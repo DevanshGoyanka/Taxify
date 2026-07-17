@@ -25,6 +25,11 @@ from app.db.init_db import create_tables
 from app.db.models import User
 from app.routers import auth as auth_router
 from app.routers import itr as itr_router
+from app.routers import clients as clients_router
+from app.routers import client_itr as client_itr_router
+from app.routers import integration as integration_router
+from app.routers import pan as pan_router
+from app.routers import tax as tax_router
 from app.schemas.auth import UserResponse
 
 app = FastAPI(title="Indian ITR Filing API", version="1.0.0")
@@ -103,6 +108,11 @@ create_tables()
 
 app.include_router(auth_router.router)
 app.include_router(itr_router.router)
+app.include_router(clients_router.router)
+app.include_router(client_itr_router.router)
+app.include_router(integration_router.router)
+app.include_router(pan_router.router)
+app.include_router(tax_router.router)
 
 # ---------------------------------------------------------------------------
 # Standalone endpoints

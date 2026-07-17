@@ -2,7 +2,7 @@
 // Document 1 §5.2, §8
 
 import { useState, useEffect } from 'react';
-import { TaxYearRules, ComputedReturn } from '../types/phase2';
+import type { TaxYearRules, ComputedReturn } from '../types/phase2';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api';
 

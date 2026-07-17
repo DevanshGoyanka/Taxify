@@ -1,7 +1,7 @@
 import re
 import asyncio
 from playwright.async_api import Page, BrowserContext
-from api.automation.downloader import update_browser_status
+from app.automation.downloader import update_browser_status
 
 
 async def _dump_inputs(page: Page, log):

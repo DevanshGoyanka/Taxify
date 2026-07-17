@@ -1,9 +1,9 @@
-﻿import asyncio
+import asyncio
 from typing import Optional
 from playwright.async_api import Page, BrowserContext, async_playwright
 
 # Import from automation folder
-from api.automation.auth import login_itd
+from app.automation.auth import login_itd
 
 
 class SubmissionService:

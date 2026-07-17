@@ -2,7 +2,7 @@
 // Document 3 Phase 3
 
 import React from 'react';
-import { ValidationReport, ValidationResult } from '../api/validation';
+import type { ValidationReport, ValidationResult } from '../../api/validation';
 
 interface Props {
   report: ValidationReport | null;
@@ -15,10 +15,10 @@ export const ValidationReportPanel: React.FC<Props> = ({ report, onClose }) => {
   }
 
   const blockingIssues = report.results.filter(
-    r => !r.passed && r.severity === 'BLOCKING'
+    (r: ValidationResult) => !r.passed && r.severity === 'BLOCKING'
   );
   const warnings = report.results.filter(
-    r => !r.passed && r.severity === 'WARNING'
+    (r: ValidationResult) => !r.passed && r.severity === 'WARNING'
   );
 
   return (
@@ -40,7 +40,7 @@ export const ValidationReportPanel: React.FC<Props> = ({ report, onClose }) => {
       {blockingIssues.length > 0 && (
         <div className="validation-section blocking">
           <h4>Blocking Issues</h4>
-          {blockingIssues.map((result, idx) => (
+          {blockingIssues.map((result: ValidationResult, idx: number) => (
             <ValidationResultItem key={idx} result={result} />
           ))}
         </div>
@@ -49,7 +49,7 @@ export const ValidationReportPanel: React.FC<Props> = ({ report, onClose }) => {
       {warnings.length > 0 && (
         <div className="validation-section warnings">
           <h4>Warnings</h4>
-          {warnings.map((result, idx) => (
+          {warnings.map((result: ValidationResult, idx: number) => (
             <ValidationResultItem key={idx} result={result} />
           ))}
         </div>

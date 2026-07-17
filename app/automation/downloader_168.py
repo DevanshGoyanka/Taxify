@@ -1,6 +1,6 @@
 import os, asyncio, re
 from playwright.async_api import Page
-from api.automation.downloader import update_browser_status
+from app.automation.downloader import update_browser_status
 
 
 async def _open_hamburger(page: Page, log_callback):

@@ -16,7 +16,7 @@ import os
 import tempfile
 from datetime import datetime
 
-from api.automation.ais_json_decryptor import decrypt_ais_json, ais_derive_fy
+from app.automation.ais_json_decryptor import decrypt_ais_json, ais_derive_fy
 
 
 # ── Classify SFT elements into output sheets ───────────────────────────────────

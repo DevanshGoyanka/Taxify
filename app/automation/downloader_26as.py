@@ -1,6 +1,6 @@
 import os, asyncio, zipfile, shutil, re
 from playwright.async_api import Page, Frame
-from api.automation.downloader import update_browser_status
+from app.automation.downloader import update_browser_status
 
 
 async def _find_frame(page: Page, selector: str, timeout: int = 3000) -> Frame | None:

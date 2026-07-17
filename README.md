@@ -105,17 +105,54 @@ All **error** responses share a unified shape regardless of status code:
 { "error": true, "message": "Human readable message", "status_code": 401 }
 ```
 
+### Core Auth & User
 | Method | Path | Auth | Request Body | Response |
 |--------|------|------|-------------|----------|
 | `GET` | `/health` | No | — | `{ status: "ok" }` |
 | `POST` | `/auth/signup` | No | `{ email, password }` | `{ access_token, token_type }` |
 | `POST` | `/auth/login` | No | `{ email, password }` | `{ access_token, token_type }` |
 | `GET` | `/me` | **Bearer** | — | `{ id, email }` |
-| `POST` | `/itr1/compute` | **Bearer** | `ITR1Input` JSON | Tax breakdown — 13 fields |
-| `POST` | `/itr4/compute` | **Bearer** | `ITR4Input` JSON | Tax breakdown — 14 fields |
-| `POST` | `/returns/save` | **Bearer** | `{ itr_type, input_data, computed_result }` | `{ id }` |
-| `GET` | `/returns` | **Bearer** | — | `[{ id, itr_type, created_at }]` |
-| `GET` | `/returns/{id}` | **Bearer** | — | `{ id, itr_type, input_data, computed_result, created_at }` |
+
+### Client Management
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `GET` | `/clients` | **Bearer** | — | `[ClientResponse]` |
+| `POST` | `/clients` | **Bearer** | `ClientCreate` | `ClientResponse` |
+| `GET` | `/clients/{id}` | **Bearer** | — | `ClientResponse` |
+| `PUT` | `/clients/{id}` | **Bearer** | `ClientUpdate` | `ClientResponse` |
+| `DELETE` | `/clients/{id}` | **Bearer** | — | `{ message: "Client deleted successfully." }` |
+| `GET` | `/clients/{id}/years` | **Bearer** | — | `[str]` (list of assessment years) |
+| `GET` | `/clients/{id}/pan-analysis` | **Bearer** | — | PAN entity type analysis details |
+| `POST` | `/clients/{id}/itr-classification` | **Bearer** | `{ hasBusinessIncome, ... }` | `{ recommendedForm, reason }` |
+
+### Client ITR Data
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `GET` | `/clients/{id}/itr/{year}` | **Bearer** | — | Saved ITR form JSON |
+| `PUT` | `/clients/{id}/itr/{year}` | **Bearer** | Form data JSON | `{ message: "ITR saved successfully", itr_type }` |
+| `POST` | `/clients/{id}/itr/{year}/validate` | **Bearer** | Form data JSON | `{ valid, errors: [], warnings: [] }` |
+| `GET` | `/clients/{id}/itr/{year}/download` | **Bearer** | — | File download (CBDT JSON Utility format) |
+| `GET` | `/clients/{id}/itr/{year}/download-pdf` | **Bearer** | — | File download (PDF Computation report) |
+
+### PAN & Tax Engine
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `GET` | `/pan/{pan}/validate` | No | — | `{ pan, valid, message }` |
+| `GET` | `/pan/{pan}/analyze` | No | — | PAN entity type breakdown |
+| `POST` | `/tax-summary/compute` | **Bearer** | Form data JSON | Full tax breakdown (grossSalary, taxableIncome, cess, etc.) |
+| `POST` | `/business-income/calculate` | No | `BusinessIncomeRequest` | `BusinessIncomeResponse` |
+| `POST` | `/business-income/validate` | No | `BusinessIncomeRequest` | `BusinessValidationResponse` |
+| `POST` | `/capital-gains/calculate` | No | `CapitalGainsRequest` | `CapitalGainsResponse` |
+| `POST` | `/capital-gains/calculate-batch` | No | `{ transactions: [...] }` | `{ transactions, summary }` |
+
+### Portal Integrations
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `POST` | `/integration/form16/extract` | **Bearer** | multipart `file` | Extracted salary & TDS details |
+| `POST` | `/integration/ais-json/import` | **Bearer** | multipart `file` | Parsed AISData |
+| `POST` | `/integration/tis/import` | **Bearer** | multipart `file` | Parsed TISData |
+| `POST` | `/integration/26as/import` | **Bearer** | multipart `file` | Parsed Form26ASData |
+| `POST` | `/prefill/autoPopulateAll` | **Bearer** | `{ aisData, form26ASData, tisData }` | Populated form fields dictionary |
 
 **Interactive docs:** `http://localhost:8000/docs`
 
@@ -162,16 +199,33 @@ All **error** responses share a unified shape regardless of status code:
 | hashed_password | VARCHAR(255) | bcrypt hash — never plaintext |
 | created_at | DATETIME | Server default (UTC) |
 
-**`saved_return`**
+**`client`**
 
 | Column | Type | Notes |
 |---|---|---|
 | id | INTEGER PK | Auto-increment |
-| user_id | INTEGER FK | → user.id, CASCADE DELETE |
-| itr_type | VARCHAR(10) | `"ITR1"` or `"ITR4"` |
-| input_data | TEXT | JSON blob of form inputs |
-| computed_result | TEXT | JSON blob of engine output |
-| created_at | DATETIME | Server default (UTC) |
+| user_id | INTEGER FK | → user.id |
+| pan | VARCHAR(10) | Unique, uppercase |
+| name | VARCHAR(255) | |
+| email | VARCHAR(255) | |
+| mobile | VARCHAR(15) | |
+| dob | VARCHAR(10) | YYYY-MM-DD |
+| aadhaar | VARCHAR(12) | |
+| created_at | DATETIME | |
+
+**`client_itr`**
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | Auto-increment |
+| client_id | INTEGER FK | → client.id |
+| year | VARCHAR(7) | Assessment Year (e.g. "2025-26") |
+| itr_type | VARCHAR(10) | "ITR-1" or "ITR-4" |
+| status | VARCHAR(50) | "Not Started", "In Progress", "Filed" |
+| form_data | TEXT | JSON string of full form values |
+| computed_result | TEXT | JSON string of tax computation results |
+| created_at | DATETIME | |
+
 
 ---
 
@@ -198,13 +252,3 @@ pytest tests/test_itr1_calculator.py -v   # specific file
 ```
 
 ---
-
-## Auth Flow Summary
-
-1. User registers → `POST /auth/signup` → receives JWT
-2. User logs in → `POST /auth/login` → receives JWT
-3. Frontend stores JWT in `localStorage` (key: `auth_token`)
-4. All protected requests include `Authorization: Bearer <token>`
-5. On app load → `GET /me` → validates token, returns `{ id, email }`
-6. On 401 → frontend clears storage → redirects to `/login`
-7. Logout → clear localStorage → redirect (no backend call needed)
