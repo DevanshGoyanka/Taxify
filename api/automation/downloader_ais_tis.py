@@ -2,8 +2,8 @@ import os
 import re
 import asyncio
 from playwright.async_api import Page
-from automation.downloader import update_browser_status, make_step_logger
-from automation.pdf_unlocker import unlock_pdf
+from api.automation.downloader import update_browser_status, make_step_logger
+from api.automation.pdf_unlocker import unlock_pdf
 
 
 # ── Outcome helpers ───────────────────────────────────────────────────────────

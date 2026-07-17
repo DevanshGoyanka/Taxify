@@ -1,6 +1,6 @@
 import os, asyncio, zipfile, shutil, re
 from playwright.async_api import Page, Frame
-from automation.downloader import update_browser_status
+from api.automation.downloader import update_browser_status
 
 
 async def _find_frame(page: Page, selector: str, timeout: int = 3000) -> Frame | None:
@@ -153,6 +153,7 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
             await asyncio.sleep(1.5)
             log_callback(f"[26AS] Proceeded — now on: {traces_page.url}")
 
+        # AY passthrough - use the assessment_year value directly as passed by caller
         log_callback(f"[26AS] Selecting Assessment Year: {assessment_year}")
         await update_browser_status(traces_page, f"TRACES: Selecting AY {assessment_year}...")
         ay_frame = await _find_frame(traces_page, "select#AssessmentYearDropDown", timeout=30000)
@@ -160,14 +161,21 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
             raise Exception("Could not find AssessmentYearDropDown on TRACES view26AS page.")
         for _ay_attempt in range(3):
             try:
+                # Try selecting by label first (visible text)
                 await ay_frame.locator("select#AssessmentYearDropDown").first.select_option(
                     label=assessment_year, timeout=10000)
                 break
-            except Exception:
-                if _ay_attempt == 2:
-                    raise
-                log_callback(f"[26AS] AY selection failed, retrying ({_ay_attempt + 1}/3)...")
-                await asyncio.sleep(2)
+            except Exception as label_error:
+                try:
+                    # Fallback: try selecting by value attribute
+                    await ay_frame.locator("select#AssessmentYearDropDown").first.select_option(
+                        value=assessment_year, timeout=10000)
+                    break
+                except Exception as value_error:
+                    if _ay_attempt == 2:
+                        raise Exception(f"Failed to select AY '{assessment_year}' by label or value. Label error: {label_error}, Value error: {value_error}")
+                    log_callback(f"[26AS] AY selection failed, retrying ({_ay_attempt + 1}/3)...")
+                    await asyncio.sleep(2)
         # onchange fires updatePart() which enables btnSubmit — give JS a moment
         await asyncio.sleep(1)
 
