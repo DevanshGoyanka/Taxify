@@ -82,6 +82,7 @@ class Client(Base):
     mobile: Mapped[str] = mapped_column(String(20), nullable=True)
     aadhaar: Mapped[str] = mapped_column(String(20), nullable=True)
     dob: Mapped[str] = mapped_column(String(10), nullable=True)
+    portal_password: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

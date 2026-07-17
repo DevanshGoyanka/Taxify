@@ -232,7 +232,8 @@ function ClientModal({ client, onClose, onSave }: any) {
     email: client?.email || '',
     mobile: client?.mobile || '',
     aadhaar: client?.aadhaar || '',
-    dob: client?.dob || ''
+    dob: client?.dob || '',
+    portal_password: ''
   });
   const [panStatus, setPanStatus] = useState<'valid' | 'invalid' | null>(null);
   const [entityType, setEntityType] = useState('');
@@ -291,7 +292,11 @@ function ClientModal({ client, onClose, onSave }: any) {
     setLoading(true);
     try {
       if (client) {
-        await clientsApi.update(client.id, formData);
+        const payload: any = { ...formData };
+        if (!payload.portal_password) {
+          delete payload.portal_password;
+        }
+        await clientsApi.update(client.id, payload);
         toast.success('Client updated');
       } else {
         await clientsApi.create(formData);
@@ -436,7 +441,7 @@ function ClientModal({ client, onClose, onSave }: any) {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
             <div>
               <label style={{ display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 500 }}>
                 Aadhaar
@@ -473,6 +478,25 @@ function ClientModal({ client, onClose, onSave }: any) {
                 }}
               />
             </div>
+          </div>
+
+          <div style={{ marginBottom: 24 }}>
+            <label style={{ display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 500 }}>
+              Portal Password
+            </label>
+            <input
+              type="password"
+              value={formData.portal_password}
+              onChange={(e) => setFormData({ ...formData, portal_password: e.target.value })}
+              autoComplete="new-password"
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                fontSize: 13
+              }}
+            />
           </div>
 
           <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
