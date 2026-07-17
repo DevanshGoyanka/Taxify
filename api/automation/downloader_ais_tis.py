@@ -778,6 +778,17 @@ async def download_ais_from_activity_history(portal: Page, fiscal_year: str,
                 continue
 
             await row.wait_for(state="visible", timeout=10000)
+            
+            # Check if AIS was already downloaded previously
+            try:
+                row_text = await row.inner_text()
+                if "ais downloaded" in row_text.lower():
+                    step("AIS already downloaded previously (found in Activity History)")
+                    log(f"[AIS] AIS PDF already downloaded for {fy_desc}")
+                    return _outcome("already_present")
+            except Exception:
+                pass
+            
             dl_cell = row.locator("td.mat-column-download").first
 
             try:
@@ -785,6 +796,25 @@ async def download_ais_from_activity_history(portal: Page, fiscal_year: str,
                 is_ready = await dl_link.is_visible(timeout=500)
             except Exception:
                 is_ready = False
+
+            # If no download link and no progress, check if already downloaded
+            if not is_ready:
+                try:
+                    progress_icon = dl_cell.locator("mat-progress-spinner").first
+                    progress_visible = await progress_icon.is_visible(timeout=500)
+                except Exception:
+                    progress_visible = False
+                
+                if not progress_visible:
+                    # No download link and no progress - likely already downloaded
+                    try:
+                        row_text = await row.inner_text()
+                        if "downloaded" in row_text.lower():
+                            step("AIS already downloaded previously (found in Activity History)")
+                            log(f"[AIS] AIS PDF already downloaded for {fy_desc}")
+                            return _outcome("already_present")
+                    except Exception:
+                        pass
 
             if is_ready:
                 step("File ready — downloading", status="AIS ready — downloading…")
