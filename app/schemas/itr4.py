@@ -1,0 +1,374 @@
+"""
+ITR-4 (Sugam) input schemas.
+
+ITR-4 applies to resident individuals, Hindu Undivided Families (HUFs), and
+partnership firms (NOT LLPs) who opt for presumptive taxation under one of:
+  - Section 44AD  — eligible businesses (traders, etc.)
+  - Section 44ADA — specified professionals
+  - Section 44AE  — goods carriage operators (≤ 10 vehicles)
+
+Total income must not exceed ₹50 lakh. The assessee may also have salary,
+house property, and other sources income — those are covered by the shared
+models imported from itr1.py.
+
+Only ONE presumptive scheme can be active per return. The active scheme is
+indicated by the `presumptive_scheme` enum in ITR4Input; the corresponding
+sub-model must be populated, the others must be None.
+
+Capital gains, brought-forward losses, foreign income, and speculative
+business income are outside ITR-4 scope.
+"""
+
+from decimal import Decimal
+from enum import Enum
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
+# Shared income / deduction models — do NOT redefine, import directly.
+from app.schemas.itr1 import (
+    AgeBracket,
+    Chapter6ADeductions,
+    HousePropertyIncome,
+    OtherSourcesIncome,
+    SalaryIncome,
+    TaxRegime,
+)
+
+
+# ---------------------------------------------------------------------------
+# Enumeration — which presumptive scheme is active
+# ---------------------------------------------------------------------------
+
+
+class PresumptiveScheme(str, Enum):
+    """
+    Indicates which presumptive taxation scheme the assessee has opted for.
+
+    Only one scheme can be active per ITR-4 return. NONE is used when the
+    assessee has no presumptive business/professional income (not a typical
+    ITR-4 scenario, but guarded for completeness).
+    """
+
+    NONE = "none"
+    S44AD = "44AD"    # Eligible business — Section 44AD
+    S44ADA = "44ADA"  # Specified profession — Section 44ADA
+    S44AE = "44AE"    # Goods carriage — Section 44AE
+
+
+# ---------------------------------------------------------------------------
+# Section 44AD — Presumptive Business Income
+# ---------------------------------------------------------------------------
+
+
+class PresumptiveBusinessIncome44AD(BaseModel):
+    """
+    Input data for computing presumptive business income under Section 44AD.
+
+    Eligible assessees: resident individuals, HUFs, and partnership firms
+    (not LLPs) engaged in any eligible business (excluding commission/
+    brokerage agents, professionals covered by 44ADA, and certain others).
+
+    Turnover limits (AY 2025-26 onwards):
+      - Up to ₹2 crore always eligible.
+      - Up to ₹3 crore IF cash receipts ≤ 5% of total turnover
+        (Finance Act 2023 amendment).
+
+    Presumptive profit rates (enforced by the computation engine, not here):
+      - 6% of turnover received via banking/digital modes (Section 44AD(1)).
+      - 8% of turnover received via cash (Section 44AD(1)).
+
+    The assessee may declare income higher than the presumptive rate.
+
+    Relevant IT Act section: Section 44AD.
+    """
+
+    total_turnover: Decimal = Field(
+        ge=0,
+        description=(
+            "Aggregate turnover or gross receipts from the eligible business "
+            "during the previous year (Section 44AD(1)). Must not exceed "
+            "₹2 crore (or ₹3 crore if digital_turnover / total_turnover ≥ 95%). "
+            "Eligibility check is enforced by the computation engine."
+        ),
+    )
+    digital_turnover: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Portion of total_turnover received via account-payee cheque, "
+            "bank draft, NEFT, RTGS, ECS, or other prescribed electronic "
+            "modes (Section 44AD(1) proviso). Attracts 6% presumptive rate. "
+            "Must satisfy: digital_turnover + cash_turnover == total_turnover."
+        ),
+    )
+    cash_turnover: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Portion of total_turnover received in cash or via non-account-"
+            "payee instruments (Section 44AD(1)). Attracts 8% presumptive "
+            "rate. Must satisfy: digital_turnover + cash_turnover == "
+            "total_turnover."
+        ),
+    )
+    income_declared: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Income declared by the assessee if higher than the presumptive "
+            "amount (Section 44AD(1) allows declaration above the floor). "
+            "If None, the computation engine will compute income at the "
+            "statutory rates (6%/8%) of the respective turnover splits."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Section 44ADA — Presumptive Professional Income
+# ---------------------------------------------------------------------------
+
+
+class PresumptiveProfessionalIncome44ADA(BaseModel):
+    """
+    Input data for computing presumptive professional income under Section 44ADA.
+
+    Eligible assessees: resident individuals and partnership firms (not LLPs)
+    engaged in specified professions — legal, medical, engineering,
+    architectural, accountancy, technical consultancy, interior decoration,
+    or any other profession notified by the CBDT (Section 44ADA(1)).
+
+    Gross receipts limits (AY 2025-26 onwards, Finance Act 2023 amendment):
+      - Up to ₹50 lakh always eligible.
+      - Up to ₹75 lakh IF cash receipts ≤ 5% of total gross receipts.
+
+    Presumptive income rate (enforced by the engine):
+      - Minimum 50% of gross receipts must be declared as income
+        (Section 44ADA(1)).
+
+    Relevant IT Act section: Section 44ADA.
+    """
+
+    gross_receipts: Decimal = Field(
+        ge=0,
+        description=(
+            "Total gross receipts from the specified profession during the "
+            "previous year (Section 44ADA(1)). Must not exceed ₹50 lakh "
+            "(or ₹75 lakh if cash receipts ≤ 5%). Eligibility enforced by "
+            "the computation engine."
+        ),
+    )
+    digital_receipts: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Portion of gross_receipts received via banking/digital modes "
+            "(account-payee cheques, NEFT, RTGS, etc.). Used by the engine "
+            "to verify the 5% cash threshold for the ₹75 lakh enhanced limit."
+        ),
+    )
+    cash_receipts: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Portion of gross_receipts received in cash or via non-account-"
+            "payee instruments. Must satisfy: "
+            "digital_receipts + cash_receipts == gross_receipts."
+        ),
+    )
+    income_declared: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Income declared if higher than 50% of gross receipts. "
+            "If None, the computation engine defaults to 50% of gross_receipts "
+            "(Section 44ADA(1))."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Section 44AE — Presumptive Goods Carriage Income
+# ---------------------------------------------------------------------------
+
+
+class GoodsCarriageVehicle(BaseModel):
+    """
+    Details of a single goods carriage vehicle owned during the year.
+
+    Under Section 44AE, income is computed per vehicle per month (or part
+    of a month) the vehicle is owned. A part-month counts as a full month.
+
+    Rate (AY 2025-26, Section 44AE(2)):
+      - Heavy goods vehicle (GVW > 12,000 kg): ₹1,000 per ton of GVW
+        (or unladen weight) per month or part of a month.
+      - Other / light goods vehicle (GVW ≤ 12,000 kg): ₹7,500 per vehicle
+        per month or part of a month.
+
+    The assessee may declare actual income if higher.
+
+    Relevant IT Act section: Section 44AE(2).
+    """
+
+    is_heavy_goods_vehicle: bool = Field(
+        description=(
+            "True if the vehicle is a 'heavy goods vehicle' — i.e., gross "
+            "vehicle weight (GVW) exceeds 12,000 kg (Section 44AE(2) "
+            "Explanation). False for light or medium goods vehicles "
+            "(GVW ≤ 12,000 kg), which attract a flat ₹7,500/month rate."
+        ),
+    )
+    gross_vehicle_weight_tons: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Gross vehicle weight in metric tons. Required when "
+            "is_heavy_goods_vehicle is True; used to compute "
+            "₹1,000 × GVW (tons) × months_owned. "
+            "Ignored (and may be None) for light goods vehicles."
+        ),
+    )
+    months_owned: int = Field(
+        ge=1,
+        le=12,
+        description=(
+            "Number of months (or part-months, each counted as a full month) "
+            "during which the vehicle was owned in the previous year "
+            "(Section 44AE(2)). Must be between 1 and 12."
+        ),
+    )
+    income_declared: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Actual income declared for this vehicle if higher than the "
+            "statutory presumptive amount (Section 44AE(1) proviso). "
+            "If None, the engine computes income at the statutory rate."
+        ),
+    )
+
+
+class PresumptiveGoodsCarriage44AE(BaseModel):
+    """
+    Input data for computing presumptive income from goods carriage under
+    Section 44AE.
+
+    Eligible assessees: resident individuals, HUFs, and firms (not LLPs)
+    engaged in the business of plying, hiring, or leasing goods carriages,
+    provided they did NOT own more than 10 goods carriages at any time
+    during the previous year (Section 44AE(1) proviso).
+
+    Total presumptive income = sum of per-vehicle income across all vehicles.
+    The 10-vehicle limit is enforced by the computation engine (not the schema).
+
+    Relevant IT Act section: Section 44AE.
+    """
+
+    vehicles: List[GoodsCarriageVehicle] = Field(
+        min_length=1,
+        description=(
+            "List of goods carriage vehicles owned during the previous year. "
+            "Each entry represents one vehicle with its type, GVW (if heavy), "
+            "months owned, and any higher-declared income. Maximum 10 vehicles "
+            "is a statutory limit enforced by the computation engine."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Top-level ITR-4 input model
+# ---------------------------------------------------------------------------
+
+
+class ITR4Input(BaseModel):
+    """
+    Top-level input model for computing an ITR-4 (Sugam) return.
+
+    Combines assessee meta-information (age bracket, regime), the active
+    presumptive scheme with its specific income data, and the shared income /
+    deduction models from ITR-1 (salary, house property, other sources,
+    Chapter VI-A deductions).
+
+    Exactly one of {business_income_44ad, professional_income_44ada,
+    goods_carriage_44ae} must be non-None when presumptive_scheme is not NONE.
+    The computation engine must enforce this constraint; the schema does not,
+    to keep validation simple and error messages explicit.
+
+    Relevant IT Act parts: Sections 44AD, 44ADA, 44AE, and the parts shared
+    with ITR-1 (Sections 15–24, Chapter VI-A).
+    """
+
+    age_bracket: AgeBracket = Field(
+        description=(
+            "Age of the assessee as on the last day of the previous year "
+            "(31 March). Determines the basic exemption limit and tax slabs."
+        ),
+    )
+    tax_regime: TaxRegime = Field(
+        description=(
+            "Tax regime elected. 'old' allows Chapter VI-A deductions; "
+            "'new' uses Section 115BAC concessional rates. Note: ITR-4 filers "
+            "under the new regime cannot opt out of 115BAC mid-year."
+        ),
+    )
+    presumptive_scheme: PresumptiveScheme = Field(
+        description=(
+            "Which presumptive scheme the assessee has opted for. "
+            "Determines which of the three presumptive sub-models is active "
+            "and which statutory rates apply."
+        ),
+    )
+
+    # --- Presumptive income sub-models (at most one must be non-None) ---
+
+    business_income_44ad: Optional[PresumptiveBusinessIncome44AD] = Field(
+        default=None,
+        description=(
+            "Populate when presumptive_scheme == '44AD'. "
+            "Must be None for all other schemes."
+        ),
+    )
+    professional_income_44ada: Optional[PresumptiveProfessionalIncome44ADA] = Field(
+        default=None,
+        description=(
+            "Populate when presumptive_scheme == '44ADA'. "
+            "Must be None for all other schemes."
+        ),
+    )
+    goods_carriage_44ae: Optional[PresumptiveGoodsCarriage44AE] = Field(
+        default=None,
+        description=(
+            "Populate when presumptive_scheme == '44AE'. "
+            "Must be None for all other schemes."
+        ),
+    )
+
+    # --- Shared income / deduction models (same as ITR-1) ---
+
+    salary_income: Optional[SalaryIncome] = Field(
+        default=None,
+        description=(
+            "Salary or pension income, if any. ITR-4 permits salary income "
+            "alongside presumptive business income (Section 44AD/ADA/AE)."
+        ),
+    )
+    house_property_income: Optional[HousePropertyIncome] = Field(
+        default=None,
+        description=(
+            "Single house property income or loss. ITR-4 allows one house "
+            "property, same as ITR-1."
+        ),
+    )
+    other_sources_income: Optional[OtherSourcesIncome] = Field(
+        default=None,
+        description=(
+            "Interest, family pension, and other sources income, if any."
+        ),
+    )
+    deductions_chapter6a: Optional[Chapter6ADeductions] = Field(
+        default=None,
+        description=(
+            "Chapter VI-A deductions (80C, 80D, 80E, etc.). Ignored by the "
+            "computation engine when tax_regime is 'new', except 80CCD(2)."
+        ),
+    )

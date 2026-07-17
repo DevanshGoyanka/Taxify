@@ -1,0 +1,222 @@
+# ITR-1 and ITR-4 Constants for FY 2025-26 (AY 2026-27)
+# All values use Decimal for precision - no float
+
+from decimal import Decimal
+from typing import Final
+
+# =============================================================================
+# OLD REGIME - TAX SLABS (Age-based) - Section 11, IT Act
+# =============================================================================
+# Taxable income up to basic exemption is nil
+
+OLD_REGIME_SLABS_BELOW_60: Final[list] = [
+    (Decimal("0"), Decimal("250000"), Decimal("0")),       # 0-2.5L @ 0%
+    (Decimal("250000"), Decimal("500000"), Decimal("5")),   # 2.5L-5L @ 5%
+    (Decimal("500000"), Decimal("1000000"), Decimal("20")), # 5L-10L @ 20%
+    (Decimal("1000000"), None, Decimal("30")),               # Above 10L @ 30%
+]
+
+OLD_REGIME_SLABS_60_TO_80: Final[list] = [
+    (Decimal("0"), Decimal("300000"), Decimal("0")),       # 0-3L @ 0%
+    (Decimal("300000"), Decimal("500000"), Decimal("5")),   # 3L-5L @ 5%
+    (Decimal("500000"), Decimal("1000000"), Decimal("20")), # 5L-10L @ 20%
+    (Decimal("1000000"), None, Decimal("30")),               # Above 10L @ 30%
+]
+
+OLD_REGIME_SLABS_ABOVE_80: Final[list] = [
+    (Decimal("0"), Decimal("500000"), Decimal("0")),       # 0-5L @ 0%
+    (Decimal("500000"), Decimal("1000000"), Decimal("20")), # 5L-10L @ 20%
+    (Decimal("1000000"), None, Decimal("30")),               # Above 10L @ 30%
+]
+
+# =============================================================================
+# NEW REGIME (Section 115BAC) - Slabs for AY 2026-27 (FY 2025-26)
+# =============================================================================
+
+NEW_REGIME_SLABS_AY_2026_27: Final[list] = [
+    (Decimal("0"), Decimal("400000"), Decimal("0")),        # 0-4L @ 0%
+    (Decimal("400000"), Decimal("800000"), Decimal("5")),    # 4L-8L @ 5%
+    (Decimal("800000"), Decimal("1200000"), Decimal("10")),  # 8L-12L @ 10%
+    (Decimal("1200000"), Decimal("1600000"), Decimal("15")), # 12L-16L @ 15%
+    (Decimal("1600000"), Decimal("2000000"), Decimal("20")), # 16L-20L @ 20%
+    (Decimal("2000000"), Decimal("2400000"), Decimal("25")), # 20L-24L @ 25%
+    (Decimal("2400000"), None, Decimal("30")),                # Above 24L @ 30%
+]
+
+# =============================================================================
+# STANDARD DEDUCTION - Section 16(ia)
+# =============================================================================
+
+OLD_REGIME_STANDARD_DEDUCTION: Final[Decimal] = Decimal("50000")    # Sec 16(ia) - Salary income
+NEW_REGIME_STANDARD_DEDUCTION: Final[Decimal] = Decimal("75000")    # Sec 16(ia) - Finance Act 2024
+
+# =============================================================================
+# REBATE u/s 87A
+# =============================================================================
+
+# Old regime rebate (AY 2026-27)
+OLD_REBATE_TAX_LIMIT: Final[Decimal] = Decimal("12500")           # Max rebate amount
+OLD_REBATE_INCOME_LIMIT: Final[Decimal] = Decimal("500000")         # Income below which rebate applies
+
+# New regime rebate (AY 2026-27) - Finance Act 2025
+NEW_REBATE_TAX_LIMIT: Final[Decimal] = Decimal("60000")            # Max rebate amount
+NEW_REBATE_INCOME_LIMIT: Final[Decimal] = Decimal("1200000")        # Full rebate income ceiling
+
+# =============================================================================
+# HEALTH & EDUCATION CESS - Section 272B
+# =============================================================================
+
+HEALTH_EDUCATION_CESS_RATE: Final[Decimal] = Decimal("0.04")       # 4% of tax + surcharge
+
+# =============================================================================
+# SURCHARGE RATES FOR INDIVIDUALS (AY 2026-27)
+# =============================================================================
+
+# Surcharge applies on tax after rebate
+# Marginal relief ensures tax+surcharge does not exceed income over threshold
+
+SURCHARGE_SLABS: Final[list] = [
+    (Decimal("5000000"), Decimal("10000000"), Decimal("0.10")),  # 10% for 50L-1Cr
+    (Decimal("10000000"), Decimal("20000000"), Decimal("0.15")), # 15% for 1Cr-2Cr
+    (Decimal("20000000"), Decimal("50000000"), Decimal("0.25")), # 25% for 2Cr-5Cr
+    (Decimal("50000000"), None, Decimal("0.37")),                  # 37% for above 5Cr (Old Regime)
+]
+
+# New regime surcharge above ₹5Cr is capped at 25% (Finance Act 2023)
+SURCHARGE_SLABS_NEW_REGIME: Final[list] = [
+    (Decimal("5000000"), Decimal("10000000"), Decimal("0.10")),  # 10% for 50L-1Cr
+    (Decimal("10000000"), Decimal("20000000"), Decimal("0.15")), # 15% for 1Cr-2Cr
+    (Decimal("20000000"), Decimal("50000000"), Decimal("0.25")), # 25% for 2Cr-5Cr
+    (Decimal("50000000"), None, Decimal("0.25")),                  # 25% for above 5Cr (New Regime cap)
+]
+
+# =============================================================================
+# PRESUMPTIVE INCOME RATES - Sections 44AD, 44ADA, 44AE
+# =============================================================================
+
+# Section 44AD - Business (turnover up to Rs 2 Crore)
+# Presumptive rate depends on payment mode
+PRESUMPTIVE_44AD_DIGITAL: Final[Decimal] = Decimal("0.06")        # 6% of gross receipts (digital)
+PRESUMPTIVE_44AD_CASH: Final[Decimal] = Decimal("0.08")           # 8% of gross receipts (cash)
+
+# Section 44ADA - Professionals (gross receipts up to Rs 50 Lakh)
+# Flat 50% of gross receipts as presumptive income
+PRESUMPTIVE_44ADA_RATE: Final[Decimal] = Decimal("0.50")          # 50% of professional gross
+
+# Section 44AE - Goods carriage (per vehicle)
+# Presumptive income per vehicle per year (monthly x 12)
+PRESUMPTIVE_44AE_PER_VEHICLE_OWNER: Final[Decimal] = Decimal("7500")          # Rs 7,500 per month per vehicle
+PRESUMPTIVE_44AE_PER_VEHICLE_LEASED: Final[Decimal] = Decimal("7500")         # Rs 7,500 per month per vehicle
+
+# =============================================================================
+# CHAPTER VI-A DEDUCTION LIMITS
+# =============================================================================
+
+# Section 80C - LIC, PPF, ELSS, etc. (combined with 80CCC, 80CCD(1))
+SECTION_80C_LIMIT: Final[Decimal] = Decimal("150000")             # Rs 1.5 lakh
+
+# Section 80CCC - Pension schemes (combined with 80C, 80CCD(1))
+SECTION_80CCC_LIMIT: Final[Decimal] = Decimal("150000")           # Rs 1.5 lakh (combined)
+
+# Section 80CCD(1) - Employee/self contribution to NPS (part of 80C limit)
+SECTION_80CCD1_LIMIT: Final[Decimal] = Decimal("150000")          # Within 80C limit
+
+# Section 80CCD(1B) - Additional NPS contribution (over 80C limit)
+SECTION_80CCD1B_LIMIT: Final[Decimal] = Decimal("50000")          # Rs 50,000 extra
+
+# Section 80CCD(2) - Employer NPS contribution (no cap)
+SECTION_80CCD2_LIMIT: Final[Decimal] = None                         # No upper limit
+
+# Section 80D - Health Insurance
+SECTION_80D_SELF_FAMILY_LIMIT: Final[Decimal] = Decimal("25000")  # Self & family (non-senior)
+SECTION_80D_SELF_FAMILY_SENIOR_LIMIT: Final[Decimal] = Decimal("50000")  # Self & family (senior)
+SECTION_80D_PARENTS_LIMIT: Final[Decimal] = Decimal("25000")       # Parents (non-senior)
+SECTION_80D_PARENTS_SENIOR_LIMIT: Final[Decimal] = Decimal("50000")  # Parents (senior)
+SECTION_80D_PREVENTIVE_CHECKUP_LIMIT: Final[Decimal] = Decimal("5000")   # Per family/parent bucket
+
+# Section 80DD - Medical treatment of dependent with disability
+SECTION_80DD_LIMIT: Final[Decimal] = Decimal("75000")             # Disabled dependent
+SECTION_80DD_SEVERE_LIMIT: Final[Decimal] = Decimal("125000")     # Severely disabled
+
+# Section 80DDB - Medical treatment for specified diseases
+SECTION_80DDB_LIMIT: Final[Decimal] = Decimal("40000")            # Below 60 years
+SECTION_80DDB_SENIOR_LIMIT: Final[Decimal] = Decimal("100000")    # 60 years and above
+
+# Section 80E - Interest on education loan
+SECTION_80E_LIMIT: Final[Decimal] = None                           # No upper limit (8 years)
+
+# Section 80EE - First-time home buyer interest
+SECTION_80EE_LIMIT: Final[Decimal] = Decimal("50000")            # Rs 50,000
+
+# Section 80EEA - Affordable housing interest (PMAY)
+SECTION_80EEA_LIMIT: Final[Decimal] = Decimal("150000")          # Rs 1.5 lakh
+
+# Section 80EEB - Electric vehicle loan interest
+SECTION_80EEB_LIMIT: Final[Decimal] = Decimal("150000")          # Rs 1.5 lakh
+
+# Section 80G - Donations (various percentages and limits)
+SECTION_80G_100_PERCENT_LIMIT: Final[str] = "Without Limit"       # 100% without limit
+SECTION_80G_50_PERCENT_LIMIT: Final[str] = "Subject to 10%"       # 50% with 10% of GTI cap
+SECTION_80G_CASH_LIMIT: Final[Decimal] = Decimal("2000")         # Cash donation cap
+
+# Section 80GGA - Donations to scientific research/rural development
+SECTION_80GGA_LIMIT: Final[Decimal] = None                         # No upper limit
+
+# Section 80GGC - Political party contributions
+SECTION_80GGC_LIMIT: Final[Decimal] = None                         # No upper limit
+
+# Section 80GG - House rent allowance (Section 80GG)
+SECTION_80GG_RENT_LIMIT: Final[Decimal] = Decimal("60000")       # Rs 5,000 x 12 months
+SECTION_80GG_GTI_PERCENT: Final[Decimal] = Decimal("0.25")      # 25% of GTI
+
+# Section 80QQB - Royalty income (authors)
+SECTION_80QQB_LIMIT: Final[Decimal] = Decimal("30000")           # Rs 30,000
+
+# Section 80RRB - Royalty on patents
+SECTION_80RRB_LIMIT: Final[Decimal] = Decimal("30000")           # Rs 30,000
+
+# Section 80TTA - Interest on savings account
+SECTION_80TTA_LIMIT: Final[Decimal] = Decimal("10000")          # Rs 10,000
+
+# Section 80TTB - Interest for senior citizens
+SECTION_80TTB_LIMIT: Final[Decimal] = Decimal("50000")           # Rs 50,000
+
+# Section 80U - Person with disability
+SECTION_80U_LIMIT: Final[Decimal] = Decimal("75000")             # Disabled
+SECTION_80U_SEVERE_LIMIT: Final[Decimal] = Decimal("125000")     # Severely disabled
+
+# Section 80CCH - Agniveer Corpus Fund
+SECTION_80CCH_LIMIT: Final[Decimal] = Decimal("288000")          # Rs 2,88,000 (FY 2024-25)
+
+# =============================================================================
+# HOUSE PROPERTY - Section 24
+# =============================================================================
+
+HOUSE_PROPERTY_STANDARD_DEDUCTION: Final[Decimal] = Decimal("0.30") # 30% of NAV (Sec 24(a))
+HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED: Final[Decimal] = Decimal("200000")  # Sec 24(b) - Self-occupied
+
+# =============================================================================
+# CAPITAL GAINS - Special Rates (AY 2026-27)
+# =============================================================================
+
+# Section 111A - STCG on listed equity (STT paid)
+STCG_111A_RATE_PRE_JUL23: Final[Decimal] = Decimal("15")         # Before July 2023
+STCG_111A_RATE_POST_JUL23: Final[Decimal] = Decimal("20")        # On/after July 2023
+
+# Section 112A - LTCG on listed equity (STT paid)
+LTCG_112A_RATE: Final[Decimal] = Decimal("10")                   # Pre-July 2023
+LTCG_112A_RATE_POST_JUL23: Final[Decimal] = Decimal("12.5")      # On/after July 2023
+LTCG_112A_EXEMPTION: Final[Decimal] = Decimal("125000")         # Rs 1.25 lakh exemption
+
+# Section 112 - Other LTCG (without indexation)
+LTCG_OTHER_RATE: Final[Decimal] = Decimal("20")                  # With indexation pre-Jul 2023
+LTCG_OTHER_RATE_POST_JUL23: Final[Decimal] = Decimal("12.5")     # Without indexation post-Jul 2023
+
+# Section 115BB - Lottery/Gambling
+LOTTERY_RATE: Final[Decimal] = Decimal("30")                     # Flat 30%
+
+# Section 115BBH - Virtual Digital Assets
+VDA_RATE: Final[Decimal] = Decimal("30")                         # Flat 30%
+
+# Section 115BBE - Unexplained income
+UNEXPLAINED_INCOME_RATE: Final[Decimal] = Decimal("60")          # Flat 60%
