@@ -7,6 +7,7 @@ from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import User, Client, ClientITR
 from app.schemas.clients import ClientCreate, ClientUpdate, ClientResponse, ClientYearResponse
+from app.security.portal_crypto import encrypt_portal_password, decrypt_portal_password
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -117,7 +118,10 @@ def create_client(
             status_code=400,
             detail=f"Client with PAN {payload.pan} already exists."
         )
-        
+    encrypted_pw = None
+    if payload.portal_password:
+        encrypted_pw = encrypt_portal_password(payload.portal_password)
+
     client = Client(
         user_id=current_user.id,
         pan=payload.pan.upper(),
@@ -126,6 +130,7 @@ def create_client(
         mobile=payload.mobile,
         aadhaar=payload.aadhaar,
         dob=payload.dob,
+        portal_password=encrypted_pw,
     )
     db.add(client)
     db.commit()
@@ -216,6 +221,8 @@ def update_client(
         client.aadhaar = payload.aadhaar
     if payload.dob is not None:
         client.dob = payload.dob
+    if payload.portal_password is not None:
+        client.portal_password = encrypt_portal_password(payload.portal_password) if payload.portal_password else None
         
     db.commit()
     db.refresh(client)
@@ -305,3 +312,15 @@ def classify_itr(
         "recommendedForm": recommended,
         "classificationReason": reason
     }
+
+def get_decrypted_portal_password(client_id: int, db: Session) -> Optional[str]:
+    """
+    Retrieve and decrypt the portal password for a given client ID.
+
+    This is an internal helper for the automation module and is not exposed.
+    """
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client or not client.portal_password:
+        return None
+    return decrypt_portal_password(client.portal_password)
+

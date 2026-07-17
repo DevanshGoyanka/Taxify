@@ -30,6 +30,7 @@ from app.routers import client_itr as client_itr_router
 from app.routers import integration as integration_router
 from app.routers import pan as pan_router
 from app.routers import tax as tax_router
+from app.routers import dashboard as dashboard_router
 from app.schemas.auth import UserResponse
 
 app = FastAPI(title="Indian ITR Filing API", version="1.0.0")
@@ -113,6 +114,7 @@ app.include_router(client_itr_router.router)
 app.include_router(integration_router.router)
 app.include_router(pan_router.router)
 app.include_router(tax_router.router)
+app.include_router(dashboard_router.router)
 
 # ---------------------------------------------------------------------------
 # Standalone endpoints

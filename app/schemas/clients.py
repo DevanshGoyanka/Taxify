@@ -11,7 +11,7 @@ class ClientBase(BaseModel):
     dob: Optional[str] = None
 
 class ClientCreate(ClientBase):
-    pass
+    portal_password: Optional[str] = None
 
 class ClientUpdate(BaseModel):
     pan: Optional[str] = None
@@ -20,6 +20,7 @@ class ClientUpdate(BaseModel):
     mobile: Optional[str] = None
     aadhaar: Optional[str] = None
     dob: Optional[str] = None
+    portal_password: Optional[str] = None
 
 class ClientYearResponse(BaseModel):
     year: str
