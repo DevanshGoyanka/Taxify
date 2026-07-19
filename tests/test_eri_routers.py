@@ -23,11 +23,11 @@ from app.schemas.eri import (
 )
 
 # Set env variables for test consistency
-os.environ["ERI_USER_ID"] = "ERIP013181"
-os.environ["ERI_PASSWORD"] = "Oracle@123"
-os.environ["ERI_SYMMETRIC_KEY"] = "Xuslp8BPWDe0QCF+rLCGZA=="
-os.environ["ERI_CLIENT_ID"] = "4fea04621c7b5660dbb12b959a29b0ee"
-os.environ["ERI_CLIENT_SECRET"] = "e754ceb48732c4e197658f76bcc69037"
+os.environ["ERI_USER_ID"] = "TEST_ERI_USER_ID"
+os.environ["ERI_PASSWORD"] = "test_password"
+os.environ["ERI_SYMMETRIC_KEY"] = "test_symmetric_key_base64=="
+os.environ["ERI_CLIENT_ID"] = "test_client_id"
+os.environ["ERI_CLIENT_SECRET"] = "test_client_secret"
 os.environ["ERI_DSC_SIGNING_MODE"] = "token"
 
 
