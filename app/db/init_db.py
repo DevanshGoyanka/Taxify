@@ -21,7 +21,7 @@ def create_tables() -> None:
     semantics internally via checkfirst=True (the default).
     """
     Base.metadata.create_all(bind=engine)
-    print("✓ Database tables created (or already exist).")
+    print("[OK] Database tables created (or already exist).")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,94 @@
+# AWS Backend Configuration
+# Runs on AWS EC2 (13.204.49.125)
+# Handles ERI API calls from whitelisted IP
+
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: ERI-Tax-ERP-AWS-Backend
+    version: 1.0.0
+  
+  # Database Configuration (AWS RDS or local MySQL)
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:taxerp_uat}
+    username: ${DB_USERNAME:taxerp_user}
+    password: ${DB_PASSWORD}
+    hikari:
+      connection-timeout: 30000
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+
+# ERI Configuration
+eri:
+  base-url: https://uatocpservices.incometax.gov.in/v1
+  auth:
+    client-id: ${ERI_CLIENT_ID:4fea04621c7b5660dbb12b959a29b0ee}
+    client-secret: ${ERI_CLIENT_SECRET:e754ceb48732c4e197658f76bcc69037}
+    username: ${ERI_USERNAME:ERIP013181}
+    password: ${ERI_PASSWORD}
+  user:
+    eri-id: ${ERI_USER_ID:ERIP011535}
+  api:
+    timeout: 60000
+    retry:
+      max-attempts: 3
+      backoff-period: 2000
+
+# DSC Local Signer Configuration (HTTP Client)
+dsc:
+  local-signer:
+    url: ${LOCAL_SIGNER_URL:http://localhost:9090}
+
+# Integration Configuration
+integration:
+  local-signer:
+    url: ${LOCAL_SIGNER_URL:http://localhost:9090}
+  aws-backend:
+    url: ${AWS_BACKEND_URL:http://13.204.49.125:8080}
+
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.taxerp: DEBUG
+    org.springframework.web: INFO
+    org.springframework.web.client: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [AWS-ERI] %-5level [%X{correlationId:-}] %logger{36} - %msg%n"
+  file:
+    name: logs/aws-eri-backend.log
+    max-size: 50MB
+    max-history: 10
+
+# Management endpoints
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+# CORS configuration (allow local signer calls)
+cors:
+  allowed-origins:
+    - "http://localhost:9090"
+    - "http://localhost:3000"
+  allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+  allowed-headers: "*"
+  allow-credentials: true

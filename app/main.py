@@ -103,6 +103,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 create_tables()
 
+from app.routers import eri as eri_router
+
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
@@ -115,6 +117,7 @@ app.include_router(integration_router.router)
 app.include_router(pan_router.router)
 app.include_router(tax_router.router)
 app.include_router(dashboard_router.router)
+app.include_router(eri_router.router)
 
 # ---------------------------------------------------------------------------
 # Standalone endpoints

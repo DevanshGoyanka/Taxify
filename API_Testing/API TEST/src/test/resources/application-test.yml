@@ -1,0 +1,86 @@
+# Test configuration for Tax ERP application
+# This configuration is used during integration testing
+
+spring:
+  application:
+    name: TaxERP-Test
+    version: 1.0.0-TEST
+  
+  # Use H2 in-memory database for testing
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: 
+    
+  # JPA configuration for testing
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: false
+    defer-datasource-initialization: true
+    
+  # H2 console for debugging (disabled in tests)
+  h2:
+    console:
+      enabled: false
+
+# DSC configuration for testing
+dsc:
+  keystore:
+    path: src/test/resources/test-keystore.p12
+    password: test123
+    type: PKCS12
+    alias: test-cert
+  pkcs11:
+    library-path: ""
+    slot-id: 0
+
+# ERI configuration for testing
+eri:
+  api:
+    base-url: https://uat.eri.incometax.gov.in
+    connection-timeout: 10000
+    read-timeout: 15000
+    timeout: 30000
+    retry-attempts: 2
+    ssl-verification: true
+  headers:
+    user-agent: TaxERP-Test/1.0.0
+    content-type: application/json
+    accept: application/json
+  retry:
+    max-attempts: 2
+    initial-delay: 1000
+    max-delay: 5000
+    multiplier: 2.0
+
+# Logging configuration for testing
+logging:
+  level:
+    com.taxerp: INFO
+    org.springframework.web: WARN
+    org.hibernate: WARN
+    org.springframework.security: WARN
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# Server configuration for testing
+server:
+  port: 0  # Random port for testing
+  servlet:
+    context-path: /
+
+# Management endpoints for testing
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always

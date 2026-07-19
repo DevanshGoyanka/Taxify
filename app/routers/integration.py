@@ -483,3 +483,220 @@ def prefill_autopopulate(
     prefill = payload.get("prefillData", {})
     form_data = payload.get("formData", {})
     return {**form_data}
+
+
+# ── ITD ERI Integration Routes ────────────────────────────────────────────────
+from datetime import datetime
+from fastapi import Request
+from app.schemas.eri import (
+    ERILoginRequest,
+    ERILogoutRequest,
+    ERIAddClientRequest,
+    ERIValidateClientOtpRequest,
+    ERIRegisterClientRequest,
+    ERIValidateRegOtpRequest
+)
+from app.eri.client import eri_post
+from app.eri.envelope import encrypt_password
+
+
+def extract_auth_token(req: Request) -> Optional[str]:
+    """Extracts authorization token from request headers (either Authorization Bearer or authToken)."""
+    auth_header = req.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    return req.headers.get("authToken")
+
+
+@router.post("/api/v1/eri/login")
+def login_eri(
+    current_user: User = Depends(get_current_user),
+):
+    """Logs in ERI and establishes session with ITD.
+    
+    Cites: Docs/API_Login_v1.1.pdf Section 4.
+    """
+    from app.eri.login import eri_login
+    
+    try:
+        res = eri_login()
+        return {
+            "success": True,
+            "authToken": res.get("authToken"),
+            "transactionId": res.get("transactionId"),
+            "message": "Login successful"
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+
+
+@router.post("/api/v1/eri/logout")
+def logout_eri(
+    req: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """Terminates the ERI session with ITD.
+    
+    Cites: Docs/API_Login_v1.1.pdf Section 4.7.
+    """
+    from app.eri.login import eri_logout
+    
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+        
+    try:
+        eri_logout(auth_token)
+        return {
+            "success": True,
+            "message": "Logout successful"
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+
+
+@router.post("/api/v1/eri/add-client")
+def eri_add_client_route(
+    req: Request,
+    request: ERIAddClientRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Submits request to add registered taxpayer as client.
+    
+    Cites: Docs/API_AddClientFlow_v1.1.pdf Section 4.
+    """
+    from app.eri.add_client import addClient
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+        
+    try:
+        res = addClient(
+            pan=request.pan,
+            dateOfBirth=request.dateOfBirth,
+            otpSourceFlag=request.otpSourceFlag,
+            auth_token=auth_token
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+
+
+@router.post("/api/v1/eri/validate-client-otp")
+def eri_validate_client_otp_route(
+    req: Request,
+    request: ERIValidateClientOtpRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Validates the OTP to accept add client request.
+    
+    Cites: Docs/API_AddClientFlow_v1.1.pdf Section 5.
+    """
+    from app.eri.add_client import validateClientOtp
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+        
+    try:
+        res = validateClientOtp(
+            pan=request.pan,
+            transactionId=request.transactionId,
+            otpSourceFlag=request.otpSourceFlag,
+            otp=request.otp,
+            validUpto=request.validUpto,
+            auth_token=auth_token
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+
+
+@router.post("/api/v1/eri/register-client")
+def eri_register_client_route(
+    req: Request,
+    request: ERIRegisterClientRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Registers an unregistered individual taxpayer and adds them as ERI client.
+    
+    Cites: Docs/API_AddClientFlow_v1.1.pdf Section 6.
+    """
+    from app.eri.add_client import addRegisterClient
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+        
+    try:
+        res = addRegisterClient(
+            pan=request.pan,
+            residentialStatusCd=request.residentialStatusCd,
+            firstName=request.firstName or "",
+            lastName=request.lastName,
+            midName=request.midName or "",
+            dateOfBirth=request.dateOfBirth,
+            userGender=request.userGender,
+            priMobileNum=request.priMobileNum,
+            isdCd=request.isdCd,
+            priMobBelongsTo=request.priMobBelongsTo,
+            priEmailRelationId=request.priEmailRelationId,
+            priEmailId=request.priEmailId,
+            addrLine1Txt=request.addrLine1Txt,
+            addrLine2Txt=request.addrLine2Txt,
+            addrLine3Txt=request.addrLine3Txt or "",
+            addrLine4Txt=request.addrLine4Txt or "",
+            addrLine5Txt=request.addrLine5Txt or "",
+            pinCd=request.pinCd or "",
+            zipCd=request.zipCd or "",
+            stdCd=request.stdCd or "",
+            countryCd=request.countryCd,
+            landlineNo=request.landlineNo or "",
+            stateCd=request.stateCd or "",
+            foreignStateDesc=request.foreignStateDesc or "",
+            auth_token=auth_token
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+
+
+@router.post("/api/v1/eri/validate-reg-otp")
+def eri_validate_reg_otp_route(
+    req: Request,
+    request: ERIValidateRegOtpRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Validates registration OTP from taxpayer to complete registration and client addition.
+    
+    Cites: Docs/API_AddClientFlow_v1.1.pdf Section 7.
+    """
+    from app.eri.add_client import validateRegOtp
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+        
+    try:
+        res = validateRegOtp(
+            pan=request.pan,
+            smsTransactionId=request.smsTransactionId,
+            emailTransactionId=request.emailTransactionId,
+            mobileOtp=request.mobileOtp,
+            emailOtp=request.emailOtp,
+            validUpto=request.validUpto,
+            auth_token=auth_token
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+

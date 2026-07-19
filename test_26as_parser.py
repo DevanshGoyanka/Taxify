@@ -10,7 +10,7 @@ from datetime import datetime
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from api.automation.as26_converter import _parse, PART_META, STATUS_FULL
+from app.automation.as26_converter import _parse, PART_META, STATUS_FULL
 
 def format_header(header: dict) -> str:
     """Format header fields for display."""

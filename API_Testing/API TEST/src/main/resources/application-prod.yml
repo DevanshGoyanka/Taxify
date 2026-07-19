@@ -1,0 +1,311 @@
+# Production Environment Configuration for Tax ERP System
+# This configuration is for production deployment with security hardening
+
+spring:
+  # Production Database Configuration with encryption
+  datasource:
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME}?ssl=true&sslmode=require&sslcert=${DB_SSL_CERT}&sslkey=${DB_SSL_KEY}&sslrootcert=${DB_SSL_ROOT_CERT}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      connection-timeout: 20000
+      maximum-pool-size: 20
+      minimum-idle: 10
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      leak-detection-threshold: 60000
+      # Production-specific connection pool settings
+      connection-test-query: SELECT 1
+      validation-timeout: 5000
+      initialization-fail-timeout: 1
+  
+  # JPA Configuration for Production
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        generate_statistics: false
+        jdbc:
+          batch_size: 30
+        connection:
+          provider_disables_autocommit: true
+        cache:
+          use_second_level_cache: true
+          use_query_cache: true
+          region:
+            factory_class: org.hibernate.cache.jcache.JCacheRegionFactory
+
+# Server Configuration for Production with SSL
+server:
+  port: ${SERVER_PORT:8443}
+  servlet:
+    context-path: /api
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+  compression:
+    enabled: true
+    min-response-size: 1024
+  
+  # SSL/HTTPS Configuration
+  ssl:
+    enabled: true
+    key-store: ${SSL_KEYSTORE_PATH}
+    key-store-password: ${SSL_KEYSTORE_PASSWORD}
+    key-store-type: ${SSL_KEYSTORE_TYPE:PKCS12}
+    key-alias: ${SSL_KEY_ALIAS}
+    trust-store: ${SSL_TRUSTSTORE_PATH}
+    trust-store-password: ${SSL_TRUSTSTORE_PASSWORD}
+    trust-store-type: ${SSL_TRUSTSTORE_TYPE:PKCS12}
+    client-auth: ${SSL_CLIENT_AUTH:none}
+    protocol: TLS
+    enabled-protocols: TLSv1.2,TLSv1.3
+    ciphers: ${SSL_CIPHERS:TLS_AES_256_GCM_SHA384,TLS_CHACHA20_POLY1305_SHA256,TLS_AES_128_GCM_SHA256,ECDHE-RSA-AES256-GCM-SHA384,ECDHE-RSA-AES128-GCM-SHA256}
+
+# Management Configuration for Production (restricted)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: never
+    info:
+      enabled: true
+  security:
+    enabled: true
+  server:
+    port: ${MANAGEMENT_PORT:8444}
+    ssl:
+      enabled: true
+
+# DSC Configuration for Production
+dsc:
+  keystore:
+    path: ${DSC_KEYSTORE_PATH}
+    password: ${DSC_KEYSTORE_PASSWORD}
+    type: ${DSC_KEYSTORE_TYPE:PKCS11}
+    alias: ${DSC_KEYSTORE_ALIAS}
+    # PKCS#11 configuration for hardware tokens
+    pkcs11:
+      library: ${PKCS11_LIBRARY_PATH}
+      slot: ${PKCS11_SLOT:0}
+      slot-list-index: ${PKCS11_SLOT_LIST_INDEX:0}
+  validation:
+    enabled: true
+    check-expiry: true
+    check-revocation: true
+    allow-test-certificates: false
+    certificate-validation-timeout: 30000
+    # Production certificate validation
+    ocsp-enabled: true
+    crl-enabled: true
+    certificate-chain-validation: strict
+
+# ERI API Configuration for Production
+eri:
+  api:
+    base-url: ${ERI_BASE_URL:https://api.eri.incometax.gov.in}
+    timeout: ${ERI_TIMEOUT:60000}
+    retry-attempts: ${ERI_RETRY_ATTEMPTS:3}
+    retry-delay: ${ERI_RETRY_DELAY:3000}
+    max-retry-delay: ${ERI_MAX_RETRY_DELAY:30000}
+  headers:
+    user-agent: "TaxERP-Phase1-PROD/1.0"
+    content-type: "application/json"
+    accept: "application/json"
+    # Production headers
+    x-environment: "PRODUCTION"
+    x-client-version: "1.0.0"
+    x-api-key: ${ERI_API_KEY}
+  security:
+    verify-ssl: true
+    trust-all-certs: false
+    certificate-validation: strict
+    # Production SSL configuration
+    ssl-context: custom
+    keystore-path: ${ERI_CLIENT_KEYSTORE_PATH}
+    keystore-password: ${ERI_CLIENT_KEYSTORE_PASSWORD}
+    truststore-path: ${ERI_CLIENT_TRUSTSTORE_PATH}
+    truststore-password: ${ERI_CLIENT_TRUSTSTORE_PASSWORD}
+  # Production endpoints
+  endpoints:
+    submit-data: "/api/v1/submit"
+    health-check: "/api/v1/health"
+    status-check: "/api/v1/status"
+
+# Audit Configuration for Production
+audit:
+  enabled: true
+  mask-sensitive-data: true
+  retention-days: ${AUDIT_RETENTION_DAYS:2555} # 7 years
+  batch-size: ${AUDIT_BATCH_SIZE:100}
+  detailed-logging: false
+  performance-metrics: false
+  # Production audit settings
+  encryption:
+    enabled: true
+    algorithm: AES-256-GCM
+    key-source: ${AUDIT_ENCRYPTION_KEY_SOURCE:vault}
+  archival:
+    enabled: true
+    archive-after-days: 365
+    compression: true
+
+# Logging Configuration for Production
+logging:
+  level:
+    root: WARN
+    com.taxerp: INFO
+    org.springframework.web: WARN
+    org.springframework.security: INFO
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+    org.springframework.transaction: WARN
+    # Security-related logging
+    org.springframework.security.web.authentication: INFO
+    org.springframework.security.web.access: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%X{correlationId:-}] [PROD] %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%X{correlationId:-}] [PROD] %logger{36} - %msg%n"
+  file:
+    name: ${LOG_FILE:/var/log/taxerp/tax-erp-prod.log}
+    max-size: 100MB
+    max-history: 90
+    total-size-cap: 10GB
+  # Production log configuration
+  config: ${LOGGING_CONFIG:classpath:logback-prod.xml}
+
+# Application-specific Configuration for Production
+app:
+  name: "Tax ERP System - Production"
+  version: "1.0.0"
+  description: "ERI-compliant Tax ERP system for production use"
+  
+  # Security Configuration for Production
+  security:
+    cors:
+      allowed-origins: ${CORS_ALLOWED_ORIGINS}
+      allowed-methods: GET,POST,PUT,DELETE
+      allowed-headers: Authorization,Content-Type,X-Requested-With,X-Correlation-ID
+      allow-credentials: true
+      max-age: 3600
+    
+    # Rate Limiting for Production
+    rate-limit:
+      enabled: true
+      requests-per-minute: ${RATE_LIMIT_RPM:30}
+      burst-capacity: ${RATE_LIMIT_BURST:5}
+    
+    # Production security hardening
+    headers:
+      frame-options: DENY
+      content-type-options: nosniff
+      xss-protection: "1; mode=block"
+      referrer-policy: strict-origin-when-cross-origin
+      content-security-policy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
+    
+    session:
+      timeout: 1800 # 30 minutes
+      cookie-secure: true
+      cookie-http-only: true
+      cookie-same-site: strict
+      tracking-modes: cookie
+  
+  # Feature Flags for Production
+  features:
+    health-check: true
+    eri-test-endpoint: false
+    audit-logging: true
+    signature-validation: true
+    debug-endpoints: false
+    performance-monitoring: true
+    test-data-generation: false
+
+# Production Validation Configuration
+validation:
+  json:
+    max-size: ${JSON_MAX_SIZE:1048576} # 1MB
+    strict-parsing: true
+    validate-schema: true
+    sanitize-input: true
+  
+  signature:
+    algorithm: SHA256withRSA
+    encoding: Base64
+    verify-certificate-chain: true
+    allow-self-signed: false
+    certificate-chain-depth: 5
+    # Production signature validation
+    timestamp-validation: true
+    signature-policy: strict
+
+# Production Monitoring Configuration
+monitoring:
+  enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: ${PROMETHEUS_ENABLED:false}
+        step: 60s
+      cloudwatch:
+        enabled: ${CLOUDWATCH_ENABLED:false}
+        namespace: TaxERP/Production
+  alerts:
+    enabled: true
+    email:
+      recipients: ${ALERT_EMAIL_RECIPIENTS}
+    thresholds:
+      error-rate: 0.05
+      response-time-p95: 5000
+      cpu-usage: 80
+      memory-usage: 85
+      disk-usage: 90
+
+# Production Backup Configuration
+backup:
+  enabled: true
+  schedule: ${BACKUP_SCHEDULE:0 2 * * *} # Daily at 2 AM
+  retention-days: ${BACKUP_RETENTION_DAYS:30}
+  encryption:
+    enabled: true
+    key-source: ${BACKUP_ENCRYPTION_KEY_SOURCE:vault}
+  storage:
+    type: ${BACKUP_STORAGE_TYPE:s3}
+    location: ${BACKUP_STORAGE_LOCATION}
+
+# Production Environment Variables Documentation
+# REQUIRED Environment Variables:
+# - DB_HOST: Production database host
+# - DB_PORT: Production database port
+# - DB_NAME: Production database name
+# - DB_USERNAME: Production database username
+# - DB_PASSWORD: Production database password (encrypted)
+# - DB_SSL_CERT: Client SSL certificate for database
+# - DB_SSL_KEY: Client SSL key for database
+# - DB_SSL_ROOT_CERT: Root CA certificate for database
+# - SSL_KEYSTORE_PATH: Server SSL keystore path
+# - SSL_KEYSTORE_PASSWORD: Server SSL keystore password (encrypted)
+# - SSL_KEY_ALIAS: Server SSL key alias
+# - SSL_TRUSTSTORE_PATH: Server SSL truststore path
+# - SSL_TRUSTSTORE_PASSWORD: Server SSL truststore password (encrypted)
+# - DSC_KEYSTORE_PATH: DSC keystore/token path
+# - DSC_KEYSTORE_PASSWORD: DSC keystore password (encrypted)
+# - DSC_KEYSTORE_ALIAS: DSC certificate alias
+# - PKCS11_LIBRARY_PATH: PKCS#11 library path for hardware tokens
+# - ERI_BASE_URL: ERI production API base URL
+# - ERI_API_KEY: ERI API authentication key (encrypted)
+# - ERI_CLIENT_KEYSTORE_PATH: ERI client certificate keystore
+# - ERI_CLIENT_KEYSTORE_PASSWORD: ERI client keystore password (encrypted)
+# - ERI_CLIENT_TRUSTSTORE_PATH: ERI client truststore
+# - ERI_CLIENT_TRUSTSTORE_PASSWORD: ERI client truststore password (encrypted)
+# - CORS_ALLOWED_ORIGINS: Allowed CORS origins (comma-separated)
+# - LOG_FILE: Production log file path
+# - AUDIT_ENCRYPTION_KEY_SOURCE: Audit log encryption key source
+# - BACKUP_ENCRYPTION_KEY_SOURCE: Backup encryption key source
+# - ALERT_EMAIL_RECIPIENTS: Alert notification email addresses
