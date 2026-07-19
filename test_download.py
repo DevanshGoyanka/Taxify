@@ -1,4 +1,4 @@
-﻿import asyncio,os,sys
+import asyncio,os,sys
 sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
 from app.automation.browser import browser_manager
 from app.automation.auth import login_itd
@@ -8,6 +8,8 @@ async def run():
   L=lambda m:print(m)
   # Build AayDocCapio-compatible output path
   downloads_root = r"C:\Users\Devansh\Desktop\Taxify\downloads"
+  if not os.path.exists(r"C:\Users\Devansh"):
+      downloads_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
   pan = os.environ.get("ITD_PAN", "").strip()
   name = "DEVANSH SUNIT GOYANKA"  # Or derive from vault if available
   assessment_year = "2026_27"  # AY for 26AS folder naming

@@ -1,6 +1,6 @@
 # .gitignore
 
-# ── Python ──────────────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -13,39 +13,61 @@ dist/
 .eggs/
 *.egg
 
-# ── Virtual environments ─────────────────────────────────────────────────────
+# Virtual environments
 .venv/
 venv/
 env/
 ENV/
 
-# ── Environment / secrets ────────────────────────────────────────────────────
+# Environment / secrets
 .env
+.env.example
 *.env.local
 *.env.*.local
 
-# ── Database ─────────────────────────────────────────────────────────────────
+# Database
 *.db
 *.sqlite
 *.sqlite3
 
-# ── pytest / coverage ────────────────────────────────────────────────────────
+# Secrets / credentials
+*.pem
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.cer
+*.crt
+*.key
+*.der
+credentials.txt
+pkcs11.cfg
+
+# Java build artifacts
+*.class
+*.jar
+target/
+
+# Archive files
+*.zip
+
+# pytest / coverage
 .pytest_cache/
 .coverage
 htmlcov/
 coverage.xml
 
-# ── IDEs ─────────────────────────────────────────────────────────────────────
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# ── OS ───────────────────────────────────────────────────────────────────────
+# OS
 .DS_Store
 Thumbs.db
 
-# ── Node / Frontend ──────────────────────────────────────────────────────────
+# Node / Frontend
 node_modules/
 frontend/node_modules/
 frontend/.env
@@ -54,9 +76,41 @@ frontend/build/
 frontend/dist/
 frontend/.next/
 
-# ── Logs ─────────────────────────────────────────────────────────────────────
+# Logs
 *.log
-# ── Downloaded files / sensitive documents ──────────────────────────────────
+
+# Downloaded files / sensitive documents
 downloads/
-*.pdf
-*.txt
+Docs/*.pdf
+Docs/*.txt
+Docs/*.zip
+
+# Test playground temp files
+uat-login-test/
+API_Testing/*.json
+API_Testing/*.cfg
+API_Testing/*.zip
+API_Testing/*.jar
+API_Testing/target/
+API_Testing/**/*.class
+API_Testing/**/target/
+API_Testing/.kiro/
+
+# Temp / debug scripts
+check_sig.py
+verify_cred_sig.py
+verify_with_cryptography.py
+dump_java_sign.py
+deploy_nginx.sh
+update_nginx.sh
+update_nginx2.sh
+api_audit.md
+fix_ay.py
+find_urls.py
+TestAES.class
+
+# JSON - only test/temp JSON, not package.json or schema
+*.json
+!frontend/**/*.json
+!Docs/PreFillSchemaJSON_V6.5/*.json
+!package.json
