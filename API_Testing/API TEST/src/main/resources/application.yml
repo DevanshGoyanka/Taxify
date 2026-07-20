@@ -1,0 +1,165 @@
+# Base Spring Boot Configuration for Tax ERP System
+# This file contains common settings shared across all environments
+
+spring:
+  application:
+    name: tax-erp-system
+  
+  # Database Configuration (defaults for development)
+  datasource:
+    url: jdbc:postgresql://localhost:5432/taxerp_dev
+    username: ${DB_USERNAME:taxerp_dev}
+    password: ${DB_PASSWORD:dev_password}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: 20000
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      leak-detection-threshold: 60000
+  
+  # JPA/Hibernate Configuration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.SnakeCasePhysicalNamingStrategy
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        use_sql_comments: true
+        jdbc:
+          batch_size: 20
+        order_inserts: true
+        order_updates: true
+  
+  # Transaction Management
+  transaction:
+    default-timeout: 30
+    rollback-on-commit-failure: true
+
+# Server Configuration
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /api
+  error:
+    include-message: always
+    include-binding-errors: always
+    include-stacktrace: on_param
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+
+# Management and Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when_authorized
+  health:
+    db:
+      enabled: true
+
+# DSC Configuration
+dsc:
+  keystore:
+    path: ${DSC_KEYSTORE_PATH:./test-keystore.p12}
+    password: ${DSC_KEYSTORE_PASSWORD:test123}
+    type: ${DSC_KEYSTORE_TYPE:PKCS12}
+    alias: ${DSC_KEYSTORE_ALIAS:}
+  validation:
+    enabled: true
+    check-expiry: true
+    check-revocation: false
+
+# ERI API Configuration
+eri:
+  api:
+    base-url: ${ERI_BASE_URL:https://uat.eri.incometax.gov.in}
+    timeout: ${ERI_TIMEOUT:30000}
+    retry-attempts: ${ERI_RETRY_ATTEMPTS:3}
+    retry-delay: ${ERI_RETRY_DELAY:1000}
+    max-retry-delay: ${ERI_MAX_RETRY_DELAY:8000}
+  headers:
+    user-agent: "TaxERP-Phase1/1.0"
+    content-type: "application/json"
+    accept: "application/json"
+  security:
+    verify-ssl: true
+    trust-all-certs: false
+
+# Audit Configuration
+audit:
+  enabled: true
+  mask-sensitive-data: true
+  retention-days: ${AUDIT_RETENTION_DAYS:365}
+  batch-size: ${AUDIT_BATCH_SIZE:100}
+
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.taxerp: INFO
+    org.springframework.web: INFO
+    org.springframework.security: INFO
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+    org.springframework.transaction: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%X{correlationId:-}] %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%X{correlationId:-}] %logger{36} - %msg%n"
+  file:
+    name: ${LOG_FILE:logs/tax-erp.log}
+    max-size: 10MB
+    max-history: 30
+    total-size-cap: 1GB
+
+# Application-specific Configuration
+app:
+  name: "Tax ERP System - Phase 1"
+  version: "1.0.0"
+  description: "ERI-compliant Tax ERP system for CA/Advocate firms"
+  contact:
+    name: "Tax ERP Support"
+    email: "support@taxerp.com"
+  
+  # Security Configuration
+  security:
+    cors:
+      allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:8080}
+      allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+      allowed-headers: "*"
+      allow-credentials: true
+      max-age: 3600
+    
+    # Rate Limiting
+    rate-limit:
+      enabled: true
+      requests-per-minute: ${RATE_LIMIT_RPM:60}
+      burst-capacity: ${RATE_LIMIT_BURST:10}
+  
+  # Feature Flags
+  features:
+    health-check: true
+    eri-test-endpoint: true
+    audit-logging: true
+    signature-validation: true
+
+# Validation Configuration
+validation:
+  json:
+    max-size: ${JSON_MAX_SIZE:1048576} # 1MB
+    strict-parsing: true
+  
+  signature:
+    algorithm: SHA256withRSA
+    encoding: Base64
+    verify-certificate-chain: true

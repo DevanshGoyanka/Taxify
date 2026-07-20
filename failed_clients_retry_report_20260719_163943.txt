@@ -1,0 +1,147 @@
+================================================================================
+FAILED CLIENTS RETRY REPORT
+================================================================================
+Test Date: 2026-07-19 16:39:43
+Total Clients: 46
+Successful: 37
+Skipped: 5
+Failed: 4
+Success Rate: 90.2%
+
+SKIPPED (Already Downloaded):
+--------------------------------------------------
+⚠ AHLPU2662E - Already downloaded: Found: 26AS (2 files)
+⚠ AODPR7988H - Already downloaded: Found: AIS, TIS (2 files)
+⚠ DBPPS5425A - Already downloaded: Found: AIS, TIS (2 files)
+⚠ AMIPR1349D - Already downloaded: Found: 26AS (2 files)
+⚠ ENNPK5934D - Already downloaded: Found: AIS, TIS (2 files)
+
+SUCCESSFUL RETRIES:
+--------------------------------------------------
+✓ ASIPD7661E - Duration: 165.9s
+  26AS: True -
+  AIS/TIS: False - {'status': 'requested', 'ref_id': '', 'fy': '2025-26', 'tis': {'status': 'failed', 'unlocked': None, 'reason': None}}
+✓ AAOPI1287K - Duration: 81.8s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AAOPI1287K-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AAOPI1287K-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AIPPK3522L - Duration: 93.9s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AIPPK3522L-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AIPPK3522L-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ BVAPS9030A - Duration: 86.8s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\BVAPS9030A-DEVANSH SUNIT GOYANKA\\AY_2026_27\\BVAPS9030A-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AHGPJ4446C - Duration: 80.8s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AHGPJ4446C-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AHGPJ4446C-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AQEPB5816F - Duration: 81.4s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AQEPB5816F-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AQEPB5816F-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AMZPB9193J - Duration: 146.2s
+  26AS: True -
+  AIS/TIS: False - {'status': 'failed', 'reason': 'AIS download icon not found or modal did not open', 'tis': {'status': 'failed', 'unlocked': None, 'reason': None}}
+✓ AKMPD1039Q - Duration: 157.2s
+  26AS: True -
+  AIS/TIS: False - {'status': 'failed', 'reason': 'AIS download icon not found or modal did not open', 'tis': {'status': 'failed', 'unlocked': None, 'reason': None}}
+✓ BPRPB8919L - Duration: 79.9s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\BPRPB8919L-DEVANSH SUNIT GOYANKA\\AY_2026_27\\BPRPB8919L-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ BNNPK2717D - Duration: 81.0s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\BNNPK2717D-DEVANSH SUNIT GOYANKA\\AY_2026_27\\BNNPK2717D-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ IBOPK0910E - Duration: 83.2s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\IBOPK0910E-DEVANSH SUNIT GOYANKA\\AY_2026_27\\IBOPK0910E-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AKZPK8869L - Duration: 80.9s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AKZPK8869L-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AKZPK8869L-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ CATPD5881R - Duration: 82.9s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\CATPD5881R-DEVANSH SUNIT GOYANKA\\AY_2026_27\\CATPD5881R-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ ATRPM7012J - Duration: 80.7s
+  26AS: True -
+  AIS/TIS: False - {'status': 'no_data', 'unlocked': None, 'reason': 'No AIS data available for FY 2025-26.', 'tis': {'status': 'no_data', 'unlocked': None, 'reason': "You don't have any TIS details to download."}}
+✓ ETTPM9077B - Duration: 83.1s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\ETTPM9077B-DEVANSH SUNIT GOYANKA\\AY_2026_27\\ETTPM9077B-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AONPK9228D - Duration: 83.5s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AONPK9228D-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AONPK9228D-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ ANCPG7860M - Duration: 79.9s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\ANCPG7860M-DEVANSH SUNIT GOYANKA\\AY_2026_27\\ANCPG7860M-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AUZPA6853E - Duration: 82.4s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AUZPA6853E-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AUZPA6853E-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ BHCPP3683C - Duration: 80.9s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\BHCPP3683C-DEVANSH SUNIT GOYANKA\\AY_2026_27\\BHCPP3683C-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ CAUPB4344J - Duration: 82.0s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\CAUPB4344J-DEVANSH SUNIT GOYANKA\\AY_2026_27\\CAUPB4344J-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ ANKPG8242P - Duration: 155.0s
+  26AS: True -
+  AIS/TIS: False - {'status': 'failed', 'reason': 'AIS download icon not found or modal did not open', 'tis': {'status': 'failed', 'unlocked': None, 'reason': None}}
+✓ BAWPG3818F - Duration: 87.3s
+  26AS: True -
+  AIS/TIS: False - {'status': 'no_data', 'unlocked': None, 'reason': 'No AIS data available for FY 2025-26.', 'tis': {'status': 'no_data', 'unlocked': None, 'reason': "You don't have any TIS details to download."}}
+✓ AOHPN0437R - Duration: 85.4s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AOHPN0437R-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AOHPN0437R-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ ACXPY8016D - Duration: 83.5s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\ACXPY8016D-DEVANSH SUNIT GOYANKA\\AY_2026_27\\ACXPY8016D-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AHAPT5100B - Duration: 83.2s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AHAPT5100B-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AHAPT5100B-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ ANGPV4022N - Duration: 86.1s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\ANGPV4022N-DEVANSH SUNIT GOYANKA\\AY_2026_27\\ANGPV4022N-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AONPD0576P - Duration: 84.4s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AONPD0576P-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AONPD0576P-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AEDPD0736M - Duration: 82.3s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AEDPD0736M-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AEDPD0736M-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AMDPG4878K - Duration: 80.8s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AMDPG4878K-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AMDPG4878K-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ HNBPK4111H - Duration: 80.7s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\HNBPK4111H-DEVANSH SUNIT GOYANKA\\AY_2026_27\\HNBPK4111H-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ BCVPV7359H - Duration: 80.4s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\BCVPV7359H-DEVANSH SUNIT GOYANKA\\AY_2026_27\\BCVPV7359H-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ GNHPS6440E - Duration: 82.8s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\GNHPS6440E-DEVANSH SUNIT GOYANKA\\AY_2026_27\\GNHPS6440E-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ AYXPV5878Q - Duration: 83.3s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\AYXPV5878Q-DEVANSH SUNIT GOYANKA\\AY_2026_27\\AYXPV5878Q-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ CCTPG4135M - Duration: 83.7s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\CCTPG4135M-DEVANSH SUNIT GOYANKA\\AY_2026_27\\CCTPG4135M-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ ALWPD1654N - Duration: 157.4s
+  26AS: True -
+  AIS/TIS: False - {'status': 'failed', 'reason': 'AIS download icon not found or modal did not open', 'tis': {'status': 'failed', 'unlocked': None, 'reason': None}}
+✓ CJHPM4428G - Duration: 84.5s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\CJHPM4428G-DEVANSH SUNIT GOYANKA\\AY_2026_27\\CJHPM4428G-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+✓ BPIPB7221Q - Duration: 81.6s
+  26AS: True -
+  AIS/TIS: True - {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched', 'file': 'C:\\Users\\Devansh\\Desktop\\Taxify\\downloads\\BPIPB7221Q-DEVANSH SUNIT GOYANKA\\AY_2026_27\\BPIPB7221Q-AIS-2025_26.pdf', 'tis': {'status': 'downloaded', 'unlocked': False, 'reason': 'no-password-matched'}}
+
+STILL FAILED:
+--------------------------------------------------
+✗ ABDPC0700B - Duration: 37.4s
+  Original issue: Could not find AssessmentYearDropDown on TRACES view26AS page
+  Error: Traceback (most recent call last):...
+✗ AIJPG6220B - Duration: 37.4s
+  Original issue: Traceback error
+  Error: Traceback (most recent call last):...
+✗ AUYPB9887E - Duration: 37.3s
+  Original issue: Traceback error
+  Error: Traceback (most recent call last):...
+✗ AUEPS6065K - Duration: 38.8s
+  Original issue: Traceback error
+  Error: Traceback (most recent call last):...
+
