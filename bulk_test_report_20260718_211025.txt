@@ -1,0 +1,52 @@
+================================================================================
+BULK AUTOMATION TEST REPORT
+================================================================================
+Test Date: 2026-07-18 21:10:25
+Total Clients: 3
+Successful: 0
+Failed: 3
+Success Rate: 0.0%
+
+SUCCESSFUL DOWNLOADS:
+--------------------------------------------------
+FAILED DOWNLOADS:
+--------------------------------------------------
+✗ ABCDE1234F - Unknown
+  Duration: 129.6s
+  Error: Traceback (most recent call last):
+  File "C:\Users\Devansh\Desktop\Taxify\test_download.py", line 39, in <module>
+    if __name__=='__main__':asyncio.run(run())
+                            ~~~~~~~~~~~^^^^^^^
+  File "C:\Program Files\Python314\Lib\asyncio\runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Program Files\Python314\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~...
+
+✗ FGHIJ5678K - Unknown
+  Duration: 99.8s
+  Error: Traceback (most recent call last):
+  File "C:\Users\Devansh\Desktop\Taxify\test_download.py", line 39, in <module>
+    if __name__=='__main__':asyncio.run(run())
+                            ~~~~~~~~~~~^^^^^^^
+  File "C:\Program Files\Python314\Lib\asyncio\runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Program Files\Python314\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~...
+
+✗ LMNOP9012Q - Unknown
+  Duration: 98.4s
+  Error: Traceback (most recent call last):
+  File "C:\Users\Devansh\Desktop\Taxify\test_download.py", line 39, in <module>
+    if __name__=='__main__':asyncio.run(run())
+                            ~~~~~~~~~~~^^^^^^^
+  File "C:\Program Files\Python314\Lib\asyncio\runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Program Files\Python314\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~...
+

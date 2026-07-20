@@ -12,6 +12,7 @@ Endpoints:
 """
 
 import json
+from dataclasses import asdict
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,7 +21,8 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import SavedReturn, User
-from app.engine.calculator import compute_itr1, compute_itr4
+from app.engine.calculators.itr1 import compute as compute_itr1
+from app.engine.calculators.itr4 import compute as compute_itr4
 from app.schemas.itr1 import ITR1Input
 from app.schemas.itr4 import ITR4Input
 from app.schemas.itr_responses import (
@@ -66,7 +68,7 @@ def itr1_compute(
         result = compute_itr1(body)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    return ITR1ComputeResponse(**result)
+    return _build_itr1_response(result)
 
 
 @router.post("/itr4/compute", response_model=ITR4ComputeResponse)
@@ -85,7 +87,39 @@ def itr4_compute(
         result = compute_itr4(body)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    return ITR4ComputeResponse(**result)
+    return _build_itr4_response(result)
+
+
+# ---------------------------------------------------------------------------
+# Response builders (dataclass → Pydantic response with field-name mapping)
+# ---------------------------------------------------------------------------
+
+def _build_itr1_response(result) -> ITR1ComputeResponse:
+    """Convert ITR1Result dataclass to the ITR1ComputeResponse Pydantic model.
+
+    Field-name mappings:
+      deductions_total  → deductions_chapter6a
+      net_tax_liability → total_tax_payable
+    """
+    d = asdict(result)
+    d["deductions_chapter6a"] = d.pop("deductions_total")
+    d["total_tax_payable"] = d.pop("net_tax_liability")
+    return ITR1ComputeResponse.model_validate(d)
+
+
+def _build_itr4_response(result) -> ITR4ComputeResponse:
+    """Convert ITR4Result dataclass to the ITR4ComputeResponse Pydantic model.
+
+    Field-name mappings:
+      presumptive_income → pgbp_income
+      deductions_total   → deductions_chapter6a
+      net_tax_liability  → total_tax_payable
+    """
+    d = asdict(result)
+    d["pgbp_income"] = d.pop("presumptive_income")
+    d["deductions_chapter6a"] = d.pop("deductions_total")
+    d["total_tax_payable"] = d.pop("net_tax_liability")
+    return ITR4ComputeResponse.model_validate(d)
 
 
 # ---------------------------------------------------------------------------

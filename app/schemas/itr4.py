@@ -15,24 +15,29 @@ Only ONE presumptive scheme can be active per return. The active scheme is
 indicated by the `presumptive_scheme` enum in ITR4Input; the corresponding
 sub-model must be populated, the others must be None.
 
-Capital gains, brought-forward losses, foreign income, and speculative
-business income are outside ITR-4 scope.
+Capital gains under Section 112A (LTCG on listed equity/equity MF) are permitted
+up to ₹1.25 lakh (CBDT notification effective AY 2025-26 onwards). No other capital
+gains, brought-forward losses, foreign income, or speculative business income are
+within ITR-4 scope.
 """
 
 from decimal import Decimal
 from enum import Enum
 from typing import List, Optional
+from datetime import date
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Shared income / deduction models — do NOT redefine, import directly.
 from app.schemas.itr1 import (
     AgeBracket,
+    CapitalGainsIncome,
     Chapter6ADeductions,
     HousePropertyIncome,
     OtherSourcesIncome,
     SalaryIncome,
     TaxRegime,
+    TDS1Entry, TDS2Entry, TCSEntry,
 )
 
 
@@ -123,6 +128,12 @@ class PresumptiveBusinessIncome44AD(BaseModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _check_44ad_cap(self) -> "PresumptiveBusinessIncome44AD":
+        if self.total_turnover > Decimal("30000000"):
+            raise ValueError("Total turnover exceeds ₹3 crore limit")
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Section 44ADA — Presumptive Professional Income
@@ -185,6 +196,12 @@ class PresumptiveProfessionalIncome44ADA(BaseModel):
             "(Section 44ADA(1))."
         ),
     )
+
+    @model_validator(mode="after")
+    def _check_44ada_cap(self) -> "PresumptiveProfessionalIncome44ADA":
+        if self.gross_receipts > Decimal("7500000"):
+            raise ValueError("Gross receipts exceed ₹75 lakh limit")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -372,3 +389,23 @@ class ITR4Input(BaseModel):
             "computation engine when tax_regime is 'new', except 80CCD(2)."
         ),
     )
+    capital_gains: Optional[CapitalGainsIncome] = Field(
+        default=None,
+        description=(
+            "Long-term capital gains under Section 112A only. As per CBDT "
+            "notification, ITR-4 allows LTCG u/s 112A up to ₹1,25,000. "
+            "The computation engine will reject inputs exceeding this limit. "
+            "No other capital gains (STCG, VDA, LTCG other than 112A) are "
+            "permitted in ITR-4."
+        ),
+    )
+    # --- TDS/TCS ---
+    tds1_entries: Optional[List[TDS1Entry]] = Field(default=None)
+    tds2_entries: Optional[List[TDS2Entry]] = Field(default=None)
+    tcs_entries: Optional[List[TCSEntry]] = Field(default=None)
+    # --- Tax payments ---
+    advance_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    self_assessment_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    # --- Filing dates ---
+    filing_date: Optional[date] = Field(default=None)
+    due_date: Optional[date] = Field(default=None)
