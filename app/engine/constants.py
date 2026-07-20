@@ -170,10 +170,10 @@ SECTION_80GG_RENT_LIMIT: Final[Decimal] = Decimal("60000")       # Rs 5,000 x 12
 SECTION_80GG_GTI_PERCENT: Final[Decimal] = Decimal("0.25")      # 25% of GTI
 
 # Section 80QQB - Royalty income (authors)
-SECTION_80QQB_LIMIT: Final[Decimal] = Decimal("30000")           # Rs 30,000
+SECTION_80QQB_LIMIT: Final[Decimal] = Decimal("300000")          # Rs 3,00,000
 
 # Section 80RRB - Royalty on patents
-SECTION_80RRB_LIMIT: Final[Decimal] = Decimal("30000")           # Rs 30,000
+SECTION_80RRB_LIMIT: Final[Decimal] = Decimal("300000")          # Rs 3,00,000
 
 # Section 80TTA - Interest on savings account
 SECTION_80TTA_LIMIT: Final[Decimal] = Decimal("10000")          # Rs 10,000
@@ -220,3 +220,21 @@ VDA_RATE: Final[Decimal] = Decimal("30")                         # Flat 30%
 
 # Section 115BBE - Unexplained income
 UNEXPLAINED_INCOME_RATE: Final[Decimal] = Decimal("60")          # Flat 60%
+
+# =============================================================================
+# COST INFLATION INDEX (CII) — Notified u/s 48, Explanation (v)
+# Base year: FY 2001-02 = 100
+# Source: CBDT Notification No. 44/2025 dated 3-Jun-2025 for FY 2025-26
+# =============================================================================
+
+CII_TABLE: Final[dict[int, int]] = {
+    # Pre base-year: actual FMV as on 01-04-2001 used
+    2001: 100, 2002: 105, 2003: 109, 2004: 113, 2005: 117,
+    2006: 122, 2007: 129, 2008: 137, 2009: 148, 2010: 167,
+    2011: 184, 2012: 200, 2013: 220, 2014: 240, 2015: 254,
+    2016: 272, 2017: 280, 2018: 289, 2019: 301, 2020: 318,
+    2021: 331, 2022: 348, 2023: 348, 2024: 363, 2025: 363,
+}
+
+# FMV date for "grandfathering" rule u/s 112A
+LTCG_112A_GRANDFATHER_DATE: Final[str] = "2018-01-31"

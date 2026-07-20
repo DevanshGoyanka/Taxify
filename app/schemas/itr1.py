@@ -21,6 +21,7 @@ Disqualifiers (must use ITR-2 or ITR-3 instead):
 from decimal import Decimal
 from enum import Enum
 from typing import List, Optional
+from datetime import date
 
 from pydantic import BaseModel, Field
 
@@ -547,3 +548,50 @@ class ITR1Input(BaseModel):
             "exceeds ₹1,25,000, as such assessees must file ITR-2."
         ),
     )
+    # --- TDS/TCS ---
+    tds1_entries: Optional[List["TDS1Entry"]] = Field(
+        default=None,
+        description="TDS on salary (Form 16 entries).",
+    )
+    tds2_entries: Optional[List["TDS2Entry"]] = Field(
+        default=None,
+        description="TDS on income other than salary.",
+    )
+    tcs_entries: Optional[List["TCSEntry"]] = Field(
+        default=None,
+        description="Tax collected at source.",
+    )
+    # --- Tax payments ---
+    advance_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    self_assessment_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    # --- Filing dates ---
+    filing_date: Optional[date] = Field(default=None)
+    due_date: Optional[date] = Field(default=None)
+
+
+# ---------------------------------------------------------------------------
+# TDS / TCS entry models (shared across ITR forms)
+# ---------------------------------------------------------------------------
+
+
+class TDS1Entry(BaseModel):
+    employer_tan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
+    employer_name: Optional[str] = Field(default=None, max_length=125)
+    income_chargeable: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class TDS2Entry(BaseModel):
+    deductor_tan: str = Field(..., pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
+    deductor_name: Optional[str] = Field(default=None, max_length=125)
+    tds_section: str = Field(...)
+    gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class TCSEntry(BaseModel):
+    collector_tan: str = Field(..., pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
+    collector_name: Optional[str] = Field(default=None)
+    tcs_section: str = Field(...)
+    gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    tcs_collected: Decimal = Field(default=Decimal("0"), ge=0)

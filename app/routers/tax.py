@@ -9,7 +9,8 @@ from app.db.database import get_db
 from app.db.models import User
 from app.schemas.itr1 import ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome, Chapter6ADeductions, CapitalGainsIncome, PropertyType, AgeBracket, TaxRegime
 from app.schemas.itr4 import ITR4Input, PresumptiveScheme, PresumptiveBusinessIncome44AD, PresumptiveProfessionalIncome44ADA
-from app.engine.calculator import compute_itr1, compute_itr4
+from app.engine.calculators.itr1 import compute as compute_itr1
+from app.engine.calculators.itr4 import compute as compute_itr4
 
 router = APIRouter(tags=["tax"])
 
@@ -177,15 +178,15 @@ def compute_tax_summary(
         res = compute_itr1(itr1_in)
         
     # Build frontend response structure
-    gti = float(res["gross_total_income"])
-    total_deductions = float(res["deductions_chapter6a"])
-    taxable_income = float(res["taxable_income"])
-    slab_tax = float(res["slab_tax"])
-    rebate = float(res["rebate_87a"])
-    tax_after_rebate = float(res["tax_after_rebate"])
-    surcharge = float(res["surcharge"])
-    cess = float(res["health_education_cess"])
-    total_tax_payable = float(res["total_tax_payable"])
+    gti = float(res.gross_total_income)
+    total_deductions = float(res.deductions_total)
+    taxable_income = float(res.taxable_income)
+    slab_tax = float(res.slab_tax)
+    rebate = float(res.rebate_87a)
+    tax_after_rebate = float(res.tax_after_rebate)
+    surcharge = float(res.surcharge)
+    cess = float(res.health_education_cess)
+    total_tax_payable = float(res.net_tax_liability)
     
     # Standard deduction
     std_ded = 75000.0 if tax_regime == TaxRegime.NEW else 50000.0
@@ -206,10 +207,10 @@ def compute_tax_summary(
         "grossSalary": gross_salary,
         "hraExempt": hra_exempt,
         "netSalary": net_salary,
-        "hpIncome": float(res["house_property_income"]),
+        "hpIncome": float(res.house_property_income),
         "cgTax": 0.0, # Simple ITR1/4 default
-        "bizIncome": float(res.get("pgbp_income", 0)),
-        "otherIncome": float(res["other_sources_income"]),
+        "bizIncome": float(getattr(res, 'presumptive_income', 0) or getattr(res, 'business_income', 0)),
+        "otherIncome": float(res.other_sources_income),
         "vdaTax": vda_gains * 0.3,
         "gti": gti,
         "gtiAfterSetOff": gti,

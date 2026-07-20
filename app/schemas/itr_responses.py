@@ -43,6 +43,81 @@ class ITR1ComputeResponse(_DecimalModel):
 
 
 # ---------------------------------------------------------------------------
+# ITR-2 compute response
+# ---------------------------------------------------------------------------
+
+class ITR2ComputeResponse(_DecimalModel):
+    """Full breakdown returned by POST /itr2/compute."""
+    salary_income: Decimal
+    house_property_income: Decimal
+    capital_gains_income: Decimal
+    other_sources_income: Decimal
+    vda_income: Decimal
+    clubbing_income: Decimal
+    gti_before_loss_setoff: Decimal
+    cyla_total_set_off: Decimal
+    bfla_total_set_off: Decimal
+    gti_after_loss_setoff: Decimal
+    gross_total_income: Decimal
+    net_agricultural_income: Decimal
+    deductions_total: Decimal
+    taxable_income: Decimal
+    aggregate_income: Decimal
+    slab_tax: Decimal
+    special_rate_tax: Decimal
+    amt_tax: Decimal
+    total_tax_before_relief: Decimal
+    tax_before_rebate: Decimal
+    rebate_87a: Decimal
+    tax_after_rebate: Decimal
+    surcharge: Decimal
+    health_education_cess: Decimal
+    gross_tax_liability: Decimal
+    relief_89: Decimal
+    relief_90_91: Decimal
+    net_tax_liability: Decimal
+    total_tds: Decimal
+    total_tcs: Decimal
+    total_taxes_paid: Decimal
+    balance_payable: Decimal
+    refund_due: Decimal
+    hp_loss_disallowed: Decimal
+
+
+# ---------------------------------------------------------------------------
+# ITR-3 compute response
+# ---------------------------------------------------------------------------
+
+class ITR3ComputeResponse(_DecimalModel):
+    """Full breakdown returned by POST /itr3/compute."""
+    business_income: Decimal
+    salary_income: Decimal
+    house_property_income: Decimal
+    capital_gains_income: Decimal
+    other_sources_income: Decimal
+    vda_income: Decimal
+    clubbing_income: Decimal
+    gross_total_income: Decimal
+    deductions_total: Decimal
+    taxable_income: Decimal
+    slab_tax: Decimal
+    special_rate_tax: Decimal
+    tax_before_rebate: Decimal
+    rebate_87a: Decimal
+    tax_after_rebate: Decimal
+    surcharge: Decimal
+    health_education_cess: Decimal
+    gross_tax_liability: Decimal
+    relief_90_91: Decimal
+    net_tax_liability: Decimal
+    total_tds: Decimal
+    total_tcs: Decimal
+    total_taxes_paid: Decimal
+    balance_payable: Decimal
+    refund_due: Decimal
+
+
+# ---------------------------------------------------------------------------
 # ITR-4 compute response
 # ---------------------------------------------------------------------------
 
@@ -52,10 +127,12 @@ class ITR4ComputeResponse(_DecimalModel):
     salary_income: Decimal
     house_property_income: Decimal
     other_sources_income: Decimal
+    capital_gains_112a: Decimal
     gross_total_income: Decimal
     deductions_chapter6a: Decimal
     taxable_income: Decimal
     slab_tax: Decimal
+    special_rate_tax: Decimal
     rebate_87a: Decimal
     tax_after_rebate: Decimal
     surcharge: Decimal
@@ -70,18 +147,18 @@ class ITR4ComputeResponse(_DecimalModel):
 
 class SaveRequest(BaseModel):
     """Body for POST /returns/save."""
-    itr_type: str          # "ITR1" or "ITR4"
-    input_data: Any        # arbitrary JSON — the original input dict
-    computed_result: Any   # arbitrary JSON — the engine output dict
+    itr_type: str          # "ITR1", "ITR2", "ITR3", or "ITR4"
+    input_data: Any        # arbitrary JSON -- the original input dict
+    computed_result: Any   # arbitrary JSON -- the engine output dict
 
 
 class SaveResponse(BaseModel):
-    """Response from POST /returns/save — just the new row id."""
+    """Response from POST /returns/save -- just the new row id."""
     id: int
 
 
 class ReturnSummary(BaseModel):
-    """One item in the GET /returns list — lightweight, no full data."""
+    """One item in the GET /returns list -- lightweight, no full data."""
     id: int
     itr_type: str
     created_at: datetime
