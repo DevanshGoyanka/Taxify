@@ -22,11 +22,14 @@ from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import SavedReturn, User
 from app.engine.calculators.itr1 import compute as compute_itr1
+from app.engine.calculators.itr3 import compute as compute_itr3
 from app.engine.calculators.itr4 import compute as compute_itr4
 from app.schemas.itr1 import ITR1Input
+from app.schemas.itr3 import ITR3Input
 from app.schemas.itr4 import ITR4Input
 from app.schemas.itr_responses import (
     ITR1ComputeResponse,
+    ITR3ComputeResponse,
     ITR4ComputeResponse,
     ReturnDetail,
     ReturnSummary,
@@ -90,6 +93,24 @@ def itr4_compute(
     return _build_itr4_response(result)
 
 
+@router.post("/itr3/compute", response_model=ITR3ComputeResponse)
+def itr3_compute(
+    body: ITR3Input,
+    current_user: User = Depends(get_current_user),
+) -> ITR3ComputeResponse:
+    """
+    Run the ITR-3 tax engine and return the full breakdown.
+
+    Raises HTTP 422 if the input is invalid (Pydantic validation).
+    Does NOT persist anything to the database.
+    """
+    try:
+        result = compute_itr3(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return _build_itr3_response(result)
+
+
 # ---------------------------------------------------------------------------
 # Response builders (dataclass → Pydantic response with field-name mapping)
 # ---------------------------------------------------------------------------
@@ -122,6 +143,11 @@ def _build_itr4_response(result) -> ITR4ComputeResponse:
     return ITR4ComputeResponse.model_validate(d)
 
 
+def _build_itr3_response(result) -> ITR3ComputeResponse:
+    """Convert ITR3Result dataclass to the ITR3ComputeResponse Pydantic model."""
+    return ITR3ComputeResponse.model_validate(asdict(result))
+
+
 # ---------------------------------------------------------------------------
 # Persistence endpoints
 # ---------------------------------------------------------------------------
@@ -138,7 +164,7 @@ def save_return(
     Both input_data and computed_result are stored as JSON text blobs.
     Returns the id of the newly created row.
     """
-    if body.itr_type not in ("ITR1", "ITR4"):
+    if body.itr_type not in ("ITR1", "ITR3", "ITR4"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="itr_type must be 'ITR1' or 'ITR4'.",

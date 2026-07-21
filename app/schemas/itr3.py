@@ -1,31 +1,30 @@
 """
 ITR-3 input schemas.
 
-ITR-3 is for Individuals and HUFs having income from business or profession.
+ITR-3 is applicable to individuals and HUFs having income from business or profession.
 
 Eligibility:
   - Resident / Non-Resident / Not Ordinarily Resident
-  - Having income under the head "Profits and Gains of Business or Profession"
-  - Can also have salary, house property, capital gains, other sources
+  - Having income under the head 'Profits and Gains of Business or Profession' (PGBP)
+  - May also have: Salary, House Property, Capital Gains, Other Sources
+  - Can carry forward / set off business losses
+  - Total income can exceed Rs 50 lakh
 
 Key schedules unique to ITR-3:
-  - PARTA_BS (Balance Sheet)
-  - PARTA_PL (Profit & Loss Account)
-  - PARTA_OI (Other Information)
-  - PARTA_QD (Quantitative Details - if 44AB audit)
-  - Manufacturing Account / Trading Account
-  - ITR3ScheduleBP (Business Income Computation)
-  - ScheduleDPM (Depreciation on Plant & Machinery)
-  - ScheduleDOA (Depreciation on Other Assets)
-  - ScheduleDEP (Depreciation Summary)
-  - ScheduleDCG (Deemed Capital Gains u/s 50 on depreciable assets)
-  - ScheduleESR (Scientific Research Expenditure u/s 35)
-  - ScheduleIF (Income from Firm/LLP/AOP)
-  - ScheduleICDS (ICDS adjustments)
-  - ScheduleUD (Unabsorbed Depreciation)
-  - ScheduleGST (GSTIN-wise turnover)
-  - Schedule10AA (SEZ deduction)
-  - Schedule80-IA, 80-IB, 80-IC, 80RA (Business-specific deductions)
+  - ITR3ScheduleBP: Core PGBP computation (BusinessIncOthThanSpec, SpecBusinessInc, etc.)
+  - PARTA_BS: Balance Sheet
+  - PARTA_PL: Profit & Loss Account
+  - PartA_GEN2: Audit Info, Nature of Business
+  - ScheduleDEP/DOA/DPM/DCG: Depreciation schedules
+  - ScheduleUD: Unabsorbed Depreciation
+  - ScheduleIF: Interest from Firms
+  - ScheduleGST: GST details
+  - 80-IA, 80-IB, 80-IC, 80RA, 10AA: Business-specific deductions
+  - ManufacturingAccount, TradingAccount: P&L sub-schedules
+  - PARTA_OI: Other Information (disallowances)
+  - ScheduleICDS: Income Computation and Disclosure Standards
+  - ScheduleESR: Expenditure on Scientific Research
+  - ScheduleTPSA: Transfer Pricing Secondary Adjustment
 """
 
 from decimal import Decimal
@@ -36,263 +35,142 @@ from datetime import date
 from pydantic import BaseModel, Field
 
 from app.schemas.itr1 import (
-    AgeBracket, TaxRegime, SalaryIncome, HousePropertyIncome,
-    OtherSourcesIncome, Chapter6ADeductions,
+    AgeBracket, TaxRegime,
+    SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
+    Chapter6ADeductions, CapitalGainsIncome,
     TDS1Entry, TDS2Entry, TCSEntry,
 )
 from app.schemas.itr2 import (
-    CGTransaction, CG112AScrip, VDATransaction, BFLossItem,
-    CFLLossItem, ScheduleSIEntry, AgriculturalIncome, ExemptIncome,
-    FSICountryEntry, TR1Entry, SPIEntry,
+    CGTransaction, CG112AScrip, VDATransaction,
+    BFLossItem, ScheduleSIEntry, AgriculturalIncome, ExemptIncome,
+    FSICountryEntry, TR1Entry, SPIEntry, AMTInput,
     ResidentialStatus, ReturnFileSection,
 )
 
 
 # ---------------------------------------------------------------------------
-# Accounting Method
+# PGBP — Business Income (ITR-3 core)
 # ---------------------------------------------------------------------------
 
-class MethodOfAccounting(str, Enum):
-    MERCANTILE = "MERC"
-    CASH = "CASH"
+class PresumptiveScheme(str, Enum):
+    """Presumptive taxation scheme, if opted."""
+    NONE = "none"
+    S44AD = "44AD"
+    S44ADA = "44ADA"
+    S44AE = "44AE"
 
 
-# ---------------------------------------------------------------------------
-# Balance Sheet (PARTA_BS)
-# ---------------------------------------------------------------------------
+class BusinessIncome(BaseModel):
+    """
+    Core business income input for ITR-3.
+
+    Captures the key financial figures needed to compute PGBP income.
+    The full P&L and balance sheet can be provided via sub-schedules below.
+    """
+
+    net_profit_before_tax: Decimal = Field(
+        default=Decimal("0"),
+        description="Net profit as per Profit & Loss account before tax (PGBP).",
+    )
+
+    # Disallowances / Additions
+    disallowance_us36: Decimal = Field(default=Decimal("0"), ge=0)
+    disallowance_us37: Decimal = Field(default=Decimal("0"), ge=0)
+    disallowance_us40: Decimal = Field(default=Decimal("0"), ge=0)
+    disallowance_us40a: Decimal = Field(default=Decimal("0"), ge=0)
+    disallowance_us43b: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Deemed Incomes
+    deemed_income_us41: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us33ab: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us33aba: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us35aba: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us35abb: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us32ad: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us40a3a: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us43ca: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us72a: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us80hhd: Decimal = Field(default=Decimal("0"), ge=0)
+    deemed_income_us80ia: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Deductions allowed
+    deduction_us32_1_iii: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Depreciation
+    depreciation_books: Decimal = Field(default=Decimal("0"), ge=0,
+                                         description="Depreciation as per Companies Act / books.")
+    depreciation_it_act: Decimal = Field(default=Decimal("0"), ge=0,
+                                          description="Depreciation as per Income Tax Act (Schedule DEP).")
+
+    # ICDS Adjustments (net effect)
+    icds_increase: Decimal = Field(default=Decimal("0"), ge=0)
+    icds_decrease: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Other
+    other_additions: Decimal = Field(default=Decimal("0"), ge=0)
+    other_deductions: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Speculative business
+    speculative_net_pl: Decimal = Field(default=Decimal("0"))
+    speculative_additions: Decimal = Field(default=Decimal("0"), ge=0)
+    speculative_deductions: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Specified business (35AD)
+    specified_business_net_pl: Decimal = Field(default=Decimal("0"))
+    specified_business_additions: Decimal = Field(default=Decimal("0"), ge=0)
+    specified_business_deductions: Decimal = Field(default=Decimal("0"), ge=0)
+
 
 class BalanceSheet(BaseModel):
-    capital: Decimal = Field(default=Decimal("0"), ge=0)
-    reserves_and_surplus: Decimal = Field(default=Decimal("0"), ge=0)
+    """Balance sheet summary for ITR-3."""
+    proprietors_fund: Decimal = Field(default=Decimal("0"), ge=0)
     secured_loans: Decimal = Field(default=Decimal("0"), ge=0)
     unsecured_loans: Decimal = Field(default=Decimal("0"), ge=0)
     current_liabilities: Decimal = Field(default=Decimal("0"), ge=0)
-    other_liabilities: Decimal = Field(default=Decimal("0"), ge=0)
     total_liabilities: Decimal = Field(default=Decimal("0"), ge=0)
 
-    fixed_assets_gross: Decimal = Field(default=Decimal("0"), ge=0)
-    accumulated_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
-    fixed_assets_net: Decimal = Field(default=Decimal("0"), ge=0)
-    investments: Decimal = Field(default=Decimal("0"), ge=0)
-    loans_and_advances: Decimal = Field(default=Decimal("0"), ge=0)
-    sundry_debtors: Decimal = Field(default=Decimal("0"), ge=0)
-    cash_and_bank: Decimal = Field(default=Decimal("0"), ge=0)
-    inventories: Decimal = Field(default=Decimal("0"), ge=0)
-    other_assets: Decimal = Field(default=Decimal("0"), ge=0)
+    fixed_assets: Decimal = Field(default=Decimal("0"), ge=0)
+    current_assets: Decimal = Field(default=Decimal("0"), ge=0)
     total_assets: Decimal = Field(default=Decimal("0"), ge=0)
 
 
-# ---------------------------------------------------------------------------
-# Profit & Loss (PARTA_PL)
-# ---------------------------------------------------------------------------
-
-class PLDebits(BaseModel):
-    opening_stock: Decimal = Field(default=Decimal("0"), ge=0)
-    purchases: Decimal = Field(default=Decimal("0"), ge=0)
-    direct_expenses: Decimal = Field(default=Decimal("0"), ge=0)
-    employee_benefit_expense: Decimal = Field(default=Decimal("0"), ge=0)
-    finance_cost: Decimal = Field(default=Decimal("0"), ge=0)  # Interest
-    depreciation_as_per_books: Decimal = Field(default=Decimal("0"), ge=0)
-    administrative_expenses: Decimal = Field(default=Decimal("0"), ge=0)
-    selling_expenses: Decimal = Field(default=Decimal("0"), ge=0)
-    rent_rates_taxes: Decimal = Field(default=Decimal("0"), ge=0)
-    repairs_and_maintenance: Decimal = Field(default=Decimal("0"), ge=0)
-    legal_and_professional: Decimal = Field(default=Decimal("0"), ge=0)
-    travel: Decimal = Field(default=Decimal("0"), ge=0)
-    power_and_fuel: Decimal = Field(default=Decimal("0"), ge=0)
-    communication: Decimal = Field(default=Decimal("0"), ge=0)
-    other_expenses: Decimal = Field(default=Decimal("0"), ge=0)
-    closing_stock: Decimal = Field(default=Decimal("0"), ge=0)
+class NatureOfBusiness(BaseModel):
+    """Nature of business codes for ITR-3 PartA_GEN2."""
+    code: int = Field(default=1, ge=1, le=99)
+    description: Optional[str] = Field(default=None, max_length=125)
 
 
-class PLCredits(BaseModel):
-    sales_turnover: Decimal = Field(default=Decimal("0"), ge=0)
-    other_business_income: Decimal = Field(default=Decimal("0"), ge=0)
-    interest_income: Decimal = Field(default=Decimal("0"), ge=0)
-    rent_income: Decimal = Field(default=Decimal("0"), ge=0)
-    commission_income: Decimal = Field(default=Decimal("0"), ge=0)
-    dividend_income: Decimal = Field(default=Decimal("0"), ge=0)
-    capital_gains_business: Decimal = Field(default=Decimal("0"), ge=0)
-    other_credits: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class PLDisallowances(BaseModel):
-    """Disallowances under the Income Tax Act from P&L."""
-    us36_expenditure_on_family: Decimal = Field(default=Decimal("0"), ge=0)
-    us36_interest_on_capital: Decimal = Field(default=Decimal("0"), ge=0)
-    us36_salary_to_partners: Decimal = Field(default=Decimal("0"), ge=0)
-    us36_bonus_commission_to_partners: Decimal = Field(default=Decimal("0"), ge=0)
-    us36_employer_pf_esic_unpaid: Decimal = Field(default=Decimal("0"), ge=0)
-    us40a_excessive_payments_to_related: Decimal = Field(default=Decimal("0"), ge=0)
-    us40a2b_cash_payments: Decimal = Field(default=Decimal("0"), ge=0)
-    us40ai_non_tds_payments: Decimal = Field(default=Decimal("0"), ge=0)
-    us43b_taxes_duties_contributions_unpaid: Decimal = Field(default=Decimal("0"), ge=0)
-    us43b_employer_contributions_unpaid: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_disallowance_us38_2: Decimal = Field(default=Decimal("0"), ge=0)
-    personal_expenses: Decimal = Field(default=Decimal("0"), ge=0)
-    other_disallowances: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class PLAdjustment(BaseModel):
-    """Net profit/loss as per P&L account."""
-    net_profit_as_per_pl: Decimal = Field(default=Decimal("0"))
-    method_of_accounting: MethodOfAccounting = Field(default=MethodOfAccounting.MERCANTILE)
-    is_audited_under_44ab: bool = Field(default=False)
+class AuditInfo(BaseModel):
+    """Audit information for PartA_GEN2."""
+    liable_sec_44ab: bool = Field(default=False)
+    liable_sec_44aa: bool = Field(default=False)
+    liable_sec_92e: bool = Field(default=False)
+    account_audited: bool = Field(default=False)
 
 
 # ---------------------------------------------------------------------------
-# Depreciation (DPM / DOA / DEP)
+# Partner in Firm details (Schedule IF)
 # ---------------------------------------------------------------------------
 
-class DepreciationBlock15(BaseModel):
-    """15% block: Motors, Buses, Lorries, Tractors (non-commercial)."""
-    wdv_opening: Decimal = Field(default=Decimal("0"), ge=0)
-    additions: Decimal = Field(default=Decimal("0"), ge=0)
-    additions_half_rate: Decimal = Field(default=Decimal("0"), ge=0)
-    realizations: Decimal = Field(default=Decimal("0"), ge=0)
-    wdv_closing: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_full: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_half: Decimal = Field(default=Decimal("0"), ge=0)
-    total_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class DepreciationBlock30(BaseModel):
-    """30% block: Commercial Vehicles, Computers."""
-    wdv_opening: Decimal = Field(default=Decimal("0"), ge=0)
-    additions: Decimal = Field(default=Decimal("0"), ge=0)
-    additions_half_rate: Decimal = Field(default=Decimal("0"), ge=0)
-    realizations: Decimal = Field(default=Decimal("0"), ge=0)
-    wdv_closing: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_full: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_half: Decimal = Field(default=Decimal("0"), ge=0)
-    total_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class DepreciationBlock40(BaseModel):
-    """40% block: Intangible assets, Pollution control equipment."""
-    wdv_opening: Decimal = Field(default=Decimal("0"), ge=0)
-    additions: Decimal = Field(default=Decimal("0"), ge=0)
-    additions_half_rate: Decimal = Field(default=Decimal("0"), ge=0)
-    realizations: Decimal = Field(default=Decimal("0"), ge=0)
-    wdv_closing: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_full: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_half: Decimal = Field(default=Decimal("0"), ge=0)
-    total_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class DepreciationBlock45(BaseModel):
-    """45% block: Energy saving devices, Solar plants."""
-    wdv_opening: Decimal = Field(default=Decimal("0"), ge=0)
-    additions: Decimal = Field(default=Decimal("0"), ge=0)
-    additions_half_rate: Decimal = Field(default=Decimal("0"), ge=0)
-    realizations: Decimal = Field(default=Decimal("0"), ge=0)
-    wdv_closing: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_full: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_half: Decimal = Field(default=Decimal("0"), ge=0)
-    total_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class DOABuildingResidential(BaseModel):
-    """DOA - Building (Residential) 5%."""
-    wdv_opening: Decimal = Field(default=Decimal("0"), ge=0)
-    additions: Decimal = Field(default=Decimal("0"), ge=0)
-    additions_half_rate: Decimal = Field(default=Decimal("0"), ge=0)
-    realizations: Decimal = Field(default=Decimal("0"), ge=0)
-    wdv_closing: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_full: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_half: Decimal = Field(default=Decimal("0"), ge=0)
-    total_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class DOABuildingOther(BaseModel):
-    """DOA - Building (Non-residential/Factory) 10%."""
-    wdv_opening: Decimal = Field(default=Decimal("0"), ge=0)
-    additions: Decimal = Field(default=Decimal("0"), ge=0)
-    additions_half_rate: Decimal = Field(default=Decimal("0"), ge=0)
-    realizations: Decimal = Field(default=Decimal("0"), ge=0)
-    wdv_closing: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_full: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_half: Decimal = Field(default=Decimal("0"), ge=0)
-    total_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class DOAFurniture(BaseModel):
-    """DOA - Furniture & Fittings 10%."""
-    wdv_opening: Decimal = Field(default=Decimal("0"), ge=0)
-    additions: Decimal = Field(default=Decimal("0"), ge=0)
-    additions_half_rate: Decimal = Field(default=Decimal("0"), ge=0)
-    realizations: Decimal = Field(default=Decimal("0"), ge=0)
-    wdv_closing: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_full: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_half: Decimal = Field(default=Decimal("0"), ge=0)
-    total_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class DOAIntangible(BaseModel):
-    """DOA - Intangible Assets (Know-how, Patents, Copyrights) 25%."""
-    wdv_opening: Decimal = Field(default=Decimal("0"), ge=0)
-    additions: Decimal = Field(default=Decimal("0"), ge=0)
-    additions_half_rate: Decimal = Field(default=Decimal("0"), ge=0)
-    realizations: Decimal = Field(default=Decimal("0"), ge=0)
-    wdv_closing: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_full: Decimal = Field(default=Decimal("0"), ge=0)
-    depreciation_half: Decimal = Field(default=Decimal("0"), ge=0)
-    total_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class DepreciationSchedule(BaseModel):
-    """Aggregated depreciation schedule input."""
-    block_15: Optional[DepreciationBlock15] = Field(default=None)
-    block_30: Optional[DepreciationBlock30] = Field(default=None)
-    block_40: Optional[DepreciationBlock40] = Field(default=None)
-    block_45: Optional[DepreciationBlock45] = Field(default=None)
-    building_residential_5: Optional[DOABuildingResidential] = Field(default=None)
-    building_other_10: Optional[DOABuildingOther] = Field(default=None)
-    furniture_10: Optional[DOAFurniture] = Field(default=None)
-    intangible_25: Optional[DOAIntangible] = Field(default=None)
+class PartnerInFirm(BaseModel):
+    firm_name: str = Field(default="", max_length=125)
+    firm_pan: str = Field(default="AAAAA0000A", pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    profit_share_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    interest_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    remuneration_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    capital_balance: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 # ---------------------------------------------------------------------------
-# ICDS Adjustments
+# Unabsorbed Depreciation (Schedule UD)
 # ---------------------------------------------------------------------------
 
-class ICDSAdjustment(BaseModel):
-    """Net effect of ICDS adjustments on business income."""
-    net_icds_effect: Decimal = Field(default=Decimal("0"))
-
-
-# ---------------------------------------------------------------------------
-# Firm/LLP/AOP Income
-# ---------------------------------------------------------------------------
-
-class FirmIncome(BaseModel):
-    firm_name: str = Field(..., max_length=125)
-    firm_pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
-    share_of_profit: Decimal = Field(default=Decimal("0"), ge=0)
-    share_of_capital_gains: Decimal = Field(default=Decimal("0"), ge=0)
-    interest_on_capital: Decimal = Field(default=Decimal("0"), ge=0)
-    salary_bonus_from_firm: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-# ---------------------------------------------------------------------------
-# Deemed Incomes
-# ---------------------------------------------------------------------------
-
-class DeemedIncomes(BaseModel):
-    us41_recovery_of_deduction: Decimal = Field(default=Decimal("0"), ge=0)
-    us33ab_recovery: Decimal = Field(default=Decimal("0"), ge=0)
-    us35abb_recovery: Decimal = Field(default=Decimal("0"), ge=0)
-    us50_capital_gains: Decimal = Field(default=Decimal("0"), ge=0)
-    other_deemed_income: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-# ---------------------------------------------------------------------------
-# GST Schedule
-# ---------------------------------------------------------------------------
-
-class GSTINEntry(BaseModel):
-    gstin: str = Field(..., pattern=r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
-    turnover: Decimal = Field(default=Decimal("0"), ge=0)
+class UDEntry(BaseModel):
+    assessment_year: str = Field(default="2025-26")
+    bf_unabsorbed_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    bf_unabsorbed_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
+    allowance_setoff_cy: Decimal = Field(default=Decimal("0"), ge=0)
+    depreciation_setoff_cy: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +180,11 @@ class GSTINEntry(BaseModel):
 class ITR3Input(BaseModel):
     """
     Top-level input model for computing an ITR-3 return.
+
+    Required schedules per ITD JSON spec:
+      CreationInfo, Form_ITR3, ITR3ScheduleBP, PARTA_BS, PARTA_PL,
+      PartA_GEN1, PartA_GEN2, ScheduleCYLA, ScheduleBFLA, PartB-TI, PartB-TTI,
+      Verification
     """
 
     # --- Assessee meta ---
@@ -310,30 +193,27 @@ class ITR3Input(BaseModel):
     residential_status: ResidentialStatus = Field(default=ResidentialStatus.RES)
     filing_section: ReturnFileSection = Field(default=ReturnFileSection.S11)
 
-    # --- Business / Profession ---
-    pl_adjustment: Optional[PLAdjustment] = Field(default=None)
-    pl_debits: Optional[PLDebits] = Field(default=None)
-    pl_credits: Optional[PLCredits] = Field(default=None)
-    pl_disallowances: Optional[PLDisallowances] = Field(default=None)
-    balance_sheet: Optional[BalanceSheet] = Field(default=None)
-    depreciation: Optional[DepreciationSchedule] = Field(default=None)
-    icds_adjustment: Optional[ICDSAdjustment] = Field(default=None)
-    deemed_incomes: Optional[DeemedIncomes] = Field(default=None)
-    firm_incomes: Optional[List[FirmIncome]] = Field(default=None)
+    # --- Business Income (core PGBP) ---
+    business_income: Optional[BusinessIncome] = Field(default=None)
 
-    # --- Heads of Income (non-business) ---
+    # --- Heads of Income ---
     salary_income: Optional[SalaryIncome] = Field(default=None)
     house_property_income: Optional[HousePropertyIncome] = Field(default=None)
     other_sources_income: Optional[OtherSourcesIncome] = Field(default=None)
 
-    # --- Capital Gains (shared with ITR-2) ---
+    # --- Capital Gains (full CG) ---
     cg_transactions: Optional[List[CGTransaction]] = Field(default=None)
     cg_112a_scrips: Optional[List[CG112AScrip]] = Field(default=None)
     vda_transactions: Optional[List[VDATransaction]] = Field(default=None)
 
-    # --- Loss Set-Off (shared with ITR-2) ---
+    # --- Loss Set-Off ---
     bf_losses: Optional[List[BFLossItem]] = Field(default=None)
-    cf_losses: Optional[List[CFLLossItem]] = Field(default=None)
+
+    # --- Partner in Firm ---
+    partner_firm_details: Optional[List[PartnerInFirm]] = Field(default=None)
+
+    # --- Unabsorbed Depreciation ---
+    ud_entries: Optional[List[UDEntry]] = Field(default=None)
 
     # --- Special Rate Income ---
     si_entries: Optional[List[ScheduleSIEntry]] = Field(default=None)
@@ -349,6 +229,18 @@ class ITR3Input(BaseModel):
     # --- Clubbing ---
     spi_entries: Optional[List[SPIEntry]] = Field(default=None)
 
+    # --- AMT ---
+    amt_input: Optional[AMTInput] = Field(default=None)
+
+    # --- Audit Info ---
+    audit_info: Optional[AuditInfo] = Field(default=None)
+
+    # --- Nature of Business ---
+    nature_of_business: Optional[List[NatureOfBusiness]] = Field(default=None)
+
+    # --- Balance Sheet ---
+    balance_sheet: Optional[BalanceSheet] = Field(default=None)
+
     # --- Deductions ---
     deductions_chapter6a: Optional[Chapter6ADeductions] = Field(default=None)
 
@@ -360,6 +252,7 @@ class ITR3Input(BaseModel):
     # --- Tax payments ---
     advance_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
     self_assessment_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
+
     # --- Filing dates ---
     filing_date: Optional[date] = Field(default=None)
     due_date: Optional[date] = Field(default=None)

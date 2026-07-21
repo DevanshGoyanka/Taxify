@@ -63,6 +63,20 @@ class ITR4Result:
     deductions_total: Decimal = Decimal("0")
     taxable_income: Decimal = Decimal("0")
 
+    # Salary detail (for ITD JSON output)
+    salary_gross: Decimal = Decimal("0")
+    salary_perquisites: Decimal = Decimal("0")
+    salary_profits_in_lieu: Decimal = Decimal("0")
+    salary_net: Decimal = Decimal("0")
+    salary_deduction_us16: Decimal = Decimal("0")
+    salary_deduction_us16ia: Decimal = Decimal("0")
+    salary_entertainment_allowance: Decimal = Decimal("0")
+    salary_professional_tax: Decimal = Decimal("0")
+
+    # Tax payment detail (for ITD JSON output)
+    advance_tax_paid: Decimal = Decimal("0")
+    self_assessment_tax_paid: Decimal = Decimal("0")
+
     slab_tax: Decimal = Decimal("0")
     special_rate_tax: Decimal = Decimal("0")
     tax_before_rebate: Decimal = Decimal("0")
@@ -128,6 +142,20 @@ def compute(input_data: ITR4Input) -> ITR4Result:
     sal = compute_salary(input_data.salary_income, regime)
     result.schedules["salary"] = sal
     result.salary_income = sal.income_chargeable
+
+    # Salary detail fields for ITD JSON output
+    result.salary_gross = sal.gross_salary
+    if input_data.salary_income:
+        result.salary_perquisites = input_data.salary_income.perquisites_value
+        result.salary_profits_in_lieu = input_data.salary_income.profits_in_lieu_of_salary
+    result.salary_net = sal.net_salary
+    result.salary_deduction_us16 = sal.deductions_u16
+    result.salary_deduction_us16ia = sal.standard_deduction
+    result.salary_entertainment_allowance = sal.entertainment_allowance
+    result.salary_professional_tax = sal.professional_tax
+
+    result.advance_tax_paid = input_data.advance_tax_paid
+    result.self_assessment_tax_paid = input_data.self_assessment_tax_paid
 
     # ── 3. House Property ────────────────────────────────────────────────────
     hp = compute_hp(input_data.house_property_income, regime)
