@@ -71,6 +71,8 @@ class ITR1Result:
     other_sources_income: Decimal = Decimal("0")
     capital_gains_112a: Decimal = Decimal("0")
     gross_total_income: Decimal = Decimal("0")
+    net_agricultural_income: Decimal = Decimal("0")
+    aggregate_income: Decimal = Decimal("0")
     deductions_total: Decimal = Decimal("0")
     taxable_income: Decimal = Decimal("0")
 
@@ -235,6 +237,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     # ── 2. Gross Total Income ────────────────────────────────────────────────
     gti = result.salary_income + result.house_property_income + result.other_sources_income + cg_112a_income
     result.gross_total_income = gti
+    result.net_agricultural_income = input_data.agriculture_income
     result.aggregate_income = gti + result.net_agricultural_income
 
     # Eligibility: GTI cannot exceed Rs 50 lakh for ITR-1

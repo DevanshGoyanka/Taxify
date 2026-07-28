@@ -458,6 +458,54 @@ class Chapter6ADeductions(BaseModel):
         ge=0,
         description="Rent paid when no HRA is received (Section 80GG).",
     )
+    amount_80gga: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Donations for scientific research or rural development (Section 80GGA).",
+    )
+    amount_80ggc: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Contributions to political parties (Section 80GGC).",
+    )
+    amount_80ia: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Deduction for infrastructure development (Section 80-IA). ITR-3 only.",
+    )
+    amount_80ib: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Deduction for industrial undertakings (Section 80-IB). ITR-3 only.",
+    )
+    amount_80ic: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Deduction for undertakings in special category states (Section 80-IC). ITR-3 only.",
+    )
+    amount_10aa: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Deduction for SEZ units (Section 10AA). ITR-3 only.",
+    )
+    amount_80ra: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Deduction for research associations etc. (Section 80RA). ITR-3 only.",
+    )
+
+    has_parents_senior: bool = Field(
+        default=False,
+        description="Whether parents are senior citizens (affects 80D cap).",
+    )
+    schedule_80dd: Optional["Schedule80DD"] = Field(
+        default=None,
+        description="Structured schedule for 80DD deduction input.",
+    )
+    schedule_80u: Optional["Schedule80U"] = Field(
+        default=None,
+        description="Structured schedule for 80U deduction input.",
+    )
 
 
 

@@ -132,6 +132,7 @@ def _income_deductions_itr1(
     profits_in_lieu: Decimal = Decimal("0"),
     ded_80c: Decimal = Decimal("0"),
     ded_80ccc: Decimal = Decimal("0"),
+    ded_80ccd1: Decimal = Decimal("0"),
     ded_80ccd1b: Decimal = Decimal("0"),
     ded_80ccd2: Decimal = Decimal("0"),
     ded_80d: Decimal = Decimal("0"),
@@ -176,7 +177,8 @@ def _income_deductions_itr1(
         "GrossTotIncomeIncLTCG112A": _to_rupees(gti_cg),
         "UsrDeductUndChapVIA": _chapter_via_itr1(
             deductions_total,
-            ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1b=ded_80ccd1b,
+            ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1=ded_80ccd1,
+            ded_80ccd1b=ded_80ccd1b,
             ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
             ded_80ddb=ded_80ddb, ded_80u=ded_80u, ded_80tta=ded_80tta,
             ded_80ttb=ded_80ttb, ded_80e=ded_80e, ded_80ee=ded_80ee,
@@ -186,7 +188,8 @@ def _income_deductions_itr1(
         ),
         "DeductUndChapVIA": _chapter_via_itr1(
             deductions_total,
-            ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1b=ded_80ccd1b,
+            ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1=ded_80ccd1,
+            ded_80ccd1b=ded_80ccd1b,
             ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
             ded_80ddb=ded_80ddb, ded_80u=ded_80u, ded_80tta=ded_80tta,
             ded_80ttb=ded_80ttb, ded_80e=ded_80e, ded_80ee=ded_80ee,

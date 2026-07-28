@@ -8,8 +8,11 @@ itr4.py, etc.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
+import os
 from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
@@ -48,9 +51,69 @@ def _today() -> str:
 
 
 def _compute_digest(data: dict) -> str:
-    """44-character SHA-256 digest for CreationInfo.Digest."""
+    """Compute ITD-compliant Digest using iterative HMAC-SHA256.
+
+    Per SOP Section 5.3:
+      1. Serialize then minify the dict to JSON (all interstitial spaces removed)
+      2. Replace "Digest" value with placeholder "-"
+      3. HMAC-SHA256 with secret key (UTF-8 encoded), repeated N iterations
+      4. Base64-encode the final hash
+
+    Reads from environment variables:
+      ERI_DIGEST_SECRET_KEY   — HMAC secret key string, UTF-8 encoded as key bytes
+      ERI_DIGEST_ITERATIONS   — number of HMAC iterations (default: 1)
+    """
+    import re
+
+    secret_key = os.getenv("ERI_DIGEST_SECRET_KEY", "")
+    if not secret_key:
+        # Fallback: simple SHA-256 hex digest for dev/testing only
+        raw = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    iterations = int(os.getenv("ERI_DIGEST_ITERATIONS", "1"))
+    placeholder = "-"
+    digest_regex = r'"Digest"\s*:\s*"[^"]*"'
+
+    # Step 1: Serialize to JSON
     raw = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(raw.encode()).hexdigest()
+
+    # Step 2: Minify — remove all interstitial whitespace outside quoted strings
+    result: list[str] = []
+    in_string = False
+    escape = False
+    for ch in raw:
+        if in_string:
+            if escape:
+                escape = False
+                result.append(ch)
+            elif ch == '\\':
+                escape = True
+                result.append(ch)
+            elif ch == '"':
+                in_string = False
+                result.append(ch)
+            else:
+                result.append(ch)
+        else:
+            if ch in (' ', '\t', '\n', '\r'):
+                continue
+            if ch == '"':
+                in_string = True
+            result.append(ch)
+    minified = ''.join(result)
+
+    # Step 3: Replace Digest value with placeholder
+    minified = re.sub(digest_regex, f'"Digest":"{placeholder}"', minified)
+
+    # Step 4+5: HMAC-SHA256 with secret key (UTF-8 bytes), iterated N times
+    key_bytes = secret_key.encode("utf-8")
+    payload = minified.encode("utf-8")
+    for _ in range(iterations):
+        payload = hmac.new(key_bytes, payload, hashlib.sha256).digest()
+
+    # Step 6: Base64 encode the final hash
+    return base64.b64encode(payload).decode("utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +121,7 @@ def _compute_digest(data: dict) -> str:
 # ---------------------------------------------------------------------------
 
 _SW_VERSION = "1.0"
-_SW_CODE = "SW00000001"
+_SW_CODE = os.getenv("ERI_SW_ID", "SW00000001")
 
 
 # ---------------------------------------------------------------------------
