@@ -26,15 +26,30 @@ from app.engine.constants import (
 )
 
 
-def compute(ded: Optional[Chapter6ADeductions], age_bracket: AgeBracket, regime: TaxRegime) -> Decimal:
+def compute(ded: Optional[Chapter6ADeductions], age_bracket: AgeBracket, regime: TaxRegime,
+            is_parents_senior: bool = False) -> Decimal:
     if not ded or regime == TaxRegime.NEW:
         return Decimal("0")
 
     is_senior = age_bracket in (AgeBracket.SIXTY_TO_80, AgeBracket.ABOVE_80)
 
+    # Self + family bucket: insurance premium + preventive check-up
+    # Preventive check-up is capped at Rs 5,000 within the bucket
     cap_self = SECTION_80D_SELF_FAMILY_SENIOR_LIMIT if is_senior else SECTION_80D_SELF_FAMILY_LIMIT
-    ded_self = min(ded.amount_80d_self_family, cap_self)
+    preventive_self_capped = min(
+        ded.amount_80d_preventive_self,
+        SECTION_80D_PREVENTIVE_CHECKUP_LIMIT,
+    )
+    total_self = ded.amount_80d_self_family + preventive_self_capped
+    ded_self = min(total_self, cap_self)
 
-    ded_parents = min(ded.amount_80d_parents, SECTION_80D_PARENTS_SENIOR_LIMIT)
+    # Parents bucket: insurance premium + preventive check-up
+    parents_cap = SECTION_80D_PARENTS_SENIOR_LIMIT if is_parents_senior else SECTION_80D_PARENTS_LIMIT
+    preventive_parents_capped = min(
+        ded.amount_80d_preventive_parents,
+        SECTION_80D_PREVENTIVE_CHECKUP_LIMIT,
+    )
+    total_parents = ded.amount_80d_parents + preventive_parents_capped
+    ded_parents = min(total_parents, parents_cap)
 
     return ded_self + ded_parents

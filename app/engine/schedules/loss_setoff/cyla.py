@@ -69,9 +69,15 @@ def compute(cy: CYLAInput) -> CYLAResult:
     total_set_off = Decimal("0")
     total_remaining = Decimal("0")
 
-    # --- HP loss: set off against any non-salary income (capped at 2L for self-occupied) ---
+    # --- HP loss: set off against any income (capped at 2L for self-occupied) ---
     hp_loss_val = abs(cy.hp_loss) if cy.hp_loss < 0 else Decimal("0")
-    hp_setoff = min(hp_loss_val, Decimal("200000"))
+    # Cap by (a) ₹2,00,000 statutory u/s 71(3A) AND (b) total positive income available
+    # HP loss can be set off against ANY head of income (salary, business, OS, CG).
+    # non_salary_income is populated by callers with salary_income + os_income.
+    available_income = max(Decimal("0"),
+        cy.non_salary_income + cy.hp_income + cy.stcg_income + cy.ltcg_income
+        + cy.non_spec_biz_income + cy.spec_biz_income)
+    hp_setoff = min(hp_loss_val, Decimal("200000"), available_income)
     hp_remaining = hp_loss_val - hp_setoff
     if hp_loss_val > 0:
         entries.append(CylaLossEntry(

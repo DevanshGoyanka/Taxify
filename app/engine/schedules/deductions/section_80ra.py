@@ -1,18 +1,17 @@
 """
-Section 80QQB / 80RA — Royalty Income of Authors.
+Section 80RA — Deduction for Patent / Royalty Income.
 
-Deduction for royalty income earned by authors of books (other than textbooks).
-  - Maximum: ₹3,00,000 (u/s 80QQB).
-  - Deduction is the lower of royalty received or ₹3,00,000.
+Deduction for any income by way of royalty in respect of a patent
+registered under the Patents Act, 1970.
 
-Section 80RRB — Royalty on Patents.
-  - Maximum: ₹3,00,000.
+Conditions:
+  - 100% of royalty income is deductible.
   - Patent must be registered under Patents Act, 1970.
+  - Available to resident individuals only.
+  - Available under old regime only.
+  - Triggers AMT u/s 115JC.
 
-Placeholder: These are modelled as simple capped deductions;
-the actual book/patent verification is a validation-layer concern.
-
-ITR forms: ITR-3 only (business/profession).
+ITR forms: ITR-3 only.
 """
 
 from decimal import Decimal
@@ -21,6 +20,7 @@ from app.schemas.itr1 import Chapter6ADeductions, TaxRegime
 
 
 def compute(ded: Optional[Chapter6ADeductions], regime: TaxRegime) -> Decimal:
+    """Return the 80RA deduction amount."""
     if not ded or regime == TaxRegime.NEW:
         return Decimal("0")
-    return ded.amount_80g
+    return ded.amount_80ra

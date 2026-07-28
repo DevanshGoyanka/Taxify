@@ -21,6 +21,13 @@ from app.engine.schedules.deductions import (
     section_80eeb,
     section_80g,
     section_80gg,
+    section_80gga,
+    section_80ggc,
+    section_80ia,
+    section_80ib,
+    section_80ic,
+    section_10aa,
+    section_80ra,
 )
 
 
@@ -43,18 +50,14 @@ def compute_all(
     *,
     cg_112a_income: Decimal = Decimal("0"),
     cg_111a_income: Decimal = Decimal("0"),
-    business_80ia: Decimal = Decimal("0"),
-    business_80ib: Decimal = Decimal("0"),
-    business_10aa: Decimal = Decimal("0"),
-    business_80ra: Decimal = Decimal("0"),
+    is_parents_senior: bool = False,
+    is_80dd_severe: bool = False,
+    is_80u_severe: bool = False,
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
     ``cg_112a_income`` and ``cg_111a_income`` are the taxable portions of those CG
     categories.  They are excluded from adjusted GTI for 80G/80GG per CBDT rules.
-
-    ``business_80ia`` etc. are ITR-3 business-specific deductions pre-computed by
-    the caller and simply added to the total here.
     """
     if not ded or gti <= 0:
         return DeductionResult()
@@ -79,20 +82,25 @@ def compute_all(
     # --- Old regime only deductions ---
     r_80c = section_80c.compute(ded, regime)
     _add("80C+80CCC+80CCD(1)", r_80c)
+    # Also store 80CCC and 80CCD(1) individually for ITD JSON line-item breakout
+    r_80ccc = section_80c.compute_80ccc(ded, regime)
+    _add("80CCC", r_80ccc)
+    r_80ccd1 = section_80c.compute_80ccd1(ded, regime)
+    _add("80CCD(1)", r_80ccd1)
 
     r_80ccd1b = section_80ccd1b.compute(ded, regime)
     _add("80CCD(1B)", r_80ccd1b)
 
-    r_80d = section_80d.compute(ded, age_bracket, regime)
+    r_80d = section_80d.compute(ded, age_bracket, regime, is_parents_senior=is_parents_senior)
     _add("80D", r_80d)
 
-    r_80dd = section_80dd.compute(ded, regime)
+    r_80dd = section_80dd.compute(ded, regime, is_severe=is_80dd_severe)
     _add("80DD", r_80dd)
 
     r_80ddb = section_80ddb.compute(ded, age_bracket, regime)
     _add("80DDB", r_80ddb)
 
-    r_80u = section_80u.compute(ded, regime)
+    r_80u = section_80u.compute(ded, regime, is_severe=is_80u_severe)
     _add("80U", r_80u)
 
     r_80tta = section_80tta.compute(ded, os_input, age_bracket, regime)
@@ -113,21 +121,27 @@ def compute_all(
     r_80eeb = section_80eeb.compute(ded, regime)
     _add("80EEB", r_80eeb)
 
-    # Business-specific deductions (ITR-3 only, computed by caller)
-    if business_80ia:
-        _add("80-IA", business_80ia, allow_new_regime=True)
-    if business_80ib:
-        _add("80-IB", business_80ib, allow_new_regime=True)
-    if business_10aa:
-        _add("10AA", business_10aa, allow_new_regime=True)
-    if business_80ra:
-        _add("80RA", business_80ra, allow_new_regime=True)
+    # --- Business-specific deductions (ITR-3 only, old regime) ---
+    r_80ia = section_80ia.compute(ded, regime)
+    _add("80-IA", r_80ia, allow_new_regime=True)
+
+    r_80ib = section_80ib.compute(ded, regime)
+    _add("80-IB", r_80ib, allow_new_regime=True)
+
+    r_80ic = section_80ic.compute(ded, regime)
+    _add("80-IC", r_80ic, allow_new_regime=True)
+
+    r_10aa = section_10aa.compute(ded, regime)
+    _add("10AA", r_10aa, allow_new_regime=True)
+
+    r_80ra = section_80ra.compute(ded, regime)
+    _add("80RA", r_80ra, allow_new_regime=True)
 
     deductions_before_80g = (
         r_80c + r_80ccd1b + r_80ccd2 + r_80cch
         + r_80d + r_80dd + r_80ddb + r_80u
         + r_80tta + r_80ttb + r_80e + r_80ee + r_80eea + r_80eeb
-        + business_80ia + business_80ib + business_10aa + business_80ra
+        + r_80ia + r_80ib + r_80ic + r_10aa + r_80ra
     )
     # Per CBDT: adjusted GTI for 80G/80GG excludes LTCG 112A and STCG 111A
     adjusted_gti = max(Decimal("0"), gti - deductions_before_80g - cg_112a_income - cg_111a_income)
@@ -138,6 +152,12 @@ def compute_all(
     r_80gg = section_80gg.compute(ded, adjusted_gti, regime)
     _add("80GG", r_80gg)
 
-    total = deductions_before_80g + r_80g + r_80gg
+    r_80gga = section_80gga.compute(ded, regime)
+    _add("80GGA", r_80gga)
+
+    r_80ggc = section_80ggc.compute(ded, regime)
+    _add("80GGC", r_80ggc)
+
+    total = deductions_before_80g + r_80g + r_80gg + r_80gga + r_80ggc
     result.total = min(total, gti)
     return result

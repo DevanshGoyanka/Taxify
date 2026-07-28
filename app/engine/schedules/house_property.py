@@ -14,8 +14,13 @@ re-computes GAV = max(municipal_value, fair_rent, annual_rent_received).
 Section 24(a): 30% standard deduction on NAV (Net Annual Value = GAV - municipal taxes)
 Section 24(b): Interest on borrowed capital
   - Self-occupied: capped at 2L (old regime) / disallowed (new regime)
-  - Let-out: fully deductible
+  - Let-out: fully deductible in both regimes
 Section 25A: Arrears of rent / unrealized rent
+
+New regime (s.115BAC): HP loss from let-out property cannot be set off against
+other heads and cannot be carried forward. Intra-head netting (two let-out
+properties, one in profit and one in loss) IS permitted. The loss is passed
+through as signed income_chargeable and blocked at the CYLA level.
 """
 
 from decimal import Decimal
@@ -81,8 +86,13 @@ def compute(input_data: Optional[HousePropertyIncome], regime: TaxRegime) -> HPR
     std_ded = nav * HOUSE_PROPERTY_STANDARD_DEDUCTION if nav > 0 else Decimal("0")
     interest = input_data.home_loan_interest_paid
     arrears = input_data.arrears_unrealised_rent_received
-    hp_income = nav - std_ded - interest + arrears
+    # Section 25A: Only 70% of arrears/unrealised rent is taxable
+    # (30% deduction is deemed to cover collection costs)
+    hp_income = nav - std_ded - interest + (arrears * Decimal("0.7"))
 
+    # For new regime: pass through signed income (losses blocked at CYLA,
+    # not at schedule level — allows intra-head netting between two let-out properties).
+    # loss_disallowed captures the negative portion for CYLA to block cross-head.
     if hp_income < 0 and regime == TaxRegime.NEW:
         return HPResult(
             property_type=pt,
@@ -92,8 +102,8 @@ def compute(input_data: Optional[HousePropertyIncome], regime: TaxRegime) -> HPR
             standard_deduction_30pct=std_ded,
             interest_on_loan=interest,
             arrears_unrealised_rent=arrears,
-            income_chargeable=Decimal("0"),
-            loss_disallowed=hp_income,
+            income_chargeable=hp_income,      # pass negative through for intra-head netting
+            loss_disallowed=hp_income,         # CYLA will use this to block cross-head setoff
         )
 
     return HPResult(

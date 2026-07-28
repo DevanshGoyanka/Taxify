@@ -27,17 +27,20 @@ class PGBPResult:
     non_spec_depreciation_books: Decimal = Decimal("0")
     non_spec_depreciation_it: Decimal = Decimal("0")
     non_spec_icds_adjustment: Decimal = Decimal("0")
-    non_spec_net_income: Decimal = Decimal("0")
+    non_spec_net_income: Decimal = Decimal("0")          # floored at 0 for GTI
+    non_spec_signed: Decimal = Decimal("0")               # signed (may be negative) for CYLA/BFLA
 
     # Speculative business
     speculative_net_pl: Decimal = Decimal("0")
     speculative_adjustments: Decimal = Decimal("0")
-    speculative_net_income: Decimal = Decimal("0")
+    speculative_net_income: Decimal = Decimal("0")        # floored at 0 for GTI
+    speculative_signed: Decimal = Decimal("0")             # signed for CYLA/BFLA
 
     # Specified business (35AD)
     specified_net_pl: Decimal = Decimal("0")
     specified_adjustments: Decimal = Decimal("0")
-    specified_net_income: Decimal = Decimal("0")
+    specified_net_income: Decimal = Decimal("0")          # floored at 0 for GTI
+    specified_signed: Decimal = Decimal("0")               # signed for CYLA/BFLA
 
     # Totals
     total_business_income: Decimal = Decimal("0")
@@ -107,17 +110,20 @@ def compute(
     r.non_spec_icds_adjustment = icds_increase - icds_decrease
 
     adjusted = net_profit_before_tax + additions - deductions + dep_adjustment
+    r.non_spec_signed = adjusted
     r.non_spec_net_income = max(z, adjusted)
 
     # --- Speculative business ---
     r.speculative_net_pl = speculative_net_pl
     r.speculative_adjustments = speculative_additions - speculative_deductions
-    r.speculative_net_income = max(z, speculative_net_pl + speculative_additions - speculative_deductions)
+    r.speculative_signed = speculative_net_pl + speculative_additions - speculative_deductions
+    r.speculative_net_income = max(z, r.speculative_signed)
 
     # --- Specified business ---
     r.specified_net_pl = specified_net_pl
     r.specified_adjustments = specified_additions - specified_deductions
-    r.specified_net_income = max(z, specified_net_pl + specified_additions - specified_deductions)
+    r.specified_signed = specified_net_pl + specified_additions - specified_deductions
+    r.specified_net_income = max(z, r.specified_signed)
 
     r.total_business_income = r.non_spec_net_income + r.speculative_net_income + r.specified_net_income
 

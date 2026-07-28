@@ -44,6 +44,14 @@ class AgeBracket(str, Enum):
     ABOVE_80 = "above_80"    # Super senior citizen: age ≥ 80
 
 
+class AssesseeType(str, Enum):
+    """Entity type of the assessee filing the return."""
+    INDIVIDUAL = "individual"
+    HUF = "huf"
+    FIRM = "firm"
+    LLP = "llp"
+
+
 class TaxRegime(str, Enum):
     """
     Tax regime elected by the assessee for the assessment year.
@@ -345,8 +353,25 @@ class Chapter6ADeductions(BaseModel):
         ge=0,
         description=(
             "Medical insurance premium paid for parents (Section 80D). "
-            "Capped at ₹25,000 (₹50,000 if parents are senior citizens) "
+            "Capped at Rs 25,000 (Rs 50,000 if parents are senior citizens) "
             "by the computation engine."
+        ),
+    )
+    amount_80d_preventive_self: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Preventive health check-up expenditure for self, spouse, and "
+            "dependent children (Section 80D). Capped at Rs 5,000 and "
+            "included within the self-family bucket limit."
+        ),
+    )
+    amount_80d_preventive_parents: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Preventive health check-up expenditure for parents (Section 80D). "
+            "Capped at Rs 5,000 and included within the parents bucket limit."
         ),
     )
     amount_80tta: Decimal = Field(
@@ -568,10 +593,120 @@ class ITR1Input(BaseModel):
     filing_date: Optional[date] = Field(default=None)
     due_date: Optional[date] = Field(default=None)
 
+    # --- ITR-1 eligibility gate fields ---
+    assessee_type: AssesseeType = Field(default=AssesseeType.INDIVIDUAL, description="Entity type of the assessee. ITR-1 is only for individuals.")
+    is_resident: bool = Field(default=True, description="True if assessee is a resident individual (ITR-1 is only for residents).")
+    is_director: bool = Field(default=False, description="True if assessee is a director in any company (disqualifies ITR-1).")
+    has_foreign_assets: bool = Field(default=False, description="True if assessee holds foreign assets or has foreign income (disqualifies ITR-1).")
+    has_unlisted_equity: bool = Field(default=False, description="True if assessee holds unlisted equity shares (disqualifies ITR-1).")
+    house_property_count: int = Field(default=1, ge=1, description="Number of house properties owned. ITR-1 allows at most 1.")
+
+    # --- Quarterly advance tax ---
+    advance_tax_q1: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 June (Q1)")
+    advance_tax_q2: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 Sep (Q2)")
+    advance_tax_q3: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 Dec (Q3)")
+    advance_tax_q4: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 Mar (Q4)")
+
+    # --- Relief and agricultural income ---
+    relief_89: Decimal = Field(default=Decimal("0"), ge=0, description="Relief under section 89 (arrears of salary) as computed by Form 10E")
+    agriculture_income: Decimal = Field(default=Decimal("0"), ge=0, description="Agricultural income shown as exempt")
+
 
 # ---------------------------------------------------------------------------
 # TDS / TCS entry models (shared across ITR forms)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Stub models referenced by ITR-4 / shared across ITR forms
+# ---------------------------------------------------------------------------
+
+class TDS3Entry(BaseModel):
+    """TDS on payment to non-residents - Schedule TDS3."""
+    deductor_tan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
+    deductor_name: Optional[str] = Field(default=None, max_length=125)
+    gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
+
+class Schedule80D(BaseModel):
+    """Schedule 80D health insurance details."""
+    pass
+
+class Schedule80G(BaseModel):
+    """Schedule 80G donation details."""
+    pass
+
+class Schedule80GGA(BaseModel):
+    """Schedule 80GGA scientific research donations."""
+    pass
+
+class Schedule80GGC(BaseModel):
+    """Schedule 80GGC political contributions."""
+    pass
+
+class Schedule80DD(BaseModel):
+    """Schedule 80DD dependent disability details."""
+    disability_type: str = Field(default="normal")
+
+class Schedule80U(BaseModel):
+    """Schedule 80U self disability details."""
+    disability_type: str = Field(default="normal")
+
+class Schedule80CEntry(BaseModel):
+    """Per-row entry for Schedule 80C."""
+    pass
+
+class Schedule80CCCEntry(BaseModel):
+    """Per-row entry for Schedule 80CCC."""
+    pass
+
+class Schedule80EEntry(BaseModel):
+    """Per-row entry for Schedule 80E."""
+    pass
+
+class Schedule80EELoanEntry(BaseModel):
+    """Per-loan entry for Schedule 80EE."""
+    pass
+
+class Schedule80EEALoanEntry(BaseModel):
+    """Per-loan entry for Schedule 80EEA."""
+    pass
+
+class Schedule80EEBLoanEntry(BaseModel):
+    """Per-loan entry for Schedule 80EEB."""
+    pass
+
+class HRADetails(BaseModel):
+    """HRA computation breakdown."""
+    pass
+
+class CoOwnershipDetails(BaseModel):
+    """Co-ownership details for house property."""
+    pass
+
+class RepresentativeDetails(BaseModel):
+    """Representative assessee details."""
+    pass
+
+class LoanDetails(BaseModel):
+    """Loan details container."""
+    pass
+
+class LoanDetail(BaseModel):
+    """Per-loan detail entry."""
+    pass
+
+class SecondaryAddress(BaseModel):
+    """Secondary address for representative filing."""
+    pass
+
+class InsurancePolicy(BaseModel):
+    """Insurance policy detail."""
+    pass
+
+class TaxPaymentDetail(BaseModel):
+    """Per-installment entry for Schedule IT."""
+    pass
 
 
 class TDS1Entry(BaseModel):

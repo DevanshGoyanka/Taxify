@@ -317,8 +317,13 @@ class ITR2Input(BaseModel):
 
     # --- Tax payments ---
     advance_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    advance_tax_q1: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 June (Q1)")
+    advance_tax_q2: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 Sep (Q2)")
+    advance_tax_q3: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 Dec (Q3)")
+    advance_tax_q4: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 Mar (Q4)")
     self_assessment_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
 
     # --- Filing dates ---
     filing_date: Optional[date] = Field(default=None)
     due_date: Optional[date] = Field(default=None)
+    relief_89: Decimal = Field(default=Decimal("0"), ge=0, description="Relief under section 89 (arrears of salary) as computed by Form 10E")

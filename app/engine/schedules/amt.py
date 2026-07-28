@@ -66,6 +66,16 @@ def compute(
         return AMTResult(final_tax=total_tax_before_cess)
 
     ati = total_income + trigger_amount
+
+    # s.115JC(4): AMT does not apply if Adjusted Total Income ≤ ₹20,00,000
+    if ati <= Decimal("2000000"):
+        return AMTResult(
+            adjusted_total_income=ati,
+            amt_tax=Decimal("0"),
+            regular_tax=total_tax_before_cess,
+            final_tax=total_tax_before_cess,
+        )
+
     amt_tax_before_cess = ati * AMT_RATE
     amt_surcharge = compute_surcharge(ati, amt_tax_before_cess, regime, age_bracket)
     amt_cess = compute_cess(amt_tax_before_cess + amt_surcharge)

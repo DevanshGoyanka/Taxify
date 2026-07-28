@@ -28,6 +28,7 @@ Computation order:
 from decimal import Decimal
 from typing import Optional
 from dataclasses import dataclass, field
+from datetime import date
 
 from app.schemas.itr1 import AgeBracket, TaxRegime
 from app.schemas.itr3 import ITR3Input
@@ -36,7 +37,7 @@ from app.engine.common.slab_tax import compute as compute_slab_tax
 from app.engine.common.rebate import compute as compute_rebate
 from app.engine.common.surcharge import compute as compute_surcharge
 from app.engine.common.cess import compute as compute_cess
-from app.engine.common.interest import compute_234a, compute_234f
+from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234f
 from app.engine.schedules.salary import compute as compute_salary
 from app.engine.schedules.house_property import compute as compute_hp
 from app.engine.schedules.other_sources import compute as compute_os
@@ -55,12 +56,14 @@ from app.engine.schedules.agricultural import (
     compute as compute_agri, compute_partial_integration_tax,
 )
 from app.engine.schedules.deductions import compute_all as compute_deductions
+from app.engine.schedules.tds_tcs import compute_all as compute_tds_tcs
 from app.engine.schedules.loss_setoff.cyla import (
     compute as compute_cyla, CYLAInput,
 )
 from app.engine.schedules.loss_setoff.bfla import (
     compute as compute_bfla, BFLAInput,
 )
+from app.engine.schedules.loss_setoff.cfl import compute as compute_cfl
 from app.engine.schedules.amt import compute as compute_amt
 
 
@@ -191,6 +194,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         r.warnings.extend(pgbp.warnings)
 
     r.business_income = biz_income
+    r.relief_89 = input_data.relief_89  # Pass-through from Form 10E
 
     # ── 2. Salary ───────────────────────────────────────────────────────
     sal = compute_salary(input_data.salary_income, regime)
@@ -254,9 +258,28 @@ def compute(input_data: ITR3Input) -> ITR3Result:
                 exempt_54b += tx.deduction_us54b
                 exempt_54ec += tx.deduction_us54ec
                 exempt_54f += tx.deduction_us54f
+
+        elif tx.asset_type.value == "listed_equity_112a":
+            # 112A is always long-term (listed equity held >12 months)
+            ltcg_112a_assets.append(CG112AAsset(
+                total_sale_value=tx.full_consideration,
+                cost_acq_without_index=tx.cost_of_acquisition,
+                total_fmv=tx.fair_market_value_jan2018 or tx.cost_of_acquisition,
+                total_deductions=tx.expenditure_on_transfer,
+            ))
+
         else:
-            stcg_other += (tx.full_consideration - tx.cost_of_acquisition
-                           - tx.expenditure_on_transfer)
+            # Unlisted shares, debt MFs, bonds, jewellery, other
+            gain = tx.full_consideration - tx.cost_of_acquisition - tx.expenditure_on_transfer
+            is_short = True
+            if tx.date_of_acquisition and tx.date_of_transfer:
+                holding_days = (tx.date_of_transfer - tx.date_of_acquisition).days
+                # Unlisted shares/movable: >24 months = LTCG
+                is_short = holding_days <= 730
+            if is_short:
+                stcg_other += gain
+            else:
+                ltcg_other_cg += gain
 
     for scrip in (input_data.cg_112a_scrips or []):
         ltcg_112a_assets.append(CG112AAsset(
@@ -306,26 +329,30 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.partner_firm_income = partner_income
     r.business_income += partner_income
 
-    # ── 8. GTI before loss set-off ──────────────────────────────────────
-    gti_before = (r.business_income + r.salary_income + r.house_property_income
-                  + r.capital_gains_income + r.other_sources_income)
+    # ── 8. GTI before loss set-off (positive-only heads; losses handled by CYLA) ──
+    gti_before = (r.business_income  # already floored at 0
+                  + max(z, r.salary_income)
+                  + max(z, r.house_property_income)
+                  + r.capital_gains_income  # already floored by aggregate()
+                  + max(z, r.other_sources_income))
     r.gti_before_loss_setoff = gti_before
 
     # ── 9. CYLA ─────────────────────────────────────────────────────────
     has_pgbp = pgbp is not None
+    # Note: STCG/LTCG intra-head losses already netted by aggregate().
+    # Business and HP losses are cross-head and handled here.
     cy_input = CYLAInput(
         hp_loss=hp.income_chargeable if hp.income_chargeable < 0 else z,
         hp_income=hp.income_chargeable if hp.income_chargeable > 0 else z,
-        non_spec_biz_loss=pgbp.non_spec_net_income if has_pgbp and pgbp.non_spec_net_income < 0 else z,
+        non_spec_biz_loss=pgbp.non_spec_signed if has_pgbp and pgbp.non_spec_signed < 0 else z,
         non_spec_biz_income=pgbp.non_spec_net_income if has_pgbp and pgbp.non_spec_net_income > 0 else z,
-        spec_biz_loss=pgbp.speculative_net_income if has_pgbp and pgbp.speculative_net_income < 0 else z,
+        spec_biz_loss=pgbp.speculative_signed if has_pgbp and pgbp.speculative_signed < 0 else z,
         spec_biz_income=pgbp.speculative_net_income if has_pgbp and pgbp.speculative_net_income > 0 else z,
-        stcg_loss=cg_result.stcg.total_stcg if cg_result.stcg.total_stcg < 0 else z,
-        stcg_income=cg_result.stcg.total_stcg if cg_result.stcg.total_stcg > 0 else z,
-        ltcg_loss=cg_result.ltcg.income_125per_other + cg_result.ltcg.income_dtaa
-                  if (cg_result.ltcg.income_125per_other + cg_result.ltcg.income_dtaa) < 0 else z,
-        ltcg_income=cg_result.ltcg.income_125per_other + cg_result.ltcg.income_dtaa
-                    if (cg_result.ltcg.income_125per_other + cg_result.ltcg.income_dtaa) > 0 else z,
+        stcg_loss=z,   # intra-head, already handled by aggregate()
+        stcg_income=cg_result.total_capital_gains if cg_result.total_capital_gains > 0 else z,
+        ltcg_loss=z,   # intra-head, already handled by aggregate()
+        ltcg_income=z,
+        non_salary_income=max(z, r.salary_income) + max(z, r.other_sources_income - r.clubbing_income),
     )
     cyla = compute_cyla(cy_input)
     r.cyla_total_set_off = cyla.total_loss_set_off
@@ -333,6 +360,10 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.schedules["cyla"] = cyla
 
     # ── 10. BFLA ────────────────────────────────────────────────────────
+    # Use post-CYLA income — CYLA may have consumed income to absorb losses.
+    cg_income_for_bfla = max(z,
+        cg_result.total_capital_gains
+        - cyla.hp_setoff - cyla.non_spec_biz_setoff - cyla.spec_biz_setoff)
     bf_list = [
         {
             "assessment_year": str(item.assessment_year),
@@ -347,14 +378,29 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         hp_income=hp.income_chargeable if hp.income_chargeable > 0 else z,
         non_spec_biz_income=pgbp.non_spec_net_income if has_pgbp and pgbp.non_spec_net_income > 0 else z,
         spec_biz_income=pgbp.speculative_net_income if has_pgbp and pgbp.speculative_net_income > 0 else z,
-        stcg_income=cg_result.stcg.total_stcg if cg_result.stcg.total_stcg > 0 else z,
-        ltcg_income=cg_result.ltcg.total_ltcg if cg_result.ltcg.total_ltcg > 0 else z,
+        stcg_income=cg_income_for_bfla,
+        ltcg_income=z,
         bf_losses=bf_list,
     )
     bfla = compute_bfla(bf_input)
     r.bfla_total_set_off = bfla.total_bf_loss_set_off
     r.bfla_remaining = bfla.total_bf_remaining
     r.schedules["bfla"] = bfla
+
+    # ── 10a. CFL: Carry-Forward Loss Summary ────────────────────────────────
+    cfl_entries = []
+    # CYLA remaining losses (current-year that couldn't be set off)
+    if cyla.hp_setoff > 0 or abs(hp.income_chargeable) > cyla.hp_setoff if hp.income_chargeable < 0 else False:
+        pass  # hp_loss remaining handled via cyla.entries
+    for entry in cyla.entries:
+        if entry.remaining_loss > 0:
+            cfl_entries.append({"head": entry.head, "sub_category": entry.sub_category,
+                                "loss_cf": entry.remaining_loss})
+    for entry in bfla.entries:
+        if entry.remaining_carry_forward > 0:
+            cfl_entries.append({"head": entry.head, "sub_category": entry.sub_category,
+                                "loss_cf": entry.remaining_carry_forward})
+    r.schedules["cfl"] = cfl_entries
 
     # ── 11. GTI after losses ────────────────────────────────────────────
     gti_after = gti_before - r.cyla_total_set_off - r.bfla_total_set_off
@@ -384,6 +430,13 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.deductions_partb_chapter6a = ded.total
     r.deductions_total = ded.total
 
+    # Populate per-section business deductions from breakdown
+    bd = ded.breakdown if ded.breakdown else {}
+    r.deductions_80ia = bd.get("80-IA", z)
+    r.deductions_80ib = bd.get("80-IB", z)
+    r.deductions_80ic = bd.get("80-IC", z)
+    r.deductions_10aa = bd.get("10AA", z)
+
     # ── 15. Taxable Income ──────────────────────────────────────────────
     income_before = max(z, gti_after - ded.total)
     ti = round_to_nearest_10(income_before)
@@ -392,7 +445,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
 
     # ── 16. Special Rate Income Tax ─────────────────────────────────────
     si_entries = []
-    si_entries.append(si_112a(cg_result.ltcg.income_112a, z))
+    si_entries.append(si_112a(cg_result.ltcg.taxable_112a, pre_exempted=True))
     si_entries.append(si_111a(stcg_result.income_111a))
     if vda_income > 0:
         si_entries.append(si_vda(vda_income))
@@ -433,12 +486,14 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.tax_before_rebate = r.total_tax_before_relief
 
     # ── 20. Rebate 87A ──────────────────────────────────────────────────
-    rebate = compute_rebate(ti, r.tax_before_rebate, regime)
+    rebate = compute_rebate(ti, r.tax_before_rebate, slab_tax, regime)
     r.rebate_87a = rebate
     r.tax_after_rebate = max(z, r.tax_before_rebate - rebate)
 
     # ── 21. Surcharge ───────────────────────────────────────────────────
-    surcharge = compute_surcharge(ti, r.tax_after_rebate, regime, age)
+    surcharge = compute_surcharge(ti, r.tax_after_rebate, regime, age,
+                                   sr_tax=si_result.surcharge_cap_tax,
+                                   sr_surcharge_full_tax=si_result.surcharge_full_tax)
     r.surcharge = surcharge
 
     # ── 22. Cess ────────────────────────────────────────────────────────
@@ -447,11 +502,14 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.gross_tax_liability = r.tax_after_rebate + surcharge + cess
 
     # ── 23. AMT (override if applicable) ────────────────────────────────
+    # AMT triggers: read from deduction breakdown
     amt_triggers = {}
-    if ded_input := input_data.deductions_chapter6a:
-        for key, label in [("amount_80ia", "80-IA"), ("amount_80ib", "80-IB"),
-                           ("amount_10aa", "10AA")]:
-            val = getattr(ded_input, key, None) or Decimal("0")
+    ded_sched = r.schedules.get("deductions")
+    if ded_sched and hasattr(ded_sched, "breakdown") and ded_sched.breakdown:
+        bd = ded_sched.breakdown
+        for key, label in [("80-IA", "80-IA"), ("80-IB", "80-IB"),
+                           ("80-IC", "80-IC"), ("10AA", "10AA")]:
+            val = bd.get(key, z)
             if val > 0:
                 amt_triggers[label] = val
     amt_result = compute_amt(ti, r.gross_tax_liability, amt_triggers, regime, age)
@@ -459,31 +517,56 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         r.amt_tax = amt_result.amt_tax - r.gross_tax_liability
         r.gross_tax_liability = amt_result.final_tax
         r.schedules["amt"] = amt_result
+        r.total_tax_before_relief += r.amt_tax  # Recomputed: AMT delta was not in original
 
     # ── 24. Foreign tax relief ──────────────────────────────────────────
     for tr1 in (input_data.tr1_entries or []):
         r.relief_90_91 += tr1.relief_claimed
     r.relief_90_91 = min(r.relief_90_91, r.gross_tax_liability)
 
-    # ── 25. Interest ────────────────────────────────────────────────────
-    filing_date = input_data.filing_date
-    due_date = input_data.due_date
-    if filing_date and due_date:
-        r.interest_234a = compute_234a(r.gross_tax_liability, filing_date, due_date)
-        r.late_fee_234f = compute_234f(filing_date, due_date, ti)
-    r.total_interest = r.interest_234a + r.interest_234b + r.interest_234c
-
-    # ── 26. Tax Credits ─────────────────────────────────────────────────
-    for tds1 in (input_data.tds1_entries or []):
-        r.total_tds += tds1.tds_deducted
-    for tds2 in (input_data.tds2_entries or []):
-        r.total_tds += tds2.tds_deducted
-    for tcs in (input_data.tcs_entries or []):
-        r.total_tcs += tcs.tcs_collected
+    # ── 25. Tax Credits (compute BEFORE interest — 234A base uses net assessed tax) ──
+    tds_tcs = compute_tds_tcs(
+        tds1_entries=input_data.tds1_entries,
+        tds2_entries=input_data.tds2_entries,
+        tcs_entries=input_data.tcs_entries,
+    )
+    r.total_tds = tds_tcs.total_tds
+    r.total_tcs = tds_tcs.total_tcs
     r.total_advance_tax = input_data.advance_tax_paid or z
     r.total_self_assessment_tax = input_data.self_assessment_tax_paid or z
     r.total_taxes_paid = (r.total_tds + r.total_tcs + r.total_advance_tax
                            + r.total_self_assessment_tax)
+
+    # ── 26. Interest & Late Fee ─────────────────────────────────────────
+    filing_date = input_data.filing_date
+    due_date = input_data.due_date
+    if filing_date and due_date:
+        # 234A: 1% on net assessed tax (gross liability minus reliefs minus prepaid taxes)
+        assessed_tax = max(z,
+            r.gross_tax_liability - r.relief_90_91 - r.relief_89
+            - r.total_tds - r.total_tcs)
+        r.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
+
+        # 234B: 1% on shortfall in advance tax
+        ay_start = date(due_date.year, 4, 1)
+        r.interest_234b = compute_234b(assessed_tax,
+            input_data.advance_tax_paid or z, filing_date, ay_start)
+
+        # 234C: deferred installment interest
+        if (input_data.advance_tax_q1 is not None or input_data.advance_tax_q2 is not None
+                or input_data.advance_tax_q3 is not None or input_data.advance_tax_q4 is not None):
+            quarterly = [
+                input_data.advance_tax_q1 or z,
+                input_data.advance_tax_q2 or z,
+                input_data.advance_tax_q3 or z,
+                input_data.advance_tax_q4 or z,
+            ]
+        else:
+            quarterly = [input_data.advance_tax_paid or z]
+        r.interest_234c = compute_234c(quarterly, assessed_tax, ay_start)
+
+        r.late_fee_234f = compute_234f(filing_date, due_date, ti)
+    r.total_interest = r.interest_234a + r.interest_234b + r.interest_234c
 
     # ── 27. Final payable / refund ──────────────────────────────────────
     net_liability = (r.gross_tax_liability - r.relief_89 - r.relief_90_91

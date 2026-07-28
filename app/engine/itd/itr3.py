@@ -660,6 +660,30 @@ def _schedule_bfla(result: ITR3Result) -> dict:
     }
 
 
+def _schedule_cfl(result: ITR3Result) -> dict:
+    """Build ScheduleCFL from computed loss carry-forward data."""
+    cfl_entries = result.schedules.get("cfl", [])
+    if not cfl_entries:
+        return {"LossCF": {"TotLossCF": 0}}
+
+    hp_cf = sum(e.get("loss_cf", 0) for e in cfl_entries if e.get("head") == "HP")
+    stcg_cf = sum(e.get("loss_cf", 0) for e in cfl_entries if e.get("head") == "STCG")
+    ltcg_cf = sum(e.get("loss_cf", 0) for e in cfl_entries if e.get("head") == "LTCG")
+    biz_cf = sum(e.get("loss_cf", 0) for e in cfl_entries
+                 if e.get("head") in ("BUS", "NonSpeculative", "Speculative"))
+    total_cf = hp_cf + stcg_cf + ltcg_cf + biz_cf
+
+    return {
+        "LossCF": {
+            "TotLossCF": float(total_cf),
+            "TotalHPPTILossCF": float(hp_cf),
+            "TotalBusinessLossCF": float(biz_cf),
+            "TotalSTCGPTILossCF": float(stcg_cf),
+            "TotalLTCGPTILossCF": float(ltcg_cf),
+        }
+    }
+
+
 def _schedule_s(result: ITR3Result) -> dict:
     return {
         "Salaries": [{
@@ -865,7 +889,7 @@ def _partb_tti(result: ITR3Result) -> dict:
                 "TaxAtSpecialRates": _to_rupees_rounded10(result.special_rate_tax),
                 "RebateOnAgriInc": _to_rupees_rounded10(result.partial_integration_tax),
                 "TaxPayableOnTotInc": _to_rupees_rounded10(result.slab_tax + result.special_rate_tax),
-                "Rebate87A": 0,
+                "Rebate87A": _to_rupees_rounded10(result.rebate_87a),
                 "TaxPayableOnRebate": _to_rupees_rounded10(result.slab_tax + result.special_rate_tax),
                 "Surcharge25ofSI": 0,
                 "SurchargeOnAboveCrore": 0,
@@ -1021,6 +1045,7 @@ def build_itr3_json(
         "PARTA_PL": _parta_pl(),
         "ScheduleCYLA": _schedule_cyla(result),
         "ScheduleBFLA": _schedule_bfla(result),
+        "ScheduleCFL": _schedule_cfl(result),
         "PartB-TI": _partb_ti(result),
         "PartB_TTI": _partb_tti(result),
         "Verification": _verification(
