@@ -25,6 +25,14 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from app.engine.calculators.itr4 import ITR4Result
+# Module-level deduction breakdown dict -- rebound by build_itr4_json before use.
+_DED_BREAKDOWN: dict[str, Decimal] = {}
+
+def _d(key: str) -> Decimal:
+    """Return deduction amount from the module-level breakdown dict."""
+    return _DED_BREAKDOWN.get(key, Decimal("0"))
+
+
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -197,8 +205,26 @@ def _income_deductions_itr4(
         "DeductionUs57iia": 0,
         "GrossTotIncome": _to_rupees(gti),
         "GrossTotIncomeIncLTCG112A": _to_rupees(gti_cg),
-        "UsrDeductUndChapVIA": _chapter_via_itr4(deductions_total),
-        "DeductUndChapVIA": _chapter_via_itr4(deductions_total),
+        "UsrDeductUndChapVIA": _chapter_via_itr4(
+            deductions_total,
+            ded_80c=_d("80C+80CCC+80CCD(1)"), ded_80ccc=_d("80CCC"),
+            ded_80ccd1b=_d("80CCD(1B)"), ded_80ccd2=_d("80CCD(2)"),
+            ded_80d=_d("80D"), ded_80dd=_d("80DD"), ded_80ddb=_d("80DDB"),
+            ded_80u=_d("80U"), ded_80tta=_d("80TTA"), ded_80ttb=_d("80TTB"),
+            ded_80e=_d("80E"), ded_80ee=_d("80EE"), ded_80eea=_d("80EEA"),
+            ded_80eeb=_d("80EEB"), ded_80g=_d("80G"), ded_80gg=_d("80GG"),
+            ded_80ggc=_d("80GGC"), ded_80cch=_d("80CCH"),
+        ),
+        "DeductUndChapVIA": _chapter_via_itr4(
+            deductions_total,
+            ded_80c=_d("80C+80CCC+80CCD(1)"), ded_80ccc=_d("80CCC"),
+            ded_80ccd1b=_d("80CCD(1B)"), ded_80ccd2=_d("80CCD(2)"),
+            ded_80d=_d("80D"), ded_80dd=_d("80DD"), ded_80ddb=_d("80DDB"),
+            ded_80u=_d("80U"), ded_80tta=_d("80TTA"), ded_80ttb=_d("80TTB"),
+            ded_80e=_d("80E"), ded_80ee=_d("80EE"), ded_80eea=_d("80EEA"),
+            ded_80eeb=_d("80EEB"), ded_80g=_d("80G"), ded_80gg=_d("80GG"),
+            ded_80ggc=_d("80GGC"), ded_80cch=_d("80CCH"),
+        ),
         "TotalIncome": _to_rupees_rounded10(total_income),
     }
 
@@ -654,7 +680,15 @@ def build_itr4_json(
         f10iea_ack_no_curr_ay_old_tax=f10iea_ack_no_curr_ay_old_tax,
     )
 
-    gti_cg = result.gross_total_income + result.capital_gains_112a
+    # -- Extract per-section deduction amounts from breakdown --------------
+    # DeductionResult is a dataclass with a .breakdown dict attribute.
+    # Rebind the module-level _DED_BREAKDOWN so _income_deductions_itr4
+    # (which calls module-level _d()) sees the correct breakdown.
+    ded_sched = result.schedules.get("deductions") if result.schedules else None
+    global _DED_BREAKDOWN
+    _DED_BREAKDOWN = getattr(ded_sched, "breakdown", {}) if ded_sched else {}
+
+    gti_cg = result.gross_total_income  # Already includes capital_gains_112a
     income = _income_deductions_itr4(
         gross_salary=result.salary_gross,
         net_salary=result.salary_net,
@@ -675,7 +709,7 @@ def build_itr4_json(
     )
 
     tax = _tax_computation_itr4(
-        slab_tax=result.tax_before_rebate,
+        slab_tax=result.slab_tax,
         rebate_87a=result.rebate_87a,
         tax_after_rebate=result.tax_after_rebate,
         surcharge=result.surcharge,
@@ -737,7 +771,7 @@ def build_itr4_json(
                 "OthersTotalTaxExe": 0,
             }
         },
-        "Schedule80G": _schedule_80g(Decimal("0"), Decimal("0")),
+        "Schedule80G": _schedule_80g(Decimal("0"), _d("80G")),
         "Schedule80GGC": {
             "Schedule80GGCDetails": [],
             "TotalDonationAmtCash80GGC": 0,
@@ -755,7 +789,7 @@ def build_itr4_json(
         "Schedule80DD": {
             "NatureOfDisability": "1",
             "TypeOfDisability": "2",
-            "DeductionAmount": 0,
+            "DeductionAmount": int(_d("80DD")),
             "DependentType": "1",
             "DependentPan": "AAAAA0000A",
             "DependentAadhaar": "000000000000",
@@ -765,28 +799,28 @@ def build_itr4_json(
         "Schedule80U": {
             "NatureOfDisability": "1",
             "TypeOfDisability": "2",
-            "DeductionAmount": 0,
+            "DeductionAmount": int(_d("80U")),
             "Form10IAAckNum": "",
             "UDIDNum": "",
         },
         "Schedule80E": {
             "Schedule80EDtls": [],
-            "TotalInterest80E": 0,
+            "TotalInterest80E": int(_d("80E")),
         },
         "Schedule80EE": {
             "Schedule80EEDtls": [],
-            "TotalInterest80EE": 0,
+            "TotalInterest80EE": int(_d("80EE")),
         },
         "Schedule80EEA": {
             "PropStmpDtyVal": 0,
             "Schedule80EEADtls": [],
-            "TotalInterest80EEA": 0,
+            "TotalInterest80EEA": int(_d("80EEA")),
         },
         "Schedule80EEB": {
             "Schedule80EEBDtls": [],
-            "TotalInterest80EEB": 0,
+            "TotalInterest80EEB": int(_d("80EEB")),
         },
-        "Schedule80C": _schedule_80c(Decimal("0")),
+        "Schedule80C": _schedule_80c(_d("80C+80CCC+80CCD(1)")),
         "TaxReturnPreparer": _tax_return_preparer(),
     }
 

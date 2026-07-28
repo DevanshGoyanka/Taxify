@@ -1,19 +1,15 @@
 """
-Section 10AA — SEZ Unit Deduction.
+Section 10AA — Deduction for SEZ Units.
 
-Deduction for newly established units in Special Economic Zones (SEZs).
-
-Key rules:
-  - First 5 years: 100% of export profits.
-  - Next 5 years: 50% of export profits.
-  - Next 5 years: 50% of export profits, subject to amount credited
-    to SEZ Re-Investment Reserve Account (max 50%).
+Deduction for profits derived from export of articles/things or
+services by a unit located in a Special Economic Zone (SEZ).
 
 Conditions:
-  - Unit must begin manufacture/production of articles/things or
-    provide services on or after 01-04-2005.
-  - Separate books of account.
-  - Audit report (Form 56F) required.
+  - 100% of export profits for first 5 years.
+  - 50% of export profits for next 5 years.
+  - Not available after 15 years from commencement.
+  - Available under old regime only.
+  - Triggers AMT u/s 115JC.
 
 ITR forms: ITR-3 only.
 """
@@ -24,6 +20,7 @@ from app.schemas.itr1 import Chapter6ADeductions, TaxRegime
 
 
 def compute(ded: Optional[Chapter6ADeductions], regime: TaxRegime) -> Decimal:
+    """Return the 10AA deduction amount."""
     if not ded or regime == TaxRegime.NEW:
         return Decimal("0")
-    return ded.amount_80g
+    return ded.amount_10aa

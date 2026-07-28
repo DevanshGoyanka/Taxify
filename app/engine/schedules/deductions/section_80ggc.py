@@ -23,4 +23,4 @@ from app.schemas.itr1 import Chapter6ADeductions, TaxRegime
 def compute(ded: Optional[Chapter6ADeductions], regime: TaxRegime) -> Decimal:
     if not ded or regime == TaxRegime.NEW:
         return Decimal("0")
-    return ded.amount_80g
+    return ded.amount_80ggc

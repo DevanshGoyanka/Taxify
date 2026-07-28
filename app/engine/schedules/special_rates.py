@@ -28,13 +28,13 @@ from enum import Enum
 from typing import Optional
 from dataclasses import dataclass, field
 from app.engine.constants import (
-    STCG_111A_RATE_PRE_JUL23,
-    STCG_111A_RATE_POST_JUL23,
+    STCG_111A_RATE_PRE_JUL24,
+    STCG_111A_RATE_POST_JUL24,
     LTCG_112A_RATE,
-    LTCG_112A_RATE_POST_JUL23,
+    LTCG_112A_RATE_POST_JUL24,
     LTCG_112A_EXEMPTION,
     LTCG_OTHER_RATE,
-    LTCG_OTHER_RATE_POST_JUL23,
+    LTCG_OTHER_RATE_POST_JUL24,
     LOTTERY_RATE,
     VDA_RATE,
     UNEXPLAINED_INCOME_RATE,
@@ -70,6 +70,14 @@ class SpecialRatesResult:
     entries: list = field(default_factory=list)
     total_special_rate_income: Decimal = Decimal("0")
     total_special_rate_tax: Decimal = Decimal("0")
+    # Tax from sections eligible for 15% surcharge cap (111A/112/112A)
+    surcharge_cap_tax: Decimal = Decimal("0")
+    # Tax from sections NOT eligible for surcharge cap (115BB/BBE/BBH/BBF)
+    surcharge_full_tax: Decimal = Decimal("0")
+
+
+# Sections eligible for the 15% surcharge cap under Finance Act provisos
+_SURCHARGE_CAP_SECTIONS: set[str] = {"111A", "112", "112A"}
 
 
 def compute_112a(ltcg_112a: Decimal, cost_of_acquisition: Decimal = Decimal("0")) -> SpecialRateEntry:
@@ -77,7 +85,7 @@ def compute_112a(ltcg_112a: Decimal, cost_of_acquisition: Decimal = Decimal("0")
     net = max(Decimal("0"), ltcg_112a - cost_of_acquisition)
     exemption = min(net, LTCG_112A_EXEMPTION)
     taxable = max(Decimal("0"), net - exemption)
-    tax = taxable * LTCG_112A_RATE_POST_JUL23 / Decimal("100")
+    tax = taxable * LTCG_112A_RATE_POST_JUL24 / Decimal("100")
 
     return SpecialRateEntry(
         section="112A",
@@ -85,16 +93,16 @@ def compute_112a(ltcg_112a: Decimal, cost_of_acquisition: Decimal = Decimal("0")
         gross_income=ltcg_112a,
         deductions=cost_of_acquisition,
         net_income=net,
-        tax_rate_pct=LTCG_112A_RATE_POST_JUL23,
+        tax_rate_pct=LTCG_112A_RATE_POST_JUL24,
         tax_amount=tax,
         exemption_available=exemption,
         taxable_income=taxable,
     )
 
 
-def compute_111a(stcg_111a: Decimal, is_post_jul23: bool = True) -> SpecialRateEntry:
+def compute_111a(stcg_111a: Decimal, is_post_jul24: bool = True) -> SpecialRateEntry:
     """Compute STCG u/s 111A."""
-    rate = STCG_111A_RATE_POST_JUL23 if is_post_jul23 else STCG_111A_RATE_PRE_JUL23
+    rate = STCG_111A_RATE_POST_JUL24 if is_post_jul24 else STCG_111A_RATE_PRE_JUL24
     tax = stcg_111a * rate / Decimal("100")
 
     return SpecialRateEntry(
@@ -161,9 +169,13 @@ def compute_115bbf(patent_royalty: Decimal) -> SpecialRateEntry:
 
 
 def aggregate(entries: list[SpecialRateEntry]) -> SpecialRatesResult:
-    """Aggregate special rate entries into total."""
+    """Aggregate special rate entries into total, splitting surcharge-cap vs full."""
+    cap_tax = sum(e.tax_amount for e in entries if e.section in _SURCHARGE_CAP_SECTIONS)
+    full_tax = sum(e.tax_amount for e in entries if e.section not in _SURCHARGE_CAP_SECTIONS)
     return SpecialRatesResult(
         entries=entries,
         total_special_rate_income=sum(e.taxable_income for e in entries),
-        total_special_rate_tax=sum(e.tax_amount for e in entries),
+        total_special_rate_tax=cap_tax + full_tax,
+        surcharge_cap_tax=cap_tax,
+        surcharge_full_tax=full_tax,
     )

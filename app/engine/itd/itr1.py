@@ -15,6 +15,16 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from app.engine.calculators.itr1 import ITR1Result
+from decimal import Decimal as _Decimal
+
+# Module-level deduction breakdown -- rebound by build_itr1_json before use.
+_DED_BREAKDOWN: dict[str, _Decimal] = {}
+
+def _d(key: str) -> _Decimal:
+    """Return deduction amount from the module-level breakdown dict."""
+    return _DED_BREAKDOWN.get(key, _Decimal("0"))
+
+
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -120,6 +130,25 @@ def _income_deductions_itr1(
     hp_schedules: Optional[list[dict]] = None,
     perquisites_value: Decimal = Decimal("0"),
     profits_in_lieu: Decimal = Decimal("0"),
+    ded_80c: Decimal = Decimal("0"),
+    ded_80ccc: Decimal = Decimal("0"),
+    ded_80ccd1b: Decimal = Decimal("0"),
+    ded_80ccd2: Decimal = Decimal("0"),
+    ded_80d: Decimal = Decimal("0"),
+    ded_80dd: Decimal = Decimal("0"),
+    ded_80ddb: Decimal = Decimal("0"),
+    ded_80u: Decimal = Decimal("0"),
+    ded_80tta: Decimal = Decimal("0"),
+    ded_80ttb: Decimal = Decimal("0"),
+    ded_80e: Decimal = Decimal("0"),
+    ded_80ee: Decimal = Decimal("0"),
+    ded_80eea: Decimal = Decimal("0"),
+    ded_80eeb: Decimal = Decimal("0"),
+    ded_80g: Decimal = Decimal("0"),
+    ded_80gg: Decimal = Decimal("0"),
+    ded_80gga: Decimal = Decimal("0"),
+    ded_80ggc: Decimal = Decimal("0"),
+    ded_80cch: Decimal = Decimal("0"),
 ) -> dict:
     return {
         "GrossSalary": _to_rupees(gross_salary),
@@ -145,8 +174,26 @@ def _income_deductions_itr1(
         "DeductionUs57iia": 0,
         "GrossTotIncome": _to_rupees(gti),
         "GrossTotIncomeIncLTCG112A": _to_rupees(gti_cg),
-        "UsrDeductUndChapVIA": _chapter_via_itr1(deductions_total),
-        "DeductUndChapVIA": _chapter_via_itr1(deductions_total),
+        "UsrDeductUndChapVIA": _chapter_via_itr1(
+            deductions_total,
+            ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1b=ded_80ccd1b,
+            ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
+            ded_80ddb=ded_80ddb, ded_80u=ded_80u, ded_80tta=ded_80tta,
+            ded_80ttb=ded_80ttb, ded_80e=ded_80e, ded_80ee=ded_80ee,
+            ded_80eea=ded_80eea, ded_80eeb=ded_80eeb, ded_80g=ded_80g,
+            ded_80gg=ded_80gg, ded_80gga=ded_80gga, ded_80ggc=ded_80ggc,
+            ded_80cch=ded_80cch,
+        ),
+        "DeductUndChapVIA": _chapter_via_itr1(
+            deductions_total,
+            ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1b=ded_80ccd1b,
+            ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
+            ded_80ddb=ded_80ddb, ded_80u=ded_80u, ded_80tta=ded_80tta,
+            ded_80ttb=ded_80ttb, ded_80e=ded_80e, ded_80ee=ded_80ee,
+            ded_80eea=ded_80eea, ded_80eeb=ded_80eeb, ded_80g=ded_80g,
+            ded_80gg=ded_80gg, ded_80gga=ded_80gga, ded_80ggc=ded_80ggc,
+            ded_80cch=ded_80cch,
+        ),
         "TotalIncome": _to_rupees_rounded10(total_income),
         "ExemptIncAgriOthUs10": {
             "ExemptIncAgriOthUs10Dtls": [],
@@ -474,7 +521,13 @@ def build_itr1_json(
         opt_out_new_regime=opt_out_new_regime,
     )
 
-    gti_cg = result.gross_total_income + result.capital_gains_112a
+    # -- Extract per-section deduction amounts from breakdown ----------------
+    # DeductionResult is a dataclass with a .breakdown dict attribute.
+    ded_sched = result.schedules.get("deductions") if result.schedules else None
+    global _DED_BREAKDOWN
+    _DED_BREAKDOWN = getattr(ded_sched, "breakdown", {}) if ded_sched else {}
+
+    gti_cg = result.gross_total_income  # Already includes capital_gains_112a
     income = _income_deductions_itr1(
         gross_salary=result.salary_gross,
         net_salary=result.salary_net,
@@ -491,6 +544,24 @@ def build_itr1_json(
         deductions_total=result.deductions_total,
         perquisites_value=result.salary_perquisites,
         profits_in_lieu=result.salary_profits_in_lieu,
+        ded_80c=_d("80C+80CCC+80CCD(1)"), ded_80ccc=_d("80CCC"), ded_80ccd1=_d("80CCD(1)"),
+        ded_80ccd1b=_d("80CCD(1B)"),
+        ded_80ccd2=_d("80CCD(2)"),
+        ded_80d=_d("80D"),
+        ded_80dd=_d("80DD"),
+        ded_80ddb=_d("80DDB"),
+        ded_80u=_d("80U"),
+        ded_80tta=_d("80TTA"),
+        ded_80ttb=_d("80TTB"),
+        ded_80e=_d("80E"),
+        ded_80ee=_d("80EE"),
+        ded_80eea=_d("80EEA"),
+        ded_80eeb=_d("80EEB"),
+        ded_80g=_d("80G"),
+        ded_80gg=_d("80GG"),
+        ded_80gga=_d("80GGA"),
+        ded_80ggc=_d("80GGC"),
+        ded_80cch=_d("80CCH"),
     )
 
     tax = _tax_computation_itr1(
@@ -536,32 +607,32 @@ def build_itr1_json(
         "TaxPaid": tax_paid,
         "Refund": refund,
         "Verification": ver,
-        "Schedule80G": _schedule_80g(Decimal("0"), Decimal("0")),
+        "Schedule80G": _schedule_80g(_d("80G"), Decimal("0")),
         "Schedule80GGA": {
             "DonationDtlsSciRsrchRuralDev": [],
             "TotalDonationAmtCash80GGA": 0,
-            "TotalDonationAmtOtherMode80GGA": 0,
-            "TotalDonationsUs80GGA": 0,
-            "TotalEligibleDonationAmt80GGA": 0,
+            "TotalDonationAmtOtherMode80GGA": _to_rupees(_d("80GGA")),
+            "TotalDonationsUs80GGA": _to_rupees(_d("80GGA")),
+            "TotalEligibleDonationAmt80GGA": _to_rupees(_d("80GGA")),
         },
         "Schedule80GGC": {
             "Schedule80GGCDetails": [],
             "TotalDonationAmtCash80GGC": 0,
-            "TotalDonationAmtOtherMode80GGC": 0,
-            "TotalDonationsUs80GGC": 0,
-            "TotalEligibleDonationAmt80GGC": 0,
+            "TotalDonationAmtOtherMode80GGC": _to_rupees(_d("80GGC")),
+            "TotalDonationsUs80GGC": _to_rupees(_d("80GGC")),
+            "TotalEligibleDonationAmt80GGC": _to_rupees(_d("80GGC")),
         },
         "Schedule80D": _schedule_80d(
             senior_flag_self=schedule_80d_senior_self,
             senior_flag_parents=schedule_80d_senior_parents,
-            self_amt=_zero_if_none(schedule_80d_self_amt),
+            self_amt=_zero_if_none(schedule_80d_self_amt) or _d("80D"),
             parents_amt=_zero_if_none(schedule_80d_parents_amt),
-            eligible_deduction=_zero_if_none(schedule_80d_self_amt) + _zero_if_none(schedule_80d_parents_amt),
+            eligible_deduction=(_zero_if_none(schedule_80d_self_amt) + _zero_if_none(schedule_80d_parents_amt)) or _d("80D"),
         ),
         "Schedule80DD": {
             "NatureOfDisability": "1",
             "TypeOfDisability": "2",
-            "DeductionAmount": 0,
+            "DeductionAmount": _to_rupees(_d("80DD")),
             "DependentType": "1",
             "DependentPan": "AAAAA0000A",
             "DependentAadhaar": "000000000000",
@@ -571,28 +642,28 @@ def build_itr1_json(
         "Schedule80U": {
             "NatureOfDisability": "1",
             "TypeOfDisability": "2",
-            "DeductionAmount": 0,
+            "DeductionAmount": _to_rupees(_d("80U")),
             "Form10IAAckNum": "",
             "UDIDNum": "",
         },
         "Schedule80E": {
             "Schedule80EDtls": [],
-            "TotalInterest80E": 0,
+            "TotalInterest80E": _to_rupees(_d("80E")),
         },
         "Schedule80EE": {
             "Schedule80EEDtls": [],
-            "TotalInterest80EE": 0,
+            "TotalInterest80EE": _to_rupees(_d("80EE")),
         },
         "Schedule80EEA": {
             "PropStmpDtyVal": 0,
             "Schedule80EEADtls": [],
-            "TotalInterest80EEA": 0,
+            "TotalInterest80EEA": _to_rupees(_d("80EEA")),
         },
         "Schedule80EEB": {
             "Schedule80EEBDtls": [],
-            "TotalInterest80EEB": 0,
+            "TotalInterest80EEB": _to_rupees(_d("80EEB")),
         },
-        "Schedule80C": _schedule_80c(Decimal("0")),
+        "Schedule80C": _schedule_80c(_d("80C+80CCC+80CCD(1)")),
         "ScheduleEA10_13A": _schedule_ea10_13a(
             place_of_work=("1" if hra_metro else "2"),
             hra_received=_zero_if_none(hra_received),
@@ -602,12 +673,19 @@ def build_itr1_json(
     }
 
     # Conditional: TDS on Salary
-    tds_sal = _tds_salary_schedule_itr1(tds_salary_entries)
+    # TDS on Salary: auto-populate from result.total_tds if no entries passed
+    _sal_entries = tds_salary_entries
+    if not _sal_entries and result.total_tds > 0:
+        _sal_entries = [{"EmployerOrDeductorOrCollectDetl": {"TAN": "AAAAA0000A", "EmployerOrDeductorOrCollecterName": "Employer"}, "TotalTDSSal": _to_rupees(result.total_tds)}]
+    tds_sal = _tds_salary_schedule_itr1(_sal_entries)
     if tds_sal:
         itr1["TDSonSalaries"] = tds_sal
 
-    # Conditional: TDS Other
-    tds_oth = _tds_other_schedule_itr1(tds_other_entries)
+    # TDS on Other Income
+    _oth_entries = tds_other_entries
+    if not _oth_entries and result.total_tds > 0:
+        _oth_entries = [{"EmployerOrDeductorOrCollectDetl": {"TAN": "AAAAA0000A"}, "AmtForTaxDeduct": _to_rupees(result.total_tds), "ClaimOutOfTotTDSOnAmtPaid": _to_rupees(result.total_tds), "TotTDSOnAmtPaid": _to_rupees(result.total_tds)}]
+    tds_oth = _tds_other_schedule_itr1(_oth_entries)
     if tds_oth:
         itr1["TDSonOthThanSals"] = tds_oth
 
@@ -626,7 +704,13 @@ def build_itr1_json(
         if result.self_assessment_tax_paid > 0:
             challans.append({"BSRCode": "1234567", "DateDep": "2025-07-15", "SrlNoOfChaln": 2, "Amt": _to_rupees(result.self_assessment_tax_paid)})
         itr1["TaxPayments"] = {"TaxPayment": challans, "TotalTaxPayments": _to_rupees(result.advance_tax_paid + result.self_assessment_tax_paid)}
-    # Conditional: LTCG 112A
+        # Conditional: ScheduleTDS3Dtls (non-resident TDS, empty for ITR-1)
+    itr1["ScheduleTDS3Dtls"] = {
+        "TDS3Details": [],
+        "TotalTDS3Details": 0,
+    }
+
+# Conditional: LTCG 112A
     if cg_sale_consideration is not None and cg_cost_acquisition is not None:
         itr1["LTCG112A"] = _ltcg_112a_schedule(
             sale_consideration=cg_sale_consideration,

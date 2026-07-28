@@ -16,7 +16,8 @@ from app.schemas.itr1 import Chapter6ADeductions, TaxRegime
 from app.engine.constants import SECTION_80DD_LIMIT, SECTION_80DD_SEVERE_LIMIT
 
 
-def compute(ded: Optional[Chapter6ADeductions], regime: TaxRegime) -> Decimal:
+def compute(ded: Optional[Chapter6ADeductions], regime: TaxRegime, is_severe: bool = False) -> Decimal:
     if not ded or regime == TaxRegime.NEW:
         return Decimal("0")
-    return min(ded.amount_80dd, SECTION_80DD_SEVERE_LIMIT)
+    cap = SECTION_80DD_SEVERE_LIMIT if is_severe else SECTION_80DD_LIMIT
+    return min(ded.amount_80dd, cap)

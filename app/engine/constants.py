@@ -71,6 +71,15 @@ HEALTH_EDUCATION_CESS_RATE: Final[Decimal] = Decimal("0.04")       # 4% of tax +
 # =============================================================================
 # SURCHARGE RATES FOR INDIVIDUALS (AY 2026-27)
 # =============================================================================
+# Basic exemption limits by age bracket (AY 2026-27)
+# Used for partial integration of agricultural income and other rate
+# determination purposes under the old regime.
+BASIC_EXEMPTION_LIMITS: Final[dict[str, Decimal]] = {
+    "below_60": Decimal("250000"),
+    "60_to_80": Decimal("300000"),
+    "above_80": Decimal("500000"),
+}
+
 
 # Surcharge applies on tax after rebate
 # Marginal relief ensures tax+surcharge does not exceed income over threshold
@@ -185,8 +194,7 @@ SECTION_80TTB_LIMIT: Final[Decimal] = Decimal("50000")           # Rs 50,000
 SECTION_80U_LIMIT: Final[Decimal] = Decimal("75000")             # Disabled
 SECTION_80U_SEVERE_LIMIT: Final[Decimal] = Decimal("125000")     # Severely disabled
 
-# Section 80CCH - Agniveer Corpus Fund
-SECTION_80CCH_LIMIT: Final[Decimal] = Decimal("288000")          # Rs 2,88,000 (FY 2024-25)
+# Section 80CCH - Agniveer Corpus Fund (no statutory rupee ceiling per s.80CCH)
 
 # =============================================================================
 # HOUSE PROPERTY - Section 24
@@ -200,17 +208,17 @@ HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED: Final[Decimal] = Decimal("200000") 
 # =============================================================================
 
 # Section 111A - STCG on listed equity (STT paid)
-STCG_111A_RATE_PRE_JUL23: Final[Decimal] = Decimal("15")         # Before July 2023
-STCG_111A_RATE_POST_JUL23: Final[Decimal] = Decimal("20")        # On/after July 2023
+STCG_111A_RATE_PRE_JUL24: Final[Decimal] = Decimal("15")         # Before 23 July 2024
+STCG_111A_RATE_POST_JUL24: Final[Decimal] = Decimal("20")        # On/after 23 July 2024
 
 # Section 112A - LTCG on listed equity (STT paid)
-LTCG_112A_RATE: Final[Decimal] = Decimal("10")                   # Pre-July 2023
-LTCG_112A_RATE_POST_JUL23: Final[Decimal] = Decimal("12.5")      # On/after July 2023
+LTCG_112A_RATE: Final[Decimal] = Decimal("10")                   # Pre-23 July 2024
+LTCG_112A_RATE_POST_JUL24: Final[Decimal] = Decimal("12.5")      # On/after 23 July 2024
 LTCG_112A_EXEMPTION: Final[Decimal] = Decimal("125000")         # Rs 1.25 lakh exemption
 
 # Section 112 - Other LTCG (without indexation)
-LTCG_OTHER_RATE: Final[Decimal] = Decimal("20")                  # With indexation pre-Jul 2023
-LTCG_OTHER_RATE_POST_JUL23: Final[Decimal] = Decimal("12.5")     # Without indexation post-Jul 2023
+LTCG_OTHER_RATE: Final[Decimal] = Decimal("20")                  # With indexation pre-23 Jul 2024
+LTCG_OTHER_RATE_POST_JUL24: Final[Decimal] = Decimal("12.5")     # Without indexation post-23 Jul 2024
 
 # Section 115BB - Lottery/Gambling
 LOTTERY_RATE: Final[Decimal] = Decimal("30")                     # Flat 30%
@@ -224,7 +232,7 @@ UNEXPLAINED_INCOME_RATE: Final[Decimal] = Decimal("60")          # Flat 60%
 # =============================================================================
 # COST INFLATION INDEX (CII) — Notified u/s 48, Explanation (v)
 # Base year: FY 2001-02 = 100
-# Source: CBDT Notification No. 44/2025 dated 3-Jun-2025 for FY 2025-26
+# Source: CBDT Notification No. 70/2025 dated 1-Jul-2025 (as amended by FA 2025)
 # =============================================================================
 
 CII_TABLE: Final[dict[int, int]] = {
@@ -232,9 +240,21 @@ CII_TABLE: Final[dict[int, int]] = {
     2001: 100, 2002: 105, 2003: 109, 2004: 113, 2005: 117,
     2006: 122, 2007: 129, 2008: 137, 2009: 148, 2010: 167,
     2011: 184, 2012: 200, 2013: 220, 2014: 240, 2015: 254,
-    2016: 272, 2017: 280, 2018: 289, 2019: 301, 2020: 318,
-    2021: 331, 2022: 348, 2023: 348, 2024: 363, 2025: 363,
+    2016: 264, 2017: 272, 2018: 280, 2019: 289, 2020: 301,
+    2021: 317, 2022: 331, 2023: 348, 2024: 363, 2025: 376,
+    2026: 384,
 }
 
 # FMV date for "grandfathering" rule u/s 112A
 LTCG_112A_GRANDFATHER_DATE: Final[str] = "2018-01-31"
+
+# ---------------------------------------------------------------------------
+# Business-specific deduction limits (ITR-3 only)
+# ---------------------------------------------------------------------------
+
+# 80-IA: 100% of profits for 10 consecutive AYs (infrastructure). No per-AY cap.
+# 80-IB: 100%/30%/25% of profits depending on category. No per-AY cap.
+# 80-IC: 100% of profits first 5 years, 25%/30% next 5 years. No per-AY cap.
+# 10AA: 100% of export profits first 5 years, 50% next 5 years. No per-AY cap.
+# 80RA: 100% deduction on patent/royalty income received. No per-AY cap.
+# All business deductions have no fixed rupee cap � claim = qualifying profit.

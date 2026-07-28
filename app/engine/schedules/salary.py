@@ -39,7 +39,7 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
     if regime == TaxRegime.OLD:
         hra = input_data.hra_exempt_amount
         lta = input_data.lta_exempt_amount
-        prof_tax = min(input_data.professional_tax_paid, Decimal("5000"))
+        prof_tax = min(input_data.professional_tax_paid, Decimal("2500"))
         is_govt = getattr(input_data, "is_government_employee", False)
         ent_allowance = min(input_data.entertainment_allowance, Decimal("5000")) if is_govt else Decimal("0")
         net_before_std = max(Decimal("0"), gross - hra - lta)

@@ -7,7 +7,7 @@ that JSON precision is preserved without floating-point drift.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -40,6 +40,7 @@ class ITR1ComputeResponse(_DecimalModel):
     health_education_cess: Decimal
     total_tax_payable: Decimal
     hp_loss_disallowed: Decimal
+    validation: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +142,7 @@ class ITR3ComputeResponse(_DecimalModel):
     cyla_remaining: Decimal
     bfla_remaining: Decimal
     unabsorbed_dep_setoff: Decimal
+    validation: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +167,7 @@ class ITR4ComputeResponse(_DecimalModel):
     health_education_cess: Decimal
     total_tax_payable: Decimal
     hp_loss_disallowed: Decimal
+    validation: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------

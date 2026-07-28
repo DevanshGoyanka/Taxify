@@ -75,6 +75,12 @@ def compute(bf: BFLAInput) -> BFLAResult:
     biz_setoff = Decimal("0")
     cg_setoff = Decimal("0")
 
+    # Track consumed income per head so later entries see reduced pools
+    hp_consumed = Decimal("0")
+    nsb_consumed = Decimal("0")
+    sb_consumed = Decimal("0")
+    cg_consumed = Decimal("0")
+
     current_fy = _ay_to_fiscal_year_end(bf.current_ay)
 
     for item in bf.bf_losses:
@@ -94,20 +100,25 @@ def compute(bf: BFLAInput) -> BFLAResult:
             continue
 
         if head == "HP":
-            set_off = min(amount, bf.hp_income)
+            set_off = min(amount, bf.hp_income - hp_consumed)
             hp_setoff += set_off
+            hp_consumed += set_off
         elif head == "NonSpeculative":
-            set_off = min(amount, bf.non_spec_biz_income)
+            set_off = min(amount, bf.non_spec_biz_income - nsb_consumed)
             biz_setoff += set_off
+            nsb_consumed += set_off
         elif head == "Speculative":
-            set_off = min(amount, bf.spec_biz_income)
+            set_off = min(amount, bf.spec_biz_income - sb_consumed)
             biz_setoff += set_off
+            sb_consumed += set_off
         elif head == "STCG":
-            set_off = min(amount, bf.stcg_income + bf.ltcg_income)
+            set_off = min(amount, (bf.stcg_income + bf.ltcg_income) - cg_consumed)
             cg_setoff += set_off
+            cg_consumed += set_off
         elif head == "LTCG":
-            set_off = min(amount, bf.ltcg_income)
+            set_off = min(amount, bf.ltcg_income - cg_consumed)
             cg_setoff += set_off
+            cg_consumed += set_off
         else:
             set_off = Decimal("0")
 

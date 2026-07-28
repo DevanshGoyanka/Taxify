@@ -223,41 +223,48 @@ def _schedule_bfla(result: ITR2Result) -> dict:
 # ScheduleCFL — Carry Forward Losses
 # ============================================================================
 
-_CARRY_FWD = {"CarryFwdLossDetail": {
-    "DateOfFiling": "2025-07-31",
-    "TotalHPPTILossCF": 0,
-    "TotalSTCGPTILossCF": 0,
-    "TotalLTCGPTILossCF": 0,
-    "OthSrcLossRaceHorseCF": 0,
-}}
-_CARRY_FWD_WO = {"CarryFwdLossDetail": {
-    "DateOfFiling": "2020-07-31",
-    "TotalHPPTILossCF": 0,
-    "TotalSTCGPTILossCF": 0,
-    "TotalLTCGPTILossCF": 0,
-}}
-_LOSS_SUMMARY = {"LossSummaryDetail": {
-    "TotalHPPTILossCF": 0,
-    "TotalSTCGPTILossCF": 0,
-    "TotalLTCGPTILossCF": 0,
-    "OthSrcLossRaceHorseCF": 0,
-}}
-
-
 def _schedule_cfl(result: ITR2Result) -> dict:
+    """Build ScheduleCFL from computed loss carry-forward data."""
+    cfl_entries = result.schedules.get("cfl", [])
+
+    if not cfl_entries:
+        # No carry-forward losses — return empty structure
+        empty = {
+            "DateOfFiling": "",
+            "TotalHPPTILossCF": 0,
+            "TotalSTCGPTILossCF": 0,
+            "TotalLTCGPTILossCF": 0,
+            "OthSrcLossRaceHorseCF": 0,
+        }
+        return {
+            "LossCFFromPrevYrToAY": empty,
+            "AdjTotBFLossInBFLA": {"LossSummaryDetail": 0},
+            "CurrentAYloss": {"LossSummaryDetail": 0},
+            "TotalOfBFLossesEarlierYrs": {"LossSummaryDetail": 0},
+            "TotalLossCFSummary": {"LossSummaryDetail": 0},
+        }
+
+    # Sum up per head
+    hp_cf = sum(e.get("loss_cf", 0) for e in cfl_entries if e.get("head") == "HP")
+    stcg_cf = sum(e.get("loss_cf", 0) for e in cfl_entries if e.get("head") == "STCG")
+    ltcg_cf = sum(e.get("loss_cf", 0) for e in cfl_entries if e.get("head") == "LTCG")
+    biz_cf = sum(e.get("loss_cf", 0) for e in cfl_entries if e.get("head") in ("BUS", "NonSpeculative", "Speculative"))
+    total_cf = hp_cf + stcg_cf + ltcg_cf + biz_cf
+
+    cf_detail = {
+        "TotalHPPTILossCF": float(hp_cf),
+        "TotalBusinessLossCF": float(biz_cf),
+        "TotalSTCGPTILossCF": float(stcg_cf),
+        "TotalLTCGPTILossCF": float(ltcg_cf),
+        "OthSrcLossRaceHorseCF": 0,
+    }
+
     return {
-        "LossCFFromPrevYrToAY": _CARRY_FWD,
-        "LossCFFromPrev2ndYearFromAY": _CARRY_FWD,
-        "LossCFFromPrev3rdYearFromAY": _CARRY_FWD,
-        "LossCFFromPrev4thYearFromAY": _CARRY_FWD,
-        "LossCFFromPrev5thYearFromAY": _CARRY_FWD_WO,
-        "LossCFFromPrev6thYearFromAY": _CARRY_FWD_WO,
-        "LossCFFromPrev7thYearFromAY": _CARRY_FWD_WO,
-        "LossCFFromPrev8thYearFromAY": _CARRY_FWD_WO,
-        "AdjTotBFLossInBFLA": _LOSS_SUMMARY,
-        "CurrentAYloss": _LOSS_SUMMARY,
-        "TotalOfBFLossesEarlierYrs": _LOSS_SUMMARY,
-        "TotalLossCFSummary": _LOSS_SUMMARY,
+        "LossCFFromPrevYrToAY": dict(DateOfFiling="", **cf_detail),
+        "AdjTotBFLossInBFLA": {"LossSummaryDetail": float(total_cf)},
+        "CurrentAYloss": dict(**cf_detail),
+        "TotalOfBFLossesEarlierYrs": {"LossSummaryDetail": 0},
+        "TotalLossCFSummary": {"LossSummaryDetail": float(total_cf)},
     }
 
 
@@ -841,7 +848,7 @@ def _partb_tti(result: ITR2Result) -> dict:
             "SurchargeOnAboveCroreBeforeMarginal": 0,
             "TotalSurcharge": _to_rupees_rounded10(result.surcharge),
             "EducationCess": _to_rupees_rounded10(result.health_education_cess),
-            "GrossTaxLiability": 0,
+            "GrossTaxLiability": _to_rupees_rounded10(result.gross_tax_liability),
             "GrossTaxPayable": 0,
             "GrossTaxPay": {
                 "TaxInc17": 0,
@@ -852,10 +859,10 @@ def _partb_tti(result: ITR2Result) -> dict:
             "TaxPayAfterCreditUs115JD": 0,
             "NetTaxLiability": _to_rupees_rounded10(result.net_tax_liability),
             "IntrstPay": {
-                "IntrstPayUs234A": 0,
-                "IntrstPayUs234B": 0,
-                "IntrstPayUs234C": 0,
-                "LateFilingFee234F": 0,
+                "IntrstPayUs234A": _to_rupees_rounded10(result.interest_234a),
+                "IntrstPayUs234B": _to_rupees_rounded10(result.interest_234b),
+                "IntrstPayUs234C": _to_rupees_rounded10(result.interest_234c),
+                "LateFilingFee234F": _to_rupees_rounded10(result.late_fee_234f),
                 "FeeFurnish234I": 0,
                 "TotalIntrstPay": 0,
             },
@@ -1255,8 +1262,6 @@ def build_itr2_json(
         "ScheduleVDA": _schedule_vda(result),
         "ScheduleCFL": _schedule_cfl(result),
         "ScheduleVIA": _schedule_via(result.deductions_total),
-        "ScheduleSI": _schedule_si(result),
-        "ScheduleSI": _schedule_si(result),
         "ScheduleEI": _schedule_ei(result),
         "Schedule115AD": _schedule_115ad(),
         "ScheduleTR1": _schedule_tr1(),
@@ -1264,7 +1269,6 @@ def build_itr2_json(
         "ScheduleAL": _schedule_al(),
         "Schedule5A2014": _schedule_5a_2014(),
         "ScheduleESOP": _schedule_esop(),
-        "ScheduleSI": _schedule_si(result),
         "Schedule80C": _schedule_80c(),
         "Schedule80D": _schedule_80d(),
         "Schedule80G": _schedule_80g_itr2(Decimal("0"), Decimal("0")),

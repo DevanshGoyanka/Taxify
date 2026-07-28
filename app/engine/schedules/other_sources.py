@@ -36,10 +36,12 @@ def compute(input_data: Optional[OtherSourcesIncome], regime: TaxRegime) -> OSRe
     fp = input_data.family_pension_received
     div = input_data.dividend_income
 
-    # 57(iia): 1/3rd of family pension or 25,000 whichever is lower
+    # 57(iia): 1/3rd of family pension or statutory cap
+    # Old regime: ₹15,000 cap | New regime: ₹25,000 cap (FA 2024 amendment)
     ded_57iia = Decimal("0")
-    if fp > 0 and regime == TaxRegime.OLD:  # Not allowed in new regime
-        ded_57iia = min(fp / Decimal("3"), Decimal("25000"))
+    if fp > 0:
+        cap = Decimal("25000") if regime == TaxRegime.NEW else Decimal("15000")
+        ded_57iia = min(fp / Decimal("3"), cap)
 
     chargeable = sb + fd + fp + div - ded_57iia
 

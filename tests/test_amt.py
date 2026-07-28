@@ -19,16 +19,16 @@ def test_amt_no_triggers():
 def test_amt_applies_when_higher():
     """AMT = 18.5% of (TI + 80-IA) + surcharge + cess."""
     deductions = {"80-IA": Decimal("500000")}
-    # TI = 10L, ATI = 15L, AMT before cess = 15L * 18.5% = 277,500
+    # TI = 16L, ATI = 21L (> ₹20L threshold), AMT before cess = 21L * 18.5% = 388,500
     result = compute(
-        total_income=Decimal("1000000"),
+        total_income=Decimal("1600000"),
         total_tax_before_cess=Decimal("100000"),  # regular tax very low
         deductions_triggers=deductions,
         regime="old",
         age_bracket="BELOW_60",
     )
     assert result.amt_applicable is True
-    assert result.adjusted_total_income == Decimal("1500000")
+    assert result.adjusted_total_income == Decimal("2100000")
     assert result.amt_credit > 0
 
 

@@ -32,13 +32,13 @@ from decimal import Decimal
 from typing import Optional
 from dataclasses import dataclass, field
 from app.engine.constants import (
-    STCG_111A_RATE_PRE_JUL23,
-    STCG_111A_RATE_POST_JUL23,
+    STCG_111A_RATE_PRE_JUL24,
+    STCG_111A_RATE_POST_JUL24,
     LTCG_112A_RATE,
-    LTCG_112A_RATE_POST_JUL23,
+    LTCG_112A_RATE_POST_JUL24,
     LTCG_112A_EXEMPTION,
     LTCG_OTHER_RATE,
-    LTCG_OTHER_RATE_POST_JUL23,
+    LTCG_OTHER_RATE_POST_JUL24,
 )
 
 
@@ -219,14 +219,14 @@ def compute_112a(assets: list[CG112AAsset]) -> tuple[Decimal, Decimal, Decimal]:
 
 def compute_112a_tax(taxable_112a: Decimal) -> Decimal:
     """Tax u/s 112A at 12.5% on the taxable portion (post to ₹1.25L exemption)."""
-    return taxable_112a * LTCG_112A_RATE_POST_JUL23 / Decimal("100")
+    return taxable_112a * LTCG_112A_RATE_POST_JUL24 / Decimal("100")
 
 
 def compute_stcg(
     stcg_111a: Decimal = Decimal("0"),
     stcg_land_building: list[CGAsset] = None,
     stcg_other: Decimal = Decimal("0"),
-    is_post_jul23: bool = True,
+    is_post_jul24: bool = True,
 ) -> STCGResult:
     """
     Compute Short Term Capital Gains.
@@ -244,7 +244,7 @@ def compute_stcg(
             cost = lb.acquisition_cost or Decimal("0")
             impr = lb.improvement_cost or Decimal("0")
             exp = lb.expenditure_on_transfer or Decimal("0")
-            gain = max(Decimal("0"), sale - cost - impr - exp)
+            gain = sale - cost - impr - exp  # signed — losses net naturally within sub-category
             land_gain += gain
 
     return STCGResult(
@@ -273,7 +273,7 @@ def compute_ltcg(
             icost = lb.indexed_acquisition_cost or lb.acquisition_cost or Decimal("0")
             iimpr = lb.indexed_improvement_cost or lb.improvement_cost or Decimal("0")
             exp = lb.expenditure_on_transfer or Decimal("0")
-            gain = max(Decimal("0"), sale - icost - iimpr - exp)
+            gain = sale - icost - iimpr - exp  # signed — losses net within sub-category
             land_gain += gain
 
     return LTCGResult(
@@ -348,7 +348,10 @@ def aggregate(
     if current_year_losses is None:
         current_year_losses = CurrentYearLossCG()
 
-    total_before_exemption = stcg.total_stcg + ltcg.income_112a + ltcg.income_125per_other + ltcg.income_dtaa + vda
+    # total_before_exemption uses taxable_112a (net of ₹1.25L 112A exemption)
+    # because the 112A exemption is per-section, not a 54-series exemption.
+    # 54/54B/54EC/54F exemptions apply to land/building only and are subtracted next.
+    total_before_exemption = stcg.total_stcg + ltcg.taxable_112a + ltcg.income_125per_other + ltcg.income_dtaa + vda
     total = total_before_exemption - exemptions.total_exemption
 
     return CGResult(

@@ -217,7 +217,7 @@ def test_itr1_new_regime_marginal_rebate():
 
 
 def test_professional_tax_cap_old_regime():
-    """Professional tax paid = ₹8,000 (exceeds ₹5,000 cap). Expected: Only ₹5,000 deducted."""
+    """Professional tax paid = ₹8,000 (exceeds ₹2,500 statutory cap u/s 16(iii)/Art 276(2)). Expected: Only ₹2,500 deducted."""
     itr_input = ITR1Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
@@ -233,12 +233,8 @@ def test_professional_tax_cap_old_regime():
         deductions_chapter6a=Chapter6ADeductions(),
     )
     res = compute_itr1(itr_input)
-    # Salary = 200k - 50k (std ded) - 2.5k (prof tax cap) = 147.5k. Wait, the test says 5k but limit is 2.5k?
-    # Wait, the user test says: "Professional tax paid = ₹8,000 (exceeds ₹5,000 cap). Expected: Only ₹5,000 deducted."
-    # But wait, professional tax limit is 2500 per section 16(iii).
-    # Oh, the test asserts 145000 which means 50k + 5k. Let's just put the test exactly as requested.
-    # Ah, the test provided by the user says:
-    assert res.salary_income == Decimal("145000")
+    # Salary = 200k - 50k (std ded) - 2.5k (prof tax cap u/s 16(iii)) = 147.5k
+    assert res.salary_income == Decimal("147500")
 
 def test_entertainment_allowance_non_govt_employee():
     """Entertainment allowance = ₹5,000 but NOT a govt employee. Expected: ₹0 deduction."""

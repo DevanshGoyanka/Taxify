@@ -31,13 +31,22 @@ from pydantic import BaseModel, Field, model_validator
 # Shared income / deduction models — do NOT redefine, import directly.
 from app.schemas.itr1 import (
     AgeBracket,
+    AssesseeType,
     CapitalGainsIncome,
     Chapter6ADeductions,
     HousePropertyIncome,
     OtherSourcesIncome,
     SalaryIncome,
     TaxRegime,
-    TDS1Entry, TDS2Entry, TCSEntry,
+    TDS1Entry, TDS2Entry, TDS3Entry, TCSEntry,
+    Schedule80D, Schedule80G, Schedule80GGA, Schedule80GGC,
+    Schedule80DD, Schedule80U,
+    Schedule80CEntry, Schedule80CCCEntry, Schedule80EEntry,
+    Schedule80EELoanEntry, Schedule80EEALoanEntry, Schedule80EEBLoanEntry,
+    HRADetails, CoOwnershipDetails, RepresentativeDetails,
+    LoanDetails, LoanDetail, SecondaryAddress,
+    Donation80G, InsurancePolicy,
+    TaxPaymentDetail,
 )
 
 
@@ -293,6 +302,37 @@ class PresumptiveGoodsCarriage44AE(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Schedule BP — Balance Sheet Financial Particulars
+# ---------------------------------------------------------------------------
+
+class ScheduleBPFinancial(BaseModel):
+    """Financial particulars from Schedule BP for cross-consistency checks (CBDT Sl 3-4, 139)."""
+    # Capital & Liabilities
+    partners_capital: Decimal = Field(default=Decimal("0"), ge=0)
+    secured_loans: Decimal = Field(default=Decimal("0"), ge=0)
+    unsecured_loans: Decimal = Field(default=Decimal("0"), ge=0)
+    advances_received: Decimal = Field(default=Decimal("0"), ge=0)
+    sundry_creditors: Decimal = Field(default=Decimal("0"), ge=0)
+    other_liabilities: Decimal = Field(default=Decimal("0"), ge=0)
+    total_capital_liabilities: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Assets
+    fixed_assets: Decimal = Field(default=Decimal("0"), ge=0)
+    investments_bp: Decimal = Field(default=Decimal("0"), ge=0)
+    inventories: Decimal = Field(default=Decimal("0"), ge=0)
+    sundry_debtors: Decimal = Field(default=Decimal("0"), ge=0)
+    bank_balance: Decimal = Field(default=Decimal("0"), ge=0)
+    cash_in_hand: Decimal = Field(default=Decimal("0"), ge=0)
+    loans_and_advances_given: Decimal = Field(default=Decimal("0"), ge=0)
+    other_assets: Decimal = Field(default=Decimal("0"), ge=0)
+    total_assets: Decimal = Field(default=Decimal("0"), ge=0)
+
+    # Partnership details for 44AE
+    salary_to_partners: Decimal = Field(default=Decimal("0"), ge=0, description="Salary paid to partners (44AE firms)")
+    interest_to_partners: Decimal = Field(default=Decimal("0"), ge=0, description="Interest paid to partners (44AE firms)")
+
+
+# ---------------------------------------------------------------------------
 # Top-level ITR-4 input model
 # ---------------------------------------------------------------------------
 
@@ -321,6 +361,17 @@ class ITR4Input(BaseModel):
             "(31 March). Determines the basic exemption limit and tax slabs."
         ),
     )
+    assessee_type: AssesseeType = Field(
+        default=AssesseeType.INDIVIDUAL,
+        description="Entity type of the assessee. ITR-4 is for individuals, HUFs, and firms (other than LLPs).",
+    )
+    # --- ITR-4 eligibility gate fields ---
+    is_resident: bool = Field(default=True, description="True if assessee is a resident. ITR-4 requires resident status.")
+    is_director: bool = Field(default=False, description="True if assessee is a director in any company (disqualifies ITR-4).")
+    has_foreign_assets: bool = Field(default=False, description="True if assessee holds foreign assets/income (disqualifies ITR-4).")
+    has_unlisted_equity: bool = Field(default=False, description="True if assessee holds unlisted equity shares (disqualifies ITR-4).")
+    house_property_count: int = Field(default=1, ge=1, description="Number of house properties. ITR-4 allows at most 1.")
+
     tax_regime: TaxRegime = Field(
         description=(
             "Tax regime elected. 'old' allows Chapter VI-A deductions; "
@@ -405,7 +456,101 @@ class ITR4Input(BaseModel):
     tcs_entries: Optional[List[TCSEntry]] = Field(default=None)
     # --- Tax payments ---
     advance_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    advance_tax_q1: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 June (Q1)")
+    advance_tax_q2: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 Sep (Q2)")
+    advance_tax_q3: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 Dec (Q3)")
+    advance_tax_q4: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 Mar (Q4)")
     self_assessment_tax_paid: Decimal = Field(default=Decimal("0"), ge=0)
     # --- Filing dates ---
     filing_date: Optional[date] = Field(default=None)
     due_date: Optional[date] = Field(default=None)
+
+    # --- Extended schema fields for detailed validations ---
+    agriculture_income: Decimal = Field(default=Decimal("0"), ge=0, description="Agricultural income shown as exempt")
+    exempt_income_breakdown: dict[str, Decimal] = Field(default_factory=dict, description="Breakdown of exempt income by category")
+    exempt_income_dropdowns: list[str] = Field(default_factory=list, description="Selected exempt income dropdown categories for uniqueness check")
+    schedule_80d: Optional[Schedule80D] = Field(default=None, description="Schedule 80D health insurance details")
+    schedule_80g: Optional[Schedule80G] = Field(default=None, description="Schedule 80G donation details")
+    schedule_80gga: Optional[Schedule80GGA] = Field(default=None, description="Schedule 80GGA scientific research donations")
+    schedule_80ggc: Optional[Schedule80GGC] = Field(default=None, description="Schedule 80GGC political contributions")
+    schedule_80dd: Optional[Schedule80DD] = Field(default=None, description="Schedule 80DD: dependent disability deduction details (CBDT Sl 248-252)")
+    schedule_80u: Optional[Schedule80U] = Field(default=None, description="Schedule 80U: self disability deduction details (CBDT Sl 249-253)")
+    schedule_80c_entries: List[Schedule80CEntry] = Field(default_factory=list, description="Per-row entries for Schedule 80C (CBDT Sl 273, 290)")
+    schedule_80ccc_entries: List[Schedule80CCCEntry] = Field(default_factory=list, description="Per-row entries for Schedule 80CCC (CBDT Sl 366, 409)")
+    schedule_80e_entries: List[Schedule80EEntry] = Field(default_factory=list, description="Per-row entries for Schedule 80E (CBDT Sl 274, 291)")
+    loan_details_80ee_list: List[Schedule80EELoanEntry] = Field(default_factory=list, description="Per-loan entries for Schedule 80EE (CBDT Sl 292, 298)")
+    loan_details_80eea_list: List[Schedule80EEALoanEntry] = Field(default_factory=list, description="Per-loan entries for Schedule 80EEA (CBDT Sl 293, 299)")
+    loan_details_80eeb_list: List[Schedule80EEBLoanEntry] = Field(default_factory=list, description="Per-loan entries for Schedule 80EEB (CBDT Sl 294, 300)")
+    loan_details_24b_list: List[LoanDetail] = Field(default_factory=list, description="Per-loan entries for Schedule 24(b) (CBDT Sl 269, 295)")
+    tax_payment_entries: List[TaxPaymentDetail] = Field(default_factory=list, description="Per-installment entries for Schedule IT")
+    hra_details: Optional[HRADetails] = Field(default=None, description="HRA computation breakdown")
+    schedule_10_13a: Optional[HRADetails] = Field(default=None, description="Schedule 10(13A) HRA detailed breakdown (CBDT Sl 315, 320)")
+    co_ownership_details: Optional[CoOwnershipDetails] = Field(default=None, description="Co-ownership details for house property")
+    representative_details: Optional[RepresentativeDetails] = Field(default=None, description="Representative assessee details")
+    secondary_address: Optional[SecondaryAddress] = Field(default=None, description="Secondary address for representative filing")
+    form_10e_filed: bool = Field(default=False, description="Whether Form 10E (relief u/s 89) has been filed")
+    form_10ia_filed: bool = Field(default=False, description="Whether Form 10-IA (80DD/80U certificate) has been filed")
+    form_10ia_filed_80dd: bool = Field(default=False, description="Whether separate Form 10-IA filed for 80DD (CBDT Sl 287)")
+    form_10ia_filed_80u: bool = Field(default=False, description="Whether separate Form 10-IA filed for 80U (CBDT Sl 287)")
+    form_10ba_filed: bool = Field(default=False, description="Whether Form 10BA (80GG declaration) has been filed")
+    pran_number: Optional[str] = Field(default=None, max_length=12, description="PRAN number for NPS contributions")
+    nature_of_employment: Optional[str] = Field(default=None, description="Nature of employment: Central/State Govt, PSU, Private, Pensioner, etc.")
+    # --- Loan details (single records, backward compat) ---
+    loan_details_24b: Optional[LoanDetails] = Field(default=None, description="Loan details for 24(b) interest")
+    loan_details_80ee: Optional[LoanDetails] = Field(default=None, description="Loan details for 80EE deduction")
+    loan_details_80eea: Optional[LoanDetails] = Field(default=None, description="Loan details for 80EEA deduction")
+    loan_details_80eeb: Optional[LoanDetails] = Field(default=None, description="Loan details for 80EEB deduction")
+    # --- Filing ---
+    filing_section: Optional[str] = Field(default=None, description="Filing section: 139(1), 139(4), 139(5), 142(1)")
+    original_filing_section: Optional[str] = Field(default=None, description="Original filing section for revised returns")
+    filing_date: Optional[date] = Field(default=None)
+    due_date: Optional[date] = Field(default=None)
+    relief_89: Decimal = Field(default=Decimal("0"), ge=0, description="Relief under section 89 (arrears of salary) as computed by Form 10E")
+    form_10iea_filed: bool = Field(default=False, description="Whether Form 10-IEA (new regime exercise) has been filed")
+    form_10iea_filing_date: Optional[date] = Field(default=None, description="Date Form 10-IEA was filed")
+    form_10iea_ack_no: Optional[str] = Field(default=None, max_length=15, description="Acknowledgement number of Form 10-IEA")
+    # --- Assessee identity ---
+    assessee_pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$", description="PAN of the assessee")
+    assessee_name: Optional[str] = Field(default=None, max_length=125, description="Name of assessee as per PAN")
+    aadhaar_number: Optional[str] = Field(default=None, min_length=12, max_length=12, description="Aadhaar number")
+    assessee_email_primary: Optional[str] = Field(default=None, description="Primary email of assessee (CBDT Sl 403)")
+    assessee_phone_primary: Optional[str] = Field(default=None, description="Primary phone of assessee (CBDT Sl 403)")
+    representative_email: Optional[str] = Field(default=None, description="Email of representative (CBDT Sl 344)")
+    representative_phone: Optional[str] = Field(default=None, description="Phone of representative (CBDT Sl 344)")
+    # --- Other sources dropdowns ---
+    other_sources_dropdowns: list[str] = Field(default_factory=list, description="Selected Other Sources income dropdown categories")
+    other_sources_total: Optional[Decimal] = Field(default=None, ge=0, description="Total OS income for cross-foot")
+    dividend_quarterly_breakdown: dict[str, Decimal] = Field(default_factory=dict, description="Quarterly breakup of dividend income")
+    # --- Capital gains extended ---
+    full_value_of_consideration: Optional[Decimal] = Field(default=None, ge=0, description="Full value of consideration for LTCG 112A")
+    disease_category: Optional[str] = Field(default=None, max_length=125, description="Specified disease for 80DDB")
+    date_of_incorporation: Optional[date] = Field(default=None, description="Date of incorporation/formation")
+    agniveer_date_of_joining: Optional[date] = Field(default=None, description="Date of joining armed forces")
+    is_property_co_owned: bool = Field(default=False, description="True if house property is co-owned")
+    other_co_owner_percentage: Decimal = Field(default=Decimal("0"), ge=0, le=100, description="Other co-owner share %")
+    total_taxes_paid: Optional[Decimal] = Field(default=None, ge=0, description="Total taxes paid")
+    total_tds_claimed: Optional[Decimal] = Field(default=None, ge=0, description="Total TDS claimed")
+    total_tcs_claimed: Optional[Decimal] = Field(default=None, ge=0, description="Total TCS claimed")
+    schedule_it_total_paid: Optional[Decimal] = Field(default=None, ge=0, description="Schedule IT col 4 total")
+    schedule_tds1_total: Optional[Decimal] = Field(default=None, ge=0, description="Schedule TDS1 col 5 total")
+    schedule_tds2_total_claimed: Optional[Decimal] = Field(default=None, ge=0, description="Schedule TDS2 col 6 total")
+    schedule_tds3_total_claimed: Optional[Decimal] = Field(default=None, ge=0, description="Schedule TDS3 col 7 total")
+    schedule_tcs_total_claimed: Optional[Decimal] = Field(default=None, ge=0, description="Schedule TCS col 6 total")
+    tds3_entries: Optional[List[TDS3Entry]] = Field(default=None, description="TDS3 entries")
+    # --- A23 Form 10-IEA complex fields ---
+    has_filed_10iea_earlier: Optional[bool] = Field(default=None, description="A23: Filed Form 10-IEA in earlier AY")
+    has_reentered_new_regime: Optional[bool] = Field(default=None, description="A23(A)(ii): Re-entered new regime via 10-IEA")
+    has_filed_10iea_current: Optional[bool] = Field(default=None, description="A23(B): Filed 10-IEA current AY")
+    a23_earlier_ay: Optional[int] = Field(default=None, ge=2020, le=2026, description="A23(A)(i): AY when first 10-IEA filed")
+    a23_reenter_ay: Optional[int] = Field(default=None, ge=2020, le=2026, description="A23(A)(ii)(a): AY when re-entered new regime")
+    is_148_proceeding: bool = Field(default=False, description="True if proceeding u/s 148 initiated")
+    original_acknowledgement_no: Optional[str] = Field(default=None, max_length=15, description="Acknowledgement no of original return")
+    total_exempt_income: Optional[Decimal] = Field(default=None, ge=0, description="Total exempt income for cross-foot")
+    has_salary_income: bool = Field(default=True, description="Whether taxpayer has salary income")
+    # --- Schedule BP Financial ---
+    schedule_bp_financial: Optional[ScheduleBPFinancial] = Field(default=None, description="Schedule BP financial particulars for cross-consistency")
+    # --- Business/Professional code dropdowns ---
+    business_code: Optional[str] = Field(default=None, description="Business code for 44AD/44AE")
+    profession_code: Optional[str] = Field(default=None, description="Profession code for 44ADA")
+    # --- Vehicle registration (44AE) ---
+    vehicle_registration_numbers: list[str] = Field(default_factory=list, description="Vehicle registration numbers for 44AE duplicate check")

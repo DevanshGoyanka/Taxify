@@ -33,24 +33,34 @@ Computation order:
 from decimal import Decimal
 from typing import Optional
 from dataclasses import dataclass, field
+from datetime import date
 
 from app.schemas.itr1 import (
     ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
     Chapter6ADeductions, CapitalGainsIncome,
-    AgeBracket, TaxRegime,
+    AgeBracket, AssesseeType, TaxRegime,
 )
 from app.engine.common.rounding import vba_round, round_to_nearest_10
 from app.engine.common.slab_tax import compute as compute_slab_tax
 from app.engine.common.rebate import compute as compute_rebate
 from app.engine.common.surcharge import compute as compute_surcharge
 from app.engine.common.cess import compute as compute_cess
-from app.engine.common.interest import compute_234a, compute_234f
-from app.engine.constants import LTCG_112A_EXEMPTION, LTCG_112A_RATE_POST_JUL23
+from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234f
+from app.engine.constants import LTCG_112A_EXEMPTION, LTCG_112A_RATE_POST_JUL24
 from app.engine.schedules.salary import compute as compute_salary
 from app.engine.schedules.house_property import compute as compute_hp
 from app.engine.schedules.other_sources import compute as compute_os
+from app.engine.schedules.agricultural import (
+    compute as compute_agri,
+    compute_partial_integration_tax,
+)
+from app.engine.schedules.agricultural import (
+    compute as compute_agri,
+    compute_partial_integration_tax,
+)
 from app.engine.schedules.special_rates import compute_112a
 from app.engine.schedules.deductions import compute_all as compute_deductions
+from app.engine.schedules.tds_tcs import compute_all as compute_tds_tcs
 
 
 @dataclass
@@ -107,9 +117,71 @@ class ITR1Result:
     warnings: list = field(default_factory=list)
 
 
+
+def _check_itr1_eligibility(input_data: ITR1Input) -> list[str]:
+    """Check all ITR-1 statutory eligibility conditions.
+
+    Returns list of error messages if any condition fails; empty list if eligible.
+    """
+    errors: list[str] = []
+
+    # 1. Must be an individual (not HUF)
+    if input_data.assessee_type != AssesseeType.INDIVIDUAL:
+        errors.append(
+            f"Ineligible for ITR-1: Assessee type is '{input_data.assessee_type.value}'. "
+            "ITR-1 is only for individuals. File ITR-2 or ITR-3."
+        )
+        return errors
+
+    # 2. Must be a resident
+    if not input_data.is_resident:
+        errors.append(
+            "Ineligible for ITR-1: Assessee is not a resident individual. "
+            "ITR-1 is only for residents. File ITR-2."
+        )
+        return errors
+
+    # 3. Not a director in any company
+    if input_data.is_director:
+        errors.append(
+            "Ineligible for ITR-1: Assessee is a director in a company. "
+            "File ITR-2."
+        )
+
+    # 4. No foreign assets / income
+    if input_data.has_foreign_assets:
+        errors.append(
+            "Ineligible for ITR-1: Assessee holds foreign assets or has foreign "
+            "income. File ITR-2."
+        )
+
+    # 5. No unlisted equity shares
+    if input_data.has_unlisted_equity:
+        errors.append(
+            "Ineligible for ITR-1: Assessee holds unlisted equity shares. "
+            "File ITR-2."
+        )
+
+    # 6. At most 1 house property
+    if input_data.house_property_count > 1:
+        errors.append(
+            f"Ineligible for ITR-1: Assessee owns {input_data.house_property_count} "
+            "house properties. ITR-1 allows at most 1. File ITR-2."
+        )
+
+    return errors
+
+
 def compute(input_data: ITR1Input) -> ITR1Result:
     """Compute complete ITR-1 return from input schema."""
     result = ITR1Result()
+
+    # ── 0. ITR-1 Eligibility Gates ───────────────────────────────────────────
+    eligibility = _check_itr1_eligibility(input_data)
+    if eligibility:
+        result.errors = eligibility
+        return result
+
     regime = input_data.tax_regime
     age = input_data.age_bracket
 
@@ -138,6 +210,9 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.advance_tax_paid = input_data.advance_tax_paid
     result.self_assessment_tax_paid = input_data.self_assessment_tax_paid
 
+    # Relief u/s 89 (pass-through from Form 10E computation)
+    result.relief_89 = input_data.relief_89
+
     # Capital Gains (112A only for ITR-1)
     cg_112a_income = Decimal("0")
     cg_112a_tax = Decimal("0")
@@ -160,6 +235,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     # ── 2. Gross Total Income ────────────────────────────────────────────────
     gti = result.salary_income + result.house_property_income + result.other_sources_income + cg_112a_income
     result.gross_total_income = gti
+    result.aggregate_income = gti + result.net_agricultural_income
 
     # Eligibility: GTI cannot exceed Rs 50 lakh for ITR-1
     if gti > Decimal("5000000"):
@@ -170,9 +246,23 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         return result
 
     # ── 3. Chapter VI-A Deductions ───────────────────────────────────────────
+    # Derive senior/severe flags from rich schedule inputs
+    is_parents_senior = False
+    is_80dd_severe = False
+    is_80u_severe = False
+    if ded_input := input_data.deductions_chapter6a:
+        is_parents_senior = ded_input.has_parents_senior
+        if ded_input.schedule_80dd and 'severe' in ded_input.schedule_80dd.disability_type.lower():
+            is_80dd_severe = True
+        if ded_input.schedule_80u and 'severe' in ded_input.schedule_80u.disability_type.lower():
+            is_80u_severe = True
+
     ded = compute_deductions(
         input_data.deductions_chapter6a, gti, age, regime, input_data.other_sources_income,
         cg_112a_income=cg_112a_income,
+        is_parents_senior=is_parents_senior,
+        is_80dd_severe=is_80dd_severe,
+        is_80u_severe=is_80u_severe,
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total
@@ -192,12 +282,13 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.tax_before_rebate = slab_tax + cg_112a_tax
 
     # ── 7. Rebate u/s 87A ────────────────────────────────────────────────────
-    rebate = compute_rebate(ti, result.tax_before_rebate, regime)
+    rebate = compute_rebate(ti, result.tax_before_rebate, slab_tax, regime)
     result.rebate_87a = rebate
     result.tax_after_rebate = max(Decimal("0"), result.tax_before_rebate - rebate)
 
     # ── 8. Surcharge ─────────────────────────────────────────────────────────
-    surcharge = compute_surcharge(ti, result.tax_after_rebate, regime, age)
+    surcharge = compute_surcharge(ti, result.tax_after_rebate, regime, age,
+                                   sr_tax=result.special_rate_tax)
     result.surcharge = surcharge
 
     # ── 9. Cess (4% on tax + surcharge) ──────────────────────────────────────
@@ -206,25 +297,51 @@ def compute(input_data: ITR1Input) -> ITR1Result:
 
     result.gross_tax_liability = result.tax_after_rebate + surcharge + cess
 
-    # ── 10. Interest & Late Fee ──────────────────────────────────────────────
+    # ── 10. Tax Credits (compute BEFORE interest — 234A base uses net assessed tax) ──
+    tds_tcs = compute_tds_tcs(
+        tds1_entries=input_data.tds1_entries,
+        tds2_entries=input_data.tds2_entries,
+        tcs_entries=input_data.tcs_entries,
+    )
+    result.total_tds = tds_tcs.total_tds
+    result.total_tcs = tds_tcs.total_tcs
+    result.total_taxes_paid = round_to_nearest_10(
+        result.total_tds + result.total_tcs
+        + input_data.advance_tax_paid
+        + input_data.self_assessment_tax_paid)
+
+    # ── 11. Interest & Late Fee ──────────────────────────────────────────────
     filing_date = input_data.filing_date
     due_date = input_data.due_date
-    tax_payable_for_interest = result.gross_tax_liability
     if filing_date and due_date:
-        result.interest_234a = compute_234a(tax_payable_for_interest, filing_date, due_date)
+        # 234A: 1% on net assessed tax (gross liability minus prepaid taxes)
+        assessed_tax = max(Decimal("0"),
+            result.gross_tax_liability - result.total_tds - result.total_tcs)
+        result.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
+
+        # 234B: 1% on shortfall in advance tax
+        ay_start = date(due_date.year, 4, 1)
+        result.interest_234b = compute_234b(assessed_tax,
+            input_data.advance_tax_paid, filing_date, ay_start)
+
+        # 234C: deferred installment interest
+        # Build quarterly advance-tax list.
+        # If per-quarter fields are filled, use them; otherwise fall back
+        # to treating the scalar advance_tax_paid as a single Q1 lump sum.
+        if (input_data.advance_tax_q1 is not None or input_data.advance_tax_q2 is not None
+                or input_data.advance_tax_q3 is not None or input_data.advance_tax_q4 is not None):
+            quarterly = [
+                input_data.advance_tax_q1 or Decimal("0"),
+                input_data.advance_tax_q2 or Decimal("0"),
+                input_data.advance_tax_q3 or Decimal("0"),
+                input_data.advance_tax_q4 or Decimal("0"),
+            ]
+        else:
+            quarterly = [input_data.advance_tax_paid] if input_data.advance_tax_paid > 0 else [Decimal("0")]
+        result.interest_234c = compute_234c(quarterly, assessed_tax, ay_start)
+
         result.late_fee_234f = compute_234f(filing_date, due_date, ti)
     result.total_interest = result.interest_234a + result.interest_234b + result.interest_234c
-
-    # ── 11. Tax Credits ──────────────────────────────────────────────────────
-    for tds1 in (input_data.tds1_entries or []):
-        result.total_tds += tds1.tds_deducted
-    for tds2 in (input_data.tds2_entries or []):
-        result.total_tds += tds2.tds_deducted
-    for tcs in (input_data.tcs_entries or []):
-        result.total_tcs += tcs.tcs_collected
-    result.total_taxes_paid = (result.total_tds + result.total_tcs
-                                + input_data.advance_tax_paid
-                                + input_data.self_assessment_tax_paid)
 
     # ── 12. Final payable / refund ───────────────────────────────────────────
     final_liability = round_to_nearest_10(
