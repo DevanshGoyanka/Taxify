@@ -457,36 +457,54 @@ def main() -> None:
         row("Net Agricultural Income", agri, "(for rate purposes)")
 
     print(f"\n  {BOLD}DEDUCTIONS{RESET}")
-    # Show per-section breakdown from the engine's DeductionResult.breakdown dict
     ded_sched = result.schedules.get("deductions") if result.schedules else None
     breakdown = getattr(ded_sched, "breakdown", {}) if ded_sched else {}
-    section_labels = [
-        ("80C+80CCC+80CCD(1)", "80C+80CCC+80CCD(1) pool (max ₹1,50,000 u/s 80CCE)"),
-        ("80CCC",       "  ↳ 80CCC (annuity, within above pool)"),
-        ("80CCD(1)",    "  ↳ 80CCD(1) (NPS employee, within above pool)"),
-        ("80CCD(1B)",   "80CCD(1B) — Additional NPS (max ₹50,000)"),
-        ("80CCD(2)",    "80CCD(2) — Employer NPS"),
-        ("80D",         "80D — Health Insurance (max ₹1,00,000)"),
-        ("80DD",        "80DD — Disabled Dependent"),
-        ("80DDB",       "80DDB — Specified Disease"),
-        ("80U",         "80U — Self Disability"),
-        ("80TTA",       "80TTA — Savings Interest (max ₹10,000)"),
-        ("80TTB",       "80TTB — Sr Citizen Deposit Interest"),
-        ("80E",         "80E — Education Loan Interest"),
-        ("80EE",        "80EE — First-time Home Loan (max ₹50,000)"),
-        ("80EEA",       "80EEA — Affordable Housing Loan (max ₹1,50,000)"),
-        ("80EEB",       "80EEB — Electric Vehicle Loan (max ₹1,50,000)"),
-        ("80G",         "80G — Donations"),
-        ("80GG",        "80GG — Rent Paid (no HRA, max ₹60,000)"),
-        ("80GGA",       "80GGA — Scientific Research/Rural Dev"),
-        ("80GGC",       "80GGC — Political Contributions"),
-        ("80CCH",       "80CCH — Agniveer Corpus Fund"),
+
+    section_info = [
+        ("80C+80CCC+80CCD(1)", "80C+80CCC+80CCD(1) pool (max ₹1,50,000 u/s 80CCE)", "amount_80c,amount_80ccc,amount_80ccd1"),
+        ("80CCC",   "  ↳ 80CCC portion",      "amount_80ccc"),
+        ("80CCD(1)","  ↳ 80CCD(1) portion",   "amount_80ccd1"),
+        ("80CCD(1B)","80CCD(1B) — Additional NPS (max ₹50,000)", "amount_80ccd1b"),
+        ("80CCD(2)", "80CCD(2) — Employer NPS", "amount_80ccd2"),
+        ("80D",      "80D — Health Insurance (max ₹1,00,000)", "amount_80d_self_family,amount_80d_preventive_self,amount_80d_parents,amount_80d_preventive_parents"),
+        ("80DD",     "80DD — Disabled Dependent", "amount_80dd"),
+        ("80DDB",    "80DDB — Specified Disease",  "amount_80ddb"),
+        ("80U",      "80U — Self Disability",     "amount_80u"),
+        ("80TTA",    "80TTA — Savings Interest (max ₹10,000)", "amount_80tta"),
+        ("80TTB",    "80TTB — Sr Citizen Deposit Interest",    "amount_80ttb"),
+        ("80E",      "80E — Education Loan Interest",         "amount_80e"),
+        ("80EE",     "80EE — First-time Home Loan (max ₹50,000)", "amount_80ee"),
+        ("80EEA",    "80EEA — Affordable Housing Loan (max ₹1,50,000)", "amount_80eea"),
+        ("80EEB",    "80EEB — Electric Vehicle Loan (max ₹1,50,000)", "amount_80eeb"),
+        ("80G",      "80G — Donations",           "amount_80g"),
+        ("80GG",     "80GG — Rent Paid (no HRA, max ₹60,000)", "amount_80gg"),
+        ("80GGA",    "80GGA — Scientific Research/Rural Dev", "amount_80gga"),
+        ("80GGC",    "80GGC — Political Contributions", "amount_80ggc"),
+        ("80CCH",    "80CCH — Agniveer Corpus Fund",     "amount_80cch"),
     ]
-    for key, label in section_labels:
-        amt = breakdown.get(key, Decimal("0"))
-        if amt > 0 or key in ("80C+80CCC+80CCD(1)", "80GGA"):
-            mark = "✓" if amt > 0 else "—"
-            row(f"  {mark} {label}", amt)
+
+    def _raw_sum(raw_keys: str) -> Decimal:
+        return sum(ded.get(k, Decimal("0")) for k in raw_keys.split(","))
+
+    for key, label, raw_keys in section_info:
+        allowed = breakdown.get(key, Decimal("0"))
+        if allowed > 0 or key in ("80C+80CCC+80CCD(1)", "80GGA"):
+            if key == "80C+80CCC+80CCD(1)":
+                raw_total = _raw_sum(raw_keys)
+                if raw_total > allowed:
+                    row(f"  ✓ {label}", allowed, f"{YELLOW}(claimed ₹{raw_total:,.0f}{RESET})")
+                else:
+                    row(f"  ✓ {label}", allowed)
+            elif key in ("80CCC", "80CCD(1)"):
+                row(f"  ✓ {label}", allowed)
+            else:
+                raw_val = _raw_sum(raw_keys)
+                if raw_val > allowed and allowed > 0:
+                    row(f"  ✓ {label}", allowed, f"{YELLOW}(claimed ₹{raw_val:,.0f}{RESET})")
+                elif allowed > 0:
+                    row(f"  ✓ {label}", allowed)
+                else:
+                    row(f"  — {label}", Decimal("0"))
     row(f"{BOLD}Chapter VI-A Total{RESET}", result.deductions_total)
     row(f"{BOLD}TAXABLE INCOME (r/o 10){RESET}", result.taxable_income, f"{BOLD}⟸ s.288A{RESET}")
 
@@ -499,7 +517,7 @@ def main() -> None:
     row(f"  Add: Surcharge", result.surcharge)
     row(f"  Add: HEC @ 4%", result.health_education_cess)
     if result.relief_89 > 0:
-        row(f"  Less: Relief u/s 89", -result.relief_89)
+        row(f"  Less: Relief u/s 89", result.relief_89)
     row(f"{BOLD}{GREEN}GROSS TAX LIABILITY{RESET}", result.gross_tax_liability, f"{BOLD}⟸{RESET}")
 
     print(f"\n  {BOLD}INTEREST & LATE FEE{RESET}")

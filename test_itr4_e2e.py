@@ -358,22 +358,39 @@ def main() -> None:
     sen_self = sen_parents = False; dd_severe = u_severe = False
 
     if tax_regime == "old":
+        # 80C pool
         ded["amount_80c"] = Decimal(ask("80C  - LIC/PPF/ELSS/EPF etc                    (₹)", "150000", "decimal"))
         ded["amount_80ccc"] = Decimal(ask("80CCC- Annuity plan premium                     (₹)", "0", "decimal"))
         ded["amount_80ccd1"] = Decimal(ask("80CCD(1)-Employee NPS contribution               (₹)", "50000", "decimal"))
+        raw_80c_pool = ded["amount_80c"] + ded["amount_80ccc"] + ded["amount_80ccd1"]
+        if raw_80c_pool > 150000:
+            print(f"      {YELLOW}⚠ 80C+80CCC+80CCD(1) = ₹{raw_80c_pool:,} exceeds ₹1,50,000 80CCE cap.{RESET}")
         ded["amount_80ccd1b"] = Decimal(ask("80CCD(1B)-Additional NPS                  (₹, max 50000)", "50000", "decimal"))
         ded["amount_80ccd2"] = Decimal(ask("80CCD(2)-Employer NPS (allowed in both regimes)  (₹)", "0", "decimal"))
         ded["amount_80d_self_family"] = Decimal(ask("80D - Med. insurance prem. (self+family)       (₹)", "25000", "decimal"))
         ded["amount_80d_preventive_self"] = Decimal(ask("80D - Preventive check-up (self+family) (₹, max 5000)", "0", "decimal"))
+        if ded["amount_80d_preventive_self"] > 5000:
+            print(f"      {YELLOW}⚠ Preventive check-up capped at ₹5,000 per bucket. Engine will cap.{RESET}")
         ded["amount_80d_parents"] = Decimal(ask("80D - Med. insurance prem. (parents)           (₹)", "25000", "decimal"))
         ded["amount_80d_preventive_parents"] = Decimal(ask("80D - Preventive check-up (parents)   (₹, max 5000)", "0", "decimal"))
+        if ded["amount_80d_preventive_parents"] > 5000:
+            print(f"      {YELLOW}⚠ Preventive check-up capped at ₹5,000 per bucket. Engine will cap.{RESET}")
         sen_self = ask("80D: Self/family includes senior citizen? (y/n)", "n") == "y"
         sen_parents = ask("80D: Parents include senior citizen? (y/n)", "y") == "y"
         ded["amount_80dd"] = Decimal(ask("80DD - Disabled dependent maintenance           (₹)", "0", "decimal"))
         dd_severe = ask("80DD: Disability is severe (>=80%)? (y/n)", "n") == "y"
+        dd_cap_hint = 125000 if dd_severe else 75000
+        if ded["amount_80dd"] > dd_cap_hint:
+            print(f"      {YELLOW}⚠ 80DD input ₹{ded['amount_80dd']:,} > ₹{dd_cap_hint:,} cap. Engine will cap.{RESET}")
         ded["amount_80ddb"] = Decimal(ask("80DDB- Specified disease treatment                (₹)", "0", "decimal"))
+        ddb_cap_hint = 100000 if age_bracket in ("60_to_80", "above_80") else 40000
+        if ded["amount_80ddb"] > ddb_cap_hint:
+            print(f"      {YELLOW}⚠ 80DDB input ₹{ded['amount_80ddb']:,} > ₹{ddb_cap_hint:,} cap (age-based). Engine will cap.{RESET}")
         ded["amount_80u"] = Decimal(ask("80U  - Self disability                            (₹)", "0", "decimal"))
         u_severe = ask("80U: Disability is severe (>=80%)? (y/n)", "n") == "y"
+        u_cap_hint = 125000 if u_severe else 75000
+        if ded["amount_80u"] > u_cap_hint:
+            print(f"      {YELLOW}⚠ 80U input ₹{ded['amount_80u']:,} > ₹{u_cap_hint:,} cap. Engine will cap.{RESET}")
         ded["amount_80e"] = Decimal(ask("80E  - Education loan interest                    (₹)", "0", "decimal"))
         ded["amount_80ee"] = Decimal(ask("80EE - First-time home loan interest              (₹)", "0", "decimal"))
         ded["amount_80eea"] = Decimal(ask("80EEA- Affordable housing loan interest           (₹)", "0", "decimal"))
@@ -642,33 +659,53 @@ def main() -> None:
     # Show per-section breakdown from the engine's DeductionResult.breakdown dict
     ded_sched = result.schedules.get("deductions") if result.schedules else None
     breakdown = getattr(ded_sched, "breakdown", {}) if ded_sched else {}
-    section_labels = [
-        ("80C+80CCC+80CCD(1)", "80C+80CCC+80CCD(1) pool (max ₹1,50,000 u/s 80CCE)"),
-        ("80CCC",       "  ↳ 80CCC (annuity, within above pool)"),
-        ("80CCD(1)",    "  ↳ 80CCD(1) (NPS employee, within above pool)"),
-        ("80CCD(1B)",   "80CCD(1B) — Additional NPS (max ₹50,000)"),
-        ("80CCD(2)",    "80CCD(2) — Employer NPS"),
-        ("80D",         "80D — Health Insurance (max ₹1,00,000)"),
-        ("80DD",        "80DD — Disabled Dependent"),
-        ("80DDB",       "80DDB — Specified Disease"),
-        ("80U",         "80U — Self Disability"),
-        ("80TTA",       "80TTA — Savings Interest (max ₹10,000)"),
-        ("80TTB",       "80TTB — Sr Citizen Deposit Interest"),
-        ("80E",         "80E — Education Loan Interest"),
-        ("80EE",        "80EE — First-time Home Loan (max ₹50,000)"),
-        ("80EEA",       "80EEA — Affordable Housing Loan (max ₹1,50,000)"),
-        ("80EEB",       "80EEB — Electric Vehicle Loan (max ₹1,50,000)"),
-        ("80G",         "80G — Donations"),
-        ("80GG",        "80GG — Rent Paid (no HRA, max ₹60,000)"),
-        ("80GGA",       "80GGA — Scientific Research/Rural Dev (ITR-1 only)"),
-        ("80GGC",       "80GGC — Political Contributions"),
-        ("80CCH",       "80CCH — Agniveer Corpus Fund"),
+
+    # Map breakdown keys → (label, raw_input_key) for "Claimed vs Allowed" display
+    section_info = [
+        ("80C+80CCC+80CCD(1)", "80C+80CCC+80CCD(1) pool (max ₹1,50,000 u/s 80CCE)", "amount_80c,amount_80ccc,amount_80ccd1"),
+        ("80CCC",   "  ↳ 80CCC portion",      "amount_80ccc"),
+        ("80CCD(1)","  ↳ 80CCD(1) portion",   "amount_80ccd1"),
+        ("80CCD(1B)","80CCD(1B) — Additional NPS (max ₹50,000)", "amount_80ccd1b"),
+        ("80CCD(2)", "80CCD(2) — Employer NPS", "amount_80ccd2"),
+        ("80D",      "80D — Health Insurance (max ₹1,00,000)", "amount_80d_self_family,amount_80d_preventive_self,amount_80d_parents,amount_80d_preventive_parents"),
+        ("80DD",     "80DD — Disabled Dependent", "amount_80dd"),
+        ("80DDB",    "80DDB — Specified Disease",  "amount_80ddb"),
+        ("80U",      "80U — Self Disability",     "amount_80u"),
+        ("80TTA",    "80TTA — Savings Interest (max ₹10,000)", "amount_80tta"),
+        ("80TTB",    "80TTB — Sr Citizen Deposit Interest",    "amount_80ttb"),
+        ("80E",      "80E — Education Loan Interest",         "amount_80e"),
+        ("80EE",     "80EE — First-time Home Loan (max ₹50,000)", "amount_80ee"),
+        ("80EEA",    "80EEA — Affordable Housing Loan (max ₹1,50,000)", "amount_80eea"),
+        ("80EEB",    "80EEB — Electric Vehicle Loan (max ₹1,50,000)", "amount_80eeb"),
+        ("80G",      "80G — Donations",           "amount_80g"),
+        ("80GG",     "80GG — Rent Paid (no HRA, max ₹60,000)", "amount_80gg"),
+        ("80GGA",    "80GGA — Scientific Research/Rural Dev (ITR-1 only)", "amount_80gga"),
+        ("80GGC",    "80GGC — Political Contributions", "amount_80ggc"),
+        ("80CCH",    "80CCH — Agniveer Corpus Fund",     "amount_80cch"),
     ]
-    for key, label in section_labels:
-        amt = breakdown.get(key, Decimal("0"))
-        if amt > 0 or key in ("80C+80CCC+80CCD(1)", "80GGA"):
-            mark = "✓" if amt > 0 else "—"
-            row(f"  {mark} {label}", amt)
+
+    def _raw_sum(raw_keys: str) -> Decimal:
+        return sum(ded.get(k, Decimal("0")) for k in raw_keys.split(","))
+
+    for key, label, raw_keys in section_info:
+        allowed = breakdown.get(key, Decimal("0"))
+        if allowed > 0 or key in ("80C+80CCC+80CCD(1)", "80GGA"):
+            if key == "80C+80CCC+80CCD(1)":
+                raw_total = _raw_sum(raw_keys)
+                if raw_total > allowed:
+                    row(f"  ✓ {label}", allowed, f"{YELLOW}(claimed ₹{raw_total:,.0f}{RESET})")
+                else:
+                    row(f"  ✓ {label}", allowed)
+            elif key in ("80CCC", "80CCD(1)"):
+                row(f"  ✓ {label}", allowed)
+            else:
+                raw_val = _raw_sum(raw_keys)
+                if raw_val > allowed and allowed > 0:
+                    row(f"  ✓ {label}", allowed, f"{YELLOW}(claimed ₹{raw_val:,.0f}{RESET})")
+                elif allowed > 0:
+                    row(f"  ✓ {label}", allowed)
+                else:
+                    row(f"  — {label}", Decimal("0"))
     row(f"{BOLD}Chapter VI-A Total{RESET}", result.deductions_total)
     row(f"{BOLD}TAXABLE INCOME{RESET}", result.taxable_income, f"{BOLD}← s.288A{RESET}")
 
