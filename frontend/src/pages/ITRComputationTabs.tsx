@@ -6,6 +6,7 @@ import { InterestEntryManager } from '../components/interest/InterestEntryManage
 import { WinningsManager } from '../components/winnings/WinningsManager';
 import { FamilyPensionManager } from '../components/familyPension/FamilyPensionManager';
 import { GiftPropertyManager } from '../components/gifts/GiftPropertyManager';
+import { Section80DManager, type Section80DData } from '../components/Section80DManager';
 
 export function BusinessTab({ formData, setFormData, taxResult }: any) {
   return (
@@ -357,17 +358,19 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
         <Field label="80CCD(2) - Employer" value={formData.s80CCD2} onChange={(v: any) => setFormData({ ...formData, s80CCD2: v })} />
       </div>
 
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Health Insurance (80D)</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Self + Family" value={formData.s80D_self} onChange={(v: any) => setFormData({ ...formData, s80D_self: v })} />
-        <Field label="Insurer Name" value={formData.s80D_selfInsurerName || ''} onChange={(v: any) => setFormData({ ...formData, s80D_selfInsurerName: v })} type="text" prefix="" />
-        <Field label="Policy No" value={formData.s80D_selfPolicyNo || ''} onChange={(v: any) => setFormData({ ...formData, s80D_selfPolicyNo: v })} type="text" prefix="" />
-        <Field label="Parents" value={formData.s80D_parent} onChange={(v: any) => setFormData({ ...formData, s80D_parent: v })} />
-        <Field label="Insurer Name" value={formData.s80D_parentInsurerName || ''} onChange={(v: any) => setFormData({ ...formData, s80D_parentInsurerName: v })} type="text" prefix="" />
-        <Field label="Policy No" value={formData.s80D_parentPolicyNo || ''} onChange={(v: any) => setFormData({ ...formData, s80D_parentPolicyNo: v })} type="text" prefix="" />
-      </div>
+      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: "var(--text-secondary)" }}>Health Insurance (80D)</h3>
+      <Section80DManager
+        data={formData.section80D || {
+          selfSeniorCitizen: "N", parentsSeniorCitizen: "N",
+          selfFamily: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
+          selfFamilySenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
+          parents: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
+          parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
+        }}
+        onChange={(d) => setFormData({ ...formData, section80D: d })}
+      />
 
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Donations (80G)</h3>
+      Donations (80G)</h3>
       
       {/* Donation Multi-Entry Manager */}
       <DonationEntryManager
