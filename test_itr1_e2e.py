@@ -223,27 +223,59 @@ def main() -> None:
         ded["amount_80c"]   = Decimal(ask("80C  - LIC/PPF/ELSS/EPF etc                    (₹)", "150000", "decimal"))
         ded["amount_80ccc"] = Decimal(ask("80CCC- Annuity plan premium                     (₹)", "0", "decimal"))
         ded["amount_80ccd1"]= Decimal(ask("80CCD(1)-Employee NPS contribution               (₹)", "50000", "decimal"))
+        raw_80cce = ded["amount_80c"] + ded["amount_80ccc"] + ded["amount_80ccd1"]
+        if raw_80cce > 150000:
+            print(f"      {YELLOW}⚠ 80C+80CCC+80CCD(1) = ₹{raw_80cce:,} exceeds ₹1,50,000 80CCE cap.{RESET}")
         ded["amount_80ccd1b"]=Decimal(ask("80CCD(1B)-Additional NPS                  (₹, max 50000)", "50000", "decimal"))
         ded["amount_80ccd2"]= Decimal(ask("80CCD(2)-Employer NPS (allowed in both regimes)  (₹)", "0", "decimal"))
         ded["amount_80d_self_family"]=Decimal(ask("80D - Med. insurance prem. (self+family)       (₹)", "25000", "decimal"))
         ded["amount_80d_preventive_self"]=Decimal(ask("80D - Preventive check-up (self+family) (₹, max 5000)", "0", "decimal"))
+        if ded["amount_80d_preventive_self"] > 5000:
+            print(f"      {YELLOW}⚠ Preventive check-up capped at ₹5,000. Engine will cap.{RESET}")
         ded["amount_80d_parents"]=Decimal(ask("80D - Med. insurance prem. (parents)           (₹)", "25000", "decimal"))
         ded["amount_80d_preventive_parents"]=Decimal(ask("80D - Preventive check-up (parents)   (₹, max 5000)", "0", "decimal"))
+        if ded["amount_80d_preventive_parents"] > 5000:
+            print(f"      {YELLOW}⚠ Preventive check-up capped at ₹5,000. Engine will cap.{RESET}")
         sen_self     = ask("80D: Self/family includes senior citizen? (y/n)", "n") == "y"
         sen_parents  = ask("80D: Parents include senior citizen? (y/n)", "y") == "y"
         ded["amount_80dd"]  = Decimal(ask("80DD - Disabled dependent maintenance           (₹)", "0", "decimal"))
         dd_severe    = ask("80DD: Disability is severe (>=80%)? (y/n)", "n") == "y"
+        dd_cap = 125000 if dd_severe else 75000
+        if ded["amount_80dd"] > dd_cap:
+            print(f"      {YELLOW}⚠ 80DD cap is ₹{dd_cap:,}. Engine will cap.{RESET}")
         ded["amount_80ddb"] = Decimal(ask("80DDB- Specified disease treatment                (₹)", "0", "decimal"))
+        ddb_cap = 100000 if age_bracket in ("60_to_80", "above_80") else 40000
+        if ded["amount_80ddb"] > ddb_cap:
+            print(f"      {YELLOW}⚠ 80DDB cap is ₹{ddb_cap:,} (age-based). Engine will cap.{RESET}")
         ded["amount_80u"]   = Decimal(ask("80U  - Self disability                            (₹)", "0", "decimal"))
         u_severe     = ask("80U: Disability is severe (>=80%)? (y/n)", "n") == "y"
+        u_cap = 125000 if u_severe else 75000
+        if ded["amount_80u"] > u_cap:
+            print(f"      {YELLOW}⚠ 80U cap is ₹{u_cap:,}. Engine will cap.{RESET}")
         ded["amount_80e"]   = Decimal(ask("80E  - Education loan interest                    (₹)", "0", "decimal"))
         ded["amount_80ee"]  = Decimal(ask("80EE - First-time home loan interest              (₹)", "0", "decimal"))
+        if ded["amount_80ee"] > 50000:
+            print(f"      {YELLOW}⚠ 80EE cap is ₹50,000. Engine will cap.{RESET}")
         ded["amount_80eea"] = Decimal(ask("80EEA- Affordable housing loan interest           (₹)", "0", "decimal"))
+        if ded["amount_80eea"] > 150000:
+            print(f"      {YELLOW}⚠ 80EEA cap is ₹1,50,000. Engine will cap.{RESET}")
         ded["amount_80eeb"] = Decimal(ask("80EEB- Electric vehicle loan interest             (₹)", "0", "decimal"))
+        if ded["amount_80eeb"] > 150000:
+            print(f"      {YELLOW}⚠ 80EEB cap is ₹1,50,000. Engine will cap.{RESET}")
         ded["amount_80g"]   = Decimal(ask("80G  - Donations                                  (₹)", "0", "decimal"))
         ded["amount_80gg"]  = Decimal(ask("80GG - Rent paid (no HRA)                         (₹)", "0", "decimal"))
+        if ded["amount_80gg"] > 0 and has_sal and hra_received > 0:
+            print(f"      {RED}⚠ 80GG not available when HRA is received. Engine will disallow.{RESET}")
         ded["amount_80tta"] = Decimal(ask("80TTA- Savings interest (age<60, max 10000)       (₹)", "10000", "decimal"))
-        ded["amount_80ttb"] = Decimal(ask("80TTB- Sr citizen deposit interest (age>=60, max 50000)(₹)", "0", "decimal"))
+        if ded["amount_80tta"] > 10000:
+            print(f"      {YELLOW}⚠ 80TTA cap is ₹10,000. Engine will cap.{RESET}")
+        if age_bracket == "below_60":
+            has_ttb = Decimal(ask("80TTB- Sr citizen deposit interest (age>=60, max 50000)(₹)", "0", "decimal"))
+            if has_ttb > 0:
+                print(f"      {RED}⚠ 80TTB is only for senior citizens (age ≥ 60). Engine will set to ₹0.{RESET}")
+            ded["amount_80ttb"] = Decimal("0")
+        else:
+            ded["amount_80ttb"] = Decimal(ask("80TTB- Sr citizen deposit interest (age>=60, max 50000)(₹)", "0", "decimal"))
         ded["amount_80cch"] = Decimal(ask("80CCH-Agniveer Corpus Fund                        (₹)", "0", "decimal"))
     else:
         # New regime: only 80CCD(2) + 80CCH
@@ -262,7 +294,14 @@ def main() -> None:
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     header("7. AGRICULTURAL INCOME")
     has_agri = ask("Has net agricultural income > ₹5,000? (y/n)", "n") == "y"
-    agri_income = Decimal(ask("Net Agricultural Income (₹)", "6000", "decimal")) if has_agri else Decimal("0")
+    if has_agri:
+        agri_income = Decimal(ask("Net Agricultural Income (₹, must be > ₹5,000)", "6000", "decimal"))
+        if agri_income <= Decimal("5000"):
+            print(f"      {RED}⚠ Agri income ≤ ₹5,000 contradicts 'Yes' above.{RESET}")
+            print(f"      {RED}  ITR-1 allows agri income up to ₹5,000. Set to 0 for ITR-1.{RESET}")
+            agri_income = Decimal("0")
+    else:
+        agri_income = Decimal("0")
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # 8. TAX PAYMENTS
