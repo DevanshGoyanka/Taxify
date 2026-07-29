@@ -168,7 +168,7 @@ def main() -> None:
 
     # ITR-4: Phone sub-object fields
     phone_std_code = ask("Phone STD Code (e.g. 080)", "0", "int")
-    phone_no = ask("Phone Number (landline, 0 if none)", "0")
+    phone_no = ask("Phone Number (landline, 0 if none)", "0", "int")
 
     subheader("Eligibility Gates")
     is_resident = ask("Is resident? (y/n)", "y") == "y"
@@ -653,6 +653,12 @@ def main() -> None:
     row("House Property Income", result.house_property_income)
     row("Other Sources Income", result.other_sources_income)
     row("Capital Gains (112A)", result.capital_gains_112a)
+    # Show gross vs taxable for 112A
+    cg_sched = result.schedules.get("capital_gains_112a") if result.schedules else None
+    if cg_sched and hasattr(cg_sched, "gross_income") and cg_sched.gross_income > 0:
+        row("  ↳ Gross LTCG (112A)", getattr(cg_sched, "gross_income", Decimal("0")))
+        if cg_sched.taxable_income < cg_sched.gross_income:
+            row("  ↳ Taxable after ₹1.25L exemption", cg_sched.taxable_income)
     row(f"{BOLD}GROSS TOTAL INCOME{RESET}", result.gross_total_income, f"{BOLD}←{RESET}")
 
     print(f"\n  {BOLD}DEDUCTIONS{RESET}")
@@ -736,11 +742,17 @@ def main() -> None:
     row(f"{BOLD}Total Taxes Paid{RESET}", result.total_taxes_paid)
 
     print(f"\n  {BOLD}{'─' * 50}{RESET}")
+    gross_plus_interest = result.gross_tax_liability + result.total_interest + result.late_fee_234f
     if result.balance_payable > 0:
         row(f"{BOLD}{RED}BALANCE PAYABLE{RESET}", result.balance_payable, f"{RED}←{RESET}")
-    else:
+    elif result.refund_due > 0:
+        row(f"  Gross Tax + Interest", gross_plus_interest)
+        row(f"  Taxes Paid", result.total_taxes_paid)
+        print(f"  {'─' * 50}")
         row(f"{BOLD}{GREEN}REFUND DUE{RESET}", result.refund_due, f"{GREEN}←{RESET}")
-    row(f"Net Tax Liability", result.net_tax_liability)
+    else:
+        row(f"  Gross Tax + Interest", gross_plus_interest)
+        row(f"  Taxes Paid", result.total_taxes_paid)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ITD JSON
@@ -844,9 +856,11 @@ def main() -> None:
         ("TaxComputation.TotalTaxPayable", "TaxComputation"),
         ("Refund.BankAccountDtls", "Refund"),
         ("Verification.Declaration", "Verification"),
-        ("ScheduleBP.PersumptiveInc44ADA", "ScheduleBP"),  # ITR-4 specific
-        ("ScheduleIT.TaxPayment", "ScheduleIT"),  # ITR-4 specific
     ]
+    # ScheduleBP check depends on presumptive scheme
+    bp_sub_obj = {"44AD": "PersumptiveInc44AD", "44ADA": "PersumptiveInc44ADA", "44AE": "PersumptiveInc44AE"}.get(presumptive_scheme, "PersumptiveInc44AD")
+    checks.append((f"ScheduleBP.{bp_sub_obj}", "ScheduleBP"))
+    checks.append(("ScheduleIT.TaxPayment", "ScheduleIT"))  # ITR-4 specific
     all_ok = True
     for field, section in checks:
         parts = field.split(".")
