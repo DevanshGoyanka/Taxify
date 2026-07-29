@@ -366,6 +366,132 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
         onChange={(d) => setFormData({ ...formData, section80D: d })}
       />
 
+      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Disability & Medical (80DD/80DDB/80U)</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>80DDB - Medical Treatment Amount</label>
+          <input type="number" value={formData.s80DDB || ''} onChange={(e) => setFormData({ ...formData, s80DDB: parseFloat(e.target.value) || 0 })} placeholder="0" min={0}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Dependent Type (80DDB)</label>
+          <select value={formData.s80DDB_dependentType || 'SELF'} onChange={(e) => setFormData({ ...formData, s80DDB_dependentType: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="SELF">Self</option>
+            <option value="DEPENDENT">Dependent</option>
+            <option value="SENIOR">Senior Citizen</option>
+            <option value="SUPER_SENIOR">Super Senior Citizen</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disease Code (80DDB)</label>
+          <select value={formData.s80DDB_diseaseCode || ''} onChange={(e) => setFormData({ ...formData, s80DDB_diseaseCode: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="">-- Select Disease --</option>
+            <option value="01">01 - Neurological Disease (60%+)</option>
+            <option value="02">02 - Parkinson's Disease</option>
+            <option value="03">03 - Malignant Cancer</option>
+            <option value="04">04 - AIDS</option>
+            <option value="05">05 - Chronic Renal Failure</option>
+            <option value="06">06 - Hemophilia</option>
+            <option value="07">07 - Thalassemia</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>80DD - Disabled Dependent Amount</label>
+          <input type="number" value={formData.s80DD || ''} onChange={(e) => setFormData({ ...formData, s80DD: parseFloat(e.target.value) || 0 })} placeholder="0" min={0}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Nature (80DD)</label>
+          <select value={formData.s80DD_natureOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80DD_natureOfDisability: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="">-- Select --</option>
+            <option value="PHYSICAL">Physical Disability</option>
+            <option value="MENTAL">Mental Disability</option>
+            <option value="BLIND">Blindness</option>
+            <option value="HEARING">Hearing Impairment</option>
+            <option value="LOCOMOTOR">Locomotor Disability</option>
+            <option value="CEREBRAL_PALSY">Cerebral Palsy</option>
+            <option value="AUTISM">Autism</option>
+            <option value="MULTIPLE">Multiple Disabilities</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Type (80DD)</label>
+          <select value={formData.s80DD_typeOfDisability || 'NORMAL'} onChange={(e) => setFormData({ ...formData, s80DD_typeOfDisability: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="NORMAL">Normal (40-79%)</option>
+            <option value="SEVERE">Severe (80%+)</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Dependent Type (80DD)</label>
+          <select value={formData.s80DD_dependentType || 'SELF'} onChange={(e) => setFormData({ ...formData, s80DD_dependentType: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="SELF">Self</option>
+            <option value="SPOUSE">Spouse</option>
+            <option value="CHILD">Child</option>
+            <option value="PARENT">Parent</option>
+            <option value="SIBLING">Sibling</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>UDID Number (80DD)</label>
+          <input type="text" value={formData.s80DD_udid || ''} onChange={(e) => setFormData({ ...formData, s80DD_udid: e.target.value })} placeholder="Unique Disability ID" maxLength={18}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace' }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Form 10-IA Filed? (80DD)</label>
+          <select value={formData.s80DD_form10IA || 'N'} onChange={(e) => setFormData({ ...formData, s80DD_form10IA: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="N">No</option>
+            <option value="Y">Yes</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>80U - Self Disability Amount</label>
+          <input type="number" value={formData.s80U || ''} onChange={(e) => setFormData({ ...formData, s80U: parseFloat(e.target.value) || 0 })} placeholder="0" min={0}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Nature (80U)</label>
+          <select value={formData.s80U_natureOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80U_natureOfDisability: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="">-- Select --</option>
+            <option value="PHYSICAL">Physical Disability</option>
+            <option value="MENTAL">Mental Disability</option>
+            <option value="BLIND">Blindness</option>
+            <option value="HEARING">Hearing Impairment</option>
+            <option value="LOCOMOTOR">Locomotor Disability</option>
+            <option value="CEREBRAL_PALSY">Cerebral Palsy</option>
+            <option value="AUTISM">Autism</option>
+            <option value="MULTIPLE">Multiple Disabilities</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Type (80U)</label>
+          <select value={formData.s80U_typeOfDisability || 'NORMAL'} onChange={(e) => setFormData({ ...formData, s80U_typeOfDisability: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="NORMAL">Normal (40-79%)</option>
+            <option value="SEVERE">Severe (80%+)</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>UDID Number (80U)</label>
+          <input type="text" value={formData.s80U_udid || ''} onChange={(e) => setFormData({ ...formData, s80U_udid: e.target.value })} placeholder="Unique Disability ID" maxLength={18}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace' }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Form 10-IA Filed? (80U)</label>
+          <select value={formData.s80U_form10IA || 'N'} onChange={(e) => setFormData({ ...formData, s80U_form10IA: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="N">No</option>
+            <option value="Y">Yes</option>
+          </select>
+        </div>
+      </div>
+
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Donations (80G)</h3>
       
       {/* Donation Multi-Entry Manager */}

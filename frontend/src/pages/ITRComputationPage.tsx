@@ -1599,6 +1599,23 @@ function PersonalInfoTab({ formData, setFormData }: any) {
       </h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
         <Field label="Email Address" value={formData.email || ''} onChange={(v: any) => setFormData({ ...formData, email: v })} type="email" prefix="" />
+        <div>
+          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Country Code</label>
+          <select value={formData.countryCodeMobile || '91'} onChange={(e) => setFormData({ ...formData, countryCodeMobile: e.target.value })}
+            style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
+            <option value="91">+91 (India)</option>
+            <option value="1">+1 (USA/Canada)</option>
+            <option value="44">+44 (UK)</option>
+            <option value="971">+971 (UAE)</option>
+            <option value="966">+966 (Saudi Arabia)</option>
+            <option value="974">+974 (Qatar)</option>
+            <option value="65">+65 (Singapore)</option>
+            <option value="61">+61 (Australia)</option>
+            <option value="81">+81 (Japan)</option>
+            <option value="86">+86 (China)</option>
+            <option value="OTH">Other</option>
+          </select>
+        </div>
         <Field label="Mobile Number" value={formData.mobile || ''} onChange={(v: any) => setFormData({ ...formData, mobile: v })} type="tel" prefix="" />
         <Field label="Telephone (STD-Number)" value={formData.telephone || ''} onChange={(v: any) => setFormData({ ...formData, telephone: v })} type="tel" prefix="" />
       </div>
@@ -1612,9 +1629,46 @@ function PersonalInfoTab({ formData, setFormData }: any) {
         <Field label="Road/Street/Post Office" value={formData.road || ''} onChange={(v: any) => setFormData({ ...formData, road: v })} type="text" prefix="" />
         <Field label="Area/Locality" value={formData.area || ''} onChange={(v: any) => setFormData({ ...formData, area: v })} type="text" prefix="" />
         <Field label="Town/City/District" value={formData.city || ''} onChange={(v: any) => setFormData({ ...formData, city: v })} type="text" prefix="" />
-        <Field label="State" value={formData.state || ''} onChange={(v: any) => setFormData({ ...formData, state: v })} type="text" prefix="" />
+        <div>
+          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>State *</label>
+          <select value={formData.state || ''} onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+            style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
+            <option value="">-- Select State --</option>
+<option value="01">01 - Andaman & Nicobar</option><option value="02">02 - Andhra Pradesh</option>
+<option value="03">03 - Arunachal Pradesh</option><option value="04">04 - Assam</option>
+<option value="05">05 - Bihar</option><option value="06">06 - Chandigarh</option>
+<option value="07">07 - Dadra & Nagar Haveli</option><option value="08">08 - Daman & Diu</option>
+<option value="09">09 - Delhi</option><option value="10">10 - Goa</option>
+<option value="11">11 - Gujarat</option><option value="12">12 - Haryana</option>
+<option value="13">13 - Himachal Pradesh</option><option value="14">14 - Jammu & Kashmir</option>
+<option value="15">15 - Karnataka</option><option value="16">16 - Kerala</option>
+<option value="17">17 - Lakshadweep</option><option value="18">18 - Madhya Pradesh</option>
+<option value="19">19 - Maharashtra</option><option value="20">20 - Manipur</option>
+<option value="21">21 - Meghalaya</option><option value="22">22 - Mizoram</option>
+<option value="23">23 - Nagaland</option><option value="24">24 - Odisha</option>
+<option value="25">25 - Puducherry</option><option value="26">26 - Punjab</option>
+<option value="27">27 - Rajasthan</option><option value="28">28 - Sikkim</option>
+<option value="29">29 - Tamil Nadu</option><option value="30">30 - Tripura</option>
+<option value="31">31 - Uttar Pradesh</option><option value="32">32 - West Bengal</option>
+<option value="33">33 - Chhattisgarh</option><option value="34">34 - Uttarakhand</option>
+<option value="35">35 - Jharkhand</option><option value="36">36 - Telangana</option>
+<option value="37">37 - Ladakh</option>
+<option value="99">99 - Foreign Territory</option>
+          </select>
+        </div>
         <Field label="PIN Code" value={formData.pincode || ''} onChange={(v: any) => setFormData({ ...formData, pincode: v })} type="text" prefix="" />
-        <Field label="Country" value={formData.country || 'India'} onChange={(v: any) => setFormData({ ...formData, country: v })} type="text" prefix="" />
+        <div>
+          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Country *</label>
+          <select value={formData.country || 'IND'} onChange={(e) => setFormData({ ...formData, country: e.target.value })}
+            style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
+            <option value="IND">IND - India</option>
+<option value="USA">USA - United States</option><option value="GBR">GBR - United Kingdom</option>
+<option value="ARE">ARE - United Arab Emirates</option><option value="SAU">SAU - Saudi Arabia</option>
+<option value="QAT">QAT - Qatar</option><option value="SGP">SGP - Singapore</option>
+<option value="AUS">AUS - Australia</option><option value="CAN">CAN - Canada</option>
+<option value="OTH">OTH - Other Country</option>
+          </select>
+        </div>
       </div>
 
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
