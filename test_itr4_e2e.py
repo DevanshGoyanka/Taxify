@@ -197,8 +197,17 @@ def main() -> None:
         bp_digital_turnover = Decimal(ask("  ↳ Received via digital modes (₹)", "2000000", "decimal"))
         bp_cash_turnover = Decimal(ask("  ↳ Received as cash (₹)", "500000", "decimal"))
         bp_other = Decimal("0")
-        declared_44ad = ask("Declare income above presumptive rate? (y/n)", "n")
-        declared_44ad_amt = Decimal(ask("Income Declared (₹, 0=use presumptive rate)", "0", "decimal")) if declared_44ad == "y" else None
+        statutory_44ad = bp_digital_turnover * Decimal("0.06") + bp_cash_turnover * Decimal("0.08")
+        print(f"      → Statutory presumptive (6% digital + 8% cash): ₹{statutory_44ad:,.0f}")
+        print(f"      {YELLOW}Declared income must be ≥ ₹{statutory_44ad:,.0f} to override (Section 44AD floor).{RESET}")
+        declared_44ad = ask("Declare income ABOVE statutory floor? (y/n)", "n")
+        if declared_44ad == "y":
+            declared_44ad_amt = Decimal(ask(f"Income Declared (₹, minimum ₹{statutory_44ad:,.0f})", str(statutory_44ad), "decimal"))
+            if declared_44ad_amt < statutory_44ad:
+                print(f"      {YELLOW}⚠ ₹{declared_44ad_amt:,.0f} < ₹{statutory_44ad:,.0f} floor → using floor.{RESET}")
+                declared_44ad_amt = None
+        else:
+            declared_44ad_amt = None
 
         # Validate: digital + cash must equal total
         if bp_digital_turnover + bp_cash_turnover != bp_gross_turnover:
@@ -212,8 +221,17 @@ def main() -> None:
         gross_receipts = Decimal(ask("Gross Receipts (₹, max ₹75L)", "5000000", "decimal"))
         digital_receipts = Decimal(ask("  ↳ Received via digital modes (₹)", "4000000", "decimal"))
         cash_receipts = Decimal(ask("  ↳ Received as cash (₹)", "1000000", "decimal"))
-        declared_44ada = ask("Declare income above 50% presumptive rate? (y/n)", "n")
-        declared_44ada_amt = Decimal(ask("Income Declared (₹, 0=use presumptive rate)", "0", "decimal")) if declared_44ada == "y" else None
+        statutory_44ada = gross_receipts * Decimal("0.50")
+        print(f"      → Statutory presumptive (50% of gross): ₹{statutory_44ada:,.0f}")
+        print(f"      {YELLOW}Declared income must be ≥ ₹{statutory_44ada:,.0f} to override (Section 44ADA floor).{RESET}")
+        declared_44ada = ask("Declare income ABOVE 50% floor? (y/n)", "n")
+        if declared_44ada == "y":
+            declared_44ada_amt = Decimal(ask(f"Income Declared (₹, minimum ₹{statutory_44ada:,.0f})", str(statutory_44ada), "decimal"))
+            if declared_44ada_amt < statutory_44ada:
+                print(f"      {YELLOW}⚠ ₹{declared_44ada_amt:,.0f} < ₹{statutory_44ada:,.0f} floor → using floor.{RESET}")
+                declared_44ada_amt = None
+        else:
+            declared_44ada_amt = None
 
         if digital_receipts + cash_receipts != gross_receipts:
             print(f"\n  {RED}✗ Digital + Cash ≠ Gross. Adjusting cash to balance.{RESET}")
@@ -225,15 +243,30 @@ def main() -> None:
         bp_scheme_str = "44AE"
         num_vehicles = int(ask("Number of goods carriage vehicles owned", "3", "int"))
         vehicles = []
-        hgv_presumptive = Decimal("1000")  # ₹1,000 per ton per month
+        hgv_presumptive_rate = Decimal("1000")  # ₹1,000 per ton per month
         lgv_presumptive = Decimal("7500")  # ₹7,500 per vehicle per month
         for i in range(num_vehicles):
             print(f"\n    Vehicle #{i + 1}:")
             is_heavy = ask("      Heavy goods vehicle (>12T GVW)? (y/n)", "n") == "y"
-            gvw = Decimal(ask("      Gross Vehicle Weight (tons)", "16.2", "decimal")) if is_heavy else None
-            months = int(ask("      Months owned in PY (1-12)", "12", "int"))
-            declared = ask("      Declare income above presumptive? (y/n)", "n")
-            declared_amt = Decimal(ask("      Income Declared (₹, 0=presumptive)", "0", "decimal")) if declared == "y" else None
+            if is_heavy:
+                gvw = Decimal(ask("      Gross Vehicle Weight (tons)", "16.2", "decimal"))
+                months = int(ask("      Months owned in PY (1-12)", "12", "int"))
+                statutory = Decimal("1000") * gvw * months
+                print(f"      → Statutory presumptive: ₹1,000 × {gvw}T × {months}m = ₹{statutory:,.0f}")
+            else:
+                gvw = None
+                months = int(ask("      Months owned in PY (1-12)", "12", "int"))
+                statutory = Decimal("7500") * months
+                print(f"      → Statutory presumptive: ₹7,500 × {months}m = ₹{statutory:,.0f}")
+            print(f"      {YELLOW}Declared income must be ≥ ₹{statutory:,.0f} to override (Section 44AE floor).{RESET}")
+            declared = ask("      Declare income ABOVE statutory floor? (y/n)", "n")
+            if declared == "y":
+                declared_amt = Decimal(ask(f"      Income Declared (₹, minimum ₹{statutory:,.0f})", str(statutory), "decimal"))
+                if declared_amt < statutory:
+                    print(f"      {YELLOW}⚠ ₹{declared_amt:,.0f} < ₹{statutory:,.0f} floor → using floor.{RESET}")
+                    declared_amt = None
+            else:
+                declared_amt = None
             vehicles.append({
                 "is_heavy_goods_vehicle": is_heavy,
                 "gross_vehicle_weight_tons": gvw,
