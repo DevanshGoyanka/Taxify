@@ -168,7 +168,7 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
       </div>
 
       {/* Category summary cards (only visible ones) */}
-      {(CATS.some(cm => visibilityMap[cm.key] && ((data[cm.key] as Category80D).policies.length > 0 || (data[cm.key] as Category80D).preventiveCheckup > 0 || (data[cm.key] as Category80D).medicalExpense > 0))) && (
+      {(CATS.some(cm => visibilityMap[cm.key] && ((data[cm.key] as Category80D).policies.length > 0 || (data[cm.key] as Category80D).preventiveCheckup > 0 || (data[cm.key] as Category80D).medicalExpense > 0)) ) && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginBottom: 16 }}>
           {CATS.filter(cm => visibilityMap[cm.key]).map(cm => {
             const cat = data[cm.key] as Category80D;
@@ -307,7 +307,7 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
       })}
 
       {/* Grand total footer */}
-      {(totalEligible > 0 || CATS.some(cm => visibilityMap[cm.key] && (data[cm.key] as Category80D).policies.length > 0))) && (
+      {(totalEligible > 0 || CATS.some(cm => visibilityMap[cm.key] && (data[cm.key] as Category80D).policies.length > 0)) && (
         <div style={{
           marginTop: 14, padding: 12, background: '#e8eaf6', borderRadius: 6,
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
