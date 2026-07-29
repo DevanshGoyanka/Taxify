@@ -307,7 +307,7 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
       })}
 
       {/* Grand total footer */}
-      {(totalEligible > 0 || CATS.some(cm => visibilityMap[cm.key] && (data[cm.key] as Category80D).policies.length > 0)) ) && (
+      {(totalEligible > 0 || CATS.some(cm => visibilityMap[cm.key] && (data[cm.key] as Category80D).policies.length > 0))) && (
         <div style={{
           marginTop: 14, padding: 12, background: '#e8eaf6', borderRadius: 6,
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
