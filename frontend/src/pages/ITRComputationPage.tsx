@@ -3,7 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAY } from '../contexts/AYContext';
 import { itrApi } from '../api/itr';
 import { clientsApi } from '../api/clients';
+import { itrAutomationApi } from '../api/itrAutomation';
+import type { AutomationJob } from '../api/itrAutomation';
 import { Spinner } from '../components/ui/Spinner';
+import StatusPill from '../components/StatusPill';
 import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
 import { CapitalGainsEntryManager } from '../components/CapitalGainsEntryManager';
@@ -11,6 +14,9 @@ import { BankInterestEntryManager } from '../components/BankInterestEntryManager
 import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
+import ImportConfirmationModal from '../components/ImportConfirmationModal';
+import type { ReconciledResults } from '../api/itrAutomation';
+import { mapReconciledToFormData } from '../utils/mapReconciledToFormData';
 
 import { 
   BusinessTab, 
@@ -32,6 +38,11 @@ export default function ITRComputationPage() {
   const [showImportMenu, setShowImportMenu] = useState(false);
   const [clientData, setClientData] = useState<any>(null);
   
+  // Automation job state
+  const [automationJobId, setAutomationJobId] = useState<number | null>(null);
+  const [showStatusBox, setShowStatusBox] = useState(false);
+  const [statusBoxJob, setStatusBoxJob] = useState<AutomationJob | null>(null);
+  
   // Part 2: Import document state
   const [importedAIS, setImportedAIS] = useState<any>(null);
   const [imported26AS, setImported26AS] = useState<any>(null);
@@ -40,6 +51,11 @@ export default function ITRComputationPage() {
   // Employer reconciliation state
   const [showReconciliationModal, setShowReconciliationModal] = useState(false);
   const [reconciliationResult, setReconciliationResult] = useState<any>(null);
+
+  // Import confirmation modal state
+  const [showImportConfirmModal, setShowImportConfirmModal] = useState(false);
+  const [reconciledImportData, setReconciledImportData] = useState<ReconciledResults | null>(null);
+  const [reconDiscrepancies, setReconDiscrepancies] = useState<string[]>([]);
   const [formData, setFormData] = useState<any>({
     // Personal Info - CBDT Mandatory Fields
     gender: 'M', fatherName: '', maritalStatus: 'SINGLE', nationality: 'INDIA', residentialStatus: 'ROR',
@@ -109,6 +125,7 @@ export default function ITRComputationPage() {
     employerEntries: [],
     capitalGainTransactions: [],
     bankInterestEntries: [],
+    interestEntries: [],
     donationEntries: [],
     // Tax Payments - Multi-entry structures
     tdsEntries: [],
@@ -293,11 +310,11 @@ export default function ITRComputationPage() {
         dataToSave.ltcgOtherPost = 0;
       }
       
-      // Clear legacy interest fields if using bank-wise
-      if (dataToSave.bankInterestEntries && dataToSave.bankInterestEntries.length > 0) {
-        dataToSave.interestSB = 0;
-        dataToSave.interestFD = 0;
-      }
+      // NOTE: Do NOT zero interestSB/interestFD when bankInterestEntries exist.
+      // tax.py reads interestSB, interestFD, interestRD, nscInterest,
+      // scssInterest, postOfficeInterest, otherInterest — NOT bankInterestEntries.
+      // Zeroing them makes all interest income invisible to the tax engine.
+      // bankInterestEntries are for display/reference only.
       
       // Clear legacy 80G field if using donation entries
       if (dataToSave.donationEntries && dataToSave.donationEntries.length > 0) {
@@ -324,6 +341,124 @@ export default function ITRComputationPage() {
     } catch (err: any) {
       toast.error(err.message || 'PDF download failed');
     }
+  };
+
+  // === ITD Portal Automation ===
+
+  const handleImportFromPortal = async () => {
+    if (!clientId || automationJobId) return;
+    setShowImportMenu(false);
+    setStatusBoxJob(null);
+
+    try {
+      const res = await itrAutomationApi.startImport(Number(clientId), ayParam || '2025-26');
+      setAutomationJobId(res.job_id);
+      setShowStatusBox(true);
+    } catch (err: any) {
+      toast.error(`Failed to start import: ${err.message}`);
+    }
+  };
+
+  // Called by StatusBox when the job completes — show import confirmation modal
+  const handleAutomationComplete = (job: AutomationJob) => {
+    setStatusBoxJob(job);
+    // If reconciled data is available, show the confirmation modal
+    if (job.parsed_results) {
+      setReconciledImportData(job.parsed_results);
+      setShowImportConfirmModal(true);
+    } else {
+      // No parsed data — raw error or extraction failed entirely
+      toast.error('Import completed but no data was extracted. Check extraction errors.');
+    }
+  };
+
+  const handleConfirmImport = () => {
+    // Map reconciled data to form fields using the existing formData shape
+    if (!reconciledImportData) {
+      toast.error('No import data available');
+      return;
+    }
+
+    const { formDataUpdate, discrepancies, summary } = mapReconciledToFormData(reconciledImportData);
+
+    setFormData((prev: any) => {
+      // For multi-entry arrays, ONLY overwrite if the incoming update has entries;
+      // otherwise preserve any existing entries the user may have manually added.
+      const safeUpdate = { ...formDataUpdate };
+      const EMPTY_KEEP_KEYS = ['employerEntries', 'dividendEntries', 'bankInterestEntries', 'interestEntries',
+        'capitalGainTransactions', 'tdsEntries'];
+      for (const key of EMPTY_KEEP_KEYS) {
+        if (Array.isArray(safeUpdate[key]) && safeUpdate[key].length === 0 && prev[key]?.length > 0) {
+          delete safeUpdate[key];
+        }
+      }
+      return { ...prev, ...safeUpdate };
+    });
+
+    // Collect discrepancy messages for the warning banner
+    const msgs: string[] = [];
+    if (discrepancies.length > 0) {
+      msgs.push(
+        `${discrepancies.length} discrepanc${discrepancies.length === 1 ? 'y' : 'ies'} found ` +
+        'between AIS, TIS, and 26AS. The higher amount has been used. ' +
+        'Review highlighted entries in Salary, Interest, Dividends, and Capital Gains tabs.'
+      );
+    }
+    if (reconciledImportData.summary.unmatched_tis > 0 ||
+        reconciledImportData.summary.unmatched_ais > 0 ||
+        reconciledImportData.summary.unmatched_as26 > 0) {
+      const parts = [];
+      if (reconciledImportData.summary.unmatched_tis) parts.push('TIS');
+      if (reconciledImportData.summary.unmatched_ais) parts.push('AIS');
+      if (reconciledImportData.summary.unmatched_as26) parts.push('26AS');
+      msgs.push(
+        `${reconciledImportData.summary.unmatched_tis + reconciledImportData.summary.unmatched_ais + reconciledImportData.summary.unmatched_as26} ` +
+        `entries from ${parts.join('/')} could not be matched and were skipped.`
+      );
+    }
+    setReconDiscrepancies(msgs);
+
+    toast.success(
+      `Import complete: ${summary.totalIncome.toLocaleString('en-IN')} total income, ` +
+      `${summary.salaryEntries} salary, ${(summary as any).businessEntries || 0} business, ` +
+      `${summary.interestEntries} interest, ` +
+      `${summary.dividendEntries} dividend, ${summary.capitalGainsEntries} capital gains entries`
+    );
+
+    // Save to backend so form state persists
+    itrApi.saveFormData(Number(clientId), year!, { ...formData, ...formDataUpdate })
+      .catch(err => console.warn('Background save after import failed:', err));
+
+    setShowImportConfirmModal(false);
+    setShowStatusBox(false);
+    setAutomationJobId(null);
+    setStatusBoxJob(null);
+    setReconciledImportData(null);
+  };
+
+  const handleCancelImport = () => {
+    // Discard job result client-side only
+    setShowImportConfirmModal(false);
+    setShowStatusBox(false);
+    setAutomationJobId(null);
+    setStatusBoxJob(null);
+    setReconciledImportData(null);
+  };
+
+  // Called by StatusPill when the job fails
+  const handleAutomationFailed = (job: AutomationJob) => {
+    const reason = job.error_message
+      ? job.error_message.split('\n')[0].slice(0, 150)
+      : 'Unknown error';
+    toast.error(`Import failed: ${reason}`);
+    setStatusBoxJob(job);
+  };
+
+  // Called by StatusPill dismiss (✕ button or auto-dismiss)
+  const handleDismissStatusBox = () => {
+    setShowStatusBox(false);
+    setAutomationJobId(null);
+    setStatusBoxJob(null);
   };
 
   const handleFileImport = async (type: string, file: File) => {
@@ -523,12 +658,16 @@ export default function ITRComputationPage() {
               bankInterestEntries: bankInterestEntriesFrom26AS.length > 0 ? bankInterestEntriesFrom26AS : [],
               
               // ===== MAP TO RESPECTIVE INCOME HEADS =====
+              // IMPORTANT: interestSB and interestFD must NOT both be set to
+              // interestIncome, because tax.py sums them (savings_bank = interestSB
+              // + postOfficeInterest, fixed_deposit = interestFD + interestRD + ...).
+              // Setting both to X gives 2X in GTI. Same for dividends vs dividendShares.
               grossRent: incomeBreakdown.housePropertyIncome || 0,
               ltcgProperty: incomeBreakdown.capitalGains || 0,
               bizTurnover: incomeBreakdown.businessIncome || 0,
               interestSB: incomeBreakdown.interestIncome || 0,
-              interestFD: incomeBreakdown.interestIncome || 0,
-              dividends: incomeBreakdown.dividendIncome || 0,
+              interestFD: 0,
+              dividendShares: incomeBreakdown.dividendIncome || 0,
               lotteryIncome: incomeBreakdown.lotteryIncome || 0,
               horseRaceIncome: incomeBreakdown.horseRaceIncome || 0,
               vdaGains: incomeBreakdown.vdaIncome || 0,
@@ -1026,7 +1165,7 @@ export default function ITRComputationPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 34 }}>
 
-          <div style={{ position: 'relative' }}>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               onClick={() => setShowImportMenu(!showImportMenu)}
               style={{
@@ -1041,6 +1180,26 @@ export default function ITRComputationPage() {
             >
               Import
             </button>
+            {/* Inline status pill — shows during portal automation, auto-dismisses on complete */}
+            {showStatusBox && automationJobId && (
+              <StatusPill
+                jobId={automationJobId}
+                onComplete={handleAutomationComplete}
+                onFailed={handleAutomationFailed}
+                onDismiss={handleDismissStatusBox}
+              />
+            )}
+
+            {/* Import Confirmation Modal — shown after job completes successfully */}
+            <ImportConfirmationModal
+              show={showImportConfirmModal}
+              results={reconciledImportData}
+              clientName={clientData?.name}
+              pan={clientData?.pan}
+              assessmentYear={ayParam}
+              onConfirm={handleConfirmImport}
+              onCancel={handleCancelImport}
+            />
             {showImportMenu && (
               <div style={{
                 position: 'absolute',
@@ -1054,11 +1213,25 @@ export default function ITRComputationPage() {
                 zIndex: 1000,
                 minWidth: 200
               }}>
+                <div
+                  onClick={handleImportFromPortal}
+                  style={{
+                    display: 'block',
+                    padding: '8px 12px',
+                    fontSize: 12,
+                    cursor: automationJobId ? 'not-allowed' : 'pointer',
+                    opacity: automationJobId ? 0.5 : 1,
+                    pointerEvents: automationJobId ? 'none' : 'auto',
+                  }}
+                >
+                  Import from Portal
+                </div>
                 <label style={{
                   display: 'block',
                   padding: '8px 12px',
                   fontSize: 12,
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  borderTop: '1px solid var(--border)'
                 }}>
                   <input
                     type="file"
@@ -1199,6 +1372,46 @@ export default function ITRComputationPage() {
           </button>
         </div>
       </div>
+
+
+
+      {/* Reconciliation Discrepancy Warning Banner */}
+      {reconDiscrepancies.length > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 8,
+          padding: '10px 14px',
+          marginBottom: 12,
+          background: '#fff8e1',
+          border: '1px solid #f9a825',
+          borderRadius: 8,
+          fontSize: 12,
+          color: '#5d4037',
+        }}>
+          <span style={{ fontSize: 16, flexShrink: 0 }}>⚠️</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+            {reconDiscrepancies.map((msg: string, i: number) => (
+              <span key={i}>{msg}</span>
+            ))}
+            <button
+              onClick={() => setReconDiscrepancies([])}
+              style={{
+                alignSelf: 'flex-start',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 11,
+                color: 'var(--text-secondary)',
+                textDecoration: 'underline',
+                padding: 0,
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{
         background: 'var(--navy)',
@@ -1393,14 +1606,15 @@ function Field({ label, value, onChange, computed, prefix = '₹', type = 'numbe
   const handleFocus = (e: any) => {
     setIsFocused(true);
     if (type === 'number') {
-      // Clear the field if it's 0 or empty
-      if (value === 0 || value === '') {
+      // Clear the field if it's 0, null, undefined, or empty
+      if (value == null || value === 0 || value === '') {
         setDisplayValue('');
         e.target.value = '';
       } else {
         // Show raw number without commas for editing
-        setDisplayValue(value.toString());
-        e.target.value = value.toString();
+        const str = String(value);
+        setDisplayValue(str);
+        e.target.value = str;
       }
     }
   };
@@ -1417,16 +1631,16 @@ function Field({ label, value, onChange, computed, prefix = '₹', type = 'numbe
     if (computed) return;
     
     if (type === 'number') {
-      const rawValue = parseIndianNumber(e.target.value);
+      const rawValue = parseIndianNumber(e.target.value ?? '');
       // Only allow integers, no decimals
       const numValue = rawValue === '' ? 0 : Math.round(Number(rawValue));
       
       if (!isNaN(numValue)) {
-        setDisplayValue(e.target.value);
+        setDisplayValue(e.target.value ?? '');
         onChange(numValue);
       }
     } else {
-      setDisplayValue(e.target.value);
+      setDisplayValue(e.target.value ?? '');
       onChange(e.target.value);
     }
   };

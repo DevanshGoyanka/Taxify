@@ -7,7 +7,7 @@ from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import User, Client, ClientITR
 from app.schemas.clients import ClientCreate, ClientUpdate, ClientResponse, ClientYearResponse
-from app.security.portal_crypto import encrypt_portal_password, decrypt_portal_password
+from app.schemas.security.portal_crypto import encrypt_portal_password, decrypt_portal_password
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
