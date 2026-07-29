@@ -8,6 +8,7 @@ import { FamilyPensionManager } from '../components/familyPension/FamilyPensionM
 import { GiftPropertyManager } from '../components/gifts/GiftPropertyManager';
 import { Section80DManager, type Section80DData } from '../components/Section80DManager';
 import { DeductionLoanManager, type DeductionLoanData } from '../components/DeductionLoanManager';
+import { Section80CManager, type Section80CData } from '../components/Section80CManager';
 
 export function BusinessTab({ formData, setFormData, taxResult }: any) {
   return (
@@ -341,16 +342,10 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
         Deductions under Chapter VI-A (CBDT Schedule VIA)
       </h3>
       <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>Section 80C (Max 1.5L)</h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="EPF" value={formData.s80C_epf} onChange={(v: any) => setFormData({ ...formData, s80C_epf: v })} />
-        <Field label="PPF" value={formData.s80C_ppf} onChange={(v: any) => setFormData({ ...formData, s80C_ppf: v })} />
-        <Field label="PPF Account No" value={formData.s80C_ppfAccNo || ''} onChange={(v: any) => setFormData({ ...formData, s80C_ppfAccNo: v })} type="text" prefix="" />
-        <Field label="ELSS" value={formData.s80C_elss} onChange={(v: any) => setFormData({ ...formData, s80C_elss: v })} />
-        <Field label="LIC Premium" value={formData.s80C_lic} onChange={(v: any) => setFormData({ ...formData, s80C_lic: v })} />
-        <Field label="LIC Policy No" value={formData.s80C_licPolicyNo || ''} onChange={(v: any) => setFormData({ ...formData, s80C_licPolicyNo: v })} type="text" prefix="" />
-        <Field label="Home Loan Principal" value={formData.s80C_home} onChange={(v: any) => setFormData({ ...formData, s80C_home: v })} />
-        <Field label="Lender Name" value={formData.s80C_homeLenderName || ''} onChange={(v: any) => setFormData({ ...formData, s80C_homeLenderName: v })} type="text" prefix="" />
-      </div>
+      <Section80CManager
+        data={formData.section80C || { investments: [] }}
+        onChange={(d) => setFormData({ ...formData, section80C: d })}
+      />
 
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>NPS</h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
@@ -753,16 +748,84 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
           </div>
         </div>
       ))}
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginTop: 32, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Advance Tax Payments
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="15-Jun" value={formData.adv15Jun || 0} onChange={(v: any) => setFormData({ ...formData, adv15Jun: v })} />
-        <Field label="15-Sep" value={formData.adv15Sep || 0} onChange={(v: any) => setFormData({ ...formData, adv15Sep: v })} />
-        <Field label="15-Dec" value={formData.adv15Dec || 0} onChange={(v: any) => setFormData({ ...formData, adv15Dec: v })} />
-        <Field label="15-Mar" value={formData.adv15Mar || 0} onChange={(v: any) => setFormData({ ...formData, adv15Mar: v })} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, marginBottom: 16 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>
+          Advance Tax Payments (CBDT Compliant — Per-Challan)
+        </h3>
+        <button
+          onClick={() => {
+            const entries = formData.advanceTaxEntries || [];
+            setFormData({ ...formData, advanceTaxEntries: [...entries, { bsrCode: '', depositDate: '', challanSerialNo: 0, amount: 0 }] });
+          }}
+          style={{
+            padding: '6px 12px',
+            background: 'var(--gold)',
+            color: 'white',
+            border: 'none',
+            borderRadius: 6,
+            fontSize: 12,
+            cursor: 'pointer'
+          }}
+        >
+          + Add Advance Tax
+        </button>
       </div>
+      {(formData.advanceTaxEntries || []).length === 0 && (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 6, marginBottom: 24 }}>
+          No advance tax entries. Click "+ Add Advance Tax" to add per-challan payments with BSR code, date, and challan serial number.
+        </div>
+      )}
+      {(formData.advanceTaxEntries || []).map((entry: any, index: number) => (
+        <div key={index} style={{ marginBottom: 16, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h4 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+              Advance Tax #{index + 1}
+            </h4>
+            <button
+              onClick={() => {
+                const updated = [...(formData.advanceTaxEntries || [])];
+                updated.splice(index, 1);
+                setFormData({ ...formData, advanceTaxEntries: updated });
+              }}
+              style={{ background: 'var(--danger)', color: 'white', border: 'none', width: 24, height: 24, borderRadius: '50%', cursor: 'pointer', fontSize: 14 }}
+            >×</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>BSR Code *</label>
+              <input type="text" value={entry.bsrCode || ''} onChange={(e) => {
+                const updated = [...(formData.advanceTaxEntries || [])];
+                updated[index] = { ...updated[index], bsrCode: e.target.value };
+                setFormData({ ...formData, advanceTaxEntries: updated });
+              }} placeholder="7-digit" maxLength={7} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Deposit Date *</label>
+              <input type="date" value={entry.depositDate || ''} onChange={(e) => {
+                const updated = [...(formData.advanceTaxEntries || [])];
+                updated[index] = { ...updated[index], depositDate: e.target.value };
+                setFormData({ ...formData, advanceTaxEntries: updated });
+              }} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Challan Serial No. *</label>
+              <input type="number" value={entry.challanSerialNo || ''} onChange={(e) => {
+                const updated = [...(formData.advanceTaxEntries || [])];
+                updated[index] = { ...updated[index], challanSerialNo: parseInt(e.target.value) || 0 };
+                setFormData({ ...formData, advanceTaxEntries: updated });
+              }} placeholder="0" min={0} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Amount (₹) *</label>
+              <input type="number" value={entry.amount || ''} onChange={(e) => {
+                const updated = [...(formData.advanceTaxEntries || [])];
+                updated[index] = { ...updated[index], amount: parseFloat(e.target.value) || 0 };
+                setFormData({ ...formData, advanceTaxEntries: updated });
+              }} placeholder="0" min={0} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontWeight: 600 }} />
+            </div>
+          </div>
+        </div>
+      ))}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>
@@ -937,7 +1000,7 @@ export function TaxComputationTab({ taxResult, regime, itrForm }: any) {
           </tr>
           <tr>
             <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Advance Tax Paid</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR((taxResult.adv15Jun || 0) + (taxResult.adv15Sep || 0) + (taxResult.adv15Dec || 0) + (taxResult.adv15Mar || 0))})</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR((taxResult.advanceTaxEntries || []).reduce((sum: number, e: any) => sum + (e.amount || 0), 0) || (taxResult.adv15Jun || 0) + (taxResult.adv15Sep || 0) + (taxResult.adv15Dec || 0) + (taxResult.adv15Mar || 0))})</td>
           </tr>
           <tr>
             <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Self Assessment Tax ({(taxResult.selfAssessmentTaxEntries || []).length} entries)</td>
