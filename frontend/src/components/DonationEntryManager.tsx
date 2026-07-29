@@ -126,7 +126,8 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
       t.totalCash += e.donationAmtCash;
       t.totalOtherMode += e.donationAmtOtherMode;
       t.totalDonation += e.donationAmtCash + e.donationAmtOtherMode;
-      t.totalEligible += (e.donationAmtCash + e.donationAmtOtherMode) * CATEGORY_INFO[e.category].eligiblePct / 100;
+      const eligibleCash = Math.min(e.donationAmtCash, 2000);
+      t.totalEligible += Math.round((eligibleCash + e.donationAmtOtherMode) * CATEGORY_INFO[e.category].eligiblePct / 100);
     }
     return map;
   }, [entries]);
@@ -209,7 +210,8 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
         const isExpanded = expandedId === entry.id;
         const ci = CATEGORY_INFO[entry.category];
         const totalAmt = entry.donationAmtCash + entry.donationAmtOtherMode;
-        const eligibleAmt = Math.round(totalAmt * ci.eligiblePct / 100);
+        const eligibleCash = Math.min(entry.donationAmtCash, 2000);
+        const eligibleAmt = Math.round((eligibleCash + entry.donationAmtOtherMode) * ci.eligiblePct / 100);
 
         return (
           <div key={entry.id} style={{
