@@ -53,11 +53,15 @@ def compute_all(
     is_parents_senior: bool = False,
     is_80dd_severe: bool = False,
     is_80u_severe: bool = False,
+    hra_exempt_amount: Decimal = Decimal("0"),
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
     ``cg_112a_income`` and ``cg_111a_income`` are the taxable portions of those CG
     categories.  They are excluded from adjusted GTI for 80G/80GG per CBDT rules.
+
+    ``hra_exempt_amount`` is used to determine 80GG eligibility (80GG is not
+    available when HRA exemption is claimed under s.10(13A)).
     """
     if not ded or gti <= 0:
         return DeductionResult()
@@ -149,7 +153,7 @@ def compute_all(
     r_80g = section_80g.compute(ded, adjusted_gti, regime)
     _add("80G", r_80g)
 
-    r_80gg = section_80gg.compute(ded, adjusted_gti, regime)
+    r_80gg = section_80gg.compute(ded, adjusted_gti, regime, hra_exempt_amount=hra_exempt_amount)
     _add("80GG", r_80gg)
 
     r_80gga = section_80gga.compute(ded, regime)

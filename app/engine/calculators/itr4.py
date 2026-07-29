@@ -265,12 +265,33 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         if ded_input.schedule_80u and "severe" in ded_input.schedule_80u.disability_type.lower():
             is_80u_severe = True
 
+    # ── Statutory validation warnings ──
+    if ded_input:
+        if ded_input.amount_80ttb > 0 and age not in (AgeBracket.SIXTY_TO_80, AgeBracket.ABOVE_80):
+            result.warnings.append(
+                "80TTB is only available for senior citizens (age >= 60). "
+                "Deduction set to Rs 0."
+            )
+        if ded_input.amount_80tta > 0 and ded_input.amount_80ttb > 0:
+            result.warnings.append(
+                "80TTA and 80TTB are mutually exclusive. "
+                "80TTA applies to non-seniors; 80TTB applies to seniors."
+            )
+        if ded_input.amount_80gg > 0:
+            sal_inp = input_data.salary_income
+            if sal_inp and getattr(sal_inp, 'hra_exempt_amount', Decimal("0")) > 0:
+                result.warnings.append(
+                    "80GG deduction is not available when HRA exemption is claimed. "
+                    "Deduction may be disallowed."
+                )
+
     ded = compute_deductions(
         input_data.deductions_chapter6a, gti, age, regime, input_data.other_sources_income,
         cg_112a_income=cg_112a_income,
         is_parents_senior=is_parents_senior,
         is_80dd_severe=is_80dd_severe,
         is_80u_severe=is_80u_severe,
+        hra_exempt_amount=getattr(input_data.salary_income, 'hra_exempt_amount', Decimal("0")) if input_data.salary_income else Decimal("0"),
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total

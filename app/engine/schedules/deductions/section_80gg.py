@@ -28,8 +28,18 @@ from app.schemas.itr1 import Chapter6ADeductions, TaxRegime
 from app.engine.constants import SECTION_80GG_RENT_LIMIT, SECTION_80GG_GTI_PERCENT
 
 
-def compute(ded: Optional[Chapter6ADeductions], adjusted_gti: Decimal, regime: TaxRegime) -> Decimal:
+def compute(
+    ded: Optional[Chapter6ADeductions],
+    adjusted_gti: Decimal,
+    regime: TaxRegime,
+    *,
+    hra_exempt_amount: Decimal = Decimal("0"),
+) -> Decimal:
     if not ded or regime == TaxRegime.NEW:
+        return Decimal("0")
+
+    # Section 80GG is NOT available if HRA is claimed (s.10(13A))
+    if hra_exempt_amount > 0:
         return Decimal("0")
 
     rent_paid = ded.amount_80gg
