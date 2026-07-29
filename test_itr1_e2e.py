@@ -273,7 +273,12 @@ def main() -> None:
     tds_salary = Decimal(ask("Total TDS on salary (₹)", "120000", "decimal")) if has_tds_sal else Decimal("0")
 
     has_tds_oth = ask("Has TDS on other income? (y/n)", "n") == "y"
-    tds_other = Decimal(ask("Total TDS on other income (₹)", "0", "decimal")) if has_tds_oth else Decimal("0")
+    if has_tds_oth:
+        tds_other = Decimal(ask("Total TDS deducted on other income (₹)", "0", "decimal"))
+        tds_other_gross = Decimal(ask("Gross amount on which TDS was deducted (₹)", "0", "decimal"))
+    else:
+        tds_other = Decimal("0")
+        tds_other_gross = Decimal("0")
 
     tcs_total = Decimal(ask("Total TCS collected (₹)", "0", "decimal"))
 
@@ -378,7 +383,7 @@ def main() -> None:
     tds2 = [TDS2Entry(
         deductor_tan="DELA00001B",
         tds_section="194A",
-        gross_amount=tds_other * 10 if tds_other > 0 else Decimal("0"),
+        gross_amount=tds_other_gross,
         tds_deducted=tds_other,
     )] if has_tds_oth and tds_other > 0 else None
 
@@ -452,14 +457,44 @@ def main() -> None:
         row("Net Agricultural Income", agri, "(for rate purposes)")
 
     print(f"\n  {BOLD}DEDUCTIONS{RESET}")
-    row("Chapter VI-A Total", result.deductions_total)
+    # Show per-section breakdown from the engine's DeductionResult.breakdown dict
+    ded_sched = result.schedules.get("deductions") if result.schedules else None
+    breakdown = getattr(ded_sched, "breakdown", {}) if ded_sched else {}
+    section_labels = [
+        ("80C+80CCC+80CCD(1)", "80C+80CCC+80CCD(1) pool (max ₹1,50,000 u/s 80CCE)"),
+        ("80CCC",       "  ↳ 80CCC (annuity, within above pool)"),
+        ("80CCD(1)",    "  ↳ 80CCD(1) (NPS employee, within above pool)"),
+        ("80CCD(1B)",   "80CCD(1B) — Additional NPS (max ₹50,000)"),
+        ("80CCD(2)",    "80CCD(2) — Employer NPS"),
+        ("80D",         "80D — Health Insurance (max ₹1,00,000)"),
+        ("80DD",        "80DD — Disabled Dependent"),
+        ("80DDB",       "80DDB — Specified Disease"),
+        ("80U",         "80U — Self Disability"),
+        ("80TTA",       "80TTA — Savings Interest (max ₹10,000)"),
+        ("80TTB",       "80TTB — Sr Citizen Deposit Interest"),
+        ("80E",         "80E — Education Loan Interest"),
+        ("80EE",        "80EE — First-time Home Loan (max ₹50,000)"),
+        ("80EEA",       "80EEA — Affordable Housing Loan (max ₹1,50,000)"),
+        ("80EEB",       "80EEB — Electric Vehicle Loan (max ₹1,50,000)"),
+        ("80G",         "80G — Donations"),
+        ("80GG",        "80GG — Rent Paid (no HRA, max ₹60,000)"),
+        ("80GGA",       "80GGA — Scientific Research/Rural Dev"),
+        ("80GGC",       "80GGC — Political Contributions"),
+        ("80CCH",       "80CCH — Agniveer Corpus Fund"),
+    ]
+    for key, label in section_labels:
+        amt = breakdown.get(key, Decimal("0"))
+        if amt > 0 or key in ("80C+80CCC+80CCD(1)", "80GGA"):
+            mark = "✓" if amt > 0 else "—"
+            row(f"  {mark} {label}", amt)
+    row(f"{BOLD}Chapter VI-A Total{RESET}", result.deductions_total)
     row(f"{BOLD}TAXABLE INCOME (r/o 10){RESET}", result.taxable_income, f"{BOLD}⟸ s.288A{RESET}")
 
     print(f"\n  {BOLD}TAX COMPUTATION{RESET}")
     row("Slab Tax", result.slab_tax)
     row("Special Rate Tax (112A @12.5%)", result.special_rate_tax)
     row(f"{BOLD}TAX BEFORE REBATE{RESET}", result.tax_before_rebate)
-    row(f"  Less: Rebate u/s 87A", -result.rebate_87a)
+    row(f"  Less: Rebate u/s 87A", result.rebate_87a)
     row(f"{BOLD}TAX AFTER REBATE{RESET}", result.tax_after_rebate)
     row(f"  Add: Surcharge", result.surcharge)
     row(f"  Add: HEC @ 4%", result.health_education_cess)
@@ -505,7 +540,7 @@ def main() -> None:
     tds_oth_js = [{
         "TAN": "DELA00001B",
         "TDSSection": "194A",
-        "AmtForTaxDeduct": int(tds_other * 10) if tds_other > 0 else 0,
+        "AmtForTaxDeduct": int(tds_other_gross),
         "DeductedYr": "2025",
         "TotTDSOnAmtPaid": int(tds_other),
         "ClaimOutOfTotTDSOnAmtPaid": int(tds_other),

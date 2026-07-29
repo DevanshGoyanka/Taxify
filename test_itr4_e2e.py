@@ -28,6 +28,13 @@ if PROJECT_ROOT not in sys.path:
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
+from app.engine.constants import (
+    PRESUMPTIVE_44AD_DIGITAL, PRESUMPTIVE_44AD_CASH, PRESUMPTIVE_44ADA_RATE,
+    PRESUMPTIVE_44AE_PER_VEHICLE_OWNER,
+)
+# 44AE heavy: ₹1,000 per ton per month — defined inline in the schedule, not yet a constant
+PRESUMPTIVE_44AE_HEAVY_PER_TON = Decimal("1000")
+
 # ── terminal formatting ─────────────────────────────────────────────────────
 CYAN = "\033[96m"
 GREEN = "\033[92m"
@@ -197,8 +204,8 @@ def main() -> None:
         bp_digital_turnover = Decimal(ask("  ↳ Received via digital modes (₹)", "2000000", "decimal"))
         bp_cash_turnover = Decimal(ask("  ↳ Received as cash (₹)", "500000", "decimal"))
         bp_other = Decimal("0")
-        statutory_44ad = bp_digital_turnover * Decimal("0.06") + bp_cash_turnover * Decimal("0.08")
-        print(f"      → Statutory presumptive (6% digital + 8% cash): ₹{statutory_44ad:,.0f}")
+        statutory_44ad = bp_digital_turnover * PRESUMPTIVE_44AD_DIGITAL + bp_cash_turnover * PRESUMPTIVE_44AD_CASH
+        print(f"      → Statutory presumptive ({int(PRESUMPTIVE_44AD_DIGITAL*100)}% digital + {int(PRESUMPTIVE_44AD_CASH*100)}% cash): ₹{statutory_44ad:,.0f}")
         print(f"      {YELLOW}Declared income must be ≥ ₹{statutory_44ad:,.0f} to override (Section 44AD floor).{RESET}")
         declared_44ad = ask("Declare income ABOVE statutory floor? (y/n)", "n")
         if declared_44ad == "y":
@@ -221,8 +228,8 @@ def main() -> None:
         gross_receipts = Decimal(ask("Gross Receipts (₹, max ₹75L)", "5000000", "decimal"))
         digital_receipts = Decimal(ask("  ↳ Received via digital modes (₹)", "4000000", "decimal"))
         cash_receipts = Decimal(ask("  ↳ Received as cash (₹)", "1000000", "decimal"))
-        statutory_44ada = gross_receipts * Decimal("0.50")
-        print(f"      → Statutory presumptive (50% of gross): ₹{statutory_44ada:,.0f}")
+        statutory_44ada = gross_receipts * PRESUMPTIVE_44ADA_RATE
+        print(f"      → Statutory presumptive ({int(PRESUMPTIVE_44ADA_RATE*100)}% of gross): ₹{statutory_44ada:,.0f}")
         print(f"      {YELLOW}Declared income must be ≥ ₹{statutory_44ada:,.0f} to override (Section 44ADA floor).{RESET}")
         declared_44ada = ask("Declare income ABOVE 50% floor? (y/n)", "n")
         if declared_44ada == "y":
@@ -251,13 +258,13 @@ def main() -> None:
             if is_heavy:
                 gvw = Decimal(ask("      Gross Vehicle Weight (tons)", "16.2", "decimal"))
                 months = int(ask("      Months owned in PY (1-12)", "12", "int"))
-                statutory = Decimal("1000") * gvw * months
-                print(f"      → Statutory presumptive: ₹1,000 × {gvw}T × {months}m = ₹{statutory:,.0f}")
+                statutory = PRESUMPTIVE_44AE_HEAVY_PER_TON * gvw * months
+                print(f"      → Statutory presumptive: ₹{PRESUMPTIVE_44AE_HEAVY_PER_TON:,.0f} × {gvw}T × {months}m = ₹{statutory:,.0f}")
             else:
                 gvw = None
                 months = int(ask("      Months owned in PY (1-12)", "12", "int"))
-                statutory = Decimal("7500") * months
-                print(f"      → Statutory presumptive: ₹7,500 × {months}m = ₹{statutory:,.0f}")
+                statutory = PRESUMPTIVE_44AE_PER_VEHICLE_OWNER * months
+                print(f"      → Statutory presumptive: ₹{PRESUMPTIVE_44AE_PER_VEHICLE_OWNER:,.0f} × {months}m = ₹{statutory:,.0f}")
             print(f"      {YELLOW}Declared income must be ≥ ₹{statutory:,.0f} to override (Section 44AE floor).{RESET}")
             declared = ask("      Declare income ABOVE statutory floor? (y/n)", "n")
             if declared == "y":
@@ -402,7 +409,12 @@ def main() -> None:
     tds_salary = Decimal(ask("Total TDS on salary (₹)", "30000", "decimal")) if has_tds_sal else Decimal("0")
 
     has_tds_oth = ask("Has TDS on other income? (y/n)", "n") == "y"
-    tds_other = Decimal(ask("Total TDS on other income (₹)", "0", "decimal")) if has_tds_oth else Decimal("0")
+    if has_tds_oth:
+        tds_other = Decimal(ask("Total TDS deducted on other income (₹)", "0", "decimal"))
+        tds_other_gross = Decimal(ask("Gross amount on which TDS was deducted (₹)", "0", "decimal"))
+    else:
+        tds_other = Decimal("0")
+        tds_other_gross = Decimal("0")
 
     tcs_total = Decimal(ask("Total TCS collected (₹)", "0", "decimal"))
 
@@ -550,7 +562,7 @@ def main() -> None:
     tds2 = [TDS2Entry(
         deductor_tan="DELA00001B",
         tds_section="194A",
-        gross_amount=tds_other * 10 if tds_other > 0 else Decimal("0"),
+        gross_amount=tds_other_gross,
         tds_deducted=tds_other,
     )] if has_tds_oth and tds_other > 0 else None
 
@@ -627,14 +639,44 @@ def main() -> None:
     row(f"{BOLD}GROSS TOTAL INCOME{RESET}", result.gross_total_income, f"{BOLD}←{RESET}")
 
     print(f"\n  {BOLD}DEDUCTIONS{RESET}")
-    row("Chapter VI-A Total", result.deductions_total)
+    # Show per-section breakdown from the engine's DeductionResult.breakdown dict
+    ded_sched = result.schedules.get("deductions") if result.schedules else None
+    breakdown = getattr(ded_sched, "breakdown", {}) if ded_sched else {}
+    section_labels = [
+        ("80C+80CCC+80CCD(1)", "80C+80CCC+80CCD(1) pool (max ₹1,50,000 u/s 80CCE)"),
+        ("80CCC",       "  ↳ 80CCC (annuity, within above pool)"),
+        ("80CCD(1)",    "  ↳ 80CCD(1) (NPS employee, within above pool)"),
+        ("80CCD(1B)",   "80CCD(1B) — Additional NPS (max ₹50,000)"),
+        ("80CCD(2)",    "80CCD(2) — Employer NPS"),
+        ("80D",         "80D — Health Insurance (max ₹1,00,000)"),
+        ("80DD",        "80DD — Disabled Dependent"),
+        ("80DDB",       "80DDB — Specified Disease"),
+        ("80U",         "80U — Self Disability"),
+        ("80TTA",       "80TTA — Savings Interest (max ₹10,000)"),
+        ("80TTB",       "80TTB — Sr Citizen Deposit Interest"),
+        ("80E",         "80E — Education Loan Interest"),
+        ("80EE",        "80EE — First-time Home Loan (max ₹50,000)"),
+        ("80EEA",       "80EEA — Affordable Housing Loan (max ₹1,50,000)"),
+        ("80EEB",       "80EEB — Electric Vehicle Loan (max ₹1,50,000)"),
+        ("80G",         "80G — Donations"),
+        ("80GG",        "80GG — Rent Paid (no HRA, max ₹60,000)"),
+        ("80GGA",       "80GGA — Scientific Research/Rural Dev (ITR-1 only)"),
+        ("80GGC",       "80GGC — Political Contributions"),
+        ("80CCH",       "80CCH — Agniveer Corpus Fund"),
+    ]
+    for key, label in section_labels:
+        amt = breakdown.get(key, Decimal("0"))
+        if amt > 0 or key in ("80C+80CCC+80CCD(1)", "80GGA"):
+            mark = "✓" if amt > 0 else "—"
+            row(f"  {mark} {label}", amt)
+    row(f"{BOLD}Chapter VI-A Total{RESET}", result.deductions_total)
     row(f"{BOLD}TAXABLE INCOME{RESET}", result.taxable_income, f"{BOLD}← s.288A{RESET}")
 
     print(f"\n  {BOLD}TAX COMPUTATION{RESET}")
     row("Slab Tax", result.slab_tax)
     row("Special Rate Tax (112A @12.5%)", result.special_rate_tax)
     row(f"{BOLD}TAX BEFORE REBATE{RESET}", result.tax_before_rebate)
-    row(f"  Less: Rebate u/s 87A", -result.rebate_87a)
+    row(f"  Less: Rebate u/s 87A", result.rebate_87a)
     row(f"{BOLD}TAX AFTER REBATE{RESET}", result.tax_after_rebate)
     row(f"  Add: Surcharge", result.surcharge)
     row(f"  Add: HEC @ 4%", result.health_education_cess)
@@ -678,7 +720,7 @@ def main() -> None:
     tds_oth_js = [{
         "TAN": "DELA00001B",
         "TDSSection": "194A",
-        "AmtForTaxDeduct": int(tds_other * 10) if tds_other > 0 else 0,
+        "AmtForTaxDeduct": int(tds_other_gross),
         "DeductedYr": "2025",
         "TotTDSOnAmtPaid": int(tds_other),
         "ClaimOutOfTotTDSOnAmtPaid": int(tds_other),
@@ -759,22 +801,29 @@ def main() -> None:
         ("PersonalInfo.Status", "PersonalInfo"),  # ITR-4 specific
         ("FilingStatus.ReturnFileSec", "FilingStatus"),
         ("FilingStatus.ItrFilingDueDate", "FilingStatus"),
-        ("IncomeDeductions.PresumtiveIncome", "IncomeDeductions"),  # ITR-4 specific
+        ("IncomeDeductions.IncomeFromBusinessProf", "IncomeDeductions"),  # ITR-4 specific
         ("IncomeDeductions.GrossTotIncome", "IncomeDeductions"),
         ("IncomeDeductions.TotalIncome", "IncomeDeductions"),
         ("TaxComputation.TotalTaxPayable", "TaxComputation"),
         ("Refund.BankAccountDtls", "Refund"),
         ("Verification.Declaration", "Verification"),
-        ("ScheduleBP.GrossTurnOrRecpt", "ScheduleBP"),  # ITR-4 specific
-        ("ScheduleIT.ScheduleITDetails", "ScheduleIT"),  # ITR-4 specific
+        ("ScheduleBP.PersumptiveInc44ADA", "ScheduleBP"),  # ITR-4 specific
+        ("ScheduleIT.TaxPayment", "ScheduleIT"),  # ITR-4 specific
     ]
     all_ok = True
     for field, section in checks:
-        val = itr4_body.get(section, {}).get(field.split(".")[1], "MISSING")
+        parts = field.split(".")
+        if len(parts) == 3:
+            # Nested: section.subsection.field
+            val = itr4_body.get(section, {}).get(parts[1], {}).get(parts[2], "MISSING") if itr4_body.get(section) else "MISSING"
+            display = f"{parts[1]}.{parts[2]}"
+        else:
+            val = itr4_body.get(section, {}).get(parts[1], "MISSING")
+            display = parts[1]
         status = "✓" if val != "MISSING" else "✗"
         if val == "MISSING":
             all_ok = False
-        print(f"    [{status}] {field}")
+        print(f"    [{status}] {section}.{display}")
 
     header(f"{'ALL CHECKS PASSED' if all_ok else 'ISSUES FOUND — REVIEW ABOVE'}")
     print(f"\n  You can now validate {os.path.basename(out_file)} on the ITD UAT portal.\n")
