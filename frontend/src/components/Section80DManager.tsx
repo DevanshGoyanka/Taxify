@@ -1,36 +1,35 @@
 // Section 80D Health Insurance Manager — CBDT AY 2026-27 COMPLIANT
-// Mirrors the official Schedule80D JSON schema with 4 policy categories:
-//   1. Self & Family (non-senior)              → Sec80DSelfFamHIDtls
-//   2. Self & Family (senior citizen)          → Sec80DSelfFamSrCtznHIDtls
-//   3. Parents (non-senior)                    → Sec80DParentsHIDtls
-//   4. Parents (senior citizen)                → Sec80DParentsSrCtznHIDtls
+// Mirrors official Schedule80D JSON schema with 4 policy categories:
+//   1. Self & Family (non-senior)       → Sec80DSelfFamHIDtls
+//   2. Self & Family (senior citizen)    → Sec80DSelfFamSrCtznHIDtls
+//   3. Parents (non-senior)             → Sec80DParentsHIDtls
+//   4. Parents (senior citizen)          → Sec80DParentsSrCtznHIDtls
 //
 // Each category collects Sch80DInsDtls[] (InsurerName, PolicyNo, HealthInsAmt)
 // plus preventive health checkup and medical expense for non-insured seniors.
+// UI style matches DonationEntryManager: collapsible cards with category badges.
 
 import React, { useState, useMemo } from 'react';
 
 // ---- Per-policy entry (maps to Sch80DInsDtls) ----
 interface Policy80D {
   id: string;
-  insurerName: string;    // max 125
-  policyNo: string;       // max 75
-  premiumAmount: number;  // → HealthInsAmt
+  insurerName: string;    // → InsurerName (max 125, required)
+  policyNo: string;       // → PolicyNo (max 75, required)
+  premiumAmount: number;  // → HealthInsAmt (required)
 }
 
 // ---- One 80D "category" (self non-sr, self sr, parents non-sr, parents sr) ----
 interface Category80D {
   policies: Policy80D[];
   preventiveCheckup: number;     // max 5000
-  medicalExpense: number;        // for non-insured seniors (not capped)
+  medicalExpense: number;        // for non-insured seniors
 }
 
 // ---- Top-level 80D form data ----
 export interface Section80DData {
-  // Senior citizen flags
-  selfSeniorCitizen: 'Y' | 'N' | 'S';     // Y=senior self, N=non-senior, S=not claiming
-  parentsSeniorCitizen: 'Y' | 'N' | 'P';  // Y=senior parents, N=non-senior, P=not claiming
-  // 4 categories
+  selfSeniorCitizen: 'Y' | 'N' | 'S';
+  parentsSeniorCitizen: 'Y' | 'N' | 'P';
   selfFamily: Category80D;
   selfFamilySenior: Category80D;
   parents: Category80D;
@@ -58,203 +57,109 @@ function sumPremiums(policies: Policy80D[]): number {
   return policies.reduce((s, p) => s + p.premiumAmount, 0);
 }
 
-export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onChange }) => {
+// Category metadata
+type CatKey = 'selfFamily' | 'selfFamilySenior' | 'parents' | 'parentsSenior';
+interface CatMeta { key: CatKey; label: string; shortLabel: string; color: string; cap: number; }
 
-  // Update a specific category
-  const updateCategory = (catKey: keyof Section80DData, updater: (cat: Category80D) => Category80D) => {
-    if (catKey === 'selfSeniorCitizen' || catKey === 'parentsSeniorCitizen') return;
+const CATS: CatMeta[] = [
+  { key: 'selfFamily', label: 'Self & Family (Non-Senior)', shortLabel: 'Self/Fam', color: '#1565c0', cap: CAP_SELF_FAMILY },
+  { key: 'selfFamilySenior', label: 'Self & Family (Senior Citizen)', shortLabel: 'Self/Sr', color: '#2e7d32', cap: CAP_SELF_FAMILY_SR },
+  { key: 'parents', label: 'Parents (Non-Senior)', shortLabel: 'Parents', color: '#ef6c00', cap: CAP_PARENTS },
+  { key: 'parentsSenior', label: 'Parents (Senior Citizen)', shortLabel: 'Parents/Sr', color: '#6a1b9a', cap: CAP_PARENTS_SR },
+];
+
+// ---- Shared styles ----
+const labelStyle: React.CSSProperties = {
+  display: 'block', marginBottom: 3, fontSize: 11, fontWeight: 600, color: '#555',
+};
+const inputStyle: React.CSSProperties = {
+  width: '100%', padding: '6px 8px', border: '1px solid #ddd', borderRadius: 4,
+  fontSize: 12, boxSizing: 'border-box',
+};
+
+export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onChange }) => {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const updateCategory = (catKey: CatKey, updater: (cat: Category80D) => Category80D) => {
     onChange({ ...data, [catKey]: updater(data[catKey] as Category80D) });
   };
 
-  // ---- Category summary per policy display card ----
-  const CategoryCard = ({
-    title, color, catKey, cap, srFlag, isVisible,
-  }: {
-    title: string; color: string; catKey: 'selfFamily' | 'selfFamilySenior' | 'parents' | 'parentsSenior';
-    cap: number; srFlag: 'Y' | 'N' | 'S' | 'P'; isVisible: boolean;
-  }) => {
-    if (!isVisible) return null;
-    const cat = data[catKey] as Category80D;
-    const premiumTotal = sumPremiums(cat.policies);
-    const eligible = Math.min(premiumTotal, cap);
-    const totalClaim = eligible + Math.min(cat.preventiveCheckup, CAP_PREVENTIVE) + Math.min(cat.medicalExpense, cap - eligible);
-
-    return (
-      <div style={{ marginBottom: 16, background: 'white', borderRadius: 8, border: `1px solid ${color}30`, borderLeft: `4px solid ${color}`, overflow: 'hidden' }}>
-        {/* Card header */}
-        <div style={{ padding: '10px 14px', background: `${color}08`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <span style={{ fontWeight: 600, fontSize: 13, color }}>{title}</span>
-            <span style={{ fontSize: 10, color: '#888', marginLeft: 8 }}>Cap: ₹{cap.toLocaleString('en-IN')}</span>
-          </div>
-        </div>
-
-        <div style={{ padding: '12px 14px' }}>
-          {/* Policy table */}
-          {cat.policies.length === 0 ? (
-            <div style={{ fontSize: 12, color: '#999', padding: '8px 0', textAlign: 'center' }}>
-              No policies added. Click + to add health insurance policies.
-            </div>
-          ) : (
-            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', marginBottom: 10 }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #eee' }}>
-                  <th style={{ textAlign: 'left', padding: '4px 8px', fontWeight: 600, color: '#666' }}>Insurer</th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px', fontWeight: 600, color: '#666' }}>Policy No.</th>
-                  <th style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 600, color: '#666' }}>Premium (₹)</th>
-                  <th style={{ width: 30 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {cat.policies.map((p) => (
-                  <tr key={p.id} style={{ borderBottom: '1px solid #f5f5f5' }}>
-                    <td style={{ padding: '4px 8px' }}>
-                      <input
-                        value={p.insurerName}
-                        onChange={e => updateCategory(catKey, c => ({
-                          ...c, policies: c.policies.map(pp => pp.id === p.id ? { ...pp, insurerName: e.target.value } : pp),
-                        }))}
-                        placeholder="Insurer name"
-                        maxLength={125}
-                        style={inlineInputStyle}
-                      />
-                    </td>
-                    <td style={{ padding: '4px 8px' }}>
-                      <input
-                        value={p.policyNo}
-                        onChange={e => updateCategory(catKey, c => ({
-                          ...c, policies: c.policies.map(pp => pp.id === p.id ? { ...pp, policyNo: e.target.value } : pp),
-                        }))}
-                        placeholder="Policy number"
-                        maxLength={75}
-                        style={inlineInputStyle}
-                      />
-                    </td>
-                    <td style={{ padding: '4px 8px' }}>
-                      <input
-                        type="number"
-                        value={p.premiumAmount || ''}
-                        onChange={e => updateCategory(catKey, c => ({
-                          ...c, policies: c.policies.map(pp => pp.id === p.id ? { ...pp, premiumAmount: parseFloat(e.target.value) || 0 } : pp),
-                        }))}
-                        placeholder="0"
-                        min={0}
-                        style={{ ...inlineInputStyle, textAlign: 'right', width: 100 }}
-                      />
-                    </td>
-                    <td style={{ padding: '4px 4px', textAlign: 'center' }}>
-                      <button onClick={() => updateCategory(catKey, c => ({
-                        ...c, policies: c.policies.filter(pp => pp.id !== p.id),
-                      }))} style={{ background: 'none', border: 'none', color: '#f44336', cursor: 'pointer', fontSize: 14 }}>×</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr style={{ borderTop: '2px solid #eee', fontWeight: 600 }}>
-                  <td colSpan={2} style={{ padding: '6px 8px', textAlign: 'right', fontSize: 11, color: '#666' }}>Total Premium:</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right', fontSize: 13 }}>₹{premiumTotal.toLocaleString('en-IN')}</td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            </table>
-          )}
-
-          <button
-            onClick={() => updateCategory(catKey, c => ({
-              ...c, policies: [...c.policies, { id: nextPolicyId(), insurerName: '', policyNo: '', premiumAmount: 0 }],
-            }))}
-            style={{ fontSize: 11, background: 'transparent', border: `1px dashed ${color}`, color, borderRadius: 4, padding: '4px 10px', cursor: 'pointer', marginBottom: 8 }}
-          >
-            + Add Policy
-          </button>
-
-          {/* Preventive + Medical */}
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
-            <div style={{ flex: '1 1 180px' }}>
-              <label style={{ fontSize: 11, color: '#888', display: 'block', marginBottom: 2 }}>Preventive Checkup (max ₹5,000)</label>
-              <input type="number" value={cat.preventiveCheckup || ''} min={0} max={CAP_PREVENTIVE}
-                onChange={e => updateCategory(catKey, c => ({ ...c, preventiveCheckup: parseFloat(e.target.value) || 0 }))}
-                style={{ ...inlineInputStyle, width: '100%' }} />
-            </div>
-            {srFlag === 'Y' && (
-              <div style={{ flex: '1 1 180px' }}>
-                <label style={{ fontSize: 11, color: '#888', display: 'block', marginBottom: 2 }}>Medical Expense (non-insured seniors)</label>
-                <input type="number" value={cat.medicalExpense || ''} min={0}
-                  onChange={e => updateCategory(catKey, c => ({ ...c, medicalExpense: parseFloat(e.target.value) || 0 }))}
-                  style={{ ...inlineInputStyle, width: '100%' }} />
-              </div>
-            )}
-          </div>
-
-          {/* Summary per category */}
-          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-            <span style={{ color: '#666' }}>Premium: ₹{premiumTotal.toLocaleString('en-IN')}</span>
-            <span style={{ fontWeight: 600, color }}>Eligible: ₹{totalClaim.toLocaleString('en-IN')}</span>
-          </div>
-        </div>
-      </div>
-    );
+  const addPolicy = (catKey: CatKey) => {
+    const newPolicy: Policy80D = { id: nextPolicyId(), insurerName: '', policyNo: '', premiumAmount: 0 };
+    updateCategory(catKey, c => ({ ...c, policies: [...c.policies, newPolicy] }));
+    setExpandedId(newPolicy.id);
   };
 
-  // ---- Derived flags ----
+  const removePolicy = (catKey: CatKey, id: string) => {
+    updateCategory(catKey, c => ({ ...c, policies: c.policies.filter(p => p.id !== id) }));
+    if (expandedId === id) setExpandedId(null);
+  };
+
+  const updatePolicy = (catKey: CatKey, id: string, field: keyof Policy80D, value: unknown) => {
+    updateCategory(catKey, c => ({
+      ...c, policies: c.policies.map(p => p.id === id ? { ...p, [field]: value } : p),
+    }));
+  };
+
+  const toggleExpand = (id: string) => {
+    setExpandedId(expandedId === id ? null : id);
+  };
+
+  // Which categories are visible
   const showSelfFamily = data.selfSeniorCitizen !== 'S';
   const showSelfFamilySr = data.selfSeniorCitizen === 'Y';
   const showParents = data.parentsSeniorCitizen !== 'P';
   const showParentsSr = data.parentsSeniorCitizen === 'Y';
+  const visibilityMap: Record<CatKey, boolean> = {
+    selfFamily: showSelfFamily,
+    selfFamilySenior: showSelfFamilySr,
+    parents: showParents,
+    parentsSenior: showParentsSr,
+  };
 
-  // Totals
+  // Grand total
   const totalEligible = useMemo(() => {
     let total = 0;
-    if (showSelfFamily) {
-      const cat = data.selfFamily;
+    const caps: Record<CatKey, number> = { selfFamily: CAP_SELF_FAMILY, selfFamilySenior: CAP_SELF_FAMILY_SR, parents: CAP_PARENTS, parentsSenior: CAP_PARENTS_SR };
+    for (const cm of CATS) {
+      if (!visibilityMap[cm.key]) continue;
+      const cat = data[cm.key] as Category80D;
       const prem = sumPremiums(cat.policies);
-      total += Math.min(prem, CAP_SELF_FAMILY) + Math.min(cat.preventiveCheckup, CAP_PREVENTIVE);
-    }
-    if (showSelfFamilySr) {
-      const cat = data.selfFamilySenior;
-      const prem = sumPremiums(cat.policies);
-      total += Math.min(prem, CAP_SELF_FAMILY_SR) + Math.min(cat.preventiveCheckup, CAP_PREVENTIVE) + Math.min(cat.medicalExpense, CAP_SELF_FAMILY_SR - Math.min(prem, CAP_SELF_FAMILY_SR));
-    }
-    if (showParents) {
-      const cat = data.parents;
-      const prem = sumPremiums(cat.policies);
-      total += Math.min(prem, CAP_PARENTS) + Math.min(cat.preventiveCheckup, CAP_PREVENTIVE);
-    }
-    if (showParentsSr) {
-      const cat = data.parentsSenior;
-      const prem = sumPremiums(cat.policies);
-      total += Math.min(prem, CAP_PARENTS_SR) + Math.min(cat.preventiveCheckup, CAP_PREVENTIVE) + Math.min(cat.medicalExpense, CAP_PARENTS_SR - Math.min(prem, CAP_PARENTS_SR));
+      const premEligible = Math.min(prem, caps[cm.key]);
+      total += premEligible + Math.min(cat.preventiveCheckup, CAP_PREVENTIVE) + Math.min(cat.medicalExpense, caps[cm.key] - premEligible);
     }
     return total;
   }, [data]);
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif' }}>
-      <div style={{ marginBottom: 12 }}>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Section 80D — Health Insurance</h3>
-        <p style={{ margin: '4px 0 0', fontSize: 11, color: '#666' }}>
-          Add per-policy details. Premiums capped at applicable limits. Preventive checkup max ₹5,000 per category.
-        </p>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Schedule 80D — Health Insurance</h3>
+          <p style={{ margin: '4px 0 0', fontSize: 11, color: '#666' }}>
+            Per-policy details with senior citizen flags. Premiums capped per category. Preventive checkup max ₹5,000.
+          </p>
+        </div>
       </div>
 
       {/* Senior citizen flags */}
       <div style={{ display: 'flex', gap: 20, marginBottom: 16, flexWrap: 'wrap' }}>
         <div>
-          <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 4 }}>Self / Family *</label>
+          <label style={labelStyle}>Self / Family *</label>
           <select value={data.selfSeniorCitizen}
             onChange={e => onChange({ ...data, selfSeniorCitizen: e.target.value as 'Y' | 'N' | 'S' })}
-            style={{ padding: '6px 10px', border: '1px solid #ddd', borderRadius: 4, fontSize: 12 }}>
+            style={inputStyle}>
             <option value="N">Non-Senior Citizen (cap ₹25,000)</option>
             <option value="Y">Senior Citizen (cap ₹50,000)</option>
             <option value="S">Not claiming for Self/Family</option>
           </select>
         </div>
         <div>
-          <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 4 }}>Parents *</label>
+          <label style={labelStyle}>Parents *</label>
           <select value={data.parentsSeniorCitizen}
             onChange={e => onChange({ ...data, parentsSeniorCitizen: e.target.value as 'Y' | 'N' | 'P' })}
-            style={{ padding: '6px 10px', border: '1px solid #ddd', borderRadius: 4, fontSize: 12 }}>
+            style={inputStyle}>
             <option value="N">Non-Senior Citizen (cap ₹25,000)</option>
             <option value="Y">Senior Citizen (cap ₹50,000)</option>
             <option value="P">Not claiming for Parents</option>
@@ -262,25 +167,155 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
         </div>
       </div>
 
-      {/* Category cards */}
-      <CategoryCard title="Self & Family" color="#1565c0" catKey="selfFamily" cap={CAP_SELF_FAMILY} srFlag={data.selfSeniorCitizen} isVisible={showSelfFamily} />
-      <CategoryCard title="Self & Family (Senior Citizen)" color="#2e7d32" catKey="selfFamilySenior" cap={CAP_SELF_FAMILY_SR} srFlag={data.selfSeniorCitizen} isVisible={showSelfFamilySr} />
-      <CategoryCard title="Parents" color="#ef6c00" catKey="parents" cap={CAP_PARENTS} srFlag={data.parentsSeniorCitizen} isVisible={showParents} />
-      <CategoryCard title="Parents (Senior Citizen)" color="#6a1b9a" catKey="parentsSenior" cap={CAP_PARENTS_SR} srFlag={data.parentsSeniorCitizen} isVisible={showParentsSr} />
+      {/* Category summary cards (only visible ones) */}
+      {(CATS.some(cm => visibilityMap[cm.key] && ((data[cm.key] as Category80D).policies.length > 0 || (data[cm.key] as Category80D).preventiveCheckup > 0 || (data[cm.key] as Category80D).medicalExpense > 0))) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginBottom: 16 }}>
+          {CATS.filter(cm => visibilityMap[cm.key]).map(cm => {
+            const cat = data[cm.key] as Category80D;
+            const prem = sumPremiums(cat.policies);
+            const premEligible = Math.min(prem, cm.cap);
+            const prevEligible = Math.min(cat.preventiveCheckup, CAP_PREVENTIVE);
+            const total = premEligible + prevEligible + Math.min(cat.medicalExpense, cm.cap - premEligible);
+            if (prem === 0 && cat.preventiveCheckup === 0 && cat.medicalExpense === 0) return null;
+            return (
+              <div key={cm.key} style={{ padding: 10, borderRadius: 6, border: `1px solid ${cm.color}30`, background: `${cm.color}08` }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: cm.color, marginBottom: 4 }}>{cm.shortLabel}</div>
+                <div style={{ fontSize: 12, color: '#333' }}>Premium: <strong>₹{prem.toLocaleString('en-IN')}</strong></div>
+                <div style={{ fontSize: 12, color: cm.color }}>Eligible: <strong>₹{total.toLocaleString('en-IN')}</strong></div>
+                <div style={{ fontSize: 10, color: '#888' }}>Policies: {cat.policies.length}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Grand total */}
-      <div style={{
-        marginTop: 14, padding: 12, background: '#e8eaf6', borderRadius: 6,
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      }}>
-        <span style={{ fontWeight: 600, fontSize: 13 }}>Total 80D Eligible Deduction</span>
-        <span style={{ fontWeight: 700, fontSize: 16, color: '#2e7d32' }}>₹{totalEligible.toLocaleString('en-IN')}</span>
-      </div>
+      {/* Policy cards per category */}
+      {CATS.filter(cm => visibilityMap[cm.key]).map(cm => {
+        const cat = data[cm.key] as Category80D;
+        const prem = sumPremiums(cat.policies);
+        const premEligible = Math.min(prem, cm.cap);
+        const prevEligible = Math.min(cat.preventiveCheckup, CAP_PREVENTIVE);
+        const medEligible = Math.min(cat.medicalExpense, cm.cap - premEligible);
+
+        return (
+          <div key={cm.key} style={{ marginBottom: 16 }}>
+            {/* Category header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ background: cm.color, color: 'white', fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 3 }}>
+                  {cm.shortLabel}
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{cm.label}</span>
+                <span style={{ fontSize: 11, color: '#888' }}>Cap: ₹{cm.cap.toLocaleString('en-IN')}</span>
+              </div>
+              <button onClick={() => addPolicy(cm.key)} style={{
+                background: cm.color, color: 'white', border: 'none', padding: '6px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600,
+              }}>
+                + Add Policy
+              </button>
+            </div>
+
+            {/* Empty state */}
+            {cat.policies.length === 0 && cat.preventiveCheckup === 0 && cat.medicalExpense === 0 && (
+              <div style={{ textAlign: 'center', padding: 20, color: '#999', background: '#fafafa', borderRadius: 8, border: '1px dashed #ddd', marginBottom: 8 }}>
+                No health insurance policies added.
+              </div>
+            )}
+
+            {/* Per-policy collapsible cards */}
+            {cat.policies.map((p) => {
+              const isExpanded = expandedId === p.id;
+              return (
+                <div key={p.id} style={{
+                  background: 'white', border: `1px solid ${isExpanded ? cm.color : '#e0e0e0'}`,
+                  borderLeft: `4px solid ${cm.color}`, borderRadius: 6, marginBottom: 6, overflow: 'hidden',
+                }}>
+                  {/* Collapsed summary */}
+                  <div onClick={() => toggleExpand(p.id)} style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '8px 12px', cursor: 'pointer', userSelect: 'none',
+                    background: isExpanded ? `${cm.color}06` : 'white',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {p.insurerName || '(Unnamed Insurer)'}
+                      </span>
+                      {p.policyNo && <span style={{ fontSize: 11, color: '#888', fontFamily: 'monospace' }}>Policy: {p.policyNo}</span>}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>₹{p.premiumAmount.toLocaleString('en-IN')}</span>
+                      <span style={{ fontSize: 14, color: '#999', transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
+                      <button onClick={(ev) => { ev.stopPropagation(); removePolicy(cm.key, p.id); }} style={{
+                        background: 'transparent', border: 'none', color: '#f44336', fontSize: 16, cursor: 'pointer', padding: '0 2px', lineHeight: 1,
+                      }} title="Remove policy">×</button>
+                    </div>
+                  </div>
+
+                  {/* Expanded detail */}
+                  {isExpanded && (
+                    <div style={{ padding: '12px 14px', borderTop: '1px solid #eee' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+                        <div>
+                          <label style={labelStyle}>Insurer Name *</label>
+                          <input type="text" value={p.insurerName} onChange={e => updatePolicy(cm.key, p.id, 'insurerName', e.target.value)}
+                            placeholder="e.g., Star Health, ICICI Lombard" maxLength={125} style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Policy Number *</label>
+                          <input type="text" value={p.policyNo} onChange={e => updatePolicy(cm.key, p.id, 'policyNo', e.target.value)}
+                            placeholder="Policy number" maxLength={75} style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Premium Amount (₹) *</label>
+                          <input type="number" value={p.premiumAmount || ''} onChange={e => updatePolicy(cm.key, p.id, 'premiumAmount', parseFloat(e.target.value) || 0)}
+                            placeholder="0" min={0} style={{ ...inputStyle, fontWeight: 600 }} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Preventive checkup + Medical expense */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginTop: 8, padding: '0 2px' }}>
+              <div>
+                <label style={labelStyle}>Preventive Health Checkup (max ₹5,000)</label>
+                <input type="number" value={cat.preventiveCheckup || ''} min={0} max={CAP_PREVENTIVE}
+                  onChange={e => updateCategory(cm.key, c => ({ ...c, preventiveCheckup: parseFloat(e.target.value) || 0 }))}
+                  style={inputStyle} />
+              </div>
+              {cm.key === 'selfFamilySenior' || cm.key === 'parentsSenior' ? (
+                <div>
+                  <label style={labelStyle}>Medical Expense (non-insured seniors)</label>
+                  <input type="number" value={cat.medicalExpense || ''} min={0}
+                    onChange={e => updateCategory(cm.key, c => ({ ...c, medicalExpense: parseFloat(e.target.value) || 0 }))}
+                    style={inputStyle} />
+                </div>
+              ) : null}
+            </div>
+
+            {/* Category subtotal */}
+            {(prem > 0 || cat.preventiveCheckup > 0 || cat.medicalExpense > 0) && (
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '0 2px' }}>
+                <span style={{ color: '#666' }}>Premium: ₹{prem.toLocaleString('en-IN')} | Preventive: ₹{prevEligible.toLocaleString('en-IN')}</span>
+                <span style={{ fontWeight: 600, color: cm.color }}>Eligible: ₹{(premEligible + prevEligible + medEligible).toLocaleString('en-IN')}</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Grand total footer */}
+      {(totalEligible > 0 || CATS.some(cm => visibilityMap[cm.key] && (data[cm.key] as Category80D).policies.length > 0)) ) && (
+        <div style={{
+          marginTop: 14, padding: 12, background: '#e8eaf6', borderRadius: 6,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>Total 80D Eligible Deduction</span>
+          <span style={{ fontWeight: 700, fontSize: 16, color: '#2e7d32' }}>₹{totalEligible.toLocaleString('en-IN')}</span>
+        </div>
+      )}
     </div>
   );
-};
-
-const inlineInputStyle: React.CSSProperties = {
-  padding: '3px 6px', border: '1px solid #e0e0e0', borderRadius: 3,
-  fontSize: 12, boxSizing: 'border-box', width: '100%',
 };
