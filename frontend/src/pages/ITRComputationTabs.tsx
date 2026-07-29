@@ -370,7 +370,7 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
         onChange={(d) => setFormData({ ...formData, section80D: d })}
       />
 
-      Donations (80G)</h3>
+      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Donations (80G)</h3>
       
       {/* Donation Multi-Entry Manager */}
       <DonationEntryManager
