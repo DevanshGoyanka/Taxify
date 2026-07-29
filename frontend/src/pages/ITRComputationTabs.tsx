@@ -7,6 +7,7 @@ import { WinningsManager } from '../components/winnings/WinningsManager';
 import { FamilyPensionManager } from '../components/familyPension/FamilyPensionManager';
 import { GiftPropertyManager } from '../components/gifts/GiftPropertyManager';
 import { Section80DManager, type Section80DData } from '../components/Section80DManager';
+import { DeductionLoanManager, type DeductionLoanData } from '../components/DeductionLoanManager';
 
 export function BusinessTab({ formData, setFormData, taxResult }: any) {
   return (
@@ -390,17 +391,25 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
         </div>
       </div>
 
+      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Education & Home Loans (80E/80EE/80EEA/80EEB)</h3>
+      <DeductionLoanManager
+        data={formData.deductionLoans || {
+          section80E: { loans: [] },
+          section80EE: { loans: [] },
+          section80EEA: { loans: [], stampDutyValue: 0 },
+          section80EEB: { loans: [] },
+        }}
+        onChange={(d) => setFormData({ ...formData, deductionLoans: d })}
+      />
+
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Others</h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-        <Field label="80E - Education Loan" value={formData.s80E} onChange={(v: any) => setFormData({ ...formData, s80E: v })} />
-        <Field label="Lender Name" value={formData.s80E_lenderName || ''} onChange={(v: any) => setFormData({ ...formData, s80E_lenderName: v })} type="text" prefix="" />
         <Field label="80TTA - SB Interest (Max ₹10K)" value={formData.s80TTA} onChange={(v: any) => setFormData({ ...formData, s80TTA: v })} />
         <Field label="Total Deductions" value={taxResult.totalDeductions} computed />
       </div>
     </div>
   );
 }
-
 export function LossesTab({ formData, setFormData }: any) {
   // Current year HP loss from House Property section (auto-calculated, capped at -₹2L)
   const currentYearHpLoss = (formData.incomeFromHouseProperty || 0) < 0 
