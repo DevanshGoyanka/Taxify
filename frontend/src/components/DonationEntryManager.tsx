@@ -210,7 +210,7 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
         const isExpanded = expandedId === entry.id;
         const ci = CATEGORY_INFO[entry.category];
         const totalAmt = entry.donationAmtCash + entry.donationAmtOtherMode;
-        const eligibleCash = Math.min(entry.donationAmtCash, 2000);
+        const eligibleCash = entry.donationAmtCash <= 2000 ? entry.donationAmtCash : 0;
         const eligibleAmt = Math.round((eligibleCash + entry.donationAmtOtherMode) * ci.eligiblePct / 100);
 
         return (

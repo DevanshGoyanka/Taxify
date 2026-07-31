@@ -7,10 +7,13 @@ import React, { useState, useMemo } from 'react';
 
 interface Investment80C {
   id: string;
-  investmentType: string;       // e.g., EPF, PPF, ELSS, LIC, HomeLoan, NSC, Tuition, FD, ULIP, SSY, Other
-  identificationNo: string;     // → IdentificationNo (max 50, required)
-  amount: number;               // → Amount (required)
-  institutionName?: string;     // UI-only for display
+  investmentType: string;
+  identificationNo: string;
+  accountOrPolicyNo: string;
+  amount: number;
+  dateOfInvestment: string;
+  institutionName: string;
+  institutionPAN: string;
 }
 
 const INVESTMENT_TYPES: Record<string, { label: string; color: string }> = {
@@ -49,7 +52,10 @@ export const Section80CManager: React.FC<Section80CManagerProps> = ({ data, onCh
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const addInvestment = () => {
-    const inv: Investment80C = { id: nextInvId(), investmentType: 'EPF', identificationNo: '', amount: 0 };
+    const inv: Investment80C = {
+      id: nextInvId(), investmentType: 'EPF', identificationNo: '', accountOrPolicyNo: '',
+      amount: 0, dateOfInvestment: '', institutionName: '', institutionPAN: '',
+    };
     onChange({ investments: [...(data.investments || []), inv] });
     setExpandedId(inv.id);
   };
@@ -129,14 +135,28 @@ export const Section80CManager: React.FC<Section80CManagerProps> = ({ data, onCh
                     </select>
                   </div>
                   <div>
-                    <label style={labelStyle}>Identification No / Account No *</label>
-                    <input type="text" value={inv.identificationNo} onChange={e => updateInvestment(inv.id, 'identificationNo', e.target.value)}
-                      placeholder="Policy No, PPF Account No, etc." maxLength={50} style={{ ...inputStyle, fontFamily: 'monospace' }} />
+                    <label style={labelStyle}>Identification No *</label>
+                    <input type="text" value={inv.identificationNo || ''} onChange={e => updateInvestment(inv.id, 'identificationNo', e.target.value)}
+                      placeholder="Investment identification number" maxLength={50} style={{ ...inputStyle, fontFamily: 'monospace' }} />
                   </div>
                   <div>
-                    <label style={labelStyle}>Institution (optional)</label>
+                    <label style={labelStyle}>Account / Policy No *</label>
+                    <input type="text" value={inv.accountOrPolicyNo || ''} onChange={e => updateInvestment(inv.id, 'accountOrPolicyNo', e.target.value)}
+                      placeholder="Policy, PPF, folio or loan account" maxLength={50} style={{ ...inputStyle, fontFamily: 'monospace' }} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Date of Investment *</label>
+                    <input type="date" value={inv.dateOfInvestment || ''} onChange={e => updateInvestment(inv.id, 'dateOfInvestment', e.target.value)} style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Institution Name *</label>
                     <input type="text" value={inv.institutionName || ''} onChange={e => updateInvestment(inv.id, 'institutionName', e.target.value)}
                       placeholder="Employer / Bank / AMC name" maxLength={125} style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Institution PAN *</label>
+                    <input type="text" value={inv.institutionPAN || ''} onChange={e => updateInvestment(inv.id, 'institutionPAN', e.target.value.toUpperCase().slice(0, 10))}
+                      placeholder="ABCDE1234F" maxLength={10} style={{ ...inputStyle, fontFamily: 'monospace', textTransform: 'uppercase' }} />
                   </div>
                   <div>
                     <label style={{ ...labelStyle, color: '#2e7d32' }}>Amount (₹) *</label>

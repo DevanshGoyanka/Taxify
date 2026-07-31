@@ -6,11 +6,72 @@ import { clientsApi } from '../api/clients';
 import { Spinner } from '../components/ui/Spinner';
 import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
+import { BankAccountManager } from '../components/BankAccountManager';
 import { CapitalGainsEntryManager } from '../components/CapitalGainsEntryManager';
 import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
+import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
+
+function buildPhase1Payload(source: any): any {
+  const data = { ...source };
+  const investments = data.section80C?.investments || [];
+  const healthCategories = data.section80D
+    ? [data.section80D.selfFamily, data.section80D.selfFamilySenior, data.section80D.parents, data.section80D.parentsSenior]
+    : [];
+  const loans80E = data.deductionLoans?.section80E?.loans || [];
+  const eligibleDonations = (data.donationEntries || []).reduce((sum: number, entry: any) => {
+    const percentage = String(entry.category || '').startsWith('50_') ? 0.5 : 1;
+    return sum + (Math.min(Number(entry.donationAmtCash) || 0, 2000) + (Number(entry.donationAmtOtherMode) || 0)) * percentage;
+  }, 0);
+
+  data.s80C = investments.reduce((sum: number, item: any) => sum + (Number(item.amount) || 0), 0);
+  data.s80D = healthCategories.reduce((total: number, category: any) => total
+    + (category?.policies || []).reduce((sum: number, policy: any) => sum + (Number(policy.premiumAmount) || 0), 0)
+    + (Number(category?.preventiveCheckup) || 0) + (Number(category?.medicalExpense) || 0), 0);
+  data.s80E = loans80E.reduce((sum: number, loan: any) => sum + (Number(loan.interestAmount) || 0), 0);
+  data.s80G = eligibleDonations;
+  data.bankAccountDetails = (data.bankAccountData?.accounts || []).map((account: any) => ({ ...account }));
+  data.countryCodeMobile = String(data.mobileCountryCode || '91');
+  data.countryCode = String(data.country || '91');
+  data.stateCode = String(data.state || '');
+  data.advanceTaxEntries = Array.isArray(data.advanceTaxEntries) ? data.advanceTaxEntries : [];
+  if (data.advanceTaxEntries.length >= 0) {
+    data.adv15Jun = 0; data.adv15Sep = 0; data.adv15Dec = 0; data.adv15Mar = 0;
+  }
+  return data;
+}
+
+function validatePhase1Payload(data: any): string | null {
+  const panPattern = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+  const ifscPattern = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+  const bsrPattern = /^[0-9]{3}[0-9A-Z]{4}$/;
+  if (!/^[0-9]{1,5}$/.test(String(data.mobileCountryCode || ''))) return 'Select a valid mobile country code.';
+  if (!data.state) return 'Select a state code.';
+  if (!data.country) return 'Select a country code.';
+  if (data.pincode && !/^[1-9][0-9]{5}$/.test(String(data.pincode))) return 'PIN code must contain 6 digits and cannot start with zero.';
+  for (const entry of data.donationEntries || []) {
+    if (!entry.doneeName || !panPattern.test(entry.doneePAN || '') || !entry.addrDetail || !entry.city || !entry.stateCode || !/^[1-9][0-9]{5}$/.test(entry.pinCode || '')) return 'Complete every 80G donee name, PAN, address, state and PIN code before saving.';
+  }
+  for (const investment of data.section80C?.investments || []) {
+    if (!investment.investmentType || !investment.dateOfInvestment || !investment.institutionName || !panPattern.test(investment.institutionPAN || '') || !investment.accountOrPolicyNo || Number(investment.amount) <= 0) return 'Complete every 80C investment, including date, institution PAN, account/policy number and amount.';
+  }
+  const categories = data.section80D ? [data.section80D.selfFamily, data.section80D.selfFamilySenior, data.section80D.parents, data.section80D.parentsSenior] : [];
+  for (const category of categories) for (const policy of category?.policies || []) {
+    if (!policy.insurerName || !policy.policyNo || !policy.policyType || !policy.dateOfCommencement || Number(policy.premiumAmount) <= 0) return 'Complete every 80D policy, including policy type and commencement date.';
+  }
+  for (const section of ['section80E', 'section80EE', 'section80EEA', 'section80EEB']) for (const loan of data.deductionLoans?.[section]?.loans || []) {
+    if (!loan.bankOrInstnName || !panPattern.test(loan.lenderPAN || '') || !loan.loanAccNo || !loan.dateOfLoan || Number(loan.interestAmount) <= 0) return `Complete every ${section.replace('section', '')} loan, including lender PAN and interest.`;
+    if (section === 'section80EE' && loan.firstTimeBuyerEligible !== true) return '80EE loans require first-time home buyer eligibility confirmation.';
+    if (section === 'section80EEB' && !loan.vehicleRegNo) return '80EEB loans require the vehicle registration number.';
+  }
+  const accounts = data.bankAccountData?.accounts || [];
+  if (accounts.length > 0 && !accounts.some((account: any) => account.useForRefund)) return 'Mark one bank account for refund.';
+  for (const account of accounts) if (!account.bankName || !account.accountNumber || !ifscPattern.test(account.ifscCode || '')) return 'Complete every bank account with a valid 11-character IFSC code.';
+  for (const payment of data.advanceTaxEntries || []) if (!bsrPattern.test(payment.bsrCode || '') || !payment.depositDate || !payment.challanSerialNo || Number(payment.amount) <= 0) return 'Complete every advance-tax challan with valid BSR code, date, serial number and amount.';
+  return null;
+}
 
 import { 
   BusinessTab, 
@@ -43,6 +104,7 @@ export default function ITRComputationPage() {
   const [formData, setFormData] = useState<any>({
     // Personal Info - CBDT Mandatory Fields
     gender: 'M', fatherName: '', maritalStatus: 'SINGLE', nationality: 'INDIA', residentialStatus: 'ROR',
+    mobileCountryCode: '91', country: '91', state: '',
     isDirector: false, holdsUnlistedShares: false, agriculturalIncome: 0,
     
     // ===== SALARY INCOME - 101% CBDT COMPLIANT =====
@@ -110,11 +172,27 @@ export default function ITRComputationPage() {
     capitalGainTransactions: [],
     bankInterestEntries: [],
     donationEntries: [],
+    section80C: { investments: [] },
+    section80D: {
+      selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N',
+      selfFamily: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
+      selfFamilySenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
+      parents: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
+      parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
+    },
+    deductionLoans: {
+      section80E: { loans: [] }, section80EE: { loans: [] },
+      section80EEA: { loans: [], stampDutyValue: 0 }, section80EEB: { loans: [] },
+    },
+    s80DDB_usrType: '', s80DDB_diseaseCode: '',
+    s80DD_natureOfDisability: '', s80DD_typeOfDisability: '', s80DD_dependentType: '',
+    s80U_natureOfDisability: '', s80U_typeOfDisability: '',
     // Tax Payments - Multi-entry structures
     tdsEntries: [],
     advanceTaxEntries: [],
     selfAssessmentTaxEntries: [],
     bankAccountDetails: [],
+    bankAccountData: { accounts: [] },
     // Legacy single-value fields (for backward compatibility)
     tdsS192: 0, tds194A: 0, tdsOther: 0,
     adv15Jun: 0, adv15Sep: 0, adv15Dec: 0, adv15Mar: 0, selfTax: 0,
@@ -152,7 +230,22 @@ export default function ITRComputationPage() {
           state: itrData.state,
           pincode: itrData.pinCode || itrData.pincode,
           // Spread all other form data
-          ...itrData
+          ...itrData,
+          mobileCountryCode: String(itrData.mobileCountryCode || itrData.countryCodeMobile || prev.mobileCountryCode || '91'),
+          country: String(itrData.countryCode || itrData.country || prev.country || '91'),
+          advanceTaxEntries: Array.isArray(itrData.advanceTaxEntries) ? itrData.advanceTaxEntries : [],
+          section80C: itrData.section80C?.investments ? itrData.section80C : prev.section80C,
+          section80D: itrData.section80D?.selfFamily ? itrData.section80D : prev.section80D,
+          deductionLoans: itrData.deductionLoans?.section80E ? itrData.deductionLoans : prev.deductionLoans,
+          bankAccountData: itrData.bankAccountData?.accounts
+            ? itrData.bankAccountData
+            : { accounts: (itrData.bankAccountDetails || []).map((account: any, index: number) => ({
+                id: account.id || `legacy-bank-${index}`,
+                bankName: account.bankName || '', accountNumber: account.accountNumber || '',
+                ifscCode: account.ifscCode || '',
+                accountType: account.accountType === 'SAVINGS' ? 'SB' : account.accountType === 'CURRENT' ? 'CA' : (account.accountType || 'SB'),
+                useForRefund: account.useForRefund === true || index === 0,
+              })) },
         }));
       })
       .catch(err => toast.error(err.message))
@@ -178,7 +271,7 @@ export default function ITRComputationPage() {
     taxResultDebounceRef.current = setTimeout(() => {
       console.log('[TAX] Calling computeTaxSummary for Other Sources...', { ayParam, regime: regime, formDataKeys: Object.keys(formData || {}) });
       setTaxResultLoading(true);
-      itrApi.computeTaxSummary(formData, ayParam || '2025-26', regime)
+      itrApi.computeTaxSummary(buildPhase1Payload(formData), ayParam || '2025-26', regime)
         .then((result: any) => {
           console.log('[TAX] computeTaxSummary result - regimeUsed:', result.taxRegime, 'result:', result);
           setBackendTaxResult(result);
@@ -262,7 +355,12 @@ export default function ITRComputationPage() {
     setSaving(true);
     try {
       // Clear legacy fields if using new array-based system
-      const dataToSave = { ...formData };
+      const validationError = validatePhase1Payload(formData);
+      if (validationError) {
+        toast.error(validationError);
+        return;
+      }
+      const dataToSave = buildPhase1Payload(formData);
       
       // Clear legacy TDS/SAT fields
       if (dataToSave.tdsEntries && dataToSave.tdsEntries.length >= 0) {
@@ -633,6 +731,7 @@ export default function ITRComputationPage() {
             employerEntries: freshFormData.employerEntries || prev.employerEntries,
             tdsEntries: freshFormData.tdsEntries || prev.tdsEntries,
             bankAccountDetails: freshFormData.bankAccountDetails || prev.bankAccountDetails,
+            bankAccountData: freshFormData.bankAccountData || prev.bankAccountData || { accounts: [] },
             bankInterestEntries: freshFormData.bankInterestEntries || prev.bankInterestEntries,
           }));
           
@@ -1474,6 +1573,18 @@ function Field({ label, value, onChange, computed, prefix = '₹', type = 'numbe
   );
 }
 
+function SalaryTab({ formData, setFormData, taxResult, ayParam, regime }: any) {
+  return <EmployerEntryManager entries={formData.employerEntries || []} onChange={(entries) => setFormData({ ...formData, employerEntries: entries })} assessmentYear={ayParam || '2025-26'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} />;
+}
+
+function HousePropertyTab({ formData, setFormData, itrForm }: any) {
+  return <HousePropertyEntryManager entries={formData.housePropertyEntries || []} onChange={(entries) => setFormData({ ...formData, housePropertyEntries: entries })} itrForm={itrForm} />;
+}
+
+function CapitalGainsTab({ formData, setFormData }: any) {
+  return <CapitalGainsEntryManager entries={formData.capitalGainTransactions || []} onChange={(entries) => setFormData({ ...formData, capitalGainTransactions: entries })} />;
+}
+
 function PersonalInfoTab({ formData, setFormData }: any) {
   const calculateAge = (dob: string) => {
     if (!dob) return 0;
@@ -1597,26 +1708,29 @@ function PersonalInfoTab({ formData, setFormData }: any) {
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
         Contact Details
       </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Email Address" value={formData.email || ''} onChange={(v: any) => setFormData({ ...formData, email: v })} type="email" prefix="" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
         <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Country Code</label>
-          <select value={formData.countryCodeMobile || '91'} onChange={(e) => setFormData({ ...formData, countryCodeMobile: e.target.value })}
-            style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
-            <option value="91">+91 (India)</option>
-            <option value="1">+1 (USA/Canada)</option>
-            <option value="44">+44 (UK)</option>
-            <option value="971">+971 (UAE)</option>
-            <option value="966">+966 (Saudi Arabia)</option>
-            <option value="974">+974 (Qatar)</option>
-            <option value="65">+65 (Singapore)</option>
-            <option value="61">+61 (Australia)</option>
-            <option value="81">+81 (Japan)</option>
-            <option value="86">+86 (China)</option>
-            <option value="OTH">Other</option>
+          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
+            Country Code
+          </label>
+          <select
+            value={formData.mobileCountryCode || '91'}
+            onChange={(e) => setFormData({ ...formData, mobileCountryCode: e.target.value })}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              fontSize: 13
+            }}
+          >
+            {ITD_COUNTRY_CODES.map((option) => (
+              <option key={option.value} value={option.value}>+{option.value} ({option.label})</option>
+            ))}
           </select>
         </div>
         <Field label="Mobile Number" value={formData.mobile || ''} onChange={(v: any) => setFormData({ ...formData, mobile: v })} type="tel" prefix="" />
+        <Field label="Email Address" value={formData.email || ''} onChange={(v: any) => setFormData({ ...formData, email: v })} type="email" prefix="" />
         <Field label="Telephone (STD-Number)" value={formData.telephone || ''} onChange={(v: any) => setFormData({ ...formData, telephone: v })} type="tel" prefix="" />
       </div>
 
@@ -1630,43 +1744,82 @@ function PersonalInfoTab({ formData, setFormData }: any) {
         <Field label="Area/Locality" value={formData.area || ''} onChange={(v: any) => setFormData({ ...formData, area: v })} type="text" prefix="" />
         <Field label="Town/City/District" value={formData.city || ''} onChange={(v: any) => setFormData({ ...formData, city: v })} type="text" prefix="" />
         <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>State *</label>
-          <select value={formData.state || ''} onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-            style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
+          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
+            State *
+          </label>
+          <select
+            value={formData.state || ''}
+            onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              fontSize: 13
+            }}
+          >
             <option value="">-- Select State --</option>
-<option value="01">01 - Andaman & Nicobar</option><option value="02">02 - Andhra Pradesh</option>
-<option value="03">03 - Arunachal Pradesh</option><option value="04">04 - Assam</option>
-<option value="05">05 - Bihar</option><option value="06">06 - Chandigarh</option>
-<option value="07">07 - Dadra & Nagar Haveli</option><option value="08">08 - Daman & Diu</option>
-<option value="09">09 - Delhi</option><option value="10">10 - Goa</option>
-<option value="11">11 - Gujarat</option><option value="12">12 - Haryana</option>
-<option value="13">13 - Himachal Pradesh</option><option value="14">14 - Jammu & Kashmir</option>
-<option value="15">15 - Karnataka</option><option value="16">16 - Kerala</option>
-<option value="17">17 - Lakshadweep</option><option value="18">18 - Madhya Pradesh</option>
-<option value="19">19 - Maharashtra</option><option value="20">20 - Manipur</option>
-<option value="21">21 - Meghalaya</option><option value="22">22 - Mizoram</option>
-<option value="23">23 - Nagaland</option><option value="24">24 - Odisha</option>
-<option value="25">25 - Puducherry</option><option value="26">26 - Punjab</option>
-<option value="27">27 - Rajasthan</option><option value="28">28 - Sikkim</option>
-<option value="29">29 - Tamil Nadu</option><option value="30">30 - Tripura</option>
-<option value="31">31 - Uttar Pradesh</option><option value="32">32 - West Bengal</option>
-<option value="33">33 - Chhattisgarh</option><option value="34">34 - Uttarakhand</option>
-<option value="35">35 - Jharkhand</option><option value="36">36 - Telangana</option>
-<option value="37">37 - Ladakh</option>
-<option value="99">99 - Foreign Territory</option>
+            <option value="01">01 - Andaman &amp; Nicobar Islands</option>
+            <option value="02">02 - Andhra Pradesh</option>
+            <option value="03">03 - Arunachal Pradesh</option>
+            <option value="04">04 - Assam</option>
+            <option value="05">05 - Bihar</option>
+            <option value="06">06 - Chandigarh</option>
+            <option value="07">07 - Dadra &amp; Nagar Haveli</option>
+            <option value="08">08 - Daman &amp; Diu</option>
+            <option value="09">09 - Delhi</option>
+            <option value="10">10 - Goa</option>
+            <option value="11">11 - Gujarat</option>
+            <option value="12">12 - Haryana</option>
+            <option value="13">13 - Himachal Pradesh</option>
+            <option value="14">14 - Jammu &amp; Kashmir</option>
+            <option value="15">15 - Karnataka</option>
+            <option value="16">16 - Kerala</option>
+            <option value="17">17 - Lakshadweep</option>
+            <option value="18">18 - Madhya Pradesh</option>
+            <option value="19">19 - Maharashtra</option>
+            <option value="20">20 - Manipur</option>
+            <option value="21">21 - Meghalaya</option>
+            <option value="22">22 - Mizoram</option>
+            <option value="23">23 - Nagaland</option>
+            <option value="24">24 - Odisha</option>
+            <option value="25">25 - Puducherry</option>
+            <option value="26">26 - Punjab</option>
+            <option value="27">27 - Rajasthan</option>
+            <option value="28">28 - Sikkim</option>
+            <option value="29">29 - Tamil Nadu</option>
+            <option value="30">30 - Tripura</option>
+            <option value="31">31 - Uttar Pradesh</option>
+            <option value="32">32 - West Bengal</option>
+            <option value="33">33 - Chhattisgarh</option>
+            <option value="34">34 - Uttarakhand</option>
+            <option value="35">35 - Jharkhand</option>
+            <option value="36">36 - Telangana</option>
+            <option value="37">37 - Ladakh</option>
           </select>
         </div>
-        <Field label="PIN Code" value={formData.pincode || ''} onChange={(v: any) => setFormData({ ...formData, pincode: v })} type="text" prefix="" />
         <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Country *</label>
-          <select value={formData.country || 'IND'} onChange={(e) => setFormData({ ...formData, country: e.target.value })}
-            style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
-            <option value="IND">IND - India</option>
-<option value="USA">USA - United States</option><option value="GBR">GBR - United Kingdom</option>
-<option value="ARE">ARE - United Arab Emirates</option><option value="SAU">SAU - Saudi Arabia</option>
-<option value="QAT">QAT - Qatar</option><option value="SGP">SGP - Singapore</option>
-<option value="AUS">AUS - Australia</option><option value="CAN">CAN - Canada</option>
-<option value="OTH">OTH - Other Country</option>
+          <Field label="PIN Code" value={formData.pincode || ''} onChange={(v: any) => setFormData({ ...formData, pincode: v })} type="text" prefix="" />
+          <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>6-digit (e.g., 110001)</div>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
+            Country *
+          </label>
+          <select
+            value={formData.country || '91'}
+            onChange={(e) => setFormData({ ...formData, country: e.target.value })}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              fontSize: 13
+            }}
+          >
+            {ITD_COUNTRY_CODES.map((option) => (
+              <option key={option.value} value={option.value}>{option.value} - {option.label}</option>
+            ))}
           </select>
         </div>
       </div>
@@ -1749,4 +1902,18 @@ function PersonalInfoTab({ formData, setFormData }: any) {
           </label>
         </div>
       </div>
+
+      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
+        Bank Account Details for Refund
+      </h3>
+      <BankAccountManager
+        data={formData.bankAccountData || { accounts: [] }}
+        onChange={(d) => setFormData({ ...formData, bankAccountData: d })}
+      />
+
       <div style={{ marginTop: 16, padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)' }}>
+        Add every bank account used for refund and mark exactly one as the refund account.
+      </div>
+    </div>
+  );
+}

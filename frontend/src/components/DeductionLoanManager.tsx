@@ -13,18 +13,20 @@
 //
 // UI style matches DonationEntryManager: collapsible cards with category badges.
 
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 
 // ---- Per-loan entry ----
 interface LoanEntry {
   id: string;
   loanTakenFrom: 'B' | 'I';    // B=Bank, I=Institution
   bankOrInstnName: string;       // max 125, required
+  lenderPAN: string;
   loanAccNo: string;             // max 20, alphanumeric, required
   dateOfLoan: string;            // YYYY-MM-DD, required
   totalLoanAmt: number;          // required
   loanOutstandingAmt: number;    // required
   interestAmount: number;        // required (section-specific name)
+  firstTimeBuyerEligible?: boolean;
   vehicleRegNo?: string;          // 80EEB only, max 11
 }
 
@@ -67,11 +69,12 @@ let _loanIdCounter = 1;
 const nextLoanId = (): string => `loan-${Date.now()}-${_loanIdCounter++}`;
 
 const newLoan = (): LoanEntry => ({
-  id: nextLoanId(), loanTakenFrom: 'B', bankOrInstnName: '', loanAccNo: '',
+  id: nextLoanId(), loanTakenFrom: 'B', bankOrInstnName: '', lenderPAN: '', loanAccNo: '',
   dateOfLoan: '', totalLoanAmt: 0, loanOutstandingAmt: 0, interestAmount: 0,
+  firstTimeBuyerEligible: false,
 });
 
-const sectionKeyToDataKey: Record<SectionKey, string> = {
+const sectionKeyToDataKey: Record<SectionKey, keyof DeductionLoanData> = {
   '80E': 'section80E',
   '80EE': 'section80EE',
   '80EEA': 'section80EEA',
@@ -91,15 +94,15 @@ export const DeductionLoanManager: React.FC<DeductionLoanManagerProps> = ({ data
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SectionKey>('80E');
 
-  const getLoans = (key: SectionKey): LoanEntry[] => {
-    const d = data[sectionKeyToDataKey[key]] as any;
-    return d?.loans || [];
-  };
+  const getLoans = (key: SectionKey): LoanEntry[] => data[sectionKeyToDataKey[key]]?.loans || [];
 
   const setLoans = (key: SectionKey, loans: LoanEntry[]) => {
-    const d = { ...data };
-    (d as any)[sectionKeyToDataKey[key]] = { ...(d as any)[sectionKeyToDataKey[key]], loans };
-    onChange(d);
+    const dataKey = sectionKeyToDataKey[key];
+    if (dataKey === 'section80EEA') {
+      onChange({ ...data, section80EEA: { ...data.section80EEA, loans } });
+      return;
+    }
+    onChange({ ...data, [dataKey]: { ...data[dataKey], loans } });
   };
 
   const addLoan = (key: SectionKey) => {
@@ -122,22 +125,19 @@ export const DeductionLoanManager: React.FC<DeductionLoanManagerProps> = ({ data
   };
 
   // Grand totals per section
-  const sectionTotals = useMemo(() => {
-    const totals: Record<SectionKey, { totalLoan: number; totalOutstanding: number; totalInterest: number }> = {
-      '80E': { totalLoan: 0, totalOutstanding: 0, totalInterest: 0 },
-      '80EE': { totalLoan: 0, totalOutstanding: 0, totalInterest: 0 },
-      '80EEA': { totalLoan: 0, totalOutstanding: 0, totalInterest: 0 },
-      '80EEB': { totalLoan: 0, totalOutstanding: 0, totalInterest: 0 },
-    };
-    for (const sec of SECTIONS) {
-      for (const l of getLoans(sec.key)) {
-        totals[sec.key].totalLoan += l.totalLoanAmt;
-        totals[sec.key].totalOutstanding += l.loanOutstandingAmt;
-        totals[sec.key].totalInterest += l.interestAmount;
-      }
+  const sectionTotals: Record<SectionKey, { totalLoan: number; totalOutstanding: number; totalInterest: number }> = {
+    '80E': { totalLoan: 0, totalOutstanding: 0, totalInterest: 0 },
+    '80EE': { totalLoan: 0, totalOutstanding: 0, totalInterest: 0 },
+    '80EEA': { totalLoan: 0, totalOutstanding: 0, totalInterest: 0 },
+    '80EEB': { totalLoan: 0, totalOutstanding: 0, totalInterest: 0 },
+  };
+  for (const sec of SECTIONS) {
+    for (const loan of getLoans(sec.key)) {
+      sectionTotals[sec.key].totalLoan += loan.totalLoanAmt;
+      sectionTotals[sec.key].totalOutstanding += loan.loanOutstandingAmt;
+      sectionTotals[sec.key].totalInterest += loan.interestAmount;
     }
-    return totals;
-  }, [data]);
+  }
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif' }}>
@@ -257,6 +257,11 @@ export const DeductionLoanManager: React.FC<DeductionLoanManagerProps> = ({ data
                             placeholder="e.g., SBI, HDFC, ICICI" maxLength={125} style={inputStyle} />
                         </div>
                         <div>
+                          <label style={labelStyle}>Lender PAN *</label>
+                          <input type="text" value={loan.lenderPAN || ''} onChange={e => updateLoan(sec.key, loan.id, 'lenderPAN', e.target.value.toUpperCase().slice(0, 10))}
+                            placeholder="ABCDE1234F" maxLength={10} style={{ ...inputStyle, fontFamily: 'monospace', textTransform: 'uppercase' }} />
+                        </div>
+                        <div>
                           <label style={labelStyle}>Loan Account / Ref No *</label>
                           <input type="text" value={loan.loanAccNo} onChange={e => updateLoan(sec.key, loan.id, 'loanAccNo', e.target.value)}
                             placeholder="Account number" maxLength={20} style={{ ...inputStyle, fontFamily: 'monospace' }} />
@@ -283,6 +288,14 @@ export const DeductionLoanManager: React.FC<DeductionLoanManagerProps> = ({ data
                           <input type="number" value={loan.interestAmount || ''} onChange={e => updateLoan(sec.key, loan.id, 'interestAmount', parseFloat(e.target.value) || 0)}
                             placeholder="0" min={0} style={{ ...inputStyle, background: `${sec.color}08`, fontWeight: 600, color: sec.color }} />
                         </div>
+                        {sec.key === '80EE' && (
+                          <div style={{ display: 'flex', alignItems: 'center', paddingTop: 20 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
+                              <input type="checkbox" checked={loan.firstTimeBuyerEligible === true} onChange={e => updateLoan(sec.key, loan.id, 'firstTimeBuyerEligible', e.target.checked)} />
+                              Eligible first-time home buyer
+                            </label>
+                          </div>
+                        )}
                         {sec.showVehicleReg && (
                           <div>
                             <label style={labelStyle}>Vehicle Registration No. *</label>

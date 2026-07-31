@@ -9,7 +9,7 @@
 // plus preventive health checkup and medical expense for non-insured seniors.
 // UI style matches DonationEntryManager: collapsible cards with category badges.
 
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 
 // ---- Per-policy entry (maps to Sch80DInsDtls) ----
 interface Policy80D {
@@ -17,6 +17,8 @@ interface Policy80D {
   insurerName: string;    // → InsurerName (max 125, required)
   policyNo: string;       // → PolicyNo (max 75, required)
   premiumAmount: number;  // → HealthInsAmt (required)
+  policyType: 'INDIVIDUAL' | 'FAMILY_FLOATER' | 'GROUP' | 'OTHER';
+  dateOfCommencement: string;
 }
 
 // ---- One 80D "category" (self non-sr, self sr, parents non-sr, parents sr) ----
@@ -51,8 +53,6 @@ const CAP_PREVENTIVE = 5000;
 let _policyIdCounter = 1;
 const nextPolicyId = (): string => `80d-p-${Date.now()}-${_policyIdCounter++}`;
 
-const newCategory = (): Category80D => ({ policies: [], preventiveCheckup: 0, medicalExpense: 0 });
-
 function sumPremiums(policies: Policy80D[]): number {
   return policies.reduce((s, p) => s + p.premiumAmount, 0);
 }
@@ -85,7 +85,10 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
   };
 
   const addPolicy = (catKey: CatKey) => {
-    const newPolicy: Policy80D = { id: nextPolicyId(), insurerName: '', policyNo: '', premiumAmount: 0 };
+    const newPolicy: Policy80D = {
+      id: nextPolicyId(), insurerName: '', policyNo: '', premiumAmount: 0,
+      policyType: 'INDIVIDUAL', dateOfCommencement: '',
+    };
     updateCategory(catKey, c => ({ ...c, policies: [...c.policies, newPolicy] }));
     setExpandedId(newPolicy.id);
   };
@@ -118,18 +121,15 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
   };
 
   // Grand total
-  const totalEligible = useMemo(() => {
-    let total = 0;
-    const caps: Record<CatKey, number> = { selfFamily: CAP_SELF_FAMILY, selfFamilySenior: CAP_SELF_FAMILY_SR, parents: CAP_PARENTS, parentsSenior: CAP_PARENTS_SR };
-    for (const cm of CATS) {
-      if (!visibilityMap[cm.key]) continue;
-      const cat = data[cm.key] as Category80D;
-      const prem = sumPremiums(cat.policies);
-      const premEligible = Math.min(prem, caps[cm.key]);
-      total += premEligible + Math.min(cat.preventiveCheckup, CAP_PREVENTIVE) + Math.min(cat.medicalExpense, caps[cm.key] - premEligible);
-    }
-    return total;
-  }, [data]);
+  let totalEligible = 0;
+  const caps: Record<CatKey, number> = { selfFamily: CAP_SELF_FAMILY, selfFamilySenior: CAP_SELF_FAMILY_SR, parents: CAP_PARENTS, parentsSenior: CAP_PARENTS_SR };
+  for (const cm of CATS) {
+    if (!visibilityMap[cm.key]) continue;
+    const cat = data[cm.key] as Category80D;
+    const prem = sumPremiums(cat.policies);
+    const premEligible = Math.min(prem, caps[cm.key]);
+    totalEligible += premEligible + Math.min(cat.preventiveCheckup, CAP_PREVENTIVE) + Math.min(cat.medicalExpense, caps[cm.key] - premEligible);
+  }
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif' }}>
@@ -269,6 +269,19 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
                           <label style={labelStyle}>Premium Amount (₹) *</label>
                           <input type="number" value={p.premiumAmount || ''} onChange={e => updatePolicy(cm.key, p.id, 'premiumAmount', parseFloat(e.target.value) || 0)}
                             placeholder="0" min={0} style={{ ...inputStyle, fontWeight: 600 }} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Policy Type *</label>
+                          <select value={p.policyType || 'INDIVIDUAL'} onChange={e => updatePolicy(cm.key, p.id, 'policyType', e.target.value)} style={inputStyle}>
+                            <option value="INDIVIDUAL">Individual</option>
+                            <option value="FAMILY_FLOATER">Family Floater</option>
+                            <option value="GROUP">Group Policy</option>
+                            <option value="OTHER">Other</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Date of Commencement *</label>
+                          <input type="date" value={p.dateOfCommencement || ''} onChange={e => updatePolicy(cm.key, p.id, 'dateOfCommencement', e.target.value)} style={inputStyle} />
                         </div>
                       </div>
                     </div>

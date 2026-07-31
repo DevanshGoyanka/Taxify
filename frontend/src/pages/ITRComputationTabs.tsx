@@ -384,17 +384,33 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
           </select>
         </div>
         <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disease Code (80DDB)</label>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>User Type (80DDB) *</label>
+          <select value={formData.s80DDB_usrType || ''} onChange={(e) => setFormData({ ...formData, s80DDB_usrType: e.target.value })}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
+            <option value="">-- Select --</option>
+            <option value="1">1 - Self / Dependent</option>
+            <option value="2">2 - Senior Citizen (Self)</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disease Code (80DDB) *</label>
           <select value={formData.s80DDB_diseaseCode || ''} onChange={(e) => setFormData({ ...formData, s80DDB_diseaseCode: e.target.value })}
             style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
             <option value="">-- Select Disease --</option>
-            <option value="01">01 - Neurological Disease (60%+)</option>
-            <option value="02">02 - Parkinson's Disease</option>
-            <option value="03">03 - Malignant Cancer</option>
-            <option value="04">04 - AIDS</option>
-            <option value="05">05 - Chronic Renal Failure</option>
-            <option value="06">06 - Hemophilia</option>
-            <option value="07">07 - Thalassemia</option>
+            <option value="a">a - Dementia</option>
+            <option value="b">b - Dystonia Musculorum Deformans</option>
+            <option value="c">c - Motor Neuron Disease</option>
+            <option value="d">d - Ataxia</option>
+            <option value="e">e - Chorea</option>
+            <option value="f">f - Hemiballismus</option>
+            <option value="g">g - Aphasia</option>
+            <option value="h">h - Parkinson's Disease</option>
+            <option value="i">i - Malignant Cancers</option>
+            <option value="j">j - Full Blown AIDS</option>
+            <option value="k">k - Chronic Renal Failure</option>
+            <option value="l">l - Hematological Disorders</option>
+            <option value="m">m - Hemophilia</option>
+            <option value="n">n - Thalassaemia</option>
           </select>
         </div>
         <div>
@@ -407,38 +423,47 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
           <select value={formData.s80DD_natureOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80DD_natureOfDisability: e.target.value })}
             style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
             <option value="">-- Select --</option>
-            <option value="PHYSICAL">Physical Disability</option>
-            <option value="MENTAL">Mental Disability</option>
-            <option value="BLIND">Blindness</option>
-            <option value="HEARING">Hearing Impairment</option>
-            <option value="LOCOMOTOR">Locomotor Disability</option>
-            <option value="CEREBRAL_PALSY">Cerebral Palsy</option>
-            <option value="AUTISM">Autism</option>
-            <option value="MULTIPLE">Multiple Disabilities</option>
+            <option value="1">1 - Dependent person with disability</option>
+            <option value="2">2 - Dependent person with severe disability</option>
           </select>
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Type (80DD)</label>
-          <select value={formData.s80DD_typeOfDisability || 'NORMAL'} onChange={(e) => setFormData({ ...formData, s80DD_typeOfDisability: e.target.value })}
+          <select value={formData.s80DD_typeOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80DD_typeOfDisability: e.target.value })}
             style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="NORMAL">Normal (40-79%)</option>
-            <option value="SEVERE">Severe (80%+)</option>
+            <option value="">-- Select --</option>
+            <option value="1">1 - Autism, cerebral palsy or multiple disabilities</option>
+            <option value="2">2 - Other disability</option>
           </select>
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Dependent Type (80DD)</label>
-          <select value={formData.s80DD_dependentType || 'SELF'} onChange={(e) => setFormData({ ...formData, s80DD_dependentType: e.target.value })}
+          <select value={formData.s80DD_dependentType || ''} onChange={(e) => setFormData({ ...formData, s80DD_dependentType: e.target.value })}
             style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="SELF">Self</option>
-            <option value="SPOUSE">Spouse</option>
-            <option value="CHILD">Child</option>
-            <option value="PARENT">Parent</option>
-            <option value="SIBLING">Sibling</option>
+            <option value="">-- Select --</option>
+            <option value="1">1 - Spouse</option><option value="2">2 - Son</option><option value="3">3 - Daughter</option>
+            <option value="4">4 - Father</option><option value="5">5 - Mother</option><option value="6">6 - Brother</option>
+            <option value="7">7 - Sister</option><option value="8">8 - HUF Member</option>
           </select>
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>UDID Number (80DD)</label>
           <input type="text" value={formData.s80DD_udid || ''} onChange={(e) => setFormData({ ...formData, s80DD_udid: e.target.value })} placeholder="Unique Disability ID" maxLength={18}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace' }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Form 10-IA Ack. No. (80DD)</label>
+          <input type="text" value={formData.s80DD_form10IA_ackno || ''} onChange={(e) => setFormData({ ...formData, s80DD_form10IA_ackno: e.target.value })} placeholder="Form 10-IA Acknowledgment Number" maxLength={15}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Dependent PAN (80DD)</label>
+          <input type="text" value={formData.s80DD_dependentPAN || ''} onChange={(e) => setFormData({ ...formData, s80DD_dependentPAN: e.target.value.toUpperCase() })} placeholder="ABCDE1234F" maxLength={10}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace', textTransform: 'uppercase' }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Dependent Aadhaar (80DD)</label>
+          <input type="text" value={formData.s80DD_dependentAadhaar || ''} onChange={(e) => setFormData({ ...formData, s80DD_dependentAadhaar: e.target.value.replace(/\D/g, '').slice(0, 12) })} placeholder="12-digit Aadhaar" maxLength={12}
             style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace' }} />
         </div>
         <div>
@@ -459,28 +484,28 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
           <select value={formData.s80U_natureOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80U_natureOfDisability: e.target.value })}
             style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
             <option value="">-- Select --</option>
-            <option value="PHYSICAL">Physical Disability</option>
-            <option value="MENTAL">Mental Disability</option>
-            <option value="BLIND">Blindness</option>
-            <option value="HEARING">Hearing Impairment</option>
-            <option value="LOCOMOTOR">Locomotor Disability</option>
-            <option value="CEREBRAL_PALSY">Cerebral Palsy</option>
-            <option value="AUTISM">Autism</option>
-            <option value="MULTIPLE">Multiple Disabilities</option>
+            <option value="1">1 - Self with disability</option>
+            <option value="2">2 - Self with severe disability</option>
           </select>
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Type (80U)</label>
-          <select value={formData.s80U_typeOfDisability || 'NORMAL'} onChange={(e) => setFormData({ ...formData, s80U_typeOfDisability: e.target.value })}
+          <select value={formData.s80U_typeOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80U_typeOfDisability: e.target.value })}
             style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="NORMAL">Normal (40-79%)</option>
-            <option value="SEVERE">Severe (80%+)</option>
+            <option value="">-- Select --</option>
+            <option value="1">1 - Autism, cerebral palsy or multiple disabilities</option>
+            <option value="2">2 - Other disability</option>
           </select>
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>UDID Number (80U)</label>
           <input type="text" value={formData.s80U_udid || ''} onChange={(e) => setFormData({ ...formData, s80U_udid: e.target.value })} placeholder="Unique Disability ID" maxLength={18}
             style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace' }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Form 10-IA Ack. No. (80U)</label>
+          <input type="text" value={formData.s80U_form10IA_ackno || ''} onChange={(e) => setFormData({ ...formData, s80U_form10IA_ackno: e.target.value })} placeholder="Form 10-IA Acknowledgment Number" maxLength={15}
+            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Form 10-IA Filed? (80U)</label>
@@ -921,9 +946,9 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>BSR Code *</label>
               <input type="text" value={entry.bsrCode || ''} onChange={(e) => {
                 const updated = [...(formData.advanceTaxEntries || [])];
-                updated[index] = { ...updated[index], bsrCode: e.target.value };
+                updated[index] = { ...updated[index], bsrCode: e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 7) };
                 setFormData({ ...formData, advanceTaxEntries: updated });
-              }} placeholder="7-digit" maxLength={7} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+              }} placeholder="7-character BSR" maxLength={7} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Deposit Date *</label>
@@ -935,11 +960,11 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Challan Serial No. *</label>
-              <input type="number" value={entry.challanSerialNo || ''} onChange={(e) => {
+              <input type="text" inputMode="numeric" value={entry.challanSerialNo || ''} onChange={(e) => {
                 const updated = [...(formData.advanceTaxEntries || [])];
-                updated[index] = { ...updated[index], challanSerialNo: parseInt(e.target.value) || 0 };
+                updated[index] = { ...updated[index], challanSerialNo: e.target.value.replace(/\D/g, '').slice(0, 5) };
                 setFormData({ ...formData, advanceTaxEntries: updated });
-              }} placeholder="0" min={0} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+              }} placeholder="5-digit serial" maxLength={5} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Amount (₹) *</label>
