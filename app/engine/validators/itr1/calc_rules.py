@@ -77,7 +77,7 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
         ))
 
     # Rule 160: New regime HP loss → GTI = salary + OS only (HP loss disallowed)
-    if is_new and result.hp_loss_disallowed < 0:
+    if is_new and result.hp_loss_disallowed > 0:
         expected_new_gti = result.salary_income + result.other_sources_income + cg_112a
         if not _eq(gti, expected_new_gti):
             results.append(_make(

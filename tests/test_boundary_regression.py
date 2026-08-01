@@ -294,7 +294,7 @@ class Test112A:
             filing_date=_today(), due_date=_due_date(), house_property_count=1,
         )
         r = compute_itr1(inp)
-        assert r.capital_gains_112a == Decimal("0")  # fully exempt
+        assert r.capital_gains_112a == Decimal("125000")  # included in GTI, exempt from 112A tax
         assert r.special_rate_tax == Decimal("0")
         assert not r.errors  # eligible
 
@@ -328,7 +328,8 @@ class Test112A:
             filing_date=_today(), due_date=_due_date(), house_property_count=1,
         )
         r = compute_itr1(inp)
-        assert r.capital_gains_112a == Decimal("0")
+        assert r.capital_gains_112a == Decimal("124999")
+        assert r.special_rate_tax == Decimal("0")
 
     def test_112a_it4_allows_up_to_exemption(self):
         """ITR-4 also rejects above ₹1.25L. Within exemption: OK."""

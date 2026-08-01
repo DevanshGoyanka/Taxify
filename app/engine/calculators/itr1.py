@@ -48,7 +48,7 @@ from app.engine.common.cess import compute as compute_cess
 from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234f
 from app.engine.constants import LTCG_112A_EXEMPTION, LTCG_112A_RATE_POST_JUL24
 from app.engine.schedules.salary import compute as compute_salary
-from app.engine.schedules.house_property import compute as compute_hp
+from app.engine.schedules.house_property import compute as compute_hp, apply_inter_head_loss_limit
 from app.engine.schedules.other_sources import compute as compute_os
 from app.engine.schedules.agricultural import (
     compute as compute_agri,
@@ -204,7 +204,11 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.schedules["os"] = os
 
     result.salary_income = sal.income_chargeable
-    result.house_property_income = hp.income_chargeable
+
+    hp_setoff = apply_inter_head_loss_limit(hp, regime)
+    result.house_property_income = hp_setoff.allowed_income
+    result.hp_loss_disallowed = hp_setoff.disallowed_loss
+
     result.other_sources_income = os.income_chargeable
 
     # Salary detail fields for ITD JSON output
@@ -236,7 +240,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
             )
             return result
         entry = compute_112a(cg.ltcg_112a)
-        cg_112a_income = entry.taxable_income
+        cg_112a_income = entry.net_income
         cg_112a_tax = entry.tax_amount
         result.schedules["capital_gains_112a"] = entry
 
@@ -350,13 +354,22 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     due_date = input_data.due_date
     if filing_date and due_date:
         # 234A: 1% on net assessed tax (gross liability minus prepaid taxes)
-        assessed_tax = max(Decimal("0"),
-            result.gross_tax_liability - result.total_tds - result.total_tcs)
+        assessed_tax = max(
+            Decimal("0"),
+            result.gross_tax_liability - result.relief_89
+            - result.total_tds - result.total_tcs - input_data.advance_tax_paid,
+        )
         result.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
 
-        # 234B: 1% on shortfall in advance tax
+        # 234B: assessed tax excludes TDS/TCS but not advance tax, whose
+        # sufficiency is evaluated separately by compute_234b.
+        advance_tax_assessed = max(
+            Decimal("0"),
+            result.gross_tax_liability - result.relief_89
+            - result.total_tds - result.total_tcs,
+        )
         ay_start = date(due_date.year, 4, 1)
-        result.interest_234b = compute_234b(assessed_tax,
+        result.interest_234b = compute_234b(advance_tax_assessed,
             input_data.advance_tax_paid, filing_date, ay_start)
 
         # 234C: deferred installment interest
@@ -373,14 +386,18 @@ def compute(input_data: ITR1Input) -> ITR1Result:
             ]
         else:
             quarterly = [input_data.advance_tax_paid] if input_data.advance_tax_paid > 0 else [Decimal("0")]
-        result.interest_234c = compute_234c(quarterly, assessed_tax, ay_start)
+        result.interest_234c = compute_234c(quarterly, advance_tax_assessed, ay_start)
 
         result.late_fee_234f = compute_234f(filing_date, due_date, ti)
     result.total_interest = result.interest_234a + result.interest_234b + result.interest_234c
 
     # ── 12. Final payable / refund ───────────────────────────────────────────
     final_liability = round_to_nearest_10(
-        result.gross_tax_liability + result.total_interest + result.late_fee_234f
+        max(
+            Decimal("0"),
+            result.gross_tax_liability - result.relief_89
+            + result.total_interest + result.late_fee_234f,
+        )
     )
     diff = final_liability - result.total_taxes_paid
     if diff > 0:
@@ -389,7 +406,5 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     else:
         result.refund_due = abs(diff)
         result.net_tax_liability = final_liability
-
-    result.hp_loss_disallowed = hp.loss_disallowed
 
     return result

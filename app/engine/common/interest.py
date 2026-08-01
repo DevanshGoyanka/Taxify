@@ -47,7 +47,7 @@ def compute_234b(assessed_tax: Decimal, advance_tax_paid: Decimal,
     Triggered if advance_tax_paid < 90% of assessed_tax.
     Interest runs from April 1 of AY to the date of determination (filing date).
     """
-    if assessed_tax <= Decimal("10000") or assessed_tax <= 0:
+    if assessed_tax < Decimal("10000") or assessed_tax <= 0:
         return Decimal("0")
     if advance_tax_paid >= assessed_tax * Decimal("0.90"):
         return Decimal("0")
@@ -74,13 +74,14 @@ def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
     Shortfall is computed cumulatively: if cumulative paid < cumulative required,
     interest is levied at 1% on the shortfall for 3 months (one quarter).
     """
-    if total_assessed_tax <= Decimal("10000") or total_assessed_tax <= 0:
+    if total_assessed_tax < Decimal("10000") or total_assessed_tax <= 0:
         return Decimal("0")
     if not advance_tax_paid:
         advance_tax_paid = [Decimal("0")]
 
     if is_presumptive_44ad_44ada:
         required_pcts = [Decimal("1.00")]
+        advance_tax_paid = [sum(advance_tax_paid, Decimal("0"))]
     else:
         required_pcts = [Decimal("0.15"), Decimal("0.45"), Decimal("0.75"), Decimal("1.00")]
 
@@ -93,7 +94,8 @@ def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
         required = total_assessed_tax * req_pct
         shortfall = required - cumulative_paid
         if shortfall > 0:
-            total_interest += shortfall * Decimal("3") / Decimal("100")
+            months = Decimal("1") if i == len(required_pcts) - 1 else Decimal("3")
+            total_interest += shortfall * months / Decimal("100")
 
     return total_interest.quantize(Decimal("1"), rounding=ROUND_DOWN)
 

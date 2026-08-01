@@ -28,32 +28,39 @@ def compute(ded: Optional[Chapter6ADeductions], adjusted_gti: Decimal, regime: T
     if not ded or regime == TaxRegime.NEW:
         return Decimal("0")
 
-    total = Decimal("0")
+    without_limit = Decimal("0")
+    limited_100 = Decimal("0")
+    limited_50 = Decimal("0")
     donations = getattr(ded, "donations_80g", None) or []
 
     for d in donations:
         if not isinstance(d, Donation80G):
             continue
 
-        cash_amt = min(d.cash_amount, SECTION_80G_CASH_LIMIT)
-        non_cash_amt = d.non_cash_amount
-        total_donation = cash_amt + non_cash_amt
-
+        cash_amt = d.cash_amount if d.cash_amount <= SECTION_80G_CASH_LIMIT else Decimal("0")
+        total_donation = cash_amt + d.non_cash_amount
         if total_donation <= 0:
             continue
 
-        pct = d.qualifying_percentage
-        factor = Decimal("1") if pct == "100%" else Decimal("0.5")
-        qualifying_amount = total_donation * factor
-
-        limit_on_ded = (d.limit_on_deduction or "").lower()
-        if limit_on_ded == "with limit":
-            total += min(qualifying_amount, adjusted_gti * Decimal("0.10"))
+        is_full_rate = d.qualifying_percentage == "100%"
+        is_limited = (d.limit_on_deduction or "").lower() == "with limit"
+        if not is_limited:
+            without_limit += total_donation if is_full_rate else total_donation * Decimal("0.5")
+        elif is_full_rate:
+            limited_100 += total_donation
         else:
-            total += qualifying_amount
+            limited_50 += total_donation
+
+    # The 10% adjusted-GTI ceiling is shared by all limited categories. Apply
+    # it first to 100%-qualifying donations, then to 50%-qualifying donations.
+    common_limit = adjusted_gti * Decimal("0.10")
+    allowed_limited_100 = min(limited_100, common_limit)
+    remaining_limit = max(Decimal("0"), common_limit - allowed_limited_100)
+    allowed_limited_50 = min(limited_50, remaining_limit) * Decimal("0.5")
+    total = without_limit + allowed_limited_100 + allowed_limited_50
 
     # Fallback: scalar field when donations_80g list is empty
     if not donations:
         total = min(ded.amount_80g, adjusted_gti)
 
-    return total
+    return min(total, adjusted_gti)

@@ -47,6 +47,29 @@ class HPResult:
     loss_carried_forward: Decimal = Decimal("0")
 
 
+@dataclass
+class HPLossSetoffResult:
+    """House-property income allowed in GTI and current-year disallowed loss."""
+
+    allowed_income: Decimal = Decimal("0")
+    disallowed_loss: Decimal = Decimal("0")
+
+
+def apply_inter_head_loss_limit(hp_result: HPResult, regime: TaxRegime) -> HPLossSetoffResult:
+    """Apply current-year inter-head house-property loss restrictions."""
+    income = hp_result.income_chargeable
+    if income >= 0:
+        return HPLossSetoffResult(allowed_income=income)
+    if regime == TaxRegime.NEW:
+        return HPLossSetoffResult(disallowed_loss=abs(income))
+    limit = Decimal("200000")
+    allowed_income = max(income, -limit)
+    return HPLossSetoffResult(
+        allowed_income=allowed_income,
+        disallowed_loss=abs(income - allowed_income),
+    )
+
+
 def compute(input_data: Optional[HousePropertyIncome], regime: TaxRegime) -> HPResult:
     if not input_data:
         return HPResult()

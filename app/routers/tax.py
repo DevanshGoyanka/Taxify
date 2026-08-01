@@ -1,5 +1,5 @@
 import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -7,12 +7,66 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import User
-from app.schemas.itr1 import ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome, Chapter6ADeductions, CapitalGainsIncome, PropertyType, AgeBracket, TaxRegime
-from app.schemas.itr4 import ITR4Input, PresumptiveScheme, PresumptiveBusinessIncome44AD, PresumptiveProfessionalIncome44ADA
+from app.schemas.itr1 import (
+    ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
+    Chapter6ADeductions, CapitalGainsIncome, Donation80G, TDS1Entry, TDS2Entry,
+    TCSEntry, PropertyType, AgeBracket, TaxRegime,
+)
+from app.schemas.itr4 import (
+    ITR4Input, PresumptiveScheme, PresumptiveBusinessIncome44AD,
+    PresumptiveProfessionalIncome44ADA, PresumptiveGoodsCarriage44AE,
+    GoodsCarriageVehicle,
+)
 from app.engine.calculators.itr1 import compute as compute_itr1
 from app.engine.calculators.itr4 import compute as compute_itr4
 
 router = APIRouter(tags=["tax"])
+
+
+def _money(value: object) -> Decimal:
+    """Convert an untrusted JSON monetary value to a non-negative Decimal."""
+    if value is None or value == "":
+        return Decimal("0")
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid monetary value: {value!r}",
+        )
+    if not amount.is_finite() or amount < 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Monetary values must be finite and non-negative: {value!r}",
+        )
+    return amount
+
+
+def _records(payload: dict, key: str) -> list[dict]:
+    """Return validated object records from a JSON array field."""
+    value = payload.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{key} must be an array of objects",
+        )
+    return value
+
+
+def _date(value: object, field_name: str) -> Optional[datetime.date]:
+    """Parse an optional ISO date or reject an invalid date value."""
+    if value is None or value == "":
+        return None
+    try:
+        return datetime.date.fromisoformat(str(value))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{field_name} must be an ISO date (YYYY-MM-DD)",
+        )
+
 
 @router.post("/tax-summary/compute")
 @router.post("/api/tax/compute")
@@ -21,6 +75,13 @@ def compute_tax_summary(
     regime: str = "NEW",
     current_user: User = Depends(get_current_user),
 ):
+    assessment_year = str(payload.get("assessmentYear") or "2026-27")
+    if assessment_year != "2026-27":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Tax computation currently supports assessment year 2026-27 only.",
+        )
+
     # Determine age
     age = int(payload.get("age", 30) or 30)
     if age >= 80:
@@ -32,150 +93,415 @@ def compute_tax_summary(
         
     tax_regime = TaxRegime.OLD if regime.upper() == "OLD" else TaxRegime.NEW
     
-    # 1. Map Salary
-    basic = float(payload.get("basic", 0) or 0)
-    da = float(payload.get("da", 0) or 0)
-    bonus = float(payload.get("bonus", 0) or 0)
-    commission = float(payload.get("commission", 0) or 0)
-    hra_received = float(payload.get("hraReceived", 0) or 0)
-    perquisites = float(payload.get("perquisites", 0) or 0)
-    profits_in_lieu = float(payload.get("profitsInLieu", 0) or 0)
-    other_allowance = float(payload.get("otherAllowance", 0) or 0)
-    
-    gross_salary = basic + da + bonus + commission + hra_received + perquisites + profits_in_lieu + other_allowance
-    hra_exempt = float(payload.get("hraExempt", 0) or 0)
-    lta_exempt = float(payload.get("ltaExempt", 0) or 0)
-    prof_tax = float(payload.get("profTax", 0) or 0)
-    ent_allowance = float(payload.get("entertainmentAllowance", 0) or 0)
-    is_govt = bool(payload.get("isGovernmentEmployee", False))
-    
+    # 1. Map Salary. Canonical employer rows take precedence over legacy scalars.
+    employers = _records(payload, "employerEntries")
+    salary_rows = employers if employers else [payload]
+    basic = sum((_money(row.get("basic")) for row in salary_rows), Decimal("0"))
+    da = sum((_money(row.get("da")) for row in salary_rows), Decimal("0"))
+    bonus = sum((_money(row.get("bonus")) for row in salary_rows), Decimal("0"))
+    commission = sum((_money(row.get("commission")) for row in salary_rows), Decimal("0"))
+    hra_received = sum(
+        (_money(row.get("hra", row.get("hraReceived"))) for row in salary_rows),
+        Decimal("0"),
+    )
+    perquisites = sum((_money(row.get("perquisites")) for row in salary_rows), Decimal("0"))
+    profits_in_lieu = sum((_money(row.get("profitsInLieu")) for row in salary_rows), Decimal("0"))
+    other_allowance = sum(
+        (_money(row.get("otherAllowance", row.get("allowances"))) for row in salary_rows),
+        Decimal("0"),
+    )
+
+    # gross_salary is section 17(1) salary only. Perquisites and profits in lieu
+    # are separate sections and are added exactly once by the salary schedule.
+    section_17_1_salary = basic + da + bonus + commission + hra_received + other_allowance
+    gross_salary = section_17_1_salary + perquisites + profits_in_lieu
+    hra_exempt = sum((_money(row.get("hraExempt")) for row in salary_rows), Decimal("0"))
+    lta_exempt = sum((_money(row.get("ltaExempt")) for row in salary_rows), Decimal("0"))
+    prof_tax = sum(
+        (_money(row.get("professionalTax", row.get("profTax"))) for row in salary_rows),
+        Decimal("0"),
+    )
+    ent_allowance = sum(
+        (_money(row.get("entertainmentAllowance")) for row in salary_rows),
+        Decimal("0"),
+    )
+    is_govt = any(bool(row.get("isGovernmentEmployee", False)) for row in salary_rows)
+
     salary_input = SalaryIncome(
-        gross_salary=Decimal(str(gross_salary)),
-        perquisites_value=Decimal(str(perquisites)),
-        profits_in_lieu_of_salary=Decimal(str(profits_in_lieu)),
-        hra_exempt_amount=Decimal(str(hra_exempt)),
-        lta_exempt_amount=Decimal(str(lta_exempt)),
-        professional_tax_paid=Decimal(str(prof_tax)),
-        entertainment_allowance=Decimal(str(ent_allowance)),
-        is_government_employee=is_govt
+        gross_salary=section_17_1_salary,
+        perquisites_value=perquisites,
+        profits_in_lieu_of_salary=profits_in_lieu,
+        hra_exempt_amount=hra_exempt,
+        lta_exempt_amount=lta_exempt,
+        professional_tax_paid=prof_tax,
+        entertainment_allowance=ent_allowance,
+        is_government_employee=is_govt,
     )
     
-    # 2. Map HP
-    hp_type = payload.get("hpType", "self")
+    # 2. Map the first canonical property; ITR-1/4 computation schemas currently
+    # represent one aggregate property schedule.
+    properties = _records(payload, "housePropertyEntries")
+    property_row = properties[0] if properties else payload
+    raw_hp_type = str(property_row.get("propertyType", property_row.get("hpType", "self"))).upper()
+    property_type = {
+        "SELF": PropertyType.SELF_OCCUPIED,
+        "SELF_OCCUPIED": PropertyType.SELF_OCCUPIED,
+        "LET_OUT": PropertyType.LET_OUT,
+        "DEEMED_LET_OUT": PropertyType.DEEMED_LET_OUT,
+    }.get(raw_hp_type, PropertyType.LET_OUT)
+    loan_interest = _money(property_row.get("interestOnLoan"))
+    if loan_interest == 0:
+        loan_interest = sum(
+            (_money(loan.get("interestUs24B")) for loan in _records(property_row, "homeLoans")),
+            Decimal("0"),
+        )
+    if loan_interest == 0:
+        loan_interest = _money(property_row.get("homeLoanInt", property_row.get("sopLoanInt")))
     hp_input = HousePropertyIncome(
-        property_type=PropertyType.SELF_OCCUPIED if hp_type == "self" else PropertyType.LET_OUT,
-        annual_rent_received=Decimal(str(payload.get("grossRent", 0) or 0)),
-        municipal_taxes_paid=Decimal(str(payload.get("munTax", 0) or 0)),
-        home_loan_interest_paid=Decimal(str(payload.get("homeLoanInt", 0) or payload.get("sopLoanInt", 0) or 0))
+        property_type=property_type,
+        annual_rent_received=_money(property_row.get("annualRent", property_row.get("grossRent"))),
+        municipal_taxes_paid=_money(property_row.get("municipalTaxesPaid", property_row.get("munTax"))),
+        home_loan_interest_paid=loan_interest,
+        municipal_value=_money(property_row.get("municipalRateableValue")),
+        fair_rent=_money(property_row.get("fairRentValue")),
+        arrears_unrealised_rent_received=_money(property_row.get("arrearsOfRent")),
     )
     
-    # 3. Map Other Sources
-    interest_sb = float(payload.get("interestSB", 0) or 0)
-    interest_fd = float(payload.get("interestFD", 0) or 0)
-    interest_rd = float(payload.get("interestRD", 0) or 0)
-    nsc_interest = float(payload.get("nscInterest", 0) or 0)
-    scss_interest = float(payload.get("scssInterest", 0) or 0)
-    post_office_interest = float(payload.get("postOfficeInterest", 0) or 0)
-    other_interest = float(payload.get("otherInterest", 0) or 0)
-    
+    # 3. Map Other Sources. Canonical rows take precedence over scalar aliases.
+    interest_rows = _records(payload, "interestEntries") or _records(payload, "bankInterestEntries")
+    if interest_rows:
+        savings_kinds = {"SAVINGS_BANK", "POST_OFFICE"}
+        interest_sb = sum(
+            (_money(row.get("grossAmount")) for row in interest_rows if str(row.get("kind", row.get("itdTag", ""))).upper() in savings_kinds),
+            Decimal("0"),
+        )
+        interest_fd = sum(
+            (_money(row.get("grossAmount")) for row in interest_rows if str(row.get("kind", row.get("itdTag", ""))).upper() not in savings_kinds),
+            Decimal("0"),
+        )
+        interest_rd = nsc_interest = scss_interest = post_office_interest = other_interest = Decimal("0")
+    else:
+        interest_sb = _money(payload.get("interestSB"))
+        interest_fd = _money(payload.get("interestFD"))
+        interest_rd = _money(payload.get("interestRD"))
+        nsc_interest = _money(payload.get("nscInterest"))
+        scss_interest = _money(payload.get("scssInterest"))
+        post_office_interest = _money(payload.get("postOfficeInterest"))
+        other_interest = _money(payload.get("otherInterest"))
     total_interest = interest_sb + interest_fd + interest_rd + nsc_interest + scss_interest + post_office_interest + other_interest
-    
-    dividend_shares = float(payload.get("dividendShares", 0) or 0)
-    dividend_mf = float(payload.get("dividendMF", 0) or 0)
-    dividend_units = float(payload.get("dividendUnits", 0) or 0)
-    dividends_legacy = float(payload.get("dividends", 0) or 0)
-    total_dividend = dividend_shares + dividend_mf + dividend_units + dividends_legacy
-    
-    family_pension = float(payload.get("familyPension", 0) or 0)
-    lottery = float(payload.get("lotteryIncome", 0) or 0)
-    horse_race = float(payload.get("horseRaceIncome", 0) or 0)
-    vda_gains = float(payload.get("vdaGains", 0) or 0)
-    
+
+    dividend_rows = _records(payload, "dividendEntries")
+    if dividend_rows:
+        total_dividend = sum((_money(row.get("grossAmount")) for row in dividend_rows), Decimal("0"))
+    else:
+        total_dividend = (
+            _money(payload.get("dividendShares")) + _money(payload.get("dividendMF"))
+            + _money(payload.get("dividendUnits")) + _money(payload.get("dividends"))
+        )
+
+    family_pension_row = payload.get("familyPensionEntry")
+    family_pension = (
+        _money(family_pension_row.get("grossAmount"))
+        if isinstance(family_pension_row, dict)
+        else _money(payload.get("familyPension"))
+    )
+    winnings_rows = _records(payload, "winningsEntries")
+    lottery = _money(payload.get("lotteryIncome")) + sum(
+        (_money(row.get("grossAmount")) for row in winnings_rows if str(row.get("type", "")).upper() != "HORSE_RACE"),
+        Decimal("0"),
+    )
+    horse_race = _money(payload.get("horseRaceIncome")) + sum(
+        (_money(row.get("grossAmount")) for row in winnings_rows if str(row.get("type", "")).upper() == "HORSE_RACE"),
+        Decimal("0"),
+    )
+    vda_gains = _money(payload.get("vdaGains"))
+    if lottery + horse_race + vda_gains > 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Lottery, gaming, horse-race, or VDA income is outside ITR-1/ITR-4; use the applicable ITR-2/ITR-3 computation.",
+        )
+
     os_input = OtherSourcesIncome(
-        savings_bank_interest=Decimal(str(interest_sb + post_office_interest)),
-        fixed_deposit_interest=Decimal(str(interest_fd + interest_rd + nsc_interest + scss_interest + other_interest)),
-        family_pension_received=Decimal(str(family_pension)),
-        dividend_income=Decimal(str(total_dividend))
+        savings_bank_interest=interest_sb + post_office_interest,
+        fixed_deposit_interest=interest_fd + interest_rd + nsc_interest + scss_interest + other_interest,
+        family_pension_received=family_pension,
+        dividend_income=total_dividend,
     )
     
-    # 4. Map Deductions
-    epf = float(payload.get("s80C_epf", 0) or 0)
-    ppf = float(payload.get("s80C_ppf", 0) or 0)
-    elss = float(payload.get("s80C_elss", 0) or 0)
-    lic = float(payload.get("s80C_lic", 0) or 0)
-    home_principal = float(payload.get("s80C_home", 0) or 0)
-    total_80c = epf + ppf + elss + lic + home_principal
-    
+    # 4. Map deductions from canonical managers where available.
+    investments_80c = payload.get("section80C")
+    investment_rows = (
+        investments_80c.get("investments", [])
+        if isinstance(investments_80c, dict)
+        else []
+    )
+    if investment_rows and all(isinstance(row, dict) for row in investment_rows):
+        total_80c = sum((_money(row.get("amount")) for row in investment_rows), Decimal("0"))
+    else:
+        total_80c = sum(
+            (_money(payload.get(key)) for key in ["s80C_epf", "s80C_ppf", "s80C_elss", "s80C_lic", "s80C_home"]),
+            Decimal("0"),
+        )
+
+    section_80d = payload.get("section80D")
+
+    def _category_80d(category: object) -> tuple[Decimal, Decimal]:
+        if not isinstance(category, dict):
+            return Decimal("0"), Decimal("0")
+        policies = category.get("policies") or []
+        if not isinstance(policies, list):
+            raise HTTPException(status_code=422, detail="Section 80D policies must be an array.")
+        premiums = sum(
+            (_money(policy.get("premiumAmount")) for policy in policies if isinstance(policy, dict)),
+            Decimal("0"),
+        )
+        eligible_amount = premiums + _money(category.get("medicalExpense"))
+        preventive = _money(category.get("preventiveCheckup"))
+        return eligible_amount, preventive
+
+    if isinstance(section_80d, dict):
+        self_is_senior = section_80d.get("selfSeniorCitizen") in {"Y", "S"}
+        parents_are_senior = section_80d.get("parentsSeniorCitizen") in {"Y", "P"}
+        self_key = "selfFamilySenior" if self_is_senior else "selfFamily"
+        parents_key = "parentsSenior" if parents_are_senior else "parents"
+        self_80d, preventive_self = _category_80d(section_80d.get(self_key))
+        parents_80d, preventive_parents = _category_80d(section_80d.get(parents_key))
+    else:
+        parents_are_senior = False
+        self_80d = _money(payload.get("s80D_self"))
+        parents_80d = _money(payload.get("s80D_parent"))
+        preventive_self = Decimal("0")
+        preventive_parents = Decimal("0")
+
+    donation_rows = _records(payload, "donationEntries")
+    donations = []
+    category_map = {
+        "100_NO_APPROVAL": ("100%", "without limit"),
+        "50_NO_APPROVAL": ("50%", "without limit"),
+        "100_APPROVAL_REQD": ("100%", "with limit"),
+        "50_APPROVAL_REQD": ("50%", "with limit"),
+    }
+    for row in donation_rows:
+        percentage, limit = category_map.get(
+            str(row.get("category", "100_NO_APPROVAL")),
+            ("100%", "without limit"),
+        )
+        donations.append(Donation80G(
+            cash_amount=_money(row.get("donationAmtCash")),
+            non_cash_amount=_money(row.get("donationAmtOtherMode")),
+            qualifying_percentage=percentage,
+            limit_on_deduction=limit,
+        ))
+
     ded_input = Chapter6ADeductions(
-        amount_80c=Decimal(str(total_80c)),
-        amount_80ccd1b=Decimal(str(payload.get("s80CCD1B", 0) or 0)),
-        amount_80ccd2=Decimal(str(payload.get("s80CCD2", 0) or 0)),
-        amount_80d_self_family=Decimal(str(payload.get("s80D_self", 0) or 0)),
-        amount_80d_parents=Decimal(str(payload.get("s80D_parent", 0) or 0)),
-        amount_80e=Decimal(str(payload.get("s80E", 0) or 0)),
-        amount_80tta=Decimal(str(payload.get("s80TTA", 0) or 0)),
-        amount_80ttb=Decimal(str(payload.get("s80TTB", 0) or 0)),
-        amount_80g=Decimal(str(payload.get("s80G", 0) or 0))
+        amount_80c=total_80c,
+        amount_80ccd1b=_money(payload.get("s80CCD1B")),
+        amount_80ccd2=_money(payload.get("s80CCD2")),
+        amount_80d_self_family=self_80d,
+        amount_80d_parents=parents_80d,
+        amount_80d_preventive_self=preventive_self,
+        amount_80d_preventive_parents=preventive_parents,
+        has_parents_senior=parents_are_senior,
+        amount_80e=_money(payload.get("s80E")),
+        amount_80tta=_money(payload.get("s80TTA")),
+        amount_80ttb=_money(payload.get("s80TTB")),
+        amount_80g=_money(payload.get("s80G")),
+        donations_80g=donations or None,
     )
     
     # 5. Map Capital Gains
     cg_input = CapitalGainsIncome(
-        ltcg_112a=Decimal(str(payload.get("ltcg112APre", 0) or payload.get("ltcg112APost", 0) or 0))
+        ltcg_112a=_money(payload.get("ltcg112APre")) + _money(payload.get("ltcg112APost"))
+    )
+
+    tds1_entries = []
+    tds2_entries = []
+    for row in _records(payload, "tdsEntries"):
+        tan = str(row.get("deductorTAN") or "")
+        section = str(row.get("section") or "")
+        tax = _money(row.get("taxDeducted", row.get("tdsDeducted")))
+        gross = _money(row.get("grossAmount", row.get("incomeAmount")))
+        if section in {"192", "S192"}:
+            tds1_entries.append(TDS1Entry(
+                employer_tan=tan or None,
+                employer_name=str(row.get("deductorName") or "") or None,
+                income_chargeable=gross,
+                tds_deducted=tax,
+            ))
+        elif tax > 0 or gross > 0:
+            if not tan:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="A non-salary TDS claim requires deductor TAN.",
+                )
+            tds2_entries.append(TDS2Entry(
+                deductor_tan=tan,
+                deductor_name=str(row.get("deductorName") or "") or None,
+                tds_section=section or "194A",
+                gross_amount=gross,
+                tds_deducted=tax,
+            ))
+
+    tcs_entries = []
+    for row in _records(payload, "tcsEntries"):
+        tan = str(row.get("collectorTAN") or "")
+        collected = _money(row.get("taxCollected", row.get("tcsCollected")))
+        gross = _money(row.get("grossAmount"))
+        if collected > 0 or gross > 0:
+            if not tan:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="A TCS claim requires collector TAN.",
+                )
+            tcs_entries.append(TCSEntry(
+                collector_tan=tan,
+                collector_name=str(row.get("collectorName") or "") or None,
+                tcs_section=str(row.get("section") or "206C"),
+                gross_amount=gross,
+                tcs_collected=collected,
+            ))
+
+    advance_entries = _records(payload, "advanceTaxEntries")
+    self_assessment_entries = _records(payload, "selfAssessmentTaxEntries")
+    quarterly_advance = [Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")]
+    if advance_entries:
+        installment_deadlines = (
+            datetime.date(2025, 6, 15), datetime.date(2025, 9, 15),
+            datetime.date(2025, 12, 15), datetime.date(2026, 3, 15),
+        )
+        for row in advance_entries:
+            amount = _money(row.get("amount"))
+            deposit_date = _date(row.get("depositDate"), "advanceTaxEntries.depositDate")
+            if deposit_date is None and amount > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="An advance-tax challan with an amount requires depositDate.",
+                )
+            bucket = 3
+            if deposit_date is not None:
+                for index, deadline in enumerate(installment_deadlines):
+                    if deposit_date <= deadline:
+                        bucket = index
+                        break
+            quarterly_advance[bucket] += amount
+        advance_tax_paid = sum(quarterly_advance, Decimal("0"))
+    else:
+        quarterly_advance = [
+            _money(payload.get("adv15Jun")), _money(payload.get("adv15Sep")),
+            _money(payload.get("adv15Dec")), _money(payload.get("adv15Mar")),
+        ]
+        advance_tax_paid = sum(quarterly_advance, Decimal("0"))
+    self_assessment_paid = (
+        sum((_money(row.get("amount")) for row in self_assessment_entries), Decimal("0"))
+        if self_assessment_entries else _money(payload.get("selfTax"))
     )
     
-    # Run calculation
-    # Check if this is ITR-4 (by checking presumptive turnover/income)
-    biz_turnover = float(payload.get("bizTurnover", 0) or 0)
-    bp_profit = float(payload.get("bpNetProfit", 0) or 0)
-    presumptive_type = payload.get("bizPresumptive", "44AD")
-    
-    is_itr4 = biz_turnover > 0 or bp_profit > 0
-    
-    if is_itr4:
-        # Map ITR4
-        scheme_enum = PresumptiveScheme.S44AD
-        if presumptive_type == "44ADA":
-            scheme_enum = PresumptiveScheme.S44ADA
-            prof_income = PresumptiveProfessionalIncome44ADA(
-                gross_receipts=Decimal(str(biz_turnover)),
-                digital_receipts=Decimal(str(biz_turnover)),
-                cash_receipts=Decimal("0"),
-                income_declared=Decimal(str(bp_profit))
-            )
-            biz_income = None
-        else:
-            biz_income = PresumptiveBusinessIncome44AD(
-                total_turnover=Decimal(str(biz_turnover)),
-                digital_turnover=Decimal(str(biz_turnover)),
-                cash_turnover=Decimal("0"),
-                income_declared=Decimal(str(bp_profit))
-            )
-            prof_income = None
-            
-        itr4_in = ITR4Input(
-            age_bracket=age_bracket,
-            tax_regime=tax_regime,
-            presumptive_scheme=scheme_enum,
-            business_income_44ad=biz_income,
-            professional_income_44ada=prof_income,
-            salary_income=salary_input,
-            house_property_income=hp_input,
-            other_sources_income=os_input,
-            deductions_chapter6a=ded_input
+    # Run calculation. Canonical business rows take precedence.
+    business_rows = _records(payload, "businessEntries") or _records(payload, "businesses")
+    if len(business_rows) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Multiple presumptive businesses are not yet supported by this calculation endpoint.",
         )
+    business_row = business_rows[0] if business_rows else None
+    biz_turnover = _money(payload.get("bizTurnover"))
+    bp_profit = _money(payload.get("bizDeclared", payload.get("bpNetProfit")))
+    presumptive_type = str(payload.get("bizPresumptive", "44AD"))
+    if business_row:
+        presumptive_type = str(business_row.get("scheme", presumptive_type))
+
+    requested_form = str(payload.get("form", payload.get("itrForm", ""))).upper()
+    is_itr4 = requested_form == "ITR-4" or bool(business_row) or biz_turnover > 0 or bp_profit > 0
+
+    common_input = dict(
+        age_bracket=age_bracket,
+        tax_regime=tax_regime,
+        salary_income=salary_input,
+        house_property_income=hp_input,
+        other_sources_income=os_input,
+        deductions_chapter6a=ded_input,
+        capital_gains=cg_input,
+        tds1_entries=tds1_entries or None,
+        tds2_entries=tds2_entries or None,
+        tcs_entries=tcs_entries or None,
+        advance_tax_paid=advance_tax_paid,
+        self_assessment_tax_paid=self_assessment_paid,
+        advance_tax_q1=quarterly_advance[0],
+        advance_tax_q2=quarterly_advance[1],
+        advance_tax_q3=quarterly_advance[2],
+        advance_tax_q4=quarterly_advance[3],
+        filing_date=_date(payload.get("filingDate"), "filingDate"),
+        due_date=_date(payload.get("dueDate"), "dueDate"),
+        house_property_count=max(1, len(properties)),
+        relief_89=_money(payload.get("relief89", payload.get("relief_89"))),
+    )
+
+    if is_itr4:
+        if presumptive_type == "44ADA":
+            digital = _money(business_row.get("digitalReceipts")) if business_row else biz_turnover
+            cash = _money(business_row.get("nonDigitalReceipts")) if business_row else Decimal("0")
+            gross = _money(business_row.get("grossReceipts")) if business_row else biz_turnover
+            if gross == 0:
+                gross = digital + cash
+            declared = _money(business_row.get("declaredIncome")) if business_row else bp_profit
+            itr4_in = ITR4Input(
+                **common_input,
+                presumptive_scheme=PresumptiveScheme.S44ADA,
+                professional_income_44ada=PresumptiveProfessionalIncome44ADA(
+                    gross_receipts=gross,
+                    digital_receipts=digital,
+                    cash_receipts=cash,
+                    income_declared=declared,
+                ),
+            )
+        elif presumptive_type == "44AE":
+            if not business_row:
+                raise HTTPException(status_code=422, detail="44AE requires canonical vehicle entries.")
+            vehicles = []
+            for vehicle in _records(business_row, "vehicles"):
+                vehicle_type = str(vehicle.get("vehicleType", "OTHER")).upper()
+                vehicles.append(GoodsCarriageVehicle(
+                    is_heavy_goods_vehicle=vehicle_type == "HEAVY",
+                    gross_vehicle_weight_tons=(
+                        _money(vehicle.get("tonnage")) if vehicle_type == "HEAVY" else None
+                    ),
+                    months_owned=int(vehicle.get("ownedMonths") or 0),
+                    income_declared=_money(vehicle.get("presumptiveIncome")) or None,
+                ))
+            itr4_in = ITR4Input(
+                **common_input,
+                presumptive_scheme=PresumptiveScheme.S44AE,
+                goods_carriage_44ae=PresumptiveGoodsCarriage44AE(vehicles=vehicles),
+            )
+        elif presumptive_type == "44AD":
+            digital = _money(business_row.get("digitalReceipts")) if business_row else biz_turnover
+            cash = _money(business_row.get("nonDigitalReceipts")) if business_row else Decimal("0")
+            total = digital + cash if business_row else biz_turnover
+            declared = _money(business_row.get("declaredIncome")) if business_row else bp_profit
+            itr4_in = ITR4Input(
+                **common_input,
+                presumptive_scheme=PresumptiveScheme.S44AD,
+                business_income_44ad=PresumptiveBusinessIncome44AD(
+                    total_turnover=total,
+                    digital_turnover=digital,
+                    cash_turnover=cash,
+                    income_declared=declared,
+                ),
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Regular business income is outside ITR-4 presumptive computation.",
+            )
         res = compute_itr4(itr4_in)
     else:
-        # Run ITR-1
-        itr1_in = ITR1Input(
-            age_bracket=age_bracket,
-            tax_regime=tax_regime,
-            salary_income=salary_input,
-            house_property_income=hp_input,
-            other_sources_income=os_input,
-            deductions_chapter6a=ded_input,
-            capital_gains=cg_input
+        res = compute_itr1(ITR1Input(**common_input))
+
+    if res.errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": "Tax computation is not valid for the selected form.", "errors": res.errors},
         )
-        res = compute_itr1(itr1_in)
         
     # Build frontend response structure
     gti = float(res.gross_total_income)
@@ -188,30 +514,28 @@ def compute_tax_summary(
     cess = float(res.health_education_cess)
     total_tax_payable = float(res.net_tax_liability)
     
-    # Standard deduction
-    std_ded = 75000.0 if tax_regime == TaxRegime.NEW else 50000.0
-    net_salary = max(0.0, gross_salary - std_ded)
-    
-    # Tax credits/paid
-    tds_salary = float(payload.get("tdsS192", 0) or 0)
-    tds_interest = float(payload.get("tds194A", 0) or 0)
-    tds_other = float(payload.get("tdsOther", 0) or 0)
-    adv_tax = sum(float(payload.get(k, 0) or 0) for k in ["adv15Jun", "adv15Sep", "adv15Dec", "adv15Mar"])
-    self_tax = float(payload.get("selfTax", 0) or 0)
-    total_tax_paid = tds_salary + tds_interest + tds_other + adv_tax + self_tax
-    
-    tax_payable = max(0.0, total_tax_payable - total_tax_paid)
-    refund = max(0.0, total_tax_paid - total_tax_payable)
+    # Use authoritative engine schedule and credit totals.
+    std_ded = float(res.salary_deduction_us16ia)
+    net_salary = float(res.salary_income)
+
+    tds_salary = float(sum((entry.tds_deducted for entry in tds1_entries), Decimal("0")))
+    tds_interest = float(sum((entry.tds_deducted for entry in tds2_entries if entry.tds_section in {"194A", "S194A"}), Decimal("0")))
+    tds_other = float(sum((entry.tds_deducted for entry in tds2_entries), Decimal("0"))) - tds_interest
+    adv_tax = float(advance_tax_paid)
+    self_tax = float(self_assessment_paid)
+    total_tax_paid = float(res.total_taxes_paid)
+    tax_payable = float(res.balance_payable)
+    refund = float(res.refund_due)
     
     return {
-        "grossSalary": gross_salary,
-        "hraExempt": hra_exempt,
+        "grossSalary": float(gross_salary),
+        "hraExempt": float(hra_exempt),
         "netSalary": net_salary,
         "hpIncome": float(res.house_property_income),
-        "cgTax": 0.0, # Simple ITR1/4 default
+        "cgTax": float(res.special_rate_tax),
         "bizIncome": float(getattr(res, 'presumptive_income', 0) or getattr(res, 'business_income', 0)),
         "otherIncome": float(res.other_sources_income),
-        "vdaTax": vda_gains * 0.3,
+        "vdaTax": 0.0,
         "gti": gti,
         "gtiAfterSetOff": gti,
         "totalDeductions": total_deductions,
@@ -224,34 +548,34 @@ def compute_tax_summary(
         "totalTaxPaid": total_tax_paid,
         "taxPayable": tax_payable,
         "refund": refund,
-        "vdaGains": vda_gains,
-        "totalInterest": total_interest,
+        "vdaGains": 0.0,
+        "totalInterest": float(total_interest),
         "interestDeduction80TTA": float(payload.get("s80TTA", 0) or 0),
         "interestDeduction80TTB": float(payload.get("s80TTB", 0) or 0),
-        "totalDividend": total_dividend,
+        "totalDividend": float(total_dividend),
         "dividendTaxableAtSpecialRate": 0.0,
         "dividendTaxableAtNormalRate": total_dividend,
-        "totalWinnings": lottery + horse_race,
-        "winningsTax": (lottery + horse_race) * 0.3,
-        "taxableGifts": float(payload.get("giftsFromNonRelatives", 0) or 0),
-        "familyPensionDed": min(15000.0, family_pension / 3.0),
-        "specialRateIncome": lottery + horse_race + vda_gains,
-        "familyPensionIncome": family_pension,
+        "totalWinnings": 0.0,
+        "winningsTax": 0.0,
+        "taxableGifts": 0.0,
+        "familyPensionDed": float(res.schedules["os"].deduction_57iia),
+        "specialRateIncome": 0.0,
+        "familyPensionIncome": float(family_pension),
         "tdsS192": tds_salary,
         "tds194A": tds_interest,
         "tdsOther": tds_other,
-        "adv15Jun": float(payload.get("adv15Jun", 0) or 0),
-        "adv15Sep": float(payload.get("adv15Sep", 0) or 0),
-        "adv15Dec": float(payload.get("adv15Dec", 0) or 0),
-        "adv15Mar": float(payload.get("adv15Mar", 0) or 0),
+        "adv15Jun": float(quarterly_advance[0]),
+        "adv15Sep": float(quarterly_advance[1]),
+        "adv15Dec": float(quarterly_advance[2]),
+        "adv15Mar": float(quarterly_advance[3]),
         "selfTax": self_tax,
         "tdsEntries": payload.get("tdsEntries", []),
         "selfAssessmentTaxEntries": payload.get("selfAssessmentTaxEntries", []),
-        "salaryIncome": gross_salary,
-        "salary171": basic + da + bonus + commission + hra_received + other_allowance,
-        "salary172": perquisites,
-        "salary173": profits_in_lieu,
-        "ltaExempt": lta_exempt,
+        "salaryIncome": float(gross_salary),
+        "salary171": float(section_17_1_salary),
+        "salary172": float(perquisites),
+        "salary173": float(profits_in_lieu),
+        "ltaExempt": float(lta_exempt),
         "gratuityExempt": float(payload.get("gratuityReceived", 0) or 0), # Simplification
         "leaveEncashmentExempt": float(payload.get("leaveEncashmentReceived", 0) or 0),
         "pensionCommutationExempt": float(payload.get("commutationOfPensionReceived", 0) or 0),
@@ -259,11 +583,11 @@ def compute_tax_summary(
         "childrenEducationExempt": 0.0,
         "hostelExempt": 0.0,
         "uniformExempt": 0.0,
-        "totalSection10Exempt": hra_exempt + lta_exempt,
+        "totalSection10Exempt": float(hra_exempt + lta_exempt),
         "standardDeduction": std_ded,
-        "entertainmentAllowanceDed": ent_allowance,
-        "professionalTaxDed": prof_tax,
-        "totalSection16Deductions": std_ded + prof_tax + ent_allowance,
+        "entertainmentAllowanceDed": float(res.salary_entertainment_allowance),
+        "professionalTaxDed": float(res.salary_professional_tax),
+        "totalSection16Deductions": float(res.salary_deduction_us16),
         "salaryTDS": tds_salary,
         "salaryEmployerCount": len(payload.get("employerEntries", [])),
         "hraCondition1": 0.0,

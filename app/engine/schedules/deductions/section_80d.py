@@ -33,23 +33,25 @@ def compute(ded: Optional[Chapter6ADeductions], age_bracket: AgeBracket, regime:
 
     is_senior = age_bracket in (AgeBracket.SIXTY_TO_80, AgeBracket.ABOVE_80)
 
-    # Self + family bucket: insurance premium + preventive check-up
-    # Preventive check-up is capped at Rs 5,000 within the bucket
-    cap_self = SECTION_80D_SELF_FAMILY_SENIOR_LIMIT if is_senior else SECTION_80D_SELF_FAMILY_LIMIT
-    preventive_self_capped = min(
+    preventive_self = min(
         ded.amount_80d_preventive_self,
         SECTION_80D_PREVENTIVE_CHECKUP_LIMIT,
     )
-    total_self = ded.amount_80d_self_family + preventive_self_capped
+    preventive_parents = min(
+        ded.amount_80d_preventive_parents,
+        max(Decimal("0"), SECTION_80D_PREVENTIVE_CHECKUP_LIMIT - preventive_self),
+    )
+
+    # Self + family bucket: insurance premium plus its share of the aggregate
+    # preventive-checkup sub-limit.
+    cap_self = SECTION_80D_SELF_FAMILY_SENIOR_LIMIT if is_senior else SECTION_80D_SELF_FAMILY_LIMIT
+    total_self = ded.amount_80d_self_family + preventive_self
     ded_self = min(total_self, cap_self)
 
-    # Parents bucket: insurance premium + preventive check-up
+    # Parents bucket uses only the unconsumed part of the aggregate preventive
+    # check-up limit and remains subject to its own overall bucket cap.
     parents_cap = SECTION_80D_PARENTS_SENIOR_LIMIT if is_parents_senior else SECTION_80D_PARENTS_LIMIT
-    preventive_parents_capped = min(
-        ded.amount_80d_preventive_parents,
-        SECTION_80D_PREVENTIVE_CHECKUP_LIMIT,
-    )
-    total_parents = ded.amount_80d_parents + preventive_parents_capped
+    total_parents = ded.amount_80d_parents + preventive_parents
     ded_parents = min(total_parents, parents_cap)
 
     return ded_self + ded_parents
