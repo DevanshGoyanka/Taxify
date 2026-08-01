@@ -152,6 +152,18 @@ class SalaryIncome(BaseModel):
         default=False,
         description="True if the employee is a Government employee (Central/State/PSU). Required for entertainment allowance deduction u/s 16(ii).",
     )
+    gratuity_received: Decimal = Field(default=Decimal("0"), ge=0)
+    commuted_pension_received: Decimal = Field(default=Decimal("0"), ge=0)
+    leave_encashment_received: Decimal = Field(default=Decimal("0"), ge=0)
+    vrs_compensation: Decimal = Field(default=Decimal("0"), ge=0)
+    retrenchment_compensation: Decimal = Field(default=Decimal("0"), ge=0)
+    transport_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    lta_amount_received: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_6_embassy_exempt: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_7_foreign_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_10cc_perquisite_tax: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_14i_prescribed_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_14ii_personal_allowance: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 
@@ -275,6 +287,11 @@ class OtherSourcesIncome(BaseModel):
         ge=0,
         description="Dividend income taxable under other sources.",
     )
+    interest_on_it_refund: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Interest received on an income-tax refund.",
+    )
 
 
 class Donation80G(BaseModel):
@@ -285,6 +302,11 @@ class Donation80G(BaseModel):
     non_cash_amount: Decimal = Field(default=Decimal("0"), ge=0, description="Amount donated via bank/cheque/digital modes.")
     qualifying_percentage: str = Field(default="100%", description="Percentage of deduction allowed: '50%' or '100%'.")
     limit_on_deduction: str = Field(default="without limit", description="Whether subject to 10% adjusted GTI limit: 'with limit' or 'without limit'.")
+    donee_pan: Optional[str] = None
+    donation_category: str = "A"
+    ifsc_code: Optional[str] = None
+    transaction_ref: Optional[str] = Field(default=None, max_length=100)
+    total_donation: Optional[Decimal] = Field(default=None, ge=0)
 
 
 class Chapter6ADeductions(BaseModel):
@@ -659,6 +681,64 @@ class ITR1Input(BaseModel):
     relief_89: Decimal = Field(default=Decimal("0"), ge=0, description="Relief under section 89 (arrears of salary) as computed by Form 10E")
     agriculture_income: Decimal = Field(default=Decimal("0"), ge=0, description="Agricultural income shown as exempt")
 
+    # --- Extended validation schedules and cross-foot totals ---
+    nature_of_employment: Optional[str] = None
+    filing_section: Optional[str] = None
+    original_filing_section: Optional[str] = None
+    form_10e_filed: bool = False
+    form_10ia_filed: bool = False
+    form_10ba_filed: bool = False
+    pran_number: Optional[str] = Field(default=None, max_length=12)
+    disease_category: Optional[str] = Field(default=None, max_length=125)
+    agniveer_date_of_joining: Optional[date] = None
+    date_of_incorporation: Optional[date] = None
+    assessee_pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    assessee_email_primary: Optional[str] = None
+    assessee_phone_primary: Optional[str] = None
+    representative_email: Optional[str] = None
+    representative_phone: Optional[str] = None
+    exempt_income_breakdown: dict[str, Decimal] = Field(default_factory=dict)
+    exempt_income_dropdowns: list[str] = Field(default_factory=list)
+    total_exempt_income: Optional[Decimal] = Field(default=None, ge=0)
+    other_sources_dropdowns: list[str] = Field(default_factory=list)
+    other_sources_total: Optional[Decimal] = Field(default=None, ge=0)
+    dividend_quarterly_breakdown: dict[str, Decimal] = Field(default_factory=dict)
+    full_value_of_consideration: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_80d: Optional["Schedule80D"] = None
+    schedule_80g: Optional["Schedule80G"] = None
+    schedule_80gga: Optional["Schedule80GGA"] = None
+    schedule_80ggc: Optional["Schedule80GGC"] = None
+    schedule_80dd: Optional["Schedule80DD"] = None
+    schedule_80u: Optional["Schedule80U"] = None
+    schedule_80c_entries: List["Schedule80CEntry"] = Field(default_factory=list)
+    schedule_80ccc_entries: List["Schedule80CCCEntry"] = Field(default_factory=list)
+    schedule_80e_entries: List["Schedule80EEntry"] = Field(default_factory=list)
+    loan_details_80ee_list: List["Schedule80EELoanEntry"] = Field(default_factory=list)
+    loan_details_80eea_list: List["Schedule80EEALoanEntry"] = Field(default_factory=list)
+    loan_details_80eeb_list: List["Schedule80EEBLoanEntry"] = Field(default_factory=list)
+    loan_details_24b_list: List["LoanDetail"] = Field(default_factory=list)
+    tax_payment_entries: List["TaxPaymentDetail"] = Field(default_factory=list)
+    bank_accounts: List["BankAccount"] = Field(default_factory=list)
+    hra_details: Optional["HRADetails"] = None
+    schedule_10_13a: Optional["HRADetails"] = None
+    loan_details_80ee: Optional["LoanDetails"] = None
+    loan_details_80eea: Optional["LoanDetails"] = None
+    loan_details_80eeb: Optional["LoanDetails"] = None
+    is_property_co_owned: bool = False
+    other_co_owner_percentage: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    co_ownership_details: Optional["CoOwnershipDetails"] = None
+    representative_details: Optional["RepresentativeDetails"] = None
+    secondary_address: Optional["SecondaryAddress"] = None
+    tds3_entries: Optional[List["TDS3Entry"]] = None
+    total_taxes_paid: Optional[Decimal] = Field(default=None, ge=0)
+    total_tds_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    total_tcs_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_it_total_paid: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_tds1_total: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_tds2_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_tds3_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_tcs_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
+
 
 # ---------------------------------------------------------------------------
 # TDS / TCS entry models (shared across ITR forms)
@@ -675,86 +755,176 @@ class TDS3Entry(BaseModel):
     deductor_name: Optional[str] = Field(default=None, max_length=125)
     gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_section: Optional[str] = None
+    tds_claimed_this_year: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class InsurancePolicy(BaseModel):
+    """Health-insurance policy detail used by Schedule 80D."""
+    section: str = "1a"
+    premium_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    insurer_name: Optional[str] = Field(default=None, max_length=125)
+    policy_number: Optional[str] = Field(default=None, max_length=50)
+    payment_mode_cash: bool = False
+
 
 class Schedule80D(BaseModel):
     """Schedule 80D health insurance details."""
-    pass
+    has_self_senior: bool = False
+    has_parents_senior: bool = False
+    not_claiming_self: bool = False
+    not_claiming_parents: bool = False
+    premium_1a_non_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    premium_1b_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    premium_2a_parents_non_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    premium_2b_parents_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    preventive_checkup_self: Decimal = Field(default=Decimal("0"), ge=0)
+    preventive_checkup_parents: Decimal = Field(default=Decimal("0"), ge=0)
+    policies: List[InsurancePolicy] = Field(default_factory=list)
+
 
 class Schedule80G(BaseModel):
     """Schedule 80G donation details."""
-    pass
+    donations: List[Donation80G] = Field(default_factory=list)
+    total_eligible_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
 
 class Schedule80GGA(BaseModel):
     """Schedule 80GGA scientific research donations."""
-    pass
+    cash_donations: Decimal = Field(default=Decimal("0"), ge=0)
+    non_cash_donations: Decimal = Field(default=Decimal("0"), ge=0)
+    total_claimed: Decimal = Field(default=Decimal("0"), ge=0)
+    eligible_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    donee_pan_list: List[str] = Field(default_factory=list)
+
+
+class PoliticalContribution(BaseModel):
+    """Non-cash contribution to a political party."""
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    contribution_date: Optional[date] = None
+    contribution_mode: str = "non_cash"
+    transaction_ref: Optional[str] = Field(default=None, max_length=100)
+    political_party_name: Optional[str] = Field(default=None, max_length=125)
+    political_party_pan: Optional[str] = None
+
 
 class Schedule80GGC(BaseModel):
     """Schedule 80GGC political contributions."""
-    pass
+    total_claimed: Decimal = Field(default=Decimal("0"), ge=0)
+    non_cash_contributions: Decimal = Field(default=Decimal("0"), ge=0)
+    political_party_name: Optional[str] = Field(default=None, max_length=125)
+    political_party_pan: Optional[str] = None
+    contributions: List[PoliticalContribution] = Field(default_factory=list)
+
 
 class Schedule80DD(BaseModel):
     """Schedule 80DD dependent disability details."""
     disability_type: str = Field(default="normal")
+    deduction_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
 
 class Schedule80U(BaseModel):
     """Schedule 80U self disability details."""
     disability_type: str = Field(default="normal")
+    deduction_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
 
 class Schedule80CEntry(BaseModel):
     """Per-row entry for Schedule 80C."""
-    pass
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    payment_type: Optional[str] = None
+    identifier_number: Optional[str] = Field(default=None, max_length=100)
+
 
 class Schedule80CCCEntry(BaseModel):
     """Per-row entry for Schedule 80CCC."""
-    pass
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    insurer_name: Optional[str] = Field(default=None, max_length=125)
+    policy_number: Optional[str] = Field(default=None, max_length=50)
+
 
 class Schedule80EEntry(BaseModel):
     """Per-row entry for Schedule 80E."""
-    pass
+    lender_name: Optional[str] = Field(default=None, max_length=125)
+    loan_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    interest_paid: Decimal = Field(default=Decimal("0"), ge=0)
 
-class Schedule80EELoanEntry(BaseModel):
+
+class LoanDetails(BaseModel):
+    """Common deduction-loan details."""
+    lender_name: Optional[str] = Field(default=None, max_length=125)
+    loan_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    sanction_date: Optional[date] = None
+    stamp_duty_value: Optional[Decimal] = Field(default=None, ge=0)
+
+
+class DeductionLoanEntry(LoanDetails):
+    """Per-loan deduction entry with interest paid."""
+    interest_paid: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class Schedule80EELoanEntry(DeductionLoanEntry):
     """Per-loan entry for Schedule 80EE."""
-    pass
 
-class Schedule80EEALoanEntry(BaseModel):
+
+class Schedule80EEALoanEntry(DeductionLoanEntry):
     """Per-loan entry for Schedule 80EEA."""
-    pass
 
-class Schedule80EEBLoanEntry(BaseModel):
+
+class Schedule80EEBLoanEntry(DeductionLoanEntry):
     """Per-loan entry for Schedule 80EEB."""
-    pass
+
 
 class HRADetails(BaseModel):
     """HRA computation breakdown."""
-    pass
+    actual_hra_received: Decimal = Field(default=Decimal("0"), ge=0)
+    rent_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    salary_for_hra: Decimal = Field(default=Decimal("0"), ge=0)
+    is_metro_city: bool = False
+
 
 class CoOwnershipDetails(BaseModel):
     """Co-ownership details for house property."""
-    pass
+    ownership_percentage: Decimal = Field(default=Decimal("100"), ge=0, le=100)
+    co_owner_pan: Optional[str] = None
+
 
 class RepresentativeDetails(BaseModel):
     """Representative assessee details."""
-    pass
+    capacity: Optional[str] = None
+    represented_person_name: Optional[str] = Field(default=None, max_length=125)
+    represented_person_pan: Optional[str] = None
 
-class LoanDetails(BaseModel):
-    """Loan details container."""
-    pass
 
-class LoanDetail(BaseModel):
-    """Per-loan detail entry."""
-    pass
+class LoanDetail(LoanDetails):
+    """Per-property loan detail entry."""
+    interest_paid_self_occupied: Decimal = Field(default=Decimal("0"), ge=0)
+    interest_paid_let_out: Decimal = Field(default=Decimal("0"), ge=0)
+
 
 class SecondaryAddress(BaseModel):
     """Secondary address for representative filing."""
-    pass
+    address_line: Optional[str] = Field(default=None, max_length=250)
+    city: Optional[str] = Field(default=None, max_length=50)
+    state_code: Optional[str] = Field(default=None, max_length=2)
+    pin_code: Optional[str] = Field(default=None, max_length=10)
 
-class InsurancePolicy(BaseModel):
-    """Insurance policy detail."""
-    pass
+
+class BankAccount(BaseModel):
+    """Bank account disclosed for refund credit."""
+    account_number: str = Field(min_length=1, max_length=34)
+    ifsc_code: str = Field(min_length=1, max_length=11)
+    account_type: str
+    is_primary: bool = False
+
 
 class TaxPaymentDetail(BaseModel):
     """Per-installment entry for Schedule IT."""
-    pass
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    payment_type: str = "advance"
+    payment_date: Optional[date] = None
+    bsr_code: Optional[str] = Field(default=None, max_length=7)
+    challan_serial_number: Optional[str] = Field(default=None, max_length=5)
 
 
 class TDS1Entry(BaseModel):
@@ -770,6 +940,7 @@ class TDS2Entry(BaseModel):
     tds_section: str = Field(...)
     gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_claimed_this_year: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class TCSEntry(BaseModel):
@@ -778,3 +949,7 @@ class TCSEntry(BaseModel):
     tcs_section: str = Field(...)
     gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
     tcs_collected: Decimal = Field(default=Decimal("0"), ge=0)
+    tcs_credit_claimed: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+ITR1Input.model_rebuild()

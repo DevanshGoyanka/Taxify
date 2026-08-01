@@ -236,11 +236,11 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
 
     # Rule 23: 87A old regime — income must be <= 5,00,000 for rebate
     if is_old and result.rebate_87a > 0:
-        if gti > 500_000:
+        if ti > 500_000:
             results.append(_make(
                 "ITR1-R023", False,
                 f"87A rebate claimed (Rs {result.rebate_87a}) but total income "
-                f"(Rs {gti}) exceeds Rs 5,00,000 limit",
+                f"(Rs {ti}) exceeds Rs 5,00,000 limit",
                 "rebate_87a",
             ))
 

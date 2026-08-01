@@ -406,7 +406,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                              + osi.savings_bank_interest + osi.fixed_deposit_interest
                              + osi.dividend_income + osi.family_pension_received
                              + osi.interest_on_it_refund
-                             - hp.home_loan_interest_paid.clamp(0, 200_000)
+                             - min(max(hp.home_loan_interest_paid, _z), Decimal("200000"))
                              + (cg.ltcg_112a if cg else _z))
             estimated_gti = max(_z, estimated_gti)
             max_ccd1_pensioner = estimated_gti * Decimal("0.20")
@@ -1277,7 +1277,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 # HRA is least of 3 conditions: actual HRA received, 50/40% salary,
                 # rent-paid-minus-10%
                 rent_factor = hd.rent_paid - (hd.salary_for_hra * Decimal("0.10"))
-                salary_factor = hd.salary_for_hra * (Decimal("0.40") if hd.is_metro_city else Decimal("0.50"))
+                salary_factor = hd.salary_for_hra * (Decimal("0.50") if hd.is_metro_city else Decimal("0.40"))
                 max_hra = min(hd.actual_hra_received, max(rent_factor, _z), salary_factor)
                 if sal.hra_exempt_amount > max_hra:
                     results.append(_make(

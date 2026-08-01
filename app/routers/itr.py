@@ -88,8 +88,20 @@ def itr1_compute(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    if result.errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITR-1 calculation rejected", "errors": result.errors},
+        )
+
     # Run calculation validation post-computation
     calc_report = itr1_calc_val(body, result)
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
     response = _build_itr1_response(result)
     response.validation = calc_report.to_dict()
     return response
@@ -296,9 +308,8 @@ def itr1_compute_json(
 ) -> Response:
     """Compute ITR-1 and return CBDT ITD-compliant JSON."""
     from app.engine.itd.itr1 import build_itr1_json
-    from dataclasses import replace
 
-    # Run validation (non-blocking — report in response if needed)
+    # Run blocking input validation before computation.
     input_report = itr1_input_val(body)
     if not input_report.can_upload:
         errors_detail = [r.to_dict() for r in input_report.blocking_errors]
@@ -312,11 +323,23 @@ def itr1_compute_json(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    if result.errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITR-1 calculation rejected", "errors": result.errors},
+        )
+
     # Run calculation validation post-computation
     calc_report = itr1_calc_val(body, result)
-    
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
+
     try:
-        itd_json = build_itr1_json(result); itd_json["_validation"] = calc_report.to_dict()
+        itd_json = build_itr1_json(result)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
