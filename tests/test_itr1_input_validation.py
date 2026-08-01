@@ -13,7 +13,8 @@ from app.schemas.itr1 import (
     ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
     Chapter6ADeductions, CapitalGainsIncome, Donation80G,
     AgeBracket, TaxRegime, PropertyType, TDS1Entry, TDS2Entry, TCSEntry,
-    BankAccount, Schedule80D,
+    BankAccount, Schedule80D, Section80DDBDetails, Section80DDBUserType,
+    SpecifiedDisease80DDB,
 )
 from app.engine.validators.itr1.input_rules import validate_itr1_input
 from app.engine.validators.base import Severity
@@ -248,6 +249,49 @@ def test_R005_80ddb_exceeds_100k():
     )
     results = validate_itr1_input(inp)
     assert failed(results, "ITR1-R005d")
+
+
+def test_R007_80ddb_cap_uses_net_reimbursed_claim() -> None:
+    """Gross expenditure above the cap is valid when reimbursement lowers the net claim."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80ddb=Decimal("80000"),
+            details_80ddb=Section80DDBDetails(
+                user_type=Section80DDBUserType.SELF_OR_DEPENDENT,
+                disease=SpecifiedDisease80DDB.MALIGNANT_CANCERS,
+                reimbursement_amount=Decimal("50000"),
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R007")
+    assert not failed(results, "ITR1-R006")
+
+
+def test_R005_80ddb_cap_uses_beneficiary_category() -> None:
+    """A senior dependent receives the senior cap even for a non-senior assessee."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80ddb=Decimal("90000"),
+            details_80ddb=Section80DDBDetails(
+                user_type=Section80DDBUserType.SELF_OR_DEPENDENT_SENIOR,
+                disease=SpecifiedDisease80DDB.PARKINSONS_DISEASE,
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R007")
+    assert not failed(results, "ITR1-R005d")
 
 
 def test_R155_new_regime_80ddb_not_allowed():

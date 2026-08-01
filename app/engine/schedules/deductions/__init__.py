@@ -85,6 +85,7 @@ def compute_all(
     is_parents_senior: bool = False,
     is_80dd_severe: bool = False,
     is_80u_severe: bool = False,
+    use_structured_80ddb: bool = False,
     hra_exempt_amount: Decimal = Decimal("0"),
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
@@ -135,7 +136,12 @@ def compute_all(
     r_80dd = section_80dd.compute(ded, regime, is_severe=is_80dd_severe)
     _add("80DD", r_80dd)
 
-    r_80ddb = section_80ddb.compute(ded, age_bracket, regime)
+    r_80ddb = section_80ddb.compute(
+        ded,
+        age_bracket,
+        regime,
+        use_structured_details=use_structured_80ddb,
+    )
     _add("80DDB", r_80ddb)
 
     r_80u = section_80u.compute(ded, regime, is_severe=is_80u_severe)

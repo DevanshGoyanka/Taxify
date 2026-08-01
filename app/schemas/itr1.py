@@ -383,6 +383,40 @@ class Donation80G(BaseModel):
     total_donation: Optional[Decimal] = Field(default=None, ge=0)
 
 
+class Section80DDBUserType(str, Enum):
+    """Official beneficiary category for Section 80DDB."""
+
+    SELF_OR_DEPENDENT = "1"
+    SELF_OR_DEPENDENT_SENIOR = "2"
+
+
+class SpecifiedDisease80DDB(str, Enum):
+    """Official Rule 11DD specified-disease codes for Section 80DDB."""
+
+    DEMENTIA = "a"
+    DYSTONIA_MUSCULORUM_DEFORMANS = "b"
+    MOTOR_NEURON_DISEASE = "c"
+    ATAXIA = "d"
+    CHOREA = "e"
+    HEMIBALLISMUS = "f"
+    APHASIA = "g"
+    PARKINSONS_DISEASE = "h"
+    MALIGNANT_CANCERS = "i"
+    AIDS = "j"
+    CHRONIC_RENAL_FAILURE = "k"
+    HEMATOLOGICAL_DISORDERS = "l"
+    HEMOPHILIA = "m"
+    THALASSAEMIA = "n"
+
+
+class Section80DDBDetails(BaseModel):
+    """Beneficiary, disease, and reimbursement details for Section 80DDB."""
+
+    user_type: Section80DDBUserType
+    disease: SpecifiedDisease80DDB
+    reimbursement_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 class Chapter6ADeductions(BaseModel):
     """
     Represents deductions claimable under Chapter VI-A of the IT Act.
@@ -518,7 +552,11 @@ class Chapter6ADeductions(BaseModel):
     amount_80ddb: Decimal = Field(
         default=Decimal("0"),
         ge=0,
-        description="Medical treatment of specified diseases (Section 80DDB).",
+        description="Gross medical-treatment expenditure for a specified disease (Section 80DDB).",
+    )
+    details_80ddb: Optional[Section80DDBDetails] = Field(
+        default=None,
+        description="Official beneficiary category, disease code, and reimbursement details.",
     )
     amount_80u: Decimal = Field(
         default=Decimal("0"),
@@ -763,7 +801,12 @@ class ITR1Input(BaseModel):
     form_10ia_filed: bool = False
     form_10ba_filed: bool = False
     pran_number: Optional[str] = Field(default=None, max_length=12)
-    disease_category: Optional[str] = Field(default=None, max_length=125)
+    disease_category: Optional[str] = Field(
+        default=None,
+        max_length=125,
+        deprecated=True,
+        description="Deprecated: use deductions_chapter6a.details_80ddb.disease.",
+    )
     agniveer_date_of_joining: Optional[date] = None
     date_of_incorporation: Optional[date] = None
     assessee_pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")

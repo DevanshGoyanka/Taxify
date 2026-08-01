@@ -318,6 +318,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         is_parents_senior=is_parents_senior,
         is_80dd_severe=is_80dd_severe,
         is_80u_severe=is_80u_severe,
+        use_structured_80ddb=True,
         hra_exempt_amount=getattr(input_data.salary_income, 'hra_exempt_amount', Decimal("0")) if input_data.salary_income else Decimal("0"),
     )
     result.schedules["deductions"] = ded

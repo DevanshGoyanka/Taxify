@@ -209,6 +209,8 @@ def _chapter_via_itr1(
     ded_80d: Decimal = Decimal("0"),
     ded_80dd: Decimal = Decimal("0"),
     ded_80ddb: Decimal = Decimal("0"),
+    ddb_user_type: Optional[str] = None,
+    ddb_disease: Optional[str] = None,
     ded_80e: Decimal = Decimal("0"),
     ded_80ee: Decimal = Decimal("0"),
     ded_80eea: Decimal = Decimal("0"),
@@ -223,7 +225,7 @@ def _chapter_via_itr1(
     ded_80cch: Decimal = Decimal("0"),
 ) -> dict:
     """ITR-1 DeductUndChapVIA / UsrDeductUndChapVIA — includes Section80GGA."""
-    return {
+    result = {
         "Section80C": _to_rupees(ded_80c),
         "Section80CCC": _to_rupees(ded_80ccc),
         "Section80CCDEmployeeOrSE": _to_rupees(ded_80ccd1),
@@ -246,6 +248,11 @@ def _chapter_via_itr1(
         "AnyOthSec80CCH": _to_rupees(ded_80cch),
         "TotalChapVIADeductions": _to_rupees(deductions_total),
     }
+    if ddb_user_type is not None:
+        result["Section80DDBUsrType"] = ddb_user_type
+    if ddb_disease is not None:
+        result["NameOfSpecDisease80DDB"] = ddb_disease
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +289,9 @@ def _income_deductions_itr1(
     ded_80d: Decimal = Decimal("0"),
     ded_80dd: Decimal = Decimal("0"),
     ded_80ddb: Decimal = Decimal("0"),
+    usr_80ddb: Optional[Decimal] = None,
+    ddb_user_type: Optional[str] = None,
+    ddb_disease: Optional[str] = None,
     ded_80u: Decimal = Decimal("0"),
     ded_80tta: Decimal = Decimal("0"),
     ded_80ttb: Decimal = Decimal("0"),
@@ -322,11 +332,16 @@ def _income_deductions_itr1(
         "GrossTotIncome": _to_rupees(gti),
         "GrossTotIncomeIncLTCG112A": _to_rupees(gti_cg),
         "UsrDeductUndChapVIA": _chapter_via_itr1(
-            deductions_total,
+            deductions_total
+            - ded_80ddb
+            + (usr_80ddb if usr_80ddb is not None else ded_80ddb),
             ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1=ded_80ccd1,
             ded_80ccd1b=ded_80ccd1b,
             ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
-            ded_80ddb=ded_80ddb, ded_80u=ded_80u, ded_80tta=ded_80tta,
+            ded_80ddb=(usr_80ddb if usr_80ddb is not None else ded_80ddb),
+            ddb_user_type=ddb_user_type,
+            ddb_disease=ddb_disease,
+            ded_80u=ded_80u, ded_80tta=ded_80tta,
             ded_80ttb=ded_80ttb, ded_80e=ded_80e, ded_80ee=ded_80ee,
             ded_80eea=ded_80eea, ded_80eeb=ded_80eeb, ded_80g=ded_80g,
             ded_80gg=ded_80gg, ded_80gga=ded_80gga, ded_80ggc=ded_80ggc,
@@ -1005,6 +1020,30 @@ def build_itr1_json(
     else:
         property_schedules = None
 
+    if input_data is not None:
+        ddb_input = input_data.deductions_chapter6a
+        ddb_details = ddb_input.details_80ddb
+        if ddb_input.amount_80ddb > 0:
+            if ddb_details is None:
+                raise ValueError(
+                    "A positive Section 80DDB claim requires official beneficiary and disease details"
+                )
+            if ddb_details.reimbursement_amount > ddb_input.amount_80ddb:
+                raise ValueError("Section 80DDB reimbursement cannot exceed expenditure")
+            usr_80ddb = ddb_input.amount_80ddb - ddb_details.reimbursement_amount
+            ddb_user_type = ddb_details.user_type.value
+            ddb_disease = ddb_details.disease.value
+        else:
+            if ddb_details is not None:
+                raise ValueError("Section 80DDB details require positive expenditure")
+            usr_80ddb = None
+            ddb_user_type = None
+            ddb_disease = None
+    else:
+        usr_80ddb = None
+        ddb_user_type = None
+        ddb_disease = None
+
     gti_cg = result.gross_total_income  # Already includes capital_gains_112a
     income = _income_deductions_itr1(
         gross_salary=result.salary_gross,
@@ -1034,6 +1073,9 @@ def build_itr1_json(
         ded_80d=deduction("80D"),
         ded_80dd=deduction("80DD"),
         ded_80ddb=deduction("80DDB"),
+        usr_80ddb=usr_80ddb,
+        ddb_user_type=ddb_user_type,
+        ddb_disease=ddb_disease,
         ded_80u=deduction("80U"),
         ded_80tta=deduction("80TTA"),
         ded_80ttb=deduction("80TTB"),
@@ -1145,7 +1187,6 @@ def build_itr1_json(
             "80G": deduction("80G"),
             "80GGA": deduction("80GGA"),
             "80GGC": deduction("80GGC"),
-            "80DDB": deduction("80DDB"),
             "80E": deduction("80E"),
             "80EE": deduction("80EE"),
             "80EEA": deduction("80EEA"),

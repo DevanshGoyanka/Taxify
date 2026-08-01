@@ -12,7 +12,15 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from app.schemas.itr1 import ITR1Input, AgeBracket, TaxRegime, PropertyType, AssesseeType
+from app.schemas.itr1 import (
+    AgeBracket,
+    AssesseeType,
+    ITR1Input,
+    PropertyType,
+    Section80DDBUserType,
+    TaxRegime,
+)
+from app.engine.constants import SECTION_80DDB_LIMIT, SECTION_80DDB_SENIOR_LIMIT
 from app.engine.validators.base import ValidationResult, Severity
 
 _z = Decimal("0")
@@ -659,37 +667,50 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # ========================================================================
 
     if ch6a and ch6a.amount_80ddb > 0:
-        # Rule 5: 80DDB senior citizen max 1,00,000 (only for senior citizens aged ≥60)
-        if is_old and is_senior and ch6a.amount_80ddb > 100_000:
-            results.append(_make(
-                "ITR1-R005d", False,
-                f"80DDB deduction (Rs {ch6a.amount_80ddb}) exceeds Rs 1,00,000 maximum "
-                f"for senior citizens (age 60+)",
-                "deductions_chapter6a.amount_80ddb",
-            ))
-
-        # Rule 7: 80DDB non-senior ≤ Rs 40,000 (enforced using age_bracket)
-        if is_old and not is_senior and ch6a.amount_80ddb > 40_000:
-            results.append(_make(
-                "ITR1-R007", False,
-                f"80DDB deduction (Rs {ch6a.amount_80ddb}) exceeds Rs 40,000 limit "
-                f"for non-senior citizens (age below 60)",
-                "deductions_chapter6a.amount_80ddb",
-                expected="<= 40000", actual=str(ch6a.amount_80ddb)))
-
-        # Rule 6: 80DDB category description required
-        if inp.disease_category:
-            results.append(_info(
-                "ITR1-R006",
-                f"80DDB claimed for '{inp.disease_category}'. Disease category verified.",
-                "deductions_chapter6a.amount_80ddb",
-            ))
+        details_80ddb = ch6a.details_80ddb
+        # Rule 5/7: cap follows the treated person's official category.
+        if details_80ddb is not None:
+            is_80ddb_senior = (
+                details_80ddb.user_type
+                is Section80DDBUserType.SELF_OR_DEPENDENT_SENIOR
+            )
+            net_80ddb = max(
+                _z,
+                ch6a.amount_80ddb - details_80ddb.reimbursement_amount,
+            )
         else:
+            is_80ddb_senior = is_senior
+            net_80ddb = ch6a.amount_80ddb
+        cap_80ddb = (
+            SECTION_80DDB_SENIOR_LIMIT
+            if is_80ddb_senior
+            else SECTION_80DDB_LIMIT
+        )
+        if is_old and net_80ddb > cap_80ddb:
+            rule_id = "ITR1-R005d" if is_80ddb_senior else "ITR1-R007"
+            results.append(_make(
+                rule_id, False,
+                f"80DDB net claim (Rs {net_80ddb}) exceeds Rs {cap_80ddb} maximum "
+                "for the selected beneficiary category",
+                "deductions_chapter6a.amount_80ddb",
+                expected=f"<= {cap_80ddb}",
+                actual=str(net_80ddb),
+            ))
+
+        # Rule 6: exact official beneficiary and disease details required.
+        if details_80ddb is None:
             results.append(_make(
                 "ITR1-R006", False,
-                "80DDB deduction claimed but disease category/specified disease "
-                "not provided. Disease description is mandatory for 80DDB.",
-                "deductions_chapter6a.amount_80ddb",
+                "80DDB deduction claimed but official beneficiary category and specified disease are missing.",
+                "deductions_chapter6a.details_80ddb",
+            ))
+        elif details_80ddb.reimbursement_amount > ch6a.amount_80ddb:
+            results.append(_make(
+                "ITR1-R006b", False,
+                "80DDB reimbursement cannot exceed gross treatment expenditure.",
+                "deductions_chapter6a.details_80ddb.reimbursement_amount",
+                expected=f"<= {ch6a.amount_80ddb}",
+                actual=str(details_80ddb.reimbursement_amount),
             ))
 
     # Rule 155: New regime 80DDB must be 0

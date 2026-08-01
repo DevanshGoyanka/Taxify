@@ -32,6 +32,9 @@ from app.schemas.itr1 import (
     Schedule80CEntry,
     Schedule80DD,
     Schedule80U,
+    Section80DDBDetails,
+    Section80DDBUserType,
+    SpecifiedDisease80DDB,
     TDS1Entry,
     TDS2Entry,
     TCSEntry,
@@ -807,6 +810,66 @@ def test_builder_cross_foots_gti_restricted_disability_deduction() -> None:
     chapter = itr1["ITR1_IncomeDeductions"]
     assert chapter["DeductUndChapVIA"]["Section80U"] == 40000
     assert chapter["UsrDeductUndChapVIA"]["Section80U"] == 40000
+
+
+def test_builder_maps_complete_80ddb_details_and_distinct_amounts() -> None:
+    """80DDB user fields retain net expenditure while computed amount is capped."""
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80ddb=Decimal("80000"),
+            details_80ddb=Section80DDBDetails(
+                user_type=Section80DDBUserType.SELF_OR_DEPENDENT,
+                disease=SpecifiedDisease80DDB.MALIGNANT_CANCERS,
+                reimbursement_amount=Decimal("10000"),
+            ),
+        )
+    })
+    chapter = _build(body)["ITR"]["ITR1"]["ITR1_IncomeDeductions"]
+    user = chapter["UsrDeductUndChapVIA"]
+    eligible = chapter["DeductUndChapVIA"]
+    assert user["Section80DDBUsrType"] == "1"
+    assert user["NameOfSpecDisease80DDB"] == "i"
+    assert user["Section80DDB"] == 70000
+    assert user["TotalChapVIADeductions"] == 170000
+    assert eligible["Section80DDB"] == 40000
+    assert eligible["TotalChapVIADeductions"] == 140000
+    assert "Section80DDBUsrType" not in eligible
+    assert "NameOfSpecDisease80DDB" not in eligible
+
+
+def test_builder_uses_treated_person_category_for_80ddb_cap() -> None:
+    """A senior dependent receives the senior cap regardless of assessee age."""
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80ddb=Decimal("90000"),
+            details_80ddb=Section80DDBDetails(
+                user_type=Section80DDBUserType.SELF_OR_DEPENDENT_SENIOR,
+                disease=SpecifiedDisease80DDB.PARKINSONS_DISEASE,
+            ),
+        )
+    })
+    chapter = _build(body)["ITR"]["ITR1"]["ITR1_IncomeDeductions"]
+    assert chapter["UsrDeductUndChapVIA"]["Section80DDBUsrType"] == "2"
+    assert chapter["DeductUndChapVIA"]["Section80DDB"] == 90000
+
+
+def test_builder_rejects_80ddb_reimbursement_above_expenditure() -> None:
+    """80DDB reimbursement cannot produce a negative net user claim."""
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80ddb=Decimal("30000"),
+            details_80ddb=Section80DDBDetails(
+                user_type=Section80DDBUserType.SELF_OR_DEPENDENT,
+                disease=SpecifiedDisease80DDB.CHRONIC_RENAL_FAILURE,
+                reimbursement_amount=Decimal("40000"),
+            ),
+        )
+    })
+    with pytest.raises(ValueError, match="reimbursement"):
+        _build(body)
 
 
 def test_builder_rejects_incomplete_positive_80ddb() -> None:
