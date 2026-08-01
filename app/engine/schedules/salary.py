@@ -36,18 +36,33 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
 
     gross = input_data.gross_salary + input_data.perquisites_value + input_data.profits_in_lieu_of_salary
 
+    exempt_allowances = sum((
+        input_data.hra_exempt_amount,
+        input_data.lta_exempt_amount,
+        input_data.gratuity_received,
+        input_data.commuted_pension_received,
+        input_data.leave_encashment_received,
+        input_data.vrs_compensation,
+        input_data.retrenchment_compensation,
+        input_data.sec10_6_embassy_exempt,
+        input_data.sec10_7_foreign_allowance,
+        input_data.sec10_10cc_perquisite_tax,
+        input_data.sec10_14i_prescribed_allowance,
+        input_data.sec10_14ii_personal_allowance,
+    ), Decimal("0"))
+
     if regime == TaxRegime.OLD:
         hra = input_data.hra_exempt_amount
         lta = input_data.lta_exempt_amount
         prof_tax = min(input_data.professional_tax_paid, Decimal("2500"))
         is_govt = getattr(input_data, "is_government_employee", False)
         ent_allowance = min(input_data.entertainment_allowance, Decimal("5000")) if is_govt else Decimal("0")
-        net_before_std = max(Decimal("0"), gross - hra - lta)
+        net_before_std = max(Decimal("0"), gross - exempt_allowances)
         std_ded = OLD_REGIME_STANDARD_DEDUCTION
         chargeable = net_before_std - std_ded - prof_tax - ent_allowance
     else:
         std_ded = NEW_REGIME_STANDARD_DEDUCTION
-        chargeable = gross - std_ded
+        chargeable = gross - exempt_allowances - std_ded
         hra = Decimal("0")
         lta = Decimal("0")
         prof_tax = Decimal("0")
@@ -55,8 +70,8 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
 
     return SalaryResult(
         gross_salary=gross,
-        exempt_allowances=hra + lta,
-        net_salary=gross - hra - lta,
+        exempt_allowances=exempt_allowances,
+        net_salary=gross - exempt_allowances,
         standard_deduction=std_ded,
         entertainment_allowance=ent_allowance,
         professional_tax=prof_tax,

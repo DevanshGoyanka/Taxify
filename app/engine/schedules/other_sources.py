@@ -23,6 +23,7 @@ class OSResult:
     fixed_deposit_interest: Decimal = Decimal("0")
     family_pension_gross: Decimal = Decimal("0")
     dividend_income: Decimal = Decimal("0")
+    interest_on_it_refund: Decimal = Decimal("0")
     deduction_57iia: Decimal = Decimal("0")
     income_chargeable: Decimal = Decimal("0")
 
@@ -35,6 +36,7 @@ def compute(input_data: Optional[OtherSourcesIncome], regime: TaxRegime) -> OSRe
     fd = input_data.fixed_deposit_interest
     fp = input_data.family_pension_received
     div = input_data.dividend_income
+    tax_refund_interest = input_data.interest_on_it_refund
 
     # 57(iia): 1/3rd of family pension or statutory cap
     # Old regime: ₹15,000 cap | New regime: ₹25,000 cap (FA 2024 amendment)
@@ -43,13 +45,14 @@ def compute(input_data: Optional[OtherSourcesIncome], regime: TaxRegime) -> OSRe
         cap = Decimal("25000") if regime == TaxRegime.NEW else Decimal("15000")
         ded_57iia = min(fp / Decimal("3"), cap)
 
-    chargeable = sb + fd + fp + div - ded_57iia
+    chargeable = sb + fd + fp + div + tax_refund_interest - ded_57iia
 
     return OSResult(
         savings_bank_interest=sb,
         fixed_deposit_interest=fd,
         family_pension_gross=fp,
         dividend_income=div,
+        interest_on_it_refund=tax_refund_interest,
         deduction_57iia=ded_57iia,
         income_chargeable=max(Decimal("0"), chargeable),
     )

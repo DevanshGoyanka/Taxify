@@ -86,7 +86,7 @@ def compute_all(
     # --- Old regime only deductions ---
     r_80c = section_80c.compute(ded, regime)
     _add("80C+80CCC+80CCD(1)", r_80c)
-    # Also store 80CCC and 80CCD(1) individually for ITD JSON line-item breakout
+    # Store 80CCC and 80CCD(1) individually for ITD JSON line-item breakout.
     r_80ccc = section_80c.compute_80ccc(ded, regime)
     _add("80CCC", r_80ccc)
     r_80ccd1 = section_80c.compute_80ccd1(ded, regime)

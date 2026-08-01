@@ -146,3 +146,17 @@ def test_optional_claimed_credit_columns_default_to_zero() -> None:
 
     results = validate_itr1_input(body)
     assert isinstance(results, list)
+
+
+def test_compute_json_passes_validated_input_to_builder() -> None:
+    """Official JSON generation must receive the validated source input."""
+    body = _valid_input()
+    with patch("app.routers.itr.itr1_input_val", return_value=ValidationReport("ITR1")), patch(
+        "app.routers.itr.compute_itr1", return_value=ITR1Result()
+    ), patch("app.routers.itr.itr1_calc_val", return_value=ValidationReport("ITR1")), patch(
+        "app.engine.itd.itr1.build_itr1_json", return_value={"ITR": {"ITR1": {}}}
+    ) as builder:
+        itr1_compute_json(body, current_user=None)
+
+    builder.assert_called_once()
+    assert builder.call_args.args[1] is body

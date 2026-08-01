@@ -22,25 +22,26 @@ def compute(ded: Optional[Chapter6ADeductions], regime: TaxRegime) -> Decimal:
     return min(raw, SECTION_80C_LIMIT)
 
 
-def compute_80ccc(ded: Optional[Chapter6ADeductions], regime: TaxRegime) -> Decimal:
-    """Return the 80CCC portion after proportional 80CCE cap."""
+def _capped_component(
+    component: Decimal,
+    ded: Optional[Chapter6ADeductions],
+    regime: TaxRegime,
+) -> Decimal:
+    """Return one component's proportional share of the Section 80CCE cap."""
     if not ded or regime == TaxRegime.NEW:
         return Decimal("0")
     raw_total = ded.amount_80c + ded.amount_80ccc + ded.amount_80ccd1
     if raw_total == 0:
         return Decimal("0")
     capped = min(raw_total, SECTION_80C_LIMIT)
-    ratio = ded.amount_80ccc / raw_total if raw_total > 0 else Decimal("0")
-    return min(ded.amount_80ccc, ratio * capped)
+    return min(component, component / raw_total * capped)
+
+
+def compute_80ccc(ded: Optional[Chapter6ADeductions], regime: TaxRegime) -> Decimal:
+    """Return the 80CCC portion after applying the shared 80CCE cap."""
+    return _capped_component(ded.amount_80ccc if ded else Decimal("0"), ded, regime)
 
 
 def compute_80ccd1(ded: Optional[Chapter6ADeductions], regime: TaxRegime) -> Decimal:
-    """Return the 80CCD(1) employee NPS portion after proportional 80CCE cap."""
-    if not ded or regime == TaxRegime.NEW:
-        return Decimal("0")
-    raw_total = ded.amount_80c + ded.amount_80ccc + ded.amount_80ccd1
-    if raw_total == 0:
-        return Decimal("0")
-    capped = min(raw_total, SECTION_80C_LIMIT)
-    ratio = ded.amount_80ccd1 / raw_total if raw_total > 0 else Decimal("0")
-    return min(ded.amount_80ccd1, ratio * capped)
+    """Return the 80CCD(1) portion after applying the shared 80CCE cap."""
+    return _capped_component(ded.amount_80ccd1 if ded else Decimal("0"), ded, regime)
