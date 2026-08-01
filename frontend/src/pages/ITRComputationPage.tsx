@@ -105,6 +105,8 @@ export default function ITRComputationPage() {
   const suppressAutoDetectRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [validationReport, setValidationReport] = useState<{ valid: boolean; errors: string[]; warnings: string[] } | null>(null);
   const [activeTab, setActiveTab] = useState(0);
   const [regime, setRegime] = useState<'old' | 'new'>('new');
   const [itrForm, setItrForm] = useState('ITR-1');
@@ -489,6 +491,35 @@ export default function ITRComputationPage() {
       toast.error(err.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleValidate = async () => {
+    const currentEditor = editorRef.current;
+    setValidating(true);
+    setValidationReport(null);
+    try {
+      if (!currentEditor) throw new Error('Return is not loaded');
+      const currentSnapshot = composeLegacyPayload(currentEditor);
+      const validationError = validatePhase1Payload(currentSnapshot);
+      if (validationError) {
+        toast.error(validationError);
+        return;
+      }
+      const payload = buildPhase1Payload(currentSnapshot);
+      const report = await itrApi.validate(clientId, effectiveAssessmentYear, payload);
+      setValidationReport(report);
+      if (report.valid && report.warnings.length === 0) {
+        toast.success('Validation passed ✓');
+      } else if (report.valid) {
+        toast(`${report.warnings.length} warning(s) — see report`, { icon: '⚠️' });
+      } else {
+        toast.error(`${report.errors.length} blocking error(s) — see report`);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Validation failed');
+    } finally {
+      setValidating(false);
     }
   };
 
@@ -1365,6 +1396,27 @@ export default function ITRComputationPage() {
           </button>
 
           <button
+            onClick={handleValidate}
+            disabled={validating}
+            style={{
+              padding: '6px 12px',
+              background: validating ? 'var(--border)' : 'var(--accent-blue)',
+              color: 'white',
+              border: 'none',
+              borderRadius: 6,
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: validating ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            {validating && <Spinner size={12} />}
+            Validate
+          </button>
+
+          <button
             onClick={handleDownloadJson}
             style={{
               padding: '6px 12px',
@@ -1404,6 +1456,24 @@ export default function ITRComputationPage() {
       {taxResultError && (
         <div role="alert" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--error)', background: 'var(--error-bg)' }}>
           Tax computation failed: {taxResultError}
+        </div>
+      )}
+
+      {validationReport && !validationReport.valid && (
+        <div role="alert" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--error)', background: 'var(--error-bg)' }}>
+          <strong>Blocking errors ({validationReport.errors.length}):</strong>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {validationReport.errors.map((e, i) => <li key={i} style={{ fontSize: 13 }}>{e}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {validationReport && validationReport.valid && validationReport.warnings.length > 0 && (
+        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--text-secondary)', background: 'var(--warn-bg, #fff8e1)' }}>
+          <strong>Warnings ({validationReport.warnings.length}):</strong>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {validationReport.warnings.map((w, i) => <li key={i} style={{ fontSize: 13 }}>{w}</li>)}
+          </ul>
         </div>
       )}
 
