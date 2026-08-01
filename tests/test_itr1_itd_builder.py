@@ -20,6 +20,7 @@ from app.schemas.itr1 import (
     DependentRelationship,
     DisabilityCategory,
     DisabilitySeverity,
+    EducationLoanLenderType,
     FilingAddress,
     HousePropertyIncome,
     ITR1FilingProfile,
@@ -31,6 +32,7 @@ from app.schemas.itr1 import (
     SalaryIncome,
     Schedule80CEntry,
     Schedule80DD,
+    Schedule80EEntry,
     Schedule80U,
     Section80DDBDetails,
     Section80DDBUserType,
@@ -810,6 +812,113 @@ def test_builder_cross_foots_gti_restricted_disability_deduction() -> None:
     chapter = itr1["ITR1_IncomeDeductions"]
     assert chapter["DeductUndChapVIA"]["Section80U"] == 40000
     assert chapter["UsrDeductUndChapVIA"]["Section80U"] == 40000
+
+
+def test_builder_maps_complete_schedule_80e() -> None:
+    """Section 80E must preserve every official lender and loan field."""
+    entry = Schedule80EEntry(
+        loan_taken_from=EducationLoanLenderType.BANK,
+        lender_name="State Bank of India",
+        account_or_reference_number="EDU/2020-123",
+        loan_date=date(2020, 1, 15),
+        total_loan_amount=Decimal("500000"),
+        outstanding_loan_amount=Decimal("350000"),
+        interest_paid=Decimal("40000"),
+    )
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80e=Decimal("40000"),
+        ),
+        "schedule_80e_entries": [entry],
+    })
+    itr1 = _build(body)["ITR"]["ITR1"]
+    assert itr1["Schedule80E"] == {
+        "Schedule80EDtls": [{
+            "LoanTknFrom": "B",
+            "BankOrInstnName": "State Bank of India",
+            "LoanAccNoOfBankOrInstnRefNo": "EDU/2020-123",
+            "DateofLoan": "2020-01-15",
+            "TotalLoanAmt": 500000,
+            "LoanOutstndngAmt": 350000,
+            "Interest80E": 40000,
+        }],
+        "TotalInterest80E": 40000,
+    }
+    chapter = itr1["ITR1_IncomeDeductions"]
+    assert chapter["UsrDeductUndChapVIA"]["Section80E"] == 40000
+    assert chapter["DeductUndChapVIA"]["Section80E"] == 40000
+
+
+def test_builder_preserves_user_80e_when_gti_caps_eligible_interest() -> None:
+    """User 80E remains raw while Schedule 80E equals GTI-eligible interest."""
+    entry = Schedule80EEntry(
+        loan_taken_from=EducationLoanLenderType.INSTITUTION,
+        lender_name="Education Finance Institute",
+        account_or_reference_number="INST-123",
+        loan_date=date(2022, 6, 1),
+        total_loan_amount=Decimal("200000"),
+        outstanding_loan_amount=Decimal("150000"),
+        interest_paid=Decimal("100000"),
+    )
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "salary_income": SalaryIncome(gross_salary=Decimal("90000")),
+        "other_sources_income": OtherSourcesIncome(),
+        "deductions_chapter6a": Chapter6ADeductions(amount_80e=Decimal("100000")),
+        "schedule_80e_entries": [entry],
+        "agriculture_income": Decimal("0"),
+    })
+    itr1 = _build(body)["ITR"]["ITR1"]
+    chapter = itr1["ITR1_IncomeDeductions"]
+    assert chapter["UsrDeductUndChapVIA"]["Section80E"] == 100000
+    assert chapter["DeductUndChapVIA"]["Section80E"] == 40000
+    assert itr1["Schedule80E"]["TotalInterest80E"] == 40000
+
+
+def test_builder_allocates_fractional_80e_interest_without_rounding_drift() -> None:
+    """Individually rounded loan rows must sum exactly to eligible Section 80E."""
+    rows = [
+        Schedule80EEntry(
+            loan_taken_from=EducationLoanLenderType.BANK,
+            lender_name=f"Bank {index}",
+            account_or_reference_number=f"LOAN-{index}",
+            loan_date=date(2020, 1, index),
+            total_loan_amount=Decimal("100"),
+            outstanding_loan_amount=Decimal("50"),
+            interest_paid=Decimal("0.60"),
+        )
+        for index in (1, 2)
+    ]
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(amount_80e=Decimal("1.20")),
+        "schedule_80e_entries": rows,
+    })
+    schedule = _build(body)["ITR"]["ITR1"]["Schedule80E"]
+    assert [row["Interest80E"] for row in schedule["Schedule80EDtls"]] == [1, 0]
+    assert schedule["TotalInterest80E"] == 1
+
+
+def test_builder_rejects_missing_or_mismatched_schedule_80e() -> None:
+    """A positive eligible 80E claim requires exactly cross-footed loan rows."""
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80e=Decimal("40000"),
+        )
+    })
+    with pytest.raises(ValueError, match="Schedule 80E loan rows"):
+        _build(body)
+    entry = Schedule80EEntry(
+        loan_taken_from=EducationLoanLenderType.BANK,
+        lender_name="Bank",
+        account_or_reference_number="LOAN-1",
+        loan_date=date(2020, 1, 1),
+        total_loan_amount=Decimal("100000"),
+        outstanding_loan_amount=Decimal("50000"),
+        interest_paid=Decimal("30000"),
+    )
+    with pytest.raises(ValueError, match="not exceed row interest"):
+        _build(body.model_copy(update={"schedule_80e_entries": [entry]}))
 
 
 def test_builder_maps_complete_80ddb_details_and_distinct_amounts() -> None:

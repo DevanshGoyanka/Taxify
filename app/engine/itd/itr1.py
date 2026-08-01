@@ -296,6 +296,7 @@ def _income_deductions_itr1(
     ded_80tta: Decimal = Decimal("0"),
     ded_80ttb: Decimal = Decimal("0"),
     ded_80e: Decimal = Decimal("0"),
+    usr_80e: Optional[Decimal] = None,
     ded_80ee: Decimal = Decimal("0"),
     ded_80eea: Decimal = Decimal("0"),
     ded_80eeb: Decimal = Decimal("0"),
@@ -334,7 +335,9 @@ def _income_deductions_itr1(
         "UsrDeductUndChapVIA": _chapter_via_itr1(
             deductions_total
             - ded_80ddb
-            + (usr_80ddb if usr_80ddb is not None else ded_80ddb),
+            + (usr_80ddb if usr_80ddb is not None else ded_80ddb)
+            - ded_80e
+            + (usr_80e if usr_80e is not None else ded_80e),
             ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1=ded_80ccd1,
             ded_80ccd1b=ded_80ccd1b,
             ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
@@ -342,7 +345,9 @@ def _income_deductions_itr1(
             ddb_user_type=ddb_user_type,
             ddb_disease=ddb_disease,
             ded_80u=ded_80u, ded_80tta=ded_80tta,
-            ded_80ttb=ded_80ttb, ded_80e=ded_80e, ded_80ee=ded_80ee,
+            ded_80ttb=ded_80ttb,
+            ded_80e=(usr_80e if usr_80e is not None else ded_80e),
+            ded_80ee=ded_80ee,
             ded_80eea=ded_80eea, ded_80eeb=ded_80eeb, ded_80g=ded_80g,
             ded_80gg=ded_80gg, ded_80gga=ded_80gga, ded_80ggc=ded_80ggc,
             ded_80cch=ded_80cch,
@@ -561,6 +566,50 @@ def _schedule_80c(input_data: ITR1Input, total_amt: Decimal) -> dict[str, Any]:
     return {
         "Schedule80CDtls": rows,
         "TotalAmt": sum(row["Amount"] for row in rows),
+    }
+
+
+def _schedule_80e(
+    entries: list[Any],
+    eligible_interest: Decimal,
+) -> dict[str, Any]:
+    """Build Schedule 80E with eligible interest allocated across real rows."""
+    if not entries:
+        raise ValueError("A positive Section 80E claim requires Schedule 80E loan rows")
+    raw_interest = sum((entry.interest_paid for entry in entries), Decimal("0"))
+    eligible_rupees = _to_rupees(eligible_interest)
+    if raw_interest <= 0 or eligible_interest > raw_interest:
+        raise ValueError(
+            "Eligible Section 80E deduction must be positive and not exceed row interest"
+        )
+
+    mapped: list[dict[str, Any]] = []
+    allocated = 0
+    for index, entry in enumerate(entries):
+        if index == len(entries) - 1:
+            row_interest = eligible_rupees - allocated
+        else:
+            proportional = entry.interest_paid / raw_interest * eligible_interest
+            row_interest = min(
+                max(0, _to_rupees(proportional)),
+                eligible_rupees - allocated,
+            )
+            allocated += row_interest
+        mapped.append({
+            "LoanTknFrom": entry.loan_taken_from.value,
+            "BankOrInstnName": entry.lender_name,
+            "LoanAccNoOfBankOrInstnRefNo": entry.account_or_reference_number,
+            "DateofLoan": entry.loan_date.isoformat(),
+            "TotalLoanAmt": _to_rupees(entry.total_loan_amount),
+            "LoanOutstndngAmt": _to_rupees(entry.outstanding_loan_amount),
+            "Interest80E": row_interest,
+        })
+    total_interest = sum(row["Interest80E"] for row in mapped)
+    if total_interest != eligible_rupees:
+        raise ValueError("Schedule 80E emitted rows do not cross-foot")
+    return {
+        "Schedule80EDtls": mapped,
+        "TotalInterest80E": total_interest,
     }
 
 
@@ -1080,6 +1129,11 @@ def build_itr1_json(
         ded_80tta=deduction("80TTA"),
         ded_80ttb=deduction("80TTB"),
         ded_80e=deduction("80E"),
+        usr_80e=(
+            input_data.deductions_chapter6a.amount_80e
+            if input_data is not None
+            else None
+        ),
         ded_80ee=deduction("80EE"),
         ded_80eea=deduction("80EEA"),
         ded_80eeb=deduction("80EEB"),
@@ -1183,11 +1237,19 @@ def build_itr1_json(
         elif schedule_80u is not None:
             raise ValueError("Schedule 80U details require a positive 80U deduction")
 
+        ded_80e = deduction("80E")
+        if ded_80e > 0:
+            itr1["Schedule80E"] = _schedule_80e(
+                input_data.schedule_80e_entries,
+                ded_80e,
+            )
+        elif input_data.schedule_80e_entries:
+            raise ValueError("Schedule 80E rows require a positive eligible deduction")
+
         incomplete_claims = {
             "80G": deduction("80G"),
             "80GGA": deduction("80GGA"),
             "80GGC": deduction("80GGC"),
-            "80E": deduction("80E"),
             "80EE": deduction("80EE"),
             "80EEA": deduction("80EEA"),
             "80EEB": deduction("80EEB"),

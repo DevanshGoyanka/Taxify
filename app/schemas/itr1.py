@@ -1070,11 +1070,27 @@ class Schedule80CCCEntry(BaseModel):
     policy_number: Optional[str] = Field(default=None, max_length=50)
 
 
+class EducationLoanLenderType(str, Enum):
+    """Official lender category for a Section 80E education loan."""
+
+    BANK = "B"
+    INSTITUTION = "I"
+
+
 class Schedule80EEntry(BaseModel):
-    """Per-row entry for Schedule 80E."""
-    lender_name: Optional[str] = Field(default=None, max_length=125)
-    loan_amount: Decimal = Field(default=Decimal("0"), ge=0)
-    interest_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    """Complete official loan row for Schedule 80E."""
+
+    loan_taken_from: EducationLoanLenderType
+    lender_name: str = Field(min_length=1, max_length=125)
+    account_or_reference_number: str = Field(
+        min_length=1,
+        max_length=20,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9/-]*$",
+    )
+    loan_date: date
+    total_loan_amount: Decimal = Field(ge=0)
+    outstanding_loan_amount: Decimal = Field(ge=0)
+    interest_paid: Decimal = Field(ge=0)
 
 
 class LoanDetails(BaseModel):

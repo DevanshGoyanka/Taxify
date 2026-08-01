@@ -2089,15 +2089,16 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     if ch6a and ch6a.amount_80e > _z:
         total_80e_schedule = sum(e.interest_paid for e in inp.schedule_80e_entries)
         if inp.schedule_80e_entries:
-            # Rule 242: VIA 80E = total interest in schedule 80E
-            if total_80e_schedule > _z and ch6a.amount_80e != total_80e_schedule:
+            # Before computation, loan-row interest represents actual interest
+            # paid and must cross-foot to the taxpayer's user-entered claim.
+            if total_80e_schedule != ch6a.amount_80e:
                 results.append(_make(
                     "ITR1-R242", False,
-                    f"80E VIA amount (Rs {ch6a.amount_80e}) does not match "
-                    f"Schedule 80E total interest (Rs {total_80e_schedule}). "
-                    f"Both must be equal.",
+                    f"Schedule 80E interest (Rs {total_80e_schedule}) must equal "
+                    f"the user claim (Rs {ch6a.amount_80e}).",
                     "deductions_chapter6a.amount_80e",
-                    expected=str(total_80e_schedule), actual=str(ch6a.amount_80e)))
+                    expected=str(ch6a.amount_80e),
+                    actual=str(total_80e_schedule)))
 
         # Rule 274: 80E claimed → loan details required
         if not inp.schedule_80e_entries:
