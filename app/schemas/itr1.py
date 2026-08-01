@@ -23,7 +23,26 @@ from enum import Enum
 from typing import List, Literal, Optional
 from datetime import date
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+OFFICIAL_COUNTRY_CODES = frozenset(
+    "93 1001 355 213 684 376 244 1264 1010 1268 54 374 297 61 43 994 1242 "
+    "973 880 1246 375 32 501 229 1441 975 591 1002 387 267 1003 55 1014 673 "
+    "359 226 257 238 855 237 1 1345 236 235 56 86 9 672 57 270 242 243 682 "
+    "506 225 385 53 1015 357 420 45 253 1767 1809 593 20 503 240 291 372 "
+    "251 500 298 679 358 33 594 689 1004 241 220 995 49 233 350 30 299 1473 "
+    "590 1671 502 1481 224 245 592 509 1005 6 504 852 36 354 91 62 98 964 "
+    "353 1624 972 5 1876 81 1534 962 7 254 686 850 82 965 996 856 371 961 "
+    "266 231 218 423 370 352 853 389 261 265 60 960 223 356 692 596 222 230 "
+    "269 52 691 373 377 976 382 1664 212 258 95 264 674 977 31 687 64 505 "
+    "227 234 683 15 1670 47 968 92 680 970 507 675 595 51 63 1011 48 14 "
+    "1787 974 262 40 8 250 1006 290 1869 1758 1007 508 1784 685 378 239 966 "
+    "221 381 248 232 65 1721 421 386 677 252 28 1008 211 35 94 249 597 1012 "
+    "268 46 41 963 886 992 255 66 670 228 690 676 1868 216 90 993 1649 688 "
+    "256 380 971 44 2 1009 598 998 678 58 84 1284 1340 681 1013 967 260 263 "
+    "9999".split()
+)
 
 
 # ---------------------------------------------------------------------------
@@ -739,6 +758,7 @@ class ITR1Input(BaseModel):
     schedule_tds3_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
     schedule_tcs_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
     filing_profile: Optional["ITR1FilingProfile"] = None
+    property_profile: Optional["PropertyFilingProfile"] = None
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +782,25 @@ class PostalAddress(BaseModel):
     country_code: str = Field(default="91", min_length=1, max_length=4)
     pin_code: Optional[str] = Field(default=None, pattern=r"^[1-9][0-9]{5}$")
     zip_code: str = Field(default="", max_length=8)
+
+
+class PropertyFilingProfile(BaseModel):
+    """Official address and ownership identity for the single ITR-1 property."""
+
+    address_detail: str = Field(min_length=1, max_length=50)
+    city_or_town_or_district: str = Field(min_length=1, max_length=50)
+    state_code: str = Field(pattern=r"^(0[1-9]|[12][0-9]|3[0-7]|99)$")
+    country_code: str = Field(default="91", min_length=1, max_length=4)
+    pin_code: Optional[str] = Field(default=None, pattern=r"^[1-9][0-9]{5}$")
+    zip_code: Optional[str] = Field(default=None, min_length=1, max_length=8)
+
+    @field_validator("country_code")
+    @classmethod
+    def validate_country_code(cls, value: str) -> str:
+        """Require an official AY 2026-27 ITD country code."""
+        if value not in OFFICIAL_COUNTRY_CODES:
+            raise ValueError("country_code must be an official ITD country code")
+        return value
 
 
 class FilingAddress(PostalAddress):

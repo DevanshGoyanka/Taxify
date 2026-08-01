@@ -21,6 +21,7 @@ from app.schemas.itr1 import (
     ITR1FilingProfile,
     ITR1Input,
     PostalAddress,
+    PropertyFilingProfile,
 )
 
 
@@ -101,6 +102,74 @@ def _verification_from_profile(profile: ITR1FilingProfile) -> dict[str, Any]:
         place=profile.verification_place,
         capacity=profile.verification_capacity,
     )
+
+
+def _property_schedule(
+    result: ITR1Result,
+    input_data: ITR1Input,
+    profile: PropertyFilingProfile,
+) -> list[dict[str, Any]]:
+    """Build the single self-owned house-property schedule from computed values."""
+    if input_data.is_property_co_owned or input_data.co_ownership_details is not None:
+        raise ValueError("Co-owned property ITD JSON is not implemented")
+    hp_input = input_data.house_property_income
+    if hp_input.home_loan_interest_paid > 0:
+        raise ValueError("Section 24(b) loan details are required for ITD JSON")
+    hp = result.schedules.get("hp") if result.schedules else None
+    if hp is None:
+        raise ValueError("Computed house-property schedule is missing")
+
+    annual_value = _to_rupees(hp.gross_annual_value)
+    balance = _to_rupees(hp.net_annual_value)
+    local_taxes = annual_value - balance
+    if local_taxes < 0:
+        raise ValueError("House-property municipal taxes do not cross-foot")
+    total_unrealized_and_tax = local_taxes
+    owned_value = balance
+    interest = _to_rupees(hp.interest_on_loan)
+    arrears = _to_rupees(hp.arrears_unrealised_rent)
+    arrears_taxable = _to_rupees(hp.arrears_unrealised_rent * Decimal("0.7"))
+    income = _to_rupees(hp.income_chargeable)
+    standard_deduction = owned_value - interest + arrears_taxable - income
+    if standard_deduction < 0:
+        raise ValueError("House-property deduction does not cross-foot")
+    total_deduction = standard_deduction + interest
+
+    address: dict[str, Any] = {
+        "AddrDetail": profile.address_detail,
+        "CityOrTownOrDistrict": profile.city_or_town_or_district,
+        "StateCode": profile.state_code,
+        "CountryCode": profile.country_code,
+    }
+    if profile.pin_code is not None:
+        address["PinCode"] = int(profile.pin_code)
+    if profile.zip_code is not None:
+        address["ZipCode"] = profile.zip_code
+
+    rent_details: dict[str, Any] = {
+        "AnnualLetableValue": annual_value,
+        "TotalUnrealizedAndTax": total_unrealized_and_tax,
+        "BalanceALV": balance,
+        "AnnualOfPropOwned": owned_value,
+        "ThirtyPercentOfBalance": standard_deduction,
+        "IntOnBorwCap": interest,
+        "TotalDeduct": total_deduction,
+        "IncomeOfHP": income,
+    }
+    if local_taxes > 0:
+        rent_details["LocalTaxes"] = local_taxes
+    if arrears > 0:
+        rent_details["ArrearsUnrealizedRentRcvd"] = arrears
+
+    return [{
+        "HPSNo": 1,
+        "AddressDetailWithZipCode": address,
+        "PropertyOwner": "SE",
+        "PropCoOwnedFlg": "NO",
+        "AsseseeShareProperty": 100,
+        "ifLetOut": hp_input.property_type.value,
+        "Rentdetails": rent_details,
+    }]
 
 
 # ---------------------------------------------------------------------------
@@ -856,6 +925,16 @@ def build_itr1_json(
     exempt_income_total = (
         input_data.agriculture_income if input_data is not None else Decimal("0")
     )
+    if input_data is not None:
+        if input_data.property_profile is None:
+            raise ValueError("property_profile is required for official ITR-1 JSON")
+        property_schedules = _property_schedule(
+            result,
+            input_data,
+            input_data.property_profile,
+        )
+    else:
+        property_schedules = None
 
     gti_cg = result.gross_total_income  # Already includes capital_gains_112a
     income = _income_deductions_itr1(
@@ -872,6 +951,7 @@ def build_itr1_json(
         gti_cg=gti_cg,
         total_income=result.taxable_income,
         deductions_total=result.deductions_total,
+        hp_schedules=property_schedules,
         allowance_rows=allowance_rows,
         other_source_rows=other_source_rows,
         deduction_57iia=(os_schedule.deduction_57iia if os_schedule else Decimal("0")),

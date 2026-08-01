@@ -23,6 +23,7 @@ from app.schemas.itr1 import (
     ITR1Input,
     OtherSourcesIncome,
     PostalAddress,
+    PropertyFilingProfile,
     PropertyType,
     SalaryIncome,
     Schedule80CEntry,
@@ -104,6 +105,13 @@ def _input(*, amount_80c: str = "100000", amount_80d: str = "25000") -> ITR1Inpu
             verification_capacity="S",
             return_file_section=11,
         ),
+        property_profile=PropertyFilingProfile(
+            address_detail="Flat 12A, MG Road",
+            city_or_town_or_district="Delhi",
+            state_code="07",
+            country_code="91",
+            pin_code="110001",
+        ),
         agriculture_income=Decimal("5000"),
         nature_of_employment="Private",
     )
@@ -125,6 +133,144 @@ def test_detailed_document_matches_official_ay_2026_27_schema() -> None:
         f"{'/'.join(map(str, error.absolute_path))}: {error.message}"
         for error in errors
     ]
+
+
+def test_builder_maps_self_occupied_property_profile() -> None:
+    """Self-occupied property must contain real address and zero cross-footed rent."""
+    prop = _build(_input())["ITR"]["ITR1"]["ITR1_IncomeDeductions"][
+        "PropertyDetails"
+    ][0]
+    assert prop["AddressDetailWithZipCode"] == {
+        "AddrDetail": "Flat 12A, MG Road",
+        "CityOrTownOrDistrict": "Delhi",
+        "StateCode": "07",
+        "CountryCode": "91",
+        "PinCode": 110001,
+    }
+    assert prop["PropertyOwner"] == "SE"
+    assert prop["PropCoOwnedFlg"] == "NO"
+    assert prop["AsseseeShareProperty"] == 100
+    assert prop["ifLetOut"] == "S"
+    assert prop["Rentdetails"] == {
+        "AnnualLetableValue": 0,
+        "TotalUnrealizedAndTax": 0,
+        "BalanceALV": 0,
+        "AnnualOfPropOwned": 0,
+        "ThirtyPercentOfBalance": 0,
+        "IntOnBorwCap": 0,
+        "TotalDeduct": 0,
+        "IncomeOfHP": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("property_type", "rent", "taxes", "arrears", "expected"),
+    [
+        (PropertyType.LET_OUT, "300000", "10000", "0", 203000),
+        (PropertyType.DEEMED_LET_OUT, "240000", "12000", "30000", 180600),
+    ],
+)
+def test_builder_cross_foots_let_out_property(
+    property_type: PropertyType,
+    rent: str,
+    taxes: str,
+    arrears: str,
+    expected: int,
+) -> None:
+    """Let-out and deemed-let-out schedules must match calculator income."""
+    body = _input().model_copy(update={
+        "house_property_income": HousePropertyIncome(
+            property_type=property_type,
+            annual_rent_received=Decimal(rent),
+            municipal_taxes_paid=Decimal(taxes),
+            arrears_unrealised_rent_received=Decimal(arrears),
+        )
+    })
+    income = _build(body)["ITR"]["ITR1"]["ITR1_IncomeDeductions"]
+    rent_details = income["PropertyDetails"][0]["Rentdetails"]
+    assert rent_details["IncomeOfHP"] == expected
+    assert income["TotalIncomeChargeableUnHP"] == expected
+    assert rent_details["TotalDeduct"] == rent_details["ThirtyPercentOfBalance"]
+    assert "Section24B" not in rent_details
+    assert "TenantDetails" not in income["PropertyDetails"][0]
+
+
+def test_builder_cross_foots_fractional_property_rounding() -> None:
+    """Independent half-even rounding must not reject a valid property schedule."""
+    body = _input().model_copy(update={
+        "house_property_income": HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("5"),
+        )
+    })
+    income = _build(body)["ITR"]["ITR1"]["ITR1_IncomeDeductions"]
+    rent_details = income["PropertyDetails"][0]["Rentdetails"]
+    assert rent_details["AnnualOfPropOwned"] == 5
+    assert rent_details["ThirtyPercentOfBalance"] == 1
+    assert rent_details["IncomeOfHP"] == 4
+    assert rent_details["AnnualOfPropOwned"] - rent_details["TotalDeduct"] == 4
+
+
+def test_property_profile_rejects_non_official_country_code() -> None:
+    """Property country code must belong to the official ITD enumeration."""
+    with pytest.raises(ValidationError, match="official ITD country code"):
+        PropertyFilingProfile(
+            address_detail="1 Main Road",
+            city_or_town_or_district="Nowhere",
+            state_code="99",
+            country_code="abcd",
+        )
+
+
+@pytest.mark.parametrize(
+    ("regime", "expected_top_level"),
+    [
+        (TaxRegime.OLD, -200000),
+        (TaxRegime.NEW, 0),
+    ],
+)
+def test_property_row_preserves_raw_loss_before_inter_head_setoff(
+    regime: TaxRegime,
+    expected_top_level: int,
+) -> None:
+    """The property row keeps raw loss while the top level applies regime limits."""
+    body = _input().model_copy(update={
+        "tax_regime": regime,
+        "house_property_income": HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("100000"),
+            home_loan_interest_paid=Decimal("400000"),
+        ),
+    })
+    result = compute(body)
+    assert result.schedules["hp"].income_chargeable == Decimal("-330000.0")
+    assert result.house_property_income == Decimal(expected_top_level)
+
+    # Loan-detail mapping is deliberately outside this slice. Clear only the
+    # input guard to exercise the raw-vs-post-setoff serialization contract.
+    serializable = body.model_copy(deep=True)
+    serializable.house_property_income.home_loan_interest_paid = Decimal("0")
+    income = build_itr1_json(result, serializable)["ITR"]["ITR1"][
+        "ITR1_IncomeDeductions"
+    ]
+    assert income["PropertyDetails"][0]["Rentdetails"]["IncomeOfHP"] == -330000
+    assert income["TotalIncomeChargeableUnHP"] == expected_top_level
+
+
+def test_builder_rejects_missing_or_unsupported_property_details() -> None:
+    """Property JSON must not fabricate address, co-owner, or loan identities."""
+    with pytest.raises(ValueError, match="property_profile"):
+        _build(_input().model_copy(update={"property_profile": None}))
+    with pytest.raises(ValueError, match="Co-owned"):
+        _build(_input().model_copy(update={"is_property_co_owned": True}))
+    body = _input().model_copy(update={
+        "house_property_income": HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("10000"),
+        )
+    })
+    with pytest.raises(ValueError, match=r"24\(b\)"):
+        _build(body)
 
 
 def test_builder_preserves_filing_profile_without_placeholders() -> None:
