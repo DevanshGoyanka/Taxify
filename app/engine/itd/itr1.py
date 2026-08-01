@@ -24,6 +24,7 @@ from app.engine.constants import (
 from app.engine.schedules.deductions.section_80gga import Section80GGAResult
 from app.engine.schedules.deductions.section_80ggc import Section80GGCResult
 from app.engine.schedules.deductions.section_80c import Section80CResult
+from app.engine.schedules.deductions._loan_common import LoanDeductionResult
 from app.schemas.itr1 import (
     BankAccountType,
     FilingAddress,
@@ -787,33 +788,34 @@ def _schedule_80ggc(details: Section80GGCResult) -> dict[str, Any]:
 
 
 def _schedule_deduction_loan(
-    entries: list[Any],
-    eligible_interest: Decimal,
+    details: LoanDeductionResult,
     *,
     section: str,
     property_stamp_duty_value: Optional[Decimal] = None,
 ) -> dict[str, Any]:
-    """Build an official 80EE, 80EEA, or 80EEB schedule."""
+    """Serialize a computed loan-deduction result without recalculating.
+
+    Consumes the typed ``LoanDeductionResult`` produced by the dedicated
+    section module and emits official rows with deterministic whole-rupee
+    eligibility already allocated.
+    """
     if section not in {"80E", "80EE", "80EEA", "80EEB"}:
         raise ValueError(f"Unsupported deduction loan section: {section}")
-    if not entries:
-        raise ValueError(f"A positive Section {section} claim requires official loan rows")
-    raw_interest = sum((entry.interest_paid for entry in entries), Decimal("0"))
-    eligible_rupees = _to_rupees(eligible_interest)
-    if raw_interest <= 0 or eligible_interest > raw_interest:
+    if not details.rows:
         raise ValueError(
-            f"Eligible Section {section} deduction must be positive and not exceed row interest"
+            f"A positive Section {section} claim requires official loan rows"
         )
-
-    mapped: list[dict[str, Any]] = []
+    eligible_rupees = _to_rupees(details.allowed_deduction)
     allocated = 0
     interest_key = f"Interest{section}"
-    for index, entry in enumerate(entries):
-        if index == len(entries) - 1:
+    mapped: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        entry = computed.source
+        if index == len(details.rows) - 1:
             row_interest = eligible_rupees - allocated
         else:
             row_interest = min(
-                max(0, _to_rupees(entry.interest_paid / raw_interest * eligible_interest)),
+                _to_rupees(computed.eligible_interest),
                 eligible_rupees - allocated,
             )
             allocated += row_interest
@@ -844,16 +846,9 @@ def _schedule_deduction_loan(
     return schedule
 
 
-def _schedule_80e(
-    entries: list[Any],
-    eligible_interest: Decimal,
-) -> dict[str, Any]:
-    """Build Schedule 80E through the shared official loan mapper."""
-    return _schedule_deduction_loan(
-        entries,
-        eligible_interest,
-        section="80E",
-    )
+def _schedule_80e(details: LoanDeductionResult) -> dict[str, Any]:
+    """Serialize Schedule 80E from a computed loan-deduction result."""
+    return _schedule_deduction_loan(details, section="80E")
 
 
 def _disability_schedule_fields(
@@ -1471,31 +1466,30 @@ def build_itr1_json(
             raise ValueError("Schedule 80U details require a positive 80U deduction")
 
         ded_80e = deduction("80E")
+        details_80e = ded_sched.section_details.get("80E") if ded_sched else None
         if ded_80e > 0:
-            itr1["Schedule80E"] = _schedule_80e(
-                input_data.schedule_80e_entries,
-                ded_80e,
-            )
+            if details_80e is None or not details_80e.rows:
+                raise ValueError("A positive Section 80E claim requires official loan rows")
+            itr1["Schedule80E"] = _schedule_80e(details_80e)
         elif input_data.schedule_80e_entries:
             raise ValueError("Schedule 80E rows require a positive eligible deduction")
 
         for section in ("80EE", "80EEA", "80EEB"):
             eligible = deduction(section)
-            rows = input_data.loan_schedule_rows(section)
+            details_loan = ded_sched.section_details.get(section) if ded_sched else None
             if eligible > 0:
+                if details_loan is None or not details_loan.rows:
+                    raise ValueError(
+                        f"A positive Section {section} claim requires official loan rows"
+                    )
                 itr1[f"Schedule{section}"] = _schedule_deduction_loan(
-                    rows,
-                    eligible,
+                    details_loan,
                     section=section,
                     property_stamp_duty_value=(
                         input_data.property_stamp_duty_value_80eea
                         if section == "80EEA"
                         else None
                     ),
-                )
-            elif rows:
-                raise ValueError(
-                    f"Schedule {section} rows require a positive eligible deduction"
                 )
 
         details_80g = result.schedules["deductions"].section_details.get("80G")

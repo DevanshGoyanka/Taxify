@@ -101,6 +101,11 @@ def compute_all(
     schedule_80ggc: Optional[Schedule80GGC] = None,
     assessee_pan: Optional[str] = None,
     schedule_80c_entries: Optional[list] = None,
+    schedule_80e_entries: Optional[list] = None,
+    loan_rows_80ee: Optional[list] = None,
+    loan_rows_80eea: Optional[list] = None,
+    loan_rows_80eeb: Optional[list] = None,
+    property_stamp_duty_value_80eea: Optional[Decimal] = None,
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
@@ -251,4 +256,35 @@ def compute_all(
     result.total = min(total, gti)
     if result.total < total:
         _cap_breakdown_to_gti(result, gti)
+
+    # Compute typed loan-deduction results using the GTI-capped amounts so
+    # that per-row allocation lives in the dedicated modules, not the builder.
+    capped_80e = result.breakdown.get("80E", Decimal("0"))
+    if capped_80e > 0:
+        details_80e = section_80e.compute_details(
+            ded, schedule_80e_entries, capped_80e, regime,
+        )
+        result.section_details["80E"] = details_80e
+
+    capped_80ee = result.breakdown.get("80EE", Decimal("0"))
+    if capped_80ee > 0:
+        details_80ee = section_80ee.compute_details(
+            ded, loan_rows_80ee, capped_80ee, regime,
+        )
+        result.section_details["80EE"] = details_80ee
+
+    capped_80eea = result.breakdown.get("80EEA", Decimal("0"))
+    if capped_80eea > 0:
+        details_80eea = section_80eea.compute_details(
+            ded, loan_rows_80eea, capped_80eea, regime,
+        )
+        result.section_details["80EEA"] = details_80eea
+
+    capped_80eeb = result.breakdown.get("80EEB", Decimal("0"))
+    if capped_80eeb > 0:
+        details_80eeb = section_80eeb.compute_details(
+            ded, loan_rows_80eeb, capped_80eeb, regime,
+        )
+        result.section_details["80EEB"] = details_80eeb
+
     return result

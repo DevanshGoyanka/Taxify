@@ -298,6 +298,10 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         schedule_80ggc=input_data.schedule_80ggc,
         assessee_pan=input_data.assessee_pan,
         schedule_80c_entries=input_data.schedule_80c_entries,
+        schedule_80e_entries=input_data.schedule_80e_entries,
+        loan_rows_80ee=getattr(input_data, "loan_details_80ee_list", None),
+        loan_rows_80eea=getattr(input_data, "loan_details_80eea_list", None),
+        loan_rows_80eeb=getattr(input_data, "loan_details_80eeb_list", None),
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total

@@ -324,6 +324,11 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         schedule_80ggc=input_data.schedule_80ggc,
         assessee_pan=input_data.assessee_pan,
         schedule_80c_entries=input_data.schedule_80c_entries,
+        schedule_80e_entries=input_data.schedule_80e_entries,
+        loan_rows_80ee=input_data.loan_schedule_rows("80EE") if input_data else None,
+        loan_rows_80eea=input_data.loan_schedule_rows("80EEA") if input_data else None,
+        loan_rows_80eeb=input_data.loan_schedule_rows("80EEB") if input_data else None,
+        property_stamp_duty_value_80eea=input_data.property_stamp_duty_value_80eea if input_data else None,
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total
