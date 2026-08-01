@@ -1288,20 +1288,20 @@ def build_itr1_json(
 
     if input_data is not None:
         ddb_input = input_data.deductions_chapter6a
-        ddb_details = ddb_input.details_80ddb
-        if ddb_input.amount_80ddb > 0:
-            if ddb_details is None:
-                raise ValueError(
-                    "A positive Section 80DDB claim requires official beneficiary and disease details"
-                )
-            if ddb_details.reimbursement_amount > ddb_input.amount_80ddb:
-                raise ValueError("Section 80DDB reimbursement cannot exceed expenditure")
-            usr_80ddb = ddb_input.amount_80ddb - ddb_details.reimbursement_amount
-            ddb_user_type = ddb_details.user_type.value
-            ddb_disease = ddb_details.disease.value
+        details_80ddb = (
+            ded_sched.section_details.get("80DDB") if ded_sched else None
+        )
+        if details_80ddb is None:
+            if ddb_input.amount_80ddb > 0 or ddb_input.details_80ddb is not None:
+                raise ValueError("Section 80DDB computation details are missing")
+            usr_80ddb = None
+            ddb_user_type = None
+            ddb_disease = None
+        elif details_80ddb.source is not None:
+            usr_80ddb = details_80ddb.user_claim
+            ddb_user_type = details_80ddb.source.user_type.value
+            ddb_disease = details_80ddb.source.disease.value
         else:
-            if ddb_details is not None:
-                raise ValueError("Section 80DDB details require positive expenditure")
             usr_80ddb = None
             ddb_user_type = None
             ddb_disease = None

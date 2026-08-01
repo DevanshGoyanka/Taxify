@@ -165,12 +165,14 @@ def compute_all(
     r_80dd = details_80dd.allowed_deduction
     _add("80DD", r_80dd)
 
-    r_80ddb = section_80ddb.compute(
+    details_80ddb = section_80ddb.compute_details(
         ded,
         age_bracket,
         regime,
         use_structured_details=use_structured_80ddb,
     )
+    result.section_details["80DDB"] = details_80ddb
+    r_80ddb = details_80ddb.allowed_deduction
     _add("80DDB", r_80ddb)
 
     details_80u = section_80u.compute_details(
