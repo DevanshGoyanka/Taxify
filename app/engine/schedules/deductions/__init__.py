@@ -131,10 +131,14 @@ def compute_all(
             result.breakdown[key] = val
 
     # --- Sections allowed in BOTH regimes ---
-    r_80ccd2 = section_80ccd2.compute(ded, regime)
+    details_80ccd2 = section_80ccd2.compute_details(ded, regime)
+    result.section_details["80CCD(2)"] = details_80ccd2
+    r_80ccd2 = details_80ccd2.allowed_deduction
     _add("80CCD(2)", r_80ccd2, allow_new_regime=True)
 
-    r_80cch = section_80cch.compute(ded, regime)
+    details_80cch = section_80cch.compute_details(ded, regime)
+    result.section_details["80CCH"] = details_80cch
+    r_80cch = details_80cch.allowed_deduction
     _add("80CCH", r_80cch, allow_new_regime=True)
 
     if regime == TaxRegime.NEW:
@@ -154,7 +158,9 @@ def compute_all(
     r_80ccd1 = section_80c.compute_80ccd1(ded, regime)
     _add("80CCD(1)", r_80ccd1)
 
-    r_80ccd1b = section_80ccd1b.compute(ded, regime)
+    details_80ccd1b = section_80ccd1b.compute_details(ded, regime)
+    result.section_details["80CCD(1B)"] = details_80ccd1b
+    r_80ccd1b = details_80ccd1b.allowed_deduction
     _add("80CCD(1B)", r_80ccd1b)
 
     details_80d = section_80d.compute_details(
@@ -192,10 +198,14 @@ def compute_all(
     r_80u = details_80u.allowed_deduction
     _add("80U", r_80u)
 
-    r_80tta = section_80tta.compute(ded, os_input, age_bracket, regime)
+    details_80tta = section_80tta.compute_details(ded, os_input, age_bracket, regime)
+    result.section_details["80TTA"] = details_80tta
+    r_80tta = details_80tta.allowed_deduction
     _add("80TTA", r_80tta)
 
-    r_80ttb = section_80ttb.compute(ded, os_input, age_bracket, regime)
+    details_80ttb = section_80ttb.compute_details(ded, os_input, age_bracket, regime)
+    result.section_details["80TTB"] = details_80ttb
+    r_80ttb = details_80ttb.allowed_deduction
     _add("80TTB", r_80ttb)
 
     r_80e = section_80e.compute(ded, regime)
@@ -237,12 +247,14 @@ def compute_all(
 
     # 80GG is computed first because an allowed 80GG deduction reduces the
     # adjusted GTI used by Section 80G's shared 10% qualifying ceiling.
-    r_80gg = section_80gg.compute(
+    details_80gg = section_80gg.compute_details(
         ded,
         adjusted_gti,
         regime,
         hra_exempt_amount=hra_exempt_amount,
     )
+    result.section_details["80GG"] = details_80gg
+    r_80gg = details_80gg.allowed_deduction
     _add("80GG", r_80gg)
 
     adjusted_gti_80g = max(Decimal("0"), adjusted_gti - r_80gg)
