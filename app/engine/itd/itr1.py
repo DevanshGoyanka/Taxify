@@ -15,6 +15,12 @@ from decimal import Decimal
 from typing import Any, Mapping, Optional
 
 from app.engine.calculators.itr1 import ITR1Result
+from app.engine.constants import (
+    SECTION_80DD_LIMIT,
+    SECTION_80DD_SEVERE_LIMIT,
+    SECTION_80U_LIMIT,
+    SECTION_80U_SEVERE_LIMIT,
+)
 from app.schemas.itr1 import (
     BankAccountType,
     FilingAddress,
@@ -543,6 +549,66 @@ def _schedule_80c(input_data: ITR1Input, total_amt: Decimal) -> dict[str, Any]:
     }
 
 
+def _disability_schedule_fields(
+    schedule: Any,
+    computed_deduction: Decimal,
+    section: str,
+) -> dict[str, Any]:
+    """Map and cross-foot fields shared by official 80DD and 80U schedules."""
+    amount = _to_rupees(computed_deduction)
+    limits = {
+        "80DD": (SECTION_80DD_LIMIT, SECTION_80DD_SEVERE_LIMIT),
+        "80U": (SECTION_80U_LIMIT, SECTION_80U_SEVERE_LIMIT),
+    }
+    normal_limit, severe_limit = limits[section]
+    expected = severe_limit if schedule.disability_type.value == "severe" else normal_limit
+    expected_rupees = _to_rupees(expected)
+    if _to_rupees(schedule.deduction_amount) != expected_rupees:
+        raise ValueError(
+            f"Schedule {section} deduction must be Rs {expected_rupees} "
+            "for the selected severity"
+        )
+    if amount <= 0 or amount > expected_rupees:
+        raise ValueError(
+            f"Schedule {section} computed deduction must be positive and not exceed "
+            f"Rs {expected_rupees}"
+        )
+    mapped: dict[str, Any] = {
+        "NatureOfDisability": schedule.disability_type.itd_code,
+        "TypeOfDisability": schedule.disability_category.itd_code,
+        "DeductionAmount": amount,
+    }
+    if schedule.form_10ia_ack_number:
+        mapped["Form10IAAckNum"] = schedule.form_10ia_ack_number
+    if schedule.udid_number:
+        mapped["UDIDNum"] = schedule.udid_number
+    return mapped
+
+
+def _schedule_80dd(schedule: Any, computed_deduction: Decimal) -> dict[str, Any]:
+    """Build the official Section 80DD dependent-disability schedule."""
+    if schedule is None:
+        raise ValueError("A positive Section 80DD claim requires Schedule 80DD details")
+    if schedule.dependent_relationship is None:
+        raise ValueError("Schedule 80DD requires dependent_relationship")
+    if schedule.dependent_relationship.value == "member_of_huf":
+        raise ValueError("ITR-1 Schedule 80DD does not allow an HUF member dependent")
+    mapped = _disability_schedule_fields(schedule, computed_deduction, "80DD")
+    mapped["DependentType"] = schedule.dependent_relationship.itd_code
+    if schedule.dependent_pan:
+        mapped["DependentPan"] = schedule.dependent_pan
+    if schedule.dependent_aadhaar:
+        mapped["DependentAadhaar"] = schedule.dependent_aadhaar
+    return mapped
+
+
+def _schedule_80u(schedule: Any, computed_deduction: Decimal) -> dict[str, Any]:
+    """Build the official Section 80U self-disability schedule."""
+    if schedule is None:
+        raise ValueError("A positive Section 80U claim requires Schedule 80U details")
+    return _disability_schedule_fields(schedule, computed_deduction, "80U")
+
+
 def _schedule_80g(
     total_donations_cash: Decimal,
     total_donations_other: Decimal,
@@ -909,6 +975,9 @@ def build_itr1_json(
     def deduction(key: str) -> Decimal:
         """Return one computed deduction amount for this build only."""
         if key == "80C":
+            direct = ded_breakdown.get("80C")
+            if direct is not None:
+                return direct
             combined = ded_breakdown.get("80C+80CCC+80CCD(1)", Decimal("0"))
             return max(
                 Decimal("0"),
@@ -1058,13 +1127,25 @@ def build_itr1_json(
                 eligible_deduction=deduction("80D"),
             )
 
+        schedule_80dd = input_data.disability_schedule_80dd()
+        schedule_80u = input_data.disability_schedule_80u()
+        ded_80dd = deduction("80DD")
+        ded_80u = deduction("80U")
+        if ded_80dd > 0:
+            itr1["Schedule80DD"] = _schedule_80dd(schedule_80dd, ded_80dd)
+        elif schedule_80dd is not None:
+            raise ValueError("Schedule 80DD details require a positive 80DD deduction")
+
+        if ded_80u > 0:
+            itr1["Schedule80U"] = _schedule_80u(schedule_80u, ded_80u)
+        elif schedule_80u is not None:
+            raise ValueError("Schedule 80U details require a positive 80U deduction")
+
         incomplete_claims = {
             "80G": deduction("80G"),
             "80GGA": deduction("80GGA"),
             "80GGC": deduction("80GGC"),
-            "80DD": deduction("80DD"),
             "80DDB": deduction("80DDB"),
-            "80U": deduction("80U"),
             "80E": deduction("80E"),
             "80EE": deduction("80EE"),
             "80EEA": deduction("80EEA"),

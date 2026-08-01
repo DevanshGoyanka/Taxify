@@ -267,10 +267,27 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     is_80u_severe = False
     if ded_input := input_data.deductions_chapter6a:
         is_parents_senior = ded_input.has_parents_senior
-        if ded_input.schedule_80dd and 'severe' in ded_input.schedule_80dd.disability_type.lower():
-            is_80dd_severe = True
-        if ded_input.schedule_80u and 'severe' in ded_input.schedule_80u.disability_type.lower():
-            is_80u_severe = True
+        try:
+            schedule_80dd = input_data.disability_schedule_80dd()
+            schedule_80u = input_data.disability_schedule_80u()
+        except ValueError as exc:
+            result.errors.append(str(exc))
+            return result
+        if schedule_80dd is not None:
+            is_80dd_severe = schedule_80dd.disability_type.value == "severe"
+            if ded_input.amount_80dd > 0:
+                ded_input = ded_input.model_copy(deep=True)
+                ded_input.amount_80dd = (
+                    Decimal("125000") if is_80dd_severe else Decimal("75000")
+                )
+        if schedule_80u is not None:
+            is_80u_severe = schedule_80u.disability_type.value == "severe"
+            if ded_input.amount_80u > 0:
+                if ded_input is input_data.deductions_chapter6a:
+                    ded_input = ded_input.model_copy(deep=True)
+                ded_input.amount_80u = (
+                    Decimal("125000") if is_80u_severe else Decimal("75000")
+                )
 
     # ── Statutory validation warnings ──
     if ded_input:
@@ -296,7 +313,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
                 )
 
     ded = compute_deductions(
-        input_data.deductions_chapter6a, gti, age, regime, input_data.other_sources_income,
+        ded_input, gti, age, regime, input_data.other_sources_income,
         cg_112a_income=cg_112a_income,
         is_parents_senior=is_parents_senior,
         is_80dd_severe=is_80dd_severe,

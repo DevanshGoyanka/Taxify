@@ -41,6 +41,38 @@ class DeductionResult:
             self.breakdown = {}
 
 
+def _cap_breakdown_to_gti(result: DeductionResult, gti: Decimal) -> None:
+    """Normalize component keys and allocate the GTI cap across deductions."""
+    combined_key = "80C+80CCC+80CCD(1)"
+    combined = result.breakdown.get(combined_key, Decimal("0"))
+    amount_80ccc = result.breakdown.get("80CCC", Decimal("0"))
+    amount_80ccd1 = result.breakdown.get("80CCD(1)", Decimal("0"))
+    normalized: dict[str, Decimal] = {}
+    for key, amount in result.breakdown.items():
+        if key == combined_key:
+            amount_80c = max(Decimal("0"), combined - amount_80ccc - amount_80ccd1)
+            if amount_80c > 0:
+                normalized["80C"] = amount_80c
+            continue
+        if key in {"80CCC", "80CCD(1)"}:
+            if amount > 0:
+                normalized[key] = amount
+            continue
+        normalized[key] = amount
+
+    remaining = max(Decimal("0"), gti)
+    capped: dict[str, Decimal] = {}
+    for key, amount in normalized.items():
+        allowed = min(amount, remaining)
+        if allowed > 0:
+            capped[key] = allowed
+            remaining -= allowed
+        if remaining <= 0:
+            break
+    result.breakdown = capped
+    result.total = sum(capped.values(), Decimal("0"))
+
+
 def compute_all(
     ded: Optional[Chapter6ADeductions],
     gti: Decimal,
@@ -81,6 +113,8 @@ def compute_all(
 
     if regime == TaxRegime.NEW:
         result.total = min(r_80ccd2 + r_80cch, gti)
+        if result.total < r_80ccd2 + r_80cch:
+            _cap_breakdown_to_gti(result, gti)
         return result
 
     # --- Old regime only deductions ---
@@ -164,4 +198,6 @@ def compute_all(
 
     total = deductions_before_80g + r_80g + r_80gg + r_80gga + r_80ggc
     result.total = min(total, gti)
+    if result.total < total:
+        _cap_breakdown_to_gti(result, gti)
     return result

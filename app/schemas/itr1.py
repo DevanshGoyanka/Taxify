@@ -50,6 +50,61 @@ OFFICIAL_COUNTRY_CODES = frozenset(
 # ---------------------------------------------------------------------------
 
 
+class DisabilitySeverity(str, Enum):
+    """Statutory disability severity used by Sections 80DD and 80U."""
+
+    NORMAL = "normal"
+    SEVERE = "severe"
+
+    @property
+    def itd_code(self) -> str:
+        """Return the official ITD nature-of-disability code."""
+        return "2" if self is DisabilitySeverity.SEVERE else "1"
+
+
+class DisabilityCategory(str, Enum):
+    """Official category of disability for Sections 80DD and 80U."""
+
+    AUTISM_CEREBRAL_PALSY_OR_MULTIPLE = "specified"
+    OTHER = "other"
+
+    @property
+    def itd_code(self) -> str:
+        """Return the official ITD type-of-disability code."""
+        return (
+            "1"
+            if self is DisabilityCategory.AUTISM_CEREBRAL_PALSY_OR_MULTIPLE
+            else "2"
+        )
+
+
+class DependentRelationship(str, Enum):
+    """Eligible dependent relationships for Section 80DD."""
+
+    SPOUSE = "spouse"
+    SON = "son"
+    DAUGHTER = "daughter"
+    FATHER = "father"
+    MOTHER = "mother"
+    BROTHER = "brother"
+    SISTER = "sister"
+    MEMBER_OF_HUF = "member_of_huf"
+
+    @property
+    def itd_code(self) -> str:
+        """Return the explicit official ITD dependent-type code."""
+        return {
+            "spouse": "1",
+            "son": "2",
+            "daughter": "3",
+            "father": "4",
+            "mother": "5",
+            "brother": "6",
+            "sister": "7",
+            "member_of_huf": "8",
+        }[self.value]
+
+
 class AgeBracket(str, Enum):
     """
     Age bracket of the assessee as on the last day of the previous year.
@@ -760,6 +815,20 @@ class ITR1Input(BaseModel):
     filing_profile: Optional["ITR1FilingProfile"] = None
     property_profile: Optional["PropertyFilingProfile"] = None
 
+    def disability_schedule_80dd(self) -> Optional["Schedule80DD"]:
+        """Return the canonical 80DD schedule, rejecting conflicting copies."""
+        nested = self.deductions_chapter6a.schedule_80dd
+        if self.schedule_80dd is not None and nested is not None and self.schedule_80dd != nested:
+            raise ValueError("Conflicting Schedule 80DD details were provided")
+        return self.schedule_80dd or nested
+
+    def disability_schedule_80u(self) -> Optional["Schedule80U"]:
+        """Return the canonical 80U schedule, rejecting conflicting copies."""
+        nested = self.deductions_chapter6a.schedule_80u
+        if self.schedule_80u is not None and nested is not None and self.schedule_80u != nested:
+            raise ValueError("Conflicting Schedule 80U details were provided")
+        return self.schedule_80u or nested
+
 
 # ---------------------------------------------------------------------------
 # TDS / TCS entry models (shared across ITR forms)
@@ -904,16 +973,44 @@ class Schedule80GGC(BaseModel):
     contributions: List[PoliticalContribution] = Field(default_factory=list)
 
 
-class Schedule80DD(BaseModel):
-    """Schedule 80DD dependent disability details."""
-    disability_type: str = Field(default="normal")
+class DisabilityScheduleBase(BaseModel):
+    """Shared official disability certificate fields for Sections 80DD and 80U."""
+
+    disability_type: DisabilitySeverity = DisabilitySeverity.NORMAL
+    disability_category: DisabilityCategory = DisabilityCategory.OTHER
     deduction_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    form_10ia_ack_number: Optional[str] = Field(default=None, max_length=15)
+    udid_number: Optional[str] = Field(default=None, max_length=18)
+
+    @field_validator("disability_type", mode="before")
+    @classmethod
+    def normalize_legacy_severity(cls, value: object) -> object:
+        """Normalize known legacy ITR-4 labels to the canonical severity enum."""
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            aliases = {
+                "dependent with disability": DisabilitySeverity.NORMAL,
+                "dependent with severe disability": DisabilitySeverity.SEVERE,
+                "self with disability": DisabilitySeverity.NORMAL,
+                "self with severe disability": DisabilitySeverity.SEVERE,
+            }
+            return aliases.get(normalized, value)
+        return value
 
 
-class Schedule80U(BaseModel):
-    """Schedule 80U self disability details."""
-    disability_type: str = Field(default="normal")
-    deduction_amount: Decimal = Field(default=Decimal("0"), ge=0)
+class Schedule80DD(DisabilityScheduleBase):
+    """Official Section 80DD dependent-disability details."""
+
+    dependent_relationship: Optional[DependentRelationship] = None
+    dependent_pan: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$",
+    )
+    dependent_aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+
+
+class Schedule80U(DisabilityScheduleBase):
+    """Official Section 80U self-disability details."""
 
 
 class Schedule80CEntry(BaseModel):

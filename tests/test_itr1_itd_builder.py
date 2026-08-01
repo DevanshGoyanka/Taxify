@@ -17,6 +17,9 @@ from app.schemas.itr1 import (
     AgeBracket,
     BankAccount,
     Chapter6ADeductions,
+    DependentRelationship,
+    DisabilityCategory,
+    DisabilitySeverity,
     FilingAddress,
     HousePropertyIncome,
     ITR1FilingProfile,
@@ -27,6 +30,8 @@ from app.schemas.itr1 import (
     PropertyType,
     SalaryIncome,
     Schedule80CEntry,
+    Schedule80DD,
+    Schedule80U,
     TDS1Entry,
     TDS2Entry,
     TCSEntry,
@@ -636,6 +641,172 @@ def test_builder_preserves_preventive_80d_bucket() -> None:
     assert schedule["HealthInsPremSlfFam"] == 20000
     assert schedule["PrevHlthChckUpSlfFam"] == 5000
     assert schedule["EligibleAmountOfDedn"] == 25000
+
+
+def test_builder_emits_complete_schedule_80dd() -> None:
+    """A complete dependent-disability claim must map to official Schedule 80DD."""
+    detail = Schedule80DD(
+        disability_type=DisabilitySeverity.SEVERE,
+        disability_category=DisabilityCategory.AUTISM_CEREBRAL_PALSY_OR_MULTIPLE,
+        deduction_amount=Decimal("125000"),
+        dependent_relationship=DependentRelationship.DAUGHTER,
+        dependent_pan="ABCDE1234F",
+        dependent_aadhaar="123456789012",
+        form_10ia_ack_number="ACK80DD123",
+        udid_number="UDID80DD123",
+    )
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80dd=Decimal("125000"),
+        ),
+        "schedule_80dd": detail,
+        "form_10ia_filed": True,
+    })
+    itr1 = _build(body)["ITR"]["ITR1"]
+    assert itr1["Schedule80DD"] == {
+        "NatureOfDisability": "2",
+        "TypeOfDisability": "1",
+        "DeductionAmount": 125000,
+        "DependentType": "3",
+        "DependentPan": "ABCDE1234F",
+        "DependentAadhaar": "123456789012",
+        "Form10IAAckNum": "ACK80DD123",
+        "UDIDNum": "UDID80DD123",
+    }
+    assert itr1["ITR1_IncomeDeductions"]["DeductUndChapVIA"]["Section80DD"] == 125000
+
+
+def test_builder_emits_complete_schedule_80u() -> None:
+    """A complete self-disability claim must map to official Schedule 80U."""
+    detail = Schedule80U(
+        disability_type=DisabilitySeverity.NORMAL,
+        disability_category=DisabilityCategory.OTHER,
+        deduction_amount=Decimal("75000"),
+        udid_number="UDID80U123",
+    )
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80u=Decimal("75000"),
+        ),
+        "schedule_80u": detail,
+        "form_10ia_filed": True,
+    })
+    itr1 = _build(body)["ITR"]["ITR1"]
+    assert itr1["Schedule80U"] == {
+        "NatureOfDisability": "1",
+        "TypeOfDisability": "2",
+        "DeductionAmount": 75000,
+        "UDIDNum": "UDID80U123",
+    }
+    assert itr1["ITR1_IncomeDeductions"]["DeductUndChapVIA"]["Section80U"] == 75000
+
+
+def test_builder_rejects_incomplete_disability_schedules() -> None:
+    """Positive disability claims require identity and certificate details."""
+    base = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80dd=Decimal("75000"),
+        ),
+        "form_10ia_filed": True,
+    })
+    with pytest.raises(ValueError, match="Schedule 80DD details"):
+        _build(base)
+    with pytest.raises(ValueError, match="dependent_relationship"):
+        _build(base.model_copy(update={
+            "schedule_80dd": Schedule80DD(
+                deduction_amount=Decimal("75000"),
+                udid_number="UDID123",
+            )
+        }))
+
+
+def test_builder_allows_optional_disability_certificate_identifiers() -> None:
+    """Official schema permits omission of Form 10-IA acknowledgement and UDID."""
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80u=Decimal("75000"),
+        ),
+        "schedule_80u": Schedule80U(deduction_amount=Decimal("75000")),
+        "form_10ia_filed": True,
+    })
+    assert _build(body)["ITR"]["ITR1"]["Schedule80U"] == {
+        "NatureOfDisability": "1",
+        "TypeOfDisability": "2",
+        "DeductionAmount": 75000,
+    }
+
+
+def test_builder_rejects_disability_severity_amount_mismatch() -> None:
+    """Selected disability severity must determine the fixed statutory amount."""
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80u=Decimal("75000"),
+        ),
+        "schedule_80u": Schedule80U(
+            disability_type=DisabilitySeverity.SEVERE,
+            deduction_amount=Decimal("75000"),
+            udid_number="UDID123",
+        ),
+        "form_10ia_filed": True,
+    })
+    with pytest.raises(ValueError, match="125000"):
+        _build(body)
+
+
+def test_builder_resolves_legacy_nested_disability_schedule() -> None:
+    """Nested shared schedule details must resolve to the same canonical source."""
+    detail = Schedule80U(
+        deduction_amount=Decimal("75000"),
+        udid_number="NESTED-UDID",
+    )
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80u=Decimal("75000"),
+            schedule_80u=detail,
+        ),
+        "form_10ia_filed": True,
+    })
+    assert _build(body)["ITR"]["ITR1"]["Schedule80U"]["UDIDNum"] == "NESTED-UDID"
+
+
+def test_builder_rejects_huf_dependent_relationship_for_itr1() -> None:
+    """The shared HUF relationship is valid for ITR-4 but not ITR-1."""
+    body = _input().model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80c=Decimal("100000"),
+            amount_80dd=Decimal("75000"),
+        ),
+        "schedule_80dd": Schedule80DD(
+            deduction_amount=Decimal("75000"),
+            dependent_relationship=DependentRelationship.MEMBER_OF_HUF,
+        ),
+        "form_10ia_filed": True,
+    })
+    with pytest.raises(ValueError, match="does not allow"):
+        _build(body)
+
+
+def test_builder_cross_foots_gti_restricted_disability_deduction() -> None:
+    """A GTI cap must restrict the schedule and both Chapter VI-A copies equally."""
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "salary_income": SalaryIncome(gross_salary=Decimal("90000")),
+        "other_sources_income": OtherSourcesIncome(),
+        "deductions_chapter6a": Chapter6ADeductions(amount_80u=Decimal("75000")),
+        "schedule_80u": Schedule80U(deduction_amount=Decimal("75000")),
+        "form_10ia_filed": True,
+        "agriculture_income": Decimal("0"),
+    })
+    itr1 = _build(body)["ITR"]["ITR1"]
+    assert itr1["Schedule80U"]["DeductionAmount"] == 40000
+    chapter = itr1["ITR1_IncomeDeductions"]
+    assert chapter["DeductUndChapVIA"]["Section80U"] == 40000
+    assert chapter["UsrDeductUndChapVIA"]["Section80U"] == 40000
 
 
 def test_builder_rejects_incomplete_positive_80ddb() -> None:
