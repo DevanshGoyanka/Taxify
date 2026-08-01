@@ -1,0 +1,377 @@
+import { adaptLegacyReturn } from './legacyAdapter';
+import { serializeReturnDraftToLegacy } from './legacySerializer';
+import type {
+  BankAccount, DeductionLoan, DividendIncome, Donation80G, Employer, FamilyPension, GiftIncome,
+  HouseProperty, InterestIncome, InterestKind, Investment80C, LoanDeductions,
+  Policy80D, ReturnDraft, Section80D, TaxChallan, TcsCredit, TdsCredit, WinningIncome,
+} from './types';
+
+export type LegacyRecord = Record<string, unknown>;
+
+/** Canonical editing state with a compatibility envelope for non-domain fields. */
+export interface ReturnEditorModel {
+  draft: ReturnDraft;
+  extras: LegacyRecord;
+}
+
+export interface InterestManagerEntry extends Partial<Omit<InterestIncome, 'kind'>> {
+  id: string;
+  itdTag: InterestKind;
+}
+
+export interface FamilyPensionManagerEntry {
+  grossAmount: number;
+  payerName?: string;
+  relationToPensioner?: string;
+}
+
+export interface WinningManagerEntry extends Partial<Omit<WinningIncome, 'id'>> {
+  id: string;
+  type: WinningIncome['type'];
+  grossAmount: number;
+  tdsDeducted: number;
+}
+
+export interface GiftManagerEntry extends Partial<Omit<GiftIncome, 'id'>> {
+  id: string;
+  propertyType: GiftIncome['propertyType'];
+  value: number;
+}
+
+export interface DeductionLoanManagerEntry {
+  id: string;
+  loanTakenFrom: DeductionLoan['loanTakenFrom'];
+  bankOrInstnName: string;
+  lenderPAN: string;
+  loanAccNo: string;
+  dateOfLoan: string;
+  totalLoanAmt: number;
+  loanOutstandingAmt: number;
+  interestAmount: number;
+  firstTimeBuyerEligible?: boolean;
+  vehicleRegNo?: string;
+}
+
+export interface DeductionLoanManagerData {
+  section80E: { loans: DeductionLoanManagerEntry[] };
+  section80EE: { loans: DeductionLoanManagerEntry[] };
+  section80EEA: { loans: DeductionLoanManagerEntry[]; stampDutyValue: number };
+  section80EEB: { loans: DeductionLoanManagerEntry[] };
+}
+
+export interface TdsManagerEntry {
+  id: string;
+  section?: string;
+  deductorName?: string;
+  deductorTAN?: string;
+  deductorPAN?: string;
+  certificateNo?: string;
+  incomeAmount?: number;
+  grossAmount?: number;
+  tdsDeducted?: number;
+  taxDeducted?: number;
+  deductionDate?: string;
+  uniqueTransactionNo?: string;
+  financialYear?: string;
+  verified26AS?: boolean;
+  claimedInReturn?: boolean;
+}
+
+export interface ChallanManagerEntry {
+  id: string;
+  bsrCode?: string;
+  depositDate?: string;
+  challanNo?: string | number;
+  challanSerialNo?: string | number;
+  amount?: number;
+  cin?: string;
+}
+
+export type BankManagerEntry = BankAccount;
+export interface BankManagerData { accounts: BankManagerEntry[] }
+
+const clone = <T>(value: T): T => structuredClone(value);
+const cloneArray = <T>(value: readonly T[]): T[] => value.map((entry) => clone(entry));
+const record = (value: unknown): value is LegacyRecord => value !== null && typeof value === 'object' && !Array.isArray(value);
+const finiteMoney = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+const optionalText = (value: unknown): string => value == null ? '' : String(value);
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (record(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  return JSON.stringify(value) ?? 'null';
+}
+
+function deterministicId(prefix: string, value: unknown, index: number): string {
+  const candidate = record(value) && typeof value.id === 'string' ? value.id.trim() : '';
+  if (candidate) return candidate;
+  const input = `${prefix}|${index}|${stableStringify(value)}`;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${prefix}-${(hash >>> 0).toString(36)}`;
+}
+
+function mergeCompatibility(base: unknown, overlay: unknown): unknown {
+  if (Array.isArray(overlay)) {
+    const baseArray = Array.isArray(base) ? base : [];
+    const baseById = new Map(
+      baseArray
+        .filter(record)
+        .filter((entry) => typeof entry.id === 'string')
+        .map((entry) => [entry.id as string, entry]),
+    );
+    return overlay.map((entry, index) => {
+      const matchingBase = record(entry) && typeof entry.id === 'string'
+        ? baseById.get(entry.id)
+        : baseArray[index];
+      return mergeCompatibility(matchingBase, entry);
+    });
+  }
+  if (record(overlay)) {
+    const baseRecord = record(base) ? base : {};
+    const merged: LegacyRecord = clone(baseRecord);
+    for (const [key, value] of Object.entries(overlay)) {
+      merged[key] = mergeCompatibility(baseRecord[key], value);
+    }
+    return merged;
+  }
+  return clone(overlay);
+}
+
+function replaceDraft(model: ReturnEditorModel, draft: ReturnDraft): ReturnEditorModel {
+  return { draft: clone(draft), extras: clone(model.extras) };
+}
+
+function mergeById<T extends { id: string }, U extends { id: string }>(
+  previous: readonly T[],
+  incoming: readonly U[],
+  convert: (entry: U, prior: T | undefined, index: number) => T,
+): T[] {
+  const existing = new Map(previous.map((entry) => [entry.id, entry]));
+  return incoming.map((entry, index) => convert(clone(entry), existing.get(entry.id), index));
+}
+
+/** Loads a legacy flat payload without retaining references to the input. */
+export function createReturnEditorModelFromLegacy(payload: unknown): ReturnEditorModel {
+  const detachedPayload = clone(payload);
+  const draft = adaptLegacyReturn(detachedPayload);
+  const extras = record(detachedPayload) ? clone(detachedPayload) : {};
+  delete draft.compatibility;
+  return { draft: clone(draft), extras };
+}
+
+/** Creates an editor from a normalized draft and optional compatibility fields. */
+export function createReturnEditorModel(draft: ReturnDraft, extras: LegacyRecord = {}): ReturnEditorModel {
+  const cleanDraft = clone(draft);
+  const compatibility = cleanDraft.compatibility?.unknownFields ?? {};
+  delete cleanDraft.compatibility;
+  return { draft: cleanDraft, extras: { ...clone(compatibility), ...clone(extras) } };
+}
+
+/** Composes the legacy projection; canonical serialization always wins over extras. */
+export function composeLegacyPayload(model: ReturnEditorModel): LegacyRecord {
+  return mergeCompatibility(model.extras, serializeReturnDraftToLegacy(clone(model.draft))) as LegacyRecord;
+}
+
+/** Applies compatibility-only fields immutably. Canonical-looking keys cannot win at serialization. */
+export function patchCompatibilityExtras(model: ReturnEditorModel, patch: LegacyRecord): ReturnEditorModel {
+  return { draft: clone(model.draft), extras: { ...clone(model.extras), ...clone(patch) } };
+}
+
+/** Applies a flat import patch atomically while retaining all unrelated current data. */
+export function applyLegacyPatch(model: ReturnEditorModel, patch: LegacyRecord): ReturnEditorModel {
+  const merged = mergeCompatibility(composeLegacyPayload(model), patch) as LegacyRecord;
+  return createReturnEditorModelFromLegacy(merged);
+}
+
+/** Replaces employers with an immutable detached copy. */
+export function updateEmployers(model: ReturnEditorModel, employers: readonly Employer[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, employers: cloneArray(employers) });
+}
+
+/** Replaces house properties with an immutable detached copy. */
+export function updateHouseProperties(model: ReturnEditorModel, properties: readonly HouseProperty[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, houseProperties: cloneArray(properties) });
+}
+
+/** Replaces Section 80C investments with an immutable detached copy. */
+export function updateSection80C(model: ReturnEditorModel, investments: readonly Investment80C[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, section80C: cloneArray(investments) } });
+}
+
+/** Replaces Section 80D details with an immutable detached copy. */
+export function updateSection80D(model: ReturnEditorModel, section80D: Section80D): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, section80D: clone(section80D) } });
+}
+
+/** Replaces Section 80G donations with an immutable detached copy. */
+export function updateSection80G(model: ReturnEditorModel, donations: readonly Donation80G[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, section80G: cloneArray(donations) } });
+}
+
+/** Replaces canonical deduction loans with an immutable detached copy. */
+export function updateDeductionLoans(model: ReturnEditorModel, loans: LoanDeductions): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, loans: clone(loans) } });
+}
+
+/** Replaces canonical TDS credits with an immutable detached copy. */
+export function updateTdsCredits(model: ReturnEditorModel, tds: readonly TdsCredit[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, taxes: { ...model.draft.taxes, tds: cloneArray(tds) } });
+}
+
+/** Replaces canonical TCS credits with an immutable detached copy. */
+export function updateTcsCredits(model: ReturnEditorModel, tcs: readonly TcsCredit[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, taxes: { ...model.draft.taxes, tcs: cloneArray(tcs) } });
+}
+
+/** Replaces canonical tax challans with an immutable detached copy. */
+export function updateTaxChallans(model: ReturnEditorModel, challans: readonly TaxChallan[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, taxes: { ...model.draft.taxes, challans: cloneArray(challans) } });
+}
+
+/** Replaces bank accounts with an immutable detached copy. */
+export function updateBankAccounts(model: ReturnEditorModel, accounts: readonly BankAccount[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, bankAccounts: cloneArray(accounts) });
+}
+
+/** Projects canonical interest entries into the existing manager shape. */
+export function interestToManager(entries: readonly InterestIncome[]): InterestManagerEntry[] {
+  return entries.map(({ kind, ...entry }) => ({ ...clone(entry), itdTag: kind }));
+}
+
+/** Merges manager interest entries into canonical entries by ID. */
+export function interestFromManager(entries: readonly InterestManagerEntry[], previous: readonly InterestIncome[] = []): InterestIncome[] {
+  return mergeById(previous, entries, (entry, prior, index) => ({
+    ...(prior ?? {} as InterestIncome), id: deterministicId('interest', entry, index),
+    kind: entry.itdTag, grossAmount: finiteMoney(entry.grossAmount), tdsDeducted: finiteMoney(entry.tdsDeducted),
+    bankName: optionalText(entry.bankName ?? prior?.bankName), accountType: entry.accountType ?? prior?.accountType ?? '',
+    accountNumber: optionalText(entry.accountNumber ?? prior?.accountNumber), ifscCode: optionalText(entry.ifscCode ?? prior?.ifscCode),
+    postOfficeName: optionalText(entry.postOfficeName ?? prior?.postOfficeName), accountNumberPO: optionalText(entry.accountNumberPO ?? prior?.accountNumberPO),
+    nscCertificateNumber: optionalText(entry.nscCertificateNumber ?? prior?.nscCertificateNumber), yearOfPurchase: finiteMoney(entry.yearOfPurchase ?? prior?.yearOfPurchase),
+    scssAccountNumber: optionalText(entry.scssAccountNumber ?? prior?.scssAccountNumber), dateOfOpening: optionalText(entry.dateOfOpening ?? prior?.dateOfOpening),
+    deductorName: optionalText(entry.deductorName ?? prior?.deductorName), deductorTAN: optionalText(entry.deductorTAN ?? prior?.deductorTAN), remarks: optionalText(entry.remarks ?? prior?.remarks),
+  }));
+}
+
+/** Updates canonical interest entries from manager values. */
+export function updateInterestFromManager(model: ReturnEditorModel, entries: readonly InterestManagerEntry[]): ReturnEditorModel {
+  const interest = interestFromManager(entries, model.draft.otherSources.interest);
+  return replaceDraft(model, { ...model.draft, otherSources: { ...model.draft.otherSources, interest } });
+}
+
+/** Replaces canonical dividend entries with an immutable detached copy. */
+export function updateDividends(model: ReturnEditorModel, dividends: readonly DividendIncome[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, otherSources: { ...model.draft.otherSources, dividends: cloneArray(dividends) } });
+}
+
+/** Projects family pension into the manager's optional-field shape. */
+export function familyPensionToManager(entry: FamilyPension): FamilyPensionManagerEntry {
+  return clone(entry);
+}
+
+/** Converts manager family pension data to its canonical shape. */
+export function familyPensionFromManager(entry: FamilyPensionManagerEntry): FamilyPension {
+  return { grossAmount: finiteMoney(entry.grossAmount), payerName: optionalText(entry.payerName), relationToPensioner: optionalText(entry.relationToPensioner) };
+}
+
+/** Updates canonical family pension from manager data. */
+export function updateFamilyPensionFromManager(model: ReturnEditorModel, entry: FamilyPensionManagerEntry): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, otherSources: { ...model.draft.otherSources, familyPension: familyPensionFromManager(entry) } });
+}
+
+/** Projects winnings into the manager shape. */
+export function winningsToManager(entries: readonly WinningIncome[]): WinningManagerEntry[] { return cloneArray(entries); }
+
+/** Merges winnings manager values by ID, preserving unexposed canonical fields. */
+export function winningsFromManager(entries: readonly WinningManagerEntry[], previous: readonly WinningIncome[] = []): WinningIncome[] {
+  return mergeById(previous, entries, (entry, prior, index) => ({ ...prior, id: deterministicId('winning', entry, index), type: entry.type, grossAmount: finiteMoney(entry.grossAmount), tdsDeducted: finiteMoney(entry.tdsDeducted), payerName: optionalText(entry.payerName ?? prior?.payerName), payerTAN: optionalText(entry.payerTAN ?? prior?.payerTAN), dateOfWinning: optionalText(entry.dateOfWinning ?? prior?.dateOfWinning) }));
+}
+
+/** Updates canonical winnings from manager values. */
+export function updateWinningsFromManager(model: ReturnEditorModel, entries: readonly WinningManagerEntry[]): ReturnEditorModel {
+  const winnings = winningsFromManager(entries, model.draft.otherSources.winnings);
+  return replaceDraft(model, { ...model.draft, otherSources: { ...model.draft.otherSources, winnings } });
+}
+
+/** Projects gifts into the manager shape. */
+export function giftsToManager(entries: readonly GiftIncome[]): GiftManagerEntry[] { return cloneArray(entries); }
+
+/** Merges gift manager values by ID, preserving unexposed canonical fields. */
+export function giftsFromManager(entries: readonly GiftManagerEntry[], previous: readonly GiftIncome[] = []): GiftIncome[] {
+  return mergeById(previous, entries, (entry, prior, index) => ({ ...prior, id: deterministicId('gift', entry, index), propertyType: entry.propertyType, value: finiteMoney(entry.value), donorName: optionalText(entry.donorName ?? prior?.donorName), donorRelation: optionalText(entry.donorRelation ?? prior?.donorRelation), dateOfReceipt: optionalText(entry.dateOfReceipt ?? prior?.dateOfReceipt), description: optionalText(entry.description ?? prior?.description), fromRelative: entry.fromRelative ?? prior?.fromRelative ?? false, receivedOnMarriage: entry.receivedOnMarriage ?? prior?.receivedOnMarriage ?? false }));
+}
+
+/** Updates canonical gifts from manager values. */
+export function updateGiftsFromManager(model: ReturnEditorModel, entries: readonly GiftManagerEntry[]): ReturnEditorModel {
+  const gifts = giftsFromManager(entries, model.draft.otherSources.gifts);
+  return replaceDraft(model, { ...model.draft, otherSources: { ...model.draft.otherSources, gifts } });
+}
+
+/** Projects grouped canonical deduction loans into the manager wrapper. */
+export function deductionLoansToManager(value: LoanDeductions): DeductionLoanManagerData {
+  const group = (section: DeductionLoan['section']): DeductionLoanManagerEntry[] => value.loans.filter((loan) => loan.section === section).map((loan) => ({ id: loan.id, loanTakenFrom: loan.loanTakenFrom, bankOrInstnName: loan.lenderName, lenderPAN: loan.lenderPAN, loanAccNo: loan.loanAccountNo, dateOfLoan: loan.dateOfLoan, totalLoanAmt: loan.totalLoanAmount, loanOutstandingAmt: loan.outstandingAmount, interestAmount: loan.interestAmount, firstTimeBuyerEligible: loan.firstTimeBuyerEligible, vehicleRegNo: loan.vehicleRegNo }));
+  return { section80E: { loans: group('80E') }, section80EE: { loans: group('80EE') }, section80EEA: { loans: group('80EEA'), stampDutyValue: value.section80EEAStampDutyValue }, section80EEB: { loans: group('80EEB') } };
+}
+
+/** Converts grouped manager loans to canonical loans, preserving hidden fields by ID. */
+export function deductionLoansFromManager(data: DeductionLoanManagerData, previous: LoanDeductions = { loans: [], section80EEAStampDutyValue: 0 }): LoanDeductions {
+  const groups: Array<[DeductionLoan['section'], readonly DeductionLoanManagerEntry[]]> = [['80E', data.section80E.loans], ['80EE', data.section80EE.loans], ['80EEA', data.section80EEA.loans], ['80EEB', data.section80EEB.loans]];
+  const existing = new Map(previous.loans.map((loan) => [loan.id, loan]));
+  const loans = groups.flatMap(([section, entries]) => entries.map((entry, index): DeductionLoan => ({ ...existing.get(entry.id), id: deterministicId(`loan-${section}`, entry, index), section, loanTakenFrom: entry.loanTakenFrom, lenderName: entry.bankOrInstnName, lenderPAN: entry.lenderPAN, loanAccountNo: entry.loanAccNo, dateOfLoan: entry.dateOfLoan, totalLoanAmount: finiteMoney(entry.totalLoanAmt), outstandingAmount: finiteMoney(entry.loanOutstandingAmt), interestAmount: finiteMoney(entry.interestAmount), firstTimeBuyerEligible: entry.firstTimeBuyerEligible ?? existing.get(entry.id)?.firstTimeBuyerEligible ?? false, vehicleRegNo: optionalText(entry.vehicleRegNo ?? existing.get(entry.id)?.vehicleRegNo) })));
+  return { loans, section80EEAStampDutyValue: finiteMoney(data.section80EEA.stampDutyValue) };
+}
+
+/** Updates canonical grouped deduction loans from manager values. */
+export function updateDeductionLoansFromManager(model: ReturnEditorModel, data: DeductionLoanManagerData): ReturnEditorModel {
+  return updateDeductionLoans(model, deductionLoansFromManager(data, model.draft.deductions.loans));
+}
+
+/** Projects canonical TDS entries into aliases used by the TDS editor. */
+export function tdsToManager(entries: readonly TdsCredit[]): TdsManagerEntry[] {
+  return entries.map((entry) => ({ ...clone(entry), incomeAmount: entry.grossAmount, tdsDeducted: entry.taxDeducted }));
+}
+
+/** Merges TDS editor values by ID, including UI-only PAN and certificate fields. */
+export function tdsFromManager(entries: readonly TdsManagerEntry[], previous: readonly TdsCredit[] = []): TdsCredit[] {
+  return mergeById(previous, entries as readonly (TdsManagerEntry & { id: string })[], (entry, prior, index) => ({ ...prior, id: deterministicId('tds', entry, index), section: optionalText(entry.section ?? prior?.section), deductorName: optionalText(entry.deductorName ?? prior?.deductorName), deductorTAN: optionalText(entry.deductorTAN ?? prior?.deductorTAN), deductorPAN: optionalText(entry.deductorPAN ?? prior?.deductorPAN), certificateNo: optionalText(entry.certificateNo ?? prior?.certificateNo), grossAmount: finiteMoney(entry.incomeAmount ?? entry.grossAmount ?? prior?.grossAmount), taxDeducted: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted ?? prior?.taxDeducted), deductionDate: optionalText(entry.deductionDate ?? prior?.deductionDate), uniqueTransactionNo: optionalText(entry.uniqueTransactionNo ?? prior?.uniqueTransactionNo), financialYear: optionalText(entry.financialYear ?? prior?.financialYear), verified26AS: entry.verified26AS ?? prior?.verified26AS ?? false, claimedInReturn: entry.claimedInReturn ?? prior?.claimedInReturn ?? true }));
+}
+
+/** Updates canonical TDS credits from manager values. */
+export function updateTdsFromManager(model: ReturnEditorModel, entries: readonly TdsManagerEntry[]): ReturnEditorModel {
+  return updateTdsCredits(model, tdsFromManager(entries, model.draft.taxes.tds));
+}
+
+/** Projects one challan kind into the editor shape. */
+export function challansToManager(challans: readonly TaxChallan[], kind: TaxChallan['kind']): ChallanManagerEntry[] {
+  return challans.filter((entry) => entry.kind === kind).map((entry) => ({ id: entry.id, bsrCode: entry.bsrCode, depositDate: entry.depositDate, challanSerialNo: entry.challanSerialNo, challanNo: entry.challanSerialNo, amount: entry.amount, cin: entry.cin }));
+}
+
+/** Replaces one challan kind while preserving every challan of the other kind. */
+export function replaceChallanKind(challans: readonly TaxChallan[], kind: TaxChallan['kind'], entries: readonly ChallanManagerEntry[]): TaxChallan[] {
+  const existing = new Map(challans.filter((entry) => entry.kind === kind).map((entry) => [entry.id, entry]));
+  const retained = clone(challans.filter((entry) => entry.kind !== kind));
+  const replacements = entries.map((entry, index): TaxChallan => ({ ...existing.get(entry.id), id: deterministicId(kind === 'ADVANCE_TAX' ? 'advance' : 'self-assessment', entry, index), kind, bsrCode: optionalText(entry.bsrCode ?? existing.get(entry.id)?.bsrCode), depositDate: optionalText(entry.depositDate ?? existing.get(entry.id)?.depositDate), challanSerialNo: optionalText(kind === 'SELF_ASSESSMENT' ? entry.challanNo ?? entry.challanSerialNo ?? existing.get(entry.id)?.challanSerialNo : entry.challanSerialNo ?? entry.challanNo ?? existing.get(entry.id)?.challanSerialNo), amount: finiteMoney(entry.amount ?? existing.get(entry.id)?.amount), cin: optionalText(entry.cin ?? existing.get(entry.id)?.cin) }));
+  return [...retained, ...replacements];
+}
+
+/** Updates one canonical challan kind without replacing the other kind. */
+export function updateChallanKindFromManager(model: ReturnEditorModel, kind: TaxChallan['kind'], entries: readonly ChallanManagerEntry[]): ReturnEditorModel {
+  return updateTaxChallans(model, replaceChallanKind(model.draft.taxes.challans, kind, entries));
+}
+
+/** Projects canonical bank accounts into the manager wrapper. */
+export function banksToManager(accounts: readonly BankAccount[]): BankManagerData { return { accounts: cloneArray(accounts) }; }
+
+/** Converts the manager bank wrapper to detached canonical accounts. */
+export function banksFromManager(data: BankManagerData): BankAccount[] { return cloneArray(data.accounts); }
+
+/** Updates canonical bank accounts from the manager wrapper. */
+export function updateBanksFromManager(model: ReturnEditorModel, data: BankManagerData): ReturnEditorModel {
+  return updateBankAccounts(model, banksFromManager(data));
+}
+
+/** Produces a detached copy of a policy list for typed 80D manager integration. */
+export function clonePolicies(policies: readonly Policy80D[]): Policy80D[] { return cloneArray(policies); }
