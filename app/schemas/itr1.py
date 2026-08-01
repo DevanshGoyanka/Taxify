@@ -1087,13 +1087,68 @@ class Schedule80G(BaseModel):
     total_eligible_amount: Decimal = Field(default=Decimal("0"), ge=0)
 
 
+class Section80GGAClause(str, Enum):
+    """Official clauses under which a Section 80GGA deduction is claimed."""
+
+    SCIENTIFIC_RESEARCH = "80GGA2a"
+    SOCIAL_OR_STATISTICAL_RESEARCH = "80GGA2aa"
+    RURAL_DEVELOPMENT = "80GGA2b"
+    ELIGIBLE_PROJECT = "80GGA2bb"
+    NATURAL_RESOURCES_OR_AFFORESTATION = "80GGA2c"
+    NOTIFIED_AFFORESTATION_FUND = "80GGA2cc"
+    NOTIFIED_RURAL_DEVELOPMENT_FUND = "80GGA2d"
+    URBAN_POVERTY_ERADICATION_FUND = "80GGA2e"
+
+
+class Donation80GGA(BaseModel):
+    """Complete official donation row for Schedule 80GGA."""
+
+    relevant_clause: Section80GGAClause
+    donee_name: str = Field(min_length=1, max_length=125)
+    address: DonationAddress
+    donee_pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    cash_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    other_mode_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 class Schedule80GGA(BaseModel):
     """Schedule 80GGA scientific research donations."""
+    donations: List[Donation80GGA] = Field(default_factory=list)
     cash_donations: Decimal = Field(default=Decimal("0"), ge=0)
     non_cash_donations: Decimal = Field(default=Decimal("0"), ge=0)
     total_claimed: Decimal = Field(default=Decimal("0"), ge=0)
     eligible_amount: Decimal = Field(default=Decimal("0"), ge=0)
     donee_pan_list: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_canonical_rows(self) -> "Schedule80GGA":
+        """Reject duplicate PANs and conflicting legacy aggregate copies."""
+        if not self.donations:
+            return self
+        pans = [donation.donee_pan for donation in self.donations]
+        if len(pans) != len(set(pans)):
+            raise ValueError("Schedule 80GGA donee PANs must be unique")
+        cash = sum((donation.cash_amount for donation in self.donations), Decimal("0"))
+        other = sum((donation.other_mode_amount for donation in self.donations), Decimal("0"))
+        legacy_present = (
+            self.cash_donations > 0
+            or self.non_cash_donations > 0
+            or self.total_claimed > 0
+            or self.eligible_amount > 0
+            or bool(self.donee_pan_list)
+        )
+        if legacy_present and (
+            self.cash_donations != cash
+            or self.non_cash_donations != other
+            or self.total_claimed != cash + other
+            or (self.donee_pan_list and self.donee_pan_list != pans)
+        ):
+            raise ValueError("Conflicting legacy and canonical Schedule 80GGA details")
+        self.cash_donations = cash
+        self.non_cash_donations = other
+        self.total_claimed = cash + other
+        self.donee_pan_list = pans
+        return self
 
 
 class PoliticalContribution(BaseModel):

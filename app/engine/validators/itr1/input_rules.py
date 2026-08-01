@@ -1748,6 +1748,13 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
     if inp.schedule_80gga:
         sgga = inp.schedule_80gga
+        if inp.assessee_pan and any(
+            donation.donee_pan == inp.assessee_pan for donation in sgga.donations
+        ):
+            results.append(_make(
+                "ITR1-R094", False,
+                "Schedule 80GGA donee PAN cannot equal the assessee PAN.",
+                "schedule_80gga.donations"))
 
         # Rule 89: 80GGA donation — cash or non-cash must be entered
         if sgga.total_claimed > _z and sgga.cash_donations == _z and sgga.non_cash_donations == _z:

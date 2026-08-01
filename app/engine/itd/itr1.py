@@ -307,6 +307,7 @@ def _income_deductions_itr1(
     usr_80g: Optional[Decimal] = None,
     ded_80gg: Decimal = Decimal("0"),
     ded_80gga: Decimal = Decimal("0"),
+    usr_80gga: Optional[Decimal] = None,
     ded_80ggc: Decimal = Decimal("0"),
     ded_80cch: Decimal = Decimal("0"),
 ) -> dict:
@@ -349,7 +350,9 @@ def _income_deductions_itr1(
             - ded_80eeb
             + (usr_80eeb if usr_80eeb is not None else ded_80eeb)
             - ded_80g
-            + (usr_80g if usr_80g is not None else ded_80g),
+            + (usr_80g if usr_80g is not None else ded_80g)
+            - ded_80gga
+            + (usr_80gga if usr_80gga is not None else ded_80gga),
             ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1=ded_80ccd1,
             ded_80ccd1b=ded_80ccd1b,
             ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
@@ -363,7 +366,9 @@ def _income_deductions_itr1(
             ded_80eea=(usr_80eea if usr_80eea is not None else ded_80eea),
             ded_80eeb=(usr_80eeb if usr_80eeb is not None else ded_80eeb),
             ded_80g=(usr_80g if usr_80g is not None else ded_80g),
-            ded_80gg=ded_80gg, ded_80gga=ded_80gga, ded_80ggc=ded_80ggc,
+            ded_80gg=ded_80gg,
+            ded_80gga=(usr_80gga if usr_80gga is not None else ded_80gga),
+            ded_80ggc=ded_80ggc,
             ded_80cch=ded_80cch,
         ),
         "DeductUndChapVIA": _chapter_via_itr1(
@@ -670,6 +675,46 @@ def _schedule_80g(details: Any) -> dict[str, Any]:
     if emitted_eligible != _to_rupees(details.allowed_deduction):
         raise ValueError("Schedule 80G eligible rows do not cross-foot")
     return schedule
+
+
+def _schedule_80gga(details: Any) -> dict[str, Any]:
+    """Serialize a computed Section 80GGA result without eligibility logic."""
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated_eligible = 0
+    rows: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        cash = _to_rupees(computed.source.cash_amount)
+        other = _to_rupees(computed.source.other_mode_amount)
+        if index == len(details.rows) - 1:
+            eligible = eligible_rupees - allocated_eligible
+        else:
+            eligible = min(
+                _to_rupees(computed.eligible_amount),
+                eligible_rupees - allocated_eligible,
+            )
+            allocated_eligible += eligible
+        rows.append({
+            "RelevantClauseUndrDedClaimed": computed.source.relevant_clause.value,
+            "NameOfDonee": computed.source.donee_name,
+            "AddressDetail": _donation_address(computed.source.address),
+            "DoneePAN": computed.source.donee_pan,
+            "DonationAmtCash": cash,
+            "DonationAmtOtherMode": other,
+            "DonationAmt": cash + other,
+            "EligibleDonationAmt": eligible,
+        })
+    emitted_eligible = sum(row["EligibleDonationAmt"] for row in rows)
+    if emitted_eligible != _to_rupees(details.allowed_deduction):
+        raise ValueError("Schedule 80GGA eligible rows do not cross-foot")
+    return {
+        "DonationDtlsSciRsrchRuralDev": rows,
+        "TotalDonationAmtCash80GGA": sum(row["DonationAmtCash"] for row in rows),
+        "TotalDonationAmtOtherMode80GGA": sum(
+            row["DonationAmtOtherMode"] for row in rows
+        ),
+        "TotalDonationsUs80GGA": sum(row["DonationAmt"] for row in rows),
+        "TotalEligibleDonationAmt80GGA": emitted_eligible,
+    }
 
 
 def _schedule_deduction_loan(
@@ -1252,6 +1297,7 @@ def build_itr1_json(
         usr_80g=(input_data.deductions_chapter6a.amount_80g if input_data else None),
         ded_80gg=deduction("80GG"),
         ded_80gga=deduction("80GGA"),
+        usr_80gga=(input_data.deductions_chapter6a.amount_80gga if input_data else None),
         ded_80ggc=deduction("80GGC"),
         ded_80cch=deduction("80CCH"),
     )
@@ -1385,8 +1431,15 @@ def build_itr1_json(
         elif input_data.deductions_chapter6a.donations_80g:
             raise ValueError("Schedule 80G rows require a positive eligible deduction")
 
+        details_80gga = result.schedules["deductions"].section_details.get("80GGA")
+        if deduction("80GGA") > 0:
+            if details_80gga is None or not details_80gga.rows:
+                raise ValueError("Complete official Schedule 80GGA donation rows are required")
+            itr1["Schedule80GGA"] = _schedule_80gga(details_80gga)
+        elif input_data.schedule_80gga and input_data.schedule_80gga.donations:
+            raise ValueError("Schedule 80GGA rows require a positive eligible deduction")
+
         incomplete_claims = {
-            "80GGA": deduction("80GGA"),
             "80GGC": deduction("80GGC"),
         }
         unsupported = [name for name, amount in incomplete_claims.items() if amount > 0]

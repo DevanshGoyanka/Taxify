@@ -3,7 +3,13 @@
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
-from app.schemas.itr1 import Chapter6ADeductions, AgeBracket, TaxRegime, OtherSourcesIncome
+from app.schemas.itr1 import (
+    Chapter6ADeductions,
+    AgeBracket,
+    TaxRegime,
+    OtherSourcesIncome,
+    Schedule80GGA,
+)
 from app.engine.schedules.deductions import (
     section_80c,
     section_80ccd1b,
@@ -90,6 +96,7 @@ def compute_all(
     is_80u_severe: bool = False,
     use_structured_80ddb: bool = False,
     hra_exempt_amount: Decimal = Decimal("0"),
+    schedule_80gga: Optional[Schedule80GGA] = None,
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
@@ -209,7 +216,16 @@ def compute_all(
     r_80g = details_80g.allowed_deduction
     _add("80G", r_80g)
 
-    r_80gga = section_80gga.compute(ded, regime)
+    consumed_before_80gga = deductions_before_80g + r_80gg + r_80g
+    available_80gga = max(Decimal("0"), gti - consumed_before_80gga)
+    details_80gga = section_80gga.compute_details(
+        ded,
+        schedule_80gga,
+        available_80gga,
+        regime,
+    )
+    result.section_details["80GGA"] = details_80gga
+    r_80gga = details_80gga.allowed_deduction
     _add("80GGA", r_80gga)
 
     r_80ggc = section_80ggc.compute(ded, regime)

@@ -21,6 +21,7 @@ from app.schemas.itr1 import (
     DisabilityCategory,
     DisabilitySeverity,
     Donation80G,
+    Donation80GGA,
     DonationAddress,
     EducationLoanLenderType,
     FilingAddress,
@@ -35,12 +36,14 @@ from app.schemas.itr1 import (
     Schedule80CEntry,
     Schedule80DD,
     Schedule80EEntry,
+    Schedule80GGA,
     ITR1Schedule80EELoanEntry,
     ITR1Schedule80EEALoanEntry,
     ITR1Schedule80EEBLoanEntry,
     Schedule80U,
     Section80DDBDetails,
     Section80DDBUserType,
+    Section80GGAClause,
     SpecifiedDisease80DDB,
     TDS1Entry,
     TDS2Entry,
@@ -1088,6 +1091,86 @@ def test_builder_rejects_incomplete_schedule_80g_identity() -> None:
         ),
     })
     with pytest.raises(ValueError, match="donee identity and address"):
+        _build(body)
+
+
+def test_builder_maps_complete_schedule_80gga() -> None:
+    """Schedule 80GGA must map official rows and computed eligible amounts."""
+    donation = Donation80GGA(
+        relevant_clause=Section80GGAClause.SCIENTIFIC_RESEARCH,
+        donee_name="National Research Association",
+        address=DonationAddress(
+            address_line="10 Science Avenue",
+            city_or_district="Bengaluru",
+            state_code="29",
+            pin_code=560001,
+        ),
+        donee_pan="ABCDE1234F",
+        cash_amount=Decimal("2500"),
+        other_mode_amount=Decimal("10000"),
+    )
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(amount_80gga=Decimal("12000")),
+        "schedule_80gga": Schedule80GGA(donations=[donation]),
+    })
+    itr1 = _build(body)["ITR"]["ITR1"]
+    schedule = itr1["Schedule80GGA"]
+    assert schedule["DonationDtlsSciRsrchRuralDev"] == [{
+        "RelevantClauseUndrDedClaimed": "80GGA2a",
+        "NameOfDonee": "National Research Association",
+        "AddressDetail": {
+            "AddrDetail": "10 Science Avenue",
+            "CityOrTownOrDistrict": "Bengaluru",
+            "StateCode": "29",
+            "PinCode": 560001,
+        },
+        "DoneePAN": "ABCDE1234F",
+        "DonationAmtCash": 2500,
+        "DonationAmtOtherMode": 10000,
+        "DonationAmt": 12500,
+        "EligibleDonationAmt": 10000,
+    }]
+    assert schedule["TotalDonationsUs80GGA"] == 12500
+    assert schedule["TotalEligibleDonationAmt80GGA"] == 10000
+    chapter = itr1["ITR1_IncomeDeductions"]
+    assert chapter["UsrDeductUndChapVIA"]["Section80GGA"] == 12000
+    assert chapter["DeductUndChapVIA"]["Section80GGA"] == 10000
+
+
+def test_builder_allocates_fractional_80gga_rows_without_drift() -> None:
+    """Official integer 80GGA rows must cross-foot after fractional inputs."""
+    donations = [
+        Donation80GGA(
+            relevant_clause=Section80GGAClause.RURAL_DEVELOPMENT,
+            donee_name=f"Rural Trust {index}",
+            address=DonationAddress(
+                address_line=f"{index} Rural Road",
+                city_or_district="Pune",
+                state_code="27",
+                pin_code=411001,
+            ),
+            donee_pan=pan,
+            other_mode_amount=Decimal("0.60"),
+        )
+        for index, pan in ((1, "ABCDE1234F"), (2, "WXYZA6789G"))
+    ]
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(amount_80gga=Decimal("1.20")),
+        "schedule_80gga": Schedule80GGA(donations=donations),
+    })
+    rows = _build(body)["ITR"]["ITR1"]["Schedule80GGA"][
+        "DonationDtlsSciRsrchRuralDev"
+    ]
+    assert [row["EligibleDonationAmt"] for row in rows] == [1, 0]
+    assert sum(row["EligibleDonationAmt"] for row in rows) == 1
+
+
+def test_builder_rejects_scalar_only_schedule_80gga() -> None:
+    """A positive 80GGA claim cannot produce fabricated donation rows."""
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(amount_80gga=Decimal("10000")),
+    })
+    with pytest.raises(ValueError, match="Schedule 80GGA donation rows"):
         _build(body)
 
 
