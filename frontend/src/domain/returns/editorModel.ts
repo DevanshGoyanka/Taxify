@@ -7,6 +7,7 @@ import type {
 } from './types';
 
 export type LegacyRecord = Record<string, unknown>;
+export type LegacySetStateAction = LegacyRecord | ((previous: LegacyRecord) => LegacyRecord);
 
 /** Canonical editing state with a compatibility envelope for non-domain fields. */
 export interface ReturnEditorModel {
@@ -17,6 +18,23 @@ export interface ReturnEditorModel {
 export interface InterestManagerEntry extends Partial<Omit<InterestIncome, 'kind'>> {
   id: string;
   itdTag: InterestKind;
+}
+
+export interface DividendManagerEntry {
+  id?: string;
+  section?: string;
+  grossAmount?: number;
+  dividendAmount?: number;
+  tdsDeducted?: number;
+  companyName?: string;
+  companyPAN?: string;
+  deductorTAN?: string;
+  isin?: string;
+  category?: DividendIncome['category'];
+  q1?: number;
+  q2?: number;
+  q3?: number;
+  q4?: number;
 }
 
 export interface FamilyPensionManagerEntry {
@@ -187,6 +205,23 @@ export function applyLegacyPatch(model: ReturnEditorModel, patch: LegacyRecord):
   return createReturnEditorModelFromLegacy(merged);
 }
 
+/** Evaluates a React-style legacy update against the latest projection and applies it atomically. */
+export function applyLegacySetStateAction(model: ReturnEditorModel, action: LegacySetStateAction): ReturnEditorModel {
+  const current = composeLegacyPayload(model);
+  const requested = typeof action === 'function' ? action(clone(current)) : action;
+  if (!record(requested)) return model;
+  return applyLegacyPatch(model, clone(requested));
+}
+
+/** Applies an update and returns the exact detached payload that should be saved immediately. */
+export function applyLegacyActionWithSnapshot(
+  model: ReturnEditorModel,
+  action: LegacySetStateAction,
+): { model: ReturnEditorModel; snapshot: LegacyRecord } {
+  const nextModel = applyLegacySetStateAction(model, action);
+  return { model: nextModel, snapshot: composeLegacyPayload(nextModel) };
+}
+
 /** Replaces employers with an immutable detached copy. */
 export function updateEmployers(model: ReturnEditorModel, employers: readonly Employer[]): ReturnEditorModel {
   return replaceDraft(model, { ...model.draft, employers: cloneArray(employers) });
@@ -260,6 +295,40 @@ export function interestFromManager(entries: readonly InterestManagerEntry[], pr
 export function updateInterestFromManager(model: ReturnEditorModel, entries: readonly InterestManagerEntry[]): ReturnEditorModel {
   const interest = interestFromManager(entries, model.draft.otherSources.interest);
   return replaceDraft(model, { ...model.draft, otherSources: { ...model.draft.otherSources, interest } });
+}
+
+/** Projects canonical dividends into the compatibility manager shape. */
+export function dividendsToManager(entries: readonly DividendIncome[]): DividendManagerEntry[] {
+  return cloneArray(entries);
+}
+
+/** Merges partial dividend-manager rows by ID and fills complete canonical defaults. */
+export function dividendsFromManager(entries: readonly DividendManagerEntry[], previous: readonly DividendIncome[] = []): DividendIncome[] {
+  const normalized = entries.map((entry, index) => ({ ...entry, id: deterministicId('dividend', entry, index) }));
+  return mergeById(previous, normalized, (entry, prior) => {
+    const section = entry.section === '10(22e)' || entry.section === '10(22f)' ? entry.section : '194';
+    return {
+      ...prior,
+      id: entry.id,
+      section,
+      grossAmount: finiteMoney(entry.grossAmount ?? entry.dividendAmount ?? prior?.grossAmount),
+      tdsDeducted: finiteMoney(entry.tdsDeducted ?? prior?.tdsDeducted),
+      companyName: optionalText(entry.companyName ?? prior?.companyName),
+      companyPAN: optionalText(entry.companyPAN ?? prior?.companyPAN),
+      deductorTAN: optionalText(entry.deductorTAN ?? prior?.deductorTAN),
+      isin: optionalText(entry.isin ?? prior?.isin),
+      category: entry.category ?? prior?.category ?? '',
+      q1: finiteMoney(entry.q1 ?? prior?.q1),
+      q2: finiteMoney(entry.q2 ?? prior?.q2),
+      q3: finiteMoney(entry.q3 ?? prior?.q3),
+      q4: finiteMoney(entry.q4 ?? prior?.q4),
+    };
+  });
+}
+
+/** Updates canonical dividend entries from partial manager rows. */
+export function updateDividendsFromManager(model: ReturnEditorModel, entries: readonly DividendManagerEntry[]): ReturnEditorModel {
+  return updateDividends(model, dividendsFromManager(entries, model.draft.otherSources.dividends));
 }
 
 /** Replaces canonical dividend entries with an immutable detached copy. */

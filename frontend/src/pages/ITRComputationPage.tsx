@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, type SetStateAction } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAY } from '../contexts/AYContext';
 import { itrApi } from '../api/itr';
@@ -13,7 +13,16 @@ import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
-import { HttpReturnRepository, serializeReturnDraftToLegacy } from '../domain/returns';
+import {
+  HttpReturnRepository, applyLegacyActionWithSnapshot, applyLegacyPatch, applyLegacySetStateAction,
+  banksToManager, challansToManager, composeLegacyPayload, createReturnEditorModelFromLegacy,
+  deductionLoansToManager, familyPensionToManager, giftsToManager, interestToManager, tdsToManager,
+  updateBankAccounts, updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
+  updateDividendsFromManager, updateEmployers, updateFamilyPensionFromManager, updateGiftsFromManager,
+  updateHouseProperties, updateInterestFromManager, updateSection80C, updateSection80D, updateSection80G,
+  updateTdsFromManager, updateWinningsFromManager, winningsToManager, type LegacyRecord,
+  type ReturnEditorModel,
+} from '../domain/returns';
 
 const returnRepository = new HttpReturnRepository();
 
@@ -81,7 +90,7 @@ import {
   OtherSourcesTab, 
   DeductionsTab, 
   TDSTab, 
-  TaxComputationTab
+  TaxComputationTab, type CanonicalManagerBindings
 } from './ITRComputationTabs';
 
 export default function ITRComputationPage() {
@@ -111,7 +120,7 @@ export default function ITRComputationPage() {
   // Employer reconciliation state
   const [showReconciliationModal, setShowReconciliationModal] = useState(false);
   const [reconciliationResult, setReconciliationResult] = useState<any>(null);
-  const [formData, setFormData] = useState<any>({
+  const emptyFormDataRef = useRef<LegacyRecord>({
     // Personal Info - CBDT Mandatory Fields
     gender: 'M', fatherName: '', maritalStatus: 'SINGLE', nationality: 'INDIA', residentialStatus: 'ROR',
     mobileCountryCode: '91', country: '91', state: '',
@@ -208,12 +217,45 @@ export default function ITRComputationPage() {
     adv15Jun: 0, adv15Sep: 0, adv15Dec: 0, adv15Mar: 0, selfTax: 0,
     age: 30
   });
-  const emptyFormDataRef = useRef(structuredClone(formData));
+  const [editorModel, setEditorModel] = useState<ReturnEditorModel | null>(null);
+  const editorRef = useRef<ReturnEditorModel | null>(null);
+  const formData = useMemo<any>(() => editorModel ? composeLegacyPayload(editorModel) : {}, [editorModel]);
+  const setFormData = useCallback((action: SetStateAction<LegacyRecord>): void => {
+    setEditorModel((current) => {
+      if (!current) return current;
+      const next = applyLegacySetStateAction(current, action);
+      editorRef.current = next;
+      return next;
+    });
+  }, []);
+  const updateEditor = useCallback((update: (current: ReturnEditorModel) => ReturnEditorModel): void => {
+    setEditorModel((current) => {
+      if (!current) return current;
+      const next = update(current);
+      editorRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const managers = useMemo<CanonicalManagerBindings>(() => ({
+    interest: (entries) => updateEditor((model) => updateInterestFromManager(model, entries)),
+    dividends: (entries) => updateEditor((model) => updateDividendsFromManager(model, entries)),
+    familyPension: (entry) => updateEditor((model) => updateFamilyPensionFromManager(model, entry)),
+    winnings: (entries) => updateEditor((model) => updateWinningsFromManager(model, entries)),
+    gifts: (entries) => updateEditor((model) => updateGiftsFromManager(model, entries)),
+    section80C: (data) => updateEditor((model) => updateSection80C(model, data.investments)),
+    section80D: (data) => updateEditor((model) => updateSection80D(model, data)),
+    donations: (entries) => updateEditor((model) => updateSection80G(model, entries)),
+    deductionLoans: (data) => updateEditor((model) => updateDeductionLoansFromManager(model, data)),
+    tds: (entries) => updateEditor((model) => updateTdsFromManager(model, entries)),
+    advanceTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'ADVANCE_TAX', entries)),
+    selfAssessmentTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'SELF_ASSESSMENT', entries)),
+    banks: (data) => updateEditor((model) => updateBanksFromManager(model, data)),
+  }), [updateEditor]);
 
   useEffect(() => {
     const requestId = ++loadGenerationRef.current;
-    loadedReturnKeyRef.current = '';
-    ++computationGenerationRef.current;
+    loadedReturnKeyRef.current = '';    ++computationGenerationRef.current;
     if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
     setBackendTaxResult(null);
     setTaxResultLoading(false);
@@ -224,7 +266,9 @@ export default function ITRComputationPage() {
     setImportedTIS(null);
     setReconciliationResult(null);
     setShowReconciliationModal(false);
-    setFormData(structuredClone(emptyFormDataRef.current));
+    const resetModel = createReturnEditorModelFromLegacy(structuredClone(emptyFormDataRef.current));
+    editorRef.current = resetModel;
+    setEditorModel(resetModel);
     if (!clientId) {
       setLoading(false);
       return;
@@ -236,51 +280,33 @@ export default function ITRComputationPage() {
     ])
       .then(([client, draft]) => {
         if (requestId !== loadGenerationRef.current) return;
-        const itrData = serializeReturnDraftToLegacy(draft) as any;
+        const savedModel = createReturnEditorModelFromLegacy({
+          ...structuredClone(emptyFormDataRef.current),
+          ...composeLegacyPayload({ draft, extras: {} }),
+        });
+        const itrData = composeLegacyPayload(savedModel) as any;
         loadedReturnKeyRef.current = `${clientId}:${effectiveAssessmentYear}`;
         setClientData(client);
         suppressAutoDetectRef.current = true;
         setItrForm(draft.form);
         setRegime(draft.regime);
-        // Prioritize saved form data over client master data
-        // Map address fields from backend names to frontend names
-        setFormData((prev: any) => ({ 
-          ...prev,
-          // Use client data as fallback only if form data doesn't have it
+        const hydrated = applyLegacyPatch(savedModel, {
           name: itrData.name || client.name,
           pan: itrData.pan || client.pan,
           email: itrData.email || client.email,
           mobile: itrData.mobile || client.mobile,
           aadhaar: itrData.aadhaar || client.aadhaar,
           dob: itrData.dob || client.dob,
-          fatherName: itrData.fatherName,
-          age: itrData.age,
-          // Address field mapping: backend -> frontend
           flatNo: itrData.flatDoorNo || itrData.flatNo,
           premises: itrData.premisesName || itrData.premises,
           road: itrData.roadStreet || itrData.road,
-          area: itrData.area,
           city: itrData.townCity || itrData.city,
-          state: itrData.state,
           pincode: itrData.pinCode || itrData.pincode,
-          // Spread all other form data
-          ...itrData,
-          mobileCountryCode: String(itrData.mobileCountryCode || itrData.countryCodeMobile || prev.mobileCountryCode || '91'),
-          country: String(itrData.countryCode || itrData.country || prev.country || '91'),
-          advanceTaxEntries: Array.isArray(itrData.advanceTaxEntries) ? itrData.advanceTaxEntries : [],
-          section80C: itrData.section80C?.investments ? itrData.section80C : prev.section80C,
-          section80D: itrData.section80D?.selfFamily ? itrData.section80D : prev.section80D,
-          deductionLoans: itrData.deductionLoans?.section80E ? itrData.deductionLoans : prev.deductionLoans,
-          bankAccountData: itrData.bankAccountData?.accounts
-            ? itrData.bankAccountData
-            : { accounts: (itrData.bankAccountDetails || []).map((account: any, index: number) => ({
-                id: account.id || `legacy-bank-${index}`,
-                bankName: account.bankName || '', accountNumber: account.accountNumber || '',
-                ifscCode: account.ifscCode || '',
-                accountType: account.accountType === 'SAVINGS' ? 'SB' : account.accountType === 'CURRENT' ? 'CA' : (account.accountType || 'SB'),
-                useForRefund: account.useForRefund === true || index === 0,
-              })) },
-        }));
+          mobileCountryCode: String(itrData.mobileCountryCode || itrData.countryCodeMobile || '91'),
+          country: String(itrData.countryCode || itrData.country || '91'),
+        });
+        editorRef.current = hydrated;
+        setEditorModel(hydrated);
       })
       .catch((err: any) => {
         if (requestId === loadGenerationRef.current) toast.error(err.message);
@@ -289,6 +315,15 @@ export default function ITRComputationPage() {
         if (requestId === loadGenerationRef.current) setLoading(false);
       });
   }, [clientId, effectiveAssessmentYear]);
+
+  useEffect(() => {
+    if (!editorModel) return;
+    if (editorModel.draft.form === itrForm && editorModel.draft.regime === regime) return;
+    updateEditor((current) => ({
+      draft: { ...current.draft, form: itrForm as ReturnEditorModel['draft']['form'], regime },
+      extras: current.extras,
+    }));
+  }, [editorModel, itrForm, regime, updateEditor]);
 
   const [backendTaxResult, setBackendTaxResult] = useState<any>(null);
   const [taxResultLoading, setTaxResultLoading] = useState(false);
@@ -398,13 +433,15 @@ export default function ITRComputationPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Clear legacy fields if using new array-based system
-      const validationError = validatePhase1Payload(formData);
+      const currentEditor = editorRef.current;
+      if (!currentEditor) throw new Error('Return is not loaded');
+      const currentSnapshot = composeLegacyPayload(currentEditor);
+      const validationError = validatePhase1Payload(currentSnapshot);
       if (validationError) {
         toast.error(validationError);
         return;
       }
-      const dataToSave = buildPhase1Payload(formData);
+      const dataToSave = buildPhase1Payload(currentSnapshot);
       
       // Clear legacy TDS/SAT fields
       if (dataToSave.tdsEntries && dataToSave.tdsEntries.length >= 0) {
@@ -469,12 +506,15 @@ export default function ITRComputationPage() {
   };
 
   const handleFileImport = async (type: string, file: File) => {
+    const importGeneration = loadGenerationRef.current;
     try {
       toast.loading(`Importing ${type}...`);
       
       if (type === 'form16-pdf' || type === 'form16-json') {
         const data = await import('../api/integration').then(m => m.integrationApi.extractForm16(file));
-        const populated = await import('../api/integration').then(m => m.integrationApi.autoPopulateFromForm16(formData, data));
+        if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
+        const populated = await import('../api/integration').then(m => m.integrationApi.autoPopulateFromForm16(composeLegacyPayload(editorRef.current!), data));
+        if (importGeneration !== loadGenerationRef.current) return;
         setFormData((prev: any) => ({ ...prev, ...populated }));
         toast.dismiss();
         toast.success('Form 16 imported and auto-populated');
@@ -499,19 +539,23 @@ export default function ITRComputationPage() {
         } else if (typeStr === 'ais-pdf') {
           const { integrationApi } = await import('../api/integration');
           data = await integrationApi.importAIS(file, legacyClientId!, effectiveAssessmentYear, pan!, dob!);
+          if (importGeneration !== loadGenerationRef.current) return;
           setImportedAIS(data);
         } else if (typeStr === 'ais-json') {
           const { integrationApi } = await import('../api/integration');
           data = await integrationApi.importAISJson(file, pan!, dob!);
+          if (importGeneration !== loadGenerationRef.current) return;
           setImportedAIS(data);
         } else if (typeStr === 'tis-pdf') {
           const { integrationApi } = await import('../api/integration');
           data = await integrationApi.importTIS(file, pan!, dob!);
+          if (importGeneration !== loadGenerationRef.current) return;
           setImportedTIS(data);
         } else if (typeStr === '26as-txt' || typeStr === '26as-pdf') {
           const { integrationApi } = await import('../api/integration');
           // Backend will use client's DOB as password for ZIP files
           data = await integrationApi.import26AS(file, legacyClientId!);
+          if (importGeneration !== loadGenerationRef.current) return;
           setImported26AS(data);
         }
         
@@ -683,8 +727,11 @@ export default function ITRComputationPage() {
             console.log('26AS Import - Dividend Entries:', dividendEntriesFrom26AS);
             console.log('26AS Import - Interest Entries:', bankInterestEntriesFrom26AS);
             
-            setFormData((prev: any) => ({ ...prev, ...formDataUpdate }));
-            await itrApi.saveFormData(clientId, effectiveAssessmentYear, { ...formData, ...formDataUpdate });
+            if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
+            const applied = applyLegacyActionWithSnapshot(editorRef.current, formDataUpdate);
+            editorRef.current = applied.model;
+            setEditorModel(applied.model);
+            await itrApi.saveFormData(clientId, effectiveAssessmentYear, applied.snapshot);
             toast.dismiss();
             
             const message = `26AS imported! ${tdsOnlyEntries.length} TDS entries. ` +
@@ -706,7 +753,10 @@ export default function ITRComputationPage() {
             importedTIS || data
           );
           
-          setFormData((prev: any) => ({ ...prev, ...populated }));
+          if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
+          const applied = applyLegacyActionWithSnapshot(editorRef.current, populated);
+          editorRef.current = applied.model;
+          setEditorModel(applied.model);
           
           // If both AIS and 26AS available, check reconciliation
           const ais = importedAIS || data;
@@ -715,6 +765,7 @@ export default function ITRComputationPage() {
           
           if (ais && f26as) {
             const report = await integrationApi.getReconciliationReport(ais, f26as, tis);
+            if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
             if (report.hasDiscrepancies) {
               toast.dismiss();
               toast.error(`${type.toUpperCase()} imported. Reconciliation needed - ${report.items.length} discrepancies found.`);
@@ -722,8 +773,9 @@ export default function ITRComputationPage() {
               return;
             }
           }
-          
-          await itrApi.saveFormData(clientId, effectiveAssessmentYear, { ...formData, ...populated });
+
+          if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
+          await itrApi.saveFormData(clientId, effectiveAssessmentYear, composeLegacyPayload(editorRef.current));
           toast.dismiss();
           toast.success(`${type.toUpperCase()} imported and auto-populated successfully!`);
         } else if (type === 'prefill') {
@@ -742,10 +794,13 @@ export default function ITRComputationPage() {
           
           // Reload form data from backend to get the extracted data
           const freshDraft = await returnRepository.get(clientId, effectiveAssessmentYear);
-          const freshFormData = serializeReturnDraftToLegacy(freshDraft) as any;
+          if (importGeneration !== loadGenerationRef.current) return;
+          const freshModel = createReturnEditorModelFromLegacy(composeLegacyPayload({ draft: freshDraft, extras: editorRef.current?.extras ?? {} }));
+          const freshFormData = composeLegacyPayload(freshModel) as any;
           console.log('Fresh form data from backend:', freshFormData);
           
           // Update form with the extracted data - use direct assignment for numeric fields
+          if (importGeneration !== loadGenerationRef.current) return;
           setFormData((prev: any) => ({ 
             ...prev,
             // Numeric fields - use ?? for null/undefined, allow 0 values through
@@ -786,6 +841,7 @@ export default function ITRComputationPage() {
           toast.dismiss();
           toast.success('Prefill data imported and loaded successfully!');
         } else {
+          if (importGeneration !== loadGenerationRef.current) return;
           setFormData((prev: any) => ({ ...prev, ...data }));
         }
         
@@ -836,7 +892,7 @@ export default function ITRComputationPage() {
       return entry;
     });
 
-    setFormData({ ...formData, employerEntries: updatedEntries });
+    setFormData((previous: LegacyRecord) => ({ ...previous, employerEntries: updatedEntries }));
     toast.success(`Applied ${action === 'USE_NEW' ? 'new' : 'existing'} values for ${discrepancy.employerName}`);
     
     // Remove resolved discrepancy
@@ -1385,15 +1441,15 @@ export default function ITRComputationPage() {
         borderRadius: 'var(--radius)',
         border: '1px solid var(--border)'
       }}>
-        {activeTab === 0 && <PersonalInfoTab formData={formData} setFormData={setFormData} />}
-        {activeTab === 1 && <SalaryTab formData={formData} setFormData={setFormData} taxResult={taxResult} ayParam={effectiveAssessmentYear} regime={regime} />}
-        {activeTab === 2 && <HousePropertyTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
+        {activeTab === 0 && <PersonalInfoTab formData={formData} setFormData={setFormData} onBanksChange={managers.banks} />}
+        {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={taxResult} ayParam={effectiveAssessmentYear} regime={regime} />}
+        {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} onChange={(entries: any[]) => updateEditor((model) => updateHouseProperties(model, entries))} itrForm={itrForm} />}
         {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} year={effectiveAssessmentYear} />}
         {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
-        {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
+        {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
         {activeTab === 6 && <ExemptIncomeTab formData={formData} setFormData={setFormData} />}
-        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} />}
-        {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
+        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} />}
+        {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
         {activeTab === 9 && (taxResultError
           ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until computation succeeds.</div>
           : <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />)}
@@ -1627,19 +1683,19 @@ function Field({ label, value, onChange, computed, prefix = '₹', type = 'numbe
   );
 }
 
-function SalaryTab({ formData, setFormData, taxResult, ayParam, regime }: any) {
-  return <EmployerEntryManager entries={formData.employerEntries || []} onChange={(entries) => setFormData({ ...formData, employerEntries: entries })} assessmentYear={ayParam || '2025-26'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} />;
+function SalaryTab({ entries, onChange, taxResult, ayParam, regime }: any) {
+  return <EmployerEntryManager entries={entries} onChange={onChange} assessmentYear={ayParam || '2025-26'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} />;
 }
 
-function HousePropertyTab({ formData, setFormData, itrForm }: any) {
-  return <HousePropertyEntryManager entries={formData.housePropertyEntries || []} onChange={(entries) => setFormData({ ...formData, housePropertyEntries: entries })} itrForm={itrForm} />;
+function HousePropertyTab({ entries, onChange, itrForm }: any) {
+  return <HousePropertyEntryManager entries={entries} onChange={onChange} itrForm={itrForm} />;
 }
 
 function CapitalGainsTab({ formData, setFormData }: any) {
   return <CapitalGainsEntryManager entries={formData.capitalGainTransactions || []} onChange={(entries) => setFormData({ ...formData, capitalGainTransactions: entries })} />;
 }
 
-function PersonalInfoTab({ formData, setFormData }: any) {
+function PersonalInfoTab({ formData, setFormData, onBanksChange }: any) {
   const calculateAge = (dob: string) => {
     if (!dob) return 0;
     const birthDate = new Date(dob);
@@ -1962,7 +2018,7 @@ function PersonalInfoTab({ formData, setFormData }: any) {
       </h3>
       <BankAccountManager
         data={formData.bankAccountData || { accounts: [] }}
-        onChange={(d) => setFormData({ ...formData, bankAccountData: d })}
+        onChange={onBanksChange}
       />
 
       <div style={{ marginTop: 16, padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)' }}>

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyReturnDraft } from './factory';
 import {
-  applyLegacyPatch, banksFromManager, banksToManager, challansToManager,
+  applyLegacyActionWithSnapshot, applyLegacyPatch, applyLegacySetStateAction, banksFromManager, banksToManager, challansToManager,
   composeLegacyPayload, createReturnEditorModel, createReturnEditorModelFromLegacy,
-  deductionLoansFromManager, deductionLoansToManager, familyPensionFromManager,
+  deductionLoansFromManager, deductionLoansToManager, dividendsFromManager, familyPensionFromManager,
   familyPensionToManager, giftsFromManager, giftsToManager, interestFromManager,
   interestToManager, patchCompatibilityExtras, replaceChallanKind, tdsFromManager,
-  tdsToManager, updateEmployers, updateHouseProperties, winningsFromManager,
+  tdsToManager, updateEmployers, updateHouseProperties, updateInterestFromManager, winningsFromManager,
   winningsToManager,
 } from './editorModel';
 import type { DeductionLoan, InterestIncome, TaxChallan, TdsCredit } from './types';
@@ -19,6 +19,62 @@ function loan(section: DeductionLoan['section'], id: string): DeductionLoan {
 }
 
 describe('return editor model', () => {
+  it('evaluates sequential functional legacy actions against the latest composed payload', () => {
+    const initial = createReturnEditorModelFromLegacy({ name: 'A', counter: 0, future: { keep: true } });
+    const first = applyLegacySetStateAction(initial, (previous) => ({ ...previous, counter: Number(previous.counter) + 1 }));
+    const second = applyLegacySetStateAction(first, (previous) => ({ ...previous, counter: Number(previous.counter) + 1 }));
+    expect(composeLegacyPayload(second)).toMatchObject({ name: 'A', counter: 2, future: { keep: true } });
+    expect(composeLegacyPayload(initial)).toMatchObject({ counter: 0 });
+  });
+
+  it('preserves compatibility scalars even when canonical arrays are present', () => {
+    const model = createReturnEditorModelFromLegacy({
+      businessEntries: [],
+      exemptIncomeEntries: [],
+      donationEntries: [],
+      bizTurnover: 0,
+      agricultureIncome: 0,
+      s80G: 0,
+    });
+    const updated = applyLegacySetStateAction(model, (previous) => ({
+      ...previous,
+      bizTurnover: 500000,
+      agricultureIncome: 4000,
+    }));
+    expect(composeLegacyPayload(updated)).toMatchObject({
+      bizTurnover: 500000,
+      agricultureIncome: 4000,
+      businessEntries: [],
+      exemptIncomeEntries: [],
+      donationEntries: [],
+      s80G: 0,
+    });
+  });
+
+  it('accepts legacy whole-object calls while preserving canonical manager data and extras', () => {
+    const initial = createReturnEditorModelFromLegacy({ future: { flag: true } });
+    const withInterest = updateInterestFromManager(initial, [{ id: 'i', itdTag: 'NSC', grossAmount: 50, tdsDeducted: 5 }]);
+    const current = composeLegacyPayload(withInterest);
+    const updated = applyLegacySetStateAction(withInterest, { ...current, note: 'changed' });
+    expect(updated.draft.otherSources.interest[0]).toMatchObject({ id: 'i', kind: 'NSC', grossAmount: 50 });
+    expect(composeLegacyPayload(updated)).toMatchObject({ future: { flag: true }, note: 'changed' });
+  });
+
+  it('returns the exact immediate-save snapshot for nested imports without mutating inputs', () => {
+    const initial = createReturnEditorModelFromLegacy({
+      filing: { filingSection: '139(5)', noticeNumber: 'old' },
+      future: { nested: { keep: true } },
+    });
+    const patch = { filing: { noticeNumber: 'new' }, imported: { source: 'AIS' } };
+    const before = structuredClone(patch);
+    const result = applyLegacyActionWithSnapshot(initial, patch);
+    expect(result.snapshot).toEqual(composeLegacyPayload(result.model));
+    expect(result.model.draft.filing).toMatchObject({ filingSection: '139(5)', noticeNumber: 'new' });
+    expect(result.snapshot).toMatchObject({ future: { nested: { keep: true } }, imported: { source: 'AIS' } });
+    expect(patch).toEqual(before);
+    expect(composeLegacyPayload(initial)).toMatchObject({ filing: { noticeNumber: 'old' } });
+  });
+
   it('loads unknown fields and gives canonical values precedence over extras', () => {
     const model = createReturnEditorModelFromLegacy({ name: 'Canonical', future: { enabled: true } });
     const patched = patchCompatibilityExtras(model, { name: 'Wrong', employerEntries: [{ id: 'bad' }], future2: 7 });
@@ -92,6 +148,19 @@ describe('return editor model', () => {
     expect(result[0]).toMatchObject({ kind: 'SAVINGS_BANK', grossAmount: 200, bankName: 'New', remarks: 'keep', nscCertificateNumber: 'CERT' });
     expect(before[0]).toMatchObject({ itdTag: 'NSC', grossAmount: 100 });
     expect(canonical[0]).toEqual(interest());
+  });
+
+  it('preserves hidden dividend fields and completes newly added rows', () => {
+    const canonical = [{
+      id: 'd', section: '194' as const, grossAmount: 100, tdsDeducted: 10,
+      companyName: 'Company', companyPAN: 'ABCDE1234F', deductorTAN: 'TAN',
+      isin: 'INE000000001', category: 'EQUITY' as const, q1: 25, q2: 25, q3: 25, q4: 25,
+    }];
+    const edited = dividendsFromManager([{ id: 'd', section: '194', grossAmount: 200, companyName: 'Updated' }], canonical);
+    expect(edited[0]).toMatchObject({ grossAmount: 200, companyPAN: 'ABCDE1234F', isin: 'INE000000001', q4: 25 });
+    const added = dividendsFromManager([{ section: '194', dividendAmount: 50, companyName: 'New' }]);
+    expect(added[0]).toMatchObject({ section: '194', grossAmount: 50, companyPAN: '', deductorTAN: '', isin: '', category: '', q1: 0, q2: 0, q3: 0, q4: 0 });
+    expect(added[0].id).toBeTruthy();
   });
 
   it('round trips family pension, winnings, and gifts while preserving hidden values', () => {

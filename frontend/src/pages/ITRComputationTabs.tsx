@@ -9,6 +9,26 @@ import { GiftPropertyManager } from '../components/gifts/GiftPropertyManager';
 import { Section80DManager, type Section80DData } from '../components/Section80DManager';
 import { DeductionLoanManager, type DeductionLoanData } from '../components/DeductionLoanManager';
 import { Section80CManager, type Section80CData } from '../components/Section80CManager';
+import type {
+  BankManagerData, ChallanManagerEntry, DeductionLoanManagerData, FamilyPensionManagerEntry,
+  GiftManagerEntry, InterestManagerEntry, TdsManagerEntry, WinningManagerEntry,
+} from '../domain/returns';
+
+export interface CanonicalManagerBindings {
+  interest: (entries: InterestManagerEntry[]) => void;
+  dividends: (entries: any[]) => void;
+  familyPension: (entry: FamilyPensionManagerEntry) => void;
+  winnings: (entries: WinningManagerEntry[]) => void;
+  gifts: (entries: GiftManagerEntry[]) => void;
+  section80C: (data: Section80CData) => void;
+  section80D: (data: Section80DData) => void;
+  donations: (entries: any[]) => void;
+  deductionLoans: (data: DeductionLoanManagerData) => void;
+  tds: (entries: TdsManagerEntry[]) => void;
+  advanceTax: (entries: ChallanManagerEntry[]) => void;
+  selfAssessmentTax: (entries: ChallanManagerEntry[]) => void;
+  banks: (data: BankManagerData) => void;
+}
 
 export function BusinessTab({ formData, setFormData, taxResult }: any) {
   return (
@@ -65,7 +85,7 @@ export function BusinessTab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function OtherSourcesTab({ formData, setFormData, taxResult }: any) {
+export function OtherSourcesTab({ formData, setFormData, taxResult, managers }: any) {
   // Calculate totals from 26AS
   const totalTDSFrom26AS = formData.tdsEntries ? formData.tdsEntries.reduce((sum: number, e: any) => sum + (e.tdsDeducted || 0), 0) : 0;
   const incomeBreakdown = formData.incomeBreakdown26AS || {};
@@ -126,7 +146,7 @@ export function OtherSourcesTab({ formData, setFormData, taxResult }: any) {
         </h4>
         <InterestEntryManager
           entries={formData.interestEntries || []}
-          onChange={(entries) => setFormData({ ...formData, interestEntries: entries })}
+          onChange={managers.interest}
         />
       </div>
 
@@ -139,7 +159,7 @@ export function OtherSourcesTab({ formData, setFormData, taxResult }: any) {
         </h4>
         <DividendEntryManager
           entries={formData.dividendEntries || []}
-          onChange={(entries) => setFormData({ ...formData, dividendEntries: entries })}
+          onChange={managers.dividends}
         />
       </div>
 
@@ -147,7 +167,7 @@ export function OtherSourcesTab({ formData, setFormData, taxResult }: any) {
       <div style={{ marginBottom: 20, background: 'white', borderRadius: 8, padding: 16, borderLeft: '4px solid #7b1fa2', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
         <FamilyPensionManager
           entry={formData.familyPensionEntry || null}
-          onChange={(entry) => setFormData({ ...formData, familyPensionEntry: entry })}
+          onChange={managers.familyPension}
         />
       </div>
 
@@ -155,7 +175,7 @@ export function OtherSourcesTab({ formData, setFormData, taxResult }: any) {
       <div style={{ marginBottom: 20, background: 'white', borderRadius: 8, padding: 16, borderLeft: '4px solid #c62828', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
         <WinningsManager
           entries={formData.winningsEntries || []}
-          onChange={(entries) => setFormData({ ...formData, winningsEntries: entries })}
+          onChange={managers.winnings}
         />
       </div>
 
@@ -163,7 +183,7 @@ export function OtherSourcesTab({ formData, setFormData, taxResult }: any) {
       <div style={{ marginBottom: 20, background: 'white', borderRadius: 8, padding: 16, borderLeft: '4px solid #ef6c00', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
         <GiftPropertyManager
           entries={formData.giftEntries || []}
-          onChange={(entries) => setFormData({ ...formData, giftEntries: entries })}
+          onChange={managers.gifts}
         />
       </div>
 
@@ -324,7 +344,7 @@ export function VDATab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function DeductionsTab({ formData, setFormData, regime, taxResult }: any) {
+export function DeductionsTab({ formData, setFormData, regime, taxResult, managers }: any) {
   if (regime === 'new') {
     return (
       <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
@@ -344,7 +364,7 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
       <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>Section 80C (Max 1.5L)</h4>
       <Section80CManager
         data={formData.section80C || { investments: [] }}
-        onChange={(d) => setFormData({ ...formData, section80C: d })}
+        onChange={managers.section80C}
       />
 
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>NPS</h3>
@@ -363,7 +383,7 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
           parents: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
           parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
         }}
-        onChange={(d) => setFormData({ ...formData, section80D: d })}
+        onChange={managers.section80D}
       />
 
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Disability & Medical (80DD/80DDB/80U)</h3>
@@ -522,20 +542,8 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
       {/* Donation Multi-Entry Manager */}
       <DonationEntryManager
         entries={formData.donationEntries || []}
-        onChange={(entries) => setFormData({ ...formData, donationEntries: entries })}
+        onChange={managers.donations}
       />
-      
-      <div style={{ marginTop: 24 }}>
-        <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-          Legacy Single-Value Field (Use multi-entry above for CBDT compliance)
-        </h4>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-          <Field label="Donation Amount" value={formData.s80G} onChange={(v: any) => setFormData({ ...formData, s80G: v })} />
-          <Field label="Donee Name" value={formData.s80G_doneeName || ''} onChange={(v: any) => setFormData({ ...formData, s80G_doneeName: v })} type="text" prefix="" />
-          <Field label="Donee PAN" value={formData.s80G_doneePAN || ''} onChange={(v: any) => setFormData({ ...formData, s80G_doneePAN: v })} type="text" prefix="" />
-          <Field label="Receipt No" value={formData.s80G_receiptNo || ''} onChange={(v: any) => setFormData({ ...formData, s80G_receiptNo: v })} type="text" prefix="" />
-        </div>
-      </div>
 
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Education & Home Loans (80E/80EE/80EEA/80EEB)</h3>
       <DeductionLoanManager
@@ -545,7 +553,7 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult }: any)
           section80EEA: { loans: [], stampDutyValue: 0 },
           section80EEB: { loans: [] },
         }}
-        onChange={(d) => setFormData({ ...formData, deductionLoans: d })}
+        onChange={managers.deductionLoans}
       />
 
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Others</h3>
@@ -647,12 +655,13 @@ export function LossesTab({ formData, setFormData }: any) {
   );
 }
 
-export function TDSTab({ formData, setFormData, taxResult }: any) {
+export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
   const tdsEntries = formData.tdsEntries || [];
   const selfAssessmentTaxEntries = formData.selfAssessmentTaxEntries || [];
 
   const addTDSEntry = () => {
     const newEntry = {
+      id: `tds-${crypto.randomUUID()}`,
       section: '192',
       deductorName: '',
       deductorTAN: '',
@@ -666,40 +675,41 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
       verified26AS: false,
       claimedInReturn: true
     };
-    setFormData({ ...formData, tdsEntries: [...tdsEntries, newEntry] });
+    managers.tds([...tdsEntries, newEntry]);
   };
 
   const updateTDSEntry = (index: number, field: string, value: any) => {
     const updated = [...tdsEntries];
     updated[index] = { ...updated[index], [field]: value };
-    setFormData({ ...formData, tdsEntries: updated });
+    managers.tds(updated);
   };
 
   const removeTDSEntry = (index: number) => {
     const updated = tdsEntries.filter((_: any, i: number) => i !== index);
-    setFormData({ ...formData, tdsEntries: updated });
+    managers.tds(updated);
   };
 
   const addSelfAssessmentEntry = () => {
     const newEntry = {
+      id: `self-assessment-${crypto.randomUUID()}`,
       bsrCode: '',
       challanNo: '',
       depositDate: '',
       amount: 0,
       cin: ''
     };
-    setFormData({ ...formData, selfAssessmentTaxEntries: [...selfAssessmentTaxEntries, newEntry] });
+    managers.selfAssessmentTax([...selfAssessmentTaxEntries, newEntry]);
   };
 
   const updateSelfAssessmentEntry = (index: number, field: string, value: any) => {
     const updated = [...selfAssessmentTaxEntries];
     updated[index] = { ...updated[index], [field]: value };
-    setFormData({ ...formData, selfAssessmentTaxEntries: updated });
+    managers.selfAssessmentTax(updated);
   };
 
   const removeSelfAssessmentEntry = (index: number) => {
     const updated = selfAssessmentTaxEntries.filter((_: any, i: number) => i !== index);
-    setFormData({ ...formData, selfAssessmentTaxEntries: updated });
+    managers.selfAssessmentTax(updated);
   };
 
   return (
@@ -906,7 +916,7 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
         <button
           onClick={() => {
             const entries = formData.advanceTaxEntries || [];
-            setFormData({ ...formData, advanceTaxEntries: [...entries, { bsrCode: '', depositDate: '', challanSerialNo: 0, amount: 0 }] });
+            managers.advanceTax([...entries, { id: '', bsrCode: '', depositDate: '', challanSerialNo: 0, amount: 0 }]);
           }}
           style={{
             padding: '6px 12px',
@@ -936,7 +946,7 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
               onClick={() => {
                 const updated = [...(formData.advanceTaxEntries || [])];
                 updated.splice(index, 1);
-                setFormData({ ...formData, advanceTaxEntries: updated });
+                managers.advanceTax(updated);
               }}
               style={{ background: 'var(--danger)', color: 'white', border: 'none', width: 24, height: 24, borderRadius: '50%', cursor: 'pointer', fontSize: 14 }}
             >×</button>
@@ -947,7 +957,7 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
               <input type="text" value={entry.bsrCode || ''} onChange={(e) => {
                 const updated = [...(formData.advanceTaxEntries || [])];
                 updated[index] = { ...updated[index], bsrCode: e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 7) };
-                setFormData({ ...formData, advanceTaxEntries: updated });
+                managers.advanceTax(updated);
               }} placeholder="7-character BSR" maxLength={7} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
             </div>
             <div>
@@ -955,7 +965,7 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
               <input type="date" value={entry.depositDate || ''} onChange={(e) => {
                 const updated = [...(formData.advanceTaxEntries || [])];
                 updated[index] = { ...updated[index], depositDate: e.target.value };
-                setFormData({ ...formData, advanceTaxEntries: updated });
+                managers.advanceTax(updated);
               }} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
             </div>
             <div>
@@ -963,7 +973,7 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
               <input type="text" inputMode="numeric" value={entry.challanSerialNo || ''} onChange={(e) => {
                 const updated = [...(formData.advanceTaxEntries || [])];
                 updated[index] = { ...updated[index], challanSerialNo: e.target.value.replace(/\D/g, '').slice(0, 5) };
-                setFormData({ ...formData, advanceTaxEntries: updated });
+                managers.advanceTax(updated);
               }} placeholder="5-digit serial" maxLength={5} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
             </div>
             <div>
@@ -971,7 +981,7 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
               <input type="number" value={entry.amount || ''} onChange={(e) => {
                 const updated = [...(formData.advanceTaxEntries || [])];
                 updated[index] = { ...updated[index], amount: parseFloat(e.target.value) || 0 };
-                setFormData({ ...formData, advanceTaxEntries: updated });
+                managers.advanceTax(updated);
               }} placeholder="0" min={0} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontWeight: 600 }} />
             </div>
           </div>
