@@ -1037,77 +1037,6 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "deductions_chapter6a.amount_80eeb",
             ))
 
-        # 80EE loan sanction date 01-Apr-2016 to 31-Mar-2017
-        if ch6a.amount_80ee > 0:
-            if inp.loan_details_80ee:
-                ld = inp.loan_details_80ee
-                if ld.sanction_date:
-                    if not (date(2016, 4, 1) <= ld.sanction_date <= date(2017, 3, 31)):
-                        results.append(_make(
-                            "ITR1-R225", False,
-                            f"80EE loan sanction date ({ld.sanction_date}) not within "
-                            f"01-Apr-2016 to 31-Mar-2017",
-                            "loan_details_80ee.sanction_date",
-                        ))
-                if ld.loan_amount > 3_500_000:
-                    results.append(_make(
-                        "ITR1-R225b", False,
-                        f"80EE loan amount (Rs {ld.loan_amount}) exceeds Rs 35,00,000 limit",
-                        "loan_details_80ee.loan_amount",
-                    ))
-            else:
-                results.append(_info(
-                    "ITR1-R225",
-                    "80EE claimed but loan_details_80ee not provided. "
-                    "Loan sanction date (01-Apr-2016 to 31-Mar-2017) must be verified.",
-                    "deductions_chapter6a.amount_80ee",
-                ))
-
-        if ch6a.amount_80eea > 0:
-            if inp.loan_details_80eea:
-                ld = inp.loan_details_80eea
-                if ld.sanction_date:
-                    if not (date(2019, 4, 1) <= ld.sanction_date <= date(2022, 3, 31)):
-                        results.append(_make(
-                            "ITR1-R228", False,
-                            f"80EEA loan sanction date ({ld.sanction_date}) not within "
-                            f"01-Apr-2019 to 31-Mar-2022",
-                            "loan_details_80eea.sanction_date",
-                        ))
-                if ld.loan_amount > 4_500_000:
-                    results.append(_make(
-                        "ITR1-R228b", False,
-                        f"80EEA loan amount (Rs {ld.loan_amount}) exceeds Rs 45,00,000 "
-                        f"stamp duty value limit",
-                        "loan_details_80eea.loan_amount",
-                    ))
-            else:
-                results.append(_info(
-                    "ITR1-R228",
-                    "80EEA claimed but loan_details_80eea not provided. "
-                    "Loan sanction date (01-Apr-2019 to 31-Mar-2022) must be verified.",
-                    "deductions_chapter6a.amount_80eea",
-                ))
-
-        if ch6a.amount_80eeb > 0:
-            if inp.loan_details_80eeb:
-                ld = inp.loan_details_80eeb
-                if ld.sanction_date:
-                    if not (date(2019, 4, 1) <= ld.sanction_date <= date(2023, 3, 31)):
-                        results.append(_make(
-                            "ITR1-R231", False,
-                            f"80EEB loan sanction date ({ld.sanction_date}) not within "
-                            f"01-Apr-2019 to 31-Mar-2023",
-                            "loan_details_80eeb.sanction_date",
-                        ))
-            else:
-                results.append(_info(
-                    "ITR1-R231",
-                    "80EEB claimed but loan_details_80eeb not provided. "
-                    "Loan sanction date (01-Apr-2019 to 31-Mar-2023) must be verified.",
-                    "deductions_chapter6a.amount_80eeb",
-                ))
-
     # ========================================================================
     # SECTION: 80GG (Rent Paid — No HRA)
     # ========================================================================
@@ -1786,108 +1715,22 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             "loan_details_24b_list",
         ))
 
-    # Rule 225: 80EE claimed → loan details in schedule 80EE required
-    if ch6a and ch6a.amount_80ee > _z and not inp.loan_details_80ee:
-        results.append(_make(
-            "ITR1-R225", False,
-            "80EE deduction claimed but loan details not provided in schedule 80EE. "
-            "Lender name, loan amount and sanction date are mandatory.",
-            "loan_details_80ee",
-        ))
-
-    # Rule 228: 80EEA claimed → loan details in schedule 80EEA required
-    if ch6a and ch6a.amount_80eea > _z and not inp.loan_details_80eea:
-        results.append(_make(
-            "ITR1-R228", False,
-            "80EEA deduction claimed but loan details not provided in schedule 80EEA. "
-            "Lender name, loan amount and sanction date are mandatory.",
-            "loan_details_80eea",
-        ))
-
-    # Rule 231: 80EEB claimed → loan details in schedule 80EEB required
-    if ch6a and ch6a.amount_80eeb > _z and not inp.loan_details_80eeb:
-        results.append(_make(
-            "ITR1-R231", False,
-            "80EEB deduction claimed but loan details not provided in schedule 80EEB. "
-            "Lender name, loan amount and sanction date are mandatory.",
-            "loan_details_80eeb",
-        ))
-
-    # Rule 221: 80EE/80EEA can only be claimed when 24(b) limit is exhausted
-    # (at least one of them and 24(b) both have values)
+    # Rule 221: 80EE/80EEA require the applicable 24(b) limit to be exhausted.
     if ch6a and (ch6a.amount_80ee > _z or ch6a.amount_80eea > _z):
-        if hp.home_loan_interest_paid <= _z:
+        required_24b = (
+            Decimal("200000")
+            if hp.property_type == PropertyType.SELF_OCCUPIED
+            else hp.home_loan_interest_paid
+        )
+        if hp.home_loan_interest_paid <= _z or hp.home_loan_interest_paid < required_24b:
             results.append(_make(
                 "ITR1-R221", False,
                 f"80EE/80EEA deduction claimed (80EE={ch6a.amount_80ee}, "
-                f"80EEA={ch6a.amount_80eea}) but no 24(b) interest reported. "
-                f"80EE/80EEA are additional deductions over and above 24(b). "
-                f"The 24(b) limit must be exhausted first.",
+                f"80EEA={ch6a.amount_80eea}) before exhausting the applicable "
+                f"Section 24(b) limit of Rs {required_24b}.",
                 "deductions_chapter6a",
-                expected="24(b) interest > 0", actual="24(b) = 0"))
-
-    # Rule 227: 80EE — max loan ≤ Rs 35 lakh
-    if ch6a and ch6a.amount_80ee > _z and inp.loan_details_80ee:
-        ld_80ee = inp.loan_details_80ee
-        if ld_80ee.loan_amount and ld_80ee.loan_amount > 3_500_000:
-            results.append(_make(
-                "ITR1-R227", False,
-                f"80EE deduction claimed but loan amount (Rs {ld_80ee.loan_amount}) "
-                f"exceeds Rs 35 lakh limit. 80EE is only available for loans ≤ Rs 35 lakh.",
-                "loan_details_80ee.loan_amount",
-                expected="<= 35,00,000", actual=str(ld_80ee.loan_amount)))
-
-    # Rule 229: 80EEA — stamp duty value ≤ Rs 45 lakh
-    if ch6a and ch6a.amount_80eea > _z and inp.loan_details_80eea:
-        ld_80eea = inp.loan_details_80eea
-        if ld_80eea.loan_amount and ld_80eea.loan_amount > 4_500_000:
-            results.append(_make(
-                "ITR1-R229", False,
-                f"80EEA deduction claimed but loan amount (Rs {ld_80eea.loan_amount}) "
-                f"exceeds Rs 45 lakh stamp duty value limit. "
-                f"80EEA is only available for residential property with "
-                f"stamp duty value ≤ Rs 45 lakh.",
-                "loan_details_80eea.loan_amount",
-                expected="<= 45,00,000", actual=str(ld_80eea.loan_amount)))
-
-    # Rule 252: 80EE loan sanction date 01.04.2016 – 31.03.2017
-    if ch6a and ch6a.amount_80ee > _z and inp.loan_details_80ee:
-        ld = inp.loan_details_80ee
-        if ld.sanction_date:
-            sd = ld.sanction_date
-            if sd < date(2016, 4, 1) or sd > date(2017, 3, 31):
-                results.append(_make(
-                    "ITR1-R252", False,
-                    f"80EE loan sanction date ({sd}) is outside the valid range: "
-                    f"01.04.2016 to 31.03.2017.",
-                    "loan_details_80ee.sanction_date",
-                    expected="01.04.2016 - 31.03.2017", actual=str(sd)))
-
-    # Rule 230: 80EEA loan sanction date 01.04.2019 – 31.03.2022
-    if ch6a and ch6a.amount_80eea > _z and inp.loan_details_80eea:
-        ld = inp.loan_details_80eea
-        if ld.sanction_date:
-            sd = ld.sanction_date
-            if sd < date(2019, 4, 1) or sd > date(2022, 3, 31):
-                results.append(_make(
-                    "ITR1-R230", False,
-                    f"80EEA loan sanction date ({sd}) is outside the valid range: "
-                    f"01.04.2019 to 31.03.2022.",
-                    "loan_details_80eea.sanction_date",
-                    expected="01.04.2019 - 31.03.2022", actual=str(sd)))
-
-    # Rule 232: 80EEB loan sanction date 01.04.2019 – 31.03.2023
-    if ch6a and ch6a.amount_80eeb > _z and inp.loan_details_80eeb:
-        ld = inp.loan_details_80eeb
-        if ld.sanction_date:
-            sd = ld.sanction_date
-            if sd < date(2019, 4, 1) or sd > date(2023, 3, 31):
-                results.append(_make(
-                    "ITR1-R232", False,
-                    f"80EEB loan sanction date ({sd}) is outside the valid range: "
-                    f"01.04.2019 to 31.03.2023.",
-                    "loan_details_80eeb.sanction_date",
-                    expected="01.04.2019 - 31.03.2023", actual=str(sd)))
+                expected=f"24(b) interest >= {required_24b}",
+                actual=str(hp.home_loan_interest_paid)))
 
     # Rule 271: Property type mandatory if 24(b) interest claimed
     if hp.home_loan_interest_paid > _z and not hp.property_type:
@@ -2108,6 +1951,84 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 f"details provided in Schedule 80E. Lender name, loan amount and "
                 f"interest paid are mandatory.",
                 "deductions_chapter6a.amount_80e"))
+
+    # ========================================================================
+    # SECTION: Schedules 80EE/80EEA/80EEB — Official Loan Rows
+    # ========================================================================
+
+    if ch6a:
+        loan_specs = (
+            ("80EE", ch6a.amount_80ee, inp.loan_details_80ee_list,
+             date(2016, 4, 1), date(2017, 3, 31)),
+            ("80EEA", ch6a.amount_80eea, inp.loan_details_80eea_list,
+             date(2019, 4, 1), date(2022, 3, 31)),
+            ("80EEB", ch6a.amount_80eeb, inp.loan_details_80eeb_list,
+             date(2019, 4, 1), date(2023, 3, 31)),
+        )
+        for section, claim, rows, start_date, end_date in loan_specs:
+            legacy = getattr(inp, f"loan_details_{section.lower()}")
+            if legacy is not None:
+                results.append(_make(
+                    f"ITR1-{section}-LEGACY", False,
+                    f"Legacy {section} loan details omit official account and outstanding fields. "
+                    f"Provide loan_details_{section.lower()}_list instead.",
+                    f"loan_details_{section.lower()}"))
+            if claim > _z:
+                if not rows:
+                    results.append(_make(
+                        f"ITR1-{section}-ROWS", False,
+                        f"A positive Section {section} claim requires complete official loan rows.",
+                        f"loan_details_{section.lower()}_list"))
+                else:
+                    row_interest = sum((row.interest_paid for row in rows), _z)
+                    if row_interest != claim:
+                        results.append(_make(
+                            f"ITR1-{section}-TOTAL", False,
+                            f"Schedule {section} interest (Rs {row_interest}) must equal "
+                            f"the user claim (Rs {claim}).",
+                            f"deductions_chapter6a.amount_{section.lower()}",
+                            expected=str(claim), actual=str(row_interest)))
+                    for index, row in enumerate(rows):
+                        if not start_date <= row.loan_date <= end_date:
+                            results.append(_make(
+                                f"ITR1-{section}-DATE", False,
+                                f"Schedule {section} row {index + 1} loan date "
+                                f"({row.loan_date}) must be from {start_date} through {end_date}.",
+                                f"loan_details_{section.lower()}_list[{index}].loan_date"))
+                        if section == "80EE" and row.total_loan_amount > Decimal("3500000"):
+                            results.append(_make(
+                                "ITR1-80EE-LOAN-LIMIT", False,
+                                f"Schedule 80EE row {index + 1} loan amount exceeds Rs 35,00,000.",
+                                f"loan_details_80ee_list[{index}].total_loan_amount"))
+                        if section in {"80EE", "80EEA"}:
+                            matching_24b = any(
+                                loan.lender_name == row.lender_name
+                                and loan.account_or_reference_number
+                                == row.account_or_reference_number
+                                for loan in inp.loan_details_24b_list
+                            )
+                            if not matching_24b:
+                                results.append(_make(
+                                    f"ITR1-{section}-24B", False,
+                                    f"Schedule {section} row {index + 1} must match a "
+                                    f"Section 24(b) loan by lender and account number.",
+                                    f"loan_details_{section.lower()}_list[{index}]"))
+            elif rows:
+                results.append(_make(
+                    f"ITR1-{section}-STALE", False,
+                    f"Schedule {section} rows require a positive user claim.",
+                    f"loan_details_{section.lower()}_list"))
+
+        if ch6a.amount_80eea > _z and inp.property_stamp_duty_value_80eea is None:
+            results.append(_make(
+                "ITR1-80EEA-STAMP", False,
+                "Section 80EEA requires the property's stamp-duty value.",
+                "property_stamp_duty_value_80eea"))
+        elif ch6a.amount_80eea == _z and inp.property_stamp_duty_value_80eea is not None:
+            results.append(_make(
+                "ITR1-80EEA-STALE-STAMP", False,
+                "Property stamp-duty value for 80EEA requires a positive claim.",
+                "property_stamp_duty_value_80eea"))
 
     # ========================================================================
     # SECTION: Rules 250-251 — 80DD/80U > 0 → Form 10-IA Details Required

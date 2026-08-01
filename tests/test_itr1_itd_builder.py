@@ -33,6 +33,9 @@ from app.schemas.itr1 import (
     Schedule80CEntry,
     Schedule80DD,
     Schedule80EEntry,
+    ITR1Schedule80EELoanEntry,
+    ITR1Schedule80EEALoanEntry,
+    ITR1Schedule80EEBLoanEntry,
     Schedule80U,
     Section80DDBDetails,
     Section80DDBUserType,
@@ -906,7 +909,7 @@ def test_builder_rejects_missing_or_mismatched_schedule_80e() -> None:
             amount_80e=Decimal("40000"),
         )
     })
-    with pytest.raises(ValueError, match="Schedule 80E loan rows"):
+    with pytest.raises(ValueError, match="requires official loan rows"):
         _build(body)
     entry = Schedule80EEntry(
         loan_taken_from=EducationLoanLenderType.BANK,
@@ -919,6 +922,103 @@ def test_builder_rejects_missing_or_mismatched_schedule_80e() -> None:
     )
     with pytest.raises(ValueError, match="not exceed row interest"):
         _build(body.model_copy(update={"schedule_80e_entries": [entry]}))
+
+
+def _deduction_loan_row(
+    section: str,
+    *,
+    interest: str = "40000",
+) -> ITR1Schedule80EELoanEntry | ITR1Schedule80EEALoanEntry | ITR1Schedule80EEBLoanEntry:
+    """Build one complete official loan row for a deduction section."""
+    common = {
+        "loan_taken_from": EducationLoanLenderType.BANK,
+        "lender_name": "State Bank of India",
+        "account_or_reference_number": f"{section}-LOAN-1",
+        "loan_date": date(2016, 4, 1) if section == "80EE" else date(2019, 4, 1),
+        "total_loan_amount": Decimal("3000000"),
+        "outstanding_loan_amount": Decimal("2000000"),
+        "interest_paid": Decimal(interest),
+    }
+    if section == "80EE":
+        return ITR1Schedule80EELoanEntry(**common)
+    if section == "80EEA":
+        return ITR1Schedule80EEALoanEntry(**common)
+    return ITR1Schedule80EEBLoanEntry(
+        **common,
+        vehicle_registration_number="DL01EV1234",
+    )
+
+
+@pytest.mark.parametrize(
+    ("section", "list_field", "interest_key", "total_key"),
+    [
+        ("80EE", "loan_details_80ee_list", "Interest80EE", "TotalInterest80EE"),
+        ("80EEA", "loan_details_80eea_list", "Interest80EEA", "TotalInterest80EEA"),
+        ("80EEB", "loan_details_80eeb_list", "Interest80EEB", "TotalInterest80EEB"),
+    ],
+)
+def test_builder_maps_complete_remaining_loan_schedules(
+    section: str,
+    list_field: str,
+    interest_key: str,
+    total_key: str,
+) -> None:
+    """Every remaining loan schedule must preserve real official row fields."""
+    row = _deduction_loan_row(section)
+    deductions = Chapter6ADeductions(**{f"amount_{section.lower()}": Decimal("40000")})
+    update = {
+        "deductions_chapter6a": deductions,
+        list_field: [row],
+    }
+    if section == "80EEA":
+        update["property_stamp_duty_value_80eea"] = Decimal("4500000")
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update=update)
+    itr1 = _build(body)["ITR"]["ITR1"]
+    schedule = itr1[f"Schedule{section}"]
+    expected_row = {
+        "LoanTknFrom": "B",
+        "BankOrInstnName": "State Bank of India",
+        "LoanAccNoOfBankOrInstnRefNo": f"{section}-LOAN-1",
+        "DateofLoan": row.loan_date.isoformat(),
+        "TotalLoanAmt": 3000000,
+        "LoanOutstndngAmt": 2000000,
+        interest_key: 40000,
+    }
+    if section == "80EEB":
+        expected_row["VehicleRegNo"] = "DL01EV1234"
+    assert schedule[f"Schedule{section}Dtls"] == [expected_row]
+    assert schedule[total_key] == 40000
+    if section == "80EEA":
+        assert schedule["PropStmpDtyVal"] == 4500000
+    chapter = itr1["ITR1_IncomeDeductions"]
+    assert chapter["UsrDeductUndChapVIA"][f"Section{section}"] == 40000
+    assert chapter["DeductUndChapVIA"][f"Section{section}"] == 40000
+
+
+def test_builder_allocates_gti_capped_80eeb_and_preserves_user_claim() -> None:
+    """80EEB output uses eligible interest while user VIA retains raw interest."""
+    row = _deduction_loan_row("80EEB", interest="100000")
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "salary_income": SalaryIncome(gross_salary=Decimal("90000")),
+        "other_sources_income": OtherSourcesIncome(),
+        "deductions_chapter6a": Chapter6ADeductions(amount_80eeb=Decimal("100000")),
+        "loan_details_80eeb_list": [row],
+        "agriculture_income": Decimal("0"),
+    })
+    itr1 = _build(body)["ITR"]["ITR1"]
+    chapter = itr1["ITR1_IncomeDeductions"]
+    assert chapter["UsrDeductUndChapVIA"]["Section80EEB"] == 100000
+    assert chapter["DeductUndChapVIA"]["Section80EEB"] == 40000
+    assert itr1["Schedule80EEB"]["TotalInterest80EEB"] == 40000
+
+
+def test_builder_rejects_legacy_or_incomplete_remaining_loan_schedules() -> None:
+    """Official generation must never fabricate missing lender or account fields."""
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(amount_80ee=Decimal("40000")),
+    })
+    with pytest.raises(ValueError, match="official loan rows"):
+        _build(body)
 
 
 def test_builder_maps_complete_80ddb_details_and_distinct_amounts() -> None:

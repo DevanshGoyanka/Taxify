@@ -298,8 +298,11 @@ def _income_deductions_itr1(
     ded_80e: Decimal = Decimal("0"),
     usr_80e: Optional[Decimal] = None,
     ded_80ee: Decimal = Decimal("0"),
+    usr_80ee: Optional[Decimal] = None,
     ded_80eea: Decimal = Decimal("0"),
+    usr_80eea: Optional[Decimal] = None,
     ded_80eeb: Decimal = Decimal("0"),
+    usr_80eeb: Optional[Decimal] = None,
     ded_80g: Decimal = Decimal("0"),
     ded_80gg: Decimal = Decimal("0"),
     ded_80gga: Decimal = Decimal("0"),
@@ -337,7 +340,13 @@ def _income_deductions_itr1(
             - ded_80ddb
             + (usr_80ddb if usr_80ddb is not None else ded_80ddb)
             - ded_80e
-            + (usr_80e if usr_80e is not None else ded_80e),
+            + (usr_80e if usr_80e is not None else ded_80e)
+            - ded_80ee
+            + (usr_80ee if usr_80ee is not None else ded_80ee)
+            - ded_80eea
+            + (usr_80eea if usr_80eea is not None else ded_80eea)
+            - ded_80eeb
+            + (usr_80eeb if usr_80eeb is not None else ded_80eeb),
             ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1=ded_80ccd1,
             ded_80ccd1b=ded_80ccd1b,
             ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
@@ -347,8 +356,10 @@ def _income_deductions_itr1(
             ded_80u=ded_80u, ded_80tta=ded_80tta,
             ded_80ttb=ded_80ttb,
             ded_80e=(usr_80e if usr_80e is not None else ded_80e),
-            ded_80ee=ded_80ee,
-            ded_80eea=ded_80eea, ded_80eeb=ded_80eeb, ded_80g=ded_80g,
+            ded_80ee=(usr_80ee if usr_80ee is not None else ded_80ee),
+            ded_80eea=(usr_80eea if usr_80eea is not None else ded_80eea),
+            ded_80eeb=(usr_80eeb if usr_80eeb is not None else ded_80eeb),
+            ded_80g=ded_80g,
             ded_80gg=ded_80gg, ded_80gga=ded_80gga, ded_80ggc=ded_80ggc,
             ded_80cch=ded_80cch,
         ),
@@ -569,48 +580,74 @@ def _schedule_80c(input_data: ITR1Input, total_amt: Decimal) -> dict[str, Any]:
     }
 
 
-def _schedule_80e(
+def _schedule_deduction_loan(
     entries: list[Any],
     eligible_interest: Decimal,
+    *,
+    section: str,
+    property_stamp_duty_value: Optional[Decimal] = None,
 ) -> dict[str, Any]:
-    """Build Schedule 80E with eligible interest allocated across real rows."""
+    """Build an official 80EE, 80EEA, or 80EEB schedule."""
+    if section not in {"80E", "80EE", "80EEA", "80EEB"}:
+        raise ValueError(f"Unsupported deduction loan section: {section}")
     if not entries:
-        raise ValueError("A positive Section 80E claim requires Schedule 80E loan rows")
+        raise ValueError(f"A positive Section {section} claim requires official loan rows")
     raw_interest = sum((entry.interest_paid for entry in entries), Decimal("0"))
     eligible_rupees = _to_rupees(eligible_interest)
     if raw_interest <= 0 or eligible_interest > raw_interest:
         raise ValueError(
-            "Eligible Section 80E deduction must be positive and not exceed row interest"
+            f"Eligible Section {section} deduction must be positive and not exceed row interest"
         )
 
     mapped: list[dict[str, Any]] = []
     allocated = 0
+    interest_key = f"Interest{section}"
     for index, entry in enumerate(entries):
         if index == len(entries) - 1:
             row_interest = eligible_rupees - allocated
         else:
-            proportional = entry.interest_paid / raw_interest * eligible_interest
             row_interest = min(
-                max(0, _to_rupees(proportional)),
+                max(0, _to_rupees(entry.interest_paid / raw_interest * eligible_interest)),
                 eligible_rupees - allocated,
             )
             allocated += row_interest
-        mapped.append({
+        row = {
             "LoanTknFrom": entry.loan_taken_from.value,
             "BankOrInstnName": entry.lender_name,
             "LoanAccNoOfBankOrInstnRefNo": entry.account_or_reference_number,
             "DateofLoan": entry.loan_date.isoformat(),
             "TotalLoanAmt": _to_rupees(entry.total_loan_amount),
             "LoanOutstndngAmt": _to_rupees(entry.outstanding_loan_amount),
-            "Interest80E": row_interest,
-        })
-    total_interest = sum(row["Interest80E"] for row in mapped)
-    if total_interest != eligible_rupees:
-        raise ValueError("Schedule 80E emitted rows do not cross-foot")
-    return {
-        "Schedule80EDtls": mapped,
-        "TotalInterest80E": total_interest,
+            interest_key: row_interest,
+        }
+        if section == "80EEB":
+            row["VehicleRegNo"] = entry.vehicle_registration_number
+        mapped.append(row)
+
+    total = sum(row[interest_key] for row in mapped)
+    if total != eligible_rupees:
+        raise ValueError(f"Schedule {section} emitted rows do not cross-foot")
+    schedule = {
+        f"Schedule{section}Dtls": mapped,
+        f"TotalInterest{section}": total,
     }
+    if section == "80EEA":
+        if property_stamp_duty_value is None:
+            raise ValueError("Schedule 80EEA requires property stamp-duty value")
+        schedule["PropStmpDtyVal"] = _to_rupees(property_stamp_duty_value)
+    return schedule
+
+
+def _schedule_80e(
+    entries: list[Any],
+    eligible_interest: Decimal,
+) -> dict[str, Any]:
+    """Build Schedule 80E through the shared official loan mapper."""
+    return _schedule_deduction_loan(
+        entries,
+        eligible_interest,
+        section="80E",
+    )
 
 
 def _disability_schedule_fields(
@@ -1135,8 +1172,11 @@ def build_itr1_json(
             else None
         ),
         ded_80ee=deduction("80EE"),
+        usr_80ee=(input_data.deductions_chapter6a.amount_80ee if input_data else None),
         ded_80eea=deduction("80EEA"),
+        usr_80eea=(input_data.deductions_chapter6a.amount_80eea if input_data else None),
         ded_80eeb=deduction("80EEB"),
+        usr_80eeb=(input_data.deductions_chapter6a.amount_80eeb if input_data else None),
         ded_80g=deduction("80G"),
         ded_80gg=deduction("80GG"),
         ded_80gga=deduction("80GGA"),
@@ -1246,13 +1286,29 @@ def build_itr1_json(
         elif input_data.schedule_80e_entries:
             raise ValueError("Schedule 80E rows require a positive eligible deduction")
 
+        for section in ("80EE", "80EEA", "80EEB"):
+            eligible = deduction(section)
+            rows = input_data.loan_schedule_rows(section)
+            if eligible > 0:
+                itr1[f"Schedule{section}"] = _schedule_deduction_loan(
+                    rows,
+                    eligible,
+                    section=section,
+                    property_stamp_duty_value=(
+                        input_data.property_stamp_duty_value_80eea
+                        if section == "80EEA"
+                        else None
+                    ),
+                )
+            elif rows:
+                raise ValueError(
+                    f"Schedule {section} rows require a positive eligible deduction"
+                )
+
         incomplete_claims = {
             "80G": deduction("80G"),
             "80GGA": deduction("80GGA"),
             "80GGC": deduction("80GGC"),
-            "80EE": deduction("80EE"),
-            "80EEA": deduction("80EEA"),
-            "80EEB": deduction("80EEB"),
         }
         unsupported = [name for name, amount in incomplete_claims.items() if amount > 0]
         if unsupported:

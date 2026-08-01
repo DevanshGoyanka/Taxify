@@ -830,9 +830,10 @@ class ITR1Input(BaseModel):
     schedule_80c_entries: List["Schedule80CEntry"] = Field(default_factory=list)
     schedule_80ccc_entries: List["Schedule80CCCEntry"] = Field(default_factory=list)
     schedule_80e_entries: List["Schedule80EEntry"] = Field(default_factory=list)
-    loan_details_80ee_list: List["Schedule80EELoanEntry"] = Field(default_factory=list)
-    loan_details_80eea_list: List["Schedule80EEALoanEntry"] = Field(default_factory=list)
-    loan_details_80eeb_list: List["Schedule80EEBLoanEntry"] = Field(default_factory=list)
+    loan_details_80ee_list: List["ITR1Schedule80EELoanEntry"] = Field(default_factory=list)
+    loan_details_80eea_list: List["ITR1Schedule80EEALoanEntry"] = Field(default_factory=list)
+    loan_details_80eeb_list: List["ITR1Schedule80EEBLoanEntry"] = Field(default_factory=list)
+    property_stamp_duty_value_80eea: Optional[Decimal] = Field(default=None, ge=0, le=4_500_000)
     loan_details_24b_list: List["LoanDetail"] = Field(default_factory=list)
     tax_payment_entries: List["TaxPaymentDetail"] = Field(default_factory=list)
     bank_accounts: List["BankAccount"] = Field(default_factory=list)
@@ -857,6 +858,26 @@ class ITR1Input(BaseModel):
     schedule_tcs_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
     filing_profile: Optional["ITR1FilingProfile"] = None
     property_profile: Optional["PropertyFilingProfile"] = None
+
+    def loan_schedule_rows(self, section: str) -> list["OfficialDeductionLoanEntry"]:
+        """Return canonical official loan rows and reject incomplete legacy copies."""
+        rows_by_section = {
+            "80EE": self.loan_details_80ee_list,
+            "80EEA": self.loan_details_80eea_list,
+            "80EEB": self.loan_details_80eeb_list,
+        }
+        legacy_by_section = {
+            "80EE": self.loan_details_80ee,
+            "80EEA": self.loan_details_80eea,
+            "80EEB": self.loan_details_80eeb,
+        }
+        if section not in rows_by_section:
+            raise ValueError(f"Unsupported deduction loan section: {section}")
+        if legacy_by_section[section] is not None:
+            raise ValueError(
+                f"Legacy {section} loan details are incomplete; provide official loan rows"
+            )
+        return list(rows_by_section[section])
 
     def disability_schedule_80dd(self) -> Optional["Schedule80DD"]:
         """Return the canonical 80DD schedule, rejecting conflicting copies."""
@@ -1071,14 +1092,14 @@ class Schedule80CCCEntry(BaseModel):
 
 
 class EducationLoanLenderType(str, Enum):
-    """Official lender category for a Section 80E education loan."""
+    """Official lender category shared by deduction loan schedules."""
 
     BANK = "B"
     INSTITUTION = "I"
 
 
-class Schedule80EEntry(BaseModel):
-    """Complete official loan row for Schedule 80E."""
+class OfficialDeductionLoanEntry(BaseModel):
+    """Common official lender and loan fields for interest deductions."""
 
     loan_taken_from: EducationLoanLenderType
     lender_name: str = Field(min_length=1, max_length=125)
@@ -1091,6 +1112,10 @@ class Schedule80EEntry(BaseModel):
     total_loan_amount: Decimal = Field(ge=0)
     outstanding_loan_amount: Decimal = Field(ge=0)
     interest_paid: Decimal = Field(ge=0)
+
+
+class Schedule80EEntry(OfficialDeductionLoanEntry):
+    """Complete official loan row for Schedule 80E."""
 
 
 class LoanDetails(BaseModel):
@@ -1107,15 +1132,29 @@ class DeductionLoanEntry(LoanDetails):
 
 
 class Schedule80EELoanEntry(DeductionLoanEntry):
-    """Per-loan entry for Schedule 80EE."""
+    """Legacy shared loan row retained for ITR-4 compatibility."""
 
 
 class Schedule80EEALoanEntry(DeductionLoanEntry):
-    """Per-loan entry for Schedule 80EEA."""
+    """Legacy shared loan row retained for ITR-4 compatibility."""
 
 
 class Schedule80EEBLoanEntry(DeductionLoanEntry):
-    """Per-loan entry for Schedule 80EEB."""
+    """Legacy shared loan row retained for ITR-4 compatibility."""
+
+
+class ITR1Schedule80EELoanEntry(OfficialDeductionLoanEntry):
+    """Complete official ITR-1 loan row for Schedule 80EE."""
+
+
+class ITR1Schedule80EEALoanEntry(OfficialDeductionLoanEntry):
+    """Complete official ITR-1 loan row for Schedule 80EEA."""
+
+
+class ITR1Schedule80EEBLoanEntry(OfficialDeductionLoanEntry):
+    """Complete official ITR-1 electric-vehicle loan row for Schedule 80EEB."""
+
+    vehicle_registration_number: str = Field(min_length=1, max_length=11)
 
 
 class HRADetails(BaseModel):
@@ -1141,6 +1180,12 @@ class RepresentativeDetails(BaseModel):
 
 class LoanDetail(LoanDetails):
     """Per-property loan detail entry."""
+    account_or_reference_number: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=20,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9/-]*$",
+    )
     interest_paid_self_occupied: Decimal = Field(default=Decimal("0"), ge=0)
     interest_paid_let_out: Decimal = Field(default=Decimal("0"), ge=0)
 
