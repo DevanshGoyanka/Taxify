@@ -20,6 +20,8 @@ from app.schemas.itr1 import (
     DependentRelationship,
     DisabilityCategory,
     DisabilitySeverity,
+    Donation80G,
+    DonationAddress,
     EducationLoanLenderType,
     FilingAddress,
     HousePropertyIncome,
@@ -1018,6 +1020,74 @@ def test_builder_rejects_legacy_or_incomplete_remaining_loan_schedules() -> None
         "deductions_chapter6a": Chapter6ADeductions(amount_80ee=Decimal("40000")),
     })
     with pytest.raises(ValueError, match="official loan rows"):
+        _build(body)
+
+
+def test_builder_maps_complete_schedule_80g_and_user_eligible_amounts() -> None:
+    """Schedule 80G must serialize real donee rows and computed eligibility."""
+    donation = Donation80G(
+        non_cash_amount=Decimal("20000"),
+        qualifying_percentage="50%",
+        limit_on_deduction="without limit",
+        donee_name="Approved Charitable Trust",
+        donee_pan="ABCDE1234F",
+        approval_reference_number="AA/80G/2025",
+        address=DonationAddress(
+            address_line="1 Charity Road",
+            city_or_district="Mumbai",
+            state_code="27",
+            pin_code=400001,
+        ),
+        ifsc_code="SBIN0000001",
+        transaction_ref="TXN-80G-1",
+    )
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80g=Decimal("15000"),
+            donations_80g=[donation],
+        ),
+    })
+    itr1 = _build(body)["ITR"]["ITR1"]
+    schedule = itr1["Schedule80G"]
+    row = schedule["Don50PercentNoApprReqd"]["DoneeWithPan"][0]
+    assert row == {
+        "DoneeWithPanName": "Approved Charitable Trust",
+        "DoneePAN": "ABCDE1234F",
+        "ArnNbr": "AA/80G/2025",
+        "AddressDetail": {
+            "AddrDetail": "1 Charity Road",
+            "CityOrTownOrDistrict": "Mumbai",
+            "StateCode": "27",
+            "PinCode": 400001,
+        },
+        "DonationAmtCash": 0,
+        "DonationAmtOtherMode": 20000,
+        "TransactionRefNum": "TXN-80G-1",
+        "IFSCCode": "SBIN0000001",
+        "DonationAmt": 20000,
+        "EligibleDonationAmt": 10000,
+    }
+    assert schedule["TotalDonationsUs80G"] == 20000
+    assert schedule["TotalEligibleDonationsUs80G"] == 10000
+    chapter = itr1["ITR1_IncomeDeductions"]
+    assert chapter["UsrDeductUndChapVIA"]["Section80G"] == 15000
+    assert chapter["DeductUndChapVIA"]["Section80G"] == 10000
+
+
+def test_builder_rejects_incomplete_schedule_80g_identity() -> None:
+    """Official Schedule 80G generation must not invent donee details."""
+    donation = Donation80G(
+        non_cash_amount=Decimal("10000"),
+        qualifying_percentage="100%",
+        limit_on_deduction="without limit",
+    )
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80g=Decimal("10000"),
+            donations_80g=[donation],
+        ),
+    })
+    with pytest.raises(ValueError, match="donee identity and address"):
         _build(body)
 
 

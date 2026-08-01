@@ -304,6 +304,7 @@ def _income_deductions_itr1(
     ded_80eeb: Decimal = Decimal("0"),
     usr_80eeb: Optional[Decimal] = None,
     ded_80g: Decimal = Decimal("0"),
+    usr_80g: Optional[Decimal] = None,
     ded_80gg: Decimal = Decimal("0"),
     ded_80gga: Decimal = Decimal("0"),
     ded_80ggc: Decimal = Decimal("0"),
@@ -346,7 +347,9 @@ def _income_deductions_itr1(
             - ded_80eea
             + (usr_80eea if usr_80eea is not None else ded_80eea)
             - ded_80eeb
-            + (usr_80eeb if usr_80eeb is not None else ded_80eeb),
+            + (usr_80eeb if usr_80eeb is not None else ded_80eeb)
+            - ded_80g
+            + (usr_80g if usr_80g is not None else ded_80g),
             ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1=ded_80ccd1,
             ded_80ccd1b=ded_80ccd1b,
             ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
@@ -359,7 +362,7 @@ def _income_deductions_itr1(
             ded_80ee=(usr_80ee if usr_80ee is not None else ded_80ee),
             ded_80eea=(usr_80eea if usr_80eea is not None else ded_80eea),
             ded_80eeb=(usr_80eeb if usr_80eeb is not None else ded_80eeb),
-            ded_80g=ded_80g,
+            ded_80g=(usr_80g if usr_80g is not None else ded_80g),
             ded_80gg=ded_80gg, ded_80gga=ded_80gga, ded_80ggc=ded_80ggc,
             ded_80cch=ded_80cch,
         ),
@@ -580,6 +583,95 @@ def _schedule_80c(input_data: ITR1Input, total_amt: Decimal) -> dict[str, Any]:
     }
 
 
+def _donation_address(address: Any) -> dict[str, Any]:
+    """Serialize one official donation-recipient address."""
+    return {
+        "AddrDetail": address.address_line,
+        "CityOrTownOrDistrict": address.city_or_district,
+        "StateCode": address.state_code,
+        "PinCode": address.pin_code,
+    }
+
+
+def _schedule_80g(details: Any) -> dict[str, Any]:
+    """Serialize a computed Section 80G result without recalculating eligibility."""
+    category_specs = {
+        "100_without_limit": (
+            "Don100Percent", "TotDon100PercentCash",
+            "TotDon100PercentOtherMode", "TotDon100Percent",
+            "TotEligibleDon100Percent",
+        ),
+        "50_without_limit": (
+            "Don50PercentNoApprReqd", "TotDon50PercentNoApprReqdCash",
+            "TotDon50PercentNoApprReqdOtherMode", "TotDon50PercentNoApprReqd",
+            "TotEligibleDon50Percent",
+        ),
+        "100_with_limit": (
+            "Don100PercentApprReqd", "TotDon100PercentApprReqdCash",
+            "TotDon100PercentApprReqdOtherMode", "TotDon100PercentApprReqd",
+            "TotEligibleDon100PercentApprReqd",
+        ),
+        "50_with_limit": (
+            "Don50PercentApprReqd", "TotDon50PercentApprReqdCash",
+            "TotDon50PercentApprReqdOtherMode", "TotDon50PercentApprReqd",
+            "TotEligibleDon50PercentApprReqd",
+        ),
+    }
+    schedule: dict[str, Any] = {}
+    emitted_eligible = 0
+    for category_key, keys in category_specs.items():
+        category = details.categories.get(category_key)
+        if category is None or not category.rows:
+            continue
+        rows = []
+        category_eligible = _to_rupees(category.eligible_amount)
+        allocated = 0
+        for index, computed in enumerate(category.rows):
+            source = computed.source
+            if not source.donee_name or not source.donee_pan or source.address is None:
+                raise ValueError("Complete donee identity and address are required for Schedule 80G")
+            eligible = (
+                category_eligible - allocated
+                if index == len(category.rows) - 1
+                else min(_to_rupees(computed.eligible_amount), category_eligible - allocated)
+            )
+            allocated += eligible
+            row = {
+                "DoneeWithPanName": source.donee_name,
+                "DoneePAN": source.donee_pan,
+                "AddressDetail": _donation_address(source.address),
+                "DonationAmtCash": _to_rupees(source.cash_amount),
+                "DonationAmtOtherMode": _to_rupees(source.non_cash_amount),
+                "DonationAmt": _to_rupees(computed.gross_amount),
+                "EligibleDonationAmt": eligible,
+            }
+            if source.approval_reference_number:
+                row["ArnNbr"] = source.approval_reference_number
+            if source.transaction_ref:
+                row["TransactionRefNum"] = source.transaction_ref
+            if source.ifsc_code:
+                row["IFSCCode"] = source.ifsc_code
+            rows.append(row)
+        object_key, cash_key, other_key, gross_key, eligible_key = keys
+        schedule[object_key] = {
+            "DoneeWithPan": rows,
+            cash_key: sum(row["DonationAmtCash"] for row in rows),
+            other_key: sum(row["DonationAmtOtherMode"] for row in rows),
+            gross_key: sum(row["DonationAmt"] for row in rows),
+            eligible_key: sum(row["EligibleDonationAmt"] for row in rows),
+        }
+        emitted_eligible += schedule[object_key][eligible_key]
+    schedule.update({
+        "TotalDonationsUs80GCash": _to_rupees(details.cash_amount),
+        "TotalDonationsUs80GOtherMode": _to_rupees(details.other_mode_amount),
+        "TotalDonationsUs80G": _to_rupees(details.gross_amount),
+        "TotalEligibleDonationsUs80G": emitted_eligible,
+    })
+    if emitted_eligible != _to_rupees(details.allowed_deduction):
+        raise ValueError("Schedule 80G eligible rows do not cross-foot")
+    return schedule
+
+
 def _schedule_deduction_loan(
     entries: list[Any],
     eligible_interest: Decimal,
@@ -708,27 +800,6 @@ def _schedule_80u(schedule: Any, computed_deduction: Decimal) -> dict[str, Any]:
     if schedule is None:
         raise ValueError("A positive Section 80U claim requires Schedule 80U details")
     return _disability_schedule_fields(schedule, computed_deduction, "80U")
-
-
-def _schedule_80g(
-    total_donations_cash: Decimal,
-    total_donations_other: Decimal,
-) -> dict:
-    result: dict[str, Any] = {
-        "TotalDonationsUs80GCash": _to_rupees(total_donations_cash),
-        "TotalDonationsUs80GOtherMode": _to_rupees(total_donations_other),
-        "TotalDonationsUs80G": _to_rupees(total_donations_cash + total_donations_other),
-        "TotalEligibleDonationsUs80G": 0,
-    }
-    if total_donations_cash > 0 or total_donations_other > 0:
-        result["Don100Percent"] = {
-            "DoneeWithPan": [{"NameOfDonee": "Donee", "PANOfDonee": "AAAAA0000A", "AmountOfDonation": _to_rupees(total_donations_cash + total_donations_other)}],
-            "TotDon100PercentCash": _to_rupees(total_donations_cash),
-            "TotDon100PercentOtherMode": _to_rupees(total_donations_other),
-            "TotDon100Percent": _to_rupees(total_donations_cash + total_donations_other),
-            "TotEligibleDon100Percent": 0,
-        }
-    return result
 
 
 def _schedule_ea10_13a(
@@ -1178,6 +1249,7 @@ def build_itr1_json(
         ded_80eeb=deduction("80EEB"),
         usr_80eeb=(input_data.deductions_chapter6a.amount_80eeb if input_data else None),
         ded_80g=deduction("80G"),
+        usr_80g=(input_data.deductions_chapter6a.amount_80g if input_data else None),
         ded_80gg=deduction("80GG"),
         ded_80gga=deduction("80GGA"),
         ded_80ggc=deduction("80GGC"),
@@ -1305,8 +1377,15 @@ def build_itr1_json(
                     f"Schedule {section} rows require a positive eligible deduction"
                 )
 
+        details_80g = result.schedules["deductions"].section_details.get("80G")
+        if deduction("80G") > 0:
+            if details_80g is None or not details_80g.categories:
+                raise ValueError("Complete official Schedule 80G donation rows are required")
+            itr1["Schedule80G"] = _schedule_80g(details_80g)
+        elif input_data.deductions_chapter6a.donations_80g:
+            raise ValueError("Schedule 80G rows require a positive eligible deduction")
+
         incomplete_claims = {
-            "80G": deduction("80G"),
             "80GGA": deduction("80GGA"),
             "80GGC": deduction("80GGC"),
         }

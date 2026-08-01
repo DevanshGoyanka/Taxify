@@ -35,10 +35,13 @@ from app.engine.schedules.deductions import (
 class DeductionResult:
     total: Decimal = Decimal("0")
     breakdown: dict = None
+    section_details: dict = None
 
     def __post_init__(self):
         if self.breakdown is None:
             self.breakdown = {}
+        if self.section_details is None:
+            self.section_details = {}
 
 
 def _cap_breakdown_to_gti(result: DeductionResult, gti: Decimal) -> None:
@@ -190,11 +193,21 @@ def compute_all(
     # Per CBDT: adjusted GTI for 80G/80GG excludes LTCG 112A and STCG 111A
     adjusted_gti = max(Decimal("0"), gti - deductions_before_80g - cg_112a_income - cg_111a_income)
 
-    r_80g = section_80g.compute(ded, adjusted_gti, regime)
-    _add("80G", r_80g)
-
-    r_80gg = section_80gg.compute(ded, adjusted_gti, regime, hra_exempt_amount=hra_exempt_amount)
+    # 80GG is computed first because an allowed 80GG deduction reduces the
+    # adjusted GTI used by Section 80G's shared 10% qualifying ceiling.
+    r_80gg = section_80gg.compute(
+        ded,
+        adjusted_gti,
+        regime,
+        hra_exempt_amount=hra_exempt_amount,
+    )
     _add("80GG", r_80gg)
+
+    adjusted_gti_80g = max(Decimal("0"), adjusted_gti - r_80gg)
+    details_80g = section_80g.compute_details(ded, adjusted_gti_80g, regime)
+    result.section_details["80G"] = details_80g
+    r_80g = details_80g.allowed_deduction
+    _add("80G", r_80g)
 
     r_80gga = section_80gga.compute(ded, regime)
     _add("80GGA", r_80gga)

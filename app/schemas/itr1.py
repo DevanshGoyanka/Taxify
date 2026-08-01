@@ -23,7 +23,7 @@ from enum import Enum
 from typing import List, Literal, Optional
 from datetime import date
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 OFFICIAL_COUNTRY_CODES = frozenset(
@@ -368,19 +368,97 @@ class OtherSourcesIncome(BaseModel):
     )
 
 
+class DonationAddress(BaseModel):
+    """Official Indian address for a donation recipient."""
+
+    address_line: str = Field(min_length=1, max_length=200)
+    city_or_district: str = Field(min_length=1, max_length=50)
+    state_code: str = Field(pattern=r"^(0[1-9]|[12][0-9]|3[0-7])$")
+    pin_code: int = Field(ge=100000, le=999999)
+
+
+class Donation80GCategory(str, Enum):
+    """Canonical Section 80G category and official frontend wire value."""
+
+    HUNDRED_WITHOUT_LIMIT = "100_NO_APPROVAL"
+    FIFTY_WITHOUT_LIMIT = "50_NO_APPROVAL"
+    HUNDRED_WITH_LIMIT = "100_APPROVAL_REQD"
+    FIFTY_WITH_LIMIT = "50_APPROVAL_REQD"
+
+    @property
+    def qualifying_percentage(self) -> str:
+        """Return the statutory qualifying percentage label."""
+        return "100%" if self in {
+            Donation80GCategory.HUNDRED_WITHOUT_LIMIT,
+            Donation80GCategory.HUNDRED_WITH_LIMIT,
+        } else "50%"
+
+    @property
+    def has_qualifying_limit(self) -> bool:
+        """Return whether the category uses the shared adjusted-GTI limit."""
+        return self in {
+            Donation80GCategory.HUNDRED_WITH_LIMIT,
+            Donation80GCategory.FIFTY_WITH_LIMIT,
+        }
+
+
 class Donation80G(BaseModel):
     """
     Represents an individual donation entry for Section 80G deduction.
     """
     cash_amount: Decimal = Field(default=Decimal("0"), ge=0, description="Amount donated in cash.")
     non_cash_amount: Decimal = Field(default=Decimal("0"), ge=0, description="Amount donated via bank/cheque/digital modes.")
-    qualifying_percentage: str = Field(default="100%", description="Percentage of deduction allowed: '50%' or '100%'.")
-    limit_on_deduction: str = Field(default="without limit", description="Whether subject to 10% adjusted GTI limit: 'with limit' or 'without limit'.")
-    donee_pan: Optional[str] = None
+    category: Optional[Donation80GCategory] = None
+    qualifying_percentage: Literal["50%", "100%"] = Field(
+        default="100%",
+        description="Legacy percentage; use category.",
+    )
+    limit_on_deduction: Literal["with limit", "without limit"] = Field(
+        default="without limit",
+        description="Legacy limit label; use category.",
+    )
+    donee_name: Optional[str] = Field(default=None, min_length=1, max_length=125)
+    donee_pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    approval_reference_number: Optional[str] = Field(default=None, max_length=25)
+    address: Optional[DonationAddress] = None
     donation_category: str = "A"
-    ifsc_code: Optional[str] = None
-    transaction_ref: Optional[str] = Field(default=None, max_length=100)
+    ifsc_code: Optional[str] = Field(
+        default=None,
+        max_length=11,
+        pattern=r"^[A-Z]{4}0[A-Z0-9]{6}$",
+    )
+    transaction_ref: Optional[str] = Field(default=None, max_length=50)
     total_donation: Optional[Decimal] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_category_representations(self) -> "Donation80G":
+        """Reject conflicting canonical and legacy category representations."""
+        if self.category is None:
+            return self
+        expected_code = {
+            Donation80GCategory.HUNDRED_WITHOUT_LIMIT: "A",
+            Donation80GCategory.FIFTY_WITHOUT_LIMIT: "B",
+            Donation80GCategory.HUNDRED_WITH_LIMIT: "C",
+            Donation80GCategory.FIFTY_WITH_LIMIT: "D",
+        }[self.category]
+        legacy_is_default = (
+            self.qualifying_percentage == "100%"
+            and self.limit_on_deduction == "without limit"
+            and self.donation_category == "A"
+        )
+        if not legacy_is_default and (
+            self.qualifying_percentage != self.category.qualifying_percentage
+            or (self.limit_on_deduction == "with limit")
+            != self.category.has_qualifying_limit
+            or self.donation_category != expected_code
+        ):
+            raise ValueError("Conflicting Section 80G category representations")
+        self.qualifying_percentage = self.category.qualifying_percentage
+        self.limit_on_deduction = (
+            "with limit" if self.category.has_qualifying_limit else "without limit"
+        )
+        self.donation_category = expected_code
+        return self
 
 
 class Section80DDBUserType(str, Enum):

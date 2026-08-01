@@ -7,7 +7,10 @@ from app.engine.calculators.itr1 import compute as compute_itr1
 from app.engine.calculators.itr4 import compute as compute_itr4
 from app.engine.common.interest import compute_234b, compute_234c
 from app.engine.schedules.deductions.section_80d import compute as compute_80d
-from app.engine.schedules.deductions.section_80g import compute as compute_80g
+from app.engine.schedules.deductions.section_80g import (
+    compute as compute_80g,
+    compute_details as compute_80g_details,
+)
 from app.routers.tax import compute_tax_summary
 from app.schemas.itr1 import (
     AgeBracket,
@@ -239,6 +242,7 @@ def test_80g_limited_donations_share_one_adjusted_gti_ceiling() -> None:
     """Limited-category donations share one 10 percent adjusted-GTI ceiling."""
     deduction = compute_80g(
         Chapter6ADeductions(
+            amount_80g=Decimal("20000"),
             donations_80g=[
                 Donation80G(
                     non_cash_amount=Decimal("10000"),
@@ -257,6 +261,67 @@ def test_80g_limited_donations_share_one_adjusted_gti_ceiling() -> None:
     )
 
     assert deduction == Decimal("10000")
+
+
+def test_80g_cash_limit_is_aggregated_by_donee_pan() -> None:
+    """Multiple cash rows for one PAN share the statutory Rs 2,000 threshold."""
+    details = compute_80g_details(
+        Chapter6ADeductions(
+            amount_80g=Decimal("3000"),
+            donations_80g=[
+                Donation80G(
+                    cash_amount=Decimal("1500"),
+                    donee_pan="ABCDE1234F",
+                ),
+                Donation80G(
+                    cash_amount=Decimal("1500"),
+                    donee_pan="ABCDE1234F",
+                ),
+            ],
+        ),
+        adjusted_gti=Decimal("100000"),
+        regime=TaxRegime.OLD,
+    )
+
+    assert details.gross_amount == Decimal("3000")
+    assert details.statutory_eligible == Decimal("0")
+    assert details.allowed_deduction == Decimal("0")
+
+
+def test_80g_user_claim_caps_structured_eligibility() -> None:
+    """Structured statutory eligibility cannot exceed the taxpayer's claim."""
+    details = compute_80g_details(
+        Chapter6ADeductions(
+            amount_80g=Decimal("6000"),
+            donations_80g=[Donation80G(non_cash_amount=Decimal("10000"))],
+        ),
+        adjusted_gti=Decimal("100000"),
+        regime=TaxRegime.OLD,
+    )
+
+    assert details.statutory_eligible == Decimal("10000")
+    assert details.allowed_deduction == Decimal("6000")
+    assert sum(
+        category.eligible_amount for category in details.categories.values()
+    ) == Decimal("6000")
+
+
+def test_80g_zero_user_claim_stays_zero_with_structured_rows() -> None:
+    """Structured donations must not create a deduction the taxpayer did not claim."""
+    details = compute_80g_details(
+        Chapter6ADeductions(
+            amount_80g=Decimal("0"),
+            donations_80g=[Donation80G(non_cash_amount=Decimal("10000"))],
+        ),
+        adjusted_gti=Decimal("100000"),
+        regime=TaxRegime.OLD,
+    )
+
+    assert details.statutory_eligible == Decimal("10000")
+    assert details.allowed_deduction == Decimal("0")
+    assert sum(
+        category.eligible_amount for category in details.categories.values()
+    ) == Decimal("0")
 
 
 def test_tax_summary_maps_canonical_employers_without_double_counting() -> None:

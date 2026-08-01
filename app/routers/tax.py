@@ -9,7 +9,8 @@ from app.db.database import get_db
 from app.db.models import User
 from app.schemas.itr1 import (
     ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
-    Chapter6ADeductions, CapitalGainsIncome, Donation80G, TDS1Entry, TDS2Entry,
+    Chapter6ADeductions, CapitalGainsIncome, Donation80G, Donation80GCategory,
+    DonationAddress, TDS1Entry, TDS2Entry,
     TCSEntry, PropertyType, AgeBracket, TaxRegime,
 )
 from app.schemas.itr4 import (
@@ -275,24 +276,36 @@ def compute_tax_summary(
 
     donation_rows = _records(payload, "donationEntries")
     donations = []
-    category_map = {
-        "100_NO_APPROVAL": ("100%", "without limit"),
-        "50_NO_APPROVAL": ("50%", "without limit"),
-        "100_APPROVAL_REQD": ("100%", "with limit"),
-        "50_APPROVAL_REQD": ("50%", "with limit"),
-    }
     for row in donation_rows:
-        percentage, limit = category_map.get(
-            str(row.get("category", "100_NO_APPROVAL")),
-            ("100%", "without limit"),
-        )
+        category_value = str(row.get("category", "100_NO_APPROVAL"))
+        try:
+            category = Donation80GCategory(category_value)
+        except ValueError:
+            category = Donation80GCategory.HUNDRED_WITHOUT_LIMIT
+        address = None
+        if any(row.get(key) for key in ("addrDetail", "city", "stateCode", "pinCode")):
+            address = DonationAddress(
+                address_line=str(row.get("addrDetail", "")),
+                city_or_district=str(row.get("city", "")),
+                state_code=str(row.get("stateCode", "")),
+                pin_code=int(row.get("pinCode", 0)),
+            )
         donations.append(Donation80G(
+            category=category,
             cash_amount=_money(row.get("donationAmtCash")),
             non_cash_amount=_money(row.get("donationAmtOtherMode")),
-            qualifying_percentage=percentage,
-            limit_on_deduction=limit,
+            donee_name=row.get("doneeName") or None,
+            donee_pan=row.get("doneePAN") or None,
+            approval_reference_number=row.get("arnNumber") or None,
+            address=address,
+            transaction_ref=row.get("transactionRefNum") or None,
+            ifsc_code=row.get("ifscCode") or None,
         ))
 
+    structured_80g_claim = sum(
+        (donation.cash_amount + donation.non_cash_amount for donation in donations),
+        Decimal("0"),
+    )
     ded_input = Chapter6ADeductions(
         amount_80c=total_80c,
         amount_80ccd1b=_money(payload.get("s80CCD1B")),
@@ -305,7 +318,7 @@ def compute_tax_summary(
         amount_80e=_money(payload.get("s80E")),
         amount_80tta=_money(payload.get("s80TTA")),
         amount_80ttb=_money(payload.get("s80TTB")),
-        amount_80g=_money(payload.get("s80G")),
+        amount_80g=(structured_80g_claim if donations else _money(payload.get("s80G"))),
         donations_80g=donations or None,
     )
     
