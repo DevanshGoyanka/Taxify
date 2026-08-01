@@ -267,11 +267,13 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     f"Expected 11 characters: first 4 letters, 5th is 0, last 6 alphanumeric.",
                     f"bank_accounts[{i}].ifsc_code",
                 ))
-            if ba.account_type not in ("savings", "current", "nro", "nre"):
+            from app.schemas.itr1 import BankAccountType
+            valid_account_types = {account_type.value for account_type in BankAccountType}
+            if ba.account_type not in valid_account_types:
                 results.append(_make(
                     "ITR1-R263", False,
                     f"Bank account #{i+1}: account_type '{ba.account_type}' is invalid. "
-                    f"Must be one of: savings, current, nro, nre.",
+                    f"Must be one of: {', '.join(sorted(valid_account_types))}.",
                     f"bank_accounts[{i}].account_type",
                 ))
 

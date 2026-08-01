@@ -833,7 +833,7 @@ class Schedule80CEntry(BaseModel):
     """Per-row entry for Schedule 80C."""
     amount: Decimal = Field(default=Decimal("0"), ge=0)
     payment_type: Optional[str] = None
-    identifier_number: Optional[str] = Field(default=None, max_length=100)
+    identifier_number: Optional[str] = Field(default=None, max_length=50)
 
 
 class Schedule80CCCEntry(BaseModel):
@@ -910,10 +910,34 @@ class SecondaryAddress(BaseModel):
     pin_code: Optional[str] = Field(default=None, max_length=10)
 
 
+class BankAccountType(str, Enum):
+    """Supported bank account types and their official ITD codes."""
+
+    SAVINGS = "savings"
+    CURRENT = "current"
+    CASH_CREDIT = "cash_credit"
+    OVERDRAFT = "overdraft"
+    NRO = "nro"
+    NRE = "nre"
+
+    @property
+    def itd_code(self) -> str:
+        """Return the corresponding AY 2026-27 ITD account code."""
+        return {
+            BankAccountType.SAVINGS: "SB",
+            BankAccountType.CURRENT: "CA",
+            BankAccountType.CASH_CREDIT: "CC",
+            BankAccountType.OVERDRAFT: "OD",
+            BankAccountType.NRO: "NRO",
+            BankAccountType.NRE: "OTH",
+        }[self]
+
+
 class BankAccount(BaseModel):
     """Bank account disclosed for refund credit."""
-    account_number: str = Field(min_length=1, max_length=34)
-    ifsc_code: str = Field(min_length=1, max_length=11)
+    account_number: str = Field(min_length=1, max_length=20)
+    ifsc_code: str = Field(min_length=11, max_length=11)
+    bank_name: Optional[str] = Field(default=None, min_length=1, max_length=125)
     account_type: str
     is_primary: bool = False
 
