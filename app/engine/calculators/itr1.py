@@ -331,6 +331,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         property_stamp_duty_value_80eea=input_data.property_stamp_duty_value_80eea if input_data else None,
         schedule_80dd=schedule_80dd,
         schedule_80u=schedule_80u,
+        schedule_80d=input_data.schedule_80d,
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total

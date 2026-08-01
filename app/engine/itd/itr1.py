@@ -1430,25 +1430,28 @@ def build_itr1_json(
 
         if deduction("80D") > 0:
             ded_input = input_data.deductions_chapter6a
+            details_80d = ded_sched.section_details.get("80D") if ded_sched else None
             schedule_80d = input_data.schedule_80d
+            if details_80d is None:
+                raise ValueError("Section 80D computation details are missing")
             self_flag = (
                 "S" if schedule_80d and schedule_80d.not_claiming_self
-                else "Y" if input_data.age_bracket.value != "below_60"
+                else "Y" if details_80d.senior_self
                 else "N"
             )
             parents_flag = (
                 "P" if schedule_80d and schedule_80d.not_claiming_parents
-                else "Y" if ded_input.has_parents_senior
+                else "Y" if details_80d.senior_parents
                 else "N"
             )
             itr1["Schedule80D"] = _schedule_80d(
                 senior_flag_self=self_flag,
                 senior_flag_parents=parents_flag,
-                self_premium=ded_input.amount_80d_self_family,
-                parents_premium=ded_input.amount_80d_parents,
-                preventive_self=ded_input.amount_80d_preventive_self,
-                preventive_parents=ded_input.amount_80d_preventive_parents,
-                eligible_deduction=deduction("80D"),
+                self_premium=details_80d.self_premium,
+                parents_premium=details_80d.parents_premium,
+                preventive_self=details_80d.preventive_self,
+                preventive_parents=details_80d.preventive_parents,
+                eligible_deduction=details_80d.allowed_deduction,
             )
 
         schedule_80dd = input_data.disability_schedule_80dd()

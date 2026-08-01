@@ -12,6 +12,7 @@ from app.schemas.itr1 import (
     Schedule80GGC,
     Schedule80DD,
     Schedule80U,
+    Schedule80D,
 )
 from app.engine.schedules.deductions import (
     section_80c,
@@ -110,6 +111,7 @@ def compute_all(
     property_stamp_duty_value_80eea: Optional[Decimal] = None,
     schedule_80dd: Optional[Schedule80DD] = None,
     schedule_80u: Optional[Schedule80U] = None,
+    schedule_80d: Optional[Schedule80D] = None,
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
@@ -155,7 +157,15 @@ def compute_all(
     r_80ccd1b = section_80ccd1b.compute(ded, regime)
     _add("80CCD(1B)", r_80ccd1b)
 
-    r_80d = section_80d.compute(ded, age_bracket, regime, is_parents_senior=is_parents_senior)
+    details_80d = section_80d.compute_details(
+        ded,
+        age_bracket,
+        regime,
+        schedule=schedule_80d,
+        is_parents_senior=is_parents_senior,
+    )
+    result.section_details["80D"] = details_80d
+    r_80d = details_80d.allowed_deduction
     _add("80D", r_80d)
 
     details_80dd = section_80dd.compute_details(
