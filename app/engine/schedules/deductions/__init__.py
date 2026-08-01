@@ -10,6 +10,8 @@ from app.schemas.itr1 import (
     OtherSourcesIncome,
     Schedule80GGA,
     Schedule80GGC,
+    Schedule80DD,
+    Schedule80U,
 )
 from app.engine.schedules.deductions import (
     section_80c,
@@ -106,6 +108,8 @@ def compute_all(
     loan_rows_80eea: Optional[list] = None,
     loan_rows_80eeb: Optional[list] = None,
     property_stamp_duty_value_80eea: Optional[Decimal] = None,
+    schedule_80dd: Optional[Schedule80DD] = None,
+    schedule_80u: Optional[Schedule80U] = None,
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
@@ -154,7 +158,11 @@ def compute_all(
     r_80d = section_80d.compute(ded, age_bracket, regime, is_parents_senior=is_parents_senior)
     _add("80D", r_80d)
 
-    r_80dd = section_80dd.compute(ded, regime, is_severe=is_80dd_severe)
+    details_80dd = section_80dd.compute_details(
+        ded, schedule_80dd, regime, is_severe=is_80dd_severe,
+    )
+    result.section_details["80DD"] = details_80dd
+    r_80dd = details_80dd.allowed_deduction
     _add("80DD", r_80dd)
 
     r_80ddb = section_80ddb.compute(
@@ -165,7 +173,11 @@ def compute_all(
     )
     _add("80DDB", r_80ddb)
 
-    r_80u = section_80u.compute(ded, regime, is_severe=is_80u_severe)
+    details_80u = section_80u.compute_details(
+        ded, schedule_80u, regime, is_severe=is_80u_severe,
+    )
+    result.section_details["80U"] = details_80u
+    r_80u = details_80u.allowed_deduction
     _add("80U", r_80u)
 
     r_80tta = section_80tta.compute(ded, os_input, age_bracket, regime)

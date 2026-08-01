@@ -1453,15 +1453,21 @@ def build_itr1_json(
 
         schedule_80dd = input_data.disability_schedule_80dd()
         schedule_80u = input_data.disability_schedule_80u()
+        details_80dd = ded_sched.section_details.get("80DD") if ded_sched else None
+        details_80u = ded_sched.section_details.get("80U") if ded_sched else None
         ded_80dd = deduction("80DD")
         ded_80u = deduction("80U")
         if ded_80dd > 0:
-            itr1["Schedule80DD"] = _schedule_80dd(schedule_80dd, ded_80dd)
+            if details_80dd is None or details_80dd.source is None:
+                raise ValueError("A positive Section 80DD claim requires Schedule 80DD details")
+            itr1["Schedule80DD"] = _schedule_80dd(details_80dd.source, ded_80dd)
         elif schedule_80dd is not None:
             raise ValueError("Schedule 80DD details require a positive 80DD deduction")
 
         if ded_80u > 0:
-            itr1["Schedule80U"] = _schedule_80u(schedule_80u, ded_80u)
+            if details_80u is None or details_80u.source is None:
+                raise ValueError("A positive Section 80U claim requires Schedule 80U details")
+            itr1["Schedule80U"] = _schedule_80u(details_80u.source, ded_80u)
         elif schedule_80u is not None:
             raise ValueError("Schedule 80U details require a positive 80U deduction")
 

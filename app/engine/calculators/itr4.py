@@ -302,6 +302,8 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         loan_rows_80ee=getattr(input_data, "loan_details_80ee_list", None),
         loan_rows_80eea=getattr(input_data, "loan_details_80eea_list", None),
         loan_rows_80eeb=getattr(input_data, "loan_details_80eeb_list", None),
+        schedule_80dd=getattr(ded_input, "schedule_80dd", None) if ded_input else None,
+        schedule_80u=getattr(ded_input, "schedule_80u", None) if ded_input else None,
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total
