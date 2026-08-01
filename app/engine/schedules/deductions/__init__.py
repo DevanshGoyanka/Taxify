@@ -100,6 +100,7 @@ def compute_all(
     schedule_80gga: Optional[Schedule80GGA] = None,
     schedule_80ggc: Optional[Schedule80GGC] = None,
     assessee_pan: Optional[str] = None,
+    schedule_80c_entries: Optional[list] = None,
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
@@ -134,6 +135,8 @@ def compute_all(
     # --- Old regime only deductions ---
     r_80c = section_80c.compute(ded, regime)
     _add("80C+80CCC+80CCD(1)", r_80c)
+    details_80c = section_80c.compute_details(ded, schedule_80c_entries, regime)
+    result.section_details["80C"] = details_80c
     # Store 80CCC and 80CCD(1) individually for ITD JSON line-item breakout.
     r_80ccc = section_80c.compute_80ccc(ded, regime)
     _add("80CCC", r_80ccc)

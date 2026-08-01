@@ -23,6 +23,7 @@ from app.engine.constants import (
 )
 from app.engine.schedules.deductions.section_80gga import Section80GGAResult
 from app.engine.schedules.deductions.section_80ggc import Section80GGCResult
+from app.engine.schedules.deductions.section_80c import Section80CResult
 from app.schemas.itr1 import (
     BankAccountType,
     FilingAddress,
@@ -563,33 +564,33 @@ def _schedule_80d(
     }
 
 
-def _schedule_80c(input_data: ITR1Input, total_amt: Decimal) -> dict[str, Any]:
-    """Build Schedule 80C rows allocated to the allowed capped deduction."""
-    positive_entries = [
-        entry for entry in input_data.schedule_80c_entries if entry.amount > 0
-    ]
-    if total_amt > 0 and not positive_entries:
-        raise ValueError(
-            "A positive Section 80C claim requires Schedule 80C detail rows"
-        )
-    raw_total = sum((entry.amount for entry in positive_entries), Decimal("0"))
+def _schedule_80c(details: Section80CResult) -> dict[str, Any]:
+    """Serialize a computed Section 80C result without recalculating eligibility."""
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated_eligible = 0
     rows: list[dict[str, Any]] = []
-    allocated = Decimal("0")
-    for index, entry in enumerate(positive_entries):
-        if not entry.identifier_number:
+    for index, computed in enumerate(details.rows):
+        source = computed.source
+        if not source.identifier_number:
             raise ValueError("Schedule 80C entries require identifier_number")
-        if index == len(positive_entries) - 1:
-            allowed_amount = total_amt - allocated
+        if index == len(details.rows) - 1:
+            eligible = eligible_rupees - allocated_eligible
         else:
-            allowed_amount = (entry.amount / raw_total * total_amt).quantize(Decimal("1"))
-            allocated += allowed_amount
+            eligible = min(
+                _to_rupees(computed.eligible_amount),
+                eligible_rupees - allocated_eligible,
+            )
+            allocated_eligible += eligible
         rows.append({
-            "IdentificationNo": entry.identifier_number,
-            "Amount": _to_rupees(max(Decimal("0"), allowed_amount)),
+            "IdentificationNo": source.identifier_number,
+            "Amount": eligible,
         })
+    emitted = sum(row["Amount"] for row in rows)
+    if emitted != eligible_rupees:
+        raise ValueError("Schedule 80C eligible rows do not cross-foot")
     return {
         "Schedule80CDtls": rows,
-        "TotalAmt": sum(row["Amount"] for row in rows),
+        "TotalAmt": emitted,
     }
 
 
@@ -1425,7 +1426,12 @@ def build_itr1_json(
 
     if input_data is not None:
         if deduction("80C") > 0 or input_data.schedule_80c_entries:
-            itr1["Schedule80C"] = _schedule_80c(input_data, deduction("80C"))
+            details_80c = ded_sched.section_details.get("80C") if ded_sched else None
+        combined_80c = ded_breakdown.get("80C+80CCC+80CCD(1)", Decimal("0"))
+        if combined_80c > 0:
+            if details_80c is None or not details_80c.rows:
+                raise ValueError("A positive Section 80C claim requires Schedule 80C detail rows")
+            itr1["Schedule80C"] = _schedule_80c(details_80c)
 
         if deduction("80D") > 0:
             ded_input = input_data.deductions_chapter6a

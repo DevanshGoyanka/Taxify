@@ -297,6 +297,7 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         schedule_80gga=input_data.schedule_80gga,
         schedule_80ggc=input_data.schedule_80ggc,
         assessee_pan=input_data.assessee_pan,
+        schedule_80c_entries=input_data.schedule_80c_entries,
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total
