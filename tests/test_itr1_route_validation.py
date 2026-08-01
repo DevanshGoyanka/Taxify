@@ -17,6 +17,7 @@ from app.schemas.itr1 import (
     OtherSourcesIncome,
     PropertyType,
     SalaryIncome,
+    Schedule80CEntry,
     TDS2Entry,
     TCSEntry,
     TaxRegime,
@@ -112,6 +113,13 @@ def test_old_regime_rebate_uses_taxable_income_after_deductions() -> None:
         house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
         other_sources_income=OtherSourcesIncome(),
         deductions_chapter6a=Chapter6ADeductions(amount_80c=Decimal("150000")),
+        schedule_80c_entries=[
+            Schedule80CEntry(
+                amount=Decimal("150000"),
+                payment_type="PPF",
+                identifier_number="PPF-REBATE-1",
+            ),
+        ],
         nature_of_employment="Private",
     )
 

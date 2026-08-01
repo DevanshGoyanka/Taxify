@@ -15,6 +15,7 @@ from decimal import Decimal
 from app.schemas.itr1 import (
     AgeBracket,
     AssesseeType,
+    DisabilitySeverity,
     ITR1Input,
     PropertyType,
     Section80DDBUserType,
@@ -912,6 +913,34 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     "deductions_chapter6a.amount_80u",
                 ))
 
+        # Rule 200b: 80U severity-amount consistency
+        if is_old and ch6a.amount_80u > 0:
+            try:
+                su = inp.disability_schedule_80u()
+            except ValueError as exc:
+                results.append(_make(
+                    "ITR1-R200b", False,
+                    f"Conflicting Schedule 80U details were provided: {exc}",
+                    "schedule_80u",
+                ))
+                su = None
+            if su is not None:
+                expected_severe = ch6a.amount_80u == 125_000
+                if expected_severe and su.disability_type is not DisabilitySeverity.SEVERE:
+                    results.append(_make(
+                        "ITR1-R200b", False,
+                        f"80U amount Rs {ch6a.amount_80u} requires severe disability but "
+                        f"schedule declares '{su.disability_type.value}'.",
+                        "schedule_80u.disability_type",
+                    ))
+                if not expected_severe and su.disability_type is DisabilitySeverity.SEVERE:
+                    results.append(_make(
+                        "ITR1-R200b", False,
+                        f"80U schedule declares severe disability but amount is "
+                        f"Rs {ch6a.amount_80u} (must be Rs 1,25,000 for severe).",
+                        "schedule_80u.disability_type",
+                    ))
+
         # Rule 203d: 80DD — nature of disability required
         if is_old and ch6a.amount_80dd > 0:
             if not inp.form_10ia_filed:
@@ -928,6 +957,34 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     f"with disability) or Rs 1,25,000 (dependent with severe disability)",
                     "deductions_chapter6a.amount_80dd",
                 ))
+
+        # Rule 203b: 80DD severity-amount consistency
+        if is_old and ch6a.amount_80dd > 0:
+            try:
+                sd = inp.disability_schedule_80dd()
+            except ValueError as exc:
+                results.append(_make(
+                    "ITR1-R203b", False,
+                    f"Conflicting Schedule 80DD details were provided: {exc}",
+                    "schedule_80dd",
+                ))
+                sd = None
+            if sd is not None:
+                expected_severe = ch6a.amount_80dd == 125_000
+                if expected_severe and sd.disability_type is not DisabilitySeverity.SEVERE:
+                    results.append(_make(
+                        "ITR1-R203b", False,
+                        f"80DD amount Rs {ch6a.amount_80dd} requires severe disability but "
+                        f"schedule declares '{sd.disability_type.value}'.",
+                        "schedule_80dd.disability_type",
+                    ))
+                if not expected_severe and sd.disability_type is DisabilitySeverity.SEVERE:
+                    results.append(_make(
+                        "ITR1-R203b", False,
+                        f"80DD schedule declares severe disability but amount is "
+                        f"Rs {ch6a.amount_80dd} (must be Rs 1,25,000 for severe).",
+                        "schedule_80dd.disability_type",
+                    ))
 
         # Rule 186: 80CCH — enforce PRAN requirement and hard cap
         if ch6a.amount_80cch > 0:
@@ -1042,10 +1099,10 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # ========================================================================
 
     if ch6a:
-        # Rule 119: HRA + 80GG mutual exclusion
+        # Rule 119b: HRA + 80GG mutual exclusion
         if sal.hra_exempt_amount > 0 and ch6a.amount_80gg > 0:
             results.append(_make(
-                "ITR1-R119", False,
+                "ITR1-R119b", False,
                 "80GG deduction cannot be claimed when HRA exemption u/s 10(13A) is claimed. "
                 f"HRA exempt: Rs {sal.hra_exempt_amount}, 80GG claimed: Rs {ch6a.amount_80gg}",
                 "deductions_chapter6a.amount_80gg",
@@ -1848,34 +1905,45 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # SECTION: Schedule 80C — Cross-Schedule Consistency (Rules 224, 241, 247)
     # ========================================================================
 
-    if ch6a and ch6a.amount_80c > _z and inp.schedule_80c_entries:
-        total_80c_schedule = sum(e.amount for e in inp.schedule_80c_entries)
-        # Rule 247: Sum of 80C payment rows = Total of Payments in Schedule 80C
-        if total_80c_schedule > _z and ch6a.amount_80c != total_80c_schedule:
+    if ch6a and ch6a.amount_80c > _z:
+        # A positive 80C claim requires at least one positive schedule row.
+        positive_80c = [e for e in inp.schedule_80c_entries if e.amount > _z]
+        if not positive_80c:
             results.append(_make(
-                "ITR1-R241", False,  # CBDT Sl 241: 80C VIA = Schedule 80C total
-                f"80C VIA amount (Rs {ch6a.amount_80c}) does not match schedule 80C "
-                f"total (Rs {total_80c_schedule}). Both must be equal.",
-                "deductions_chapter6a.amount_80c",
-                expected=str(total_80c_schedule), actual=str(ch6a.amount_80c)))
+                "ITR1-80C-DETAILS", False,
+                f"Section 80C deduction claimed (Rs {ch6a.amount_80c}) but no "
+                f"schedule 80C detail rows provided. At least one row with an "
+                f"identifier number is required.",
+                "schedule_80c_entries",
+            ))
+        else:
+            total_80c_schedule = sum(e.amount for e in positive_80c)
+            # Rule 247: Sum of 80C payment rows = Total of Payments in Schedule 80C
+            if total_80c_schedule > _z and ch6a.amount_80c != total_80c_schedule:
+                results.append(_make(
+                    "ITR1-R241", False,  # CBDT Sl 241: 80C VIA = Schedule 80C total
+                    f"80C VIA amount (Rs {ch6a.amount_80c}) does not match schedule 80C "
+                    f"total (Rs {total_80c_schedule}). Both must be equal.",
+                    "deductions_chapter6a.amount_80c",
+                    expected=str(total_80c_schedule), actual=str(ch6a.amount_80c)))
 
-        # Rule 224: Each 80C entry must have identifier details
-        for i, e in enumerate(inp.schedule_80c_entries):
-            if e.amount > _z:
-                if not e.payment_type:
-                    results.append(_make(
-                        "ITR1-R224", False,
-                        f"Schedule 80C row {i+1}: amount of Rs {e.amount} entered but "
-                        f"payment type (LIC/PPF/ELSS/EPF/tuition etc.) not specified.",
-                        f"schedule_80c_entries[{i}].payment_type",
-                    ))
-                if not e.identifier_number:
-                    results.append(_make(
-                        "ITR1-R224b", False,
-                        f"Schedule 80C row {i+1}: identifier number (policy/folio/PRAN) "
-                        f"required for the investment/payment of Rs {e.amount}.",
-                        f"schedule_80c_entries[{i}].identifier_number",
-                    ))
+            # Rule 224: Each 80C entry must have identifier details
+            for i, e in enumerate(inp.schedule_80c_entries):
+                if e.amount > _z:
+                    if not e.payment_type:
+                        results.append(_make(
+                            "ITR1-R224", False,
+                            f"Schedule 80C row {i+1}: amount of Rs {e.amount} entered but "
+                            f"payment type (LIC/PPF/ELSS/EPF/tuition etc.) not specified.",
+                            f"schedule_80c_entries[{i}].payment_type",
+                        ))
+                    if not e.identifier_number:
+                        results.append(_make(
+                            "ITR1-R224b", False,
+                            f"Schedule 80C row {i+1}: identifier number (policy/folio/PRAN) "
+                            f"required for the investment/payment of Rs {e.amount}.",
+                            f"schedule_80c_entries[{i}].identifier_number",
+                        ))
 
     # ========================================================================
     # SECTION: Schedule 80CCC — Per-Row Validation (Rules 302, 337)
@@ -2713,9 +2781,17 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             ))
 
     # --- R202: 80U VIA = Schedule 80U ---
-    if ch6a and ch6a.amount_80u > _z and inp.schedule_80u:
-        su = inp.schedule_80u
-        if ch6a.amount_80u != su.deduction_amount:
+    if ch6a and ch6a.amount_80u > _z:
+        try:
+            su = inp.disability_schedule_80u()
+        except ValueError as exc:
+            results.append(_make(
+                "ITR1-R202", False,
+                f"Conflicting Schedule 80U details were provided: {exc}",
+                "schedule_80u",
+            ))
+            su = None
+        if su is not None and ch6a.amount_80u != su.deduction_amount:
             results.append(_make(
                 "ITR1-R202", False,
                 f"80U VIA amount (Rs {ch6a.amount_80u}) does not match Schedule 80U "
@@ -2724,9 +2800,17 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             ))
 
     # --- R205: 80DD VIA = Schedule 80DD ---
-    if ch6a and ch6a.amount_80dd > _z and inp.schedule_80dd:
-        sdd = inp.schedule_80dd
-        if ch6a.amount_80dd != sdd.deduction_amount:
+    if ch6a and ch6a.amount_80dd > _z:
+        try:
+            sdd = inp.disability_schedule_80dd()
+        except ValueError as exc:
+            results.append(_make(
+                "ITR1-R205", False,
+                f"Conflicting Schedule 80DD details were provided: {exc}",
+                "schedule_80dd",
+            ))
+            sdd = None
+        if sdd is not None and ch6a.amount_80dd != sdd.deduction_amount:
             results.append(_make(
                 "ITR1-R205", False,
                 f"80DD VIA amount (Rs {ch6a.amount_80dd}) does not match Schedule 80DD "
@@ -2735,22 +2819,27 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             ))
 
     # --- R206-R207: 80DD/80U > 0 → details required ---
-    if inp.schedule_80dd and inp.schedule_80dd.deduction_amount > _z:
-        if not inp.schedule_80dd.disability_type:
+    if ch6a and ch6a.amount_80dd > _z:
+        if sdd is None:
             results.append(_make(
                 "ITR1-R206", False,
-                "80DD deduction > 0 but disability type not specified. "
-                "Specify 'dependent person with disability' or 'dependent person with severe disability'",
-                "schedule_80dd.disability_type",
+                "80DD deduction claimed but Schedule 80DD disability and dependent "
+                "details were not provided.",
+                "schedule_80dd",
             ))
-    if inp.schedule_80u and inp.schedule_80u.deduction_amount > _z:
-        if not inp.schedule_80u.disability_type:
+        elif sdd.dependent_relationship is None:
             results.append(_make(
-                "ITR1-R207", False,
-                "80U deduction > 0 but disability type not specified. "
-                "Specify 'self with disability' or 'self with severe disability'",
-                "schedule_80u.disability_type",
+                "ITR1-R206b", False,
+                "80DD deduction claimed but the eligible dependent's relationship "
+                "was not provided.",
+                "schedule_80dd.dependent_relationship",
             ))
+    if ch6a and ch6a.amount_80u > _z and su is None:
+        results.append(_make(
+            "ITR1-R207", False,
+            "80U deduction claimed but Schedule 80U disability details were not provided.",
+            "schedule_80u",
+        ))
 
     # --- R211: 80GGC date range 01.04.2025 - 31.03.2026 ---
     if inp.schedule_80ggc and inp.schedule_80ggc.contributions:
