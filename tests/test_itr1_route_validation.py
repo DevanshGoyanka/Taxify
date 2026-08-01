@@ -160,3 +160,16 @@ def test_compute_json_passes_validated_input_to_builder() -> None:
 
     builder.assert_called_once()
     assert builder.call_args.args[1] is body
+
+
+def test_compute_json_reports_missing_filing_profile_as_client_error() -> None:
+    """Missing official identity data must return a controlled HTTP 400."""
+    body = _valid_input()
+    with patch("app.routers.itr.itr1_input_val", return_value=ValidationReport("ITR1")), patch(
+        "app.routers.itr.compute_itr1", return_value=ITR1Result()
+    ), patch("app.routers.itr.itr1_calc_val", return_value=ValidationReport("ITR1")):
+        with pytest.raises(HTTPException) as exc_info:
+            itr1_compute_json(body, current_user=None)
+
+    assert exc_info.value.status_code == 400
+    assert "filing_profile" in str(exc_info.value.detail)

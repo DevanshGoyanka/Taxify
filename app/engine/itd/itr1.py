@@ -15,7 +15,13 @@ from decimal import Decimal
 from typing import Any, Mapping, Optional
 
 from app.engine.calculators.itr1 import ITR1Result
-from app.schemas.itr1 import BankAccountType, ITR1Input
+from app.schemas.itr1 import (
+    BankAccountType,
+    FilingAddress,
+    ITR1FilingProfile,
+    ITR1Input,
+    PostalAddress,
+)
 
 
 from app.engine.itd.common import (
@@ -30,6 +36,71 @@ from app.engine.itd.common import (
     _personal_info_base,
     _compute_digest,
 )
+
+
+def _address_from_profile(address: PostalAddress, *, include_contact: bool) -> dict[str, Any]:
+    """Map a typed filing address to the official address structure."""
+    mapped: dict[str, Any] = {
+        "ResidenceNo": address.residence_no,
+        "ResidenceName": address.residence_name,
+        "RoadOrStreet": address.road_or_street,
+        "LocalityOrArea": address.locality_or_area,
+        "CityOrTownOrDistrict": address.city_or_town_or_district,
+        "StateCode": address.state_code,
+        "CountryCode": address.country_code,
+        "ZipCode": address.zip_code,
+    }
+    if address.pin_code is not None:
+        mapped["PinCode"] = int(address.pin_code)
+    if include_contact:
+        if not isinstance(address, FilingAddress):
+            raise ValueError("Primary filing address requires contact details")
+        mapped.update({
+            "CountryCodeMobile": address.mobile_country_code,
+            "MobileNo": int(address.mobile_no),
+            "CountryCodeMobileNoSec": 0,
+            "MobileNoSec": 0,
+            "EmailAddress": address.email,
+        })
+    return mapped
+
+
+def _personal_info_from_profile(profile: ITR1FilingProfile) -> dict[str, Any]:
+    """Build official personal information exclusively from real profile data."""
+    personal: dict[str, Any] = {
+        "AssesseeName": {
+            "FirstName": profile.first_name,
+            "MiddleName": profile.middle_name,
+            "SurNameOrOrgName": profile.surname,
+        },
+        "PAN": profile.pan,
+        "Address": _address_from_profile(profile.primary_address, include_contact=True),
+        "SecondaryAdd": "Y" if profile.alternate_address else "N",
+        "DOB": profile.date_of_birth.isoformat(),
+        "EmployerCategory": profile.employer_category,
+    }
+    if profile.alternate_address is not None:
+        personal["AlternateAddress"] = _address_from_profile(
+            profile.alternate_address,
+            include_contact=False,
+        )
+    if profile.aadhaar_number is not None:
+        personal["AadhaarCardNo"] = profile.aadhaar_number
+    return personal
+
+
+def _verification_from_profile(profile: ITR1FilingProfile) -> dict[str, Any]:
+    """Build official verification from the typed filing profile."""
+    full_name = " ".join(
+        part for part in (profile.first_name, profile.middle_name, profile.surname) if part
+    )
+    return _verification(
+        assessee_name=full_name,
+        father_name=profile.father_name,
+        pan=profile.pan,
+        place=profile.verification_place,
+        capacity=profile.verification_capacity,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -725,30 +796,40 @@ def build_itr1_json(
 ) -> dict:
     """Build an ITD-compliant ITR-1 JSON document."""
 
-    assessee_name = f"{first_name} {last_name}".strip()
-    ver = _verification(
-        assessee_name=assessee_name or "ASSESSEE",
-        father_name=father_name or "FATHER",
-        pan=pan,
-        place=ver_place,
-    )
+    if input_data is not None:
+        if input_data.filing_profile is None:
+            raise ValueError("filing_profile is required for official ITR-1 JSON")
+        profile = input_data.filing_profile
+        personal = _personal_info_from_profile(profile)
+        ver = _verification_from_profile(profile)
+        filing = _filing_status_itr1(
+            return_file_sec=profile.return_file_section,
+            opt_out_new_regime=("Y" if input_data.tax_regime.value == "old" else "N"),
+        )
+    else:
+        assessee_name = f"{first_name} {last_name}".strip()
+        ver = _verification(
+            assessee_name=assessee_name or "ASSESSEE",
+            father_name=father_name or "FATHER",
+            pan=pan,
+            place=ver_place,
+        )
 
-    personal = _personal_info_base(
-        pan=pan, first_name=first_name, middle_name=middle_name, last_name=last_name,
-        dob=dob, employer_category=employer_category,
-        residence_no=residence_no, locality=locality, city=city,
-        state_code=state_code, country_code=country_code,
-        mobile_no=mobile_no, email=email, aadhaar=aadhaar,
-        secondary_add=secondary_add, pin_code=pin_code,
-    )
-    # Omit EmailAddressSec from Address — it's optional and "" fails regex
-    if "Address" in personal:
-        personal["Address"].pop("EmailAddressSec", None)
+        personal = _personal_info_base(
+            pan=pan, first_name=first_name, middle_name=middle_name, last_name=last_name,
+            dob=dob, employer_category=employer_category,
+            residence_no=residence_no, locality=locality, city=city,
+            state_code=state_code, country_code=country_code,
+            mobile_no=mobile_no, email=email, aadhaar=aadhaar,
+            secondary_add=secondary_add, pin_code=pin_code,
+        )
+        if "Address" in personal:
+            personal["Address"].pop("EmailAddressSec", None)
 
-    filing = _filing_status_itr1(
-        return_file_sec=return_file_sec,
-        opt_out_new_regime=opt_out_new_regime,
-    )
+        filing = _filing_status_itr1(
+            return_file_sec=return_file_sec,
+            opt_out_new_regime=opt_out_new_regime,
+        )
 
     # -- Extract per-section deduction amounts from the request-local result --
     ded_sched = result.schedules.get("deductions") if result.schedules else None

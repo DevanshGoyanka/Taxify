@@ -9,15 +9,20 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft4Validator
 
+from pydantic import ValidationError
+
 from app.engine.calculators.itr1 import compute
 from app.engine.itd.itr1 import build_itr1_json
 from app.schemas.itr1 import (
     AgeBracket,
     BankAccount,
     Chapter6ADeductions,
+    FilingAddress,
     HousePropertyIncome,
+    ITR1FilingProfile,
     ITR1Input,
     OtherSourcesIncome,
+    PostalAddress,
     PropertyType,
     SalaryIncome,
     Schedule80CEntry,
@@ -75,6 +80,30 @@ def _input(*, amount_80c: str = "100000", amount_80d: str = "25000") -> ITR1Inpu
             account_type="savings",
             is_primary=True,
         )],
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F",
+            first_name="Asha",
+            middle_name="Rani",
+            surname="Sharma",
+            date_of_birth=date(1990, 1, 15),
+            employer_category="OTH",
+            aadhaar_number="123456789012",
+            primary_address=FilingAddress(
+                residence_no="12A",
+                road_or_street="MG Road",
+                locality_or_area="Central Colony",
+                city_or_town_or_district="Delhi",
+                state_code="07",
+                country_code="91",
+                pin_code="110001",
+                mobile_no="9876543210",
+                email="asha.sharma@example.com",
+            ),
+            father_name="Ramesh Sharma",
+            verification_place="Delhi",
+            verification_capacity="S",
+            return_file_section=11,
+        ),
         agriculture_income=Decimal("5000"),
         nature_of_employment="Private",
     )
@@ -96,6 +125,119 @@ def test_detailed_document_matches_official_ay_2026_27_schema() -> None:
         f"{'/'.join(map(str, error.absolute_path))}: {error.message}"
         for error in errors
     ]
+
+
+def test_builder_preserves_filing_profile_without_placeholders() -> None:
+    """Personal information, filing status, and verification must use source data."""
+    itr1 = _build(_input())["ITR"]["ITR1"]
+
+    assert itr1["PersonalInfo"] == {
+        "AssesseeName": {
+            "FirstName": "Asha",
+            "MiddleName": "Rani",
+            "SurNameOrOrgName": "Sharma",
+        },
+        "PAN": "ABCDE1234F",
+        "Address": {
+            "ResidenceNo": "12A",
+            "ResidenceName": "",
+            "RoadOrStreet": "MG Road",
+            "LocalityOrArea": "Central Colony",
+            "CityOrTownOrDistrict": "Delhi",
+            "StateCode": "07",
+            "CountryCode": "91",
+            "PinCode": 110001,
+            "ZipCode": "",
+            "CountryCodeMobile": 91,
+            "MobileNo": 9876543210,
+            "CountryCodeMobileNoSec": 0,
+            "MobileNoSec": 0,
+            "EmailAddress": "asha.sharma@example.com",
+        },
+        "SecondaryAdd": "N",
+        "DOB": "1990-01-15",
+        "EmployerCategory": "OTH",
+        "AadhaarCardNo": "123456789012",
+    }
+    assert itr1["FilingStatus"]["ReturnFileSec"] == 11
+    assert itr1["FilingStatus"]["OptOutNewTaxRegime"] == "Y"
+    assert itr1["Verification"] == {
+        "Declaration": {
+            "AssesseeVerName": "Asha Rani Sharma",
+            "FatherName": "Ramesh Sharma",
+            "AssesseeVerPAN": "ABCDE1234F",
+        },
+        "Capacity": "S",
+        "Place": "Delhi",
+    }
+    serialized = json.dumps(itr1)
+    for placeholder in (
+        "AAAAA0000A",
+        "assessee@example.com",
+        "9999999999",
+        '"FATHER"',
+        '"ASSESSEE"',
+    ):
+        assert placeholder not in serialized
+
+
+def test_builder_rejects_missing_filing_profile() -> None:
+    """API-path JSON generation must not fabricate required taxpayer identity."""
+    body = _input().model_copy(update={"filing_profile": None})
+    with pytest.raises(ValueError, match="filing_profile"):
+        _build(body)
+
+
+def test_builder_maps_alternate_address() -> None:
+    """A supplied alternate address must be preserved in PersonalInfo."""
+    profile = _input().filing_profile
+    assert profile is not None
+    alternate = PostalAddress(
+        residence_no="9",
+        locality_or_area="Camp Area",
+        city_or_town_or_district="Pune",
+        state_code="27",
+        country_code="91",
+        pin_code="411001",
+    )
+    body = _input().model_copy(update={
+        "filing_profile": profile.model_copy(update={"alternate_address": alternate})
+    })
+    personal = _build(body)["ITR"]["ITR1"]["PersonalInfo"]
+    assert personal["SecondaryAdd"] == "Y"
+    assert personal["AlternateAddress"]["CityOrTownOrDistrict"] == "Pune"
+    assert "MobileNo" not in personal["AlternateAddress"]
+
+
+def test_filing_profile_rejects_non_self_and_unsupported_sections() -> None:
+    """Incomplete representative/revised filing modes must fail at input parsing."""
+    profile = _input().filing_profile
+    assert profile is not None
+    with pytest.raises(ValidationError):
+        ITR1FilingProfile(**{
+            **profile.model_dump(),
+            "verification_capacity": "R",
+        })
+    with pytest.raises(ValidationError):
+        ITR1FilingProfile(**{
+            **profile.model_dump(),
+            "return_file_section": 17,
+        })
+
+
+def test_filing_profile_uses_official_email_and_employer_categories() -> None:
+    """Profile constraints must match official email and employer enums."""
+    profile = _input().filing_profile
+    assert profile is not None
+    with pytest.raises(ValidationError):
+        FilingAddress(**{
+            **profile.primary_address.model_dump(),
+            "email": "not-an-email",
+        })
+    pensioner = profile.model_copy(update={"employer_category": "PESG"})
+    assert _build(_input().model_copy(update={"filing_profile": pensioner}))[
+        "ITR"
+    ]["ITR1"]["PersonalInfo"]["EmployerCategory"] == "PESG"
 
 
 def test_builder_preserves_allowance_and_other_source_details() -> None:

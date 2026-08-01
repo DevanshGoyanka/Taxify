@@ -20,7 +20,7 @@ Disqualifiers (must use ITR-2 or ITR-3 instead):
 
 from decimal import Decimal
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import date
 
 from pydantic import BaseModel, Field
@@ -738,6 +738,7 @@ class ITR1Input(BaseModel):
     schedule_tds2_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
     schedule_tds3_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
     schedule_tcs_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    filing_profile: Optional["ITR1FilingProfile"] = None
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +749,53 @@ class ITR1Input(BaseModel):
 # ---------------------------------------------------------------------------
 # Stub models referenced by ITR-4 / shared across ITR forms
 # ---------------------------------------------------------------------------
+
+class PostalAddress(BaseModel):
+    """Postal address fields shared by primary and alternate addresses."""
+
+    residence_no: str = Field(min_length=1, max_length=50)
+    residence_name: str = Field(default="", max_length=50)
+    road_or_street: str = Field(default="", max_length=50)
+    locality_or_area: str = Field(min_length=1, max_length=50)
+    city_or_town_or_district: str = Field(min_length=1, max_length=50)
+    state_code: str = Field(pattern=r"^(0[1-9]|[12][0-9]|3[0-7]|99)$")
+    country_code: str = Field(default="91", min_length=1, max_length=4)
+    pin_code: Optional[str] = Field(default=None, pattern=r"^[1-9][0-9]{5}$")
+    zip_code: str = Field(default="", max_length=8)
+
+
+class FilingAddress(PostalAddress):
+    """Primary filing address with mandatory taxpayer contact details."""
+
+    mobile_country_code: int = Field(default=91, ge=1, le=99999)
+    mobile_no: str = Field(pattern=r"^[1-9][0-9]{4,9}$")
+    email: str = Field(
+        min_length=3,
+        max_length=125,
+        pattern=r"^([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+$",
+    )
+
+
+class ITR1FilingProfile(BaseModel):
+    """Taxpayer identity, filing status, and verification for official JSON."""
+
+    pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    first_name: str = Field(default="", max_length=25)
+    middle_name: str = Field(default="", max_length=25)
+    surname: str = Field(min_length=1, max_length=75)
+    date_of_birth: date
+    employer_category: str = Field(
+        default="OTH",
+        pattern=r"^(CGOV|SGOV|PSU|PE|PESG|PEPS|PEO|OTH|NA)$",
+    )
+    aadhaar_number: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    primary_address: FilingAddress
+    alternate_address: Optional[PostalAddress] = None
+    father_name: str = Field(min_length=1, max_length=125)
+    verification_place: str = Field(min_length=1, max_length=50)
+    verification_capacity: Literal["S"] = "S"
+    return_file_section: Literal[11, 12] = 11
+
 
 class TDS3Entry(BaseModel):
     """TDS on payment to non-residents - Schedule TDS3."""
