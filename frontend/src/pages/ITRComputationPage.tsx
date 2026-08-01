@@ -13,6 +13,9 @@ import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
+import { HttpReturnRepository, serializeReturnDraftToLegacy } from '../domain/returns';
+
+const returnRepository = new HttpReturnRepository();
 
 function buildPhase1Payload(source: any): any {
   const data = { ...source };
@@ -86,6 +89,11 @@ export default function ITRComputationPage() {
   const clientId = routeClientId || '';
   const navigate = useNavigate();
   const { ayParam } = useAY();
+  const effectiveAssessmentYear = year || ayParam || '2026-27';
+  const loadGenerationRef = useRef(0);
+  const loadedReturnKeyRef = useRef('');
+  const computationGenerationRef = useRef(0);
+  const suppressAutoDetectRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
@@ -200,16 +208,40 @@ export default function ITRComputationPage() {
     adv15Jun: 0, adv15Sep: 0, adv15Dec: 0, adv15Mar: 0, selfTax: 0,
     age: 30
   });
+  const emptyFormDataRef = useRef(structuredClone(formData));
 
   useEffect(() => {
-    if (!clientId) return;
+    const requestId = ++loadGenerationRef.current;
+    loadedReturnKeyRef.current = '';
+    ++computationGenerationRef.current;
+    if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
+    setBackendTaxResult(null);
+    setTaxResultLoading(false);
+    setTaxResultError(null);
+    setClientData(null);
+    setImportedAIS(null);
+    setImported26AS(null);
+    setImportedTIS(null);
+    setReconciliationResult(null);
+    setShowReconciliationModal(false);
+    setFormData(structuredClone(emptyFormDataRef.current));
+    if (!clientId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     Promise.all([
       clientsApi.get(clientId),
-      itrApi.getFormData(clientId, year || ayParam || '2026-27')
+      returnRepository.get(clientId, effectiveAssessmentYear),
     ])
-      .then(([client, itrData]) => {
+      .then(([client, draft]) => {
+        if (requestId !== loadGenerationRef.current) return;
+        const itrData = serializeReturnDraftToLegacy(draft) as any;
+        loadedReturnKeyRef.current = `${clientId}:${effectiveAssessmentYear}`;
         setClientData(client);
+        suppressAutoDetectRef.current = true;
+        setItrForm(draft.form);
+        setRegime(draft.regime);
         // Prioritize saved form data over client master data
         // Map address fields from backend names to frontend names
         setFormData((prev: any) => ({ 
@@ -250,12 +282,17 @@ export default function ITRComputationPage() {
               })) },
         }));
       })
-      .catch(err => toast.error(err.message))
-      .finally(() => setLoading(false));
-  }, [clientId, year, ayParam]);
+      .catch((err: any) => {
+        if (requestId === loadGenerationRef.current) toast.error(err.message);
+      })
+      .finally(() => {
+        if (requestId === loadGenerationRef.current) setLoading(false);
+      });
+  }, [clientId, effectiveAssessmentYear]);
 
   const [backendTaxResult, setBackendTaxResult] = useState<any>(null);
   const [taxResultLoading, setTaxResultLoading] = useState(false);
+  const [taxResultError, setTaxResultError] = useState<string | null>(null);
 
   // Debounce timer ref for tax summary API calls
   const taxResultDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -263,37 +300,38 @@ export default function ITRComputationPage() {
   // Fetch backend-computed tax summary - replaces local computeTax()
   // Debounced: only fires 500ms after user stops typing
   useEffect(() => {
-    if (!clientId || !ayParam) return;
-
-    // Cancel any pending call
-    if (taxResultDebounceRef.current) {
-      clearTimeout(taxResultDebounceRef.current);
-    }
+    if (!clientId || loading || loadedReturnKeyRef.current !== `${clientId}:${effectiveAssessmentYear}`) return;
+    const requestId = ++computationGenerationRef.current;
+    setTaxResultLoading(true);
+    setTaxResultError(null);
 
     taxResultDebounceRef.current = setTimeout(() => {
-      console.log('[TAX] Calling computeTaxSummary for Other Sources...', { ayParam, regime: regime, formDataKeys: Object.keys(formData || {}) });
-      setTaxResultLoading(true);
-      itrApi.computeTaxSummary(buildPhase1Payload(formData), ayParam || '2025-26', regime)
+      itrApi.computeTaxSummary(buildPhase1Payload(formData), effectiveAssessmentYear, regime)
         .then((result: any) => {
-          console.log('[TAX] computeTaxSummary result - regimeUsed:', result.taxRegime, 'result:', result);
+          if (requestId !== computationGenerationRef.current) return;
           setBackendTaxResult(result);
+          setTaxResultError(null);
         })
         .catch((err: any) => {
-          console.error('[TAX] computeTaxSummary ERROR:', err);
-          // If backend call fails, clear result (no fallback to local)
+          if (requestId !== computationGenerationRef.current) return;
           setBackendTaxResult(null);
+          setTaxResultError(err?.message || 'Tax computation failed. Please try again.');
         })
-        .finally(() => setTaxResultLoading(false));
+        .finally(() => {
+          if (requestId === computationGenerationRef.current) setTaxResultLoading(false);
+        });
     }, 500);
-  }, [clientId, ayParam, regime, formData]);
 
-  // Cleanup on unmount
-  useEffect(() => {
     return () => {
-      if (taxResultDebounceRef.current) {
-        clearTimeout(taxResultDebounceRef.current);
-      }
+      if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
     };
+  }, [clientId, effectiveAssessmentYear, regime, formData, loading]);
+
+  // Invalidate all asynchronous completions after unmount.
+  useEffect(() => () => {
+    ++loadGenerationRef.current;
+    ++computationGenerationRef.current;
+    if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
   }, []);
 
   const taxResult = useMemo(() => {
@@ -327,6 +365,10 @@ export default function ITRComputationPage() {
   }, [backendTaxResult]);
 
   useEffect(() => {
+    if (suppressAutoDetectRef.current) {
+      suppressAutoDetectRef.current = false;
+      return;
+    }
     autoDetectITRForm();
   }, [
     formData.basic, 
@@ -404,7 +446,7 @@ export default function ITRComputationPage() {
         dataToSave.s80G = 0;
       }
       
-      await itrApi.saveFormData(clientId, year!, dataToSave);
+      await itrApi.saveFormData(clientId, effectiveAssessmentYear, dataToSave);
       toast.success('Saved ✓');
     } catch (err: any) {
       toast.error(err.message);
@@ -414,12 +456,12 @@ export default function ITRComputationPage() {
   };
 
   const handleDownloadJson = () => {
-    itrApi.downloadJson(clientId, year!).catch(err => toast.error(err.message));
+    itrApi.downloadJson(clientId, effectiveAssessmentYear).catch(err => toast.error(err.message));
   };
 
   const handleDownloadPdf = async () => {
     try {
-      await itrApi.downloadPdf(clientId, year!);
+      await itrApi.downloadPdf(clientId, effectiveAssessmentYear);
       toast.success('PDF downloaded successfully');
     } catch (err: any) {
       toast.error(err.message || 'PDF download failed');
@@ -456,7 +498,7 @@ export default function ITRComputationPage() {
           data = JSON.parse(text);
         } else if (typeStr === 'ais-pdf') {
           const { integrationApi } = await import('../api/integration');
-          data = await integrationApi.importAIS(file, legacyClientId!, year!, pan!, dob!);
+          data = await integrationApi.importAIS(file, legacyClientId!, effectiveAssessmentYear, pan!, dob!);
           setImportedAIS(data);
         } else if (typeStr === 'ais-json') {
           const { integrationApi } = await import('../api/integration');
@@ -642,7 +684,7 @@ export default function ITRComputationPage() {
             console.log('26AS Import - Interest Entries:', bankInterestEntriesFrom26AS);
             
             setFormData((prev: any) => ({ ...prev, ...formDataUpdate }));
-            await itrApi.saveFormData(clientId, year!, { ...formData, ...formDataUpdate });
+            await itrApi.saveFormData(clientId, effectiveAssessmentYear, { ...formData, ...formDataUpdate });
             toast.dismiss();
             
             const message = `26AS imported! ${tdsOnlyEntries.length} TDS entries. ` +
@@ -658,7 +700,7 @@ export default function ITRComputationPage() {
           // Auto-populate from AIS and TIS documents
           const populated = await integrationApi.autoPopulateAll(
             legacyClientId!,
-            year!,
+            effectiveAssessmentYear,
             importedAIS || data,
             imported26AS || data,
             importedTIS || data
@@ -681,7 +723,7 @@ export default function ITRComputationPage() {
             }
           }
           
-          await itrApi.saveFormData(clientId, year!, { ...formData, ...populated });
+          await itrApi.saveFormData(clientId, effectiveAssessmentYear, { ...formData, ...populated });
           toast.dismiss();
           toast.success(`${type.toUpperCase()} imported and auto-populated successfully!`);
         } else if (type === 'prefill') {
@@ -692,14 +734,15 @@ export default function ITRComputationPage() {
           const importResult = await integrationApi.importITDPrefill(
             file, 
             legacyClientId!,
-            year!
+            effectiveAssessmentYear
           );
           
           console.log('Prefill import result:', importResult);
           toast.success('Prefill imported successfully! Reloading data...');
           
           // Reload form data from backend to get the extracted data
-          const freshFormData = await itrApi.getFormData(clientId, year!);
+          const freshDraft = await returnRepository.get(clientId, effectiveAssessmentYear);
+          const freshFormData = serializeReturnDraftToLegacy(freshDraft) as any;
           console.log('Fresh form data from backend:', freshFormData);
           
           // Update form with the extracted data - use direct assignment for numeric fields
@@ -1074,7 +1117,7 @@ export default function ITRComputationPage() {
               <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
                 <span className="mono">{clientData?.pan || ''}</span>
                 <span style={{ margin: '0 8px' }}>•</span>
-                <span>AY {ayParam || '2025-26'}</span>
+                <span>AY {effectiveAssessmentYear}</span>
               </div>
             </div>
           </div>
@@ -1106,11 +1149,7 @@ export default function ITRComputationPage() {
             </select>
             <select
               value={regime}
-              onChange={(e) => {
-                const newRegime = e.target.value as 'old' | 'new';
-                console.log('[REGIME] Changed from', regime, 'to', newRegime);
-                setRegime(newRegime);
-              }}
+              onChange={(e) => setRegime(e.target.value as 'old' | 'new')}
               style={{
                 padding: '6px 12px',
                 border: '1px solid var(--border)',
@@ -1301,6 +1340,17 @@ export default function ITRComputationPage() {
         </div>
       </div>
 
+      {taxResultLoading && (
+        <div role="status" style={{ marginBottom: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
+          Computing tax summary…
+        </div>
+      )}
+      {taxResultError && (
+        <div role="alert" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--error)', background: 'var(--error-bg)' }}>
+          Tax computation failed: {taxResultError}
+        </div>
+      )}
+
       <div style={{
         background: 'var(--navy)',
         borderRadius: 'var(--radius)',
@@ -1336,15 +1386,17 @@ export default function ITRComputationPage() {
         border: '1px solid var(--border)'
       }}>
         {activeTab === 0 && <PersonalInfoTab formData={formData} setFormData={setFormData} />}
-        {activeTab === 1 && <SalaryTab formData={formData} setFormData={setFormData} taxResult={taxResult} ayParam={ayParam} regime={regime} />}
+        {activeTab === 1 && <SalaryTab formData={formData} setFormData={setFormData} taxResult={taxResult} ayParam={effectiveAssessmentYear} regime={regime} />}
         {activeTab === 2 && <HousePropertyTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
-        {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} year={year!} />}
+        {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} year={effectiveAssessmentYear} />}
         {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
         {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
         {activeTab === 6 && <ExemptIncomeTab formData={formData} setFormData={setFormData} />}
         {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} />}
         {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
-        {activeTab === 9 && <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />}
+        {activeTab === 9 && (taxResultError
+          ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until computation succeeds.</div>
+          : <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />)}
       </div>
 
       {/* Employer Reconciliation Modal */}

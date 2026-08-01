@@ -1,4 +1,4 @@
-export type ItrForm = 'ITR-1' | 'ITR-4';
+export type ItrForm = 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4';
 export type TaxRegime = 'old' | 'new';
 export type Money = number;
 export interface Identified { id: string; }

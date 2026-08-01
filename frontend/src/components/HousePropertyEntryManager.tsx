@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { calculateHouseProperty, type HousePropertyInput, type PropertyCalculation, type HousePropertyCalculationResponse } from '../services/housePropertyCalculationService';
 
 // Comprehensive House Property Entry interface - CBDT AY 2026-27 compliant
@@ -107,12 +107,14 @@ export function HousePropertyEntryManager({ entries, onChange, itrForm }: HouseP
   const [showCoOwnerModal, setShowCoOwnerModal] = useState<number | null>(null);
   const [calculationResponse, setCalculationResponse] = useState<HousePropertyCalculationResponse | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
+  const calculationGenerationRef = useRef(0);
 
   // Normalize ITR form (handle both 'ITR-1' and 'ITR1' formats)
   const normalizedForm = itrForm.replace('-', '');
-  const maxProperties = normalizedForm === 'ITR1' ? 1 : 999;
+  const maxProperties = normalizedForm === 'ITR1' ? 2 : 999;
 
   const recalculateAllProperties = async (updatedEntries: HousePropertyEntry[]) => {
+    const requestId = ++calculationGenerationRef.current;
     try {
       // Map frontend entry format to API input format
       const inputs: HousePropertyInput[] = updatedEntries.map(entry => ({
@@ -159,6 +161,7 @@ export function HousePropertyEntryManager({ entries, onChange, itrForm }: HouseP
       }));
 
       const response = await calculateHouseProperty(itrForm.replace('-', '').replace('ITR', '2025-26'), inputs);
+      if (requestId !== calculationGenerationRef.current) return;
       setCalculationResponse(response);
 
       // Map response back to entries
@@ -175,7 +178,9 @@ export function HousePropertyEntryManager({ entries, onChange, itrForm }: HouseP
       });
       onChange(recalculated);
     } catch (error) {
-      console.error('Error calculating house property:', error);
+      if (requestId === calculationGenerationRef.current) {
+        console.error('Error calculating house property:', error);
+      }
     }
   };
 
@@ -272,9 +277,14 @@ export function HousePropertyEntryManager({ entries, onChange, itrForm }: HouseP
   };
 
   const removeEntry = (index: number) => {
+    ++calculationGenerationRef.current;
     const updated = entries.filter((_, i) => i !== index);
+    setCalculationResponse(null);
     onChange(updated);
     if (expandedIndex === index) setExpandedIndex(null);
+    if (isInitialized && updated.length > 0) {
+      recalculateAllProperties(updated);
+    }
   };
 
   const addCoOwner = (propertyIndex: number) => {
