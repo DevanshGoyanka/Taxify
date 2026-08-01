@@ -1152,13 +1152,38 @@ class Schedule80GGA(BaseModel):
 
 
 class PoliticalContribution(BaseModel):
-    """Non-cash contribution to a political party."""
+    """Complete official contribution row for Schedule 80GGC."""
+
     amount: Decimal = Field(default=Decimal("0"), ge=0)
+    cash_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    other_mode_amount: Decimal = Field(default=Decimal("0"), ge=0)
     contribution_date: Optional[date] = None
     contribution_mode: str = "non_cash"
-    transaction_ref: Optional[str] = Field(default=None, max_length=100)
-    political_party_name: Optional[str] = Field(default=None, max_length=125)
-    political_party_pan: Optional[str] = None
+    transaction_ref: Optional[str] = Field(default=None, max_length=50)
+    ifsc_code: Optional[str] = Field(
+        default=None,
+        max_length=11,
+        pattern=r"^[A-Z]{4}0[A-Z0-9]{6}$",
+    )
+    political_party_name: Optional[str] = Field(default=None, min_length=1, max_length=125)
+    political_party_pan: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$",
+    )
+
+    @model_validator(mode="after")
+    def normalize_legacy_amount(self) -> "PoliticalContribution":
+        """Normalize the legacy amount field into the official other-mode amount."""
+        gross = self.cash_amount + self.other_mode_amount
+        if self.amount > 0:
+            if gross > 0 and self.amount != gross:
+                raise ValueError("Conflicting legacy and official 80GGC amounts")
+            if gross == 0:
+                self.other_mode_amount = self.amount
+                gross = self.amount
+        self.amount = gross
+        self.contribution_mode = "cash" if self.cash_amount > 0 and self.other_mode_amount == 0 else "non_cash"
+        return self
 
 
 class Schedule80GGC(BaseModel):
@@ -1168,6 +1193,44 @@ class Schedule80GGC(BaseModel):
     political_party_name: Optional[str] = Field(default=None, max_length=125)
     political_party_pan: Optional[str] = None
     contributions: List[PoliticalContribution] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_canonical_rows(self) -> "Schedule80GGC":
+        """Reject conflicting aggregate and canonical contribution details."""
+        if not self.contributions:
+            return self
+        other = sum(
+            (contribution.other_mode_amount for contribution in self.contributions),
+            Decimal("0"),
+        )
+        gross = sum(
+            (
+                contribution.cash_amount + contribution.other_mode_amount
+                for contribution in self.contributions
+            ),
+            Decimal("0"),
+        )
+        numeric_legacy_present = (
+            self.total_claimed > 0 or self.non_cash_contributions > 0
+        )
+        if numeric_legacy_present and (
+            self.total_claimed != gross
+            or self.non_cash_contributions != other
+        ):
+            raise ValueError("Conflicting legacy and canonical Schedule 80GGC details")
+        if self.political_party_name is not None and any(
+            contribution.political_party_name != self.political_party_name
+            for contribution in self.contributions
+        ):
+            raise ValueError("Conflicting aggregate and row political party names")
+        if self.political_party_pan is not None and any(
+            contribution.political_party_pan != self.political_party_pan
+            for contribution in self.contributions
+        ):
+            raise ValueError("Conflicting aggregate and row political party PANs")
+        self.total_claimed = gross
+        self.non_cash_contributions = other
+        return self
 
 
 class DisabilityScheduleBase(BaseModel):

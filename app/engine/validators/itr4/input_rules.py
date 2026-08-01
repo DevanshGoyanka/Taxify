@@ -2380,12 +2380,17 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # SUB-SECTION: 80GGC Detailed Cross-Foots (CBDT Sl 241-247, 256, 398)
     # ═══════════════════════════════════════════════════════════════════════════
 
-    # R241: 80GGC VIA = Schedule 80GGC total
+    # R241: 80GGC VIA cannot exceed eligible non-cash contributions
     if ch6a and getattr(ch6a, 'amount_80ggc', z) > z and inp.schedule_80ggc:
-        if getattr(ch6a, 'amount_80ggc', z) != inp.schedule_80ggc.total_claimed:
+        eligible_total = (
+            inp.schedule_80ggc.non_cash_contributions
+            if inp.schedule_80ggc.contributions
+            else inp.schedule_80ggc.total_claimed
+        )
+        if getattr(ch6a, 'amount_80ggc', z) > eligible_total:
             results.append(_make("ITR4-R241", False,
-                f"80GGC VIA (Rs {getattr(ch6a, 'amount_80ggc', z)}) ≠ Schedule 80GGC "
-                f"total (Rs {inp.schedule_80ggc.total_claimed})",
+                f"80GGC VIA (Rs {getattr(ch6a, 'amount_80ggc', z)}) exceeds eligible "
+                f"non-cash contributions (Rs {eligible_total})",
                 "deductions_chapter6a.amount_80ggc"))
 
     # R243: Total Donation = sum of contributions

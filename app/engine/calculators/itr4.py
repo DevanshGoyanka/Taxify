@@ -295,6 +295,8 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         is_80u_severe=is_80u_severe,
         hra_exempt_amount=getattr(input_data.salary_income, 'hra_exempt_amount', Decimal("0")) if input_data.salary_income else Decimal("0"),
         schedule_80gga=input_data.schedule_80gga,
+        schedule_80ggc=input_data.schedule_80ggc,
+        assessee_pan=input_data.assessee_pan,
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total

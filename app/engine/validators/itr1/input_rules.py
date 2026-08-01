@@ -1806,29 +1806,8 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
     # ========================================================================
     # SECTION: Schedule 80GGC — Political Contributions (Rules 195-199, 329)
+    # Canonical row validation is performed below with the Chapter VI-A claim.
     # ========================================================================
-
-    if inp.schedule_80ggc and inp.schedule_80ggc.total_claimed > 0:
-        sggc = inp.schedule_80ggc
-
-        # Rule 195: Total = cash + non-cash (80GGC is only non-cash)
-        if sggc.total_claimed != sggc.non_cash_contributions:
-            results.append(_make(
-                "ITR1-R195", False,
-                f"Schedule 80GGC total (Rs {sggc.total_claimed}) does not equal "
-                f"non-cash contributions (Rs {sggc.non_cash_contributions}). "
-                f"80GGC is only for non-cash (cheque/draft/ECS) contributions.",
-                "schedule_80ggc",
-                expected=str(sggc.non_cash_contributions), actual=str(sggc.total_claimed)))
-
-        # Rule 329: Political party name and PAN required for 80GGC
-        if not sggc.political_party_name or not sggc.political_party_pan:
-            results.append(_make(
-                "ITR1-R329", False,
-                "Schedule 80GGC: name and PAN of the political party / electoral trust "
-                "are mandatory for claiming deduction u/s 80GGC.",
-                "schedule_80ggc",
-            ))
 
     # ========================================================================
     # SECTION: Schedule 80G — IFSC & Transaction Ref for Non-Cash Donations
@@ -2399,15 +2378,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "schedule_80gga.cash_donations",
             ))
 
-    # Schedule 80GGC: Must be non-cash only
-    if inp.schedule_80ggc and inp.schedule_80ggc.total_claimed > 0:
-        if inp.schedule_80ggc.non_cash_contributions != inp.schedule_80ggc.total_claimed:
-            results.append(_make(
-                "ITR1-R193", False,
-                "Schedule 80GGC: political contributions must be entirely non-cash "
-                "(cheque/draft/ECS). Cash contributions are not deductible.",
-                "schedule_80ggc",
-            ))
+    # Schedule 80GGC cash is disclosed but excluded from deductible eligibility.
 
     # Form 10E (relief u/s 89) requirement
     if inp.form_10e_filed:
@@ -3063,50 +3034,72 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     f"schedule_80g.donations[{i}].donee_pan",
                 ))
 
-    # --- R193: 80GGC VIA = Schedule 80GGC total ---
-    if ch6a and ch6a.amount_80ggc > _z and inp.schedule_80ggc:
-        if ch6a.amount_80ggc != inp.schedule_80ggc.total_claimed:
+    # --- R193: 80GGC VIA claim cannot exceed eligible non-cash contributions ---
+    if ch6a and ch6a.amount_80ggc > _z:
+        if not inp.schedule_80ggc or not inp.schedule_80ggc.contributions:
             results.append(_make(
                 "ITR1-R193", False,
-                f"80GGC VIA claimed (Rs {ch6a.amount_80ggc}) does not match Schedule 80GGC "
-                f"total (Rs {inp.schedule_80ggc.total_claimed})",
+                "80GGC deduction claimed but official contribution rows were not provided",
+                "deductions_chapter6a.amount_80ggc",
+            ))
+        elif ch6a.amount_80ggc > inp.schedule_80ggc.non_cash_contributions:
+            results.append(_make(
+                "ITR1-R193", False,
+                f"80GGC VIA claimed (Rs {ch6a.amount_80ggc}) exceeds non-cash "
+                f"contributions (Rs {inp.schedule_80ggc.non_cash_contributions})",
                 "deductions_chapter6a.amount_80ggc",
             ))
 
-    # --- R194-R199: 80GGC per-row validations ---
+    # --- R194-R199: 80GGC canonical per-row validations ---
     if inp.schedule_80ggc and inp.schedule_80ggc.contributions:
-        sggc = inp.schedule_80ggc
-        total_from_rows = sum(c.amount for c in sggc.contributions)
-        # R195: Total = cash + non-cash (80GGC is non-cash only)
-        if sggc.total_claimed > _z and sggc.total_claimed != total_from_rows:
-            results.append(_make(
-                "ITR1-R195", False,
-                f"80GGC total claimed (Rs {sggc.total_claimed}) does not equal sum of "
-                f"per-contribution amounts (Rs {total_from_rows})",
-                "schedule_80ggc.total_claimed",
-            ))
-        for i, c in enumerate(sggc.contributions):
-            # R198: Date of contribution mandatory
-            if c.amount > _z and not c.contribution_date:
+        for i, contribution in enumerate(inp.schedule_80ggc.contributions):
+            gross = contribution.cash_amount + contribution.other_mode_amount
+            path = f"schedule_80ggc.contributions[{i}]"
+            if gross <= _z:
+                results.append(_make(
+                    "ITR1-R195", False,
+                    f"80GGC contribution {i+1}: contribution amount must be positive",
+                    path,
+                ))
+            if not contribution.contribution_date:
                 results.append(_make(
                     "ITR1-R198", False,
                     f"80GGC contribution {i+1}: date of contribution is mandatory",
-                    f"schedule_80ggc.contributions[{i}].contribution_date",
+                    f"{path}.contribution_date",
                 ))
-            # R199: Non-cash mode details required
-            if c.amount > _z and c.contribution_mode == "non_cash" and not c.transaction_ref:
+            elif not date(2025, 4, 1) <= contribution.contribution_date <= date(2026, 3, 31):
                 results.append(_make(
-                    "ITR1-R199", False,
-                    f"80GGC contribution {i+1}: non-cash contribution of Rs {c.amount} "
-                    f"requires transaction reference (cheque number / ECS ref)",
-                    f"schedule_80ggc.contributions[{i}].transaction_ref",
+                    "ITR1-R198b", False,
+                    f"80GGC contribution {i+1}: date must fall in previous year "
+                    "2025-04-01 through 2026-03-31",
+                    f"{path}.contribution_date",
                 ))
-            # R329: Political party name and PAN required
-            if c.amount > _z and (not c.political_party_name or not c.political_party_pan):
+            if contribution.other_mode_amount > _z:
+                if not contribution.transaction_ref:
+                    results.append(_make(
+                        "ITR1-R199", False,
+                        f"80GGC contribution {i+1}: non-cash contribution requires "
+                        "a transaction reference",
+                        f"{path}.transaction_ref",
+                    ))
+                if not contribution.ifsc_code:
+                    results.append(_make(
+                        "ITR1-R199b", False,
+                        f"80GGC contribution {i+1}: non-cash contribution requires IFSC",
+                        f"{path}.ifsc_code",
+                    ))
+            if not contribution.political_party_name or not contribution.political_party_pan:
                 results.append(_make(
                     "ITR1-R329", False,
                     f"80GGC contribution {i+1}: political party name and PAN are mandatory",
-                    f"schedule_80ggc.contributions[{i}]",
+                    path,
+                ))
+            elif inp.assessee_pan and contribution.political_party_pan == inp.assessee_pan:
+                results.append(_make(
+                    "ITR1-R329b", False,
+                    f"80GGC contribution {i+1}: political party PAN cannot equal "
+                    "the assessee PAN",
+                    f"{path}.political_party_pan",
                 ))
 
     # --- R219: 139(9) defective response A23 match (portal-level) ---

@@ -29,6 +29,7 @@ from app.schemas.itr1 import (
     ITR1FilingProfile,
     ITR1Input,
     OtherSourcesIncome,
+    PoliticalContribution,
     PostalAddress,
     PropertyFilingProfile,
     PropertyType,
@@ -37,6 +38,7 @@ from app.schemas.itr1 import (
     Schedule80DD,
     Schedule80EEntry,
     Schedule80GGA,
+    Schedule80GGC,
     ITR1Schedule80EELoanEntry,
     ITR1Schedule80EEALoanEntry,
     ITR1Schedule80EEBLoanEntry,
@@ -1091,6 +1093,72 @@ def test_builder_rejects_incomplete_schedule_80g_identity() -> None:
         ),
     })
     with pytest.raises(ValueError, match="donee identity and address"):
+        _build(body)
+
+
+def test_builder_maps_complete_schedule_80ggc() -> None:
+    """Schedule 80GGC must disclose cash while allowing only supported non-cash."""
+    contribution = PoliticalContribution(
+        cash_amount=Decimal("2000"),
+        other_mode_amount=Decimal("10000"),
+        contribution_date=date(2025, 4, 1),
+        transaction_ref="NEFT-80GGC-001",
+        ifsc_code="SBIN0001234",
+        political_party_name="National Reform Party",
+        political_party_pan="ABCDE1234F",
+    )
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(amount_80ggc=Decimal("9000")),
+        "schedule_80ggc": Schedule80GGC(contributions=[contribution]),
+    })
+    itr1 = _build(body)["ITR"]["ITR1"]
+    schedule = itr1["Schedule80GGC"]
+    assert schedule["Schedule80GGCDetails"] == [{
+        "DonationDate": "2025-04-01",
+        "DonationAmtCash": 2000,
+        "DonationAmtOtherMode": 10000,
+        "TransactionRefNum": "NEFT-80GGC-001",
+        "IFSCCode": "SBIN0001234",
+        "DonationAmt": 12000,
+        "EligibleDonationAmt": 9000,
+        "PoliticalPartyName": "National Reform Party",
+        "PoliticalPartyPAN": "ABCDE1234F",
+    }]
+    assert schedule["TotalDonationsUs80GGC"] == 12000
+    assert schedule["TotalEligibleDonationAmt80GGC"] == 9000
+    chapter = itr1["ITR1_IncomeDeductions"]
+    assert chapter["UsrDeductUndChapVIA"]["Section80GGC"] == 9000
+    assert chapter["DeductUndChapVIA"]["Section80GGC"] == 9000
+
+
+def test_builder_rejects_80ggc_party_pan_equal_to_assessee_pan() -> None:
+    """Direct computation must disallow an 80GGC row using the assessee PAN."""
+    contribution = PoliticalContribution(
+        other_mode_amount=Decimal("10000"),
+        contribution_date=date(2026, 3, 31),
+        transaction_ref="NEFT-SELF-PAN",
+        ifsc_code="SBIN0001234",
+        political_party_name="Invalid Self Party",
+        political_party_pan="ABCDE1234F",
+    )
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "assessee_pan": "ABCDE1234F",
+        "deductions_chapter6a": Chapter6ADeductions(amount_80ggc=Decimal("10000")),
+        "schedule_80ggc": Schedule80GGC(contributions=[contribution]),
+    })
+    result = compute(body)
+    details = result.schedules["deductions"].section_details["80GGC"]
+    assert details.allowed_deduction == 0
+    with pytest.raises(ValueError, match="positive eligible deduction"):
+        build_itr1_json(result, body)
+
+
+def test_builder_rejects_scalar_only_schedule_80ggc() -> None:
+    """A positive 80GGC claim cannot produce fabricated contribution rows."""
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(amount_80ggc=Decimal("10000")),
+    })
+    with pytest.raises(ValueError, match="Schedule 80GGC contribution rows"):
         _build(body)
 
 

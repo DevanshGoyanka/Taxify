@@ -21,6 +21,8 @@ from app.engine.constants import (
     SECTION_80U_LIMIT,
     SECTION_80U_SEVERE_LIMIT,
 )
+from app.engine.schedules.deductions.section_80gga import Section80GGAResult
+from app.engine.schedules.deductions.section_80ggc import Section80GGCResult
 from app.schemas.itr1 import (
     BankAccountType,
     FilingAddress,
@@ -309,6 +311,7 @@ def _income_deductions_itr1(
     ded_80gga: Decimal = Decimal("0"),
     usr_80gga: Optional[Decimal] = None,
     ded_80ggc: Decimal = Decimal("0"),
+    usr_80ggc: Optional[Decimal] = None,
     ded_80cch: Decimal = Decimal("0"),
 ) -> dict:
     return {
@@ -352,7 +355,9 @@ def _income_deductions_itr1(
             - ded_80g
             + (usr_80g if usr_80g is not None else ded_80g)
             - ded_80gga
-            + (usr_80gga if usr_80gga is not None else ded_80gga),
+            + (usr_80gga if usr_80gga is not None else ded_80gga)
+            - ded_80ggc
+            + (usr_80ggc if usr_80ggc is not None else ded_80ggc),
             ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1=ded_80ccd1,
             ded_80ccd1b=ded_80ccd1b,
             ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
@@ -368,7 +373,7 @@ def _income_deductions_itr1(
             ded_80g=(usr_80g if usr_80g is not None else ded_80g),
             ded_80gg=ded_80gg,
             ded_80gga=(usr_80gga if usr_80gga is not None else ded_80gga),
-            ded_80ggc=ded_80ggc,
+            ded_80ggc=(usr_80ggc if usr_80ggc is not None else ded_80ggc),
             ded_80cch=ded_80cch,
         ),
         "DeductUndChapVIA": _chapter_via_itr1(
@@ -677,22 +682,29 @@ def _schedule_80g(details: Any) -> dict[str, Any]:
     return schedule
 
 
-def _schedule_80gga(details: Any) -> dict[str, Any]:
+def _schedule_80gga(details: Section80GGAResult) -> dict[str, Any]:
     """Serialize a computed Section 80GGA result without eligibility logic."""
     eligible_rupees = _to_rupees(details.allowed_deduction)
     allocated_eligible = 0
+    eligible_indices = [
+        index for index, computed in enumerate(details.rows)
+        if computed.eligible_amount > 0
+    ]
+    final_eligible_index = eligible_indices[-1] if eligible_indices else None
     rows: list[dict[str, Any]] = []
     for index, computed in enumerate(details.rows):
         cash = _to_rupees(computed.source.cash_amount)
         other = _to_rupees(computed.source.other_mode_amount)
-        if index == len(details.rows) - 1:
+        if index == final_eligible_index:
             eligible = eligible_rupees - allocated_eligible
-        else:
+        elif computed.eligible_amount > 0:
             eligible = min(
                 _to_rupees(computed.eligible_amount),
                 eligible_rupees - allocated_eligible,
             )
             allocated_eligible += eligible
+        else:
+            eligible = 0
         rows.append({
             "RelevantClauseUndrDedClaimed": computed.source.relevant_clause.value,
             "NameOfDonee": computed.source.donee_name,
@@ -714,6 +726,62 @@ def _schedule_80gga(details: Any) -> dict[str, Any]:
         ),
         "TotalDonationsUs80GGA": sum(row["DonationAmt"] for row in rows),
         "TotalEligibleDonationAmt80GGA": emitted_eligible,
+    }
+
+
+def _schedule_80ggc(details: Section80GGCResult) -> dict[str, Any]:
+    """Serialize a computed Section 80GGC result without eligibility logic."""
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated_eligible = 0
+    eligible_indices = [
+        index for index, computed in enumerate(details.rows)
+        if computed.eligible_amount > 0
+    ]
+    final_eligible_index = eligible_indices[-1] if eligible_indices else None
+    rows: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        source = computed.source
+        cash = _to_rupees(source.cash_amount)
+        other = _to_rupees(source.other_mode_amount)
+        if index == final_eligible_index:
+            eligible = eligible_rupees - allocated_eligible
+        elif computed.eligible_amount > 0:
+            eligible = min(
+                _to_rupees(computed.eligible_amount),
+                eligible_rupees - allocated_eligible,
+            )
+            allocated_eligible += eligible
+        else:
+            eligible = 0
+        if source.contribution_date is None:
+            raise ValueError("Schedule 80GGC requires a contribution date")
+        row: dict[str, Any] = {
+            "DonationDate": source.contribution_date.isoformat(),
+            "DonationAmtCash": cash,
+            "DonationAmtOtherMode": other,
+            "DonationAmt": cash + other,
+            "EligibleDonationAmt": eligible,
+        }
+        if source.transaction_ref:
+            row["TransactionRefNum"] = source.transaction_ref
+        if source.ifsc_code:
+            row["IFSCCode"] = source.ifsc_code
+        if source.political_party_name:
+            row["PoliticalPartyName"] = source.political_party_name
+        if source.political_party_pan:
+            row["PoliticalPartyPAN"] = source.political_party_pan
+        rows.append(row)
+    emitted_eligible = sum(row["EligibleDonationAmt"] for row in rows)
+    if emitted_eligible != eligible_rupees:
+        raise ValueError("Schedule 80GGC eligible rows do not cross-foot")
+    return {
+        "Schedule80GGCDetails": rows,
+        "TotalDonationAmtCash80GGC": sum(row["DonationAmtCash"] for row in rows),
+        "TotalDonationAmtOtherMode80GGC": sum(
+            row["DonationAmtOtherMode"] for row in rows
+        ),
+        "TotalDonationsUs80GGC": sum(row["DonationAmt"] for row in rows),
+        "TotalEligibleDonationAmt80GGC": emitted_eligible,
     }
 
 
@@ -1299,6 +1367,7 @@ def build_itr1_json(
         ded_80gga=deduction("80GGA"),
         usr_80gga=(input_data.deductions_chapter6a.amount_80gga if input_data else None),
         ded_80ggc=deduction("80GGC"),
+        usr_80ggc=(input_data.deductions_chapter6a.amount_80ggc if input_data else None),
         ded_80cch=deduction("80CCH"),
     )
 
@@ -1439,9 +1508,15 @@ def build_itr1_json(
         elif input_data.schedule_80gga and input_data.schedule_80gga.donations:
             raise ValueError("Schedule 80GGA rows require a positive eligible deduction")
 
-        incomplete_claims = {
-            "80GGC": deduction("80GGC"),
-        }
+        details_80ggc = result.schedules["deductions"].section_details.get("80GGC")
+        if deduction("80GGC") > 0:
+            if details_80ggc is None or not details_80ggc.rows:
+                raise ValueError("Complete official Schedule 80GGC contribution rows are required")
+            itr1["Schedule80GGC"] = _schedule_80ggc(details_80ggc)
+        elif input_data.schedule_80ggc and input_data.schedule_80ggc.contributions:
+            raise ValueError("Schedule 80GGC rows require a positive eligible deduction")
+
+        incomplete_claims: dict[str, Decimal] = {}
         unsupported = [name for name, amount in incomplete_claims.items() if amount > 0]
         if unsupported:
             raise ValueError(

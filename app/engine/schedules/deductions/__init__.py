@@ -9,6 +9,7 @@ from app.schemas.itr1 import (
     TaxRegime,
     OtherSourcesIncome,
     Schedule80GGA,
+    Schedule80GGC,
 )
 from app.engine.schedules.deductions import (
     section_80c,
@@ -97,6 +98,8 @@ def compute_all(
     use_structured_80ddb: bool = False,
     hra_exempt_amount: Decimal = Decimal("0"),
     schedule_80gga: Optional[Schedule80GGA] = None,
+    schedule_80ggc: Optional[Schedule80GGC] = None,
+    assessee_pan: Optional[str] = None,
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
@@ -228,7 +231,17 @@ def compute_all(
     r_80gga = details_80gga.allowed_deduction
     _add("80GGA", r_80gga)
 
-    r_80ggc = section_80ggc.compute(ded, regime)
+    consumed_before_80ggc = consumed_before_80gga + r_80gga
+    available_80ggc = max(Decimal("0"), gti - consumed_before_80ggc)
+    details_80ggc = section_80ggc.compute_details(
+        ded,
+        schedule_80ggc,
+        available_80ggc,
+        regime,
+        assessee_pan,
+    )
+    result.section_details["80GGC"] = details_80ggc
+    r_80ggc = details_80ggc.allowed_deduction
     _add("80GGC", r_80ggc)
 
     total = deductions_before_80g + r_80g + r_80gg + r_80gga + r_80ggc
