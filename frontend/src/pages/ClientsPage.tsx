@@ -8,12 +8,13 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { Badge } from '../components/ui/Badge';
 import { Spinner } from '../components/ui/Spinner';
 import { panInitials, deriveEntityFromPAN } from '../utils/formatters';
+import type { ClientRecord } from '../types/client.types';
 import toast from 'react-hot-toast';
 
 export default function ClientsPage() {
   const { ayParam } = useAY();
   const navigate = useNavigate();
-  const [clients, setClients] = useState<any[]>([]);
+  const [clients, setClients] = useState<ClientRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -43,11 +44,11 @@ export default function ClientsPage() {
     return map[status] || 'muted';
   };
 
-  const handleDelete = async (id: number, name: string) => {
-    if (!confirm(`Are you sure you want to delete ${name}? This cannot be undone.`)) return;
+  const handleArchive = async (id: string, name: string) => {
+    if (!confirm(`Archive ${name}? Their prior-year returns will be preserved and the client can be restored later.`)) return;
     try {
-      await clientsApi.delete(id);
-      toast.success('Client deleted');
+      await clientsApi.archive(id);
+      toast.success('Client archived');
       loadClients();
     } catch (err: any) {
       toast.error(err.message);
@@ -158,7 +159,7 @@ export default function ClientsPage() {
                   <td>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button
-                        onClick={() => navigate(`/filing/${client.id}/${latestYear?.year || '2025-26'}`)}
+                        onClick={() => navigate(`/filing/${client.publicId}/${latestYear?.year || ayParam || '2026-27'}`)}
                         style={{
                           padding: '4px 8px',
                           background: 'var(--accent-blue)',
@@ -185,7 +186,7 @@ export default function ClientsPage() {
                         Edit
                       </button>
                       <button
-                        onClick={() => handleDelete(client.id, client.name)}
+                        onClick={() => handleArchive(client.publicId, client.name)}
                         style={{
                           padding: '4px 8px',
                           background: 'var(--danger-bg)',
@@ -196,7 +197,7 @@ export default function ClientsPage() {
                           cursor: 'pointer'
                         }}
                       >
-                        Delete
+                        Archive
                       </button>
                     </div>
                   </td>
@@ -296,7 +297,7 @@ function ClientModal({ client, onClose, onSave }: any) {
         if (!payload.portal_password) {
           delete payload.portal_password;
         }
-        await clientsApi.update(client.id, payload);
+        await clientsApi.update(client.publicId || client.id, payload);
         toast.success('Client updated');
       } else {
         await clientsApi.create(formData);

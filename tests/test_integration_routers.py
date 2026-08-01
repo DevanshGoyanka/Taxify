@@ -1,5 +1,6 @@
 import os
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -7,7 +8,14 @@ os.environ.setdefault("PORTAL_ENCRYPTION_KEY", "BF4X7PwLyjUJAZ68rDLJ7ba33LIeR5Ey
 
 from app.db.database import Base
 from app.db.models import User, Client, ClientITR
-from app.routers.clients import create_client, list_clients, update_client, delete_client, get_decrypted_portal_password
+from app.routers.clients import (
+    create_client,
+    delete_client,
+    list_clients,
+    restore_client,
+    update_client,
+    get_decrypted_portal_password,
+)
 from app.routers.client_itr import get_client_itr, save_client_itr, validate_client_itr
 from app.routers.tax import compute_tax_summary
 from app.routers.dashboard import get_dashboard_stats
@@ -39,7 +47,7 @@ def test_clients_crud_direct(db, current_user):
     # 1. Create client
     from app.schemas.clients import ClientCreate, ClientUpdate
     payload = ClientCreate(
-        pan="ABCDE1234F",
+        pan="ABCPD1234F",
         name="Jane Doe",
         email="jane@example.com",
         mobile="9876543210",
@@ -48,12 +56,13 @@ def test_clients_crud_direct(db, current_user):
     )
     client_res = create_client(payload, current_user=current_user, db=db)
     assert client_res.id is not None
+    assert client_res.publicId
     assert client_res.name == "Jane Doe"
     
     # 2. Get list
     clients_list = list_clients(current_user=current_user, db=db)
     assert len(clients_list) == 1
-    assert clients_list[0].pan == "ABCDE1234F"
+    assert clients_list[0].pan == "ABCPD1234F"
 
     # 3. Update client
     update_payload = ClientUpdate(
@@ -64,17 +73,47 @@ def test_clients_crud_direct(db, current_user):
     assert updated_client.name == "Jane Smith"
     assert updated_client.email == "janesmith@example.com"
 
-    # 4. Delete client
-    delete_res = delete_client(client_id=client_res.id, current_user=current_user, db=db)
-    assert delete_res["message"] == "Client deleted successfully."
+    # 4. Archive client without deleting historical records
+    legacy_id = client_res.id
+    public_id = client_res.publicId
+    historical_itr = ClientITR(
+        client_id=legacy_id,
+        year="2024-25",
+        itr_type="ITR-1",
+        status="Filed",
+        form_data='{"pan":"ABCPD1234F"}',
+        computed_result="{}",
+    )
+    db.add(historical_itr)
+    db.commit()
+
+    delete_res = delete_client(client_id=public_id, current_user=current_user, db=db)
+    assert delete_res["message"] == "Client archived successfully."
     clients_list = list_clients(current_user=current_user, db=db)
     assert len(clients_list) == 0
+    assert db.query(Client).filter(Client.id == legacy_id).first() is not None
+    assert db.query(ClientITR).filter(ClientITR.client_id == legacy_id).count() == 1
+    with pytest.raises(HTTPException) as archived_error:
+        update_client(
+            client_id=public_id,
+            payload=ClientUpdate(name="Blocked Change"),
+            current_user=current_user,
+            db=db,
+        )
+    assert archived_error.value.status_code == 409
+
+    # 5. Restore the same stable client identity
+    restored = restore_client(client_id=public_id, current_user=current_user, db=db)
+    assert restored.publicId == public_id
+    assert restored.id == legacy_id
+    clients_list = list_clients(current_user=current_user, db=db)
+    assert len(clients_list) == 1
 
 def test_client_itr_direct(db, current_user):
     # 1. Setup client
     client = Client(
         user_id=current_user.id,
-        pan="ABCDE1234F",
+        pan="ABCPD1234F",
         name="Jane Doe",
         email="jane@example.com",
         mobile="9876543210",
@@ -87,7 +126,7 @@ def test_client_itr_direct(db, current_user):
     
     # 2. Get default ITR (no row in DB yet)
     default_itr = get_client_itr(client_id=client.id, year="2025-26", current_user=current_user, db=db)
-    assert default_itr["pan"] == "ABCDE1234F"
+    assert default_itr["pan"] == "ABCPD1234F"
     assert default_itr["name"] == "Jane Doe"
     
     # 3. Save ITR
@@ -97,18 +136,18 @@ def test_client_itr_direct(db, current_user):
         "interestSB": 15000.0,
         "age": 35,
         "name": "Jane Doe",
-        "pan": "ABCDE1234F",
+        "pan": "ABCPD1234F",
         "dob": "1990-01-01"
     }
-    save_res = save_client_itr(client_id=client.id, year="2025-26", payload=itr_payload, current_user=current_user, db=db)
+    save_res = save_client_itr(client_id=client.public_id, year="2025-26", payload=itr_payload, current_user=current_user, db=db)
     assert save_res["message"] == "ITR saved successfully"
     
     # 4. Fetch again (now it exists in DB)
-    saved_itr = get_client_itr(client_id=client.id, year="2025-26", current_user=current_user, db=db)
+    saved_itr = get_client_itr(client_id=client.public_id, year="2025-26", current_user=current_user, db=db)
     assert saved_itr["basic"] == 1200000.0
     
     # 5. Validate ITR
-    val_res = validate_client_itr(client_id=client.id, year="2025-26", payload=itr_payload, current_user=current_user, db=db)
+    val_res = validate_client_itr(client_id=client.public_id, year="2025-26", payload=itr_payload, current_user=current_user, db=db)
     assert val_res["valid"] is True
     assert len(val_res["errors"]) == 0
 
@@ -132,7 +171,7 @@ def test_dashboard_stats_direct(db, current_user):
     # 1. Setup client
     from app.schemas.clients import ClientCreate
     payload = ClientCreate(
-        pan="ABCDE1234F",
+        pan="ABCPD1234F",
         name="Jane Doe",
         email="jane@example.com",
         mobile="9876543210",
@@ -154,7 +193,7 @@ def test_portal_password_crypto_and_response(db, current_user):
     from app.schemas.clients import ClientCreate
     # 1. Create client with portal password
     payload = ClientCreate(
-        pan="ABCDE1234F",
+        pan="ABCPD1234F",
         name="Jane Doe",
         email="jane@example.com",
         mobile="9876543210",

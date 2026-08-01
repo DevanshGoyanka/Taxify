@@ -8,8 +8,9 @@ Defines exactly two tables:
 """
 
 import datetime
+import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.database import Base
@@ -68,8 +69,18 @@ class Client(Base):
     """
 
     __tablename__ = "client"
+    __table_args__ = (
+        UniqueConstraint("user_id", "pan", name="uq_client_user_pan"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    public_id: Mapped[str] = mapped_column(
+        String(36),
+        unique=True,
+        index=True,
+        nullable=False,
+        default=lambda: str(uuid.uuid4()),
+    )
     user_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("user.id", ondelete="CASCADE"),
@@ -83,6 +94,11 @@ class Client(Base):
     aadhaar: Mapped[str] = mapped_column(String(20), nullable=True)
     dob: Mapped[str] = mapped_column(String(10), nullable=True)
     portal_password: Mapped[str] = mapped_column(Text, nullable=True)
+    archived_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -102,6 +118,9 @@ class ClientITR(Base):
     """
 
     __tablename__ = "client_itr"
+    __table_args__ = (
+        UniqueConstraint("client_id", "year", name="uq_client_itr_client_year"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     client_id: Mapped[int] = mapped_column(

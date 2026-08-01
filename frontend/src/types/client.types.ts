@@ -1,0 +1,40 @@
+export interface ClientYear {
+  year: string;
+  itrType: string;
+  status: string;
+}
+
+export interface ClientRecord {
+  /** Legacy internal database ID. Use only in temporary compatibility adapters. */
+  id: number;
+  /** Stable opaque ID used by routes and resource APIs. */
+  publicId: string;
+  pan: string;
+  name: string;
+  email?: string | null;
+  mobile?: string | null;
+  aadhaar?: string | null;
+  dob?: string | null;
+  archived: boolean;
+  archivedAt?: string | null;
+  years: ClientYear[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClientListParams {
+  search?: string;
+  assessmentYear?: string;
+  status?: string;
+  include_archived?: boolean;
+}
+
+export interface ClientUpsertPayload {
+  pan: string;
+  name: string;
+  email?: string;
+  mobile?: string;
+  aadhaar?: string;
+  dob?: string;
+  portal_password?: string;
+}

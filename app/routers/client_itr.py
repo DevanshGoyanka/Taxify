@@ -5,22 +5,21 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import User, Client, ClientITR
+from app.routers.clients import ensure_client_active, resolve_owned_client
 
 router = APIRouter(prefix="/clients/{client_id}/itr", tags=["client_itr"])
 
 @router.get("/{year}")
 def get_client_itr(
-    client_id: int,
+    client_id: str,
     year: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     # Verify client ownership
-    client = db.query(Client).filter(Client.id == client_id, Client.user_id == current_user.id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
+    client = resolve_owned_client(client_id, current_user.id, db)
         
-    itr = db.query(ClientITR).filter(ClientITR.client_id == client_id, ClientITR.year == year).first()
+    itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == year).first()
     if not itr:
         # Return default values based on client info
         return {
@@ -35,18 +34,17 @@ def get_client_itr(
 
 @router.put("/{year}")
 def save_client_itr(
-    client_id: int,
+    client_id: str,
     year: str,
     payload: dict,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     # Verify client ownership
-    client = db.query(Client).filter(Client.id == client_id, Client.user_id == current_user.id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
+    client = resolve_owned_client(client_id, current_user.id, db)
+    ensure_client_active(client)
         
-    itr = db.query(ClientITR).filter(ClientITR.client_id == client_id, ClientITR.year == year).first()
+    itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == year).first()
     
     # Determine ITR Form type
     # If business turnover/profit is present, or a presumptive scheme is selected, it's ITR-4, else ITR-1
@@ -57,7 +55,7 @@ def save_client_itr(
     
     if not itr:
         itr = ClientITR(
-            client_id=client_id,
+            client_id=client.id,
             year=year,
             itr_type=itr_type,
             status="In Progress",
@@ -75,7 +73,7 @@ def save_client_itr(
 
 @router.post("/{year}/validate")
 def validate_client_itr(
-    client_id: int,
+    client_id: str,
     year: str,
     payload: dict,
     current_user: User = Depends(get_current_user),
@@ -113,16 +111,14 @@ def validate_client_itr(
 
 @router.get("/{year}/download")
 def download_client_itr_json(
-    client_id: int,
+    client_id: str,
     year: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    client = db.query(Client).filter(Client.id == client_id, Client.user_id == current_user.id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
+    client = resolve_owned_client(client_id, current_user.id, db)
         
-    itr = db.query(ClientITR).filter(ClientITR.client_id == client_id, ClientITR.year == year).first()
+    itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == year).first()
     data = json.loads(itr.form_data) if itr else {}
     
     # Format according to CBDT json utility structure
@@ -153,14 +149,12 @@ def download_client_itr_json(
 
 @router.get("/{year}/download-pdf")
 def download_client_itr_pdf(
-    client_id: int,
+    client_id: str,
     year: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    client = db.query(Client).filter(Client.id == client_id, Client.user_id == current_user.id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
+    client = resolve_owned_client(client_id, current_user.id, db)
         
     # Generate simple PDF
     pdf_data = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << >> /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 50 >>\nstream\nBT /F1 12 Tf 70 800 Td (ITR Computation Report) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f\n0000000009 00000 n\n0000000056 00000 n\n0000000111 00000 n\n0000000212 00000 n\ntrailer\n<< /Size 5 >>\nstartxref\n312\n%%EOF"

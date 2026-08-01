@@ -82,7 +82,8 @@ import {
 } from './ITRComputationTabs';
 
 export default function ITRComputationPage() {
-  const { clientId, year } = useParams();
+  const { clientId: routeClientId, year } = useParams();
+  const clientId = routeClientId || '';
   const navigate = useNavigate();
   const { ayParam } = useAY();
   const [loading, setLoading] = useState(true);
@@ -92,6 +93,7 @@ export default function ITRComputationPage() {
   const [itrForm, setItrForm] = useState('ITR-1');
   const [showImportMenu, setShowImportMenu] = useState(false);
   const [clientData, setClientData] = useState<any>(null);
+  const legacyClientId = clientData?.id as number | undefined;
   
   // Part 2: Import document state
   const [importedAIS, setImportedAIS] = useState<any>(null);
@@ -203,8 +205,8 @@ export default function ITRComputationPage() {
     if (!clientId) return;
     setLoading(true);
     Promise.all([
-      clientsApi.get(Number(clientId)),
-      itrApi.getFormData(Number(clientId), ayParam || '2025-26')
+      clientsApi.get(clientId),
+      itrApi.getFormData(clientId, year || ayParam || '2026-27')
     ])
       .then(([client, itrData]) => {
         setClientData(client);
@@ -250,7 +252,7 @@ export default function ITRComputationPage() {
       })
       .catch(err => toast.error(err.message))
       .finally(() => setLoading(false));
-  }, [clientId, ayParam]);
+  }, [clientId, year, ayParam]);
 
   const [backendTaxResult, setBackendTaxResult] = useState<any>(null);
   const [taxResultLoading, setTaxResultLoading] = useState(false);
@@ -402,7 +404,7 @@ export default function ITRComputationPage() {
         dataToSave.s80G = 0;
       }
       
-      await itrApi.saveFormData(Number(clientId), year!, dataToSave);
+      await itrApi.saveFormData(clientId, year!, dataToSave);
       toast.success('Saved ✓');
     } catch (err: any) {
       toast.error(err.message);
@@ -412,12 +414,12 @@ export default function ITRComputationPage() {
   };
 
   const handleDownloadJson = () => {
-    itrApi.downloadJson(Number(clientId), year!).catch(err => toast.error(err.message));
+    itrApi.downloadJson(clientId, year!).catch(err => toast.error(err.message));
   };
 
   const handleDownloadPdf = async () => {
     try {
-      await itrApi.downloadPdf(Number(clientId), year!);
+      await itrApi.downloadPdf(clientId, year!);
       toast.success('PDF downloaded successfully');
     } catch (err: any) {
       toast.error(err.message || 'PDF download failed');
@@ -454,7 +456,7 @@ export default function ITRComputationPage() {
           data = JSON.parse(text);
         } else if (typeStr === 'ais-pdf') {
           const { integrationApi } = await import('../api/integration');
-          data = await integrationApi.importAIS(file, Number(clientId), year!, pan!, dob!);
+          data = await integrationApi.importAIS(file, legacyClientId!, year!, pan!, dob!);
           setImportedAIS(data);
         } else if (typeStr === 'ais-json') {
           const { integrationApi } = await import('../api/integration');
@@ -467,7 +469,7 @@ export default function ITRComputationPage() {
         } else if (typeStr === '26as-txt' || typeStr === '26as-pdf') {
           const { integrationApi } = await import('../api/integration');
           // Backend will use client's DOB as password for ZIP files
-          data = await integrationApi.import26AS(file, Number(clientId));
+          data = await integrationApi.import26AS(file, legacyClientId!);
           setImported26AS(data);
         }
         
@@ -640,7 +642,7 @@ export default function ITRComputationPage() {
             console.log('26AS Import - Interest Entries:', bankInterestEntriesFrom26AS);
             
             setFormData((prev: any) => ({ ...prev, ...formDataUpdate }));
-            await itrApi.saveFormData(Number(clientId), year!, { ...formData, ...formDataUpdate });
+            await itrApi.saveFormData(clientId, year!, { ...formData, ...formDataUpdate });
             toast.dismiss();
             
             const message = `26AS imported! ${tdsOnlyEntries.length} TDS entries. ` +
@@ -655,7 +657,7 @@ export default function ITRComputationPage() {
 
           // Auto-populate from AIS and TIS documents
           const populated = await integrationApi.autoPopulateAll(
-            Number(clientId),
+            legacyClientId!,
             year!,
             importedAIS || data,
             imported26AS || data,
@@ -679,7 +681,7 @@ export default function ITRComputationPage() {
             }
           }
           
-          await itrApi.saveFormData(Number(clientId), year!, { ...formData, ...populated });
+          await itrApi.saveFormData(clientId, year!, { ...formData, ...populated });
           toast.dismiss();
           toast.success(`${type.toUpperCase()} imported and auto-populated successfully!`);
         } else if (type === 'prefill') {
@@ -689,7 +691,7 @@ export default function ITRComputationPage() {
           // Import to backend - this saves to database
           const importResult = await integrationApi.importITDPrefill(
             file, 
-            Number(clientId), 
+            legacyClientId!,
             year!
           );
           
@@ -697,7 +699,7 @@ export default function ITRComputationPage() {
           toast.success('Prefill imported successfully! Reloading data...');
           
           // Reload form data from backend to get the extracted data
-          const freshFormData = await itrApi.getFormData(Number(clientId), year!);
+          const freshFormData = await itrApi.getFormData(clientId, year!);
           console.log('Fresh form data from backend:', freshFormData);
           
           // Update form with the extracted data - use direct assignment for numeric fields
