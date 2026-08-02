@@ -122,12 +122,6 @@ export default function ITRComputationPage() {
   const [showReconciliationModal, setShowReconciliationModal] = useState(false);
   const [reconciliationResult, setReconciliationResult] = useState<any>(null);
   const emptyFormDataRef = useRef<LegacyRecord>({
-
-  // Import confirmation modal state
-  const [showImportConfirmModal, setShowImportConfirmModal] = useState(false);
-  const [reconciledImportData, setReconciledImportData] = useState<ReconciledResults | null>(null);
-  const [reconDiscrepancies, setReconDiscrepancies] = useState<string[]>([]);
-  const [formData, setFormData] = useState<any>({
     // Personal Info - CBDT Mandatory Fields
     gender: 'M', fatherName: '', maritalStatus: 'SINGLE', nationality: 'INDIA', residentialStatus: 'ROR',
     mobileCountryCode: '91', country: '91', state: '',
@@ -227,6 +221,12 @@ export default function ITRComputationPage() {
   });
   const [editorModel, setEditorModel] = useState<ReturnEditorModel | null>(null);
   const editorRef = useRef<ReturnEditorModel | null>(null);
+
+  // Import confirmation modal state
+  const [showImportConfirmModal, setShowImportConfirmModal] = useState(false);
+  const [reconciledImportData, setReconciledImportData] = useState<ReconciledResults | null>(null);
+  const [reconDiscrepancies, setReconDiscrepancies] = useState<string[]>([]);
+
   const formData = useMemo<any>(() => editorModel ? composeLegacyPayload(editorModel) : {}, [editorModel]);
   const setFormData = useCallback((action: SetStateAction<LegacyRecord>): void => {
     setEditorModel((current) => {
