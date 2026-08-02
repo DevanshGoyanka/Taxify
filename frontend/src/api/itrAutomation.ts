@@ -116,7 +116,7 @@ export const itrAutomationApi = {
    */
   startImport(
     clientId: number,
-    assessmentYear: string = '2025-26',
+    assessmentYear: string = '2026-27',
     jobType: string = 'DOWNLOAD_ALL',
   ): Promise<StartJobResponse> {
     return axiosInstance

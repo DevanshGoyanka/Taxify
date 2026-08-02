@@ -87,7 +87,7 @@ def list_clients(
             years_list.append(ClientYearResponse(year=assessmentYear, itrType="ITR-1", status="Not Started"))
         elif not years_list:
             # Default fallback for list view
-            years_list.append(ClientYearResponse(year="2025-26", itrType="ITR-1", status="Not Started"))
+            years_list.append(ClientYearResponse(year="2026-27", itrType="ITR-1", status="Not Started"))
 
         response.append(
             ClientResponse(
@@ -136,10 +136,10 @@ def create_client(
     db.commit()
     db.refresh(client)
     
-    # Auto-create a default ClientITR row for 2025-26
+    # Auto-create a default ClientITR row for 2026-27
     default_itr = ClientITR(
         client_id=client.id,
-        year="2025-26",
+        year="2026-27",
         itr_type="ITR-1",
         status="Not Started",
         form_data="{}",
@@ -148,7 +148,7 @@ def create_client(
     db.add(default_itr)
     db.commit()
     
-    years_list = [ClientYearResponse(year="2025-26", itrType="ITR-1", status="Not Started")]
+    years_list = [ClientYearResponse(year="2026-27", itrType="ITR-1", status="Not Started")]
     
     return ClientResponse(
         id=client.id,
@@ -183,7 +183,7 @@ def get_client(
         for itr in itrs
     ]
     if not years_list:
-        years_list.append(ClientYearResponse(year="2025-26", itrType="ITR-1", status="Not Started"))
+        years_list.append(ClientYearResponse(year="2026-27", itrType="ITR-1", status="Not Started"))
 
     return ClientResponse(
         id=client.id,
@@ -237,7 +237,7 @@ def update_client(
         for itr in itrs
     ]
     if not years_list:
-        years_list.append(ClientYearResponse(year="2025-26", itrType="ITR-1", status="Not Started"))
+        years_list.append(ClientYearResponse(year="2026-27", itrType="ITR-1", status="Not Started"))
 
     return ClientResponse(
         id=client.id,
@@ -276,7 +276,7 @@ def get_client_years(
         raise HTTPException(status_code=404, detail="Client not found.")
         
     itrs = db.query(ClientITR).filter(ClientITR.client_id == client.id).order_by(ClientITR.year.desc()).all()
-    return [itr.year for itr in itrs] or ["2025-26"]
+    return [itr.year for itr in itrs] or ["2026-27"]
 
 @router.get("/{client_id}/pan-analysis")
 def get_client_pan_analysis(

@@ -22,9 +22,40 @@ function isSalaryCat(entry: ReconciledEntry): boolean {
 function isBusinessCat(entry: ReconciledEntry): boolean {
   // Entries that belong under "Profits and Gains of Business or Profession"
   // or should be routed to bizTurnover/bpNetProfit form fields.
-  // These include: 194H (commission), 194C (contracts), 194J (professional),
+  // These include: 194C (contracts), 194J (professional),
   // 194M (certain payments), and any other business-like receipts.
+  // Note: 194H (commission/brokerage) is classified as Other Sources.
   return entry.income_head === 'Profits and Gains of Business or Profession';
+}
+
+const PROFESSIONAL_SECTIONS = new Set(['194J']);
+const BUSINESS_SECTIONS = new Set([
+  '194C', '194I', '194M', '194N', '194O', '194Q', '194S',
+  '194D', '206C', '206CE', '206CF',
+]);
+
+function detectPresumptiveScheme(entries: ReconciledEntry[]): '44AD' | '44ADA' | 'Regular' {
+  let hasProfessional = false;
+  let hasBusiness = false;
+
+  for (const entry of entries) {
+    const sec = (entry.section || '').replace(/\s+/g, '').toUpperCase();
+    if (PROFESSIONAL_SECTIONS.has(sec)) hasProfessional = true;
+    if (BUSINESS_SECTIONS.has(sec)) hasBusiness = true;
+  }
+
+  // If all entries are professional (194J), classify as 44ADA
+  if (hasProfessional && !hasBusiness) return '44ADA';
+  // If entries have business sections, classify as 44AD
+  if (hasBusiness) return '44AD';
+  // Default: 44AD for generic business receipts
+  return '44AD';
+}
+
+function computeStatutoryMinimum(turnover: number, scheme: '44AD' | '44ADA' | 'Regular'): number {
+  if (scheme === '44ADA') return Math.round(turnover * 0.50);
+  if (scheme === '44AD') return Math.round(turnover * 0.06);
+  return turnover;
 }
 
 function isDividendCat(entry: ReconciledEntry): boolean {
@@ -261,15 +292,17 @@ export function mapReconciledToFormData(results: ReconciledResults): MapReconcil
     interestFD,
 
     // ── Business / Profession ──
-    // 26AS Part I entries under sections 194H, 194C, 194J, 194M etc.
-    // These are commission/brokerage/contract payments — NOT salary.
-    // 194H = commission at 5%, 194C = contracts, 194J = professional fees.
-    // Route to bizTurnover for presumptive taxation (ITR-4 / Section 44AD).
-    // The engine will apply 6% (digital) or 8% (cash) rate automatically.
+    // Detect the correct presumptive scheme from TDS section codes:
+    // 194J → professional income (44ADA), 194H/194C/194M → business (44AD).
+    // Declared income defaults to the statutory minimum, not full turnover.
     bizTurnover: totalBusiness > 0 ? totalBusiness : undefined,
-    bpNetProfit: totalBusiness > 0 ? totalBusiness : undefined,
-    bizDeclared: totalBusiness > 0 ? totalBusiness : undefined,
-    bizPresumptive: totalBusiness > 0 ? '44AD' : undefined,
+    bpNetProfit: totalBusiness > 0
+      ? computeStatutoryMinimum(totalBusiness, detectPresumptiveScheme(businessEntries))
+      : undefined,
+    bizDeclared: totalBusiness > 0
+      ? computeStatutoryMinimum(totalBusiness, detectPresumptiveScheme(businessEntries))
+      : undefined,
+    bizPresumptive: totalBusiness > 0 ? detectPresumptiveScheme(businessEntries) : undefined,
 
     // ── Capital Gains ──
     capitalGainTransactions: capitalGainsEntries.length > 0

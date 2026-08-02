@@ -31,8 +31,8 @@ router = APIRouter(tags=["automation"])
 def start_automation_import(
     client_id: int,
     assessment_year: str = Query(
-        default="2025-26",
-        description="Assessment year, e.g. '2025-26'. Converted to financial year internally.",
+        default="2026-27",
+        description="Assessment year, e.g. '2026-27'. Converted to financial year internally.",
     ),
     job_type: str = Query(
         default="DOWNLOAD_ALL",

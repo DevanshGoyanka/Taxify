@@ -26,7 +26,7 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
 ):
     if not ay:
-        ay = "2025-26"
+        ay = "2026-27"
 
     # Total clients for this user
     total_clients = db.query(Client).filter(Client.user_id == current_user.id).count()

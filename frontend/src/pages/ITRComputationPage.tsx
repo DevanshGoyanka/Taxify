@@ -143,7 +143,7 @@ export default function ITRComputationPage() {
     setLoading(true);
     Promise.all([
       clientsApi.get(Number(clientId)),
-      itrApi.getFormData(Number(clientId), ayParam || '2025-26')
+      itrApi.getFormData(Number(clientId), ayParam || '2026-27')
     ])
       .then(([client, itrData]) => {
         setClientData(client);
@@ -195,7 +195,7 @@ export default function ITRComputationPage() {
     taxResultDebounceRef.current = setTimeout(() => {
       console.log('[TAX] Calling computeTaxSummary for Other Sources...', { ayParam, regime: regime, formDataKeys: Object.keys(formData || {}) });
       setTaxResultLoading(true);
-      itrApi.computeTaxSummary(formData, ayParam || '2025-26', regime)
+      itrApi.computeTaxSummary(formData, ayParam || '2026-27', regime)
         .then((result: any) => {
           console.log('[TAX] computeTaxSummary result - regimeUsed:', result.taxRegime, 'result:', result);
           setBackendTaxResult(result);
@@ -351,7 +351,7 @@ export default function ITRComputationPage() {
     setStatusBoxJob(null);
 
     try {
-      const res = await itrAutomationApi.startImport(Number(clientId), ayParam || '2025-26');
+      const res = await itrAutomationApi.startImport(Number(clientId), ayParam || '2026-27');
       setAutomationJobId(res.job_id);
       setShowStatusBox(true);
     } catch (err: any) {
@@ -561,7 +561,7 @@ export default function ITRComputationPage() {
             if (fyFrom26AS.includes("2025")) {
               fyFrom26AS = '2025-26';
             } else if (fyFrom26AS.includes("2024")) {
-              fyFrom26AS = '2024-25';
+              fyFrom26AS = '2025-26';
             }
             
             // TDS entries only (where TDS > 0)
@@ -848,7 +848,7 @@ export default function ITRComputationPage() {
   };
 
   const autoDetectITRForm = () => {
-    // Comprehensive ITR form detection based on CBDT rules - AY 2025-26
+    // Comprehensive ITR form detection based on CBDT rules - AY 2026-27
     const hasBusinessIncome = (formData.bizTurnover || 0) > 0 || (formData.bpNetProfit || 0) > 0;
     const hasPresumptiveIncome = hasBusinessIncome && formData.bizPresumptive && formData.bizPresumptive !== 'Regular';
     
@@ -1112,7 +1112,7 @@ export default function ITRComputationPage() {
               <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
                 <span className="mono">{clientData?.pan || ''}</span>
                 <span style={{ margin: '0 8px' }}>•</span>
-                <span>AY {ayParam || '2025-26'}</span>
+                <span>AY {ayParam || '2026-27'}</span>
               </div>
             </div>
           </div>
@@ -1951,7 +1951,7 @@ function SalaryTab({ formData, setFormData, ayParam, regime, taxResult }: any) {
       <EmployerEntryManager
         entries={formData.employerEntries || []}
         onChange={(entries) => setFormData({ ...formData, employerEntries: entries })}
-        assessmentYear={ayParam || '2025-26'}
+        assessmentYear={ayParam || '2026-27'}
         taxRegime={regime === 'new' ? 'NEW' : 'OLD'}
         backendResult={{
           grossSalaryTotal: taxResult?.grossSalary,

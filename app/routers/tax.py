@@ -127,12 +127,15 @@ def compute_tax_summary(
     # Check if this is ITR-4 (by checking presumptive turnover/income)
     biz_turnover = float(payload.get("bizTurnover", 0) or 0)
     bp_profit = float(payload.get("bpNetProfit", 0) or 0)
+    biz_declared = float(payload.get("bizDeclared", 0) or 0)
     presumptive_type = payload.get("bizPresumptive", "44AD")
     
     is_itr4 = biz_turnover > 0 or bp_profit > 0
     
     if is_itr4:
-        # Map ITR4
+        # For presumptive schemes use bizDeclared; for Regular use bpNetProfit
+        declared_income = biz_declared if presumptive_type in ("44AD", "44ADA") else bp_profit
+        
         scheme_enum = PresumptiveScheme.S44AD
         if presumptive_type == "44ADA":
             scheme_enum = PresumptiveScheme.S44ADA
@@ -140,7 +143,7 @@ def compute_tax_summary(
                 gross_receipts=Decimal(str(biz_turnover)),
                 digital_receipts=Decimal(str(biz_turnover)),
                 cash_receipts=Decimal("0"),
-                income_declared=Decimal(str(bp_profit))
+                income_declared=Decimal(str(declared_income))
             )
             biz_income = None
         else:
@@ -148,7 +151,7 @@ def compute_tax_summary(
                 total_turnover=Decimal(str(biz_turnover)),
                 digital_turnover=Decimal(str(biz_turnover)),
                 cash_turnover=Decimal("0"),
-                income_declared=Decimal(str(bp_profit))
+                income_declared=Decimal(str(declared_income))
             )
             prof_income = None
             
@@ -275,7 +278,7 @@ def compute_tax_summary(
     }
 
 @router.post("/business-income/calculate")
-def calculate_business_income(request: dict, assessmentYear: str = "2025-26"):
+def calculate_business_income(request: dict, assessmentYear: str = "2026-27"):
     scheme = request.get("scheme", "Regular")
     gross_turnover = float(request.get("grossTurnover", 0) or 0)
     declared_income = float(request.get("declaredIncome", 0) or 0)
@@ -330,7 +333,7 @@ def validate_business_input(request: dict):
         "isValid": len(errors) == 0,
         "errors": errors,
         "warnings": warnings,
-        "assessmentYear": "2025-26"
+        "assessmentYear": "2026-27"
     }
 
 @router.post("/capital-gains/calculate")
@@ -380,7 +383,7 @@ def calculate_capital_gains(request: dict):
         "taxableGain": taxable_gain,
         "taxRate": tax_rate,
         "taxPayable": tax_payable,
-        "assessmentYear": request.get("assessmentYear", "2025-26"),
+        "assessmentYear": request.get("assessmentYear", "2026-27"),
         "scheduleCGReference": "Schedule CG",
         "sectionReference": sec_ref,
         "complianceNotes": ["Holding period computed: {} months.".format(months)]

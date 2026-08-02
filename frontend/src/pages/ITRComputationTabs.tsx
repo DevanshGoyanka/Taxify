@@ -504,7 +504,7 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
       certificateNo: '',
       deductionDate: '',
       uniqueTransactionNo: '',
-      financialYear: '2024-25',
+      financialYear: '2025-26',
       verified26AS: false,
       claimedInReturn: true
     };
@@ -717,7 +717,7 @@ export function TDSTab({ formData, setFormData, taxResult }: any) {
             <Field label="Certificate No *" value={entry.certificateNo || ''} onChange={(v: any) => updateTDSEntry(index, 'certificateNo', v)} type="text" prefix="" required />
             <Field label="Deduction Date *" value={entry.deductionDate || ''} onChange={(v: any) => updateTDSEntry(index, 'deductionDate', v)} type="date" prefix="" required />
             <Field label="Unique Transaction No" value={entry.uniqueTransactionNo || ''} onChange={(v: any) => updateTDSEntry(index, 'uniqueTransactionNo', v)} type="text" prefix="" />
-            <Field label="Financial Year *" value={entry.financialYear || '2024-25'} onChange={(v: any) => updateTDSEntry(index, 'financialYear', v)} type="text" prefix="" required />
+            <Field label="Financial Year *" value={entry.financialYear || '2025-26'} onChange={(v: any) => updateTDSEntry(index, 'financialYear', v)} type="text" prefix="" required />
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginTop: 24 }}>
                 <input

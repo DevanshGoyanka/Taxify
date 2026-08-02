@@ -158,7 +158,7 @@ export default function ClientsPage() {
                   <td>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button
-                        onClick={() => navigate(`/filing/${client.id}/${latestYear?.year || '2025-26'}`)}
+                        onClick={() => navigate(`/filing/${client.id}/${latestYear?.year || '2026-27'}`)}
                         style={{
                           padding: '4px 8px',
                           background: 'var(--accent-blue)',
