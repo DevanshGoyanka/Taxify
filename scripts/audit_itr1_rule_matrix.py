@@ -68,6 +68,9 @@ KNOWN_STRUCTURAL_COVERAGE: dict[int, tuple[str, str]] = {
     87: ("IMPLEMENTED_BUILDER", "80G category total donation equals cash plus other mode in ITD builder; no exact rule ID emitted"),
     99: ("PARTIAL", "TDS/TCS claim consistency exists, but year-of-deduction null/zero is not proven as an exact validator for all TDS2/TDS3/TCS rows"),
     328: ("IMPLEMENTED_CALCULATION", "234-I computation exists in interest.py/calculator and R27/R28/R140 include fees_234i; exact R328 ID not emitted"),
+    296: ("RECONCILED_MODEL_INVARIANT", "The normalized ITR-1 HP model stores the assessee-share annual value directly; no separate pre-share annual-value field exists, so the official multiplication cannot diverge inside the domain model"),
+    298: ("RECONCILED_MODEL_INVARIANT", "Official HP Sl.1d is a presentation total; the normalized model stores annual rent and arrears separately and the calculator/builder derives their total instead of accepting an editable total"),
+    299: ("RECONCILED_MODEL_INVARIANT", "Official HP Sl.1i is a presentation total; the normalized loan rows store component interest and the validator/calculator sum rows instead of accepting an editable total"),
 }
 
 @dataclass(frozen=True)

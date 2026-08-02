@@ -1055,6 +1055,7 @@ class TDS3Entry(BaseModel):
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
     tds_section: Optional[str] = None
     tds_claimed_this_year: Decimal = Field(default=Decimal("0"), ge=0)
+    financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
 
 
 class InsurancePolicy(BaseModel):
@@ -1449,6 +1450,7 @@ class TDS2Entry(BaseModel):
     gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
     tds_claimed_this_year: Decimal = Field(default=Decimal("0"), ge=0)
+    financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
 
 
 class TCSEntry(BaseModel):
@@ -1458,6 +1460,7 @@ class TCSEntry(BaseModel):
     gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
     tcs_collected: Decimal = Field(default=Decimal("0"), ge=0)
     tcs_credit_claimed: Decimal = Field(default=Decimal("0"), ge=0)
+    financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
 
 
 ITR1Input.model_rebuild()

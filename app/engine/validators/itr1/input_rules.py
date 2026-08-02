@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+import re
 from app.schemas.itr1 import (
     AgeBracket,
     AssesseeType,
@@ -25,6 +26,35 @@ from app.engine.constants import SECTION_80DDB_LIMIT, SECTION_80DDB_SENIOR_LIMIT
 from app.engine.validators.base import ValidationResult, Severity
 
 _z = Decimal("0")
+
+
+def _norm_token(value: object) -> str:
+    """Normalize a dropdown/list token for official duplicate-selection checks."""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _contains_any_token(value: object, needles: tuple[str, ...]) -> bool:
+    token = _norm_token(value)
+    return any(_norm_token(needle) in token for needle in needles)
+
+
+def _duplicate_dropdown_results(
+    values: list[object],
+    rules: dict[str, tuple[str, tuple[str, ...]]],
+    field_path: str,
+) -> list[ValidationResult]:
+    """Return failures when an official dropdown nature is selected more than once."""
+    out: list[ValidationResult] = []
+    for rule_id, (label, needles) in rules.items():
+        count = sum(1 for value in values if _contains_any_token(value, needles))
+        if count > 1:
+            out.append(_make(
+                rule_id,
+                False,
+                f"{label} dropdown cannot be selected more than once; found {count} selections.",
+                field_path,
+            ))
+    return out
 
 
 def _make(rule_id: str, passed: bool, message: str, field_path: str = "", **kwargs) -> ValidationResult:
@@ -69,6 +99,75 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     is_individual = assessee == AssesseeType.INDIVIDUAL
     is_huf = assessee == AssesseeType.HUF
     is_firm = assessee == AssesseeType.FIRM
+
+    # Official exempt-income dropdown duplicate checks. These rules operate on
+    # the raw nature-code list because the aggregate breakdown is intentionally
+    # represented as a mapping and therefore cannot contain duplicate keys.
+    exempt_dropdown_rules = {
+        "ITR1-R033": ("Section 10(11) statutory provident fund", ("10(11)", "sec10(11)", "statutory provident fund")),
+        "ITR1-R034": ("Section 10(12) recognised provident fund", ("10(12)", "sec10(12)", "recognized provident fund", "recognised provident fund")),
+        "ITR1-R035": ("Section 10(13) approved superannuation fund", ("10(13)", "sec10(13)", "approved superannuation")),
+        "ITR1-R036": ("Section 10(16) scholarship", ("10(16)", "sec10(16)", "scholarship")),
+        "ITR1-R038": ("Section 10(18) gallantry-award pension", ("10(18)", "sec10(18)", "param vir chakra", "gallantry")),
+        "ITR1-R039": ("Defence medical disability pension", ("defense medical disability pension", "defence medical disability pension")),
+        "ITR1-R040": ("Section 10(19) armed-forces family pension", ("10(19)", "sec10(19)", "armed forces family pension")),
+        "ITR1-R041": ("Section 10(26) specified-area income", ("10(26)", "sec10(26)")),
+        "ITR1-R042": ("Section 10(26AAA) Sikkimese income", ("10(26aaa)", "sec10(26aaa)")),
+        "ITR1-R141": ("Section 10(17A) Government award", ("10(17a)", "sec10(17a)", "award instituted by government")),
+        "ITR1-R303": ("Section 10(2) member share from HUF", ("10(2)", "sec10(2)", "member share from huf")),
+        "ITR1-R304": ("Section 10(10BB) Bhopal gas-leak payment", ("10(10bb)", "sec10(10bb)", "bhopal gas")),
+        "ITR1-R305": ("Section 10(11A) Sukanya Samriddhi receipt", ("10(11a)", "sec10(11a)", "sukanya")),
+        "ITR1-R306": ("Section 10(12A) NPS partial withdrawal", ("10(12a)", "sec10(12a)")),
+        "ITR1-R307": ("Section 10(12AA) NPS Trust payment", ("10(12aa)", "sec10(12aa)")),
+        "ITR1-R308": ("Section 10(12AB) notified lump-sum receipt", ("10(12ab)", "sec10(12ab)")),
+        "ITR1-R309": ("Section 10(12B) NPS exit receipt", ("10(12b)", "sec10(12b)")),
+        "ITR1-R310": ("Section 10(12BA) NPS partial withdrawal", ("10(12ba)", "sec10(12ba)")),
+        "ITR1-R311": ("Section 10(12C) Agniveer Corpus Fund income", ("10(12c)", "sec10(12c)", "agniveer corpus")),
+        "ITR1-R312": ("Section 10(15) specified-security interest", ("10(15)", "sec10(15)", "specified securities")),
+        "ITR1-R313": ("Section 10(19A) ex-ruler palace annual value", ("10(19a)", "sec10(19a)", "ex-ruler", "ex ruler")),
+        "ITR1-R314": ("Section 10(23AA) armed-forces fund receipt", ("10(23aa)", "sec10(23aa)")),
+        "ITR1-R315": ("Section 10(23FBB) investment-fund income", ("10(23fbb)", "sec10(23fbb)")),
+        "ITR1-R316": ("Section 10(23FD) business-trust income", ("10(23fd)", "sec10(23fd)")),
+        "ITR1-R317": ("Section 10(25) approved-fund receipt", ("10(25)", "sec10(25)")),
+        "ITR1-R318": ("Minor child's small exemption", ("minor child", "10(32)", "sec10(32)")),
+        "ITR1-R319": ("Section 10(35) specified mutual-fund income", ("10(35)", "sec10(35)")),
+        "ITR1-R320": ("Section 10(35A) securitisation-trust income", ("10(35a)", "sec10(35a)", "securitization trust", "securitisation trust")),
+        "ITR1-R321": ("Section 10(43) reverse-mortgage receipt", ("10(43)", "sec10(43)", "reverse mortgage")),
+        "ITR1-R322": ("Section 10(44) NPS Trust income", ("10(44)", "sec10(44)")),
+    }
+    results.extend(_duplicate_dropdown_results(
+        list(inp.exempt_income_dropdowns),
+        exempt_dropdown_rules,
+        "exempt_income_dropdowns",
+    ))
+
+    other_source_dropdown_rules = {
+        "ITR1-R051": ("Interest from deposits", ("interest from deposits", "bank/post office", "bankpostoffice", "cooperative society")),
+        "ITR1-R055": ("Interest on income-tax refund", ("income tax refund", "interest on it refund", "tax refund")),
+        "ITR1-R056": ("Family pension", ("family pension",)),
+    }
+    results.extend(_duplicate_dropdown_results(
+        list(inp.other_sources_dropdowns),
+        other_source_dropdown_rules,
+        "other_sources_dropdowns",
+    ))
+
+    # R099: a claimed TDS2/TDS3/TCS credit must identify its deduction year.
+    for schedule_name, entries, claim_field in (
+        ("tds2_entries", inp.tds2_entries or [], "tds_claimed_this_year"),
+        ("tds3_entries", inp.tds3_entries or [], "tds_claimed_this_year"),
+        ("tcs_entries", inp.tcs_entries or [], "tcs_credit_claimed"),
+    ):
+        for index, entry in enumerate(entries):
+            claim = getattr(entry, claim_field, _z)
+            year = getattr(entry, "financial_year", None)
+            if claim > _z and (not year or year in {"0", "0000-00"}):
+                results.append(_make(
+                    "ITR1-R099",
+                    False,
+                    f"{schedule_name} row {index + 1}: financial year is mandatory when tax credit is claimed.",
+                    f"{schedule_name}[{index}].financial_year",
+                ))
 
     # ═══════════════════════════════════════════════════════════════════════
     # SECTION: Assessee Type Eligibility
@@ -124,6 +223,57 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     f"Maximum exemption for non-Govt employees is ₹25 lakh.",
                     "salary_income.leave_encashment_received",
                 ))
+        # R070/R188: both official retrenchment-compensation variants share the ₹5L ceiling.
+        if sal.retrenchment_compensation > 500_000:
+            for rule_id in ("ITR1-R070", "ITR1-R188"):
+                results.append(_make(
+                    rule_id, False,
+                    f"Retrenchment compensation exemption (Rs {sal.retrenchment_compensation}) "
+                    "cannot exceed Rs 5,00,000.",
+                    "salary_income.retrenchment_compensation",
+                ))
+        # R072: only one of retrenchment compensation and VRS can be selected.
+        if sal.retrenchment_compensation > _z and sal.vrs_compensation > _z:
+            results.append(_make(
+                "ITR1-R072", False,
+                "Sections 10(10B) and 10(10C) are mutually exclusive; claim only one.",
+                "salary_income",
+            ))
+        # R075/R076: prescribed allowances cannot exceed salary u/s 17(1).
+        for rule_id, amount, field in (
+            ("ITR1-R075", sal.sec10_14i_prescribed_allowance, "sec10_14i_prescribed_allowance"),
+            ("ITR1-R076", sal.sec10_14ii_personal_allowance, "sec10_14ii_personal_allowance"),
+        ):
+            if is_old and amount > sal.gross_salary:
+                results.append(_make(
+                    rule_id, False,
+                    f"Section 10(14) exemption (Rs {amount}) exceeds salary u/s 17(1) "
+                    f"(Rs {sal.gross_salary}).",
+                    f"salary_income.{field}",
+                ))
+        # R161: MP/MLA/MLC allowance is unavailable under the new regime.
+        if is_new and any(_contains_any_token(value, ("10(17)", "mp/mla/mlc", "mpmlamlc")) for value in inp.exempt_income_dropdowns):
+            results.append(_make(
+                "ITR1-R161", False,
+                "Section 10(17) MP/MLA/MLC allowance must be zero under the new tax regime.",
+                "exempt_income_dropdowns",
+            ))
+        # R264: salary plus exempt allowances requires nature of employment.
+        salary_exemptions = (
+            sal.hra_exempt_amount + sal.lta_exempt_amount + sal.gratuity_received
+            + sal.commuted_pension_received + sal.leave_encashment_received
+            + sal.vrs_compensation + sal.retrenchment_compensation
+            + sal.sec10_6_embassy_exempt + sal.sec10_7_foreign_allowance
+            + sal.sec10_10cc_perquisite_tax + sal.sec10_14i_prescribed_allowance
+            + sal.sec10_14ii_personal_allowance
+        )
+        if sal.gross_salary > _z and salary_exemptions > _z and not inp.nature_of_employment:
+            results.append(_make(
+                "ITR1-R264", False,
+                "Nature of employment is mandatory when salary and exempt allowances are reported.",
+                "nature_of_employment",
+            ))
+
         # R103: VRS exempt cap (Rs 5,00,000 for individuals)
         if sal.vrs_compensation > 500_000:
             results.append(_make(
@@ -520,39 +670,43 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                             "schedule_80d.policies",
                         ))
 
-                # R128: same as CBDT rule - 1a per-policy sum = Schedule 80D field
+                # R128/R234: 1a per-policy sum = Schedule 80D field
                 if section_sums["1a"] != sd80d.premium_1a_non_senior and sd80d.premium_1a_non_senior > 0:
-                    results.append(_make(
-                        "ITR1-R128", False,
-                        f"80D 1a: sum of per-policy premiums (Rs {section_sums['1a']}) "
-                        f"!= Schedule 80D premium_1a_non_senior "
-                        f"(Rs {sd80d.premium_1a_non_senior})",
-                        "schedule_80d.premium_1a_non_senior",
-                    ))
+                    for rule_id in ("ITR1-R128", "ITR1-R234"):
+                        results.append(_make(
+                            rule_id, False,
+                            f"80D 1a: sum of per-policy premiums (Rs {section_sums['1a']}) "
+                            f"!= Schedule 80D premium_1a_non_senior "
+                            f"(Rs {sd80d.premium_1a_non_senior})",
+                            "schedule_80d.premium_1a_non_senior",
+                        ))
                 if section_sums["1b"] != sd80d.premium_1b_senior and sd80d.premium_1b_senior > 0:
-                    results.append(_make(
-                        "ITR1-R131", False,
-                        f"80D 1b: sum of per-policy premiums (Rs {section_sums['1b']}) "
-                        f"!= Schedule 80D premium_1b_senior "
-                        f"(Rs {sd80d.premium_1b_senior})",
-                        "schedule_80d.premium_1b_senior",
-                    ))
+                    for rule_id in ("ITR1-R131", "ITR1-R235"):
+                        results.append(_make(
+                            rule_id, False,
+                            f"80D 1b: sum of per-policy premiums (Rs {section_sums['1b']}) "
+                            f"!= Schedule 80D premium_1b_senior "
+                            f"(Rs {sd80d.premium_1b_senior})",
+                            "schedule_80d.premium_1b_senior",
+                        ))
                 if section_sums["2a"] != sd80d.premium_2a_parents_non_senior and sd80d.premium_2a_parents_non_senior > 0:
-                    results.append(_make(
-                        "ITR1-R133", False,
-                        f"80D 2a: sum of per-policy premiums (Rs {section_sums['2a']}) "
-                        f"!= Schedule 80D premium_2a_parents_non_senior "
-                        f"(Rs {sd80d.premium_2a_parents_non_senior})",
-                        "schedule_80d.premium_2a_parents_non_senior",
-                    ))
+                    for rule_id in ("ITR1-R133", "ITR1-R236"):
+                        results.append(_make(
+                            rule_id, False,
+                            f"80D 2a: sum of per-policy premiums (Rs {section_sums['2a']}) "
+                            f"!= Schedule 80D premium_2a_parents_non_senior "
+                            f"(Rs {sd80d.premium_2a_parents_non_senior})",
+                            "schedule_80d.premium_2a_parents_non_senior",
+                        ))
                 if section_sums["2b"] != sd80d.premium_2b_parents_senior and sd80d.premium_2b_parents_senior > 0:
-                    results.append(_make(
-                        "ITR1-R135", False,
-                        f"80D 2b: sum of per-policy premiums (Rs {section_sums['2b']}) "
-                        f"!= Schedule 80D premium_2b_parents_senior "
-                        f"(Rs {sd80d.premium_2b_parents_senior})",
-                        "schedule_80d.premium_2b_parents_senior",
-                    ))
+                    for rule_id in ("ITR1-R135", "ITR1-R237"):
+                        results.append(_make(
+                            rule_id, False,
+                            f"80D 2b: sum of per-policy premiums (Rs {section_sums['2b']}) "
+                            f"!= Schedule 80D premium_2b_parents_senior "
+                            f"(Rs {sd80d.premium_2b_parents_senior})",
+                            "schedule_80d.premium_2b_parents_senior",
+                        ))
 
         else:
             # No schedule_80d provided — conservative caps
@@ -698,13 +852,14 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 actual=str(net_80ddb),
             ))
 
-        # Rule 6: exact official beneficiary and disease details required.
+        # Rule 6 / Rule 239: exact official beneficiary and disease details required.
         if details_80ddb is None:
-            results.append(_make(
-                "ITR1-R006", False,
-                "80DDB deduction claimed but official beneficiary category and specified disease are missing.",
-                "deductions_chapter6a.details_80ddb",
-            ))
+            for rule_id in ("ITR1-R006", "ITR1-R239"):
+                results.append(_make(
+                    rule_id, False,
+                    "80DDB deduction claimed but official beneficiary category and specified disease are missing.",
+                    "deductions_chapter6a.details_80ddb",
+                ))
         elif details_80ddb.reimbursement_amount > ch6a.amount_80ddb:
             results.append(_make(
                 "ITR1-R006b", False,
@@ -1202,12 +1357,13 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
         # Rule 162 / 253: New regime self-occupied interest must be 0
         if hp.property_type == PropertyType.SELF_OCCUPIED and hp.home_loan_interest_paid > 0:
-            results.append(_make(
-                "ITR1-R162", False,
-                f"New Tax Regime does not allow interest on borrowed capital for self-occupied "
-                f"property. Claimed: Rs {hp.home_loan_interest_paid}",
-                "house_property_income.home_loan_interest_paid",
-            ))
+            for rule_id in ("ITR1-R162", "ITR1-R253"):
+                results.append(_make(
+                    rule_id, False,
+                    f"New Tax Regime does not allow interest on borrowed capital for self-occupied "
+                    f"property. Claimed: Rs {hp.home_loan_interest_paid}",
+                    "house_property_income.home_loan_interest_paid",
+                ))
 
     # ========================================================================
     # SECTION: Old Regime — Salary Validations
@@ -2029,9 +2185,14 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     f"loan_details_{section.lower()}"))
             if claim > _z:
                 if not rows:
+                    missing_rows_rule = {
+                        "80EE": "ITR1-R225",
+                        "80EEA": "ITR1-R228",
+                        "80EEB": "ITR1-R231",
+                    }[section]
                     results.append(_make(
-                        f"ITR1-{section}-ROWS", False,
-                        f"A positive Section {section} claim requires complete official loan rows.",
+                        missing_rows_rule, False,
+                        f"A positive Section {section} claim requires complete official bank and loan rows.",
                         f"loan_details_{section.lower()}_list"))
                 else:
                     row_interest = sum((row.interest_paid for row in rows), _z)
@@ -2044,14 +2205,19 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                             expected=str(claim), actual=str(row_interest)))
                     for index, row in enumerate(rows):
                         if not start_date <= row.loan_date <= end_date:
+                            date_rule = {
+                                "80EE": "ITR1-R252",
+                                "80EEA": "ITR1-R230",
+                                "80EEB": "ITR1-R232",
+                            }[section]
                             results.append(_make(
-                                f"ITR1-{section}-DATE", False,
+                                date_rule, False,
                                 f"Schedule {section} row {index + 1} loan date "
                                 f"({row.loan_date}) must be from {start_date} through {end_date}.",
                                 f"loan_details_{section.lower()}_list[{index}].loan_date"))
                         if section == "80EE" and row.total_loan_amount > Decimal("3500000"):
                             results.append(_make(
-                                "ITR1-80EE-LOAN-LIMIT", False,
+                                "ITR1-R227", False,
                                 f"Schedule 80EE row {index + 1} loan amount exceeds Rs 35,00,000.",
                                 f"loan_details_80ee_list[{index}].total_loan_amount"))
                         if section in {"80EE", "80EEA"}:
@@ -2075,8 +2241,8 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
         if ch6a.amount_80eea > _z and inp.property_stamp_duty_value_80eea is None:
             results.append(_make(
-                "ITR1-80EEA-STAMP", False,
-                "Section 80EEA requires the property's stamp-duty value.",
+                "ITR1-R229", False,
+                "Section 80EEA requires the property's stamp-duty value, capped at Rs 45,00,000.",
                 "property_stamp_duty_value_80eea"))
         elif ch6a.amount_80eea == _z and inp.property_stamp_duty_value_80eea is not None:
             results.append(_make(
@@ -2791,6 +2957,14 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "schedule_80u",
             ))
             su = None
+        if su is not None:
+            expected_80u = Decimal("125000") if su.disability_type is DisabilitySeverity.SEVERE else Decimal("75000")
+            if ch6a.amount_80u != expected_80u:
+                results.append(_make(
+                    "ITR1-R201", False,
+                    f"80U deduction for {su.disability_type.value} disability must be exactly Rs {expected_80u}, subject to GTI.",
+                    "deductions_chapter6a.amount_80u",
+                ))
         if su is not None and ch6a.amount_80u != su.deduction_amount:
             results.append(_make(
                 "ITR1-R202", False,
@@ -2810,6 +2984,14 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "schedule_80dd",
             ))
             sdd = None
+        if sdd is not None:
+            expected_80dd = Decimal("125000") if sdd.disability_type is DisabilitySeverity.SEVERE else Decimal("75000")
+            if ch6a.amount_80dd != expected_80dd:
+                results.append(_make(
+                    "ITR1-R204", False,
+                    f"80DD deduction for {sdd.disability_type.value} disability must be exactly Rs {expected_80dd}, subject to GTI.",
+                    "deductions_chapter6a.amount_80dd",
+                ))
         if sdd is not None and ch6a.amount_80dd != sdd.deduction_amount:
             results.append(_make(
                 "ITR1-R205", False,
@@ -2821,12 +3003,13 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # --- R206-R207: 80DD/80U > 0 → details required ---
     if ch6a and ch6a.amount_80dd > _z:
         if sdd is None:
-            results.append(_make(
-                "ITR1-R206", False,
-                "80DD deduction claimed but Schedule 80DD disability and dependent "
-                "details were not provided.",
-                "schedule_80dd",
-            ))
+            for rule_id in ("ITR1-R206", "ITR1-R209"):
+                results.append(_make(
+                    rule_id, False,
+                    "80DD deduction claimed but Schedule 80DD disability and dependent "
+                    "details were not provided.",
+                    "schedule_80dd",
+                ))
         elif sdd.dependent_relationship is None:
             results.append(_make(
                 "ITR1-R206b", False,
@@ -2835,11 +3018,12 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "schedule_80dd.dependent_relationship",
             ))
     if ch6a and ch6a.amount_80u > _z and su is None:
-        results.append(_make(
-            "ITR1-R207", False,
-            "80U deduction claimed but Schedule 80U disability details were not provided.",
-            "schedule_80u",
-        ))
+        for rule_id in ("ITR1-R207", "ITR1-R208"):
+            results.append(_make(
+                rule_id, False,
+                "80U deduction claimed but Schedule 80U disability details were not provided.",
+                "schedule_80u",
+            ))
 
     # --- R211: 80GGC date range 01.04.2025 - 31.03.2026 ---
     if inp.schedule_80ggc and inp.schedule_80ggc.contributions:
@@ -2956,7 +3140,19 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "hra_details",
             ))
     if inp.schedule_10_13a:
+        from app.engine.common.hra import compute_hra_from_details
+
         hra_sched = inp.schedule_10_13a
+        computed_hra = compute_hra_from_details(hra_sched).exempt_amount
+        if sal.hra_exempt_amount != computed_hra:
+            results.append(_make(
+                "ITR1-R269", False,
+                f"Salary HRA exemption (Rs {sal.hra_exempt_amount}) must equal Schedule "
+                f"10(13A) eligible exemption (Rs {computed_hra}).",
+                "salary_income.hra_exempt_amount",
+                expected=str(computed_hra),
+                actual=str(sal.hra_exempt_amount),
+            ))
         if hra_sched.salary_for_hra > _z and hra_sched.actual_hra_received > _z:
             combined = hra_sched.salary_for_hra + hra_sched.actual_hra_received
             if combined > sal.gross_salary:
@@ -3141,6 +3337,34 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
     # --- R194-R199: 80GGC canonical per-row validations ---
     if inp.schedule_80ggc and inp.schedule_80ggc.contributions:
+        row_cash = sum((c.cash_amount for c in inp.schedule_80ggc.contributions), _z)
+        row_other = sum((c.other_mode_amount for c in inp.schedule_80ggc.contributions), _z)
+        row_gross = row_cash + row_other
+        if inp.schedule_80ggc.total_claimed != row_gross:
+            results.append(_make(
+                "ITR1-R197", False,
+                f"Schedule 80GGC total contribution (Rs {inp.schedule_80ggc.total_claimed}) "
+                f"must equal row cash plus other-mode contributions (Rs {row_gross}).",
+                "schedule_80ggc.total_claimed",
+            ))
+        if inp.schedule_80ggc.non_cash_contributions != row_other:
+            results.append(_make(
+                "ITR1-R197", False,
+                f"Schedule 80GGC non-cash total (Rs {inp.schedule_80ggc.non_cash_contributions}) "
+                f"must equal row other-mode contributions (Rs {row_other}).",
+                "schedule_80ggc.non_cash_contributions",
+            ))
+        if ch6a and ch6a.amount_80ggc != min(row_other, ch6a.amount_80ggc):
+            results.append(_make(
+                "ITR1-R196", False,
+                "Schedule 80GGC eligible total must equal eligible row amounts restricted to GTI.",
+                "deductions_chapter6a.amount_80ggc",
+            ))
+        results.append(_info(
+            "ITR1-R194",
+            "Schedule 80GGC row eligibility is derived from other-mode contributions; cash is excluded and the aggregate is restricted to GTI.",
+            "schedule_80ggc.contributions",
+        ))
         for i, contribution in enumerate(inp.schedule_80ggc.contributions):
             gross = contribution.cash_amount + contribution.other_mode_amount
             path = f"schedule_80ggc.contributions[{i}]"
