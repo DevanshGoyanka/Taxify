@@ -122,23 +122,6 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
     parentsSenior: showParentsSr,
   };
 
-  // Grand total — DISPLAY ESTIMATE ONLY.
-  // The authoritative 80D eligible amount is computed by the backend engine
-  // (section_80d.py), which applies the shared ₹5,000 preventive-checkup
-  // sub-limit across buckets and the per-bucket caps.  This frontend sum is
-  // an indicative estimate for the summary card and must NOT be treated as
-  // the final deduction; the backend value from the compute endpoint is the
-  // source of truth.
-  let totalEligible = 0;
-  const caps: Record<CatKey, number> = { selfFamily: CAP_SELF_FAMILY, selfFamilySenior: CAP_SELF_FAMILY_SR, parents: CAP_PARENTS, parentsSenior: CAP_PARENTS_SR };
-  for (const cm of CATS) {
-    if (!visibilityMap[cm.key]) continue;
-    const cat = data[cm.key] as Category80D;
-    const prem = sumPremiums(cat.policies);
-    const premEligible = Math.min(prem, caps[cm.key]);
-    totalEligible += premEligible + Math.min(cat.preventiveCheckup, CAP_PREVENTIVE) + Math.min(cat.medicalExpense, caps[cm.key] - premEligible);
-  }
-
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif' }}>
       {/* Header */}
@@ -181,15 +164,13 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
           {CATS.filter(cm => visibilityMap[cm.key]).map(cm => {
             const cat = data[cm.key] as Category80D;
             const prem = sumPremiums(cat.policies);
-            const premEligible = Math.min(prem, cm.cap);
-            const prevEligible = Math.min(cat.preventiveCheckup, CAP_PREVENTIVE);
-            const total = premEligible + prevEligible + Math.min(cat.medicalExpense, cm.cap - premEligible);
-            if (prem === 0 && cat.preventiveCheckup === 0 && cat.medicalExpense === 0) return null;
+            const totalEntered = prem + cat.preventiveCheckup + cat.medicalExpense;
+            if (totalEntered === 0) return null;
             return (
               <div key={cm.key} style={{ padding: 10, borderRadius: 6, border: `1px solid ${cm.color}30`, background: `${cm.color}08` }}>
                 <div style={{ fontSize: 10, fontWeight: 700, color: cm.color, marginBottom: 4 }}>{cm.shortLabel}</div>
                 <div style={{ fontSize: 12, color: '#333' }}>Premium: <strong>₹{prem.toLocaleString('en-IN')}</strong></div>
-                <div style={{ fontSize: 12, color: cm.color }}>Eligible: <strong>₹{total.toLocaleString('en-IN')}</strong></div>
+                <div style={{ fontSize: 12, color: cm.color }}>Total entered: <strong>₹{totalEntered.toLocaleString('en-IN')}</strong></div>
                 <div style={{ fontSize: 10, color: '#888' }}>Policies: {cat.policies.length}</div>
               </div>
             );
@@ -201,9 +182,7 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
       {CATS.filter(cm => visibilityMap[cm.key]).map(cm => {
         const cat = data[cm.key] as Category80D;
         const prem = sumPremiums(cat.policies);
-        const premEligible = Math.min(prem, cm.cap);
-        const prevEligible = Math.min(cat.preventiveCheckup, CAP_PREVENTIVE);
-        const medEligible = Math.min(cat.medicalExpense, cm.cap - premEligible);
+        const totalEntered = prem + cat.preventiveCheckup + cat.medicalExpense;
 
         return (
           <div key={cm.key} style={{ marginBottom: 16 }}>
@@ -319,8 +298,8 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
             {/* Category subtotal */}
             {(prem > 0 || cat.preventiveCheckup > 0 || cat.medicalExpense > 0) && (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #eee', display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '0 2px' }}>
-                <span style={{ color: '#666' }}>Premium: ₹{prem.toLocaleString('en-IN')} | Preventive: ₹{prevEligible.toLocaleString('en-IN')}</span>
-                <span style={{ fontWeight: 600, color: cm.color }}>Eligible: ₹{(premEligible + prevEligible + medEligible).toLocaleString('en-IN')}</span>
+                <span style={{ color: '#666' }}>Premium: ₹{prem.toLocaleString('en-IN')} | Preventive entered: ₹{cat.preventiveCheckup.toLocaleString('en-IN')}</span>
+                <span style={{ fontWeight: 600, color: cm.color }}>Total entered: ₹{totalEntered.toLocaleString('en-IN')}</span>
               </div>
             )}
           </div>
@@ -331,13 +310,19 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
           80D eligible amount. When the backend result is not yet available
           (e.g., no data entered), the footer is hidden. The frontend never
           computes the statutory eligible amount itself. */}
-      {((backendEligible ?? 0) > 0 || CATS.some(cm => visibilityMap[cm.key] && (data[cm.key] as Category80D).policies.length > 0)) && (
+      {CATS.some(cm => visibilityMap[cm.key] && (
+        (data[cm.key] as Category80D).policies.length > 0
+        || (data[cm.key] as Category80D).preventiveCheckup > 0
+        || (data[cm.key] as Category80D).medicalExpense > 0
+      )) && (
         <div style={{
           marginTop: 14, padding: 12, background: '#e8eaf6', borderRadius: 6,
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
-          <span style={{ fontWeight: 600, fontSize: 13 }}>Total 80D Eligible Deduction {backendEligible == null ? '(estimate — backend not yet computed)' : ''}</span>
-          <span style={{ fontWeight: 700, fontSize: 16, color: '#2e7d32' }}>₹{(backendEligible ?? totalEligible).toLocaleString('en-IN')}</span>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>Total 80D Eligible Deduction</span>
+          <span style={{ fontWeight: 700, fontSize: 16, color: '#2e7d32' }}>
+            {backendEligible == null ? 'Awaiting backend calculation' : `₹${backendEligible.toLocaleString('en-IN')}`}
+          </span>
         </div>
       )}
     </div>

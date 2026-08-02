@@ -72,7 +72,7 @@ export const itrApi = {
    * Calculate business income - all calculations done in backend
    * POST /api/v1/business-income/calculate
    */
-  calculateBusinessIncome: async (request: BusinessIncomeRequest, assessmentYear: string = '2025-26') => {
+  calculateBusinessIncome: async (request: BusinessIncomeRequest, assessmentYear: string = '2026-27') => {
     const { data } = await axiosInstance.post(
       `/business-income/calculate?assessmentYear=${assessmentYear}`,
       request

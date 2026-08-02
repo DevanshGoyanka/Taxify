@@ -64,7 +64,6 @@ interface CategoryTotals {
   totalCash: number;
   totalOtherMode: number;
   totalDonation: number;
-  totalEligible: number;
 }
 
 interface DonationEntryManagerProps {
@@ -117,17 +116,11 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
     setExpandedId(expandedId === id ? null : id);
   };
 
-  // ---- Category totals ----
-  // NOTE: totalEligible here is a DISPLAY ESTIMATE only.  The authoritative
-  // 80G eligible deduction is computed by the backend engine
-  // (section_80g.py), which applies the correct cash-per-donee-PAN ₹2,000
-  // aggregate rule (CBDT rule 88 — cash is ineligible when aggregate cash
-  // per PAN exceeds ₹2,000, NOT a per-row min).  This frontend estimate uses
-  // a per-row approximation for the summary card and must NOT be treated as
-  // the final deduction; the backend value from the compute endpoint is the
-  // source of truth.
+  // Raw category totals only. Statutory eligibility is calculated solely by
+  // the backend because cash eligibility is aggregated by donee PAN and
+  // qualifying-limit categories depend on adjusted gross total income.
   const categoryTotals = useMemo((): Record<DonationCategory, CategoryTotals> => {
-    const init = (): CategoryTotals => ({ totalCash: 0, totalOtherMode: 0, totalDonation: 0, totalEligible: 0 });
+    const init = (): CategoryTotals => ({ totalCash: 0, totalOtherMode: 0, totalDonation: 0 });
     const map: Record<DonationCategory, CategoryTotals> = {
       '100_NO_APPROVAL': init(), '50_NO_APPROVAL': init(),
       '100_APPROVAL_REQD': init(), '50_APPROVAL_REQD': init(),
@@ -137,9 +130,6 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
       t.totalCash += e.donationAmtCash;
       t.totalOtherMode += e.donationAmtOtherMode;
       t.totalDonation += e.donationAmtCash + e.donationAmtOtherMode;
-      // Display-only per-row estimate; backend applies aggregate-per-PAN rule.
-      const displayEligibleCash = Math.min(e.donationAmtCash, 2000);
-      t.totalEligible += Math.round((displayEligibleCash + e.donationAmtOtherMode) * CATEGORY_INFO[e.category].eligiblePct / 100);
     }
     return map;
   }, [entries]);
@@ -147,8 +137,6 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
   const grandTotalCash = Object.values(categoryTotals).reduce((s, t) => s + t.totalCash, 0);
   const grandTotalOther = Object.values(categoryTotals).reduce((s, t) => s + t.totalOtherMode, 0);
   const grandTotal = grandTotalCash + grandTotalOther;
-  // Labelled as estimate — backend owns the authoritative eligible amount.
-  const grandEligibleEstimate = Object.values(categoryTotals).reduce((s, t) => s + t.totalEligible, 0);
 
   // ---- Shared styles ----
   const labelStyle: React.CSSProperties = {
@@ -166,7 +154,7 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
         <div>
           <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Schedule 80G — Donations</h3>
           <p style={{ margin: '4px 0 0', fontSize: 11, color: '#666' }}>
-            Per-donee entries grouped by 4 CBDT categories. Cash donations capped at ₹2,000 per donee.
+            Per-donee entries grouped by 4 CBDT categories. The backend applies cash-mode and qualifying-limit rules.
           </p>
         </div>
         <button onClick={addEntry} style={{
@@ -195,8 +183,8 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
                 <div style={{ fontSize: 12, color: '#333' }}>
                   Donation: <strong>₹{t.totalDonation.toLocaleString('en-IN')}</strong>
                 </div>
-                <div style={{ fontSize: 12, color: '#333' }}>
-                  Eligible: <strong style={{ color: ci.color }}>₹{t.totalEligible.toLocaleString('en-IN')}</strong>
+                <div style={{ fontSize: 12, color: ci.color }}>
+                  Raw category total: <strong>₹{t.totalDonation.toLocaleString('en-IN')}</strong>
                 </div>
                 <div style={{ fontSize: 10, color: '#888' }}>
                   Cash: ₹{t.totalCash.toLocaleString('en-IN')} | Other: ₹{t.totalOtherMode.toLocaleString('en-IN')}
@@ -223,8 +211,6 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
         const isExpanded = expandedId === entry.id;
         const ci = CATEGORY_INFO[entry.category];
         const totalAmt = entry.donationAmtCash + entry.donationAmtOtherMode;
-        const eligibleCash = entry.donationAmtCash <= 2000 ? entry.donationAmtCash : 0;
-        const eligibleAmt = Math.round((eligibleCash + entry.donationAmtOtherMode) * ci.eligiblePct / 100);
 
         return (
           <div key={entry.id} style={{
@@ -257,7 +243,6 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>₹{totalAmt.toLocaleString('en-IN')}</span>
-                <span style={{ fontSize: 11, color: ci.color }}>Elig: ₹{eligibleAmt.toLocaleString('en-IN')}</span>
                 <span style={{ fontSize: 14, color: '#999', transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>
                   ▾
                 </span>
@@ -370,8 +355,8 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
                       style={{ ...inputStyle, background: '#f5f5f5', fontWeight: 700 }} />
                   </div>
                   <div>
-                    <label style={{ ...labelStyle, color: ci.color }}>Eligible ({ci.eligiblePct}%)</label>
-                    <input type="number" value={eligibleAmt} disabled
+                    <label style={{ ...labelStyle, color: ci.color }}>Eligible deduction</label>
+                    <input type="text" value="Calculated by backend" disabled
                       style={{ ...inputStyle, background: `${ci.color}10`, fontWeight: 700, color: ci.color }} />
                   </div>
                 </div>
@@ -440,8 +425,10 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
             <strong style={{ fontSize: 14 }}>₹{grandTotal.toLocaleString('en-IN')}</strong>
           </div>
           <div>
-            <span style={{ fontSize: 11, color: '#666' }}>Total Eligible Deduction {backendEligible == null ? '(estimate — backend not yet computed)' : ''}: </span>
-            <strong style={{ fontSize: 14, color: '#2e7d32' }}>₹{(backendEligible ?? grandEligibleEstimate).toLocaleString('en-IN')}</strong>
+            <span style={{ fontSize: 11, color: '#666' }}>Total Eligible Deduction: </span>
+            <strong style={{ fontSize: 14, color: '#2e7d32' }}>
+              {backendEligible == null ? 'Awaiting backend calculation' : `₹${backendEligible.toLocaleString('en-IN')}`}
+            </strong>
           </div>
         </div>
       )}

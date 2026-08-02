@@ -365,6 +365,7 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult, manage
       <Section80CManager
         data={formData.section80C || { investments: [] }}
         onChange={managers.section80C}
+        backendEligible={(taxResult?.deductionBreakdown?.['80C']) ?? null}
       />
 
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>NPS</h3>

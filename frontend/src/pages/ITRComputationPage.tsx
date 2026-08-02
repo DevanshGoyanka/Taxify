@@ -28,27 +28,17 @@ const returnRepository = new HttpReturnRepository();
 
 function buildPhase1Payload(source: any): any {
   const data = { ...source };
-  const investments = data.section80C?.investments || [];
-  const healthCategories = data.section80D
-    ? [data.section80D.selfFamily, data.section80D.selfFamilySenior, data.section80D.parents, data.section80D.parentsSenior]
-    : [];
-  const loans80E = data.deductionLoans?.section80E?.loans || [];
 
   // Frontend must NOT perform authoritative statutory calculations.
   // The backend engine owns every deduction ceiling, eligibility, and the
   // 80G cash-per-donee-PAN ₹2,000 rule (CBDT rule 88 — aggregate per PAN,
-  // not per-row min).  We only pass structured rows; the engine derives the
-  // eligible VIA amounts.  The scalar s80C/s80D/s80E/s80G fields below are
-  // kept only for display parity and are NOT used as the source of truth —
-  // the backend re-derives them from the structured rows in the payload.
-  data.s80C = investments.reduce((sum: number, item: any) => sum + (Number(item.amount) || 0), 0);
-  data.s80D = healthCategories.reduce((total: number, category: any) => total
-    + (category?.policies || []).reduce((sum: number, policy: any) => sum + (Number(policy.premiumAmount) || 0), 0)
-    + (Number(category?.preventiveCheckup) || 0) + (Number(category?.medicalExpense) || 0), 0);
-  data.s80E = loans80E.reduce((sum: number, loan: any) => sum + (Number(loan.interestAmount) || 0), 0);
-  // 80G eligible amount is NOT computed here. The backend section_80g module
-  // applies the correct cash-per-PAN aggregate rule. We only send the raw
-  // donation rows and let the engine compute the eligible deduction.
+  // not per-row min).  We pass structured rows; the engine derives the
+  // eligible VIA amounts.  The scalar s80C/s80D/s80E/s80G fields are set
+  // to 0 so the backend re-derives everything from the structured rows in
+  // the payload — no double-source risk.
+  data.s80C = 0;
+  data.s80D = 0;
+  data.s80E = 0;
   data.s80G = 0;
   data.bankAccountDetails = (data.bankAccountData?.accounts || []).map((account: any) => ({ ...account }));
   data.countryCodeMobile = String(data.mobileCountryCode || '91');
@@ -948,7 +938,7 @@ export default function ITRComputationPage() {
   };
 
   const autoDetectITRForm = () => {
-    // Comprehensive ITR form detection based on CBDT rules - AY 2025-26
+    // Comprehensive ITR form detection based on CBDT rules - AY 2026-27
     const hasBusinessIncome = (formData.bizTurnover || 0) > 0 || (formData.bpNetProfit || 0) > 0;
     const hasPresumptiveIncome = hasBusinessIncome && formData.bizPresumptive && formData.bizPresumptive !== 'Regular';
     
@@ -1762,7 +1752,7 @@ function Field({ label, value, onChange, computed, prefix = '₹', type = 'numbe
 }
 
 function SalaryTab({ entries, onChange, taxResult, ayParam, regime }: any) {
-  return <EmployerEntryManager entries={entries} onChange={onChange} assessmentYear={ayParam || '2025-26'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} />;
+  return <EmployerEntryManager entries={entries} onChange={onChange} assessmentYear={ayParam || '2026-27'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} />;
 }
 
 function HousePropertyTab({ entries, onChange, itrForm }: any) {

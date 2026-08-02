@@ -160,7 +160,7 @@ export function HousePropertyEntryManager({ entries, onChange, itrForm }: HouseP
         tenantAadhaar: entry.tenantAadhaar || ''
       }));
 
-      const response = await calculateHouseProperty(itrForm.replace('-', '').replace('ITR', '2025-26'), inputs);
+      const response = await calculateHouseProperty('2026-27', inputs);
       if (requestId !== calculationGenerationRef.current) return;
       setCalculationResponse(response);
 

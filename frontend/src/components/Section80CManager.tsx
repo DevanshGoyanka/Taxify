@@ -38,9 +38,10 @@ export interface Section80CData {
 interface Section80CManagerProps {
   data: Section80CData;
   onChange: (data: Section80CData) => void;
+  /** Authoritative 80C eligible amount from the backend engine
+   *  (section_80c aggregator with ₹1.5L ceiling). */
+  backendEligible?: number | null;
 }
-
-const CAP_80C = 150000;
 
 let _invIdCounter = 1;
 const nextInvId = (): string => `80c-${Date.now()}-${_invIdCounter++}`;
@@ -48,7 +49,7 @@ const nextInvId = (): string => `80c-${Date.now()}-${_invIdCounter++}`;
 const labelStyle: React.CSSProperties = { display: 'block', marginBottom: 3, fontSize: 11, fontWeight: 600, color: '#555' };
 const inputStyle: React.CSSProperties = { width: '100%', padding: '6px 8px', border: '1px solid #ddd', borderRadius: 4, fontSize: 12, boxSizing: 'border-box' };
 
-export const Section80CManager: React.FC<Section80CManagerProps> = ({ data, onChange }) => {
+export const Section80CManager: React.FC<Section80CManagerProps> = ({ data, onChange, backendEligible }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const addInvestment = () => {
@@ -72,8 +73,6 @@ export const Section80CManager: React.FC<Section80CManagerProps> = ({ data, onCh
   const toggleExpand = (id: string) => { setExpandedId(expandedId === id ? null : id); };
 
   const totalAmount = useMemo(() => (data.investments || []).reduce((s, i) => s + i.amount, 0), [data]);
-  const eligible = Math.min(totalAmount, CAP_80C);
-  const overCap = totalAmount > CAP_80C;
 
   const investments = data.investments || [];
 
@@ -171,12 +170,11 @@ export const Section80CManager: React.FC<Section80CManagerProps> = ({ data, onCh
       })}
 
       {investments.length > 0 && (
-        <div style={{ marginTop: 14, padding: 12, background: overCap ? '#fff3e0' : '#e8f5e9', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <span style={{ fontSize: 11, color: '#666' }}>Total: <strong>₹{totalAmount.toLocaleString('en-IN')}</strong></span>
-            {overCap && <span style={{ fontSize: 11, color: '#e65100', marginLeft: 8 }}>(cap exceeded by ₹{(totalAmount - CAP_80C).toLocaleString('en-IN')})</span>}
-          </div>
-          <span style={{ fontWeight: 700, fontSize: 16, color: '#2e7d32' }}>Eligible: ₹{eligible.toLocaleString('en-IN')}</span>
+        <div style={{ marginTop: 14, padding: 12, background: '#e8f5e9', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: '#666' }}>Total invested: <strong>₹{totalAmount.toLocaleString('en-IN')}</strong></span>
+          <span style={{ fontWeight: 700, fontSize: 16, color: '#2e7d32' }}>
+            {backendEligible == null ? 'Eligible: awaiting backend calculation' : `Eligible: ₹${backendEligible.toLocaleString('en-IN')}`}
+          </span>
         </div>
       )}
     </div>

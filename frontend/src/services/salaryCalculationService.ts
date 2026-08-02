@@ -246,7 +246,7 @@ export const calculateSalary = async (
     totalProfessionalTax: data.totalProfessionalTax ?? data.professionalTax,
     totalHRAExempt: data.totalHRAExempt ?? data.hraExempt,
     assessmentYear: data.assessmentYear ?? data.ay ?? assessmentYear,
-    standardDeductionAmount: data.standardDeductionAmount ?? "75000",
+    standardDeductionAmount: data.standardDeductionAmount ?? String(data.totalStandardDeduction ?? data.standardDeduction ?? (taxRegime === 'NEW' ? 75000 : 50000)),
   };
 };
 

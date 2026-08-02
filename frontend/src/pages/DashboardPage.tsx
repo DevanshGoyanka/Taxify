@@ -94,7 +94,7 @@ export default function DashboardPage() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
           <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-            AY 2025-26 Filing Season:
+            AY 2026-27 Filing Season:
           </span>
           <div className="progress-bar" style={{ flex: 1, maxWidth: 400 }}>
             <div className="progress-fill" style={{ width: `${progress}%`, background: 'var(--gold)' }} />
