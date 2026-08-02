@@ -186,9 +186,12 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
         ))
 
     # Rule 27: Total Tax Fees Interest = tax+cess+interest+fees - relief
+    # CBDT rule 27: Total Tax, Fees & Interest = Gross Tax & Cess + Interest
+    # u/s 234A + 234B + 234C + Fees u/s 234I + Fees u/s 234F − Relief u/s 89
     expected_ttfi = (
         result.gross_tax_liability
         + result.total_interest
+        + result.fees_234i
         + result.late_fee_234f
         - result.relief_89
     )
@@ -197,39 +200,41 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
             "ITR1-R027", False,
             f"Total Tax Fees Interest mismatch: {result.net_tax_liability} != "
             f"Gross tax({result.gross_tax_liability}) + "
-            f"Interest({result.total_interest}) + Fees({result.late_fee_234f}) - "
+            f"Interest({result.total_interest}) + Fees 234I({result.fees_234i}) "
+            f"+ Fees 234F({result.late_fee_234f}) - "
             f"Relief({result.relief_89}) = {expected_ttfi}",
             "net_tax_liability",
         ))
 
-    # Rule 28: Total interest = 234A + 234B + 234C + 234F + 234I
+    # Rule 28: Total interest+fees = 234A + 234B + 234C + 234F + 234I
     expected_interest = (
         result.interest_234a
         + result.interest_234b
         + result.interest_234c
         + result.late_fee_234f
+        + result.fees_234i
     )
-    total_interest_plus_fees = result.total_interest + result.late_fee_234f
+    total_interest_plus_fees = result.total_interest + result.late_fee_234f + result.fees_234i
     if not _eq(total_interest_plus_fees, expected_interest, Decimal("1")):
         results.append(_make(
             "ITR1-R028", False,
             f"Total Interest+Late Fee mismatch: "
-            f"total_interest+late_fee={total_interest_plus_fees} != "
+            f"total_interest+late_fee+234i={total_interest_plus_fees} != "
             f"234A({result.interest_234a})+234B({result.interest_234b})+"
-            f"234C({result.interest_234c})+234F({result.late_fee_234f}) = "
-            f"{expected_interest}",
+            f"234C({result.interest_234c})+234F({result.late_fee_234f})+"
+            f"234I({result.fees_234i}) = {expected_interest}",
             "total_interest",
         ))
 
     # Rule 140: Total Tax Fee Interest = Balance Tax after Relief + Total Interest Fee
     balance_after_relief = result.gross_tax_liability - result.relief_89
-    expected_140 = balance_after_relief + result.total_interest + result.late_fee_234f
+    expected_140 = balance_after_relief + result.total_interest + result.late_fee_234f + result.fees_234i
     if not _eq(result.net_tax_liability, expected_140, Decimal("10")):
         results.append(_make(
             "ITR1-R140", False,
             f"Total Tax Fee Interest mismatch (Rule 140): {result.net_tax_liability} != "
             f"Balance after relief({balance_after_relief}) + "
-            f"Total Interest Fee({result.total_interest + result.late_fee_234f}) = "
+            f"Total Interest Fee({result.total_interest + result.late_fee_234f + result.fees_234i}) = "
             f"{expected_140}",
             "net_tax_liability",
         ))

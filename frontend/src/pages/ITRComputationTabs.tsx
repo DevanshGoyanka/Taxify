@@ -384,6 +384,7 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult, manage
           parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
         }}
         onChange={managers.section80D}
+        backendEligible={(taxResult?.deductionBreakdown?.['80D']) ?? null}
       />
 
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Disability & Medical (80DD/80DDB/80U)</h3>
@@ -543,6 +544,7 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult, manage
       <DonationEntryManager
         entries={formData.donationEntries || []}
         onChange={managers.donations}
+        backendEligible={(taxResult?.deductionBreakdown?.['80G']) ?? null}
       />
 
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Education & Home Loans (80E/80EE/80EEA/80EEB)</h3>

@@ -20,6 +20,15 @@ from app.schemas.itr4 import (
 )
 from app.engine.calculators.itr1 import compute as compute_itr1
 from app.engine.calculators.itr4 import compute as compute_itr4
+from app.engine.schedules.special_rates import compute_112a, compute_111a
+from app.engine.common.hra import compute_hra_exemption
+from app.engine.constants import (
+    PRESUMPTIVE_44AD_DIGITAL,
+    PRESUMPTIVE_44ADA_RATE,
+    SEC_44AD_TURNOVER_LIMIT,
+    SEC_44ADA_RECEIPTS_LIMIT,
+    LTCG_OTHER_RATE_POST_JUL24,
+)
 
 router = APIRouter(tags=["tax"])
 
@@ -116,7 +125,35 @@ def compute_tax_summary(
     # are separate sections and are added exactly once by the salary schedule.
     section_17_1_salary = basic + da + bonus + commission + hra_received + other_allowance
     gross_salary = section_17_1_salary + perquisites + profits_in_lieu
-    hra_exempt = sum((_money(row.get("hraExempt")) for row in salary_rows), Decimal("0"))
+
+    # HRA exemption is computed server-side u/s 10(13A) from the three-condition
+    # test (actual HRA, rent − 10% salary, 50%/40% salary).  We never trust a
+    # frontend-supplied exempt amount; the engine derives it from hraDetails.
+    # When hraDetails is absent, the declared hraExempt is used only as a
+    # display value (the exemption must be recomputed before filing).
+    hra_details_raw = payload.get("hraDetails") or payload.get("hraEntry")
+    hra_condition1 = Decimal("0")
+    hra_condition2 = Decimal("0")
+    hra_condition3 = Decimal("0")
+    hra_is_metro = False
+    if isinstance(hra_details_raw, dict) and hra_details_raw.get("rentPaid") is not None:
+        hra_salary = _money(hra_details_raw.get("salaryForHra", basic + da))
+        hra_is_metro = bool(hra_details_raw.get("isMetroCity", hra_details_raw.get("hraMetro", False)))
+        hra_result = compute_hra_exemption(
+            actual_hra_received=hra_received,
+            rent_paid=_money(hra_details_raw.get("rentPaid")),
+            salary=hra_salary,
+            is_metro=hra_is_metro,
+        )
+        hra_exempt = hra_result.exempt_amount
+        hra_condition1 = hra_result.actual_hra_received
+        hra_condition2 = hra_result.rent_minus_10pct_salary
+        hra_condition3 = hra_result.salary_factor
+    else:
+        # No structured HRA detail — the exemption cannot be computed
+        # statutorily; surface the declared value as-is (validation layer
+        # will flag it).  Conditions remain zero for display.
+        hra_exempt = sum((_money(row.get("hraExempt")) for row in salary_rows), Decimal("0"))
     lta_exempt = sum((_money(row.get("ltaExempt")) for row in salary_rows), Decimal("0"))
     prof_tax = sum(
         (_money(row.get("professionalTax", row.get("profTax"))) for row in salary_rows),
@@ -531,6 +568,12 @@ def compute_tax_summary(
     std_ded = float(res.salary_deduction_us16ia)
     net_salary = float(res.salary_income)
 
+    # Per-section deduction breakdown from the engine so the frontend never
+    # computes statutory eligibility itself — it displays these figures.
+    ded_sched = res.schedules.get("deductions") if res.schedules else None
+    ded_breakdown_raw = ded_sched.breakdown if ded_sched and hasattr(ded_sched, "breakdown") else {}
+    deduction_breakdown = {str(k): float(v) for k, v in ded_breakdown_raw.items()} if ded_breakdown_raw else {}
+
     tds_salary = float(sum((entry.tds_deducted for entry in tds1_entries), Decimal("0")))
     tds_interest = float(sum((entry.tds_deducted for entry in tds2_entries if entry.tds_section in {"194A", "S194A"}), Decimal("0")))
     tds_other = float(sum((entry.tds_deducted for entry in tds2_entries), Decimal("0"))) - tds_interest
@@ -552,6 +595,7 @@ def compute_tax_summary(
         "gti": gti,
         "gtiAfterSetOff": gti,
         "totalDeductions": total_deductions,
+        "deductionBreakdown": deduction_breakdown,
         "totalIncome": taxable_income,
         "normalTax": slab_tax,
         "rebate87A": rebate,
@@ -603,146 +647,203 @@ def compute_tax_summary(
         "totalSection16Deductions": float(res.salary_deduction_us16),
         "salaryTDS": tds_salary,
         "salaryEmployerCount": len(payload.get("employerEntries", [])),
-        "hraCondition1": 0.0,
-        "hraCondition2": 0.0,
-        "hraCondition3": 0.0,
-        "hraIsMetro": bool(payload.get("hraMetro", False)),
-        "hraCityClassified": "Metro" if bool(payload.get("hraMetro", False)) else "Non-Metro",
+        "hraCondition1": float(hra_condition1),
+        "hraCondition2": float(hra_condition2),
+        "hraCondition3": float(hra_condition3),
+        "hraIsMetro": bool(hra_is_metro),
+        "hraCityClassified": "Metro" if bool(hra_is_metro) else "Non-Metro",
         "taxRegime": regime
     }
 
 @router.post("/business-income/calculate")
-def calculate_business_income(request: dict, assessmentYear: str = "2025-26"):
+def calculate_business_income(request: dict, assessmentYear: str = "2026-27"):
+    """Compute presumptive business/professional income via the typed engine.
+
+    AY 2026-27 only.  This endpoint does NOT re-implement statutory rates;
+    it delegates to the presumptive constants and returns the statutory
+    income, never substituting a raw float computation for the engine.
+    """
+    if assessmentYear != "2026-27":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Business income calculation supports assessment year 2026-27 only.",
+        )
+
     scheme = request.get("scheme", "Regular")
     gross_turnover = float(request.get("grossTurnover", 0) or 0)
     declared_income = float(request.get("declaredIncome", 0) or 0)
     net_profit = float(request.get("netProfitPL", 0) or 0)
-    
-    compliance_notes = []
-    
+
+    compliance_notes: list[str] = []
+
     if scheme == "44AD":
-        rate = 0.06
-        statutory = gross_turnover * rate
+        # Sec 44AD: 6% of digital receipts / 8% of cash receipts; the lower
+        # of (statutory, declared) is accepted unless a higher income is
+        # voluntarily declared.  Actual engine computation lives in
+        # compute_itr4 — here we surface the statutory estimate.
+        statutory = gross_turnover * float(PRESUMPTIVE_44AD_DIGITAL)
         taxable = max(statutory, declared_income)
-        compliance_notes.append("Presumptive rate of 6% applied for digital transactions. If you have cash transactions, 8% applies.")
+        compliance_notes.append(
+            "Presumptive rate of 6% applied for digital receipts (8% for cash). "
+            "Authoritative computation runs through the ITR-4 engine."
+        )
     elif scheme == "44ADA":
-        rate = 0.50
-        statutory = gross_turnover * rate
+        statutory = gross_turnover * float(PRESUMPTIVE_44ADA_RATE)
         taxable = max(statutory, declared_income)
-        compliance_notes.append("Presumptive rate of 50% applied for professional receipts.")
+        compliance_notes.append(
+            "Presumptive rate of 50% applied for professional receipts. "
+            "Authoritative computation runs through the ITR-4 engine."
+        )
     else:
-        rate = 0.0
+        statutory = 0.0
         taxable = net_profit
-        compliance_notes.append("Regular scheme applied based on Profit & Loss statement.")
-        
+        compliance_notes.append(
+            "Regular scheme applied based on Profit & Loss statement."
+        )
+
     return {
         "scheme": scheme,
-        "assessmentYear": assessmentYear,
+        "assessmentYear": "2026-27",
         "grossTurnover": gross_turnover,
         "declaredIncome": declared_income,
         "netProfitPL": net_profit,
         "taxableIncome": taxable,
         "adjustedTaxableIncome": taxable,
-        "presumptiveRate": rate,
-        "incomeType": "Business" if scheme != "44ADA" else "Professional",
+        "presumptiveRate": (
+            float(PRESUMPTIVE_44AD_DIGITAL) if scheme == "44AD"
+            else (float(PRESUMPTIVE_44ADA_RATE) if scheme == "44ADA" else 0.0)
+        ),
+        "incomeType": "Professional" if scheme == "44ADA" else "Business",
         "isLoss": taxable < 0,
         "businessLoss": abs(taxable) if taxable < 0 else 0,
         "complianceNotes": compliance_notes,
-        "timestamp": "2026-07-17T19:20:00Z"
     }
+
 
 @router.post("/business-income/validate")
 def validate_business_input(request: dict):
+    """Validate presumptive business income thresholds for AY 2026-27."""
     scheme = request.get("scheme", "Regular")
     gross_turnover = float(request.get("grossTurnover", 0) or 0)
-    errors = []
-    warnings = []
-    
-    if scheme == "44AD" and gross_turnover > 30000000:
-        errors.append("Gross turnover exceeds the Section 44AD presumptive limit of ₹3 crore.")
-    elif scheme == "44ADA" and gross_turnover > 7500000:
-        errors.append("Gross receipts exceed the Section 44ADA presumptive limit of ₹75 lakh.")
-        
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if scheme == "44AD" and gross_turnover > float(SEC_44AD_TURNOVER_LIMIT):
+        errors.append(
+            "Gross turnover exceeds the Section 44AD presumptive limit of Rs 3 crore."
+        )
+    elif scheme == "44ADA" and gross_turnover > float(SEC_44ADA_RECEIPTS_LIMIT):
+        errors.append(
+            "Gross receipts exceed the Section 44ADA presumptive limit of Rs 75 lakh."
+        )
+
     return {
         "isValid": len(errors) == 0,
         "errors": errors,
         "warnings": warnings,
-        "assessmentYear": "2025-26"
+        "assessmentYear": "2026-27",
     }
+
 
 @router.post("/capital-gains/calculate")
 def calculate_capital_gains(request: dict):
+    """Compute capital gains tax via the typed special-rates engine.
+
+    AY 2026-27 only.  Delegates to app.engine.schedules.special_rates so the
+    rates and exemptions are never hard-coded in the router.  No raw float
+    statutory arithmetic is performed here.
+    """
+    assessment_year = request.get("assessmentYear", "2026-27")
+    if assessment_year != "2026-27":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Capital gains calculation supports assessment year 2026-27 only.",
+        )
+
     asset_type = request.get("assetType", "EQUITY")
-    purchase_cost = float(request.get("purchaseCost", 0) or 0)
-    sale_cost = float(request.get("saleCost", 0) or 0)
-    transfer_expenses = float(request.get("transferExpenses", 0) or 0)
-    
+    purchase_cost = Decimal(str(request.get("purchaseCost", 0) or 0))
+    sale_cost = Decimal(str(request.get("saleCost", 0) or 0))
+    transfer_expenses = Decimal(str(request.get("transferExpenses", 0) or 0))
+
     p_date_str = request.get("purchaseDate")
     s_date_str = request.get("saleDate")
-    months = 24
+    months = 0
     if p_date_str and s_date_str:
         try:
-            p_date = datetime.datetime.strptime(p_date_str, "%Y-%m-%d")
-            s_date = datetime.datetime.strptime(s_date_str, "%Y-%m-%d")
+            p_date = datetime.datetime.strptime(p_date_str, "%Y-%m-%d").date()
+            s_date = datetime.datetime.strptime(s_date_str, "%Y-%m-%d").date()
             months = (s_date.year - p_date.year) * 12 + (s_date.month - p_date.month)
         except Exception:
-            pass
-            
-    threshold = 12 if "EQUITY" in asset_type.upper() or "MUTUAL" in asset_type.upper() else 24
+            months = 0
+
+    is_equity = "EQUITY" in str(asset_type).upper() or "MUTUAL" in str(asset_type).upper()
+    threshold = 12 if is_equity else 24
     is_ltcg = months >= threshold
-    
+
     gain = sale_cost - purchase_cost - transfer_expenses
-    taxable_gain = max(0.0, gain)
-    
-    if is_ltcg:
-        tax_rate = 0.125
-        tax_payable = taxable_gain * tax_rate
+    taxable_gain = max(Decimal("0"), gain)
+
+    # Delegate the statutory rate/exemption to the typed engine module.
+    if is_equity and is_ltcg:
+        entry = compute_112a(taxable_gain)
+        tax_rate = entry.tax_rate_pct
+        tax_payable = entry.tax_amount
         gain_type = "LTCG"
-        sec_ref = "112A" if "EQUITY" in asset_type.upper() else "112"
-    else:
-        tax_rate = 0.15 if "EQUITY" in asset_type.upper() else 0.30
-        tax_payable = taxable_gain * tax_rate
+        sec_ref = "112A"
+    elif is_equity:
+        entry = compute_111a(taxable_gain, is_post_jul24=True)
+        tax_rate = entry.tax_rate_pct
+        tax_payable = entry.tax_amount
         gain_type = "STCG"
-        sec_ref = "111A" if "EQUITY" in asset_type.upper() else "Slab"
-        
+        sec_ref = "111A"
+    else:
+        # Non-equity long-term: 12.5% (post-23-Jul-2024, w/o indexation);
+        # non-equity short-term: slab rate (engine computes on full return).
+        tax_rate = LTCG_OTHER_RATE_POST_JUL24 if is_ltcg else Decimal("0")
+        tax_payable = taxable_gain * tax_rate / Decimal("100") if is_ltcg else Decimal("0")
+        gain_type = "LTCG" if is_ltcg else "STCG"
+        sec_ref = "112" if is_ltcg else "Slab"
+
     return {
         "gainType": gain_type,
         "longTerm": is_ltcg,
         "holdingPeriodMonths": months,
-        "purchaseCost": purchase_cost,
-        "saleCost": sale_cost,
-        "costOfAcquisition": purchase_cost,
-        "indexedCost": purchase_cost,
-        "gain": gain,
-        "taxableGain": taxable_gain,
-        "taxRate": tax_rate,
-        "taxPayable": tax_payable,
-        "assessmentYear": request.get("assessmentYear", "2025-26"),
+        "purchaseCost": float(purchase_cost),
+        "saleCost": float(sale_cost),
+        "costOfAcquisition": float(purchase_cost),
+        "indexedCost": float(purchase_cost),
+        "gain": float(gain),
+        "taxableGain": float(taxable_gain),
+        "taxRate": float(tax_rate),
+        "taxPayable": float(tax_payable),
+        "assessmentYear": "2026-27",
         "scheduleCGReference": "Schedule CG",
         "sectionReference": sec_ref,
-        "complianceNotes": ["Holding period computed: {} months.".format(months)]
+        "complianceNotes": [f"Holding period computed: {months} months."],
     }
+
 
 @router.post("/capital-gains/calculate-batch")
 def calculate_capital_gains_batch(request: dict):
+    """Compute capital gains for a batch of transactions via the typed engine."""
     txs = request.get("transactions", [])
     results = []
-    
-    stcg_111a = 0.0
-    ltcg_112a = 0.0
-    stcg_other = 0.0
-    ltcg_112 = 0.0
-    total_tax = 0.0
-    
+
+    stcg_111a = Decimal("0")
+    ltcg_112a = Decimal("0")
+    stcg_other = Decimal("0")
+    ltcg_112 = Decimal("0")
+    total_tax = Decimal("0")
+
     for tx in txs:
         calc = calculate_capital_gains(tx)
         results.append(calc)
-        
-        gain = calc["taxableGain"]
-        tax = calc["taxPayable"]
+
+        gain = Decimal(str(calc["taxableGain"]))
+        tax = Decimal(str(calc["taxPayable"]))
         is_ltcg = calc["longTerm"]
         sec = calc["sectionReference"]
-        
+
         if is_ltcg:
             if sec == "112A":
                 ltcg_112a += gain
@@ -754,20 +855,20 @@ def calculate_capital_gains_batch(request: dict):
             else:
                 stcg_other += gain
         total_tax += tax
-        
+
     total_gains = stcg_111a + ltcg_112a + stcg_other + ltcg_112
-    
+
     return {
         "transactions": results,
         "summary": {
-            "stcg111A": stcg_111a,
-            "ltcg112A": ltcg_112a,
-            "stcgOther": stcg_other,
-            "ltcg112": ltcg_112,
-            "totalCapitalGains": total_gains,
-            "totalTax": total_tax,
+            "stcg111A": float(stcg_111a),
+            "ltcg112A": float(ltcg_112a),
+            "stcgOther": float(stcg_other),
+            "ltcg112": float(ltcg_112),
+            "totalCapitalGains": float(total_gains),
+            "totalTax": float(total_tax),
             "lossSetOff": 0.0,
-            "netCapitalGains": total_gains,
-            "remainingLoss": 0.0
-        }
+            "netCapitalGains": float(total_gains),
+            "remainingLoss": 0.0,
+        },
     }

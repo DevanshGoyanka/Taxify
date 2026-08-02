@@ -1,4 +1,4 @@
-"""Interest u/s 234A, 234B, 234C and late fee u/s 234F.
+"""Interest u/s 234A, 234B, 234C, fees u/s 234I, and late fee u/s 234F.
 
 Section 234A: 1% per month (or part-month) on unpaid tax from the day
   immediately following the due date to the date of filing.
@@ -12,13 +12,21 @@ Section 234C: Deferred installment interest at 1% per month for shortfall in
   quarterly advance tax installments. Different rules apply for assessees
   declaring profits u/s 44AD/44ADA (single installment by 15 March).
 
+Section 234I: Fee for default in furnishing return u/s 139(1) when a return is
+  revised or belated. Rs 1,000 if total income <= Rs 5,00,000; otherwise
+  Rs 5,000. Applies when the return is filed after the due date u/s 139(1)
+  (i.e., belated u/s 139(4) or revised u/s 139(5)) after 31 December of the
+  relevant assessment year.
+
 Section 234F: Rs 0 (on/before due date), Rs 1,000 (<= 5L TI, after due date
   before Dec 31), Rs 5,000 (>5L TI, after due date before Dec 31),
   Rs 10,000 (any TI, filed after Dec 31).
 """
 
-from decimal import Decimal, ROUND_UP, ROUND_DOWN
+from decimal import Decimal, ROUND_UP
 from datetime import date
+
+_ZERO = Decimal("0")
 
 
 def _months_between(start: date, end: date) -> int:
@@ -32,10 +40,10 @@ def _months_between(start: date, end: date) -> int:
 def compute_234a(tax_payable: Decimal, filing_date: date, due_date: date) -> Decimal:
     """1% per month on unpaid tax from due date to filing date."""
     if filing_date <= due_date:
-        return Decimal("0")
+        return _ZERO
     months = _months_between(due_date, filing_date)
     interest = tax_payable * Decimal(months) / Decimal("100")
-    return interest.quantize(Decimal("1"), rounding=ROUND_DOWN)
+    return interest.quantize(Decimal("1"), rounding=ROUND_UP)
 
 
 def compute_234b(assessed_tax: Decimal, advance_tax_paid: Decimal,
@@ -55,7 +63,7 @@ def compute_234b(assessed_tax: Decimal, advance_tax_paid: Decimal,
     shortfall = assessed_tax - advance_tax_paid
     months = _months_between(ay_start, filing_date)
     interest = shortfall * Decimal(months) / Decimal("100")
-    return interest.quantize(Decimal("1"), rounding=ROUND_DOWN)
+    return interest.quantize(Decimal("1"), rounding=ROUND_UP)
 
 
 def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
@@ -94,10 +102,14 @@ def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
         required = total_assessed_tax * req_pct
         shortfall = required - cumulative_paid
         if shortfall > 0:
+            # CBDT: 1% per month for 3 months per quarter. The final (March)
+            # installment shortfall attracts only 1 month of interest
+            # (the installment falls on 15 March, leaving ~1 month to the
+            # 31 March determination date).
             months = Decimal("1") if i == len(required_pcts) - 1 else Decimal("3")
             total_interest += shortfall * months / Decimal("100")
 
-    return total_interest.quantize(Decimal("1"), rounding=ROUND_DOWN)
+    return total_interest.quantize(Decimal("1"), rounding=ROUND_UP)
 
 
 def compute_234f(filing_date: date, due_date: date, total_income: Decimal) -> Decimal:
@@ -108,7 +120,7 @@ def compute_234f(filing_date: date, due_date: date, total_income: Decimal) -> De
     - Filed after 31 Dec: Rs 10,000
     """
     if filing_date <= due_date:
-        return Decimal("0")
+        return _ZERO
 
     fy_end_year = due_date.year
     dec_31 = date(fy_end_year, 12, 31)
@@ -116,3 +128,31 @@ def compute_234f(filing_date: date, due_date: date, total_income: Decimal) -> De
     if filing_date <= dec_31:
         return Decimal("1000") if total_income <= Decimal("500000") else Decimal("5000")
     return Decimal("10000")
+
+
+def compute_234i(filing_date: date, due_date: date, total_income: Decimal) -> Decimal:
+    """Fee u/s 234I for default in furnishing return u/s 139(1).
+
+    Applies to belated (u/s 139(4)) or revised (u/s 139(5)) returns filed
+    after 31 December of the assessment year.
+
+    - Filed on or before the due date u/s 139(1): Rs 0
+    - Filed after the due date but on or before 31 December: Rs 1,000 if
+      total income <= Rs 5,00,000, otherwise Rs 5,000
+    - Filed after 31 December: Rs 5,000 (Rs 1,000 if total income <= Rs 5,00,000)
+
+    Note: This fee is distinct from the late-filing fee u/s 234F. Section 234I
+    applies specifically when a return is revised under section 139(5) or
+    filed belatedly under section 139(4) after the December cut-off of the
+    relevant assessment year.
+    """
+    if filing_date <= due_date:
+        return _ZERO
+
+    fy_end_year = due_date.year
+    dec_31 = date(fy_end_year, 12, 31)
+
+    is_low_income = total_income <= Decimal("500000")
+    if filing_date <= dec_31:
+        return Decimal("1000") if is_low_income else Decimal("5000")
+    return Decimal("1000") if is_low_income else Decimal("5000")

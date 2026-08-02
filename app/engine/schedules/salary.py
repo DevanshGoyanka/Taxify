@@ -56,7 +56,30 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         lta = input_data.lta_exempt_amount
         prof_tax = min(input_data.professional_tax_paid, Decimal("2500"))
         is_govt = getattr(input_data, "is_government_employee", False)
-        ent_allowance = min(input_data.entertainment_allowance, Decimal("5000")) if is_govt else Decimal("0")
+        if is_govt and input_data.entertainment_allowance > 0:
+            # CBDT Rule 57 / Section 16(ii): the entertainment allowance
+            # deduction is the least of:
+            #   (a) Rs 5,000 (statutory ceiling)
+            #   (b) 1/5th of salary (excluding the entertainment allowance)
+            #   (c) 20% of basic salary
+            # "Salary" for this test is Section 17(1) salary excluding the
+            # entertainment allowance component itself.
+            salary_excl_ent = max(
+                Decimal("0"),
+                input_data.gross_salary - input_data.entertainment_allowance,
+            )
+            one_fifth_salary = salary_excl_ent / Decimal("5")
+            # 20% of basic: approximate basic as the 17(1) gross salary,
+            # since a dedicated basic field is not exposed on the schema.
+            twenty_pct_basic = input_data.gross_salary * Decimal("0.20")
+            ent_allowance = min(
+                Decimal("5000"),
+                one_fifth_salary,
+                twenty_pct_basic,
+                input_data.entertainment_allowance,
+            )
+        else:
+            ent_allowance = Decimal("0")
         net_before_std = max(Decimal("0"), gross - exempt_allowances)
         std_ded = OLD_REGIME_STANDARD_DEDUCTION
         chargeable = net_before_std - std_ded - prof_tax - ent_allowance

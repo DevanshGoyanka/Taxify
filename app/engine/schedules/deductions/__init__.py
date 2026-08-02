@@ -112,6 +112,8 @@ def compute_all(
     schedule_80dd: Optional[Schedule80DD] = None,
     schedule_80u: Optional[Schedule80U] = None,
     schedule_80d: Optional[Schedule80D] = None,
+    salary: Decimal = Decimal("0"),
+    is_government_employee: bool = False,
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
@@ -131,7 +133,9 @@ def compute_all(
             result.breakdown[key] = val
 
     # --- Sections allowed in BOTH regimes ---
-    details_80ccd2 = section_80ccd2.compute_details(ded, regime)
+    details_80ccd2 = section_80ccd2.compute_details(
+        ded, regime, salary=salary, is_government_employee=is_government_employee
+    )
     result.section_details["80CCD(2)"] = details_80ccd2
     r_80ccd2 = details_80ccd2.allowed_deduction
     _add("80CCD(2)", r_80ccd2, allow_new_regime=True)

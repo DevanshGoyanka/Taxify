@@ -41,6 +41,8 @@ export interface Section80DData {
 interface Section80DManagerProps {
   data: Section80DData;
   onChange: (data: Section80DData) => void;
+  /** Authoritative 80D eligible amount from the backend engine (section_80d). */
+  backendEligible?: number | null;
 }
 
 // Caps per official schema
@@ -77,7 +79,7 @@ const inputStyle: React.CSSProperties = {
   fontSize: 12, boxSizing: 'border-box',
 };
 
-export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onChange }) => {
+export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onChange, backendEligible }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const updateCategory = (catKey: CatKey, updater: (cat: Category80D) => Category80D) => {
@@ -120,7 +122,13 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
     parentsSenior: showParentsSr,
   };
 
-  // Grand total
+  // Grand total — DISPLAY ESTIMATE ONLY.
+  // The authoritative 80D eligible amount is computed by the backend engine
+  // (section_80d.py), which applies the shared ₹5,000 preventive-checkup
+  // sub-limit across buckets and the per-bucket caps.  This frontend sum is
+  // an indicative estimate for the summary card and must NOT be treated as
+  // the final deduction; the backend value from the compute endpoint is the
+  // source of truth.
   let totalEligible = 0;
   const caps: Record<CatKey, number> = { selfFamily: CAP_SELF_FAMILY, selfFamilySenior: CAP_SELF_FAMILY_SR, parents: CAP_PARENTS, parentsSenior: CAP_PARENTS_SR };
   for (const cm of CATS) {
@@ -319,14 +327,17 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
         );
       })}
 
-      {/* Grand total footer */}
-      {(totalEligible > 0 || CATS.some(cm => visibilityMap[cm.key] && (data[cm.key] as Category80D).policies.length > 0)) && (
+      {/* Grand total footer — displays the authoritative backend-computed
+          80D eligible amount. When the backend result is not yet available
+          (e.g., no data entered), the footer is hidden. The frontend never
+          computes the statutory eligible amount itself. */}
+      {((backendEligible ?? 0) > 0 || CATS.some(cm => visibilityMap[cm.key] && (data[cm.key] as Category80D).policies.length > 0)) && (
         <div style={{
           marginTop: 14, padding: 12, background: '#e8eaf6', borderRadius: 6,
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
-          <span style={{ fontWeight: 600, fontSize: 13 }}>Total 80D Eligible Deduction</span>
-          <span style={{ fontWeight: 700, fontSize: 16, color: '#2e7d32' }}>₹{totalEligible.toLocaleString('en-IN')}</span>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>Total 80D Eligible Deduction {backendEligible == null ? '(estimate — backend not yet computed)' : ''}</span>
+          <span style={{ fontWeight: 700, fontSize: 16, color: '#2e7d32' }}>₹{(backendEligible ?? totalEligible).toLocaleString('en-IN')}</span>
         </div>
       )}
     </div>

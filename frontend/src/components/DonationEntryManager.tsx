@@ -70,12 +70,15 @@ interface CategoryTotals {
 interface DonationEntryManagerProps {
   entries: DoneeEntry[];
   onChange: (entries: DoneeEntry[]) => void;
+  /** Authoritative 80G eligible amount from the backend engine (section_80g),
+   *  which applies the correct cash-per-donee-PAN ₹2,000 aggregate rule. */
+  backendEligible?: number | null;
 }
 
 let _doneeIdCounter = 1;
 const nextDoneeId = (): string => `d-${Date.now()}-${_doneeIdCounter++}`;
 
-export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entries, onChange }) => {
+export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entries, onChange, backendEligible }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const addEntry = () => {
@@ -115,6 +118,14 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
   };
 
   // ---- Category totals ----
+  // NOTE: totalEligible here is a DISPLAY ESTIMATE only.  The authoritative
+  // 80G eligible deduction is computed by the backend engine
+  // (section_80g.py), which applies the correct cash-per-donee-PAN ₹2,000
+  // aggregate rule (CBDT rule 88 — cash is ineligible when aggregate cash
+  // per PAN exceeds ₹2,000, NOT a per-row min).  This frontend estimate uses
+  // a per-row approximation for the summary card and must NOT be treated as
+  // the final deduction; the backend value from the compute endpoint is the
+  // source of truth.
   const categoryTotals = useMemo((): Record<DonationCategory, CategoryTotals> => {
     const init = (): CategoryTotals => ({ totalCash: 0, totalOtherMode: 0, totalDonation: 0, totalEligible: 0 });
     const map: Record<DonationCategory, CategoryTotals> = {
@@ -126,8 +137,9 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
       t.totalCash += e.donationAmtCash;
       t.totalOtherMode += e.donationAmtOtherMode;
       t.totalDonation += e.donationAmtCash + e.donationAmtOtherMode;
-      const eligibleCash = Math.min(e.donationAmtCash, 2000);
-      t.totalEligible += Math.round((eligibleCash + e.donationAmtOtherMode) * CATEGORY_INFO[e.category].eligiblePct / 100);
+      // Display-only per-row estimate; backend applies aggregate-per-PAN rule.
+      const displayEligibleCash = Math.min(e.donationAmtCash, 2000);
+      t.totalEligible += Math.round((displayEligibleCash + e.donationAmtOtherMode) * CATEGORY_INFO[e.category].eligiblePct / 100);
     }
     return map;
   }, [entries]);
@@ -135,7 +147,8 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
   const grandTotalCash = Object.values(categoryTotals).reduce((s, t) => s + t.totalCash, 0);
   const grandTotalOther = Object.values(categoryTotals).reduce((s, t) => s + t.totalOtherMode, 0);
   const grandTotal = grandTotalCash + grandTotalOther;
-  const grandEligible = Object.values(categoryTotals).reduce((s, t) => s + t.totalEligible, 0);
+  // Labelled as estimate — backend owns the authoritative eligible amount.
+  const grandEligibleEstimate = Object.values(categoryTotals).reduce((s, t) => s + t.totalEligible, 0);
 
   // ---- Shared styles ----
   const labelStyle: React.CSSProperties = {
@@ -427,8 +440,8 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
             <strong style={{ fontSize: 14 }}>₹{grandTotal.toLocaleString('en-IN')}</strong>
           </div>
           <div>
-            <span style={{ fontSize: 11, color: '#666' }}>Total Eligible Deduction: </span>
-            <strong style={{ fontSize: 14, color: '#2e7d32' }}>₹{grandEligible.toLocaleString('en-IN')}</strong>
+            <span style={{ fontSize: 11, color: '#666' }}>Total Eligible Deduction {backendEligible == null ? '(estimate — backend not yet computed)' : ''}: </span>
+            <strong style={{ fontSize: 14, color: '#2e7d32' }}>₹{(backendEligible ?? grandEligibleEstimate).toLocaleString('en-IN')}</strong>
           </div>
         </div>
       )}

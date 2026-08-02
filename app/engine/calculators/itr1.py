@@ -45,7 +45,7 @@ from app.engine.common.slab_tax import compute as compute_slab_tax
 from app.engine.common.rebate import compute as compute_rebate
 from app.engine.common.surcharge import compute as compute_surcharge
 from app.engine.common.cess import compute as compute_cess
-from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234f
+from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234f, compute_234i
 from app.engine.constants import LTCG_112A_EXEMPTION, LTCG_112A_RATE_POST_JUL24
 from app.engine.schedules.salary import compute as compute_salary
 from app.engine.schedules.house_property import compute as compute_hp, apply_inter_head_loss_limit
@@ -104,6 +104,7 @@ class ITR1Result:
     interest_234b: Decimal = Decimal("0")
     interest_234c: Decimal = Decimal("0")
     late_fee_234f: Decimal = Decimal("0")
+    fees_234i: Decimal = Decimal("0")
     total_interest: Decimal = Decimal("0")
 
     net_tax_liability: Decimal = Decimal("0")
@@ -332,6 +333,10 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         schedule_80dd=schedule_80dd,
         schedule_80u=schedule_80u,
         schedule_80d=input_data.schedule_80d,
+        salary=input_data.salary_income.gross_salary if input_data.salary_income else Decimal("0"),
+        is_government_employee=bool(
+            input_data.salary_income and input_data.salary_income.is_government_employee
+        ),
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total
@@ -419,6 +424,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         result.interest_234c = compute_234c(quarterly, advance_tax_assessed, ay_start)
 
         result.late_fee_234f = compute_234f(filing_date, due_date, ti)
+        result.fees_234i = compute_234i(filing_date, due_date, ti)
     result.total_interest = result.interest_234a + result.interest_234b + result.interest_234c
 
     # ── 12. Final payable / refund ───────────────────────────────────────────
@@ -426,7 +432,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         max(
             Decimal("0"),
             result.gross_tax_liability - result.relief_89
-            + result.total_interest + result.late_fee_234f,
+            + result.total_interest + result.late_fee_234f + result.fees_234i,
         )
     )
     diff = final_liability - result.total_taxes_paid

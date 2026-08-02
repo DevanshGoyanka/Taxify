@@ -107,10 +107,12 @@ SURCHARGE_SLABS_NEW_REGIME: Final[list] = [
 # Presumptive rate depends on payment mode
 PRESUMPTIVE_44AD_DIGITAL: Final[Decimal] = Decimal("0.06")        # 6% of gross receipts (digital)
 PRESUMPTIVE_44AD_CASH: Final[Decimal] = Decimal("0.08")           # 8% of gross receipts (cash)
+SEC_44AD_TURNOVER_LIMIT: Final[Decimal] = Decimal("30000000")     # Rs 3 crore (Section 44AD threshold, FA 2024)
 
-# Section 44ADA - Professionals (gross receipts up to Rs 50 Lakh)
+# Section 44ADA - Professionals (gross receipts up to Rs 75 Lakh)
 # Flat 50% of gross receipts as presumptive income
 PRESUMPTIVE_44ADA_RATE: Final[Decimal] = Decimal("0.50")          # 50% of professional gross
+SEC_44ADA_RECEIPTS_LIMIT: Final[Decimal] = Decimal("7500000")     # Rs 75 lakh (Section 44ADA threshold)
 
 # Section 44AE - Goods carriage (per vehicle)
 # Presumptive income per vehicle per year (monthly x 12)
