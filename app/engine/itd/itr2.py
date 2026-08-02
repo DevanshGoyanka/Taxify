@@ -969,7 +969,7 @@ def _schedule_tr1() -> dict:
         "TotalTaxReliefOutsideIndia": 0,
         "TaxPaidOutsideIndFlg": "NO",
         "AmtTaxRefunded": 0,
-        "AssmtYrTaxRelief": "2025-26",
+        "AssmtYrTaxRelief": "2026-27",
         "ScheduleTR": [],
         "TotalTaxPaidOutsideIndia": 0,
     }

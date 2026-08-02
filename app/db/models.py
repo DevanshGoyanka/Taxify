@@ -1,10 +1,13 @@
 """
 SQLAlchemy ORM models.
 
-Defines exactly two tables:
+Tables:
   - User           : registered users with hashed passwords.
-  - SavedReturn    : a user's submitted ITR-1 or ITR-4 calculation, with both
+  - SavedReturn    : a user's submitted ITR calculation, with both
                      the raw input and the computed result stored as JSON text.
+  - Client         : a client managed by a user.
+  - ClientITR      : ITR form data and calculation status for a client+AY.
+  - AutomationJob  : an automated download job (Playwright → ITD portal).
 """
 
 import datetime
@@ -146,3 +149,69 @@ class ClientITR(Base):
         nullable=False,
     )
 
+
+class AutomationJob(Base):
+    """
+    An automated download job via Playwright into the ITD portal.
+
+    Tracks the full lifecycle: queued → running → completed / failed.
+    Stores download file paths on completion.
+    """
+
+    __tablename__ = "automation_job"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("client.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    job_type: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="DOWNLOAD_ALL"
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="queued"
+    )
+    fiscal_year: Mapped[str] = mapped_column(String(10), nullable=False)
+
+    # ---- Progress tracking (JSON-serialised) ----
+    steps_completed: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
+    current_step: Mapped[str] = mapped_column(String(100), nullable=True)
+    status_message: Mapped[str] = mapped_column(String(500), nullable=True)
+    progress_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # ---- Results ----
+    files_downloaded: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}"
+    )
+    parsed_results: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}"
+    )
+    ais_ref_id: Mapped[str] = mapped_column(String(50), nullable=True)
+    error_message: Mapped[str] = mapped_column(String(1000), nullable=True)
+
+    # ---- Timestamps ----
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # ---- Retry ----
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)

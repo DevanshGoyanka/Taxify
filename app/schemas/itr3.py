@@ -166,7 +166,7 @@ class PartnerInFirm(BaseModel):
 # ---------------------------------------------------------------------------
 
 class UDEntry(BaseModel):
-    assessment_year: str = Field(default="2025-26")
+    assessment_year: str = Field(default="2026-27")
     bf_unabsorbed_allowance: Decimal = Field(default=Decimal("0"), ge=0)
     bf_unabsorbed_depreciation: Decimal = Field(default=Decimal("0"), ge=0)
     allowance_setoff_cy: Decimal = Field(default=Decimal("0"), ge=0)

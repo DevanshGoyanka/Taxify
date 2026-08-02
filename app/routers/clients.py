@@ -9,7 +9,7 @@ from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import User, Client, ClientITR
 from app.schemas.clients import ClientCreate, ClientUpdate, ClientResponse, ClientYearResponse
-from app.security.portal_crypto import encrypt_portal_password, decrypt_portal_password
+from app.schemas.security.portal_crypto import encrypt_portal_password, decrypt_portal_password
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -152,7 +152,7 @@ def list_clients(
             years_list.append(ClientYearResponse(year=assessmentYear, itrType="ITR-1", status="Not Started"))
         elif not years_list:
             # Default fallback for list view
-            years_list.append(ClientYearResponse(year="2025-26", itrType="ITR-1", status="Not Started"))
+            years_list.append(ClientYearResponse(year="2026-27", itrType="ITR-1", status="Not Started"))
 
         response.append(serialize_client(client, db, years_list))
     return response
@@ -311,7 +311,7 @@ def get_client_years(
     client = resolve_owned_client(client_id, current_user.id, db)
         
     itrs = db.query(ClientITR).filter(ClientITR.client_id == client.id).order_by(ClientITR.year.desc()).all()
-    return [itr.year for itr in itrs] or ["2025-26"]
+    return [itr.year for itr in itrs] or ["2026-27"]
 
 @router.get("/{client_id}/pan-analysis")
 def get_client_pan_analysis(

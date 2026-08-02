@@ -6,14 +6,45 @@ Startup sequence:
   2. Create database tables (idempotent)
   3. Add CORS middleware (origin from FRONTEND_URL env var)
   4. Register global exception handlers (unified error shape)
-  5. Mount all routers
+  5. Start automation job worker
+  6. Mount all routers
 """
 
+import logging
 import os
+import sys
 
 from dotenv import load_dotenv
 
 load_dotenv()  # Must run before any import that reads os.environ
+
+# ── Logging configuration ───────────────────────────────────────────────────
+# Set up structured console logging so all taxify.* loggers produce
+# timestamped, levelled output on stdout — visible in uvicorn logs and
+# essential for diagnosing automation import failures.
+
+LOG_FORMAT = "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format=LOG_FORMAT,
+    datefmt=LOG_DATE_FORMAT,
+    stream=sys.stdout,
+)
+
+# Set our application loggers to the configured level.
+# DEBUG-level loggers produce very detailed step-by-step trace for
+# automation jobs — enable per-module by setting TAXIFY_LOG_LEVEL=DEBUG.
+_taxify_level = os.getenv("TAXIFY_LOG_LEVEL", "INFO").upper()
+logging.getLogger("taxify").setLevel(getattr(logging, _taxify_level, logging.INFO))
+
+# Quiet noisy third-party loggers
+logging.getLogger("playwright").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -21,19 +52,42 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import get_current_user
+from app.automation.job_worker import start_worker, stop_worker
 from app.db.init_db import create_tables
 from app.db.models import User
-from app.routers import auth as auth_router
-from app.routers import itr as itr_router
-from app.routers import clients as clients_router
-from app.routers import client_itr as client_itr_router
-from app.routers import integration as integration_router
-from app.routers import pan as pan_router
-from app.routers import tax as tax_router
-from app.routers import dashboard as dashboard_router
+
+from app.routers import (
+    auth as auth_router,
+    itr as itr_router,
+    clients as clients_router,
+    client_itr as client_itr_router,
+    integration as integration_router,
+    pan as pan_router,
+    tax as tax_router,
+    dashboard as dashboard_router,
+    automation as automation_router,
+)
 from app.schemas.auth import UserResponse
 
-app = FastAPI(title="Indian ITR Filing API", version="1.0.0")
+
+# ---------------------------------------------------------------------------
+# Lifespan (startup / shutdown)
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: create tables + launch background worker.  Shutdown: stop worker."""
+    create_tables()
+    start_worker()
+    yield
+    await stop_worker()
+
+
+app = FastAPI(
+    title="Indian ITR Filing API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 # ---------------------------------------------------------------------------
 # CORS
@@ -41,15 +95,16 @@ app = FastAPI(title="Indian ITR Filing API", version="1.0.0")
 
 _frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
+# Accept multiple origins from env (comma-separated), with sensible dev defaults
+_allowed_origins_raw = os.getenv(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080",
+)
+_allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        _frontend_url,
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173", "http://localhost:3001", "http://127.0.0.1:3001",
-    ],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -95,6 +150,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all handler — returns 500 in the unified error shape."""
+    logger = logging.getLogger("taxify.main")
+    logger.exception(
+        "Unhandled exception on %s %s: %s",
+        request.method, request.url.path, exc,
+    )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=_error_body(
@@ -103,11 +163,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         ),
     )
 
-# ---------------------------------------------------------------------------
-# DB init
-# ---------------------------------------------------------------------------
-
-create_tables()
 
 from app.routers import eri as eri_router
 
@@ -124,6 +179,7 @@ app.include_router(pan_router.router)
 app.include_router(tax_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(eri_router.router)
+app.include_router(automation_router.router)
 
 # ---------------------------------------------------------------------------
 # Standalone endpoints

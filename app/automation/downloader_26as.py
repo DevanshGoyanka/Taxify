@@ -221,7 +221,10 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
             except Exception:
                 continue
 
-        ay_str = assessment_year.replace("-", "_")
+        # fiscal_year is used throughout for consistent file naming.
+        # For AY 2026-27: fiscal_year = "2025-26" → fy_str = "2025_26"
+        # Consistent with AIS and TIS downloaders (all three docs use FY naming).
+        fy_str = assessment_year.replace("-", "_")
         prefix = f"{pan}-" if pan else ""
         os.makedirs(download_dir, exist_ok=True)
 
@@ -233,7 +236,7 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
 
         log_callback("[26AS] Exporting Form 26AS to PDF...")
         await update_browser_status(traces_page, "TRACES: Downloading PDF file...")
-        output_pdf = os.path.join(download_dir, f"{prefix}26AS-{ay_str}.pdf")
+        output_pdf = os.path.join(download_dir, f"{prefix}26AS-{fy_str}.pdf")
         async with traces_page.expect_download() as download_info:
             await pdf_btn.click()
         await (await download_info.value).save_as(output_pdf)
@@ -252,7 +255,7 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
             txt_btn_frame = await _find_frame(traces_page, "input#btnSubmit", timeout=10000)
             if not txt_btn_frame:
                 raise Exception("btnSubmit not found for TXT download")
-            output_txt = os.path.join(download_dir, f"{prefix}26AS-{ay_str}.txt")
+            output_txt = os.path.join(download_dir, f"{prefix}26AS-{fy_str}.txt")
             tmp_path = output_txt + ".download"
             async with traces_page.expect_download(timeout=30000) as txt_dl_info:
                 await txt_btn_frame.locator("input#btnSubmit").first.click()
