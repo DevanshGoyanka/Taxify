@@ -85,6 +85,16 @@ class ITR1Result:
     salary_deduction_us16ia: Decimal = Decimal("0")
     salary_entertainment_allowance: Decimal = Decimal("0")
     salary_professional_tax: Decimal = Decimal("0")
+    # Section 10 exemption breakdown (for ITD JSON / display)
+    salary_gratuity_exempt: Decimal = Decimal("0")
+    salary_leave_encashment_exempt: Decimal = Decimal("0")
+    salary_vrs_exempt: Decimal = Decimal("0")
+    salary_commutted_pension_exempt: Decimal = Decimal("0")
+    salary_transport_exempt: Decimal = Decimal("0")
+    salary_children_education_exempt: Decimal = Decimal("0")
+    salary_hostel_exempt: Decimal = Decimal("0")
+    salary_hra_exempt: Decimal = Decimal("0")
+    salary_lta_exempt: Decimal = Decimal("0")
 
     # Tax payment detail (for ITD JSON output)
     advance_tax_paid: Decimal = Decimal("0")
@@ -221,6 +231,16 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.salary_deduction_us16ia = sal.standard_deduction
     result.salary_entertainment_allowance = sal.entertainment_allowance
     result.salary_professional_tax = sal.professional_tax
+    # Section 10 exemption breakdown from the salary schedule
+    result.salary_gratuity_exempt = getattr(sal, 'gratuity_exempt', Decimal("0"))
+    result.salary_leave_encashment_exempt = getattr(sal, 'leave_encashment_exempt', Decimal("0"))
+    result.salary_vrs_exempt = getattr(sal, 'vrs_exempt', Decimal("0"))
+    result.salary_commutted_pension_exempt = getattr(sal, 'commuted_pension_exempt', Decimal("0"))
+    result.salary_transport_exempt = getattr(sal, 'transport_exempt', Decimal("0"))
+    result.salary_children_education_exempt = getattr(sal, 'children_education_exempt', Decimal("0"))
+    result.salary_hostel_exempt = getattr(sal, 'hostel_exempt', Decimal("0"))
+    result.salary_hra_exempt = getattr(sal, 'hra_exempt', Decimal("0"))
+    result.salary_lta_exempt = getattr(sal, 'lta_exempt', Decimal("0"))
 
     result.advance_tax_paid = input_data.advance_tax_paid
     result.self_assessment_tax_paid = input_data.self_assessment_tax_paid

@@ -634,14 +634,20 @@ def compute_tax_summary(
         "salary172": float(perquisites),
         "salary173": float(profits_in_lieu),
         "ltaExempt": float(lta_exempt),
-        "gratuityExempt": float(payload.get("gratuityReceived", 0) or 0), # Simplification
-        "leaveEncashmentExempt": float(payload.get("leaveEncashmentReceived", 0) or 0),
-        "pensionCommutationExempt": float(payload.get("commutationOfPensionReceived", 0) or 0),
-        "transportExempt": 0.0,
-        "childrenEducationExempt": 0.0,
-        "hostelExempt": 0.0,
+        "gratuityExempt": float(res.salary_gratuity_exempt),
+        "leaveEncashmentExempt": float(res.salary_leave_encashment_exempt),
+        "pensionCommutationExempt": float(res.salary_commutted_pension_exempt),
+        "transportExempt": float(res.salary_transport_exempt),
+        "childrenEducationExempt": float(res.salary_children_education_exempt),
+        "hostelExempt": float(res.salary_hostel_exempt),
         "uniformExempt": 0.0,
-        "totalSection10Exempt": float(hra_exempt + lta_exempt),
+        "totalSection10Exempt": float(
+            res.salary_hra_exempt + res.salary_lta_exempt
+            + res.salary_gratuity_exempt + res.salary_leave_encashment_exempt
+            + res.salary_vrs_exempt + res.salary_commutted_pension_exempt
+            + res.salary_transport_exempt + res.salary_children_education_exempt
+            + res.salary_hostel_exempt
+        ),
         "standardDeduction": std_ded,
         "entertainmentAllowanceDed": float(res.salary_entertainment_allowance),
         "professionalTaxDed": float(res.salary_professional_tax),

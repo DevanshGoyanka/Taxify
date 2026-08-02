@@ -415,6 +415,7 @@ def _tax_computation_itr1(
     interest_234b: Decimal,
     interest_234c: Decimal,
     late_fee_234f: Decimal,
+    fees_234i: Decimal = Decimal("0"),
 ) -> dict:
     """ITR-1 TaxComputation — includes TotalIntrstPay (not in ITR-4)."""
     return {
@@ -425,16 +426,16 @@ def _tax_computation_itr1(
         "GrossTaxLiability": _to_rupees_rounded10(gross_tax_liability),
         "Section89": _to_rupees_rounded10(relief_89),
         "NetTaxLiability": _to_rupees_rounded10(net_tax_liability),
-        "TotalIntrstPay": _to_rupees_rounded10(total_interest + late_fee_234f),
+        "TotalIntrstPay": _to_rupees_rounded10(total_interest + late_fee_234f + fees_234i),
         "IntrstPay": {
             "IntrstPayUs234A": _to_rupees_rounded10(interest_234a),
             "IntrstPayUs234B": _to_rupees_rounded10(interest_234b),
             "IntrstPayUs234C": _to_rupees_rounded10(interest_234c),
             "LateFilingFee234F": _to_rupees_rounded10(late_fee_234f),
-            "FeeFurnish234I": 0,
+            "FeeFurnish234I": _to_rupees_rounded10(fees_234i),
         },
         "TotTaxPlusIntrstPay": _to_rupees_rounded10(
-            gross_tax_liability + total_interest + late_fee_234f
+            gross_tax_liability + total_interest + late_fee_234f + fees_234i
         ),
     }
 
@@ -1040,24 +1041,39 @@ def _positive_rows(
     ]
 
 
-def _allowance_rows(input_data: Optional[ITR1Input]) -> list[dict[str, Any]]:
-    """Build Section 10 salary-exemption rows from validated input."""
+def _allowance_rows(input_data: Optional[ITR1Input], result: ITR1Result) -> list[dict[str, Any]]:
+    """Build Section 10 salary-exemption rows from computed exempt amounts.
+
+    Uses the ``SalaryResult`` computed-exemption breakdown (statutory ceilings
+    applied) rather than the raw gross-received amounts from the input schema.
+    """
     if input_data is None:
         return []
     salary = input_data.salary_income
+    sal_sched = result.schedules.get("salary") if result.schedules else None
+    # Computed exempt amounts from the salary schedule (ceilings applied).
+    gratuity_exempt = getattr(sal_sched, "gratuity_exempt", salary.gratuity_received) if sal_sched else salary.gratuity_received
+    leave_encashment_exempt = getattr(sal_sched, "leave_encashment_exempt", salary.leave_encashment_received) if sal_sched else salary.leave_encashment_received
+    vrs_exempt = getattr(sal_sched, "vrs_exempt", salary.vrs_compensation) if sal_sched else salary.vrs_compensation
+    commuted_pension_exempt = getattr(sal_sched, "commuted_pension_exempt", salary.commuted_pension_received) if sal_sched else salary.commuted_pension_received
+    transport_exempt = getattr(sal_sched, "transport_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    cea_exempt = getattr(sal_sched, "children_education_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    hostel_exempt = getattr(sal_sched, "hostel_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    hra_exempt = getattr(sal_sched, "hra_exempt", salary.hra_exempt_amount) if sal_sched else salary.hra_exempt_amount
+    lta_exempt = getattr(sal_sched, "lta_exempt", salary.lta_exempt_amount) if sal_sched else salary.lta_exempt_amount
     amounts = {
-        "10(5)": salary.lta_exempt_amount,
+        "10(5)": lta_exempt,
         "10(6)": salary.sec10_6_embassy_exempt,
         "10(7)": salary.sec10_7_foreign_allowance,
-        "10(10)": salary.gratuity_received,
-        "10(10A)": salary.commuted_pension_received,
-        "10(10AA)": salary.leave_encashment_received,
+        "10(10)": gratuity_exempt,
+        "10(10A)": commuted_pension_exempt,
+        "10(10AA)": leave_encashment_exempt,
         "10(10B)(i)": salary.retrenchment_compensation,
-        "10(10C)": salary.vrs_compensation,
+        "10(10C)": vrs_exempt,
         "10(10CC)": salary.sec10_10cc_perquisite_tax,
-        "10(13A)": salary.hra_exempt_amount,
-        "10(14)(i)": salary.sec10_14i_prescribed_allowance,
-        "10(14)(ii)": salary.sec10_14ii_personal_allowance,
+        "10(13A)": hra_exempt,
+        "10(14)(i)": cea_exempt,
+        "10(14)(ii)": hostel_exempt,
     }
     return _positive_rows(amounts, "SalNatureDesc", "SalOthAmount")
 
@@ -1301,7 +1317,7 @@ def build_itr1_json(
         return ded_breakdown.get(key, Decimal("0"))
 
     os_schedule = result.schedules.get("os") if result.schedules else None
-    allowance_rows = _allowance_rows(input_data)
+    allowance_rows = _allowance_rows(input_data, result)
     other_source_rows = _other_source_rows(result)
     exempt_income_rows = _exempt_income_rows(input_data)
     exempt_income_total = (
@@ -1413,6 +1429,7 @@ def build_itr1_json(
         interest_234b=result.interest_234b,
         interest_234c=result.interest_234c,
         late_fee_234f=result.late_fee_234f,
+        fees_234i=result.fees_234i,
     )
 
     tax_paid = _tax_paid_itr1(
