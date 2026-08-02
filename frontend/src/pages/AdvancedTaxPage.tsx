@@ -633,7 +633,10 @@ function MultiEmployerCalculator({ onResult, setLoading }: any) {
       employerPAN: '',
       grossSalary: 0,
       exemptAllowances: 0,
-      standardDeduction: 75000,  // Fixed: AY 2025-26 standard deduction is ₹75,000
+      // Standard deduction is computed by the backend based on the selected
+      // tax regime (₹50K old / ₹75K new). Do NOT pre-fill a statutory default
+      // here; the backend engine owns this value.
+      standardDeduction: 0,
       professionalTax: 0,
       tdsDeducted: 0,
       periodFrom: '',
@@ -648,7 +651,10 @@ function MultiEmployerCalculator({ onResult, setLoading }: any) {
       employerPAN: '',
       grossSalary: 0,
       exemptAllowances: 0,
-      standardDeduction: 75000,  // Fixed: AY 2025-26 standard deduction is ₹75,000
+      // Standard deduction is computed by the backend based on the selected
+      // tax regime (₹50K old / ₹75K new). Do NOT pre-fill a statutory default
+      // here; the backend engine owns this value.
+      standardDeduction: 0,
       professionalTax: 0,
       tdsDeducted: 0,
       periodFrom: '',

@@ -566,70 +566,61 @@ export function DeductionsTab({ formData, setFormData, regime, taxResult, manage
     </div>
   );
 }
-export function LossesTab({ formData, setFormData }: any) {
-  // Current year HP loss from House Property section (auto-calculated, capped at -₹2L)
-  const currentYearHpLoss = (formData.incomeFromHouseProperty || 0) < 0 
-    ? Math.min((formData.incomeFromHouseProperty || 0), -200000) 
+export function LossesTab({ formData, setFormData, taxResult }: any) {
+  // HP loss disallowed (above the ₹2L set-off ceiling) is computed by the
+  // backend engine (apply_inter_head_loss_limit). The frontend must not
+  // recompute statutory loss set-off or carry-forward amounts.
+  const hpLossDisallowed = taxResult?.hpLossDisallowed ?? 0;
+  const currentYearHpLoss = (formData.incomeFromHouseProperty || 0) < 0
+    ? formData.incomeFromHouseProperty
     : 0;
-  
-  // Past year HP loss brought forward (manual entry for losses from previous years)
   const pastYearHpLoss = formData.bfLossHP || 0;
-  
-  // Total HP loss available for set-off = current year + past year brought forward
-  const totalHpLossForSetoff = currentYearHpLoss + pastYearHpLoss;
-  
-  // Amount used for set-off (max ₹2L)
-  const lossUsedForSetoff = Math.min(Math.abs(totalHpLossForSetoff), 200000);
-  
-  // Excess loss to be carried forward to future years
-  const lossCarriedForward = Math.abs(totalHpLossForSetoff) > 200000 
-    ? Math.abs(totalHpLossForSetoff) - 200000 
-    : 0;
-  
+  // Display-only total; the backend owns the set-off computation.
+  const totalHpLossDisplay = Math.abs(currentYearHpLoss) + Math.abs(pastYearHpLoss);
+
   return (
     <div>
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
         Brought Forward Losses (CBDT Schedule CYLA)
       </h3>
-      
-      {/* Current Year HP Loss - Auto Calculated - Read Only */}
+
+      {/* Current Year HP Loss - Auto from backend */}
       <div style={{ marginBottom: 16, padding: 12, background: currentYearHpLoss < 0 ? 'var(--error-bg)' : 'var(--success-bg)', borderRadius: 6 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: currentYearHpLoss < 0 ? 'var(--error)' : 'var(--success)' }}>
-          Current Year HP Loss (Auto from HP tab): ₹{currentYearHpLoss.toLocaleString('en-IN')}
+          Current Year HP Loss (from backend): ₹{Math.abs(currentYearHpLoss).toLocaleString('en-IN')}
           {currentYearHpLoss === 0 && <span style={{ color: 'var(--success)' }}> - No loss from current year</span>}
         </div>
       </div>
-      
+
       {/* Past Year Losses Brought Forward - Manual Entry */}
       <div style={{ marginBottom: 20, padding: 12, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>
           Losses Brought Forward from Previous Years
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-          <Field 
-            label="House Property Loss B/F from Prev Year (₹)" 
-            value={formData.bfLossHP || 0} 
-            onChange={(v: any) => setFormData({ ...formData, bfLossHP: v })} 
+          <Field
+            label="House Property Loss B/F from Prev Year (₹)"
+            value={formData.bfLossHP || 0}
+            onChange={(v: any) => setFormData({ ...formData, bfLossHP: v })}
           />
         </div>
         <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>
           Enter HP losses from previous year that couldn't be fully set off. Maximum 8 years can be carried forward.
         </div>
       </div>
-      
-      {/* Summary of Set-off */}
-      {totalHpLossForSetoff !== 0 && (
+
+      {/* HP Loss Set-off from backend */}
+      {totalHpLossDisplay > 0 && (
         <div style={{ marginBottom: 16, padding: 12, background: 'var(--gold-pale)', borderRadius: 6, border: '1px solid var(--gold)' }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>
-            HP Loss Set-off Summary
+            HP Loss Set-off (backend-computed)
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            <div>Total HP Loss available: ₹{Math.abs(totalHpLossForSetoff).toLocaleString('en-IN')}</div>
-            <div>Already used this year: ₹{lossUsedForSetoff.toLocaleString('en-IN')}</div>
-            {lossCarriedForward > 0 && (
+            <div>Total HP Loss (display): ₹{totalHpLossDisplay.toLocaleString('en-IN')}</div>
+            <div>HP Loss Disallowed by backend (above ₹2L ceiling): ₹{hpLossDisallowed.toLocaleString('en-IN')}</div>
+            {hpLossDisallowed > 0 && (
               <div style={{ color: 'var(--error)', fontWeight: 600 }}>
-                Carried Forward to Future Years: ₹{lossCarriedForward.toLocaleString('en-IN')}
-                <span style={{ fontWeight: 400, fontSize: 11 }}> (can be used for next 8 years)</span>
+                Disallowed loss may be carried forward to future years (up to 8 assessment years).
               </div>
             )}
           </div>
@@ -673,7 +664,7 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
       certificateNo: '',
       deductionDate: '',
       uniqueTransactionNo: '',
-      financialYear: '2024-25',
+      financialYear: '2025-26',
       verified26AS: false,
       claimedInReturn: true
     };
@@ -887,7 +878,7 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
             <Field label="Certificate No *" value={entry.certificateNo || ''} onChange={(v: any) => updateTDSEntry(index, 'certificateNo', v)} type="text" prefix="" required />
             <Field label="Deduction Date *" value={entry.deductionDate || ''} onChange={(v: any) => updateTDSEntry(index, 'deductionDate', v)} type="date" prefix="" required />
             <Field label="Unique Transaction No" value={entry.uniqueTransactionNo || ''} onChange={(v: any) => updateTDSEntry(index, 'uniqueTransactionNo', v)} type="text" prefix="" />
-            <Field label="Financial Year *" value={entry.financialYear || '2024-25'} onChange={(v: any) => updateTDSEntry(index, 'financialYear', v)} type="text" prefix="" required />
+            <Field label="Financial Year *" value={entry.financialYear || '2025-26'} onChange={(v: any) => updateTDSEntry(index, 'financialYear', v)} type="text" prefix="" required />
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginTop: 24 }}>
                 <input

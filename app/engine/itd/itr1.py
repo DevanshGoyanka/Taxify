@@ -517,6 +517,33 @@ def _bank_accounts_from_input(input_data: ITR1Input) -> list[dict[str, Any]]:
 # ITR-1 Schedule helpers
 # ---------------------------------------------------------------------------
 
+def _policy_insurance_details(policies: list, section_code: str) -> list:
+    """Build ``Sch80DInsDtls`` rows for one 80D bucket from policy entries.
+
+    Args:
+        policies: ``InsurancePolicy`` rows from ``Schedule80D``.
+        section_code: The bucket code ("1a" self non-senior, "1b" self senior,
+            "2a" parents non-senior, "2b" parents senior).
+
+    Returns:
+        A list of dicts with ``InsurerName``, ``PolicyNo`` and
+        ``HealthInsAmt`` keys, per the official V1.1 ``Sch80DInsDtls`` schema.
+    """
+    rows: list[dict] = []
+    for p in policies or []:
+        if str(getattr(p, "section", "1a")) != section_code:
+            continue
+        insurer = (getattr(p, "insurer_name", None) or "").strip() or "Not Provided"
+        policy_no = (getattr(p, "policy_number", None) or "").strip() or "Not Provided"
+        amount = _to_rupees(getattr(p, "premium_paid", Decimal("0")) or Decimal("0"))
+        rows.append({
+            "InsurerName": insurer[:125],
+            "PolicyNo": policy_no[:75],
+            "HealthInsAmt": amount,
+        })
+    return rows
+
+
 def _schedule_80d(
     senior_flag_self: str,
     senior_flag_parents: str,
@@ -525,21 +552,26 @@ def _schedule_80d(
     preventive_self: Decimal,
     preventive_parents: Decimal,
     eligible_deduction: Decimal,
+    policies: Optional[list] = None,
 ) -> dict:
+    self_non_senior_rows = _policy_insurance_details(policies, "1a")
+    self_senior_rows = _policy_insurance_details(policies, "1b")
+    parents_non_senior_rows = _policy_insurance_details(policies, "2a")
+    parents_senior_rows = _policy_insurance_details(policies, "2b")
     return {
         "Sec80DSelfFamSrCtznHealth": {
             "SeniorCitizenFlag": senior_flag_self,
             "SelfAndFamily": _to_rupees(self_premium) if senior_flag_self == "N" else 0,
             "HealthInsPremSlfFam": _to_rupees(self_premium) if senior_flag_self == "N" else 0,
             "Sec80DSelfFamHIDtls": {
-                "Sch80DInsDtls": [],
+                "Sch80DInsDtls": self_non_senior_rows,
                 "TotalPayments": _to_rupees(self_premium) if senior_flag_self == "N" else 0,
             },
             "PrevHlthChckUpSlfFam": _to_rupees(preventive_self) if senior_flag_self == "N" else 0,
             "SelfAndFamilySeniorCitizen": _to_rupees(self_premium) if senior_flag_self == "Y" else 0,
             "HlthInsPremSlfFamSrCtzn": _to_rupees(self_premium) if senior_flag_self == "Y" else 0,
             "Sec80DSelfFamSrCtznHIDtls": {
-                "Sch80DInsDtls": [],
+                "Sch80DInsDtls": self_senior_rows,
                 "TotalPayments": _to_rupees(self_premium) if senior_flag_self == "Y" else 0,
             },
             "PrevHlthChckUpSlfFamSrCtzn": _to_rupees(preventive_self) if senior_flag_self == "Y" else 0,
@@ -548,14 +580,14 @@ def _schedule_80d(
             "Parents": _to_rupees(parents_premium) if senior_flag_parents == "N" else 0,
             "HlthInsPremParents": _to_rupees(parents_premium) if senior_flag_parents == "N" else 0,
             "Sec80DParentsHIDtls": {
-                "Sch80DInsDtls": [],
+                "Sch80DInsDtls": parents_non_senior_rows,
                 "TotalPayments": _to_rupees(parents_premium) if senior_flag_parents == "N" else 0,
             },
             "PrevHlthChckUpParents": _to_rupees(preventive_parents) if senior_flag_parents == "N" else 0,
             "ParentsSeniorCitizen": _to_rupees(parents_premium) if senior_flag_parents == "Y" else 0,
             "HlthInsPremParentsSrCtzn": _to_rupees(parents_premium) if senior_flag_parents == "Y" else 0,
             "Sec80DParentsSrCtznHIDtls": {
-                "Sch80DInsDtls": [],
+                "Sch80DInsDtls": parents_senior_rows,
                 "TotalPayments": _to_rupees(parents_premium) if senior_flag_parents == "Y" else 0,
             },
             "PrevHlthChckUpParentsSrCtzn": _to_rupees(preventive_parents) if senior_flag_parents == "Y" else 0,
@@ -1452,6 +1484,7 @@ def build_itr1_json(
                 preventive_self=details_80d.preventive_self,
                 preventive_parents=details_80d.preventive_parents,
                 eligible_deduction=details_80d.allowed_deduction,
+                policies=(schedule_80d.policies if schedule_80d else None),
             )
 
         schedule_80dd = input_data.disability_schedule_80dd()

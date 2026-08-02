@@ -596,6 +596,7 @@ def compute_tax_summary(
         "gtiAfterSetOff": gti,
         "totalDeductions": total_deductions,
         "deductionBreakdown": deduction_breakdown,
+        "hpLossDisallowed": float(res.hp_loss_disallowed),
         "totalIncome": taxable_income,
         "normalTax": slab_tax,
         "rebate87A": rebate,
