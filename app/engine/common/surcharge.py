@@ -1,89 +1,133 @@
-"""Surcharge computation with marginal relief for both regimes.
-
-Surcharge is applied on tax (after rebate) at slab-determined rates.
-For dividend income and capital gains u/s 111A/112/112A/115AD, the surcharge
-rate is capped at 15% regardless of the taxpayer's total-income slab — only the
-surcharge on the "other" (normal-rate) component of income can go up to the
-full slab rate (25%/37% old regime, 25% new regime).
-
-CBDT marginal relief formula (Section 2(3C), Schedule I):
-  Surcharge is computed on tax (after rebate). However, under marginal relief,
-  the total tax + surcharge payable on income exceeding the threshold shall not
-  exceed (income - threshold + tax on threshold income).
-
-Equivalently:  surcharge payable = min(rate_surcharge, income_excess)
-"""
+"""Surcharge and marginal-relief computation for AY 2026-27."""
 
 from decimal import Decimal
+
 from app.engine.common.rounding import vba_round
 from app.engine.constants import SURCHARGE_SLABS, SURCHARGE_SLABS_NEW_REGIME
 
+_ZERO = Decimal("0")
+_CAP_RATE = Decimal("0.15")
 
-def compute(taxable_income: Decimal, tax_after_rebate: Decimal, regime: str,
-            age_bracket: str, sr_tax: Decimal = Decimal("0"),
-            sr_surcharge_full_tax: Decimal = Decimal("0")) -> Decimal:
-    """Compute surcharge, capping special-rate income component at 15%.
+
+def _tax_at_threshold(
+    threshold: Decimal,
+    taxable_income: Decimal,
+    regime: str,
+    age_bracket: str,
+    capped_tax: Decimal,
+    full_special_tax: Decimal,
+    capped_income: Decimal,
+    full_special_income: Decimal,
+) -> Decimal:
+    """Recompute tax at a surcharge threshold across all income baskets."""
+    from app.engine.common.slab_tax import compute as compute_slab_tax
+
+    excess = max(_ZERO, taxable_income - threshold)
+    normal_income = max(_ZERO, taxable_income - capped_income - full_special_income)
+    normal_at_threshold = max(_ZERO, normal_income - excess)
+    remaining_excess = max(_ZERO, excess - normal_income)
+
+    full_retained = max(_ZERO, full_special_income - remaining_excess)
+    remaining_excess = max(_ZERO, remaining_excess - full_special_income)
+    capped_retained = max(_ZERO, capped_income - remaining_excess)
+
+    full_tax_at_threshold = (
+        full_special_tax * full_retained / full_special_income
+        if full_special_income > 0 else _ZERO
+    )
+    capped_tax_at_threshold = (
+        capped_tax * capped_retained / capped_income
+        if capped_income > 0 else _ZERO
+    )
+    return (
+        compute_slab_tax(normal_at_threshold, age_bracket, regime)
+        + full_tax_at_threshold
+        + capped_tax_at_threshold
+    )
+
+
+def compute(
+    taxable_income: Decimal,
+    tax_after_rebate: Decimal,
+    regime: str,
+    age_bracket: str,
+    sr_tax: Decimal = _ZERO,
+    sr_surcharge_full_tax: Decimal = _ZERO,
+    sr_income: Decimal = _ZERO,
+    sr_surcharge_full_income: Decimal = _ZERO,
+    tax_at_threshold: Decimal | None = None,
+) -> Decimal:
+    """Compute surcharge, its 15% basket cap, and marginal relief.
 
     Args:
-        taxable_income: Total taxable income for slab determination.
-        tax_after_rebate: Tax after rebate (normal + special-rate).
-        regime: 'old' or 'new'.
-        age_bracket: Age bracket for threshold tax computation.
-        sr_tax: Tax on qualifying special-rate income eligible for 15% cap
-                (111A/112/112A). For backward compatibility, if
-                sr_surcharge_full_tax is 0, all sr_tax is treated as capped.
-        sr_surcharge_full_tax: Tax on non-qualifying special-rate income
-                (115BB lottery, 115BBH VDA, 115BBE unexplained, 115BBF patent)
-                that gets the full slab-determined surcharge rate.
+        taxable_income: Total income used to select the surcharge slab.
+        tax_after_rebate: Aggregate normal and special-rate tax after rebate.
+        regime: Selected tax regime.
+        age_bracket: Taxpayer age bracket.
+        sr_tax: Tax on section 111A/112/112A and dividend income, whose
+            surcharge is capped at 15%.
+        sr_surcharge_full_tax: Tax on special income without the 15% cap.
+        sr_income: Income corresponding to ``sr_tax``. Supplying it enables a
+            basket-aware marginal-relief threshold computation.
+        sr_surcharge_full_income: Income corresponding to the uncapped special
+            tax basket.
+        tax_at_threshold: Explicit aggregate tax (before surcharge) at the
+            applicable threshold. This overrides internal recomputation.
 
     Returns:
-        Surcharge amount.
+        Non-negative surcharge after marginal relief.
     """
     from app.schemas.itr1 import TaxRegime
 
-    if tax_after_rebate <= 0:
-        return Decimal("0")
+    income = max(_ZERO, taxable_income)
+    aggregate_tax = max(_ZERO, tax_after_rebate)
+    if aggregate_tax == 0:
+        return _ZERO
 
     slabs = SURCHARGE_SLABS_NEW_REGIME if regime == TaxRegime.NEW else SURCHARGE_SLABS
-    rate = Decimal("0")
-    base = Decimal("0")
-
-    for low, high, r in slabs:
-        if high is None:
-            if taxable_income > low:
-                rate = r
-                base = low
-        elif low < taxable_income <= high:
-            rate = r
-            base = low
+    rate = _ZERO
+    threshold = _ZERO
+    for low, high, slab_rate in slabs:
+        if income > low and (high is None or income <= high):
+            rate = slab_rate
+            threshold = low
             break
-
     if rate == 0:
-        return Decimal("0")
+        return _ZERO
 
-    # Split into three buckets:
-    #   capped_sr: 111A/112/112A -> capped at 15%
-    #   full_sr:   115BB/BBE/BBH/BBF -> full slab rate
-    #   normal:    everything else -> full slab rate
-    capped_sr = sr_tax or Decimal("0")
-    full_sr = sr_surcharge_full_tax or Decimal("0")
-    normal_tax = tax_after_rebate - capped_sr - full_sr
-    capped_sr_surcharge = capped_sr * min(rate, Decimal("0.15"))
-    full_sr_surcharge = full_sr * rate
-    normal_surcharge = normal_tax * rate
-    before_relief = capped_sr_surcharge + full_sr_surcharge + normal_surcharge
+    capped_tax = min(max(_ZERO, sr_tax), aggregate_tax)
+    full_special_tax = min(
+        max(_ZERO, sr_surcharge_full_tax),
+        aggregate_tax - capped_tax,
+    )
+    normal_tax = max(_ZERO, aggregate_tax - capped_tax - full_special_tax)
+    surcharge_before_relief = (
+        capped_tax * min(rate, _CAP_RATE)
+        + full_special_tax * rate
+        + normal_tax * rate
+    )
 
-    # Marginal relief: tax + surcharge shall not exceed
-    #   (taxable_income - threshold) + tax at threshold income
-    # ------------------------------------------------------------
-    from app.engine.common.slab_tax import compute as compute_slab_tax
-    threshold_tax = compute_slab_tax(base, age_bracket, regime)
+    if tax_at_threshold is None:
+        if sr_income > 0 or sr_surcharge_full_income > 0:
+            threshold_tax = _tax_at_threshold(
+                threshold,
+                income,
+                regime,
+                age_bracket,
+                capped_tax,
+                full_special_tax,
+                max(_ZERO, sr_income),
+                max(_ZERO, sr_surcharge_full_income),
+            )
+        else:
+            from app.engine.common.slab_tax import compute as compute_slab_tax
+            threshold_tax = compute_slab_tax(threshold, age_bracket, regime)
+    else:
+        threshold_tax = max(_ZERO, tax_at_threshold)
 
-    excess_income = taxable_income - base
-    max_tax_plus_surcharge_at_threshold = excess_income + threshold_tax
-    current_tax_plus_surcharge = tax_after_rebate + before_relief
-
-    relief = max(Decimal("0"), current_tax_plus_surcharge - max_tax_plus_surcharge_at_threshold)
-    surcharge = vba_round(before_relief - relief)
-
-    return max(Decimal("0"), surcharge)
+    maximum_tax_and_surcharge = threshold_tax + (income - threshold)
+    relief = max(
+        _ZERO,
+        aggregate_tax + surcharge_before_relief - maximum_tax_and_surcharge,
+    )
+    return max(_ZERO, vba_round(surcharge_before_relief - relief))

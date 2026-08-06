@@ -1,158 +1,283 @@
-"""
-Schedule CYLA: Current Year Loss Adjustment.
+"""Current-year loss adjustment under sections 70 and 71.
 
-Under the IT Act (Sections 70-71), current-year losses from one head of
-income can be set off against income from another head.
+Implements the statutory intra-head and inter-head set-off order with
+six CG sub-baskets matching the official ITR-2 Schedule CYLA schema:
 
-Set-off rules (Section 70, 71):
-  - Loss from HP (Section 24): can be set off against any income.
-    Self-occupied loss capped at Rs 2,00,000 (Section 24(b)).
-  - Loss from Business (Non-speculative): can be set off against any income
-    EXCEPT salary (Section 71(2A), Section 72(2)).
-  - Loss from Speculative Business: can only be set off against speculative
-    business income (Section 73(2)).
-  - STCG loss: can be set off against STCG or LTCG (Section 74(1)(a)).
-  - LTCG loss: can be set off only against LTCG (Section 74(1)(b)).
-  - Loss from Other Sources: cannot be set off against any income
-    (Section 74A, w.e.f. AY 2024-25).
-
-ITR forms: ITR-2, ITR-3 only. ITR-1/4 do not permit loss set-off.
+  - STCG20Per  (section 111A, 20% rate)
+  - STCG30Per  (section 112 at 30%/other normal-rate STCG)
+  - STCGAppRate (applicable-rate STCG)
+  - STCGDTAARate (DTAA-rate STCG)
+  - LTCG12_5Per (section 112/112A at 12.5%)
+  - LTCGDTAARate (DTAA-rate LTCG)
 """
 
-from decimal import Decimal
 from dataclasses import dataclass, field
+from decimal import Decimal
+
+_ZERO = Decimal("0")
 
 
 @dataclass
 class CylaLossEntry:
+    """One current-year loss adjustment entry."""
+
     head: str = ""
     sub_category: str = ""
-    loss_amount: Decimal = Decimal("0")
-    set_off_amount: Decimal = Decimal("0")
-    remaining_loss: Decimal = Decimal("0")
+    loss_amount: Decimal = _ZERO
+    set_off_amount: Decimal = _ZERO
+    remaining_loss: Decimal = _ZERO
+
+
+@dataclass
+class CylaIncomeBasket:
+    """Per-basket income remaining after intra-head CG set-off.
+
+    Maps to the official Schedule CYLA IncCYLA sub-structure for each
+    capital-gain rate basket.
+    """
+
+    inc_of_cur_yr: Decimal = _ZERO
+    hp_loss_setoff: Decimal = _ZERO
+    oth_src_loss_setoff: Decimal = _ZERO
+    inc_of_cur_yr_after_setoff: Decimal = _ZERO
 
 
 @dataclass
 class CYLAInput:
-    # Income heads the loss can be set off against
-    non_salary_income: Decimal = Decimal("0")   # GTI - salary - spec_biz
-    hp_loss: Decimal = Decimal("0")             # negative = loss
-    stcg_loss: Decimal = Decimal("0")           # negative = loss
-    ltcg_loss: Decimal = Decimal("0")           # negative = loss
-    non_spec_biz_loss: Decimal = Decimal("0")   # negative = loss
-    spec_biz_loss: Decimal = Decimal("0")       # negative = loss
-    # Income available to absorb the losses
-    hp_income: Decimal = Decimal("0")
-    stcg_income: Decimal = Decimal("0")
-    ltcg_income: Decimal = Decimal("0")
-    non_spec_biz_income: Decimal = Decimal("0")
-    spec_biz_income: Decimal = Decimal("0")
+    """Income and loss pools available for current-year adjustment.
+
+    CG sub-basket incomes are passed as signed values (negative = loss).
+    Non-CG losses (HP, business) are passed as positive loss magnitudes.
+    """
+
+    non_salary_income: Decimal = _ZERO
+    hp_loss: Decimal = _ZERO
+    stcg20_income: Decimal = _ZERO
+    stcg30_income: Decimal = _ZERO
+    stcg_app_income: Decimal = _ZERO
+    stcg_dtaa_income: Decimal = _ZERO
+    ltcg125_income: Decimal = _ZERO
+    ltcg_dtaa_income: Decimal = _ZERO
+    non_spec_biz_loss: Decimal = _ZERO
+    spec_biz_loss: Decimal = _ZERO
+    hp_income: Decimal = _ZERO
+    non_spec_biz_income: Decimal = _ZERO
+    spec_biz_income: Decimal = _ZERO
 
 
 @dataclass
 class CYLAResult:
-    entries: list = field(default_factory=list)
-    total_loss_set_off: Decimal = Decimal("0")
-    total_loss_remaining: Decimal = Decimal("0")
-    # Breakout per head for downstream GTI adjustment
-    hp_setoff: Decimal = Decimal("0")
-    stcg_setoff: Decimal = Decimal("0")
-    ltcg_setoff: Decimal = Decimal("0")
-    non_spec_biz_setoff: Decimal = Decimal("0")
-    spec_biz_setoff: Decimal = Decimal("0")
+    """Current-year set-off amounts and unabsorbed losses.
+
+    Per-basket fields populate the six official CG sub-basket structures.
+    """
+
+    entries: list[CylaLossEntry] = field(default_factory=list)
+    total_loss_set_off: Decimal = _ZERO
+    total_loss_remaining: Decimal = _ZERO
+    hp_setoff: Decimal = _ZERO
+    stcg20_setoff: Decimal = _ZERO
+    stcg30_setoff: Decimal = _ZERO
+    stcg_app_setoff: Decimal = _ZERO
+    stcg_dtaa_setoff: Decimal = _ZERO
+    ltcg125_setoff: Decimal = _ZERO
+    ltcg_dtaa_setoff: Decimal = _ZERO
+    non_spec_biz_setoff: Decimal = _ZERO
+    spec_biz_setoff: Decimal = _ZERO
+    # Per-basket residual income after CG loss set-off (for builder)
+    stcg20_remaining: Decimal = _ZERO
+    stcg30_remaining: Decimal = _ZERO
+    stcg_app_remaining: Decimal = _ZERO
+    stcg_dtaa_remaining: Decimal = _ZERO
+    ltcg125_remaining: Decimal = _ZERO
+    ltcg_dtaa_remaining: Decimal = _ZERO
+
+
+def _positive(value: Decimal) -> Decimal:
+    """Return the nonnegative portion of a value."""
+    return max(_ZERO, value)
+
+
+def _loss(value: Decimal) -> Decimal:
+    """Return the magnitude of a negative value, else zero."""
+    return max(_ZERO, -value)
 
 
 def compute(cy: CYLAInput) -> CYLAResult:
-    """Apply current-year loss set-off per Sections 70-74A."""
+    """Apply current-year losses sequentially to nonnegative income pools.
 
-    entries = []
-    total_set_off = Decimal("0")
-    total_remaining = Decimal("0")
+    Capital losses are adjusted intra-head first (STCL before LTCL). Business
+    and house-property adjustments then see only income left in their eligible
+    pools, preventing the same income from absorbing multiple losses.
 
-    # --- HP loss: set off against any income (capped at 2L for self-occupied) ---
-    hp_loss_val = abs(cy.hp_loss) if cy.hp_loss < 0 else Decimal("0")
-    # Cap by (a) ₹2,00,000 statutory u/s 71(3A) AND (b) total positive income available
-    # HP loss can be set off against ANY head of income (salary, business, OS, CG).
-    # non_salary_income is populated by callers with salary_income + os_income.
-    available_income = max(Decimal("0"),
-        cy.non_salary_income + cy.hp_income + cy.stcg_income + cy.ltcg_income
-        + cy.non_spec_biz_income + cy.spec_biz_income)
-    hp_setoff = min(hp_loss_val, Decimal("200000"), available_income)
-    hp_remaining = hp_loss_val - hp_setoff
-    if hp_loss_val > 0:
-        entries.append(CylaLossEntry(
-            head="HP", sub_category="HouseProperty",
-            loss_amount=hp_loss_val,
-            set_off_amount=hp_setoff,
-            remaining_loss=hp_remaining,
-        ))
-        total_set_off += hp_setoff
-        total_remaining += hp_remaining
+    The six CG sub-baskets are tracked individually so the builder can
+    populate every official Schedule CYLA row.
 
-    # --- STCG loss: set off against STCG + LTCG ---
-    stcg_loss_val = abs(cy.stcg_loss) if cy.stcg_loss < 0 else Decimal("0")
-    stcg_setoff = max(Decimal("0"), min(stcg_loss_val, cy.stcg_income + cy.ltcg_income))
-    stcg_remaining = stcg_loss_val - stcg_setoff
-    if stcg_loss_val > 0:
-        entries.append(CylaLossEntry(
-            head="STCG", sub_category="STCG",
-            loss_amount=stcg_loss_val,
-            set_off_amount=stcg_setoff,
-            remaining_loss=stcg_remaining,
-        ))
-        total_set_off += stcg_setoff
-        total_remaining += stcg_remaining
+    Args:
+        cy: Current-year income and loss pools.
 
-    # --- LTCG loss: set off only against LTCG ---
-    ltcg_loss_val = abs(cy.ltcg_loss) if cy.ltcg_loss < 0 else Decimal("0")
-    ltcg_setoff = min(ltcg_loss_val, cy.ltcg_income)
-    ltcg_remaining = ltcg_loss_val - ltcg_setoff
-    if ltcg_loss_val > 0:
-        entries.append(CylaLossEntry(
-            head="LTCG", sub_category="LTCG",
-            loss_amount=ltcg_loss_val,
-            set_off_amount=ltcg_setoff,
-            remaining_loss=ltcg_remaining,
-        ))
-        total_set_off += ltcg_setoff
-        total_remaining += ltcg_remaining
+    Returns:
+        Ordered loss adjustments, remaining positive loss magnitudes, and
+        per-basket residual incomes.
+    """
+    hp_pool = _positive(cy.hp_income)
+    stcg20_pool = _positive(cy.stcg20_income)
+    stcg30_pool = _positive(cy.stcg30_income)
+    stcg_app_pool = _positive(cy.stcg_app_income)
+    stcg_dtaa_pool = _positive(cy.stcg_dtaa_income)
+    ltcg125_pool = _positive(cy.ltcg125_income)
+    ltcg_dtaa_pool = _positive(cy.ltcg_dtaa_income)
+    nsb_pool = _positive(cy.non_spec_biz_income)
+    spec_pool = _positive(cy.spec_biz_income)
+    other_pool = _positive(cy.non_salary_income)
+    entries: list[CylaLossEntry] = []
 
-    # --- Non-speculative biz loss: set off against any non-salary, non-spec-biz income ---
-    nsb_loss_val = abs(cy.non_spec_biz_loss) if cy.non_spec_biz_loss < 0 else Decimal("0")
-    eligible_income = cy.hp_income + cy.stcg_income + cy.ltcg_income + cy.spec_biz_income
-    nsb_setoff = min(nsb_loss_val, eligible_income)
-    nsb_remaining = nsb_loss_val - nsb_setoff
-    if nsb_loss_val > 0:
-        entries.append(CylaLossEntry(
-            head="BUS", sub_category="NonSpeculative",
-            loss_amount=nsb_loss_val,
-            set_off_amount=nsb_setoff,
-            remaining_loss=nsb_remaining,
-        ))
-        total_set_off += nsb_setoff
-        total_remaining += nsb_remaining
+    def record(head: str, sub_category: str, amount: Decimal, setoff: Decimal) -> None:
+        """Append a CYLA entry when the loss is nonzero."""
+        if amount > _ZERO:
+            entries.append(CylaLossEntry(head, sub_category, amount, setoff, amount - setoff))
 
-    # --- Speculative biz loss: set off only against speculative income ---
-    sb_loss_val = abs(cy.spec_biz_loss) if cy.spec_biz_loss < 0 else Decimal("0")
-    sb_setoff = min(sb_loss_val, cy.spec_biz_income)
-    sb_remaining = sb_loss_val - sb_setoff
-    if sb_loss_val > 0:
-        entries.append(CylaLossEntry(
-            head="BUS", sub_category="Speculative",
-            loss_amount=sb_loss_val,
-            set_off_amount=sb_setoff,
-            remaining_loss=sb_remaining,
-        ))
-        total_set_off += sb_setoff
-        total_remaining += sb_remaining
+    # Intra-head CG loss set-off: STCL (all sub-baskets) before LTCL.
+    # STCL can absorb STCG and then LTCG within CG. Per-basket tracking:
+    # each STCL sub-basket absorbs its own income first, then other STCG
+    # baskets, then LTCG baskets. LTCL absorbs LTCG only.
+    stcg_loss_total = (
+        _loss(cy.stcg20_income) + _loss(cy.stcg30_income)
+        + _loss(cy.stcg_app_income) + _loss(cy.stcg_dtaa_income)
+    )
+    # Track per-basket STCL
+    stcl_20 = _loss(cy.stcg20_income)
+    stcl_30 = _loss(cy.stcg30_income)
+    stcl_app = _loss(cy.stcg_app_income)
+    stcl_dtaa = _loss(cy.stcg_dtaa_income)
+
+    # Absorb own basket first
+    absorbed_20 = min(stcl_20, stcg20_pool); stcg20_pool -= absorbed_20; stcl_20 -= absorbed_20
+    absorbed_30 = min(stcl_30, stcg30_pool); stcg30_pool -= absorbed_30; stcl_30 -= absorbed_30
+    absorbed_app = min(stcl_app, stcg_app_pool); stcg_app_pool -= absorbed_app; stcl_app -= absorbed_app
+    absorbed_dtaa = min(stcl_dtaa, stcg_dtaa_pool); stcg_dtaa_pool -= absorbed_dtaa; stcl_dtaa -= absorbed_dtaa
+
+    # Cross-absorb STCL into other STCG baskets
+    ltcl_125 = _loss(cy.ltcg125_income)
+    ltcl_dtaa = _loss(cy.ltcg_dtaa_income)
+    remaining_stcl = stcl_20 + stcl_30 + stcl_app + stcl_dtaa
+    stcg_baskets = [stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool]
+    for i in range(len(stcg_baskets)):
+        used = min(remaining_stcl, stcg_baskets[i])
+        stcg_baskets[i] -= used
+        remaining_stcl -= used
+        if remaining_stcl <= _ZERO:
+            break
+    stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool = stcg_baskets
+
+    # STCL absorbs LTCG
+    ltcg_baskets = [ltcg125_pool, ltcg_dtaa_pool]
+    for i in range(len(ltcg_baskets)):
+        used = min(remaining_stcl, ltcg_baskets[i])
+        ltcg_baskets[i] -= used
+        remaining_stcl -= used
+        if remaining_stcl <= _ZERO:
+            break
+    ltcg125_pool, ltcg_dtaa_pool = ltcg_baskets
+
+    total_stcg_setoff = stcg_loss_total - remaining_stcl
+    # Record aggregate STCG entry; per-basket breakdown is available via result fields
+    if stcg_loss_total > _ZERO:
+        record("STCG", "STCG", stcg_loss_total, total_stcg_setoff)
+
+    # LTCL absorbs LTCG only — cross-basket within LTCG
+    ltcl_total = ltcl_125 + ltcl_dtaa
+    ltcl_remaining = ltcl_total
+    ltcg125_absorbed = min(ltcl_remaining, ltcg125_pool)
+    ltcg125_pool -= ltcg125_absorbed
+    ltcl_remaining -= ltcg125_absorbed
+    ltcg_dtaa_absorbed = min(ltcl_remaining, ltcg_dtaa_pool)
+    ltcg_dtaa_pool -= ltcg_dtaa_absorbed
+    ltcl_remaining -= ltcg_dtaa_absorbed
+    total_ltcg_setoff = ltcl_total - ltcl_remaining
+    if ltcl_total > _ZERO:
+        record("LTCG", "LTCG", ltcl_total, total_ltcg_setoff)
+
+    # Speculative business loss
+    spec_loss = _loss(cy.spec_biz_loss)
+    spec_setoff = min(spec_loss, spec_pool)
+    spec_pool -= spec_setoff
+    record("BUS", "Speculative", spec_loss, spec_setoff)
+
+    # Non-speculative business loss — absorbs nsb, then hp, stcg, ltcg, other
+    nsb_loss = _loss(cy.non_spec_biz_loss)
+    nsb_setoff = _ZERO
+    cg_pools = [stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool, ltcg125_pool, ltcg_dtaa_pool]
+    for pool_name in ("nsb", "hp", "cg", "other"):
+        if pool_name == "cg":
+            for i in range(len(cg_pools)):
+                used = min(nsb_loss - nsb_setoff, cg_pools[i])
+                cg_pools[i] -= used
+                nsb_setoff += used
+        else:
+            pool = {"nsb": nsb_pool, "hp": hp_pool, "other": other_pool}[pool_name]
+            used = min(nsb_loss - nsb_setoff, pool)
+            nsb_setoff += used
+            if pool_name == "nsb":
+                nsb_pool -= used
+            elif pool_name == "hp":
+                hp_pool -= used
+            else:
+                other_pool -= used
+    stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool, ltcg125_pool, ltcg_dtaa_pool = cg_pools
+    record("BUS", "NonSpeculative", nsb_loss, nsb_setoff)
+
+    # HP loss — capped at ₹2L for inter-head set-off
+    hp_loss = _loss(cy.hp_loss)
+    hp_eligible = min(hp_loss, Decimal("200000"))
+    hp_setoff = _ZERO
+    for pool_name in ("other", "nsb", "spec", "cg"):
+        if pool_name == "cg":
+            for i in range(len(cg_pools)):
+                used = min(hp_eligible - hp_setoff, cg_pools[i])
+                cg_pools[i] -= used
+                hp_setoff += used
+        else:
+            pool = {"other": other_pool, "nsb": nsb_pool, "spec": spec_pool}[pool_name]
+            used = min(hp_eligible - hp_setoff, pool)
+            hp_setoff += used
+            if pool_name == "other":
+                other_pool -= used
+            elif pool_name == "nsb":
+                nsb_pool -= used
+            else:
+                spec_pool -= used
+    stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool, ltcg125_pool, ltcg_dtaa_pool = cg_pools
+    record("HP", "HouseProperty", hp_loss, hp_setoff)
+
+    total_setoff = hp_setoff + total_stcg_setoff + total_ltcg_setoff + nsb_setoff + spec_setoff
+    total_remaining = sum((entry.remaining_loss for entry in entries), _ZERO)
+
+    # Compute per-basket setoff (original income - remaining)
+    stcg20_setoff = _positive(cy.stcg20_income) - stcg20_pool if cy.stcg20_income > _ZERO else _ZERO
+    stcg30_setoff = _positive(cy.stcg30_income) - stcg30_pool if cy.stcg30_income > _ZERO else _ZERO
+    stcg_app_setoff = _positive(cy.stcg_app_income) - stcg_app_pool if cy.stcg_app_income > _ZERO else _ZERO
+    stcg_dtaa_setoff = _positive(cy.stcg_dtaa_income) - stcg_dtaa_pool if cy.stcg_dtaa_income > _ZERO else _ZERO
+    ltcg125_setoff = _positive(cy.ltcg125_income) - ltcg125_pool if cy.ltcg125_income > _ZERO else _ZERO
+    ltcg_dtaa_setoff = _positive(cy.ltcg_dtaa_income) - ltcg_dtaa_pool if cy.ltcg_dtaa_income > _ZERO else _ZERO
 
     return CYLAResult(
         entries=entries,
-        total_loss_set_off=total_set_off,
+        total_loss_set_off=total_setoff,
         total_loss_remaining=total_remaining,
         hp_setoff=hp_setoff,
-        stcg_setoff=stcg_setoff,
-        ltcg_setoff=ltcg_setoff,
+        stcg20_setoff=stcg20_setoff,
+        stcg30_setoff=stcg30_setoff,
+        stcg_app_setoff=stcg_app_setoff,
+        stcg_dtaa_setoff=stcg_dtaa_setoff,
+        ltcg125_setoff=ltcg125_setoff,
+        ltcg_dtaa_setoff=ltcg_dtaa_setoff,
         non_spec_biz_setoff=nsb_setoff,
-        spec_biz_setoff=sb_setoff,
+        spec_biz_setoff=spec_setoff,
+        stcg20_remaining=stcg20_pool,
+        stcg30_remaining=stcg30_pool,
+        stcg_app_remaining=stcg_app_pool,
+        stcg_dtaa_remaining=stcg_dtaa_pool,
+        ltcg125_remaining=ltcg125_pool,
+        ltcg_dtaa_remaining=ltcg_dtaa_pool,
     )

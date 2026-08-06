@@ -19,6 +19,7 @@ from app.auth.dependencies import get_current_user
 from app.automation.job_worker import _get_job_dict, enqueue_job, _download_dir
 from app.db.database import get_db
 from app.db.models import AutomationJob, Client, User
+from app.routers.clients import resolve_owned_client
 
 logger = logging.getLogger("taxify.automation.router")
 router = APIRouter(tags=["automation"])
@@ -29,7 +30,7 @@ router = APIRouter(tags=["automation"])
 
 @router.post("/clients/{client_id}/automation/import")
 def start_automation_import(
-    client_id: int,
+    client_id: str,
     assessment_year: str = Query(
         default="2026-27",
         description="Assessment year, e.g. '2026-27'. Converted to financial year internally.",
@@ -50,32 +51,19 @@ def start_automation_import(
     The job downloads Form 26AS, AIS, and TIS PDFs from the ITD portal
     using the client's stored PAN, DOB, and portal_password.
     """
-    logger.info(
-        "User %d requesting automation import for client %d, AY=%s, type=%s",
-        current_user.id, client_id, assessment_year, job_type,
-    )
+    # Resolve client by public_id (or legacy integer id) with ownership check
+    client = resolve_owned_client(client_id, current_user.id, db)
 
-    # Validate client exists and belongs to current user
-    client = (
-        db.query(Client)
-        .filter(Client.id == client_id, Client.user_id == current_user.id)
-        .first()
+    logger.info(
+        "User %d requesting automation import for client %s, AY=%s, type=%s",
+        current_user.id, client.public_id, assessment_year, job_type,
     )
-    if not client:
-        logger.warning(
-            "Automation import: Client %d not found for user %d.",
-            client_id, current_user.id,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Client not found.",
-        )
 
     # Require portal password
     if not client.portal_password:
         logger.warning(
-            "Automation import: Client %d (%s) has no portal_password set.",
-            client_id, client.pan or "no PAN",
+            "Automation import: Client %s (%s) has no portal_password set.",
+            client.public_id, client.pan or "no PAN",
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -90,9 +78,9 @@ def start_automation_import(
 
     fiscal_year = _derive_fiscal_year(assessment_year)
 
-    # Create job
+    # Create job — store internal integer client.id
     job = AutomationJob(
-        client_id=client_id,
+        client_id=client.id,
         user_id=current_user.id,
         job_type=job_type,
         status="queued",
@@ -107,15 +95,15 @@ def start_automation_import(
     # Enqueue for background processing
     enqueue_job(job_id)
     logger.info(
-        "Automation import: Created job %d for client %d (%s), FY=%s, type=%s.",
-        job_id, client_id, client.pan, fiscal_year, job_type,
+        "Automation import: Created job %d for client %s (%s), FY=%s, type=%s.",
+        job_id, client.public_id, client.pan, fiscal_year, job_type,
     )
 
     return {
         "job_id": job_id,
         "status": "queued",
         "fiscal_year": fiscal_year,
-        "download_dir": _download_dir(client_id, fiscal_year),
+        "download_dir": _download_dir(client.id, fiscal_year),
         "message": "Automation job created and queued. Poll GET /automation/jobs/{job_id} for progress.",
     }
 
@@ -156,7 +144,7 @@ def get_job_status(
 
 @router.get("/automation/jobs")
 def list_jobs(
-    client_id: Optional[int] = Query(default=None, description="Filter by client"),
+    client_id: Optional[str] = Query(default=None, description="Filter by client public_id or legacy id"),
     status_filter: Optional[str] = Query(
         default=None, alias="status", description="Filter by status"
     ),
@@ -171,7 +159,10 @@ def list_jobs(
         AutomationJob.user_id == current_user.id
     )
     if client_id is not None:
-        query = query.filter(AutomationJob.client_id == client_id)
+        # Resolve the client by public_id or legacy integer id, then
+        # filter jobs by the internal integer client.id.
+        resolved = resolve_owned_client(client_id, current_user.id, db)
+        query = query.filter(AutomationJob.client_id == resolved.id)
     if status_filter:
         query = query.filter(AutomationJob.status == status_filter)
 

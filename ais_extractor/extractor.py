@@ -488,6 +488,191 @@ def _consume_note(lines: list[str], idx: int) -> int:
     return i
 
 
+def _parse_listed_equity_sale_rows(text: str) -> tuple[list[str], list[DetailRow]]:
+    """Parse row-level SFT-17 listed-equity sales from extracted AIS text.
+
+    PyMuPDF emits each table cell on separate lines and splits several cells
+    (for example, ``Listed Equity Share`` and ``Off market``) across lines.
+    This parser anchors each row on its serial number and transfer date, then
+    parses the stable categorical and numeric suffix from the row.
+
+    Args:
+        text: Text containing an AIS section or complete AIS document.
+
+    Returns:
+        A canonical header and all valid listed-equity sale rows found.
+    """
+    header = [
+        "SR. NO.",
+        "DATE OF SALE/TRANSFER",
+        "SECURITY NAME (SECURITY CODE)",
+        "SECURITY CLASS",
+        "DEBIT TYPE",
+        "CREDIT TYPE",
+        "ASSET TYPE",
+        "QUANTITY",
+        "SALE PRICE PER UNIT",
+        "SALES CONSIDERATION",
+        "COST OF ACQUISITION",
+        "UNIT FMV",
+        "FAIR MARKET VALUE",
+        "INDEXED COST OF ACQUISITION",
+        "STATUS",
+    ]
+    row_start = re.compile(r"(?m)^(?P<sr>\d+)\s*\n(?P<date>\d{2}/\d{2}/\d{4})\s*\n")
+    starts = list(row_start.finditer(text))
+    rows: list[DetailRow] = []
+    numeric = r"[\d,]+(?:\.\d+)?"
+    body_pattern = re.compile(
+        rf"^(?P<security>.*?)\s*\nListed\s*\nEquity Share\s*\n"
+        rf"(?P<debit>Market|Off\s+market)\s*\n"
+        rf"(?P<credit>Market|Off\s+market)\s*\n"
+        rf"(?P<term>Short|Long)\s*\nterm\s*\n"
+        rf"(?P<quantity>{numeric})\s*\n"
+        rf"(?P<sale_price>{numeric})\s*\n"
+        rf"(?P<consideration>{numeric})\s*\n"
+        rf"(?P<cost>{numeric})\s*\n"
+        rf"(?P<unit_fmv>{numeric})\s*\n"
+        rf"(?P<fmv>{numeric})\s*\n"
+        rf"(?P<indexed_cost>{numeric})\s*\n"
+        rf"(?P<status>Active|Inactive)",
+        re.DOTALL | re.IGNORECASE,
+    )
+
+    for index, start in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        body = text[start.end():end]
+        match = body_pattern.search(body)
+        if match is None:
+            continue
+
+        security = re.sub(r"\s+", " ", match.group("security")).strip()
+        isin_match = re.search(r"\b(IN[EA][A-Z0-9]{9})\b", security, re.IGNORECASE)
+        isin = isin_match.group(1).upper() if isin_match else ""
+        description = re.sub(r"\s*\(?IN[EA][A-Z0-9]{9}\)?\s*$", "", security, flags=re.IGNORECASE).strip()
+        debit_type = re.sub(r"\s+", " ", match.group("debit")).title()
+        credit_type = re.sub(r"\s+", " ", match.group("credit")).title()
+        asset_type = f"{match.group('term').title()} term"
+        values = [
+            str(int(start.group("sr"))),
+            start.group("date"),
+            security,
+            "Listed Equity Share",
+            debit_type,
+            credit_type,
+            asset_type,
+            match.group("quantity"),
+            match.group("sale_price"),
+            match.group("consideration"),
+            match.group("cost"),
+            match.group("unit_fmv"),
+            match.group("fmv"),
+            match.group("indexed_cost"),
+            match.group("status").title(),
+        ]
+        data = {f"col_{column}": value for column, value in enumerate(values)}
+        data.update({
+            "transfer_date": start.group("date"),
+            "security_name": description,
+            "security_code": isin,
+            "isin": isin,
+            "security_class": "Listed Equity Share",
+            "debit_type": debit_type,
+            "credit_type": credit_type,
+            "asset_type": asset_type,
+            "quantity": match.group("quantity"),
+            "sale_price_per_unit": match.group("sale_price"),
+            "sales_consideration": match.group("consideration"),
+            "cost_of_acquisition": match.group("cost"),
+            "unit_fmv": match.group("unit_fmv"),
+            "fair_market_value": match.group("fmv"),
+            "indexed_cost_of_acquisition": match.group("indexed_cost"),
+            "status": match.group("status").title(),
+        })
+        rows.append(DetailRow(sr_no=int(start.group("sr")), data=data))
+
+    return header, rows
+
+
+def _parse_equity_mutual_fund_sale_rows(text: str) -> tuple[list[str], list[DetailRow]]:
+    """Parse row-level SFT-18 equity-oriented mutual-fund disposals.
+
+    Args:
+        text: Text containing an AIS B2 section.
+
+    Returns:
+        A canonical header and every complete SFT-18 disposal row found.
+    """
+    header = [
+        "SR. NO.", "AMC NAME (CODE)", "DATE OF SALE/TRANSFER",
+        "SECURITY CLASS", "SECURITY NAME (SECURITY CODE)", "DEBIT TYPE",
+        "CREDIT TYPE", "ASSET TYPE", "QUANTITY", "SALE PRICE PER UNIT",
+        "SALES CONSIDERATION", "STT", "COST OF ACQUISITION", "UNIT FMV",
+        "FAIR MARKET VALUE", "INDEXED COST OF ACQUISITION", "STATUS",
+    ]
+    numeric = r"[\d,]+(?:\.\d+)?"
+    pattern = re.compile(
+        rf"(?m)(?:(?<=STATUS\n)|(?<=Active\n))(?P<sr>\d+)\s*\n"
+        rf"(?P<amc>.*?)\s*\n(?P<date>\d{{2}}/\d{{2}}/\d{{4}})\s*\n"
+        rf"Unit of\s*\nEquity\s*\nOriented\s*\nMutual\s*\nFund\s*\n"
+        rf"(?P<security>.*?)\s*\nAMC\s*\n\(redemption\s*\n?\)\s*\n"
+        rf"AMC\s*\n\(purchase\s*\n?\)\s*\n"
+        rf"(?P<term>Short|Long)\s*\nterm\s*\n"
+        rf"(?P<quantity>{numeric})\s*\n(?P<sale_price>{numeric})\s*\n"
+        rf"(?P<consideration>{numeric})\s*\n(?P<stt>{numeric})\s*\n"
+        rf"(?P<cost>{numeric})\s*\n(?P<unit_fmv>{numeric})\s*\n"
+        rf"(?P<fmv>{numeric})\s*\n(?P<indexed_cost>{numeric})\s*\n"
+        rf"(?P<status>Active|Inactive)",
+        re.DOTALL | re.IGNORECASE,
+    )
+    rows: list[DetailRow] = []
+    for match in pattern.finditer(text):
+        compact_amc = re.sub(r"\s+", "", match.group("amc")).strip()
+        header_marker = compact_amc.rfind("STATUS")
+        if header_marker >= 0:
+            compact_amc = re.sub(r"^\d+", "", compact_amc[header_marker + len("STATUS"):])
+        compact_security = re.sub(r"\s+", "", match.group("security")).strip()
+        isin_match = re.search(r"\b(INF[A-Z0-9]{9})\b", compact_security, re.IGNORECASE)
+        isin = isin_match.group(1).upper() if isin_match else ""
+        security_name = re.sub(
+            r"\(?INF[A-Z0-9]{9}\)?$", "", compact_security, flags=re.IGNORECASE
+        ).strip()
+        security_name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", security_name)
+        asset_type = f"{match.group('term').title()} term"
+        values = [
+            match.group("sr"), compact_amc, match.group("date"),
+            "Unit of Equity Oriented Mutual Fund", security_name,
+            "AMC (redemption)", "AMC (purchase)", asset_type,
+            match.group("quantity"), match.group("sale_price"),
+            match.group("consideration"), match.group("stt"), match.group("cost"),
+            match.group("unit_fmv"), match.group("fmv"), match.group("indexed_cost"),
+            match.group("status").title(),
+        ]
+        data = {f"col_{index}": value for index, value in enumerate(values)}
+        data.update({
+            "amc_name": compact_amc,
+            "transfer_date": match.group("date"),
+            "security_name": security_name,
+            "security_code": isin,
+            "isin": isin,
+            "security_class": "Unit of Equity Oriented Mutual Fund",
+            "debit_type": "AMC (redemption)",
+            "credit_type": "AMC (purchase)",
+            "asset_type": asset_type,
+            "quantity": match.group("quantity"),
+            "sale_price_per_unit": match.group("sale_price"),
+            "sales_consideration": match.group("consideration"),
+            "stt": match.group("stt"),
+            "cost_of_acquisition": match.group("cost"),
+            "unit_fmv": match.group("unit_fmv"),
+            "fair_market_value": match.group("fmv"),
+            "indexed_cost_of_acquisition": match.group("indexed_cost"),
+            "status": match.group("status").title(),
+        })
+        rows.append(DetailRow(sr_no=int(match.group("sr")), data=data))
+    return header, rows
+
+
 def parse_section_text(text: str, section: str) -> list[AISEntry]:
     """Parse a complete section (B1, B2, or B7) into AISEntry objects
     using a line-by-line state machine.
@@ -801,7 +986,28 @@ class AISExtractor:
                     break
 
         section_text = self._text[idx:end if end != -1 else len(self._text)]
-        return parse_section_text(section_text, section)
+        entries = parse_section_text(section_text, section)
+        if section == "B2":
+            listed_header, listed_rows = _parse_listed_equity_sale_rows(section_text)
+            mutual_fund_header, mutual_fund_rows = _parse_equity_mutual_fund_sale_rows(section_text)
+            listed_offset = 0
+            mutual_fund_offset = 0
+            for entry in entries:
+                code = entry.information_code.upper()
+                expected_count = max(entry.count, 0)
+                if code.startswith("SFT-17-LES"):
+                    assigned_rows = listed_rows[listed_offset:listed_offset + expected_count]
+                    if assigned_rows:
+                        entry.detail_header = listed_header
+                        entry.details = assigned_rows
+                        listed_offset += len(assigned_rows)
+                elif code.startswith("SFT-18-EMF"):
+                    assigned_rows = mutual_fund_rows[mutual_fund_offset:mutual_fund_offset + expected_count]
+                    if assigned_rows:
+                        entry.detail_header = mutual_fund_header
+                        entry.details = assigned_rows
+                        mutual_fund_offset += len(assigned_rows)
+        return entries
 
     def _extract_metadata(self) -> AISMetadata:
         text = self._text

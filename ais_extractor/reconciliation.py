@@ -8,9 +8,11 @@ Priority for final amount: TIS (accepted_by_taxpayer) > AIS (amount) > 26AS
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Optional
 
 
@@ -59,6 +61,28 @@ SECTION_TO_CATEGORY = {
     "206CF": "business receipts",
 }
 
+TRANSACTION_LEVEL_CATEGORIES = frozenset({
+    "sale of securities and units of mutual fund",
+    "purchase of securities and units of mutual funds",
+    "sale of land or building",
+    "purchase of immovable property",
+})
+
+
+class CreditType(str, Enum):
+    """Tax-credit kind sourced authoritatively from Form 26AS."""
+
+    TDS = "TDS"
+    TCS = "TCS"
+
+
+class SelectedSource(str, Enum):
+    """Source selected for the reconciled value."""
+
+    TIS = "TIS"
+    AIS = "AIS"
+    FORM_26AS = "26AS"
+
 
 # ============================================================
 # Name normalization
@@ -67,7 +91,7 @@ SECTION_TO_CATEGORY = {
 _CODE_SUFFIX_RE = re.compile(r'\s*\([A-Z0-9.]+\s*\)\s*$', re.IGNORECASE)
 
 def normalize_name(name: str) -> str:
-    """Strip PAN/CODE suffix, lowercase, collapse whitespace."""
+    """Strip identifier suffixes, lowercase text, and collapse whitespace."""
     if not name:
         return ""
     n = _CODE_SUFFIX_RE.sub('', name)
@@ -75,6 +99,14 @@ def normalize_name(name: str) -> str:
     n = re.sub(r'[^a-z0-9\s]', '', n.lower())
     n = re.sub(r'\s+', ' ', n).strip()
     return n
+
+
+def normalize_source_identity(category: str, source: str) -> str:
+    """Return a controlled fallback identity for cross-document matching."""
+    normalized = normalize_name(source)
+    if category.strip().lower() == "salary":
+        normalized = re.sub(r'^salary(?:\s+received)?\s+', '', normalized)
+    return normalized
 
 
 def extract_pan(source: str) -> str:
@@ -85,6 +117,20 @@ def extract_pan(source: str) -> str:
     if m:
         return m.group(1)
     return ""
+
+
+def canonical_section(section: str, description: str = "") -> str:
+    """Normalize statutory section text for cross-source matching."""
+    combined = f"{section} {description}".upper()
+    match = re.search(r'(?:SECTION\s*)?(192A?|193|194[A-Z]{0,2}|206C[A-Z]?)', combined)
+    return match.group(1) if match else ""
+
+
+def sections_compatible(left: Entry, right: Entry) -> bool:
+    """Return whether two entries can represent the same statutory field."""
+    left_section = canonical_section(left.section, left.description)
+    right_section = canonical_section(right.section, right.description)
+    return not left_section or not right_section or left_section == right_section
 
 
 def _parse_amount(val: Any) -> float:
@@ -104,6 +150,496 @@ def _parse_amount(val: Any) -> float:
 # Entry extraction from each document
 # ============================================================
 
+class RecordGranularity(str, Enum):
+    """Granularity of a capital-gain source record."""
+
+    TRANSACTION_DETAIL = "TRANSACTION_DETAIL"
+    ACCOUNT_PERIOD_AGGREGATE = "ACCOUNT_PERIOD_AGGREGATE"
+    REPORTING_SOURCE_AGGREGATE = "REPORTING_SOURCE_AGGREGATE"
+    CATEGORY_CONTROL = "CATEGORY_CONTROL"
+
+
+@dataclass
+class CapitalGainEvidence:
+    """One immutable AIS capital-gain detail or aggregate evidence record."""
+
+    evidence_id: str
+    granularity: RecordGranularity
+    side: str
+    category: str
+    information_code: str
+    summary_sr_no: int
+    detail_sr_no: Optional[int]
+    reporting_source: str
+    reporting_entity_pan: str
+    account_id: str = ""
+    transaction_date: str = ""
+    security_class: str = ""
+    security_name: str = ""
+    security_identifier: str = ""
+    quantity: Optional[float] = None
+    amount: float = 0.0
+    acquisition_cost: Optional[float] = None
+    fair_market_value: Optional[float] = None
+    unit_fmv: Optional[float] = None
+    sale_price_per_unit: Optional[float] = None
+    stt_amount: Optional[float] = None
+    debit_type: str = ""
+    credit_type: str = ""
+    asset_type: str = ""
+    stt_paid_on_acquisition: Optional[bool] = None
+    stt_paid_on_transfer: Optional[bool] = None
+    recognized_exchange: Optional[bool] = None
+    acquired_before_31_jan_2018: Optional[bool] = None
+    acquisition_mode: str = ""
+    status: str = ""
+    parser_confidence: str = "LOW"
+
+
+@dataclass
+class CapitalGainControl:
+    """AIS or TIS aggregate used solely to cross-foot detail records."""
+
+    control_id: str
+    source_document: str
+    granularity: RecordGranularity
+    category: str
+    side: str
+    information_code: str
+    reporting_source: str
+    reporting_entity_pan: str
+    amount: float
+    accepted_amount: Optional[float] = None
+
+
+_HEADER_NON_ALNUM_RE = re.compile(r"[^A-Z0-9]+")
+
+
+def _stable_source_id(*parts: object) -> str:
+    """Return a deterministic non-PII-prefixed identity for a source row."""
+    payload = "|".join(str(part or "").strip() for part in parts)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _capital_gain_side(category: str) -> str:
+    """Infer purchase or sale side from an AIS/TIS category."""
+    normalized = category.strip().lower()
+    if "purchase" in normalized:
+        return "PURCHASE"
+    if "sale" in normalized or "transfer" in normalized:
+        return "SALE"
+    return "UNKNOWN"
+
+
+def _normalized_header(value: str) -> str:
+    """Normalize a PDF table heading for semantic field matching."""
+    return _HEADER_NON_ALNUM_RE.sub(" ", value.upper()).strip()
+
+
+def _detail_cells(headers: list[str], detail: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+    """Map positional AIS detail values to normalized headings."""
+    raw = detail.get("data", {})
+    if not isinstance(raw, dict):
+        return {}, []
+    values = [str(raw.get(f"col_{index}", "") or "").strip() for index in range(max(len(headers), len(raw)))]
+    mapped: dict[str, str] = {}
+    for index, value in enumerate(values):
+        header = _normalized_header(headers[index]) if index < len(headers) else f"COLUMN {index}"
+        if header:
+            mapped[header] = value
+    return mapped, values
+
+
+def _first_semantic_value(cells: dict[str, str], *terms: str) -> str:
+    """Return the first non-empty cell whose heading contains all terms."""
+    normalized_terms = tuple(term.upper() for term in terms)
+    for heading, value in cells.items():
+        if value and all(term in heading for term in normalized_terms):
+            return value
+    return ""
+
+
+def _optional_amount(value: str) -> Optional[float]:
+    """Parse an amount while distinguishing missing or malformed data from zero."""
+    if not value or value.strip() in {"-", "--", "—"}:
+        return None
+    cleaned = re.sub(r"[₹\s]", "", value).replace(",", "")
+    negative = cleaned.startswith("(") and cleaned.endswith(")")
+    cleaned = cleaned.strip("()")
+    try:
+        amount = float(cleaned)
+    except ValueError:
+        return None
+    return -amount if negative else amount
+
+
+def _first_amount(cells: dict[str, str], candidates: tuple[tuple[str, ...], ...]) -> Optional[float]:
+    """Return the first valid amount under a semantically matching heading."""
+    for terms in candidates:
+        normalized_terms = tuple(term.upper() for term in terms)
+        for heading, value in cells.items():
+            if not all(term in heading for term in normalized_terms):
+                continue
+            parsed = _optional_amount(value)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _optional_number(value: str) -> Optional[float]:
+    """Parse an optional numeric value without inventing zero for missing data."""
+    if not value or value.strip() in {"-", "--", "—"}:
+        return None
+    cleaned = value.replace(",", "").strip()
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _parse_sft18_detail(data: dict[str, Any]) -> dict[str, Any]:
+    """Parse one SFT-18(Pur) detail row with AMC-name-wrapping detection.
+
+    Schema (8 columns): SR. NO. | QUARTER | CLIENT ID | AMC NAME (CODE) | HOLDER FLAG | TOTAL PURCHASE AMOUNT | TOTAL SALES VALUE | STATUS
+
+    The AMC name can wrap across col_3, col_4, col_5 ... shifting holder flag
+    and amounts rightward.  Strategy: scan forward from col_4 until finding a
+    known holder-flag token — every cell before it is part of the AMC name.
+    This handles 1-, 2-, and 3+-part names uniformly.
+    """
+    holder_flags = {"First", "Second", "Joint", "Single", "Either or Survivor"}
+
+    client_id = str(data.get("col_2", "")).strip()
+    if client_id == "None":
+        client_id = ""
+
+    quarter = str(data.get("col_1", "")).strip()
+    if quarter == "None":
+        quarter = ""
+
+    # col_3 is always the first AMC fragment; col_4 onward may be more.
+    amc_parts = [str(data.get("col_3", "")).strip()]
+    holder_col: int | None = None
+    for col_idx in range(4, 10):
+        val = str(data.get(f"col_{col_idx}", "")).strip()
+        if not val or val == "None":
+            break
+        if val in holder_flags:
+            holder_col = col_idx
+            break
+        amc_parts.append(val)
+
+    amc_name = " ".join(p for p in amc_parts if p and p != "None")
+
+    # Columns immediately after the holder flag are PURCHASE, SALES, STATUS
+    if holder_col is not None:
+        purchase_raw = str(data.get(f"col_{holder_col + 1}", "")).strip()
+        sales_raw    = str(data.get(f"col_{holder_col + 2}", "")).strip()
+        status       = str(data.get(f"col_{holder_col + 3}", "")).strip()
+    else:
+        # Fallback: no holder flag found — treat as no-wrap (fixed positions)
+        purchase_raw = str(data.get("col_5", "")).strip()
+        sales_raw    = str(data.get("col_6", "")).strip()
+        status       = str(data.get("col_7", "")).strip()
+
+    if status == "None":
+        status = ""
+
+    return {
+        "amc_name": amc_name,
+        "client_id": client_id,
+        "quarter": quarter,
+        "purchase_amount": _parse_amount(purchase_raw),
+        "sale_amount": _parse_amount(sales_raw),
+        "status": status,
+    }
+
+
+def _parse_sft17_detail(data: dict[str, Any]) -> dict[str, Any]:
+    """Parse one SFT-17(Pur) detail row (listed equity, no AMC column).
+
+    Schema (7 columns): SR. NO. | QUARTER | CLIENT ID | HOLDER FLAG | MARKET PURCHASE | MARKET SALES | STATUS
+    """
+    client_id = str(data.get("col_2", "")).strip()
+    status = str(data.get("col_6", "")).strip()
+    quarter = str(data.get("col_1", "")).strip()
+
+    if client_id == "None":
+        client_id = ""
+    if status == "None":
+        status = ""
+    if quarter == "None":
+        quarter = ""
+
+    return {
+        "amc_name": "",
+        "client_id": client_id,
+        "quarter": quarter,
+        "purchase_amount": _parse_amount(data.get("col_4", "0")),
+        "sale_amount": _parse_amount(data.get("col_5", "0")),
+        "status": status,
+    }
+
+
+def _extract_capital_gain_ledger(ais: dict, tis: dict) -> tuple[list[CapitalGainEvidence], list[CapitalGainControl], list[dict[str, object]]]:
+    """Extract every detail row from each AIS CG entry.
+
+    Each AIS entry is one fund/account.  Each quarterly detail row within
+    that entry becomes a separate evidence row so the user can see every
+    transaction and reconcile it against TIS accepted totals.
+    """
+    evidence: list[CapitalGainEvidence] = []
+    controls: list[CapitalGainControl] = []
+    financial_year = str(ais.get("metadata", {}).get("financial_year", ""))
+    download_id = str(ais.get("metadata", {}).get("download_id", ""))
+
+    for income_head in ais.get("income_heads", {}).values():
+        for entry in income_head.get("entries", []):
+            category = str(entry.get("category", "")).strip().lower()
+            if category not in TRANSACTION_LEVEL_CATEGORIES:
+                continue
+            side = _capital_gain_side(category)
+            source = str(entry.get("information_source", ""))
+            code = str(entry.get("information_code", ""))
+            pan = str(entry.get("institution_pan", "")) or extract_pan(source)
+            summary_sr = int(entry.get("sr_no", 0) or 0)
+            summary_amount = _parse_amount(entry.get("amount", 0))
+            if summary_amount <= 0:
+                continue
+
+            # AIS control for TIS cross-foot
+            controls.append(CapitalGainControl(
+                control_id=_stable_source_id("AIS", financial_year, download_id, code, summary_sr, source, summary_amount),
+                source_document="AIS",
+                granularity=RecordGranularity.REPORTING_SOURCE_AGGREGATE,
+                category=category,
+                side=side,
+                information_code=code,
+                reporting_source=source,
+                reporting_entity_pan=pan,
+                amount=summary_amount,
+            ))
+
+            headers = [str(h) for h in entry.get("detail_header", [])]
+            headers_upper = " ".join(headers).upper()
+            is_sft18 = "AMC NAME" in headers_upper and "TOTAL PURCHASE AMOUNT" in headers_upper
+            is_sft17 = "MARKET PURCHASE" in headers_upper
+            is_listed_equity_sale = (
+                "DATE OF SALE/TRANSFER" in headers_upper
+                and "SECURITY NAME" in headers_upper
+                and "SALES CONSIDERATION" in headers_upper
+                and "COST OF ACQUISITION" in headers_upper
+            )
+            details = entry.get("details", [])
+
+            if not details:
+                # Summary-only entry (e.g. SFT-18-EMF(M), SFT-17-LES(M)).
+                # Emit one evidence row with the summary amount.
+                evidence.append(CapitalGainEvidence(
+                    evidence_id=_stable_source_id("AIS", financial_year, download_id, code, summary_sr, side, "SUMMARY"),
+                    granularity=RecordGranularity.REPORTING_SOURCE_AGGREGATE,
+                    side=side,
+                    category=category,
+                    information_code=code,
+                    summary_sr_no=summary_sr,
+                    detail_sr_no=None,
+                    reporting_source=source,
+                    reporting_entity_pan=pan,
+                    amount=summary_amount,
+                    parser_confidence="MEDIUM",
+                ))
+                continue
+
+            # Parse every detail row
+            for detail in details:
+                data = detail.get("data", {})
+                detail_sr = int(detail.get("sr_no", 0) or 0)
+
+                if is_listed_equity_sale:
+                    cells, _ = _detail_cells(headers, detail)
+                    security_value = _first_semantic_value(cells, "SECURITY", "NAME")
+                    identifier_match = re.search(r"\b(IN[EA][A-Z0-9]{9})\b", security_value, re.IGNORECASE)
+                    security_identifier = identifier_match.group(1).upper() if identifier_match else str(data.get("isin", ""))
+                    security_name = re.sub(
+                        r"\s*\(?IN[EA][A-Z0-9]{9}\)?\s*$",
+                        "",
+                        security_value,
+                        flags=re.IGNORECASE,
+                    ).strip() or str(data.get("security_name", ""))
+                    transaction_date = _first_semantic_value(cells, "DATE", "SALE") or str(data.get("transfer_date", ""))
+                    consideration = _first_amount(cells, (("SALES", "CONSIDERATION"),))
+                    acquisition_cost = _first_amount(cells, (("COST", "ACQUISITION"),))
+                    fair_market_value = _first_amount(cells, (("FAIR", "MARKET", "VALUE"),))
+                    unit_fmv = _first_amount(cells, (("UNIT", "FMV"),))
+                    sale_price = _first_amount(cells, (("SALE", "PRICE", "UNIT"),))
+                    stt_amount = _first_amount(cells, (("STT",),))
+                    quantity = _optional_number(_first_semantic_value(cells, "QUANTITY"))
+                    debit_type = _first_semantic_value(cells, "DEBIT", "TYPE")
+                    credit_type = _first_semantic_value(cells, "CREDIT", "TYPE")
+                    asset_type = _first_semantic_value(cells, "ASSET", "TYPE")
+                    status = _first_semantic_value(cells, "STATUS")
+                    security_class = _first_semantic_value(cells, "SECURITY", "CLASS")
+                    if consideration is None:
+                        continue
+                    evidence.append(CapitalGainEvidence(
+                        evidence_id=_stable_source_id(
+                            "AIS", financial_year, download_id, code, summary_sr,
+                            detail_sr, "SALE", security_identifier, transaction_date,
+                            consideration,
+                        ),
+                        granularity=RecordGranularity.TRANSACTION_DETAIL,
+                        side="SALE",
+                        category=category,
+                        information_code=code,
+                        summary_sr_no=summary_sr,
+                        detail_sr_no=detail_sr,
+                        reporting_source=source,
+                        reporting_entity_pan=pan,
+                        transaction_date=transaction_date,
+                        security_class=security_class,
+                        security_name=security_name,
+                        security_identifier=security_identifier,
+                        quantity=quantity,
+                        amount=consideration,
+                        acquisition_cost=acquisition_cost,
+                        fair_market_value=fair_market_value,
+                        unit_fmv=unit_fmv,
+                        sale_price_per_unit=sale_price,
+                        stt_amount=stt_amount,
+                        debit_type=debit_type,
+                        credit_type=credit_type,
+                        asset_type=asset_type,
+                        status=status,
+                        parser_confidence="HIGH",
+                    ))
+                    continue
+
+                if is_sft18:
+                    parsed = _parse_sft18_detail(data)
+                elif is_sft17:
+                    parsed = _parse_sft17_detail(data)
+                else:
+                    # Unknown schema — use summary amount and skip detail parsing
+                    continue
+
+                amc_name = parsed["amc_name"]
+                client_id = parsed["client_id"]
+                purchase_amount = parsed["purchase_amount"]
+                sale_amount = parsed["sale_amount"]
+                status = parsed["status"]
+
+                # Emit purchase row (only when the parent AIS entry is a purchase category)
+                if purchase_amount and purchase_amount > 0 and "purchase" in category:
+                    evidence.append(CapitalGainEvidence(
+                        evidence_id=_stable_source_id("AIS", financial_year, download_id, code, summary_sr, detail_sr, "PUR", client_id, purchase_amount),
+                        granularity=RecordGranularity.TRANSACTION_DETAIL,
+                        side="PURCHASE",
+                        category="purchase of securities and units of mutual funds",
+                        information_code=code,
+                        summary_sr_no=summary_sr,
+                        detail_sr_no=detail_sr,
+                        reporting_source=source,
+                        reporting_entity_pan=pan,
+                        account_id=client_id,
+                        transaction_date=parsed.get("quarter", ""),
+                        security_name=amc_name,
+                        amount=purchase_amount,
+                        status=status,
+                        parser_confidence="HIGH",
+                    ))
+
+                # Emit sale row only when the parent AIS entry is a sale category.
+                # Purchase-categorised entries (SFT-18(Pur)) include a "total sales
+                # value" column for context, but those redemptions are already
+                # reported as separate AIS sale entries (SFT-18-EMF(M) etc.).
+                # Emitting them here too double-counts the sale proceeds.
+                if sale_amount and sale_amount > 0 and "sale" in category:
+                    evidence.append(CapitalGainEvidence(
+                        evidence_id=_stable_source_id("AIS", financial_year, download_id, code, summary_sr, detail_sr, "SALE", client_id, sale_amount),
+                        granularity=RecordGranularity.TRANSACTION_DETAIL,
+                        side="SALE",
+                        category="sale of securities and units of mutual fund",
+                        transaction_date=parsed.get("quarter", ""),
+                        information_code=code,
+                        summary_sr_no=summary_sr,
+                        detail_sr_no=detail_sr,
+                        reporting_source=source,
+                        reporting_entity_pan=pan,
+                        account_id=client_id,
+                        security_name=amc_name,
+                        amount=sale_amount,
+                        status=status,
+                        parser_confidence="HIGH",
+                    ))
+
+    for income_head in tis.get("income_heads", {}).values():
+        for entry in income_head.get("entries", []):
+            category = str(entry.get("category", "")).strip().lower()
+            if category not in TRANSACTION_LEVEL_CATEGORIES:
+                continue
+            side = _capital_gain_side(category)
+            accepted = _parse_amount(entry.get("accepted_by_taxpayer", 0))
+            for detail in entry.get("details", []):
+                source = str(detail.get("information_source", ""))
+                pan = str(detail.get("institution_pan", "")) or extract_pan(source)
+                amount = _parse_amount(detail.get("accepted_by_taxpayer", 0))
+                code = str(detail.get("part", ""))
+                sr_no = int(detail.get("sr_no", 0) or 0)
+                controls.append(CapitalGainControl(
+                    control_id=_stable_source_id("TIS", category, sr_no, source, amount),
+                    source_document="TIS",
+                    granularity=RecordGranularity.REPORTING_SOURCE_AGGREGATE,
+                    category=category,
+                    side=side,
+                    information_code=code,
+                    reporting_source=source,
+                    reporting_entity_pan=pan,
+                    amount=amount,
+                    accepted_amount=amount,
+                ))
+            controls.append(CapitalGainControl(
+                control_id=_stable_source_id("TIS", category, "CATEGORY", accepted),
+                source_document="TIS",
+                granularity=RecordGranularity.CATEGORY_CONTROL,
+                category=category,
+                side=side,
+                information_code="",
+                reporting_source="",
+                reporting_entity_pan="",
+                amount=accepted,
+                accepted_amount=accepted,
+            ))
+
+    discrepancies: list[dict[str, object]] = []
+    for category in sorted({control.category for control in controls}):
+        detail_total = sum(item.amount for item in evidence if item.category == category)
+        ais_total = sum(
+            control.amount
+            for control in controls
+            if control.source_document == "AIS" and control.category == category
+        )
+        tis_category_controls = [
+            control
+            for control in controls
+            if control.source_document == "TIS"
+            and control.granularity is RecordGranularity.CATEGORY_CONTROL
+            and control.category == category
+        ]
+        tis_total = sum(control.amount for control in tis_category_controls)
+        reference_total = tis_total if tis_category_controls else ais_total
+        difference = detail_total - reference_total
+        if abs(difference) > 0.01:
+            discrepancies.append({
+                "category": category,
+                "side": _capital_gain_side(category),
+                "detail_total": round(detail_total, 2),
+                "ais_control_total": round(ais_total, 2),
+                "tis_accepted_total": round(tis_total, 2),
+                "difference": round(difference, 2),
+            })
+    return evidence, controls, discrepancies
+
+
 @dataclass
 class Entry:
     category: str
@@ -115,10 +651,21 @@ class Entry:
     description: str = ""
     income_head: str = ""
     pan: str = ""
+    tan: str = ""
+    credit_type: Optional[CreditType] = None
 
     @property
     def key(self) -> str:
-        return f"{self.category}|{self.source}"
+        category = self.category.strip().lower()
+        identity = normalize_source_identity(category, self.source)
+        if category in TRANSACTION_LEVEL_CATEGORIES:
+            # A reporting entity can report multiple distinct funds/assets.
+            # Preserve the full source description as transaction identity.
+            return f"{category}|transaction:{identity}"
+        identifier = self.tan.strip().upper() or self.pan.strip().upper()
+        if identifier:
+            return f"{category}|id:{identifier}"
+        return f"{category}|name:{identity}"
 
 
 def _extract_ais(ais: dict) -> list[Entry]:
@@ -152,23 +699,40 @@ def _extract_ais(ais: dict) -> list[Entry]:
     return entries
 
 
+def _tis_accepted_totals(tis: dict) -> dict[str, float]:
+    """Return authoritative system-deduplicated TIS totals by category."""
+    totals: dict[str, float] = {}
+    for income_head in tis.get("income_heads", {}).values():
+        for entry in income_head.get("entries", []):
+            category = str(entry.get("category", "")).strip().lower()
+            if category and "accepted_by_taxpayer" in entry:
+                totals[category] = totals.get(category, 0.0) + _parse_amount(
+                    entry.get("accepted_by_taxpayer")
+                )
+    return totals
+
+
 def _extract_tis(tis: dict) -> list[Entry]:
     entries: list[Entry] = []
     for ih_name, ih_data in tis.get("income_heads", {}).items():
         for e in ih_data.get("entries", []):
             cat = e.get("category", "").lower()
-            for d in e.get("details", []):
+            details = e.get("details", [])
+            detail_entries: list[Entry] = []
+            for d in details:
                 raw = d.get("information_source", "")
                 src = normalize_name(raw)
                 pan = d.get("institution_pan", "") or extract_pan(raw)
                 if src:
-                    entries.append(Entry(
+                    detail_entries.append(Entry(
                         category=cat, source=src, raw_source=raw,
                         amount=_parse_amount(d.get("accepted_by_taxpayer", "0")),
                         section=d.get("part", ""),
                         description=d.get("information_description", ""),
                         income_head=ih_name, pan=pan,
                     ))
+
+            entries.extend(detail_entries)
     return entries
 
 
@@ -206,6 +770,9 @@ def _extract_26as(as26: dict) -> list[Entry]:
                 section=section,
                 description=f"TDS/TCS u/s {section}" if section else "TDS/TCS",
                 income_head=CATEGORY_TO_INCOME_HEAD.get(cat, "Income from Other Sources"),
+                pan=str(row.get("PAN of Deductor", row.get("PAN of Collector", "")) or "").strip().upper(),
+                tan=str(row.get("TAN of Deductor", row.get("TAN of Collector", "")) or "").strip().upper(),
+                credit_type=CreditType.TDS if part_id == "I" else CreditType.TCS,
             ))
 
     # Part IV: Property Seller
@@ -250,12 +817,16 @@ def _pan_cross_match(
     under the entry from map_a's key (which typically has a better name).
     """
     for e_a in entries_a:
+        if e_a.category in TRANSACTION_LEVEL_CATEGORIES:
+            continue
         if not e_a.pan or e_a.key not in map_a:
             continue
         for e_b in entries_b:
+            if e_b.category in TRANSACTION_LEVEL_CATEGORIES:
+                continue
             if not e_b.pan or e_b.pan != e_a.pan:
                 continue
-            if e_b.category != e_a.category:
+            if e_b.category != e_a.category or not sections_compatible(e_a, e_b):
                 continue
             if e_b.key == e_a.key:
                 continue  # already matched
@@ -266,6 +837,36 @@ def _pan_cross_match(
                 merged = map_b.pop(b_key, [])
                 map_b.setdefault(e_a.key, []).extend(merged)
             break
+
+def _name_cross_match(
+    map_a: dict[str, list[Entry]], map_b: dict[str, list[Entry]],
+    entries_a: list[Entry], entries_b: list[Entry],
+) -> None:
+    """Merge exact category-aware fallback names using indexed lookup."""
+    del entries_a
+    index_b: dict[tuple[str, str], str] = {}
+    for entry in entries_b:
+        if entry.key not in map_b:
+            continue
+        identity = normalize_source_identity(entry.category, entry.source)
+        if identity:
+            index_b.setdefault((entry.category, identity), entry.key)
+
+    for key_a, grouped_entries in list(map_a.items()):
+        if not grouped_entries:
+            continue
+        entry_a = grouped_entries[0]
+        if entry_a.category in TRANSACTION_LEVEL_CATEGORIES:
+            continue
+        identity_a = normalize_source_identity(entry_a.category, entry_a.source)
+        key_b = index_b.get((entry_a.category, identity_a))
+        if not key_b or key_b == key_a or key_b not in map_b:
+            continue
+        candidate = map_b[key_b][0]
+        if not sections_compatible(entry_a, candidate):
+            continue
+        map_b.setdefault(key_a, []).extend(map_b.pop(key_b))
+
 
 @dataclass
 class ReconciledEntry:
@@ -279,6 +880,15 @@ class ReconciledEntry:
     ais_amount: float = 0.0
     as26_amount: float = 0.0
     as26_tds: float = 0.0
+    as26_tcs: float = 0.0
+    credit_type: Optional[CreditType] = None
+    credit_selected_source: Optional[SelectedSource] = None
+    credit_selection_reason: str = ""
+    selected_source: SelectedSource = SelectedSource.AIS
+    selection_reason: str = "AIS_INCOME_FALLBACK"
+    pan: str = ""
+    tan: str = ""
+    source_id: str = ""
     present_in: dict[str, bool] = field(default_factory=lambda: {"tis": False, "ais": False, "as26": False})
     has_discrepancy: bool = False
     discrepancy_detail: str = ""
@@ -288,6 +898,10 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
     ais_entries = _extract_ais(ais_data)
     tis_entries = _extract_tis(tis_data)
     as26_entries = _extract_26as(as26_data)
+    tis_accepted_totals = _tis_accepted_totals(tis_data)
+    capital_gain_evidence, capital_gain_controls, capital_gain_control_discrepancies = (
+        _extract_capital_gain_ledger(ais_data, tis_data)
+    )
 
     # Index by key
     ais_map: dict[str, list[Entry]] = {}
@@ -308,6 +922,13 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
     _pan_cross_match(ais_map, as26_map, ais_entries, as26_entries)
     _pan_cross_match(tis_map, as26_map, tis_entries, as26_entries)
 
+    # Identifier-free AIS/TIS salary labels commonly include document-specific
+    # prefixes (for example "salary received"). Match only when the controlled,
+    # category-aware fallback names are exactly equal.
+    _name_cross_match(ais_map, tis_map, ais_entries, tis_entries)
+    _name_cross_match(ais_map, as26_map, ais_entries, as26_entries)
+    _name_cross_match(tis_map, as26_map, tis_entries, as26_entries)
+
     all_keys = set(ais_map.keys()) | set(tis_map.keys()) | set(as26_map.keys())
 
     # Build reconciled entries
@@ -324,7 +945,8 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
         ais_total = sum(e.amount for e in a)
         tis_total = sum(e.amount for e in t)
         as26_total = sum(e.amount for e in as_list)
-        as26_tds_total = sum(e.tds for e in as_list)
+        as26_tds_total = sum(e.tds for e in as_list if e.credit_type is CreditType.TDS)
+        as26_tcs_total = sum(e.tds for e in as_list if e.credit_type is CreditType.TCS)
 
         has_tis = bool(t)
         has_ais = bool(a)
@@ -340,8 +962,26 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
         # Income head
         ih = best.income_head or CATEGORY_TO_INCOME_HEAD.get(best.category, "Income from Other Sources")
 
-        # Final amount: TIS > AIS > 26AS
-        final = tis_total if has_tis else (ais_total if has_ais else as26_total)
+        # Income/transaction values use TIS, then AIS, then 26AS fallback.
+        # Tax credits themselves always come from 26AS fields below.
+        if has_tis:
+            final = tis_total
+            selected_source = SelectedSource.TIS
+            selection_reason = "TIS_ACCEPTED_INCOME"
+        elif has_ais:
+            final = ais_total
+            selected_source = SelectedSource.AIS
+            selection_reason = "AIS_INCOME_FALLBACK"
+        else:
+            final = 0.0 if as_list and any(entry.credit_type for entry in as_list) else as26_total
+            selected_source = SelectedSource.FORM_26AS
+            selection_reason = (
+                "26AS_CREDIT_EVIDENCE_ONLY"
+                if as_list and any(entry.credit_type for entry in as_list)
+                else "26AS_INCOME_FALLBACK"
+            )
+        credit_types = {entry.credit_type for entry in as_list if entry.credit_type is not None}
+        credit_type = next(iter(credit_types)) if len(credit_types) == 1 else None
 
         rec = ReconciledEntry(
             category=best.category,
@@ -354,16 +994,35 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
             ais_amount=ais_total,
             as26_amount=as26_total,
             as26_tds=as26_tds_total,
+            as26_tcs=as26_tcs_total,
+            credit_type=credit_type,
+            credit_selected_source=(SelectedSource.FORM_26AS if credit_type else None),
+            credit_selection_reason=("26AS_TAX_CREDIT" if credit_type else ""),
+            selected_source=selected_source,
+            selection_reason=selection_reason,
+            pan=next((e.pan for e in as_list + t + a if e.pan), ""),
+            tan=next((e.tan for e in as_list + t + a if e.tan), ""),
+            source_id=key,
             present_in={"tis": has_tis, "ais": has_ais, "as26": has_as26},
         )
 
-        # Discrepancy check (tolerance: 1 rupee)
-        if has_tis and has_ais and abs(tis_total - ais_total) > 1.0:
-            rec.has_discrepancy = True
-            rec.discrepancy_detail = f"TIS={tis_total:,.2f} vs AIS={ais_total:,.2f}"
-        elif has_ais and has_as26 and abs(ais_total - as26_total) > 1.0:
-            rec.has_discrepancy = True
-            rec.discrepancy_detail = f"AIS={ais_total:,.2f} vs 26AS={as26_total:,.2f}"
+        # Compare every available source pair; do not hide later mismatches.
+        comparisons: list[str] = []
+        source_amounts = [
+            ("TIS", has_tis, tis_total),
+            ("AIS", has_ais, ais_total),
+            ("26AS", has_as26, as26_total),
+        ]
+        for left_index, (left_name, left_present, left_amount) in enumerate(source_amounts):
+            if not left_present:
+                continue
+            for right_name, right_present, right_amount in source_amounts[left_index + 1:]:
+                if right_present and abs(left_amount - right_amount) > 1.0:
+                    comparisons.append(
+                        f"{left_name}={left_amount:,.2f} vs {right_name}={right_amount:,.2f}"
+                    )
+        rec.has_discrepancy = bool(comparisons)
+        rec.discrepancy_detail = "; ".join(comparisons)
 
         reconciled.append(rec)
 
@@ -379,6 +1038,35 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
         if has_as26 and not has_tis and not has_ais:
             unmatched_as26.extend(as26_map[key])
 
+    # TIS accepted totals are system-deduplicated category controls. Preserve
+    # every raw source amount unchanged. AIS/26AS-only representations in a
+    # controlled category remain evidence but contribute no additional income.
+    category_control_discrepancies: list[dict[str, object]] = []
+    controlled_head_adjustments: dict[str, float] = {}
+    for category, accepted_total in tis_accepted_totals.items():
+        if category in TRANSACTION_LEVEL_CATEGORIES:
+            continue
+        category_rows = [row for row in reconciled if row.category == category]
+        tis_rows = [row for row in category_rows if row.present_in["tis"]]
+        if not tis_rows:
+            continue
+        detail_total = sum(row.tis_amount for row in tis_rows)
+        for row in category_rows:
+            if not row.present_in["tis"]:
+                row.final_amount = 0.0
+        income_head = tis_rows[0].income_head
+        controlled_head_adjustments[income_head] = (
+            controlled_head_adjustments.get(income_head, 0.0)
+            + accepted_total - sum(row.final_amount for row in category_rows)
+        )
+        if abs(detail_total - accepted_total) > 0.01:
+            category_control_discrepancies.append({
+                "category": category,
+                "tis_accepted_total": round(accepted_total, 2),
+                "tis_detail_total": round(detail_total, 2),
+                "difference": round(detail_total - accepted_total, 2),
+            })
+
     # Group by income head
     by_head: dict[str, dict] = {}
     for rec in reconciled:
@@ -387,7 +1075,8 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
             by_head[ih] = {
                 "income_head": ih, "total_final": 0.0,
                 "total_tis": 0.0, "total_ais": 0.0, "total_as26": 0.0,
-                "total_as26_tds": 0.0, "discrepancy_count": 0, "entries": [],
+                "total_as26_tds": 0.0, "total_as26_tcs": 0.0,
+                "discrepancy_count": 0, "entries": [],
             }
         g = by_head[ih]
         g["total_final"] += rec.final_amount
@@ -395,6 +1084,7 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
         g["total_ais"] += rec.ais_amount
         g["total_as26"] += rec.as26_amount
         g["total_as26_tds"] += rec.as26_tds
+        g["total_as26_tcs"] += rec.as26_tcs
         if rec.has_discrepancy:
             g["discrepancy_count"] += 1
         g["entries"].append(rec)
@@ -402,14 +1092,16 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
     def _entry_dict(e: Entry) -> dict:
         return {
             "category": e.category, "source": e.raw_source,
+            "source_id": e.key,
             "amount": round(e.amount, 2), "tds": round(e.tds, 2),
             "section": e.section, "description": e.description,
-            "income_head": e.income_head,
+            "income_head": e.income_head, "pan": e.pan, "tan": e.tan,
         }
 
     def _rec_dict(r: ReconciledEntry) -> dict:
         return {
             "category": r.category, "source": r.source,
+            "source_id": r.source_id, "pan": r.pan, "tan": r.tan,
             "description": r.description, "section": r.section,
             "income_head": r.income_head,
             "amounts": {
@@ -418,6 +1110,12 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
                 "as26": round(r.as26_amount, 2),
             },
             "as26_tds": round(r.as26_tds, 2),
+            "as26_tcs": round(r.as26_tcs, 2),
+            "credit_type": r.credit_type.value if r.credit_type else None,
+            "credit_selected_source": r.credit_selected_source.value if r.credit_selected_source else None,
+            "credit_selection_reason": r.credit_selection_reason,
+            "selected_source": r.selected_source.value,
+            "selection_reason": r.selection_reason,
             "final_amount": round(r.final_amount, 2),
             "present_in": r.present_in,
             "has_discrepancy": r.has_discrepancy,
@@ -439,16 +1137,78 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
         "income_heads": {
             ih: {
                 "income_head": g["income_head"],
-                "total_final": round(g["total_final"], 2),
+                "total_final": round(g["total_final"] + controlled_head_adjustments.get(ih, 0.0), 2),
                 "total_tis": round(g["total_tis"], 2),
                 "total_ais": round(g["total_ais"], 2),
                 "total_as26": round(g["total_as26"], 2),
                 "total_as26_tds": round(g["total_as26_tds"], 2),
+                "total_as26_tcs": round(g["total_as26_tcs"], 2),
                 "discrepancy_count": g["discrepancy_count"],
                 "entries": [_rec_dict(r) for r in g["entries"]],
             }
             for ih, g in sorted(by_head.items())
         },
+        "category_controls": {
+            category: round(amount, 2)
+            for category, amount in sorted(tis_accepted_totals.items())
+        },
+        "category_control_discrepancies": category_control_discrepancies,
+        "capital_gain_evidence": [
+            {
+                "evidence_id": item.evidence_id,
+                "granularity": item.granularity.value,
+                "side": item.side,
+                "category": item.category,
+                "information_code": item.information_code,
+                "summary_sr_no": item.summary_sr_no,
+                "detail_sr_no": item.detail_sr_no,
+                "reporting_source": item.reporting_source,
+                "reporting_entity_pan": item.reporting_entity_pan,
+                "account_id": item.account_id,
+                "transaction_date": item.transaction_date,
+                "security_class": item.security_class,
+                "security_name": item.security_name,
+                "security_identifier": item.security_identifier,
+                "quantity": item.quantity,
+                "amount": round(item.amount, 2),
+                "acquisition_cost": item.acquisition_cost,
+                "fair_market_value": item.fair_market_value,
+                "unit_fmv": item.unit_fmv,
+                "sale_price_per_unit": item.sale_price_per_unit,
+                "stt_amount": item.stt_amount,
+                "debit_type": item.debit_type,
+                "credit_type": item.credit_type,
+                "asset_type": item.asset_type,
+                "stt_paid_on_acquisition": item.stt_paid_on_acquisition,
+                "stt_paid_on_transfer": item.stt_paid_on_transfer,
+                "recognized_exchange": item.recognized_exchange,
+                "acquired_before_31_jan_2018": item.acquired_before_31_jan_2018,
+                "acquisition_mode": item.acquisition_mode,
+                "status": item.status,
+                "parser_confidence": item.parser_confidence,
+            }
+            for item in capital_gain_evidence
+        ],
+        "capital_gain_controls": [
+            {
+                "control_id": item.control_id,
+                "source_document": item.source_document,
+                "granularity": item.granularity.value,
+                "category": item.category,
+                "side": item.side,
+                "information_code": item.information_code,
+                "reporting_source": item.reporting_source,
+                "reporting_entity_pan": item.reporting_entity_pan,
+                "amount": round(item.amount, 2),
+                "accepted_amount": (
+                    round(item.accepted_amount, 2)
+                    if item.accepted_amount is not None
+                    else None
+                ),
+            }
+            for item in capital_gain_controls
+        ],
+        "capital_gain_control_discrepancies": capital_gain_control_discrepancies,
         "unmatched": {
             "tis_only": [_entry_dict(e) for e in unmatched_tis],
             "ais_only": [_entry_dict(e) for e in unmatched_ais],
@@ -456,7 +1216,11 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
         },
         "summary": {
             "total_entries": len(reconciled),
-            "total_final_income": round(sum(r.final_amount for r in reconciled), 2),
+            "total_final_income": round(
+                sum(r.final_amount for r in reconciled)
+                + sum(controlled_head_adjustments.values()),
+                2,
+            ),
             "total_discrepancies": sum(1 for r in reconciled if r.has_discrepancy),
             "matched_all_three": sum(1 for r in reconciled if all(r.present_in.values())),
             "matched_two": sum(1 for r in reconciled if sum(r.present_in.values()) == 2),

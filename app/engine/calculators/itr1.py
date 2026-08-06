@@ -41,7 +41,10 @@ from app.schemas.itr1 import (
     AgeBracket, AssesseeType, TaxRegime,
 )
 from app.engine.common.rounding import vba_round, round_to_nearest_10
-from app.engine.common.slab_tax import compute as compute_slab_tax
+from app.engine.common.slab_tax import (
+    compute as compute_slab_tax,
+    basic_exemption_limit as get_basic_exemption_limit,
+)
 from app.engine.common.rebate import compute as compute_rebate
 from app.engine.common.surcharge import compute as compute_surcharge
 from app.engine.common.cess import compute as compute_cess
@@ -74,7 +77,13 @@ class ITR1Result:
     net_agricultural_income: Decimal = Decimal("0")
     aggregate_income: Decimal = Decimal("0")
     deductions_total: Decimal = Decimal("0")
+    total_income_before_288a: Decimal = Decimal("0")
+    rounding_adjustment_288a: Decimal = Decimal("0")
     taxable_income: Decimal = Decimal("0")
+    basic_exemption_limit: Decimal = Decimal("0")
+    normal_rate_income: Decimal = Decimal("0")
+    income_chargeable_above_basic_exemption: Decimal = Decimal("0")
+    nil_tax_reason: str | None = None
 
     # Salary detail (for ITD JSON output)
     salary_gross: Decimal = Decimal("0")
@@ -364,21 +373,33 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     # ── 4. Taxable Income (u/s 288A, rounded to nearest Rs 10) ───────────────
     income_before_rounding = max(Decimal("0"), gti - ded.total)
     ti = round_to_nearest_10(income_before_rounding)
+    result.total_income_before_288a = income_before_rounding
+    result.rounding_adjustment_288a = ti - income_before_rounding
     result.taxable_income = ti
 
     # ── 5. Normal slab tax (income excluding special-rate income) ─────────────
     normal_income = max(Decimal("0"), ti - cg_112a_income)
+    exemption_limit = get_basic_exemption_limit(age, regime)
+    result.basic_exemption_limit = exemption_limit
+    result.normal_rate_income = normal_income
+    result.income_chargeable_above_basic_exemption = max(
+        Decimal("0"), normal_income - exemption_limit,
+    )
     slab_tax = compute_slab_tax(normal_income, age, regime)
     result.slab_tax = slab_tax
 
     # ── 6. Special rate tax ──────────────────────────────────────────────────
     result.special_rate_tax = cg_112a_tax
     result.tax_before_rebate = slab_tax + cg_112a_tax
+    if result.tax_before_rebate == Decimal("0") and normal_income <= exemption_limit:
+        result.nil_tax_reason = "BELOW_BASIC_EXEMPTION_LIMIT"
 
     # ── 7. Rebate u/s 87A ────────────────────────────────────────────────────
     rebate = compute_rebate(ti, result.tax_before_rebate, slab_tax, regime)
     result.rebate_87a = rebate
     result.tax_after_rebate = max(Decimal("0"), result.tax_before_rebate - rebate)
+    if result.tax_before_rebate > Decimal("0") and result.tax_after_rebate == Decimal("0"):
+        result.nil_tax_reason = "REBATE_87A"
 
     # ── 8. Surcharge ─────────────────────────────────────────────────────────
     surcharge = compute_surcharge(ti, result.tax_after_rebate, regime, age,

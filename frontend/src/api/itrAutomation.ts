@@ -18,9 +18,19 @@ if (import.meta.env.DEV) {
 
 export interface ReconciledEntry {
   source: string;
+  source_id?: string;
+  pan?: string;
+  tan?: string;
+  description?: string;
   final_amount: number;
   amounts: Record<string, number>;
   as26_tds: number;
+  as26_tcs?: number;
+  credit_type?: 'TDS' | 'TCS' | null;
+  credit_selected_source?: '26AS' | null;
+  credit_selection_reason?: '26AS_TAX_CREDIT' | '';
+  selected_source?: 'TIS' | 'AIS' | '26AS';
+  selection_reason?: 'TIS_ACCEPTED_INCOME' | 'AIS_INCOME_FALLBACK' | '26AS_INCOME_FALLBACK' | '26AS_CREDIT_EVIDENCE_ONLY';
   present_in: Record<string, boolean>;
   has_discrepancy: boolean;
   discrepancy_detail?: string;
@@ -36,15 +46,78 @@ export interface ReconciledIncomeHead {
   total_ais: number;
   total_as26: number;
   total_as26_tds: number;
+  total_as26_tcs?: number;
   discrepancy_count: number;
   entries: ReconciledEntry[];
 }
 
 export interface ReconciledUnmatchedEntry {
   source: string;
+  source_id?: string;
+  category?: string;
+  description?: string;
+  income_head?: string;
+  pan?: string;
+  tan?: string;
   amount: number;
   tds: number;
   section: string;
+}
+
+export interface CapitalGainEvidence {
+  evidence_id: string;
+  granularity: 'TRANSACTION_DETAIL' | 'ACCOUNT_PERIOD_AGGREGATE' | 'REPORTING_SOURCE_AGGREGATE' | 'CATEGORY_CONTROL';
+  side: 'PURCHASE' | 'SALE' | 'UNKNOWN';
+  category: string;
+  information_code: string;
+  summary_sr_no: number;
+  detail_sr_no: number | null;
+  reporting_source: string;
+  reporting_entity_pan?: string;
+  account_id?: string;
+  transaction_date?: string;
+  security_class?: string;
+  security_name?: string;
+  security_identifier?: string;
+  quantity?: number | null;
+  amount: number;
+  acquisition_cost?: number | null;
+  fair_market_value?: number | null;
+  unit_fmv?: number | null;
+  sale_price_per_unit?: number | null;
+  stt_amount?: number | null;
+  debit_type?: string;
+  credit_type?: string;
+  asset_type?: string;
+  stt_paid_on_acquisition?: boolean | null;
+  stt_paid_on_transfer?: boolean | null;
+  recognized_exchange?: boolean | null;
+  acquired_before_31_jan_2018?: boolean | null;
+  acquisition_mode?: string;
+  status?: string;
+  parser_confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+export interface CapitalGainControl {
+  control_id: string;
+  source_document: 'AIS' | 'TIS';
+  granularity: 'REPORTING_SOURCE_AGGREGATE' | 'CATEGORY_CONTROL';
+  category: string;
+  side: 'PURCHASE' | 'SALE' | 'UNKNOWN';
+  information_code: string;
+  reporting_source: string;
+  reporting_entity_pan?: string;
+  amount: number;
+  accepted_amount?: number | null;
+}
+
+export interface CapitalGainControlDiscrepancy {
+  category: string;
+  side: 'PURCHASE' | 'SALE' | 'UNKNOWN';
+  detail_total: number;
+  ais_control_total: number;
+  tis_accepted_total: number;
+  difference: number;
 }
 
 export interface ReconciledResults {
@@ -54,6 +127,16 @@ export interface ReconciledResults {
     financial_year?: string;
   };
   income_heads: Record<string, ReconciledIncomeHead>;
+  category_controls?: Record<string, number>;
+  category_control_discrepancies?: Array<{
+    category: string;
+    tis_accepted_total: number;
+    tis_detail_total: number;
+    difference: number;
+  }>;
+  capital_gain_evidence?: CapitalGainEvidence[];
+  capital_gain_controls?: CapitalGainControl[];
+  capital_gain_control_discrepancies?: CapitalGainControlDiscrepancy[];
   unmatched: {
     tis_only: ReconciledUnmatchedEntry[];
     ais_only: ReconciledUnmatchedEntry[];
@@ -115,7 +198,7 @@ export const itrAutomationApi = {
    * Start an ITD portal automation download job.
    */
   startImport(
-    clientId: number,
+    clientId: string,
     assessmentYear: string = '2026-27',
     jobType: string = 'DOWNLOAD_ALL',
   ): Promise<StartJobResponse> {

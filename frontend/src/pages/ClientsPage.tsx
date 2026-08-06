@@ -116,7 +116,7 @@ export default function ClientsPage() {
             {!loading && clients.map((client) => {
               const latestYear = client.years?.[0];
               return (
-                <tr key={client.id}>
+                <tr key={client.publicId || client.id}>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div style={{
@@ -297,7 +297,7 @@ function ClientModal({ client, onClose, onSave }: any) {
         if (!payload.portal_password) {
           delete payload.portal_password;
         }
-        await clientsApi.update(client.publicId || client.id, payload);
+        await clientsApi.update(client.publicId, payload);
         toast.success('Client updated');
       } else {
         await clientsApi.create(formData);

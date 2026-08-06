@@ -9,8 +9,37 @@ from app.schemas.itr4 import (
     GoodsCarriageVehicle,
     PresumptiveScheme,
 )
-from app.schemas.itr1 import AgeBracket, TaxRegime, SalaryIncome, HousePropertyIncome, PropertyType, Chapter6ADeductions
+from app.schemas.itr1 import AgeBracket, TaxRegime, SalaryIncome, HousePropertyIncome, PropertyType, Chapter6ADeductions, CapitalGainsIncome
 from app.engine.calculators.itr4 import compute as compute_itr4
+from app.engine.itd.itr4 import build_itr4_json
+
+def test_itr4_builder_projects_canonical_restricted_112a_schedule():
+    """ITR-4 official JSON must consume canonical restricted transactions."""
+    capital_gains = CapitalGainsIncome(transactions=[{
+        "assetType": "LISTED_EQUITY",
+        "purchaseDate": "2023-01-01",
+        "saleDate": "2025-01-02",
+        "purchaseCost": "100000",
+        "saleCost": "120000",
+        "transferExpenses": "1000",
+        "sttPaidOnAcquisition": True,
+        "sttPaidOnTransfer": True,
+        "recognizedExchange": True,
+    }])
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        presumptive_scheme=PresumptiveScheme.NONE,
+        capital_gains=capital_gains,
+    )
+    result = compute_itr4(itr_input)
+    schedule = build_itr4_json(result, itr_input)["ITR"]["ITR4"]["LTCG112A"]
+    assert schedule == {
+        "TotSaleCnsdrn": 120000,
+        "TotCstAcqisn": 101000,
+        "LongCap112A": 19000,
+    }
+
 
 def test_itr4_no_income():
     """Scenario 1: No income, scheme NONE."""

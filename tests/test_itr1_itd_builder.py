@@ -16,6 +16,7 @@ from app.engine.itd.itr1 import build_itr1_json
 from app.schemas.itr1 import (
     AgeBracket,
     BankAccount,
+    CapitalGainsIncome,
     Chapter6ADeductions,
     DependentRelationship,
     DisabilityCategory,
@@ -142,6 +143,49 @@ def _build(body: ITR1Input) -> dict:
     result = compute(body)
     assert result.errors == []
     return build_itr1_json(result, body)
+
+
+def test_builder_projects_canonical_restricted_112a_schedule() -> None:
+    """Canonical transactions must cross-foot into the official LTCG schedule."""
+    body = _input().model_copy(update={
+        "capital_gains": CapitalGainsIncome(transactions=[{
+            "assetType": "LISTED_EQUITY",
+            "purchaseDate": "2023-01-01",
+            "saleDate": "2025-01-02",
+            "purchaseCost": "100000",
+            "saleCost": "120000",
+            "transferExpenses": "1000",
+            "sttPaidOnAcquisition": True,
+            "sttPaidOnTransfer": True,
+            "recognizedExchange": True,
+        }]),
+    })
+    schedule = _build(body)["ITR"]["ITR1"]["LTCG112A"]
+    assert schedule == {
+        "TotSaleCnsdrn": 120000,
+        "TotCstAcqisn": 101000,
+        "LongCap112A": 19000,
+    }
+
+
+def test_builder_emits_zero_cost_canonical_112a_schedule() -> None:
+    """A legitimate zero acquisition cost must not suppress LTCG112A."""
+    body = _input().model_copy(update={
+        "capital_gains": CapitalGainsIncome(transactions=[{
+            "assetType": "LISTED_EQUITY",
+            "purchaseDate": "2023-01-01",
+            "saleDate": "2025-01-02",
+            "purchaseCost": "0",
+            "saleCost": "100000",
+            "transferExpenses": "0",
+            "sttPaidOnAcquisition": True,
+            "sttPaidOnTransfer": True,
+            "recognizedExchange": True,
+        }]),
+    })
+    schedule = _build(body)["ITR"]["ITR1"]["LTCG112A"]
+    assert schedule["TotCstAcqisn"] == 0
+    assert schedule["LongCap112A"] == 100000
 
 
 def test_detailed_document_matches_official_ay_2026_27_schema() -> None:

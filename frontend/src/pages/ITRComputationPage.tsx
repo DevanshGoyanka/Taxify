@@ -5,8 +5,7 @@ import { itrApi } from '../api/itr';
 import { clientsApi } from '../api/clients';
 import { itrAutomationApi } from '../api/itrAutomation';
 import type { AutomationJob } from '../api/itrAutomation';
-import { Spinner } from '../components/ui/Spinner';
-import StatusPill from '../components/StatusPill';
+import { Spinner } from '../components/ui/Spinner';import StatusPill from '../components/StatusPill';
 import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
 import { BankAccountManager } from '../components/BankAccountManager';
@@ -46,6 +45,7 @@ function buildPhase1Payload(source: any): any {
   if (data.advanceTaxEntries.length >= 0) {
     data.adv15Jun = 0; data.adv15Sep = 0; data.adv15Dec = 0; data.adv15Mar = 0;
   }
+
   return data;
 }
 
@@ -77,6 +77,52 @@ function validatePhase1Payload(data: any): string | null {
   for (const account of accounts) if (!account.bankName || !account.accountNumber || !ifscPattern.test(account.ifscCode || '')) return 'Complete every bank account with a valid 11-character IFSC code.';
   for (const payment of data.advanceTaxEntries || []) if (!bsrPattern.test(payment.bsrCode || '') || !payment.depositDate || !payment.challanSerialNo || Number(payment.amount) <= 0) return 'Complete every advance-tax challan with valid BSR code, date, serial number and amount.';
   return null;
+}
+
+function getRestrictedCapitalGainsState(formData: any, taxResult: any): {
+  hasTransactions: boolean;
+  hasEvidence: boolean;
+  hasUnsupportedRows: boolean;
+  hasIneligibleIssues: boolean;
+  hasIncompleteEvidence: boolean;
+  hasFormLevelLosses: boolean;
+  eligibility: Record<string, boolean>;
+} {
+  const transactions = Array.isArray(formData.capitalGainTransactions) ? formData.capitalGainTransactions : [];
+  const supportedAssets = new Set(['LISTED_EQUITY', 'EQUITY_ORIENTED_MUTUAL_FUND', 'BUSINESS_TRUST_UNIT']);
+  const summary = taxResult?.capitalGainsSummary || {};
+  const issues = Array.isArray(summary.issues)
+    ? summary.issues
+    : Array.isArray(taxResult?.capitalGainsIssues) ? taxResult.capitalGainsIssues : [];
+  const eligibilityCodes = new Set(['UNSUPPORTED_ASSET', 'NOT_LONG_TERM', 'SECTION_112A_LOSS', 'AGGREGATE_LIMIT_EXCEEDED']);
+  const evidenceCodes = new Set([
+    'INVALID_TRANSACTION', 'MISSING_ACQUISITION_DATE', 'MISSING_TRANSFER_DATE', 'INVALID_DATE_ORDER',
+    'MISSING_SALE_VALUE', 'INVALID_SALE_VALUE', 'MISSING_ACTUAL_COST', 'INVALID_ACTUAL_COST',
+    'INVALID_TRANSFER_EXPENSES', 'MISSING_STT_ACQUISITION', 'MISSING_STT_TRANSFER',
+    'MISSING_RECOGNIZED_EXCHANGE', 'MISSING_FMV_31_JAN_2018', 'INVALID_FMV_31_JAN_2018',
+  ]);
+  const hasAnyEntry = transactions.length > 0;
+  const hasSaleEntry = transactions.some((entry: any) => Number(entry?.saleCost || entry?.saleValue) > 0);
+  // Form-data-only loss detection: if any 112A-eligible transaction has a
+  // negative gain (sale value < actual cost), it will produce a SECTION_112A_LOSS
+  // issue and require ITR-2.  This lets us detect ITR-2 eligibility *before*
+  // the first backend compute, so the correct endpoint is called from the
+  // start instead of falling back after a 422 rejection.
+  const hasFormLevelLosses = transactions.some((entry: any) => {
+    const isSupported = supportedAssets.has(String(entry?.assetType || ''));
+    const sale = Number(entry?.saleCost || entry?.saleValue || 0);
+    const cost = Number(entry?.actualCost || entry?.purchaseCost || 0);
+    return isSupported && sale > 0 && cost > 0 && sale < cost;
+  });
+  return {
+    hasTransactions: hasAnyEntry,
+    hasEvidence: hasAnyEntry,
+    hasUnsupportedRows: transactions.some((entry: any) => !supportedAssets.has(String(entry?.assetType || ''))),
+    hasIneligibleIssues: issues.some((issue: any) => eligibilityCodes.has(String(issue?.code || ''))),
+    hasIncompleteEvidence: issues.some((issue: any) => evidenceCodes.has(String(issue?.code || ''))),
+    hasFormLevelLosses,
+    eligibility: summary.eligibility || taxResult?.capitalGainsEligibility || {},
+  };
 }
 
 import { 
@@ -339,9 +385,25 @@ export default function ITRComputationPage() {
 
   // Debounce timer ref for tax summary API calls
   const taxResultDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const taxSummaryPayload = useMemo(
+    () => ({ ...buildPhase1Payload(formData), form: itrForm }),
+    [formData, itrForm],
+  );
+  // Editor synchronization can recreate an equivalent formData object many
+  // times. Depend on the serialized calculation contract so identity-only
+  // rerenders do not trigger duplicate backend computations.
+  const taxSummaryPayloadKey = useMemo(
+    () => JSON.stringify(taxSummaryPayload),
+    [taxSummaryPayload],
+  );
 
   // Fetch backend-computed tax summary - replaces local computeTax()
-  // Debounced: only fires 500ms after user stops typing
+  // All ITR forms (ITR-1, ITR-2, ITR-3, ITR-4) use the same endpoint.
+  // The backend maps the flat payload to the correct canonical model
+  // (ITR1Input / ITR2Input / ITR4Input) based on the `form` field and
+  // runs the appropriate engine.  The frontend never needs a mapper.
+  //
+  // Debounced: only fires 500ms after user stops typing.
   useEffect(() => {
     if (!clientId || loading || loadedReturnKeyRef.current !== `${clientId}:${effectiveAssessmentYear}`) return;
     const requestId = ++computationGenerationRef.current;
@@ -349,7 +411,7 @@ export default function ITRComputationPage() {
     setTaxResultError(null);
 
     taxResultDebounceRef.current = setTimeout(() => {
-      itrApi.computeTaxSummary(buildPhase1Payload(formData), effectiveAssessmentYear, regime)
+      itrApi.computeTaxSummary(taxSummaryPayload, effectiveAssessmentYear, regime)
         .then((result: any) => {
           if (requestId !== computationGenerationRef.current) return;
           setBackendTaxResult(result);
@@ -357,8 +419,25 @@ export default function ITRComputationPage() {
         })
         .catch((err: any) => {
           if (requestId !== computationGenerationRef.current) return;
-          setBackendTaxResult(null);
-          setTaxResultError(err?.message || 'Tax computation failed. Please try again.');
+          // Preserve the last successful tax figures, but replace capital-gain
+          // validation state with the current rejected draft's structured
+          // issues so users can fix the exact rows that blocked computation.
+          const details = err?.details;
+          const capitalGainsSummary = details?.capitalGainsSummary;
+          if (capitalGainsSummary) {
+            setBackendTaxResult((previous: any) => ({
+              ...(previous || {}),
+              capitalGainsSummary,
+              capitalGainsStatus: details?.status || capitalGainsSummary.status,
+              capitalGainsIssues: details?.issues || capitalGainsSummary.issues || [],
+              capitalGainsEligibility: details?.eligibility || capitalGainsSummary.eligibility || {},
+            }));
+          }
+          const msg = typeof err?.message === 'string' && err.message.length > 0
+            ? err.message
+            : 'Tax computation failed. Please try again.';
+          console.error('[TAX] compute failed:', { msg });
+          setTaxResultError(msg);
         })
         .finally(() => {
           if (requestId === computationGenerationRef.current) setTaxResultLoading(false);
@@ -368,7 +447,7 @@ export default function ITRComputationPage() {
     return () => {
       if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
     };
-  }, [clientId, effectiveAssessmentYear, regime, formData, loading]);
+  }, [clientId, effectiveAssessmentYear, regime, taxSummaryPayloadKey, loading]);
 
   // Invalidate all asynchronous completions after unmount.
   useEffect(() => () => {
@@ -382,19 +461,49 @@ export default function ITRComputationPage() {
     if (backendTaxResult) return backendTaxResult;
     // Return empty result when loading or no data - include ALL Other Sources properties
     return {
-      grossSalary: 0, hraExempt: 0, netSalary: 0, hpIncome: 0, cgTax: 0,
-      bizIncome: 0, otherIncome: 0, vdaTax: 0, gti: 0, gtiAfterSetOff: 0,
-      totalDeductions: 0, totalIncome: 0, normalTax: 0, rebate87A: 0,
-      surcharge: 0, cess: 0, totalTaxLiability: 0, totalTaxPaid: 0,
-      taxPayable: 0, refund: 0, vdaGains: 0,
+      // CBDT Income Summary
+      grossSalary: 0, hraExempt: 0, salaryBeforeSection16: 0, netSalary: 0,
+      incomeFromSal: 0, deductionUs16: 0,
+      hpIncome: 0, totalIncChargeHP: 0,
+      otherIncome: 0, incomeOthSrc: 0,
+      familyPensionIncome: 0, familyPensionDed: 0, deductUs57iia: 0,
+      bizIncome: 0,
+      gti: 0, grossTotIncome: 0, grossTotIncomeIncLTCG112A: 0, gtiAfterSetOff: 0,
+      totalDeductions: 0, deductChapVIA: 0,
+      hpLossDisallowed: 0,
+      totalIncomeBefore288A: 0, roundingAdjustment288A: 0, totalIncome: 0,
+
+      // CBDT Tax Computation
+      basicExemptionLimit: 0, normalRateIncome: 0,
+      incomeChargeableAboveBasicExemption: 0, nilTaxReason: null,
+      normalTax: 0, totalTaxPayable: 0,
+      rebate87A: 0, taxPayableOnRebate: 0,
+      surcharge: 0, cess: 0,
+      grossTaxLiability: 0, section89: 0,
+      netTaxLiability: 0, totalTaxLiability: 0,
+
+      // CBDT Taxes Paid
+      advanceTax: 0, totalTDS: 0, totalTCS: 0,
+      selfAssessmentTax: 0, totalTaxPaid: 0, totalTaxesPaid: 0,
+      claimedTDSEntered: 0, creditStatus: 'CONFIRMED',
+      creditValidationIssues: [], refundStatus: 'NONE',
+      enteredCredits: { tds: 0, advanceTax: 0, selfAssessmentTax: 0, total: 0 },
+      validatedCredits: { tds: 0, advanceTax: 0, selfAssessmentTax: 0, tcs: 0, total: 0 },
+      provisionalRefund: 0, provisionalTaxPayable: 0, blockedCreditsTotal: 0,
+      confirmedRefund: null, calculationStatus: 'CALCULATED',
+
+      // Balance / Refund
+      balTaxPayable: 0, taxPayable: 0,
+      refund: 0, refundDue: 0,
+
+      // Legacy fields still used by other tabs
+      vdaTax: 0, vdaGains: 0, cgTax: 0,
       totalInterest: 0, interestDeduction80TTA: 0, interestDeduction80TTB: 0,
       totalDividend: 0, dividendTaxableAtSpecialRate: 0, dividendTaxableAtNormalRate: 0,
-      totalWinnings: 0, winningsTax: 0, taxableGifts: 0, familyPensionDed: 0, specialRateIncome: 0,
-      familyPensionIncome: 0, // Added for Other Sources
+      totalWinnings: 0, winningsTax: 0, taxableGifts: 0, specialRateIncome: 0,
       tdsS192: 0, tds194A: 0, tdsOther: 0,
       adv15Jun: 0, adv15Sep: 0, adv15Dec: 0, adv15Mar: 0,
-      selfTax: 0, tdsEntries: [], selfAssessmentTaxEntries: [],
-      // Schedule S (Salary) fields — populated by backend SalaryScheduleComputer
+      selfTax: 0, tdsEntries: [], selfAssessmentTaxEntries: [], advanceTaxEntries: [],
       salaryIncome: 0, salary171: 0, salary172: 0, salary173: 0,
       ltaExempt: 0, gratuityExempt: 0, leaveEncashmentExempt: 0,
       pensionCommutationExempt: 0, transportExempt: 0,
@@ -404,7 +513,6 @@ export default function ITRComputationPage() {
       totalSection16Deductions: 0, salaryTDS: 0, salaryEmployerCount: 0,
       hraCondition1: 0, hraCondition2: 0, hraCondition3: 0,
       hraIsMetro: false, hraCityClassified: '',
-      // Authoritative per-section deduction eligible amounts from the backend.
       deductionBreakdown: {} as Record<string, number>,
     };
   }, [backendTaxResult]);
@@ -437,7 +545,10 @@ export default function ITRComputationPage() {
     formData.bfLossHP,
     formData.bfLossBusiness,
     formData.bfLossSTCG,
-    formData.bfLossLTCG
+    formData.bfLossLTCG,
+    formData.capitalGainTransactions,
+    taxResult.capitalGainsSummary,
+    taxResult.capitalGainsIssues
   ]);
 
   const handleSave = async () => {
@@ -471,16 +582,9 @@ export default function ITRComputationPage() {
         dataToSave.bonus = 0;
       }
       
-      // Clear legacy CG fields if using transaction-based
-      if (dataToSave.capitalGainTransactions && dataToSave.capitalGainTransactions.length > 0) {
-        dataToSave.stcgEquityPre = 0;
-        dataToSave.stcgEquityPost = 0;
-        dataToSave.stcgOtherSlab = 0;
-        dataToSave.ltcg112APre = 0;
-        dataToSave.ltcg112APost = 0;
-        dataToSave.ltcgOtherPre = 0;
-        dataToSave.ltcgOtherPost = 0;
-      }
+      // Preserve both structured transactions and legacy capital-gain fields.
+      // The backend owns compatibility projection and authoritative computation;
+      // deleting either representation here can destroy imported evidence.
       
       // NOTE: Do NOT zero interestSB/interestFD when bankInterestEntries exist.
       // tax.py reads interestSB, interestFD, interestRD, nscInterest,
@@ -552,7 +656,7 @@ export default function ITRComputationPage() {
     setStatusBoxJob(null);
 
     try {
-      const res = await itrAutomationApi.startImport(Number(clientId), ayParam || '2026-27');
+      const res = await itrAutomationApi.startImport(clientId, ayParam || '2026-27');
       setAutomationJobId(res.job_id);
       setShowStatusBox(true);
     } catch (err: any) {
@@ -582,28 +686,47 @@ export default function ITRComputationPage() {
 
     const { formDataUpdate, discrepancies, summary } = mapReconciledToFormData(reconciledImportData);
 
-    setFormData((prev: any) => {
-      // For multi-entry arrays, ONLY overwrite if the incoming update has entries;
-      // otherwise preserve any existing entries the user may have manually added.
-      const safeUpdate = { ...formDataUpdate };
-      const EMPTY_KEEP_KEYS = ['employerEntries', 'dividendEntries', 'bankInterestEntries', 'interestEntries',
-        'capitalGainTransactions', 'tdsEntries'];
-      for (const key of EMPTY_KEEP_KEYS) {
-        if (Array.isArray(safeUpdate[key]) && safeUpdate[key].length === 0 && prev[key]?.length > 0) {
-          delete safeUpdate[key];
-        }
+    // A portal import replaces a material portion of the draft. Any result
+    // computed for the pre-import generation must not be presented as current.
+    ++computationGenerationRef.current;
+    if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
+    setBackendTaxResult(null);
+    setTaxResultLoading(true);
+    setTaxResultError('Computation unavailable for the imported draft until recalculated.');
+
+    // Build one merged snapshot and use it for both the editor and persistence.
+    // Empty imported arrays must not erase manually entered rows.
+    const safeUpdate = { ...formDataUpdate };
+    const currentDraft = editorRef.current
+      ? composeLegacyPayload(editorRef.current)
+      : formData;
+    const EMPTY_KEEP_KEYS = ['employerEntries', 'dividendEntries', 'bankInterestEntries', 'interestEntries',
+      'capitalGainTransactions', 'tdsEntries', 'tcsEntries'];
+    for (const key of EMPTY_KEEP_KEYS) {
+      if (Array.isArray(safeUpdate[key]) && safeUpdate[key].length === 0 && currentDraft[key]?.length > 0) {
+        delete safeUpdate[key];
       }
-      return { ...prev, ...safeUpdate };
-    });
+    }
+    const mergedImportData = { ...currentDraft, ...safeUpdate };
+    setFormData(mergedImportData);
 
     // Collect discrepancy messages for the warning banner
     const msgs: string[] = [];
     if (discrepancies.length > 0) {
       msgs.push(
         `${discrepancies.length} discrepanc${discrepancies.length === 1 ? 'y' : 'ies'} found ` +
-        'between AIS, TIS, and 26AS. The higher amount has been used. ' +
+        'between AIS, TIS, and 26AS. The reconciled source amount has been selected. ' +
         'Review highlighted entries in Salary, Interest, Dividends, and Capital Gains tabs.'
       );
+    }
+    if ((reconciledImportData.category_control_discrepancies?.length || 0) > 0) {
+      for (const discrepancy of reconciledImportData.category_control_discrepancies || []) {
+        msgs.push(
+          `${discrepancy.category}: TIS accepted total ₹${discrepancy.tis_accepted_total.toLocaleString('en-IN')} ` +
+          `differs from annexure detail total ₹${discrepancy.tis_detail_total.toLocaleString('en-IN')}. ` +
+          'The accepted TIS total controls computation; all detail rows remain preserved for review.'
+        );
+      }
     }
     if (reconciledImportData.summary.unmatched_tis > 0 ||
         reconciledImportData.summary.unmatched_ais > 0 ||
@@ -614,7 +737,7 @@ export default function ITRComputationPage() {
       if (reconciledImportData.summary.unmatched_as26) parts.push('26AS');
       msgs.push(
         `${reconciledImportData.summary.unmatched_tis + reconciledImportData.summary.unmatched_ais + reconciledImportData.summary.unmatched_as26} ` +
-        `entries from ${parts.join('/')} could not be matched and were skipped.`
+        `entries found in only one of ${parts.join('/')} were preserved for review.`
       );
     }
     setReconDiscrepancies(msgs);
@@ -627,7 +750,7 @@ export default function ITRComputationPage() {
     );
 
     // Save to backend so form state persists
-    itrApi.saveFormData(Number(clientId), year!, { ...formData, ...formDataUpdate })
+    itrApi.saveFormData(clientId, effectiveAssessmentYear, mergedImportData)
       .catch(err => console.warn('Background save after import failed:', err));
 
     setShowImportConfirmModal(false);
@@ -1074,15 +1197,20 @@ export default function ITRComputationPage() {
     const hasBusinessIncome = (formData.bizTurnover || 0) > 0 || (formData.bpNetProfit || 0) > 0;
     const hasPresumptiveIncome = hasBusinessIncome && formData.bizPresumptive && formData.bizPresumptive !== 'Regular';
     
-    // Capital Gains - ALL types including real-estate, movable, VDA, securities
-    const hasCapitalGains = 
-      (formData.stcgPre || 0) > 0 || 
-      (formData.stcgPost || 0) > 0 || 
+    // Restricted long-term Section 112A gains are permitted in ITR-1/ITR-4.
+    // Unsupported preserved rows or backend eligibility failures require ITR-2/3.
+    // hasFormLevelLosses detects signed 112A losses from form data alone so
+    // ITR-2 is detected *before* the first backend compute.
+    const restrictedCapitalGains = getRestrictedCapitalGainsState(formData, taxResult);
+    const hasLegacyCapitalGains =
+      (formData.stcgPre || 0) > 0 ||
+      (formData.stcgPost || 0) > 0 ||
       (formData.stcgOther || 0) > 0 ||
-      (formData.ltcgPre || 0) > 0 || 
-      (formData.ltcgPost || 0) > 0 || 
+      (formData.ltcgPre || 0) > 0 ||
+      (formData.ltcgPost || 0) > 0 ||
       (formData.ltcgOther || 0) > 0 ||
       (formData.vdaGains || 0) > 0;
+    const hasCapitalGainsRequiringFutureForm = hasLegacyCapitalGains || restrictedCapitalGains.hasUnsupportedRows || restrictedCapitalGains.hasIneligibleIssues || restrictedCapitalGains.hasFormLevelLosses;
     
     // Special Income - Lottery, Online Gaming, Card Games, Race Winnings
     const hasSpecialIncome = 
@@ -1115,10 +1243,15 @@ export default function ITRComputationPage() {
     let detectedForm = 'ITR-1';
     let reason = '';
 
-    // Priority 1: ITR-4 (Presumptive taxation)
-    if (hasPresumptiveIncome) {
+    // Priority 1: ITR-4 for presumptive income only while restricted CG remains eligible.
+    if (hasPresumptiveIncome && !hasCapitalGainsRequiringFutureForm) {
       detectedForm = 'ITR-4';
       reason = 'Presumptive income under 44AD/44ADA';
+    }
+    // Presumptive business plus CG outside restricted 112A requires the ITR-3 workflow.
+    else if (hasPresumptiveIncome && hasCapitalGainsRequiringFutureForm) {
+      detectedForm = 'ITR-3';
+      reason = 'Presumptive income with capital gains outside restricted Section 112A eligibility';
     }
     // Priority 2: ITR-3 (Business/Professional income - non-presumptive)
     else if (hasBusinessIncome) {
@@ -1126,9 +1259,9 @@ export default function ITRComputationPage() {
       reason = 'Business or professional income';
     }
     // Priority 3: ITR-2 conditions - Capital Gains (Real-estate, Movable, Foreign, Securities, VDA)
-    else if (hasCapitalGains) {
-      detectedForm = 'ITR-2';
-      reason = 'Capital gains from investments/real-estate/VDA/securities';
+    else if (hasCapitalGainsRequiringFutureForm) {
+      detectedForm = hasBusinessIncome ? 'ITR-3' : 'ITR-2';
+      reason = 'Capital-gains facts outside restricted Section 112A eligibility';
     }
     // Priority 4: ITR-2 - Special Income (Lottery, Online Gaming)
     else if (hasSpecialIncome) {
@@ -1196,17 +1329,16 @@ export default function ITRComputationPage() {
     const hasBusinessIncome = (formData.bizTurnover || 0) > 0 || (formData.bpNetProfit || 0) > 0;
     const hasPresumptiveIncome = hasBusinessIncome && formData.bizPresumptive && formData.bizPresumptive !== 'Regular';
     
-    // ALL Capital Gains - Real-estate, Movable, Foreign, Securities, VDA
-    const hasCapitalGains = 
-      (formData.stcgPre || 0) > 0 || 
-      (formData.stcgPost || 0) > 0 || 
+    const restrictedCapitalGains = getRestrictedCapitalGainsState(formData, taxResult);
+    const hasLegacyCapitalGains =
+      (formData.stcgPre || 0) > 0 ||
+      (formData.stcgPost || 0) > 0 ||
       (formData.stcgOther || 0) > 0 ||
-      (formData.ltcgPre || 0) > 0 || 
-      (formData.ltcgPost || 0) > 0 || 
+      (formData.ltcgPre || 0) > 0 ||
+      (formData.ltcgPost || 0) > 0 ||
       (formData.ltcgOther || 0) > 0 ||
       (formData.vdaGains || 0) > 0;
-    
-    // Special Income - Lottery, Online Gaming
+    const hasCapitalGainsRequiringFutureForm = hasLegacyCapitalGains || restrictedCapitalGains.hasUnsupportedRows || restrictedCapitalGains.hasIneligibleIssues || restrictedCapitalGains.hasFormLevelLosses;
     const hasSpecialIncome = 
       (formData.winnings || 0) > 0 || 
       (formData.lotteryIncome || 0) > 0 ||
@@ -1238,7 +1370,7 @@ export default function ITRComputationPage() {
       // Rule 10: Total income > ₹50 lakh
       if (totalIncome > 5000000) errors.push('Total income exceeds ₹50 lakhs (Rule 10)');
       // Capital Gains - All types
-      if (hasCapitalGains) errors.push('Capital gains (Real-estate/Movable/Securities/VDA) not allowed in ITR-1');
+      if (hasCapitalGainsRequiringFutureForm || restrictedCapitalGains.eligibility['ITR-1'] === false) errors.push('Only eligible restricted long-term Section 112A gains are allowed in ITR-1; use ITR-2 for other capital gains');
       // Business Income
       if (hasBusinessIncome) errors.push('Business income not allowed in ITR-1 (use ITR-3/ITR-4)');
       // Agricultural Income
@@ -1274,6 +1406,7 @@ export default function ITRComputationPage() {
     }
     else if (selectedForm === 'ITR-4') {
       if (!hasPresumptiveIncome) errors.push('ITR-4 is only for presumptive taxation (44AD/44ADA/44AE)');
+      if (hasCapitalGainsRequiringFutureForm || restrictedCapitalGains.eligibility['ITR-4'] === false) errors.push('Only eligible restricted long-term Section 112A gains are allowed in ITR-4; use ITR-3 for other capital gains');
     }
 
     if (errors.length > 0) {
@@ -1619,7 +1752,15 @@ export default function ITRComputationPage() {
       )}
       {taxResultError && (
         <div role="alert" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--error)', background: 'var(--error-bg)' }}>
-          Tax computation failed: {taxResultError}
+          {backendTaxResult
+            ? <>Current draft has an error; figures below are from the last successful backend computation: {taxResultError}</>
+            : <>Tax computation failed: {taxResultError}</>}
+        </div>
+      )}
+      {backendTaxResult?.filingComputationStatus === 'PROVISIONAL_COMMON_INCOME_PREVIEW' && (
+        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d' }}>
+          <strong>Provisional preview only.</strong>{' '}
+          {backendTaxResult.filingComputationMessage}
         </div>
       )}
 
@@ -1638,6 +1779,8 @@ export default function ITRComputationPage() {
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
             {validationReport.warnings.map((w, i) => <li key={i} style={{ fontSize: 13 }}>{w}</li>)}
           </ul>
+        </div>
+      )}
 
       {/* Reconciliation Discrepancy Warning Banner */}
       {reconDiscrepancies.length > 0 && (
@@ -1714,14 +1857,14 @@ export default function ITRComputationPage() {
         {activeTab === 0 && <PersonalInfoTab formData={formData} setFormData={setFormData} onBanksChange={managers.banks} />}
         {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={taxResult} ayParam={effectiveAssessmentYear} regime={regime} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} onChange={(entries: any[]) => updateEditor((model) => updateHouseProperties(model, entries))} itrForm={itrForm} />}
-        {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} year={effectiveAssessmentYear} />}
+        {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
         {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
         {activeTab === 6 && <ExemptIncomeTab formData={formData} setFormData={setFormData} />}
         {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} />}
         {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
-        {activeTab === 9 && (taxResultError
-          ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until computation succeeds.</div>
+        {activeTab === 9 && (!backendTaxResult && taxResultError
+          ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until the first computation succeeds.</div>
           : <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />)}
       </div>
 
@@ -1962,8 +2105,17 @@ function HousePropertyTab({ entries, onChange, itrForm }: any) {
   return <HousePropertyEntryManager entries={entries} onChange={onChange} itrForm={itrForm} />;
 }
 
-function CapitalGainsTab({ formData, setFormData }: any) {
-  return <CapitalGainsEntryManager entries={formData.capitalGainTransactions || []} onChange={(entries) => setFormData({ ...formData, capitalGainTransactions: entries })} />;
+function CapitalGainsTab({ formData, setFormData, taxResult, itrForm }: any) {
+  const summary = taxResult?.capitalGainsSummary || null;
+  return <CapitalGainsEntryManager
+    entries={formData.capitalGainTransactions || []}
+    onChange={(entries) => setFormData({ ...formData, capitalGainTransactions: entries })}
+    selectedForm={itrForm}
+    summary={summary}
+    issues={taxResult?.capitalGainsIssues || summary?.issues || []}
+    status={taxResult?.capitalGainsStatus || summary?.status}
+    eligibility={taxResult?.capitalGainsEligibility || summary?.eligibility}
+  />;
 }
 
 function PersonalInfoTab({ formData, setFormData, onBanksChange }: any) {

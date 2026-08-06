@@ -25,6 +25,8 @@ from datetime import date
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.capital_gains import Section112ATransaction
+
 
 OFFICIAL_COUNTRY_CODES = frozenset(
     "93 1001 355 213 684 376 244 1264 1010 1268 54 374 297 61 43 994 1242 "
@@ -365,6 +367,23 @@ class OtherSourcesIncome(BaseModel):
         default=Decimal("0"),
         ge=0,
         description="Interest received on an income-tax refund.",
+    )
+    income_56_2_x: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Income u/s 56(2)(x) — inadequacy of consideration for "
+        "property/money received without consideration.",
+    )
+    income_56_2_vib: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Income u/s 56(2)(vib) — consideration for transfer of "
+        "immovable property less than stamp duty value.",
+    )
+    other_income: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Any other income chargeable under other sources.",
     )
 
 
@@ -768,6 +787,37 @@ class CapitalGainsIncome(BaseModel):
             "gain reported in Schedule 112A of the ITR-1 form."
         ),
     )
+    full_value_of_consideration: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Aggregate sale consideration for Section 112A assets.",
+    )
+    transactions: Optional[List[Section112ATransaction]] = Field(
+        default=None,
+        description="Canonical transaction evidence for restricted Section 112A computation.",
+    )
+
+    @model_validator(mode="after")
+    def derive_canonical_transaction_totals(self) -> "CapitalGainsIncome":
+        """Validate canonical rows and project their aggregate into form fields."""
+        if not self.transactions:
+            return self
+        from app.engine.schedules.restricted_112a import compute_restricted_112a
+
+        raw_rows = [transaction.model_dump(mode="json") for transaction in self.transactions]
+        portfolio = compute_restricted_112a(raw_rows)
+        if portfolio.evidence_count:
+            raise ValueError(
+                "Imported capital-gains evidence must be matched and completed "
+                "before generating an ITR-1/ITR-4 filing artifact"
+            )
+        if not portfolio.is_valid:
+            codes = ", ".join(issue.code.value for issue in portfolio.issues)
+            raise ValueError(f"Restricted Section 112A transactions are not eligible: {codes}")
+        self.ltcg_112a = portfolio.gross_gain
+        self.cost_of_acquisition = portfolio.cost_of_acquisition
+        self.full_value_of_consideration = portfolio.full_value_of_consideration
+        return self
 
 
 # ---------------------------------------------------------------------------

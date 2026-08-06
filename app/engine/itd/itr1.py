@@ -1644,11 +1644,24 @@ def build_itr1_json(
 
     # TDS3 is optional; emitting an empty details array violates minItems=1.
 
-    # Conditional: LTCG 112A
-    if cg_sale_consideration is not None and cg_cost_acquisition is not None:
+    # Conditional: LTCG 112A. Typed aggregate evidence takes precedence over
+    # legacy keyword arguments supplied by older callers.
+    typed_cg = input_data.capital_gains if input_data is not None else None
+    has_typed_transactions = bool(typed_cg is not None and typed_cg.transactions)
+    sale_consideration = (
+        typed_cg.full_value_of_consideration
+        if has_typed_transactions and typed_cg is not None
+        else cg_sale_consideration
+    )
+    cost_acquisition = (
+        typed_cg.cost_of_acquisition
+        if has_typed_transactions and typed_cg is not None
+        else cg_cost_acquisition
+    )
+    if sale_consideration is not None and cost_acquisition is not None:
         itr1["LTCG112A"] = _ltcg_112a_schedule(
-            sale_consideration=cg_sale_consideration,
-            cost_acquisition=cg_cost_acquisition,
+            sale_consideration=sale_consideration,
+            cost_acquisition=cost_acquisition,
             long_cap_112a=result.capital_gains_112a,
         )
 

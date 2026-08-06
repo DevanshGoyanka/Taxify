@@ -53,7 +53,11 @@ def _unlock_and_warn(file_path, pan, dob, log, label="PDF", status_cb=None):
             status_cb(f"✅ {label} downloaded & unlocked")
     else:
         reason = result.get("reason", "unknown")
-        if reason == "no-password-matched":
+        if reason == "not-encrypted":
+            log(f"[PDF Unlock] {label} is already readable; unlock not required.")
+            if status_cb:
+                status_cb(f"✅ {label} downloaded & readable")
+        elif reason == "no-password-matched":
             log(
                 f"[Warning] {label} unlock failed — no password candidate matched "
                 f"{os.path.basename(file_path)}. "

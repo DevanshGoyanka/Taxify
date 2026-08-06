@@ -364,6 +364,8 @@ async def _run_job(job_id: int) -> None:
                 files["26as"] = pdf26
                 if unlock_result.get("unlocked"):
                     log(f"[Worker] 26AS PDF unlocked: {pdf26}")
+                elif unlock_result.get("reason") == "not-encrypted":
+                    log(f"[Worker] 26AS PDF is already readable; unlock not required: {pdf26}")
                 else:
                     log(
                         f"[Worker] 26AS PDF saved but unlock failed: "
@@ -466,12 +468,20 @@ async def _run_job(job_id: int) -> None:
                     job_id, label, path, os.path.getsize(path), bool(pan), bool(dob),
                 )
                 unlock_result = unlock_pdf(path, pan=pan, dob=dob, log=log)
+                unlock_reason = unlock_result.get("reason")
                 if unlock_result.get("unlocked"):
                     log(f"[Worker] {label} PDF unlocked: {path}")
+                elif unlock_reason == "not-encrypted":
+                    log(f"[Worker] {label} PDF is already readable; unlock not required: {path}")
+                    logger.info(
+                        "Job %d: %s PDF already readable — unlock not required.",
+                        job_id,
+                        label,
+                    )
                 else:
                     log(
                         f"[Worker] {label} PDF unlock FAILED: "
-                        f"reason={unlock_result.get('reason', 'unknown')}, "
+                        f"reason={unlock_reason or 'unknown'}, "
                         f"last_error={unlock_result.get('last_error', 'N/A')}"
                     )
                     logger.error(

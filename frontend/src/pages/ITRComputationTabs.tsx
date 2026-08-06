@@ -652,6 +652,18 @@ export function LossesTab({ formData, setFormData, taxResult }: any) {
 export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
   const tdsEntries = formData.tdsEntries || [];
   const selfAssessmentTaxEntries = formData.selfAssessmentTaxEntries || [];
+  const tanPattern = /^[A-Z]{4}[0-9]{5}[A-Z]$/;
+  const bsrPattern = /^[0-9]{7}$/;
+  const challanPattern = /^[0-9]{1,5}$/;
+  const inputErrorStyle = { color: 'var(--danger)', fontSize: 11, marginTop: 4 };
+  const deriveCin = (entry: any) => {
+    const bsr = String(entry.bsrCode || '');
+    const date = String(entry.depositDate || '').replaceAll('-', '');
+    const serial = String(entry.challanNo || entry.challanSerialNo || '');
+    return bsrPattern.test(bsr) && date.length === 8 && challanPattern.test(serial) && Number(serial) > 0
+      ? `${bsr}-${date}-${serial.padStart(5, '0')}`
+      : '';
+  };
 
   const addTDSEntry = () => {
     const newEntry = {
@@ -715,9 +727,11 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
             ✓ 26AS Data Imported
           </h3>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            TDS entries have been auto-populated from Form 26AS. 
-            {formData.imported26AS && `Found ${(formData.tdsEntries || []).length} deductor(s) with total TDS of ₹${((formData.imported26AS || {}).totalTDS || 0).toLocaleString('en-IN')}.`}
-            Review and update if needed.
+            TDS entries were populated from Form 26AS.{' '}
+            Current draft claims ₹{Number(taxResult.enteredCredits?.tds || 0).toLocaleString('en-IN')} of TDS across {tdsEntries.filter((entry: any) => entry.claimedInReturn !== false).length} selected row(s).
+            {Number((formData.imported26AS || {}).totalTDS || 0) !== Number(taxResult.enteredCredits?.tds || 0) && (
+              <> The imported snapshot reported ₹{Number((formData.imported26AS || {}).totalTDS || 0).toLocaleString('en-IN')}; review manually edited values and supporting evidence.</>
+            )}
           </div>
         </div>
       )}
@@ -872,12 +886,28 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
               </select>
             </div>
             <Field label="Deductor Name *" value={entry.deductorName || ''} onChange={(v: any) => updateTDSEntry(index, 'deductorName', v)} type="text" prefix="" required />
-            <Field label="Deductor TAN *" value={entry.deductorTAN || ''} onChange={(v: any) => updateTDSEntry(index, 'deductorTAN', v)} type="text" prefix="" required />
+            <div>
+              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
+                Deductor TAN *
+              </label>
+              <input
+                type="text"
+                value={entry.deductorTAN || ''}
+                onChange={(e) => updateTDSEntry(index, 'deductorTAN', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))}
+                placeholder="ABCD12345E"
+                maxLength={10}
+                aria-invalid={Boolean(entry.deductorTAN) && !tanPattern.test(entry.deductorTAN)}
+                style={{ width: '100%', padding: '8px 12px', border: `1px solid ${entry.deductorTAN && !tanPattern.test(entry.deductorTAN) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 6, fontSize: 13 }}
+              />
+              {entry.deductorTAN && !tanPattern.test(entry.deductorTAN) && (
+                <div style={inputErrorStyle}>TAN must match ABCD12345E.</div>
+              )}
+            </div>
             <Field label="Deductor PAN" value={entry.deductorPAN || ''} onChange={(v: any) => updateTDSEntry(index, 'deductorPAN', v)} type="text" prefix="" />
             <Field label="Income Amount *" value={entry.incomeAmount || 0} onChange={(v: any) => updateTDSEntry(index, 'incomeAmount', v)} required />
             <Field label="TDS Deducted *" value={entry.tdsDeducted || 0} onChange={(v: any) => updateTDSEntry(index, 'tdsDeducted', v)} required />
-            <Field label="Certificate No *" value={entry.certificateNo || ''} onChange={(v: any) => updateTDSEntry(index, 'certificateNo', v)} type="text" prefix="" required />
-            <Field label="Deduction Date *" value={entry.deductionDate || ''} onChange={(v: any) => updateTDSEntry(index, 'deductionDate', v)} type="date" prefix="" required />
+            <Field label="Certificate No" value={entry.certificateNo || ''} onChange={(v: any) => updateTDSEntry(index, 'certificateNo', v)} type="text" prefix="" />
+            <Field label="Deduction Date" value={entry.deductionDate || ''} onChange={(v: any) => updateTDSEntry(index, 'deductionDate', v)} type="date" prefix="" />
             <Field label="Unique Transaction No" value={entry.uniqueTransactionNo || ''} onChange={(v: any) => updateTDSEntry(index, 'uniqueTransactionNo', v)} type="text" prefix="" />
             <Field label="Financial Year *" value={entry.financialYear || '2025-26'} onChange={(v: any) => updateTDSEntry(index, 'financialYear', v)} type="text" prefix="" required />
             <div>
@@ -948,11 +978,12 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>BSR Code *</label>
-              <input type="text" value={entry.bsrCode || ''} onChange={(e) => {
+              <input type="text" inputMode="numeric" value={entry.bsrCode || ''} onChange={(e) => {
                 const updated = [...(formData.advanceTaxEntries || [])];
-                updated[index] = { ...updated[index], bsrCode: e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 7) };
+                updated[index] = { ...updated[index], bsrCode: e.target.value.replace(/\D/g, '').slice(0, 7) };
                 managers.advanceTax(updated);
-              }} placeholder="7-character BSR" maxLength={7} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+              }} placeholder="7-digit BSR" maxLength={7} aria-invalid={Boolean(entry.bsrCode) && !bsrPattern.test(entry.bsrCode)} style={{ width: '100%', padding: '6px 8px', border: `1px solid ${entry.bsrCode && !bsrPattern.test(entry.bsrCode) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 4, fontSize: 12 }} />
+              {entry.bsrCode && !bsrPattern.test(entry.bsrCode) && <div style={inputErrorStyle}>BSR code must contain exactly 7 digits.</div>}
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Deposit Date *</label>
@@ -968,7 +999,8 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
                 const updated = [...(formData.advanceTaxEntries || [])];
                 updated[index] = { ...updated[index], challanSerialNo: e.target.value.replace(/\D/g, '').slice(0, 5) };
                 managers.advanceTax(updated);
-              }} placeholder="5-digit serial" maxLength={5} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
+              }} placeholder="1-5 digits" maxLength={5} aria-invalid={Boolean(entry.challanSerialNo) && (!challanPattern.test(String(entry.challanSerialNo)) || Number(entry.challanSerialNo) <= 0)} style={{ width: '100%', padding: '6px 8px', border: `1px solid ${entry.challanSerialNo && (!challanPattern.test(String(entry.challanSerialNo)) || Number(entry.challanSerialNo) <= 0) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 4, fontSize: 12 }} />
+              {entry.challanSerialNo && (!challanPattern.test(String(entry.challanSerialNo)) || Number(entry.challanSerialNo) <= 0) && <div style={inputErrorStyle}>Enter 1-5 digits greater than zero.</div>}
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Amount (₹) *</label>
@@ -1031,146 +1063,327 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
           </div>
           
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-            <Field label="BSR Code *" value={entry.bsrCode || ''} onChange={(v: any) => updateSelfAssessmentEntry(index, 'bsrCode', v)} type="text" prefix="" required />
-            <Field label="Challan Serial No *" value={entry.challanNo || ''} onChange={(v: any) => updateSelfAssessmentEntry(index, 'challanNo', v)} type="text" prefix="" required />
+            <div>
+              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>BSR Code *</label>
+              <input type="text" inputMode="numeric" value={entry.bsrCode || ''} onChange={(e) => updateSelfAssessmentEntry(index, 'bsrCode', e.target.value.replace(/\D/g, '').slice(0, 7))} placeholder="7-digit BSR" maxLength={7} aria-invalid={Boolean(entry.bsrCode) && !bsrPattern.test(entry.bsrCode)} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${entry.bsrCode && !bsrPattern.test(entry.bsrCode) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 6, fontSize: 13 }} />
+              {entry.bsrCode && !bsrPattern.test(entry.bsrCode) && <div style={inputErrorStyle}>BSR code must contain exactly 7 digits.</div>}
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Challan Serial No *</label>
+              <input type="text" inputMode="numeric" value={entry.challanNo || ''} onChange={(e) => updateSelfAssessmentEntry(index, 'challanNo', e.target.value.replace(/\D/g, '').slice(0, 5))} placeholder="1-5 digits" maxLength={5} aria-invalid={Boolean(entry.challanNo) && (!challanPattern.test(String(entry.challanNo)) || Number(entry.challanNo) <= 0)} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${entry.challanNo && (!challanPattern.test(String(entry.challanNo)) || Number(entry.challanNo) <= 0) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 6, fontSize: 13 }} />
+              {entry.challanNo && (!challanPattern.test(String(entry.challanNo)) || Number(entry.challanNo) <= 0) && <div style={inputErrorStyle}>Enter 1-5 digits greater than zero.</div>}
+            </div>
             <Field label="Date of Deposit *" value={entry.depositDate || ''} onChange={(v: any) => updateSelfAssessmentEntry(index, 'depositDate', v)} type="date" prefix="" required />
             <Field label="Amount *" value={entry.amount || 0} onChange={(v: any) => updateSelfAssessmentEntry(index, 'amount', v)} required />
-            <Field label="CIN (Challan ID) *" value={entry.cin || ''} onChange={(v: any) => updateSelfAssessmentEntry(index, 'cin', v)} type="text" prefix="" required />
+            <div>
+              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>CIN (derived)</label>
+              <input type="text" value={deriveCin(entry)} readOnly placeholder="Complete BSR, date and serial" style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'var(--gold-pale)' }} />
+            </div>
           </div>
         </div>
       ))}
 
       <div style={{ marginTop: 24, padding: 16, background: 'var(--gold-pale)', borderRadius: 6 }}>
-        <Field label="Total Tax Paid" value={taxResult.totalTaxPaid} computed />
+        <Field label="Entered Tax Payments" value={taxResult.enteredCredits?.total ?? taxResult.totalTaxPaid} computed />
+        <Field label="Validated Filing Credits" value={taxResult.validatedCredits?.total ?? taxResult.totalTaxPaid} computed />
       </div>
     </div>
   );
 }
 
 export function TaxComputationTab({ taxResult, regime, itrForm }: any) {
+  const INR = (v: any) => `₹${Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+  const signedINR = (v: any) => {
+    const amount = Number(v || 0);
+    return `${amount >= 0 ? '+' : '−'}${INR(Math.abs(amount))}`;
+  };
+
+  // CBDT deduction breakdown entries (from backend engine)
+  const dedBreakdown = taxResult.deductionBreakdown || {};
+  const dedEntries = Object.entries(dedBreakdown).filter(([, v]: any) => Number(v) > 0);
+
+  // Income head totals (all backend-computed)
+  const incomeFromSal = Number(taxResult.incomeFromSal ?? taxResult.netSalary ?? 0);
+  const hpIncome = Number(taxResult.totalIncChargeHP ?? taxResult.hpIncome ?? 0);
+  const otherIncome = Number(taxResult.incomeOthSrc ?? taxResult.otherIncome ?? 0);
+  const bizIncome = Number(taxResult.bizIncome ?? 0);
+  const gti = Number(taxResult.grossTotIncome ?? taxResult.gti ?? 0);
+  const totalIncome = Number(taxResult.totalIncome ?? 0);
+  const chapVIA = Number(taxResult.deductChapVIA ?? taxResult.totalDeductions ?? 0);
+
   return (
     <div style={{ maxWidth: 800, margin: '0 auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <tbody>
+          {/* ════════════════════════════════════════════════════════════════
+              PART B — TOTAL INCOME (CBDT ITR1_IncomeDeductions)
+          ═════════════════════════════════════════════════════════════════ */}
           <tr style={{ background: 'var(--bg)' }}>
-            <td colSpan={2} style={{ padding: '8px 12px', fontWeight: 600, fontSize: 13 }}>Income Summary</td>
+            <td colSpan={2} style={{ padding: '8px 12px', fontWeight: 700, fontSize: 13, color: 'var(--gold)' }}>
+              PART B — TOTAL INCOME
+            </td>
           </tr>
-          {taxResult.netSalary > 0 && (
-            <tr>
-              <td style={{ padding: '8px 12px', fontSize: 13 }}>Salary (Net Taxable)</td>
-              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.netSalary)}</td>
-            </tr>
-          )}
-          {taxResult.hpIncome !== 0 && (
-            <tr>
-              <td style={{ padding: '8px 12px', fontSize: 13 }}>House Property Income</td>
-              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.hpIncome)}</td>
-            </tr>
-          )}
-          {taxResult.bizIncome > 0 && (
-            <tr>
-              <td style={{ padding: '8px 12px', fontSize: 13 }}>Business Income</td>
-              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.bizIncome)}</td>
-            </tr>
-          )}
-          {taxResult.otherIncome > 0 && (
-            <tr>
-              <td style={{ padding: '8px 12px', fontSize: 13 }}>Other Sources</td>
-              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.otherIncome)}</td>
-            </tr>
-          )}
-          {taxResult.vdaGains > 0 && (
-            <tr>
-              <td style={{ padding: '8px 12px', fontSize: 13 }}>VDA Income</td>
-              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.vdaGains)}</td>
-            </tr>
-          )}
-          <tr style={{ borderTop: '2px solid var(--border)' }}>
-            <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Gross Total Income (GTI)</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(taxResult.gti)}</td>
-          </tr>
-          {(taxResult.gti - taxResult.gtiAfterSetOff) > 0 && itrForm !== 'ITR-1' && (
+
+          {/* ── Salary (Schedule S) — only show when salary exists ── */}
+          {Number(taxResult.grossSalary) > 0 && (
             <>
               <tr>
-                <td style={{ padding: '8px 12px', fontSize: 13 }}>Less: B/F Loss</td>
-                <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--danger)' }}>({INR(taxResult.gti - taxResult.gtiAfterSetOff)})</td>
+                <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Gross Salary (u/s 17(1))</td>
+                <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.grossSalary)}</td>
               </tr>
+              {Number(taxResult.totalSection10Exempt) > 0 && (
+                <tr>
+                  <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Less: Exempt Allowances (u/s 10)</td>
+                  <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--danger)' }}>({INR(taxResult.totalSection10Exempt)})</td>
+                </tr>
+              )}
               <tr>
-                <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>GTI After Set-offs</td>
-                <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(taxResult.gtiAfterSetOff)}</td>
+                <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Salary after Section 10 exemptions</td>
+                <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.salaryBeforeSection16)}</td>
               </tr>
+              {Number(taxResult.deductionUs16) > 0 && (
+                <tr>
+                  <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Less: Deductions u/s 16</td>
+                  <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--danger)' }}>({INR(taxResult.deductionUs16)})</td>
+                </tr>
+              )}
+              {Number(taxResult.standardDeduction) > 0 && (
+                <tr>
+                  <td style={{ padding: '4px 12px 4px 36px', fontSize: 12, color: 'var(--text-muted)' }}>• Standard Deduction (16ia)</td>
+                  <td className="mono" style={{ padding: '4px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text-muted)' }}>{INR(taxResult.standardDeduction)}</td>
+                </tr>
+              )}
+              {Number(taxResult.entertainmentAllowanceDed) > 0 && (
+                <tr>
+                  <td style={{ padding: '4px 12px 4px 36px', fontSize: 12, color: 'var(--text-muted)' }}>• Entertainment Allowance (16ii)</td>
+                  <td className="mono" style={{ padding: '4px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text-muted)' }}>{INR(taxResult.entertainmentAllowanceDed)}</td>
+                </tr>
+              )}
+              {Number(taxResult.professionalTaxDed) > 0 && (
+                <tr>
+                  <td style={{ padding: '4px 12px 4px 36px', fontSize: 12, color: 'var(--text-muted)' }}>• Professional Tax (16iii)</td>
+                  <td className="mono" style={{ padding: '4px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text-muted)' }}>{INR(taxResult.professionalTaxDed)}</td>
+                </tr>
+              )}
             </>
           )}
-          {regime === 'old' && taxResult.totalDeductions > 0 && (
+
+          {/* ── Income head totals ── */}
+          {incomeFromSal > 0 && (
             <tr>
-              <td style={{ padding: '8px 12px', fontSize: 13 }}>Less: Total Deductions</td>
-              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--danger)' }}>({INR(taxResult.totalDeductions)})</td>
+              <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Income from Salary</td>
+              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(incomeFromSal)}</td>
+            </tr>
+          )}
+          {hpIncome !== 0 && (
+            <tr>
+              <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Income from House Property</td>
+              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(hpIncome)}</td>
+            </tr>
+          )}
+          {bizIncome > 0 && (
+            <tr>
+              <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Business/Profession Income (Presumptive)</td>
+              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(bizIncome)}</td>
+            </tr>
+          )}
+          {otherIncome > 0 && (
+            <>
+              <tr>
+                <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Income from Other Sources</td>
+                <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(otherIncome)}</td>
+              </tr>
+              {Number(taxResult.familyPensionDed) > 0 && (
+                <tr>
+                  <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Less: Deduction u/s 57iia (Family Pension)</td>
+                  <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--danger)' }}>({INR(taxResult.deductUs57iia ?? taxResult.familyPensionDed)})</td>
+                </tr>
+              )}
+            </>
+          )}
+
+          {/* ── GTI ── */}
+          <tr style={{ borderTop: '2px solid var(--border)' }}>
+            <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Gross Total Income</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(gti)}</td>
+          </tr>
+
+          {/* ── Chapter VIA Deductions ── */}
+          {regime === 'old' && chapVIA > 0 && (
+            <>
+              <tr>
+                <td style={{ padding: '8px 12px', fontSize: 13 }}>Less: Deductions (Chapter VIA)</td>
+                <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--danger)' }}>({INR(chapVIA)})</td>
+              </tr>
+              {dedEntries.map(([key, val]: any) => (
+                <tr key={key}>
+                  <td style={{ padding: '4px 12px 4px 36px', fontSize: 12, color: 'var(--text-muted)' }}>• {key}</td>
+                  <td className="mono" style={{ padding: '4px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text-muted)' }}>{INR(val)}</td>
+                </tr>
+              ))}
+            </>
+          )}
+
+          {/* ── Total Income and Section 288A reconciliation ── */}
+          <tr style={{ borderTop: '1px solid var(--border)' }}>
+            <td style={{ padding: '8px 12px', fontSize: 13 }}>Total Income before rounding</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.totalIncomeBefore288A)}</td>
+          </tr>
+          {Number(taxResult.roundingAdjustment288A) !== 0 && (
+            <tr>
+              <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Section 288A rounding adjustment</td>
+              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{signedINR(taxResult.roundingAdjustment288A)}</td>
             </tr>
           )}
           <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--gold-pale)' }}>
-            <td style={{ padding: '8px 12px', fontSize: 14, fontWeight: 600 }}>Total Taxable Income</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 14, textAlign: 'right', fontWeight: 600 }}>{INR(taxResult.totalIncome)}</td>
+            <td style={{ padding: '8px 12px', fontSize: 14, fontWeight: 700 }}>ROUNDED TOTAL INCOME (u/s 288A)</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 14, textAlign: 'right', fontWeight: 700 }}>{INR(totalIncome)}</td>
           </tr>
+
+          {/* ════════════════════════════════════════════════════════════════
+              PART B — TAX COMPUTATION (CBDT ITR1_TaxComputation)
+          ═════════════════════════════════════════════════════════════════ */}
           <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--bg)' }}>
-            <td colSpan={2} style={{ padding: '8px 12px', fontWeight: 600, fontSize: 13 }}>Tax Calculation</td>
+            <td colSpan={2} style={{ padding: '8px 12px', fontWeight: 700, fontSize: 13, color: 'var(--gold)' }}>
+              TAX COMPUTATION
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '8px 12px', fontSize: 13 }}>Tax on Normal Income</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.normalTax)}</td>
+            <td style={{ padding: '8px 12px', fontSize: 13 }}>Normal-rate income</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.normalRateIncome)}</td>
           </tr>
-          {taxResult.rebate87A > 0 && (
+          <tr>
+            <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Basic exemption limit</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.basicExemptionLimit)}</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Income above basic exemption limit</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(taxResult.incomeChargeableAboveBasicExemption)}</td>
+          </tr>
+          {taxResult.nilTaxReason === 'BELOW_BASIC_EXEMPTION_LIMIT' && (
+            <tr style={{ background: 'var(--success-bg)' }}>
+              <td colSpan={2} style={{ padding: '8px 12px', fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>
+                Nil tax: normal-rate income does not exceed the applicable basic exemption limit.
+              </td>
+            </tr>
+          )}
+          <tr>
+            <td style={{ padding: '8px 12px', fontSize: 13 }}>Tax before rebate</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.totalTaxPayable ?? taxResult.normalTax)}</td>
+          </tr>
+          {Number(taxResult.rebate87A) > 0 && (
             <tr>
               <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Less: Rebate u/s 87A</td>
               <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR(taxResult.rebate87A)})</td>
             </tr>
           )}
-          {taxResult.surcharge > 0 && (
-            <tr>
-              <td style={{ padding: '8px 12px', fontSize: 13 }}>Surcharge</td>
-              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.surcharge)}</td>
+          {taxResult.nilTaxReason === 'REBATE_87A' && Number(taxResult.rebate87A) > 0 && (
+            <tr style={{ background: 'var(--success-bg)' }}>
+              <td colSpan={2} style={{ padding: '8px 12px', fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>
+                Nil tax after applying rebate under Section 87A.
+              </td>
             </tr>
           )}
           <tr>
-            <td style={{ padding: '8px 12px', fontSize: 13 }}>Health & Education Cess (4%)</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.cess)}</td>
+            <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Tax After Rebate</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(taxResult.taxPayableOnRebate)}</td>
           </tr>
-          <tr>
-            <td style={{ padding: '8px 12px', fontSize: 13 }}>VDA Tax @ 30%</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.vdaTax)}</td>
+          {Number(taxResult.surcharge) > 0 && (
+            <tr>
+              <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Add: Surcharge</td>
+              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.surcharge)}</td>
+            </tr>
+          )}
+          {Number(taxResult.cess) > 0 && (
+            <tr>
+              <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Add: Health & Education Cess (4%)</td>
+              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.cess)}</td>
+            </tr>
+          )}
+          <tr style={{ borderTop: '1px solid var(--border)' }}>
+            <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Gross Tax Liability</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(taxResult.grossTaxLiability)}</td>
           </tr>
-          <tr>
-            <td style={{ padding: '8px 12px', fontSize: 13 }}>Capital Gains Tax (Special)</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.cgTax)}</td>
-          </tr>
+          {(Number(taxResult.section89) ?? 0) > 0 && (
+            <tr>
+              <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Less: Relief u/s 89</td>
+              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR(taxResult.section89)})</td>
+            </tr>
+          )}
           <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--navy)' }}>
-            <td style={{ padding: '12px', fontSize: 15, fontWeight: 600, color: 'white' }}>TOTAL TAX LIABILITY</td>
-            <td className="mono" style={{ padding: '12px', fontSize: 15, textAlign: 'right', fontWeight: 600, color: 'white' }}>{INR(taxResult.totalTaxLiability)}</td>
+            <td style={{ padding: '12px', fontSize: 15, fontWeight: 700, color: 'white' }}>NET TAX LIABILITY</td>
+            <td className="mono" style={{ padding: '12px', fontSize: 15, textAlign: 'right', fontWeight: 700, color: 'white' }}>{INR(taxResult.netTaxLiability ?? taxResult.totalTaxLiability)}</td>
           </tr>
-          <tr style={{ background: 'var(--bg)' }}>
-            <td colSpan={2} style={{ padding: '8px 12px', fontWeight: 600, fontSize: 13 }}>Less: Tax Payments</td>
-          </tr>
-          <tr>
-            <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>TDS Deducted ({(taxResult.tdsEntries || []).filter((e: any) => e.claimedInReturn !== false).length} entries)</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR((taxResult.tdsEntries || []).reduce((sum: number, e: any) => sum + (e.claimedInReturn !== false ? (e.tdsDeducted || 0) : 0), 0) || ((taxResult.tdsS192 || 0) + (taxResult.tds194A || 0) + (taxResult.tdsOther || 0)))})</td>
-          </tr>
-          <tr>
-            <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Advance Tax Paid</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR((taxResult.advanceTaxEntries || []).reduce((sum: number, e: any) => sum + (e.amount || 0), 0) || (taxResult.adv15Jun || 0) + (taxResult.adv15Sep || 0) + (taxResult.adv15Dec || 0) + (taxResult.adv15Mar || 0))})</td>
+
+          {/* ════════════════════════════════════════════════════════════════
+              TAXES PAID (CBDT TaxesPaid)
+          ═════════════════════════════════════════════════════════════════ */}
+          <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--bg)' }}>
+            <td colSpan={2} style={{ padding: '8px 12px', fontWeight: 700, fontSize: 13, color: 'var(--gold)' }}>
+              TAXES PAID
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Self Assessment Tax ({(taxResult.selfAssessmentTaxEntries || []).length} entries)</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR((taxResult.selfAssessmentTaxEntries || []).reduce((sum: number, e: any) => sum + (e.amount || 0), 0) || (taxResult.selfTax || 0))})</td>
+            <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Validated Advance Tax</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR(taxResult.validatedCredits?.advanceTax ?? taxResult.advanceTax)})</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Validated TDS</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR(taxResult.validatedCredits?.tds ?? taxResult.totalTDS)})</td>
+          </tr>
+          {(taxResult.totalTCS ?? 0) > 0 && (
+            <tr>
+              <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>TCS</td>
+              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR(taxResult.totalTCS)})</td>
+            </tr>
+          )}
+          <tr>
+            <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Validated Self-Assessment Tax</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR(taxResult.validatedCredits?.selfAssessmentTax ?? taxResult.selfAssessmentTax ?? taxResult.selfTax)})</td>
           </tr>
           <tr style={{ borderTop: '1px solid var(--border)' }}>
-            <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Total Tax Paid</td>
-            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600, color: 'var(--success)' }}>({INR(taxResult.totalTaxPaid)})</td>
+            <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Validated Filing Credits</td>
+            <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600, color: 'var(--success)' }}>({INR(taxResult.validatedCredits?.total ?? taxResult.totalTaxesPaid ?? taxResult.totalTaxPaid)})</td>
           </tr>
-          <tr style={{ borderTop: '2px solid var(--border)', background: taxResult.taxPayable > 0 ? 'var(--danger-bg)' : 'var(--success-bg)' }}>
-            <td style={{ padding: '12px', fontSize: 15, fontWeight: 600, color: taxResult.taxPayable > 0 ? 'var(--danger)' : 'var(--success)' }}>
-              {taxResult.taxPayable > 0 ? 'TAX PAYABLE' : 'REFUND'}
+          {taxResult.creditStatus === 'PROVISIONAL' && (
+            <>
+              <tr>
+                <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Entered Credits (Provisional)</td>
+                <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600, color: 'var(--gold)' }}>({INR(taxResult.enteredCredits?.total)})</td>
+              </tr>
+              <tr>
+                <td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Blocked Pending Correction</td>
+                <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--danger)' }}>{INR(taxResult.blockedCreditsTotal)}</td>
+              </tr>
+            </>
+          )}
+
+          {taxResult.creditStatus === 'PROVISIONAL' && (
+            <tr style={{ background: 'var(--danger-bg)' }}>
+              <td colSpan={2} style={{ padding: '10px 12px', fontSize: 12, color: 'var(--danger)' }}>
+                <strong>Tax credits are provisional.</strong>
+                {(taxResult.creditValidationIssues || []).map((issue: any, index: number) => (
+                  <div key={`${issue.code}-${issue.row}-${index}`} style={{ marginTop: 4 }}>
+                    • {issue.creditType} row {issue.row}: {issue.message}
+                  </div>
+                ))}
+              </td>
+            </tr>
+          )}
+
+          {/* ════════════════════════════════════════════════════════════════
+              BALANCE / REFUND
+          ═════════════════════════════════════════════════════════════════ */}
+          <tr style={{ borderTop: '2px solid var(--border)', background: taxResult.balTaxPayable > 0 ? 'var(--danger-bg)' : taxResult.refundStatus === 'PROVISIONAL_BLOCKED' ? 'var(--gold-pale)' : 'var(--success-bg)' }}>
+            <td style={{ padding: '12px', fontSize: 15, fontWeight: 700, color: taxResult.balTaxPayable > 0 ? 'var(--danger)' : taxResult.refundStatus === 'PROVISIONAL_BLOCKED' ? 'var(--gold)' : 'var(--success)' }}>
+              {taxResult.balTaxPayable > 0 ? 'BALANCE TAX PAYABLE' : taxResult.refundStatus === 'PROVISIONAL_BLOCKED' ? 'PROVISIONAL REFUND — VALIDATION REQUIRED' : 'REFUND DUE'}
             </td>
-            <td className="mono" style={{ padding: '12px', fontSize: 15, textAlign: 'right', fontWeight: 600, color: taxResult.taxPayable > 0 ? 'var(--danger)' : 'var(--success)' }}>
-              {INR(taxResult.taxPayable > 0 ? taxResult.taxPayable : taxResult.refund)}
+            <td className="mono" style={{ padding: '12px', fontSize: 15, textAlign: 'right', fontWeight: 700, color: taxResult.balTaxPayable > 0 ? 'var(--danger)' : taxResult.refundStatus === 'PROVISIONAL_BLOCKED' ? 'var(--gold)' : 'var(--success)' }}>
+              {INR(taxResult.balTaxPayable > 0
+                ? taxResult.balTaxPayable
+                : taxResult.refundStatus === 'PROVISIONAL_BLOCKED'
+                  ? taxResult.provisionalRefund
+                  : taxResult.confirmedRefund ?? taxResult.refundDue ?? taxResult.refund)}
             </td>
           </tr>
         </tbody>

@@ -196,21 +196,31 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         else:
             ent_allowance = Decimal("0")
         net_before_std = max(Decimal("0"), gross - exempt_allowances)
-        std_ded = OLD_REGIME_STANDARD_DEDUCTION
+        # Section 16 deductions cannot create a loss under the salary head.
+        prof_tax = min(prof_tax, net_before_std)
+        ent_allowance = min(ent_allowance, max(Decimal("0"), net_before_std - prof_tax))
+        std_ded = min(
+            OLD_REGIME_STANDARD_DEDUCTION,
+            max(Decimal("0"), net_before_std - prof_tax - ent_allowance),
+        )
         chargeable = net_before_std - std_ded - prof_tax - ent_allowance
     else:
-        std_ded = NEW_REGIME_STANDARD_DEDUCTION
-        chargeable = gross - exempt_allowances - std_ded
-        prof_tax = Decimal("0")
-        ent_allowance = Decimal("0")
-        # New regime disallows HRA and LTA exemptions.
+        # New-regime HRA and LTA exemptions are disallowed before calculating
+        # the available salary against which Section 16(ia) can be claimed.
+        disallowed_hra_lta = hra_exempt + lta_exempt
         hra_exempt = Decimal("0")
         lta_exempt = Decimal("0")
+        exempt_allowances = max(Decimal("0"), exempt_allowances - disallowed_hra_lta)
+        net_before_std = max(Decimal("0"), gross - exempt_allowances)
+        std_ded = min(NEW_REGIME_STANDARD_DEDUCTION, net_before_std)
+        chargeable = net_before_std - std_ded
+        prof_tax = Decimal("0")
+        ent_allowance = Decimal("0")
 
     return SalaryResult(
         gross_salary=gross,
         exempt_allowances=exempt_allowances,
-        net_salary=gross - exempt_allowances,
+        net_salary=max(Decimal("0"), gross - exempt_allowances),
         standard_deduction=std_ded,
         entertainment_allowance=ent_allowance,
         professional_tax=prof_tax,

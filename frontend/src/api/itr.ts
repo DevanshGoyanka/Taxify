@@ -1,11 +1,11 @@
 import axiosInstance from './axiosInstance';
 
 export const itrApi = {
-  getFormData: async (clientId: string | number, year: string) => {
+  getFormData: async (clientId: string, year: string) => {
     const { data } = await axiosInstance.get(`/clients/${clientId}/itr/${year}`);
     return data;
   },
-  saveFormData: async (clientId: string | number, year: string, formData: any) => {
+  saveFormData: async (clientId: string, year: string, formData: any) => {
     const { data } = await axiosInstance.put(`/clients/${clientId}/itr/${year}`, formData);
     return data;
   },
@@ -26,7 +26,7 @@ export const itrApi = {
   /**
    * Legacy computeTax - redirects to new endpoint
    */
-  computeTaxLegacy: async (clientId: string | number, year: string, formData: any) => {
+  computeTaxLegacy: async (clientId: string, year: string, formData: any) => {
     const { data } = await axiosInstance.post(`/clients/${clientId}/itr/${year}/compute`, formData);
     return data;
   },
@@ -46,11 +46,11 @@ export const itrApi = {
     return data;
   },
   
-  validate: async (clientId: string | number, year: string, formData: any) => {
+  validate: async (clientId: string, year: string, formData: any) => {
     const { data } = await axiosInstance.post(`/clients/${clientId}/itr/${year}/validate`, formData);
     return data as { valid: boolean; errors: string[]; warnings: string[] };
   },
-  downloadJson: async (clientId: string | number, year: string) => {
+  downloadJson: async (clientId: string, year: string) => {
     const res = await axiosInstance.get(`/clients/${clientId}/itr/${year}/download`, { responseType: 'blob' });
     const url = URL.createObjectURL(new Blob([res.data]));
     const a = document.createElement('a');
@@ -58,7 +58,7 @@ export const itrApi = {
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   },
-  downloadPdf: async (clientId: string | number, year: string) => {
+  downloadPdf: async (clientId: string, year: string) => {
     const res = await axiosInstance.get(`/clients/${clientId}/itr/${year}/download-pdf`, { responseType: 'blob' });
     const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
     const a = document.createElement('a');

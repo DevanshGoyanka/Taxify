@@ -5,3 +5,23 @@ export * from './legacySerializer';
 export * from './repository';
 export * from './state';
 export * from './editorModel';
+
+// ── CBDT eligibility & schedule registry ─────────────────────────────────────
+export {
+  type EligibilityFacts,
+  type FormRecommendation,
+  type ItrForm,
+  assessFormEligibility,
+  collectEligibilityFacts,
+  evaluateEligibility,
+} from '../eligibility';
+
+export {
+  type ScheduleDefinition,
+  type ScheduleStatus,
+  SCHEDULE_REGISTRY,
+  activeSchedules,
+  blockingSchedules,
+  getSchedule,
+  schedulesForForm,
+} from '../scheduleRegistry';

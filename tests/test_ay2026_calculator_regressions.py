@@ -324,6 +324,104 @@ def test_80g_zero_user_claim_stays_zero_with_structured_rows() -> None:
     ) == Decimal("0")
 
 
+def test_tax_summary_preserves_imported_cg_evidence_without_taxing_it() -> None:
+    """Purchase/sale evidence with form ITR-2 now runs the ITR-2 engine.
+
+    Previously the backend returned a provisional preview with GTI=0.
+    Now that ITR-2 is fully integrated, the evidence rows with sale values
+    are mapped to canonical CGTransactions and the ITR-2 engine computes
+    actual capital gains.  The first row (saleCost=0, purchaseCost=4000)
+    produces no gain; the second row (saleValue=68394, no cost) produces
+    a full gain because cost_of_acquisition defaults to 0.
+    """
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-2",
+            "capitalGainTransactions": [
+                {
+                    "assetType": "MUTUAL_FUND",
+                    "purchaseDate": "",
+                    "saleDate": "",
+                    "purchaseCost": 4000,
+                    "saleCost": 0,
+                    "importStatus": "INCOMPLETE",
+                },
+                {
+                    "recordKind": "EVIDENCE",
+                    "evidenceSide": "SALE",
+                    "assetType": "MUTUAL_FUND",
+                    "saleValue": 68394,
+                },
+            ],
+        },
+        regime="NEW",
+        current_user=None,
+    )
+
+    # ITR-2 engine now computes actual capital gains from the evidence.
+    assert result["requestedForm"] == "ITR-2"
+    assert result["computedByFormEngine"] == "ITR-2"
+    assert result["filingComputationStatus"] == "FORM_COMPUTATION"
+
+
+def test_tax_summary_computes_canonical_restricted_112a_rows() -> None:
+    """Structured rows must be the authoritative ITR-1 capital-gain source."""
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-1",
+            "ltcg112APre": 999999,
+            "capitalGainTransactions": [{
+                "assetType": "LISTED_EQUITY",
+                "purchaseDate": "2023-01-01",
+                "saleDate": "2025-01-02",
+                "purchaseCost": 100000,
+                "saleCost": 120000,
+                "transferExpenses": 1000,
+                "sttPaidOnAcquisition": True,
+                "sttPaidOnTransfer": True,
+                "recognizedExchange": True,
+            }],
+        },
+        regime="NEW",
+        current_user=None,
+    )
+
+    assert result["capitalGainsStatus"] == "VALID"
+    assert result["capitalGainsSummary"]["gross112AGain"] == 19000.0
+    assert result["capitalGainsSummary"]["costOfAcquisition"] == 101000.0
+    assert result["gti"] == 19000.0
+
+
+def test_tax_summary_returns_structured_restricted_112a_issues() -> None:
+    """Incomplete evidence must block computation with row-level issue codes."""
+    with pytest.raises(HTTPException) as exc_info:
+        compute_tax_summary(
+            payload={
+                "assessmentYear": "2026-27",
+                "form": "ITR-1",
+                "capitalGainTransactions": [{
+                    "assetType": "PROPERTY",
+                    "saleCost": 120000,
+                }],
+            },
+            regime="NEW",
+            current_user=None,
+        )
+
+    assert exc_info.value.status_code == 422
+    detail = exc_info.value.detail
+    assert detail["status"] == "BLOCKED"
+    assert detail["capitalGainsSummary"]["transactionCount"] == 0
+    assert {issue["code"] for issue in detail["issues"]} >= {
+        "UNSUPPORTED_ASSET",
+        "MISSING_ACQUISITION_DATE",
+        "MISSING_TRANSFER_DATE",
+        "MISSING_ACTUAL_COST",
+    }
+
+
 def test_tax_summary_maps_canonical_employers_without_double_counting() -> None:
     """Canonical salary arrays must be authoritative and count each component once."""
     result = compute_tax_summary(
@@ -346,6 +444,128 @@ def test_tax_summary_maps_canonical_employers_without_double_counting() -> None:
     assert result["grossSalary"] == 750000.0
     assert result["netSalary"] == 700000.0
     assert result["gti"] == 700000.0
+
+
+def test_tax_summary_counts_explicit_claimed_tds_and_excludes_unclaimed_rows() -> None:
+    """Only the TDS-deducted value of rows selected for claim is creditable."""
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-1",
+            "tdsEntries": [
+                {
+                    "section": "192",
+                    "deductorName": "Example Employer",
+                    "deductorTAN": "ABCD12345E",
+                    "certificateNo": "CERT-1",
+                    "deductionDate": "2025-07-01",
+                    "incomeAmount": 500,
+                    "tdsDeducted": 500,
+                    "claimedInReturn": True,
+                },
+                {
+                    "section": "192",
+                    "incomeAmount": 1000,
+                    "tdsDeducted": 250,
+                    "claimedInReturn": False,
+                },
+            ],
+        },
+        regime="OLD",
+        current_user=None,
+    )
+
+    assert result["totalTDS"] == 500.0
+    assert result["totalTaxesPaid"] == 500.0
+    assert result["refundDue"] == 500.0
+
+
+def test_tax_summary_marks_incomplete_credits_provisional_and_reclassifies_early_sat() -> None:
+    """Incomplete evidence blocks refund confirmation and pre-year-end SAT is advance tax."""
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-1",
+            "tdsEntries": [{
+                "section": "192",
+                "incomeAmount": 50000,
+                "tdsDeducted": 5000,
+                "claimedInReturn": True,
+            }],
+            "advanceTaxEntries": [{
+                "depositDate": "2026-02-01",
+                "amount": 6000,
+                "bsrCode": "",
+                "challanSerialNo": 0,
+            }],
+            "selfAssessmentTaxEntries": [{
+                "depositDate": "2026-03-28",
+                "amount": 7000,
+                "bsrCode": "",
+                "challanNo": "",
+            }],
+        },
+        regime="NEW",
+        current_user=None,
+    )
+
+    assert result["totalTDS"] == 0.0
+    assert result["advanceTax"] == 0.0
+    assert result["selfAssessmentTax"] == 0.0
+    assert result["totalTaxesPaid"] == 0.0
+    assert result["refundDue"] == 0.0
+    assert result["enteredCredits"]["tds"] == 5000.0
+    assert result["enteredCredits"]["advanceTax"] == 13000.0
+    assert result["enteredCredits"]["total"] == 18000.0
+    assert result["validatedCredits"]["total"] == 0.0
+    assert result["provisionalRefund"] == 18000.0
+    assert result["blockedCreditsTotal"] == 18000.0
+    assert result["creditStatus"] == "PROVISIONAL"
+    assert result["refundStatus"] == "PROVISIONAL_BLOCKED"
+    issue_codes = {issue["code"] for issue in result["creditValidationIssues"]}
+    assert "MISSING_TAN" in issue_codes
+    assert "INVALID_BSR_FORMAT" in issue_codes
+    assert "INVALID_CHALLAN_SERIAL" in issue_codes
+    assert "RECLASSIFIED_AS_ADVANCE_TAX" in issue_codes
+
+
+def test_tax_summary_malformed_identifiers_do_not_crash_or_validate_credit() -> None:
+    """Random draft identifiers remain provisional and never reach strict models."""
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-1",
+            "tdsEntries": [{
+                "section": "192",
+                "deductorName": "Example Employer",
+                "deductorTAN": "VYGYVYTFTFVTYFTFVTFTTVT",
+                "certificateNo": "CERT",
+                "deductionDate": "2025-06-01",
+                "incomeAmount": 50000,
+                "tdsDeducted": 5000,
+                "claimedInReturn": True,
+            }],
+            "advanceTaxEntries": [{
+                "bsrCode": "ABC1234",
+                "depositDate": "2026-02-01",
+                "challanSerialNo": "ABCDE",
+                "amount": 6000,
+            }],
+        },
+        regime="OLD",
+        current_user=None,
+    )
+
+    assert result["calculationStatus"] == "CALCULATED_WITH_CREDIT_ISSUES"
+    assert result["enteredCredits"]["total"] == 11000.0
+    assert result["validatedCredits"]["total"] == 0.0
+    assert result["blockedCreditsTotal"] == 11000.0
+    assert result["provisionalRefund"] == 11000.0
+    assert result["confirmedRefund"] is None
+    issues = result["creditValidationIssues"]
+    assert any(issue["code"] == "INVALID_TAN_FORMAT" and issue["field"] == "deductorTAN" for issue in issues)
+    assert any(issue["code"] == "INVALID_BSR_FORMAT" and issue["field"] == "bsrCode" for issue in issues)
+    assert any(issue["code"] == "INVALID_CHALLAN_SERIAL" for issue in issues)
 
 
 def test_tax_summary_maps_mixed_44ad_receipts_and_declared_income() -> None:
@@ -410,7 +630,12 @@ def test_tax_summary_maps_filing_dates_and_advance_tax_installments() -> None:
             "filingDate": "2026-08-31",
             "dueDate": "2026-07-31",
             "advanceTaxEntries": [
-                {"amount": 100000, "depositDate": "2026-03-15"},
+                {
+                    "amount": 100000,
+                    "depositDate": "2026-03-15",
+                    "bsrCode": "1234567",
+                    "challanSerialNo": "12345",
+                },
             ],
         },
         regime="OLD",
@@ -422,22 +647,76 @@ def test_tax_summary_maps_filing_dates_and_advance_tax_installments() -> None:
     assert result["taxPayable"] > 0
 
 
-def test_tax_summary_rejects_claimed_tds_without_tan() -> None:
-    """A claimed non-salary credit without TAN must not be silently discarded."""
-    with pytest.raises(HTTPException) as exc_info:
-        compute_tax_summary(
-            payload={
-                "assessmentYear": "2026-27",
-                "form": "ITR-1",
-                "tdsEntries": [
-                    {"section": "194A", "grossAmount": 10000, "taxDeducted": 1000},
-                ],
-            },
-            regime="NEW",
-            current_user=None,
-        )
+def test_tax_summary_marks_claimed_non_salary_tds_without_tan_provisional() -> None:
+    """A non-salary credit without TAN remains entered but is not filing-valid."""
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-1",
+            "tdsEntries": [
+                {"section": "194A", "grossAmount": 10000, "taxDeducted": 1000},
+            ],
+        },
+        regime="NEW",
+        current_user=None,
+    )
 
-    assert exc_info.value.status_code == 422
+    assert result["enteredCredits"]["tds"] == 1000.0
+    assert result["validatedCredits"]["tds"] == 0.0
+    assert result["creditStatus"] == "PROVISIONAL"
+    assert any(
+        issue["code"] == "MISSING_TAN" and issue["field"] == "deductorTAN"
+        for issue in result["creditValidationIssues"]
+    )
+
+
+def test_tax_summary_uses_tis_dividend_control_without_mutating_detail_rows() -> None:
+    """A TIS accepted category total must control overlapping dividend evidence."""
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-1",
+            "dividendEntries": [
+                {"companyName": "Synthetic One", "grossAmount": 500},
+                {"companyName": "Synthetic Two SFT", "grossAmount": 14},
+                {"companyName": "Synthetic Two TDS Evidence", "grossAmount": 14},
+            ],
+            "importedCategoryControls": {"dividend": 514},
+        },
+        regime="NEW",
+        current_user=None,
+    )
+
+    assert result["totalDividend"] == 514.0
+    assert result["incomeOthSrc"] == 514.0
+
+
+def test_salary_tds_with_26as_identity_does_not_require_certificate_or_date() -> None:
+    """Schedule TDS1 credit requires TAN, employer, income and TDS—not Form 16 metadata."""
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-1",
+            "employerEntries": [{"basic": 1500000}],
+            "tdsEntries": [{
+                "section": "192",
+                "deductorName": "Synthetic Employer Private Limited",
+                "deductorTAN": "ABCD12345E",
+                "incomeAmount": 1500000,
+                "tdsDeducted": 100000,
+                "financialYear": "2025-26",
+                "verified26AS": True,
+                "claimedInReturn": True,
+            }],
+        },
+        regime="NEW",
+        current_user=None,
+    )
+
+    assert result["enteredCredits"]["tds"] == 100000.0
+    assert result["validatedCredits"]["tds"] == 100000.0
+    assert result["creditStatus"] == "CONFIRMED"
+    assert result["creditValidationIssues"] == []
 
 
 def test_tax_summary_rejects_multiple_businesses_instead_of_truncating() -> None:
