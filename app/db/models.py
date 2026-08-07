@@ -179,6 +179,9 @@ class AutomationJob(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="queued"
     )
+    assessment_year: Mapped[str | None] = mapped_column(
+        String(10), nullable=True
+    )
     fiscal_year: Mapped[str] = mapped_column(String(10), nullable=False)
 
     # ---- Progress tracking (JSON-serialised) ----

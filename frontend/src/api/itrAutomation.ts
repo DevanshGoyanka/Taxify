@@ -166,6 +166,7 @@ export type AutomationJob = {
   user_id: number;
   job_type: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  assessment_year: string | null;
   fiscal_year: string;
   steps_completed: string[];
   current_step: string | null;
@@ -190,6 +191,7 @@ export type AutomationJob = {
 export type StartJobResponse = {
   job_id: number;
   status: string;
+  assessment_year: string;
   fiscal_year: string;
   download_dir: string;
   message: string;

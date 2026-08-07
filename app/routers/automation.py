@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.automation.job_worker import _get_job_dict, enqueue_job, _download_dir
 from app.automation.privacy import install_automation_privacy_filter
+from app.automation.years import TaxYearContext
 from app.db.database import get_db
 from app.db.models import AutomationJob, Client, User
 from app.routers.clients import resolve_owned_client
@@ -53,6 +54,17 @@ def start_automation_import(
     The job downloads Form 26AS, AIS, and TIS PDFs from the ITD portal
     using the client's stored PAN, DOB, and portal_password.
     """
+    try:
+        tax_years = TaxYearContext.from_assessment_year(assessment_year)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    assessment_year = tax_years.assessment_year
+    fiscal_year = tax_years.fiscal_year
+
     # Resolve client by public_id (or legacy integer id) with ownership check
     client = resolve_owned_client(client_id, current_user.id, db)
 
@@ -75,17 +87,13 @@ def start_automation_import(
             ),
         )
 
-    # Derive financial year from assessment year
-    from app.automation.job_worker import _derive_fiscal_year
-
-    fiscal_year = _derive_fiscal_year(assessment_year)
-
-    # Create job — store internal integer client.id
+    # Create job — store both explicit AY and derived FY.
     job = AutomationJob(
         client_id=client.id,
         user_id=current_user.id,
         job_type=job_type,
         status="queued",
+        assessment_year=assessment_year,
         fiscal_year=fiscal_year,
     )
     db.add(job)
@@ -104,6 +112,7 @@ def start_automation_import(
     return {
         "job_id": job_id,
         "status": "queued",
+        "assessment_year": assessment_year,
         "fiscal_year": fiscal_year,
         "download_dir": _download_dir(client.id, fiscal_year),
         "message": "Automation job created and queued. Poll GET /automation/jobs/{job_id} for progress.",
@@ -178,6 +187,7 @@ def list_jobs(
                 "client_id": j.client_id,
                 "job_type": j.job_type,
                 "status": j.status,
+                "assessment_year": j.assessment_year,
                 "fiscal_year": j.fiscal_year,
                 "current_step": j.current_step,
                 "status_message": j.status_message,

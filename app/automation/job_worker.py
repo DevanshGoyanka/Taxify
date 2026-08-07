@@ -29,12 +29,14 @@ from app.automation.browser import browser_manager
 from app.automation.downloader_26as import download_26as
 from app.automation.downloader_ais_tis import run_request_ais, run_download_ais_tis
 from app.automation.errors import _friendly_error
+from app.automation.navigation import resolve_itd_anchor
 from app.automation.pdf_unlocker import unlock_pdf, verify_pdf_decryptable
 from app.automation.privacy import (
     install_automation_privacy_filter,
     sanitize_automation_text,
 )
 from app.automation.timing import AutomationTimeline
+from app.automation.years import TaxYearContext
 from app.db.database import SessionLocal
 from app.db.models import AutomationJob
 from app.schemas.security.portal_crypto import decrypt_portal_password
@@ -112,17 +114,8 @@ def _progress_for_step(step: str | None) -> dict:
 
 
 def _derive_fiscal_year(assessment_year: str) -> str:
-    """Convert assessment year to financial year.
-
-    "2025-26" -> "2024-25",  "2026-27" -> "2025-26"
-    """
-    parts = assessment_year.split("-")
-    if len(parts) == 2:
-        try:
-            return f"{int(parts[0]) - 1}-{str(int(parts[1]) - 1).zfill(2)}"
-        except (ValueError, TypeError):
-            pass
-    return assessment_year
+    """Convert a validated assessment year to its financial year."""
+    return TaxYearContext.from_assessment_year(assessment_year).fiscal_year
 
 
 def _download_dir(client_id: int, fiscal_year: str) -> str:
@@ -172,6 +165,7 @@ def _get_job_dict(job_id: int) -> Optional[dict]:
             "user_id": job.user_id,
             "job_type": job.job_type,
             "status": job.status,
+            "assessment_year": job.assessment_year,
             "fiscal_year": job.fiscal_year,
             "steps_completed": _safe_json(job.steps_completed, []),
             "current_step": job.current_step,
@@ -227,7 +221,13 @@ async def _run_job(job_id: int) -> None:
             logger.error("Job %d: Not found in database -- aborting.", job_id)
             return
         client_id = job.client_id
+        job_type = job.job_type
         fiscal_year = job.fiscal_year
+        assessment_year = job.assessment_year
+        if not assessment_year:
+            assessment_year = TaxYearContext.from_financial_year(
+                fiscal_year
+            ).assessment_year
 
         from app.db.models import Client
 
@@ -329,6 +329,7 @@ async def _run_job(job_id: int) -> None:
     page = None
     context = None
     files: dict[str, Optional[str]] = {"26as": None, "ais": None, "tis": None}
+    required_artifact_failures: list[str] = []
     steps: list[str] = []
 
     try:
@@ -365,13 +366,14 @@ async def _run_job(job_id: int) -> None:
         log("[Worker] Starting 26AS download...")
         ok, reason, txt_path = await download_26as(
             page=page,
-            assessment_year=fiscal_year,
+            assessment_year=assessment_year,
             download_dir=dldir,
             log_callback=log,
             pan=pan,
             dob=dob,
         )
         timeline.mark("26AS download completed")
+        page = await resolve_itd_anchor(page)
 
         if ok:
             pan_prefix = f"{pan}-" if pan else ""
@@ -389,7 +391,11 @@ async def _run_job(job_id: int) -> None:
                         f"[Worker] 26AS PDF saved but unlock failed: "
                         f"{unlock_result.get('reason', 'unknown')}"
                     )
+            else:
+                ok = False
+                reason = "26AS portal flow returned without saving the expected PDF"
 
+        if ok and files["26as"]:
             steps.append("26as_downloaded")
             _update_job(job_id, steps_completed=json.dumps(steps), progress_pct=27)
             _update_job(
@@ -399,7 +405,10 @@ async def _run_job(job_id: int) -> None:
                 progress_pct=28,
             )
         else:
-            log(f"[Worker] 26AS download failed: {reason}")
+            failure_reason = reason or "26AS download failed"
+            log(f"[Worker] 26AS download failed: {failure_reason}")
+            if job_type in {"DOWNLOAD_ALL", "DOWNLOAD_26AS"}:
+                required_artifact_failures.append(f"26AS: {failure_reason}")
 
         # Step 3: Request AIS + Download TIS (Phase 1)
         _update_job(
@@ -420,6 +429,7 @@ async def _run_job(job_id: int) -> None:
             dob=dob,
         )
         timeline.mark("AIS and TIS request phase completed")
+        page = await resolve_itd_anchor(page)
 
         pan_prefix = f"{pan}-" if pan else ""
         fy_str = fiscal_year.replace("-", "_")
@@ -458,6 +468,7 @@ async def _run_job(job_id: int) -> None:
                 dl_tis=False,
                 ais_ref_id=ref_id,
             )
+            page = await resolve_itd_anchor(page)
 
             ais_outcome2 = dl_result.get("ais", {})
             ais_status2 = ais_outcome2.get("status", "failed")
@@ -721,6 +732,12 @@ async def _run_job(job_id: int) -> None:
             except Exception as e:
                 log(f"[Worker] Logout error (non-fatal): {e}")
         steps.append("logout")
+
+        if required_artifact_failures:
+            raise RuntimeError(
+                "Required artifact download failed: "
+                + "; ".join(required_artifact_failures)
+            )
 
         # Success
         _update_job(

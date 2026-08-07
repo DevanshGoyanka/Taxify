@@ -27,7 +27,8 @@ def _apply_additive_sqlite_migrations() -> None:
         return
 
     inspector = inspect(engine)
-    if "client" not in inspector.get_table_names():
+    table_names = set(inspector.get_table_names())
+    if "client" not in table_names:
         return
 
     columns = {column["name"] for column in inspector.get_columns("client")}
@@ -91,6 +92,30 @@ def _apply_additive_sqlite_migrations() -> None:
             print(
                 "[WARN] Client/year uniqueness index deferred: "
                 f"{duplicate_year_count} duplicate client/year group(s) require reconciliation."
+            )
+
+        if "automation_job" in table_names:
+            automation_columns = {
+                column["name"]
+                for column in inspect(engine).get_columns("automation_job")
+            }
+            if "assessment_year" not in automation_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE automation_job "
+                        "ADD COLUMN assessment_year VARCHAR(10)"
+                    )
+                )
+            connection.execute(
+                text(
+                    "UPDATE automation_job "
+                    "SET assessment_year = "
+                    "printf('%04d-%02d', "
+                    "CAST(substr(fiscal_year, 1, 4) AS INTEGER) + 1, "
+                    "CAST(substr(fiscal_year, 6, 2) AS INTEGER) + 1) "
+                    "WHERE assessment_year IS NULL "
+                    "AND fiscal_year GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'"
+                )
             )
 
 
