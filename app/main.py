@@ -53,6 +53,7 @@ from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import get_current_user
 from app.automation.job_worker import start_worker, stop_worker
+from app.automation.privacy import install_uvicorn_access_privacy_filter
 from app.db.init_db import create_tables
 from app.db.models import User
 
@@ -68,6 +69,10 @@ from app.routers import (
     automation as automation_router,
 )
 from app.schemas.auth import UserResponse
+
+# Uvicorn access records contain raw request targets, including client UUIDs.
+# Apply the same privacy boundary used by automation application loggers.
+install_uvicorn_access_privacy_filter(logging.getLogger("uvicorn.access"))
 
 
 # ---------------------------------------------------------------------------

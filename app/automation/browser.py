@@ -5,6 +5,8 @@ import asyncio
 
 from playwright.async_api import async_playwright
 
+from app.automation.timing import AutomationTimeline
+
 
 def _get_system_proxy() -> dict | None:
     """
@@ -234,7 +236,24 @@ class BrowserManager:
                         log_callback(f"[Error] Failed to launch browser: {e}")
                     raise
 
-    async def get_context(self, log_callback=None, interactive=True):
+    async def get_context(
+        self,
+        log_callback=None,
+        interactive=True,
+        timeline: AutomationTimeline | None = None,
+    ):
+        """Create an isolated portal browser context.
+
+        Args:
+            log_callback: Optional progress logging callback.
+            interactive: Whether to show the browser window.
+            timeline: Optional monotonic workflow timeline.
+
+        Returns:
+            A configured Playwright browser context.
+        """
+        if timeline is not None:
+            timeline.mark("context requested")
         try:
             await self._ensure_browser(log_callback, interactive)
         except Exception as e:
@@ -274,6 +293,8 @@ class BrowserManager:
             Object.defineProperty(navigator, 'plugins',   { get: () => [1, 2, 3, 4, 5] });
             window.chrome = window.chrome || { runtime: {} };
         }""")
+        if timeline is not None:
+            timeline.mark("context ready")
         return ctx
 
     async def close(self):

@@ -30,6 +30,11 @@ from app.automation.downloader_26as import download_26as
 from app.automation.downloader_ais_tis import run_request_ais, run_download_ais_tis
 from app.automation.errors import _friendly_error
 from app.automation.pdf_unlocker import unlock_pdf, verify_pdf_decryptable
+from app.automation.privacy import (
+    install_automation_privacy_filter,
+    sanitize_automation_text,
+)
+from app.automation.timing import AutomationTimeline
 from app.db.database import SessionLocal
 from app.db.models import AutomationJob
 from app.schemas.security.portal_crypto import decrypt_portal_password
@@ -41,6 +46,7 @@ from ais_extractor.tis_extractor import extract_tis as _extract_tis, tis_to_fron
 from ais_extractor.reconciliation import reconcile as _reconcile_data
 
 logger = logging.getLogger("taxify.automation.worker")
+install_automation_privacy_filter(logger)
 
 # ---------------------------------------------------------------------------
 # Queue + worker state
@@ -252,13 +258,12 @@ async def _run_job(job_id: int) -> None:
         logger.info(
             "Job %d: Client %d DOB format info — "
             "value_available=%s, hyphen_count=%d, seg_lengths=%s, "
-            "raw_first_char=%s, pan_first_3=%s",
+            "pan_available=%s",
             job_id, client_id,
             bool(dob_stripped),
             dob_stripped.count("-"),
             "-".join(dob_seg_lengths) if dob_seg_lengths else "empty",
-            dob_stripped[:1] if dob_stripped else "empty",
-            pan[:3] if pan else "empty",
+            bool(pan),
         )
         try:
             portal_pw = decrypt_portal_password(encrypted_pw) if encrypted_pw else ""
@@ -297,11 +302,16 @@ async def _run_job(job_id: int) -> None:
     log_lines: list[str] = []
 
     def log(msg: str) -> None:
-        log_lines.append(msg)
-        short = msg[:500] if len(msg) > 500 else msg
+        safe_msg = sanitize_automation_text(msg)
+        log_lines.append(safe_msg)
+        short = safe_msg[:500] if len(safe_msg) > 500 else safe_msg
         _update_job(job_id, status_message=short)
-        # Also emit to server console for real-time diagnostics
-        logger.debug("Job %d: %s", job_id, msg)
+        # Timing events are intentionally visible at INFO for live Phase 0
+        # verification; ordinary detailed portal logs remain DEBUG-level.
+        if safe_msg.startswith("[Timing]"):
+            logger.info("Job %d: %s", job_id, safe_msg)
+        else:
+            logger.debug("Job %d: %s", job_id, safe_msg)
 
     _update_job(
         job_id,
@@ -315,6 +325,7 @@ async def _run_job(job_id: int) -> None:
     )
     logger.info("Job %d: Marked as running, attempt %d.", job_id, job.attempt_count + 1)
 
+    timeline = AutomationTimeline(log)
     page = None
     context = None
     files: dict[str, Optional[str]] = {"26as": None, "ais": None, "tis": None}
@@ -324,7 +335,11 @@ async def _run_job(job_id: int) -> None:
         # Step 1: Browser + Login
         _update_job(job_id, current_step="login", status_message="Launching browser...", progress_pct=5)
         log("[Worker] Getting browser context...")
-        context = await browser_manager.get_context(log_callback=log, interactive=False)
+        context = await browser_manager.get_context(
+            log_callback=log,
+            interactive=False,
+            timeline=timeline,
+        )
         log("[Worker] Browser context ready. Logging into ITD portal...")
 
         _update_job(job_id, status_message="Logging into ITD portal...", progress_pct=7)
@@ -333,6 +348,7 @@ async def _run_job(job_id: int) -> None:
             password=portal_pw,
             log_callback=log,
             context=context,
+            timeline=timeline,
         )
         steps.append("login")
         _update_job(job_id, steps_completed=json.dumps(steps), progress_pct=9)
@@ -345,6 +361,7 @@ async def _run_job(job_id: int) -> None:
             status_message="Downloading Form 26AS...",
             progress_pct=10,
         )
+        timeline.mark("26AS navigation started")
         log("[Worker] Starting 26AS download...")
         ok, reason, txt_path = await download_26as(
             page=page,
@@ -354,6 +371,7 @@ async def _run_job(job_id: int) -> None:
             pan=pan,
             dob=dob,
         )
+        timeline.mark("26AS download completed")
 
         if ok:
             pan_prefix = f"{pan}-" if pan else ""
@@ -390,6 +408,7 @@ async def _run_job(job_id: int) -> None:
             status_message="Requesting AIS + downloading TIS...",
             progress_pct=30,
         )
+        timeline.mark("AIS portal navigation started")
         log("[Worker] Starting AIS request + TIS download...")
 
         ais_outcome = await run_request_ais(
@@ -400,6 +419,7 @@ async def _run_job(job_id: int) -> None:
             pan=pan,
             dob=dob,
         )
+        timeline.mark("AIS and TIS request phase completed")
 
         pan_prefix = f"{pan}-" if pan else ""
         fy_str = fiscal_year.replace("-", "_")
@@ -697,7 +717,7 @@ async def _run_job(job_id: int) -> None:
         _update_job(job_id, current_step="logout", status_message="Logging out...", progress_pct=95)
         if page:
             try:
-                await logout_itd(page, log)
+                await logout_itd(page, log, timeline=timeline)
             except Exception as e:
                 log(f"[Worker] Logout error (non-fatal): {e}")
         steps.append("logout")
@@ -723,11 +743,15 @@ async def _run_job(job_id: int) -> None:
         if not friendly or not friendly.strip():
             raw_msg = str(exc).split("\n")[0].strip()
             friendly = raw_msg[:200] if raw_msg else type(exc).__name__
-        log(f"[Worker] Exception: {exc}")
-        log(f"[Worker] Traceback:\n{tb}")
+        safe_tb = sanitize_automation_text(tb)
+        safe_exc = sanitize_automation_text(exc)
+        log(f"[Worker] Exception: {safe_exc}")
+        log(f"[Worker] Traceback:\n{safe_tb}")
         logger.error(
             "Job %d: FAILED -- %s\n%s",
-            job_id, friendly, tb,
+            job_id,
+            friendly,
+            safe_tb,
         )
 
         _update_job(
@@ -735,7 +759,7 @@ async def _run_job(job_id: int) -> None:
             status="failed",
             current_step=None,
             status_message=f"Failed: {friendly}",
-            error_message=f"{friendly}\n\n--- Full traceback ---\n{tb}",
+            error_message=f"{friendly}\n\n--- Full traceback ---\n{safe_tb}",
             steps_completed=json.dumps(steps),
             files_downloaded=json.dumps(files),
             completed_at=datetime.datetime.utcnow(),

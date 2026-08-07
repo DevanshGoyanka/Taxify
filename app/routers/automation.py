@@ -17,11 +17,13 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
 from app.automation.job_worker import _get_job_dict, enqueue_job, _download_dir
+from app.automation.privacy import install_automation_privacy_filter
 from app.db.database import get_db
 from app.db.models import AutomationJob, Client, User
 from app.routers.clients import resolve_owned_client
 
 logger = logging.getLogger("taxify.automation.router")
+install_automation_privacy_filter(logger)
 router = APIRouter(tags=["automation"])
 
 

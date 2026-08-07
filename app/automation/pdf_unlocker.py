@@ -35,7 +35,10 @@ encrypted file untouched (download is NOT considered a failure).
 import os
 import logging
 
+from app.automation.privacy import install_automation_privacy_filter
+
 logger = logging.getLogger(__name__)
+install_automation_privacy_filter(logger)
 
 
 # ── Pre-extraction integrity check ────────────────────────────────────────────
@@ -179,9 +182,7 @@ def _dob_variants(dob: str) -> list[str]:
             yyyy, mm, dd = parts[0], parts[1], parts[2]
             detected_format = "YYYY-MM-DD (DB)"
             logger.info(
-                "_dob_variants: detected YYYY-MM-DD format — auto-normalising to "
-                "DDMMYYYY (dd=%s, mm=%s, yyyy=%s)",
-                dd, mm, yyyy,
+                "_dob_variants: detected YYYY-MM-DD format and normalized it for PDF unlocking."
             )
         else:
             # → DD-MM-YYYY (vault format) — also handles DD/MM/YYYY-ish input
@@ -216,14 +217,9 @@ def _dob_variants(dob: str) -> list[str]:
 
         # Debug: log detected format and resulting variants (masked for security)
         logger.debug(
-            "_dob_variants: detected_format=%s, dd=%s, mm=%s, yyyy=%s → "
-            "%d variant(s): [%s, %s, %s]",
+            "_dob_variants: detected_format=%s, variants_generated=%d",
             detected_format,
-            dd, mm, yyyy,
             len(variants),
-            variants[0][:2] + "***" + variants[0][-2:] if len(variants) > 0 else "-",
-            variants[1][:2] + "***" + variants[1][-2:] if len(variants) > 1 else "-",
-            variants[2][:2] + "***" + variants[2][-4:] if len(variants) > 2 else "-",
         )
 
     except Exception:
@@ -311,8 +307,10 @@ def unlock_pdf(
 
     # Debug: log file details
     logger.info(
-        "unlock_pdf starting for %s: size=%d, pan=%s, dob=%s",
-        file_path, file_size, (pan or "")[:3] + "***", "***",
+        "unlock_pdf starting for an artifact: size=%d, pan_present=%s, dob_present=%s",
+        file_size,
+        bool(pan),
+        bool(dob),
     )
 
     # Read first bytes to verify it's actually a PDF
@@ -392,36 +390,24 @@ def unlock_pdf(
             f"leaving {filename} encrypted."
         )
         logger.warning(
-            "unlock_pdf: no password candidates for %s (pan=%s, dob_available=%s, "
-            "raw_dob_seg_lengths=%s)",
-            file_path, (pan or "")[:3] + "***", bool(dob),
+            "unlock_pdf: no password candidates for an artifact "
+            "(pan_available=%s, dob_available=%s, raw_dob_seg_lengths=%s)",
+            bool(pan),
+            bool(dob),
             "-".join(dob_seg_lengths) if dob_seg_lengths else "empty",
         )
         return {"unlocked": False, "reason": "no-dob"}
 
-    # Debug: log candidate count + masked first candidate for format verification
-    first_candidate_masked = ""
-    if candidates:
-        c0 = candidates[0]
-        if len(c0) > 6:
-            first_candidate_masked = c0[:4] + "***" + c0[-2:]
-        else:
-            first_candidate_masked = "***"
-
     logger.info(
-        "unlock_pdf: trying %d password candidates for %s "
-        "(pan=%s, dob_seg_lengths=%s, first_candidate_masked=%s, "
-        "first_candidate_len=%d)",
-        len(candidates), filename,
-        (pan or "")[:3] + "***",
+        "unlock_pdf: trying %d password candidates for an artifact "
+        "(dob_seg_lengths=%s, first_candidate_len=%d)",
+        len(candidates),
         "-".join(dob_seg_lengths) if dob_seg_lengths else "empty",
-        first_candidate_masked,
         len(candidates[0]) if candidates else 0,
     )
     _log(
-        f"[PDF Unlock] {len(candidates)} candidate(s) for {filename} "
-        f"(pan={'yes' if pan else 'no'}, dob={'yes' if dob else 'no'}, "
-        f"first_candidate_masked={first_candidate_masked})"
+        f"[PDF Unlock] {len(candidates)} candidate(s) prepared for an artifact "
+        f"(pan={'yes' if pan else 'no'}, dob={'yes' if dob else 'no'})"
     )
 
     # ------------------------------------------------------------------
@@ -431,11 +417,11 @@ def unlock_pdf(
 
     last_error = ""
     for i, pwd in enumerate(candidates, 1):
-        # Log masked password for debugging (first 2 + last 2 chars only)
-        pwd_masked = pwd[:2] + "***" + pwd[-2:] if len(pwd) > 4 else "***"
+        # Never log any portion of a generated password candidate.
         logger.debug(
-            "unlock_pdf candidate %d/%d for %s (pwd=%s)",
-            i, len(candidates), filename, pwd_masked,
+            "unlock_pdf candidate %d/%d for an artifact",
+            i,
+            len(candidates),
         )
         try:
             with pikepdf.open(file_path, password=pwd) as pdf:

@@ -302,4 +302,32 @@ Example: `D:\Taxify\Taxify\downloads\2\2024-25\AAACT1234A-26AS-2024_25.pdf`
 - **Portal passwords** are stored AES-256-GCM encrypted (key from `PORTAL_ENCRYPTION_KEY` env var)
 - **Access control**: Jobs are scoped to `user_id`. Polling a job you don't own returns 403.
 - **No credentials in logs**: PAN is partially redacted in auth logs
+- **Terminal diagnostics are value-free**: Input values and page URLs are omitted; only control metadata is recorded after terminal login failure.
 - **Browser cleanup**: Page and context are always closed in `finally` block — no orphan Chromium processes
+
+---
+
+## Phase 0 Runtime and Timing Baseline
+
+Start the backend with the standard, GIL-enabled Python interpreter:
+
+```powershell
+py -3.14 run.py
+```
+
+The launcher rejects free-threaded Python and reports missing `PyMuPDF` or `pikepdf` dependencies before the server starts.
+
+Automation logs now include credential-safe monotonic events:
+
+```text
+[Timing] context requested total=0.000s delta=0.000s
+[Timing] context ready total=1.250s delta=1.250s
+[Timing] login page requested total=1.251s delta=0.001s
+[Timing] login page ready total=3.500s delta=2.249s
+[Timing] PAN submitted total=6.000s delta=2.500s
+[Timing] SAM ready total=7.200s delta=1.200s
+[Timing] password submitted total=8.100s delta=0.900s
+[Timing] dashboard ready total=12.400s delta=4.300s
+```
+
+Timing labels come from a fixed allowlist and never include PAN, password, taxpayer name, portal response body, dynamic URL, or document contents. Alternative semantic selectors share one total elapsed deadline, preventing timeout multiplication when controls are absent.
