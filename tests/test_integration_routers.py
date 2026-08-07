@@ -16,7 +16,7 @@ from app.routers.clients import (
     update_client,
     get_decrypted_portal_password,
 )
-from app.routers.client_itr import get_client_itr, save_client_itr, validate_client_itr
+from app.routers.client_itr import get_client_itr, save_client_itr, validate_client_itr, download_client_itr_draft_json, generate_client_cbdt_json
 from app.routers.tax import compute_tax_summary
 from app.routers.dashboard import get_dashboard_stats
 
@@ -221,3 +221,194 @@ def test_portal_password_crypto_and_response(db, current_user):
     assert len(clients_list) == 1
     assert not hasattr(clients_list[0], "portal_password")
 
+
+# ---------------------------------------------------------------------------
+# Phase 0: Form preservation on save, ITR-3 block, and draft export safety
+# ---------------------------------------------------------------------------
+
+def _make_phase0_client(db, current_user):
+    client = Client(
+        user_id=current_user.id,
+        pan="EPPPG3078Q",
+        name="PhaseZero Tester",
+        email="phase0@test.com",
+        mobile="9999999999",
+        dob="1990-01-01",
+        aadhaar="999999999999",
+    )
+    db.add(client)
+    db.commit()
+    db.refresh(client)
+    return client
+
+
+def test_save_preserves_selected_form(db, current_user):
+    client = _make_phase0_client(db, current_user)
+    for form in ("ITR-1", "ITR-2", "ITR-3", "ITR-4"):
+        payload = {
+            "form": form,
+            "itrForm": form,
+            "basic": 500000,
+            "name": client.name,
+            "pan": client.pan,
+            "dob": client.dob,
+        }
+        save_client_itr(client_id=client.public_id, year="2026-27", payload=payload, current_user=current_user, db=db)
+        itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == "2026-27").first()
+        assert itr is not None, f"ITR row missing for {form}"
+        assert itr.itr_type == form, f"Saved {form} but stored {itr.itr_type}"
+
+
+def test_save_infers_itr4_when_business_data_and_no_form(db, current_user):
+    client = _make_phase0_client(db, current_user)
+    payload = {
+        "bizTurnover": 1000000,
+        "bizPresumptive": "44AD",
+        "basic": 500000,
+        "name": client.name,
+        "pan": client.pan,
+        "dob": client.dob,
+    }
+    save_client_itr(client_id=client.public_id, year="2026-27", payload=payload, current_user=current_user, db=db)
+    itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == "2026-27").first()
+    assert itr.itr_type == "ITR-4"
+
+
+def test_save_infers_itr1_when_no_business_data_and_no_form(db, current_user):
+    client = _make_phase0_client(db, current_user)
+    payload = {
+        "basic": 500000,
+        "interestSB": 10000,
+        "name": client.name,
+        "pan": client.pan,
+        "dob": client.dob,
+    }
+    save_client_itr(client_id=client.public_id, year="2026-27", payload=payload, current_user=current_user, db=db)
+    itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == "2026-27").first()
+    assert itr.itr_type == "ITR-1"
+
+
+def test_draft_json_download_blocked_for_itr3(db, current_user):
+    client = _make_phase0_client(db, current_user)
+    save_client_itr(
+        client_id=client.public_id,
+        year="2026-27",
+        payload={
+            "form": "ITR-3",
+            "itrForm": "ITR-3",
+            "basic": 500000,
+            "name": client.name,
+            "pan": client.pan,
+            "dob": client.dob,
+        },
+        current_user=current_user,
+        db=db,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        download_client_itr_draft_json(
+            client_id=client.public_id,
+            year="2026-27",
+            current_user=current_user,
+            db=db,
+        )
+    assert exc_info.value.status_code == 422
+
+
+def test_draft_json_download_allows_itr1(db, current_user):
+    client = _make_phase0_client(db, current_user)
+    payload = {
+        "form": "ITR-1",
+        "itrForm": "ITR-1",
+        "basic": 500000,
+        "name": client.name,
+        "pan": client.pan,
+        "dob": client.dob,
+    }
+    save_client_itr(client_id=client.public_id, year="2026-27", payload=payload, current_user=current_user, db=db)
+    response = download_client_itr_draft_json(
+        client_id=client.public_id,
+        year="2026-27",
+        current_user=current_user,
+        db=db,
+    )
+    assert response.status_code == 200
+    import json
+    data = json.loads(response.body)
+    assert data.get("form") == "ITR-1"
+    assert "Draft" in response.headers.get("content-disposition", "")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: canonical filing gateway
+# ---------------------------------------------------------------------------
+
+def test_cbdt_gateway_blocks_itr3(db, current_user):
+    """The canonical filing gateway must fail closed for unsupported ITR-3."""
+    client = _make_phase0_client(db, current_user)
+    save_client_itr(
+        client_id=client.public_id,
+        year="2026-27",
+        payload={
+            "form": "ITR-3",
+            "itrForm": "ITR-3",
+            "assessmentYear": "2026-27",
+            "basic": 500000,
+            "name": client.name,
+            "pan": client.pan,
+            "dob": client.dob,
+        },
+        current_user=current_user,
+        db=db,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        generate_client_cbdt_json(
+            client_id=client.public_id,
+            year="2026-27",
+            current_user=current_user,
+            db=db,
+        )
+    assert exc_info.value.status_code == 422
+    assert "ITR-3" in str(exc_info.value.detail)
+
+
+def test_cbdt_gateway_blocks_incomplete_itr2(db, current_user):
+    """ITR-2 export must fail closed until its canonical mapper is complete."""
+    client = _make_phase0_client(db, current_user)
+    save_client_itr(
+        client_id=client.public_id,
+        year="2026-27",
+        payload={
+            "form": "ITR-2",
+            "itrForm": "ITR-2",
+            "assessmentYear": "2026-27",
+            "basic": 500000,
+            "name": client.name,
+            "pan": client.pan,
+            "dob": client.dob,
+        },
+        current_user=current_user,
+        db=db,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        generate_client_cbdt_json(
+            client_id=client.public_id,
+            year="2026-27",
+            current_user=current_user,
+            db=db,
+        )
+    assert exc_info.value.status_code == 422
+    assert "ITR-2" in str(exc_info.value.detail)
+
+
+def test_filing_gateway_requires_form(db, current_user):
+    """The filing gateway must reject a saved draft with no recognized form."""
+    from app.engine.filing_gateway import FilingGatewayError, generate_filing_artifact
+
+    with pytest.raises(FilingGatewayError) as exc_info:
+        generate_filing_artifact(
+            flat_draft={"assessmentYear": "2026-27"},
+            user=current_user,
+            db=db,
+            include_official_json=True,
+        )
+    assert "Unsupported or missing ITR form" in str(exc_info.value)

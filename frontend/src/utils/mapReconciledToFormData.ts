@@ -193,9 +193,17 @@ function buildCapitalGainEvidenceEntry(
   const description = evidence.security_name || evidence.security_class || '';
   const isoDate = (raw: string | undefined): string => {
     if (!raw) return '';
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
     // Convert DD/MM/YYYY to YYYY-MM-DD
-    const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    return m ? `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}` : raw;
+    const m = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+    // Accept already-ISO YYYY-MM-DD.  Reject anything else (e.g. quarters
+    // like "Q2(Jul-Sep)" that the AIS reconciliation emits for SFT-18(Pur)
+    // purchase aggregates — those are not real dates and must not be passed
+    // through to the backend's strict ISO date parser.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    return '';
   };
 
   // For sale rows, attempt to derive the acquisition date by matching to
@@ -227,6 +235,7 @@ function buildCapitalGainEvidenceEntry(
       ? 'TRANSACTION' as const
       : 'EVIDENCE' as const,
     evidenceSide: evidence.side,  // 'PURCHASE' or 'SALE'
+    quarter: evidence.quarter || '',
     assetType: capitalGainAssetType(evidence),
     description,
     assetDescription: description,

@@ -25,6 +25,10 @@ import {
   updateTdsFromManager, updateWinningsFromManager, winningsToManager, type LegacyRecord,
   type ReturnEditorModel,
 } from '../domain/returns';
+import {
+  assessFormEligibility, collectEligibilityFacts, type FormRecommendation, type ItrForm,
+} from '../domain/returns';
+import { activeSchedules, blockingSchedules, type ScheduleStatus } from '../domain/returns';
 import ImportConfirmationModal from '../components/ImportConfirmationModal';
 import type { ReconciledResults } from '../api/itrAutomation';
 import { mapReconciledToFormData } from '../utils/mapReconciledToFormData';
@@ -150,6 +154,8 @@ export default function ITRComputationPage() {
   const [activeTab, setActiveTab] = useState(0);
   const [regime, setRegime] = useState<'old' | 'new'>('new');
   const [itrForm, setItrForm] = useState('ITR-1');
+  const [eligibility, setEligibility] = useState<FormRecommendation | null>(null);
+  const [formLockedByUser, setFormLockedByUser] = useState(false);
   const [showImportMenu, setShowImportMenu] = useState(false);
   const [clientData, setClientData] = useState<any>(null);
   const legacyClientId = clientData?.id as number | undefined;
@@ -385,6 +391,23 @@ export default function ITRComputationPage() {
 
   // Debounce timer ref for tax summary API calls
   const taxResultDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ── CBDT Eligibility (recomputed on every form edit) ────────────────────
+  const eligibilityResult = useMemo<FormRecommendation>(
+    () => assessFormEligibility(formData, backendTaxResult),
+    [formData, backendTaxResult],
+  );
+
+  useEffect(() => {
+    setEligibility(eligibilityResult);
+    // When not locked by user, follow the recommendation.
+    if (!formLockedByUser && eligibilityResult.recommendedForm !== itrForm) {
+      setItrForm(eligibilityResult.recommendedForm);
+      if (eligibilityResult.recommendedForm !== 'ITR-1') {
+        toast(`Auto‑recommended: ${eligibilityResult.recommendedForm} — ${eligibilityResult.reason}`, { icon: '🔍', duration: 4000 });
+      }
+    }
+  }, [eligibilityResult, formLockedByUser, itrForm]);
+
   const taxSummaryPayload = useMemo(
     () => ({ ...buildPhase1Payload(formData), form: itrForm }),
     [formData, itrForm],
@@ -517,38 +540,27 @@ export default function ITRComputationPage() {
     };
   }, [backendTaxResult]);
 
+  // ── Recomputation‑triggered eligibility update ──
+  // The eligibilityResult memo above already updates on every formData change.
+  // We also mark user‑locked when the form is explicitly set by the user
+  // (e.g. after confirming an import recommendation or switching manually).
+  // suppressAutoDetectRef prevents the first render from overwriting a saved form.
   useEffect(() => {
     if (suppressAutoDetectRef.current) {
       suppressAutoDetectRef.current = false;
       return;
     }
-    autoDetectITRForm();
+    // The eligibility engine automatically recommends the best form.
+    // No separate autoDetectITRForm call needed — the memo + effect above handle it.
   }, [
-    formData.basic, 
-    formData.bizTurnover, 
-    formData.bpNetProfit, 
-    formData.bizPresumptive,
-    formData.stcgPre, 
-    formData.stcgPost, 
-    formData.stcgOther,
-    formData.ltcgPre, 
-    formData.ltcgPost, 
-    formData.ltcgOther,
-    formData.vdaGains,
-    formData.grossRent, 
-    formData.interestFD, 
-    formData.dividends,
-    formData.isDirector,
-    formData.holdsUnlistedShares,
-    formData.agriculturalIncome,
-    formData.residentialStatus,
-    formData.bfLossHP,
-    formData.bfLossBusiness,
-    formData.bfLossSTCG,
-    formData.bfLossLTCG,
-    formData.capitalGainTransactions,
-    taxResult.capitalGainsSummary,
-    taxResult.capitalGainsIssues
+    formData.basic, formData.bizTurnover, formData.bpNetProfit, formData.bizPresumptive,
+    formData.stcgPre, formData.stcgPost, formData.stcgOther,
+    formData.ltcgPre, formData.ltcgPost, formData.ltcgOther,
+    formData.vdaGains, formData.grossRent, formData.interestFD, formData.dividends,
+    formData.isDirector, formData.holdsUnlistedShares, formData.agriculturalIncome,
+    formData.residentialStatus, formData.bfLossHP, formData.bfLossBusiness,
+    formData.bfLossSTCG, formData.bfLossLTCG, formData.capitalGainTransactions,
+    taxResult.capitalGainsSummary, taxResult.capitalGainsIssues,
   ]);
 
   const handleSave = async () => {
@@ -563,6 +575,12 @@ export default function ITRComputationPage() {
         return;
       }
       const dataToSave = buildPhase1Payload(currentSnapshot);
+      // The backend now persists the user's selected form exactly; never infer it.
+      dataToSave.form = itrForm;
+      dataToSave.itrForm = itrForm;
+      if (!dataToSave.filingSection) dataToSave.filingSection = '139(1)';
+      if (!dataToSave.residentialStatus) dataToSave.residentialStatus = 'ROR';
+      if (!dataToSave.employerCategory) dataToSave.employerCategory = 'OTH';
       
       // Clear legacy TDS/SAT fields
       if (dataToSave.tdsEntries && dataToSave.tdsEntries.length >= 0) {
@@ -635,8 +653,32 @@ export default function ITRComputationPage() {
     }
   };
 
-  const handleDownloadJson = () => {
-    itrApi.downloadJson(clientId, effectiveAssessmentYear).catch(err => toast.error(err.message));
+  const handleDownloadDraftJson = () => {
+    if (itrForm === 'ITR-3') {
+      toast.error('ITR-3 official export is not available yet. Save and validate the draft first.');
+      return;
+    }
+    itrApi.downloadDraftJson(clientId, effectiveAssessmentYear).catch(err => toast.error(err.message));
+  };
+
+  const handleGenerateCbdtJson = async () => {
+    if (itrForm === 'ITR-3') {
+      toast.error('ITR-3 CBDT export is not implemented yet.');
+      return;
+    }
+    try {
+      const currentEditor = editorRef.current;
+      const liveDraft = currentEditor ? { ...buildPhase1Payload(composeLegacyPayload(currentEditor)), form: itrForm, itrForm: itrForm } : undefined;
+      await itrApi.generateCbdtJson(clientId, effectiveAssessmentYear, liveDraft);
+      toast.success(`CBDT ${itrForm} JSON generated ✓`);
+    } catch (err: any) {
+      const message = err?.message || 'CBDT JSON generation failed';
+      const errors: string[] = Array.isArray(err?.errors) ? err.errors : [];
+      toast.error(
+        errors.length > 0 ? `${message}\n\n${errors.join('\n')}` : message,
+        { duration: 10000 }
+      );
+    }
   };
 
   const handleDownloadPdf = async () => {
@@ -748,6 +790,9 @@ export default function ITRComputationPage() {
       `${summary.interestEntries} interest, ` +
       `${summary.dividendEntries} dividend, ${summary.capitalGainsEntries} capital gains entries`
     );
+
+    // ── Reassess eligibility after import ────────────────────────────────
+    setFormLockedByUser(false);
 
     // Save to backend so form state persists
     itrApi.saveFormData(clientId, effectiveAssessmentYear, mergedImportData)
@@ -1472,31 +1517,58 @@ export default function ITRComputationPage() {
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <select
-              value={itrForm}
-              onChange={(e) => {
-                const newForm = e.target.value;
-                if (validateITRFormSelection(newForm)) {
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <select
+                value={itrForm}
+                onChange={(e) => {
+                  const newForm = e.target.value as ItrForm;
+                  const blockers = eligibility?.blockersByForm?.[newForm] ?? [];
+                  if (blockers.length > 0) {
+                    toast.error(
+                      `${newForm} has ${blockers.length} blocker(s):\n${blockers.join('\n')}`,
+                      { duration: 6000 },
+                    );
+                  }
+                  // Allow the switch anyway — blockers disable filing, not viewing.
                   setItrForm(newForm);
-                } else {
-                  // Revert to previous value if validation fails
-                  e.target.value = itrForm;
-                }
-              }}
-              style={{
-                padding: '6px 12px',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                fontSize: 13,
-                fontWeight: 500,
-                background: 'white'
-              }}
-            >
-              <option value="ITR-1">ITR-1</option>
-              <option value="ITR-2">ITR-2</option>
-              <option value="ITR-3">ITR-3</option>
-              <option value="ITR-4">ITR-4</option>
-            </select>
+                  setFormLockedByUser(true);
+                  if (eligibility && newForm === eligibility.recommendedForm) {
+                    toast.success(`Switched to recommended ${newForm}`);
+                  }
+                }}
+                style={{
+                  padding: '6px 12px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  background: 'white',
+                }}
+              >
+                {(['ITR-1', 'ITR-2', 'ITR-3', 'ITR-4'] as const).map((f) => (
+                  <option key={f} value={f}>
+                    {f}{eligibility?.recommendedForm === f ? ' ★' : ''}{eligibility?.blockersByForm?.[f]?.length ? ` (${eligibility.blockersByForm[f].length})` : ''}
+                  </option>
+                ))}
+              </select>
+              {eligibility && itrForm !== eligibility.recommendedForm && (
+                <button
+                  onClick={() => { setItrForm(eligibility.recommendedForm); setFormLockedByUser(false); }}
+                  title={`Switch to recommended ${eligibility.recommendedForm}`}
+                  style={{
+                    padding: '2px 8px',
+                    background: 'var(--gold)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 4,
+                    fontSize: 11,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Use {eligibility.recommendedForm}
+                </button>
+              )}
+            </div>
             <select
               value={regime}
               onChange={(e) => setRegime(e.target.value as 'old' | 'new')}
@@ -1714,7 +1786,8 @@ export default function ITRComputationPage() {
           </button>
 
           <button
-            onClick={handleDownloadJson}
+            onClick={handleDownloadDraftJson}
+            title={itrForm === 'ITR-3' ? 'ITR-3 CBDT export not yet available' : 'Download a draft data snapshot (not the official CBDT return)'}
             style={{
               padding: '6px 12px',
               background: 'var(--accent-blue)',
@@ -1722,11 +1795,31 @@ export default function ITRComputationPage() {
               border: 'none',
               borderRadius: 6,
               fontSize: 12,
-              cursor: 'pointer'
+              cursor: 'pointer',
+              opacity: itrForm === 'ITR-3' ? 0.55 : 1,
             }}
           >
-            JSON
+            {itrForm === 'ITR-3' ? 'JSON (Not Ready)' : 'Draft JSON'}
           </button>
+
+          {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (
+            <button
+              onClick={handleGenerateCbdtJson}
+              title="Generate and download the official CBDT ITD-compliant JSON (ITR-1/ITR-4)"
+              style={{
+                padding: '6px 12px',
+                background: 'var(--gold)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              CBDT JSON
+            </button>
+          )}
 
           <button
             onClick={handleDownloadPdf}
@@ -1819,6 +1912,82 @@ export default function ITRComputationPage() {
           </div>
         </div>
       )}
+
+    {/* ── Eligibility Banner (CBDT) ──────────────────────────────────── */}
+      {eligibility && (
+        <div style={{
+          marginBottom: 12,
+          padding: '10px 16px',
+          borderRadius: 8,
+          background: eligibility.blockers.length > 0 ? '#fef2f2' : '#f0fdf4',
+          border: `1px solid ${eligibility.blockers.length > 0 ? '#fecaca' : '#bbf7d0'}`,
+          fontSize: 13,
+          color: eligibility.blockers.length > 0 ? '#991b1b' : '#166534',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <strong>{eligibility.blockers.length > 0 ? '⚠️' : '✅'} Recommended: {eligibility.recommendedForm}</strong>
+              {' — '}{eligibility.reason}
+              {eligibility.blockers.length > 0 && (
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }}>
+                  {eligibility.blockers.map((b, i) => <li key={i}>{b}</li>)}
+                </ul>
+              )}
+            </div>
+            {formLockedByUser && (
+              <button
+                onClick={() => setFormLockedByUser(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  textDecoration: 'underline',
+                  padding: '2px 4px',
+                }}
+              >
+                Unlock
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Schedule Checklist (dynamic per form) ─────────────────────── */}
+      {eligibility && (() => {
+        const facts = collectEligibilityFacts(formData, backendTaxResult);
+        const schedules = activeSchedules(itrForm as ItrForm, facts);
+        if (schedules.length === 0) return null;
+        const blocking = new Set(blockingSchedules(itrForm as ItrForm, facts).map(s => s.id));
+        const statusColors: Record<ScheduleStatus, string> = {
+          'available': '#166534', 'partial': '#92400e', 'missing': '#991b1b',
+          'derived': '#6b7280', 'not-applicable': '#9ca3af', 'unavailable': '#9ca3af',
+        };
+        const statusBg: Record<ScheduleStatus, string> = {
+          'available': '#dcfce7', 'partial': '#fffbeb', 'missing': '#fef2f2',
+          'derived': '#f3f4f6', 'not-applicable': '#f3f4f6', 'unavailable': '#f3f4f6',
+        };
+        return (
+          <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 12 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: '#334155' }}>
+              Schedules for {itrForm} ({schedules.length})
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {schedules.map(({ schedule, status }) => (
+                <span key={schedule.id} style={{
+                  padding: '2px 8px', borderRadius: 4, fontSize: 11,
+                  color: statusColors[status], background: statusBg[status],
+                  border: `1px solid ${blocking.has(schedule.id) ? '#f87171' : 'transparent'}`,
+                  fontWeight: blocking.has(schedule.id) ? 600 : 400,
+                }} title={schedule.description}>
+                  {schedule.label}{blocking.has(schedule.id) ? ' ⚠' : ''}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{
         background: 'var(--navy)',

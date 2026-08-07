@@ -31,6 +31,7 @@ _ASSET_ALIASES = {
 }
 
 
+
 @dataclass(frozen=True)
 class Section112AIssue:
     """One structured evidence or eligibility failure."""
@@ -148,8 +149,34 @@ def compute_restricted_112a(raw_transactions: Iterable[dict[str, Any]]) -> Secti
             )
 
         def has_value(*keys: str) -> bool:
-            """Return whether at least one alias contains a non-empty value."""
-            return any(raw.get(key) is not None and raw.get(key) != "" for key in keys)
+            """Return whether at least one alias contains a non-empty, non-zero value.
+
+            A monetary value of 0 is treated as ABSENT so that a purchase-only
+            row (saleValue=0, actualCost=500000) is not misread as a completed
+            sale of ₹0 — which would fabricate a ₹5,00,000 capital loss.
+            """
+            for key in keys:
+                value = raw.get(key)
+                if value is None or value == "":
+                    continue
+                if isinstance(value, (int, float, Decimal)) and value == 0:
+                    continue
+                return True
+            return False
+
+        def _positive_amount(*keys: str) -> Decimal:
+            """Return the first positive monetary value among aliases, else 0."""
+            for key in keys:
+                value = raw.get(key)
+                if value is None or value == "":
+                    continue
+                try:
+                    parsed = Decimal(str(value))
+                except (ValueError, TypeError):
+                    continue
+                if parsed.is_finite() and parsed > 0:
+                    return parsed
+            return Decimal("0")
 
         # A sale-side AIS row becomes a completed taxable disposal once the user
         # supplies the missing purchase facts. Older drafts may still carry
@@ -159,38 +186,54 @@ def compute_restricted_112a(raw_transactions: Iterable[dict[str, Any]]) -> Secti
             raw.get("aisHoldingPeriod") or raw.get("ais_holding_period") or ""
         ).strip().upper()
         has_ais_long_term_classification = ais_holding_period.startswith("LONG")
+        # A completed sale requires a POSITIVE sale value.  A zero/missing
+        # saleValue with a positive actualCost is a purchase-only evidence row,
+        # not a disposal — treating it as a ₹0 sale fabricates a fake loss.
+        sale_amount = _positive_amount("sale_value", "saleValue", "saleCost", "fullValueOfConsideration")
+        cost_amount = _positive_amount("actual_cost", "actualCost", "purchaseCost", "costOfAcquisition")
+        has_positive_sale = sale_amount > 0
         is_completed_sale = (
             evidence_side == CapitalGainEvidenceSide.SALE.value
+            and has_positive_sale
             and (
                 has_value("acquisition_date", "acquisitionDate", "purchaseDate", "dateOfAcquisition")
                 or has_ais_long_term_classification
             )
             and has_value("transfer_date", "transferDate", "saleDate", "dateOfTransfer")
-            and has_value("actual_cost", "actualCost", "purchaseCost", "costOfAcquisition")
-            and has_value("sale_value", "saleValue", "saleCost", "fullValueOfConsideration")
+            and cost_amount > 0
+        )
+        # A manually-entered purchase-only row (no saleValue, positive cost) is
+        # evidence of a holding, not a completed disposal.  Treat it as evidence
+        # so it never produces a fabricated gain/loss.  This fixes the bug where
+        # a client with a ₹5,00,000 purchase and no sale was reported as having
+        # ₹4,99,975 LTCG 112A (the cost being read as a sale).
+        is_purchase_only_evidence = (
+            not is_completed_sale
+            and cost_amount > 0
+            and not has_positive_sale
         )
         is_imported_evidence = (
             not is_completed_sale
             and (
                 record_kind == CapitalGainRecordKind.EVIDENCE.value
                 or str(raw.get("importStatus") or "").upper() == "INCOMPLETE"
+                or is_purchase_only_evidence
             )
         )
         if is_imported_evidence:
             evidence_count += 1
             source_amount_raw = raw.get("importedGrossAmount")
             if source_amount_raw is None:
-                source_amount_raw = (
-                    raw.get("actualCost", raw.get("purchaseCost", 0))
-                    if evidence_side == "PURCHASE"
-                    else raw.get("saleValue", raw.get("saleCost", 0))
-                )
+                if evidence_side == "PURCHASE" or is_purchase_only_evidence:
+                    source_amount_raw = raw.get("actualCost", raw.get("purchaseCost", 0))
+                else:
+                    source_amount_raw = raw.get("saleValue", raw.get("saleCost", 0))
             try:
                 source_amount = Decimal(str(source_amount_raw or 0))
             except (ValueError, TypeError):
                 source_amount = Decimal("0")
             if source_amount.is_finite() and source_amount > 0:
-                if evidence_side == "PURCHASE":
+                if evidence_side == "PURCHASE" or is_purchase_only_evidence:
                     evidence_purchase_total += source_amount
                 elif evidence_side == "SALE":
                     evidence_sale_total += source_amount
@@ -222,7 +265,7 @@ def compute_restricted_112a(raw_transactions: Iterable[dict[str, Any]]) -> Secti
             issues.append(_issue(Section112AIssueCode.MISSING_ACQUISITION_DATE, "Acquisition date is required when AIS does not explicitly classify the disposal as long-term.", row_number, "purchaseDate"))
         if transaction.transfer_date is None:
             issues.append(_issue(Section112AIssueCode.MISSING_TRANSFER_DATE, "Transfer date is required.", row_number, "saleDate"))
-        if transaction.sale_value is None:
+        if transaction.sale_value is None or transaction.sale_value == 0:
             issues.append(_issue(Section112AIssueCode.MISSING_SALE_VALUE, "Full value of consideration is required.", row_number, "saleValue"))
         elif not transaction.sale_value.is_finite() or transaction.sale_value < 0:
             issues.append(_issue(Section112AIssueCode.INVALID_SALE_VALUE, "Sale value must be finite and non-negative.", row_number, "saleValue"))
@@ -355,3 +398,16 @@ def compute_restricted_112a(raw_transactions: Iterable[dict[str, Any]]) -> Secti
             "ITR-4": eligible,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Canonical alias — the single unified 112A entrypoint for ITR-1/ITR-4.
+# ---------------------------------------------------------------------------
+# ``compute_112a`` is the canonical name for all ITR-1/ITR-4 112A
+# computation.  It is the same function as ``compute_restricted_112a`` —
+# the two names express intent ("compute 112A" vs "restricted portfolio")
+# but guarantee a single implementation.  The ITR-2/ITR-3 per-scrip path
+# in ``app.engine.schedules.capital_gains`` is a *different*
+# responsibility (full Schedule CG with grandfathering, indexation, and
+# per-scrip detail) and must not be invoked from the ITR-1/4 pipeline.
+compute_112a = compute_restricted_112a

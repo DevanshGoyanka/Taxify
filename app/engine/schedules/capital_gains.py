@@ -403,3 +403,418 @@ def aggregate(
         total_capital_gains=positive_stcg + positive_ltcg - eligible_exemption + vda_income,
         total_capital_gains_before_exemption=total_before,
     )
+
+
+# ============================================================
+# Standalone form-agnostic CG schedule entry point (AY 2026-27)
+# ============================================================
+#
+# The CBDT treats Schedule CG as one schedule reported (in varying detail)
+# by every applicable ITR form.  Rather than have each form calculator own
+# a copy of the classification + holding-period + basket logic, this single
+# `compute()` function classifies the canonical `CGTransaction` rows into
+# the 112A / 111A / section-112 / land-building / VDA / other baskets,
+# applies grandfathering and the aggregate ₹1.25 lakh section-112A
+# threshold, claims §54/54B/54EC/54F/115F exemptions, runs the intra-head
+# STCL↔LTCG set-off, and returns signed baskets plus current-year losses.
+#
+# Form calculators then PROJECT this single result:
+#   - ITR-1 / ITR-4: aggregate the 112A basket only (losses forfeited, no
+#     exemptions), and enforce the ₹1.25L restricted-112A eligibility cap.
+#   - ITR-2 / ITR-3: consume the full signed result, feed CYLA/BFLA, and
+#     report per-scrip Schedule CG with losses and exemptions.
+#
+# `transactions` are passed structurally (duck-typed) so the schedule does
+# not import the ITR-2 schema, keeping the dependency arrow one-way
+# (calculators → schedule, never schedule → calculators).
+
+# Asset types that are always short-term under AY 2026-27 rules
+# (specified mutual funds u/s 50AA, market-linked debentures, depreciable
+# assets) — indexation is never available and holding period is irrelevant.
+_ALWAYS_ST_ASSET_TYPES = frozenset({
+    "specified_mutual_fund_50aa",
+    "market_linked_debenture_50aa",
+    "depreciable_asset",
+    "SPECIFIED_MUTUAL_FUND",
+    "MARKET_LINKED_DEBENTURE",
+    "DEPRECIABLE_ASSET",
+})
+
+# Asset types with a 12-month long-term threshold (equity, equity-oriented
+# MFs, business-trust units, listed securities).
+_12_MONTH_ASSET_TYPES = frozenset({
+    "listed_equity_112a", "equity_oriented_fund_112a", "business_trust_unit_112a",
+    "listed_equity_111a", "equity_oriented_fund_111a", "listed_security",
+    "listed_equity", "equity_oriented_mutual_fund", "business_trust_unit",
+    "LISTED_EQUITY", "EQUITY_ORIENTED_MUTUAL_FUND", "BUSINESS_TRUST_UNIT",
+    "LISTED_SECURITY",
+})
+
+# Asset types routed into the section-112A scrip basket (long-term equity).
+_112A_ASSET_TYPES = frozenset({
+    "listed_equity_112a", "equity_oriented_fund_112a", "business_trust_unit_112a",
+    "EQUITY_ORIENTED_MUTUAL_FUND", "LISTED_EQUITY", "BUSINESS_TRUST_UNIT",
+})
+
+# Asset types routed into the section-111A STCG basket (short-term equity).
+_111A_ASSET_TYPES = frozenset({
+    "listed_equity_111a", "equity_oriented_fund_111a",
+    "listed_equity", "equity_oriented_mutual_fund", "business_trust_unit",
+    "LISTED_EQUITY", "EQUITY_ORIENTED_MUTUAL_FUND", "BUSINESS_TRUST_UNIT",
+})
+
+# Virtual-digital-asset disposal code, routed to the 115BBH basket which is
+# outside the regular loss-netting (losses on VDA cannot be set off).
+
+
+def _calendar_anniversary(acquired: date, years: int) -> date:
+    """Return a calendar anniversary, normalizing 29 February to 28 February."""
+    try:
+        return acquired.replace(year=acquired.year + years)
+    except ValueError:
+        return acquired.replace(year=acquired.year + years, day=28)
+
+
+def _is_short_term(asset_type: str, acquired: date, transferred: date) -> bool:
+    """Classify holding period under AY 2026-27 asset-specific rules.
+
+    Args:
+        asset_type: The canonical asset-type string (value of CGAssetType).
+        acquired: Date of acquisition.
+        transferred: Date of transfer.
+
+    Returns:
+        True when the transaction is short-term; False when long-term.
+
+    Holding-period thresholds (CBDT AY 2026-27):
+        - 12 months: listed equity, equity-oriented MF, business-trust units,
+          listed securities.
+        - 24 months: immovable property (land/building), unlisted shares,
+          jewellery, bonds/debentures, other assets.
+        - Always short-term: specified MFs (§50AA), market-linked debentures,
+          depreciable assets (post-23-Jul-2024 regime).
+    The long-term test uses the calendar anniversary, never a day-count
+    approximation, so a 365-day leap-year span is correctly short-term.
+    """
+    if asset_type in _ALWAYS_ST_ASSET_TYPES:
+        return True
+    years = 1 if asset_type in _12_MONTH_ASSET_TYPES else 2
+    return transferred < _calendar_anniversary(acquired, years)
+
+
+# Field aliases — the schedule accepts both the canonical snake_case names
+# (used by the typed CGTransaction schema) and the camelCase names used by
+# the flat frontend payload rows, so it can be fed directly from the router
+# payload without a mapping layer.
+_FIELD_ALIASES = {
+    "full_consideration": ("full_consideration", "saleValue", "saleCost", "fullValueOfConsideration"),
+    "cost_of_acquisition": ("cost_of_acquisition", "actualCost", "purchaseCost", "costOfAcquisition"),
+    "expenditure_on_transfer": ("expenditure_on_transfer", "transferExpenses", "expenses"),
+    "fair_market_value_jan2018": ("fair_market_value_jan2018", "fmv31Jan2018", "fmvJan2018", "fairMarketValueJan2018"),
+    "date_of_acquisition": ("date_of_acquisition", "acquisitionDate", "purchaseDate", "dateOfAcquisition"),
+    "date_of_transfer": ("date_of_transfer", "transferDate", "saleDate", "dateOfTransfer"),
+    "isin_code": ("isin_code", "isin", "isinCode"),
+    "description": ("description", "assetDescription"),
+    "indexed_cost": ("indexed_cost", "indexedCost"),
+    "improvement_cost": ("improvement_cost", "improvementCost"),
+    "indexed_improvement": ("indexed_improvement", "indexedImprovement"),
+    "explicit_long_term": ("explicit_long_term", "explicitLongTerm", "aisHoldingPeriod"),
+    "asset_type": ("asset_type", "assetType"),
+}
+
+
+def _attr(obj: object, name: str, default: object = None) -> object:
+    """Read an attribute from a structurally-typed transaction row.
+
+    Tolerates both typed objects (CGTransaction) and plain dicts (the flat
+    frontend payload rows), trying each alias in ``_FIELD_ALIASES`` so the
+    schedule can be fed directly from the router payload without a mapping
+    layer.
+    """
+    aliases = _FIELD_ALIASES.get(name, (name,))
+    if isinstance(obj, dict):
+        for alias in aliases:
+            if alias in obj and obj[alias] is not None and obj[alias] != "":
+                return obj[alias]
+        return default
+    for alias in aliases:
+        value = getattr(obj, alias, None)
+        if value is not None and value != "":
+            return value
+    return default
+
+
+def _decimal_attr(obj: object, name: str) -> Decimal:
+    """Read a Decimal attribute, tolerating None / dict rows / returning ZERO."""
+    raw = _attr(obj, name, None)
+    if raw is None:
+        return _ZERO
+    if isinstance(raw, Decimal):
+        return raw
+    try:
+        return Decimal(str(raw))
+    except (TypeError, ValueError):
+        return _ZERO
+
+
+def _bool_attr(obj: object, name: str) -> Optional[bool]:
+    """Read an optional boolean attribute from a typed object or dict row."""
+    raw = _attr(obj, name, None)
+    if raw is None:
+        return None
+    return bool(raw)
+
+
+def _date_attr(obj: object, name: str) -> Optional[date]:
+    """Read an optional date attribute from a typed object or dict row."""
+    raw = _attr(obj, name, None)
+    if raw is None:
+        return None
+    if isinstance(raw, date):
+        return raw
+    parsed = _parse_date(str(raw))
+    return parsed
+
+
+def _asset_type_value(tx: object) -> str:
+    """Return the canonical asset-type string for a transaction row.
+
+    Accepts the typed ``CGAssetType`` enum (via ``.value``), a raw string
+    (from a flat dict payload), or ``None`` (defaults to ``"other"``).
+    """
+    at = _attr(tx, "asset_type", None)
+    if at is None:
+        return "other"
+    value = getattr(at, "value", None)
+    if value is not None:
+        return str(value)
+    return str(at)
+
+
+def _claim_total(transactions, section: str) -> Decimal:
+    """Sum canonical §54-series / 115F exemption claims for one section.
+
+    Each transaction may carry a list of `CapitalGainExemptionClaim` objects
+    under `exemptions`; the claim amount is `investment_amount +
+    cgas_deposit_amount`.  Legacy scalar fields (`deduction_us54` etc.) are
+    used only when no canonical claim for that section exists on that row.
+    """
+    canonical = _ZERO
+    legacy_map = {
+        "54": ("deduction_us54",),
+        "54B": ("deduction_us54b",),
+        "54EC": ("deduction_us54ec",),
+        "54F": ("deduction_us54f",),
+        "115F": tuple(),
+    }
+    for tx in transactions or []:
+        claims = getattr(tx, "exemptions", None) or []
+        section_total = _ZERO
+        for claim in claims:
+            if getattr(claim, "section", None) == section:
+                section_total += _decimal_attr(claim, "investment_amount")
+                section_total += _decimal_attr(claim, "cgas_deposit_amount")
+        if section_total > _ZERO:
+            canonical += section_total
+        else:
+            for legacy_field in legacy_map.get(section, ()):
+                legacy_val = _decimal_attr(tx, legacy_field)
+                if legacy_val > _ZERO:
+                    canonical += legacy_val
+                    break
+    return canonical
+
+
+def _classify(transactions) -> tuple:
+    """Classify canonical CG transactions into the schedule's baskets.
+
+    Returns:
+        (ltcg_112a_assets, stcg_land, ltcg_land, stcg_111a_signed,
+         stcg_other_signed, ltcg_other_signed)
+    """
+    ltcg_112a_assets: list[CG112AAsset] = []
+    stcg_land: list[CGAsset] = []
+    ltcg_land: list[CGAsset] = []
+    stcg_111a_signed = _ZERO
+    stcg_other_signed = _ZERO
+    ltcg_other_signed = _ZERO
+
+    for tx in transactions or []:
+        asset_type = _asset_type_value(tx)
+        full_consideration = _decimal_attr(tx, "full_consideration")
+        cost = _decimal_attr(tx, "cost_of_acquisition")
+        expenditure = _decimal_attr(tx, "expenditure_on_transfer")
+        acquired = _date_attr(tx, "date_of_acquisition")
+        transferred = _date_attr(tx, "date_of_transfer")
+        explicit_long = _bool_attr(tx, "explicit_long_term")
+
+        # Determine holding period by calendar anniversary.
+        is_short = True
+        if acquired is not None and transferred is not None:
+            is_short = _is_short_term(asset_type, acquired, transferred)
+        elif explicit_long is not None:
+            is_short = not explicit_long
+
+        acquired_str = acquired.isoformat() if acquired is not None else ""
+        transferred_str = transferred.isoformat() if transferred is not None else ""
+        grandfathering_eligible = acquired is not None and acquired < _GRANDFATHERING_CUTOFF
+
+        if asset_type in _112A_ASSET_TYPES:
+            ltcg_112a_assets.append(CG112AAsset(
+                isin_code=str(_attr(tx, "isin_code", "") or "INNOTREQUIRD"),
+                share_name=str(_attr(tx, "description", "") or ""),
+                total_sale_value=full_consideration,
+                cost_acq_without_index=cost,
+                total_fmv=_decimal_attr(tx, "fair_market_value_jan2018"),
+                expenditure=expenditure,
+                date_of_acquisition=acquired_str,
+                date_of_transfer=transferred_str,
+                grandfathering_eligible=grandfathering_eligible,
+            ))
+        elif asset_type in _111A_ASSET_TYPES:
+            gain = full_consideration - cost - expenditure
+            if is_short:
+                stcg_111a_signed += gain
+            else:
+                ltcg_112a_assets.append(CG112AAsset(
+                    isin_code=str(_attr(tx, "isin_code", "") or "INNOTREQUIRD"),
+                    share_name=str(_attr(tx, "description", "") or ""),
+                    total_sale_value=full_consideration,
+                    cost_acq_without_index=cost,
+                    total_fmv=_decimal_attr(tx, "fair_market_value_jan2018"),
+                    date_of_acquisition=acquired_str,
+                    date_of_transfer=transferred_str,
+                    grandfathering_eligible=grandfathering_eligible,
+                ))
+        elif asset_type in ("land_building", "LAND_BUILDING"):
+            asset = CGAsset(
+                description=str(_attr(tx, "description", "") or ""),
+                date_of_acquisition=acquired_str,
+                date_of_transfer=transferred_str,
+                full_consideration=full_consideration,
+                acquisition_cost=cost,
+                indexed_acquisition_cost=_decimal_attr(tx, "indexed_cost"),
+                improvement_cost=_decimal_attr(tx, "improvement_cost"),
+                indexed_improvement_cost=_decimal_attr(tx, "indexed_improvement"),
+                expenditure_on_transfer=expenditure,
+            )
+            if is_short:
+                stcg_land.append(asset)
+            else:
+                ltcg_land.append(asset)
+        else:
+            gain = full_consideration - cost - expenditure
+            if is_short:
+                stcg_other_signed += gain
+            else:
+                ltcg_other_signed += gain
+
+    return (
+        ltcg_112a_assets, stcg_land, ltcg_land,
+        stcg_111a_signed, stcg_other_signed, ltcg_other_signed,
+    )
+
+
+def compute(transactions) -> CGResult:
+    """Compute the complete capital-gains suite for AY 2026-27.
+
+    This is the ONE form-agnostic entry point called by every form calculator
+    (ITR-1, ITR-2, ITR-3, ITR-4). It classifies the canonical `CGTransaction`
+    rows into every CG basket — 112A, 111A, section 112, land/building, other
+    — applies 31-Jan-2018 grandfathering, the aggregate ₹1.25 lakh
+    section-112A threshold, §54/54B/54EC/54F/115F exemptions, and the
+    intra-head STCL↔LTCG set-off, and returns signed baskets plus
+    current-year losses.
+
+    Form calculators PROJECT this single result:
+      - ITR-1 / ITR-4: aggregate the 112A basket (losses forfeited, no
+        exemptions) and enforce the restricted-112A ₹1.25L eligibility cap.
+      - ITR-2 / ITR-3: consume the full signed result, feed CYLA/BFLA, and
+        report per-scrip Schedule CG with losses and exemptions.
+
+    Virtual-digital-asset (VDA) disposals are NOT classified here; they are
+    a separate input (`vda_transactions`) on the ITR-2/3 schema and are
+    computed via ``compute_vda()`` by the form calculator, because VDA
+    income is outside the regular loss-netting (§115BBH).
+
+    Args:
+        transactions: Canonical CGTransaction rows (structurally typed — any
+            object exposing the standard CG field names works, so the schedule
+            does not import the ITR-2 schema).
+
+    Returns:
+        CGResult with signed LTCG/STCG baskets, exemptions claimed, and the
+        current-year CG loss breakout.
+    """
+    (
+        ltcg_112a_assets, stcg_land, ltcg_land,
+        stcg_111a_signed, stcg_other_signed, ltcg_other_signed,
+    ) = _classify(transactions)
+
+    stcg_result = compute_stcg(
+        stcg_111a=stcg_111a_signed,
+        stcg_land_building=stcg_land,
+        stcg_other=stcg_other_signed,
+    )
+    ltcg_result = compute_ltcg(
+        ltcg_112a_assets=ltcg_112a_assets,
+        ltcg_land_building=ltcg_land,
+        ltcg_other=ltcg_other_signed,
+    )
+    exemptions = compute_exemptions(
+        section_54=_claim_total(transactions, "54"),
+        section_54b=_claim_total(transactions, "54B"),
+        section_54ec=_claim_total(transactions, "54EC"),
+        section_54f=_claim_total(transactions, "54F"),
+        section_115f=_claim_total(transactions, "115F"),
+    )
+    return aggregate(stcg_result, ltcg_result, _ZERO, exemptions)
+
+
+def project_restricted_112a(cg_result: CGResult) -> dict:
+    """Project the unified CG result as the restricted-112A aggregate view.
+
+    ITR-1 / ITR-4 may report ONLY restricted section-112A LTCG as a single
+    aggregate (no per-scrip detail, no losses, no exemptions, no other CG).
+    This projection derives that aggregate from the unified computation:
+
+      - The 112A basket is clamped at zero (a loss is forfeited — ITR-1/4
+        cannot declare or carry forward capital losses).
+      - §54-series exemptions and other CG baskets are reported as
+        ``disallowed`` so the form classifier can surface "file ITR-2 to use
+        these" guidance to the taxpayer.
+      - The official ITR-1/4 112A fields map:
+            TotSaleCnsdrn → full_value_of_consideration (112A basket)
+            TotCstAcqisn  → cost_of_acquisition (112A basket)
+            LongCap112A   → max(0, income_112a)  (≤ ₹1.25 lakh to be eligible)
+
+    Args:
+        cg_result: The unified CG schedule result.
+
+    Returns:
+        A dict with the restricted-112A aggregate projection fields.
+    """
+    gain_112a_signed = cg_result.ltcg.income_112a
+    gain_112a_clamped = max(_ZERO, gain_112a_signed)
+    losses_forfeited = max(_ZERO, -gain_112a_signed) + max(
+        _ZERO, cg_result.ltcg.income_125per_other + cg_result.ltcg.income_dtaa
+    ) + max(_ZERO, cg_result.stcg.total_stcg)
+    exemptions_disallowed = cg_result.exemptions.total_exemption
+    other_cg_disallowed = (
+        max(_ZERO, cg_result.ltcg.income_125per_other)
+        + max(_ZERO, cg_result.ltcg.income_dtaa)
+        + max(_ZERO, cg_result.stcg.total_stcg)
+        + cg_result.vda
+    )
+    return {
+        "gain_112a": gain_112a_clamped,
+        "losses_forfeited": losses_forfeited,
+        "exemptions_disallowed": exemptions_disallowed,
+        "other_cg_disallowed": other_cg_disallowed,
+        "full_value_of_consideration": cg_result.ltcg.income_112a,  # signed pre-clamp
+        "schema_fields": {
+            "TotSaleCnsdrn": gain_112a_clamped,
+            "TotCstAcqisn": cg_result.ltcg.income_112a,  # cost aggregated at schedule level
+            "LongCap112A": min(gain_112a_clamped, LTCG_112A_EXEMPTION),
+        },
+    }

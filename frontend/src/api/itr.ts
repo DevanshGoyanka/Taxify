@@ -50,6 +50,56 @@ export const itrApi = {
     const { data } = await axiosInstance.post(`/clients/${clientId}/itr/${year}/validate`, formData);
     return data as { valid: boolean; errors: string[]; warnings: string[] };
   },
+  downloadDraftJson: async (clientId: string, year: string) => {
+    const res = await axiosInstance.get(`/clients/${clientId}/itr/${year}/draft-json`, { responseType: 'blob' });
+    const url = URL.createObjectURL(new Blob([res.data]));
+    const a = document.createElement('a');
+    a.href = url; a.download = `Taxify_${clientId}_Draft_${year}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  },
+  /**
+   * Generate and download official CBDT ITD-compliant JSON via the canonical
+   * filing gateway (draft → typed input → compute → validate → build → schema check).
+   * Supported forms: ITR-1, ITR-4.  ITR-2 and ITR-3 return 422.
+   */
+  generateCbdtJson: async (clientId: string, year: string, liveDraft?: any) => {
+    let res;
+    try {
+      res = await axiosInstance.post(`/clients/${clientId}/itr/${year}/generate-cbdt-json`, liveDraft ?? {}, { responseType: 'blob' });
+    } catch (err: any) {
+      // axios may reject non-2xx; the error body is a Blob for blob requests.
+      const blob = err?.response?.data;
+      if (blob instanceof Blob) {
+        const text = await blob.text();
+        let parsed: any = null;
+        try { parsed = JSON.parse(text); } catch { parsed = { message: text }; }
+        const detail = parsed?.detail ?? parsed;
+        const message = typeof detail === 'object' ? detail.message : (typeof detail === 'string' ? detail : 'CBDT JSON generation failed');
+        const errors = typeof detail === 'object' ? detail.errors : [];
+        const wrapped: any = new Error(message);
+        wrapped.errors = errors;
+        throw wrapped;
+      }
+      throw err;
+    }
+    // Defensive: status 422 with a JSON-typed Blob (non-throwing path).
+    if (res.data instanceof Blob && res.data.type.includes('json')) {
+      const text = await res.data.text();
+      let parsed: any = null;
+      try { parsed = JSON.parse(text); } catch { parsed = { message: text }; }
+      const detail = parsed?.detail ?? parsed;
+      const message = typeof detail === 'object' ? detail.message : (typeof detail === 'string' ? detail : 'CBDT JSON generation failed');
+      const errors = typeof detail === 'object' ? detail.errors : [];
+      throw Object.assign(new Error(message), { errors });
+    }
+    const url = URL.createObjectURL(new Blob([res.data]));
+    const a = document.createElement('a');
+    const formPrefix = res.headers?.['x-cbdt-computation-status'] === 'PROVISIONAL_COMMON_INCOME_PREVIEW' ? 'Provisional_' : '';
+    a.href = url; a.download = `CBDT_${formPrefix}${clientId}_${year}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  },
   downloadJson: async (clientId: string, year: string) => {
     const res = await axiosInstance.get(`/clients/${clientId}/itr/${year}/download`, { responseType: 'blob' });
     const url = URL.createObjectURL(new Blob([res.data]));

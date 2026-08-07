@@ -174,6 +174,10 @@ class CapitalGainEvidence:
     reporting_entity_pan: str
     account_id: str = ""
     transaction_date: str = ""
+    # SFT-18(Pur)/SFT-17(Pur) purchase aggregates carry no transaction date;
+    # instead the AIS reports a quarter string e.g. "Q2(Jul-Sep)".  Preserved
+    # verbatim so the UI can render it alongside an editable date input.
+    quarter: str = ""
     security_class: str = ""
     security_name: str = ""
     security_identifier: str = ""
@@ -542,6 +546,7 @@ def _extract_capital_gain_ledger(ais: dict, tis: dict) -> tuple[list[CapitalGain
                         reporting_entity_pan=pan,
                         account_id=client_id,
                         transaction_date=parsed.get("quarter", ""),
+                        quarter=parsed.get("quarter", ""),
                         security_name=amc_name,
                         amount=purchase_amount,
                         status=status,
@@ -560,6 +565,7 @@ def _extract_capital_gain_ledger(ais: dict, tis: dict) -> tuple[list[CapitalGain
                         side="SALE",
                         category="sale of securities and units of mutual fund",
                         transaction_date=parsed.get("quarter", ""),
+                        quarter=parsed.get("quarter", ""),
                         information_code=code,
                         summary_sr_no=summary_sr,
                         detail_sr_no=detail_sr,
@@ -1166,6 +1172,7 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
                 "reporting_entity_pan": item.reporting_entity_pan,
                 "account_id": item.account_id,
                 "transaction_date": item.transaction_date,
+                "quarter": item.quarter,
                 "security_class": item.security_class,
                 "security_name": item.security_name,
                 "security_identifier": item.security_identifier,

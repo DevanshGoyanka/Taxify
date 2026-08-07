@@ -39,6 +39,8 @@ export interface CapitalGainTransaction {
   section?: string;
   /** "PURCHASE" or "SALE" — set by AIS importer */
   evidenceSide?: string;
+  /** AIS-reported quarter for SFT-18(Pur) purchase aggregates, e.g. "Q2(Jul-Sep)". */
+  quarter?: string;
   [key: string]: unknown;
 }
 
@@ -160,6 +162,16 @@ export const CapitalGainsEntryManager: React.FC<CapitalGainsEntryManagerProps> =
   const updateBoth = useCallback((index: number, canonical: keyof CapitalGainTransaction, legacy: keyof CapitalGainTransaction, value: unknown): void => {
     update(index, { [canonical]: value, [legacy]: value });
   }, [update]);
+  // Updater for purchase reference rows (filtered purchaseRefEntries array).
+  const updatePurchase = useCallback((purchaseIndex: number, patch: Partial<CapitalGainTransaction>): void => {
+    const purchaseEntry = purchaseRefEntries[purchaseIndex];
+    const fullIndex = entries.indexOf(purchaseEntry);
+    if (fullIndex === -1) return;
+    onChange(entries.map((entry, row) => row === fullIndex ? { ...entry, ...patch } : entry));
+  }, [entries, purchaseRefEntries, onChange]);
+  const updatePurchaseBoth = useCallback((index: number, canonical: keyof CapitalGainTransaction, legacy: keyof CapitalGainTransaction, value: unknown): void => {
+    updatePurchase(index, { [canonical]: value, [legacy]: value });
+  }, [updatePurchase]);
 
   const addEntry = useCallback((): void => {
     const id = makeId();
@@ -356,17 +368,24 @@ export const CapitalGainsEntryManager: React.FC<CapitalGainsEntryManagerProps> =
               const cost = Number(entry.actualCost ?? entry.purchaseCost ?? 0);
               const desc = String(entry.description ?? entry.assetDescription ?? '');
               const sec = String(entry.section ?? '');
+              const quarter = String(entry.quarter ?? '');
+              const acqDate = valueOf(entry, 'acquisitionDate', 'purchaseDate', '');
               return (
                 <div key={entry.id ?? idx} style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   padding: '8px 10px', background: 'white', border: '1px solid #e5e7eb',
                   borderRadius: 6, fontSize: 12,
+                  display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center',
                 }}>
                   <div>
                     {sec && <span style={{ marginRight: 8, fontSize: 10, color: '#6b7280', background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>{sec}</span>}
+                    {quarter && <span style={{ marginRight: 8, fontSize: 10, color: '#1e3a8a', background: '#dbeafe', padding: '1px 6px', borderRadius: 3, fontWeight: 600 }} title="AIS-reported quarter (SFT-18(Pur) has no transaction date)">{quarter}</span>}
                     <span style={{ fontWeight: 500 }}>{desc || 'Unnamed fund'}</span>
                   </div>
-                  <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                    <label style={{ display: 'grid', gap: 2, fontSize: 11, color: '#374151' }}>
+                      <span style={{ fontSize: 10, color: '#6b7280' }}>Acquisition date{quarter ? ' (override quarter)' : ''}</span>
+                      <input type="date" value={String(acqDate)} onChange={(e) => updatePurchaseBoth(idx, 'acquisitionDate', 'purchaseDate', e.target.value)} style={inp} />
+                    </label>
                     <span style={{ color: '#374151' }}>Cost: <strong>\u20b9{cost.toLocaleString('en-IN')}</strong></span>
                     <button type="button" onClick={() => removeEntry(entry)} style={{ border: 0, background: 'transparent', color: '#dc2626', cursor: 'pointer', fontSize: 11 }}>Remove</button>
                   </div>

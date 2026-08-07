@@ -10,3 +10,5 @@ sqlalchemy
 python-dotenv
 bcrypt>=4.0.0
 python-jose[cryptography]
+PyMuPDF>=1.24.0
+pikepdf>=9.0.0

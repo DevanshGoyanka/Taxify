@@ -106,16 +106,33 @@ def _records(payload: dict, key: str) -> list[dict]:
 
 
 def _date(value: object, field_name: str) -> Optional[datetime.date]:
-    """Parse an optional ISO date or reject an invalid date value."""
+    """Parse an optional ISO date.
+
+    Accepts ``YYYY-MM-DD`` and ``DD/MM/YYYY`` (the two formats the AIS
+    reconciliation and the frontend emit).  Non-date placeholders such as
+    the SFT-18(Pur) quarter string ``"Q2(Jul-Sep)"`` resolve to ``None``
+    rather than aborting the whole computation — a single bad date in one
+    evidence row must not prevent the return from being prepared.
+    """
     if value is None or value == "":
         return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    # ISO: YYYY-MM-DD
     try:
-        return datetime.date.fromisoformat(str(value))
+        return datetime.date.fromisoformat(raw)
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"{field_name} must be an ISO date (YYYY-MM-DD)",
-        )
+        pass
+    # DD/MM/YYYY → YYYY-MM-DD
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
+    if m:
+        try:
+            return datetime.date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            return None
+    # Unparseable placeholder (e.g. quarter) — degrade gracefully.
+    return None
 
 
 @router.post("/tax-summary/compute")
@@ -208,6 +225,21 @@ def _compute_itr2_from_flat_payload(
 
     cg_transactions: list[CGTx] = []
     for row in capital_gain_rows:
+        # AIS SFT-18(Pur) purchase-only evidence rows are reference data:
+        # they carry a quarter (e.g. "Q2(Jul-Sep)") in place of a real
+        # transaction date and have no sale consideration.  They are not
+        # disposals to report in ITR-2 Schedule CG, so skip them here.
+        # The reconciled purchase totals are already reflected in the
+        # restricted-112A cost-of-acquisition aggregates computed above.
+        side = str(row.get("evidenceSide", "")).upper()
+        sale_value = _first(row, "saleValue", "saleCost", "fullValueOfConsideration", default=0)
+        is_purchase_only = side == "PURCHASE" or (
+            _money(sale_value) == 0
+            and bool(row.get("quarter"))
+        )
+        if is_purchase_only:
+            continue
+
         raw_asset = str(row.get("assetType", "other")).upper()
         mapped = _ASSET_TYPE_MAP.get(raw_asset, raw_asset.lower())
         try:
@@ -908,6 +940,13 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         other_sources_income=os_input,
         deductions_chapter6a=ded_input,
         capital_gains=cg_input,
+        # Pass the canonical CG transactions through to every form calculator
+        # so ITR-1/4 can run the standalone CG schedule and project the
+        # restricted-112A view (surfacing losses-forfeited / other-CG-
+        # disallowed for form-eligibility guidance). Purchase-only evidence
+        # rows are filtered out at the ITR-2 builder; for ITR-1/4 they are
+        # harmless because the schedule ignores zero-consideration rows.
+        cg_transactions=capital_gain_rows if capital_gain_rows else None,
         tds1_entries=tds1_entries or None,
         tds2_entries=tds2_entries or None,
         tcs_entries=tcs_entries or None,

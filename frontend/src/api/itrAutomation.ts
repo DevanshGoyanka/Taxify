@@ -76,6 +76,8 @@ export interface CapitalGainEvidence {
   reporting_entity_pan?: string;
   account_id?: string;
   transaction_date?: string;
+  /** AIS-reported quarter for SFT-18(Pur) purchase aggregates, e.g. "Q2(Jul-Sep)". */
+  quarter?: string;
   security_class?: string;
   security_name?: string;
   security_identifier?: string;

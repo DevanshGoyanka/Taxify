@@ -47,12 +47,20 @@ def save_client_itr(
         
     itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == year).first()
     
-    # Determine ITR Form type
-    # If business turnover/profit is present, or a presumptive scheme is selected, it's ITR-4, else ITR-1
-    biz_turnover = payload.get("bizTurnover", 0)
-    bp_profit = payload.get("bpNetProfit", 0)
-    is_itr4 = (biz_turnover and float(biz_turnover) > 0) or (bp_profit and float(bp_profit) > 0)
-    itr_type = "ITR-4" if is_itr4 else "ITR-1"
+    selected_form = str(payload.get("form", payload.get("itrForm", ""))).strip().upper()
+    accepted_forms = {"ITR-1", "ITR-2", "ITR-3", "ITR-4"}
+    if selected_form in accepted_forms:
+        # Persist the taxpayer's selected form exactly. Eligibility and filing
+        # validation belong to their dedicated pipelines; inferring a form from
+        # a couple of business scalars corrupts valid ITR-2 and ITR-3 drafts.
+        itr_type = selected_form
+    else:
+        # Legacy/fallback: infer from business activity for payloads that
+        # predate explicit form selection (backwards compatibility).
+        biz_turnover = payload.get("bizTurnover", 0)
+        bp_profit = payload.get("bpNetProfit", 0)
+        is_itr4 = (biz_turnover and float(biz_turnover) > 0) or (bp_profit and float(bp_profit) > 0)
+        itr_type = "ITR-4" if is_itr4 else "ITR-1"
     
     if not itr:
         itr = ClientITR(
@@ -138,30 +146,113 @@ def validate_client_itr(
         "warnings": warnings,
     }
 
-@router.get("/{year}/download")
-def download_client_itr_json(
+@router.get("/{year}/draft-json")
+def download_client_itr_draft_json(
     client_id: str,
     year: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Download the stored ITR form data as JSON.
+    """Download the stored ITR form data as a draft JSON.
 
-    The stored ``form_data`` blob is returned as-is.  Generation of the
-    official CBDT ITD-compliant JSON is handled by the canonical
-    ``/itr1/compute-json`` (or ``/itr4/compute-json``) endpoint, which runs
-    the typed engine and ``build_itr1_json``.  This legacy endpoint must not
-    emit a hand-rolled CBDT structure that diverges from the official schema.
+    This is explicitly a draft/data snapshot, not an official CBDT return.
+    Official CBDT ITD-compliant JSON is produced by the form-specific
+    ``/itrN/compute-json`` endpoints.
     """
     client = resolve_owned_client(client_id, current_user.id, db)
 
     itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == year).first()
     data = json.loads(itr.form_data) if itr else {}
 
+    form = str(data.get("form", data.get("itrForm", ""))).strip().upper()
+    if form == "ITR-3":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ITR-3 draft export is not supported until ITR-3 filing is implemented.",
+        )
+
+    filename_suffix = f"Draft_{year}" if form != "ITR-3" else f"ITR3_Draft_{year}"
+
     return Response(
         content=json.dumps(data, indent=2, default=str),
         media_type="application/json",
-        headers={"Content-Disposition": f"attachment; filename=ITR_{client.pan}_{year}.json"},
+        headers={"Content-Disposition": f'attachment; filename=Taxify_{client.pan}_{filename_suffix}.json'},
+    )
+
+
+@router.post("/{year}/generate-cbdt-json")
+def generate_client_cbdt_json(
+    client_id: str,
+    year: str,
+    payload: dict | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Generate official CBDT ITD-compliant JSON via the canonical filing gateway.
+
+    This endpoint consumes the current live draft (POST body) or falls back
+    to the persisted form_data.  It then runs:
+
+      draft → typed input → compute → validate → build JSON → schema check
+
+    Returns the official CBDT JSON for download, or 422 with actionable
+    errors if the pipeline cannot produce a valid artifact.
+
+    Supported forms: ITR-1, ITR-4.
+    Blocked forms: ITR-2, ITR-3 (require dedicated canonical mappers).
+    """
+    client = resolve_owned_client(client_id, current_user.id, db)
+
+    from app.engine.filing_gateway import generate_filing_artifact, FilingGatewayError
+
+    import json as _json
+
+    # The frontend sends the current live editor snapshot as POST body.
+    # When absent, fall back to the persisted form_data.
+    if payload is None or not payload:
+        itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == year).first()
+        flat_draft = _json.loads(itr.form_data) if itr else {}
+    else:
+        flat_draft = payload
+
+    flat_draft.setdefault("assessmentYear", year or "2026-27")
+
+    try:
+        result = generate_filing_artifact(
+            flat_draft=flat_draft,
+            user=current_user,
+            db=db,
+            include_official_json=True,
+        )
+    except FilingGatewayError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": str(exc),
+                "errors": exc.errors,
+            },
+        )
+
+    if not result.has_official_json:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "The filing gateway did not produce official JSON.",
+                "errors": ["No official JSON was generated."],
+            },
+        )
+
+    form_file_prefix = result.form.replace("-", "")
+    content = _json.dumps(result.official_json, indent=2, default=str)
+
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f"attachment; filename=CBDT-{form_file_prefix}_{client.pan}_{year}.json",
+            "X-CBDT-Computation-Status": result.computation_status,
+            "X-CBDT-Schema-Valid": "true" if not result.validation_errors else "false",
+        },
     )
 
 @router.get("/{year}/download-pdf")

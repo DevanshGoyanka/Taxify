@@ -260,7 +260,45 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     # Capital Gains (112A only for ITR-1)
     cg_112a_income = Decimal("0")
     cg_112a_tax = Decimal("0")
-    if input_data.capital_gains:
+    if input_data.cg_transactions:
+        # Standalone CG schedule runs the complete suite (112A / 111A /
+        # section-112 / land-building / other) with grandfathering and the
+        # ₹1.25L aggregate threshold. ITR-1 then projects the restricted-112A
+        # aggregate view: only the 112A basket is reportable, losses are
+        # forfeited, and exemptions/other CG are disallowed (the form
+        # classifier surfaces "file ITR-2" guidance).
+        from app.engine.schedules.capital_gains import (
+            compute as _compute_cg_schedule,
+            project_restricted_112a,
+        )
+        cg_result = _compute_cg_schedule(input_data.cg_transactions)
+        projection = project_restricted_112a(cg_result)
+        result.schedules["capital_gains_unified"] = cg_result
+        result.schedules["capital_gains_projection"] = projection
+        gain_112a = projection["gain_112a"]
+        if gain_112a > LTCG_112A_EXEMPTION:
+            result.errors.append(
+                f"Ineligible for ITR-1: LTCG u/s 112A of Rs {gain_112a} "
+                f"exceeds Rs {LTCG_112A_EXEMPTION} limit. File ITR-2."
+            )
+            return result
+        if projection["other_cg_disallowed"] > 0:
+            result.errors.append(
+                "Ineligible for ITR-1: capital gains outside restricted "
+                "Section 112A are present. File ITR-2 or ITR-3."
+            )
+            return result
+        if projection["exemptions_disallowed"] > 0:
+            result.errors.append(
+                "Ineligible for ITR-1: §54/54B/54EC/54F exemption claims "
+                "require Schedule CG. File ITR-2 or ITR-3."
+            )
+            return result
+        entry = compute_112a(gain_112a)
+        cg_112a_income = entry.net_income
+        cg_112a_tax = entry.tax_amount
+        result.schedules["capital_gains_112a"] = entry
+    elif input_data.capital_gains:
         cg = input_data.capital_gains
         # Eligibility check: LTCG 112A cannot exceed Rs 1.25 lakh for ITR-1
         if cg.ltcg_112a > LTCG_112A_EXEMPTION:

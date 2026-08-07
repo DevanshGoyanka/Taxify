@@ -377,51 +377,64 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     r.schedules["os"] = os
 
     # ── 2. Capital Gains ─────────────────────────────────────────────────────
-    (
-        ltcg_112a_assets,
-        stcg_land,
-        ltcg_land,
-        stcg_111a_signed,
-        stcg_other_signed,
-        ltcg_other_signed,
-    ) = _classify_cg_transactions(input_data)
-
-    # Add explicit 112A scrips
-    for scrip in input_data.cg_112a_scrips:
-        ltcg_112a_assets.append(CG112AAsset(
-            isin_code=scrip.isin_code,
-            share_name=scrip.share_unit_name,
-            num_shares=scrip.num_shares_units,
-            sale_price_per_share=scrip.sale_price_per_share,
-            total_sale_value=scrip.total_sale_value,
-            cost_acq_without_index=scrip.cost_acq_without_index,
-            fmv_per_share=scrip.fmv_per_share,
-            total_fmv=scrip.total_fmv,
-            expenditure=scrip.expenditure_on_transfer,
-            total_deductions=scrip.total_deductions,
-            date_of_acquisition=scrip.date_of_acquisition.isoformat() if scrip.date_of_acquisition else "",
-            date_of_transfer=scrip.date_of_transfer.isoformat(),
-            grandfathering_eligible=scrip.is_before_31jan2018,
-        ))
-
-    # Compute CG baskets — 111A gets its own special-rate basket
-    stcg_result = compute_stcg(
-        stcg_111a=stcg_111a_signed,
-        stcg_land_building=stcg_land,
-        stcg_other=stcg_other_signed,
+    # The standalone CG schedule classifies every canonical transaction into
+    # the 112A / 111A / section-112 / land-building / other baskets, applies
+    # 31-Jan-2018 grandfathering, the ₹1.25L aggregate 112A threshold, and
+    # §54/54B/54EC/54F/115F exemptions, and runs the intra-head STCL↔LTCG
+    # set-off. The ITR-2 calculator consumes that signed result and then
+    # performs the form-specific CYLA/BFLA/special-rate tax work on top.
+    from app.engine.schedules.capital_gains import (
+        CG112AAsset as _CG112AAsset,
+        _classify as _cg_classify,
+        aggregate as _aggregate_cg,
+        compute as _compute_cg_schedule,
+        compute_ltcg as _compute_ltcg_merged,
+        compute_stcg as _compute_stcg_merged,
+        compute_vda as _compute_vda_income,
     )
+    cg_result = _compute_cg_schedule(input_data.cg_transactions)
 
-    # 111A: if listed equity 111A transactions were classified, they are in stcg_other_signed.
-    # For now, 111A is part of income_30per (slab-rate) unless explicitly tagged.
-    # A future enhancement can split 111A out during classification.
+    # Merge explicit 112A scrips (Schedule 112A Part-A3) into the 112A basket
+    # so the ₹1.25L threshold is applied once over the union of classified
+    # scrips and explicit scrips.  VDA (§115BBH) is kept outside the regular
+    # loss-netting and folded in after aggregation.
+    if input_data.cg_112a_scrips:
+        (
+            ltcg_112a_assets, stcg_land, ltcg_land,
+            stcg_111a_signed, stcg_other_signed, ltcg_other_signed,
+        ) = _cg_classify(input_data.cg_transactions)
+        for scrip in input_data.cg_112a_scrips:
+            ltcg_112a_assets.append(_CG112AAsset(
+                isin_code=scrip.isin_code,
+                share_name=scrip.share_unit_name,
+                num_shares=scrip.num_shares_units,
+                sale_price_per_share=scrip.sale_price_per_share,
+                total_sale_value=scrip.total_sale_value,
+                cost_acq_without_index=scrip.cost_acq_without_index,
+                fmv_per_share=scrip.fmv_per_share,
+                total_fmv=scrip.total_fmv,
+                expenditure=scrip.expenditure_on_transfer,
+                total_deductions=scrip.total_deductions,
+                date_of_acquisition=scrip.date_of_acquisition.isoformat() if scrip.date_of_acquisition else "",
+                date_of_transfer=scrip.date_of_transfer.isoformat(),
+                grandfathering_eligible=scrip.is_before_31jan2018,
+            ))
+        stcg_result = _compute_stcg_merged(
+            stcg_111a=stcg_111a_signed,
+            stcg_land_building=stcg_land,
+            stcg_other=stcg_other_signed,
+        )
+        ltcg_result = _compute_ltcg_merged(
+            ltcg_112a_assets=ltcg_112a_assets,
+            ltcg_land_building=ltcg_land,
+            ltcg_other=ltcg_other_signed,
+        )
+        cg_result = _aggregate_cg(stcg_result, ltcg_result, _ZERO, cg_result.exemptions)
+    else:
+        stcg_result = cg_result.stcg
+        ltcg_result = cg_result.ltcg
 
-    ltcg_result = compute_ltcg(
-        ltcg_112a_assets=ltcg_112a_assets,
-        ltcg_land_building=ltcg_land,
-        ltcg_other=ltcg_other_signed,
-    )
-
-    # VDA
+    # VDA (§115BBH) — outside the regular loss-netting.
     vda_entries: list[VDAEntry] = []
     for vda in input_data.vda_transactions:
         vda_entries.append(VDAEntry(
@@ -430,40 +443,17 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             acquisition_cost=vda.acquisition_cost,
             consideration_received=vda.consideration_received,
         ))
-    vda_income = compute_vda(vda_entries)
+    vda_income = _compute_vda_income(vda_entries)
     r.vda_income = vda_income
-
-    # CG exemptions
-    total_54 = sum(
-        (claim.investment_amount + claim.cgas_deposit_amount for tx in input_data.cg_transactions for claim in tx.exemptions if claim.section == "54"), _ZERO,
+    cg_result = type(cg_result)(
+        stcg=cg_result.stcg,
+        ltcg=cg_result.ltcg,
+        vda=vda_income,
+        exemptions=cg_result.exemptions,
+        current_year_losses=cg_result.current_year_losses,
+        total_capital_gains=cg_result.total_capital_gains + vda_income,
+        total_capital_gains_before_exemption=cg_result.total_capital_gains_before_exemption + vda_income,
     )
-    total_54b = sum(
-        (claim.investment_amount + claim.cgas_deposit_amount for tx in input_data.cg_transactions for claim in tx.exemptions if claim.section == "54B"), _ZERO,
-    )
-    total_54ec = sum(
-        (claim.investment_amount + claim.cgas_deposit_amount for tx in input_data.cg_transactions for claim in tx.exemptions if claim.section == "54EC"), _ZERO,
-    )
-    total_54f = sum(
-        (claim.investment_amount + claim.cgas_deposit_amount for tx in input_data.cg_transactions for claim in tx.exemptions if claim.section == "54F"), _ZERO,
-    )
-    # Add legacy exemption fields
-    for tx in input_data.cg_transactions:
-        if tx.deduction_us54 > 0 and total_54 == 0:
-            total_54 = tx.deduction_us54
-        if tx.deduction_us54b > 0 and total_54b == 0:
-            total_54b = tx.deduction_us54b
-        if tx.deduction_us54ec > 0 and total_54ec == 0:
-            total_54ec = tx.deduction_us54ec
-        if tx.deduction_us54f > 0 and total_54f == 0:
-            total_54f = tx.deduction_us54f
-
-    # Section 115F (NRI bonds/shares exemption)
-    total_115f = sum(
-        (claim.investment_amount + claim.cgas_deposit_amount for tx in input_data.cg_transactions for claim in tx.exemptions if claim.section == "115F"), _ZERO,
-    )
-
-    exemptions = compute_exemptions(total_54, total_54b, total_54ec, total_54f, total_115f)
-    cg_result = aggregate_cg(stcg_result, ltcg_result, vda_income, exemptions)
     r.schedules["cg"] = cg_result
 
     # ── 3. Clubbing (SPI) ────────────────────────────────────────────────────
@@ -607,7 +597,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         cyla,
         bfla,
         non_cg_for_hp,
-        exemptions,
+        cg_result.exemptions,
     )
     r.schedules["post_loss_cg"] = post_loss_cg
     r.capital_gains_income = sum(post_loss_cg.values(), _ZERO) - post_loss_cg["112a_taxable"] + vda_income

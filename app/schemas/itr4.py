@@ -450,6 +450,18 @@ class ITR4Input(BaseModel):
             "permitted in ITR-4."
         ),
     )
+    cg_transactions: Optional[list] = Field(
+        default=None,
+        description=(
+            "Canonical capital-gain transaction rows (the same typed "
+            "CGTransaction shape used by ITR-2). When provided, the ITR-4 "
+            "calculator runs the standalone CG schedule and projects the "
+            "restricted-112A aggregate view, surfacing losses-forfeited and "
+            "other-CG-disallowed for form-eligibility guidance. This does "
+            "NOT widen ITR-4 eligibility — only restricted 112A LTCG within "
+            "₹1.25 lakh is reportable; any other CG forces ITR-3."
+        ),
+    )
     # --- TDS/TCS ---
     tds1_entries: Optional[List[TDS1Entry]] = Field(default=None)
     tds2_entries: Optional[List[TDS2Entry]] = Field(default=None)
