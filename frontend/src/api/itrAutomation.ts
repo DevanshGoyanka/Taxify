@@ -158,6 +158,13 @@ export interface ReconciledResults {
   _extraction_errors?: string[];
 }
 
+export type ArtifactOutcome = {
+  state: 'downloaded' | 'no_data' | 'retryable_failure' | 'validation_failed' | 'session_expired' | 'permanent_failure';
+  path: string | null;
+  reason: string;
+  ay: string;
+};
+
 // NOTE: exported as `export type` so Rolldown (Vite 6) preserves it under
 // verbatimModuleSyntax. Callers MUST use: import type { AutomationJob }.
 export type AutomationJob = {
@@ -178,6 +185,7 @@ export type AutomationJob = {
   // Raw server log (for debugging)
   raw_status_message: string | null;
   files_downloaded: Record<string, string | null>;
+  artifact_outcomes: Record<string, ArtifactOutcome>;
   parsed_results: ReconciledResults | null;
   ais_ref_id: string | null;
   error_message: string | null;

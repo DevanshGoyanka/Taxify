@@ -106,6 +106,13 @@ def _apply_additive_sqlite_migrations() -> None:
                         "ADD COLUMN assessment_year VARCHAR(10)"
                     )
                 )
+            if "artifact_outcomes" not in automation_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE automation_job "
+                        "ADD COLUMN artifact_outcomes TEXT NOT NULL DEFAULT '{}'"
+                    )
+                )
             connection.execute(
                 text(
                     "UPDATE automation_job "

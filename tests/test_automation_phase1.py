@@ -17,6 +17,7 @@ from app.automation.navigation import (
     navigate_income_tax_returns,
     race_portal_navigation,
     resolve_itd_anchor,
+    restore_dashboard_anchor,
 )
 from app.automation.years import TaxYearContext
 
@@ -90,6 +91,8 @@ class FakePage:
         self.body = body
         self.closed = False
         self.frames: list[FakeFrame] = []
+        self.goto_calls: list[str] = []
+        self.reload_calls = 0
 
     def locator(self, selector: str) -> FakeLocator:
         """Return body or hidden element locators."""
@@ -103,9 +106,15 @@ class FakePage:
         """Return closure state."""
         return self.closed
 
+    async def reload(self, **kwargs: Any) -> None:
+        """Record a true document reload."""
+        del kwargs
+        self.reload_calls += 1
+
     async def goto(self, url: str, **kwargs: Any) -> None:
         """Navigate to a URL."""
         del kwargs
+        self.goto_calls.append(url)
         self.url = url
 
 
@@ -162,11 +171,17 @@ def test_worker_year_derivation_uses_supported_context_attribute() -> None:
 
 
 def test_worker_passes_assessment_year_to_26as_and_fy_to_ais() -> None:
-    """Worker calls must preserve distinct AY and FY semantics."""
+    """Worker calls must preserve distinct AY/FY semantics and proven core order."""
     source = inspect.getsource(job_worker._run_job)
+    as26_call = source.index("ok, reason, txt_path = await download_26as(")
+    ais_call = source.index("ais_outcome = await run_request_ais(")
+    prefill_call = source.index("prefill_outcome = await download_prefill(")
+
     assert "assessment_year=assessment_year" in source
     assert source.count("fiscal_year=fiscal_year") >= 2
-    assert source.count("page = await resolve_itd_anchor(page)") == 3
+    assert source.count("page = await resolve_itd_anchor(page)") == 4
+    assert "page = await restore_dashboard_anchor(" not in source
+    assert as26_call < ais_call < prefill_call
     assert "required_artifact_failures.append" in source
     assert "if required_artifact_failures:" in source
     assert "assessment_year=fiscal_year" not in source
@@ -229,8 +244,13 @@ def test_additive_migration_backfills_legacy_job_assessment_year(
         assessment_year = connection.execute(
             text("SELECT assessment_year FROM automation_job WHERE id = 1")
         ).scalar_one()
+        artifact_outcomes = connection.execute(
+            text("SELECT artifact_outcomes FROM automation_job WHERE id = 1")
+        ).scalar_one()
     assert "assessment_year" in columns
+    assert "artifact_outcomes" in columns
     assert assessment_year == "2026-27"
+    assert artifact_outcomes == "{}"
 
 
 @pytest.mark.asyncio

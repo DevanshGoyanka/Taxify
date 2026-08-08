@@ -79,7 +79,8 @@ GET  /automation/jobs                  -- list
 | `steps_completed` | TEXT (JSON list) | e.g. `["login", "26as_downloaded", "ais_downloaded", "tis_downloaded", "logout"]` |
 | `current_step` | VARCHAR(100) | What the worker is doing right now |
 | `status_message` | VARCHAR(500) | Live human-readable progress |
-| `files_downloaded` | TEXT (JSON object) | `{"26as": "/path/to/26AS.pdf", "ais": null, "tis": "/path/to/TIS.pdf"}` |
+| `files_downloaded` | TEXT (JSON object) | Validated final artifact paths; Phase 2 adds `prefill` without auto-importing it |
+| `artifact_outcomes` | TEXT (JSON object) | Structured per-artifact status such as Prefill `downloaded`, `no_data`, or `validation_failed` |
 | `ais_ref_id` | VARCHAR(50) | AIS reference ID from the portal (used for Phase 2 polling) |
 | `error_message` | VARCHAR(1000) | Friendly error + full traceback on failure |
 | `created_at` | DATETIME | When the job was created |

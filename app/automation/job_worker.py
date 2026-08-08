@@ -28,6 +28,7 @@ from app.automation.auth import login_itd, logout_itd
 from app.automation.browser import browser_manager
 from app.automation.downloader_26as import download_26as
 from app.automation.downloader_ais_tis import run_request_ais, run_download_ais_tis
+from app.automation.downloader_prefill import PrefillState, download_prefill
 from app.automation.errors import _friendly_error
 from app.automation.navigation import resolve_itd_anchor
 from app.automation.pdf_unlocker import unlock_pdf, verify_pdf_decryptable
@@ -69,11 +70,12 @@ _PROJECT_ROOT = os.path.dirname(
 # Each automation step is mapped to a user-friendly progress indicator.
 # The frontend StatusBox uses current_step and progress_pct for display.
 _STEP_PROGRESS: dict[str, dict] = {
-    "login":          {"pct": 5,  "label": "Signing into ITD portal",       "icon": "\U0001f510"},
-    "download_26as":  {"pct": 10, "label": "Downloading Form 26AS",         "icon": "\U0001f4c4"},
-    "request_ais":    {"pct": 30, "label": "Requesting AIS generation",      "icon": "\U0001f4cb"},
-    "download_tis":   {"pct": 55, "label": "Downloading TIS statement",     "icon": "\U0001f4e5"},
-    "poll_ais":       {"pct": 65, "label": "Waiting for AIS to generate",    "icon": "\u23f3"},
+    "login":             {"pct": 5,  "label": "Signing into ITD portal",       "icon": "\U0001f510"},
+    "download_26as":     {"pct": 10, "label": "Downloading Form 26AS",         "icon": "\U0001f4c4"},
+    "request_ais":       {"pct": 30, "label": "Requesting AIS generation",     "icon": "\U0001f4cb"},
+    "download_tis":      {"pct": 55, "label": "Downloading TIS statement",      "icon": "\U0001f4e5"},
+    "poll_ais":          {"pct": 65, "label": "Waiting for AIS to generate",     "icon": "\u23f3"},
+    "download_prefill":  {"pct": 80, "label": "Downloading ITD Prefill JSON",   "icon": "\U0001f4e5"},
     "unlock":         {"pct": 85, "label": "Decrypting PDFs",               "icon": "\U0001f513"},
     "extract":        {"pct": 88, "label": "Extracting PDF data",           "icon": "\U0001f4ca"},
     "logout":         {"pct": 95, "label": "Signing out",                   "icon": "\U0001f6aa"},
@@ -86,6 +88,8 @@ _STATUS_CLEAN_MAP: dict[str, str] = {
     "Launching browser":        "Launching secure browser\u2026",
     "Logging into ITD portal":  "Signing into ITD portal\u2026",
     "Login successful":         "Signed in successfully",
+    "Downloading Prefill":      "Downloading current-year Prefill JSON\u2026",
+    "Prefill downloaded":       "Current-year Prefill JSON ready",
     "Downloading Form 26AS":    "Fetching Form 26AS\u2026",
     "26AS downloaded":          "Form 26AS ready",
     "Requesting AIS":           "Requesting AIS generation\u2026",
@@ -177,6 +181,7 @@ def _get_job_dict(job_id: int) -> Optional[dict]:
             # Raw server fields (available for debugging)
             "raw_status_message": job.status_message,
             "files_downloaded": _safe_json(job.files_downloaded, {}),
+            "artifact_outcomes": _safe_json(job.artifact_outcomes, {}),
             "parsed_results": _safe_json(job.parsed_results, {}),
             "ais_ref_id": job.ais_ref_id,
             "error_message": job.error_message,
@@ -308,7 +313,7 @@ async def _run_job(job_id: int) -> None:
         _update_job(job_id, status_message=short)
         # Timing events are intentionally visible at INFO for live Phase 0
         # verification; ordinary detailed portal logs remain DEBUG-level.
-        if safe_msg.startswith("[Timing]"):
+        if safe_msg.startswith(("[Timing]", "[NAV]", "[PREFILL]", "[26AS]")):
             logger.info("Job %d: %s", job_id, safe_msg)
         else:
             logger.debug("Job %d: %s", job_id, safe_msg)
@@ -328,7 +333,13 @@ async def _run_job(job_id: int) -> None:
     timeline = AutomationTimeline(log)
     page = None
     context = None
-    files: dict[str, Optional[str]] = {"26as": None, "ais": None, "tis": None}
+    files: dict[str, Optional[str]] = {
+        "prefill": None,
+        "26as": None,
+        "ais": None,
+        "tis": None,
+    }
+    artifact_outcomes: dict[str, dict] = {}
     required_artifact_failures: list[str] = []
     steps: list[str] = []
 
@@ -360,7 +371,7 @@ async def _run_job(job_id: int) -> None:
             job_id,
             current_step="download_26as",
             status_message="Downloading Form 26AS...",
-            progress_pct=10,
+            progress_pct=20,
         )
         timeline.mark("26AS navigation started")
         log("[Worker] Starting 26AS download...")
@@ -490,7 +501,49 @@ async def _run_job(job_id: int) -> None:
                 files["tis"] = tis_path
             steps.append("tis_downloaded")
 
-        # Step 4: Unlock remaining PDFs
+        # Step 4: Download current-year Prefill JSON without importing it.
+        # Keep this optional, route-mutating operation after the proven
+        # dashboard -> 26AS -> AIS/TIS sequence so a Prefill failure cannot
+        # contaminate required artifact downloads.
+        _update_job(
+            job_id,
+            current_step="download_prefill",
+            status_message="Downloading Prefill JSON...",
+            progress_pct=80,
+        )
+        timeline.mark("Prefill navigation started")
+        log("[Worker] Starting current-year Prefill JSON download...")
+        prefill_outcome = await download_prefill(
+            page=page,
+            pan=pan,
+            download_dir=dldir,
+            assessment_year=assessment_year,
+            log=log,
+        )
+        timeline.mark("Prefill download completed")
+        page = await resolve_itd_anchor(page)
+        artifact_outcomes["prefill"] = prefill_outcome.to_dict()
+        if prefill_outcome.state is PrefillState.DOWNLOADED and prefill_outcome.path:
+            files["prefill"] = prefill_outcome.path
+            steps.append("prefill_downloaded")
+            prefill_status = "Prefill downloaded"
+            log("[Worker] Current-year Prefill JSON downloaded and validated.")
+        else:
+            prefill_status = f"Prefill: {prefill_outcome.state.value}"
+            log(
+                "[Worker] Current-year Prefill outcome: "
+                f"{prefill_outcome.state.value} — {prefill_outcome.reason}"
+            )
+        _update_job(
+            job_id,
+            steps_completed=json.dumps(steps),
+            files_downloaded=json.dumps(files),
+            artifact_outcomes=json.dumps(artifact_outcomes),
+            status_message=prefill_status,
+            progress_pct=82,
+        )
+
+        # Step 5: Unlock remaining PDFs
         _update_job(job_id, current_step="unlock", status_message="Decrypting PDFs...", progress_pct=85)
         for label, path in [("AIS", files["ais"]), ("TIS", files["tis"])]:
             if path and os.path.exists(path):
@@ -747,6 +800,7 @@ async def _run_job(job_id: int) -> None:
             status_message="All downloads complete",
             steps_completed=json.dumps(steps),
             files_downloaded=json.dumps(files),
+            artifact_outcomes=json.dumps(artifact_outcomes),
             completed_at=datetime.datetime.utcnow(),
             progress_pct=100,
         )
@@ -779,6 +833,7 @@ async def _run_job(job_id: int) -> None:
             error_message=f"{friendly}\n\n--- Full traceback ---\n{safe_tb}",
             steps_completed=json.dumps(steps),
             files_downloaded=json.dumps(files),
+            artifact_outcomes=json.dumps(artifact_outcomes),
             completed_at=datetime.datetime.utcnow(),
             progress_pct=0,
         )

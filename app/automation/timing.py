@@ -19,6 +19,8 @@ _ALLOWED_EVENTS = frozenset(
         "SAM ready",
         "password submitted",
         "dashboard ready",
+        "Prefill navigation started",
+        "Prefill download completed",
         "26AS navigation started",
         "26AS download completed",
         "AIS portal navigation started",

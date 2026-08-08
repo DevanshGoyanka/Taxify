@@ -196,6 +196,9 @@ class AutomationJob(Base):
     files_downloaded: Mapped[str] = mapped_column(
         Text, nullable=False, default="{}"
     )
+    artifact_outcomes: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}"
+    )
     parsed_results: Mapped[str] = mapped_column(
         Text, nullable=False, default="{}"
     )

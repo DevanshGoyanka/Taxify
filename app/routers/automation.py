@@ -192,6 +192,7 @@ def list_jobs(
                 "current_step": j.current_step,
                 "status_message": j.status_message,
                 "progress_pct": j.progress_pct,
+                "artifact_outcomes": json.loads(j.artifact_outcomes or "{}"),
                 "error_message": j.error_message,
                 "created_at": j.created_at.isoformat() if j.created_at else None,
                 "started_at": j.started_at.isoformat() if j.started_at else None,
