@@ -5,6 +5,10 @@ export interface Identified { id: string; }
 
 export interface Employer extends Identified {
   customEmployerName: string; employerName: string; employerTAN: string; natureOfEmployment: string;
+  employerAddress: string; employerCity: string; employerStateCode: string; employerPinCode: string; employerZipCode: string;
+  salaryNatureRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
+  perquisiteNatureRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
+  section10ExemptionRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
   basic: Money; da: Money; commission: Money; hra: Money; bonus: Money; allowances: Money; lta: Money;
   otherAllowance: Money; arrearSalary: Money; perquisites: Money; profitsInLieu: Money; rentPaid: Money;
   city: string; isMetroCity: boolean; isGovernmentEmployee: boolean; isDisabledEmployee: boolean;
@@ -15,18 +19,19 @@ export interface Employer extends Identified {
   vrsCompensation: Money; retrenchmentCompensation: Money; otherExempt: Money; tdsDeducted: Money; employerNPS: Money;
 }
 export interface CoOwner { coOwnerSNo: number; name: string; pan: string; aadhaar: string; share: number; }
-export interface HomeLoan { lenderType: 'B' | 'I' | 'L'; lenderName: string; lenderPAN: string; loanAccountNo: string; dateOfLoan: string; totalLoanAmount: Money; loanOutstandingAmount: Money; interestUs24B: Money; constructionCompletionDate: string; completedWithin5Years: boolean; preConstructionInterest: Money; }
+export interface TenantDetail { tenantSNo: number; name: string; pan: string; aadhaar: string; panOrTan: string; }
+export interface HomeLoan { lenderType: 'B' | 'I'; lenderName: string; lenderPAN: string; loanAccountNo: string; dateOfLoan: string; totalLoanAmount: Money; loanOutstandingAmount: Money; interestUs24B: Money; constructionCompletionDate: string; completedWithin5Years: boolean; preConstructionInterest: Money; }
 export interface HouseProperty extends Identified {
   name: string; propertySequenceNo: number; propertyType: 'SELF_OCCUPIED' | 'LET_OUT' | 'DEEMED_LET_OUT';
-  address: string; premisesName: string; roadOrStreet: string; area: string; city: string; state: string; pinCode: string;
-  countryCode: string; propertyIdentificationNo: string; propertyOwnerType: 'SE' | 'MI' | 'SP' | 'OT'; ownershipType: 'SOLE' | 'JOINT';
+  address: string; premisesName: string; roadOrStreet: string; area: string; city: string; state: string; pinCode: string; zipCode: string;
+  countryCode: string; propertyIdentificationNo: string; propertyOwnerType: 'SE' | 'MI' | 'SP' | 'OT'; propertyOwnerOther: string; ownershipType: 'SOLE' | 'JOINT';
   ownershipShare: number; isCoOwned: boolean; isPropertyInJointOwnership: boolean; coOwners: CoOwner[];
   annualRent: Money; municipalRateableValue: Money; fairRentValue: Money; standardRent: Money; annualLettingValue: Money;
   unrealizedRent: Money; arrearsOfRent: Money; vacancyPeriodMonths: number; municipalTaxesPaid: Money; interestOnLoan: Money;
-  preConstructionInterest: Money; lenderName: string; lenderPAN: string; lenderType: 'B' | 'I' | 'L'; loanAccountNo: string;
+  preConstructionInterest: Money; lenderName: string; lenderPAN: string; lenderType: 'B' | 'I'; loanAccountNo: string;
   loanSanctionDate: string; constructionCompletionDate: string; principalRepayment: Money; totalLoanAmount: Money;
-  loanOutstandingAmount: Money; completedWithin5Years: boolean; homeLoans: HomeLoan[]; tenantName: string; tenantPAN: string;
-  tenantAadhaar: string; grossAnnualValue: Money; netAnnualValue: Money; standardDeduction30Pct: Money; incomeFromHP: number;
+  loanOutstandingAmount: Money; completedWithin5Years: boolean; homeLoans: HomeLoan[]; tenantDetails: TenantDetail[]; tenantName: string; tenantPAN: string;
+  tenantAadhaar: string; passThroughIncome: Money; grossAnnualValue: Money; netAnnualValue: Money; standardDeduction30Pct: Money; incomeFromHP: number;
   maxRent: Money; preConstructionInterestClaimed: Money;
 }
 export interface BusinessIdentity { businessName: string; natureCode: string; description: string; }

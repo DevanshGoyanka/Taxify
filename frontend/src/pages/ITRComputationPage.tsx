@@ -9,6 +9,7 @@ import { Spinner } from '../components/ui/Spinner';import StatusPill from '../co
 import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
 import { BankAccountManager } from '../components/BankAccountManager';
+import { PersonalInfoTab } from '../components/PersonalInfoTab';
 import { CapitalGainsEntryManager } from '../components/CapitalGainsEntryManager';
 import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
@@ -57,10 +58,50 @@ function validatePhase1Payload(data: any): string | null {
   const panPattern = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
   const ifscPattern = /^[A-Z]{4}0[A-Z0-9]{6}$/;
   const bsrPattern = /^[0-9]{3}[0-9A-Z]{4}$/;
+  const ackPattern = /^[0-9]{15}$/;
+  const indianPinPattern = /^[1-9][0-9]{5}$/;
+  const filingSection = String(data.filingSection || '139(1)');
+  if (!data.surnameOrOrgName && !data.name) return 'Enter the required surname or organisation name.';
+  if (String(data.firstName || '').length > 25 || String(data.middleName || '').length > 25 || String(data.surnameOrOrgName || data.name || '').length > 75) return 'Name fields exceed the official schema length limit.';
+  if (!panPattern.test(String(data.pan || ''))) return 'Enter a valid PAN in the format ABCDE1234F.';
+  if (!data.dob || new Date(`${data.dob}T00:00:00`) > new Date('2026-03-31T00:00:00')) return 'Enter a valid date of birth/formation on or before 31 March 2026.';
   if (!/^[0-9]{1,5}$/.test(String(data.mobileCountryCode || ''))) return 'Select a valid mobile country code.';
-  if (!data.state) return 'Select a state code.';
+  if (!/^[1-9][0-9]{4,9}$/.test(String(data.mobile || ''))) return 'Mobile number must contain 5 to 10 digits and cannot start with zero.';
+  if (!data.email) return 'Enter the required primary email address.';
+  if (!data.flatNo || !data.area || !data.city) return 'Complete the required residence number, locality/area and city/district.';
   if (!data.country) return 'Select a country code.';
-  if (data.pincode && !/^[1-9][0-9]{5}$/.test(String(data.pincode))) return 'PIN code must contain 6 digits and cannot start with zero.';
+  if (String(data.country) === '91' && !data.state) return 'Select an Indian state code.';
+  if (String(data.country) === '91' && !indianPinPattern.test(String(data.pincode || ''))) return 'Indian address requires a valid 6-digit PIN code.';
+  if (String(data.country) !== '91' && !data.zipCode) return 'Foreign address requires a ZIP/postal code.';
+  if (String(data.country) !== '91' && String(data.zipCode).length > 8) return 'Foreign ZIP/postal code cannot exceed 8 characters.';
+  if (data.aadhaar && !/^[0-9]{12}$/.test(String(data.aadhaar))) return 'Aadhaar number must contain exactly 12 digits when provided.';
+  if (data.secondaryMobile && (!/^[0-9]{1,5}$/.test(String(data.secondaryMobileCountryCode || '')) || !/^[1-9][0-9]{4,9}$/.test(String(data.secondaryMobile)))) return 'Secondary mobile requires a valid country code and a 5 to 10 digit mobile number.';
+  if (data.secondaryAddressDifferent) {
+    const address = data.alternateAddress || {};
+    if (!address.cityOrTownOrDistrict || !address.countryCode) return 'Complete alternate address city and country when correspondence address is different.';
+    if (String(address.countryCode) === '91' && (!address.stateCode || !indianPinPattern.test(String(address.pinCode || '')))) return 'Complete alternate Indian address state and valid 6-digit PIN code.';
+    if (String(address.countryCode) !== '91' && !address.zipCode) return 'Complete alternate foreign address ZIP/postal code.';
+  }
+  if (['139(5)', '139(9)'].includes(filingSection) && (!ackPattern.test(String(data.originalAcknowledgementNumber || '')) || !data.originalFilingDate)) return 'Revised or defective-return responses require the 15-digit original acknowledgement number and original filing date.';
+  if (['142(1)', '148', '153C', '139(9)'].includes(filingSection) && (!data.noticeNumber || !data.noticeDate)) return 'The selected filing section requires the notice/order number and date.';
+  if (data.assesseRepFlg) {
+    const representative = data.representativeAssessee || {};
+    if (!representative.name || !panPattern.test(String(representative.pan || '')) || !representative.email || !/^[0-9]{1,5}$/.test(String(representative.countryCode || '')) || !/^[1-9][0-9]{4,9}$/.test(String(representative.mobile || ''))) return 'Complete representative assessee name, PAN, email, mobile country code and mobile number.';
+  }
+  if (data.isFiiFpi && !/^IN[a-zA-Z]{2}FP[0-9]{6}$/.test(String(data.sebiRegistrationNumber || ''))) return 'FII/FPI declaration requires a valid SEBI registration number.';
+  if (data.leiNumber && (!/^[A-Z0-9]{20}$/.test(String(data.leiNumber)) || !data.leiValidUptoDate)) return 'LEI requires an exact 20-character number and validity date.';
+  if (data.isDirector) {
+    if (!Array.isArray(data.directorDetails) || data.directorDetails.length === 0) return 'Add at least one company detail when director declaration is Yes.';
+    if (data.directorDetails.some((row: any) => !row.companyName || !['D', 'F'].includes(row.companyType) || !['L', 'U'].includes(row.shareType) || (row.companyPan && !panPattern.test(row.companyPan)) || (row.din && !/^[0-9]{8}$/.test(row.din)))) return 'Complete each director row with company name, domestic/foreign type, listed/unlisted share type, and valid PAN/DIN where supplied.';
+  }
+  if (data.partnerInFirm) {
+    if (!Array.isArray(data.partnerFirmDetails) || data.partnerFirmDetails.length === 0 || data.partnerFirmDetails.some((row: any) => !row.firmName || !panPattern.test(String(row.firmPan || '')))) return 'Complete each partnership-firm name and PAN when partner-in-firm is Yes.';
+  }
+  if (data.holdsUnlistedShares) {
+    if (!Array.isArray(data.unlistedShareHoldings) || data.unlistedShareHoldings.length === 0) return 'Add at least one unlisted share holding when the declaration is Yes.';
+    if (data.unlistedShareHoldings.some((row: any) => !row.companyName || !['D', 'F'].includes(row.companyType) || !String(row.openingNumberOfShares ?? '').match(/^[0-9]+$/) || !String(row.openingCostOfAcquisition ?? '').match(/^\d+(\.\d{1,2})?$/) || !String(row.closingNumberOfShares ?? '').match(/^[0-9]+$/) || !String(row.closingCostOfAcquisition ?? '').match(/^\d+(\.\d{1,2})?$/))) return 'Complete each unlisted-share row with company, domestic/foreign type, opening and closing number of shares, and opening/closing cost of acquisition.';
+  }
+  if (data.foreignExchangeFlag === undefined && data.form === 'ITR-3') return 'Select whether foreign exchange was involved for ITR-3.';
   for (const entry of data.donationEntries || []) {
     if (!entry.doneeName || !panPattern.test(entry.doneePAN || '') || !entry.addrDetail || !entry.city || !entry.stateCode || !/^[1-9][0-9]{5}$/.test(entry.pinCode || '')) return 'Complete every 80G donee name, PAN, address, state and PIN code before saving.';
   }
@@ -75,6 +116,39 @@ function validatePhase1Payload(data: any): string | null {
     if (!loan.bankOrInstnName || !panPattern.test(loan.lenderPAN || '') || !loan.loanAccNo || !loan.dateOfLoan || Number(loan.interestAmount) <= 0) return `Complete every ${section.replace('section', '')} loan, including lender PAN and interest.`;
     if (section === 'section80EE' && loan.firstTimeBuyerEligible !== true) return '80EE loans require first-time home buyer eligibility confirmation.';
     if (section === 'section80EEB' && !loan.vehicleRegNo) return '80EEB loans require the vehicle registration number.';
+  }
+  for (const property of data.housePropertyEntries || []) {
+    const form = String(data.form || data.itrForm || '').replace('-', '');
+    const addressLimit = form === 'ITR1' || form === 'ITR4' ? 50 : 200;
+    if (!property.address || String(property.address).length > addressLimit || !property.city || String(property.city).length > 50 || !property.state || !property.countryCode) return `Complete each house property address (maximum ${addressLimit}), city, state and country.`;
+    if (String(property.state) === '99') {
+      if (String(property.countryCode) === '91') return 'Foreign house property state code 99 requires a country other than India.';
+      if (!property.zipCode || String(property.zipCode).length > 8) return 'Foreign house property requires a ZIP/postal code of at most 8 characters.';
+    } else {
+      if (String(property.countryCode) !== '91') return 'Indian house property state codes require country code 91 (India).';
+      if (!indianPinPattern.test(String(property.pinCode || ''))) return 'Indian house property requires a valid 6-digit PIN code.';
+    }
+    if (!['SE', 'MI', 'SP', 'OT'].includes(String(property.propertyOwnerType || ''))) return 'Select the official owner type for every house property.';
+    if (property.propertyOwnerType === 'OT' && (!property.propertyOwnerOther || String(property.propertyOwnerOther).length > 50)) return 'Other property owner type requires a description of at most 50 characters.';
+    const ownShare = Number(property.ownershipShare);
+    if (property.isCoOwned) {
+      if (!Number.isFinite(ownShare) || ownShare < 0 || ownShare > 100 || !Array.isArray(property.coOwners) || property.coOwners.length === 0) return 'Co-owned properties require your valid share and at least one co-owner.';
+      for (const owner of property.coOwners) if (!owner.name || String(owner.name).length > 125 || (owner.pan && !panPattern.test(String(owner.pan))) || (owner.aadhaar && !/^[0-9]{12}$/.test(String(owner.aadhaar))) || Number(owner.share) < 0 || Number(owner.share) > 100) return 'Complete every co-owner with name, valid optional PAN/Aadhaar and share from 0 to 100.';
+      const totalShare = ownShare + property.coOwners.reduce((sum: number, owner: any) => sum + Number(owner.share || 0), 0);
+      if (Math.abs(totalShare - 100) > 0.001) return 'House property ownership shares must total exactly 100%.';
+    }
+    for (const tenant of property.tenantDetails || []) if (!tenant.name || String(tenant.name).length > 125 || (tenant.pan && !panPattern.test(String(tenant.pan))) || (tenant.aadhaar && !/^[0-9]{12}$/.test(String(tenant.aadhaar))) || (tenant.panOrTan && !/^(?:[A-Z]{5}[0-9]{4}[A-Z]|[A-Z]{4}[0-9]{5}[A-Z])$/.test(String(tenant.panOrTan)))) return 'Complete every tenant with name and valid optional PAN, TAN or Aadhaar.';
+    for (const loan of property.homeLoans || []) if (!['B', 'I'].includes(String(loan.lenderType)) || !loan.lenderName || String(loan.lenderName).length > 125 || !loan.loanAccountNo || String(loan.loanAccountNo).length > 20 || !/^[A-Za-z0-9 /-]+$/.test(String(loan.loanAccountNo)) || !loan.dateOfLoan || Number(loan.totalLoanAmount) < 0 || Number(loan.loanOutstandingAmount) < 0 || Number(loan.interestUs24B) < 0) return 'Complete every section 24(b) loan with source, lender, account/reference, date and non-negative amounts.';
+  }
+  for (const employer of data.employerEntries || []) {
+    if (!employer.employerName || !['CGOV', 'SGOV', 'PSU', 'PE', 'PESG', 'PEPS', 'PEO', 'OTH'].includes(String(employer.natureOfEmployment || '')) || !employer.employerAddress || !employer.employerCity || !employer.employerStateCode) return 'Complete each salary employer name, employment category and address details.';
+    if (employer.employerTAN && !/^[A-Z]{4}[0-9]{5}[A-Z]$/.test(String(employer.employerTAN))) return 'Employer TAN must use the format ABCD12345E when provided.';
+    if (employer.employerStateCode !== '99' && employer.employerPinCode && !indianPinPattern.test(String(employer.employerPinCode))) return 'Employer PIN code must contain 6 digits and cannot start with zero.';
+    if (employer.employerStateCode === '99' && !employer.employerZipCode) return 'Employer outside India requires a ZIP/postal code.';
+    for (const row of [...(employer.salaryNatureRows || []), ...(employer.perquisiteNatureRows || []), ...(employer.section10ExemptionRows || [])]) if (!row.natureCode || Number(row.amount) < 0 || (row.natureCode === 'OTH' && !row.otherDescription)) return 'Complete each itemised salary, perquisite or section 10 row with a nature, non-negative amount, and other description where applicable.';
+    if (Number(employer.hra || 0) > 0 && (Number(employer.rentPaid || 0) <= 0 || !employer.city)) return 'HRA received requires annual rent paid and city of employment before validation.';
+    if (Number(employer.commutedPension || 0) > 0 && employer.gratuityAlsoReceived === undefined) return 'Commuted pension requires confirmation whether gratuity was also received.';
+    if (Number(employer.lta || 0) > 0 && (Number(employer.actualLtaFare || 0) <= 0 || employer.isDomesticTravel === false || Number(employer.journeysInBlock || 0) <= 0)) return 'LTA claim requires actual domestic travel fare and journeys used in the block.';
   }
   const accounts = data.bankAccountData?.accounts || [];
   if (accounts.length > 0 && !accounts.some((account: any) => account.useForRefund)) return 'Mark one bank account for refund.';
@@ -569,11 +643,8 @@ export default function ITRComputationPage() {
       const currentEditor = editorRef.current;
       if (!currentEditor) throw new Error('Return is not loaded');
       const currentSnapshot = composeLegacyPayload(currentEditor);
-      const validationError = validatePhase1Payload(currentSnapshot);
-      if (validationError) {
-        toast.error(validationError);
-        return;
-      }
+      // Saving persists an incomplete draft. Official validation is deliberately
+      // performed only by the Validate flow and before JSON generation/filing.
       const dataToSave = buildPhase1Payload(currentSnapshot);
       // The backend now persists the user's selected form exactly; never infer it.
       dataToSave.form = itrForm;
@@ -2023,8 +2094,8 @@ export default function ITRComputationPage() {
         borderRadius: 'var(--radius)',
         border: '1px solid var(--border)'
       }}>
-        {activeTab === 0 && <PersonalInfoTab formData={formData} setFormData={setFormData} onBanksChange={managers.banks} />}
-        {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={taxResult} ayParam={effectiveAssessmentYear} regime={regime} />}
+        {activeTab === 0 && <PersonalInfoTab formData={formData} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={setFormData} onBanksChange={managers.banks} />}
+        {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={taxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={formData.tdsEntries || []} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} onChange={(entries: any[]) => updateEditor((model) => updateHouseProperties(model, entries))} itrForm={itrForm} />}
         {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
@@ -2067,7 +2138,7 @@ function ExemptIncomeTab({ formData, setFormData }: any) {
         Agricultural Income (Section 10(1))
       </h4>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Gross Agricultural Income" value={formData.agricultureIncome || 0} onChange={(v: any) => setFormData({ ...formData, agricultureIncome: v })} />
+        <Field label="Gross Agricultural Income" value={formData.agricultureIncome || 0} onChange={(v: any) => setFormData({ ...formData, agricultureIncome: v, agriculturalIncome: v })} />
         <Field label="Deductible Agricultural Expenses" value={formData.agricultureExpenses || 0} onChange={(v: any) => setFormData({ ...formData, agricultureExpenses: v })} />
         <Field label="Net Agricultural Income" value={(formData.agricultureIncome || 0) - (formData.agricultureExpenses || 0)} computed />
       </div>
@@ -2092,17 +2163,16 @@ function ExemptIncomeTab({ formData, setFormData }: any) {
         <Field label="Total Exempt LTCG" value={(formData.ltcgExempt || 0) + (formData.ltcgExempt38 || 0)} computed />
       </div>
 
-      {/* Other Exempt Income */}
+      {/* Non-salary exempt income */}
       <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Other Exempt Income
+        Other Non-Salary Exempt Income
       </h4>
+      <div style={{ padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)', marginBottom: 12 }}>
+        Salary-origin exemptions—such as HRA, LTA, gratuity, leave encashment, VRS compensation and commuted pension—are entered only in Salary Income under Schedule S.
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Gratuity Exempt u/s 10(10)" value={formData.gratuityExempt || 0} onChange={(v: any) => setFormData({ ...formData, gratuityExempt: v })} />
-        <Field label="Leave Encashment Exempt u/s 10(10AA)" value={formData.leaveEncashmentExempt || 0} onChange={(v: any) => setFormData({ ...formData, leaveEncashmentExempt: v })} />
-        <Field label="VRS Compensation Exempt u/s 10(10C)" value={formData.vrsCompensationExempt || 0} onChange={(v: any) => setFormData({ ...formData, vrsCompensationExempt: v })} />
-        <Field label="Commutation of Pension" value={formData.commutationPension || 0} onChange={(v: any) => setFormData({ ...formData, commutationPension: v })} />
-        <Field label="Share of Profit from Firm/HUF" value={formData.shareOfProfitFirm || 0} onChange={(v: any) => setFormData({ ...formData, shareOfProfitFirm: v })} />
-        <Field label="Any Other Exempt Income" value={formData.otherExemptIncome || 0} onChange={(v: any) => setFormData({ ...formData, otherExemptIncome: v })} />
+        <Field label="Share of Profit from Firm / LLP / HUF" value={formData.shareOfProfitFirm || 0} onChange={(v: any) => setFormData({ ...formData, shareOfProfitFirm: v })} />
+        <Field label="Any Other Non-Salary Exempt Income" value={formData.otherExemptIncome || 0} onChange={(v: any) => setFormData({ ...formData, otherExemptIncome: v })} />
       </div>
 
       {/* Total Exempt Income Summary */}
@@ -2119,10 +2189,6 @@ function ExemptIncomeTab({ formData, setFormData }: any) {
             (formData.otherExemptInterest || 0) +
             (formData.ltcgExempt || 0) +
             (formData.ltcgExempt38 || 0) +
-            (formData.gratuityExempt || 0) +
-            (formData.leaveEncashmentExempt || 0) +
-            (formData.vrsCompensationExempt || 0) +
-            (formData.commutationPension || 0) +
             (formData.shareOfProfitFirm || 0) +
             (formData.otherExemptIncome || 0)
           } 
@@ -2133,7 +2199,7 @@ function ExemptIncomeTab({ formData, setFormData }: any) {
   );
 }
 
-function Field({ label, value, onChange, computed, prefix = '₹', type = 'number', required = false }: any) {
+function Field({ label, value, onChange, computed, prefix = '₹', type = 'number', required = false, pattern, maxLength, min, max, inputMode, helpText }: any) {
   const [displayValue, setDisplayValue] = React.useState('');
   const [isFocused, setIsFocused] = React.useState(false);
 
@@ -2242,12 +2308,19 @@ function Field({ label, value, onChange, computed, prefix = '₹', type = 'numbe
           </span>
         )}
         <input
-          type="text"
-          value={computed ? (type === 'number' ? formatIndianNumber(value) : value) : displayValue}
+          type={type === 'number' ? 'text' : type}
+          value={computed ? (type === 'number' ? formatIndianNumber(value) : value ?? '') : displayValue}
           onChange={handleChange}
           onFocus={handleFocus}
           onBlur={handleBlur}
           readOnly={computed}
+          required={required}
+          pattern={pattern}
+          maxLength={maxLength}
+          min={min}
+          max={max}
+          inputMode={inputMode || (type === 'number' ? 'numeric' : undefined)}
+          aria-label={label}
           placeholder={type === 'number' && !computed ? '0' : ''}
           style={{
             width: '100%',
@@ -2262,12 +2335,13 @@ function Field({ label, value, onChange, computed, prefix = '₹', type = 'numbe
           }}
         />
       </div>
+      {helpText && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>{helpText}</div>}
     </div>
   );
 }
 
-function SalaryTab({ entries, onChange, taxResult, ayParam, regime }: any) {
-  return <EmployerEntryManager entries={entries} onChange={onChange} assessmentYear={ayParam || '2026-27'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} />;
+function SalaryTab({ entries, onChange, taxResult, ayParam, regime, tdsEntries }: any) {
+  return <EmployerEntryManager entries={entries} onChange={onChange} assessmentYear={ayParam || '2026-27'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} tdsEntries={tdsEntries || []} />;
 }
 
 function HousePropertyTab({ entries, onChange, itrForm }: any) {
@@ -2287,7 +2361,7 @@ function CapitalGainsTab({ formData, setFormData, taxResult, itrForm }: any) {
   />;
 }
 
-function PersonalInfoTab({ formData, setFormData, onBanksChange }: any) {
+function LegacyPersonalInfoTab({ formData, setFormData, onBanksChange }: any) {
   const calculateAge = (dob: string) => {
     if (!dob) return 0;
     const birthDate = new Date(dob);
