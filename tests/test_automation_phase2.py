@@ -270,7 +270,7 @@ async def test_semantic_menu_alternatives_and_atomic_valid_download(
     assert page.menu_clicks == 1
     assert page.download_clicks == 1
     assert page.selects[0].selected == "AY 2026-27"
-    assert prefill._test_flow_calls[:2] == ["resolve", "navigate"]
+    assert prefill._test_flow_calls == ["resolve"]
 
 
 @pytest.mark.asyncio
@@ -435,6 +435,93 @@ async def test_session_expiry_uses_shared_helper(
     assert outcome.path is None
 
 
+@pytest.mark.asyncio
+async def test_local_click_fallback_exposes_prefill_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prefill must explicitly click menu levels when shared hover navigation stalls."""
+    events: list[str] = []
+
+    class MenuLocator:
+        """Stateful menu locator for the local Prefill fallback."""
+
+        def __init__(self, kind: str) -> None:
+            """Store the menu level represented by this locator."""
+            self.kind = kind
+
+        @property
+        def first(self) -> "MenuLocator":
+            """Return this locator."""
+            return self
+
+        async def is_visible(self, timeout: int = 0) -> bool:
+            """Expose menu levels according to prior clicks."""
+            del timeout
+            if self.kind == "efile":
+                return True
+            if self.kind == "returns":
+                return "efile" in events
+            if self.kind == "prefill":
+                return "returns" in events
+            return False
+
+        async def click(self, timeout: int = 0, force: bool = False) -> None:
+            """Record explicit activation of a menu level."""
+            del timeout, force
+            events.append(self.kind)
+
+        async def hover(self, timeout: int = 0) -> None:
+            """Record hover fallback activation."""
+            del timeout
+            events.append(self.kind)
+
+    class MenuPage:
+        """Portal shell where explicit clicks reveal nested actions."""
+
+        def get_by_role(self, role: str, name: Any) -> MenuLocator:
+            """Return a stateful locator based on the requested semantic name."""
+            del role
+            pattern = getattr(name, "pattern", str(name)).lower()
+            if "pre" in pattern:
+                return MenuLocator("prefill")
+            if "income" in pattern:
+                return MenuLocator("returns")
+            return MenuLocator("efile")
+
+        def get_by_text(self, name: Any, exact: bool = False) -> MenuLocator:
+            """Mirror semantic role lookup for text fallbacks."""
+            del exact
+            return self.get_by_role("link", name)
+
+        def locator(self, selector: str) -> MenuLocator:
+            """Return XPath/CSS fallback locators."""
+            if "Pre-filled" in selector or "pre-filled" in selector:
+                return MenuLocator("prefill")
+            if "Income Tax Returns" in selector:
+                return MenuLocator("returns")
+            return MenuLocator("efile")
+
+    page = MenuPage()
+    action = await prefill._open_prefill_action_locally(
+        page,
+        prefill.MonotonicDeadline.after(1_000),
+    )
+
+    assert action is not None
+    assert events == ["efile", "returns"]
+
+
+def test_iter_frames_excludes_playwright_main_frame_duplicate() -> None:
+    """The main document must not be scanned once as page and again as frame."""
+    page = Page(b"{}")
+    main_frame = object()
+    child_frame = object()
+    page.main_frame = main_frame  # type: ignore[attr-defined]
+    page.frames = [main_frame, child_frame]  # type: ignore[attr-defined]
+
+    assert prefill._iter_frames(page) == (page, child_frame)
+
+
 def test_worker_integrates_prefill_after_core_downloads_without_extraction() -> None:
     """Worker must preserve 26AS→AIS/TIS before optional Prefill processing."""
     source = inspect.getsource(job_worker._run_job)
@@ -444,6 +531,8 @@ def test_worker_integrates_prefill_after_core_downloads_without_extraction() -> 
     extraction = source.index("# Step 4.5: Extract parsed data")
 
     assert as26_call < ais_call < prefill_call < extraction
+    assert "context.new_page(" not in source
+    assert "dashboard_url=" not in source
     assert "page = await restore_dashboard_anchor(" not in source
     assert 'files["prefill"] = prefill_outcome.path' in source
     assert 'artifact_outcomes["prefill"] = prefill_outcome.to_dict()' in source

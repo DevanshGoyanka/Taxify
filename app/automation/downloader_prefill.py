@@ -143,28 +143,34 @@ async def download_prefill(
         anchor = await resolve_itd_anchor(page)
         if await session_expired(anchor):
             return _outcome(PrefillState.SESSION_EXPIRED, "The portal session has expired.", assessment_year)
-        _emit(log, "[PREFILL] Opening Income Tax Returns navigation.")
-        await navigate_income_tax_returns(
-            anchor, timeout_ms=deadline.remaining_ms, log=log
-        )
-        _emit(log, "[PREFILL] Income Tax Returns submenu opened.")
+
+        menu = await _find_prefill_action(anchor, min(250, deadline.remaining_ms))
+        if menu is None:
+            _emit(log, "[PREFILL] Opening Income Tax Returns navigation.")
+            navigation_budget = min(5_000, deadline.remaining_ms)
+            try:
+                await navigate_income_tax_returns(
+                    anchor, timeout_ms=navigation_budget, log=log
+                )
+            except Exception as exc:
+                _emit(
+                    log,
+                    "[PREFILL] Shared navigation did not expose the action; "
+                    f"using local click fallback ({type(exc).__name__}).",
+                )
+            menu = await _find_prefill_action(
+                anchor, min(500, deadline.remaining_ms)
+            )
+
+        if menu is None and not deadline.expired:
+            menu = await _open_prefill_action_locally(anchor, deadline, log=log)
+
         if await session_expired(anchor):
             return _outcome(PrefillState.SESSION_EXPIRED, "The portal session has expired.", assessment_year)
-
-        _emit(log, "[PREFILL] Finding Download Pre-filled Data action.")
-        menu = await _find_semantic(
-            anchor,
-            _DOWNLOAD_PREFILL,
-            (
-                "//*[normalize-space(.)='Download Pre-filled Data']",
-                "//*[normalize-space(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'))='download pre-filled data']",
-                "//*[normalize-space(.)='Download Prefilled Data']",
-            ),
-            deadline.remaining_ms,
-        )
         if menu is None:
             _emit(log, "[PREFILL] Download Pre-filled Data action was not found.")
             return _outcome(PrefillState.RETRYABLE_FAILURE, "Pre-filled data action was not found.", assessment_year)
+        _emit(log, "[PREFILL] Download Pre-filled Data action ready.")
         _emit(log, "[PREFILL] Clicking Download Pre-filled Data action.")
         await menu.click(timeout=max(1, min(750, deadline.remaining_ms)))
 
@@ -246,6 +252,70 @@ async def download_prefill(
         if "permission" in message or "invalid argument" in message:
             state = PrefillState.PERMANENT_FAILURE
         return _outcome(state, "The pre-filled data download did not complete.", assessment_year)
+
+
+async def _find_prefill_action(page: Any, timeout_ms: int) -> Optional[Any]:
+    """Find the actual Prefill leaf action under one short bounded probe."""
+    return await _find_semantic(
+        page,
+        _DOWNLOAD_PREFILL,
+        (
+            "//*[normalize-space(.)='Download Pre-filled Data']",
+            "//*[normalize-space(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'))='download pre-filled data']",
+            "//*[normalize-space(.)='Download Prefilled Data']",
+        ),
+        timeout_ms,
+    )
+
+
+async def _open_prefill_action_locally(
+    page: Any,
+    deadline: MonotonicDeadline,
+    *,
+    log: Optional[Callable[[str], None]] = None,
+) -> Optional[Any]:
+    """Explicitly click ITD menu levels when hover-only navigation stalls."""
+    efile = await _find_semantic(
+        page,
+        re.compile(r"^\s*e-File\s*$", re.IGNORECASE),
+        ("a#e-File", "//*[normalize-space(.)='e-File']"),
+        min(2_000, deadline.remaining_ms),
+    )
+    if efile is None:
+        _emit(log, "[PREFILL] Local fallback could not find e-File.")
+        return None
+    try:
+        await efile.click(timeout=max(1, min(750, deadline.remaining_ms)))
+    except Exception:
+        try:
+            await efile.click(force=True, timeout=max(1, min(750, deadline.remaining_ms)))
+        except Exception:
+            return None
+
+    returns = await _find_semantic(
+        page,
+        re.compile(r"^\s*Income\s+Tax\s+Returns\s*$", re.IGNORECASE),
+        (
+            "//*[normalize-space(.)='Income Tax Returns']",
+            "//*[text()='Income Tax Returns']",
+        ),
+        min(2_000, deadline.remaining_ms),
+    )
+    if returns is None:
+        _emit(log, "[PREFILL] Local fallback could not find Income Tax Returns.")
+        return None
+    try:
+        await returns.click(timeout=max(1, min(750, deadline.remaining_ms)))
+    except Exception:
+        try:
+            await returns.hover(timeout=max(1, min(750, deadline.remaining_ms)))
+        except Exception:
+            return None
+
+    action = await _find_prefill_action(page, min(3_000, deadline.remaining_ms))
+    if action is not None:
+        _emit(log, "[PREFILL] Local click fallback exposed the Prefill action.")
+    return action
 
 
 async def _find_semantic(
@@ -394,7 +464,10 @@ async def _select_combobox_ay(
         if deadline.expired:
             return False
         try:
-            if not await _try_combobox_option(trigger, frame, deadline, log=log):
+            if not await _try_combobox_option(
+                trigger, frame, page, deadline, log=log
+            ):
+                await _close_combobox_panel(trigger, frame)
                 continue
             value = await _control_value(trigger, deadline)
             if _AY_TEXT.search(value):
@@ -412,62 +485,129 @@ async def _select_combobox_ay(
 async def _try_combobox_option(
     trigger: Any,
     frame: Any,
+    page: Any,
     deadline: MonotonicDeadline,
     *,
     log: Optional[Callable[[str], None]] = None,
 ) -> bool:
-    """Open one combobox and click the AY option if its panel exposes one."""
-    open_ms = max(1, min(500, deadline.remaining_ms))
+    """Open one combobox and select a delayed AY option from any overlay root."""
+    del log
+    open_ms = max(1, min(750, deadline.remaining_ms))
     await trigger.click(timeout=open_ms)
-    # Angular/JSF panels attach asynchronously; give the option list a brief window.
-    option = await _find_visible_ay_option(frame, deadline)
-    if option is None:
-        return False
-    click_ms = max(1, min(500, deadline.remaining_ms))
-    await option.click(timeout=click_ms)
-    return True
+    option_deadline = MonotonicDeadline.after(min(2_000, deadline.remaining_ms))
+    while not option_deadline.expired:
+        for root in _ordered_option_roots(page, frame):
+            option = await _find_visible_ay_option(root, option_deadline)
+            if option is None:
+                continue
+            await option.click(timeout=max(1, min(750, deadline.remaining_ms)))
+            return True
+        await option_deadline.sleep(0.05)
+    return False
 
 
 async def _discover_combobox_triggers(
     page: Any,
-    deadline: MonotonicDeadline
+    deadline: MonotonicDeadline,
 ) -> list[tuple[Any, Any]]:
-    """Collect visible custom-combobox trigger elements across all frames.
-
-    Returns a list of ``(trigger_locator, frame)`` pairs. The trigger is the
-    clickable surface that opens the option panel; Angular exposes it via
-    ``role="combobox"`` or ``role="listbox"``, while PrimeFaces/JSF exposes
-    ``.ui-selectonemenu`` and ``select[style*='display:none']`` pairs whose
-    visible trigger is the sibling ``.ui-selectonemenu-trigger``.
-    """
-    triggers: list[tuple[Any, Any]] = []
-    selectors = (
+    """Collect AY-scoped controls first, then unique generic fallbacks."""
+    scoped_selectors = (
+        "[role='combobox'][aria-label*='assessment' i]",
+        "[role='combobox'][aria-label*='year' i]",
+        "[role='combobox'][name*='assessment' i]",
+        "[role='combobox'][id*='assessment' i]",
+        "[role='combobox'][formcontrolname*='assessment' i]",
+        "[role='combobox'][placeholder*='assessment' i]",
+        "mat-form-field:has-text('Assessment Year') [role='combobox']",
+        ".mat-form-field:has-text('Assessment Year') [role='combobox']",
+        ".form-group:has-text('Assessment Year') [role='combobox']",
+        "label:has-text('Assessment Year') + * [role='combobox']",
+    )
+    generic_selectors = (
         "[role='combobox']",
-        "[role='listbox']",
-        ".ui-selectonemenu",
         ".ui-selectonemenu-trigger",
         ".ng-select-container",
         ".mat-select-trigger",
         ".select2-choice",
         ".chosen-single",
     )
-    for frame in _iter_frames(page):
+    scoped = await _visible_trigger_candidates(page, scoped_selectors, deadline)
+    accessible: list[tuple[Any, Any]] = []
+    accessible_names = (
+        re.compile(r"assessment\s*year|\bAY\b", re.IGNORECASE),
+        re.compile(r".*", re.DOTALL),
+    )
+    for root in _iter_frames(page):
+        for accessible_name in accessible_names:
+            try:
+                candidate = root.get_by_role(
+                    "combobox", name=accessible_name
+                ).first
+                if await candidate.is_visible(
+                    timeout=max(1, min(150, deadline.remaining_ms))
+                ):
+                    accessible.append((candidate, root))
+            except Exception:
+                continue
+    generic = await _visible_trigger_candidates(page, generic_selectors, deadline)
+    return _unique_trigger_candidates((*scoped, *accessible, *generic))
+
+
+async def _visible_trigger_candidates(
+    page: Any,
+    selectors: Sequence[str],
+    deadline: MonotonicDeadline,
+) -> list[tuple[Any, Any]]:
+    """Return visible trigger candidates across unique page/frame roots."""
+    candidates: list[tuple[Any, Any]] = []
+    for root in _iter_frames(page):
         if deadline.expired:
             break
         for selector in selectors:
             try:
-                locator = frame.locator(selector)
+                locator = root.locator(selector)
                 count = int(await _bounded(locator.count(), deadline))
             except Exception:
                 continue
             for index in range(count):
                 try:
                     candidate = locator.nth(index)
-                    if await candidate.is_visible(timeout=max(1, min(150, deadline.remaining_ms))):
-                        triggers.append((candidate, frame))
+                    if await candidate.is_visible(
+                        timeout=max(1, min(150, deadline.remaining_ms))
+                    ):
+                        candidates.append((candidate, root))
                 except Exception:
                     continue
-    return triggers
+    return candidates
+
+
+def _unique_trigger_candidates(
+    candidates: Sequence[tuple[Any, Any]],
+) -> list[tuple[Any, Any]]:
+    """Deduplicate repeated selectors while preserving scoped priority."""
+    unique: list[tuple[Any, Any]] = []
+    seen: set[str] = set()
+    for trigger, root in candidates:
+        key = f"{id(root)}:{trigger!s}"
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((trigger, root))
+    return unique
+
+
+def _ordered_option_roots(page: Any, trigger_root: Any) -> tuple[Any, ...]:
+    """Search trigger root, page overlay root, then remaining child frames."""
+    roots = (trigger_root, page, *_iter_frames(page))
+    unique: list[Any] = []
+    seen: set[int] = set()
+    for root in roots:
+        marker = id(root)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique.append(root)
+    return tuple(unique)
 
 
 async def _find_visible_ay_option(
@@ -475,6 +615,14 @@ async def _find_visible_ay_option(
     deadline: MonotonicDeadline,
 ) -> Optional[Any]:
     """Find a visible option element matching the AY text within the open panel."""
+    try:
+        accessible = frame.get_by_role("option", name=_AY_TEXT).first
+        if await accessible.is_visible(
+            timeout=max(1, min(150, deadline.remaining_ms))
+        ):
+            return accessible
+    except Exception:
+        pass
     option_selectors = (
         "[role='option']",
         "[role='listitem']",
@@ -516,9 +664,19 @@ async def _close_combobox_panel(trigger: Any, frame: Any) -> None:
 
 
 def _iter_frames(page: Any) -> tuple[Any, ...]:
-    """Yield the main page and every child frame for exhaustive control scans."""
-    frames = tuple(getattr(page, "frames", ()) or ())
-    return (page,) + frames if frames else (page,)
+    """Yield the page plus unique child frames, excluding its main frame."""
+    roots: list[Any] = [page]
+    main_frame = getattr(page, "main_frame", None)
+    seen: set[int] = {id(page)}
+    if main_frame is not None:
+        seen.add(id(main_frame))
+    for frame in tuple(getattr(page, "frames", ()) or ()):
+        marker = id(frame)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        roots.append(frame)
+    return tuple(roots)
 
 
 async def _verify_ay_displayed(
