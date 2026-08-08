@@ -34,6 +34,7 @@ from app.automation.filed_returns_inventory import (
     InventoryState,
     capture_filed_return_inventory,
 )
+from app.automation.filing_mode_classifier import classify_filing_mode
 from app.automation.navigation import resolve_itd_anchor
 from app.automation.pdf_unlocker import unlock_pdf, verify_pdf_decryptable
 from app.automation.privacy import (
@@ -320,7 +321,7 @@ async def _run_job(job_id: int) -> None:
         _update_job(job_id, status_message=short)
         # Timing events are intentionally visible at INFO for live Phase 0
         # verification; ordinary detailed portal logs remain DEBUG-level.
-        if safe_msg.startswith(("[Timing]", "[NAV]", "[PREFILL]", "[26AS]", "[FILED RETURNS]")):
+        if safe_msg.startswith(("[Timing]", "[NAV]", "[PREFILL]", "[26AS]", "[FILED RETURNS]", "[CLASSIFICATION]")):
             logger.info("Job %d: %s", job_id, safe_msg)
         else:
             logger.debug("Job %d: %s", job_id, safe_msg)
@@ -565,11 +566,21 @@ async def _run_job(job_id: int) -> None:
         )
         page = await resolve_itd_anchor(page)
         artifact_outcomes["filed_return_inventory"] = inventory_outcome.to_dict()
+        classification = classify_filing_mode(inventory_outcome, assessment_year)
+        artifact_outcomes["filing_mode_classification"] = classification.to_dict()
         if inventory_outcome.state in {InventoryState.CAPTURED, InventoryState.NO_RETURNS}:
             steps.append("filed_return_inventory_captured")
+            steps.append("filing_mode_classified")
         log(
             "[Worker] Filed-return inventory outcome: "
             f"{inventory_outcome.state.value}; records={len(inventory_outcome.records)}"
+        )
+        log(
+            "[CLASSIFICATION] Filing-mode classification completed; "
+            f"state={classification.state.value}; "
+            f"context={classification.filing_context.value}; "
+            f"current_returns={classification.current_return_count}; "
+            f"review_required={classification.review_required}."
         )
         _update_job(
             job_id,
