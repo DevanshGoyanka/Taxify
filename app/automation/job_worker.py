@@ -30,6 +30,10 @@ from app.automation.downloader_26as import download_26as
 from app.automation.downloader_ais_tis import run_request_ais, run_download_ais_tis
 from app.automation.downloader_prefill import PrefillState, download_prefill
 from app.automation.errors import _friendly_error
+from app.automation.filed_returns_inventory import (
+    InventoryState,
+    capture_filed_return_inventory,
+)
 from app.automation.navigation import resolve_itd_anchor
 from app.automation.pdf_unlocker import unlock_pdf, verify_pdf_decryptable
 from app.automation.privacy import (
@@ -76,6 +80,7 @@ _STEP_PROGRESS: dict[str, dict] = {
     "download_tis":      {"pct": 55, "label": "Downloading TIS statement",      "icon": "\U0001f4e5"},
     "poll_ais":          {"pct": 65, "label": "Waiting for AIS to generate",     "icon": "\u23f3"},
     "download_prefill":  {"pct": 80, "label": "Downloading ITD Prefill JSON",   "icon": "\U0001f4e5"},
+    "filed_return_inventory": {"pct": 83, "label": "Reading filed-return inventory", "icon": "\U0001f4cb"},
     "unlock":         {"pct": 85, "label": "Decrypting PDFs",               "icon": "\U0001f513"},
     "extract":        {"pct": 88, "label": "Extracting PDF data",           "icon": "\U0001f4ca"},
     "logout":         {"pct": 95, "label": "Signing out",                   "icon": "\U0001f6aa"},
@@ -90,6 +95,8 @@ _STATUS_CLEAN_MAP: dict[str, str] = {
     "Login successful":         "Signed in successfully",
     "Downloading Prefill":      "Downloading current-year Prefill JSON\u2026",
     "Prefill downloaded":       "Current-year Prefill JSON ready",
+    "Reading filed returns":    "Reading filed-return inventory\u2026",
+    "Filed returns captured":   "Filed-return inventory ready",
     "Downloading Form 26AS":    "Fetching Form 26AS\u2026",
     "26AS downloaded":          "Form 26AS ready",
     "Requesting AIS":           "Requesting AIS generation\u2026",
@@ -313,7 +320,7 @@ async def _run_job(job_id: int) -> None:
         _update_job(job_id, status_message=short)
         # Timing events are intentionally visible at INFO for live Phase 0
         # verification; ordinary detailed portal logs remain DEBUG-level.
-        if safe_msg.startswith(("[Timing]", "[NAV]", "[PREFILL]", "[26AS]")):
+        if safe_msg.startswith(("[Timing]", "[NAV]", "[PREFILL]", "[26AS]", "[FILED RETURNS]")):
             logger.info("Job %d: %s", job_id, safe_msg)
         else:
             logger.debug("Job %d: %s", job_id, safe_msg)
@@ -541,6 +548,35 @@ async def _run_job(job_id: int) -> None:
             artifact_outcomes=json.dumps(artifact_outcomes),
             status_message=prefill_status,
             progress_pct=82,
+        )
+
+        # Step 4.1: Capture filed-return inventory metadata only. This optional,
+        # nonfatal observation performs no row selection and no download/import.
+        _update_job(
+            job_id,
+            current_step="filed_return_inventory",
+            status_message="Reading filed returns...",
+            progress_pct=83,
+        )
+        log("[Worker] Starting filed-return inventory capture...")
+        inventory_outcome = await capture_filed_return_inventory(
+            page=page,
+            log=log,
+        )
+        page = await resolve_itd_anchor(page)
+        artifact_outcomes["filed_return_inventory"] = inventory_outcome.to_dict()
+        if inventory_outcome.state in {InventoryState.CAPTURED, InventoryState.NO_RETURNS}:
+            steps.append("filed_return_inventory_captured")
+        log(
+            "[Worker] Filed-return inventory outcome: "
+            f"{inventory_outcome.state.value}; records={len(inventory_outcome.records)}"
+        )
+        _update_job(
+            job_id,
+            steps_completed=json.dumps(steps),
+            artifact_outcomes=json.dumps(artifact_outcomes),
+            status_message="Filed returns captured",
+            progress_pct=84,
         )
 
         # Step 5: Unlock remaining PDFs

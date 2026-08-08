@@ -179,7 +179,7 @@ def test_worker_passes_assessment_year_to_26as_and_fy_to_ais() -> None:
 
     assert "assessment_year=assessment_year" in source
     assert source.count("fiscal_year=fiscal_year") >= 2
-    assert source.count("page = await resolve_itd_anchor(page)") == 4
+    assert source.count("page = await resolve_itd_anchor(page)") == 5
     assert "page = await restore_dashboard_anchor(" not in source
     assert as26_call < ais_call < prefill_call
     assert "required_artifact_failures.append" in source

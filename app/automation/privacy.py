@@ -11,8 +11,12 @@ _UUID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _DOB_PATTERN = re.compile(r"\b(?:19|20)[0-9]{2}[-/]\d{1,2}[-/]\d{1,2}\b")
+_EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_ACK_PATTERN = re.compile(
+    r"(?i)(acknowledg(?:e)?ment(?:\s*(?:no\.?|number))?\s*[:=-]?\s*)\d{12,20}"
+)
 _DOWNLOAD_PATH_PATTERN = re.compile(
-    r"[A-Za-z]:\\[^\r\n,;]*?\\downloads\\[^\s,'\"}\]]+",
+    r"(?:[A-Za-z]:\\|/)[^\r\n,;]*?(?:\\|/)Downloads?(?:\\|/)[^\s,'\"}\]]+",
     re.IGNORECASE,
 )
 
@@ -24,11 +28,14 @@ def sanitize_automation_text(value: object) -> str:
         value: Arbitrary value about to be persisted or written to a log.
 
     Returns:
-        A string with PANs, public client UUIDs, full DOBs, and download paths
-        replaced by stable non-sensitive labels.
+        A string with PANs, public client UUIDs, full DOBs, email addresses,
+        acknowledgement numbers, and download paths replaced by stable
+        non-sensitive labels.
     """
     text = str(value)
     text = _DOWNLOAD_PATH_PATTERN.sub("<download-path>", text)
+    text = _ACK_PATTERN.sub(r"\1<acknowledgement>", text)
+    text = _EMAIL_PATTERN.sub("<email>", text)
     text = _PAN_PATTERN.sub("<PAN>", text)
     text = _UUID_PATTERN.sub("<client-id>", text)
     text = _DOB_PATTERN.sub("<DOB>", text)

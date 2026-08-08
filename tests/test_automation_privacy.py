@@ -33,6 +33,24 @@ def test_sanitize_automation_text_redacts_taxpayer_data() -> None:
     assert "<download-path>" in sanitized
 
 
+def test_sanitize_automation_text_redacts_inventory_sensitive_data() -> None:
+    """Acknowledgements, emails, and user download paths must be removed."""
+    acknowledgement = "".join(["1"] * 15)
+    raw = (
+        f"Acknowledgement No: {acknowledgement} email taxpayer@example.com path "
+        rf"C:\Users\Example\Downloads\{acknowledgement}.json"
+    )
+
+    sanitized = sanitize_automation_text(raw)
+
+    assert acknowledgement not in sanitized
+    assert "taxpayer@example.com" not in sanitized
+    assert r"C:\Users\Example" not in sanitized
+    assert "<acknowledgement>" in sanitized
+    assert "<email>" in sanitized
+    assert "<download-path>" in sanitized
+
+
 def test_logging_filter_redacts_formatted_arguments() -> None:
     """The logger filter must sanitize values supplied through format args."""
     record = logging.LogRecord(
