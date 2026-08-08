@@ -246,5 +246,4 @@ def test_worker_integrates_classification_without_portal_or_tax_actions() -> Non
     assert 'artifact_outcomes["filing_mode_classification"]' in source
     assert 'files["filing_mode_classification"]' not in source
     assert 'parsed["filing_mode_classification"]' not in source
-    assert "download_filed" not in source
     assert "click_revision" not in source

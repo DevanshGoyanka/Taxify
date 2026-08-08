@@ -29,11 +29,16 @@ from app.automation.browser import browser_manager
 from app.automation.downloader_26as import download_26as
 from app.automation.downloader_ais_tis import run_request_ais, run_download_ais_tis
 from app.automation.downloader_prefill import PrefillState, download_prefill
+from app.automation.downloader_filed_return import (
+    FiledReturnDownloadState,
+    download_filed_return_json,
+)
 from app.automation.errors import _friendly_error
 from app.automation.filed_returns_inventory import (
     InventoryState,
     capture_filed_return_inventory,
 )
+from app.automation.filing_advisory import generate_filing_advisory
 from app.automation.filing_mode_classifier import classify_filing_mode
 from app.automation.navigation import resolve_itd_anchor
 from app.automation.pdf_unlocker import unlock_pdf, verify_pdf_decryptable
@@ -82,6 +87,7 @@ _STEP_PROGRESS: dict[str, dict] = {
     "poll_ais":          {"pct": 65, "label": "Waiting for AIS to generate",     "icon": "\u23f3"},
     "download_prefill":  {"pct": 80, "label": "Downloading ITD Prefill JSON",   "icon": "\U0001f4e5"},
     "filed_return_inventory": {"pct": 83, "label": "Reading filed-return inventory", "icon": "\U0001f4cb"},
+    "filed_return_download": {"pct": 84, "label": "Downloading prior-year reference JSON", "icon": "\U0001f4e5"},
     "unlock":         {"pct": 85, "label": "Decrypting PDFs",               "icon": "\U0001f513"},
     "extract":        {"pct": 88, "label": "Extracting PDF data",           "icon": "\U0001f4ca"},
     "logout":         {"pct": 95, "label": "Signing out",                   "icon": "\U0001f6aa"},
@@ -582,12 +588,50 @@ async def _run_job(job_id: int) -> None:
             f"current_returns={classification.current_return_count}; "
             f"review_required={classification.review_required}."
         )
+
+        # Step 4.2: Generate filing advisory and optionally download prior-year
+        # filed-return JSON as a read-only reference. This does not import,
+        # reconcile, or compute from the downloaded artifact.
+        advisory = generate_filing_advisory(classification, inventory_outcome)
+        artifact_outcomes["filing_advisory"] = advisory.to_dict()
+        if advisory.already_filed_advisory:
+            log(f"[ADVISORY] {advisory.already_filed_advisory_message}")
+        prior_ref_ay = advisory.download_assessment_year
+        if prior_ref_ay and advisory.download_row_identity:
+            _update_job(
+                job_id,
+                current_step="filed_return_download",
+                status_message="Downloading prior-year reference JSON...",
+                progress_pct=84,
+            )
+            log(f"[FILED RETURN DL] Downloading prior-year reference JSON for AY {prior_ref_ay}.")
+            prior_dl = await download_filed_return_json(
+                page=page,
+                assessment_year=prior_ref_ay,
+                target_row_identity=advisory.download_row_identity,
+                download_dir=dldir,
+                timeout_ms=60_000,
+                log=log,
+            )
+            page = await resolve_itd_anchor(page)
+            artifact_outcomes["prior_year_return"] = prior_dl.to_dict()
+            if prior_dl.state is FiledReturnDownloadState.DOWNLOADED:
+                files["prior_year_return"] = prior_dl.path
+                steps.append("prior_year_return_downloaded")
+                log(f"[FILED RETURN DL] Prior-year reference JSON saved for AY {prior_ref_ay}.")
+            else:
+                log(f"[FILED RETURN DL] Prior-year reference download: {prior_dl.state.value}")
+        else:
+            log("[ADVISORY] No prior-year reference download targeted.")
+        steps.append("filing_advisory_generated")
+
         _update_job(
             job_id,
             steps_completed=json.dumps(steps),
+            files_downloaded=json.dumps(files),
             artifact_outcomes=json.dumps(artifact_outcomes),
             status_message="Filed returns captured",
-            progress_pct=84,
+            progress_pct=85,
         )
 
         # Step 5: Unlock remaining PDFs
