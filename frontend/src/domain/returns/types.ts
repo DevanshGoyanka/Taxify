@@ -69,7 +69,7 @@ export interface LegacyCompatibilityEnvelope { source: 'legacy-flat-v1'; unknown
 export interface ReturnDraft {
   schemaVersion: 1; assessmentYear: string; form: ItrForm; regime: TaxRegime;
   personal: { name: string; pan: string; email: string; mobile: string; dateOfBirth: string | null };
-  filing: FilingStatus; employers: Employer[]; houseProperties: HouseProperty[]; businesses: PresumptiveBusiness[];
+  filing: FilingStatus; employers: Employer[]; houseProperties: HouseProperty[]; housePropertyPassThroughIncome: number; businesses: PresumptiveBusiness[]; capitalGainsSchedule: Record<string, unknown>;
   otherSources: { interest: InterestIncome[]; dividends: DividendIncome[]; familyPension: FamilyPension; winnings: WinningIncome[]; gifts: GiftIncome[] };
   exemptIncome: ExemptIncomeEntry[];
   deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions };

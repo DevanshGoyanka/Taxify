@@ -10,7 +10,8 @@ import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
 import { BankAccountManager } from '../components/BankAccountManager';
 import { PersonalInfoTab } from '../components/PersonalInfoTab';
-import { CapitalGainsEntryManager } from '../components/CapitalGainsEntryManager';
+import { CapitalGainsEntryManager, hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
+import { BusinessProfessionEntryManager } from '../components/BusinessProfessionEntryManager';
 import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
@@ -133,9 +134,7 @@ function validatePhase1Payload(data: any): string | null {
     const ownShare = Number(property.ownershipShare);
     if (property.isCoOwned) {
       if (!Number.isFinite(ownShare) || ownShare < 0 || ownShare > 100 || !Array.isArray(property.coOwners) || property.coOwners.length === 0) return 'Co-owned properties require your valid share and at least one co-owner.';
-      for (const owner of property.coOwners) if (!owner.name || String(owner.name).length > 125 || (owner.pan && !panPattern.test(String(owner.pan))) || (owner.aadhaar && !/^[0-9]{12}$/.test(String(owner.aadhaar))) || Number(owner.share) < 0 || Number(owner.share) > 100) return 'Complete every co-owner with name, valid optional PAN/Aadhaar and share from 0 to 100.';
-      const totalShare = ownShare + property.coOwners.reduce((sum: number, owner: any) => sum + Number(owner.share || 0), 0);
-      if (Math.abs(totalShare - 100) > 0.001) return 'House property ownership shares must total exactly 100%.';
+      for (const owner of property.coOwners) if (!owner.name || String(owner.name).length > 125 || (owner.pan && !panPattern.test(String(owner.pan))) || (owner.aadhaar && !/^[0-9]{12}$/.test(String(owner.aadhaar))) || Number(owner.share) < 0 || Number(owner.share) > 100) return 'Complete every co-owner with name, valid optional PAN/Aadhaar and an optional share from 0 to 100.';
     }
     for (const tenant of property.tenantDetails || []) if (!tenant.name || String(tenant.name).length > 125 || (tenant.pan && !panPattern.test(String(tenant.pan))) || (tenant.aadhaar && !/^[0-9]{12}$/.test(String(tenant.aadhaar))) || (tenant.panOrTan && !/^(?:[A-Z]{5}[0-9]{4}[A-Z]|[A-Z]{4}[0-9]{5}[A-Z])$/.test(String(tenant.panOrTan)))) return 'Complete every tenant with name and valid optional PAN, TAN or Aadhaar.';
     for (const loan of property.homeLoans || []) if (!['B', 'I'].includes(String(loan.lenderType)) || !loan.lenderName || String(loan.lenderName).length > 125 || !loan.loanAccountNo || String(loan.loanAccountNo).length > 20 || !/^[A-Za-z0-9 /-]+$/.test(String(loan.loanAccountNo)) || !loan.dateOfLoan || Number(loan.totalLoanAmount) < 0 || Number(loan.loanOutstandingAmount) < 0 || Number(loan.interestUs24B) < 0) return 'Complete every section 24(b) loan with source, lender, account/reference, date and non-negative amounts.';
@@ -154,6 +153,71 @@ function validatePhase1Payload(data: any): string | null {
   if (accounts.length > 0 && !accounts.some((account: any) => account.useForRefund)) return 'Mark one bank account for refund.';
   for (const account of accounts) if (!account.bankName || !account.accountNumber || !ifscPattern.test(account.ifscCode || '')) return 'Complete every bank account with a valid 11-character IFSC code.';
   for (const payment of data.advanceTaxEntries || []) if (!bsrPattern.test(payment.bsrCode || '') || !payment.depositDate || !payment.challanSerialNo || Number(payment.amount) <= 0) return 'Complete every advance-tax challan with valid BSR code, date, serial number and amount.';
+  const cgError = validateCapitalGainsSchedule(data.capitalGainsSchedule, String(data.form || data.itrForm || '').replace('-', '').toUpperCase());
+  if (cgError) return cgError;
+  return null;
+}
+
+function validateCapitalGainsSchedule(schedule: any, form: string): string | null {
+  if (!schedule) return null;
+  const panPattern = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+  const isinPattern = /^IN[A-Z0-9]{10}$/;
+  const simple = form === 'ITR1' || form === 'ITR4';
+  const itr3 = form === 'ITR3';
+  if (simple) {
+    const block = schedule.simplified112A || {};
+    if (block.totalSaleConsideration !== undefined && Number(block.totalSaleConsideration) < 0) return '112A sale consideration cannot be negative.';
+    if (block.totalCostAcquisition !== undefined && Number(block.totalCostAcquisition) < 0) return '112A cost of acquisition cannot be negative.';
+    return null;
+  }
+  const numberRow = (rows: any[], required: string[], context: string): string | null => {
+    for (const row of rows) {
+      for (const key of required) {
+        const value = row[key];
+        const missing = value === undefined || value === '' || value === null;
+        if (missing) return `${context}: ${key.replace(/([A-Z])/g, ' $1').toLowerCase()} is required.`;
+        if (typeof value === 'string' && (key === 'name' || key === 'doneeName' || key === 'firmName' || key === 'address') && String(value).length > 250) return `${context}: ${key} exceeds the 250-character limit.`;
+      }
+    }
+    return null;
+  };
+  const scripRequired = ['isin','name','totalSaleValue','costWithoutIndexation','acquisitionCost','fmvPerUnit','totalFmv','transferExpenses'];
+  let error = numberRow(schedule.schedule112A || [], scripRequired, 'Schedule 112A');
+  if (error) return error;
+  error = numberRow(schedule.schedule115AD || [], scripRequired, 'Schedule 115AD');
+  if (error) return error;
+  for (const scrip of [...(schedule.schedule112A || []), ...(schedule.schedule115AD || [])]) if (String(scrip.isin) && !isinPattern.test(String(scrip.isin))) return 'Every Schedule 112A / 115AD scrip requires a valid ISIN in the form INE012345678.';
+  const vdaRequired = ['dateOfAcquisition','dateOfTransfer','head','acquisitionCost','consideration'];
+  error = numberRow(schedule.vda || [], vdaRequired, 'Schedule VDA');
+  if (error) return error;
+  for (const vda of schedule.vda || []) {
+    if (vda.dateOfAcquisition && vda.dateOfTransfer && String(vda.dateOfAcquisition) > String(vda.dateOfTransfer)) return 'VDA acquisition date must be on or before the transfer date.';
+    if (vda.head && !['CG','BI'].includes(String(vda.head))) return 'VDA head must be capital gains or business income.';
+    if (!itr3 && vda.head === 'BI') return 'Only ITR-3 may treat virtual digital asset transfers as business income.';
+  }
+  const claimRequired = ['section','dateOfTransfer','amountDeducted'];
+  error = numberRow(schedule.deductionClaims || [], claimRequired, 'Deduction claims');
+  if (error) return error;
+  for (const claim of schedule.deductionClaims || []) {
+    const allowed = itr3 ? ['54','54B','54EC','54F','115F','54D','54G','54GA'] : ['54','54B','54EC','54F','115F'];
+    if (!allowed.includes(String(claim.section))) return 'Deduction section is not permitted for the selected form.';
+    if (claim.ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(String(claim.ifsc))) return 'Deduction IFSC must follow the ABCD0123456 pattern.';
+    if (claim.accountNumber && String(claim.accountNumber).length > 20) return 'Capital Gains Account number cannot exceed 20 characters.';
+  }
+  for (const row of schedule.stDtaa || []) if (!row.countryName || !row.countryCode || !row.article || Number(row.treatyRate) < 0 || !row.itActSection || Number(row.itActRate) < 0) return 'Complete every STCG DTAA row with country, article, treaty rate and Income-tax Act section and rate.';
+  for (const row of schedule.ltDtaa || []) if (!row.countryName || !row.countryCode || !row.article || Number(row.treatyRate) < 0 || !row.itActSection || Number(row.itActRate) < 0) return 'Complete every LTCG DTAA row with country, article, treaty rate and Income-tax Act section and rate.';
+  for (const row of schedule.stImmovable || []) {
+    const transferees = row.transferees || [];
+    if (transferees.length === 0) return 'STCG land/building rows require at least one transferee.';
+    for (const buyer of transferees) if (!buyer.name || Number(buyer.share) < 0 || Number(buyer.share) > 100 || Number(buyer.amount) < 0 || (buyer.pan && !panPattern.test(String(buyer.pan)))) return 'Complete every STCG transferee with name, valid optional PAN, share 0–100 and non-negative amount.';
+  }
+  for (const row of schedule.ltImmovable || []) {
+    const transferees = row.transferees || [];
+    if (transferees.length === 0) return 'LTCG land/building rows require at least one transferee.';
+    for (const buyer of transferees) if (!buyer.name || Number(buyer.share) < 0 || Number(buyer.share) > 100 || Number(buyer.amount) < 0 || (buyer.pan && !panPattern.test(String(buyer.pan)))) return 'Complete every LTCG transferee with name, valid optional PAN, share 0–100 and non-negative amount.';
+    for (const improvement of row.improvements || []) if (!improvement.financialYear || Number(improvement.cost) < 0) return 'Complete every improvement with a financial year and non-negative cost.';
+    for (const exemption of row.exemptions || []) if (!exemption.section || Number(exemption.amount) < 0) return 'Complete every exemption with a section and non-negative amount.';
+  }
   return null;
 }
 
@@ -203,11 +267,10 @@ function getRestrictedCapitalGainsState(formData: any, taxResult: any): {
   };
 }
 
-import { 
-  BusinessTab, 
-  OtherSourcesTab, 
-  DeductionsTab, 
-  TDSTab, 
+import {
+  OtherSourcesTab,
+  DeductionsTab,
+  TDSTab,
   TaxComputationTab, type CanonicalManagerBindings
 } from './ITRComputationTabs';
 
@@ -291,7 +354,7 @@ export default function ITRComputationPage() {
     stcgEquityPre: 0, stcgEquityPost: 0, stcgOtherSlab: 0, 
     ltcg112APre: 0, ltcg112APost: 0, ltcgOtherPre: 0, ltcgOtherPost: 0,
     // Business Income
-    bizPresumptive: '44AD', bizTurnover: 0, bizDeclared: 0, bpNetProfit: 0,
+    bizPresumptive: '44AD', bizTurnover: 0, bizDeclared: 0, bpNetProfit: 0, businessSchedule: {},
     // ===== OTHER SOURCES - CBDT COMPLIANT =====
     // Interest Income
     interestSB: 0, interestFD: 0, interestRD: 0, nscInterest: 0, scssInterest: 0, postOfficeInterest: 0, otherInterest: 0,
@@ -316,6 +379,7 @@ export default function ITRComputationPage() {
     // Phase 1 Multi-Entry Structures (CBDT Compliant)
     employerEntries: [],
     capitalGainTransactions: [],
+    capitalGainsSchedule: {},
     bankInterestEntries: [],
     interestEntries: [],
     donationEntries: [],
@@ -1600,6 +1664,22 @@ export default function ITRComputationPage() {
                       { duration: 6000 },
                     );
                   }
+                  // Block downgrade to ITR-1/4 when non-112A Capital Gains data exists.
+                  const isDowngrade = (newForm === 'ITR-1' || newForm === 'ITR-4') && (itrForm === 'ITR-2' || itrForm === 'ITR-3');
+                  if (isDowngrade && hasNonSimplifiedCapitalGains(formData.capitalGainsSchedule)) {
+                    const confirmDowngrade = window.confirm(
+                      `Switching to ${newForm} will prevent the following Capital Gains data from being filed:\n\n` +
+                      `• Full Schedule CG (STCG/LTCG land & building, equity, NRI, other assets, slump sales)\n` +
+                      `• Schedule 112A scrip-level detail\n• Schedule 115AD\n• Schedule VDA\n• DTAA rows\n• Deduction claims\n• Loss set-off matrix\n\n` +
+                      `The data will be preserved but will NOT be included in the filed return.\n\n` +
+                      `Switch to ${newForm} anyway?`
+                    );
+                    if (!confirmDowngrade) {
+                      // Revert the select by forcing re-render with the old value.
+                      setItrForm(itrForm);
+                      return;
+                    }
+                  }
                   // Allow the switch anyway — blockers disable filing, not viewing.
                   setItrForm(newForm);
                   setFormLockedByUser(true);
@@ -2096,9 +2176,9 @@ export default function ITRComputationPage() {
       }}>
         {activeTab === 0 && <PersonalInfoTab formData={formData} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={setFormData} onBanksChange={managers.banks} />}
         {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={taxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={formData.tdsEntries || []} />}
-        {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} onChange={(entries: any[]) => updateEditor((model) => updateHouseProperties(model, entries))} itrForm={itrForm} />}
+        {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} />}
         {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
-        {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
+        {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
         {activeTab === 6 && <ExemptIncomeTab formData={formData} setFormData={setFormData} />}
         {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} />}
@@ -2344,20 +2424,28 @@ function SalaryTab({ entries, onChange, taxResult, ayParam, regime, tdsEntries }
   return <EmployerEntryManager entries={entries} onChange={onChange} assessmentYear={ayParam || '2026-27'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} tdsEntries={tdsEntries || []} />;
 }
 
-function HousePropertyTab({ entries, onChange, itrForm }: any) {
-  return <HousePropertyEntryManager entries={entries} onChange={onChange} itrForm={itrForm} />;
+function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm }: any) {
+  return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} />;
 }
 
 function CapitalGainsTab({ formData, setFormData, taxResult, itrForm }: any) {
   const summary = taxResult?.capitalGainsSummary || null;
   return <CapitalGainsEntryManager
+    data={formData.capitalGainsSchedule || {}}
     entries={formData.capitalGainTransactions || []}
-    onChange={(entries) => setFormData({ ...formData, capitalGainTransactions: entries })}
+    onChange={(capitalGainsSchedule) => setFormData({ ...formData, capitalGainsSchedule })}
     selectedForm={itrForm}
     summary={summary}
     issues={taxResult?.capitalGainsIssues || summary?.issues || []}
-    status={taxResult?.capitalGainsStatus || summary?.status}
-    eligibility={taxResult?.capitalGainsEligibility || summary?.eligibility}
+  />;
+}
+
+function BusinessTab({ formData, setFormData, taxResult, itrForm }: any) {
+  return <BusinessProfessionEntryManager
+    data={formData.businessSchedule || {}}
+    onChange={(businessSchedule) => setFormData({ ...formData, businessSchedule })}
+    selectedForm={itrForm}
+    taxResult={taxResult}
   />;
 }
 

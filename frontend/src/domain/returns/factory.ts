@@ -10,7 +10,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
     schemaVersion: 1, assessmentYear, form, regime,
     personal: { name: '', pan: '', email: '', mobile: '', dateOfBirth: null },
     filing: { filingSection: '139(1)', returnType: 'ORIGINAL', originalAcknowledgementNumber: '', originalFilingDate: null, noticeNumber: '' },
-    employers: [], houseProperties: [], businesses: [],
+    employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: {},
     otherSources: { interest: [], dividends: [], familyPension: { grossAmount: 0, payerName: '', relationToPensioner: '' }, winnings: [], gifts: [] },
     exemptIncome: [],
     deductions: { section80C: [], section80D: { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: createEmpty80DCategory(), selfFamilySenior: createEmpty80DCategory(), parents: createEmpty80DCategory(), parentsSenior: createEmpty80DCategory() }, section80G: [], loans: { loans: [], section80EEAStampDutyValue: 0 } },

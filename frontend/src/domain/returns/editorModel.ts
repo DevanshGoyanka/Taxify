@@ -227,9 +227,9 @@ export function updateEmployers(model: ReturnEditorModel, employers: readonly Em
   return replaceDraft(model, { ...model.draft, employers: cloneArray(employers) });
 }
 
-/** Replaces house properties with an immutable detached copy. */
-export function updateHouseProperties(model: ReturnEditorModel, properties: readonly HouseProperty[]): ReturnEditorModel {
-  return replaceDraft(model, { ...model.draft, houseProperties: cloneArray(properties) });
+/** Replaces house properties and the Schedule HP-level pass-through income. */
+export function updateHouseProperties(model: ReturnEditorModel, properties: readonly HouseProperty[], passThroughIncome = model.draft.housePropertyPassThroughIncome): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, houseProperties: cloneArray(properties), housePropertyPassThroughIncome: passThroughIncome });
 }
 
 /** Replaces Section 80C investments with an immutable detached copy. */
