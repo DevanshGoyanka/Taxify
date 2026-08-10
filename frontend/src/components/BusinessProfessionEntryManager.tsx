@@ -1,7 +1,8 @@
 import React from 'react';
 import ITR4ScheduleBPManager, { type ITR4ScheduleBPData } from './business/ITR4ScheduleBPManager';
-import ITR3BusinessCoreManager, { type ITR3BusinessCoreData } from './business/ITR3BusinessCoreManager';
-import ITR3BusinessAuxiliaryManager, { type ITR3AuxiliaryData } from './business/ITR3BusinessAuxiliaryManager';
+import type { ITR3BusinessCoreData } from './business/ITR3BusinessCoreManager';
+import type { ITR3AuxiliaryData } from './business/ITR3BusinessAuxiliaryManager';
+import ITR3BusinessWorkspace from './business/ITR3BusinessWorkspace';
 
 /** Canonical frontend-only Business/Profession state for AY 2026-27. */
 export interface BusinessProfessionScheduleData {
@@ -47,16 +48,13 @@ export function BusinessProfessionEntryManager({ data = {}, onChange, selectedFo
   }
 
   return <div>
-    <Header selectedForm={selectedForm} detail="Official ITR-3 business schedules: mandatory core accounts and auxiliary schedules." />
-    <ITR3BusinessCoreManager
-      value={data.ITR3Core}
-      onChange={(ITR3Core: ITR3BusinessCoreData) => onChange({ ...data, ITR3Core })}
+    <ITR3BusinessWorkspace
+      core={data.ITR3Core}
+      auxiliary={data.ITR3Auxiliary}
+      onCoreChange={(ITR3Core: ITR3BusinessCoreData) => onChange({ ...data, ITR3Core })}
+      onAuxiliaryChange={(ITR3Auxiliary: ITR3AuxiliaryData) => onChange({ ...data, ITR3Auxiliary })}
+      computedIncome={Number(taxResult?.bizIncome || 0)}
     />
-    <ITR3BusinessAuxiliaryManager
-      data={data.ITR3Auxiliary}
-      onChange={(ITR3Auxiliary: ITR3AuxiliaryData) => onChange({ ...data, ITR3Auxiliary })}
-    />
-    <ComputedIncome value={Number(taxResult?.bizIncome || 0)} />
   </div>;
 }
 

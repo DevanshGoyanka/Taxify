@@ -8,6 +8,8 @@ export type ITR3AuxiliaryData = Record<string, ITR3AuxiliaryValue>;
 export interface ITR3BusinessAuxiliaryManagerProps {
   data?: Partial<ITR3AuxiliaryData>;
   onChange: (data: ITR3AuxiliaryData) => void;
+  visibleSchedules?: string[];
+  showHeading?: boolean;
 }
 
 type Kind = 'money' | 'signed' | 'number' | 'text' | 'date' | 'select' | 'readonly';
@@ -21,8 +23,11 @@ const MAX = 99999999999999;
 const AY10 = Array.from({ length: 22 }, (_, i) => `${2001 + i}-${String(2 + i).padStart(2, '0')}`);
 const UNITS = ['101','102','103','104','105','106','107','108','109','110','111','112','113','114','115','116','117','118','119','120','121','122','999'] as const;
 const UNIT_LABELS: Record<string, string> = {101:'Gms',102:'Kilograms',103:'Litre',104:'Kilolitre',105:'Metre',106:'Kilometre',107:'Numbers',108:'Quintal',109:'Ton',110:'Pound',111:'Milligrams',112:'Carat',113:'Numbers (1000s)',114:'Kwatt',115:'Mwatt',116:'Inch',117:'Feet',118:'Sqft',119:'Acre',120:'Cubicft',121:'Sqmetre',122:'Cubicmetre',999:'Residual'};
-const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid var(--border, #d7dce2)', borderRadius: 5, fontSize: 12, background: '#fff' };
-const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 9 };
+const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text-primary)', background: '#fff' };
+const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 };
+const addButton: React.CSSProperties = { padding: '6px 12px', background: 'var(--gold)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' };
+const removeButton: React.CSSProperties = { padding: '4px 8px', background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' };
+const panel: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 6, padding: 16, marginTop: 12, background: 'var(--bg)' };
 
 const f = (key: string, label?: string, kind: Kind = 'money', options?: readonly string[]): Field => ({ key, label: label || key, kind, options });
 const moneyFields = (keys: readonly string[], readonly: readonly string[] = []): Field[] => keys.map((key) => f(key, undefined, readonly.includes(key) ? 'readonly' : (key.includes('CapGain') || key.includes('FirmCap') || key.includes('ProfitShareAmt') ? 'signed' : 'money')));
@@ -72,6 +77,79 @@ const deepClone = (value: ITR3AuxiliaryData): ITR3AuxiliaryData => JSON.parse(JS
 const pathGet = (root: Obj, path: readonly (string|number)[]): ITR3AuxiliaryValue | undefined => path.reduce<ITR3AuxiliaryValue|undefined>((v,k)=>Array.isArray(v)?v[Number(k)]:asObj(v)[String(k)],root);
 const pathSet = (root: Obj, path: readonly (string|number)[], value: ITR3AuxiliaryValue): void => { let cursor: ITR3AuxiliaryValue = root; path.forEach((key,index)=>{ const last=index===path.length-1; if(Array.isArray(cursor)){ if(last) cursor[Number(key)]=value; else { cursor[Number(key)] ??= typeof path[index+1]==='number'?[]:{}; cursor=cursor[Number(key)]; } } else { const obj=asObj(cursor); if(last) obj[String(key)]=value; else { obj[String(key)] ??= typeof path[index+1]==='number'?[]:{}; cursor=obj[String(key)]; } } }); };
 const at = (root: Obj, path: readonly (string|number)[]): Obj => asObj(pathGet(root,path));
+const humanize = (name: string): string => {
+  const replacements: Record<string,string> = {Tot:'Total',Amt:'Amount',Inc:'Income',Exp:'Expense',Dtls:'Details',Dtl:'Detail',Stck:'Stock',Opng:'Opening',Clsng:'Closing',Bal:'Balance',Curr:'Current',Prev:'Previous',Yr:'Year',Bus:'Business',Prof:'Profession',Depr:'Depreciation',Deduct:'Deduction',Adj:'Adjustment',Rcpt:'Receipt',Grs:'Gross',Oth:'Other',Sec:'Section',Assmt:'Assessment',Addr:'Address',Qty:'Quantity'};
+  return name.replace(/([a-z0-9])([A-Z])/g,'$1 $2').replace(/_/g,' ').split(' ').map(token=>replacements[token]??token).join(' ').replace(/\s+/g,' ').trim();
+};
+const FRIENDLY_LABELS: Record<string, string> = {
+  PlantMachinery: 'Plant and machinery',
+  DepreciationDetail: 'Block-wise depreciation computation',
+  SummaryFromDeprSch: 'Depreciation summary carried to Schedule BP',
+  SummaryFromDeprSchCG: 'Section 50 capital-gains summary',
+  DeductionUs35: 'Deduction under section 35',
+  DeductUs35: 'Scientific research expenditure and eligible deduction',
+  ScheduleUD: 'Assessment-year-wise unabsorbed depreciation',
+  AccPolicyAmtDetl: 'ICDS I — Accounting policies',
+  InventoriesValueDetl: 'ICDS II — Valuation of inventories',
+  ConstContractsAmtDetl: 'ICDS III — Construction contracts',
+  RevenueRcgAmtDetl: 'ICDS IV — Revenue recognition',
+  TangibleFixedAssetDetl: 'ICDS V — Tangible fixed assets',
+  ForeignExgRatesDetl: 'ICDS VI — Effects of changes in foreign exchange rates',
+  GovtGrantsDetl: 'ICDS VII — Government grants',
+  SecuritiesDetl: 'ICDS VIII — Securities',
+  BorrowingCostsDetl: 'ICDS IX — Borrowing costs',
+  ProvAssetsDetl: 'ICDS X — Provisions, contingent liabilities and contingent assets',
+  TotalNetAmtDetl: 'Total ICDS adjustment',
+  TurnoverGrsRcptForGSTIN: 'Turnover or gross receipts by GSTIN',
+  PartnerFirmDetails: 'Partnership-firm details',
+  DeductSEZ: 'Eligible SEZ undertakings',
+  DedUs10Detail: 'Deduction under section 10AA',
+  Undertaking: 'Undertaking-wise deduction',
+  DedFromUndertakingWithAy: 'Assessment-year-wise deduction',
+  DeductInNorthEast: 'Eligible undertakings in the North-East',
+  DonationDtlsRsrchAssctn: 'Research-association donation details',
+  DtlsTaxesPaid: 'Additional-tax payment details',
+  TradingConcern: 'Trading concern — quantitative details',
+  ManfactrConcern: 'Manufacturing concern — quantitative details',
+  RawMaterial: 'Raw materials',
+  FinishrByProd: 'Finished goods and by-products',
+  QuantitDet: 'Item-wise quantity details',
+  WDVFirstDay: 'Written-down value on 1 April 2025',
+  WDVLastDay: 'Written-down value on 31 March 2026',
+  AdditionsGrThan180Days: 'Additions used for 180 days or more',
+  AdditionsLessThan180Days: 'Additions used for less than 180 days',
+  TotalDepreciation: 'Total depreciation',
+  NetAggregateDepreciation: 'Net aggregate depreciation',
+  AssYr: 'Assessment year',
+  FirmName: 'Name of firm',
+  FirmPAN: 'PAN of firm',
+  IsLiableToAudit: 'Is the firm liable to audit?',
+  Sec92EFirmFlag: 'Is the firm liable under section 92E?',
+  ProfitSharePercent: 'Share of profit (%)',
+  ProfitShareAmt: 'Share of profit amount',
+  IntrstAmtDueOrRecv: 'Interest due or received',
+  RemunernAmtDueOrRecv: 'Remuneration due or received',
+  FirmCapBalOn31Mar: 'Capital balance on 31 March 2026',
+  GSTINNo: 'GSTIN',
+  AmtTurnGrossRcptGSTIN: 'Turnover or gross receipts',
+  ItemName: 'Item name',
+  UnitOfMeasure: 'Unit of measure',
+  OpeningStock: 'Opening stock quantity',
+  PurchaseQty: 'Purchase quantity',
+  SaleQty: 'Sales quantity',
+  ClgStock: 'Closing stock quantity',
+  AnyShortExces: 'Shortage or excess',
+};
+const fieldLabel = (field: Field): string => field.label && field.label !== field.key ? field.label : FRIENDLY_LABELS[field.key] ?? humanize(field.key);
+const groupLabel = (group: Group): string => FRIENDLY_LABELS[group.key] ?? (group.label === group.key ? humanize(group.label) : group.label);
+
+interface AuxiliaryStats { populated: number; rows: number; total: number; }
+const auxiliaryStats = (value: ITR3AuxiliaryValue | undefined): AuxiliaryStats => {
+  if (Array.isArray(value)) return value.reduce<AuxiliaryStats>((stats, item) => { const child = auxiliaryStats(item); return { populated: stats.populated + child.populated, rows: stats.rows + child.rows, total: stats.total + child.total }; }, { populated: 0, rows: value.length, total: 0 });
+  if (value && typeof value === 'object') return Object.entries(value).reduce<AuxiliaryStats>((stats, [key, item]) => { const child = auxiliaryStats(item); const includeTotal = typeof item === 'number' && !/(^Tot|Total|BalCFNY|Net|WDVLastDay|FullRate|HalfRate)/.test(key); return { populated: stats.populated + child.populated, rows: stats.rows + child.rows, total: stats.total + child.total + (includeTotal ? item : 0) }; }, { populated: 0, rows: 0, total: 0 });
+  return { populated: value !== '' && value !== null && value !== undefined && value !== 0 && value !== false ? 1 : 0, rows: 0, total: 0 };
+};
+const scheduleSummary = (value: ITR3AuxiliaryValue | undefined): string => { const stats = auxiliaryStats(value); return `${stats.populated} field${stats.populated === 1 ? '' : 's'} entered${stats.rows ? ` · ${stats.rows} row${stats.rows === 1 ? '' : 's'}` : ''}${stats.total ? ` · ₹${stats.total.toLocaleString('en-IN')}` : ''}`; };
 
 function recompute(source: ITR3AuxiliaryData): ITR3AuxiliaryData {
   const d=deepClone(source); const root=d as Obj;
@@ -92,25 +170,40 @@ function recompute(source: ITR3AuxiliaryData): ITR3AuxiliaryData {
 }
 
 function FieldEditor({ field, value, onValue }: { field: Field; value: ITR3AuxiliaryValue | undefined; onValue: (value: ITR3AuxiliaryValue) => void }): React.JSX.Element {
-  const kind=field.kind||'money'; const label=field.label||field.key; const numeric=['money','signed','number','readonly'].includes(kind); const min=kind==='signed'?undefined:0;
-  return <label style={{fontSize:11,color:'var(--text-secondary,#555)'}}>{label}{field.key==='UnitOfMeasure'&&typeof value==='string'?` — ${UNIT_LABELS[value]||''}`:''}
-    {kind==='select'?<select style={input} value={String(value??'')} onChange={e=>onValue(e.target.value)}><option value="">Select</option>{field.options?.map(o=><option key={o} value={o}>{o}{field.key==='UnitOfMeasure'?` — ${UNIT_LABELS[o]}`:''}</option>)}</select>:<input style={{...input,background:kind==='readonly'?'#f1f4f7':'#fff'}} type={kind==='date'?'date':numeric?'number':'text'} min={min} max={field.max??(numeric?MAX:undefined)} step={kind==='number'?'0.01':'1'} readOnly={kind==='readonly'} value={value===undefined||value===null?'':String(value)} onChange={e=>onValue(numeric?(e.target.value===''?0:Number(e.target.value)):e.target.value)} />}
+  const kind=field.kind||'money'; const label=fieldLabel(field); const numeric=['money','signed','number','readonly'].includes(kind); const min=kind==='signed'?undefined:0;
+  return <label style={{display:'block',minWidth:0}}><span style={{display:'block',marginBottom:6,fontSize:12,fontWeight:500,color:'var(--text-secondary)'}}>{label}{field.key==='UnitOfMeasure'&&typeof value==='string'?` — ${UNIT_LABELS[value]||''}`:''}{kind==='readonly'?' (calculated)':''}</span>
+    {kind==='select'?<select style={input} value={String(value??'')} onChange={e=>onValue(e.target.value)}><option value="">Select</option>{field.options?.map(o=><option key={o} value={o}>{o}{field.key==='UnitOfMeasure'?` — ${UNIT_LABELS[o]}`:''}</option>)}</select>:<input style={{...input,background:kind==='readonly'?'var(--gold-pale)':'#fff',fontWeight:kind==='readonly'?600:400}} type={kind==='date'?'date':numeric?'number':'text'} min={min} max={field.max??(numeric?MAX:undefined)} step={kind==='number'?'0.01':'1'} readOnly={kind==='readonly'} value={value===undefined||value===null?'':String(value)} onChange={e=>onValue(numeric?(e.target.value===''?0:Number(e.target.value)):e.target.value)} />}
   </label>;
 }
 
-function GroupEditor({ group, root, path, update }: { group: Group; root: Obj; path: (string|number)[]; update: (path:(string|number)[],value:ITR3AuxiliaryValue)=>void }): React.JSX.Element {
-  if(group.key==='__code') return <></>; const p=[...path,group.key]; const rows=group.rows?(pathGet(root,p) as ITR3AuxiliaryValue[]|undefined)||[]:[];
-  return <div style={{border:'1px solid var(--border,#dce1e6)',borderRadius:6,padding:10,marginTop:9}}><strong style={{fontSize:12}}>{group.label}</strong>
-    {group.fields&&<div style={{...grid,marginTop:8}}>{group.fields.map(field=><FieldEditor key={field.key} field={field} value={pathGet(root,[...p,field.key])} onValue={v=>update([...p,field.key],v)}/>)}</div>}
-    {group.rows&&<div>{rows.map((row,index)=><div key={index} style={{background:'var(--bg,#f7f8fa)',padding:9,borderRadius:5,marginTop:8}}><div style={{...grid,alignItems:'end'}}>{group.rows!.fields.map(field=><FieldEditor key={field.key} field={field} value={asObj(row)[field.key]} onValue={v=>update([...p,index,field.key],v)}/>)}<button type="button" disabled={rows.length<=(group.rows?.min||0)} onClick={()=>update(p,rows.filter((_,i)=>i!==index))}>Remove</button></div>{group.groups?.map(g=><GroupEditor key={g.key} group={g} root={root} path={[...p,index]} update={update}/>)}</div>)}<button type="button" style={{marginTop:8}} disabled={rows.length>=(group.rows.max??Infinity)} onClick={()=>update(p,[...rows,Object.fromEntries(group.rows!.fields.map(x=>[x.key,x.kind==='text'||x.kind==='date'||x.kind==='select'?'':0]))])}>+ Add row</button></div>}
-    {group.groups?.map(g=><GroupEditor key={g.key} group={g} root={root} path={p} update={update}/>)}</div>;
+function GroupEditor({ group, root, path, update, depth = 0 }: { group: Group; root: Obj; path: (string|number)[]; update: (path:(string|number)[],value:ITR3AuxiliaryValue)=>void; depth?: number }): React.JSX.Element {
+  if(group.key==='__code') return <></>; const p=[...path,group.key]; const rows=group.rows?(pathGet(root,p) as ITR3AuxiliaryValue[]|undefined)||[]:[]; const groupValue=pathGet(root,p); const title=groupLabel(group);
+  return <details open={depth===0} style={{...panel,background:depth===0?'var(--bg)':'#fff'}}><summary style={{cursor:'pointer',listStyle:'none',display:'flex',justifyContent:'space-between',alignItems:'center',gap:12}}><span style={{fontSize:13,fontWeight:600,color:'var(--text-secondary)'}}>{title}</span><span style={{fontSize:11,color:'var(--text-muted)',fontWeight:400}}>{scheduleSummary(groupValue)} · Expand / collapse</span></summary>
+    <div style={{paddingTop:14}}>
+      {group.fields&&<div style={grid}>{group.fields.map(field=><FieldEditor key={field.key} field={field} value={pathGet(root,[...p,field.key])} onValue={v=>update([...p,field.key],v)}/>)}</div>}
+      {group.rows&&<div style={{marginTop:group.fields?16:0}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:rows.length?12:0}}><div style={{fontSize:11,color:'var(--text-muted)'}}>{rows.length} entr{rows.length===1?'y':'ies'}{group.rows.min?` · minimum ${group.rows.min}`:''}{group.rows.max?` · maximum ${group.rows.max}`:''}</div><button type="button" style={{...addButton,opacity:rows.length>=(group.rows.max??Infinity)?0.5:1}} disabled={rows.length>=(group.rows.max??Infinity)} onClick={()=>update(p,[...rows,Object.fromEntries(group.rows!.fields.map(x=>[x.key,x.kind==='text'||x.kind==='date'||x.kind==='select'?'':0]))])}>+ Add entry</button></div>
+        {rows.length===0&&<div style={{padding:20,textAlign:'center',color:'var(--text-muted)',background:'#fff',borderRadius:6}}>No entries. Click “Add entry” to add one.</div>}
+        {rows.map((row,index)=><div key={index} style={{background:'#fff',padding:16,border:'1px solid var(--border)',borderRadius:6,marginTop:12}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:12}}><h4 style={{margin:0,fontSize:13,color:'var(--text-secondary)'}}>Entry #{index+1}</h4><button type="button" style={{...removeButton,opacity:rows.length<=(group.rows?.min||0)?0.5:1}} disabled={rows.length<=(group.rows?.min||0)} onClick={()=>update(p,rows.filter((_,i)=>i!==index))}>Remove</button></div><div style={grid}>{group.rows!.fields.map(field=><FieldEditor key={field.key} field={field} value={asObj(row)[field.key]} onValue={v=>update([...p,index,field.key],v)}/>)}</div>{group.groups?.map(g=><GroupEditor key={g.key} group={g} root={root} path={[...p,index]} update={update} depth={depth+1}/>)}</div>)}
+      </div>}
+      {group.groups?.map(g=><GroupEditor key={g.key} group={g} root={root} path={p} update={update} depth={depth+1}/>)}</div>
+  </details>;
 }
 
 /** Renders canonical, frontend-only AY 2026-27 ITR-3 auxiliary schedules. */
-export default function ITR3BusinessAuxiliaryManager({ data, onChange }: ITR3BusinessAuxiliaryManagerProps): React.JSX.Element {
-  const [draft,setDraft]=useState<ITR3AuxiliaryData>(()=>recompute((data||{}) as ITR3AuxiliaryData)); const [open,setOpen]=useState<string>('ScheduleDPM');
+export default function ITR3BusinessAuxiliaryManager({ data, onChange, visibleSchedules, showHeading = true }: ITR3BusinessAuxiliaryManagerProps): React.JSX.Element {
+  const [draft,setDraft]=useState<ITR3AuxiliaryData>(()=>recompute((data||{}) as ITR3AuxiliaryData)); const [open,setOpen]=useState<Set<string>>(()=>new Set(visibleSchedules?.slice(0,1)??['ScheduleDPM']));
   useEffect(()=>{setDraft(recompute((data||{}) as ITR3AuxiliaryData));},[data]);
+  useEffect(()=>setOpen(current=>current.size>0&&(!visibleSchedules||visibleSchedules.some(key=>current.has(key)))?current:new Set(visibleSchedules?.slice(0,1)??['ScheduleDPM'])),[visibleSchedules]);
   const canonical=useMemo(()=>recompute(draft),[draft]);
+  const displayedSpecs=visibleSchedules?specs.filter(spec=>visibleSchedules.includes(spec.key)):specs;
   const update=(path:(string|number)[],value:ITR3AuxiliaryValue):void=>{const next=deepClone(draft);pathSet(next as Obj,path,value);const computed=recompute(next);setDraft(computed);onChange(computed);};
-  return <section><div style={{marginBottom:10}}><h3 style={{margin:'0 0 4px'}}>ITR-3 Auxiliary Business / Profession Schedules</h3><small>AY 2026-27 · official canonical property names · calculated fields are read-only</small></div>{specs.map(spec=><div key={spec.key} style={{border:'1px solid var(--border,#d7dce2)',borderRadius:7,marginBottom:8,background:'#fff'}}><button type="button" onClick={()=>setOpen(open===spec.key?'':spec.key)} style={{width:'100%',padding:'10px 12px',border:0,background:'transparent',textAlign:'left',fontWeight:700,cursor:'pointer'}}>{open===spec.key?'▾':'▸'} {spec.label}</button>{open===spec.key&&<div style={{padding:'0 12px 12px'}}>{spec.fields&&<div style={grid}>{spec.fields.map(field=><FieldEditor key={field.key} field={field} value={pathGet(canonical as Obj,[spec.key,field.key])} onValue={v=>update([spec.key,field.key],v)}/>)}</div>}{spec.groups?.map(group=><GroupEditor key={group.key} group={group} root={canonical as Obj} path={[spec.key]} update={update}/>)}</div>}</div>)}</section>;
+  const toggle=(key:string):void=>setOpen(current=>{const next=new Set(current);if(next.has(key))next.delete(key);else next.add(key);return next;});
+  return <section aria-label="ITR-3 auxiliary business schedules">
+    {showHeading&&<div style={{display:'flex',alignItems:'center',gap:8,margin:'24px 0 18px'}}><span style={{background:'var(--gold)',color:'#fff',padding:'4px 10px',borderRadius:4,fontSize:12,fontWeight:600}}>AUX</span><div><h3 style={{margin:0,fontSize:14,fontWeight:600,color:'var(--text-secondary)'}}>Supporting Business and Deduction Schedules</h3><div style={{marginTop:3,fontSize:11,color:'var(--text-muted)'}}>Official AY 2026-27 ITR-3 schedules · canonical fields and calculated totals</div></div></div>}
+    {displayedSpecs.map((spec,index)=>{const isOpen=open.has(spec.key);const value=pathGet(canonical as Obj,[spec.key]);return <section key={spec.key} style={{marginBottom:16,background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,overflow:'hidden'}}>
+      <button type="button" onClick={()=>toggle(spec.key)} aria-expanded={isOpen} style={{width:'100%',padding:16,border:0,background:'transparent',cursor:'pointer',textAlign:'left',display:'flex',justifyContent:'space-between',alignItems:'center',gap:16}}><span style={{display:'flex',alignItems:'center',gap:10}}><span style={{width:26,height:26,borderRadius:4,background:isOpen?'var(--gold)':'var(--gold-pale)',color:isOpen?'#fff':'var(--text-secondary)',display:'inline-flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700}}>{index+1}</span><span><span style={{display:'block',fontSize:13,fontWeight:600,color:'var(--text-secondary)'}}>{spec.label}</span><span style={{display:'block',marginTop:4,fontSize:11,color:'var(--text-muted)'}}>{scheduleSummary(value)}</span></span></span><span style={{fontSize:12,color:'var(--text-muted)'}}>{isOpen?'Collapse ▲':'Expand ▼'}</span></button>
+      {isOpen&&<div style={{padding:'0 16px 16px'}}>{spec.fields&&<div style={grid}>{spec.fields.map(field=><FieldEditor key={field.key} field={field} value={pathGet(canonical as Obj,[spec.key,field.key])} onValue={v=>update([spec.key,field.key],v)}/>)}</div>}{spec.groups?.map(group=><GroupEditor key={group.key} group={group} root={canonical as Obj} path={[spec.key]} update={update}/>)}</div>}
+    </section>;})}
+  </section>;
 }

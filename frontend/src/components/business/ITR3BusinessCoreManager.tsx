@@ -18,6 +18,8 @@ export interface ITR3BusinessCoreManagerProps {
   value?: Partial<ITR3BusinessCoreData>;
   onChange: (value: ITR3BusinessCoreData) => void;
   disabled?: boolean;
+  visibleSchedules?: Array<keyof ITR3BusinessCoreData>;
+  showHeading?: boolean;
 }
 
 interface SchemaNode {
@@ -55,9 +57,104 @@ const TITLES: Record<keyof ITR3BusinessCoreData, string> = {
   PARTA_PL: 'Part A ? Profit and Loss',
   ITR3ScheduleBP: 'Schedule BP',
 };
+/** Generic total-key detector (used for readOnly display marking). */
 const TOTAL_KEYS = /(^Tot|Total$|Total[A-Z]|Tot[A-Z]|NetIncomeFrmSpecActivity$|TardingAccTotCred$|CostOfGoodsPrdcd$|GrossProfitFrmBusProf$)/;
-const inputStyle: React.CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid var(--border, #d7dce2)', borderRadius: 6, padding: '8px 10px', background: '#fff', color: 'var(--text-primary, #17202a)' };
-const cardStyle: React.CSSProperties = { border: '1px solid var(--border, #d7dce2)', borderRadius: 8, padding: 14, marginBottom: 12, background: 'var(--bg, #fafbfc)' };
+
+const inputStyle: React.CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid var(--border, #d7dce2)', borderRadius: 6, padding: '8px 12px', background: '#fff', color: 'var(--text-primary, #17202a)', fontSize: 13 };
+const cardStyle: React.CSSProperties = { border: '1px solid var(--border, #d7dce2)', borderRadius: 6, padding: 16, marginBottom: 16, background: 'var(--bg, #fafbfc)' };
+const gridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 };
+const addButtonStyle: React.CSSProperties = { padding: '6px 12px', background: 'var(--gold, #b58b2a)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' };
+const removeButtonStyle: React.CSSProperties = { padding: '4px 8px', background: 'var(--danger, #c0392b)', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' };
+
+/**
+ * Calculated-field formulas keyed by the full dotted path (schedule-rooted).
+ * Only fields listed here are auto-computed; all others are user-entered.
+ */
+const CALCULATED_FIELDS: Record<string, { formula: 'sum' | 'subtract'; fields: string[] }> = {
+  // Manufacturing Account — OpeningInventory
+  'ManufacturingAccount.OpeningInventory.OpngInvntryTotal': { formula: 'sum', fields: ['OpngStckRawMat', 'OpngStckWrkinPrgrs'] },
+  'ManufacturingAccount.OpeningInventory.TotalFactoryOverheads': { formula: 'sum', fields: ['IndirectWages', 'FactoryRentAndRates', 'FactoryInsurance', 'FactoryFuelAndPower', 'FactoryGeneralExpenses', 'DeprctnOfFactoryMachinery'] },
+  'ManufacturingAccount.OpeningInventory.TotalDebtsManfctrngAcc': { formula: 'sum', fields: ['OpngInvntryTotal', 'Purchases', 'DirectWages', 'DirectExpenses', 'CarriageInward', 'PowerAndFuel', 'OthDirectExpenses', 'TotalFactoryOverheads'] },
+  'ManufacturingAccount.ClosingStock.ClsngStckTotal': { formula: 'sum', fields: ['ClsngStckRawMaterial', 'ClsngStckWrkInPrgrs'] },
+  'ManufacturingAccount.CostOfGoodsPrdcd': { formula: 'subtract', fields: ['OpeningInventory.TotalDebtsManfctrngAcc', 'ClosingStock.ClsngStckTotal'] },
+  // Trading Account
+  'TradingAccount.OperatingRevenueTotal': { formula: 'sum', fields: ['SaleOfGoods', 'SaleOfServices'] },
+  'TradingAccount.SalesGrossReceiptsTotal': { formula: 'sum', fields: ['OperatingRevenueTotal', 'GrossRcptFromProfession'] },
+  'TradingAccount.ExciseCustomsVAT.TotExciseCustomsVAT': { formula: 'sum', fields: ['UnionExciseDuty', 'ServiceTax', 'VATorSaleTax', 'Cess', 'CentralGoodServiceTax', 'StateGoodServiceTax', 'IntegratedGoodServiceTax', 'UnionTerrGoodServiceTax', 'OthDutyTaxCess'] },
+  'TradingAccount.TotRevenueFrmOperations': { formula: 'sum', fields: ['SalesGrossReceiptsTotal', 'ExciseCustomsVAT.TotExciseCustomsVAT'] },
+  'TradingAccount.TardingAccTotCred': { formula: 'sum', fields: ['TotRevenueFrmOperations', 'ClsngStckOfFinishedStcks'] },
+  'TradingAccount.DirectExpensesTotal': { formula: 'sum', fields: ['OpngStckOfFinishedStcks', 'Purchases', 'DirectExpenses', 'CarriageInward', 'PowerAndFuel'] },
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.TotExciseCustomsVAT': { formula: 'sum', fields: ['CustomDuty', 'CounterVailDuty', 'SplAddDuty', 'UnionExciseDuty', 'ServiceTax', 'VATorSaleTax', 'CentralGoodServiceTax', 'StateGoodServiceTax', 'IntegratedGoodServiceTax', 'UnionTerrGoodServiceTax', 'OthDutyTaxCess'] },
+  'TradingAccount.GrossProfitFrmBusProf': { formula: 'subtract', fields: ['TardingAccTotCred', 'DirectExpensesTotal', 'DutyTaxPay.ExciseCustomsVAT.TotExciseCustomsVAT'] },
+  // P&L — CreditsToPL
+  'PARTA_PL.CreditsToPL.OthIncome.TotOthIncome': { formula: 'sum', fields: ['RentInc', 'Comissions', 'Dividends', 'InterestInc', 'ProfitOnSaleFixedAsset', 'ProfitOnInvChrSTT', 'ProfitOnOthInv', 'ProfitOnCurrFluct', 'ProfitOnCnvInvntryToCapAsst', 'ProfitOnAgriIncome', 'LiabilityWrittenBack', 'AmtofInterest', 'AmtofRem', 'MiscOthIncome'] },
+  'PARTA_PL.CreditsToPL.TotCreditsToPL': { formula: 'sum', fields: ['GrossProfitTrnsfFrmTrdAcc', 'OthIncome.TotOthIncome'] },
+  // P&L — DebitsToPL
+  'PARTA_PL.DebitsToPL.EmployeeComp.TotEmployeeComp': { formula: 'sum', fields: ['SalsWages', 'Bonus', 'MedExpReimb', 'LeaveEncash', 'LeaveTravelBenft', 'ContToSuperAnnFund', 'ContToPF', 'ContToGratFund', 'ContToOthFund', 'OthEmpBenftExpdr'] },
+  'PARTA_PL.DebitsToPL.Insurances.TotInsurances': { formula: 'sum', fields: ['MedInsur', 'LifeInsur', 'KeyManInsur', 'OthInsur'] },
+  'PARTA_PL.DebitsToPL.CommissionExpdrDtls.Total': { formula: 'sum', fields: ['NonResOtherCompany', 'Others'] },
+  'PARTA_PL.DebitsToPL.RoyalityDtls.Total': { formula: 'sum', fields: ['NonResOtherCompany', 'Others'] },
+  'PARTA_PL.DebitsToPL.ProfessionalConstDtls.Total': { formula: 'sum', fields: ['NonResOtherCompany', 'Others'] },
+  'PARTA_PL.DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.TotExciseCustomsVAT': { formula: 'sum', fields: ['UnionExciseDuty', 'ServiceTax', 'VATorSaleTax', 'Cess', 'CentralGoodServiceTax', 'StateGoodServiceTax', 'IntegratedGoodServiceTax', 'UnionTerrGoodServiceTax', 'OthDutyTaxCess'] },
+  'PARTA_PL.DebitsToPL.InterestExpdrtDtls.InterestExpdr': { formula: 'sum', fields: ['NonResOtherCompany', 'Others'] },
+  // P&L — NoBooksOfAccPL
+  'PARTA_PL.NoBooksOfAccPL.GrossProfit': { formula: 'subtract', fields: ['GrossReceipt', 'GrsRcptAccPayeeOrBankMode', 'GrsRcptOtherMode'] },
+  'PARTA_PL.NoBooksOfAccPL.NetProfit': { formula: 'subtract', fields: ['GrossProfit', 'Expenses'] },
+  'PARTA_PL.NoBooksOfAccPL.GrossProfitPrf': { formula: 'subtract', fields: ['GrossReceiptPrf', 'GrsRcptAccPayeeOrBankModePrf', 'GrsRcptOtherModePrf'] },
+  'PARTA_PL.NoBooksOfAccPL.NetProfitPrf': { formula: 'subtract', fields: ['GrossProfitPrf', 'ExpensesPrf'] },
+  'PARTA_PL.NoBooksOfAccPL.TotBusinessProfession': { formula: 'sum', fields: ['NetProfit', 'NetProfitPrf'] },
+  'PARTA_PL.NetIncomeFrmSpecActivity': { formula: 'subtract', fields: ['GrossProfit', 'Expenditure'] },
+  // Balance Sheet — FundSrc
+  'PARTA_BS.FundSrc.PropFund.ResrNSurp.TotResrNSurp': { formula: 'sum', fields: ['RevResr', 'CapResr', 'StatResr', 'OthResr'] },
+  'PARTA_BS.FundSrc.PropFund.TotPropFund': { formula: 'sum', fields: ['PropCap', 'ResrNSurp.TotResrNSurp'] },
+  'PARTA_BS.FundSrc.LoanFunds.SecrLoan.RupeeLoan.TotRupeeLoan': { formula: 'sum', fields: ['FrmBank', 'FrmOthrs'] },
+  'PARTA_BS.FundSrc.LoanFunds.SecrLoan.TotSecrLoan': { formula: 'sum', fields: ['ForeignCurrLoan', 'RupeeLoan.TotRupeeLoan'] },
+  'PARTA_BS.FundSrc.LoanFunds.UnsecrLoan.TotUnSecrLoan': { formula: 'sum', fields: ['FrmBank', 'FrmOthrs'] },
+  'PARTA_BS.FundSrc.LoanFunds.TotLoanFund': { formula: 'sum', fields: ['SecrLoan.TotSecrLoan', 'UnsecrLoan.TotUnSecrLoan'] },
+  'PARTA_BS.FundSrc.Advances.TotalAdvances': { formula: 'sum', fields: ['FromPrsn', 'FromOthers'] },
+  'PARTA_BS.FundSrc.TotFundSrc': { formula: 'sum', fields: ['PropFund.TotPropFund', 'LoanFunds.TotLoanFund', 'DeferredTax', 'Advances.TotalAdvances'] },
+  // Balance Sheet — FundApply
+  'PARTA_BS.FundApply.FixedAsset.TotFixedAsset': { formula: 'sum', fields: ['NetBlock', 'CapWrkProg'] },
+  'PARTA_BS.FundApply.Investments.LongTermInv.TotLongTermInv': { formula: 'sum', fields: ['GovtOthSecQuoted', 'GovOthSecUnQoted'] },
+  'PARTA_BS.FundApply.Investments.TradeInv.TotTradeInv': { formula: 'sum', fields: ['EquityShares', 'PreferShares', 'Debenture'] },
+  'PARTA_BS.FundApply.Investments.TotInvestments': { formula: 'sum', fields: ['LongTermInv.TotLongTermInv', 'TradeInv.TotTradeInv'] },
+  'PARTA_BS.FundApply.CurrAssetLoanAdv.CurrAsset.Inventories.TotInventries': { formula: 'sum', fields: ['StoresConsumables', 'RawMatl', 'StkInProcess', 'FinOrTradGood'] },
+  'PARTA_BS.FundApply.CurrAssetLoanAdv.CurrAsset.CashOrBankBal.TotCashOrBankBal': { formula: 'sum', fields: ['CashinHand', 'BankBal'] },
+  'PARTA_BS.FundApply.CurrAssetLoanAdv.CurrAsset.TotCurrAsset': { formula: 'sum', fields: ['Inventories.TotInventries', 'SndryDebtors', 'CashOrBankBal.TotCashOrBankBal', 'OthCurrAsset'] },
+  'PARTA_BS.FundApply.CurrAssetLoanAdv.LoanAdv.TotLoanAdv': { formula: 'sum', fields: ['AdvRecoverable', 'Deposits', 'BalWithRevAuth'] },
+  'PARTA_BS.FundApply.CurrAssetLoanAdv.TotCurrAssetLoanAdv': { formula: 'sum', fields: ['CurrAsset.TotCurrAsset', 'LoanAdv.TotLoanAdv'] },
+  'PARTA_BS.FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.CurrLiabilities.TotCurrLiabilities': { formula: 'sum', fields: ['SundryCred', 'LiabForLeasedAsset', 'AccrIntonLeasedAsset', 'AccrIntNotDue'] },
+  'PARTA_BS.FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.Provisions.TotProvisions': { formula: 'sum', fields: ['ITProvision', 'ELSuperAnnGratProvision', 'OthProvision'] },
+  'PARTA_BS.FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.TotCurrLiabilitiesProvision': { formula: 'sum', fields: ['CurrLiabilities.TotCurrLiabilities', 'Provisions.TotProvisions'] },
+  'PARTA_BS.FundApply.CurrAssetLoanAdv.NetCurrAsset': { formula: 'subtract', fields: ['TotCurrAssetLoanAdv', 'CurrLiabilitiesProv.TotCurrLiabilitiesProvision'] },
+  'PARTA_BS.FundApply.MiscAdjust.TotMiscAdjust': { formula: 'sum', fields: ['MiscExpndr', 'DefTaxAsset', 'AccumaltedLosses'] },
+  'PARTA_BS.FundApply.TotFundApply': { formula: 'sum', fields: ['FixedAsset.TotFixedAsset', 'Investments.TotInvestments', 'CurrAssetLoanAdv.TotCurrAssetLoanAdv', 'CurrAssetLoanAdv.NetCurrAsset', 'MiscAdjust.TotMiscAdjust'] },
+  // ===== Schedule BP — calculated totals =====
+  'ITR3ScheduleBP.BusinessIncOthThanSpec.TotalProfitFrmActCvrd': { formula: 'sum', fields: ['PLUs44sChapXIIG', 'ProfitLossInclRefrdSec.ProfitLossUs44AD', 'ProfitLossInclRefrdSec.ProfitLossUs44ADA', 'ProfitLossInclRefrdSec.ProfitLossUs44AE', 'ProfitLossInclRefrdSec.ProfitLossUs44B', 'ProfitLossInclRefrdSec.ProfitLossUs44BB', 'ProfitLossInclRefrdSec.ProfitLossUs44BBA', 'ProfitLossInclRefrdSec.ProfitLossUs44BBC', 'ProfitLossInclRefrdSec.ProfitLossUs44BBD', 'ProfitLossInclRefrdSec.ProfitLossUs44DA', 'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule7', 'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule7A', 'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule7B1', 'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule7B1A', 'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule8'] },
+  'ITR3ScheduleBP.BusinessIncOthThanSpec.IncCredPL.TotExempIncPL': { formula: 'sum', fields: ['FirmShareInc', 'AOPBOISharInc', 'OthExempInc', 'OtherExmptIncDtl.OperatingDividendAmt'] },
+  'ITR3ScheduleBP.BusinessIncOthThanSpec.TotExpDebPL': { formula: 'sum', fields: ['ExpDebToPLOthHeadDtls.Salary', 'ExpDebToPLOthHeadDtls.HouseProperty', 'ExpDebToPLOthHeadDtls.CapitalGains', 'ExpDebToPLOthHeadDtls.OtherSources', 'ExpDebToPLOthHeadDtls.Us115BBF', 'ExpDebToPLOthHeadDtls.Us115BBG', 'ExpDebToPLOthHeadDtls.115BBH', 'ExpDebToPLExemptInc', 'ExpDebToPLExemptIncDisAllwUs14A'] },
+  'ITR3ScheduleBP.BusinessIncOthThanSpec.DepreciationAllowITAct32.TotDeprAllowITAct': { formula: 'sum', fields: ['DepreciationAllowUs32_1_ii', 'DepreciationAllowUs32_1_i'] },
+  'ITR3ScheduleBP.BusinessIncOthThanSpec.TotAfterAddToPLDeprOthSpecInc': { formula: 'sum', fields: ['AdjustPLAfterDeprOthSpecInc', 'AmtDebPLDisallowUs36', 'AmtDebPLDisallowUs37', 'AmtDebPLDisallowUs40', 'AmtDebPLDisallowUs40A', 'AmtDebPLDisallowUs43B', 'InterestDisAllowUs23SMEAct', 'DeemIncUs41', 'DeemIncUs3380HHD80IA', 'DeemIncUs32AD', 'DeemIncUs33AB', 'DeemIncUs33ABA', 'DeemIncUs35ABA', 'DeemIncUs35ABB', 'DeemIncUs40A3A', 'DeemIncUs72A', 'DeemIncUs80HHD', 'DeemIncUs80IA', 'DeemIncUs43CA', 'OthItemDisallowUs28To44DA', 'AnyOthIncNotInclInExpDisallowPL', 'AnyOthIncNotInclInSalary', 'AnyOthIncNotInclInBonus', 'AnyOthIncNotInclInCommission', 'AnyOthIncNotInclInInterest', 'AnyOthIncNotInclInOthers', 'IncProfDecLossAccICDSAdj'] },
+  'ITR3ScheduleBP.BusinessIncOthThanSpec.TotDeductionAmts': { formula: 'sum', fields: ['DeductUs32_1_iii', 'DebPLUs35ExcessAmt', 'AmtDisallUs40NowAllow', 'AmtDisallUs43BNowAllow', 'AnyOthAmtAllDeduct', 'DecProfIncLossAccICDSAdj'] },
+  'ITR3ScheduleBP.BusinessIncOthThanSpec.DeemedProfitBusUs.TotDeemedProfitBusUs': { formula: 'sum', fields: ['Section44AD', 'Section44ADA', 'Section44AE', 'Section44B', 'Section44BB', 'Section44BBA', 'Section44BBC', 'Section44BBD', 'Section44DA'] },
+  'ITR3ScheduleBP.BusSetoffCurrYr.TotLossSetOffOnBus': { formula: 'sum', fields: ['LossSetOffOnBusLoss', 'SpeculativeInc.BusLossSetoff', 'SpecifiedInc.BusLossSetoff'] },
+};
+
+/** Resolve a dotted field path within a schedule object, returning the numeric value (0 if not found). */
+function resolveNestedNumber(source: CanonicalObject | undefined, dottedPath: string): number {
+  if (!source || !dottedPath) return 0;
+  const parts = dottedPath.split('.');
+  let current: CanonicalValue = source;
+  for (const part of parts) {
+    if (current && typeof current === 'object' && !Array.isArray(current)) {
+      current = (current as CanonicalObject)[part] ?? 0;
+    } else {
+      return 0;
+    }
+  }
+  if (typeof current === 'number' && Number.isFinite(current)) return current;
+  return 0;
+}
 
 function dereference(node: SchemaNode): SchemaNode {
   if (!node.$ref) return node;
@@ -112,74 +209,582 @@ function sumNumbers(value: CanonicalValue | undefined, excludedKey = ''): number
   return 0;
 }
 
-function recalculate(node: SchemaNode, value: CanonicalValue, key = ''): CanonicalValue {
+function recalculate(node: SchemaNode, value: CanonicalValue, key = '', pathPrefix = ''): CanonicalValue {
   const resolved = merged(node);
   if (Array.isArray(value)) return value.map((item) => recalculate(resolved.items ?? {}, item));
   if (!value || typeof value !== 'object') return value;
   const source = value as CanonicalObject;
   const result: CanonicalObject = { ...source };
+  // Recurse into children first so nested totals are computed before parent totals.
   for (const [childKey, childSchema] of Object.entries(resolved.properties ?? {})) {
-    if (result[childKey] !== undefined) result[childKey] = recalculate(childSchema, result[childKey], childKey);
+    if (result[childKey] !== undefined) result[childKey] = recalculate(childSchema, result[childKey], childKey, pathPrefix ? `${pathPrefix}.${childKey}` : childKey);
   }
-  // Official total/result fields are output-only here; totals are always regenerated from their immediate schedule block.
+  // Apply calculated-field formulas using the full dotted path (schedule-rooted).
   for (const [childKey, childSchema] of Object.entries(resolved.properties ?? {})) {
-    if (TOTAL_KEYS.test(childKey) && ['integer', 'number'].includes(schemaType(childSchema))) result[childKey] = Math.trunc(sumNumbers(result, childKey));
+    const fullPath = pathPrefix ? `${pathPrefix}.${childKey}` : childKey;
+    const calc = CALCULATED_FIELDS[fullPath];
+    if (calc && ['integer', 'number'].includes(schemaType(childSchema))) {
+      const values = calc.fields.map((f) => resolveNestedNumber(result, f));
+      if (calc.formula === 'subtract') {
+        result[childKey] = Math.trunc(values.reduce<number>((acc, v, i) => i === 0 ? v : acc - v, 0));
+      } else {
+        result[childKey] = Math.trunc(values.reduce<number>((acc, v) => acc + v, 0));
+      }
+    }
   }
-  if (key === 'NetIncomeFrmSpecActivity') return result;
   return result;
 }
 
 function humanize(name: string): string {
-  return name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
+  const expanded = name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
+  const replacements: Record<string, string> = {
+    Tot: 'Total', Amt: 'Amount', Inc: 'Income', Exp: 'Expense', Expdr: 'Expenditure', Dtls: 'Details', Dtl: 'Detail',
+    Stck: 'Stock', Opng: 'Opening', Clsng: 'Closing', Bal: 'Balance', Curr: 'Current', Prev: 'Previous', Yr: 'Year',
+    Bus: 'Business', Prof: 'Profession', Spec: 'Speculative', Depr: 'Depreciation', Deduct: 'Deduction', Adj: 'Adjustment',
+    Pymt: 'Payment', Rcpt: 'Receipt', Grs: 'Gross', Trn: 'Turnover', Oth: 'Other', Sec: 'Section', Us: 'u/s',
+    Acct: 'Account', Acc: 'Account', Liab: 'Liabilities', Inv: 'Inventory', Ass: 'Assets', Src: 'Sources', Appl: 'Application',
+  };
+  return expanded.split(' ').map((token) => replacements[token] ?? token).join(' ').replace(/\bPL\b/g, 'P&L').replace(/\s+/g, ' ').trim();
 }
 
-interface EditorProps { node: SchemaNode; value: CanonicalValue; path: string; name: string; required?: boolean; disabled: boolean; onChange: (value: CanonicalValue) => void; }
+const FRIENDLY_LABELS: Record<string, string> = {
+  // ===== PartA_GEN2 — Audit & Nature of Business =====
+  AuditInfo: 'Books of account and tax audit',
+  NatOfBus: 'Nature of business or profession',
+  BiiDetails: 'Details of section 44AD/44ADA/44AE/44BB applicability',
+  AuditDetails92E: 'Form 92E audit details',
+  // ===== Tab 2 — Financial Statements =====
+  FundSrc: 'Sources of funds',
+  FundApply: 'Application of funds',
+  NoBooksOfAccBS: 'Balance-sheet particulars where regular books are not maintained',
+  PropFund: 'Proprietor\u2019s funds',
+  LoanFunds: 'Loan funds',
+  CurrAssetLoanAdv: 'Current assets, loans and advances',
+  MiscAdjust: 'Other assets and adjustments',
+  OpeningInventory: 'Opening inventory and manufacturing costs',
+  ClosingStock: 'Closing inventory',
+  CostOfGoodsPrdcd: 'Cost of goods produced',
+  CreditsToPL: 'Income credited to Profit and Loss Account',
+  DebitsToPL: 'Expenses debited to Profit and Loss Account',
+  TaxProvAppr: 'Tax provisions and appropriations',
+  NoBooksOfAccPL: 'Profit and loss particulars where regular books are not maintained',
+  BusinessIncOthThanSpec: 'A. Business or profession other than speculative and specified business',
+  SpecBusinessInc: 'B. Speculative business',
+  SpecifiedBusinessInc: 'C. Specified business',
+  IncChrgUnHdProftGain: 'D. Income chargeable under Profits and Gains of Business or Profession',
+  BusSetoffCurrYr: 'E. Business loss set-off in current year',
+  // Manufacturing Account
+  'OpeningInventory.OpngStckRawMat': 'Opening stock of raw materials',
+  'OpeningInventory.OpngStckWrkinPrgrs': 'Opening stock of work-in-progress',
+  'OpeningInventory.OpngInvntryTotal': 'Total opening inventory',
+  'OpeningInventory.Purchases': 'Purchases of raw materials',
+  'OpeningInventory.DirectWages': 'Direct wages',
+  'OpeningInventory.DirectExpenses': 'Direct expenses',
+  'OpeningInventory.CarriageInward': 'Carriage inward',
+  'OpeningInventory.PowerAndFuel': 'Power and fuel',
+  'OpeningInventory.OthDirectExpenses': 'Other direct expenses',
+  'OpeningInventory.IndirectWages': 'Indirect wages',
+  'OpeningInventory.FactoryRentAndRates': 'Factory rent and rates',
+  'OpeningInventory.FactoryInsurance': 'Factory insurance',
+  'OpeningInventory.FactoryFuelAndPower': 'Factory fuel and power',
+  'OpeningInventory.FactoryGeneralExpenses': 'Factory general expenses',
+  'OpeningInventory.DeprctnOfFactoryMachinery': 'Depreciation of factory machinery',
+  'OpeningInventory.TotalFactoryOverheads': 'Total factory overheads',
+  'OpeningInventory.TotalDebtsManfctrngAcc': 'Total debits to manufacturing account',
+  'ClosingStock.ClsngStckRawMaterial': 'Closing stock of raw material',
+  'ClosingStock.ClsngStckWrkInPrgrs': 'Closing stock of work-in-progress',
+  'ClosingStock.ClsngStckTotal': 'Total closing stock',
+  // Trading Account
+  'TradingAccount.SaleOfGoods': 'Sale of goods',
+  'TradingAccount.SaleOfServices': 'Sale of services',
+  'TradingAccount.OperatingRevenueTotal': 'Total operating revenue',
+  'TradingAccount.GrossRcptFromProfession': 'Gross receipts from profession',
+  'TradingAccount.SalesGrossReceiptsTotal': 'Total sales/gross receipts',
+  'TradingAccount.ExciseCustomsVAT.UnionExciseDuty': 'Union excise duty',
+  'TradingAccount.ExciseCustomsVAT.ServiceTax': 'Service tax',
+  'TradingAccount.ExciseCustomsVAT.VATorSaleTax': 'VAT or sales tax',
+  'TradingAccount.ExciseCustomsVAT.Cess': 'Cess',
+  'TradingAccount.ExciseCustomsVAT.CentralGoodServiceTax': 'Central goods and services tax',
+  'TradingAccount.ExciseCustomsVAT.StateGoodServiceTax': 'State goods and services tax',
+  'TradingAccount.ExciseCustomsVAT.IntegratedGoodServiceTax': 'Integrated goods and services tax',
+  'TradingAccount.ExciseCustomsVAT.UnionTerrGoodServiceTax': 'Union Territory goods and services tax',
+  'TradingAccount.ExciseCustomsVAT.OthDutyTaxCess': 'Other duty/tax/cess',
+  'TradingAccount.ExciseCustomsVAT.TotExciseCustomsVAT': 'Total excise/customs/VAT',
+  'TradingAccount.TotRevenueFrmOperations': 'Total revenue from operations',
+  'TradingAccount.ClsngStckOfFinishedStcks': 'Closing stock of finished goods',
+  'TradingAccount.TardingAccTotCred': 'Trading account total credits',
+  'TradingAccount.OpngStckOfFinishedStcks': 'Opening stock of finished goods',
+  'TradingAccount.Purchases': 'Purchases',
+  'TradingAccount.DirectExpenses': 'Direct expenses',
+  'TradingAccount.CarriageInward': 'Carriage inward',
+  'TradingAccount.PowerAndFuel': 'Power and fuel',
+  'TradingAccount.DirectExpensesTotal': 'Total direct expenses',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.CustomDuty': 'Customs duty',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.CounterVailDuty': 'Countervailing duty',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.SplAddDuty': 'Special additional duty',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.UnionExciseDuty': 'Union excise duty',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.ServiceTax': 'Service tax',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.VATorSaleTax': 'VAT or sales tax',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.CentralGoodServiceTax': 'Central goods and services tax',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.StateGoodServiceTax': 'State goods and services tax',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.IntegratedGoodServiceTax': 'Integrated goods and services tax',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.UnionTerrGoodServiceTax': 'Union Territory goods and services tax',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.OthDutyTaxCess': 'Other duty/tax/cess',
+  'TradingAccount.DutyTaxPay.ExciseCustomsVAT.TotExciseCustomsVAT': 'Total excise/customs/VAT',
+  'TradingAccount.GrossProfitFrmBusProf': 'Gross profit from business or profession',
+  // P&L Credits
+  'CreditsToPL.GrossProfitTrnsfFrmTrdAcc': 'Gross profit transferred from trading account',
+  'CreditsToPL.OthIncome.RentInc': 'Rent income',
+  'CreditsToPL.OthIncome.Comissions': 'Commissions',
+  'CreditsToPL.OthIncome.Dividends': 'Dividends',
+  'CreditsToPL.OthIncome.InterestInc': 'Interest income',
+  'CreditsToPL.OthIncome.ProfitOnSaleFixedAsset': 'Profit on sale of fixed assets',
+  'CreditsToPL.OthIncome.ProfitOnInvChrSTT': 'Profit on investments (STT paid)',
+  'CreditsToPL.OthIncome.ProfitOnOthInv': 'Profit on other investments',
+  'CreditsToPL.OthIncome.ProfitOnCurrFluct': 'Profit on currency fluctuation',
+  'CreditsToPL.OthIncome.ProfitOnCnvInvntryToCapAsst': 'Profit on conversion of inventory to capital asset',
+  'CreditsToPL.OthIncome.ProfitOnAgriIncome': 'Profit on agricultural income',
+  'CreditsToPL.OthIncome.LiabilityWrittenBack': 'Liability written back',
+  'CreditsToPL.OthIncome.AmtofInterest': 'Amount of interest',
+  'CreditsToPL.OthIncome.AmtofRem': 'Amount of remuneration',
+  'CreditsToPL.OthIncome.MiscOthIncome': 'Miscellaneous other income',
+  'CreditsToPL.OthIncome.TotOthIncome': 'Total other income',
+  'CreditsToPL.TotCreditsToPL': 'Total credits to P&L account',
+  // P&L Debits
+  'DebitsToPL.EmployeeComp.SalsWages': 'Salaries and wages',
+  'DebitsToPL.EmployeeComp.Bonus': 'Bonus',
+  'DebitsToPL.EmployeeComp.MedExpReimb': 'Medical expense reimbursement',
+  'DebitsToPL.EmployeeComp.LeaveEncash': 'Leave encashment',
+  'DebitsToPL.EmployeeComp.LeaveTravelBenft': 'Leave travel benefit',
+  'DebitsToPL.EmployeeComp.ContToSuperAnnFund': 'Contribution to superannuation fund',
+  'DebitsToPL.EmployeeComp.ContToPF': 'Contribution to provident fund',
+  'DebitsToPL.EmployeeComp.ContToGratFund': 'Contribution to gratuity fund',
+  'DebitsToPL.EmployeeComp.ContToOthFund': 'Contribution to other funds',
+  'DebitsToPL.EmployeeComp.OthEmpBenftExpdr': 'Other employee benefit expenditure',
+  'DebitsToPL.EmployeeComp.TotEmployeeComp': 'Total employee compensation',
+  'DebitsToPL.Insurances.MedInsur': 'Medical insurance',
+  'DebitsToPL.Insurances.LifeInsur': 'Life insurance',
+  'DebitsToPL.Insurances.KeyManInsur': 'Key-man insurance',
+  'DebitsToPL.Insurances.OthInsur': 'Other insurance',
+  'DebitsToPL.Insurances.TotInsurances': 'Total insurance',
+  'DebitsToPL.CommissionExpdrDtls.NonResOtherCompany': 'Non-resident / other company',
+  'DebitsToPL.CommissionExpdrDtls.Others': 'Others',
+  'DebitsToPL.CommissionExpdrDtls.Total': 'Total commission expenditure',
+  'DebitsToPL.RoyalityDtls.NonResOtherCompany': 'Non-resident / other company',
+  'DebitsToPL.RoyalityDtls.Others': 'Others',
+  'DebitsToPL.RoyalityDtls.Total': 'Total royalty',
+  'DebitsToPL.ProfessionalConstDtls.NonResOtherCompany': 'Non-resident / other company',
+  'DebitsToPL.ProfessionalConstDtls.Others': 'Others',
+  'DebitsToPL.ProfessionalConstDtls.Total': 'Total professional consultancy',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.UnionExciseDuty': 'Union excise duty',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.ServiceTax': 'Service tax',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.VATorSaleTax': 'VAT or sales tax',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.Cess': 'Cess',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.CentralGoodServiceTax': 'Central goods and services tax',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.StateGoodServiceTax': 'State goods and services tax',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.IntegratedGoodServiceTax': 'Integrated goods and services tax',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.UnionTerrGoodServiceTax': 'Union Territory goods and services tax',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.OthDutyTaxCess': 'Other duty/tax/cess',
+  'DebitsToPL.RatesTaxesPays.ExciseCustomsVAT.TotExciseCustomsVAT': 'Total excise/customs/VAT',
+  'DebitsToPL.InterestExpdrtDtls.NonResOtherCompany': 'Non-resident / other company',
+  'DebitsToPL.InterestExpdrtDtls.Others': 'Others',
+  'DebitsToPL.InterestExpdrtDtls.InterestExpdr': 'Total interest expenditure',
+  'DebitsToPL.PBIDTA': 'Profit before interest, depreciation, tax and amortisation',
+  'DebitsToPL.DepreciationDebPLGeneralAcc': 'Depreciation debited to P&L (general account)',
+  'DebitsToPL.DepreciationDebPLCosAct': 'Depreciation debited to P&L (cost account)',
+  'DebitsToPL.DepreciationAllowITAct32': 'Depreciation allowable under section 32',
+  'DebitsToPL.PBITDA': 'Profit before interest, tax, depreciation and amortisation',
+  'DebitsToPL.InterestAndFinChrg': 'Interest and finance charges',
+  'DebitsToPL.ProfitBeforeTax': 'Profit before tax',
+  // P&L Tax provisions
+  'TaxProvAppr.CurrentYrTax': 'Current year tax',
+  'TaxProvAppr.DeferredTax': 'Deferred tax',
+  'TaxProvAppr.PBT': 'Profit before tax (as per P&L)',
+  'TaxProvAppr.NetPLAccBal': 'Net P&L account balance',
+  'TaxProvAppr.Appropriations': 'Appropriations',
+  'TaxProvAppr.BalTransfrdToResrNSurp': 'Balance transferred to reserves and surplus',
+  'TaxProvAppr.TotTaxProvAppr': 'Total tax provisions and appropriations',
+  // P&L No-books
+  'NoBooksOfAccPL.GrossReceipt': 'Gross receipts',
+  'NoBooksOfAccPL.GrsRcptAccPayeeOrBankMode': 'Gross receipts via account payee/banking mode',
+  'NoBooksOfAccPL.GrsRcptOtherMode': 'Gross receipts via other mode',
+  'NoBooksOfAccPL.GrossProfit': 'Gross profit',
+  'NoBooksOfAccPL.Expenses': 'Expenses',
+  'NoBooksOfAccPL.NetProfit': 'Net profit',
+  'NoBooksOfAccPL.GrossReceiptPrf': 'Gross receipts (profession)',
+  'NoBooksOfAccPL.GrsRcptAccPayeeOrBankModePrf': 'Gross receipts (profession) via account payee/banking mode',
+  'NoBooksOfAccPL.GrsRcptOtherModePrf': 'Gross receipts (profession) via other mode',
+  'NoBooksOfAccPL.GrossProfitPrf': 'Gross profit (profession)',
+  'NoBooksOfAccPL.ExpensesPrf': 'Expenses (profession)',
+  'NoBooksOfAccPL.NetProfitPrf': 'Net profit (profession)',
+  'NoBooksOfAccPL.TotBusinessProfession': 'Total business/profession',
+  'NoBooksOfAccPL.PresumptiveInc44AD': 'Presumptive income u/s 44AD',
+  'NoBooksOfAccPL.PresumptiveInc44ADA': 'Presumptive income u/s 44ADA',
+  // P&L Presumptive
+  'TurnverFrmSpecActivity.GrossReceipt': 'Gross receipts from specified activity',
+  'TurnverFrmSpecActivity.Expenditure': 'Expenditure',
+  'NetIncomeFrmSpecActivity': 'Net income from specified activity',
+  // Balance Sheet — FundSrc
+  'FundSrc.PropFund.PropCap': 'Proprietor\u2019s capital',
+  'FundSrc.PropFund.ResrNSurp.RevResr': 'Revenue reserves',
+  'FundSrc.PropFund.ResrNSurp.CapResr': 'Capital reserves',
+  'FundSrc.PropFund.ResrNSurp.StatResr': 'Statutory reserves',
+  'FundSrc.PropFund.ResrNSurp.OthResr': 'Other reserves',
+  'FundSrc.PropFund.ResrNSurp.TotResrNSurp': 'Total reserves and surplus',
+  'FundSrc.PropFund.TotPropFund': 'Total proprietor\u2019s funds',
+  'FundSrc.LoanFunds.SecrLoan.ForeignCurrLoan': 'Foreign currency loan',
+  'FundSrc.LoanFunds.SecrLoan.RupeeLoan.FrmBank': 'From banks',
+  'FundSrc.LoanFunds.SecrLoan.RupeeLoan.FrmOthrs': 'From others',
+  'FundSrc.LoanFunds.SecrLoan.RupeeLoan.TotRupeeLoan': 'Total rupee loan',
+  'FundSrc.LoanFunds.SecrLoan.TotSecrLoan': 'Total secured loan',
+  'FundSrc.LoanFunds.UnsecrLoan.FrmBank': 'From banks',
+  'FundSrc.LoanFunds.UnsecrLoan.FrmOthrs': 'From others',
+  'FundSrc.LoanFunds.UnsecrLoan.TotUnSecrLoan': 'Total unsecured loan',
+  'FundSrc.LoanFunds.TotLoanFund': 'Total loan funds',
+  'FundSrc.DeferredTax': 'Deferred tax',
+  'FundSrc.Advances.FromPrsn': 'Advances from persons',
+  'FundSrc.Advances.FromOthers': 'Advances from others',
+  'FundSrc.Advances.TotalAdvances': 'Total advances',
+  'FundSrc.TotFundSrc': 'Total sources of funds',
+  // Balance Sheet — FundApply
+  'FundApply.FixedAsset.GrossBlock': 'Gross block of fixed assets',
+  'FundApply.FixedAsset.Depreciation': 'Depreciation',
+  'FundApply.FixedAsset.NetBlock': 'Net block',
+  'FundApply.FixedAsset.CapWrkProg': 'Capital work in progress',
+  'FundApply.FixedAsset.TotFixedAsset': 'Total fixed assets',
+  'FundApply.Investments.LongTermInv.GovtOthSecQuoted': 'Government/other securities (quoted)',
+  'FundApply.Investments.LongTermInv.GovOthSecUnQoted': 'Government/other securities (unquoted)',
+  'FundApply.Investments.LongTermInv.TotLongTermInv': 'Total long-term investments',
+  'FundApply.Investments.TradeInv.EquityShares': 'Equity shares',
+  'FundApply.Investments.TradeInv.PreferShares': 'Preference shares',
+  'FundApply.Investments.TradeInv.Debenture': 'Debentures',
+  'FundApply.Investments.TradeInv.TotTradeInv': 'Total trade investments',
+  'FundApply.Investments.TotInvestments': 'Total investments',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.Inventories.StoresConsumables': 'Stores and consumables',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.Inventories.RawMatl': 'Raw materials',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.Inventories.StkInProcess': 'Stock in process',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.Inventories.FinOrTradGood': 'Finished/trading goods',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.Inventories.TotInventries': 'Total inventories',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.SndryDebtors': 'Sundry debtors',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.CashOrBankBal.CashinHand': 'Cash in hand',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.CashOrBankBal.BankBal': 'Bank balance',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.CashOrBankBal.TotCashOrBankBal': 'Total cash/bank balance',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.OthCurrAsset': 'Other current assets',
+  'FundApply.CurrAssetLoanAdv.CurrAsset.TotCurrAsset': 'Total current assets',
+  'FundApply.CurrAssetLoanAdv.LoanAdv.AdvRecoverable': 'Advances recoverable',
+  'FundApply.CurrAssetLoanAdv.LoanAdv.Deposits': 'Deposits',
+  'FundApply.CurrAssetLoanAdv.LoanAdv.BalWithRevAuth': 'Balance with revenue authorities',
+  'FundApply.CurrAssetLoanAdv.LoanAdv.TotLoanAdv': 'Total loans and advances',
+  'FundApply.CurrAssetLoanAdv.TotCurrAssetLoanAdv': 'Total current assets, loans and advances',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.CurrLiabilities.SundryCred': 'Sundry creditors',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.CurrLiabilities.LiabForLeasedAsset': 'Liability for leased assets',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.CurrLiabilities.AccrIntonLeasedAsset': 'Accrued interest on leased assets',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.CurrLiabilities.AccrIntNotDue': 'Accrued interest not yet due',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.CurrLiabilities.TotCurrLiabilities': 'Total current liabilities',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.Provisions.ITProvision': 'Income-tax provision',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.Provisions.ELSuperAnnGratProvision': 'EL/superannuation/gratuity provision',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.Provisions.OthProvision': 'Other provisions',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.Provisions.TotProvisions': 'Total provisions',
+  'FundApply.CurrAssetLoanAdv.CurrLiabilitiesProv.TotCurrLiabilitiesProvision': 'Total current liabilities and provisions',
+  'FundApply.CurrAssetLoanAdv.NetCurrAsset': 'Net current asset',
+  'FundApply.MiscAdjust.MiscExpndr': 'Miscellaneous expenditure',
+  'FundApply.MiscAdjust.DefTaxAsset': 'Deferred tax asset',
+  'FundApply.MiscAdjust.AccumaltedLosses': 'Accumulated losses',
+  'FundApply.MiscAdjust.TotMiscAdjust': 'Total other assets and adjustments',
+  'FundApply.TotFundApply': 'Total application of funds',
+  'NoBooksOfAccBS.CashBalAmt': 'Total cash balance (no books)',
+  // ===== Schedule BP — BusinessIncOthThanSpec =====
+  'BusinessIncOthThanSpec.ProfBfrTaxPL': 'Profit before tax as per Profit and Loss Account',
+  'BusinessIncOthThanSpec.NetPLFromSpecBus': 'Less: profit or loss from speculative business included above',
+  'BusinessIncOthThanSpec.NetPLFromSpecifiedBus': 'Less: profit or loss from specified business included above',
+  'BusinessIncOthThanSpec.PLUs44sChapXIIG': 'P&L as per sections 44 to 44DA (Chapter XIIG)',
+  'BusinessIncOthThanSpec.TotalProfitFrmActCvrd': 'Total profit from activities covered (sections 44-44DA)',
+  'BusinessIncOthThanSpec.IncCredPLNotChargable': 'Income credited to P&L not chargeable',
+  'BusinessIncOthThanSpec.BalancePLOthThanSpecBus': 'Balance P&L (other than speculative business)',
+  'BusinessIncOthThanSpec.ExpDebToPLExemptInc': 'Expenses debited to P&L for exempt income',
+  'BusinessIncOthThanSpec.ExpDebToPLExemptIncDisAllwUs14A': 'Expenses debited to P&L for exempt income disallowed u/s 14A',
+  'BusinessIncOthThanSpec.TotExpDebPL': 'Total expenses debited to P&L (other heads)',
+  'BusinessIncOthThanSpec.AdjustedPLOthThanSpecBus': 'Adjusted P&L (other than speculative business)',
+  'BusinessIncOthThanSpec.DepreciationDebPLCosAct': 'Depreciation debited to books (cost accounts)',
+  'BusinessIncOthThanSpec.AdjustPLAfterDeprOthSpecInc': 'Adjusted P&L after depreciation and other speculative income',
+  'BusinessIncOthThanSpec.AmtDebPLDisallowUs36': 'Amount debited to P&L disallowed u/s 36',
+  'BusinessIncOthThanSpec.AmtDebPLDisallowUs37': 'Amount debited to P&L disallowed u/s 37',
+  'BusinessIncOthThanSpec.AmtDebPLDisallowUs40': 'Amount debited to P&L disallowed u/s 40',
+  'BusinessIncOthThanSpec.AmtDebPLDisallowUs40A': 'Amount debited to P&L disallowed u/s 40A',
+  'BusinessIncOthThanSpec.AmtDebPLDisallowUs43B': 'Amount debited to P&L disallowed u/s 43B',
+  'BusinessIncOthThanSpec.InterestDisAllowUs23SMEAct': 'Interest disallowed u/s 23 (MSME Act)',
+  'BusinessIncOthThanSpec.DeemIncUs41': 'Deemed income u/s 41(1)',
+  'BusinessIncOthThanSpec.DeemIncUs3380HHD80IA': 'Deemed income u/s 33AB/80HHD/80IA',
+  'BusinessIncOthThanSpec.DeemIncUs32AD': 'Deemed income u/s 32AD',
+  'BusinessIncOthThanSpec.DeemIncUs33AB': 'Deemed income u/s 33AB',
+  'BusinessIncOthThanSpec.DeemIncUs33ABA': 'Deemed income u/s 33ABA',
+  'BusinessIncOthThanSpec.DeemIncUs35ABA': 'Deemed income u/s 35ABA',
+  'BusinessIncOthThanSpec.DeemIncUs35ABB': 'Deemed income u/s 35ABB',
+  'BusinessIncOthThanSpec.DeemIncUs40A3A': 'Deemed income u/s 40A(3A)',
+  'BusinessIncOthThanSpec.DeemIncUs72A': 'Deemed income u/s 72A',
+  'BusinessIncOthThanSpec.DeemIncUs80HHD': 'Deemed income u/s 80HHD',
+  'BusinessIncOthThanSpec.DeemIncUs80IA': 'Deemed income u/s 80IA',
+  'BusinessIncOthThanSpec.DeemIncUs43CA': 'Deemed income u/s 43CA',
+  'BusinessIncOthThanSpec.OthItemDisallowUs28To44DA': 'Other items disallowed u/s 28 to 44DA',
+  'BusinessIncOthThanSpec.AnyOthIncNotInclInExpDisallowPL': 'Any other income not included in expenses disallowed in P&L',
+  'BusinessIncOthThanSpec.AnyOthIncNotInclInSalary': 'Any other income not included \u2014 salary',
+  'BusinessIncOthThanSpec.AnyOthIncNotInclInBonus': 'Any other income not included \u2014 bonus',
+  'BusinessIncOthThanSpec.AnyOthIncNotInclInCommission': 'Any other income not included \u2014 commission',
+  'BusinessIncOthThanSpec.AnyOthIncNotInclInInterest': 'Any other income not included \u2014 interest',
+  'BusinessIncOthThanSpec.AnyOthIncNotInclInOthers': 'Any other income not included \u2014 others',
+  'BusinessIncOthThanSpec.IncProfDecLossAccICDSAdj': 'Income (profit decrease/loss) per ICDS adjustment',
+  'BusinessIncOthThanSpec.TotAfterAddToPLDeprOthSpecInc': 'Total after additions to P&L (depreciation, other speculative income)',
+  'BusinessIncOthThanSpec.DeductUs32_1_iii': 'Deduction u/s 32(1)(iii)',
+  'BusinessIncOthThanSpec.DebPLUs35ExcessAmt': 'Amount debited to P&L u/s 35 (excess)',
+  'BusinessIncOthThanSpec.AmtDisallUs40NowAllow': 'Amount disallowed u/s 40 now allowed',
+  'BusinessIncOthThanSpec.AmtDisallUs43BNowAllow': 'Amount disallowed u/s 43B now allowed',
+  'BusinessIncOthThanSpec.AnyOthAmtAllDeduct': 'Any other amount allowed as deduction',
+  'BusinessIncOthThanSpec.DecProfIncLossAccICDSAdj': 'Deduction (profit increase/loss) per ICDS adjustment',
+  'BusinessIncOthThanSpec.TotDeductionAmts': 'Total deduction amounts',
+  'BusinessIncOthThanSpec.PLAftAdjDedBusOthThanSpec': 'P&L after adjustment and deductions (business other than speculative)',
+  'BusinessIncOthThanSpec.NetPLAftAdjBusOthThanSpec': 'Net P&L after adjustment (business other than speculative)',
+  'BusinessIncOthThanSpec.NetPLBusOthThanSpec7A7B7C': 'Net P&L from business other than speculative (u/s 7A/7B/7C)',
+  'BusinessIncOthThanSpec.ChrgblIncUndrRule7': 'Chargeable income under Rule 7',
+  'BusinessIncOthThanSpec.DeemedChrgblIncUndrRule7A': 'Deemed chargeable income under Rule 7A',
+  'BusinessIncOthThanSpec.DeemedChrgblIncUndrRule7B1': 'Deemed chargeable income under Rule 7B(1)',
+  'BusinessIncOthThanSpec.DeemedChrgblIncUndrRule7B1A': 'Deemed chargeable income under Rule 7B(1)(A)',
+  'BusinessIncOthThanSpec.DeemedChrgblIncUndrRule8': 'Deemed chargeable income under Rule 8',
+  'BusinessIncOthThanSpec.IncomeOtherThanRule': 'Income other than under Rule 7/7A/7B/8',
+  'BusinessIncOthThanSpec.BalIncDeemedFrmAgri': 'Balance income deemed from agricultural operations',
+  // BP income heads (disambiguated)
+  'IncRecCredPLOthHeadDtls.Salary': 'Salary income (taxable under \u201cSalaries\u201d)',
+  'IncRecCredPLOthHeadDtls.HouseProperty': 'Income from house property (credited to P&L)',
+  'IncRecCredPLOthHeadDtls.CapitalGains': 'Income from capital gains (credited to P&L)',
+  'IncRecCredPLOthHeadDtls.OtherSources': 'Income from other sources (credited to P&L)',
+  'IncRecCredPLOthHeadDtls.Dividend': 'Dividend income (credited to P&L)',
+  'IncRecCredPLOthHeadDtls.OtherThanDividend': 'Income other than dividend (u/s 115BBF)',
+  'IncRecCredPLOthHeadDtls.Us115BBF': 'Income u/s 115BBF (other than dividend)',
+  'IncRecCredPLOthHeadDtls.Us115BBG': 'Income u/s 115BBG',
+  'IncRecCredPLOthHeadDtls.115BBH': 'Income u/s 115BBH (net of cost of acquisition)',
+  // BP expense heads (disambiguated)
+  'ExpDebToPLOthHeadDtls.Salary': 'Expense debited to P&L \u2014 salary',
+  'ExpDebToPLOthHeadDtls.HouseProperty': 'Expense debited to P&L \u2014 house property',
+  'ExpDebToPLOthHeadDtls.CapitalGains': 'Expense debited to P&L \u2014 capital gains',
+  'ExpDebToPLOthHeadDtls.OtherSources': 'Expense debited to P&L \u2014 other sources',
+  'ExpDebToPLOthHeadDtls.Us115BBF': 'Expense debited to P&L \u2014 u/s 115BBF',
+  'ExpDebToPLOthHeadDtls.Us115BBG': 'Expense debited to P&L \u2014 u/s 115BBG',
+  'ExpDebToPLOthHeadDtls.115BBH': 'Expense debited to P&L \u2014 u/s 115BBH',
+  // BP ProfitLossInclRefrdSec
+  'ProfitLossInclRefrdSec.ProfitLossUs44AD': 'Profit/loss u/s 44AD',
+  'ProfitLossInclRefrdSec.ProfitLossUs44ADA': 'Profit/loss u/s 44ADA',
+  'ProfitLossInclRefrdSec.ProfitLossUs44AE': 'Profit/loss u/s 44AE',
+  'ProfitLossInclRefrdSec.ProfitLossUs44B': 'Profit/loss u/s 44B',
+  'ProfitLossInclRefrdSec.ProfitLossUs44BB': 'Profit/loss u/s 44BB',
+  'ProfitLossInclRefrdSec.ProfitLossUs44BBA': 'Profit/loss u/s 44BBA',
+  'ProfitLossInclRefrdSec.ProfitLossUs44BBC': 'Profit/loss u/s 44BBC',
+  'ProfitLossInclRefrdSec.ProfitLossUs44BBD': 'Profit/loss u/s 44BBD',
+  'ProfitLossInclRefrdSec.ProfitLossUs44DA': 'Profit/loss u/s 44DA',
+  // BP ProfitFrmActCvrd
+  'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule7': 'Profit from activity covered under Rule 7',
+  'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule7A': 'Profit from activity covered under Rule 7A',
+  'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule7B1': 'Profit from activity covered under Rule 7B(1)',
+  'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule7B1A': 'Profit from activity covered under Rule 7B(1)(A)',
+  'ProfitFrmActCvrd.ProfitFrmActCvrdUndrRule8': 'Profit from activity covered under Rule 8',
+  // BP IncCredPL
+  'IncCredPL.FirmShareInc': 'Share of income from firm',
+  'IncCredPL.AOPBOISharInc': 'Share of income from AOP/BOI',
+  'IncCredPL.OtherExmptIncDtl': 'Other exempt income details',
+  'IncCredPL.OthExempInc': 'Other exempt income',
+  'IncCredPL.TotExempIncPL': 'Total exempt income in P&L',
+  // BP DepreciationAllowITAct32
+  'DepreciationAllowITAct32.DepreciationAllowUs32_1_ii': 'Depreciation allowable u/s 32(1)(ii)',
+  'DepreciationAllowITAct32.DepreciationAllowUs32_1_i': 'Depreciation allowable u/s 32(1)(i)',
+  'DepreciationAllowITAct32.TotDeprAllowITAct': 'Total depreciation allowable under the IT Act',
+  // BP DeemedProfitBusUs
+  'DeemedProfitBusUs.Section44AD': 'Deemed profit u/s 44AD',
+  'DeemedProfitBusUs.Section44ADA': 'Deemed profit u/s 44ADA',
+  'DeemedProfitBusUs.Section44AE': 'Deemed profit u/s 44AE',
+  'DeemedProfitBusUs.Section44B': 'Deemed profit u/s 44B',
+  'DeemedProfitBusUs.Section44BB': 'Deemed profit u/s 44BB',
+  'DeemedProfitBusUs.Section44BBA': 'Deemed profit u/s 44BBA',
+  'DeemedProfitBusUs.Section44BBC': 'Deemed profit u/s 44BBC',
+  'DeemedProfitBusUs.Section44BBD': 'Deemed profit u/s 44BBD',
+  'DeemedProfitBusUs.Section44DA': 'Deemed profit u/s 44DA',
+  'DeemedProfitBusUs.TotDeemedProfitBusUs': 'Total deemed profit from business (u/s 44AD to 44DA)',
+  // BP SpecBusinessInc
+  'SpecBusinessInc.NetPLFrmSpecBus': 'Net P&L from speculative business',
+  'SpecBusinessInc.AdditionUs28to44DA': 'Additions u/s 28 to 44DA (speculative)',
+  'SpecBusinessInc.DeductUs28to44DA': 'Deductions u/s 28 to 44DA (speculative)',
+  'SpecBusinessInc.AdjustedPLFrmSpecuBus': 'Adjusted P&L from speculative business',
+  // BP SpecifiedBusinessInc
+  'SpecifiedBusinessInc.NetPLFrmSpecifiedBus': 'Net P&L from specified business',
+  'SpecifiedBusinessInc.AddSec28to44DA': 'Additions u/s 28 to 44DA (specified business)',
+  'SpecifiedBusinessInc.DedSec28to44DAOTDedSec35AD': 'Deductions u/s 28 to 44DA other than deduction u/s 35AD',
+  'SpecifiedBusinessInc.ProfitLossSpecifiedBusiness': 'Profit/loss from specified business',
+  'SpecifiedBusinessInc.DeductionUs35AD': 'Deduction u/s 35AD',
+  'SpecifiedBusinessInc.PLFrmSpecifiedBus': 'P&L from specified business',
+  'SpecifiedBusinessInc.DedUs35ADSubSec5Dtls': 'Deduction u/s 35AD sub-section (5) details',
+  // BP BusSetoffCurrYr
+  'BusSetoffCurrYr.LossSetOffOnBusLoss': 'Loss set-off against business loss (current year)',
+  'BusSetoffCurrYr.TotLossSetOffOnBus': 'Total loss set-off on business (current year)',
+  'BusSetoffCurrYr.LossRemainSetOffOnBus': 'Loss remaining to be set-off on business',
+  // BusLossCurrYearSetoffType
+  'BusLossCurrYearSetoffType.IncOfCurYrUnderThatHead': 'Income of current year under that head',
+  'BusLossCurrYearSetoffType.BusLossSetoff': 'Business loss set-off (current year)',
+  'BusLossCurrYearSetoffType.IncOfCurYrAfterSetOff': 'Income of current year after set-off',
+  // Disambiguate SpeculativeInc vs SpecifiedInc
+  'SpeculativeInc.IncOfCurYrUnderThatHead': 'Speculative income \u2014 income of current year under that head',
+  'SpeculativeInc.BusLossSetoff': 'Speculative income \u2014 business loss set-off (current year)',
+  'SpeculativeInc.IncOfCurYrAfterSetOff': 'Speculative income \u2014 income of current year after set-off',
+  'SpecifiedInc.IncOfCurYrUnderThatHead': 'Specified business income \u2014 income of current year under that head',
+  'SpecifiedInc.BusLossSetoff': 'Specified business income \u2014 business loss set-off (current year)',
+  'SpecifiedInc.IncOfCurYrAfterSetOff': 'Specified business income \u2014 income of current year after set-off',
+  // Array/heading fallbacks
+  'OtherExmptIncDtl': 'Other exempt income details',
+  'OtherExmptIncDtls': 'Other exempt income entries',
+  'DedUs35ADSubSec5Dtls': 'Deduction u/s 35AD sub-section (5) details',
+  'OperatingDividendName.dividend': 'Dividend',
+};
 
-function SchemaEditor({ node, value, path, name, required = false, disabled, onChange }: EditorProps): React.ReactElement {
+function displayLabel(name: string, fallback?: string): string {
+  return FRIENDLY_LABELS[name] ?? fallback ?? humanize(name);
+}
+
+/** Resolve the most specific friendly label for a field, considering both its dotted path and its own name. */
+function resolveLabel(path: string, name: string, fallback?: string): string {
+  if (FRIENDLY_LABELS[path]) return FRIENDLY_LABELS[path];
+  const normalized = path.replace(/\.\d+\./g, '.').replace(/\.\d+$/g, '');
+  const parts = normalized.split('.');
+  for (let i = 0; i < parts.length; i += 1) {
+    const suffix = parts.slice(i).join('.');
+    if (FRIENDLY_LABELS[suffix]) return FRIENDLY_LABELS[suffix];
+  }
+  if (FRIENDLY_LABELS[name]) return FRIENDLY_LABELS[name];
+  return fallback ?? humanize(name);
+}
+
+/** Fields that should only appear when a controlling flag has a specific value. Key = field path (rooted at the schedule root). */
+const CONDITIONAL_VISIBILITY: Record<string, { controllingPath: string; showWhen: Array<string | number | boolean> }> = {
+  'PartA_GEN2.AuditInfo.BiiDetails': { controllingPath: 'PartA_GEN2.AuditInfo.Cndnfor44AB', showWhen: ['bii'] },
+  'PartA_GEN2.AuditInfo.AuditDetails92E': { controllingPath: 'PartA_GEN2.AuditInfo.LiableSec92Eflg', showWhen: ['Y'] },
+  'PartA_GEN2.AuditInfo.AuditReportFurnishDate': { controllingPath: 'PartA_GEN2.AuditInfo.LiableSec44ABflg', showWhen: ['Y'] },
+  'PartA_GEN2.AuditInfo.AckNum44AB': { controllingPath: 'PartA_GEN2.AuditInfo.LiableSec44ABflg', showWhen: ['Y'] },
+  'PartA_GEN2.AuditInfo.AudFrmName': { controllingPath: 'PartA_GEN2.AuditInfo.LiableSec44ABflg', showWhen: ['Y'] },
+  'PartA_GEN2.AuditInfo.AudFrmPAN': { controllingPath: 'PartA_GEN2.AuditInfo.LiableSec44ABflg', showWhen: ['Y'] },
+  'PartA_GEN2.AuditInfo.AudFrmAadhaar': { controllingPath: 'PartA_GEN2.AuditInfo.LiableSec44ABflg', showWhen: ['Y'] },
+  'PartA_GEN2.AuditInfo.AccountAuditFlag': { controllingPath: 'PartA_GEN2.AuditInfo.LiableSec44ABflg', showWhen: ['Y'] },
+  'PartA_GEN2.AuditInfo.AuditReportDetails': { controllingPath: 'PartA_GEN2.AuditInfo.AccountAuditFlag', showWhen: ['Y'] },
+  // Tab 2 presumptive cross-schedule visibility (controlled by PartA_GEN2.AuditInfo.IncDclrdUs)
+  'ManufacturingAccount.NatOfBus44AD': { controllingPath: 'PartA_GEN2.AuditInfo.IncDclrdUs', showWhen: ['Y'] },
+  'ManufacturingAccount.PersumptiveInc44AD': { controllingPath: 'PartA_GEN2.AuditInfo.IncDclrdUs', showWhen: ['Y'] },
+  'ManufacturingAccount.NatOfBus44ADA': { controllingPath: 'PartA_GEN2.AuditInfo.IncDclrdUs', showWhen: ['Y'] },
+  'ManufacturingAccount.PersumptiveInc44ADA': { controllingPath: 'PartA_GEN2.AuditInfo.IncDclrdUs', showWhen: ['Y'] },
+  'ManufacturingAccount.NatOfBus44AE': { controllingPath: 'PartA_GEN2.AuditInfo.IncDclrdUs', showWhen: ['Y'] },
+  'ManufacturingAccount.GoodsDtlsUs44AE': { controllingPath: 'PartA_GEN2.AuditInfo.IncDclrdUs', showWhen: ['Y'] },
+  'ManufacturingAccount.TotalNumOfMonths': { controllingPath: 'PartA_GEN2.AuditInfo.IncDclrdUs', showWhen: ['Y'] },
+  'ManufacturingAccount.TotalPrsumptvIncUs44EGoods': { controllingPath: 'PartA_GEN2.AuditInfo.IncDclrdUs', showWhen: ['Y'] },
+  'ManufacturingAccount.TotalPrsumptvIncUs44E': { controllingPath: 'PartA_GEN2.AuditInfo.IncDclrdUs', showWhen: ['Y'] },
+};
+
+/** Resolve a controlling field value from the root state by walking its full dotted path. */
+function resolveControlValue(rootValue: CanonicalValue | undefined, controllingPath: string): string | number | boolean | undefined {
+  if (!rootValue || !controllingPath) return undefined;
+  const parts = controllingPath.split('.');
+  let current: CanonicalValue = rootValue;
+  for (const part of parts) {
+    if (current && typeof current === 'object' && !Array.isArray(current)) {
+      current = (current as CanonicalObject)[part];
+    } else {
+      return undefined;
+    }
+  }
+  return typeof current === 'string' || typeof current === 'number' || typeof current === 'boolean' ? current : undefined;
+}
+
+/** Determine whether a field should be rendered based on conditional-visibility rules. */
+function shouldShowField(path: string, rootValue: CanonicalValue | undefined): boolean {
+  const rule = CONDITIONAL_VISIBILITY[path];
+  if (!rule) return true;
+  const value = resolveControlValue(rootValue, rule.controllingPath);
+  return rule.showWhen.includes(value as string | number | boolean);
+}
+
+function statsText(value: CanonicalObject): string {
+  const values = Object.values(value);
+  const populated = values.filter((v) => v !== 0 && v !== '' && v !== false && v !== undefined && v !== null && !(Array.isArray(v) && v.length === 0) && !(typeof v === 'object' && v !== null && Object.keys(v).length === 0)).length;
+  return `${populated} populated field${populated === 1 ? '' : 's'}`;
+}
+
+function enumOptionLabel(name: string, option: string | number | boolean, description?: string): string {
+  if (description) {
+    const match = description.match(new RegExp(`(?:^|[;\\s])${String(option)}\\s*:\\s*([^;]+)`));
+    if (match) return match[1].trim();
+  }
+  return String(option);
+}
+
+interface EditorProps { node: SchemaNode; value: CanonicalValue; path: string; name: string; required?: boolean; disabled: boolean; depth: number; inlineObject?: boolean; rootValue?: CanonicalValue; onChange: (value: CanonicalValue) => void; }
+
+function SchemaEditor({ node, value, path, name, required = false, disabled, depth, inlineObject, rootValue, onChange }: EditorProps): React.ReactElement {
   const resolved = merged(node);
   const type = schemaType(resolved);
   const id = `itr3-${path.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-  const label = resolved.title || humanize(name);
+  const label = resolveLabel(path, name, resolved.title);
+  if (!shouldShowField(path, rootValue)) return <></>;
   if (type === 'object') {
     const objectValue = value && typeof value === 'object' && !Array.isArray(value) ? value as CanonicalObject : {};
-    return <fieldset style={cardStyle}><legend style={{ fontWeight: 700, padding: '0 6px' }}>{label}{required ? ' *' : ''}</legend>
-      {resolved.description && <p title={resolved.description} style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 0 }}>{resolved.description}</p>}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(245px, 1fr))', gap: 12 }}>
-        {Object.entries(resolved.properties ?? {}).map(([childName, child]) => <SchemaEditor key={childName} node={child} name={childName} path={`${path}.${childName}`} value={objectValue[childName] ?? initialValue(child)} required={resolved.required?.includes(childName)} disabled={disabled} onChange={(next) => onChange({ ...objectValue, [childName]: next })} />)}
+    const isFlatInline = inlineObject || depth <= 1 || Object.values(resolved.properties ?? {}).every((child) => ['string', 'integer', 'number', 'boolean'].includes(schemaType(child)));
+    const content = <>
+      {resolved.description && <p title={resolved.description} style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-muted, #6b7280)', margin: '0 0 12px' }}>{resolved.description}</p>}
+      <div style={gridStyle}>
+        {Object.entries(resolved.properties ?? {}).map(([childName, child]) => <SchemaEditor key={childName} node={child} name={childName} path={`${path}.${childName}`} value={objectValue[childName] ?? initialValue(child)} required={resolved.required?.includes(childName)} disabled={disabled} depth={depth + 1} inlineObject={isFlatInline} rootValue={rootValue ?? objectValue} onChange={(next) => onChange({ ...objectValue, [childName]: next })} />)}
       </div>
-    </fieldset>;
+    </>;
+    if (depth === 0 || inlineObject) return <div style={{ gridColumn: inlineObject ? '1 / -1' : undefined }}>{content}</div>;
+    if (depth === 1 || isFlatInline) return <section style={{ ...cardStyle, gridColumn: '1 / -1', marginBottom: 0 }}><div style={{ marginBottom: 14 }}><h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary, #374151)' }}>{label}{required ? ' *' : ''}</h4>{resolved.description && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>{resolved.description}</div>}</div>{content}</section>;
+    return <details open={false} style={{ ...cardStyle, gridColumn: '1 / -1', marginBottom: 0 }}>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}><span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary, #374151)' }}>{label}{required ? ' *' : ''}</span><span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)', fontWeight: 400 }}>{statsText(objectValue)} \u00b7 Expand / collapse</span></summary>
+      <div style={{ paddingTop: 14 }}>{content}</div>
+    </details>;
   }
   if (type === 'array') {
     const rows = Array.isArray(value) ? value : [];
     const min = resolved.minItems ?? 0;
+    const hasExplicitMax = resolved.maxItems !== undefined;
     const max = resolved.maxItems ?? Number.MAX_SAFE_INTEGER;
-    return <section style={{ ...cardStyle, gridColumn: '1 / -1' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}><strong>{label}{required ? ' *' : ''}</strong><button type="button" disabled={disabled || rows.length >= max} onClick={() => onChange([...rows, initialValue(resolved.items ?? {})])}>+ Add</button></div>
-      {rows.length === 0 && <small>No entries{min > 0 ? `; at least ${min} required` : ''}.</small>}
-      {rows.map((row, index) => <div key={`${path}-${index}`} style={{ marginTop: 10, padding: 10, borderLeft: '3px solid var(--gold, #b58b2a)' }}><SchemaEditor node={resolved.items ?? {}} name={`${name} ${index + 1}`} path={`${path}.${index}`} value={row} disabled={disabled} onChange={(next) => onChange(rows.map((item, i) => i === index ? next : item))} /><button type="button" disabled={disabled || rows.length <= min} onClick={() => onChange(rows.filter((_, i) => i !== index))}>Remove row {index + 1}</button></div>)}
-      {Number.isFinite(max) && <small>Maximum {max} rows.</small>}
+    const canAdd = !disabled && rows.length < max;
+    return <section style={{ ...cardStyle, gridColumn: '1 / -1', marginBottom: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: rows.length === 0 ? 0 : 12 }}><div><h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary, #374151)' }}>{label}{required ? ' *' : ''}</h4><div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>{rows.length} entr{rows.length === 1 ? 'y' : 'ies'}{hasExplicitMax ? ` \u00b7 maximum ${max}` : ''}{min > 0 ? ` \u00b7 minimum ${min}` : ''}</div></div><button type="button" style={{ ...addButtonStyle, opacity: canAdd ? 1 : 0.5 }} disabled={!canAdd} onClick={() => onChange([...rows, initialValue(resolved.items ?? {})])}>+ Add entry</button></div>
+      {rows.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted, #6b7280)', background: '#fff', borderRadius: 6 }}>No entries. Click \u201cAdd entry\u201d to add one.</div>}
+      {rows.map((row, index) => <div key={`${path}-${index}`} style={{ marginTop: 12, padding: 16, border: '1px solid var(--border, #d7dce2)', borderRadius: 6, background: '#fff' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}><h4 style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary, #374151)' }}>{label} #{index + 1}</h4><button type="button" style={{ ...removeButtonStyle, opacity: disabled || rows.length <= min ? 0.5 : 1 }} disabled={disabled || rows.length <= min} onClick={() => onChange(rows.filter((_, i) => i !== index))}>Remove</button></div><SchemaEditor node={resolved.items ?? {}} name={`${name} ${index + 1}`} path={`${path}.${index}`} value={row} disabled={disabled} depth={depth + 1} inlineObject rootValue={rootValue} onChange={(next) => onChange(rows.map((item, i) => i === index ? next : item))} /></div>)}
     </section>;
   }
   const readOnly = resolved.readOnly || (TOTAL_KEYS.test(name) && (type === 'integer' || type === 'number'));
-  const common = { id, required, disabled: disabled || readOnly, title: resolved.description, style: { ...inputStyle, background: readOnly ? '#eef1f4' : '#fff' } };
-  return <label htmlFor={id} style={{ display: 'block', minWidth: 0 }}><span style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 5 }}>{label}{required ? ' *' : ''}{readOnly ? ' (calculated)' : ''}</span>
-    {resolved.enum ? <select {...common} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)}>{!required && <option value="">Select</option>}{resolved.enum.map((option) => <option key={String(option)} value={String(option)}>{String(option)}</option>)}</select>
+  const patternOptions = !resolved.enum && typeof resolved.pattern === 'string' && /^(?:N\|Y|Y\|N)$/.test(resolved.pattern) ? ['N', 'Y'] : undefined;
+  const options = resolved.enum ?? patternOptions;
+  const common = { id, required, disabled: disabled || readOnly, title: resolved.description, style: { ...inputStyle, background: readOnly ? 'var(--gold-pale, #fdf3e3)' : '#fff', fontWeight: readOnly ? 600 : 400 } };
+  return <label htmlFor={id} style={{ display: 'block', minWidth: 0 }}><span style={{ display: 'block', fontSize: 12, fontWeight: 500, color: 'var(--text-secondary, #374151)', marginBottom: 6 }}>{label}{required ? ' *' : ''}{readOnly ? ' (calculated)' : ''}</span>
+    {options ? <select {...common} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)}>{(!required || String(value ?? '') === '') && <option value="">Select</option>}{options.map((option) => <option key={String(option)} value={String(option)}>{enumOptionLabel(name, option, resolved.description)}</option>)}</select>
       : type === 'boolean' ? <select {...common} value={value ? 'true' : 'false'} onChange={(event) => onChange(event.target.value === 'true')}><option value="false">No</option><option value="true">Yes</option></select>
       : <input {...common} type={resolved.format === 'date' || /Date/.test(name) ? 'date' : type === 'integer' || type === 'number' ? 'number' : 'text'} value={typeof value === 'string' || typeof value === 'number' ? value : ''} min={resolved.minimum} max={resolved.maximum} minLength={resolved.minLength} maxLength={resolved.maxLength} pattern={resolved.pattern} step={type === 'integer' ? 1 : type === 'number' ? 'any' : undefined} onChange={(event) => onChange(type === 'integer' || type === 'number' ? (event.target.value === '' ? 0 : Number(event.target.value)) : event.target.value)} />}
+    {resolved.description && !options && <span style={{ display: 'block', marginTop: 4, fontSize: 10, lineHeight: 1.4, color: 'var(--text-muted, #6b7280)' }}>{resolved.description}</span>}
   </label>;
 }
 
 /** Renders exact schema-driven editors for all mandatory AY 2026-27 ITR-3 core business schedules. */
-export default function ITR3BusinessCoreManager({ value, onChange, disabled = false }: ITR3BusinessCoreManagerProps): React.ReactElement {
+export default function ITR3BusinessCoreManager({ value, onChange, disabled = false, visibleSchedules = ROOTS, showHeading = true }: ITR3BusinessCoreManagerProps): React.ReactElement {
   const normalized = useMemo(() => normalizeRoot(value), [value]);
   const [draft, setDraft] = useState<ITR3BusinessCoreData>(normalized);
-  const [active, setActive] = useState<keyof ITR3BusinessCoreData>('PartA_GEN2');
   useEffect(() => setDraft(normalized), [normalized]);
   const update = (root: keyof ITR3BusinessCoreData, next: CanonicalValue): void => {
-    const updated = { ...draft, [root]: recalculate(DEFINITIONS[root], next) as CanonicalObject };
+    const recalculated = recalculate(DEFINITIONS[root], next, '', root) as CanonicalObject;
+    const updated = { ...draft, [root]: recalculated } as ITR3BusinessCoreData;
     setDraft(updated);
     onChange(updated);
   };
-  return <section aria-label="ITR-3 core business schedules"><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>{ROOTS.map((root) => <button type="button" key={root} onClick={() => setActive(root)} aria-pressed={active === root} style={{ padding: '8px 10px', fontWeight: active === root ? 700 : 400 }}>{TITLES[root]}</button>)}</div>
-    <SchemaEditor node={DEFINITIONS[active]} name={TITLES[active]} path={active} value={draft[active]} required disabled={disabled} onChange={(next) => update(active, next)} />
+  if (visibleSchedules.length === 1) {
+    const root = visibleSchedules[0];
+    return <section aria-label="ITR-3 core business schedules" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <SchemaEditor node={DEFINITIONS[root]} name={root} path={root} value={draft[root]} required disabled={disabled} depth={0} rootValue={draft as unknown as CanonicalValue} onChange={(next) => update(root, next)} />
+    </section>;
+  }
+  return <section aria-label="ITR-3 core business schedules" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    {showHeading && <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Business schedules</h3>}
+    {visibleSchedules.map((root) => <SchemaEditor key={root} node={DEFINITIONS[root]} name={root} path={root} value={draft[root]} required disabled={disabled} depth={0} rootValue={draft as unknown as CanonicalValue} onChange={(next) => update(root, next)} />)}
   </section>;
 }
