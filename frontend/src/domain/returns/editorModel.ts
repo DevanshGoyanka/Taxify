@@ -1,7 +1,7 @@
 import { adaptLegacyReturn } from './legacyAdapter';
 import { serializeReturnDraftToLegacy } from './legacySerializer';
 import type {
-  BankAccount, DeductionLoan, DividendIncome, Donation80G, Employer, FamilyPension, GiftIncome,
+  BankAccount, DeductionLoan, DividendIncome, Donation80G, Employer, FamilyPension, GiftConsiderationKind, GiftIncome,
   HouseProperty, InterestIncome, InterestKind, Investment80C, LoanDeductions,
   Policy80D, ReturnDraft, Section80D, TaxChallan, TcsCredit, TdsCredit, WinningIncome,
 } from './types';
@@ -35,6 +35,7 @@ export interface DividendManagerEntry {
   q2?: number;
   q3?: number;
   q4?: number;
+  q5?: number;
 }
 
 export interface FamilyPensionManagerEntry {
@@ -272,6 +273,11 @@ export function updateBankAccounts(model: ReturnEditorModel, accounts: readonly 
   return replaceDraft(model, { ...model.draft, bankAccounts: cloneArray(accounts) });
 }
 
+/** Replaces canonical other-sources data with an immutable detached copy. */
+export function updateOtherSources(model: ReturnEditorModel, otherSources: ReturnDraft['otherSources']): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, otherSources: clone(otherSources) });
+}
+
 /** Projects canonical interest entries into the existing manager shape. */
 export function interestToManager(entries: readonly InterestIncome[]): InterestManagerEntry[] {
   return entries.map(({ kind, ...entry }) => ({ ...clone(entry), itdTag: kind }));
@@ -322,6 +328,7 @@ export function dividendsFromManager(entries: readonly DividendManagerEntry[], p
       q2: finiteMoney(entry.q2 ?? prior?.q2),
       q3: finiteMoney(entry.q3 ?? prior?.q3),
       q4: finiteMoney(entry.q4 ?? prior?.q4),
+      q5: finiteMoney(entry.q5 ?? prior?.q5),
     };
   });
 }
@@ -370,7 +377,7 @@ export function giftsToManager(entries: readonly GiftIncome[]): GiftManagerEntry
 
 /** Merges gift manager values by ID, preserving unexposed canonical fields. */
 export function giftsFromManager(entries: readonly GiftManagerEntry[], previous: readonly GiftIncome[] = []): GiftIncome[] {
-  return mergeById(previous, entries, (entry, prior, index) => ({ ...prior, id: deterministicId('gift', entry, index), propertyType: entry.propertyType, value: finiteMoney(entry.value), donorName: optionalText(entry.donorName ?? prior?.donorName), donorRelation: optionalText(entry.donorRelation ?? prior?.donorRelation), dateOfReceipt: optionalText(entry.dateOfReceipt ?? prior?.dateOfReceipt), description: optionalText(entry.description ?? prior?.description), fromRelative: entry.fromRelative ?? prior?.fromRelative ?? false, receivedOnMarriage: entry.receivedOnMarriage ?? prior?.receivedOnMarriage ?? false }));
+  return mergeById(previous, entries, (entry, prior, index) => ({ ...prior, id: deterministicId('gift', entry, index), propertyType: entry.propertyType, value: finiteMoney(entry.value), donorName: optionalText(entry.donorName ?? prior?.donorName), donorRelation: optionalText(entry.donorRelation ?? prior?.donorRelation), dateOfReceipt: optionalText(entry.dateOfReceipt ?? prior?.dateOfReceipt), description: optionalText(entry.description ?? prior?.description), fromRelative: entry.fromRelative ?? prior?.fromRelative ?? false, receivedOnMarriage: entry.receivedOnMarriage ?? prior?.receivedOnMarriage ?? false, considerationKind: (entry.considerationKind ?? prior?.considerationKind ?? 'WITHOUT_CONSIDERATION') as GiftConsiderationKind, stampDutyValue: finiteMoney(entry.stampDutyValue ?? prior?.stampDutyValue), considerationPaid: finiteMoney(entry.considerationPaid ?? prior?.considerationPaid), fairMarketValue: finiteMoney(entry.fairMarketValue ?? prior?.fairMarketValue) }));
 }
 
 /** Updates canonical gifts from manager values. */

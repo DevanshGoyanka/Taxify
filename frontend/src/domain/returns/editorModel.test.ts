@@ -154,7 +154,7 @@ describe('return editor model', () => {
     const canonical = [{
       id: 'd', section: '194' as const, grossAmount: 100, tdsDeducted: 10,
       companyName: 'Company', companyPAN: 'ABCDE1234F', deductorTAN: 'TAN',
-      isin: 'INE000000001', category: 'EQUITY' as const, q1: 25, q2: 25, q3: 25, q4: 25,
+      isin: 'INE000000001', category: 'EQUITY' as const, q1: 25, q2: 25, q3: 25, q4: 25, q5: 0,
     }];
     const edited = dividendsFromManager([{ id: 'd', section: '194', grossAmount: 200, companyName: 'Updated' }], canonical);
     expect(edited[0]).toMatchObject({ grossAmount: 200, companyPAN: 'ABCDE1234F', isin: 'INE000000001', q4: 25 });
@@ -169,7 +169,7 @@ describe('return editor model', () => {
     const winningManager = winningsToManager(winnings);
     delete winningManager[0].payerTAN;
     expect(winningsFromManager(winningManager, winnings)[0]).toMatchObject({ payerTAN: 'T', dateOfWinning: '2025-01-01' });
-    const gifts = [{ id: 'g', propertyType: 'CASH' as const, value: 70, donorName: 'D', donorRelation: 'Friend', dateOfReceipt: '2025-02-01', description: 'Gift', fromRelative: false, receivedOnMarriage: true }];
+    const gifts = [{ id: 'g', propertyType: 'CASH' as const, value: 70, donorName: 'D', donorRelation: 'Friend', dateOfReceipt: '2025-02-01', description: 'Gift', fromRelative: false, receivedOnMarriage: true, considerationKind: 'WITHOUT_CONSIDERATION' as const }];
     const giftManager = giftsToManager(gifts);
     delete giftManager[0].donorRelation;
     expect(giftsFromManager(giftManager, gifts)[0]).toMatchObject({ donorRelation: 'Friend', receivedOnMarriage: true });

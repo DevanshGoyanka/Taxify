@@ -1,4 +1,7 @@
 import { INR } from '../utils/formatters';
+import ScheduleOSWorkspace from '../components/othersources/ScheduleOSWorkspace';
+import type { ReturnDraft } from '../domain/returns/types';
+import type { ItrForm } from '../domain/eligibility';
 import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DividendEntryManager } from '../components/dividend/DividendEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
@@ -19,6 +22,7 @@ export interface CanonicalManagerBindings {
   dividends: (entries: any[]) => void;
   familyPension: (entry: FamilyPensionManagerEntry) => void;
   winnings: (entries: WinningManagerEntry[]) => void;
+  otherSources: (next: ReturnDraft['otherSources']) => void;
   gifts: (entries: GiftManagerEntry[]) => void;
   section80C: (data: Section80CData) => void;
   section80D: (data: Section80DData) => void;
@@ -85,11 +89,33 @@ export function BusinessTab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function OtherSourcesTab({ formData, setFormData, taxResult, managers }: any) {
+export function OtherSourcesTab({ formData, setFormData, taxResult, managers, itrForm, regime, editorModel }: any) {
+  // ── Unified canonical Schedule OS workspace ──────────────────────────────────
+  // The complete seven-card editor reads/writes the canonical ReturnDraft.otherSources
+  // superset. Legacy scalar fields are preserved by the legacy serializer/adapter
+  // during the UI-only phase; backend JSON projectors will be wired in a later phase.
+  const os: ReturnDraft['otherSources'] = editorModel?.draft?.otherSources ?? {
+    interest: [], dividends: [], familyPension: { grossAmount: 0, payerName: '', relationToPensioner: '' },
+    winnings: [], gifts: [], otherIncome: [], dtaaIncome: [], dtaaAggregates: { totalAmountTaxUsDtaa: 0 },
+    section89A: [], section89AAggregates: { incomeNotified89AOS: 0, incomeNotifiedOther89AOS: 0, incomeNotifiedPriorYear89AOS: 0, incomeReliefUs89AOS: 0 },
+    accumulatedPf: [], accumulatedPfAggregates: { totalIncomeBenefit: 0, totalTaxBenefit: 0 }, specialRateIncome: [],
+    unexplainedIncome: { cashCreditsUs68: 0, unexplainedInvestmentsUs69: 0, unexplainedMoneyUs69A: 0, undisclosedInvestmentsUs69B: 0, unexplainedExpenditureUs69C: 0, hundiBorrowingUs69D: 0, priorYearBusinessTrust562xii: 0, priorYearLifeInsurance562xiii: 0 },
+    deductions: { expenses: 0, interestExpenseUs57: 0, interestExpenseEligibleUs57: 0, familyPensionDeductionUs57iia: 0, depreciation: 0, totalDeductions: 0, amountNotDeductibleUs58: 0, profitChargeableUs59: 0 },
+  };
+  const updateOS = (next: ReturnDraft['otherSources']): void => {
+    if (managers?.otherSources) { managers.otherSources(next); return; }
+    // Fallback: write through formData so state still advances if editor binding is absent.
+    setFormData({ ...formData, osOtherIncomeEntries: next.otherIncome, osDtaaEntries: next.dtaaIncome, osSection89AEntries: next.section89A, osAccumulatedPfEntries: next.accumulatedPf, osUnexplainedIncome: next.unexplainedIncome, osDeductions: next.deductions });
+  };
+  return <ScheduleOSWorkspace form={(itrForm ?? formData?.form ?? 'ITR-1') as ItrForm} regime={(regime ?? formData?.regime ?? 'new') === 'old' ? 'old' : 'new'} otherSources={os} onChange={updateOS} />;
+}
+
+// Legacy OtherSourcesTab implementation retained below for reference until backend wiring is complete.
+function _LegacyOtherSourcesTab({ formData, setFormData, taxResult, managers }: any) {
   // Calculate totals from 26AS
   const totalTDSFrom26AS = formData.tdsEntries ? formData.tdsEntries.reduce((sum: number, e: any) => sum + (e.tdsDeducted || 0), 0) : 0;
   const incomeBreakdown = formData.incomeBreakdown26AS || {};
-  
+
   // Get income from 26AS breakdown
   const dividendFrom26AS = incomeBreakdown.dividendIncome || 0;
   const interestFrom26AS = incomeBreakdown.interestIncome || 0;

@@ -1,9 +1,20 @@
 import type { Category80D, FinancialParticulars, ReturnDraft } from './types';
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _FactoryTypeGuard = ReturnDraft;
+
 /** Creates an empty 80D category with independent policy storage. */
 export function createEmpty80DCategory(): Category80D { return { policies: [], preventiveCheckup: 0, medicalExpense: 0 }; }
 /** Creates empty Schedule BP financial particulars. */
 export function createEmptyFinancialParticulars(): FinancialParticulars { return { cashBalance: 0, bankBalance: 0, inventory: 0, sundryDebtors: 0, sundryCreditors: 0, otherAssets: 0, totalAssets: 0, securedLoans: 0, unsecuredLoans: 0, advances: 0, otherLiabilities: 0, totalLiabilities: 0, grossProfit: 0, expenses: 0, netProfit: 0 }; }
+/** Creates an empty Schedule OS deductions block. */
+export function createEmptyOtherSourcesDeductions() {
+  return { expenses: 0, interestExpenseUs57: 0, interestExpenseEligibleUs57: 0, familyPensionDeductionUs57iia: 0, depreciation: 0, totalDeductions: 0, amountNotDeductibleUs58: 0, profitChargeableUs59: 0 };
+}
+/** Creates an empty unexplained income block. */
+export function createEmptyUnexplainedIncome() {
+  return { cashCreditsUs68: 0, unexplainedInvestmentsUs69: 0, unexplainedMoneyUs69A: 0, undisclosedInvestmentsUs69B: 0, unexplainedExpenditureUs69C: 0, hundiBorrowingUs69D: 0, priorYearBusinessTrust562xii: 0, priorYearLifeInsurance562xiii: 0 };
+}
 /** Creates a fresh normalized return draft with no shared mutable state. */
 export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['form'] = 'ITR-1', regime: ReturnDraft['regime'] = 'new'): ReturnDraft {
   return {
@@ -11,7 +22,14 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
     personal: { name: '', pan: '', email: '', mobile: '', dateOfBirth: null },
     filing: { filingSection: '139(1)', returnType: 'ORIGINAL', originalAcknowledgementNumber: '', originalFilingDate: null, noticeNumber: '' },
     employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: {},
-    otherSources: { interest: [], dividends: [], familyPension: { grossAmount: 0, payerName: '', relationToPensioner: '' }, winnings: [], gifts: [] },
+    otherSources: {
+      interest: [], dividends: [], familyPension: { grossAmount: 0, payerName: '', relationToPensioner: '' },
+      winnings: [], gifts: [], otherIncome: [], dtaaIncome: [], dtaaAggregates: { totalAmountTaxUsDtaa: 0 },
+      section89A: [], section89AAggregates: { incomeNotified89AOS: 0, incomeNotifiedOther89AOS: 0, incomeNotifiedPriorYear89AOS: 0, incomeReliefUs89AOS: 0 },
+      accumulatedPf: [], accumulatedPfAggregates: { totalIncomeBenefit: 0, totalTaxBenefit: 0 }, specialRateIncome: [],
+      unexplainedIncome: createEmptyUnexplainedIncome(),
+      deductions: createEmptyOtherSourcesDeductions(),
+    },
     exemptIncome: [],
     deductions: { section80C: [], section80D: { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: createEmpty80DCategory(), selfFamilySenior: createEmpty80DCategory(), parents: createEmpty80DCategory(), parentsSenior: createEmpty80DCategory() }, section80G: [], loans: { loans: [], section80EEAStampDutyValue: 0 } },
     taxes: { tds: [], tcs: [], challans: [] }, bankAccounts: [],

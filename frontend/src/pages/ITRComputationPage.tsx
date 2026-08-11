@@ -23,7 +23,7 @@ import {
   deductionLoansToManager, familyPensionToManager, giftsToManager, interestToManager, tdsToManager,
   updateBankAccounts, updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
   updateDividendsFromManager, updateEmployers, updateFamilyPensionFromManager, updateGiftsFromManager,
-  updateHouseProperties, updateInterestFromManager, updateSection80C, updateSection80D, updateSection80G,
+  updateHouseProperties, updateInterestFromManager, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
   updateTdsFromManager, updateWinningsFromManager, winningsToManager, type LegacyRecord,
   type ReturnEditorModel,
 } from '../domain/returns';
@@ -440,6 +440,7 @@ export default function ITRComputationPage() {
     dividends: (entries) => updateEditor((model) => updateDividendsFromManager(model, entries)),
     familyPension: (entry) => updateEditor((model) => updateFamilyPensionFromManager(model, entry)),
     winnings: (entries) => updateEditor((model) => updateWinningsFromManager(model, entries)),
+    otherSources: (next) => updateEditor((model) => updateOtherSources(model, next)),
     gifts: (entries) => updateEditor((model) => updateGiftsFromManager(model, entries)),
     section80C: (data) => updateEditor((model) => updateSection80C(model, data.investments)),
     section80D: (data) => updateEditor((model) => updateSection80D(model, data)),
@@ -2179,7 +2180,7 @@ export default function ITRComputationPage() {
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} />}
         {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
-        {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
+        {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel} />}
         {activeTab === 6 && <ExemptIncomeTab formData={formData} setFormData={setFormData} />}
         {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} />}
         {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}

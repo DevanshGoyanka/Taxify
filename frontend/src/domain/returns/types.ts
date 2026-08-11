@@ -43,12 +43,27 @@ export interface VehicleRecord extends Identified { vehicleNumber: string; vehic
 export interface Presumptive44AE extends Identified, BusinessIdentity { scheme: '44AE'; vehicles: VehicleRecord[]; declaredIncome: Money; gstinTurnovers: GstinTurnoverRow[]; financialParticulars: FinancialParticulars; }
 export type PresumptiveBusiness = Presumptive44AD | Presumptive44ADA | Presumptive44AE;
 
-export type InterestKind = 'SAVINGS_BANK' | 'TERM_DEPOSIT' | 'IT_REFUND' | 'POST_OFFICE' | 'NSC' | 'SCSS' | 'OTHER' | 'BONDS' | 'SECURITIES';
+export type InterestKind = 'SAVINGS_BANK' | 'TERM_DEPOSIT' | 'IT_REFUND' | 'POST_OFFICE' | 'NSC' | 'SCSS' | 'OTHER' | 'BONDS' | 'SECURITIES' | 'PF_10_11_FIRST' | 'PF_10_11_SECOND' | 'PF_10_12_FIRST' | 'PF_10_12_SECOND';
 export interface InterestIncome extends Identified { kind: InterestKind; grossAmount: Money; tdsDeducted: Money; bankName: string; accountType: 'SAVINGS' | 'CURRENT' | 'FD' | ''; accountNumber: string; ifscCode: string; postOfficeName: string; accountNumberPO: string; nscCertificateNumber: string; yearOfPurchase: number; scssAccountNumber: string; dateOfOpening: string; deductorName: string; deductorTAN: string; remarks: string; }
-export interface DividendIncome extends Identified { section: '10(22e)' | '10(22f)' | '194'; grossAmount: Money; tdsDeducted: Money; companyName: string; companyPAN: string; deductorTAN: string; isin: string; category: 'EQUITY' | 'PREFERENCE' | 'MUTUAL_FUND' | ''; q1: Money; q2: Money; q3: Money; q4: Money; }
+export type DividendSection = '194' | '10(22e)' | '10(22f)' | '115BBDA' | '115BBDAaiii' | '115A1ai' | '115A1aA' | '115AC' | '115ACA' | '115AD1i' | 'DTAA';
+export interface DividendIncome extends Identified { section: DividendSection; grossAmount: Money; tdsDeducted: Money; companyName: string; companyPAN: string; deductorTAN: string; isin: string; category: 'EQUITY' | 'PREFERENCE' | 'MUTUAL_FUND' | ''; q1: Money; q2: Money; q3: Money; q4: Money; q5: Money; }
 export interface FamilyPension { grossAmount: Money; payerName: string; relationToPensioner: string; }
-export interface WinningIncome extends Identified { type: 'LOTTERY' | 'BETTING' | 'CARD_GAME' | 'HORSE_RACE'; grossAmount: Money; tdsDeducted: Money; payerName: string; payerTAN: string; dateOfWinning: string; }
-export interface GiftIncome extends Identified { propertyType: 'IMMOVABLE' | 'CASH' | 'MOVABLE' | 'OTHER'; value: Money; donorName: string; donorRelation: string; dateOfReceipt: string; description: string; fromRelative: boolean; receivedOnMarriage: boolean; }
+export type WinningIncomeType = 'LOTTERY' | 'BETTING' | 'CARD_GAME' | 'HORSE_RACE' | 'ONLINE_GAMING' | 'RACE_HORSE_ACTIVITY' | 'UNEXPLAINED_115BBE';
+export interface WinningIncome extends Identified { type: WinningIncomeType; grossAmount: Money; tdsDeducted: Money; payerName: string; payerTAN: string; dateOfWinning: string; q1?: Money; q2?: Money; q3?: Money; q4?: Money; q5?: Money; receipts?: Money; deductionUs57?: Money; amountNotDeductibleUs58?: Money; profitChargeableUs59?: Money; balance?: Money; }
+export type GiftConsiderationKind = 'WITHOUT_CONSIDERATION' | 'INADEQUATE_CONSIDERATION';
+export interface GiftIncome extends Identified { propertyType: 'IMMOVABLE' | 'CASH' | 'MOVABLE' | 'OTHER'; value: Money; donorName: string; donorRelation: string; dateOfReceipt: string; description: string; fromRelative: boolean; receivedOnMarriage: boolean; considerationKind: GiftConsiderationKind; stampDutyValue?: Money; considerationPaid?: Money; fairMarketValue?: Money; }
+export interface OtherIncomeEntry extends Identified { nature: string; description: string; amount: Money; }
+export type DtaaNatureOfIncome = '1ai' | '1aiii' | '1b' | '1c' | '1d' | '2ai' | '2aii' | '2d' | '2e';
+export interface DtaaIncomeEntry extends Identified { amount: Money; natureOfIncome: DtaaNatureOfIncome; countryName: string; countryCode: string; dtaaArticle: string; rateAsPerTreaty: number; rateAsPerITAct: number; taxResidencyCertificate: 'Y' | 'N'; itemNoIncl: string; applicableRate: number; q1: Money; q2: Money; q3: Money; q4: Money; q5: Money; }
+export interface Section89AEntry extends Identified { countryCode: 'US' | 'UK' | 'CA'; amount: Money; }
+export interface Section89AAggregates { incomeNotified89AOS: Money; incomeNotifiedOther89AOS: Money; incomeNotifiedPriorYear89AOS: Money; incomeReliefUs89AOS: Money; }
+export type PfAssessmentYear = '2005-06' | '2006-07' | '2007-08' | '2008-09' | '2009-10' | '2010-11' | '2011-12' | '2012-13' | '2013-14' | '2014-15' | '2015-16' | '2016-17' | '2017-18' | '2018-19' | '2019-20' | '2020-21' | '2021-22' | '2022-23' | '2023-24' | '2024-25' | '2025-26';
+export interface AccumulatedPfEntry extends Identified { assessmentYear: PfAssessmentYear; incomeBenefit: Money; taxBenefit: Money; }
+export interface AccumulatedPfAggregates { totalIncomeBenefit: Money; totalTaxBenefit: Money; }
+export type SpecialRateSourceDescription = '5A1ai' | '5A1aA' | '5A1aii' | '5A1aiia' | '5A1aiiaa' | '5A1aiiab' | '5A1aiiac' | '5A1aiii' | '5A1bA' | '5AC1ab' | '5AC1abD' | '5ACA1a' | '5AD1i' | '5AD1iP' | '5BBA' | '5BBF' | '5BBG' | '5Ea' | '5A1aiiaaP' | '5A1aiiaa2P' | '5AD1iDiv';
+export interface SpecialRateIncomeEntry extends Identified { sourceDescription: SpecialRateSourceDescription; sourceAmount: Money; }
+export interface UnexplainedIncomeDetails { cashCreditsUs68: Money; unexplainedInvestmentsUs69: Money; unexplainedMoneyUs69A: Money; undisclosedInvestmentsUs69B: Money; unexplainedExpenditureUs69C: Money; hundiBorrowingUs69D: Money; priorYearBusinessTrust562xii: Money; priorYearLifeInsurance562xiii: Money; }
+export interface OtherSourcesDeductions { expenses: Money; interestExpenseUs57: Money; interestExpenseEligibleUs57: Money; familyPensionDeductionUs57iia: Money; depreciation: Money; totalDeductions: Money; amountNotDeductibleUs58: Money; profitChargeableUs59: Money; }
 
 export interface Investment80C extends Identified { investmentType: string; identificationNo: string; accountOrPolicyNo: string; amount: Money; dateOfInvestment: string; institutionName: string; institutionPAN: string; }
 export interface Policy80D extends Identified { insurerName: string; policyNo: string; premiumAmount: Money; policyType: 'INDIVIDUAL' | 'FAMILY_FLOATER' | 'GROUP' | 'OTHER'; dateOfCommencement: string; }
@@ -70,7 +85,23 @@ export interface ReturnDraft {
   schemaVersion: 1; assessmentYear: string; form: ItrForm; regime: TaxRegime;
   personal: { name: string; pan: string; email: string; mobile: string; dateOfBirth: string | null };
   filing: FilingStatus; employers: Employer[]; houseProperties: HouseProperty[]; housePropertyPassThroughIncome: number; businesses: PresumptiveBusiness[]; capitalGainsSchedule: Record<string, unknown>;
-  otherSources: { interest: InterestIncome[]; dividends: DividendIncome[]; familyPension: FamilyPension; winnings: WinningIncome[]; gifts: GiftIncome[] };
+  otherSources: {
+    interest: InterestIncome[];
+    dividends: DividendIncome[];
+    familyPension: FamilyPension;
+    winnings: WinningIncome[];
+    gifts: GiftIncome[];
+    otherIncome: OtherIncomeEntry[];
+    dtaaIncome: DtaaIncomeEntry[];
+    dtaaAggregates: { totalAmountTaxUsDtaa: Money };
+    section89A: Section89AEntry[];
+    section89AAggregates: Section89AAggregates;
+    accumulatedPf: AccumulatedPfEntry[];
+    accumulatedPfAggregates: AccumulatedPfAggregates;
+    specialRateIncome: SpecialRateIncomeEntry[];
+    unexplainedIncome: UnexplainedIncomeDetails;
+    deductions: OtherSourcesDeductions;
+  };
   exemptIncome: ExemptIncomeEntry[];
   deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions };
   taxes: { tds: TdsCredit[]; tcs: TcsCredit[]; challans: TaxChallan[] }; bankAccounts: BankAccount[];
