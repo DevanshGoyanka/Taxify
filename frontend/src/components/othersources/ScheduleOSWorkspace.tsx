@@ -24,44 +24,46 @@ const sum = (values: readonly { grossAmount?: number; value?: number; amount?: n
 // ── Interest taxonomy ─────────────────────────────────────────────────────────
 interface InterestOption { kind: InterestKind; label: string; }
 const INTEREST_OPTIONS: readonly InterestOption[] = [
-  { kind: 'SAVINGS_BANK', label: 'Savings-account interest' },
-  { kind: 'TERM_DEPOSIT', label: 'Deposit interest (bank/post office/co-op)' },
-  { kind: 'IT_REFUND', label: 'Income-tax refund interest' },
-  { kind: 'BONDS', label: 'Bonds or debentures' },
-  { kind: 'SECURITIES', label: 'Interest on securities' },
-  { kind: 'PF_10_11_FIRST', label: 'Taxable PF interest — first proviso to 10(11)' },
-  { kind: 'PF_10_11_SECOND', label: 'Taxable PF interest — second proviso to 10(11)' },
-  { kind: 'PF_10_12_FIRST', label: 'Taxable PF interest — first proviso to 10(12)' },
-  { kind: 'PF_10_12_SECOND', label: 'Taxable PF interest — second proviso to 10(12)' },
-  { kind: 'OTHER', label: 'Other interest' },
+  { kind: 'SAVINGS_BANK', label: 'SAV — Interest from savings account' },
+  { kind: 'TERM_DEPOSIT', label: 'IFD — Interest from deposits (bank/post office/co-operative society)' },
+  { kind: 'POST_OFFICE', label: 'IFD — Post-office deposit interest' },
+  { kind: 'NSC', label: 'OTH — NSC accrued interest' },
+  { kind: 'SCSS', label: 'IFD — Senior Citizens Savings Scheme interest' },
+  { kind: 'IT_REFUND', label: 'TAX — Interest on income-tax refund u/s 244A' },
+  { kind: 'BONDS', label: 'OTH — Interest on bonds or debentures' },
+  { kind: 'SECURITIES', label: 'OTH — Interest on securities' },
+  { kind: 'PF_10_11_FIRST', label: '10(11)(iP) — Taxable PF interest, first proviso to section 10(11)' },
+  { kind: 'PF_10_11_SECOND', label: '10(11)(iiP) — Taxable PF interest, second proviso to section 10(11)' },
+  { kind: 'PF_10_12_FIRST', label: '10(12)(iP) — Taxable PF interest, first proviso to section 10(12)' },
+  { kind: 'PF_10_12_SECOND', label: '10(12)(iiP) — Taxable PF interest, second proviso to section 10(12)' },
+  { kind: 'OTHER', label: 'OTH — Other interest income' },
 ];
 const interestLabel = (kind: InterestKind): string => INTEREST_OPTIONS.find((option) => option.kind === kind)?.label ?? kind;
 
 // ── Dividend taxonomy ─────────────────────────────────────────────────────────
 interface DividendOption { section: DividendSection; label: string; }
 const DIVIDEND_OPTIONS: readonly DividendOption[] = [
-  { section: '194', label: 'Dividend other than 2(22)(e)' },
-  { section: '10(22e)', label: 'Deemed dividend u/s 2(22)(e)' },
-  { section: '10(22f)', label: 'Dividend u/s 2(22)(f)' },
-  { section: '115BBDA', label: 'Dividend u/s 115BBDA' },
-  { section: '115BBDAaiii', label: 'Dividend u/s 115BBDA(a)(iii)' },
-  { section: '115A1ai', label: 'Dividend u/s 115A(1)(a)(i)' },
-  { section: '115A1aA', label: 'Dividend u/s 115A(1)(a)(A) — proviso' },
-  { section: '115AC', label: 'Dividend u/s 115AC' },
-  { section: '115ACA', label: 'Dividend u/s 115ACA' },
-  { section: '115AD1i', label: 'Dividend u/s 115AD(1)(i)' },
-  { section: 'DTAA', label: 'DTAA dividend' },
+  { section: '194', label: 'DividendOthThan22e — Dividend other than deemed dividend u/s 2(22)(e)' },
+  { section: '10(22e)', label: 'Dividend22e — Deemed dividend u/s 2(22)(e)' },
+  { section: '10(22f)', label: 'Dividend22f — Dividend u/s 2(22)(f)' },
+  { section: '115BBDA', label: 'DividendIncUs115BBDA — Dividend taxable u/s 115BBDA' },
+  { section: '115BBDAaiii', label: 'DividendIncUs115BBDAaiii — Dividend u/s 115BBDA(a)(iii)' },
+  { section: '115A1ai', label: 'DividendIncUs115A1ai — Dividend u/s 115A(1)(a)(i)' },
+  { section: '115A1aA', label: 'DividendIncUs115A1aA — Dividend u/s 115A(1)(a)(A), proviso' },
+  { section: '115AC', label: 'DividendIncUs115AC — Dividend u/s 115AC' },
+  { section: '115ACA', label: 'DividendIncUs115ACA — Dividend u/s 115ACA' },
+  { section: '115AD1i', label: 'DividendIncUs115AD1i — Dividend u/s 115AD(1)(i)' },
+  { section: 'DTAA', label: 'DividendDTAA — Dividend chargeable under DTAA' },
 ];
 const dividendLabel = (section: DividendSection): string => DIVIDEND_OPTIONS.find((option) => option.section === section)?.label ?? section;
 
 // ── Winnings taxonomy ─────────────────────────────────────────────────────────
 interface WinningOption { type: WinningIncomeType; label: string; }
 const WINNING_OPTIONS: readonly WinningOption[] = [
-  { type: 'LOTTERY', label: 'Lottery, crossword, card game, betting or gambling' },
-  { type: 'ONLINE_GAMING', label: 'Online games' },
-  { type: 'HORSE_RACE', label: 'Winnings from horse races' },
-  { type: 'UNEXPLAINED_115BBE', label: 'Unexplained income u/s 115BBE' },
-  { type: 'RACE_HORSE_ACTIVITY', label: 'Owning and maintaining race horses' },
+  { type: 'LOTTERY', label: 'LtryPzzlChrgblUs115BB — Lottery, crossword, races, games, gambling or betting' },
+  { type: 'ONLINE_GAMING', label: 'IncChrgblUs115BBJ — Net winnings from online games' },
+  { type: 'UNEXPLAINED_115BBE', label: 'IncChrgblUs115BBE — Income chargeable u/s 115BBE' },
+  { type: 'RACE_HORSE_ACTIVITY', label: 'IncFromOwnHorse — Owning and maintaining race horses' },
 ];
 const winningLabel = (type: WinningIncomeType): string => WINNING_OPTIONS.find((option) => option.type === type)?.label ?? type;
 
@@ -148,6 +150,7 @@ const entryPanelStyle: React.CSSProperties = { marginBottom: 24, padding: 16, ba
 const entryHeaderStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 };
 const entryTitleStyle: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', margin: 0 };
 const gridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 };
+const primaryIncomeRowStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(270px, 1.35fr) minmax(320px, 2fr) minmax(150px, 0.75fr)', gap: 16, alignItems: 'end' };
 const wideFieldStyle: React.CSSProperties = { gridColumn: 'span 2' };
 const labelStyle: React.CSSProperties = { display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' };
 const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 };
@@ -313,19 +316,15 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
           <h4 style={entryTitleStyle}>Interest Entry #{index + 1} · {interestLabel(entry.kind)}</h4>
           <button type="button" style={removeButtonStyle} disabled={disabled} onClick={() => removeInterest(entry.id)}>Remove</button>
         </div>
-        <div style={gridStyle}>
-          <div style={wideFieldStyle}>
-            <label style={labelStyle}>Nature of interest *</label>
+        <div style={primaryIncomeRowStyle}>
+          <div>
+            <label style={labelStyle}>Section / nature *</label>
             <select style={selectStyle} value={entry.kind} disabled={disabled} onChange={(event) => updateInterest(entry.id, { kind: event.target.value as InterestKind })}>
               {INTEREST_OPTIONS.map((option) => <option key={option.kind} value={option.kind}>{option.label}</option>)}
             </select>
           </div>
-          <Field label="Gross interest (₹) *" type="number" value={entry.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => updateInterest(entry.id, { grossAmount: money(Number(value)) })} />
-          <Field label="TDS deducted (₹)" type="number" value={entry.tdsDeducted || ''} disabled={disabled} max={INV} onChange={(value) => updateInterest(entry.id, { tdsDeducted: money(Number(value)) })} />
-        </div>
-        <div style={{ ...gridStyle, marginTop: 16 }}>
-          <div style={wideFieldStyle}><label style={labelStyle}>Source / institution</label><input style={inputStyle} type="text" value={entry.bankName || entry.deductorName} disabled={disabled} onChange={(event) => updateInterest(entry.id, { bankName: event.target.value })} /></div>
-          <div style={wideFieldStyle}><label style={labelStyle}>Deductor TAN</label><input style={inputStyle} type="text" value={entry.deductorTAN} disabled={disabled} onChange={(event) => updateInterest(entry.id, { deductorTAN: event.target.value })} /></div>
+          <div><label style={labelStyle}>Company / source</label><input style={inputStyle} type="text" value={entry.bankName || entry.deductorName} disabled={disabled} onChange={(event) => updateInterest(entry.id, { bankName: event.target.value })} /></div>
+          <Field label="Gross amount (₹) *" type="number" value={entry.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => updateInterest(entry.id, { grossAmount: money(Number(value)) })} />
         </div>
       </div>)}
     </Section>
@@ -342,30 +341,15 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
           <h4 style={entryTitleStyle}>Dividend Entry #{index + 1} · {dividendLabel(entry.section)}</h4>
           <button type="button" style={removeButtonStyle} disabled={disabled} onClick={() => removeDividend(entry.id)}>Remove</button>
         </div>
-        <div style={gridStyle}>
-          <div style={wideFieldStyle}>
-            <label style={labelStyle}>Section *</label>
+        <div style={primaryIncomeRowStyle}>
+          <div>
+            <label style={labelStyle}>Section / nature *</label>
             <select style={selectStyle} value={entry.section} disabled={disabled} onChange={(event) => updateDividend(entry.id, { section: event.target.value as DividendSection })}>
               {DIVIDEND_OPTIONS.map((option) => <option key={option.section} value={option.section}>{option.label}</option>)}
             </select>
           </div>
-          <Field label="Gross dividend (₹) *" type="number" value={entry.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => updateDividend(entry.id, { grossAmount: money(Number(value)) })} />
-          <Field label="TDS deducted (₹)" type="number" value={entry.tdsDeducted || ''} disabled={disabled} max={INV} onChange={(value) => updateDividend(entry.id, { tdsDeducted: money(Number(value)) })} />
-        </div>
-        <div style={{ ...gridStyle, marginTop: 16 }}>
-          <div style={wideFieldStyle}><label style={labelStyle}>Company / source *</label><input style={inputStyle} type="text" value={entry.companyName} disabled={disabled} onChange={(event) => updateDividend(entry.id, { companyName: event.target.value })} /></div>
-          <div style={wideFieldStyle}><label style={labelStyle}>Company PAN</label><input style={inputStyle} type="text" value={entry.companyPAN} disabled={disabled} onChange={(event) => updateDividend(entry.id, { companyPAN: event.target.value })} /></div>
-          <div style={wideFieldStyle}><label style={labelStyle}>Deductor TAN</label><input style={inputStyle} type="text" value={entry.deductorTAN} disabled={disabled} onChange={(event) => updateDividend(entry.id, { deductorTAN: event.target.value })} /></div>
-          <div style={wideFieldStyle}><label style={labelStyle}>ISIN</label><input style={inputStyle} type="text" value={entry.isin} disabled={disabled} onChange={(event) => updateDividend(entry.id, { isin: event.target.value })} /></div>
-          <div>
-            <label style={labelStyle}>Category *</label>
-            <select style={selectStyle} value={entry.category} disabled={disabled} onChange={(event) => updateDividend(entry.id, { category: event.target.value as DividendIncome['category'] })}>
-              <option value="">—</option>
-              <option value="EQUITY">Equity</option>
-              <option value="PREFERENCE">Preference</option>
-              <option value="MUTUAL_FUND">Mutual fund</option>
-            </select>
-          </div>
+          <div><label style={labelStyle}>Company / source</label><input style={inputStyle} type="text" value={entry.companyName} disabled={disabled} onChange={(event) => updateDividend(entry.id, { companyName: event.target.value })} /></div>
+          <Field label="Gross amount (₹) *" type="number" value={entry.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => updateDividend(entry.id, { grossAmount: money(Number(value)) })} />
         </div>
         <FivePeriodBreakup q1={entry.q1} q2={entry.q2} q3={entry.q3} q4={entry.q4} q5={entry.q5} disabled={disabled} onChange={(field, value) => updateDividend(entry.id, { [field]: value })} />
       </div>)}
@@ -399,20 +383,18 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
           <h4 style={entryTitleStyle}>Income Entry #{index + 1}</h4>
           <button type="button" style={removeButtonStyle} disabled={disabled} onClick={() => removeOtherIncome(entry.id)}>Remove</button>
         </div>
-        <div style={gridStyle}>
-          <div style={wideFieldStyle}>
-            <label style={labelStyle}>Nature of income *</label>
+        <div style={primaryIncomeRowStyle}>
+          <div>
+            <label style={labelStyle}>Section / nature *</label>
             <select style={selectStyle} value={entry.nature} disabled={disabled} onChange={(event) => updateOtherIncome(entry.id, { nature: event.target.value as 'FAMILY_PENSION' | 'MACHINERY_RENT' | 'OTHER' | 'PASS_THROUGH' })}>
-              <option value="FAMILY_PENSION">Family pension</option>
-              <option value="MACHINERY_RENT">Rent from machinery, plant or building</option>
-              <option value="PASS_THROUGH">Pass-through income (normal rate)</option>
-              <option value="OTHER">Any other normal-rate income</option>
+              <option value="FAMILY_PENSION">FAP — Family pension</option>
+              <option value="MACHINERY_RENT">RentFromMachPlantBldgs — Rent from machinery, plant or building</option>
+              <option value="PASS_THROUGH">NatofPassThrghIncome — Pass-through income at normal rate</option>
+              <option value="OTHER">OTH — Any other normal-rate income</option>
             </select>
           </div>
-          <Field label="Amount (₹) *" type="number" value={entry.amount || ''} disabled={disabled} max={INV} onChange={(value) => updateOtherIncome(entry.id, { amount: money(Number(value)) })} />
-        </div>
-        <div style={{ ...gridStyle, marginTop: 16 }}>
-          <div style={wideFieldStyle}><label style={labelStyle}>Description</label><input style={inputStyle} type="text" maxLength={125} value={entry.description} disabled={disabled} onChange={(event) => updateOtherIncome(entry.id, { description: event.target.value })} /></div>
+          <div><label style={labelStyle}>Company / source / description *</label><input style={inputStyle} type="text" maxLength={125} value={entry.description} disabled={disabled} onChange={(event) => updateOtherIncome(entry.id, { description: event.target.value })} /></div>
+          <Field label="Gross amount (₹) *" type="number" value={entry.amount || ''} disabled={disabled} max={INV} onChange={(value) => updateOtherIncome(entry.id, { amount: money(Number(value)) })} />
         </div>
       </div>)}
     </Section>
@@ -485,23 +467,16 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
             <Field label="Profit chargeable u/s 59 (₹)" type="number" value={entry.profitChargeableUs59 || ''} disabled={disabled} max={INV} onChange={(value) => updateWinning(entry.id, { profitChargeableUs59: money(Number(value)) })} />
             <Field label="Balance (₹)" type="number" value={entry.balance || ''} readOnly />
           </div>
-          : <div style={gridStyle}>
-            <div style={wideFieldStyle}>
-              <label style={labelStyle}>Income type *</label>
+          : <div style={primaryIncomeRowStyle}>
+            <div>
+              <label style={labelStyle}>Section / nature *</label>
               <select style={selectStyle} value={entry.type} disabled={disabled} onChange={(event) => updateWinning(entry.id, { type: event.target.value as WinningIncomeType })}>
                 {WINNING_OPTIONS.filter((option) => option.type !== 'RACE_HORSE_ACTIVITY').map((option) => <option key={option.type} value={option.type}>{option.label}</option>)}
               </select>
             </div>
-            <Field label="Gross winnings (₹) *" type="number" value={entry.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => updateWinning(entry.id, { grossAmount: money(Number(value)) })} />
-            <Field label="TDS deducted (₹)" type="number" value={entry.tdsDeducted || ''} disabled={disabled} max={INV} onChange={(value) => updateWinning(entry.id, { tdsDeducted: money(Number(value)) })} />
+            <div><label style={labelStyle}>Company / source</label><input style={inputStyle} type="text" value={entry.payerName} disabled={disabled} onChange={(event) => updateWinning(entry.id, { payerName: event.target.value })} /></div>
+            <Field label="Gross amount (₹) *" type="number" value={entry.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => updateWinning(entry.id, { grossAmount: money(Number(value)) })} />
           </div>}
-        {entry.type !== 'RACE_HORSE_ACTIVITY' && (
-          <div style={{ ...gridStyle, marginTop: 16 }}>
-            <div style={wideFieldStyle}><label style={labelStyle}>Payer / source</label><input style={inputStyle} type="text" value={entry.payerName} disabled={disabled} onChange={(event) => updateWinning(entry.id, { payerName: event.target.value })} /></div>
-            <div style={wideFieldStyle}><label style={labelStyle}>Payer TAN</label><input style={inputStyle} type="text" value={entry.payerTAN} disabled={disabled} onChange={(event) => updateWinning(entry.id, { payerTAN: event.target.value })} /></div>
-            <Field label="Date received" type="date" value={entry.dateOfWinning} disabled={disabled} onChange={(value) => updateWinning(entry.id, { dateOfWinning: value })} />
-          </div>
-        )}
         {entry.type !== 'RACE_HORSE_ACTIVITY' && (
           <FivePeriodBreakup q1={entry.q1 ?? 0} q2={entry.q2 ?? 0} q3={entry.q3 ?? 0} q4={entry.q4 ?? 0} q5={entry.q5 ?? 0} disabled={disabled} onChange={(field, value) => updateWinning(entry.id, { [field]: value })} />
         )}
