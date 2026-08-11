@@ -20,6 +20,7 @@ export interface ITR3BusinessCoreManagerProps {
   disabled?: boolean;
   visibleSchedules?: Array<keyof ITR3BusinessCoreData>;
   showHeading?: boolean;
+  excludedPaths?: string[];
 }
 
 interface SchemaNode {
@@ -332,6 +333,11 @@ const FRIENDLY_LABELS: Record<string, string> = {
   'TradingAccount.DutyTaxPay.ExciseCustomsVAT.OthDutyTaxCess': 'Other duty/tax/cess',
   'TradingAccount.DutyTaxPay.ExciseCustomsVAT.TotExciseCustomsVAT': 'Total excise/customs/VAT',
   'TradingAccount.GrossProfitFrmBusProf': 'Gross profit from business or profession',
+  'TradingAccount.GoodsCostPrdcdFrmMA': 'Cost of goods produced transferred from Manufacturing Account',
+  'TradingAccount.TurnoverIntradayTrd': 'Turnover from intraday trading',
+  'TradingAccount.IncomeIntradayTrd': 'Income from intraday trading',
+  'TradingAccount.TurnoverFutureTrd': 'Turnover from futures trading',
+  'TradingAccount.IncomeFutureTrd': 'Income from futures trading',
   // P&L Credits
   'CreditsToPL.GrossProfitTrnsfFrmTrdAcc': 'Gross profit transferred from trading account',
   'CreditsToPL.OthIncome.RentInc': 'Rent income',
@@ -351,6 +357,32 @@ const FRIENDLY_LABELS: Record<string, string> = {
   'CreditsToPL.OthIncome.TotOthIncome': 'Total other income',
   'CreditsToPL.TotCreditsToPL': 'Total credits to P&L account',
   // P&L Debits
+  'DebitsToPL.ConsumptionOfStores': 'Consumption of stores and spare parts',
+  'DebitsToPL.PowerFuel': 'Power and fuel',
+  'DebitsToPL.RepairsBldg': 'Repairs to buildings',
+  'DebitsToPL.RepairMach': 'Repairs to machinery',
+  'DebitsToPL.EmployeeComp.AnyCompPaidToNonRes': 'Was any employee compensation paid to a non-resident?',
+  'DebitsToPL.EmployeeComp.AmtPaidToNonRes': 'Employee compensation paid to non-residents',
+  'DebitsToPL.StaffWelfareExp': 'Staff welfare expenses',
+  'DebitsToPL.SalePromoExp': 'Sales promotion expenses',
+  'DebitsToPL.HotelBoardLodge': 'Hotel, boarding and lodging expenses',
+  'DebitsToPL.FestivalCelebExp': 'Festival and celebration expenses',
+  'DebitsToPL.AuditFee': 'Audit fees',
+  'DebitsToPL.BadDebtDtls': 'Bad-debt details',
+  'DebitsToPL.BadDebtDtls.BadDebtAmtDtls': 'Bad debts where PAN is available',
+  'DebitsToPL.BadDebtDtls.BadDebtAmtDtlsTotal': 'Total bad debts where PAN is available',
+  'DebitsToPL.BadDebtDtls.OthersPANNotAvlblDtl': 'Bad debts where PAN is not available',
+  'DebitsToPL.BadDebtDtls.OthersPANNotAvlblDtlTotal': 'Total bad debts where PAN is not available',
+  'DebitsToPL.BadDebtDtls.BadDebt': 'Total bad debts',
+  'DebitsToPL.ProvForBadDoubtDebt': 'Provision for bad and doubtful debts',
+  'DebitsToPL.DepreciationAmort': 'Depreciation and amortisation',
+  'DebitsToPL.PBT': 'Profit before tax',
+  'DebitsToPL.ProvForCurrTax': 'Provision for current tax',
+  'DebitsToPL.ProvDefTax': 'Provision for deferred tax',
+  'DebitsToPL.BalBFPrevYr': 'Balance brought forward from previous year',
+  'DebitsToPL.AmtAvlAppr': 'Amount available for appropriation',
+  'DebitsToPL.TrfToReserves': 'Transfer to reserves',
+  'DebitsToPL.ProprietorAccBalTrf': 'Balance transferred to proprietor’s account',
   'DebitsToPL.EmployeeComp.SalsWages': 'Salaries and wages',
   'DebitsToPL.EmployeeComp.Bonus': 'Bonus',
   'DebitsToPL.EmployeeComp.MedExpReimb': 'Medical expense reimbursement',
@@ -420,6 +452,9 @@ const FRIENDLY_LABELS: Record<string, string> = {
   'NoBooksOfAccPL.TotBusinessProfession': 'Total business/profession',
   'NoBooksOfAccPL.PresumptiveInc44AD': 'Presumptive income u/s 44AD',
   'NoBooksOfAccPL.PresumptiveInc44ADA': 'Presumptive income u/s 44ADA',
+  'PARTA_PL.TurnverFrmSpecActivity': 'Turnover from speculative activity',
+  'PARTA_PL.NonResidentPLDetails': 'Non-resident presumptive P&L details',
+  'PARTA_PL.NonResidentPL': 'Non-resident presumptive P&L summary',
   // P&L Presumptive
   'TurnverFrmSpecActivity.GrossReceipt': 'Gross receipts from specified activity',
   'TurnverFrmSpecActivity.Expenditure': 'Expenditure',
@@ -493,6 +528,9 @@ const FRIENDLY_LABELS: Record<string, string> = {
   'FundApply.MiscAdjust.TotMiscAdjust': 'Total other assets and adjustments',
   'FundApply.TotFundApply': 'Total application of funds',
   'NoBooksOfAccBS.CashBalAmt': 'Total cash balance (no books)',
+  'NoBooksOfAccBS.TotSundryDbtAmt': 'Total sundry debtors',
+  'NoBooksOfAccBS.TotSundryCrdAmt': 'Total sundry creditors',
+  'NoBooksOfAccBS.TotStkInTradAmt': 'Total stock-in-trade',
   // ===== Schedule BP — BusinessIncOthThanSpec =====
   'BusinessIncOthThanSpec.ProfBfrTaxPL': 'Profit before tax as per Profit and Loss Account',
   'BusinessIncOthThanSpec.NetPLFromSpecBus': 'Less: profit or loss from speculative business included above',
@@ -552,7 +590,7 @@ const FRIENDLY_LABELS: Record<string, string> = {
   'BusinessIncOthThanSpec.IncomeOtherThanRule': 'Income other than under Rule 7/7A/7B/8',
   'BusinessIncOthThanSpec.BalIncDeemedFrmAgri': 'Balance income deemed from agricultural operations',
   // BP income heads (disambiguated)
-  'IncRecCredPLOthHeadDtls.Salary': 'Salary income (taxable under \u201cSalaries\u201d)',
+  'IncRecCredPLOthHeadDtls.Salary': 'Salary income (taxable under “Salaries”)',
   'IncRecCredPLOthHeadDtls.HouseProperty': 'Income from house property (credited to P&L)',
   'IncRecCredPLOthHeadDtls.CapitalGains': 'Income from capital gains (credited to P&L)',
   'IncRecCredPLOthHeadDtls.OtherSources': 'Income from other sources (credited to P&L)',
@@ -718,27 +756,27 @@ function enumOptionLabel(name: string, option: string | number | boolean, descri
   return String(option);
 }
 
-interface EditorProps { node: SchemaNode; value: CanonicalValue; path: string; name: string; required?: boolean; disabled: boolean; depth: number; inlineObject?: boolean; rootValue?: CanonicalValue; onChange: (value: CanonicalValue) => void; }
+interface EditorProps { node: SchemaNode; value: CanonicalValue; path: string; name: string; required?: boolean; disabled: boolean; depth: number; inlineObject?: boolean; rootValue?: CanonicalValue; excludedPaths?: ReadonlySet<string>; onChange: (value: CanonicalValue) => void; }
 
-function SchemaEditor({ node, value, path, name, required = false, disabled, depth, inlineObject, rootValue, onChange }: EditorProps): React.ReactElement {
+function SchemaEditor({ node, value, path, name, required = false, disabled, depth, inlineObject, rootValue, excludedPaths, onChange }: EditorProps): React.ReactElement {
   const resolved = merged(node);
   const type = schemaType(resolved);
   const id = `itr3-${path.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
   const label = resolveLabel(path, name, resolved.title);
-  if (!shouldShowField(path, rootValue)) return <></>;
+  if (excludedPaths?.has(path) || !shouldShowField(path, rootValue)) return <></>;
   if (type === 'object') {
     const objectValue = value && typeof value === 'object' && !Array.isArray(value) ? value as CanonicalObject : {};
     const isFlatInline = inlineObject || depth <= 1 || Object.values(resolved.properties ?? {}).every((child) => ['string', 'integer', 'number', 'boolean'].includes(schemaType(child)));
     const content = <>
       {resolved.description && <p title={resolved.description} style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-muted, #6b7280)', margin: '0 0 12px' }}>{resolved.description}</p>}
       <div style={gridStyle}>
-        {Object.entries(resolved.properties ?? {}).map(([childName, child]) => <SchemaEditor key={childName} node={child} name={childName} path={`${path}.${childName}`} value={objectValue[childName] ?? initialValue(child)} required={resolved.required?.includes(childName)} disabled={disabled} depth={depth + 1} inlineObject={isFlatInline} rootValue={rootValue ?? objectValue} onChange={(next) => onChange({ ...objectValue, [childName]: next })} />)}
+        {Object.entries(resolved.properties ?? {}).map(([childName, child]) => <SchemaEditor key={childName} node={child} name={childName} path={`${path}.${childName}`} value={objectValue[childName] ?? initialValue(child)} required={resolved.required?.includes(childName)} disabled={disabled} depth={depth + 1} inlineObject={isFlatInline} rootValue={rootValue ?? objectValue} excludedPaths={excludedPaths} onChange={(next) => onChange({ ...objectValue, [childName]: next })} />)}
       </div>
     </>;
     if (depth === 0 || inlineObject) return <div style={{ gridColumn: inlineObject ? '1 / -1' : undefined }}>{content}</div>;
     if (depth === 1 || isFlatInline) return <section style={{ ...cardStyle, gridColumn: '1 / -1', marginBottom: 0 }}><div style={{ marginBottom: 14 }}><h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary, #374151)' }}>{label}{required ? ' *' : ''}</h4>{resolved.description && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>{resolved.description}</div>}</div>{content}</section>;
     return <details open={false} style={{ ...cardStyle, gridColumn: '1 / -1', marginBottom: 0 }}>
-      <summary style={{ cursor: 'pointer', listStyle: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}><span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary, #374151)' }}>{label}{required ? ' *' : ''}</span><span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)', fontWeight: 400 }}>{statsText(objectValue)} \u00b7 Expand / collapse</span></summary>
+      <summary style={{ cursor: 'pointer', listStyle: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}><span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary, #374151)' }}>{label}{required ? ' *' : ''}</span><span style={{ fontSize: 11, color: 'var(--text-muted, #6b7280)', fontWeight: 400 }}>{statsText(objectValue)} · Expand / collapse</span></summary>
       <div style={{ paddingTop: 14 }}>{content}</div>
     </details>;
   }
@@ -749,9 +787,9 @@ function SchemaEditor({ node, value, path, name, required = false, disabled, dep
     const max = resolved.maxItems ?? Number.MAX_SAFE_INTEGER;
     const canAdd = !disabled && rows.length < max;
     return <section style={{ ...cardStyle, gridColumn: '1 / -1', marginBottom: 0 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: rows.length === 0 ? 0 : 12 }}><div><h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary, #374151)' }}>{label}{required ? ' *' : ''}</h4><div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>{rows.length} entr{rows.length === 1 ? 'y' : 'ies'}{hasExplicitMax ? ` \u00b7 maximum ${max}` : ''}{min > 0 ? ` \u00b7 minimum ${min}` : ''}</div></div><button type="button" style={{ ...addButtonStyle, opacity: canAdd ? 1 : 0.5 }} disabled={!canAdd} onClick={() => onChange([...rows, initialValue(resolved.items ?? {})])}>+ Add entry</button></div>
-      {rows.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted, #6b7280)', background: '#fff', borderRadius: 6 }}>No entries. Click \u201cAdd entry\u201d to add one.</div>}
-      {rows.map((row, index) => <div key={`${path}-${index}`} style={{ marginTop: 12, padding: 16, border: '1px solid var(--border, #d7dce2)', borderRadius: 6, background: '#fff' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}><h4 style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary, #374151)' }}>{label} #{index + 1}</h4><button type="button" style={{ ...removeButtonStyle, opacity: disabled || rows.length <= min ? 0.5 : 1 }} disabled={disabled || rows.length <= min} onClick={() => onChange(rows.filter((_, i) => i !== index))}>Remove</button></div><SchemaEditor node={resolved.items ?? {}} name={`${name} ${index + 1}`} path={`${path}.${index}`} value={row} disabled={disabled} depth={depth + 1} inlineObject rootValue={rootValue} onChange={(next) => onChange(rows.map((item, i) => i === index ? next : item))} /></div>)}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: rows.length === 0 ? 0 : 12 }}><div><h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary, #374151)' }}>{label}{required ? ' *' : ''}</h4><div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted, #6b7280)' }}>{rows.length} entr{rows.length === 1 ? 'y' : 'ies'}{hasExplicitMax ? ` · maximum ${max}` : ''}{min > 0 ? ` · minimum ${min}` : ''}</div></div><button type="button" style={{ ...addButtonStyle, opacity: canAdd ? 1 : 0.5 }} disabled={!canAdd} onClick={() => onChange([...rows, initialValue(resolved.items ?? {})])}>+ Add entry</button></div>
+      {rows.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted, #6b7280)', background: '#fff', borderRadius: 6 }}>No entries. Click &ldquo;Add entry&rdquo; to add one.</div>}
+      {rows.map((row, index) => <div key={`${path}-${index}`} style={{ marginTop: 12, padding: 16, border: '1px solid var(--border, #d7dce2)', borderRadius: 6, background: '#fff' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}><h4 style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary, #374151)' }}>{label} #{index + 1}</h4><button type="button" style={{ ...removeButtonStyle, opacity: disabled || rows.length <= min ? 0.5 : 1 }} disabled={disabled || rows.length <= min} onClick={() => onChange(rows.filter((_, i) => i !== index))}>Remove</button></div><SchemaEditor node={resolved.items ?? {}} name={`${name} ${index + 1}`} path={`${path}.${index}`} value={row} disabled={disabled} depth={depth + 1} inlineObject rootValue={rootValue} excludedPaths={excludedPaths} onChange={(next) => onChange(rows.map((item, i) => i === index ? next : item))} /></div>)}
     </section>;
   }
   const readOnly = resolved.readOnly || (TOTAL_KEYS.test(name) && (type === 'integer' || type === 'number'));
@@ -767,8 +805,9 @@ function SchemaEditor({ node, value, path, name, required = false, disabled, dep
 }
 
 /** Renders exact schema-driven editors for all mandatory AY 2026-27 ITR-3 core business schedules. */
-export default function ITR3BusinessCoreManager({ value, onChange, disabled = false, visibleSchedules = ROOTS, showHeading = true }: ITR3BusinessCoreManagerProps): React.ReactElement {
+export default function ITR3BusinessCoreManager({ value, onChange, disabled = false, visibleSchedules = ROOTS, showHeading = true, excludedPaths = [] }: ITR3BusinessCoreManagerProps): React.ReactElement {
   const normalized = useMemo(() => normalizeRoot(value), [value]);
+  const excludedPathSet = useMemo(() => new Set(excludedPaths), [excludedPaths]);
   const [draft, setDraft] = useState<ITR3BusinessCoreData>(normalized);
   useEffect(() => setDraft(normalized), [normalized]);
   const update = (root: keyof ITR3BusinessCoreData, next: CanonicalValue): void => {
@@ -780,11 +819,11 @@ export default function ITR3BusinessCoreManager({ value, onChange, disabled = fa
   if (visibleSchedules.length === 1) {
     const root = visibleSchedules[0];
     return <section aria-label="ITR-3 core business schedules" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <SchemaEditor node={DEFINITIONS[root]} name={root} path={root} value={draft[root]} required disabled={disabled} depth={0} rootValue={draft as unknown as CanonicalValue} onChange={(next) => update(root, next)} />
+      <SchemaEditor node={DEFINITIONS[root]} name={root} path={root} value={draft[root]} required disabled={disabled} depth={0} rootValue={draft as unknown as CanonicalValue} excludedPaths={excludedPathSet} onChange={(next) => update(root, next)} />
     </section>;
   }
   return <section aria-label="ITR-3 core business schedules" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
     {showHeading && <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Business schedules</h3>}
-    {visibleSchedules.map((root) => <SchemaEditor key={root} node={DEFINITIONS[root]} name={root} path={root} value={draft[root]} required disabled={disabled} depth={0} rootValue={draft as unknown as CanonicalValue} onChange={(next) => update(root, next)} />)}
+    {visibleSchedules.map((root) => <SchemaEditor key={root} node={DEFINITIONS[root]} name={root} path={root} value={draft[root]} required disabled={disabled} depth={0} rootValue={draft as unknown as CanonicalValue} excludedPaths={excludedPathSet} onChange={(next) => update(root, next)} />)}
   </section>;
 }

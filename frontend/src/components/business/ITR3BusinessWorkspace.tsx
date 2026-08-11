@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import ITR3BusinessCoreManager, { type CanonicalValue, type ITR3BusinessCoreData } from './ITR3BusinessCoreManager';
+import ITR3BusinessCoreManager, { type CanonicalObject, type CanonicalValue, type ITR3BusinessCoreData } from './ITR3BusinessCoreManager';
 import ITR3BusinessAuxiliaryManager, { type ITR3AuxiliaryData, type ITR3AuxiliaryValue } from './ITR3BusinessAuxiliaryManager';
+import ITR3PresumptiveManager from './ITR3PresumptiveManager';
 
 /** Props for the guided AY 2026-27 ITR-3 business workspace. */
 export interface ITR3BusinessWorkspaceProps {
@@ -55,6 +56,38 @@ const SCHEDULE_CHOICES: readonly ScheduleChoice[] = [
 ];
 
 const sectionCard: React.CSSProperties = { padding: 18, background: '#fff', border: '1px solid var(--border)', borderRadius: 6, marginBottom: 16 };
+const PRESUMPTIVE_PL_PATHS = [
+  'PARTA_PL.NatOfBus44AD',
+  'PARTA_PL.PersumptiveInc44AD',
+  'PARTA_PL.NatOfBus44ADA',
+  'PARTA_PL.PersumptiveInc44ADA',
+  'PARTA_PL.NatOfBus44AE',
+  'PARTA_PL.GoodsDtlsUs44AE',
+  'PARTA_PL.TotalNumOfMonths',
+  'PARTA_PL.TotalPrsumptvIncUs44EGoods',
+  'PARTA_PL.TotalPrsumptvIncUs44E',
+] as const;
+
+function asCanonicalObject(value: CanonicalValue | undefined): CanonicalObject {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as CanonicalObject : {};
+}
+
+function declaresPresumptiveIncome(core?: Partial<ITR3BusinessCoreData>): boolean {
+  const general = asCanonicalObject(core?.PartA_GEN2);
+  const audit = asCanonicalObject(general.AuditInfo);
+  return audit.IncDclrdUs === 'Y';
+}
+
+function withPartAPL(core: Partial<ITR3BusinessCoreData> | undefined, partAPL: CanonicalObject): ITR3BusinessCoreData {
+  return {
+    PartA_GEN2: asCanonicalObject(core?.PartA_GEN2),
+    PARTA_BS: asCanonicalObject(core?.PARTA_BS),
+    ManufacturingAccount: asCanonicalObject(core?.ManufacturingAccount),
+    TradingAccount: asCanonicalObject(core?.TradingAccount),
+    PARTA_PL: partAPL,
+    ITR3ScheduleBP: asCanonicalObject(core?.ITR3ScheduleBP),
+  };
+}
 
 function hasMeaningfulValue(value: CanonicalValue | ITR3AuxiliaryValue | undefined): boolean {
   if (Array.isArray(value)) return value.length > 0 && value.some(hasMeaningfulValue);
@@ -111,7 +144,8 @@ export default function ITR3BusinessWorkspace({ core, auxiliary, onCoreChange, o
 
     {activeStep === 'accounts' && <div>
       <div style={sectionCard}><h3 style={{ margin: '0 0 6px', fontSize: 15, color: 'var(--text-secondary)' }}>2. Prepare financial statements</h3><p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: 'var(--text-muted)' }}>Enter figures in accounting order. Manufacturers should complete the Manufacturing Account first; its cost of goods produced flows into the Trading Account, followed by the Profit and Loss Account and Balance Sheet.</p></div>
-      <ITR3BusinessCoreManager value={core} onChange={onCoreChange} visibleSchedules={['ManufacturingAccount', 'TradingAccount', 'PARTA_PL', 'PARTA_BS']} showHeading={false} />
+      <ITR3BusinessCoreManager value={core} onChange={onCoreChange} visibleSchedules={['ManufacturingAccount', 'TradingAccount', 'PARTA_PL', 'PARTA_BS']} excludedPaths={[...PRESUMPTIVE_PL_PATHS]} showHeading={false} />
+      {declaresPresumptiveIncome(core) && <ITR3PresumptiveManager data={asCanonicalObject(core?.PARTA_PL)} onChange={(partAPL) => onCoreChange(withPartAPL(core, partAPL))} />}
     </div>}
 
     {activeStep === 'bp' && <div>
