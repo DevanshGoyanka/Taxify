@@ -147,7 +147,8 @@ const sectionSubtitleStyle: React.CSSProperties = { fontSize: 12, color: 'var(--
 const entryPanelStyle: React.CSSProperties = { marginBottom: 24, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' };
 const entryHeaderStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 };
 const entryTitleStyle: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', margin: 0 };
-const gridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 };
+const gridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 };
+const wideFieldStyle: React.CSSProperties = { gridColumn: 'span 2' };
 const labelStyle: React.CSSProperties = { display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' };
 const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 };
 const selectStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'white' };
@@ -160,8 +161,8 @@ const summaryRowStyle: React.CSSProperties = { display: 'flex', justifyContent: 
 const badgeStyle: React.CSSProperties = { padding: '2px 6px', fontSize: 10, fontWeight: 600, borderRadius: 3, color: 'white' };
 const subSectionHeaderStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 };
 
-function Field({ label, value, onChange, type = 'text', readOnly = false, max, min, disabled }: { label: string; value: string | number; onChange?: (value: string) => void; type?: 'text' | 'number' | 'date'; readOnly?: boolean; max?: number; min?: number; disabled?: boolean }): React.JSX.Element {
-  return <div><label style={labelStyle}>{label}</label><input style={inputStyle} type={type} value={value ?? ''} readOnly={readOnly} disabled={disabled} max={max} min={min} onChange={(event) => onChange?.(type === 'number' ? event.target.value : event.target.value)} /></div>;
+function Field({ label, value, onChange, type = 'text', readOnly = false, max, min, disabled, wide = false }: { label: string; value: string | number; onChange?: (value: string) => void; type?: 'text' | 'number' | 'date'; readOnly?: boolean; max?: number; min?: number; disabled?: boolean; wide?: boolean }): React.JSX.Element {
+  return <div style={wide ? wideFieldStyle : undefined}><label style={labelStyle}>{label}</label><input style={inputStyle} type={type} value={value ?? ''} readOnly={readOnly} disabled={disabled} max={max} min={min} onChange={(event) => onChange?.(type === 'number' ? event.target.value : event.target.value)} /></div>;
 }
 
 function ApplicabilityBadge({ form }: { form: ItrForm }): React.JSX.Element {
@@ -313,15 +314,18 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
           <button type="button" style={removeButtonStyle} disabled={disabled} onClick={() => removeInterest(entry.id)}>Remove</button>
         </div>
         <div style={gridStyle}>
-          <div>
+          <div style={wideFieldStyle}>
             <label style={labelStyle}>Nature of interest *</label>
             <select style={selectStyle} value={entry.kind} disabled={disabled} onChange={(event) => updateInterest(entry.id, { kind: event.target.value as InterestKind })}>
               {INTEREST_OPTIONS.map((option) => <option key={option.kind} value={option.kind}>{option.label}</option>)}
             </select>
           </div>
-          <div><label style={labelStyle}>Source / institution</label><input style={inputStyle} type="text" value={entry.bankName || entry.deductorName} disabled={disabled} onChange={(event) => updateInterest(entry.id, { bankName: event.target.value })} /></div>
           <Field label="Gross interest (₹) *" type="number" value={entry.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => updateInterest(entry.id, { grossAmount: money(Number(value)) })} />
           <Field label="TDS deducted (₹)" type="number" value={entry.tdsDeducted || ''} disabled={disabled} max={INV} onChange={(value) => updateInterest(entry.id, { tdsDeducted: money(Number(value)) })} />
+        </div>
+        <div style={{ ...gridStyle, marginTop: 16 }}>
+          <div style={wideFieldStyle}><label style={labelStyle}>Source / institution</label><input style={inputStyle} type="text" value={entry.bankName || entry.deductorName} disabled={disabled} onChange={(event) => updateInterest(entry.id, { bankName: event.target.value })} /></div>
+          <div style={wideFieldStyle}><label style={labelStyle}>Deductor TAN</label><input style={inputStyle} type="text" value={entry.deductorTAN} disabled={disabled} onChange={(event) => updateInterest(entry.id, { deductorTAN: event.target.value })} /></div>
         </div>
       </div>)}
     </Section>
@@ -339,15 +343,29 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
           <button type="button" style={removeButtonStyle} disabled={disabled} onClick={() => removeDividend(entry.id)}>Remove</button>
         </div>
         <div style={gridStyle}>
-          <div>
+          <div style={wideFieldStyle}>
             <label style={labelStyle}>Section *</label>
             <select style={selectStyle} value={entry.section} disabled={disabled} onChange={(event) => updateDividend(entry.id, { section: event.target.value as DividendSection })}>
               {DIVIDEND_OPTIONS.map((option) => <option key={option.section} value={option.section}>{option.label}</option>)}
             </select>
           </div>
-          <div><label style={labelStyle}>Company / source *</label><input style={inputStyle} type="text" value={entry.companyName} disabled={disabled} onChange={(event) => updateDividend(entry.id, { companyName: event.target.value })} /></div>
           <Field label="Gross dividend (₹) *" type="number" value={entry.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => updateDividend(entry.id, { grossAmount: money(Number(value)) })} />
           <Field label="TDS deducted (₹)" type="number" value={entry.tdsDeducted || ''} disabled={disabled} max={INV} onChange={(value) => updateDividend(entry.id, { tdsDeducted: money(Number(value)) })} />
+        </div>
+        <div style={{ ...gridStyle, marginTop: 16 }}>
+          <div style={wideFieldStyle}><label style={labelStyle}>Company / source *</label><input style={inputStyle} type="text" value={entry.companyName} disabled={disabled} onChange={(event) => updateDividend(entry.id, { companyName: event.target.value })} /></div>
+          <div style={wideFieldStyle}><label style={labelStyle}>Company PAN</label><input style={inputStyle} type="text" value={entry.companyPAN} disabled={disabled} onChange={(event) => updateDividend(entry.id, { companyPAN: event.target.value })} /></div>
+          <div style={wideFieldStyle}><label style={labelStyle}>Deductor TAN</label><input style={inputStyle} type="text" value={entry.deductorTAN} disabled={disabled} onChange={(event) => updateDividend(entry.id, { deductorTAN: event.target.value })} /></div>
+          <div style={wideFieldStyle}><label style={labelStyle}>ISIN</label><input style={inputStyle} type="text" value={entry.isin} disabled={disabled} onChange={(event) => updateDividend(entry.id, { isin: event.target.value })} /></div>
+          <div>
+            <label style={labelStyle}>Category *</label>
+            <select style={selectStyle} value={entry.category} disabled={disabled} onChange={(event) => updateDividend(entry.id, { category: event.target.value as DividendIncome['category'] })}>
+              <option value="">—</option>
+              <option value="EQUITY">Equity</option>
+              <option value="PREFERENCE">Preference</option>
+              <option value="MUTUAL_FUND">Mutual fund</option>
+            </select>
+          </div>
         </div>
         <FivePeriodBreakup q1={entry.q1} q2={entry.q2} q3={entry.q3} q4={entry.q4} q5={entry.q5} disabled={disabled} onChange={(field, value) => updateDividend(entry.id, { [field]: value })} />
       </div>)}
@@ -366,8 +384,8 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
           <h4 style={entryTitleStyle}>Family pension</h4>
         </div>
         <div style={gridStyle}>
-          <div><label style={labelStyle}>Payer name *</label><input style={inputStyle} type="text" value={os.familyPension.payerName} disabled={disabled} onChange={(event) => patch({ familyPension: { ...os.familyPension, payerName: event.target.value } })} /></div>
-          <div><label style={labelStyle}>Relation to pensioner</label><input style={inputStyle} type="text" value={os.familyPension.relationToPensioner} disabled={disabled} onChange={(event) => patch({ familyPension: { ...os.familyPension, relationToPensioner: event.target.value } })} /></div>
+          <div style={wideFieldStyle}><label style={labelStyle}>Payer name *</label><input style={inputStyle} type="text" value={os.familyPension.payerName} disabled={disabled} onChange={(event) => patch({ familyPension: { ...os.familyPension, payerName: event.target.value } })} /></div>
+          <div style={wideFieldStyle}><label style={labelStyle}>Relation to pensioner</label><input style={inputStyle} type="text" value={os.familyPension.relationToPensioner} disabled={disabled} onChange={(event) => patch({ familyPension: { ...os.familyPension, relationToPensioner: event.target.value } })} /></div>
           <Field label="Gross family pension (₹) *" type="number" value={os.familyPension.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => patch({ familyPension: { ...os.familyPension, grossAmount: money(Number(value)) } })} />
         </div>
         <div style={{ ...gridStyle, marginTop: 16 }}>
@@ -382,7 +400,7 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
           <button type="button" style={removeButtonStyle} disabled={disabled} onClick={() => removeOtherIncome(entry.id)}>Remove</button>
         </div>
         <div style={gridStyle}>
-          <div>
+          <div style={wideFieldStyle}>
             <label style={labelStyle}>Nature of income *</label>
             <select style={selectStyle} value={entry.nature} disabled={disabled} onChange={(event) => updateOtherIncome(entry.id, { nature: event.target.value as 'FAMILY_PENSION' | 'MACHINERY_RENT' | 'OTHER' | 'PASS_THROUGH' })}>
               <option value="FAMILY_PENSION">Family pension</option>
@@ -391,8 +409,10 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
               <option value="OTHER">Any other normal-rate income</option>
             </select>
           </div>
-          <div><label style={labelStyle}>Description</label><input style={inputStyle} type="text" maxLength={125} value={entry.description} disabled={disabled} onChange={(event) => updateOtherIncome(entry.id, { description: event.target.value })} /></div>
           <Field label="Amount (₹) *" type="number" value={entry.amount || ''} disabled={disabled} max={INV} onChange={(value) => updateOtherIncome(entry.id, { amount: money(Number(value)) })} />
+        </div>
+        <div style={{ ...gridStyle, marginTop: 16 }}>
+          <div style={wideFieldStyle}><label style={labelStyle}>Description</label><input style={inputStyle} type="text" maxLength={125} value={entry.description} disabled={disabled} onChange={(event) => updateOtherIncome(entry.id, { description: event.target.value })} /></div>
         </div>
       </div>)}
     </Section>
@@ -410,24 +430,23 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
           <button type="button" style={removeButtonStyle} disabled={disabled} onClick={() => removeGift(entry.id)}>Remove</button>
         </div>
         <div style={gridStyle}>
-          <div>
+          <div style={wideFieldStyle}>
             <label style={labelStyle}>Property type *</label>
             <select style={selectStyle} value={entry.propertyType} disabled={disabled} onChange={(event) => updateGift(entry.id, { propertyType: event.target.value as GiftIncome['propertyType'] })}>
               <option value="CASH">Money received without consideration</option>
               <option value="IMMOVABLE">Immovable property</option>
               <option value="MOVABLE">Other specified property</option>
-              <option value="OTHER">Other</option>
             </select>
           </div>
-          <div>
+          {entry.propertyType !== 'CASH' && <div style={wideFieldStyle}>
             <label style={labelStyle}>Consideration kind *</label>
             <select style={selectStyle} value={entry.considerationKind} disabled={disabled} onChange={(event) => updateGift(entry.id, { considerationKind: event.target.value as GiftIncome['considerationKind'] })}>
               <option value="WITHOUT_CONSIDERATION">Without consideration</option>
               <option value="INADEQUATE_CONSIDERATION">Inadequate consideration</option>
             </select>
-          </div>
-          <div><label style={labelStyle}>Donor name *</label><input style={inputStyle} type="text" value={entry.donorName} disabled={disabled} onChange={(event) => updateGift(entry.id, { donorName: event.target.value })} /></div>
-          <div><label style={labelStyle}>Donor relation</label><input style={inputStyle} type="text" value={entry.donorRelation} disabled={disabled} onChange={(event) => updateGift(entry.id, { donorRelation: event.target.value })} /></div>
+          </div>}
+          <div style={wideFieldStyle}><label style={labelStyle}>Donor name *</label><input style={inputStyle} type="text" value={entry.donorName} disabled={disabled} onChange={(event) => updateGift(entry.id, { donorName: event.target.value })} /></div>
+          <div style={wideFieldStyle}><label style={labelStyle}>Donor relation</label><input style={inputStyle} type="text" value={entry.donorRelation} disabled={disabled} onChange={(event) => updateGift(entry.id, { donorRelation: event.target.value })} /></div>
           {entry.propertyType === 'IMMOVABLE'
             ? <Field label="Stamp duty value (₹)" type="number" value={entry.stampDutyValue || ''} disabled={disabled} max={INV} onChange={(value) => updateGift(entry.id, { stampDutyValue: money(Number(value)) })} />
             : <Field label="Fair market value (₹)" type="number" value={entry.fairMarketValue || ''} disabled={disabled} max={INV} onChange={(value) => updateGift(entry.id, { fairMarketValue: money(Number(value)) })} />}
@@ -467,17 +486,22 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
             <Field label="Balance (₹)" type="number" value={entry.balance || ''} readOnly />
           </div>
           : <div style={gridStyle}>
-            <div>
+            <div style={wideFieldStyle}>
               <label style={labelStyle}>Income type *</label>
               <select style={selectStyle} value={entry.type} disabled={disabled} onChange={(event) => updateWinning(entry.id, { type: event.target.value as WinningIncomeType })}>
                 {WINNING_OPTIONS.filter((option) => option.type !== 'RACE_HORSE_ACTIVITY').map((option) => <option key={option.type} value={option.type}>{option.label}</option>)}
               </select>
             </div>
-            <div><label style={labelStyle}>Payer / source</label><input style={inputStyle} type="text" value={entry.payerName} disabled={disabled} onChange={(event) => updateWinning(entry.id, { payerName: event.target.value })} /></div>
             <Field label="Gross winnings (₹) *" type="number" value={entry.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => updateWinning(entry.id, { grossAmount: money(Number(value)) })} />
             <Field label="TDS deducted (₹)" type="number" value={entry.tdsDeducted || ''} disabled={disabled} max={INV} onChange={(value) => updateWinning(entry.id, { tdsDeducted: money(Number(value)) })} />
-            <Field label="Date received" type="date" value={entry.dateOfWinning} disabled={disabled} onChange={(value) => updateWinning(entry.id, { dateOfWinning: value })} />
           </div>}
+        {entry.type !== 'RACE_HORSE_ACTIVITY' && (
+          <div style={{ ...gridStyle, marginTop: 16 }}>
+            <div style={wideFieldStyle}><label style={labelStyle}>Payer / source</label><input style={inputStyle} type="text" value={entry.payerName} disabled={disabled} onChange={(event) => updateWinning(entry.id, { payerName: event.target.value })} /></div>
+            <div style={wideFieldStyle}><label style={labelStyle}>Payer TAN</label><input style={inputStyle} type="text" value={entry.payerTAN} disabled={disabled} onChange={(event) => updateWinning(entry.id, { payerTAN: event.target.value })} /></div>
+            <Field label="Date received" type="date" value={entry.dateOfWinning} disabled={disabled} onChange={(value) => updateWinning(entry.id, { dateOfWinning: value })} />
+          </div>
+        )}
         {entry.type !== 'RACE_HORSE_ACTIVITY' && (
           <FivePeriodBreakup q1={entry.q1 ?? 0} q2={entry.q2 ?? 0} q3={entry.q3 ?? 0} q4={entry.q4 ?? 0} q5={entry.q5 ?? 0} disabled={disabled} onChange={(field, value) => updateWinning(entry.id, { [field]: value })} />
         )}
@@ -591,16 +615,16 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
             <button type="button" style={removeButtonStyle} disabled={disabled} onClick={() => removeDtaa(entry.id)}>Remove</button>
           </div>
           <div style={gridStyle}>
-            <div>
+            <div style={wideFieldStyle}>
               <label style={labelStyle}>Nature of income *</label>
               <select style={selectStyle} value={entry.natureOfIncome} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { natureOfIncome: event.target.value as DtaaIncomeEntry['natureOfIncome'] })}>
                 {DTAA_NATURE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
-            <div><label style={labelStyle}>Item no. (incl.)</label><input style={inputStyle} type="text" value={entry.itemNoIncl} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { itemNoIncl: event.target.value })} /></div>
-            <div><label style={labelStyle}>Country name</label><input style={inputStyle} type="text" value={entry.countryName} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { countryName: event.target.value })} /></div>
-            <div><label style={labelStyle}>Country code</label><input style={inputStyle} type="text" value={entry.countryCode} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { countryCode: event.target.value })} /></div>
-            <div><label style={labelStyle}>DTAA article</label><input style={inputStyle} type="text" value={entry.dtaaArticle} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { dtaaArticle: event.target.value })} /></div>
+            <div style={wideFieldStyle}><label style={labelStyle}>Item no. (incl.)</label><input style={inputStyle} type="text" value={entry.itemNoIncl} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { itemNoIncl: event.target.value })} /></div>
+            <div style={wideFieldStyle}><label style={labelStyle}>Country name</label><input style={inputStyle} type="text" value={entry.countryName} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { countryName: event.target.value })} /></div>
+            <div style={wideFieldStyle}><label style={labelStyle}>Country code</label><input style={inputStyle} type="text" value={entry.countryCode} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { countryCode: event.target.value })} /></div>
+            <div style={wideFieldStyle}><label style={labelStyle}>DTAA article</label><input style={inputStyle} type="text" value={entry.dtaaArticle} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { dtaaArticle: event.target.value })} /></div>
             <Field label="Amount (₹) *" type="number" value={entry.amount || ''} disabled={disabled} max={INV} onChange={(value) => updateDtaa(entry.id, { amount: money(Number(value)) })} />
             <Field label="Rate as per treaty (%)" type="number" value={entry.rateAsPerTreaty || ''} disabled={disabled} max={100} onChange={(value) => updateDtaa(entry.id, { rateAsPerTreaty: money(Number(value)) })} />
             <Field label="Rate as per IT Act (%)" type="number" value={entry.rateAsPerITAct || ''} disabled={disabled} max={100} onChange={(value) => updateDtaa(entry.id, { rateAsPerITAct: money(Number(value)) })} />
@@ -633,7 +657,7 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
             <button type="button" style={removeButtonStyle} disabled={disabled} onClick={() => removeSpecialRate(entry.id)}>Remove</button>
           </div>
           <div style={gridStyle}>
-            <div>
+            <div style={wideFieldStyle}>
               <label style={labelStyle}>Source description *</label>
               <select style={selectStyle} value={entry.sourceDescription} disabled={disabled} onChange={(event) => updateSpecialRate(entry.id, { sourceDescription: event.target.value as SpecialRateSourceDescription })}>
                 {SPECIAL_RATE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
