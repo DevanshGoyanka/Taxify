@@ -72,6 +72,91 @@ export interface Section80D { selfSeniorCitizen: 'Y' | 'N' | 'S'; parentsSeniorC
 export interface Donation80G extends Identified { category: '100_NO_APPROVAL' | '50_NO_APPROVAL' | '100_APPROVAL_REQD' | '50_APPROVAL_REQD'; doneeName: string; doneePAN: string; arnNumber: string; addrDetail: string; city: string; stateCode: string; pinCode: string; donationAmtCash: Money; donationAmtOtherMode: Money; transactionRefNum: string; ifscCode: string; donationDate: string; receiptNumber: string; notes: string; }
 export interface DeductionLoan extends Identified { section: '80E' | '80EE' | '80EEA' | '80EEB'; loanTakenFrom: 'B' | 'I'; lenderName: string; lenderPAN: string; loanAccountNo: string; dateOfLoan: string; totalLoanAmount: Money; outstandingAmount: Money; interestAmount: Money; firstTimeBuyerEligible: boolean; vehicleRegNo: string; }
 export interface LoanDeductions { loans: DeductionLoan[]; section80EEAStampDutyValue: Money; }
+
+/** Form-10-IA filing metadata shared by Schedule 80DD and 80U. */
+export interface Form10IAFiling { filed: 'Y' | 'N'; acknowledgementNumber: string; filingDate: string | null; formAckNum11A: string; }
+
+/** Canonical Chapter VI-A aggregate mirroring the official UsrDeductUndChapVIAType schema. */
+export interface ChapterVIA {
+  section80C: Money;
+  section80CCC: Money;
+  /** Aggregate of the PensionContribution80CCC[] detail array (computed total). */
+  pensionContribution80CCC: Money;
+  section80CCDEmployeeOrSE: Money;
+  section80CCD1B: Money;
+  section80CCDEmployer: Money;
+  /** Single PRAN from the PRANDtls[] detail array (typical case; one PRAN per assessee). */
+  pranNumber: string;
+  section80D: Money;
+  section80DD: Money;
+  section80DDNatureOfDisability: '1' | '2' | '';
+  section80DDTypeOfDisability: '1' | '2' | '';
+  section80DDDependentType: string;
+  section80DDDependentPAN: string;
+  section80DDDependentAadhaar: string;
+  section80DDForm10IA: Form10IAFiling;
+  section80DDUDIDNumber: string;
+  section80DDB: Money;
+  section80DDBUserType: '1' | '2' | '';
+  section80DDBNameOfSpecDisease: string;
+  section80E: Money;
+  section80EE: Money;
+  section80EEA: Money;
+  section80EEAStampDutyValue: Money;
+  section80EEB: Money;
+  section80G: Money;
+  section80GG: Money;
+  section80GGRentPaid: Money;
+  section80GGA: Money;
+  section80GGC: Money;
+  section80U: Money;
+  section80UNatureOfDisability: '1' | '2' | '';
+  section80UTypeOfDisability: '1' | '2' | '';
+  section80UForm10IA: Form10IAFiling;
+  section80UUDIDNumber: string;
+  section80QQB: Money;
+  section80QQBRoyaltyIncome: Money;
+  section80QQBForm10CCDAckNum: string;
+  section80RRB: Money;
+  section80RRBForm10CCEAckNum: string;
+  section80TTA: Money;
+  section80TTB: Money;
+  form10BAAckNum: string;
+  anyOtherSection80CCH: Money;
+  anyOtherSection80CCHDescription: string;
+  totalChapterVIADeductions: Money;
+  /** ITR-3 only — Part B/C business-linked deductions (80IA family). */
+  businessDeductions: BusinessDeductions;
+}
+
+/** ITR-3 Part B/C Chapter VI-A business-linked deduction fields. */
+export interface BusinessDeductions {
+  totalPartBChapterVIA: Money;
+  section80IA: Money;
+  section80IAB: Money;
+  section80IB: Money;
+  section80IBA: Money;
+  section80IC: Money;
+  section80JJA: Money;
+  section80JJAA: Money;
+  totalPartCChapterVIA: Money;
+  totalPartCAAndDChapterVIA: Money;
+}
+
+/** Empty Chapter VI-A aggregate used as the default for fresh drafts. */
+export const EMPTY_CHAPTER_VIA: ChapterVIA = {
+  section80C: 0, section80CCC: 0, pensionContribution80CCC: 0, section80CCDEmployeeOrSE: 0, section80CCD1B: 0, section80CCDEmployer: 0, pranNumber: '',
+  section80D: 0, section80DD: 0, section80DDNatureOfDisability: '', section80DDTypeOfDisability: '', section80DDDependentType: '', section80DDDependentPAN: '', section80DDDependentAadhaar: '', section80DDForm10IA: { filed: 'N', acknowledgementNumber: '', filingDate: null, formAckNum11A: '' }, section80DDUDIDNumber: '',
+  section80DDB: 0, section80DDBUserType: '', section80DDBNameOfSpecDisease: '',
+  section80E: 0, section80EE: 0, section80EEA: 0, section80EEAStampDutyValue: 0, section80EEB: 0,
+  section80G: 0, section80GG: 0, section80GGRentPaid: 0, section80GGA: 0, section80GGC: 0,
+  section80U: 0, section80UNatureOfDisability: '', section80UTypeOfDisability: '', section80UForm10IA: { filed: 'N', acknowledgementNumber: '', filingDate: null, formAckNum11A: '' }, section80UUDIDNumber: '',
+  section80QQB: 0, section80QQBRoyaltyIncome: 0, section80QQBForm10CCDAckNum: '',
+  section80RRB: 0, section80RRBForm10CCEAckNum: '',
+  section80TTA: 0, section80TTB: 0,
+  form10BAAckNum: '', anyOtherSection80CCH: 0, anyOtherSection80CCHDescription: '', totalChapterVIADeductions: 0,
+  businessDeductions: { totalPartBChapterVIA: 0, section80IA: 0, section80IAB: 0, section80IB: 0, section80IBA: 0, section80IC: 0, section80JJA: 0, section80JJAA: 0, totalPartCChapterVIA: 0, totalPartCAAndDChapterVIA: 0 },
+};
 export interface TdsCredit extends Identified { section: string; deductorName: string; deductorTAN: string; deductorPAN: string; certificateNo: string; grossAmount: Money; taxDeducted: Money; deductionDate: string; uniqueTransactionNo: string; financialYear: string; verified26AS: boolean; claimedInReturn: boolean; }
 export interface TcsCredit extends Identified { collectorName: string; collectorTAN: string; grossAmount: Money; taxCollected: Money; claimedInReturn: boolean; }
 export interface TaxChallan extends Identified { kind: 'ADVANCE_TAX' | 'SELF_ASSESSMENT'; bsrCode: string; depositDate: string; challanSerialNo: string; amount: Money; cin: string; }
@@ -123,7 +208,7 @@ export interface ReturnDraft {
     deductions: OtherSourcesDeductions;
   };
   exemptIncome: ExemptIncomeSchedule;
-  deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions };
+  deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions; chapterVIA: ChapterVIA };
   taxes: { tds: TdsCredit[]; tcs: TcsCredit[]; challans: TaxChallan[] }; bankAccounts: BankAccount[];
   verification: Verification; provenance: ImportProvenance[]; compatibility?: LegacyCompatibilityEnvelope;
 }

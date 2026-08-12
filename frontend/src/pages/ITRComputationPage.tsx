@@ -25,7 +25,7 @@ import {
   updateBankAccounts, updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
   updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
   updateHouseProperties, updateInterestFromManager, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
-  updateTdsFromManager, updateWinningsFromManager, winningsToManager, type LegacyRecord,
+  updateChapterVIA, updateTdsFromManager, updateWinningsFromManager, winningsToManager, type LegacyRecord,
   type ReturnEditorModel,
 } from '../domain/returns';
 import {
@@ -447,6 +447,7 @@ export default function ITRComputationPage() {
     section80D: (data) => updateEditor((model) => updateSection80D(model, data)),
     donations: (entries) => updateEditor((model) => updateSection80G(model, entries)),
     deductionLoans: (data) => updateEditor((model) => updateDeductionLoansFromManager(model, data)),
+    chapterVIA: (next) => updateEditor((model) => updateChapterVIA(model, next)),
     tds: (entries) => updateEditor((model) => updateTdsFromManager(model, entries)),
     advanceTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'ADVANCE_TAX', entries)),
     selfAssessmentTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'SELF_ASSESSMENT', entries)),
@@ -2183,7 +2184,7 @@ export default function ITRComputationPage() {
         {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel} />}
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
-        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} />}
+        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} form={itrForm} />}
         {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
         {activeTab === 9 && (!backendTaxResult && taxResultError
           ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until the first computation succeeds.</div>

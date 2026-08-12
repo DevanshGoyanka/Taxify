@@ -1,5 +1,6 @@
 import { INR } from '../utils/formatters';
 import ScheduleOSWorkspace from '../components/othersources/ScheduleOSWorkspace';
+import DeductionsWorkspace from '../components/deductions/DeductionsWorkspace';
 import type { ReturnDraft } from '../domain/returns/types';
 import type { ItrForm } from '../domain/eligibility';
 import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
@@ -28,6 +29,7 @@ export interface CanonicalManagerBindings {
   section80D: (data: Section80DData) => void;
   donations: (entries: any[]) => void;
   deductionLoans: (data: DeductionLoanManagerData) => void;
+  chapterVIA: (next: import('../domain/returns/types').ChapterVIA) => void;
   tds: (entries: TdsManagerEntry[]) => void;
   advanceTax: (entries: ChallanManagerEntry[]) => void;
   selfAssessmentTax: (entries: ChallanManagerEntry[]) => void;
@@ -370,227 +372,22 @@ export function VDATab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function DeductionsTab({ formData, setFormData, regime, taxResult, managers }: any) {
-  if (regime === 'new') {
-    return (
-      <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
-        No deductions available in New Regime (except 80CCD(2) - employer NPS contribution as per CBDT)
-        <div style={{ marginTop: 16 }}>
-          <Field label="80CCD(2) - Employer NPS" value={formData.s80CCD2} onChange={(v: any) => setFormData({ ...formData, s80CCD2: v })} />
-        </div>
-      </div>
-    );
-  }
-
+export function DeductionsTab({ formData, regime, taxResult, managers, form }: { formData: any; setFormData: any; regime: 'old' | 'new'; taxResult: any; managers: CanonicalManagerBindings; form: ItrForm }) {
+  const via = (formData?.chapterVIA ?? {}) as import('../domain/returns/types').ChapterVIA;
   return (
-    <div>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Deductions under Chapter VI-A (CBDT Schedule VIA)
-      </h3>
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>Section 80C (Max 1.5L)</h4>
-      <Section80CManager
-        data={formData.section80C || { investments: [] }}
-        onChange={managers.section80C}
-        backendEligible={(taxResult?.deductionBreakdown?.['80C']) ?? null}
-      />
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>NPS</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="80CCD(1B) - Max ₹50K" value={formData.s80CCD1B} onChange={(v: any) => setFormData({ ...formData, s80CCD1B: v })} />
-        <Field label="NPS PRAN" value={formData.s80CCD1B_PRAN || ''} onChange={(v: any) => setFormData({ ...formData, s80CCD1B_PRAN: v })} type="text" prefix="" />
-        <Field label="80CCD(2) - Employer" value={formData.s80CCD2} onChange={(v: any) => setFormData({ ...formData, s80CCD2: v })} />
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: "var(--text-secondary)" }}>Health Insurance (80D)</h3>
-      <Section80DManager
-        data={formData.section80D || {
-          selfSeniorCitizen: "N", parentsSeniorCitizen: "N",
-          selfFamily: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
-          selfFamilySenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
-          parents: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
-          parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
-        }}
-        onChange={managers.section80D}
-        backendEligible={(taxResult?.deductionBreakdown?.['80D']) ?? null}
-      />
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Disability & Medical (80DD/80DDB/80U)</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>80DDB - Medical Treatment Amount</label>
-          <input type="number" value={formData.s80DDB || ''} onChange={(e) => setFormData({ ...formData, s80DDB: parseFloat(e.target.value) || 0 })} placeholder="0" min={0}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Dependent Type (80DDB)</label>
-          <select value={formData.s80DDB_dependentType || 'SELF'} onChange={(e) => setFormData({ ...formData, s80DDB_dependentType: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="SELF">Self</option>
-            <option value="DEPENDENT">Dependent</option>
-            <option value="SENIOR">Senior Citizen</option>
-            <option value="SUPER_SENIOR">Super Senior Citizen</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>User Type (80DDB) *</label>
-          <select value={formData.s80DDB_usrType || ''} onChange={(e) => setFormData({ ...formData, s80DDB_usrType: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="">-- Select --</option>
-            <option value="1">1 - Self / Dependent</option>
-            <option value="2">2 - Senior Citizen (Self)</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disease Code (80DDB) *</label>
-          <select value={formData.s80DDB_diseaseCode || ''} onChange={(e) => setFormData({ ...formData, s80DDB_diseaseCode: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="">-- Select Disease --</option>
-            <option value="a">a - Dementia</option>
-            <option value="b">b - Dystonia Musculorum Deformans</option>
-            <option value="c">c - Motor Neuron Disease</option>
-            <option value="d">d - Ataxia</option>
-            <option value="e">e - Chorea</option>
-            <option value="f">f - Hemiballismus</option>
-            <option value="g">g - Aphasia</option>
-            <option value="h">h - Parkinson's Disease</option>
-            <option value="i">i - Malignant Cancers</option>
-            <option value="j">j - Full Blown AIDS</option>
-            <option value="k">k - Chronic Renal Failure</option>
-            <option value="l">l - Hematological Disorders</option>
-            <option value="m">m - Hemophilia</option>
-            <option value="n">n - Thalassaemia</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>80DD - Disabled Dependent Amount</label>
-          <input type="number" value={formData.s80DD || ''} onChange={(e) => setFormData({ ...formData, s80DD: parseFloat(e.target.value) || 0 })} placeholder="0" min={0}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Nature (80DD)</label>
-          <select value={formData.s80DD_natureOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80DD_natureOfDisability: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="">-- Select --</option>
-            <option value="1">1 - Dependent person with disability</option>
-            <option value="2">2 - Dependent person with severe disability</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Type (80DD)</label>
-          <select value={formData.s80DD_typeOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80DD_typeOfDisability: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="">-- Select --</option>
-            <option value="1">1 - Autism, cerebral palsy or multiple disabilities</option>
-            <option value="2">2 - Other disability</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Dependent Type (80DD)</label>
-          <select value={formData.s80DD_dependentType || ''} onChange={(e) => setFormData({ ...formData, s80DD_dependentType: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="">-- Select --</option>
-            <option value="1">1 - Spouse</option><option value="2">2 - Son</option><option value="3">3 - Daughter</option>
-            <option value="4">4 - Father</option><option value="5">5 - Mother</option><option value="6">6 - Brother</option>
-            <option value="7">7 - Sister</option><option value="8">8 - HUF Member</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>UDID Number (80DD)</label>
-          <input type="text" value={formData.s80DD_udid || ''} onChange={(e) => setFormData({ ...formData, s80DD_udid: e.target.value })} placeholder="Unique Disability ID" maxLength={18}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace' }} />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Form 10-IA Ack. No. (80DD)</label>
-          <input type="text" value={formData.s80DD_form10IA_ackno || ''} onChange={(e) => setFormData({ ...formData, s80DD_form10IA_ackno: e.target.value })} placeholder="Form 10-IA Acknowledgment Number" maxLength={15}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Dependent PAN (80DD)</label>
-          <input type="text" value={formData.s80DD_dependentPAN || ''} onChange={(e) => setFormData({ ...formData, s80DD_dependentPAN: e.target.value.toUpperCase() })} placeholder="ABCDE1234F" maxLength={10}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace', textTransform: 'uppercase' }} />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Dependent Aadhaar (80DD)</label>
-          <input type="text" value={formData.s80DD_dependentAadhaar || ''} onChange={(e) => setFormData({ ...formData, s80DD_dependentAadhaar: e.target.value.replace(/\D/g, '').slice(0, 12) })} placeholder="12-digit Aadhaar" maxLength={12}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace' }} />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Form 10-IA Filed? (80DD)</label>
-          <select value={formData.s80DD_form10IA || 'N'} onChange={(e) => setFormData({ ...formData, s80DD_form10IA: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="N">No</option>
-            <option value="Y">Yes</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>80U - Self Disability Amount</label>
-          <input type="number" value={formData.s80U || ''} onChange={(e) => setFormData({ ...formData, s80U: parseFloat(e.target.value) || 0 })} placeholder="0" min={0}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Nature (80U)</label>
-          <select value={formData.s80U_natureOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80U_natureOfDisability: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="">-- Select --</option>
-            <option value="1">1 - Self with disability</option>
-            <option value="2">2 - Self with severe disability</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Disability Type (80U)</label>
-          <select value={formData.s80U_typeOfDisability || ''} onChange={(e) => setFormData({ ...formData, s80U_typeOfDisability: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="">-- Select --</option>
-            <option value="1">1 - Autism, cerebral palsy or multiple disabilities</option>
-            <option value="2">2 - Other disability</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>UDID Number (80U)</label>
-          <input type="text" value={formData.s80U_udid || ''} onChange={(e) => setFormData({ ...formData, s80U_udid: e.target.value })} placeholder="Unique Disability ID" maxLength={18}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontFamily: 'monospace' }} />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Form 10-IA Ack. No. (80U)</label>
-          <input type="text" value={formData.s80U_form10IA_ackno || ''} onChange={(e) => setFormData({ ...formData, s80U_form10IA_ackno: e.target.value })} placeholder="Form 10-IA Acknowledgment Number" maxLength={15}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: '#555' }}>Form 10-IA Filed? (80U)</label>
-          <select value={formData.s80U_form10IA || 'N'} onChange={(e) => setFormData({ ...formData, s80U_form10IA: e.target.value })}
-            style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}>
-            <option value="N">No</option>
-            <option value="Y">Yes</option>
-          </select>
-        </div>
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Donations (80G)</h3>
-      
-      {/* Donation Multi-Entry Manager */}
-      <DonationEntryManager
-        entries={formData.donationEntries || []}
-        onChange={managers.donations}
-        backendEligible={(taxResult?.deductionBreakdown?.['80G']) ?? null}
-      />
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Education & Home Loans (80E/80EE/80EEA/80EEB)</h3>
-      <DeductionLoanManager
-        data={formData.deductionLoans || {
-          section80E: { loans: [] },
-          section80EE: { loans: [] },
-          section80EEA: { loans: [], stampDutyValue: 0 },
-          section80EEB: { loans: [] },
-        }}
-        onChange={managers.deductionLoans}
-      />
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>Others</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-        <Field label="80TTA - SB Interest (Max ₹10K)" value={formData.s80TTA} onChange={(v: any) => setFormData({ ...formData, s80TTA: v })} />
-        <Field label="Total Deductions" value={taxResult.totalDeductions} computed />
-      </div>
-    </div>
+    <DeductionsWorkspace
+      form={form}
+      regime={regime}
+      section80C={formData?.section80C?.investments ?? []}
+      section80D={formData?.section80D ?? { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, selfFamilySenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, parents: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 } }}
+      section80G={formData?.donationEntries ?? []}
+      loans={formData?.deductionLoans ?? { section80E: { loans: [] }, section80EE: { loans: [] }, section80EEA: { loans: [], stampDutyValue: 0 }, section80EEB: { loans: [] } }}
+      chapterVIA={via}
+      onChangeChapterVIA={managers.chapterVIA}
+      managers={managers}
+      totalDeductions={taxResult?.totalDeductions}
+      deductionBreakdown={taxResult?.deductionBreakdown}
+    />
   );
 }
 export function LossesTab({ formData, setFormData, taxResult }: any) {

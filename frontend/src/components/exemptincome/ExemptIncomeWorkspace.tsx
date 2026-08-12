@@ -54,6 +54,9 @@ const SUBCATEGORY_OPTIONS: readonly CodeOption<ExemptIncomeSubCategory>[] = [
   ['Anyother1','Any other exempt income — item 1'], ['Anyother2','Any other exempt income — item 2'], ['Anyother3','Any other exempt income — item 3'], ['Anyother4','Any other exempt income — item 4'],
 ].map(([value, description]) => ({ value: value as ExemptIncomeSubCategory, label: `${value} — ${description}` }));
 
+const ITR1_SUBCATEGORIES = new Set<ExemptIncomeSubCategory>([
+  '10(1)','10(2)','10(10BB)','10(10BC)','10(10D)','10(11)','10(11A)','10(12)','10(12A)','10(12AA)','10(12AB)','10(12B)','10(12BA)','10(12C)','10(13)','10(15)','10(16)','10(17A)','10(18)','10(19)','10(19A)','10(23AA)','10(23FBB)','10(23FD)','10(25)','10(26)','10(26AAA)','10(30)','10(31)','10(32)','10(35)','10(35A)','10(43)','10(44)','DMD','Incmexmptcircular','Incmexmptnotification','Receiptnotincme',
+]);
 const ITR4_SUBCATEGORIES = new Set<ExemptIncomeSubCategory>([
   '10(1)','10(2)','10(10BB)','10(10BC)','10(10D)','10(11)','10(11A)','10(12)','10(12A)','10(12AA)','10(12AB)','10(12B)','10(12BA)','10(12C)','10(13)','10(15)','10(16)','10(17A)','10(18)','10(19)','10(19A)','10(23AA)','10(23FBB)','10(23FD)','10(25)','10(26)','10(26AAA)','10(30)','10(31)','10(32)','10(35)','10(35A)','10(43)','10(44)','DMD','Incmexmptcircular','Incmexmptnotification','Receiptnotincme',
 ]);
@@ -97,9 +100,9 @@ export default function ExemptIncomeWorkspace({ form, schedule, onChange, disabl
   const patch = (next: Partial<ExemptIncomeSchedule>): void => onChange({ ...schedule, ...next });
   const isFull = form === 'ITR-2' || form === 'ITR-3';
   const isItr1 = form === 'ITR-1';
-  const allowedCategories = form === 'ITR-4' ? CATEGORY_OPTIONS.filter((option) => option.value !== 'OTHN') : CATEGORY_OPTIONS;
+  const allowedCategories = form === 'ITR-1' || form === 'ITR-4' ? CATEGORY_OPTIONS.filter((option) => option.value !== 'OTHN') : CATEGORY_OPTIONS;
   const allowedSubcategories = useMemo(() => {
-    const allowed = form === 'ITR-4' ? ITR4_SUBCATEGORIES : form === 'ITR-2' ? ITR2_SUBCATEGORIES : ITR3_SUBCATEGORIES;
+    const allowed = form === 'ITR-1' ? ITR1_SUBCATEGORIES : form === 'ITR-4' ? ITR4_SUBCATEGORIES : form === 'ITR-2' ? ITR2_SUBCATEGORIES : ITR3_SUBCATEGORIES;
     return SUBCATEGORY_OPTIONS.filter((option) => allowed.has(option.value));
   }, [form]);
   const netAgriculture = Math.max(0, money(schedule.grossAgriculturalReceipts) - money(schedule.agriculturalExpenses) - money(schedule.unabsorbedAgriculturalLossPreviousEightYears) + (form === 'ITR-3' ? money(schedule.agriculturalIncomeRule7And8) : 0));
@@ -119,10 +122,21 @@ export default function ExemptIncomeWorkspace({ form, schedule, onChange, disabl
   const removeDtaa = (entryId: string): void => patch({ dtaaExemptIncome: schedule.dtaaExemptIncome.filter((entry) => entry.id !== entryId) });
 
   if (isItr1) return <div>
-    <h3 style={styles.title}>Exempt Income</h3>
-    <div style={{ marginTop: 16, padding: 16, background: 'var(--warning-bg)', color: 'var(--warning)', border: '1px solid var(--warning)', borderRadius: 6, fontSize: 12 }}>
-      ITR-1 has no non-salary Schedule EI. Salary exemptions are reported in the Salary tab under Schedule S. Equity LTCG up to the section 112A threshold belongs in Capital Gains. Switch to ITR-2 to report agricultural income above ₹5,000 or other non-salary exempt income.
-    </div>
+    <div style={{ marginBottom: 16 }}><h3 style={styles.title}>Exempt Income (ExemptIncAgriOthUs10)</h3><div style={styles.subtitle}>AY 2026-27 · non-salary exempt income only; salary exemptions remain in Schedule S</div></div>
+    <div style={{ marginBottom: 16, padding: 12, background: 'var(--info-bg)', color: 'var(--info)', border: '1px solid var(--info)', borderRadius: 6, fontSize: 12 }}>ITR-1 reports agricultural and other section-10 exempt income here. Agricultural income under section 10(1) is allowed only up to ₹5,000 — exceeding that requires ITR-2. Equity LTCG up to the section 112A threshold belongs in Capital Gains.</div>
+    {incompatible.length > 0 && <div style={{ marginBottom: 16, padding: 12, background: 'var(--warning-bg)', color: 'var(--warning)', border: '1px solid var(--warning)', borderRadius: 6, fontSize: 12 }}>⚠ {incompatible.length} saved entr{incompatible.length === 1 ? 'y is' : 'ies are'} unsupported by ITR-1. Data is preserved; change form or classification before filing.</div>}
+    <div style={styles.sectionHeader}><h4 style={styles.panelTitle}>Exempt Income Entries</h4><button style={styles.add} disabled={disabled} onClick={addEntry}>+ Add Exempt Income</button></div>
+    {schedule.otherExemptIncome.length === 0 && <div style={styles.empty}>No non-salary exempt-income entries.</div>}
+    {schedule.otherExemptIncome.map((entry, index) => <div key={entry.id} style={styles.panel}>
+      <div style={styles.panelHeader}><h4 style={styles.panelTitle}>Exempt Entry #{index + 1}</h4><button style={styles.remove} disabled={disabled} onClick={() => removeEntry(entry.id)}>Remove</button></div>
+      <div style={styles.primaryRow}>
+        <div><label style={styles.label}>Category *</label><select style={styles.input} value={entry.category} disabled={disabled} onChange={(event) => updateEntry(entry.id, { category: event.target.value as ExemptIncomeCategory })}>{allowedCategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+        <div><label style={styles.label}>Sub-category / section *</label><select style={styles.input} value={entry.subCategory} disabled={disabled} onChange={(event) => updateEntry(entry.id, { subCategory: event.target.value as ExemptIncomeSubCategory })}>{!allowedSubcategories.some((option) => option.value === entry.subCategory) && <option value={entry.subCategory}>Unsupported on ITR-1: {entry.subCategory}</option>}{allowedSubcategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+        <Field label="Amount (₹) *" value={entry.grossAmount || ''} disabled={disabled} onChange={(value) => updateEntry(entry.id, { grossAmount: money(Number(value)) })} />
+      </div>
+      <div style={{ marginTop: 16 }}><Field label="Description / source *" type="text" maxLength={125} value={entry.description} disabled={disabled} onChange={(value) => updateEntry(entry.id, { description: value })} /></div>
+    </div>)}
+    <div style={styles.panel}><div style={styles.panelHeader}><h4 style={styles.panelTitle}>Exempt Income Review</h4><span style={{ padding: '2px 7px', borderRadius: 3, background: 'var(--info)', color: 'white', fontSize: 10, fontWeight: 600 }}>ExemptIncAgriOthUs10</span></div><div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}><span>Total exempt income</span><strong>{inr(othersTotal)}</strong></div></div>
   </div>;
 
   return <div>

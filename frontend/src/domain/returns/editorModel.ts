@@ -1,7 +1,7 @@
 import { adaptLegacyReturn } from './legacyAdapter';
 import { serializeReturnDraftToLegacy } from './legacySerializer';
 import type {
-  BankAccount, DeductionLoan, DividendIncome, Donation80G, Employer, FamilyPension, GiftConsiderationKind, GiftIncome,
+  BankAccount, ChapterVIA, DeductionLoan, DividendIncome, Donation80G, Employer, FamilyPension, GiftConsiderationKind, GiftIncome,
   HouseProperty, InterestIncome, InterestKind, Investment80C, LoanDeductions,
   Policy80D, ReturnDraft, Section80D, TaxChallan, TcsCredit, TdsCredit, WinningIncome,
 } from './types';
@@ -251,6 +251,11 @@ export function updateSection80G(model: ReturnEditorModel, donations: readonly D
 /** Replaces canonical deduction loans with an immutable detached copy. */
 export function updateDeductionLoans(model: ReturnEditorModel, loans: LoanDeductions): ReturnEditorModel {
   return replaceDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, loans: clone(loans) } });
+}
+
+/** Replaces the canonical Chapter VI-A aggregate with an immutable detached copy. */
+export function updateChapterVIA(model: ReturnEditorModel, chapterVIA: ChapterVIA): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, chapterVIA: clone(chapterVIA) } });
 }
 
 /** Replaces canonical TDS credits with an immutable detached copy. */
