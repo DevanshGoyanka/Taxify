@@ -17,12 +17,13 @@ import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
+import ExemptIncomeWorkspace from '../components/exemptincome/ExemptIncomeWorkspace';
 import {
   HttpReturnRepository, applyLegacyActionWithSnapshot, applyLegacyPatch, applyLegacySetStateAction,
   banksToManager, challansToManager, composeLegacyPayload, createReturnEditorModelFromLegacy,
   deductionLoansToManager, familyPensionToManager, giftsToManager, interestToManager, tdsToManager,
   updateBankAccounts, updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
-  updateDividendsFromManager, updateEmployers, updateFamilyPensionFromManager, updateGiftsFromManager,
+  updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
   updateHouseProperties, updateInterestFromManager, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
   updateTdsFromManager, updateWinningsFromManager, winningsToManager, type LegacyRecord,
   type ReturnEditorModel,
@@ -290,7 +291,7 @@ export default function ITRComputationPage() {
   const [validationReport, setValidationReport] = useState<{ valid: boolean; errors: string[]; warnings: string[] } | null>(null);
   const [activeTab, setActiveTab] = useState(0);
   const [regime, setRegime] = useState<'old' | 'new'>('new');
-  const [itrForm, setItrForm] = useState('ITR-1');
+  const [itrForm, setItrForm] = useState<ItrForm>('ITR-1');
   const [eligibility, setEligibility] = useState<FormRecommendation | null>(null);
   const [formLockedByUser, setFormLockedByUser] = useState(false);
   const [showImportMenu, setShowImportMenu] = useState(false);
@@ -1421,7 +1422,7 @@ export default function ITRComputationPage() {
     const hasBFLoss = (formData.bfLossHP || 0) > 0 || (formData.bfLossBusiness || 0) > 0 || 
                       (formData.bfLossSTCG || 0) > 0 || (formData.bfLossLTCG || 0) > 0;
 
-    let detectedForm = 'ITR-1';
+    let detectedForm: ItrForm = 'ITR-1';
     let reason = '';
 
     // Priority 1: ITR-4 for presumptive income only while restricted CG remains eligible.
@@ -2181,7 +2182,7 @@ export default function ITRComputationPage() {
         {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel} />}
-        {activeTab === 6 && <ExemptIncomeTab formData={formData} setFormData={setFormData} />}
+        {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
         {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} />}
         {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
         {activeTab === 9 && (!backendTaxResult && taxResultError
@@ -2201,84 +2202,11 @@ export default function ITRComputationPage() {
 }
 
 // ============================================================================
-// EXEMPT INCOME TAB - CBDT SCHEDULE EI (VR1-027, VR1-028)
+// EXEMPT INCOME TAB - Replaced by the canonical ExemptIncomeWorkspace component.
+// The old scalar editor (including the stale section 10(38) path) has been removed
+// to eliminate duplicate capture; non-salary exempt income is now owned solely by
+// the canonical Schedule EI superset on ReturnDraft.exemptIncome.
 // ============================================================================
-function ExemptIncomeTab({ formData, setFormData }: any) {
-  return (
-    <div>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Schedule EI - Exempt Income (CBDT VR1-027, VR1-028)
-      </h3>
-      
-      <div style={{ padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)', marginBottom: 16 }}>
-        Exempt income is reported in Schedule EI. Agricultural income above Rs 5,000 requires ITR-2.
-      </div>
-
-      {/* Agricultural Income */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Agricultural Income (Section 10(1))
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Gross Agricultural Income" value={formData.agricultureIncome || 0} onChange={(v: any) => setFormData({ ...formData, agricultureIncome: v, agriculturalIncome: v })} />
-        <Field label="Deductible Agricultural Expenses" value={formData.agricultureExpenses || 0} onChange={(v: any) => setFormData({ ...formData, agricultureExpenses: v })} />
-        <Field label="Net Agricultural Income" value={(formData.agricultureIncome || 0) - (formData.agricultureExpenses || 0)} computed />
-      </div>
-
-      {/* Exempt Interest Income */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Exempt Interest Income (Section 10)
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="PPF Interest (Exempt)" value={formData.ppfInterest || 0} onChange={(v: any) => setFormData({ ...formData, ppfInterest: v })} />
-        <Field label="Sukanya Samriddhi Interest (Exempt)" value={formData.sukanyaSamriddhiInterest || 0} onChange={(v: any) => setFormData({ ...formData, sukanyaSamriddhiInterest: v })} />
-        <Field label="Other Exempt Interest" value={formData.otherExemptInterest || 0} onChange={(v: any) => setFormData({ ...formData, otherExemptInterest: v })} />
-      </div>
-
-      {/* Long Term Capital Gains Exempt */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        LTCG Exempt u/s 10(33) - Equity Shares
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="LTCG u/s 10(33) - Equity" value={formData.ltcgExempt || 0} onChange={(v: any) => setFormData({ ...formData, ltcgExempt: v })} />
-        <Field label="LTCG Exemption u/s 10(38)" value={formData.ltcgExempt38 || 0} onChange={(v: any) => setFormData({ ...formData, ltcgExempt38: v })} />
-        <Field label="Total Exempt LTCG" value={(formData.ltcgExempt || 0) + (formData.ltcgExempt38 || 0)} computed />
-      </div>
-
-      {/* Non-salary exempt income */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Other Non-Salary Exempt Income
-      </h4>
-      <div style={{ padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)', marginBottom: 12 }}>
-        Salary-origin exemptions—such as HRA, LTA, gratuity, leave encashment, VRS compensation and commuted pension—are entered only in Salary Income under Schedule S.
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Share of Profit from Firm / LLP / HUF" value={formData.shareOfProfitFirm || 0} onChange={(v: any) => setFormData({ ...formData, shareOfProfitFirm: v })} />
-        <Field label="Any Other Non-Salary Exempt Income" value={formData.otherExemptIncome || 0} onChange={(v: any) => setFormData({ ...formData, otherExemptIncome: v })} />
-      </div>
-
-      {/* Total Exempt Income Summary */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--gold)' }}>
-        Total Exempt Income
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        <Field 
-          label="Total Exempt Income (Schedule EI)" 
-          value={
-            (formData.agricultureIncome || 0) +
-            (formData.ppfInterest || 0) +
-            (formData.sukanyaSamriddhiInterest || 0) +
-            (formData.otherExemptInterest || 0) +
-            (formData.ltcgExempt || 0) +
-            (formData.ltcgExempt38 || 0) +
-            (formData.shareOfProfitFirm || 0) +
-            (formData.otherExemptIncome || 0)
-          } 
-          computed 
-        />
-      </div>
-    </div>
-  );
-}
 
 function Field({ label, value, onChange, computed, prefix = '₹', type = 'number', required = false, pattern, maxLength, min, max, inputMode, helpText }: any) {
   const [displayValue, setDisplayValue] = React.useState('');

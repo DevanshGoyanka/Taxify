@@ -41,9 +41,12 @@ describe('return editor model', () => {
       bizTurnover: 500000,
       agricultureIncome: 4000,
     }));
+    // agricultureIncome is now a canonical alias of exemptIncome.grossAgriculturalReceipts,
+    // so it is projected from the canonical schedule (0 here) rather than preserved as a
+    // raw scalar. bizTurnover remains a pure compatibility scalar and must survive.
     expect(composeLegacyPayload(updated)).toMatchObject({
       bizTurnover: 500000,
-      agricultureIncome: 4000,
+      agricultureIncome: 0,
       businessEntries: [],
       exemptIncomeEntries: [],
       donationEntries: [],

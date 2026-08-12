@@ -77,7 +77,27 @@ export interface TcsCredit extends Identified { collectorName: string; collector
 export interface TaxChallan extends Identified { kind: 'ADVANCE_TAX' | 'SELF_ASSESSMENT'; bsrCode: string; depositDate: string; challanSerialNo: string; amount: Money; cin: string; }
 export interface BankAccount extends Identified { bankName: string; accountNumber: string; ifscCode: string; accountType: 'SB' | 'CA' | 'CC' | 'OD' | 'NRO' | 'OTH'; useForRefund: boolean; }
 export interface FilingStatus { filingSection: '139(1)' | '139(4)' | '139(5)' | '119(2)(b)'; returnType: 'ORIGINAL' | 'REVISED'; originalAcknowledgementNumber: string; originalFilingDate: string | null; noticeNumber: string; }
-export interface ExemptIncomeEntry extends Identified { kind: 'AGRICULTURE' | 'PPF_INTEREST' | 'SUKANYA_INTEREST' | 'OTHER_INTEREST' | 'LTCG_10_33' | 'LTCG_10_38' | 'GRATUITY' | 'LEAVE_ENCASHMENT' | 'VRS' | 'COMMUTED_PENSION' | 'FIRM_PROFIT_SHARE' | 'OTHER'; description: string; grossAmount: Money; expenses: Money; }
+export type ExemptIncomeCategory = 'AGRI' | 'GOVC' | 'ISI' | 'SSRA' | 'SRSC' | 'SRST' | 'SRPC' | 'OTH' | 'OTHN';
+export type ExemptIncomeSubCategory = '10(1)' | '10(2)' | '10(2A)' | '10(4)(i)' | '10(4)(ii)' | '10(4B)' | '10(4C)' | '10(4E)' | '10(4F)' | '10(4G)' | '10(4H)' | '10(6B)' | '10(6BB)' | '10(6D)' | '10(8)' | '10(8A)' | '10(8B)' | '10(9)' | '10(10BB)' | '10(10BC)' | '10(10D)' | '10(11)' | '10(11A)' | '10(12)' | '10(12A)' | '10(12AA)' | '10(12AB)' | '10(12B)' | '10(12BA)' | '10(12C)' | '10(13)' | '10(15)' | '10(16)' | '10(17A)' | '10(18)' | '10(19)' | '10(19A)' | '10(23AA)' | '10(23FBB)' | '10(23FBC)' | '10(23FD)' | '10(23FF)' | '10(25)' | '10(26)' | '10(26AAA)' | '10(30)' | '10(31)' | '10(32)' | '10(33)' | '10(35)' | '10(35A)' | '10(36)' | '10(37)' | '10(37A)' | '10(43)' | '10(44)' | 'DMD' | 'Incmexmptcircular' | 'Incmexmptnotification' | 'Receiptnotincme' | 'Anyother1' | 'Anyother2' | 'Anyother3' | 'Anyother4';
+export interface ExemptIncomeEntry extends Identified { category: ExemptIncomeCategory; subCategory: ExemptIncomeSubCategory; description: string; grossAmount: Money; }
+export interface AgriculturalLandParcel extends Identified { nameOfDistrict: string; pinCode: string; measurementOfLand: number; ownedFlag: 'O' | 'H'; irrigatedFlag: 'IRG' | 'RF'; }
+export interface DtaaExemptIncomeEntry extends Identified { amountOfIncome: Money; natureOfIncome: string; countryName: string; countryCode: string; articleOfDtaa: string; headOfIncome: 'SA' | 'HP' | 'PG' | 'CG' | 'OS'; trcFlag: 'Y' | 'N'; }
+export interface ExemptIncomeSchedule {
+  interestIncome: Money;
+  grossAgriculturalReceipts: Money;
+  agriculturalExpenses: Money;
+  unabsorbedAgriculturalLossPreviousEightYears: Money;
+  agriculturalIncomeRule7And8: Money;
+  netAgriculturalIncomeOrOtherIncomeRule7: Money;
+  agriculturalLandParcels: AgriculturalLandParcel[];
+  otherExemptIncome: ExemptIncomeEntry[];
+  othersTotal: Money;
+  dtaaExemptIncome: DtaaExemptIncomeEntry[];
+  incomeNotChargeableToTax: Money;
+  incomeChargeableAsPerDtaa: Money;
+  passThroughIncomeNotChargeableToTax: Money;
+  totalExemptIncome: Money;
+}
 export interface ImportProvenance { source: 'MANUAL' | 'FORM16' | 'AIS' | 'TIS' | '26AS' | 'ITD_PREFILL' | 'LEGACY'; importedAt: string | null; reference: string; }
 export interface Verification { capacity: 'SELF' | 'REPRESENTATIVE'; place: string; date: string | null; declarationAccepted: boolean; }
 export interface LegacyCompatibilityEnvelope { source: 'legacy-flat-v1'; unknownFields: Readonly<Record<string, unknown>>; }
@@ -102,7 +122,7 @@ export interface ReturnDraft {
     unexplainedIncome: UnexplainedIncomeDetails;
     deductions: OtherSourcesDeductions;
   };
-  exemptIncome: ExemptIncomeEntry[];
+  exemptIncome: ExemptIncomeSchedule;
   deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions };
   taxes: { tds: TdsCredit[]; tcs: TcsCredit[]; challans: TaxChallan[] }; bankAccounts: BankAccount[];
   verification: Verification; provenance: ImportProvenance[]; compatibility?: LegacyCompatibilityEnvelope;

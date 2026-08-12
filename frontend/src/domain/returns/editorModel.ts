@@ -273,6 +273,11 @@ export function updateBankAccounts(model: ReturnEditorModel, accounts: readonly 
   return replaceDraft(model, { ...model.draft, bankAccounts: cloneArray(accounts) });
 }
 
+/** Replaces canonical exempt-income Schedule EI data with an immutable detached copy. */
+export function updateExemptIncome(model: ReturnEditorModel, exemptIncome: ReturnDraft['exemptIncome']): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, exemptIncome: clone(exemptIncome) });
+}
+
 /** Replaces canonical other-sources data with an immutable detached copy. */
 export function updateOtherSources(model: ReturnEditorModel, otherSources: ReturnDraft['otherSources']): ReturnEditorModel {
   return replaceDraft(model, { ...model.draft, otherSources: clone(otherSources) });
