@@ -25,7 +25,7 @@ import {
   updateBankAccounts, updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
   updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
   updateHouseProperties, updateInterestFromManager, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
-  updateChapterVIA, updateTdsFromManager, updateWinningsFromManager, winningsToManager, type LegacyRecord,
+  updateChapterVIA, updateTdsFromManager, updateTcsCredits, updateWinningsFromManager, winningsToManager, type LegacyRecord,
   type ReturnEditorModel,
 } from '../domain/returns';
 import {
@@ -401,6 +401,7 @@ export default function ITRComputationPage() {
     s80U_natureOfDisability: '', s80U_typeOfDisability: '',
     // Tax Payments - Multi-entry structures
     tdsEntries: [],
+    tcsEntries: [],
     advanceTaxEntries: [],
     selfAssessmentTaxEntries: [],
     bankAccountDetails: [],
@@ -449,6 +450,7 @@ export default function ITRComputationPage() {
     deductionLoans: (data) => updateEditor((model) => updateDeductionLoansFromManager(model, data)),
     chapterVIA: (next) => updateEditor((model) => updateChapterVIA(model, next)),
     tds: (entries) => updateEditor((model) => updateTdsFromManager(model, entries)),
+    tcs: (entries) => updateEditor((model) => updateTcsCredits(model, entries)),
     advanceTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'ADVANCE_TAX', entries)),
     selfAssessmentTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'SELF_ASSESSMENT', entries)),
     banks: (data) => updateEditor((model) => updateBanksFromManager(model, data)),
@@ -2185,7 +2187,7 @@ export default function ITRComputationPage() {
         {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel} />}
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
         {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} form={itrForm} />}
-        {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
+        {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} form={itrForm} />}
         {activeTab === 9 && (!backendTaxResult && taxResultError
           ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until the first computation succeeds.</div>
           : <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />)}

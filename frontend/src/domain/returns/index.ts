@@ -5,6 +5,7 @@ export * from './legacySerializer';
 export * from './repository';
 export * from './state';
 export * from './editorModel';
+export * from './tdsSections';
 
 // ── CBDT eligibility & schedule registry ─────────────────────────────────────
 export {

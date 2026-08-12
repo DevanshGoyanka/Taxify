@@ -31,6 +31,7 @@ export interface CanonicalManagerBindings {
   deductionLoans: (data: DeductionLoanManagerData) => void;
   chapterVIA: (next: import('../domain/returns/types').ChapterVIA) => void;
   tds: (entries: TdsManagerEntry[]) => void;
+  tcs: (entries: import('../domain/returns/types').TcsCredit[]) => void;
   advanceTax: (entries: ChallanManagerEntry[]) => void;
   selfAssessmentTax: (entries: ChallanManagerEntry[]) => void;
   banks: (data: BankManagerData) => void;
@@ -472,21 +473,28 @@ export function LossesTab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
+export function TDSTab({ formData, setFormData, taxResult, managers, form }: { formData: any; setFormData: any; taxResult: any; managers: CanonicalManagerBindings; form: ItrForm }) {
   const tdsEntries = formData.tdsEntries || [];
+  const tcsEntries = formData.tcsEntries || [];
   const selfAssessmentTaxEntries = formData.selfAssessmentTaxEntries || [];
-  const tanPattern = /^[A-Z]{4}[0-9]{5}[A-Z]$/;
-  const bsrPattern = /^[0-9]{7}$/;
+  // TAN is jurisdiction-prefixed per the official schema (e.g. DELA12345B).
+  const tanPattern = /^(HYD|VPN|BBN|BPL|JBP|CHE|CMB|MRI|DEL|CAL|MRT|AHM|BRD|RKT|SRT|BLR|AGR|KNP|CHN|TVD|ALD|LKN|MUM|NGP|AMR|JLD|PTL|RTK|KLP|NSK|PNE|PTN|RCH|JDH|JPR|SHL)[A-Z][0-9]{5}[A-Z]$/;
+  // BSR Code: first 3 digits, then 4 alphanumeric (per TaxPayment.BSRCode pattern).
+  const bsrPattern = /^[0-9]{3}[0-9A-Z]{4}$/;
+  // Challan serial is an integer 1..99999 per the schema.
   const challanPattern = /^[0-9]{1,5}$/;
   const inputErrorStyle = { color: 'var(--danger)', fontSize: 11, marginTop: 4 };
   const deriveCin = (entry: any) => {
     const bsr = String(entry.bsrCode || '');
     const date = String(entry.depositDate || '').replaceAll('-', '');
-    const serial = String(entry.challanNo || entry.challanSerialNo || '');
+    const serial = String(entry.challanNo ?? entry.challanSerialNo ?? '');
     return bsrPattern.test(bsr) && date.length === 8 && challanPattern.test(serial) && Number(serial) > 0
       ? `${bsr}-${date}-${serial.padStart(5, '0')}`
       : '';
   };
+
+  // ITR-2/3 permit the full non-salary TDS section range; ITR-1/4 only salary.
+  const isFullTds = form === 'ITR-2' || form === 'ITR-3';
 
   const addTDSEntry = () => {
     const newEntry = {
@@ -510,6 +518,18 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
   const updateTDSEntry = (index: number, field: string, value: any) => {
     const updated = [...tdsEntries];
     updated[index] = { ...updated[index], [field]: value };
+    // If the section is a 206C (TCS) code, the row belongs in Schedule TCS,
+    // not Schedule TDS — route it to the TCS manager binding instead.
+    if (field === 'section' && /^[0-9]{4}C/.test(String(value))) {
+      const row = updated[index];
+      managers.tcs([...tcsEntries, {
+        id: row.id, collectorName: row.deductorName || '', collectorTAN: row.deductorTAN || '',
+        grossAmount: Number(row.incomeAmount) || 0, taxCollected: Number(row.tdsDeducted) || 0, claimedInReturn: row.claimedInReturn !== false,
+      }]);
+      const remaining = tdsEntries.filter((_: any, i: number) => i !== index);
+      managers.tds(remaining);
+      return;
+    }
     managers.tds(updated);
   };
 
@@ -627,38 +647,38 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
                   <option value="192">192 - Salary</option>
                   <option value="192A">192A - PF Withdrawal</option>
                 </optgroup>
-                <optgroup label="Interest / Securities">
+                {isFullTds && (<optgroup label="Interest / Securities">
                   <option value="193">193 - Interest on Securities</option>
                   <option value="194A">194A - Interest (other than securities)</option>
                   <option value="194LB">194LB - Infrastructure Debt Fund Interest</option>
                   <option value="194LD">194LD - Bonds/Government Securities</option>
-                </optgroup>
-                <optgroup label="Dividends">
+                </optgroup>)}
+                {isFullTds && (<optgroup label="Dividends">
                   <option value="194">194 - Dividends</option>
                   <option value="194K">194K - Mutual Fund Income</option>
-                </optgroup>
-                <optgroup label="Winnings / Games">
+                </optgroup>)}
+                {isFullTds && (<optgroup label="Winnings / Games">
                   <option value="194B">194B - Lottery / Crossword</option>
                   <option value="194BA">194BA - Online Games</option>
                   <option value="194BB">194BB - Horse Race</option>
-                </optgroup>
-                <optgroup label="Contractor / Professional">
+                </optgroup>)}
+                {isFullTds && (<optgroup label="Contractor / Professional">
                   <option value="194C">194C - Contractor Payments</option>
                   <option value="194J">194J - Professional / Technical Fees</option>
-                </optgroup>
-                <optgroup label="Commission / Insurance">
+                </optgroup>)}
+                {isFullTds && (<optgroup label="Commission / Insurance">
                   <option value="194H">194H - Commission / Brokerage</option>
                   <option value="194D">194D - Insurance Commission</option>
                   <option value="194DA">194DA - Life Insurance Payment</option>
-                </optgroup>
-                <optgroup label="Rent / Property">
+                </optgroup>)}
+                {isFullTds && (<optgroup label="Rent / Property">
                   <option value="194I">194I - Rent (General)</option>
                   <option value="194IA">194IA - Sale of Immovable Property</option>
                   <option value="194IB">194IB - Rent by Individuals/HUF</option>
                   <option value="194IC">194IC - Specified Agreement</option>
                   <option value="194LA">194LA - Compensation on Acquisition</option>
-                </optgroup>
-                <optgroup label="Non-Resident">
+                </optgroup>)}
+                {isFullTds && (<optgroup label="Non-Resident">
                   <option value="194E">194E - Non-Resident Sportsmen</option>
                   <option value="195">195 - Sums Payable to Non-Resident</option>
                   <option value="196A">196A - Units of Non-Residents</option>
@@ -666,8 +686,8 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
                   <option value="196C">196C - Foreign Currency Bonds</option>
                   <option value="196D">196D - Foreign Institutional Investors</option>
                   <option value="196DA">196DA - Specified Fund Income</option>
-                </optgroup>
-                <optgroup label="Other TDS">
+                </optgroup>)}
+                {isFullTds && (<optgroup label="Other TDS">
                   <option value="194EE">194EE - NSS Deposits</option>
                   <option value="194F">194F - Mutual Fund Repurchase</option>
                   <option value="194G">194G - Lottery Ticket Commission</option>
@@ -682,8 +702,8 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
                   <option value="194Q">194Q - Purchase of Goods</option>
                   <option value="194R">194R - Benefits / Perquisites</option>
                   <option value="194S">194S - Virtual Digital Asset</option>
-                </optgroup>
-                <optgroup label="TCS">
+                </optgroup>)}
+                {isFullTds && (<optgroup label="TCS">
                   <option value="206C">206C - TCS (General)</option>
                   <option value="206CA">206CA - Alcoholic Liquor</option>
                   <option value="206CB">206CB - Timber (Forest Lease)</option>
@@ -704,8 +724,8 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
                   <option value="206CQ">206CQ - LRS Other Purposes</option>
                   <option value="206CR">206CR - Sale of Goods</option>
                   <option value="206CT">206CT - LRS Education/Medical</option>
-                </optgroup>
-                <option value="OTHER">Other</option>
+                </optgroup>)}
+                {isFullTds && <option value="OTHER">Other</option>}
               </select>
             </div>
             <Field label="Deductor Name *" value={entry.deductorName || ''} onChange={(v: any) => updateTDSEntry(index, 'deductorName', v)} type="text" prefix="" required />
@@ -717,13 +737,13 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
                 type="text"
                 value={entry.deductorTAN || ''}
                 onChange={(e) => updateTDSEntry(index, 'deductorTAN', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))}
-                placeholder="ABCD12345E"
+                placeholder="DELA12345B"
                 maxLength={10}
                 aria-invalid={Boolean(entry.deductorTAN) && !tanPattern.test(entry.deductorTAN)}
                 style={{ width: '100%', padding: '8px 12px', border: `1px solid ${entry.deductorTAN && !tanPattern.test(entry.deductorTAN) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 6, fontSize: 13 }}
               />
               {entry.deductorTAN && !tanPattern.test(entry.deductorTAN) && (
-                <div style={inputErrorStyle}>TAN must match ABCD12345E.</div>
+                <div style={inputErrorStyle}>TAN must be a 10-char jurisdiction code (e.g. DELA12345B).</div>
               )}
             </div>
             <Field label="Deductor PAN" value={entry.deductorPAN || ''} onChange={(v: any) => updateTDSEntry(index, 'deductorPAN', v)} type="text" prefix="" />
@@ -801,12 +821,12 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>BSR Code *</label>
-              <input type="text" inputMode="numeric" value={entry.bsrCode || ''} onChange={(e) => {
+              <input type="text" inputMode="text" value={entry.bsrCode || ''} onChange={(e) => {
                 const updated = [...(formData.advanceTaxEntries || [])];
-                updated[index] = { ...updated[index], bsrCode: e.target.value.replace(/\D/g, '').slice(0, 7) };
+                updated[index] = { ...updated[index], bsrCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7) };
                 managers.advanceTax(updated);
-              }} placeholder="7-digit BSR" maxLength={7} aria-invalid={Boolean(entry.bsrCode) && !bsrPattern.test(entry.bsrCode)} style={{ width: '100%', padding: '6px 8px', border: `1px solid ${entry.bsrCode && !bsrPattern.test(entry.bsrCode) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 4, fontSize: 12 }} />
-              {entry.bsrCode && !bsrPattern.test(entry.bsrCode) && <div style={inputErrorStyle}>BSR code must contain exactly 7 digits.</div>}
+              }} placeholder="3 digits + 4 alphanumeric" maxLength={7} aria-invalid={Boolean(entry.bsrCode) && !bsrPattern.test(entry.bsrCode)} style={{ width: '100%', padding: '6px 8px', border: `1px solid ${entry.bsrCode && !bsrPattern.test(entry.bsrCode) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 4, fontSize: 12 }} />
+              {entry.bsrCode && !bsrPattern.test(entry.bsrCode) && <div style={inputErrorStyle}>BSR must be 7 chars: 3 digits then 4 alphanumeric.</div>}
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Deposit Date *</label>
@@ -888,8 +908,8 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: any) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
             <div>
               <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>BSR Code *</label>
-              <input type="text" inputMode="numeric" value={entry.bsrCode || ''} onChange={(e) => updateSelfAssessmentEntry(index, 'bsrCode', e.target.value.replace(/\D/g, '').slice(0, 7))} placeholder="7-digit BSR" maxLength={7} aria-invalid={Boolean(entry.bsrCode) && !bsrPattern.test(entry.bsrCode)} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${entry.bsrCode && !bsrPattern.test(entry.bsrCode) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 6, fontSize: 13 }} />
-              {entry.bsrCode && !bsrPattern.test(entry.bsrCode) && <div style={inputErrorStyle}>BSR code must contain exactly 7 digits.</div>}
+              <input type="text" inputMode="text" value={entry.bsrCode || ''} onChange={(e) => updateSelfAssessmentEntry(index, 'bsrCode', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7))} placeholder="3 digits + 4 alphanumeric" maxLength={7} aria-invalid={Boolean(entry.bsrCode) && !bsrPattern.test(entry.bsrCode)} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${entry.bsrCode && !bsrPattern.test(entry.bsrCode) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 6, fontSize: 13 }} />
+              {entry.bsrCode && !bsrPattern.test(entry.bsrCode) && <div style={inputErrorStyle}>BSR must be 7 chars: 3 digits then 4 alphanumeric.</div>}
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Challan Serial No *</label>

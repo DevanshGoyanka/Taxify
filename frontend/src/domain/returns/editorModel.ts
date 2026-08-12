@@ -1,5 +1,6 @@
 import { adaptLegacyReturn } from './legacyAdapter';
 import { serializeReturnDraftToLegacy } from './legacySerializer';
+import { classifyTdsSchedule, toSchemaSectionCode } from './tdsSections';
 import type {
   BankAccount, ChapterVIA, DeductionLoan, DividendIncome, Donation80G, Employer, FamilyPension, GiftConsiderationKind, GiftIncome,
   HouseProperty, InterestIncome, InterestKind, Investment80C, LoanDeductions,
@@ -420,9 +421,47 @@ export function tdsToManager(entries: readonly TdsCredit[]): TdsManagerEntry[] {
   return entries.map((entry) => ({ ...clone(entry), incomeAmount: entry.grossAmount, tdsDeducted: entry.taxDeducted }));
 }
 
-/** Merges TDS editor values by ID, including UI-only PAN and certificate fields. */
+/** Merges TDS editor values by ID, including UI-only PAN and certificate fields.
+ *  Schema-enrichment fields (schedule, tdsSectionCode, taxDeductCreditDtls,
+ *  tenant fields, etc.) are preserved from the prior row and auto-derived
+ *  from the user-facing section code where possible. */
 export function tdsFromManager(entries: readonly TdsManagerEntry[], previous: readonly TdsCredit[] = []): TdsCredit[] {
-  return mergeById(previous, entries as readonly (TdsManagerEntry & { id: string })[], (entry, prior, index) => ({ ...prior, id: deterministicId('tds', entry, index), section: optionalText(entry.section ?? prior?.section), deductorName: optionalText(entry.deductorName ?? prior?.deductorName), deductorTAN: optionalText(entry.deductorTAN ?? prior?.deductorTAN), deductorPAN: optionalText(entry.deductorPAN ?? prior?.deductorPAN), certificateNo: optionalText(entry.certificateNo ?? prior?.certificateNo), grossAmount: finiteMoney(entry.incomeAmount ?? entry.grossAmount ?? prior?.grossAmount), taxDeducted: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted ?? prior?.taxDeducted), deductionDate: optionalText(entry.deductionDate ?? prior?.deductionDate), uniqueTransactionNo: optionalText(entry.uniqueTransactionNo ?? prior?.uniqueTransactionNo), financialYear: optionalText(entry.financialYear ?? prior?.financialYear), verified26AS: entry.verified26AS ?? prior?.verified26AS ?? false, claimedInReturn: entry.claimedInReturn ?? prior?.claimedInReturn ?? true }));
+  return mergeById(previous, entries as readonly (TdsManagerEntry & { id: string })[], (entry, prior, index) => {
+    const section = optionalText(entry.section ?? prior?.section);
+    return {
+      ...prior,
+      id: deterministicId('tds', entry, index),
+      section,
+      deductorName: optionalText(entry.deductorName ?? prior?.deductorName),
+      deductorTAN: optionalText(entry.deductorTAN ?? prior?.deductorTAN),
+      deductorPAN: optionalText(entry.deductorPAN ?? prior?.deductorPAN),
+      certificateNo: optionalText(entry.certificateNo ?? prior?.certificateNo),
+      grossAmount: finiteMoney(entry.incomeAmount ?? entry.grossAmount ?? prior?.grossAmount),
+      taxDeducted: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted ?? prior?.taxDeducted),
+      deductionDate: optionalText(entry.deductionDate ?? prior?.deductionDate),
+      uniqueTransactionNo: optionalText(entry.uniqueTransactionNo ?? prior?.uniqueTransactionNo),
+      financialYear: optionalText(entry.financialYear ?? prior?.financialYear),
+      verified26AS: entry.verified26AS ?? prior?.verified26AS ?? false,
+      claimedInReturn: entry.claimedInReturn ?? prior?.claimedInReturn ?? true,
+      // Auto-derived schema fields (kept in sync with the user-facing section).
+      tdsSectionCode: toSchemaSectionCode(section),
+      schedule: classifyTdsSchedule(section),
+      deductedYr: prior?.deductedYr !== undefined && prior.deductedYr !== '' ? prior.deductedYr : '',
+      headOfIncome: prior?.headOfIncome ?? 'NA',
+      tdsCreditName: prior?.tdsCreditName ?? 'S',
+      panOfOtherPerson: prior?.panOfOtherPerson ?? '',
+      aadhaarOfOtherPerson: prior?.aadhaarOfOtherPerson ?? '',
+      broughtFwdTDSAmt: finiteMoney(prior?.broughtFwdTDSAmt),
+      amtCarriedFwd: finiteMoney(prior?.amtCarriedFwd),
+      claimOutOfTotTDSOnAmtPaid: finiteMoney(prior?.claimOutOfTotTDSOnAmtPaid),
+      taxDeductCreditDtls: prior?.taxDeductCreditDtls ?? { taxDeductedOwnHands: 0, taxDeductedIncome: 0, taxDeductedTDS: 0, taxClaimedOwnHands: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted), taxClaimedIncome: 0, taxClaimedTDS: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted), taxClaimedSpouseOthPrsnPAN: '', spouseOthPrsnAadhaar: '' },
+      nameOfTenant: prior?.nameOfTenant ?? '',
+      grsRcptToTaxDeduct: finiteMoney(prior?.grsRcptToTaxDeduct),
+      tdsClaimed: finiteMoney(prior?.tdsClaimed),
+      panOfTenant: prior?.panOfTenant ?? '',
+      aadhaarOfTenant: prior?.aadhaarOfTenant ?? '',
+    };
+  });
 }
 
 /** Updates canonical TDS credits from manager values. */
@@ -435,12 +474,31 @@ export function challansToManager(challans: readonly TaxChallan[], kind: TaxChal
   return challans.filter((entry) => entry.kind === kind).map((entry) => ({ id: entry.id, bsrCode: entry.bsrCode, depositDate: entry.depositDate, challanSerialNo: entry.challanSerialNo, challanNo: entry.challanSerialNo, amount: entry.amount, cin: entry.cin }));
 }
 
-/** Replaces one challan kind while preserving every challan of the other kind. */
+/** Replaces one challan kind while preserving every challan of the other kind.
+ *  `challanSerialNo` is coerced to an integer per the schema's SrlNoOfChaln type. */
 export function replaceChallanKind(challans: readonly TaxChallan[], kind: TaxChallan['kind'], entries: readonly ChallanManagerEntry[]): TaxChallan[] {
   const existing = new Map(challans.filter((entry) => entry.kind === kind).map((entry) => [entry.id, entry]));
   const retained = clone(challans.filter((entry) => entry.kind !== kind));
-  const replacements = entries.map((entry, index): TaxChallan => ({ ...existing.get(entry.id), id: deterministicId(kind === 'ADVANCE_TAX' ? 'advance' : 'self-assessment', entry, index), kind, bsrCode: optionalText(entry.bsrCode ?? existing.get(entry.id)?.bsrCode), depositDate: optionalText(entry.depositDate ?? existing.get(entry.id)?.depositDate), challanSerialNo: optionalText(kind === 'SELF_ASSESSMENT' ? entry.challanNo ?? entry.challanSerialNo ?? existing.get(entry.id)?.challanSerialNo : entry.challanSerialNo ?? entry.challanNo ?? existing.get(entry.id)?.challanSerialNo), amount: finiteMoney(entry.amount ?? existing.get(entry.id)?.amount), cin: optionalText(entry.cin ?? existing.get(entry.id)?.cin) }));
+  const replacements = entries.map((entry, index): TaxChallan => {
+    const prior = existing.get(entry.id);
+    const serialRaw = kind === 'SELF_ASSESSMENT' ? entry.challanNo ?? entry.challanSerialNo ?? prior?.challanSerialNo : entry.challanSerialNo ?? entry.challanNo ?? prior?.challanSerialNo;
+    const serial = Math.max(0, Math.min(99999, Math.trunc(Number(serialRaw)) || 0));
+    const bsr = optionalText(entry.bsrCode ?? prior?.bsrCode);
+    const date = optionalText(entry.depositDate ?? prior?.depositDate);
+    const amount = finiteMoney(entry.amount ?? prior?.amount);
+    return { ...prior, id: deterministicId(kind === 'ADVANCE_TAX' ? 'advance' : 'self-assessment', entry, index), kind, bsrCode: bsr, depositDate: date, challanSerialNo: serial, amount, cin: deriveCin(bsr, date, serial) };
+  });
   return [...retained, ...replacements];
+}
+
+/** Derives the Challan Identification Number (CIN) from BSR, date and serial. */
+function deriveCin(bsr: string, date: string, serial: number): string {
+  const bsrValid = bsr && /^[0-9]{3}[0-9A-Z]{4}$/.test(bsr);
+  const dateCompact = String(date || '').replaceAll('-', '');
+  const serialValid = serial > 0 && serial <= 99999;
+  return bsrValid && dateCompact.length === 8 && serialValid
+    ? `${bsr}-${dateCompact}-${String(serial).padStart(5, '0')}`
+    : '';
 }
 
 /** Updates one canonical challan kind without replacing the other kind. */

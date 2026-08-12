@@ -10,9 +10,10 @@ import {
   winningsToManager,
 } from './editorModel';
 import type { DeductionLoan, InterestIncome, TaxChallan, TdsCredit } from './types';
+import { EMPTY_TDS_CREDIT, EMPTY_TAX_CHALLAN } from './types';
 
 const interest = (id = 'interest-1'): InterestIncome => ({ id, kind: 'NSC', grossAmount: 100, tdsDeducted: 10, bankName: 'Bank', accountType: 'FD', accountNumber: '1', ifscCode: 'IFSC', postOfficeName: 'PO', accountNumberPO: '2', nscCertificateNumber: 'CERT', yearOfPurchase: 2020, scssAccountNumber: '3', dateOfOpening: '2020-01-01', deductorName: 'D', deductorTAN: 'TAN', remarks: 'keep' });
-const tds = (): TdsCredit => ({ id: 'tds-1', section: '194A', deductorName: 'Bank', deductorTAN: 'TAN', deductorPAN: 'ABCDE1234F', certificateNo: 'CERT-1', grossAmount: 1000, taxDeducted: 100, deductionDate: '2025-01-01', uniqueTransactionNo: 'UTN', financialYear: '2025-26', verified26AS: true, claimedInReturn: true });
+const tds = (): TdsCredit => ({ ...EMPTY_TDS_CREDIT, id: 'tds-1', section: '194A', deductorName: 'Bank', deductorTAN: 'TAN', deductorPAN: 'ABCDE1234F', certificateNo: 'CERT-1', grossAmount: 1000, taxDeducted: 100, deductionDate: '2025-01-01', uniqueTransactionNo: 'UTN', financialYear: '2025-26', verified26AS: true, claimedInReturn: true });
 
 function loan(section: DeductionLoan['section'], id: string): DeductionLoan {
   return { id, section, loanTakenFrom: 'B', lenderName: 'Lender', lenderPAN: 'ABCDE1234F', loanAccountNo: 'ACC', dateOfLoan: '2025-01-01', totalLoanAmount: 100, outstandingAmount: 80, interestAmount: 10, firstTimeBuyerEligible: true, vehicleRegNo: 'MH01AB1234' };
@@ -204,17 +205,17 @@ describe('return editor model', () => {
 
   it('replaces advance and self-assessment challans independently and supports challanNo alias', () => {
     const challans: TaxChallan[] = [
-      { id: 'a', kind: 'ADVANCE_TAX', bsrCode: '1', depositDate: '2025-06-15', challanSerialNo: '10', amount: 100, cin: 'A' },
-      { id: 's', kind: 'SELF_ASSESSMENT', bsrCode: '2', depositDate: '2026-07-01', challanSerialNo: '20', amount: 200, cin: 'S' },
+      { ...EMPTY_TAX_CHALLAN, id: 'a', kind: 'ADVANCE_TAX', bsrCode: '1', depositDate: '2025-06-15', challanSerialNo: 10, amount: 100, cin: 'A' },
+      { ...EMPTY_TAX_CHALLAN, id: 's', kind: 'SELF_ASSESSMENT', bsrCode: '2', depositDate: '2026-07-01', challanSerialNo: 20, amount: 200, cin: 'S' },
     ];
     const advance = replaceChallanKind(challans, 'ADVANCE_TAX', [{ id: 'a', amount: 150, challanNo: 11 }]);
     expect(advance.find((entry) => entry.kind === 'SELF_ASSESSMENT')).toEqual(challans[1]);
-    expect(advance.find((entry) => entry.id === 'a')).toMatchObject({ amount: 150, challanSerialNo: '11', bsrCode: '1' });
+    expect(advance.find((entry) => entry.id === 'a')).toMatchObject({ amount: 150, challanSerialNo: 11, bsrCode: '1' });
     const projectedSelf = challansToManager(advance, 'SELF_ASSESSMENT');
     projectedSelf[0] = { ...projectedSelf[0], challanNo: '21', amount: 250 };
     const self = replaceChallanKind(advance, 'SELF_ASSESSMENT', projectedSelf);
-    expect(challansToManager(self, 'ADVANCE_TAX')[0]).toMatchObject({ amount: 150, challanNo: '11' });
-    expect(self.find((entry) => entry.id === 's')).toMatchObject({ amount: 250, challanSerialNo: '21' });
+    expect(challansToManager(self, 'ADVANCE_TAX')[0]).toMatchObject({ amount: 150, challanNo: 11 });
+    expect(self.find((entry) => entry.id === 's')).toMatchObject({ amount: 250, challanSerialNo: 21 });
   });
 
   it('normalizes the self-assessment challanNo alias from a direct legacy payload', () => {
@@ -224,7 +225,7 @@ describe('return editor model', () => {
     expect(model.draft.taxes.challans[0]).toMatchObject({
       id: 's',
       kind: 'SELF_ASSESSMENT',
-      challanSerialNo: '42',
+      challanSerialNo: 42,
       amount: 500,
     });
   });

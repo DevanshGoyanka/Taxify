@@ -157,9 +157,118 @@ export const EMPTY_CHAPTER_VIA: ChapterVIA = {
   form10BAAckNum: '', anyOtherSection80CCH: 0, anyOtherSection80CCHDescription: '', totalChapterVIADeductions: 0,
   businessDeductions: { totalPartBChapterVIA: 0, section80IA: 0, section80IAB: 0, section80IB: 0, section80IBA: 0, section80IC: 0, section80JJA: 0, section80JJAA: 0, totalPartCChapterVIA: 0, totalPartCAAndDChapterVIA: 0 },
 };
-export interface TdsCredit extends Identified { section: string; deductorName: string; deductorTAN: string; deductorPAN: string; certificateNo: string; grossAmount: Money; taxDeducted: Money; deductionDate: string; uniqueTransactionNo: string; financialYear: string; verified26AS: boolean; claimedInReturn: boolean; }
-export interface TcsCredit extends Identified { collectorName: string; collectorTAN: string; grossAmount: Money; taxCollected: Money; claimedInReturn: boolean; }
-export interface TaxChallan extends Identified { kind: 'ADVANCE_TAX' | 'SELF_ASSESSMENT'; bsrCode: string; depositDate: string; challanSerialNo: string; amount: Money; cin: string; }
+/** TDS credit claim detail sub-object (mirrors TaxDeductCreditDtls). */
+export interface TaxDeductCreditDtls {
+  taxDeductedOwnHands: Money;
+  taxDeductedIncome: Money;
+  taxDeductedTDS: Money;
+  taxClaimedOwnHands: Money;
+  taxClaimedIncome: Money;
+  taxClaimedTDS: Money;
+  taxClaimedSpouseOthPrsnPAN: string;
+  spouseOthPrsnAadhaar: string;
+}
+
+/** Empty TaxDeductCreditDtls used as the default for fresh TDS rows. */
+export const EMPTY_TAX_DEDUCT_CREDIT_DTLS: TaxDeductCreditDtls = {
+  taxDeductedOwnHands: 0, taxDeductedIncome: 0, taxDeductedTDS: 0,
+  taxClaimedOwnHands: 0, taxClaimedIncome: 0, taxClaimedTDS: 0,
+  taxClaimedSpouseOthPrsnPAN: '', spouseOthPrsnAadhaar: '',
+};
+
+/** Canonical TDS credit row. The visible UI fields keep their legacy names; */
+/*  the schema-faithful fields are added alongside for serialization.        */
+export interface TdsCredit extends Identified {
+  // ── Visible UI fields (unchanged) ────────────────────────────────────────
+  section: string;              // user-facing section code (e.g. "194A")
+  deductorName: string;         // → EmployerOrDeductorOrCollecterName
+  deductorTAN: string;          // → TAN (jurisdiction-prefixed)
+  deductorPAN: string;          // → PAN (salary TDS uses employer PAN; TDS3 uses tenant PAN)
+  certificateNo: string;        // TDS certificate number (UI convenience)
+  grossAmount: Money;           // → IncChrgSal / GrossAmount / AmtForTaxDeduct
+  taxDeducted: Money;           // → TotalTDSSal / TotTDSOnAmtPaid / TDSDeducted
+  deductionDate: string;         // deduction date (UI convenience)
+  uniqueTransactionNo: string;  // UTN (UI convenience)
+  financialYear: string;         // user-entered FY label (UI convenience)
+  verified26AS: boolean;         // UI reconciliation flag
+  claimedInReturn: boolean;      // UI claim flag → drives TaxClaimedOwnHands
+  // ── Schema-faithful enrichment (hidden from the current UI) ─────────────
+  schedule: 'TDS1' | 'TDS2' | 'TDS3';       // which Schedule TDS the row belongs to
+  tdsSectionCode: string;                   // schema enum code (e.g. "94A"), mapped from `section`
+  deductedYr: number | '';                  // DeductedYr enum (2008..2025)
+  headOfIncome: 'HP' | 'CG' | 'OS' | 'BP' | 'EI' | 'NA';
+  tdsCreditName: 'S' | 'O';                  // S=Self, O=Other person
+  panOfOtherPerson: string;
+  aadhaarOfOtherPerson: string;
+  broughtFwdTDSAmt: Money;                   // BroughtFwdTDSAmt
+  amtCarriedFwd: Money;                      // AmtCarriedFwd / TDSCreditCarriedFwd
+  claimOutOfTotTDSOnAmtPaid: Money;          // ITR-1/4 TDS2 simplified shape
+  taxDeductCreditDtls: TaxDeductCreditDtls;  // ITR-2/3 TDS2 claim detail
+  // ── Schedule TDS-3 (tenant/buyer) fields ────────────────────────────────
+  nameOfTenant: string;
+  grsRcptToTaxDeduct: Money;
+  tdsClaimed: Money;
+  panOfTenant: string;
+  aadhaarOfTenant: string;
+}
+
+/** Empty TdsCredit used as the default for fresh rows. */
+export const EMPTY_TDS_CREDIT: Omit<TdsCredit, 'id'> = {
+  section: '192', deductorName: '', deductorTAN: '', deductorPAN: '', certificateNo: '',
+  grossAmount: 0, taxDeducted: 0, deductionDate: '', uniqueTransactionNo: '',
+  financialYear: '2025-26', verified26AS: false, claimedInReturn: true,
+  schedule: 'TDS1', tdsSectionCode: '', deductedYr: '', headOfIncome: 'NA',
+  tdsCreditName: 'S', panOfOtherPerson: '', aadhaarOfOtherPerson: '',
+  broughtFwdTDSAmt: 0, amtCarriedFwd: 0, claimOutOfTotTDSOnAmtPaid: 0,
+  taxDeductCreditDtls: { ...EMPTY_TAX_DEDUCT_CREDIT_DTLS },
+  nameOfTenant: '', grsRcptToTaxDeduct: 0, tdsClaimed: 0, panOfTenant: '', aadhaarOfTenant: '',
+};
+
+/** Canonical TCS credit row (Schedule TCS). The visible UI fields mirror the */
+/*  TDS row shape so the same UI component can render both; schema fields    */
+/*  are enriched for serialization.                                          */
+export interface TcsCredit extends Identified {
+  // ── Visible UI fields (reuse TDS-like shape) ──────────────────────────────
+  collectorName: string;        // → EmployerOrDeductorOrCollecterName
+  collectorTAN: string;         // → EmployerOrDeductorOrCollectTAN
+  grossAmount: Money;           // → GrossAmount
+  taxCollected: Money;          // → TotalTCSAmt
+  claimedInReturn: boolean;     // UI claim flag
+  // ── Schema-faithful enrichment ──────────────────────────────────────────
+  tcsCreditOwner: '1' | '2';                  // 1=Self, 2=Spouse/Other person
+  panOfSpouseOrOthrPrsn: string;
+  deductedYr: number | '';
+  broughtFwdTDSAmt: Money;
+  tcsAmtCollOwnHand: Money;                   // TCSCurrFYDtls.TCSAmtCollOwnHand
+  tcsAmtCollSpouseOrOthrHand: Money;          // TCSCurrFYDtls.TCSAmtCollSpouseOrOthrHand
+  tcsClaimedAmtCollOwnHand: Money;            // TCSClaimedThisYearDtls.TCSAmtCollOwnHand
+  tcsClaimedAmtCollSpouseOrOthrHand: Money;   // TCSClaimedThisYearDtls.TCSAmtCollSpouseOrOthrHand
+  claimedPANOfSpouseOrOthrPrsn: string;       // TCSClaimedThisYearDtls.PANOfSpouseOrOthrPrsn
+}
+
+/** Empty TcsCredit used as the default for fresh rows. */
+export const EMPTY_TCS_CREDIT: Omit<TcsCredit, 'id'> = {
+  collectorName: '', collectorTAN: '', grossAmount: 0, taxCollected: 0, claimedInReturn: true,
+  tcsCreditOwner: '1', panOfSpouseOrOthrPrsn: '', deductedYr: '', broughtFwdTDSAmt: 0,
+  tcsAmtCollOwnHand: 0, tcsAmtCollSpouseOrOthrHand: 0,
+  tcsClaimedAmtCollOwnHand: 0, tcsClaimedAmtCollSpouseOrOthrHand: 0, claimedPANOfSpouseOrOthrPrsn: '',
+};
+
+/** Canonical tax challan (TaxPayment). Schema requires integer SrlNoOfChaln ≤ 99999. */
+export interface TaxChallan extends Identified {
+  kind: 'ADVANCE_TAX' | 'SELF_ASSESSMENT';
+  bsrCode: string;            // → BSRCode, pattern [0-9]{3}[0-9A-Z]{4}
+  depositDate: string;        // → DateDep (YYYY-MM-DD)
+  challanSerialNo: number;     // → SrlNoOfChaln (integer, 0..99999)
+  amount: Money;               // → Amt
+  cin: string;                 // derived: BSR-Date-Serial
+}
+
+/** Empty TaxChallan used as the default for fresh challans. */
+export const EMPTY_TAX_CHALLAN: Omit<TaxChallan, 'id'> = {
+  kind: 'ADVANCE_TAX', bsrCode: '', depositDate: '', challanSerialNo: 0, amount: 0, cin: '',
+};
+
 export interface BankAccount extends Identified { bankName: string; accountNumber: string; ifscCode: string; accountType: 'SB' | 'CA' | 'CC' | 'OD' | 'NRO' | 'OTH'; useForRefund: boolean; }
 export interface FilingStatus { filingSection: '139(1)' | '139(4)' | '139(5)' | '119(2)(b)'; returnType: 'ORIGINAL' | 'REVISED'; originalAcknowledgementNumber: string; originalFilingDate: string | null; noticeNumber: string; }
 export type ExemptIncomeCategory = 'AGRI' | 'GOVC' | 'ISI' | 'SSRA' | 'SRSC' | 'SRST' | 'SRPC' | 'OTH' | 'OTHN';
