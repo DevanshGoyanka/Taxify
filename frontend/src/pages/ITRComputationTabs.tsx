@@ -473,9 +473,8 @@ export function LossesTab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function TDSTab({ formData, setFormData, taxResult, managers, form }: { formData: any; setFormData: any; taxResult: any; managers: CanonicalManagerBindings; form: ItrForm }) {
+export function TDSTab({ formData, setFormData, taxResult, managers }: { formData: any; setFormData: any; taxResult: any; managers: CanonicalManagerBindings }) {
   const tdsEntries = formData.tdsEntries || [];
-  const tcsEntries = formData.tcsEntries || [];
   const selfAssessmentTaxEntries = formData.selfAssessmentTaxEntries || [];
   // TAN is jurisdiction-prefixed per the official schema (e.g. DELA12345B).
   const tanPattern = /^(HYD|VPN|BBN|BPL|JBP|CHE|CMB|MRI|DEL|CAL|MRT|AHM|BRD|RKT|SRT|BLR|AGR|KNP|CHN|TVD|ALD|LKN|MUM|NGP|AMR|JLD|PTL|RTK|KLP|NSK|PNE|PTN|RCH|JDH|JPR|SHL)[A-Z][0-9]{5}[A-Z]$/;
@@ -493,9 +492,8 @@ export function TDSTab({ formData, setFormData, taxResult, managers, form }: { f
       : '';
   };
 
-  // ITR-2/3 permit the full non-salary TDS section range; ITR-1/4 only salary.
-  const isFullTds = form === 'ITR-2' || form === 'ITR-3';
-
+  // The TDS tab collects every section for every form; ITR-form eligibility
+  // (which sections a given form may claim) is the backend's responsibility.
   const addTDSEntry = () => {
     const newEntry = {
       id: `tds-${crypto.randomUUID()}`,
@@ -518,18 +516,6 @@ export function TDSTab({ formData, setFormData, taxResult, managers, form }: { f
   const updateTDSEntry = (index: number, field: string, value: any) => {
     const updated = [...tdsEntries];
     updated[index] = { ...updated[index], [field]: value };
-    // If the section is a 206C (TCS) code, the row belongs in Schedule TCS,
-    // not Schedule TDS — route it to the TCS manager binding instead.
-    if (field === 'section' && /^[0-9]{4}C/.test(String(value))) {
-      const row = updated[index];
-      managers.tcs([...tcsEntries, {
-        id: row.id, collectorName: row.deductorName || '', collectorTAN: row.deductorTAN || '',
-        grossAmount: Number(row.incomeAmount) || 0, taxCollected: Number(row.tdsDeducted) || 0, claimedInReturn: row.claimedInReturn !== false,
-      }]);
-      const remaining = tdsEntries.filter((_: any, i: number) => i !== index);
-      managers.tds(remaining);
-      return;
-    }
     managers.tds(updated);
   };
 
@@ -647,38 +633,38 @@ export function TDSTab({ formData, setFormData, taxResult, managers, form }: { f
                   <option value="192">192 - Salary</option>
                   <option value="192A">192A - PF Withdrawal</option>
                 </optgroup>
-                {isFullTds && (<optgroup label="Interest / Securities">
+                <optgroup label="Interest / Securities">
                   <option value="193">193 - Interest on Securities</option>
                   <option value="194A">194A - Interest (other than securities)</option>
                   <option value="194LB">194LB - Infrastructure Debt Fund Interest</option>
                   <option value="194LD">194LD - Bonds/Government Securities</option>
-                </optgroup>)}
-                {isFullTds && (<optgroup label="Dividends">
+                </optgroup>
+                <optgroup label="Dividends">
                   <option value="194">194 - Dividends</option>
                   <option value="194K">194K - Mutual Fund Income</option>
-                </optgroup>)}
-                {isFullTds && (<optgroup label="Winnings / Games">
+                </optgroup>
+                <optgroup label="Winnings / Games">
                   <option value="194B">194B - Lottery / Crossword</option>
                   <option value="194BA">194BA - Online Games</option>
                   <option value="194BB">194BB - Horse Race</option>
-                </optgroup>)}
-                {isFullTds && (<optgroup label="Contractor / Professional">
+                </optgroup>
+                <optgroup label="Contractor / Professional">
                   <option value="194C">194C - Contractor Payments</option>
                   <option value="194J">194J - Professional / Technical Fees</option>
-                </optgroup>)}
-                {isFullTds && (<optgroup label="Commission / Insurance">
+                </optgroup>
+                <optgroup label="Commission / Insurance">
                   <option value="194H">194H - Commission / Brokerage</option>
                   <option value="194D">194D - Insurance Commission</option>
                   <option value="194DA">194DA - Life Insurance Payment</option>
-                </optgroup>)}
-                {isFullTds && (<optgroup label="Rent / Property">
+                </optgroup>
+                <optgroup label="Rent / Property">
                   <option value="194I">194I - Rent (General)</option>
                   <option value="194IA">194IA - Sale of Immovable Property</option>
                   <option value="194IB">194IB - Rent by Individuals/HUF</option>
                   <option value="194IC">194IC - Specified Agreement</option>
                   <option value="194LA">194LA - Compensation on Acquisition</option>
-                </optgroup>)}
-                {isFullTds && (<optgroup label="Non-Resident">
+                </optgroup>
+                <optgroup label="Non-Resident">
                   <option value="194E">194E - Non-Resident Sportsmen</option>
                   <option value="195">195 - Sums Payable to Non-Resident</option>
                   <option value="196A">196A - Units of Non-Residents</option>
@@ -686,8 +672,8 @@ export function TDSTab({ formData, setFormData, taxResult, managers, form }: { f
                   <option value="196C">196C - Foreign Currency Bonds</option>
                   <option value="196D">196D - Foreign Institutional Investors</option>
                   <option value="196DA">196DA - Specified Fund Income</option>
-                </optgroup>)}
-                {isFullTds && (<optgroup label="Other TDS">
+                </optgroup>
+                <optgroup label="Other TDS">
                   <option value="194EE">194EE - NSS Deposits</option>
                   <option value="194F">194F - Mutual Fund Repurchase</option>
                   <option value="194G">194G - Lottery Ticket Commission</option>
@@ -702,8 +688,8 @@ export function TDSTab({ formData, setFormData, taxResult, managers, form }: { f
                   <option value="194Q">194Q - Purchase of Goods</option>
                   <option value="194R">194R - Benefits / Perquisites</option>
                   <option value="194S">194S - Virtual Digital Asset</option>
-                </optgroup>)}
-                {isFullTds && (<optgroup label="TCS">
+                </optgroup>
+                <optgroup label="TCS">
                   <option value="206C">206C - TCS (General)</option>
                   <option value="206CA">206CA - Alcoholic Liquor</option>
                   <option value="206CB">206CB - Timber (Forest Lease)</option>
@@ -724,8 +710,8 @@ export function TDSTab({ formData, setFormData, taxResult, managers, form }: { f
                   <option value="206CQ">206CQ - LRS Other Purposes</option>
                   <option value="206CR">206CR - Sale of Goods</option>
                   <option value="206CT">206CT - LRS Education/Medical</option>
-                </optgroup>)}
-                {isFullTds && <option value="OTHER">Other</option>}
+                </optgroup>
+                <option value="OTHER">Other</option>
               </select>
             </div>
             <Field label="Deductor Name *" value={entry.deductorName || ''} onChange={(v: any) => updateTDSEntry(index, 'deductorName', v)} type="text" prefix="" required />
