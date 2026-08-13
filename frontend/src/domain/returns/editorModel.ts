@@ -95,6 +95,27 @@ export interface TdsManagerEntry {
   financialYear?: string;
   verified26AS?: boolean;
   claimedInReturn?: boolean;
+  // ── Schema-faithful enrichment (TDS-2 advanced / TDS-3 tenant / TCS) ────
+  deductedYr?: number | '';
+  headOfIncome?: 'HP' | 'CG' | 'OS' | 'BP' | 'EI' | 'NA';
+  tdsCreditName?: 'S' | 'O';
+  panOfOtherPerson?: string;
+  aadhaarOfOtherPerson?: string;
+  broughtFwdTDSAmt?: number;
+  amtCarriedFwd?: number;
+  claimOutOfTotTDSOnAmtPaid?: number;
+  nameOfTenant?: string;
+  panOfTenant?: string;
+  aadhaarOfTenant?: string;
+  grsRcptToTaxDeduct?: number;
+  tdsClaimed?: number;
+  // ── Schedule TCS fields (when a 206C section is in the TDS list) ──────────
+  tcsCreditOwner?: '1' | '2';
+  panOfSpouseOrOthrPrsn?: string;
+  tcsAmtCollOwnHand?: number;
+  tcsAmtCollSpouseOrOthrHand?: number;
+  tcsClaimedAmtCollOwnHand?: number;
+  tcsClaimedAmtCollSpouseOrOthrHand?: number;
 }
 
 export interface ChallanManagerEntry {
@@ -418,7 +439,19 @@ export function updateDeductionLoansFromManager(model: ReturnEditorModel, data: 
 
 /** Projects canonical TDS entries into aliases used by the TDS editor. */
 export function tdsToManager(entries: readonly TdsCredit[]): TdsManagerEntry[] {
-  return entries.map((entry) => ({ ...clone(entry), incomeAmount: entry.grossAmount, tdsDeducted: entry.taxDeducted }));
+  return entries.map((entry) => ({
+    ...clone(entry), incomeAmount: entry.grossAmount, tdsDeducted: entry.taxDeducted,
+    // Project the schema-enrichment fields so the UI can render saved values.
+    deductedYr: entry.deductedYr, headOfIncome: entry.headOfIncome, tdsCreditName: entry.tdsCreditName,
+    panOfOtherPerson: entry.panOfOtherPerson, aadhaarOfOtherPerson: entry.aadhaarOfOtherPerson,
+    broughtFwdTDSAmt: entry.broughtFwdTDSAmt, amtCarriedFwd: entry.amtCarriedFwd,
+    claimOutOfTotTDSOnAmtPaid: entry.claimOutOfTotTDSOnAmtPaid,
+    nameOfTenant: entry.nameOfTenant, panOfTenant: entry.panOfTenant, aadhaarOfTenant: entry.aadhaarOfTenant,
+    grsRcptToTaxDeduct: entry.grsRcptToTaxDeduct, tdsClaimed: entry.tdsClaimed,
+    tcsCreditOwner: entry.tcsCreditOwner, panOfSpouseOrOthrPrsn: entry.panOfSpouseOrOthrPrsn,
+    tcsAmtCollOwnHand: entry.tcsAmtCollOwnHand, tcsAmtCollSpouseOrOthrHand: entry.tcsAmtCollSpouseOrOthrHand,
+    tcsClaimedAmtCollOwnHand: entry.tcsClaimedAmtCollOwnHand, tcsClaimedAmtCollSpouseOrOthrHand: entry.tcsClaimedAmtCollSpouseOrOthrHand,
+  }));
 }
 
 /** Merges TDS editor values by ID, including UI-only PAN and certificate fields.
@@ -443,23 +476,31 @@ export function tdsFromManager(entries: readonly TdsManagerEntry[], previous: re
       financialYear: optionalText(entry.financialYear ?? prior?.financialYear),
       verified26AS: entry.verified26AS ?? prior?.verified26AS ?? false,
       claimedInReturn: entry.claimedInReturn ?? prior?.claimedInReturn ?? true,
-      // Auto-derived schema fields (kept in sync with the user-facing section).
+      // Auto-derived / user-edited schema enrichment fields. Read the manager
+      // entry first (UI edits), fall back to the prior canonical row, then default.
       tdsSectionCode: toSchemaSectionCode(section),
       schedule: classifyTdsSchedule(section),
-      deductedYr: prior?.deductedYr !== undefined && prior.deductedYr !== '' ? prior.deductedYr : '',
-      headOfIncome: prior?.headOfIncome ?? 'NA',
-      tdsCreditName: prior?.tdsCreditName ?? 'S',
-      panOfOtherPerson: prior?.panOfOtherPerson ?? '',
-      aadhaarOfOtherPerson: prior?.aadhaarOfOtherPerson ?? '',
-      broughtFwdTDSAmt: finiteMoney(prior?.broughtFwdTDSAmt),
-      amtCarriedFwd: finiteMoney(prior?.amtCarriedFwd),
-      claimOutOfTotTDSOnAmtPaid: finiteMoney(prior?.claimOutOfTotTDSOnAmtPaid),
-      taxDeductCreditDtls: prior?.taxDeductCreditDtls ?? { taxDeductedOwnHands: 0, taxDeductedIncome: 0, taxDeductedTDS: 0, taxClaimedOwnHands: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted), taxClaimedIncome: 0, taxClaimedTDS: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted), taxClaimedSpouseOthPrsnPAN: '', spouseOthPrsnAadhaar: '' },
-      nameOfTenant: prior?.nameOfTenant ?? '',
-      grsRcptToTaxDeduct: finiteMoney(prior?.grsRcptToTaxDeduct),
-      tdsClaimed: finiteMoney(prior?.tdsClaimed),
-      panOfTenant: prior?.panOfTenant ?? '',
-      aadhaarOfTenant: prior?.aadhaarOfTenant ?? '',
+      deductedYr: entry.deductedYr !== undefined && entry.deductedYr !== '' ? entry.deductedYr : (prior?.deductedYr !== undefined && prior.deductedYr !== '' ? prior.deductedYr : ''),
+      headOfIncome: entry.headOfIncome ?? prior?.headOfIncome ?? 'NA',
+      tdsCreditName: entry.tdsCreditName ?? prior?.tdsCreditName ?? 'S',
+      panOfOtherPerson: optionalText(entry.panOfOtherPerson ?? prior?.panOfOtherPerson),
+      aadhaarOfOtherPerson: optionalText(entry.aadhaarOfOtherPerson ?? prior?.aadhaarOfOtherPerson),
+      broughtFwdTDSAmt: finiteMoney(entry.broughtFwdTDSAmt ?? prior?.broughtFwdTDSAmt),
+      amtCarriedFwd: finiteMoney(entry.amtCarriedFwd ?? prior?.amtCarriedFwd),
+      claimOutOfTotTDSOnAmtPaid: finiteMoney(entry.claimOutOfTotTDSOnAmtPaid ?? prior?.claimOutOfTotTDSOnAmtPaid),
+      taxDeductCreditDtls: prior?.taxDeductCreditDtls ?? { taxDeductedOwnHands: 0, taxDeductedIncome: 0, taxDeductedTDS: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted), taxClaimedOwnHands: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted), taxClaimedIncome: 0, taxClaimedTDS: finiteMoney(entry.tdsDeducted ?? entry.taxDeducted), taxClaimedSpouseOthPrsnPAN: '', spouseOthPrsnAadhaar: '' },
+      nameOfTenant: optionalText(entry.nameOfTenant ?? prior?.nameOfTenant),
+      grsRcptToTaxDeduct: finiteMoney(entry.grsRcptToTaxDeduct ?? prior?.grsRcptToTaxDeduct),
+      tdsClaimed: finiteMoney(entry.tdsClaimed ?? prior?.tdsClaimed),
+      panOfTenant: optionalText(entry.panOfTenant ?? prior?.panOfTenant),
+      aadhaarOfTenant: optionalText(entry.aadhaarOfTenant ?? prior?.aadhaarOfTenant),
+      // Schedule TCS fields (a 206C row stored in the TDS list carries these).
+      tcsCreditOwner: entry.tcsCreditOwner ?? prior?.tcsCreditOwner ?? '1',
+      panOfSpouseOrOthrPrsn: optionalText(entry.panOfSpouseOrOthrPrsn ?? prior?.panOfSpouseOrOthrPrsn),
+      tcsAmtCollOwnHand: finiteMoney(entry.tcsAmtCollOwnHand ?? prior?.tcsAmtCollOwnHand),
+      tcsAmtCollSpouseOrOthrHand: finiteMoney(entry.tcsAmtCollSpouseOrOthrHand ?? prior?.tcsAmtCollSpouseOrOthrHand),
+      tcsClaimedAmtCollOwnHand: finiteMoney(entry.tcsClaimedAmtCollOwnHand ?? prior?.tcsClaimedAmtCollOwnHand),
+      tcsClaimedAmtCollSpouseOrOthrHand: finiteMoney(entry.tcsClaimedAmtCollSpouseOrOthrHand ?? prior?.tcsClaimedAmtCollSpouseOrOthrHand),
     };
   });
 }

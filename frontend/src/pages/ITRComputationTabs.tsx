@@ -17,6 +17,7 @@ import type {
   BankManagerData, ChallanManagerEntry, DeductionLoanManagerData, FamilyPensionManagerEntry,
   GiftManagerEntry, InterestManagerEntry, TdsManagerEntry, WinningManagerEntry,
 } from '../domain/returns';
+import { classifyTdsSchedule, isTcsSection, DEDUCTED_YR_OPTIONS } from '../domain/returns/tdsSections';
 
 export interface CanonicalManagerBindings {
   interest: (entries: InterestManagerEntry[]) => void;
@@ -547,6 +548,24 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
     managers.selfAssessmentTax(updated);
   };
 
+  // Per-schedule aggregate totals (TotalTDSonSalaries, TotalTDSonOthThanSals,
+  // TotalTDS3Details, TotalSchTCS) computed from the current entries, so the
+  // user can reconcile against the official schedule totals.
+  const tdsBreakdown = tdsEntries.reduce((acc: { tds1: number; tds2: number; tds3: number; tcs: number; }, entry: any) => {
+    const section = entry.section || '192';
+    const amount = Number(entry.tdsDeducted ?? entry.taxDeducted ?? 0) || 0;
+    const claimed = entry.claimedInReturn !== false;
+    if (!claimed) return acc;
+    if (isTcsSection(section)) { acc.tcs += amount; return acc; }
+    const sched = classifyTdsSchedule(section);
+    if (sched === 'TDS1') acc.tds1 += amount;
+    else if (sched === 'TDS2') acc.tds2 += amount;
+    else if (sched === 'TDS3') acc.tds3 += amount;
+    return acc;
+  }, { tds1: 0, tds2: 0, tds3: 0, tcs: 0 });
+  const advanceTotal = (formData.advanceTaxEntries || []).reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+  const satTotal = selfAssessmentTaxEntries.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+
   return (
     <div>
       {/* Auto-populated TDS entries from AIS/26AS */}
@@ -740,6 +759,60 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
             <Field label="Unique Transaction No" value={entry.uniqueTransactionNo || ''} onChange={(v: any) => updateTDSEntry(index, 'uniqueTransactionNo', v)} type="text" prefix="" />
             <Field label="Financial Year *" value={entry.financialYear || '2025-26'} onChange={(v: any) => updateTDSEntry(index, 'financialYear', v)} type="text" prefix="" required />
             <div>
+              <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Deducted Year (FY tax deducted)</label>
+              <select value={entry.deductedYr ?? ''} onChange={(e) => updateTDSEntry(index, 'deductedYr', e.target.value === '' ? '' : Number(e.target.value))} style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'white' }}>
+                <option value="">-- Select FY --</option>
+                {DEDUCTED_YR_OPTIONS.map((y) => <option key={y} value={y}>{y}-{(y + 1) % 100}</option>)}
+              </select>
+            </div>
+            {(() => {
+              const sched = classifyTdsSchedule(entry.section || '192');
+              const isTcs = isTcsSection(entry.section || '');
+              const inputStyle = { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 };
+              const labelStyle = { display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' };
+              if (isTcs) return (
+                <div style={{ gridColumn: '1 / -1', marginTop: 8, padding: 12, background: 'var(--gold-pale)', borderRadius: 6, border: '1px dashed var(--gold)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--gold)', marginBottom: 8 }}>Schedule TCS detail</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                    <div><label style={labelStyle}>TCS Credit Owner</label><select style={inputStyle} value={entry.tcsCreditOwner || '1'} onChange={(e) => updateTDSEntry(index, 'tcsCreditOwner', e.target.value as '1' | '2')}><option value="1">1 — Self</option><option value="2">2 — Spouse / Other Person</option></select></div>
+                    <div><label style={labelStyle}>PAN of Spouse / Other</label><input style={inputStyle} type="text" maxLength={10} value={entry.panOfSpouseOrOthrPrsn || ''} onChange={(e) => updateTDSEntry(index, 'panOfSpouseOrOthrPrsn', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))} placeholder="ABCDE1234F" /></div>
+                    <div><label style={labelStyle}>TCS Collected (own)</label><input style={inputStyle} type="number" min={0} value={entry.tcsAmtCollOwnHand || ''} onChange={(e) => updateTDSEntry(index, 'tcsAmtCollOwnHand', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>TCS Collected (spouse/other)</label><input style={inputStyle} type="number" min={0} value={entry.tcsAmtCollSpouseOrOthrHand || ''} onChange={(e) => updateTDSEntry(index, 'tcsAmtCollSpouseOrOthrHand', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>TCS Claimed (own)</label><input style={inputStyle} type="number" min={0} value={entry.tcsClaimedAmtCollOwnHand || ''} onChange={(e) => updateTDSEntry(index, 'tcsClaimedAmtCollOwnHand', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>TCS Claimed (spouse/other)</label><input style={inputStyle} type="number" min={0} value={entry.tcsClaimedAmtCollSpouseOrOthrHand || ''} onChange={(e) => updateTDSEntry(index, 'tcsClaimedAmtCollSpouseOrOthrHand', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                  </div>
+                </div>
+              );
+              if (sched === 'TDS3') return (
+                <div style={{ gridColumn: '1 / -1', marginTop: 8, padding: 12, background: 'var(--info-bg)', borderRadius: 6, border: '1px dashed var(--info)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--info)', marginBottom: 8 }}>Schedule TDS-3 — tenant / buyer detail</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                    <div><label style={labelStyle}>Name of Tenant / Buyer *</label><input style={inputStyle} type="text" maxLength={125} value={entry.nameOfTenant || ''} onChange={(e) => updateTDSEntry(index, 'nameOfTenant', e.target.value)} placeholder="Tenant / buyer name" /></div>
+                    <div><label style={labelStyle}>PAN of Tenant / Buyer</label><input style={inputStyle} type="text" maxLength={10} value={entry.panOfTenant || ''} onChange={(e) => updateTDSEntry(index, 'panOfTenant', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))} placeholder="ABCDE1234F" /></div>
+                    <div><label style={labelStyle}>Aadhaar of Tenant / Buyer</label><input style={inputStyle} type="text" maxLength={12} inputMode="numeric" value={entry.aadhaarOfTenant || ''} onChange={(e) => updateTDSEntry(index, 'aadhaarOfTenant', e.target.value.replace(/\D/g, '').slice(0, 12))} placeholder="12-digit Aadhaar" /></div>
+                    <div><label style={labelStyle}>Gross Receipt to Tax Deduct (₹)</label><input style={inputStyle} type="number" min={0} value={entry.grsRcptToTaxDeduct || ''} onChange={(e) => updateTDSEntry(index, 'grsRcptToTaxDeduct', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>TDS Claimed (₹)</label><input style={inputStyle} type="number" min={0} value={entry.tdsClaimed || ''} onChange={(e) => updateTDSEntry(index, 'tdsClaimed', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Head of Income</label><select style={inputStyle} value={entry.headOfIncome || 'NA'} onChange={(e) => updateTDSEntry(index, 'headOfIncome', e.target.value as 'HP' | 'CG' | 'OS' | 'BP' | 'EI' | 'NA')}><option value="NA">NA — Not Applicable</option><option value="HP">HP — House Property</option><option value="CG">CG — Capital Gains</option><option value="OS">OS — Other Sources</option><option value="BP">BP — Business/Profession</option><option value="EI">EI — Exempt Income</option></select></div>
+                  </div>
+                </div>
+              );
+              if (sched === 'TDS2') return (
+                <div style={{ gridColumn: '1 / -1', marginTop: 8, padding: 12, background: 'var(--bg)', borderRadius: 6, border: '1px dashed var(--border)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>Schedule TDS-2 — non-salary TDS detail</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+                    <div><label style={labelStyle}>TDS Credit Owner</label><select style={inputStyle} value={entry.tdsCreditName || 'S'} onChange={(e) => updateTDSEntry(index, 'tdsCreditName', e.target.value as 'S' | 'O')}><option value="S">S — Self</option><option value="O">O — Other Person</option></select></div>
+                    <div><label style={labelStyle}>PAN of Other Person</label><input style={inputStyle} type="text" maxLength={10} value={entry.panOfOtherPerson || ''} onChange={(e) => updateTDSEntry(index, 'panOfOtherPerson', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))} placeholder="ABCDE1234F" /></div>
+                    <div><label style={labelStyle}>Aadhaar of Other Person</label><input style={inputStyle} type="text" maxLength={12} inputMode="numeric" value={entry.aadhaarOfOtherPerson || ''} onChange={(e) => updateTDSEntry(index, 'aadhaarOfOtherPerson', e.target.value.replace(/\D/g, '').slice(0, 12))} placeholder="12-digit Aadhaar" /></div>
+                    <div><label style={labelStyle}>Head of Income</label><select style={inputStyle} value={entry.headOfIncome || 'NA'} onChange={(e) => updateTDSEntry(index, 'headOfIncome', e.target.value as 'HP' | 'CG' | 'OS' | 'BP' | 'EI' | 'NA')}><option value="NA">NA — Not Applicable</option><option value="HP">HP — House Property</option><option value="CG">CG — Capital Gains</option><option value="OS">OS — Other Sources</option><option value="BP">BP — Business/Profession</option><option value="EI">EI — Exempt Income</option></select></div>
+                    <div><label style={labelStyle}>Brought-fwd TDS Amt (₹)</label><input style={inputStyle} type="number" min={0} value={entry.broughtFwdTDSAmt || ''} onChange={(e) => updateTDSEntry(index, 'broughtFwdTDSAmt', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Carried-fwd TDS Amt (₹)</label><input style={inputStyle} type="number" min={0} value={entry.amtCarriedFwd || ''} onChange={(e) => updateTDSEntry(index, 'amtCarriedFwd', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Claim out of Total TDS (₹)</label><input style={inputStyle} type="number" min={0} value={entry.claimOutOfTotTDSOnAmtPaid || ''} onChange={(e) => updateTDSEntry(index, 'claimOutOfTotTDSOnAmtPaid', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                  </div>
+                </div>
+              );
+              return null;
+            })()}
+            <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginTop: 24 }}>
                 <input
                   type="checkbox"
@@ -913,7 +986,14 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
       ))}
 
       <div style={{ marginTop: 24, padding: 16, background: 'var(--gold-pale)', borderRadius: 6 }}>
-        <Field label="Entered Tax Payments" value={taxResult.enteredCredits?.total ?? taxResult.totalTaxPaid} computed />
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--gold)', marginBottom: 10 }}>Schedule-wise totals (claimed)</div>
+        <Field label="Schedule TDS-1 — Salary TDS (TotalTDSonSalaries)" value={tdsBreakdown.tds1} computed />
+        <Field label="Schedule TDS-2 — Non-salary TDS (TotalTDSonOthThanSals)" value={tdsBreakdown.tds2} computed />
+        <Field label="Schedule TDS-3 — Tenant/buyer TDS (TotalTDS3Details)" value={tdsBreakdown.tds3} computed />
+        <Field label="Schedule TCS — Collected at source (TotalSchTCS)" value={tdsBreakdown.tcs} computed />
+        <Field label="Advance Tax (TaxesPaid.AdvanceTax)" value={advanceTotal} computed />
+        <Field label="Self-Assessment Tax (TaxesPaid.SelfAssessmentTax)" value={satTotal} computed />
+        <Field label="Entered Tax Payments (TotalTaxPayments)" value={taxResult.enteredCredits?.total ?? taxResult.totalTaxPaid} computed />
         <Field label="Validated Filing Credits" value={taxResult.validatedCredits?.total ?? taxResult.totalTaxPaid} computed />
       </div>
     </div>

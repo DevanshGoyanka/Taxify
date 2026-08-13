@@ -210,6 +210,13 @@ export interface TdsCredit extends Identified {
   tdsClaimed: Money;
   panOfTenant: string;
   aadhaarOfTenant: string;
+  // ── Schedule TCS fields (when a 206C section row is stored in the TDS list)
+  tcsCreditOwner: '1' | '2';
+  panOfSpouseOrOthrPrsn: string;
+  tcsAmtCollOwnHand: Money;
+  tcsAmtCollSpouseOrOthrHand: Money;
+  tcsClaimedAmtCollOwnHand: Money;
+  tcsClaimedAmtCollSpouseOrOthrHand: Money;
 }
 
 /** Empty TdsCredit used as the default for fresh rows. */
@@ -222,6 +229,7 @@ export const EMPTY_TDS_CREDIT: Omit<TdsCredit, 'id'> = {
   broughtFwdTDSAmt: 0, amtCarriedFwd: 0, claimOutOfTotTDSOnAmtPaid: 0,
   taxDeductCreditDtls: { ...EMPTY_TAX_DEDUCT_CREDIT_DTLS },
   nameOfTenant: '', grsRcptToTaxDeduct: 0, tdsClaimed: 0, panOfTenant: '', aadhaarOfTenant: '',
+  tcsCreditOwner: '1', panOfSpouseOrOthrPrsn: '', tcsAmtCollOwnHand: 0, tcsAmtCollSpouseOrOthrHand: 0, tcsClaimedAmtCollOwnHand: 0, tcsClaimedAmtCollSpouseOrOthrHand: 0,
 };
 
 /** Canonical TCS credit row (Schedule TCS). The visible UI fields mirror the */
