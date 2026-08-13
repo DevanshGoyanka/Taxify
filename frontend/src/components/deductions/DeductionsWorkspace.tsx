@@ -4,7 +4,7 @@
 // Chapter VI-A section, gated per ITR form. New regime restricts to 80CCD(2).
 
 import React, { useMemo, useState } from 'react';
-import type { ChapterVIA, BusinessDeductions, Donation80G, Investment80C, Section80D } from '../../domain/returns/types';
+import type { ChapterVIA, BusinessDeductions, Donation80G, Investment80C, Schedule80GGAEntry, Schedule80GGCEntry, Section80D, Section80GGAClause } from '../../domain/returns/types';
 import type { DeductionLoanManagerData } from '../../domain/returns';
 import type { ItrForm } from '../../domain/eligibility';
 import { Section80CManager } from '../Section80CManager';
@@ -28,6 +28,10 @@ interface DeductionsWorkspaceProps {
   loans: DeductionLoanManagerData;
   chapterVIA: ChapterVIA;
   onChangeChapterVIA: (next: ChapterVIA) => void;
+  schedule80GGA: Schedule80GGAEntry[];
+  schedule80GGC: Schedule80GGCEntry[];
+  onChangeSchedule80GGA: (entries: Schedule80GGAEntry[]) => void;
+  onChangeSchedule80GGC: (entries: Schedule80GGCEntry[]) => void;
   managers: SubManagers;
   totalDeductions?: number;
   deductionBreakdown?: Record<string, number> | null;
@@ -110,7 +114,88 @@ function dependentOptions(form: ItrForm) {
   return form === 'ITR-2' || form === 'ITR-3' ? [...DEPENDENT_BASE, HUF_MEMBER_OPTION] : DEPENDENT_BASE;
 }
 
-export default function DeductionsWorkspace({ form, regime, section80C, section80D, section80G, loans, chapterVIA, onChangeChapterVIA, managers, totalDeductions, deductionBreakdown }: DeductionsWorkspaceProps): React.JSX.Element {
+const GGA_CLAUSE_OPTIONS: ReadonlyArray<{ value: Section80GGAClause; label: string }> = [
+  { value: '80GGA2a', label: '80GGA(2)(a) — scientific research association' },
+  { value: '80GGA2b', label: '80GGA(2)(b) — university/college research' },
+  { value: '80GGA2c', label: '80GGA(2)(c) — national laboratory' },
+  { value: '80GGA2d', label: '80GGA(2)(d) — rural development fund' },
+  { value: '80GGA2e', label: '80GGA(2)(e) — urban poverty eradication fund' },
+];
+
+let rowIdCounter = 0;
+function nextRowId(prefix: string): string {
+  rowIdCounter += 1;
+  return `${prefix}-${Date.now().toString(36)}-${rowIdCounter}`;
+}
+
+function empty80GGAEntry(): Schedule80GGAEntry {
+  return { id: nextRowId('80gga'), relevantClause: '80GGA2a', doneeName: '', doneePAN: '', addressLine: '', city: '', stateCode: '', pinCode: '', cashAmount: 0, otherModeAmount: 0 };
+}
+function empty80GGCEntry(): Schedule80GGCEntry {
+  return { id: nextRowId('80ggc'), cashAmount: 0, otherModeAmount: 0, contributionDate: '', transactionRef: '', ifscCode: '', politicalPartyName: '', politicalPartyPAN: '' };
+}
+
+function Schedule80GGAEditor({ entries, onChange }: { entries: Schedule80GGAEntry[]; onChange: (entries: Schedule80GGAEntry[]) => void }): React.JSX.Element {
+  const update = (id: string, patch: Partial<Schedule80GGAEntry>): void => onChange(entries.map((e) => e.id === id ? { ...e, ...patch } : e));
+  const remove = (id: string): void => onChange(entries.filter((e) => e.id !== id));
+  const add = (): void => onChange([...entries, empty80GGAEntry()]);
+  const total = entries.reduce((sum, e) => sum + money(e.cashAmount) + money(e.otherModeAmount), 0);
+  return <div>
+    {entries.length === 0 && <div style={{ ...styles.hint, marginBottom: 8 }}>No 80GGA donation rows yet. Click “Add donation” to add the first row.</div>}
+    {entries.map((entry, index) => (
+      <div key={entry.id} style={{ marginBottom: 16, padding: 12, border: '1px solid var(--border)', borderRadius: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+          <strong style={{ fontSize: 12 }}>Donation #{index + 1}</strong>
+          <button type="button" onClick={() => remove(entry.id)} style={{ border: '1px solid var(--border)', background: 'white', padding: '2px 8px', fontSize: 11, borderRadius: 4, cursor: 'pointer' }}>Remove</button>
+        </div>
+        <div style={styles.grid}>
+          <SelectField label="Relevant clause" value={entry.relevantClause} options={GGA_CLAUSE_OPTIONS} onChange={(value) => update(entry.id, { relevantClause: value })} />
+          <TextField label="Donee name" value={entry.doneeName} maxLength={125} placeholder="Research association / fund name" onChange={(value) => update(entry.id, { doneeName: value })} />
+          <TextField label="Donee PAN" value={entry.doneePAN} maxLength={10} placeholder="ABCDE1234F" onChange={(value) => update(entry.id, { doneePAN: value.toUpperCase() })} />
+          <TextField label="Address line" value={entry.addressLine} maxLength={200} placeholder="Donee address" onChange={(value) => update(entry.id, { addressLine: value })} />
+          <TextField label="City / District" value={entry.city} maxLength={50} placeholder="City" onChange={(value) => update(entry.id, { city: value })} />
+          <TextField label="State code" value={entry.stateCode} maxLength={2} placeholder="01-37" onChange={(value) => update(entry.id, { stateCode: value })} hint="Indian state code (01-37)" />
+          <TextField label="Pin code" value={entry.pinCode} maxLength={6} placeholder="6-digit PIN" onChange={(value) => update(entry.id, { pinCode: value.replace(/\D/g, '').slice(0, 6) })} />
+          <NumberField label="Cash donation (₹)" value={entry.cashAmount} hint="Cash not allowed for 80GGA — keep 0" onChange={(value) => update(entry.id, { cashAmount: value })} />
+          <NumberField label="Non-cash donation (₹)" value={entry.otherModeAmount} onChange={(value) => update(entry.id, { otherModeAmount: value })} />
+        </div>
+      </div>
+    ))}
+    <button type="button" onClick={add} style={{ border: '1px solid var(--border)', background: 'var(--bg)', padding: '6px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer' }}>+ Add donation</button>
+    <div style={{ ...styles.hint, marginTop: 8 }}>Total claimed: <strong>{inr(total)}</strong></div>
+  </div>;
+}
+
+function Schedule80GGCEditor({ entries, onChange }: { entries: Schedule80GGCEntry[]; onChange: (entries: Schedule80GGCEntry[]) => void }): React.JSX.Element {
+  const update = (id: string, patch: Partial<Schedule80GGCEntry>): void => onChange(entries.map((e) => e.id === id ? { ...e, ...patch } : e));
+  const remove = (id: string): void => onChange(entries.filter((e) => e.id !== id));
+  const add = (): void => onChange([...entries, empty80GGCEntry()]);
+  const total = entries.reduce((sum, e) => sum + money(e.cashAmount) + money(e.otherModeAmount), 0);
+  return <div>
+    {entries.length === 0 && <div style={{ ...styles.hint, marginBottom: 8 }}>No 80GGC contribution rows yet. Click “Add contribution” to add the first row.</div>}
+    {entries.map((entry, index) => (
+      <div key={entry.id} style={{ marginBottom: 16, padding: 12, border: '1px solid var(--border)', borderRadius: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+          <strong style={{ fontSize: 12 }}>Contribution #{index + 1}</strong>
+          <button type="button" onClick={() => remove(entry.id)} style={{ border: '1px solid var(--border)', background: 'white', padding: '2px 8px', fontSize: 11, borderRadius: 4, cursor: 'pointer' }}>Remove</button>
+        </div>
+        <div style={styles.grid}>
+          <TextField label="Political party name" value={entry.politicalPartyName} maxLength={125} placeholder="Registered political party" onChange={(value) => update(entry.id, { politicalPartyName: value })} />
+          <TextField label="Political party PAN" value={entry.politicalPartyPAN} maxLength={10} placeholder="ABCDE1234F" onChange={(value) => update(entry.id, { politicalPartyPAN: value.toUpperCase() })} />
+          <NumberField label="Cash contribution (₹)" value={entry.cashAmount} hint="Cash not allowed for 80GGC — keep 0" onChange={(value) => update(entry.id, { cashAmount: value })} />
+          <NumberField label="Non-cash contribution (₹)" value={entry.otherModeAmount} onChange={(value) => update(entry.id, { otherModeAmount: value })} />
+          <TextField label="Contribution date" value={entry.contributionDate} placeholder="YYYY-MM-DD" onChange={(value) => update(entry.id, { contributionDate: value })} />
+          <TextField label="Transaction reference" value={entry.transactionRef} maxLength={50} placeholder="Cheque / UTR no." onChange={(value) => update(entry.id, { transactionRef: value })} />
+          <TextField label="IFSC code" value={entry.ifscCode} maxLength={11} placeholder="AAAA0XXXXXX" onChange={(value) => update(entry.id, { ifscCode: value.toUpperCase() })} />
+        </div>
+      </div>
+    ))}
+    <button type="button" onClick={add} style={{ border: '1px solid var(--border)', background: 'var(--bg)', padding: '6px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer' }}>+ Add contribution</button>
+    <div style={{ ...styles.hint, marginTop: 8 }}>Total claimed: <strong>{inr(total)}</strong></div>
+  </div>;
+}
+
+export default function DeductionsWorkspace({ form, regime, section80C, section80D, section80G, loans, chapterVIA, onChangeChapterVIA, schedule80GGA, schedule80GGC, onChangeSchedule80GGA, onChangeSchedule80GGC, managers, totalDeductions, deductionBreakdown }: DeductionsWorkspaceProps): React.JSX.Element {
   const caps = FORM_CAPS[form];
   const isNew = regime === 'new';
   // ITR-2/3 Schedule80DD/80U also collect Form10IAFilingDate and FormAckNum11A; ITR-1/4 only Form10IAAckNum.
@@ -203,8 +288,14 @@ export default function DeductionsWorkspace({ form, regime, section80C, section8
 
     <Collapsible title="Section 80GGA / 80GGC — scientific research & political contributions" subtitle="Donations for scientific research/rural development (80GGA) and political parties/electoral trusts (80GGC)" defaultOpen={false} summary={inr(chapterVIA.section80GGA + chapterVIA.section80GGC)} badge={<span style={{ ...styles.badge, background: 'var(--gold)' }}>{caps.gga ? 'Research/Political' : 'Political only'}</span>}>
       {!caps.gga && <div style={styles.unsupported}>Section 80GGA is not available on {form}. Only 80GGC applies.</div>}
-      {caps.gga && <div style={styles.grid}><NumberField label="80GGA — scientific research / rural development donation (₹)" value={chapterVIA.section80GGA} hint="100% deductible; cash not allowed" onChange={(value) => patch({ section80GGA: value })} /></div>}
-      <div style={styles.grid}><NumberField label="80GGC — political party / electoral trust donation (₹)" value={chapterVIA.section80GGC} hint="100% deductible; cash not allowed" onChange={(value) => patch({ section80GGC: value })} /></div>
+      {caps.gga && <>
+        <h4 style={{ ...styles.panelTitle, marginBottom: 10 }}>Section 80GGA — scientific research / rural development donations</h4>
+        <Schedule80GGAEditor entries={schedule80GGA} onChange={onChangeSchedule80GGA} />
+        <NumberField label="80GGA aggregate (₹)" value={chapterVIA.section80GGA} hint="Auto-derived from detail rows; 100% deductible, cash not allowed" disabled onChange={() => undefined} />
+      </>}
+      <h4 style={{ ...styles.panelTitle, marginTop: 20, marginBottom: 10 }}>Section 80GGC — political party / electoral trust contributions</h4>
+      <Schedule80GGCEditor entries={schedule80GGC} onChange={onChangeSchedule80GGC} />
+      <NumberField label="80GGC aggregate (₹)" value={chapterVIA.section80GGC} hint="Auto-derived from detail rows; 100% deductible, cash not allowed" disabled onChange={() => undefined} />
     </Collapsible>
 
     <Collapsible title="Section 80E / 80EE / 80EEA / 80EEB — education & home/EV loans" subtitle="Education loan interest (80E), first-home loan interest (80EE/80EEA), electric vehicle loan interest (80EEB)" defaultOpen={false} summary={inr(chapterVIA.section80E + chapterVIA.section80EE + chapterVIA.section80EEA + chapterVIA.section80EEB)} badge={<span style={{ ...styles.badge, background: 'var(--info)' }}>Loans</span>}>

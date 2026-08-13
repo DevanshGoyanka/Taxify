@@ -39,8 +39,10 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       incomeNotChargeableToTax: 0, incomeChargeableAsPerDtaa: 0,
       passThroughIncomeNotChargeableToTax: 0, totalExemptIncome: 0,
     },
-    deductions: { section80C: [], section80D: { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: createEmpty80DCategory(), selfFamilySenior: createEmpty80DCategory(), parents: createEmpty80DCategory(), parentsSenior: createEmpty80DCategory() }, section80G: [], loans: { loans: [], section80EEAStampDutyValue: 0 }, chapterVIA: { ...EMPTY_CHAPTER_VIA, businessDeductions: { ...EMPTY_CHAPTER_VIA.businessDeductions } } },
+    deductions: { section80C: [], section80D: { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: createEmpty80DCategory(), selfFamilySenior: createEmpty80DCategory(), parents: createEmpty80DCategory(), parentsSenior: createEmpty80DCategory() }, section80G: [], loans: { loans: [], section80EEAStampDutyValue: 0 }, chapterVIA: { ...EMPTY_CHAPTER_VIA, businessDeductions: { ...EMPTY_CHAPTER_VIA.businessDeductions } }, schedule80GGA: [], schedule80GGC: [] },
     taxes: { tds: [], tcs: [], challans: [] }, bankAccounts: [],
-    verification: { capacity: 'SELF', place: '', date: null, declarationAccepted: false }, provenance: [],
+    verification: { capacity: 'SELF', place: '', date: null, declarationAccepted: false },
+    taxReturnPreparer: { used: false, identificationNumber: '', name: '', reimbursementFromGovernment: 0 },
+    provenance: [],
   };
 }

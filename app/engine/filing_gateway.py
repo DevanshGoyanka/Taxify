@@ -35,6 +35,7 @@ from app.routers.tax import compute_tax_summary
 # ---------------------------------------------------------------------------
 
 _TAN_PATTERN = re.compile(r"^[A-Z]{4}[0-9]{5}[A-Z]$")
+_PAN_PATTERN = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
 _BSR_PATTERN = re.compile(r"^[0-9]{7}$")
 _CHALLAN_SERIAL_PATTERN = re.compile(r"^[0-9]{1,5}$")
 
@@ -231,6 +232,15 @@ def _build_itr1_official_json(
             errors=[str(exc)],
         )
 
+    # Step A.5: cross-field validation — reject invalid inter-field
+    # combinations before computation so the error messages are actionable.
+    cross_field_errors = _validate_itr1_cross_fields(typed_input)
+    if cross_field_errors:
+        raise FilingGatewayError(
+            "ITR-1 cross-field validation failed.",
+            errors=cross_field_errors,
+        )
+
     # Step B: compute
     try:
         result = compute_itr1(typed_input)
@@ -255,13 +265,15 @@ def _build_itr1_official_json(
             errors=[str(exc)],
         )
 
-    # Step D: validate against official schema
+    # Step D: validate against the official schema. A filing artifact is not
+    # downloadable unless it fully validates against the AY 2026-27 schema.
     try:
         validate_itr1_json(itd_json)
     except Exception as exc:
-        # Schema validation is best-effort for ITR-1 until the builder is
-        # complete.  Surface errors as warnings rather than blocking.
-        errors.append(f"Official schema warning: {exc}")
+        raise FilingGatewayError(
+            "ITR-1 official JSON failed schema validation.",
+            errors=[str(exc)],
+        ) from exc
 
     return itd_json, errors
 
@@ -357,6 +369,77 @@ def _records(payload: dict, key: str) -> list[dict]:
     return value
 
 
+def _validate_itr1_cross_fields(typed_input: Any) -> list[str]:
+    """Run cross-field validation rules on the typed ITR-1 input.
+
+    Returns a list of human-readable error strings. An empty list means the
+    input passed all cross-field checks. These rules complement the per-field
+    Pydantic validators and the official schema validation gate.
+    """
+    errors: list[str] = []
+    ded = typed_input.deductions_chapter6a
+    profile = typed_input.filing_profile
+    taxpayer_pan = profile.pan.upper() if profile and profile.pan else ""
+
+    # Rule: donee PAN must not equal taxpayer PAN (80G, 80GGA, 80GGC).
+    if ded.donations_80g:
+        for donation in ded.donations_80g:
+            if donation.donee_pan and donation.donee_pan.upper() == taxpayer_pan:
+                errors.append(
+                    f"Section 80G donee PAN {donation.donee_pan} must not equal "
+                    f"the taxpayer PAN"
+                )
+
+    if typed_input.schedule_80gga and typed_input.schedule_80gga.donations:
+        for donation in typed_input.schedule_80gga.donations:
+            if donation.donee_pan and donation.donee_pan.upper() == taxpayer_pan:
+                errors.append(
+                    f"Section 80GGA donee PAN {donation.donee_pan} must not equal "
+                    f"the taxpayer PAN"
+                )
+
+    if typed_input.schedule_80ggc and typed_input.schedule_80ggc.contributions:
+        for contribution in typed_input.schedule_80ggc.contributions:
+            pan = contribution.political_party_pan
+            if pan and pan.upper() == taxpayer_pan:
+                errors.append(
+                    f"Section 80GGC political party PAN {pan} must not equal "
+                    f"the taxpayer PAN"
+                )
+
+    # Rule: positive 80CCD(1B) claim requires PRAN evidence.
+    if ded.amount_80ccd1b > 0 and not getattr(typed_input, 'pran_number', None):
+        errors.append(
+            "A positive Section 80CCD(1B) claim requires a PRAN number"
+        )
+
+    # Rule: TDS claimed must not exceed TDS deducted (TDS2 entries).
+    for entry in typed_input.tds2_entries or []:
+        if entry.tds_claimed_this_year > entry.tds_deducted:
+            errors.append(
+                f"TDS2 claimed credit for section {entry.tds_section} "
+                f"exceeds the deducted amount"
+            )
+
+    # Rule: TDS3 claimed must not exceed TDS deducted.
+    for entry in typed_input.tds3_entries or []:
+        if entry.tds_claimed > entry.tds_deducted:
+            errors.append(
+                f"TDS3 claimed credit for tenant {entry.tenant_pan} "
+                f"exceeds the deducted amount"
+            )
+
+    # Rule: TCS claimed must not exceed TCS collected.
+    for entry in typed_input.tcs_entries or []:
+        if entry.tcs_credit_claimed > entry.tcs_collected:
+            errors.append(
+                f"TCS claimed credit for section {entry.tcs_section} "
+                f"exceeds the collected amount"
+            )
+
+    return errors
+
+
 def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
     """Construct ``ITR1Input`` from the same flat payload contract used by
     ``/tax-summary/compute``.
@@ -369,8 +452,11 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
     from app.schemas.itr1 import (
         ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
         Chapter6ADeductions, CapitalGainsIncome, Donation80G,
-        Donation80GCategory, DonationAddress, TDS1Entry, TDS2Entry,
-        TCSEntry, PropertyType, AgeBracket, TaxRegime,
+        Donation80GCategory, DonationAddress, TDS1Entry, TDS2Entry, TDS3Entry,
+        TCSEntry, PropertyType, AgeBracket, TaxRegime, ITR1FilingProfile,
+        FilingAddress, PostalAddress, PropertyFilingProfile, BankAccount,
+        Donation80GGA, Schedule80GGA, Schedule80GGC, PoliticalContribution,
+        Section80GGAClause, TaxReturnPreparer, HRADetails,
     )
 
     age = int(payload.get("age", 30) or 30)
@@ -383,6 +469,103 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
 
     regime_str = str(payload.get("taxRegime", payload.get("regime", "NEW"))).upper()
     tax_regime = TaxRegime.OLD if regime_str == "OLD" else TaxRegime.NEW
+
+    def required_text(key: str, *, max_length: int | None = None) -> str:
+        value = str(payload.get(key, "")).strip()
+        if not value:
+            raise ValueError(f"{key} is required for official ITR-1 JSON")
+        if max_length is not None and len(value) > max_length:
+            raise ValueError(f"{key} must not exceed {max_length} characters")
+        return value
+
+    def filing_section_code(value: object, official_code: object) -> int:
+        section_map = {
+            "139(1)": 11,
+            "139(4)": 12,
+            11: 11,
+            12: 12,
+            "11": 11,
+            "12": 12,
+        }
+        code = section_map.get(value)
+        if code is None:
+            raise ValueError(
+                "ITR-1 official JSON currently supports filing sections 139(1) and 139(4) only"
+            )
+        if official_code not in (None, ""):
+            try:
+                supplied_code = int(official_code)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("returnFileSectionCode must be an official numeric filing-section code") from exc
+            if supplied_code != code:
+                raise ValueError("filingSection and returnFileSectionCode must describe the same return section")
+        return code
+
+    verification = payload.get("verification")
+    verification_data = verification if isinstance(verification, dict) else {}
+    if verification_data.get("declarationAccepted") is not True:
+        raise ValueError("Verification declaration must be accepted for official ITR-1 JSON")
+    if str(verification_data.get("capacity", "SELF")).upper() != "SELF":
+        raise ValueError("Representative verification is not supported for official ITR-1 JSON")
+
+    date_of_birth = _date(payload.get("dob"), "dob")
+    if date_of_birth is None:
+        raise ValueError("dob must be a valid YYYY-MM-DD date for official ITR-1 JSON")
+
+    mobile_country_code_raw = str(payload.get("mobileCountryCode", "91")).strip()
+    if not mobile_country_code_raw.isdigit():
+        raise ValueError("mobileCountryCode must be numeric for official ITR-1 JSON")
+
+    primary_address = FilingAddress(
+        residence_no=required_text("flatNo", max_length=50),
+        residence_name=str(payload.get("premises", "")).strip(),
+        road_or_street=str(payload.get("road", "")).strip(),
+        locality_or_area=required_text("area", max_length=50),
+        city_or_town_or_district=required_text("city", max_length=50),
+        state_code=required_text("state", max_length=2),
+        country_code=str(payload.get("country", "91")).strip() or "91",
+        pin_code=(str(payload.get("pincode", "")).strip() or None),
+        zip_code=str(payload.get("zipCode", "")).strip(),
+        mobile_country_code=int(mobile_country_code_raw),
+        mobile_no=required_text("mobile", max_length=10),
+        email=required_text("email", max_length=125),
+    )
+
+    alternate_raw = payload.get("alternateAddress")
+    alternate_address = None
+    if payload.get("secondaryAddressDifferent") is True:
+        if not isinstance(alternate_raw, dict):
+            raise ValueError("alternateAddress is required when secondaryAddressDifferent is true")
+        alternate_address = PostalAddress(
+            residence_no=str(alternate_raw.get("residenceNo", "")).strip(),
+            residence_name=str(alternate_raw.get("residenceName", "")).strip(),
+            road_or_street=str(alternate_raw.get("roadOrStreet", "")).strip(),
+            locality_or_area=str(alternate_raw.get("localityOrArea", "")).strip(),
+            city_or_town_or_district=str(alternate_raw.get("cityOrTownOrDistrict", "")).strip(),
+            state_code=str(alternate_raw.get("stateCode", "")).strip(),
+            country_code=str(alternate_raw.get("countryCode", "91")).strip() or "91",
+            pin_code=(str(alternate_raw.get("pinCode", "")).strip() or None),
+            zip_code=str(alternate_raw.get("zipCode", "")).strip(),
+        )
+
+    filing_profile = ITR1FilingProfile(
+        pan=required_text("pan", max_length=10).upper(),
+        first_name=str(payload.get("firstName", "")).strip(),
+        middle_name=str(payload.get("middleName", "")).strip(),
+        surname=required_text("surnameOrOrgName", max_length=75) if str(payload.get("surnameOrOrgName", "")).strip() else required_text("name", max_length=75),
+        date_of_birth=date_of_birth,
+        employer_category=str(payload.get("employerCategory", "OTH")).strip() or "OTH",
+        aadhaar_number=(str(payload.get("aadhaar", "")).strip() or None),
+        primary_address=primary_address,
+        alternate_address=alternate_address,
+        father_name=required_text("fatherName", max_length=125),
+        verification_place=str(verification_data.get("place", "")).strip(),
+        verification_capacity="S",
+        return_file_section=filing_section_code(
+            payload.get("filingSection", "139(1)"),
+            payload.get("returnFileSectionCode"),
+        ),
+    )
 
     # Salary — same mapping as tax.py
     employers = _records(payload, "employerEntries")
@@ -421,6 +604,20 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         entertainment_allowance=ent_allowance,
         is_government_employee=is_govt,
     )
+
+    # HRA evidence — aggregate per-employer HRA facts into a single HRADetails
+    # object so the official ScheduleEA10_13A can be emitted when HRA is claimed.
+    rent_paid_total = sum(_money(row.get("rentPaid")) for row in salary_rows)
+    is_metro = any(bool(row.get("isMetroCity", False)) for row in salary_rows)
+    hra_details = None
+    if hra_received > 0 or rent_paid_total > 0 or hra_exempt > 0:
+        hra_details = HRADetails(
+            actual_hra_received=hra_received,
+            rent_paid=rent_paid_total,
+            salary_for_hra=basic,
+            dearness_allowance=da,
+            is_metro_city=is_metro,
+        )
 
     # House Property — first property only (ITR-1 supports one aggregate)
     properties = _records(payload, "housePropertyEntries")
@@ -573,19 +770,74 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         d.cash_amount + d.non_cash_amount for d in donations
     )
 
+    # ── Schedule 80GGA / 80GGC / TRP — must be built before Chapter6ADeductions ──
+    schedule_80gga_rows = _records(payload, "schedule80GGAEntries")
+    schedule_80gga = None
+    if schedule_80gga_rows:
+        donations_80gga = []
+        for row in schedule_80gga_rows:
+            donations_80gga.append(Donation80GGA(
+                relevant_clause=Section80GGAClause(str(row.get("relevantClause", ""))),
+                donee_name=str(row.get("doneeName", "")).strip(),
+                address=DonationAddress(
+                    address_line=str(row.get("addressLine", "")).strip(),
+                    city_or_district=str(row.get("city", "")).strip(),
+                    state_code=str(row.get("stateCode", "")).strip(),
+                    pin_code=int(str(row.get("pinCode", "0")).strip() or "0"),
+                ),
+                donee_pan=str(row.get("doneePAN", "")).strip().upper(),
+                cash_amount=_money(row.get("cashAmount")),
+                other_mode_amount=_money(row.get("otherModeAmount")),
+            ))
+        schedule_80gga = Schedule80GGA(donations=donations_80gga)
+
+    schedule_80ggc_rows = _records(payload, "schedule80GGCEntries")
+    schedule_80ggc = None
+    if schedule_80ggc_rows:
+        contributions_80ggc = []
+        for row in schedule_80ggc_rows:
+            contributions_80ggc.append(PoliticalContribution(
+                cash_amount=_money(row.get("cashAmount")),
+                other_mode_amount=_money(row.get("otherModeAmount")),
+                contribution_date=_date(row.get("contributionDate"), "contributionDate"),
+                transaction_ref=str(row.get("transactionRef", "")).strip() or None,
+                ifsc_code=str(row.get("ifscCode", "")).strip().upper() or None,
+                political_party_name=str(row.get("politicalPartyName", "")).strip() or None,
+                political_party_pan=str(row.get("politicalPartyPAN", "")).strip().upper() or None,
+            ))
+        schedule_80ggc = Schedule80GGC(contributions=contributions_80ggc)
+
+    trp_raw = payload.get("taxReturnPreparer")
+    tax_return_preparer = None
+    if isinstance(trp_raw, dict) and trp_raw.get("used") is True:
+        tax_return_preparer = TaxReturnPreparer(
+            identification_number=str(trp_raw.get("identificationNumber", "")).strip().upper(),
+            name=str(trp_raw.get("name", "")).strip(),
+            reimbursement_from_government=_money(trp_raw.get("reimbursementFromGovernment")),
+        )
+
+    old_regime_amount = lambda amount: amount if tax_regime == TaxRegime.OLD else Decimal("0")
     ded_input = Chapter6ADeductions(
-        amount_80c=total_80c,
-        amount_80ccd1b=_money(payload.get("s80CCD1B")),
+        amount_80c=old_regime_amount(total_80c),
+        amount_80ccd1b=old_regime_amount(_money(payload.get("s80CCD1B"))),
         amount_80ccd2=_money(payload.get("s80CCD2")),
-        amount_80d_self_family=self_80d,
-        amount_80d_parents=parents_80d,
+        amount_80d_self_family=old_regime_amount(self_80d),
+        amount_80d_parents=old_regime_amount(parents_80d),
         amount_80d_preventive_self=Decimal("0"),
         amount_80d_preventive_parents=Decimal("0"),
         has_parents_senior=parents_are_senior,
-        amount_80e=_money(payload.get("s80E")),
-        amount_80tta=_money(payload.get("s80TTA")),
-        amount_80ttb=_money(payload.get("s80TTB")),
-        amount_80g=(structured_80g_claim if donations else _money(payload.get("s80G"))),
+        amount_80e=old_regime_amount(_money(payload.get("s80E"))),
+        amount_80tta=old_regime_amount(_money(payload.get("s80TTA"))),
+        amount_80ttb=old_regime_amount(_money(payload.get("s80TTB"))),
+        amount_80g=old_regime_amount(structured_80g_claim if donations else _money(payload.get("s80G"))),
+        amount_80gga=old_regime_amount(
+            sum((donation.cash_amount + donation.other_mode_amount for donation in schedule_80gga.donations), Decimal("0"))
+            if schedule_80gga is not None else _money(payload.get("s80GGA"))
+        ),
+        amount_80ggc=old_regime_amount(
+            sum((contribution.cash_amount + contribution.other_mode_amount for contribution in schedule_80ggc.contributions), Decimal("0"))
+            if schedule_80ggc is not None else _money(payload.get("s80GGC"))
+        ),
         donations_80g=donations or None,
     )
 
@@ -610,6 +862,7 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
     # TDS/TCS
     tds1_entries = []
     tds2_entries = []
+    tds3_entries = []
     for row in _records(payload, "tdsEntries"):
         if row.get("claimedInReturn") is False:
             continue
@@ -617,6 +870,25 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         section = str(row.get("section") or "").strip().upper()
         tax = _money(row.get("taxDeducted", row.get("tdsDeducted")))
         gross = _money(row.get("grossAmount", row.get("incomeAmount")))
+        schedule = str(row.get("schedule") or "").strip().upper()
+        tenant_pan = str(row.get("panOfTenant") or row.get("deductorPAN") or "").strip().upper()
+        tenant_name = str(row.get("nameOfTenant") or row.get("deductorName") or "").strip()
+        # TDS3 rows carry tenant identity (PAN + name) rather than a deductor TAN.
+        if schedule == "TDS3" or (tenant_pan and _PAN_PATTERN.fullmatch(tenant_pan)):
+            try:
+                tds3_entries.append(TDS3Entry(
+                    tenant_pan=tenant_pan,
+                    tenant_name=tenant_name,
+                    tenant_aadhaar=str(row.get("aadhaarOfTenant") or "").strip() or None,
+                    gross_receipt=_money(row.get("grsRcptToTaxDeduct", row.get("grossAmount"))),
+                    tds_deducted=tax,
+                    tds_claimed=_money(row.get("tdsClaimed", row.get("taxDeducted"))),
+                    tds_section=section or "195",
+                    deducted_yr=str(row.get("deductedYr") or "2025"),
+                ))
+            except ValidationError:
+                continue
+            continue
         if not tan or not _TAN_PATTERN.fullmatch(tan):
             continue
         try:
@@ -704,6 +976,36 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
     if not self_assessment_entries and not normalized_sat:
         self_assessment_paid = _money(payload.get("selfTax"))
 
+    bank_root = payload.get("bankAccountData")
+    bank_source = bank_root.get("accounts") if isinstance(bank_root, dict) else payload.get("bankAccountDetails")
+    bank_rows = bank_source if isinstance(bank_source, list) else []
+    bank_accounts = [
+        BankAccount(
+            account_number=str(row.get("accountNumber", "")).strip(),
+            ifsc_code=str(row.get("ifscCode", "")).strip().upper(),
+            bank_name=str(row.get("bankName", "")).strip() or None,
+            account_type={
+                "SB": "savings", "SAVINGS": "savings", "CA": "current", "CURRENT": "current",
+                "CC": "cash_credit", "OD": "overdraft", "NRO": "nro", "NRE": "nre",
+            }.get(str(row.get("accountType", "")).strip().upper(), str(row.get("accountType", "")).strip()),
+            is_primary=row.get("useForRefund") is True,
+        )
+        for row in bank_rows
+        if isinstance(row, dict)
+    ]
+
+    property_address = str(prop.get("address", prop.get("name", ""))).strip()
+    if not property_address:
+        property_address = primary_address.residence_no
+    property_profile = PropertyFilingProfile(
+        address_detail=property_address[:50],
+        city_or_town_or_district=str(prop.get("city", payload.get("city", ""))).strip() or primary_address.city_or_town_or_district,
+        state_code=str(prop.get("state", payload.get("state", ""))).strip() or primary_address.state_code,
+        country_code=str(prop.get("countryCode", payload.get("country", "91"))).strip() or primary_address.country_code,
+        pin_code=(str(prop.get("pinCode", payload.get("pincode", ""))).strip() or primary_address.pin_code),
+        zip_code=(str(prop.get("zipCode", payload.get("zipCode", ""))).strip() or None),
+    )
+
     return ITR1Input(
         age_bracket=age_bracket,
         tax_regime=tax_regime,
@@ -714,6 +1016,7 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         capital_gains=cg_input,
         tds1_entries=tds1_entries or None,
         tds2_entries=tds2_entries or None,
+        tds3_entries=tds3_entries or None,
         tcs_entries=tcs_entries or None,
         advance_tax_paid=advance_tax_paid,
         self_assessment_tax_paid=self_assessment_paid,
@@ -725,6 +1028,14 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         due_date=_date(payload.get("dueDate"), "dueDate"),
         house_property_count=max(1, len(properties)),
         relief_89=_money(payload.get("relief89", payload.get("relief_89"))),
+        filing_profile=filing_profile,
+        property_profile=property_profile,
+        bank_accounts=bank_accounts,
+        schedule_80gga=schedule_80gga,
+        schedule_80ggc=schedule_80ggc,
+        tax_return_preparer=tax_return_preparer,
+        hra_details=hra_details,
+        pran_number=str(payload.get("s80CCD1B_PRAN", "")).strip() or None,
     )
 
 
@@ -759,6 +1070,7 @@ def _build_itr4_input_from_flat(payload: dict[str, Any]) -> Any:
     cg_input = itr1_partial.capital_gains
     tds1 = itr1_partial.tds1_entries
     tds2 = itr1_partial.tds2_entries
+    tds3 = itr1_partial.tds3_entries
     tcs = itr1_partial.tcs_entries
     advance_tax = itr1_partial.advance_tax_paid
     sat_tax = itr1_partial.self_assessment_tax_paid
@@ -797,6 +1109,7 @@ def _build_itr4_input_from_flat(payload: dict[str, Any]) -> Any:
             capital_gains=cg_input,
             tds1_entries=tds1 or None,
             tds2_entries=tds2 or None,
+            tds3_entries=tds3 or None,
             tcs_entries=tcs or None,
             advance_tax_paid=advance_tax,
             self_assessment_tax_paid=sat_tax,
@@ -840,6 +1153,7 @@ def _build_itr4_input_from_flat(payload: dict[str, Any]) -> Any:
             capital_gains=cg_input,
             tds1_entries=tds1 or None,
             tds2_entries=tds2 or None,
+            tds3_entries=tds3 or None,
             tcs_entries=tcs or None,
             advance_tax_paid=advance_tax,
             self_assessment_tax_paid=sat_tax,
@@ -871,6 +1185,7 @@ def _build_itr4_input_from_flat(payload: dict[str, Any]) -> Any:
         capital_gains=cg_input,
         tds1_entries=tds1 or None,
         tds2_entries=tds2 or None,
+        tds3_entries=tds3 or None,
         tcs_entries=tcs or None,
         advance_tax_paid=advance_tax,
         self_assessment_tax_paid=sat_tax,

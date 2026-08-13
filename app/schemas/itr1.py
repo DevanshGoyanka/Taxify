@@ -998,6 +998,7 @@ class ITR1Input(BaseModel):
     schedule_tcs_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
     filing_profile: Optional["ITR1FilingProfile"] = None
     property_profile: Optional["PropertyFilingProfile"] = None
+    tax_return_preparer: Optional["TaxReturnPreparer"] = None
 
     def loan_schedule_rows(self, section: str) -> list["OfficialDeductionLoanEntry"]:
         """Return canonical official loan rows and reject incomplete legacy copies."""
@@ -1109,15 +1110,35 @@ class ITR1FilingProfile(BaseModel):
     return_file_section: Literal[11, 12] = 11
 
 
+class TaxReturnPreparer(BaseModel):
+    """Official tax return preparer details, when a TRP prepares the return."""
+
+    identification_number: str = Field(pattern=r"^(T[0-9]{9}|[0-9]{6})$")
+    name: str = Field(min_length=1, max_length=125)
+    reimbursement_from_government: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 class TDS3Entry(BaseModel):
-    """TDS on payment to non-residents - Schedule TDS3."""
-    deductor_tan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
-    deductor_name: Optional[str] = Field(default=None, max_length=125)
-    gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    """TDS on payment to non-residents - Schedule TDS3.
+
+    Mirrors the official ``TDS3Details`` object: tenant/buyer PAN, name,
+    gross receipt, deducted year, TDS deducted, TDS claimed, and section.
+    """
+    tenant_pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    tenant_name: str = Field(min_length=1, max_length=125)
+    tenant_aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    gross_receipt: Decimal = Field(default=Decimal("0"), ge=0)
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
-    tds_section: Optional[str] = None
-    tds_claimed_this_year: Decimal = Field(default=Decimal("0"), ge=0)
-    financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
+    tds_claimed: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_section: str = Field(...)
+    deducted_yr: str = Field(default="2025", pattern=r"^20[0-9]{2}$")
+
+    @model_validator(mode="after")
+    def validate_claimed_does_not_exceed_deducted(self) -> "TDS3Entry":
+        """Reject claimed credit that exceeds the deducted credit."""
+        if self.tds_claimed > self.tds_deducted:
+            raise ValueError("TDS3 claimed credit cannot exceed deducted credit")
+        return self
 
 
 class InsurancePolicy(BaseModel):
@@ -1421,6 +1442,7 @@ class HRADetails(BaseModel):
     actual_hra_received: Decimal = Field(default=Decimal("0"), ge=0)
     rent_paid: Decimal = Field(default=Decimal("0"), ge=0)
     salary_for_hra: Decimal = Field(default=Decimal("0"), ge=0)
+    dearness_allowance: Decimal = Field(default=Decimal("0"), ge=0)
     is_metro_city: bool = False
 
 

@@ -36,6 +36,9 @@ export interface CanonicalManagerBindings {
   advanceTax: (entries: ChallanManagerEntry[]) => void;
   selfAssessmentTax: (entries: ChallanManagerEntry[]) => void;
   banks: (data: BankManagerData) => void;
+  schedule80GGA: (entries: import('../domain/returns/types').Schedule80GGAEntry[]) => void;
+  schedule80GGC: (entries: import('../domain/returns/types').Schedule80GGCEntry[]) => void;
+  taxReturnPreparer: (next: import('../domain/returns/types').TaxReturnPreparer) => void;
 }
 
 export function BusinessTab({ formData, setFormData, taxResult }: any) {
@@ -374,8 +377,11 @@ export function VDATab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function DeductionsTab({ formData, regime, taxResult, managers, form }: { formData: any; setFormData: any; regime: 'old' | 'new'; taxResult: any; managers: CanonicalManagerBindings; form: ItrForm }) {
+export function DeductionsTab({ formData, regime, taxResult, managers, form, editorModel }: { formData: any; setFormData: any; regime: 'old' | 'new'; taxResult: any; managers: CanonicalManagerBindings; form: ItrForm; editorModel?: import('../domain/returns').ReturnEditorModel | null }) {
   const via = (formData?.chapterVIA ?? {}) as import('../domain/returns/types').ChapterVIA;
+  const draftDeductions = editorModel?.draft.deductions;
+  const schedule80GGA = draftDeductions?.schedule80GGA ?? [];
+  const schedule80GGC = draftDeductions?.schedule80GGC ?? [];
   return (
     <DeductionsWorkspace
       form={form}
@@ -387,6 +393,10 @@ export function DeductionsTab({ formData, regime, taxResult, managers, form }: {
       chapterVIA={via}
       onChangeChapterVIA={managers.chapterVIA}
       managers={managers}
+      schedule80GGA={schedule80GGA}
+      schedule80GGC={schedule80GGC}
+      onChangeSchedule80GGA={managers.schedule80GGA}
+      onChangeSchedule80GGC={managers.schedule80GGC}
       totalDeductions={taxResult?.totalDeductions}
       deductionBreakdown={taxResult?.deductionBreakdown}
     />

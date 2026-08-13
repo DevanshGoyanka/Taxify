@@ -73,6 +73,41 @@ export interface Donation80G extends Identified { category: '100_NO_APPROVAL' | 
 export interface DeductionLoan extends Identified { section: '80E' | '80EE' | '80EEA' | '80EEB'; loanTakenFrom: 'B' | 'I'; lenderName: string; lenderPAN: string; loanAccountNo: string; dateOfLoan: string; totalLoanAmount: Money; outstandingAmount: Money; interestAmount: Money; firstTimeBuyerEligible: boolean; vehicleRegNo: string; }
 export interface LoanDeductions { loans: DeductionLoan[]; section80EEAStampDutyValue: Money; }
 
+/** Official clauses under which a Section 80GGA deduction is claimed. */
+export type Section80GGAClause = '80GGA2a' | '80GGA2b' | '80GGA2c' | '80GGA2d' | '80GGA2e';
+
+/** Canonical donation row for Schedule 80GGA (scientific research / rural development). */
+export interface Schedule80GGAEntry extends Identified {
+  relevantClause: Section80GGAClause;
+  doneeName: string;
+  doneePAN: string;
+  addressLine: string;
+  city: string;
+  stateCode: string;
+  pinCode: string;
+  cashAmount: Money;
+  otherModeAmount: Money;
+}
+
+/** Canonical political contribution row for Schedule 80GGC. */
+export interface Schedule80GGCEntry extends Identified {
+  cashAmount: Money;
+  otherModeAmount: Money;
+  contributionDate: string;
+  transactionRef: string;
+  ifscCode: string;
+  politicalPartyName: string;
+  politicalPartyPAN: string;
+}
+
+/** Official Tax Return Preparer details (omitted entirely when ``used`` is false). */
+export interface TaxReturnPreparer {
+  used: boolean;
+  identificationNumber: string;
+  name: string;
+  reimbursementFromGovernment: Money;
+}
+
 /** Form-10-IA filing metadata shared by Schedule 80DD and 80U. */
 export interface Form10IAFiling { filed: 'Y' | 'N'; acknowledgementNumber: string; filingDate: string | null; formAckNum11A: string; }
 
@@ -325,7 +360,7 @@ export interface ReturnDraft {
     deductions: OtherSourcesDeductions;
   };
   exemptIncome: ExemptIncomeSchedule;
-  deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions; chapterVIA: ChapterVIA };
+  deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions; chapterVIA: ChapterVIA; schedule80GGA: Schedule80GGAEntry[]; schedule80GGC: Schedule80GGCEntry[] };
   taxes: { tds: TdsCredit[]; tcs: TcsCredit[]; challans: TaxChallan[] }; bankAccounts: BankAccount[];
-  verification: Verification; provenance: ImportProvenance[]; compatibility?: LegacyCompatibilityEnvelope;
+  verification: Verification; taxReturnPreparer: TaxReturnPreparer; provenance: ImportProvenance[]; compatibility?: LegacyCompatibilityEnvelope;
 }

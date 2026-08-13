@@ -4,7 +4,7 @@ import { classifyTdsSchedule, toSchemaSectionCode } from './tdsSections';
 import type {
   BankAccount, ChapterVIA, DeductionLoan, DividendIncome, Donation80G, Employer, FamilyPension, GiftConsiderationKind, GiftIncome,
   HouseProperty, InterestIncome, InterestKind, Investment80C, LoanDeductions,
-  Policy80D, ReturnDraft, Section80D, TaxChallan, TcsCredit, TdsCredit, WinningIncome,
+  Policy80D, ReturnDraft, Schedule80GGAEntry, Schedule80GGCEntry, Section80D, TaxChallan, TcsCredit, TdsCredit, WinningIncome,
 } from './types';
 
 export type LegacyRecord = Record<string, unknown>;
@@ -278,6 +278,21 @@ export function updateDeductionLoans(model: ReturnEditorModel, loans: LoanDeduct
 /** Replaces the canonical Chapter VI-A aggregate with an immutable detached copy. */
 export function updateChapterVIA(model: ReturnEditorModel, chapterVIA: ChapterVIA): ReturnEditorModel {
   return replaceDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, chapterVIA: clone(chapterVIA) } });
+}
+
+/** Replaces canonical Schedule 80GGA donation rows with an immutable detached copy. */
+export function updateSchedule80GGA(model: ReturnEditorModel, entries: readonly Schedule80GGAEntry[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, schedule80GGA: cloneArray(entries) } });
+}
+
+/** Replaces canonical Schedule 80GGC political contribution rows with an immutable detached copy. */
+export function updateSchedule80GGC(model: ReturnEditorModel, entries: readonly Schedule80GGCEntry[]): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, schedule80GGC: cloneArray(entries) } });
+}
+
+/** Replaces canonical Tax Return Preparer details with an immutable detached copy. */
+export function updateTaxReturnPreparer(model: ReturnEditorModel, trp: ReturnDraft['taxReturnPreparer']): ReturnEditorModel {
+  return replaceDraft(model, { ...model.draft, taxReturnPreparer: clone(trp) });
 }
 
 /** Replaces canonical TDS credits with an immutable detached copy. */

@@ -26,6 +26,7 @@ import {
   updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
   updateHouseProperties, updateInterestFromManager, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
   updateChapterVIA, updateTdsFromManager, updateTcsCredits, updateWinningsFromManager, winningsToManager, type LegacyRecord,
+  updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
   type ReturnEditorModel,
 } from '../domain/returns';
 import {
@@ -436,6 +437,13 @@ export default function ITRComputationPage() {
       return next;
     });
   }, []);
+  const handleRegimeChange = useCallback((nextRegime: 'old' | 'new'): void => {
+    setRegime(nextRegime);
+    updateEditor((current) => ({
+      draft: { ...current.draft, regime: nextRegime },
+      extras: { ...current.extras, regime: nextRegime, taxRegime: nextRegime, optOutNewTaxRegime: nextRegime === 'old' ? 'Y' : 'N' },
+    }));
+  }, [updateEditor]);
 
   const managers = useMemo<CanonicalManagerBindings>(() => ({
     interest: (entries) => updateEditor((model) => updateInterestFromManager(model, entries)),
@@ -449,6 +457,9 @@ export default function ITRComputationPage() {
     donations: (entries) => updateEditor((model) => updateSection80G(model, entries)),
     deductionLoans: (data) => updateEditor((model) => updateDeductionLoansFromManager(model, data)),
     chapterVIA: (next) => updateEditor((model) => updateChapterVIA(model, next)),
+    schedule80GGA: (entries) => updateEditor((model) => updateSchedule80GGA(model, entries)),
+    schedule80GGC: (entries) => updateEditor((model) => updateSchedule80GGC(model, entries)),
+    taxReturnPreparer: (next) => updateEditor((model) => updateTaxReturnPreparer(model, next)),
     tds: (entries) => updateEditor((model) => updateTdsFromManager(model, entries)),
     tcs: (entries) => updateEditor((model) => updateTcsCredits(model, entries)),
     advanceTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'ADVANCE_TAX', entries)),
@@ -1727,7 +1738,7 @@ export default function ITRComputationPage() {
             </div>
             <select
               value={regime}
-              onChange={(e) => setRegime(e.target.value as 'old' | 'new')}
+              onChange={(e) => handleRegimeChange(e.target.value as 'old' | 'new')}
               style={{
                 padding: '6px 12px',
                 border: '1px solid var(--border)',
@@ -2179,14 +2190,14 @@ export default function ITRComputationPage() {
         borderRadius: 'var(--radius)',
         border: '1px solid var(--border)'
       }}>
-        {activeTab === 0 && <PersonalInfoTab formData={formData} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={setFormData} onBanksChange={managers.banks} />}
+        {activeTab === 0 && <PersonalInfoTab formData={formData} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={setFormData} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} />}
         {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={taxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={formData.tdsEntries || []} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} />}
         {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel} />}
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
-        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} form={itrForm} />}
+        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel} />}
         {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
         {activeTab === 9 && (!backendTaxResult && taxResultError
           ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until the first computation succeeds.</div>

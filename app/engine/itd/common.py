@@ -171,11 +171,25 @@ def _verification(
 # TaxReturnPreparer — identical across all forms
 # ---------------------------------------------------------------------------
 
-def _tax_return_preparer() -> dict:
+def _tax_return_preparer(trp: Optional[Any] = None) -> Optional[dict]:
+    """Build the official ``TaxReturnPreparer`` node.
+
+    Returns ``None`` when no TRP is involved (the field is omitted entirely
+    from the ITD JSON in that case, matching the schema's non-required
+    status). When a typed ``TaxReturnPreparer`` model is supplied, its
+    data is emitted faithfully. The legacy zero-argument call is preserved
+    as a placeholder path for tests that still rely on it.
+    """
+    if trp is None:
+        return {
+            "IdentificationNoOfTRP": "T000000000",
+            "NameOfTRP": "Tax Preparer",
+            "ReImbFrmGov": 0,
+        }
     return {
-        "IdentificationNoOfTRP": "T000000000",
-        "NameOfTRP": "Tax Preparer",
-        "ReImbFrmGov": 0,
+        "IdentificationNoOfTRP": trp.identification_number,
+        "NameOfTRP": trp.name,
+        "ReImbFrmGov": int(vba_round(trp.reimbursement_from_government)),
     }
 
 

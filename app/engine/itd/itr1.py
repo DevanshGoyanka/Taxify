@@ -1169,6 +1169,37 @@ def _tds_other_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
     }
 
 
+def _tds3_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
+    """Build Schedule TDS3 from validated non-resident tenant rows.
+
+    Emits the official ``ScheduleTDS3Dtls`` object with one ``TDS3Details``
+    entry per typed ``TDS3Entry`` row. All official required fields are
+    populated from the tenant/buyer identity and the gross/TDS amounts.
+    """
+    if not input_data.tds3_entries:
+        return None
+    rows: list[dict[str, Any]] = []
+    for entry in input_data.tds3_entries:
+        if not entry.tenant_pan or not entry.tenant_name:
+            raise ValueError("TDS3 entries require tenant PAN and name for ITD JSON")
+        row: dict[str, Any] = {
+            "PANofTenant": entry.tenant_pan,
+            "NameOfTenant": entry.tenant_name,
+            "GrsRcptToTaxDeduct": _to_rupees(entry.gross_receipt),
+            "DeductedYr": entry.deducted_yr,
+            "TDSDeducted": _to_rupees(entry.tds_deducted),
+            "TDSClaimed": _to_rupees(entry.tds_claimed),
+            "TDSSection": entry.tds_section,
+        }
+        if entry.tenant_aadhaar:
+            row["AadhaarofTenant"] = entry.tenant_aadhaar
+        rows.append(row)
+    return {
+        "TDS3Details": rows,
+        "TotalTDS3Details": sum(row["TDSClaimed"] for row in rows),
+    }
+
+
 def _tcs_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
     """Build Schedule TCS exclusively from validated collector rows."""
     rows = []
@@ -1468,6 +1499,9 @@ def build_itr1_json(
         "Verification": ver,
     }
 
+    if input_data is not None and input_data.tax_return_preparer is not None:
+        itr1["TaxReturnPreparer"] = _tax_return_preparer(input_data.tax_return_preparer)
+
     if input_data is not None:
         if deduction("80C") > 0 or input_data.schedule_80c_entries:
             details_80c = ded_sched.section_details.get("80C") if ded_sched else None
@@ -1590,6 +1624,7 @@ def build_itr1_json(
                 hra_received=hra.actual_hra_received,
                 rent_paid=hra.rent_paid,
                 basic_salary=hra.salary_for_hra,
+                dearness_allowance=hra.dearness_allowance,
             )
             claimed_hra = _to_rupees(input_data.salary_income.hra_exempt_amount)
             if hra_schedule["EligbleExmpAllwncUs13A"] != claimed_hra:
@@ -1625,14 +1660,14 @@ def build_itr1_json(
         if tcs:
             itr1["ScheduleTCS"] = tcs
 
+        tds3 = _tds3_from_input(input_data)
+        if tds3:
+            itr1["ScheduleTDS3Dtls"] = tds3
+
         tax_payments = _tax_payments_from_input(input_data)
         if tax_payments:
             itr1["TaxPayments"] = tax_payments
 
-        if input_data.tds3_entries:
-            raise ValueError(
-                "TDS3 ITD JSON requires tenant PAN and name, which are absent from the input model"
-            )
     else:
         # Compatibility path for legacy callers that supply already-mapped rows.
         tds_salary = _tds_salary_schedule_itr1(tds_salary_entries)
@@ -1641,8 +1676,6 @@ def build_itr1_json(
         tds_other = _tds_other_schedule_itr1(tds_other_entries)
         if tds_other:
             itr1["TDSonOthThanSals"] = tds_other
-
-    # TDS3 is optional; emitting an empty details array violates minItems=1.
 
     # Conditional: LTCG 112A. Typed aggregate evidence takes precedence over
     # legacy keyword arguments supplied by older callers.
