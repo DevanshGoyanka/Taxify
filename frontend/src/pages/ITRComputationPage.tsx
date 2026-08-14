@@ -39,6 +39,26 @@ import { mapReconciledToFormData } from '../utils/mapReconciledToFormData';
 
 const returnRepository = new HttpReturnRepository();
 
+/** Derive age as on 31st March of AY 2026-27 from a DOB string.
+ *
+ * Used both on DOB change and when hydrating a return from the backend.
+ * Age is never trusted from persisted or hardcoded values — a senior
+ * citizen (60-80) must get the ₹3L basic exemption bracket, not the
+ * under-60 ₹2.5L bracket.
+ */
+function calculateAgeFromDob(dob: string | undefined | null): number {
+  if (!dob) return 0;
+  const birthDate = new Date(dob);
+  if (Number.isNaN(birthDate.getTime())) return 0;
+  const refDate = new Date('2026-03-31'); // Age as on 31st March of AY
+  let age = refDate.getFullYear() - birthDate.getFullYear();
+  const monthDiff = refDate.getMonth() - birthDate.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && refDate.getDate() < birthDate.getDate())) {
+    age -= 1;
+  }
+  return age >= 0 ? age : 0;
+}
+
 function buildPhase1Payload(source: any): any {
   const data = { ...source };
   data.s80C = 0;
@@ -511,6 +531,10 @@ export default function ITRComputationPage() {
           mobile: itrData.mobile || client.mobile,
           aadhaar: itrData.aadhaar || client.aadhaar,
           dob: itrData.dob || client.dob,
+          // Always derive age from DOB — never trust a persisted or
+          // hardcoded age value. A 65-year-old senior citizen must get
+          // the ₹3L exemption bracket, not the under-60 ₹2.5L bracket.
+          age: calculateAgeFromDob(itrData.dob || client.dob),
           flatNo: itrData.flatDoorNo || itrData.flatNo,
           premises: itrData.premisesName || itrData.premises,
           road: itrData.roadStreet || itrData.road,

@@ -871,7 +871,9 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         amount_80e=old_regime_amount(_money(payload.get("s80E"))),
         # Savings-account interest alone qualifies under 80TTA; FD interest does not.
         amount_80tta=old_regime_amount(min(interest_sb + post_office, Decimal("10000"))),
-        amount_80ttb=old_regime_amount(_money(payload.get("s80TTB"))),
+        # 80TTB covers ALL deposit interest (SB + FD + RD + post office)
+        # for senior citizens, capped at ₹50,000. Derived, not manual.
+        amount_80ttb=old_regime_amount(min(interest_sb + interest_fd + post_office, Decimal("50000"))),
         amount_80g=old_regime_amount(structured_80g_claim if donations else _money(payload.get("s80G"))),
         amount_80gga=old_regime_amount(
             sum((donation.cash_amount + donation.other_mode_amount for donation in schedule_80gga.donations), Decimal("0"))

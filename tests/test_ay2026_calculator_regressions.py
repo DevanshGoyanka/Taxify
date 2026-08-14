@@ -1300,3 +1300,62 @@ def test_itr1_ltcg_112a_exemption_and_slab_isolation() -> None:
     assert Decimal(str(result["netTaxLiability"])) == Decimal("52000")
 
 
+# ---------------------------------------------------------------------------
+# TEST 6 — Senior citizen: age-based slab, 80TTB vs 80TTA, non-triggering
+# marginal relief
+# ---------------------------------------------------------------------------
+
+def test_itr1_senior_citizen_80ttb_age_slab_non_triggering_relief() -> None:
+    """Test 6: age 65, pension-as-salary, 80TTB covers SB+FD, no relief.
+
+    Senior citizen (60-80) gets ₹3L basic exemption. Pension routed through
+    Salary head with ₹50,000 standard deduction. 80TTB covers both SB and
+    FD interest combined (₹50,000 cap), unlike 80TTA (SB-only, ₹10,000).
+    Marginal relief does NOT trigger because slab tax 14,000 < cap 20,000.
+    """
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-1",
+            "itrForm": "ITR-1",
+            "age": 65,
+            "residentialStatus": "ROR",
+            "employerEntries": [{"basic": "600000"}],  # Pension
+            "interestEntries": [
+                {"kind": "TERM_DEPOSIT", "grossAmount": "65000"},
+                {"kind": "SAVINGS_BANK", "grossAmount": "15000"},
+            ],
+            "section80C": {"investments": [{"amount": "60000"}]},
+        },
+        regime="OLD",
+        current_user=None,
+    )
+
+    # Salary (pension) = 6,00,000 - 50,000 std = 5,50,000.
+    assert Decimal(str(result["incomeFromSal"])) == Decimal("550000")
+    # OS = 65,000 (FD) + 15,000 (SB) = 80,000.
+    assert Decimal(str(result["otherIncome"])) == Decimal("80000")
+    # GTI = 5,50,000 + 80,000 = 6,30,000.
+    assert Decimal(str(result["grossTotIncome"])) == Decimal("630000")
+    # Senior citizen basic exemption = ₹3,00,000.
+    assert Decimal(str(result["basicExemptionLimit"])) == Decimal("300000")
+    # 80TTB = min(80,000, 50,000) = 50,000 (covers both FD and SB).
+    assert Decimal(str(result["interestDeduction80TTB"])) == Decimal("50000")
+    # 80TTA = 0 (senior citizens use 80TTB, not 80TTA).
+    assert Decimal(str(result["interestDeduction80TTA"])) == Decimal("0")
+    # Chapter VI-A = 60,000 (80C) + 50,000 (80TTB) = 1,10,000.
+    assert Decimal(str(result["totalDeductions"])) == Decimal("110000")
+    assert Decimal(str(result["deductionBreakdown"]["80TTB"])) == Decimal("50000")
+    # Net taxable = 6,30,000 - 1,10,000 = 5,20,000.
+    assert Decimal(str(result["totalIncome"])) == Decimal("520000")
+    # Senior slab: 0 (0-3L) + 5%×2L (10,000) + 20%×20,000 (4,000) = 14,000.
+    assert Decimal(str(result["normalTax"])) == Decimal("14000")
+    # Marginal relief cap = 5,20,000 - 5,00,000 = 20,000. Since 14,000 <
+    # 20,000, relief does NOT trigger. Rebate = 0.
+    assert Decimal(str(result["rebate87A"])) == Decimal("0")
+    # Cess 4% = 560 -> total = 14,560.
+    assert Decimal(str(result["grossTaxLiability"])) == Decimal("14560")
+    assert Decimal(str(result["netTaxLiability"])) == Decimal("14560")
+
+
+

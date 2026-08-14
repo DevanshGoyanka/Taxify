@@ -682,7 +682,17 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
             if tax_regime == TaxRegime.OLD
             else Decimal("0")
         ),
-        amount_80ttb=_money(payload.get("s80TTB")),
+        # 80TTB is derived from ALL deposit interest (SB + FD + RD +
+        # post office) for senior citizens, capped at ₹50,000. Unlike
+        # 80TTA, it covers FD interest too. Zero under new regime.
+        amount_80ttb=(
+            min(
+                interest_sb + interest_fd + post_office_interest,
+                Decimal("50000"),
+            )
+            if tax_regime == TaxRegime.OLD
+            else Decimal("0")
+        ),
         amount_80g=(structured_80g_claim if donations else _money(payload.get("s80G"))),
         donations_80g=donations or None,
     )
