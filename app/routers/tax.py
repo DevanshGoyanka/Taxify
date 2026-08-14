@@ -13,7 +13,7 @@ from app.schemas.itr1 import (
     ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
     Chapter6ADeductions, CapitalGainsIncome, Donation80G, Donation80GCategory,
     DonationAddress, TDS1Entry, TDS2Entry,
-    TCSEntry, PropertyType, AgeBracket, TaxRegime,
+    TCSEntry, TaxPaymentDetail, PropertyType, AgeBracket, TaxRegime,
 )
 from app.schemas.itr2 import (
     ITR2Input,
@@ -33,6 +33,7 @@ from app.engine.calculators.itr4 import compute as compute_itr4
 from app.engine.schedules.special_rates import compute_112a, compute_111a
 from app.engine.schedules.restricted_112a import compute_restricted_112a
 from app.engine.common.hra import compute_hra_exemption
+from app.engine.common.due_dates import get_due_date
 from app.engine.constants import (
     PRESUMPTIVE_44AD_DIGITAL,
     PRESUMPTIVE_44ADA_RATE,
@@ -119,6 +120,27 @@ def _records(payload: dict, key: str) -> list[dict]:
             detail=f"{key} must be an array of objects",
         )
     return value
+
+
+def _itr2_filing_section(value: object) -> ReturnFileSection:
+    """Map UI filing-section text to ITR-2's official numeric enum."""
+    section_map = {
+        "139(1)": ReturnFileSection.ON_TIME_139_1,
+        "139(4)": ReturnFileSection.BELATED_139_4,
+        "142(1)": ReturnFileSection.NOTICE_142_1,
+        "148": ReturnFileSection.NOTICE_148,
+        "153C": ReturnFileSection.NOTICE_153C,
+        "139(5)": ReturnFileSection.REVISED_139_5,
+        "139(9)": ReturnFileSection.DEFECTIVE_139_9,
+        "119(2)(b)": ReturnFileSection.CONDONATION_119_2B,
+    }
+    raw = str(value or "139(1)").strip()
+    if raw in section_map:
+        return section_map[raw]
+    try:
+        return ReturnFileSection(int(raw))
+    except (TypeError, ValueError):
+        return ReturnFileSection.ON_TIME_139_1
 
 
 def _date(value: object, field_name: str) -> Optional[datetime.date]:
@@ -328,6 +350,7 @@ def _compute_itr2_from_flat_payload(
         advance_tax_q4=quarterly_advance[3],
         filing_date=_date(payload.get("filingDate"), "filingDate"),
         due_date=_date(payload.get("dueDate"), "dueDate"),
+        filing_section=_itr2_filing_section(payload.get("filingSection") or payload.get("filing_section")),
         relief_89=_money(payload.get("relief89", payload.get("relief_89"))),
     )
     try:
@@ -933,6 +956,7 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
 
     self_assessment_paid = Decimal("0")
     entered_self_assessment_tax = Decimal("0")
+    validated_tax_payment_entries: list[TaxPaymentDetail] = []
     if normalized_self_assessment_entries:
         for row_index, row in enumerate(normalized_self_assessment_entries):
             amount = _money(row.get("amount"))
@@ -982,6 +1006,13 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
                 ))
             if row_is_valid:
                 self_assessment_paid += amount
+                validated_tax_payment_entries.append(TaxPaymentDetail(
+                    amount=amount,
+                    payment_type="self_assessment",
+                    payment_date=deposit_date,
+                    bsr_code=bsr_code,
+                    challan_serial_number=challan_serial,
+                ))
     elif not self_assessment_entries:
         self_assessment_paid = _money(payload.get("selfTax"))
         entered_self_assessment_tax = self_assessment_paid
@@ -1011,6 +1042,9 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         "PROVISIONAL_COMMON_INCOME_PREVIEW" if is_future_form else "FORM_COMPUTATION"
     )
 
+    effective_filing_date = _date(payload.get("filingDate"), "filingDate")
+    effective_due_date = _date(payload.get("dueDate"), "dueDate")
+
     common_input = dict(
         age_bracket=age_bracket,
         tax_regime=tax_regime,
@@ -1036,8 +1070,10 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         advance_tax_q2=quarterly_advance[1],
         advance_tax_q3=quarterly_advance[2],
         advance_tax_q4=quarterly_advance[3],
-        filing_date=_date(payload.get("filingDate"), "filingDate"),
-        due_date=_date(payload.get("dueDate"), "dueDate"),
+        tax_payment_entries=validated_tax_payment_entries,
+        filing_date=effective_filing_date,
+        due_date=effective_due_date,
+        filing_section=payload.get("filingSection") or payload.get("filing_section"),
         house_property_count=max(1, len(properties)),
         relief_89=_money(payload.get("relief89", payload.get("relief_89"))),
     )
@@ -1245,6 +1281,12 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         "taxPayable": tax_payable,
         "refund": refund,
         "refundDue": refund,
+        "interest234A": float(getattr(res, "interest_234a", Decimal("0"))),
+        "interest234B": float(getattr(res, "interest_234b", Decimal("0"))),
+        "interest234C": float(getattr(res, "interest_234c", Decimal("0"))),
+        "totalInterest234": float(getattr(res, "total_interest", Decimal("0"))),
+        "lateFee234F": float(getattr(res, "late_fee_234f", Decimal("0"))),
+        "fees234I": float(getattr(res, "fees_234i", Decimal("0"))),
 
         # ── Taxes Paid (CBDT TaxesPaid) ──
         "advanceTax": adv_tax,

@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 from typing import Sequence
-from app.engine.common.rounding import vba_round
+from app.engine.common.rounding import round_to_nearest_rupee
 from app.engine.constants import (
     OLD_REGIME_SLABS_BELOW_60,
     OLD_REGIME_SLABS_60_TO_80,
@@ -24,7 +24,7 @@ def _compute(slab_defs: Sequence[Slab], taxable_income: Decimal) -> Decimal:
                    else taxable_income - lower)
         if taxable <= 0:
             continue
-        tax += vba_round(taxable * rate / Decimal("100"))
+        tax += round_to_nearest_rupee(taxable * rate / Decimal("100"))
     return tax
 
 

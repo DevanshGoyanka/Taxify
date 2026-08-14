@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { BankAccountManager, type BankAccountData } from './BankAccountManager';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import { calculateAgeFromDob } from '../utils/age';
@@ -94,6 +94,10 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function filingDueDateForForm(itrForm: SupportedItrForm): string {
+  return itrForm === 'ITR-1' || itrForm === 'ITR-2' ? '2026-07-31' : '2026-08-31';
+}
+
 function Field({ label, value, onChange, type = 'text', required = false, pattern, maxLength, inputMode, help, disabled = false }: FieldProps): React.JSX.Element {
   const id = `personal-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
   return <div>
@@ -126,6 +130,7 @@ function BlankAddress(): AddressData {
  */
 export function PersonalInfoTab({ formData, itrForm, onChange, onBanksChange, onRegimeChange }: PersonalInfoTabProps): React.JSX.Element {
   const advancedForm = itrForm === 'ITR-2' || itrForm === 'ITR-3';
+  const filingDueDate = filingDueDateForForm(itrForm);
   const filingSection = text(formData.filingSection || '139(1)');
   const itr1FilingSections = new Set(['139(1)', '139(4)']);
   const selectedRegime = text(formData.regime || formData.taxRegime || (text(formData.optOutNewTaxRegime) === 'Y' ? 'old' : 'new')).toLowerCase() === 'old' ? 'OLD' : 'NEW';
@@ -137,6 +142,11 @@ export function PersonalInfoTab({ formData, itrForm, onChange, onBanksChange, on
   const partnerFirms = Array.isArray(formData.partnerFirmDetails) ? formData.partnerFirmDetails as PartnerFirmDetail[] : [];
   const holdings = Array.isArray(formData.unlistedShareHoldings) ? formData.unlistedShareHoldings as UnlistedShareHolding[] : [];
   const patch = (values: FormData): void => onChange({ ...formData, ...values });
+  useEffect(() => {
+    if (!text(formData.filingDate)) {
+      patch({ filingDate: filingDueDate, dueDate: filingDueDate, itrFilingDueDate: filingDueDate });
+    }
+  }, [filingDueDate, formData.filingDate, formData.dueDate, formData.itrFilingDueDate]);
   const updatePrimaryAddress = (key: keyof AddressData, value: string): void => {
     const next = { ...primaryAddress, [key]: value };
     patch({
@@ -197,7 +207,8 @@ export function PersonalInfoTab({ formData, itrForm, onChange, onBanksChange, on
     <SectionHeading title="Filing status and return history" description="The selected filing section activates the original-return and notice details required to prevent invalid return metadata." />
       <div style={CARD_STYLE}><div style={GRID_STYLE}>
         <SelectField label="Return filed under section" value={filingSection} onChange={(value) => patch({ filingSection: value, returnFileSectionCode: value === '139(4)' ? 12 : 11, returnType: 'ORIGINAL' })} required><option value="139(1)">139(1) — On or before due date</option><option value="139(4)">139(4) — Belated return</option>{itrForm === 'ITR-1' && !itr1FilingSections.has(filingSection) && <option value={filingSection}>{filingSection} — unsupported for ITR-1 JSON generation</option>}{itrForm !== 'ITR-1' && <><option value="142(1)">142(1) — Notice response</option><option value="148">148 — Reassessment return</option><option value="153C">153C — Search-related return</option><option value="139(5)">139(5) — Revised return</option><option value="139(9)">139(9) — Defective-return response</option><option value="119(2)(b)">119(2)(b) — Condonation of delay</option></>}</SelectField>
-        <Field label="ITR Filing Due Date" value={text(formData.itrFilingDueDate)} onChange={() => undefined} disabled help="System-calculated due date; administrative rules determine this value." />
+        <Field label="ITR Filing Due Date" value={filingDueDate} onChange={() => undefined} type="date" disabled help={`AY 2026-27 statutory due date for ${itrForm}; the engine uses this date unless an official extension applies.`} />
+        <Field label="Filing Date (calculation/testing)" value={text(formData.filingDate || filingDueDate)} onChange={(value) => patch({ filingDate: value || null })} type="date" required help="Defaults to the statutory due date, so no late charges are assumed. Change this date to test 234A, 234B, 234F, or revised-return scenarios." />
         {(filingSection === '139(5)' || filingSection === '139(9)') && <><Field label="Original Return Acknowledgement Number" value={text(formData.originalAcknowledgementNumber)} onChange={(value) => patch({ originalAcknowledgementNumber: value.replace(/\D/g, '').slice(0, 15) })} required pattern={ACK_PATTERN} maxLength={15} inputMode="numeric" help="15-digit acknowledgement number." /><Field label="Original Return Filing Date" value={text(formData.originalFilingDate)} onChange={(value) => patch({ originalFilingDate: value })} type="date" required /></>}
         {['142(1)', '148', '153C', '139(9)'].includes(filingSection) && <><Field label="Notice / Order Number" value={text(formData.noticeNumber)} onChange={(value) => patch({ noticeNumber: value })} required maxLength={50} /><Field label="Notice / Order Date" value={text(formData.noticeDate)} onChange={(value) => patch({ noticeDate: value })} type="date" required /></>}
         <SelectField label="Employer Category" value={text(formData.employerCategory || 'OTH')} onChange={(value) => patch({ employerCategory: value })} required><option value="CGOV">Central Government</option><option value="SGOV">State Government</option><option value="PSU">Public Sector Undertaking</option><option value="PE">Pensioner</option><option value="PESG">State Government Pensioner</option><option value="PEPS">PSU Pensioner</option><option value="PEO">Other Pensioner</option><option value="OTH">Others</option><option value="NA">Not Applicable</option></SelectField>

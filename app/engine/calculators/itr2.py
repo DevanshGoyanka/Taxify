@@ -37,9 +37,10 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from app.engine.common.cess import compute as compute_cess
-from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234f
+from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234i, compute_234f
+from app.engine.common.due_dates import get_due_date, get_default_filing_date
 from app.engine.common.rebate import compute as compute_rebate
-from app.engine.common.rounding import round_to_nearest_10, vba_round
+from app.engine.common.rounding import round_to_nearest_10
 from app.engine.common.slab_tax import compute as compute_slab_tax
 from app.engine.common.surcharge import compute as compute_surcharge
 from app.engine.constants import (
@@ -145,6 +146,7 @@ class ITR2Result:
     interest_234b: Decimal = _ZERO
     interest_234c: Decimal = _ZERO
     late_fee_234f: Decimal = _ZERO
+    fees_234i: Decimal = _ZERO
     total_interest: Decimal = _ZERO
 
     # Final
@@ -853,23 +855,21 @@ def compute(input_data: ITR2Input) -> ITR2Result:
 
     # ── 21. Interest and Late Fee ─────────────────────────────────────────────
     filing_date = input_data.filing_date
-    due_date = input_data.due_date
+    due_date = input_data.due_date or (get_due_date("ITR-2") if filing_date else None)
 
     if filing_date and due_date:
         assessed_tax = max(
             _ZERO,
             r.gross_tax_liability - r.relief_90_91 - r.relief_89 - r.total_tds - r.total_tcs,
         )
-        r.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
-
         ay_start = date(due_date.year, 4, 1)
+        r.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
         r.interest_234b = compute_234b(
             assessed_tax,
             input_data.advance_tax_paid or _ZERO,
             filing_date,
             ay_start,
         )
-
         quarterly = (
             [
                 input_data.advance_tax_q1 or _ZERO,
@@ -887,6 +887,8 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         )
         r.interest_234c = compute_234c(quarterly, assessed_tax, ay_start)
         r.late_fee_234f = compute_234f(filing_date, due_date, ti)
+        r.fees_234i = compute_234i(filing_date, due_date, ti,
+                                   filing_section=input_data.filing_section)
 
     r.total_interest = r.interest_234a + r.interest_234b + r.interest_234c
 
@@ -897,15 +899,16 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         - r.relief_90_91
         + r.total_interest
         + r.late_fee_234f
+        + r.fees_234i
     )
-    r.net_tax_liability = round_to_nearest_10(net_liability)
+    r.net_tax_liability = max(_ZERO, net_liability)
 
     diff = r.net_tax_liability - r.total_taxes_paid
     if diff > 0:
-        r.balance_payable = diff
+        r.balance_payable = round_to_nearest_10(diff)
         r.refund_due = _ZERO
     else:
         r.balance_payable = _ZERO
-        r.refund_due = abs(diff)
+        r.refund_due = round_to_nearest_10(abs(diff))
 
     return r

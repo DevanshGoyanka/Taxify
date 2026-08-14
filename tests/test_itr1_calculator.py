@@ -140,8 +140,13 @@ def test_itr1_old_regime_high_income():
     assert res.slab_tax == Decimal("233400")
     assert res.rebate_87a == Decimal("0")
     # Cess = 233400 * 4% = 9336
-    # Total tax payable = 233400 + 9336 = 242736 -> Round to nearest 10 = 242740
-    assert res.net_tax_liability == Decimal("242740")
+    # Aggregate liability (gross tax) = 233400 + 9336 = 242736. Section 288B
+    # rounds only the final balance payable / refund due, not the intermediate
+    # net_tax_liability aggregate.
+    assert res.gross_tax_liability == Decimal("242736")
+    assert res.net_tax_liability == Decimal("242736")
+    # With no credits, balance_payable is the 288B-rounded aggregate: 242740.
+    assert res.balance_payable == Decimal("242740")
 
 def test_itr1_new_regime_high_income():
     """Scenario 4: New regime, below 60, high income (15.28L taxable)."""
@@ -183,8 +188,12 @@ def test_itr1_new_regime_high_income():
     assert res.slab_tax == Decimal("109200")
     assert res.rebate_87a == Decimal("0")
     # Cess = 109.2k * 4% = 4368
-    # Total payable = 109200 + 4368 = 113568 -> Rounded = 113570
-    assert res.net_tax_liability == Decimal("113570")
+    # Aggregate liability = 109200 + 4368 = 113568. Section 288B rounding is
+    # applied only to balance_payable / refund_due, not to the intermediate
+    # net_tax_liability aggregate.
+    assert res.gross_tax_liability == Decimal("113568")
+    assert res.net_tax_liability == Decimal("113568")
+    assert res.balance_payable == Decimal("113570")
 
 def test_itr1_senior_citizen_old_regime():
     """Scenario 5: Senior citizen, Old regime, basic exemption 3L, self-occupied HP loss & 80TTB."""

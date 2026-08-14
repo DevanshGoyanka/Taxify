@@ -56,7 +56,8 @@ from app.engine.schedules.agricultural import (
     compute as compute_agri,
     compute_partial_integration_tax,
 )
-from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234f
+from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234i, compute_234f
+from app.engine.common.due_dates import get_due_date, get_default_filing_date
 from app.engine.constants import LTCG_112A_EXEMPTION
 
 
@@ -111,6 +112,7 @@ class ITR4Result:
     interest_234b: Decimal = Decimal("0")
     interest_234c: Decimal = Decimal("0")
     late_fee_234f: Decimal = Decimal("0")
+    fees_234i: Decimal = Decimal("0")
     total_interest: Decimal = Decimal("0")
 
     net_tax_liability: Decimal = Decimal("0")
@@ -421,35 +423,31 @@ def compute(input_data: ITR4Input) -> ITR4Result:
     )
     result.total_tds = tds_tcs.total_tds
     result.total_tcs = tds_tcs.total_tcs
-    result.total_taxes_paid = round_to_nearest_10(
+    # Tax credits remain exact whole-rupee amounts until final reconciliation.
+    result.total_taxes_paid = (
         result.total_tds + result.total_tcs
         + input_data.advance_tax_paid
         + input_data.self_assessment_tax_paid)
 
     # ── 15. Interest & Late Fee ──────────────────────────────────────────────
     filing_date = input_data.filing_date
-    due_date = input_data.due_date
+    due_date = input_data.due_date or (get_due_date("ITR-4") if filing_date else None)
+
     if filing_date and due_date:
-        # 234A: 1% on net assessed tax (gross liability minus prepaid taxes)
         assessed_tax = max(
             Decimal("0"),
             result.gross_tax_liability - result.relief_89
             - result.total_tds - result.total_tcs - input_data.advance_tax_paid,
         )
-        result.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
-
-        # 234B: assessed tax excludes TDS/TCS but advance tax is evaluated
-        # separately against the 90 percent payment threshold.
         advance_tax_assessed = max(
             Decimal("0"),
             result.gross_tax_liability - result.relief_89
             - result.total_tds - result.total_tcs,
         )
         ay_start = date(due_date.year, 4, 1)
+        result.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
         result.interest_234b = compute_234b(advance_tax_assessed,
             input_data.advance_tax_paid, filing_date, ay_start)
-
-        # 234C: deferred installment interest
         is_presumptive = input_data.presumptive_scheme in (
             PresumptiveScheme.S44AD, PresumptiveScheme.S44ADA)
         if (input_data.advance_tax_q1 is not None or input_data.advance_tax_q2 is not None
@@ -465,24 +463,22 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         result.interest_234c = compute_234c(
             quarterly, advance_tax_assessed, ay_start,
             is_presumptive_44ad_44ada=is_presumptive)
-
         result.late_fee_234f = compute_234f(filing_date, due_date, ti)
+        result.fees_234i = compute_234i(filing_date, due_date, ti,
+                                        filing_section=input_data.filing_section)
     result.total_interest = result.interest_234a + result.interest_234b + result.interest_234c
 
     # ── 16. Final payable / refund ───────────────────────────────────────────
-    final_liability = round_to_nearest_10(
-        max(
-            Decimal("0"),
-            result.gross_tax_liability - result.relief_89
-            + result.total_interest + result.late_fee_234f,
-        )
+    final_liability = max(
+        Decimal("0"),
+        result.gross_tax_liability - result.relief_89
+        + result.total_interest + result.late_fee_234f + result.fees_234i,
     )
+    result.net_tax_liability = final_liability
     diff = final_liability - result.total_taxes_paid
     if diff > 0:
-        result.balance_payable = diff
-        result.net_tax_liability = final_liability
+        result.balance_payable = round_to_nearest_10(diff)
     else:
-        result.refund_due = abs(diff)
-        result.net_tax_liability = final_liability
+        result.refund_due = round_to_nearest_10(abs(diff))
 
     return result

@@ -170,8 +170,12 @@ def test_itr4_44ae_goods_carriage_high_income():
     # Total Slab Tax = 297,300
     assert res.slab_tax == Decimal("297300")
     # Cess = 297,300 * 4% = 11,892
-    # Total tax payable = 297,300 + 11,892 = 309,192 -> Rounded to nearest 10 = 309,190
-    assert res.net_tax_liability == Decimal("309190")
+    # Aggregate liability = 297,300 + 11,892 = 309,192. Section 288B rounding
+    # is applied only to balance_payable / refund_due, not to the intermediate
+    # net_tax_liability aggregate.
+    assert res.gross_tax_liability == Decimal("309192")
+    assert res.net_tax_liability == Decimal("309192")
+    assert res.balance_payable == Decimal("309190")
 
 def test_itr4_validation_failures():
     """Scenario 5: 44AD limits and vehicle count validation checks."""

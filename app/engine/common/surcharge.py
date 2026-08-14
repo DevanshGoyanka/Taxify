@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from app.engine.common.rounding import vba_round
+from app.engine.common.rounding import round_to_nearest_rupee
 from app.engine.constants import SURCHARGE_SLABS, SURCHARGE_SLABS_NEW_REGIME
 
 _ZERO = Decimal("0")
@@ -130,4 +130,4 @@ def compute(
         _ZERO,
         aggregate_tax + surcharge_before_relief - maximum_tax_and_surcharge,
     )
-    return max(_ZERO, vba_round(surcharge_before_relief - relief))
+    return max(_ZERO, round_to_nearest_rupee(surcharge_before_relief - relief))

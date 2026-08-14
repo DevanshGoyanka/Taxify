@@ -1229,6 +1229,11 @@ export function TaxComputationTab({ taxResult, regime, itrForm }: any) {
               <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', color: 'var(--success)' }}>({INR(taxResult.section89)})</td>
             </tr>
           )}
+          {(Number(taxResult.interest234A) || 0) > 0 && <tr><td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Add: Interest u/s 234A</td><td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.interest234A)}</td></tr>}
+          {(Number(taxResult.interest234B) || 0) > 0 && <tr><td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Add: Interest u/s 234B</td><td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.interest234B)}</td></tr>}
+          {(Number(taxResult.interest234C) || 0) > 0 && <tr><td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Add: Interest u/s 234C</td><td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.interest234C)}</td></tr>}
+          {(Number(taxResult.lateFee234F) || 0) > 0 && <tr><td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Add: Late filing fee u/s 234F</td><td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.lateFee234F)}</td></tr>}
+          {(Number(taxResult.fees234I) || 0) > 0 && <tr><td style={{ padding: '8px 12px', fontSize: 13, paddingLeft: '24px' }}>Add: Fee u/s 234-I (revised return)</td><td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right' }}>{INR(taxResult.fees234I)}</td></tr>}
           <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--navy)' }}>
             <td style={{ padding: '12px', fontSize: 15, fontWeight: 700, color: 'white' }}>NET TAX LIABILITY</td>
             <td className="mono" style={{ padding: '12px', fontSize: 15, textAlign: 'right', fontWeight: 700, color: 'white' }}>{INR(taxResult.netTaxLiability ?? taxResult.totalTaxLiability)}</td>

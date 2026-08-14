@@ -17,7 +17,11 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
 
-from app.engine.common.rounding import vba_round, round_to_nearest_10
+from app.engine.common.rounding import (
+    round_to_nearest_10,
+    round_to_nearest_rupee,
+    vba_round,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -25,12 +29,22 @@ from app.engine.common.rounding import vba_round, round_to_nearest_10
 # ---------------------------------------------------------------------------
 
 def _to_rupees(val: Decimal) -> int:
-    """Rupee Decimal to integer whole rupees (banker's rounding, VBA-compatible)."""
-    return int(vba_round(val))
+    """Emit a monetary amount as whole rupees using statutory half-up rounding.
+
+    Income-tax intermediate fields (tax components, interest components, TDS,
+    advance tax) are not rounded under section 288B; they are reported in
+    whole rupees. For consistency with CBDT field semantics, 50 paise rounds
+    upward rather than to the nearest even rupee.
+    """
+    return int(round_to_nearest_rupee(val))
 
 
 def _to_rupees_rounded10(val: Decimal) -> int:
-    """Rupee Decimal to nearest Rs 10 (Section 288A/288B)."""
+    """Apply Sections 288A/288B: nearest ₹10, with ₹5 rounded upward.
+
+    Reserved for fields that the Act explicitly requires to be rounded to the
+    nearest ₹10: total income, balance tax payable, and refund due.
+    """
     return int(round_to_nearest_10(val))
 
 
@@ -189,7 +203,7 @@ def _tax_return_preparer(trp: Optional[Any] = None) -> Optional[dict]:
     return {
         "IdentificationNoOfTRP": trp.identification_number,
         "NameOfTRP": trp.name,
-        "ReImbFrmGov": int(vba_round(trp.reimbursement_from_government)),
+        "ReImbFrmGov": _to_rupees(trp.reimbursement_from_government),
     }
 
 

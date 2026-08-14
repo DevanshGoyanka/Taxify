@@ -463,24 +463,29 @@ def _tax_computation_itr1(
     late_fee_234f: Decimal,
     fees_234i: Decimal = Decimal("0"),
 ) -> dict:
-    """ITR-1 TaxComputation — includes TotalIntrstPay (not in ITR-4)."""
+    """ITR-1 TaxComputation — includes TotalIntrstPay (not in ITR-4).
+
+    Intermediate tax and interest components are emitted in whole rupees.
+    Only total income, balance tax payable, and refund due are rounded to the
+    nearest ₹10 under sections 288A/288B.
+    """
     return {
-        "TotalTaxPayable": _to_rupees_rounded10(slab_tax),
-        "Rebate87A": _to_rupees_rounded10(rebate_87a),
-        "TaxPayableOnRebate": _to_rupees_rounded10(tax_after_rebate),
-        "EducationCess": _to_rupees_rounded10(cess),
-        "GrossTaxLiability": _to_rupees_rounded10(gross_tax_liability),
-        "Section89": _to_rupees_rounded10(relief_89),
-        "NetTaxLiability": _to_rupees_rounded10(net_tax_liability),
-        "TotalIntrstPay": _to_rupees_rounded10(total_interest + late_fee_234f + fees_234i),
+        "TotalTaxPayable": _to_rupees(slab_tax),
+        "Rebate87A": _to_rupees(rebate_87a),
+        "TaxPayableOnRebate": _to_rupees(tax_after_rebate),
+        "EducationCess": _to_rupees(cess),
+        "GrossTaxLiability": _to_rupees(gross_tax_liability),
+        "Section89": _to_rupees(relief_89),
+        "NetTaxLiability": _to_rupees(net_tax_liability),
+        "TotalIntrstPay": _to_rupees(total_interest + late_fee_234f + fees_234i),
         "IntrstPay": {
-            "IntrstPayUs234A": _to_rupees_rounded10(interest_234a),
-            "IntrstPayUs234B": _to_rupees_rounded10(interest_234b),
-            "IntrstPayUs234C": _to_rupees_rounded10(interest_234c),
-            "LateFilingFee234F": _to_rupees_rounded10(late_fee_234f),
-            "FeeFurnish234I": _to_rupees_rounded10(fees_234i),
+            "IntrstPayUs234A": _to_rupees(interest_234a),
+            "IntrstPayUs234B": _to_rupees(interest_234b),
+            "IntrstPayUs234C": _to_rupees(interest_234c),
+            "LateFilingFee234F": _to_rupees(late_fee_234f),
+            "FeeFurnish234I": _to_rupees(fees_234i),
         },
-        "TotTaxPlusIntrstPay": _to_rupees_rounded10(
+        "TotTaxPlusIntrstPay": _to_rupees(
             gross_tax_liability + total_interest + late_fee_234f + fees_234i
         ),
     }

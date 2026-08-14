@@ -249,23 +249,27 @@ def _tax_computation_itr4(
     interest_234c: Decimal,
     late_fee_234f: Decimal,
 ) -> dict:
-    """ITR-4 TaxComputation — no TotalIntrstPay, Section89 not required."""
+    """ITR-4 TaxComputation — no TotalIntrstPay, Section89 not required.
+
+    Intermediate components are emitted in whole rupees. Balance payable and
+    refund due use ₹10 rounding per section 288B.
+    """
     return {
-        "TotalTaxPayable": _to_rupees_rounded10(slab_tax),
-        "Rebate87A": _to_rupees_rounded10(rebate_87a),
-        "TaxPayableOnRebate": _to_rupees_rounded10(tax_after_rebate),
-        "EducationCess": _to_rupees_rounded10(cess),
-        "GrossTaxLiability": _to_rupees_rounded10(gross_tax_liability),
-        "Section89": _to_rupees_rounded10(relief_89),
-        "NetTaxLiability": _to_rupees_rounded10(net_tax_liability),
+        "TotalTaxPayable": _to_rupees(slab_tax),
+        "Rebate87A": _to_rupees(rebate_87a),
+        "TaxPayableOnRebate": _to_rupees(tax_after_rebate),
+        "EducationCess": _to_rupees(cess),
+        "GrossTaxLiability": _to_rupees(gross_tax_liability),
+        "Section89": _to_rupees(relief_89),
+        "NetTaxLiability": _to_rupees(net_tax_liability),
         "IntrstPay": {
-            "IntrstPayUs234A": _to_rupees_rounded10(interest_234a),
-            "IntrstPayUs234B": _to_rupees_rounded10(interest_234b),
-            "IntrstPayUs234C": _to_rupees_rounded10(interest_234c),
-            "LateFilingFee234F": _to_rupees_rounded10(late_fee_234f),
+            "IntrstPayUs234A": _to_rupees(interest_234a),
+            "IntrstPayUs234B": _to_rupees(interest_234b),
+            "IntrstPayUs234C": _to_rupees(interest_234c),
+            "LateFilingFee234F": _to_rupees(late_fee_234f),
             "FeeFurnish234I": 0,
         },
-        "TotTaxPlusIntrstPay": _to_rupees_rounded10(
+        "TotTaxPlusIntrstPay": _to_rupees(
             gross_tax_liability + total_interest + late_fee_234f
         ),
     }

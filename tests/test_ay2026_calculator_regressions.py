@@ -871,10 +871,12 @@ def test_hra_exemption_old_regime_cheaper_than_new_for_test2_scenario() -> None:
     """Old regime must be cheaper than new regime for the corrected TEST 2 scenario.
 
     With the statutorily recomputed HRA exemption of Rs 2,40,000:
-        Old regime tax: 1,42,770 (salary 15,07,600; HP -2,00,000; ded 2,25,000)
-        New regime tax: 1,50,800 (salary 17,25,000; HP 0; ded 0)
-    Old regime is cheaper by exactly Rs 8,030.  If the app recommends 'New
-    Regime' here, that's a bug.
+        Old regime: slab 1,37,280 + cess 5,491 = gross 1,42,771; balTaxPayable 1,42,770 (288B)
+        New regime: slab 1,45,000 + cess 5,800 = gross 1,50,800; balTaxPayable 1,50,800 (288B)
+    Old regime is cheaper by exactly Rs 8,030 on the 288B-rounded balance.
+    Section 288B rounds only the final payable/refund, not intermediate
+    NetTaxLiability, so the unrounded aggregate (1,42,771) is exposed as
+    netTaxLiability while balTaxPayable carries the statutory ₹10 rounding.
     """
     payload = _test2_hra_payload()
 
@@ -883,20 +885,30 @@ def test_hra_exemption_old_regime_cheaper_than_new_for_test2_scenario() -> None:
 
     old_tax = Decimal(str(old_result["netTaxLiability"]))
     new_tax = Decimal(str(new_result["netTaxLiability"]))
+    old_payable = Decimal(str(old_result["balTaxPayable"]))
+    new_payable = Decimal(str(new_result["balTaxPayable"]))
 
-    # Old regime tax must be exactly 1,42,770.
-    assert old_tax == Decimal("142770"), (
-        f"Old regime tax should be 1,42,770, got {old_tax}"
+    # Old regime aggregate liability (pre-288B) is exactly 1,42,771.
+    assert old_tax == Decimal("142771"), (
+        f"Old regime netTaxLiability should be 1,42,771, got {old_tax}"
     )
 
-    # New regime tax must be exactly 1,50,800.
+    # New regime aggregate liability (pre-288B) is exactly 1,50,800.
     assert new_tax == Decimal("150800"), (
-        f"New regime tax should be 1,50,800, got {new_tax}"
+        f"New regime netTaxLiability should be 1,50,800, got {new_tax}"
     )
 
-    # Old regime must be cheaper by exactly 8,030.
-    assert new_tax - old_tax == Decimal("8030"), (
-        f"Old regime should be cheaper by 8,030, got diff {new_tax - old_tax}"
+    # Section 288B rounds the final payable to nearest ₹10.
+    assert old_payable == Decimal("142770"), (
+        f"Old regime balTaxPayable should be 1,42,770 (288B), got {old_payable}"
+    )
+    assert new_payable == Decimal("150800"), (
+        f"New regime balTaxPayable should be 1,50,800 (288B), got {new_payable}"
+    )
+
+    # Old regime must be cheaper by exactly 8,030 on the 288B-rounded balance.
+    assert new_payable - old_payable == Decimal("8030"), (
+        f"Old regime should be cheaper by 8,030, got diff {new_payable - old_payable}"
     )
 
 
@@ -1129,7 +1141,11 @@ def test_itr1_two_house_properties_old_regime_aggregate_and_80tta() -> None:
     assert Decimal(str(result["totalDeductions"])) == Decimal("128000")
     assert Decimal(str(result["totalIncome"])) == Decimal("568000")
     assert Decimal(str(result["grossTaxLiability"])) == Decimal("27144")
-    assert Decimal(str(result["netTaxLiability"])) == Decimal("27140")
+    # netTaxLiability is the unrounded aggregate liability (gross minus relief
+    # plus interest/fees). Section 288B rounding to nearest ₹10 is applied only
+    # to the final balance payable / refund due.
+    assert Decimal(str(result["netTaxLiability"])) == Decimal("27144")
+    assert Decimal(str(result["balTaxPayable"])) == Decimal("27140")
 
     # The self-occupied ₹10,000 excess cannot leak into any deduction/loss.
     assert Decimal(str(result["hpLossDisallowed"])) == Decimal("0")
