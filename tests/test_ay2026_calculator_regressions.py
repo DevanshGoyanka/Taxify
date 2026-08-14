@@ -736,3 +736,413 @@ def test_tax_summary_rejects_multiple_businesses_instead_of_truncating() -> None
         )
 
     assert exc_info.value.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# HRA exemption regression — per-employer statutory recomputation.
+#
+# Reproduces the real-client "TEST 2" scenario: HRA received, rent paid,
+# non-metro city, self-occupied home-loan interest, 80C/80D/80CCD(1B).
+# The frontend sends HRA facts per-employer inside employerEntries (not as
+# a top-level hraDetails object).  The engine must statutorily recompute the
+# exemption u/s 10(13A) from those per-employer facts.
+# ---------------------------------------------------------------------------
+
+def _test2_hra_payload() -> dict:
+    """Return the flat payload shape the frontend sends for TEST 2.
+
+    Corrected inputs (rent paid = 3,30,000/year so that the statutory HRA
+    exemption resolves to 2,40,000 — matching the Form 16 figure):
+        HRA exempt = min(300000, 330000 - 10%*900000, 40%*900000)
+                   = min(300000, 240000, 360000) = 240000.
+    """
+    return {
+        "assessmentYear": "2026-27",
+        "form": "ITR-1",
+        "itrForm": "ITR-1",
+        "pan": "EPPPG3078Q",
+        "firstName": "Devansh",
+        "surnameOrOrgName": "Goyanka",
+        "dob": "1995-01-01",
+        "age": 31,
+        "employerCategory": "OTH",
+        "filingSection": "139(1)",
+        "residentialStatus": "ROR",
+        "employerEntries": [
+            {
+                "employerName": "Sunit Goyanka",
+                "natureOfEmployment": "OTH",
+                "employerAddress": "Akola",
+                "employerCity": "Akola",
+                "employerStateCode": "19",
+                "basic": "900000",
+                "hra": "300000",
+                "otherAllowance": "540000",
+                "perquisites": "60000",
+                "rentPaid": "330000",
+                "isMetroCity": False,
+                "professionalTax": "2400",
+            }
+        ],
+        "housePropertyEntries": [
+            {
+                "propertyType": "SELF_OCCUPIED",
+                "interestOnLoan": "200000",
+            }
+        ],
+        "section80C": {
+            "investments": [
+                {"investmentType": "PPF", "amount": "150000"},
+            ]
+        },
+        "s80D_self": "25000",
+        "s80CCD1B": "50000",
+        "bankAccountData": {
+            "accounts": [
+                {
+                    "bankName": "HDFC",
+                    "accountNumber": "1234567890",
+                    "ifscCode": "HDFC0001234",
+                    "accountType": "SB",
+                    "useForRefund": True,
+                }
+            ]
+        },
+        "verification": {
+            "capacity": "SELF",
+            "place": "Akola",
+            "date": "2026-07-31",
+            "declarationAccepted": True,
+        },
+    }
+
+
+def test_hra_exemption_per_employer_old_regime_statutorily_recomputed() -> None:
+    """Old regime: HRA exemption must be statutorily recomputed from per-employer facts.
+
+    With rent = 3,30,000:
+        HRA exempt = min(300000, 330000 - 90000, 40%*900000)
+                   = min(300000, 240000, 360000) = 240000.
+    Salary income = 18,00,000 - 2,40,000 - 50,000 - 2,400 = 15,07,600.
+    """
+    payload = _test2_hra_payload()
+    result = compute_tax_summary(
+        payload=payload,
+        regime="OLD",
+        current_user=None,
+    )
+
+    # HRA exemption must be 2,40,000 (statutorily recomputed from per-employer facts).
+    assert Decimal(str(result["hraExempt"])) == Decimal("240000"), (
+        f"HRA exempt should be 2,40,000 under old regime, got {result['hraExempt']}"
+    )
+
+    # Salary income: 18,00,000 gross - 2,40,000 HRA - 50,000 std - 2,400 prof tax
+    # = 15,07,600.
+    assert Decimal(str(result["incomeFromSal"])) == Decimal("1507600"), (
+        f"Salary income should be 15,07,600, got {result['incomeFromSal']}"
+    )
+
+
+def test_hra_exemption_per_employer_new_regime_disallowed() -> None:
+    """New regime: HRA exemption must be disallowed (zero).
+
+    Full gross salary taxable; std deduction 75,000 -> salary income = 17,25,000.
+    """
+    payload = _test2_hra_payload()
+    result = compute_tax_summary(
+        payload=payload,
+        regime="NEW",
+        current_user=None,
+    )
+
+    # HRA exemption must be 0 in new regime.
+    assert Decimal(str(result["hraExempt"])) == Decimal("0"), (
+        f"HRA exempt should be 0 under new regime, got {result['hraExempt']}"
+    )
+
+    # Salary income: 18,00,000 - 75,000 std = 17,25,000.
+    assert Decimal(str(result["incomeFromSal"])) == Decimal("1725000"), (
+        f"Salary income should be 17,25,000 under new regime, got {result['incomeFromSal']}"
+    )
+
+
+def test_hra_exemption_old_regime_cheaper_than_new_for_test2_scenario() -> None:
+    """Old regime must be cheaper than new regime for the corrected TEST 2 scenario.
+
+    With the statutorily recomputed HRA exemption of Rs 2,40,000:
+        Old regime tax: 1,42,770 (salary 15,07,600; HP -2,00,000; ded 2,25,000)
+        New regime tax: 1,50,800 (salary 17,25,000; HP 0; ded 0)
+    Old regime is cheaper by exactly Rs 8,030.  If the app recommends 'New
+    Regime' here, that's a bug.
+    """
+    payload = _test2_hra_payload()
+
+    old_result = compute_tax_summary(payload=payload, regime="OLD", current_user=None)
+    new_result = compute_tax_summary(payload=payload, regime="NEW", current_user=None)
+
+    old_tax = Decimal(str(old_result["netTaxLiability"]))
+    new_tax = Decimal(str(new_result["netTaxLiability"]))
+
+    # Old regime tax must be exactly 1,42,770.
+    assert old_tax == Decimal("142770"), (
+        f"Old regime tax should be 1,42,770, got {old_tax}"
+    )
+
+    # New regime tax must be exactly 1,50,800.
+    assert new_tax == Decimal("150800"), (
+        f"New regime tax should be 1,50,800, got {new_tax}"
+    )
+
+    # Old regime must be cheaper by exactly 8,030.
+    assert new_tax - old_tax == Decimal("8030"), (
+        f"Old regime should be cheaper by 8,030, got diff {new_tax - old_tax}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Explicit HRA three-condition boundary cases.
+#
+# The statutory HRA exemption is the *minimum* of three conditions:
+#   1. Actual HRA received.
+#   2. Rent paid - 10% of salary (basic + DA).
+#   3. 50% of salary (metro) / 40% of salary (non-metro).
+#
+# Each test below isolates one binding term so a hardcoded formula (e.g.
+# "always 40%" or "always use actual HRA") is caught.
+# ---------------------------------------------------------------------------
+
+def _hra_payload(*, rent: str, hra: str = "300000", basic: str = "900000",
+                 is_metro: bool = False) -> dict:
+    """Build a minimal old-regime payload with a single employer and HRA facts."""
+    return {
+        "assessmentYear": "2026-27",
+        "form": "ITR-1",
+        "pan": "EPPPG3078Q",
+        "firstName": "Devansh",
+        "surnameOrOrgName": "Goyanka",
+        "dob": "1995-01-01",
+        "age": 31,
+        "employerCategory": "OTH",
+        "filingSection": "139(1)",
+        "residentialStatus": "ROR",
+        "employerEntries": [
+            {
+                "employerName": "Employer",
+                "natureOfEmployment": "OTH",
+                "employerAddress": "A",
+                "employerCity": "A",
+                "employerStateCode": "19",
+                "basic": basic,
+                "hra": hra,
+                "rentPaid": rent,
+                "isMetroCity": is_metro,
+            }
+        ],
+        "bankAccountData": {
+            "accounts": [
+                {
+                    "bankName": "HDFC",
+                    "accountNumber": "1234567890",
+                    "ifscCode": "HDFC0001234",
+                    "accountType": "SB",
+                    "useForRefund": True,
+                }
+            ]
+        },
+        "verification": {
+            "capacity": "SELF",
+            "place": "A",
+            "date": "2026-07-31",
+            "declarationAccepted": True,
+        },
+    }
+
+
+def test_hra_condition1_actual_hra_is_binding() -> None:
+    """Condition 1 (actual HRA received) is the binding minimum.
+
+    With very high rent and high salary, the actual HRA received should be
+    the smallest of the three:
+        min(200000, 500000 - 50000, 40%*500000)
+        = min(200000, 450000, 200000) = 200000.
+    """
+    payload = _hra_payload(rent="500000", hra="200000", basic="500000")
+    result = compute_tax_summary(payload=payload, regime="OLD", current_user=None)
+    assert Decimal(str(result["hraExempt"])) == Decimal("200000"), (
+        f"Condition 1 (actual HRA) should bind at 2,00,000, got {result['hraExempt']}"
+    )
+
+
+def test_hra_condition2_rent_minus_10pct_is_binding() -> None:
+    """Condition 2 (rent - 10% salary) is the binding minimum.
+
+    With low rent relative to HRA and salary:
+        min(300000, 150000 - 100000, 40%*1000000)
+        = min(300000, 50000, 400000) = 50000.
+    """
+    payload = _hra_payload(rent="150000", hra="300000", basic="1000000")
+    result = compute_tax_summary(payload=payload, regime="OLD", current_user=None)
+    assert Decimal(str(result["hraExempt"])) == Decimal("50000"), (
+        f"Condition 2 (rent-10%) should bind at 50,000, got {result['hraExempt']}"
+    )
+
+
+def test_hra_condition3_salary_factor_is_binding_non_metro() -> None:
+    """Condition 3 (40% salary, non-metro) is the binding minimum.
+
+    With very high rent and high HRA, the 40% salary factor should bind:
+        min(500000, 1000000 - 100000, 40%*1000000)
+        = min(500000, 900000, 400000) = 400000.
+    """
+    payload = _hra_payload(rent="1000000", hra="500000", basic="1000000",
+                          is_metro=False)
+    result = compute_tax_summary(payload=payload, regime="OLD", current_user=None)
+    assert Decimal(str(result["hraExempt"])) == Decimal("400000"), (
+        f"Condition 3 (40% salary, non-metro) should bind at 4,00,000, "
+        f"got {result['hraExempt']}"
+    )
+
+
+def test_hra_condition3_salary_factor_is_binding_metro() -> None:
+    """Condition 3 (50% salary, metro) is the binding minimum.
+
+    Same inputs as the non-metro case but metro=True:
+        min(500000, 1000000 - 100000, 50%*1000000)
+        = min(500000, 900000, 500000) = 500000.
+
+    This case, combined with the non-metro case above, isolates the 40% vs
+    50% difference — catching a hardcoded "always 40%" bug.
+    """
+    payload = _hra_payload(rent="1000000", hra="500000", basic="1000000",
+                          is_metro=True)
+    result = compute_tax_summary(payload=payload, regime="OLD", current_user=None)
+    assert Decimal(str(result["hraExempt"])) == Decimal("500000"), (
+        f"Condition 3 (50% salary, metro) should bind at 5,00,000, "
+        f"got {result['hraExempt']}"
+    )
+
+
+def test_hra_metro_non_metro_isolation_trap() -> None:
+    """Explicit isolation of the 40% vs 50% city-factor difference.
+
+    With rent = 1,50,000 and basic = 9,00,000 (HRA received large enough to
+    not bind):
+        Non-metro: min(300000, 150000-90000, 40%*900000)
+                 = min(300000, 60000, 360000) = 60000.
+        Metro:     min(300000, 150000-90000, 50%*900000)
+                 = min(300000, 60000, 450000) = 60000.
+
+    NOTE: Both give the same answer here because condition 2 (rent-10%) is
+    binding, NOT the city percentage.  This is a deliberate trap: if a
+    future change hardcodes "always 40%" or "always 50%", this test still
+    passes — so it does NOT catch that bug on its own.  The real isolation
+    is provided by the pair of condition3 tests above (which use high rent
+    so the city percentage is the binding term).
+    """
+    payload_non_metro = _hra_payload(rent="150000", hra="300000",
+                                     basic="900000", is_metro=False)
+    payload_metro = _hra_payload(rent="150000", hra="300000",
+                                basic="900000", is_metro=True)
+    result_nm = compute_tax_summary(payload=payload_non_metro, regime="OLD",
+                                    current_user=None)
+    result_m = compute_tax_summary(payload=payload_metro, regime="OLD",
+                                   current_user=None)
+    # Both should be 60,000 (condition 2 binds in both cases).
+    assert Decimal(str(result_nm["hraExempt"])) == Decimal("60000"), (
+        f"Non-metro HRA exempt should be 60,000, got {result_nm['hraExempt']}"
+    )
+    assert Decimal(str(result_m["hraExempt"])) == Decimal("60000"), (
+        f"Metro HRA exempt should be 60,000, got {result_m['hraExempt']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TEST 3 — ITR-1 two-house-property aggregation, AY 2026-27
+# ---------------------------------------------------------------------------
+
+def _test3_two_property_payload() -> dict:
+    """Return the user-provided AY 2026-27 two-property regression case.
+
+    Gross salary is ₹8,50,000 so the old-regime ₹50,000 standard deduction
+    produces the specified ₹8,00,000 income from salary.
+    """
+    return {
+        "assessmentYear": "2026-27",
+        "form": "ITR-1",
+        "itrForm": "ITR-1",
+        "age": 31,
+        "residentialStatus": "ROR",
+        "employerEntries": [{"basic": "850000"}],
+        "housePropertyEntries": [
+            {
+                "propertyType": "SELF_OCCUPIED",
+                "interestOnLoan": "210000",
+            },
+            {
+                "propertyType": "LET_OUT",
+                # This is the actual HousePropertyEntryManager UI field.
+                "annualLettingValue": "300000",
+                "municipalTaxesPaid": "20000",
+                "interestOnLoan": "150000",
+            },
+        ],
+        "interestEntries": [
+            {"kind": "SAVINGS_BANK", "grossAmount": "8000"},
+            {"kind": "TERM_DEPOSIT", "grossAmount": "42000"},
+        ],
+        "section80C": {"investments": [{"amount": "120000"}]},
+    }
+
+
+def test_itr1_two_house_properties_old_regime_aggregate_and_80tta() -> None:
+    """Test 3: aggregate two HPs and derive 80TTA from savings only.
+
+    HP-1 is self-occupied: ₹2,10,000 interest caps at ₹2,00,000, so its
+    ₹10,000 excess is neither deductible nor carried into the let-out row.
+    HP-2 is let-out: ₹3,00,000 - ₹20,000 NAV deduction - ₹84,000 standard
+    deduction - ₹1,50,000 interest = ₹46,000. The aggregate is -₹1,54,000,
+    below the aggregate ₹2 lakh inter-head set-off ceiling.
+    """
+    result = compute_tax_summary(
+        payload=_test3_two_property_payload(),
+        regime="OLD",
+        current_user=None,
+    )
+
+    assert Decimal(str(result["incomeFromSal"])) == Decimal("800000")
+    assert Decimal(str(result["hpIncome"])) == Decimal("-154000")
+    assert Decimal(str(result["otherIncome"])) == Decimal("50000")
+    assert Decimal(str(result["grossTotIncome"])) == Decimal("696000")
+    # The engine groups 80C under the composite PF/PPF/ELSS key.
+    assert Decimal(str(result["deductionBreakdown"]["80C+80CCC+80CCD(1)"])) == Decimal("120000")
+    assert Decimal(str(result["deductionBreakdown"]["80TTA"])) == Decimal("8000")
+    assert Decimal(str(result["interestDeduction80TTA"])) == Decimal("8000")
+    assert Decimal(str(result["totalDeductions"])) == Decimal("128000")
+    assert Decimal(str(result["totalIncome"])) == Decimal("568000")
+    assert Decimal(str(result["grossTaxLiability"])) == Decimal("27144")
+    assert Decimal(str(result["netTaxLiability"])) == Decimal("27140")
+
+    # The self-occupied ₹10,000 excess cannot leak into any deduction/loss.
+    assert Decimal(str(result["hpLossDisallowed"])) == Decimal("0")
+    # FD interest is included in OS, but excluded from the 80TTA base.
+    assert Decimal(str(result["otherIncome"])) - Decimal(str(result["interestDeduction80TTA"])) == Decimal("42000")
+
+
+def test_itr1_two_house_properties_new_regime_disallows_hp_loss_and_80tta() -> None:
+    """New regime retains HP income only after intra-head netting, then blocks loss."""
+    result = compute_tax_summary(
+        payload=_test3_two_property_payload(),
+        regime="NEW",
+        current_user=None,
+    )
+
+    assert Decimal(str(result["incomeFromSal"])) == Decimal("775000")
+    # Self-occupied interest is disallowed, but the let-out property's ₹46,000
+    # positive income remains taxable under the new regime.
+    assert Decimal(str(result["hpIncome"])) == Decimal("46000")
+    assert Decimal(str(result["hpLossDisallowed"])) == Decimal("0")
+    assert Decimal(str(result["otherIncome"])) == Decimal("50000")
+    assert Decimal(str(result["totalDeductions"])) == Decimal("0")
+    assert Decimal(str(result["totalIncome"])) == Decimal("871000")
+    assert Decimal(str(result["interestDeduction80TTA"])) == Decimal("0")

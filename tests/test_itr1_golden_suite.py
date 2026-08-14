@@ -325,3 +325,104 @@ def test_golden_new_regime_only_80ccd2_passes() -> None:
     document = build_itr1_json(result, typed)
     validate_itr1_json(document)
     _assert_no_placeholders(document)
+
+
+# ---------------------------------------------------------------------------
+# Golden case 9 - Two house properties (self-occupied + let-out)
+# Official AY 2026-27 ITR-1 V1.1 PropertyDetails.maxItems = 2
+# ---------------------------------------------------------------------------
+
+def test_golden_two_house_properties() -> None:
+    """Two house properties must produce two PropertyDetails rows and validate.
+
+    The CBDT AY 2026-27 ITR-1 V1.1 schema defines ``PropertyDetails`` as an
+    array with ``maxItems = 2`` (schema lines 610-615). This golden case
+    verifies the full pipeline preserves both rows:
+
+      - flat ``housePropertyEntries`` array → ``ITR1Input.house_properties``
+      - per-property HP compute → ``ITR1Result.hp_results`` (two entries)
+      - official JSON builder → two ``PropertyDetails`` rows (HPSNo 1, 2)
+      - official V1.1 schema validation passes
+
+    Aggregate intra-head income is computed before the inter-head loss limit
+    is applied, so one self-occupied (-₹2L interest) and one let-out
+    (+₹1.25L) property nets to a disallowed-loss scenario under the old
+    regime, which this case exercises.
+    """
+    payload = _base()
+    payload["employerEntries"] = [{"basic": "1200000"}]
+    payload["housePropertyEntries"] = [
+        {
+            "propertyType": "SELF",
+            "address": "12 Rose Villa",
+            "city": "Mumbai",
+            "state": "27",
+            "country": "91",
+            "pinCode": "400001",
+            "interestOnLoan": "0",
+        },
+        {
+            "propertyType": "LET_OUT",
+            "address": "5 Hill View",
+            "city": "Pune",
+            "state": "27",
+            "country": "91",
+            "pinCode": "411001",
+            "annualRent": "360000",
+            "municipalTaxesPaid": "20000",
+            "interestOnLoan": "0",
+        },
+    ]
+
+    typed = _build_itr1_input_from_flat(payload)
+    # Schema reconciliation: two rows flow into the typed list and profiles.
+    assert len(typed.house_properties) == 2
+    assert len(typed.property_profiles) == 2
+    assert typed.house_property_count == 2
+
+    result = compute(typed)
+    assert result.errors == [], f"Calculator errors: {result.errors}"
+    # Two per-property HP results retained on the result.
+    assert len(result.hp_results) == 2
+    # Property 1 (self-occupied, 0 interest) → income 0.
+    # Property 2 (let-out: rent 3,60,000, taxes 20,000) → NAV 3,40,000,
+    #   30% std ded 1,02,000, interest 0 → income 2,38,000.
+    # Aggregate intra-head income = 0 + 2,38,000 = 2,38,000 (no loss to limit).
+    assert result.hp_results[0].income_chargeable == Decimal("0")
+    assert result.hp_results[1].income_chargeable == Decimal("238000")
+    assert result.house_property_income == Decimal("238000")
+
+    document = build_itr1_json(result, typed)
+    validate_itr1_json(document)
+    _assert_no_placeholders(document)
+
+    itr1 = document["ITR"]["ITR1"]
+    property_details = itr1["ITR1_IncomeDeductions"]["PropertyDetails"]
+    assert len(property_details) == 2
+    assert property_details[0]["HPSNo"] == 1
+    assert property_details[1]["HPSNo"] == 2
+    assert property_details[0]["ifLetOut"] == "S"
+    assert property_details[1]["ifLetOut"] == "L"
+    # Each row carries its own address (no row is dropped or duplicated).
+    assert property_details[0]["AddressDetailWithZipCode"]["AddrDetail"] == "12 Rose Villa"
+    assert property_details[1]["AddressDetailWithZipCode"]["AddrDetail"] == "5 Hill View"
+
+
+# ---------------------------------------------------------------------------
+# Golden case 10 - Three house properties must be rejected (>2 disqualifies)
+# ---------------------------------------------------------------------------
+
+def test_golden_three_house_properties_rejected() -> None:
+    """Three house properties must fail ITR-1 eligibility (max 2 allowed)."""
+    from pydantic import ValidationError
+
+    payload = _base()
+    payload["employerEntries"] = [{"basic": "1000000"}]
+    payload["housePropertyEntries"] = [
+        {"propertyType": "SELF", "address": "A1", "city": "Mumbai", "state": "27", "pinCode": "400001", "interestOnLoan": "0"},
+        {"propertyType": "LET_OUT", "address": "A2", "city": "Pune", "state": "27", "pinCode": "411001", "annualRent": "120000", "interestOnLoan": "0"},
+        {"propertyType": "LET_OUT", "address": "A3", "city": "Nashik", "state": "27", "pinCode": "422001", "annualRent": "180000", "interestOnLoan": "0"},
+    ]
+
+    with pytest.raises(ValidationError, match="at most 2"):
+        _build_itr1_input_from_flat(payload)

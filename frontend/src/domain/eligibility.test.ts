@@ -175,4 +175,24 @@ describe('assessFormEligibility', () => {
     const rec = assessFormEligibility(data);
     expect(rec.recommendedForm).toBe('ITR-2');
   });
+
+  it('keeps ITR-1 eligible for two official PropertyDetails rows', () => {
+    const rec = assessFormEligibility({
+      basic: 600_000,
+      residentialStatus: 'ROR',
+      housePropertyEntries: [{ propertyType: 'SELF_OCCUPIED' }, { propertyType: 'LET_OUT' }],
+    }, { totalIncome: 600_000 });
+    expect(rec.recommendedForm).toBe('ITR-1');
+    expect(rec.eligibleForms['ITR-1']).toBe(true);
+  });
+
+  it('requires ITR-2 once PropertyDetails exceeds the official two-row limit', () => {
+    const rec = assessFormEligibility({
+      basic: 600_000,
+      residentialStatus: 'ROR',
+      housePropertyEntries: [{}, {}, {}],
+    }, { totalIncome: 600_000 });
+    expect(rec.recommendedForm).toBe('ITR-2');
+    expect(rec.eligibleForms['ITR-1']).toBe(false);
+  });
 });

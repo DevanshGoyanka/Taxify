@@ -346,56 +346,77 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
     # ===================================================================
     # SECTION: House Property Schedule Checks
     # ===================================================================
+    # The ITR-1 calculator stores schedules["hp"] as a list of HPResult
+    # objects (one per PropertyDetails row, up to two under the AY 2026-27
+    # schema). The legacy single-object path is retained for callers that
+    # bypass the multi-property compute path.
 
-    hp_sched = schedules.get("hp") if isinstance(schedules, dict) else None
+    hp_sched_raw = schedules.get("hp") if isinstance(schedules, dict) else None
+    if isinstance(hp_sched_raw, list):
+        hp_sched_list = hp_sched_raw
+    elif hp_sched_raw is None:
+        hp_sched_list = []
+    else:
+        hp_sched_list = [hp_sched_raw]
 
-    # Rule 46: NAV = rent - municipal taxes (for let-out / deemed let-out)
-    if hp.property_type != PropertyType.SELF_OCCUPIED and hp_sched:
-        if hasattr(hp_sched, "net_annual_value") and hasattr(hp_sched, "gross_annual_value") and hasattr(hp_sched, "municipal_taxes"):
-            expected_nav = max(_z, hp_sched.gross_annual_value - hp_sched.municipal_taxes)
-            if not _eq(hp_sched.net_annual_value, expected_nav):
-                results.append(_make(
-                    "ITR1-R046", False,
-                    f"Net Annual Value mismatch: computed={hp_sched.net_annual_value}, "
-                    f"expected GAV({hp_sched.gross_annual_value}) - "
-                    f"Municipal Taxes({hp_sched.municipal_taxes}) = {expected_nav}",
-                    "house_property_income",
-                ))
+    hp_input_list = list(inp.house_properties) or ([inp.house_property_income] if inp.house_property_income else [])
 
-    # Rule 47: HP income chargeable = NAV - 30% std ded - interest + arrears
-    if hp.property_type != PropertyType.SELF_OCCUPIED and hp_sched:
-        if all(hasattr(hp_sched, a) for a in ["net_annual_value", "standard_deduction_30pct", "interest_on_loan", "arrears_unrealised_rent", "income_chargeable"]):
-            expected_hp_income = (
-                hp_sched.net_annual_value
-                - hp_sched.standard_deduction_30pct
-                - hp_sched.interest_on_loan
-                + (hp_sched.arrears_unrealised_rent * Decimal("0.7"))
-            )
-            if not _eq(hp_sched.income_chargeable, expected_hp_income, Decimal("1")):
-                results.append(_make(
-                    "ITR1-R047", False,
-                    f"House Property income chargeable mismatch: computed="
-                    f"{hp_sched.income_chargeable}, expected "
-                    f"NAV({hp_sched.net_annual_value}) - "
-                    f"30%({hp_sched.standard_deduction_30pct}) - "
-                    f"Interest({hp_sched.interest_on_loan}) + "
-                    f"Arrears({hp_sched.arrears_unrealised_rent}) = "
-                    f"{expected_hp_income}",
-                    "house_property_income",
-                ))
+    for idx, hp_sched in enumerate(hp_sched_list):
+        hp_input = hp_input_list[idx] if idx < len(hp_input_list) else inp.house_property_income
+        field_scope = (
+            f"house_property_income[{idx}]"
+            if len(hp_sched_list) > 1
+            else "house_property_income"
+        )
 
-    # Rule 43: HP standard deduction = 30% of Annual Value
-    if hp.property_type != PropertyType.SELF_OCCUPIED and hp_sched:
-        if hasattr(hp_sched, "net_annual_value") and hasattr(hp_sched, "standard_deduction_30pct"):
-            expected_30 = hp_sched.net_annual_value * Decimal("0.3")
-            if not _eq(hp_sched.standard_deduction_30pct, expected_30, Decimal("1")):
-                results.append(_make(
-                    "ITR1-R043", False,
-                    f"HP 30% standard deduction mismatch: "
-                    f"computed={hp_sched.standard_deduction_30pct}, "
-                    f"expected 30% of NAV({hp_sched.net_annual_value}) = {expected_30}",
-                    "house_property_income",
-                ))
+        # Rule 46: NAV = rent - municipal taxes (for let-out / deemed let-out)
+        if hp_input.property_type != PropertyType.SELF_OCCUPIED:
+            if hasattr(hp_sched, "net_annual_value") and hasattr(hp_sched, "gross_annual_value") and hasattr(hp_sched, "municipal_taxes"):
+                expected_nav = max(_z, hp_sched.gross_annual_value - hp_sched.municipal_taxes)
+                if not _eq(hp_sched.net_annual_value, expected_nav):
+                    results.append(_make(
+                        "ITR1-R046", False,
+                        f"Net Annual Value mismatch (property {idx + 1}): "
+                        f"computed={hp_sched.net_annual_value}, "
+                        f"expected GAV({hp_sched.gross_annual_value}) - "
+                        f"Municipal Taxes({hp_sched.municipal_taxes}) = {expected_nav}",
+                        field_scope,
+                    ))
+
+        # Rule 47: HP income chargeable = NAV - 30% std ded - interest + arrears
+        if hp_input.property_type != PropertyType.SELF_OCCUPIED:
+            if all(hasattr(hp_sched, a) for a in ["net_annual_value", "standard_deduction_30pct", "interest_on_loan", "arrears_unrealised_rent", "income_chargeable"]):
+                expected_hp_income = (
+                    hp_sched.net_annual_value
+                    - hp_sched.standard_deduction_30pct
+                    - hp_sched.interest_on_loan
+                    + (hp_sched.arrears_unrealised_rent * Decimal("0.7"))
+                )
+                if not _eq(hp_sched.income_chargeable, expected_hp_income, Decimal("1")):
+                    results.append(_make(
+                        "ITR1-R047", False,
+                        f"House Property income chargeable mismatch (property {idx + 1}): "
+                        f"computed={hp_sched.income_chargeable}, expected "
+                        f"NAV({hp_sched.net_annual_value}) - "
+                        f"30%({hp_sched.standard_deduction_30pct}) - "
+                        f"Interest({hp_sched.interest_on_loan}) + "
+                        f"Arrears({hp_sched.arrears_unrealised_rent}) = "
+                        f"{expected_hp_income}",
+                        field_scope,
+                    ))
+
+        # Rule 43: HP standard deduction = 30% of Annual Value
+        if hp_input.property_type != PropertyType.SELF_OCCUPIED:
+            if hasattr(hp_sched, "net_annual_value") and hasattr(hp_sched, "standard_deduction_30pct"):
+                expected_30 = hp_sched.net_annual_value * Decimal("0.3")
+                if not _eq(hp_sched.standard_deduction_30pct, expected_30, Decimal("1")):
+                    results.append(_make(
+                        "ITR1-R043", False,
+                        f"HP 30% standard deduction mismatch (property {idx + 1}): "
+                        f"computed={hp_sched.standard_deduction_30pct}, "
+                        f"expected 30% of NAV({hp_sched.net_annual_value}) = {expected_30}",
+                        field_scope,
+                    ))
 
     # ===================================================================
     # SECTION: Standard Deduction Limits (from schedule values)

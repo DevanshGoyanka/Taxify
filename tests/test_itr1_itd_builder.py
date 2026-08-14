@@ -307,7 +307,10 @@ def test_property_row_preserves_raw_loss_before_inter_head_setoff(
         ),
     })
     result = compute(body)
-    assert result.schedules["hp"].income_chargeable == Decimal("-330000.0")
+    # schedules["hp"] is now a list of HPResult (one per property); the
+    # single-property case yields a one-element list.
+    assert result.schedules["hp"][0].income_chargeable == Decimal("-330000.0")
+    assert result.hp_results[0].income_chargeable == Decimal("-330000.0")
     assert result.house_property_income == Decimal(expected_top_level)
 
     # Loan-detail mapping is deliberately outside this slice. Clear only the

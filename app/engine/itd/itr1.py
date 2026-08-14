@@ -117,69 +117,115 @@ def _verification_from_profile(profile: ITR1FilingProfile) -> dict[str, Any]:
 def _property_schedule(
     result: ITR1Result,
     input_data: ITR1Input,
-    profile: PropertyFilingProfile,
+    profile: Optional[PropertyFilingProfile],
 ) -> list[dict[str, Any]]:
-    """Build the single self-owned house-property schedule from computed values."""
+    """Build the official ``PropertyDetails`` array from computed values.
+
+    The CBDT AY 2026-27 ITR-1 V1.1 schema permits at most two
+    ``PropertyDetails`` rows. The ITR-1 calculator computes one HPResult
+    per property (retained in ``result.hp_results``) and this builder emits
+    a matching ``PropertyDetails`` row per property, numbered HPSNo 1 and 2.
+
+    Backward-compatible single-property callers may pass ``profile`` as
+    the single ``PropertyFilingProfile``; multi-property callers must set
+    ``input_data.property_profiles`` (the schema's model_validator mirrors
+    ``property_profile`` into the first slot).
+    """
     if input_data.is_property_co_owned or input_data.co_ownership_details is not None:
         raise ValueError("Co-owned property ITD JSON is not implemented")
-    hp_input = input_data.house_property_income
-    if hp_input.home_loan_interest_paid > 0:
-        raise ValueError("Section 24(b) loan details are required for ITD JSON")
-    hp = result.schedules.get("hp") if result.schedules else None
-    if hp is None:
+
+    # Resolve the list of per-property HPResults. Prefer the dedicated
+    # hp_results attribute; fall back to schedules["hp"] for older paths.
+    hp_results: list = list(getattr(result, "hp_results", []) or [])
+    if not hp_results:
+        hp_raw = result.schedules.get("hp") if result.schedules else None
+        if isinstance(hp_raw, list):
+            hp_results = list(hp_raw)
+        elif hp_raw is not None:
+            hp_results = [hp_raw]
+    if not hp_results:
         raise ValueError("Computed house-property schedule is missing")
 
-    annual_value = _to_rupees(hp.gross_annual_value)
-    balance = _to_rupees(hp.net_annual_value)
-    local_taxes = annual_value - balance
-    if local_taxes < 0:
-        raise ValueError("House-property municipal taxes do not cross-foot")
-    total_unrealized_and_tax = local_taxes
-    owned_value = balance
-    interest = _to_rupees(hp.interest_on_loan)
-    arrears = _to_rupees(hp.arrears_unrealised_rent)
-    arrears_taxable = _to_rupees(hp.arrears_unrealised_rent * Decimal("0.7"))
-    income = _to_rupees(hp.income_chargeable)
-    standard_deduction = owned_value - interest + arrears_taxable - income
-    if standard_deduction < 0:
-        raise ValueError("House-property deduction does not cross-foot")
-    total_deduction = standard_deduction + interest
+    # Resolve the matching property inputs and profiles, in row order,
+    # using the reconciliation helpers (which handle model_copy staleness).
+    hp_inputs = input_data.reconciled_house_properties()
+    profiles = input_data.reconciled_property_profiles()
+    if not profiles and profile is not None:
+        profiles = [profile]
+    # Pad missing profiles with the single profile (backward-compat) so the
+    # first row always has an address; reject if none available at all.
+    if not profiles:
+        raise ValueError("property_profile is required for official ITR-1 JSON")
+    while len(profiles) < len(hp_results):
+        profiles.append(profiles[0])
+    while len(hp_inputs) < len(hp_results):
+        hp_inputs.append(hp_inputs[0])
 
-    address: dict[str, Any] = {
-        "AddrDetail": profile.address_detail,
-        "CityOrTownOrDistrict": profile.city_or_town_or_district,
-        "StateCode": profile.state_code,
-        "CountryCode": profile.country_code,
-    }
-    if profile.pin_code is not None:
-        address["PinCode"] = int(profile.pin_code)
-    if profile.zip_code is not None:
-        address["ZipCode"] = profile.zip_code
+    rows: list[dict[str, Any]] = []
+    for idx, (hp, hp_input, prof) in enumerate(zip(hp_results, hp_inputs, profiles), start=1):
+        if hp_input.home_loan_interest_paid > 0:
+            raise ValueError(
+                "Section 24(b) loan details are required for ITD JSON "
+                f"(property {idx})"
+            )
 
-    rent_details: dict[str, Any] = {
-        "AnnualLetableValue": annual_value,
-        "TotalUnrealizedAndTax": total_unrealized_and_tax,
-        "BalanceALV": balance,
-        "AnnualOfPropOwned": owned_value,
-        "ThirtyPercentOfBalance": standard_deduction,
-        "IntOnBorwCap": interest,
-        "TotalDeduct": total_deduction,
-        "IncomeOfHP": income,
-    }
-    if local_taxes > 0:
-        rent_details["LocalTaxes"] = local_taxes
-    if arrears > 0:
-        rent_details["ArrearsUnrealizedRentRcvd"] = arrears
+        annual_value = _to_rupees(hp.gross_annual_value)
+        balance = _to_rupees(hp.net_annual_value)
+        local_taxes = annual_value - balance
+        if local_taxes < 0:
+            raise ValueError(
+                f"House-property municipal taxes do not cross-foot (property {idx})"
+            )
+        total_unrealized_and_tax = local_taxes
+        owned_value = balance
+        interest = _to_rupees(hp.interest_on_loan)
+        arrears = _to_rupees(hp.arrears_unrealised_rent)
+        arrears_taxable = _to_rupees(hp.arrears_unrealised_rent * Decimal("0.7"))
+        income = _to_rupees(hp.income_chargeable)
+        standard_deduction = owned_value - interest + arrears_taxable - income
+        if standard_deduction < 0:
+            raise ValueError(
+                f"House-property deduction does not cross-foot (property {idx})"
+            )
+        total_deduction = standard_deduction + interest
 
-    return [{
-        "HPSNo": 1,
-        "AddressDetailWithZipCode": address,
-        "PropertyOwner": "SE",
-        "PropCoOwnedFlg": "NO",
-        "AsseseeShareProperty": 100,
-        "ifLetOut": hp_input.property_type.value,
-        "Rentdetails": rent_details,
-    }]
+        address: dict[str, Any] = {
+            "AddrDetail": prof.address_detail,
+            "CityOrTownOrDistrict": prof.city_or_town_or_district,
+            "StateCode": prof.state_code,
+            "CountryCode": prof.country_code,
+        }
+        if prof.pin_code is not None:
+            address["PinCode"] = int(prof.pin_code)
+        if prof.zip_code is not None:
+            address["ZipCode"] = prof.zip_code
+
+        rent_details: dict[str, Any] = {
+            "AnnualLetableValue": annual_value,
+            "TotalUnrealizedAndTax": total_unrealized_and_tax,
+            "BalanceALV": balance,
+            "AnnualOfPropOwned": owned_value,
+            "ThirtyPercentOfBalance": standard_deduction,
+            "IntOnBorwCap": interest,
+            "TotalDeduct": total_deduction,
+            "IncomeOfHP": income,
+        }
+        if local_taxes > 0:
+            rent_details["LocalTaxes"] = local_taxes
+        if arrears > 0:
+            rent_details["ArrearsUnrealizedRentRcvd"] = arrears
+
+        rows.append({
+            "HPSNo": idx,
+            "AddressDetailWithZipCode": address,
+            "PropertyOwner": "SE",
+            "PropCoOwnedFlg": "NO",
+            "AsseseeShareProperty": 100,
+            "ifLetOut": hp_input.property_type.value,
+            "Rentdetails": rent_details,
+        })
+
+    return rows
 
 
 # ---------------------------------------------------------------------------

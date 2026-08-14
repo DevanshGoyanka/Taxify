@@ -70,7 +70,8 @@ interface TDSEntry {
 }
 
 interface BackendResult {
-  grossSalaryTotal?: number;
+  grossSalary?: number;
+  incomeFromSal?: number;
   hraExempt?: number;
   ltaExempt?: number;
   gratuityExempt?: number;
@@ -85,7 +86,6 @@ interface BackendResult {
   entertainmentAllowanceDed?: number;
   professionalTaxDed?: number;
   totalSection16Deductions?: number;
-  netTaxableSalary?: number;
   totalTDSDeducted?: number;
 }
 
@@ -563,19 +563,9 @@ export function EmployerEntryManager({
   const updateEmployer = (id: string, patch: Partial<EmployerEntry>): void =>
     onChange(entries.map((e) => (e.id === id ? { ...e, ...patch } : e)));
 
-  const totalGross = entries.reduce((total, e) =>
-    total +
-    money(e.basic) + money(e.da) + money(e.hra) + money(e.lta) +
-    money(e.bonus) + money(e.commission) + money(e.allowances) + money(e.otherAllowance) +
-    money(e.arrearSalary) + money(e.perquisites) + money(e.profitsInLieu) +
-    money(e.commutedPension) + money(e.gratuity) + money(e.leaveEncashment) +
-    money(e.vrsCompensation) + money(e.retrenchmentCompensation), 0);
-
-  const hasBackendResult = money(backendResult?.grossSalaryTotal) > 0;
-  const finalGross = hasBackendResult ? money(backendResult?.grossSalaryTotal) : totalGross;
-  const finalExemptions = hasBackendResult
-    ? money(backendResult?.totalSection10Exempt) + money(backendResult?.totalSection16Deductions)
-    : 0;
+  const hasBackendResult = backendResult !== null && backendResult !== undefined;
+  const finalGross = money(backendResult?.grossSalary);
+  const finalExemptions = money(backendResult?.totalSection10Exempt) + money(backendResult?.totalSection16Deductions);
 
   const totalSalaryTDS = tdsEntries
     .filter((e) => (e.section === '192' || e.section === '192A') && e.claimedInReturn !== false)
@@ -622,32 +612,27 @@ export function EmployerEntryManager({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <h4 style={{ margin: 0, fontSize: 14, color: 'var(--gold-light)' }}>Schedule S -- Salary Summary</h4>
             <span style={{ fontSize: 11, padding: '2px 8px', background: hasBackendResult ? 'var(--success)' : '#4a5568', borderRadius: 4, color: '#fff' }}>
-              {hasBackendResult ? 'Live' : 'Local estimate'}
+              {hasBackendResult ? 'Live' : 'Awaiting computation'}
             </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 16 }}>
             <div>
               <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 4 }}>GROSS SALARY</div>
-              <strong style={{ fontSize: 22 }}>&#x20B9;{formatINR(finalGross)}</strong>
+              <strong style={{ fontSize: 22 }}>{hasBackendResult ? `₹${formatINR(finalGross)}` : '—'}</strong>
             </div>
             <div>
               <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 4 }}>SECTION 10 + 16</div>
-              <strong style={{ fontSize: 22, color: '#86efac' }}>&#x20B9;{formatINR(finalExemptions)}</strong>
+              <strong style={{ fontSize: 22, color: '#86efac' }}>{hasBackendResult ? `₹${formatINR(finalExemptions)}` : '—'}</strong>
             </div>
             <div>
               <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 4 }}>NET TAXABLE SALARY</div>
-              <strong style={{ fontSize: 22, color: 'var(--gold-light)' }}>&#x20B9;{formatINR(backendResult?.netTaxableSalary)}</strong>
-            </div>
-            <div>
-              <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 4 }}>SALARY TDS (SEC 192)</div>
-              <strong style={{ fontSize: 22, color: '#a5f3fc' }}>&#x20B9;{formatINR(totalSalaryTDS)}</strong>
-              <div style={{ opacity: 0.55, fontSize: 10, marginTop: 3 }}>from TDS &amp; Advance Tax tab</div>
+              <strong style={{ fontSize: 22, color: 'var(--gold-light)' }}>{hasBackendResult ? `₹${formatINR(money(backendResult?.incomeFromSal))}` : '—'}</strong>
             </div>
           </div>
           <div style={{ marginTop: 14, opacity: 0.65, fontSize: 11 }}>
             {hasBackendResult
-              ? 'Values from tax engine computation.'
-              : 'Local gross shown. Run computation to see net taxable salary after exemptions and deductions.'}
+              ? 'Values are from the tax engine computation.'
+              : 'Run computation to view the tax-engine result.'}
           </div>
         </div>
       )}

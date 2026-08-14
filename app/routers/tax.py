@@ -395,10 +395,39 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         hra_condition2 = hra_result.rent_minus_10pct_salary
         hra_condition3 = hra_result.salary_factor
     else:
-        # No structured HRA detail — the exemption cannot be computed
-        # statutorily; surface the declared value as-is (validation layer
-        # will flag it).  Conditions remain zero for display.
-        hra_exempt = sum((_money(row.get("hraExempt")) for row in salary_rows), Decimal("0"))
+        # No top-level hraDetails object.  The frontend sends HRA facts
+        # per-employer inside employerEntries (hra, rentPaid, basic, da,
+        # isMetroCity).  Statutorily recompute the exemption for each
+        # employer and sum — the ITD schema permits per-employer HRA
+        # evidence (Schedule EA10_13A).  When an employer has HRA but no
+        # rent/metro facts the exemption for that row is zero.
+        hra_exempt = Decimal("0")
+        for row in salary_rows:
+            row_hra = _money(row.get("hra", row.get("hraReceived")))
+            row_rent = _money(row.get("rentPaid"))
+            row_basic = _money(row.get("basic"))
+            row_da = _money(row.get("da"))
+            row_salary = row_basic + row_da
+            row_metro = bool(
+                row.get("isMetroCity", row.get("hraMetro", False))
+            )
+            if row_hra > 0 and row_rent > 0 and row_salary > 0:
+                row_result = compute_hra_exemption(
+                    actual_hra_received=row_hra,
+                    rent_paid=row_rent,
+                    salary=row_salary,
+                    is_metro=row_metro,
+                )
+                hra_exempt += row_result.exempt_amount
+                # Aggregate display conditions across employers.
+                hra_condition1 += row_result.actual_hra_received
+                hra_condition2 += row_result.rent_minus_10pct_salary
+                hra_condition3 += row_result.salary_factor
+                hra_is_metro = row_metro or hra_is_metro
+            elif row_hra > 0:
+                # HRA received but rent/metro facts missing — surface the
+                # declared hraExempt (zero if absent) so validation flags it.
+                hra_exempt += _money(row.get("hraExempt"))
     lta_exempt = sum((_money(row.get("ltaExempt")) for row in salary_rows), Decimal("0"))
     prof_tax = sum(
         (_money(row.get("professionalTax", row.get("profTax"))) for row in salary_rows),
@@ -421,34 +450,50 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         is_government_employee=is_govt,
     )
     
-    # 2. Map the first canonical property; ITR-1/4 computation schemas currently
-    # represent one aggregate property schedule.
+    # 2. Map every canonical housePropertyEntries row. The CBDT AY 2026-27
+    # ITR-1 V1.1 schema permits at most two PropertyDetails rows; the
+    # ITR1Input schema enforces this cap. Legacy single-property payloads
+    # (no housePropertyEntries array) fall back to the flat payload.
     properties = _records(payload, "housePropertyEntries")
-    property_row = properties[0] if properties else payload
-    raw_hp_type = str(property_row.get("propertyType", property_row.get("hpType", "self"))).upper()
-    property_type = {
+    if not properties:
+        properties = [payload]
+
+    hp_type_map = {
         "SELF": PropertyType.SELF_OCCUPIED,
         "SELF_OCCUPIED": PropertyType.SELF_OCCUPIED,
         "LET_OUT": PropertyType.LET_OUT,
         "DEEMED_LET_OUT": PropertyType.DEEMED_LET_OUT,
-    }.get(raw_hp_type, PropertyType.LET_OUT)
-    loan_interest = _money(property_row.get("interestOnLoan"))
-    if loan_interest == 0:
-        loan_interest = sum(
-            (_money(loan.get("interestUs24B")) for loan in _records(property_row, "homeLoans")),
-            Decimal("0"),
+    }
+
+    def _build_hp_input(property_row: dict) -> HousePropertyIncome:
+        raw_hp_type = str(property_row.get("propertyType", property_row.get("hpType", "self"))).upper()
+        property_type = hp_type_map.get(raw_hp_type, PropertyType.LET_OUT)
+        loan_interest = _money(property_row.get("interestOnLoan"))
+        if loan_interest == 0:
+            loan_interest = sum(
+                (_money(loan.get("interestUs24B")) for loan in _records(property_row, "homeLoans")),
+                Decimal("0"),
+            )
+        if loan_interest == 0:
+            loan_interest = _money(property_row.get("homeLoanInt", property_row.get("sopLoanInt")))
+        return HousePropertyIncome(
+            property_type=property_type,
+            annual_rent_received=_money(
+                property_row.get(
+                    "annualRent",
+                    property_row.get("annualLettingValue", property_row.get("grossRent")),
+                )
+            ),
+            municipal_taxes_paid=_money(property_row.get("municipalTaxesPaid", property_row.get("munTax"))),
+            home_loan_interest_paid=loan_interest,
+            municipal_value=_money(property_row.get("municipalRateableValue")),
+            fair_rent=_money(property_row.get("fairRentValue")),
+            arrears_unrealised_rent_received=_money(property_row.get("arrearsOfRent")),
         )
-    if loan_interest == 0:
-        loan_interest = _money(property_row.get("homeLoanInt", property_row.get("sopLoanInt")))
-    hp_input = HousePropertyIncome(
-        property_type=property_type,
-        annual_rent_received=_money(property_row.get("annualRent", property_row.get("grossRent"))),
-        municipal_taxes_paid=_money(property_row.get("municipalTaxesPaid", property_row.get("munTax"))),
-        home_loan_interest_paid=loan_interest,
-        municipal_value=_money(property_row.get("municipalRateableValue")),
-        fair_rent=_money(property_row.get("fairRentValue")),
-        arrears_unrealised_rent_received=_money(property_row.get("arrearsOfRent")),
-    )
+
+    hp_inputs = [_build_hp_input(property_row) for property_row in properties]
+    # Backward-compatible single-property scalar (first row).
+    hp_input = hp_inputs[0]
     
     # 3. Map Other Sources. Canonical rows take precedence over scalar aliases.
     interest_rows = _records(payload, "interestEntries") or _records(payload, "bankInterestEntries")
@@ -612,7 +657,13 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         amount_80d_preventive_parents=preventive_parents,
         has_parents_senior=parents_are_senior,
         amount_80e=_money(payload.get("s80E")),
-        amount_80tta=_money(payload.get("s80TTA")),
+        # 80TTA is derived from eligible savings-account interest only.
+        # FD/RD and other deposit interest are intentionally excluded.
+        amount_80tta=(
+            min(interest_sb + post_office_interest, Decimal("10000"))
+            if tax_regime == TaxRegime.OLD
+            else Decimal("0")
+        ),
         amount_80ttb=_money(payload.get("s80TTB")),
         amount_80g=(structured_80g_claim if donations else _money(payload.get("s80G"))),
         donations_80g=donations or None,
@@ -937,6 +988,7 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         tax_regime=tax_regime,
         salary_income=salary_input,
         house_property_income=hp_input,
+        house_properties=hp_inputs,
         other_sources_income=os_input,
         deductions_chapter6a=ded_input,
         capital_gains=cg_input,
@@ -963,6 +1015,9 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
     )
 
     if is_itr4:
+        # ITR-4 schema does not yet expose a multi-property list field; drop
+        # the ITR-1-only house_properties kwarg before splatting common_input.
+        itr4_common_input = {k: v for k, v in common_input.items() if k != "house_properties"}
         if presumptive_type == "44ADA":
             digital = _money(business_row.get("digitalReceipts")) if business_row else biz_turnover
             cash = _money(business_row.get("nonDigitalReceipts")) if business_row else Decimal("0")
@@ -971,7 +1026,7 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
                 gross = digital + cash
             declared = _money(business_row.get("declaredIncome")) if business_row else bp_profit
             itr4_in = ITR4Input(
-                **common_input,
+                **itr4_common_input,
                 presumptive_scheme=PresumptiveScheme.S44ADA,
                 professional_income_44ada=PresumptiveProfessionalIncome44ADA(
                     gross_receipts=gross,
@@ -995,7 +1050,7 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
                     income_declared=_money(vehicle.get("presumptiveIncome")) or None,
                 ))
             itr4_in = ITR4Input(
-                **common_input,
+                **itr4_common_input,
                 presumptive_scheme=PresumptiveScheme.S44AE,
                 goods_carriage_44ae=PresumptiveGoodsCarriage44AE(vehicles=vehicles),
             )
@@ -1005,7 +1060,7 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
             total = digital + cash if business_row else biz_turnover
             declared = _money(business_row.get("declaredIncome")) if business_row else bp_profit
             itr4_in = ITR4Input(
-                **common_input,
+                **itr4_common_input,
                 presumptive_scheme=PresumptiveScheme.S44AD,
                 business_income_44ad=PresumptiveBusinessIncome44AD(
                     total_turnover=total,
@@ -1105,7 +1160,7 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
     return {
         # ── Income Summary (CBDT ITR1_IncomeDeductions) ──
         "grossSalary": float(gross_salary),
-        "hraExempt": float(hra_exempt),
+        "hraExempt": float(getattr(res, "salary_hra_exempt", hra_exempt)),
         "salaryBeforeSection16": salary_before_section16,
         "netSalary": net_salary,
         "incomeFromSal": float(res.salary_income),
@@ -1240,8 +1295,8 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         "vdaGains": float(getattr(res, 'vda_income', Decimal("0"))),
         "cgTax": float(res.special_rate_tax),
         "totalInterest": float(total_interest),
-        "interestDeduction80TTA": float(payload.get("s80TTA", 0) or 0),
-        "interestDeduction80TTB": float(payload.get("s80TTB", 0) or 0),
+        "interestDeduction80TTA": float(deduction_breakdown.get("80TTA", 0)),
+        "interestDeduction80TTB": float(deduction_breakdown.get("80TTB", 0)),
         "totalDividend": float(total_dividend),
         "dividendTaxableAtSpecialRate": 0.0,
         "dividendTaxableAtNormalRate": total_dividend,

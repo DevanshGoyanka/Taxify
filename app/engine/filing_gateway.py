@@ -619,36 +619,58 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
             is_metro_city=is_metro,
         )
 
-    # House Property — first property only (ITR-1 supports one aggregate)
+    # House Property — map every canonical housePropertyEntries row. The
+    # CBDT AY 2026-27 ITR-1 V1.1 schema permits at most two PropertyDetails
+    # rows; the ITR1Input schema enforces this cap. Legacy single-property
+    # payloads (no housePropertyEntries array) fall back to the flat payload.
     properties = _records(payload, "housePropertyEntries")
-    prop = properties[0] if properties else payload
-    raw_hp_type = str(
-        prop.get("propertyType", prop.get("hpType", "self"))
-    ).upper()
-    property_type = {
+    if not properties:
+        properties = [payload]
+
+    hp_type_map = {
         "SELF": PropertyType.SELF_OCCUPIED,
         "SELF_OCCUPIED": PropertyType.SELF_OCCUPIED,
         "LET_OUT": PropertyType.LET_OUT,
         "DEEMED_LET_OUT": PropertyType.DEEMED_LET_OUT,
-    }.get(raw_hp_type, PropertyType.LET_OUT)
-    loan_interest = _money(prop.get("interestOnLoan"))
-    if loan_interest == 0:
-        loan_interest = sum(
-            _money(loan.get("interestUs24B"))
-            for loan in _records(prop, "homeLoans")
-        )
-    if loan_interest == 0:
-        loan_interest = _money(prop.get("homeLoanInt", prop.get("sopLoanInt")))
+    }
 
-    hp_input = HousePropertyIncome(
-        property_type=property_type,
-        annual_rent_received=_money(prop.get("annualRent", prop.get("grossRent"))),
-        municipal_taxes_paid=_money(prop.get("municipalTaxesPaid", prop.get("munTax"))),
-        home_loan_interest_paid=loan_interest,
-        municipal_value=_money(prop.get("municipalRateableValue")),
-        fair_rent=_money(prop.get("fairRentValue")),
-        arrears_unrealised_rent_received=_money(prop.get("arrearsOfRent")),
-    )
+    def _build_hp_input(prop: dict) -> HousePropertyIncome:
+        raw_hp_type = str(prop.get("propertyType", prop.get("hpType", "self"))).upper()
+        property_type = hp_type_map.get(raw_hp_type, PropertyType.LET_OUT)
+        loan_interest = _money(prop.get("interestOnLoan"))
+        if loan_interest == 0:
+            loan_interest = sum(
+                _money(loan.get("interestUs24B"))
+                for loan in _records(prop, "homeLoans")
+            )
+        if loan_interest == 0:
+            loan_interest = _money(prop.get("homeLoanInt", prop.get("sopLoanInt")))
+        return HousePropertyIncome(
+            property_type=property_type,
+            annual_rent_received=_money(
+                prop.get("annualRent", prop.get("annualLettingValue", prop.get("grossRent")))
+            ),
+            municipal_taxes_paid=_money(prop.get("municipalTaxesPaid", prop.get("munTax"))),
+            home_loan_interest_paid=loan_interest,
+            municipal_value=_money(prop.get("municipalRateableValue")),
+            fair_rent=_money(prop.get("fairRentValue")),
+            arrears_unrealised_rent_received=_money(prop.get("arrearsOfRent")),
+        )
+
+    def _build_property_profile(prop: dict, fallback: PropertyFilingProfile) -> PropertyFilingProfile:
+        address = str(prop.get("address", prop.get("name", ""))).strip() or fallback.address_detail
+        return PropertyFilingProfile(
+            address_detail=address[:50],
+            city_or_town_or_district=str(prop.get("city", payload.get("city", ""))).strip() or fallback.city_or_town_or_district,
+            state_code=str(prop.get("state", payload.get("state", ""))).strip() or fallback.state_code,
+            country_code=str(prop.get("countryCode", payload.get("country", "91"))).strip() or fallback.country_code,
+            pin_code=(str(prop.get("pinCode", payload.get("pincode", ""))).strip() or fallback.pin_code),
+            zip_code=(str(prop.get("zipCode", payload.get("zipCode", ""))).strip() or fallback.zip_code),
+        )
+
+    hp_inputs = [_build_hp_input(prop) for prop in properties]
+    # Backward-compatible single-property scalar (first row).
+    hp_input = hp_inputs[0]
 
     # Other Sources — mirror tax.py
     interest_rows = _records(payload, "interestEntries") or _records(payload, "bankInterestEntries")
@@ -827,7 +849,8 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         amount_80d_preventive_parents=Decimal("0"),
         has_parents_senior=parents_are_senior,
         amount_80e=old_regime_amount(_money(payload.get("s80E"))),
-        amount_80tta=old_regime_amount(_money(payload.get("s80TTA"))),
+        # Savings-account interest alone qualifies under 80TTA; FD interest does not.
+        amount_80tta=old_regime_amount(min(interest_sb + post_office, Decimal("10000"))),
         amount_80ttb=old_regime_amount(_money(payload.get("s80TTB"))),
         amount_80g=old_regime_amount(structured_80g_claim if donations else _money(payload.get("s80G"))),
         amount_80gga=old_regime_amount(
@@ -994,23 +1017,30 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         if isinstance(row, dict)
     ]
 
-    property_address = str(prop.get("address", prop.get("name", ""))).strip()
-    if not property_address:
-        property_address = primary_address.residence_no
+    # Build a backward-compatible single property_profile from the first row,
+    # and a property_profiles list (one per housePropertyEntries row) for the
+    # official two-property AY 2026-27 ITR-1 schema. The schema's
+    # model_validator reconciles both representations.
+    first_prop = properties[0]
+    first_address = str(first_prop.get("address", first_prop.get("name", ""))).strip()
+    if not first_address:
+        first_address = primary_address.residence_no
     property_profile = PropertyFilingProfile(
-        address_detail=property_address[:50],
-        city_or_town_or_district=str(prop.get("city", payload.get("city", ""))).strip() or primary_address.city_or_town_or_district,
-        state_code=str(prop.get("state", payload.get("state", ""))).strip() or primary_address.state_code,
-        country_code=str(prop.get("countryCode", payload.get("country", "91"))).strip() or primary_address.country_code,
-        pin_code=(str(prop.get("pinCode", payload.get("pincode", ""))).strip() or primary_address.pin_code),
-        zip_code=(str(prop.get("zipCode", payload.get("zipCode", ""))).strip() or None),
+        address_detail=first_address[:50],
+        city_or_town_or_district=str(first_prop.get("city", payload.get("city", ""))).strip() or primary_address.city_or_town_or_district,
+        state_code=str(first_prop.get("state", payload.get("state", ""))).strip() or primary_address.state_code,
+        country_code=str(first_prop.get("countryCode", payload.get("country", "91"))).strip() or primary_address.country_code,
+        pin_code=(str(first_prop.get("pinCode", payload.get("pincode", ""))).strip() or primary_address.pin_code),
+        zip_code=(str(first_prop.get("zipCode", payload.get("zipCode", ""))).strip() or None),
     )
+    property_profiles = [_build_property_profile(prop, property_profile) for prop in properties]
 
     return ITR1Input(
         age_bracket=age_bracket,
         tax_regime=tax_regime,
         salary_income=salary_input,
         house_property_income=hp_input,
+        house_properties=hp_inputs,
         other_sources_income=os_input,
         deductions_chapter6a=ded_input,
         capital_gains=cg_input,
@@ -1030,6 +1060,7 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         relief_89=_money(payload.get("relief89", payload.get("relief_89"))),
         filing_profile=filing_profile,
         property_profile=property_profile,
+        property_profiles=property_profiles,
         bank_accounts=bank_accounts,
         schedule_80gga=schedule_80gga,
         schedule_80ggc=schedule_80ggc,

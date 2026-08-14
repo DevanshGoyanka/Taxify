@@ -584,6 +584,9 @@ export default function ITRComputationPage() {
   useEffect(() => {
     if (!clientId || loading || loadedReturnKeyRef.current !== `${clientId}:${effectiveAssessmentYear}`) return;
     const requestId = ++computationGenerationRef.current;
+    // A result is authoritative only for the exact payload that produced it.
+    // Clear the prior draft's calculation while this draft is being recomputed.
+    setBackendTaxResult(null);
     setTaxResultLoading(true);
     setTaxResultError(null);
 
@@ -1426,7 +1429,8 @@ export default function ITRComputationPage() {
       (formData.severance || 0) > 0 ||
       (formData.vrs || 0) > 0;
     
-    const hasMultipleProperties = formData.hpType === 'letout' && (formData.grossRent || 0) > 0;
+    const housePropertyEntries = Array.isArray(formData.housePropertyEntries) ? formData.housePropertyEntries : [];
+    const hasMultipleProperties = housePropertyEntries.length > 2;
     const hasForeignIncome = (formData.foreignIncome || 0) > 0 || (formData.foreignAssets || 0) > 0;
     const totalIncome = taxResult.totalIncome || 0;
     const agriculturalIncome = formData.agriculturalIncome || 0;
@@ -2191,8 +2195,8 @@ export default function ITRComputationPage() {
         border: '1px solid var(--border)'
       }}>
         {activeTab === 0 && <PersonalInfoTab formData={formData} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={setFormData} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} />}
-        {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={taxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={formData.tdsEntries || []} />}
-        {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} />}
+        {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={formData.tdsEntries || []} />}
+        {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} taxResult={backendTaxResult} />}
         {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
         {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel} />}
@@ -2367,8 +2371,8 @@ function SalaryTab({ entries, onChange, taxResult, ayParam, regime, tdsEntries }
   return <EmployerEntryManager entries={entries} onChange={onChange} assessmentYear={ayParam || '2026-27'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} tdsEntries={tdsEntries || []} />;
 }
 
-function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm }: any) {
-  return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} />;
+function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm, taxResult }: any) {
+  return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} taxResult={taxResult} />;
 }
 
 function CapitalGainsTab({ formData, setFormData, taxResult, itrForm }: any) {

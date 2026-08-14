@@ -79,8 +79,9 @@ export function collectEligibilityFacts(
     m('cardGameIncome') > 0 || m('horseRaceIncome') > 0 || m('raceWinnings') > 0;
   const hasVdaIncome = m('vdaGains') > 0;
   const hasForeignIncomeOrAssets = m('foreignIncome') > 0 || m('foreignAssets') > 0;
+  // Official AY 2026-27 ITR-1 V1.1 schema permits PropertyDetails.maxItems = 2.
   const hasMultipleHouseProperties =
-    (Array.isArray(formData.housePropertyEntries) && formData.housePropertyEntries.length > 1) ||
+    (Array.isArray(formData.housePropertyEntries) && formData.housePropertyEntries.length > 2) ||
     (formData.hpType === 'letout' && m('grossRent') > 0 && (formData.hpType2 !== undefined));
 
   // ── Questionnaire / explicit ──

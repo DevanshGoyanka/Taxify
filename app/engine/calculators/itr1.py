@@ -6,7 +6,7 @@ Composes schedule modules to produce a complete ITR-1 computation.
 ITR-1 eligibility:
   - Resident individual
   - Total income <= Rs 50 lakh
-  - Income from: Salary, One House Property, Other Sources
+  - Income from: Salary, up to two House Properties, Other Sources
   - LTCG u/s 112A only (capped at Rs 1.25 lakh), no other capital gains
   - No business/professional income
   - No foreign assets/income
@@ -51,7 +51,7 @@ from app.engine.common.cess import compute as compute_cess
 from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234f, compute_234i
 from app.engine.constants import LTCG_112A_EXEMPTION, LTCG_112A_RATE_POST_JUL24
 from app.engine.schedules.salary import compute as compute_salary
-from app.engine.schedules.house_property import compute as compute_hp, apply_inter_head_loss_limit
+from app.engine.schedules.house_property import HPResult, compute as compute_hp, apply_inter_head_loss_limit
 from app.engine.schedules.other_sources import compute as compute_os
 from app.engine.schedules.agricultural import (
     compute as compute_agri,
@@ -84,6 +84,11 @@ class ITR1Result:
     normal_rate_income: Decimal = Decimal("0")
     income_chargeable_above_basic_exemption: Decimal = Decimal("0")
     nil_tax_reason: str | None = None
+
+    # Per-property house-property schedule results (one per ITR-1 row).
+    # Ordered to match the ITR1Input.house_properties list; the first entry
+    # corresponds to HPSNo 1, the second to HPSNo 2.
+    hp_results: list = field(default_factory=list)
 
     # Salary detail (for ITD JSON output)
     salary_gross: Decimal = Decimal("0")
@@ -184,11 +189,13 @@ def _check_itr1_eligibility(input_data: ITR1Input) -> list[str]:
             "File ITR-2."
         )
 
-    # 6. At most 1 house property
-    if input_data.house_property_count > 1:
+    # 6. Official AY 2026-27 ITR-1 schema permits at most two PropertyDetails rows.
+    hp_rows = input_data.reconciled_house_properties() or [input_data.house_property_income]
+    property_count = max(input_data.house_property_count, len(hp_rows))
+    if property_count > 2:
         errors.append(
-            f"Ineligible for ITR-1: Assessee owns {input_data.house_property_count} "
-            "house properties. ITR-1 allows at most 1. File ITR-2."
+            f"Ineligible for ITR-1: Assessee owns {property_count} house properties. "
+            "Official ITR-1 supports at most 2. File ITR-2."
         )
 
     # 7. Agricultural income must NOT exceed ₹5,000 for ITR-1
@@ -217,17 +224,35 @@ def compute(input_data: ITR1Input) -> ITR1Result:
 
     # ── 1. Heads of Income ───────────────────────────────────────────────────
     sal = compute_salary(input_data.salary_income, regime)
-    hp = compute_hp(input_data.house_property_income, regime)
+    # Use the typed multi-property list when supplied; fall back to the legacy
+    # single-property field for backward-compatible callers. The helper detects
+    # staleness from model_copy(update=...) and returns the authoritative list.
+    hp_inputs = input_data.reconciled_house_properties() or [input_data.house_property_income]
+    # Defensive clamp — the eligibility gate already rejects >2.
+    if len(hp_inputs) > 2:
+        result.errors.append(
+            "Ineligible for ITR-1: more than two house properties supplied. File ITR-2."
+        )
+        return result
+    hp_results = [compute_hp(hp_input, regime) for hp_input in hp_inputs]
+    # Aggregate intra-head income BEFORE applying the inter-head loss limit
+    # (Section 24(b) self-occupied interest cap and Section 71B set-off).
+    hp_income_before_setoff = sum((hp.income_chargeable for hp in hp_results), Decimal("0"))
+    hp_setoff = apply_inter_head_loss_limit(
+        HPResult(income_chargeable=hp_income_before_setoff),
+        regime,
+    )
     os = compute_os(input_data.other_sources_income, regime)
     result.schedules["salary"] = sal
-    result.schedules["hp"] = hp
+    result.schedules["hp"] = hp_results
     result.schedules["os"] = os
 
     result.salary_income = sal.income_chargeable
-
-    hp_setoff = apply_inter_head_loss_limit(hp, regime)
     result.house_property_income = hp_setoff.allowed_income
     result.hp_loss_disallowed = hp_setoff.disallowed_loss
+    # Retain per-property HP results so the official JSON builder can emit
+    # one PropertyDetails row per property (HPSNo 1 and 2).
+    result.hp_results = hp_results
 
     result.other_sources_income = os.income_chargeable
 

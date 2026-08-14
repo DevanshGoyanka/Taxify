@@ -856,9 +856,15 @@ class ITR1Input(BaseModel):
         description="Details of salary and allowances received during the year.",
     )
     house_property_income: HousePropertyIncome = Field(
+        description="Primary house-property details retained for backward-compatible ITR-1 callers.",
+    )
+    house_properties: List[HousePropertyIncome] = Field(
+        default_factory=list,
+        max_length=2,
         description=(
-            "Details of the single house property owned by the assessee. "
-            "ITR-1 does not permit more than one property."
+            "Official AY 2026-27 ITR-1 PropertyDetails rows. The CBDT V1.1 "
+            "schema permits at most two properties. When supplied, these rows "
+            "replace the backward-compatible house_property_income field."
         ),
     )
     other_sources_income: OtherSourcesIncome = Field(
@@ -921,7 +927,7 @@ class ITR1Input(BaseModel):
     is_director: bool = Field(default=False, description="True if assessee is a director in any company (disqualifies ITR-1).")
     has_foreign_assets: bool = Field(default=False, description="True if assessee holds foreign assets or has foreign income (disqualifies ITR-1).")
     has_unlisted_equity: bool = Field(default=False, description="True if assessee holds unlisted equity shares (disqualifies ITR-1).")
-    house_property_count: int = Field(default=1, ge=1, description="Number of house properties owned. ITR-1 allows at most 1.")
+    house_property_count: int = Field(default=1, ge=1, le=2, description="Number of house properties owned. Official AY 2026-27 ITR-1 permits at most 2.")
 
     # --- Quarterly advance tax ---
     advance_tax_q1: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 June (Q1)")
@@ -998,7 +1004,100 @@ class ITR1Input(BaseModel):
     schedule_tcs_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
     filing_profile: Optional["ITR1FilingProfile"] = None
     property_profile: Optional["PropertyFilingProfile"] = None
+    property_profiles: List["PropertyFilingProfile"] = Field(
+        default_factory=list,
+        max_length=2,
+        description=(
+            "Official AY 2026-27 ITR-1 PropertyDetails address/ownership "
+            "profiles, one per row in ``house_properties``. When supplied, "
+            "the i-th profile corresponds to the i-th house-property income "
+            "row. A single ``property_profile`` remains supported for "
+            "backward-compatible single-property callers."
+        ),
+    )
     tax_return_preparer: Optional["TaxReturnPreparer"] = None
+
+    @model_validator(mode="after")
+    def reconcile_house_property_rows(self) -> "ITR1Input":
+        """Reconcile the single- and multi-property representations.
+
+        The CBDT AY 2026-27 ITR-1 schema permits at most two
+        ``PropertyDetails`` rows (V1.1 ``PropertyDetails.maxItems = 2``).
+        Callers may supply either the legacy single-property fields
+        (``house_property_income`` + ``property_profile``) or the typed
+        list fields (``house_properties`` + ``property_profiles``). This
+        validator normalises both directions so the computation engine
+        and the official-JSON builder only need to read ``house_properties``
+        and ``property_profiles``.
+        """
+        # 1. Ensure house_properties is populated for legacy callers.
+        if not self.house_properties:
+            self.house_properties = [self.house_property_income]
+        # 2. Enforce the official two-row cap.
+        if len(self.house_properties) > 2:
+            raise ValueError(
+                "ITR-1 supports at most two house properties; "
+                f"{len(self.house_properties)} rows were supplied."
+            )
+        # 3. Mirror house_property_income to the first row for any legacy
+        #    reader that still inspects the scalar field.
+        if self.house_property_income is not self.house_properties[0]:
+            self.house_property_income = self.house_properties[0]
+        # 4. Mirror property_profiles ↔ property_profile (single row).
+        if not self.property_profiles:
+            if self.property_profile is not None:
+                self.property_profiles = [self.property_profile]
+        else:
+            if len(self.property_profiles) > 2:
+                raise ValueError(
+                    "ITR-1 supports at most two property profiles; "
+                    f"{len(self.property_profiles)} rows were supplied."
+                )
+            if self.property_profile is None:
+                self.property_profile = self.property_profiles[0]
+            else:
+                # Keep the i-th profile authoritative for the i-th row.
+                if self.property_profile is not self.property_profiles[0]:
+                    self.property_profiles[0] = self.property_profile
+        # 5. Keep house_property_count in sync with the row count.
+        row_count = max(len(self.house_properties), len(self.property_profiles) or 1)
+        if row_count > 2:
+            raise ValueError(
+                "ITR-1 supports at most two house properties."
+            )
+        self.house_property_count = max(self.house_property_count, row_count)
+        return self
+
+    def reconciled_house_properties(self) -> list["HousePropertyIncome"]:
+        """Return the authoritative house-property input list.
+
+        The schema's ``model_validator`` keeps ``house_properties`` and the
+        legacy scalar ``house_property_income`` in sync at construction time.
+        However, ``model_copy(update={"house_property_income": X})`` mutates
+        the scalar without re-running the validator, leaving the list stale.
+        This helper detects that staleness and returns the authoritative list
+        so the calculator and ITD builder always read consistent inputs.
+        """
+        if self.house_properties and self.house_properties[0] is self.house_property_income:
+            return list(self.house_properties)
+        # Stale list (or single-property caller): the scalar is authoritative.
+        if self.house_property_income is not None:
+            return [self.house_property_income]
+        return list(self.house_properties)
+
+    def reconciled_property_profiles(self) -> list["PropertyFilingProfile"]:
+        """Return the authoritative property-profile list (mirrors the above).
+
+        If the scalar ``property_profile`` was explicitly cleared (e.g. via
+        ``model_copy(update={"property_profile": None})``) the list is stale
+        and we return an empty list so downstream builders raise the required
+        "property_profile is required" error.
+        """
+        if self.property_profile is None:
+            return []
+        if self.property_profiles and self.property_profiles[0] is self.property_profile:
+            return list(self.property_profiles)
+        return [self.property_profile]
 
     def loan_schedule_rows(self, section: str) -> list["OfficialDeductionLoanEntry"]:
         """Return canonical official loan rows and reject incomplete legacy copies."""
