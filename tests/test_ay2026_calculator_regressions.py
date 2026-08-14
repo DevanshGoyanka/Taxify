@@ -1248,3 +1248,55 @@ def test_itr1_87a_marginal_relief_negative_control_old_regime_5_20L() -> None:
     assert Decimal(str(result["grossTaxLiability"])) == Decimal("17160")
     assert Decimal(str(result["netTaxLiability"])) == Decimal("17160")
 
+
+# ---------------------------------------------------------------------------
+# TEST 5 — LTCG u/s 112A inside ITR-1: exemption math + isolation from slab
+# ---------------------------------------------------------------------------
+
+def test_itr1_ltcg_112a_exemption_and_slab_isolation() -> None:
+    """Test 5: ₹1,25,000 LTCG u/s 112A exemption and slab isolation.
+
+    ITR-1's eligibility cap on 112A gains (₹1,25,000) exactly equals the
+    exemption threshold, so taxable LTCG inside any valid ITR-1 filing is
+    always ₹0. The engine must:
+      (a) keep the ₹1,25,000 LTCG out of the slab-rate income pool,
+      (b) not apply 87A rebate machinery to the (zero) taxable LTCG,
+      (c) use Total Income (including the zero taxable LTCG, not the gross
+          ₹1,25,000) for the marginal-relief threshold test.
+    """
+    # New regime: 13,25,000 gross - 75,000 std = 12,50,000 salary income.
+    # LTCG 112A gross = 1,25,000 (exactly at the ITR-1 cap / exemption).
+    result = compute_tax_summary(
+        payload={
+            "assessmentYear": "2026-27",
+            "form": "ITR-1",
+            "itrForm": "ITR-1",
+            "age": 31,
+            "residentialStatus": "ROR",
+            "employerEntries": [{"basic": "1325000"}],
+            "capitalGainsSchedule": {
+                "simplified112A": {
+                    "totalSaleConsideration": "350000",
+                    "totalCostAcquisition": "225000",
+                },
+            },
+        },
+        regime="NEW",
+        current_user=None,
+    )
+
+    # (a) Normal-rate income excludes the ₹1,25,000 LTCG.
+    assert Decimal(str(result["normalRateIncome"])) == Decimal("1250000")
+    # Total income includes only the (zero) taxable LTCG, not gross ₹1,25,000.
+    assert Decimal(str(result["totalIncome"])) == Decimal("1250000")
+    # (b) CG special-rate tax is zero (exemption correctly applied).
+    assert Decimal(str(result["cgTax"])) == Decimal("0")
+    # Slab tax on 12,50,000: 20,000 + 40,000 + 15%×50,000 = 67,500.
+    assert Decimal(str(result["normalTax"])) == Decimal("67500")
+    # (c) Marginal relief: cap = 12,50,000 - 12,00,000 = 50,000 < 67,500,
+    # so tax capped at 50,000. Cess 4% = 2,000 -> net = 52,000.
+    assert Decimal(str(result["rebate87A"])) == Decimal("17500")
+    assert Decimal(str(result["grossTaxLiability"])) == Decimal("52000")
+    assert Decimal(str(result["netTaxLiability"])) == Decimal("52000")
+
+

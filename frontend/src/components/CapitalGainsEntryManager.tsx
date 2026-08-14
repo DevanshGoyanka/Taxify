@@ -188,7 +188,14 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
   const importedCost = entries.reduce((sum, row) => sum + Number(row.actualCost ?? row.purchaseCost ?? 0), 0);
   const simpleSale = Number(data.simplified112A.totalSaleConsideration || 0);
   const simpleCost = Number(data.simplified112A.totalCostAcquisition || 0);
-  const simpleGain = Math.max(0, Math.min(125000, simpleSale - simpleCost));
+  // Only derive the gain when the user has entered both sale and cost.
+  // When cost is blank (0), we must NOT auto-cap sale to ₹1,25,000 — that
+  // would mislead the user into thinking the gain is ₹1,25,000 when they
+  // haven't actually provided the purchase value yet.
+  const costEntered = Number(data.simplified112A.totalCostAcquisition) > 0;
+  const simpleGain = costEntered
+    ? Math.max(0, Math.min(125000, simpleSale - simpleCost))
+    : 0;
   const allIssues = (summary?.issues || issues).filter(Boolean);
 
   const rows = (key: SectionKey): JsonRow[] => Array.isArray(data[key]) ? data[key] as JsonRow[] : [];
