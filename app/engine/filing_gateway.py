@@ -350,6 +350,21 @@ def _money(value: object) -> Decimal:
     return amount
 
 
+def _first_money(*candidates: object) -> Decimal:
+    """Return the first non-zero monetary value among candidates.
+
+    The frontend always serializes every HouseProperty field (defaulting
+    unused ones to 0), so ``dict.get("annualRent", fallback)`` returns 0
+    and never reaches the ``annualLettingValue`` the user entered. This
+    helper picks the first candidate that parses to a positive amount.
+    """
+    for value in candidates:
+        amount = _money(value)
+        if amount > 0:
+            return amount
+    return Decimal("0")
+
+
 def _date(value: object, field_name: str) -> Optional[datetime.date]:
     if value is None or value == "":
         return None
@@ -647,10 +662,15 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
             loan_interest = _money(prop.get("homeLoanInt", prop.get("sopLoanInt")))
         return HousePropertyIncome(
             property_type=property_type,
-            annual_rent_received=_money(
-                prop.get("annualRent", prop.get("annualLettingValue", prop.get("grossRent")))
+            annual_rent_received=_first_money(
+                prop.get("annualRent"),
+                prop.get("annualLettingValue"),
+                prop.get("grossRent"),
             ),
-            municipal_taxes_paid=_money(prop.get("municipalTaxesPaid", prop.get("munTax"))),
+            municipal_taxes_paid=_first_money(
+                prop.get("municipalTaxesPaid"),
+                prop.get("munTax"),
+            ),
             home_loan_interest_paid=loan_interest,
             municipal_value=_money(prop.get("municipalRateableValue")),
             fair_rent=_money(prop.get("fairRentValue")),

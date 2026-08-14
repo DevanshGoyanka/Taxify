@@ -1078,10 +1078,18 @@ def _test3_two_property_payload() -> dict:
             {
                 "propertyType": "SELF_OCCUPIED",
                 "interestOnLoan": "210000",
+                # The frontend always serializes every HP field (defaulting
+                # unused ones to 0). Both keys are present on every row.
+                "annualRent": 0,
+                "annualLettingValue": 0,
+                "municipalTaxesPaid": 0,
             },
             {
                 "propertyType": "LET_OUT",
-                # This is the actual HousePropertyEntryManager UI field.
+                # This mirrors the actual frontend payload: the UI writes
+                # 'annualLettingValue', but 'annualRent' is still emitted
+                # as 0 on every row. The backend must pick the non-zero one.
+                "annualRent": 0,
                 "annualLettingValue": "300000",
                 "municipalTaxesPaid": "20000",
                 "interestOnLoan": "150000",

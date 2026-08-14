@@ -92,6 +92,22 @@ def _money(value: object) -> Decimal:
     return amount
 
 
+def _first_money(*candidates: object) -> Decimal:
+    """Return the first non-zero monetary value among candidates.
+
+    The frontend serializes every HouseProperty field on every row, so
+    keys like ``annualRent`` are always present (defaulting to 0). A plain
+    ``dict.get("annualRent", fallback)`` therefore returns 0 and never
+    reaches the ``annualLettingValue`` the user actually entered. This
+    helper picks the first candidate that parses to a positive amount.
+    """
+    for value in candidates:
+        amount = _money(value)
+        if amount > 0:
+            return amount
+    return Decimal("0")
+
+
 def _records(payload: dict, key: str) -> list[dict]:
     """Return validated object records from a JSON array field."""
     value = payload.get(key)
@@ -478,13 +494,15 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
             loan_interest = _money(property_row.get("homeLoanInt", property_row.get("sopLoanInt")))
         return HousePropertyIncome(
             property_type=property_type,
-            annual_rent_received=_money(
-                property_row.get(
-                    "annualRent",
-                    property_row.get("annualLettingValue", property_row.get("grossRent")),
-                )
+            annual_rent_received=_first_money(
+                property_row.get("annualRent"),
+                property_row.get("annualLettingValue"),
+                property_row.get("grossRent"),
             ),
-            municipal_taxes_paid=_money(property_row.get("municipalTaxesPaid", property_row.get("munTax"))),
+            municipal_taxes_paid=_first_money(
+                property_row.get("municipalTaxesPaid"),
+                property_row.get("munTax"),
+            ),
             home_loan_interest_paid=loan_interest,
             municipal_value=_money(property_row.get("municipalRateableValue")),
             fair_rent=_money(property_row.get("fairRentValue")),
