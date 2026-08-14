@@ -1154,3 +1154,97 @@ def test_itr1_two_house_properties_new_regime_disallows_hp_loss_and_80tta() -> N
     assert Decimal(str(result["totalDeductions"])) == Decimal("0")
     assert Decimal(str(result["totalIncome"])) == Decimal("871000")
     assert Decimal(str(result["interestDeduction80TTA"])) == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# TEST 4 — Marginal relief on Sec 87A, both regimes (the cliff-edge test)
+# ---------------------------------------------------------------------------
+
+def _test4_marginal_relief_payload(salary_gross: str) -> dict:
+    """Return a minimal salary-only payload producing the requested net TI.
+
+    Old regime: gross - 50,000 std deduction = net taxable income.
+    New regime: gross - 75,000 std deduction = net taxable income.
+    """
+    return {
+        "assessmentYear": "2026-27",
+        "form": "ITR-1",
+        "itrForm": "ITR-1",
+        "age": 31,
+        "residentialStatus": "ROR",
+        "employerEntries": [{"basic": salary_gross}],
+    }
+
+
+def test_itr1_87a_marginal_relief_old_regime_5_10L() -> None:
+    """Test 4 Case B: old regime, TI = 5,10,000.
+
+    Slab tax = 12,500 + 20%×10,000 = 14,500. Marginal relief cap =
+    5,10,000 - 5,00,000 = 10,000. Since 14,500 > 10,000, tax is capped
+    at 10,000. Cess 4% = 400 -> net tax = 10,400.
+    """
+    # Old regime: 5,60,000 gross - 50,000 std = 5,10,000 net TI.
+    result = compute_tax_summary(
+        payload=_test4_marginal_relief_payload("560000"),
+        regime="OLD",
+        current_user=None,
+    )
+    assert Decimal(str(result["totalIncome"])) == Decimal("510000")
+    assert Decimal(str(result["grossTaxLiability"])) == Decimal("10400")
+    assert Decimal(str(result["netTaxLiability"])) == Decimal("10400")
+
+
+def test_itr1_87a_marginal_relief_new_regime_12_10L() -> None:
+    """Test 4 Case A: new regime, TI = 12,10,000.
+
+    Slab tax = 60,000 + 20%×10,000 = 62,000 (per new-regime FY 2025-26
+    slabs: 0-4L nil, 4-8L @5% = 20,000, 8-12L @10% = 40,000, 12-12.1L
+    @15% = 1,500; total = 61,500). Marginal relief cap = 12,10,000 -
+    12,00,000 = 10,000. Since 61,500 > 10,000, tax is capped at 10,000.
+    Cess 4% = 400 -> net tax = 10,400.
+    """
+    # New regime: 12,85,000 gross - 75,000 std = 12,10,000 net TI.
+    result = compute_tax_summary(
+        payload=_test4_marginal_relief_payload("1285000"),
+        regime="NEW",
+        current_user=None,
+    )
+    assert Decimal(str(result["totalIncome"])) == Decimal("1210000")
+    assert Decimal(str(result["grossTaxLiability"])) == Decimal("10400")
+    assert Decimal(str(result["netTaxLiability"])) == Decimal("10400")
+
+
+def test_itr1_87a_marginal_relief_cross_regime_check() -> None:
+    """Both regimes land at exactly ₹10,400 — cross-regime consistency check."""
+    old_result = compute_tax_summary(
+        payload=_test4_marginal_relief_payload("560000"),
+        regime="OLD",
+        current_user=None,
+    )
+    new_result = compute_tax_summary(
+        payload=_test4_marginal_relief_payload("1285000"),
+        regime="NEW",
+        current_user=None,
+    )
+    assert Decimal(str(old_result["netTaxLiability"])) == Decimal("10400")
+    assert Decimal(str(new_result["netTaxLiability"])) == Decimal("10400")
+
+
+def test_itr1_87a_marginal_relief_negative_control_old_regime_5_20L() -> None:
+    """Test 4 negative control: old regime, TI = 5,20,000.
+
+    Slab tax = 12,500 + 20%×20,000 = 16,500. Marginal relief cap =
+    5,20,000 - 5,00,000 = 20,000. Since 16,500 < 20,000, relief must
+    NOT trigger — the app should charge the full 16,500 + cess(660) =
+    17,160, not artificially reduce it.
+    """
+    # Old regime: 5,70,000 gross - 50,000 std = 5,20,000 net TI.
+    result = compute_tax_summary(
+        payload=_test4_marginal_relief_payload("570000"),
+        regime="OLD",
+        current_user=None,
+    )
+    assert Decimal(str(result["totalIncome"])) == Decimal("520000")
+    assert Decimal(str(result["grossTaxLiability"])) == Decimal("17160")
+    assert Decimal(str(result["netTaxLiability"])) == Decimal("17160")
+

@@ -42,9 +42,16 @@ def compute(
     if regime == TaxRegime.OLD:
         if taxable_income <= OLD_REBATE_INCOME_LIMIT:
             return min(available_slab_tax, OLD_REBATE_TAX_LIMIT)
-        return Decimal("0")
+        # Marginal relief: just above the rebate threshold, tax after rebate
+        # must never exceed the income excess over the threshold. The excess
+        # acts as the cap on tax payable, so the rebate is the amount by
+        # which slab tax exceeds that excess. When slab tax is already below
+        # the excess (negative control), no relief triggers.
+        income_excess = taxable_income - OLD_REBATE_INCOME_LIMIT
+        return min(available_slab_tax, max(Decimal("0"), available_slab_tax - income_excess))
 
     if taxable_income <= NEW_REBATE_INCOME_LIMIT:
         return min(available_slab_tax, NEW_REBATE_TAX_LIMIT)
+    # Same marginal-relief principle under the new regime.
     income_excess = taxable_income - NEW_REBATE_INCOME_LIMIT
     return min(available_slab_tax, max(Decimal("0"), available_slab_tax - income_excess))
