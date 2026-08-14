@@ -553,12 +553,11 @@ def _extract_capital_gain_ledger(ais: dict, tis: dict) -> tuple[list[CapitalGain
                         parser_confidence="HIGH",
                     ))
 
-                # Emit sale row only when the parent AIS entry is a sale category.
-                # Purchase-categorised entries (SFT-18(Pur)) include a "total sales
-                # value" column for context, but those redemptions are already
-                # reported as separate AIS sale entries (SFT-18-EMF(M) etc.).
-                # Emitting them here too double-counts the sale proceeds.
-                if sale_amount and sale_amount > 0 and "sale" in category:
+                # SFT-18 detail rows explicitly report the total sales value.
+                # Preserve every non-zero detail-side value as immutable evidence;
+                # later reconciliation controls are responsible for detecting or
+                # resolving cross-source duplication, never the parser.
+                if sale_amount and sale_amount > 0 and ("sale" in category or is_sft18):
                     evidence.append(CapitalGainEvidence(
                         evidence_id=_stable_source_id("AIS", financial_year, download_id, code, summary_sr, detail_sr, "SALE", client_id, sale_amount),
                         granularity=RecordGranularity.TRANSACTION_DETAIL,

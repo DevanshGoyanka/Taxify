@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { BankAccountManager, type BankAccountData } from './BankAccountManager';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
+import { calculateAgeFromDob } from '../utils/age';
 
 export type SupportedItrForm = 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4';
 type FormData = Record<string, unknown>;
@@ -145,11 +146,8 @@ export function PersonalInfoTab({ formData, itrForm, onChange, onBanksChange, on
   };
   const updateAlternateAddress = (key: keyof AddressData, value: string): void => patch({ alternateAddress: { ...alternateAddress, [key]: value } });
   const setDob = (dob: string): void => {
-    const date = new Date(`${dob}T00:00:00`);
-    const reference = new Date('2026-03-31T00:00:00');
-    let age = reference.getFullYear() - date.getFullYear();
-    if (date > reference || (reference.getMonth() < date.getMonth()) || (reference.getMonth() === date.getMonth() && reference.getDate() < date.getDate())) age -= 1;
-    patch({ dob, age: Number.isFinite(age) && age >= 0 ? age : 0 });
+    const assessmentYear = text(formData.assessmentYear) || '2026-27';
+    patch({ dob, age: calculateAgeFromDob(dob, assessmentYear) });
   };
   const renderAddressFields = (address: AddressData, update: (key: keyof AddressData, value: string) => void, prefix: string): React.JSX.Element => {
     const india = address.countryCode === '91';

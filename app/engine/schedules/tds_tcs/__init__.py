@@ -36,7 +36,9 @@ def compute_all(
     result = TdsTcsResult()
 
     for e in (tds1_entries or []):
-        tds_val = getattr(e, "tds_deducted", Decimal("0"))
+        # TDS1 (salary) uses ``tax_deducted`` in the official input schema;
+        # accept the alternate spelling too for mapped legacy records.
+        tds_val = getattr(e, "tax_deducted", getattr(e, "tds_deducted", Decimal("0")))
         result.total_tds_salary += tds_val
         result.total_tds += tds_val
         if getattr(e, "matched_with_26as", True):
@@ -45,7 +47,7 @@ def compute_all(
             result.tds_unmatched += tds_val
 
     for e in (tds2_entries or []):
-        tds_val = getattr(e, "tds_deducted", Decimal("0"))
+        tds_val = getattr(e, "tds_deducted", getattr(e, "tax_deducted", Decimal("0")))
         result.total_tds_other += tds_val
         result.total_tds += tds_val
         if getattr(e, "matched_with_26as", True):

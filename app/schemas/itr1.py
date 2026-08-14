@@ -1620,10 +1620,34 @@ class TaxPaymentDetail(BaseModel):
 
 
 class TDS1Entry(BaseModel):
+    """Salary TDS credit reported in Schedule TDS1.
+
+    Accepts the current canonical field names and maps legacy router/import
+    names before validation so salary tax credits cannot be silently dropped.
+    """
+
     employer_tan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
     employer_name: Optional[str] = Field(default=None, max_length=125)
     income_chargeable: Decimal = Field(default=Decimal("0"), ge=0)
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def map_legacy_salary_tds_fields(cls, value: object) -> object:
+        """Map legacy salary-TDS payload keys to canonical Schedule TDS1 keys."""
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        aliases = {
+            "deductor_tan": "employer_tan",
+            "deductor_name": "employer_name",
+            "total_amount_credited": "income_chargeable",
+            "tax_deducted": "tds_deducted",
+        }
+        for legacy_key, canonical_key in aliases.items():
+            if canonical_key not in payload and legacy_key in payload:
+                payload[canonical_key] = payload[legacy_key]
+        return payload
 
 
 class TDS2Entry(BaseModel):

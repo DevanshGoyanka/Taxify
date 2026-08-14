@@ -235,8 +235,6 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
   const incompatibilities = useMemo(() => compactFormIncompatibilities(os), [os]);
   const interestTotal = sum(os.interest);
   const dividendTotal = sum(os.dividends);
-  // CBDT AY 2026-27: DeductionUs57iia cap is ₹25,000 universally — no regime distinction.
-  const familyPensionDeduction = Math.min(money(os.familyPension.grossAmount) / 3, 25000);
 
   // ── Interest ──
   const addInterest = (): void => { if (disabled) return; patchInterest([...os.interest, { id: genId('interest'), kind: 'SAVINGS_BANK', grossAmount: 0, tdsDeducted: 0, bankName: '', accountType: '', accountNumber: '', ifscCode: '', postOfficeName: '', accountNumberPO: '', nscCertificateNumber: '', yearOfPurchase: 0, scssAccountNumber: '', dateOfOpening: '', deductorName: '', deductorTAN: '', remarks: '' }]); };
@@ -372,10 +370,6 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
           <div style={wideFieldStyle}><label style={labelStyle}>Relation to pensioner</label><input style={inputStyle} type="text" value={os.familyPension.relationToPensioner} disabled={disabled} onChange={(event) => patch({ familyPension: { ...os.familyPension, relationToPensioner: event.target.value } })} /></div>
           <Field label="Gross family pension (₹) *" type="number" value={os.familyPension.grossAmount || ''} disabled={disabled} max={INV} onChange={(value) => patch({ familyPension: { ...os.familyPension, grossAmount: money(Number(value)) } })} />
         </div>
-        <div style={{ ...gridStyle, marginTop: 16 }}>
-          <Field label="Deduction u/s 57(iia) — ₹25,000 cap" type="number" value={familyPensionDeduction} readOnly />
-          <Field label="Net family pension (₹)" type="number" value={money(os.familyPension.grossAmount) - familyPensionDeduction} readOnly />
-        </div>
       </div>}
 
       {os.otherIncome.map((entry, index) => <div key={entry.id} style={entryPanelStyle}>
@@ -489,7 +483,6 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
         <Field label="Other allowable expenses u/s 57 (₹)" type="number" value={os.deductions.expenses || ''} disabled={disabled} max={INV} onChange={(value) => updateDeduction('expenses', money(Number(value)))} />
         <Field label="Interest expense against dividend (₹)" type="number" value={os.deductions.interestExpenseUs57 || ''} disabled={disabled} max={INV} onChange={(value) => updateDeduction('interestExpenseUs57', money(Number(value)))} />
         <Field label="Eligible interest expense u/s 57 (₹)" type="number" value={os.deductions.interestExpenseEligibleUs57 || ''} disabled={disabled} max={INV} onChange={(value) => updateDeduction('interestExpenseEligibleUs57', money(Number(value)))} />
-        <Field label="Family pension deduction u/s 57(iia) (₹)" type="number" value={familyPensionDeduction} readOnly />
         <Field label="Depreciation (₹)" type="number" value={os.deductions.depreciation || ''} disabled={disabled} max={INV} onChange={(value) => updateDeduction('depreciation', money(Number(value)))} />
         <Field label="Total deductions (₹)" type="number" value={totalDeductions} readOnly />
         <Field label="Amount not deductible u/s 58 (₹)" type="number" value={os.deductions.amountNotDeductibleUs58 || ''} disabled={disabled} max={INV} onChange={(value) => updateDeduction('amountNotDeductibleUs58', money(Number(value)))} />

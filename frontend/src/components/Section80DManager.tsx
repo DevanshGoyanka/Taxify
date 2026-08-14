@@ -45,13 +45,6 @@ interface Section80DManagerProps {
   backendEligible?: number | null;
 }
 
-// Caps per official schema
-const CAP_SELF_FAMILY = 25000;
-const CAP_SELF_FAMILY_SR = 50000;
-const CAP_PARENTS = 25000;
-const CAP_PARENTS_SR = 50000;
-const CAP_PREVENTIVE = 5000;
-
 let _policyIdCounter = 1;
 const nextPolicyId = (): string => `80d-p-${Date.now()}-${_policyIdCounter++}`;
 
@@ -61,13 +54,13 @@ function sumPremiums(policies: Policy80D[]): number {
 
 // Category metadata
 type CatKey = 'selfFamily' | 'selfFamilySenior' | 'parents' | 'parentsSenior';
-interface CatMeta { key: CatKey; label: string; shortLabel: string; color: string; cap: number; }
+interface CatMeta { key: CatKey; label: string; shortLabel: string; color: string; }
 
 const CATS: CatMeta[] = [
-  { key: 'selfFamily', label: 'Self & Family (Non-Senior)', shortLabel: 'Self/Fam', color: '#1565c0', cap: CAP_SELF_FAMILY },
-  { key: 'selfFamilySenior', label: 'Self & Family (Senior Citizen)', shortLabel: 'Self/Sr', color: '#2e7d32', cap: CAP_SELF_FAMILY_SR },
-  { key: 'parents', label: 'Parents (Non-Senior)', shortLabel: 'Parents', color: '#ef6c00', cap: CAP_PARENTS },
-  { key: 'parentsSenior', label: 'Parents (Senior Citizen)', shortLabel: 'Parents/Sr', color: '#6a1b9a', cap: CAP_PARENTS_SR },
+  { key: 'selfFamily', label: 'Self & Family (Non-Senior)', shortLabel: 'Self/Fam', color: '#1565c0' },
+  { key: 'selfFamilySenior', label: 'Self & Family (Senior Citizen)', shortLabel: 'Self/Sr', color: '#2e7d32' },
+  { key: 'parents', label: 'Parents (Non-Senior)', shortLabel: 'Parents', color: '#ef6c00' },
+  { key: 'parentsSenior', label: 'Parents (Senior Citizen)', shortLabel: 'Parents/Sr', color: '#6a1b9a' },
 ];
 
 // ---- Shared styles ----
@@ -129,7 +122,7 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
         <div>
           <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Schedule 80D — Health Insurance</h3>
           <p style={{ margin: '4px 0 0', fontSize: 11, color: '#666' }}>
-            Per-policy details with senior citizen flags. Premiums capped per category. Preventive checkup max ₹5,000.
+            Enter actual policy premiums and preventive-checkup expenses. The tax engine applies the applicable statutory limits.
           </p>
         </div>
       </div>
@@ -141,8 +134,8 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
           <select value={data.selfSeniorCitizen}
             onChange={e => onChange({ ...data, selfSeniorCitizen: e.target.value as 'Y' | 'N' | 'S' })}
             style={inputStyle}>
-            <option value="N">Non-Senior Citizen (cap ₹25,000)</option>
-            <option value="Y">Senior Citizen (cap ₹50,000)</option>
+            <option value="N">Non-Senior Citizen</option>
+            <option value="Y">Senior Citizen</option>
             <option value="S">Not claiming for Self/Family</option>
           </select>
         </div>
@@ -151,8 +144,8 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
           <select value={data.parentsSeniorCitizen}
             onChange={e => onChange({ ...data, parentsSeniorCitizen: e.target.value as 'Y' | 'N' | 'P' })}
             style={inputStyle}>
-            <option value="N">Non-Senior Citizen (cap ₹25,000)</option>
-            <option value="Y">Senior Citizen (cap ₹50,000)</option>
+            <option value="N">Non-Senior Citizen</option>
+            <option value="Y">Senior Citizen</option>
             <option value="P">Not claiming for Parents</option>
           </select>
         </div>
@@ -193,7 +186,7 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
                   {cm.shortLabel}
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>{cm.label}</span>
-                <span style={{ fontSize: 11, color: '#888' }}>Cap: ₹{cm.cap.toLocaleString('en-IN')}</span>
+                <span style={{ fontSize: 11, color: '#888' }}>Eligible amount computed by tax engine</span>
               </div>
               <button onClick={() => addPolicy(cm.key)} style={{
                 background: cm.color, color: 'white', border: 'none', padding: '6px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600,
@@ -280,8 +273,8 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
             {/* Preventive checkup + Medical expense */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginTop: 8, padding: '0 2px' }}>
               <div>
-                <label style={labelStyle}>Preventive Health Checkup (max ₹5,000)</label>
-                <input type="number" value={cat.preventiveCheckup || ''} min={0} max={CAP_PREVENTIVE}
+                <label style={labelStyle}>Preventive Health Checkup</label>
+                <input type="number" value={cat.preventiveCheckup || ''} min={0}
                   onChange={e => updateCategory(cm.key, c => ({ ...c, preventiveCheckup: parseFloat(e.target.value) || 0 }))}
                   style={inputStyle} />
               </div>

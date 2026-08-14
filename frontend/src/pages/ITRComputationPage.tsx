@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef, useCallback, type SetStateAction } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, type SetStateAction } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAY } from '../contexts/AYContext';
 import { itrApi } from '../api/itr';
@@ -36,27 +36,18 @@ import { activeSchedules, blockingSchedules, type ScheduleStatus } from '../doma
 import ImportConfirmationModal from '../components/ImportConfirmationModal';
 import type { ReconciledResults } from '../api/itrAutomation';
 import { mapReconciledToFormData } from '../utils/mapReconciledToFormData';
+import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
 
 const returnRepository = new HttpReturnRepository();
 
-/** Derive age as on 31st March of AY 2026-27 from a DOB string.
+/**
+ * Derive age from DOB using the shared assessment-year-aware utility.
  *
- * Used both on DOB change and when hydrating a return from the backend.
- * Age is never trusted from persisted or hardcoded values — a senior
- * citizen (60-80) must get the ₹3L basic exemption bracket, not the
- * under-60 ₹2.5L bracket.
+ * The current ITR-1 production scope supports AY 2026-27; the shared utility
+ * keeps this call-site ready for a future assessment-year configuration.
  */
 function calculateAgeFromDob(dob: string | undefined | null): number {
-  if (!dob) return 0;
-  const birthDate = new Date(dob);
-  if (Number.isNaN(birthDate.getTime())) return 0;
-  const refDate = new Date('2026-03-31'); // Age as on 31st March of AY
-  let age = refDate.getFullYear() - birthDate.getFullYear();
-  const monthDiff = refDate.getMonth() - birthDate.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && refDate.getDate() < birthDate.getDate())) {
-    age -= 1;
-  }
-  return age >= 0 ? age : 0;
+  return deriveAgeFromDob(dob, '2026-27');
 }
 
 function buildPhase1Payload(source: any): any {
@@ -77,7 +68,7 @@ function buildPhase1Payload(source: any): any {
   return data;
 }
 
-function validatePhase1Payload(data: any): string | null {
+function validatePhase1Payload(data: any, assessmentYear: string): string | null {
   const panPattern = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
   const ifscPattern = /^[A-Z]{4}0[A-Z0-9]{6}$/;
   const bsrPattern = /^[0-9]{3}[0-9A-Z]{4}$/;
@@ -87,7 +78,7 @@ function validatePhase1Payload(data: any): string | null {
   if (!data.surnameOrOrgName && !data.name) return 'Enter the required surname or organisation name.';
   if (String(data.firstName || '').length > 25 || String(data.middleName || '').length > 25 || String(data.surnameOrOrgName || data.name || '').length > 75) return 'Name fields exceed the official schema length limit.';
   if (!panPattern.test(String(data.pan || ''))) return 'Enter a valid PAN in the format ABCDE1234F.';
-  if (!data.dob || new Date(`${data.dob}T00:00:00`) > new Date('2026-03-31T00:00:00')) return 'Enter a valid date of birth/formation on or before 31 March 2026.';
+  if (!data.dob || new Date(`${data.dob}T00:00:00`) > new Date(`${getReferenceDate(assessmentYear)}T00:00:00`)) return 'Enter a valid date of birth/formation on or before 31 March of the assessment year.';
   if (!/^[0-9]{1,5}$/.test(String(data.mobileCountryCode || ''))) return 'Select a valid mobile country code.';
   if (!/^[1-9][0-9]{4,9}$/.test(String(data.mobile || ''))) return 'Mobile number must contain 5 to 10 digits and cannot start with zero.';
   if (!data.email) return 'Enter the required primary email address.';
@@ -430,7 +421,9 @@ export default function ITRComputationPage() {
     // Legacy single-value fields (for backward compatibility)
     tdsS192: 0, tds194A: 0, tdsOther: 0,
     adv15Jun: 0, adv15Sep: 0, adv15Dec: 0, adv15Mar: 0, selfTax: 0,
-    age: 30
+    // Age is derived from DOB when a return is hydrated; never default to a
+    // potentially incorrect statutory age bracket.
+    age: 0
   });
   const [editorModel, setEditorModel] = useState<ReturnEditorModel | null>(null);
   const editorRef = useRef<ReturnEditorModel | null>(null);
@@ -809,7 +802,7 @@ export default function ITRComputationPage() {
     try {
       if (!currentEditor) throw new Error('Return is not loaded');
       const currentSnapshot = composeLegacyPayload(currentEditor);
-      const validationError = validatePhase1Payload(currentSnapshot);
+      const validationError = validatePhase1Payload(currentSnapshot, effectiveAssessmentYear);
       if (validationError) {
         toast.error(validationError);
         return;
@@ -1139,7 +1132,9 @@ export default function ITRComputationPage() {
               professionalTax: 0,
               tdsDeducted: deductor.totalTDS || 0,
               grossSalary: deductor.totalAmount || 0,
-              netSalary: (deductor.totalAmount || 0) - (deductor.totalTDS || 0),
+              // TDS is a tax credit, not a salary deduction. Net taxable salary
+              // is computed by the backend after statutory exemptions/deductions.
+              netSalary: 0,
               financialYear: fyFrom26AS,
               verified26AS: true
             }));
@@ -1546,98 +1541,6 @@ export default function ITRComputationPage() {
       setItrForm(detectedForm);
       toast(`Auto-detected: ${detectedForm} - ${reason}`, { icon: '🔍', duration: 4000 });
     }
-  };
-
-  const validateITRFormSelection = (selectedForm: string) => {
-    // Validate if manually selected form is eligible - CBDT Rules for ITR-1/ITR-2
-    const hasBusinessIncome = (formData.bizTurnover || 0) > 0 || (formData.bpNetProfit || 0) > 0;
-    const hasPresumptiveIncome = hasBusinessIncome && formData.bizPresumptive && formData.bizPresumptive !== 'Regular';
-    
-    const restrictedCapitalGains = getRestrictedCapitalGainsState(formData, taxResult);
-    const hasLegacyCapitalGains =
-      (formData.stcgPre || 0) > 0 ||
-      (formData.stcgPost || 0) > 0 ||
-      (formData.stcgOther || 0) > 0 ||
-      (formData.ltcgPre || 0) > 0 ||
-      (formData.ltcgPost || 0) > 0 ||
-      (formData.ltcgOther || 0) > 0 ||
-      (formData.vdaGains || 0) > 0;
-    const hasCapitalGainsRequiringFutureForm = hasLegacyCapitalGains || restrictedCapitalGains.hasUnsupportedRows || restrictedCapitalGains.hasIneligibleIssues || restrictedCapitalGains.hasFormLevelLosses;
-    const hasSpecialIncome = 
-      (formData.winnings || 0) > 0 || 
-      (formData.lotteryIncome || 0) > 0 ||
-      (formData.onlineGamingIncome || 0) > 0 ||
-      (formData.cardGameIncome || 0) > 0 ||
-      (formData.raceWinnings || 0) > 0;
-    
-    // Exempt Income
-    const hasExemptIncome = 
-      (formData.rajarshi || 0) > 0 ||
-      (formData.municipal || 0) > 0 ||
-      (formData.scholarship || 0) > 0 ||
-      (formData.gratuity || 0) > 0 ||
-      (formData.severance || 0) > 0 ||
-      (formData.vrs || 0) > 0;
-    
-    const totalIncome = taxResult.totalIncome || 0;
-    const agriculturalIncome = formData.agriculturalIncome || 0;
-    const isDirector = formData.isDirector || false;
-    const hasUnlistedShares = formData.holdsUnlistedShares || false;
-    const isNonResident = formData.residentialStatus && formData.residentialStatus !== 'ROR';
-    const hasBFLoss = (formData.bfLossHP || 0) > 0 || (formData.bfLossBusiness || 0) > 0 || 
-                      (formData.bfLossSTCG || 0) > 0 || (formData.bfLossLTCG || 0) > 0;
-    const hasForeignIncome = (formData.foreignIncome || 0) > 0 || (formData.foreignAssets || 0) > 0;
-
-    const errors: string[] = [];
-
-    if (selectedForm === 'ITR-1') {
-      // Rule 10: Total income > ₹50 lakh
-      if (totalIncome > 5000000) errors.push('Total income exceeds ₹50 lakhs (Rule 10)');
-      // Capital Gains - All types
-      if (hasCapitalGainsRequiringFutureForm || restrictedCapitalGains.eligibility['ITR-1'] === false) errors.push('Only eligible restricted long-term Section 112A gains are allowed in ITR-1; use ITR-2 for other capital gains');
-      // Business Income
-      if (hasBusinessIncome) errors.push('Business income not allowed in ITR-1 (use ITR-3/ITR-4)');
-      // Agricultural Income
-      if (agriculturalIncome > 5000) errors.push('Agricultural income exceeds ₹5,000');
-      // Director in company/firm
-      if (isDirector) errors.push('Directors must file ITR-2 or ITR-3');
-      // Unlisted shares
-      if (hasUnlistedShares) errors.push('Unlisted shares holders must file ITR-2');
-      // Non-resident
-      if (isNonResident) errors.push('Non-residents/RNOR must file ITR-2');
-      // Brought forward losses
-      if (hasBFLoss) errors.push('Brought forward losses not allowed in ITR-1');
-      // Special income (Lottery, Gaming)
-      if (hasSpecialIncome) errors.push('Lottery/Online gaming winnings require ITR-2 (Section 115BB)');
-      // Foreign income
-      if (hasForeignIncome) errors.push('Foreign income/assets require ITR-2');
-      // Exempt income requiring Schedule EI
-      if (hasExemptIncome) errors.push('Exempt income requires ITR-2 (Schedule EI)');
-    }
-    else if (selectedForm === 'ITR-2') {
-      // ITR-2 cannot have regular business income (use ITR-3)
-      if (hasBusinessIncome && !hasPresumptiveIncome) {
-        errors.push('Regular business income requires ITR-3 or ITR-4 (presumptive)');
-      }
-      // ITR-2 cannot have presumptive business (use ITR-4)
-      if (hasPresumptiveIncome) {
-        errors.push('Presumptive income (44AD/44ADA/44AE) requires ITR-4');
-      }
-    }
-    else if (selectedForm === 'ITR-3') {
-      if (!hasBusinessIncome) errors.push('ITR-3 is only for business/professional income');
-      if (hasPresumptiveIncome) errors.push('Presumptive income should use ITR-4');
-    }
-    else if (selectedForm === 'ITR-4') {
-      if (!hasPresumptiveIncome) errors.push('ITR-4 is only for presumptive taxation (44AD/44ADA/44AE)');
-      if (hasCapitalGainsRequiringFutureForm || restrictedCapitalGains.eligibility['ITR-4'] === false) errors.push('Only eligible restricted long-term Section 112A gains are allowed in ITR-4; use ITR-3 for other capital gains');
-    }
-
-    if (errors.length > 0) {
-      toast.error(`ITR-${selectedForm.split('-')[1]} not eligible:\n${errors.join('\n')}`, { duration: 6000 });
-      return false;
-    }
-    return true;
   };
 
   if (loading) {
@@ -2418,337 +2321,4 @@ function BusinessTab({ formData, setFormData, taxResult, itrForm }: any) {
     selectedForm={itrForm}
     taxResult={taxResult}
   />;
-}
-
-function LegacyPersonalInfoTab({ formData, setFormData, onBanksChange }: any) {
-  const calculateAge = (dob: string) => {
-    if (!dob) return 0;
-    const birthDate = new Date(dob);
-    const refDate = new Date('2026-03-31'); // Age as on 31st March of AY
-    let age = refDate.getFullYear() - birthDate.getFullYear();
-    const monthDiff = refDate.getMonth() - birthDate.getMonth();
-    if (monthDiff < 0 || (monthDiff === 0 && refDate.getDate() < birthDate.getDate())) {
-      age--;
-    }
-    return age;
-  };
-
-  const handleDobChange = (dob: string) => {
-    const age = calculateAge(dob);
-    setFormData({ ...formData, dob, age });
-  };
-
-  return (
-    <div>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Part A - General Information (Auto-populated from Client Master)
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Name of Assessee" value={formData.name || ''} onChange={(v: any) => setFormData({ ...formData, name: v })} type="text" prefix="" />
-        <Field label="PAN" value={formData.pan || ''} onChange={(v: any) => setFormData({ ...formData, pan: v })} type="text" prefix="" />
-        <Field label="Aadhaar Number" value={formData.aadhaar || ''} onChange={(v: any) => setFormData({ ...formData, aadhaar: v })} type="text" prefix="" />
-        <Field label="Date of Birth / Formation" value={formData.dob || ''} onChange={handleDobChange} type="date" prefix="" />
-        <Field label="Age as on 31/03" value={formData.age} computed prefix="" />
-        <Field label="Status" value={formData.status || 'Individual'} onChange={(v: any) => setFormData({ ...formData, status: v })} type="text" prefix="" />
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        CBDT Mandatory Fields
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Father's Name *" value={formData.fatherName || ''} onChange={(v: any) => setFormData({ ...formData, fatherName: v })} type="text" prefix="" required />
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Gender *
-          </label>
-          <select
-            value={formData.gender || 'M'}
-            onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-            <option value="T">Transgender</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Marital Status *
-          </label>
-          <select
-            value={formData.maritalStatus || 'SINGLE'}
-            onChange={(e) => setFormData({ ...formData, maritalStatus: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="SINGLE">Single</option>
-            <option value="MARRIED">Married</option>
-            <option value="DIVORCED">Divorced</option>
-            <option value="WIDOWED">Widowed</option>
-          </select>
-        </div>
-        <Field label="Nationality *" value={formData.nationality || 'INDIA'} onChange={(v: any) => setFormData({ ...formData, nationality: v })} type="text" prefix="" required />
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Director in Company?
-          </label>
-          <select
-            value={formData.isDirector ? 'Y' : 'N'}
-            onChange={(e) => setFormData({ ...formData, isDirector: e.target.value === 'Y' })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="N">No</option>
-            <option value="Y">Yes (Triggers ITR-2)</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Holds Unlisted Shares?
-          </label>
-          <select
-            value={formData.holdsUnlistedShares ? 'Y' : 'N'}
-            onChange={(e) => setFormData({ ...formData, holdsUnlistedShares: e.target.value === 'Y' })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="N">No</option>
-            <option value="Y">Yes (Triggers ITR-2)</option>
-          </select>
-        </div>
-        <Field label="Agricultural Income (>₹5,000 triggers ITR-2)" value={formData.agriculturalIncome || 0} onChange={(v: any) => setFormData({ ...formData, agriculturalIncome: v })} />
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Contact Details
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Country Code
-          </label>
-          <select
-            value={formData.mobileCountryCode || '91'}
-            onChange={(e) => setFormData({ ...formData, mobileCountryCode: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            {ITD_COUNTRY_CODES.map((option) => (
-              <option key={option.value} value={option.value}>+{option.value} ({option.label})</option>
-            ))}
-          </select>
-        </div>
-        <Field label="Mobile Number" value={formData.mobile || ''} onChange={(v: any) => setFormData({ ...formData, mobile: v })} type="tel" prefix="" />
-        <Field label="Email Address" value={formData.email || ''} onChange={(v: any) => setFormData({ ...formData, email: v })} type="email" prefix="" />
-        <Field label="Telephone (STD-Number)" value={formData.telephone || ''} onChange={(v: any) => setFormData({ ...formData, telephone: v })} type="tel" prefix="" />
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Address for Communication
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Flat/Door/Block No." value={formData.flatNo || ''} onChange={(v: any) => setFormData({ ...formData, flatNo: v })} type="text" prefix="" />
-        <Field label="Name of Premises/Building/Village" value={formData.premises || ''} onChange={(v: any) => setFormData({ ...formData, premises: v })} type="text" prefix="" />
-        <Field label="Road/Street/Post Office" value={formData.road || ''} onChange={(v: any) => setFormData({ ...formData, road: v })} type="text" prefix="" />
-        <Field label="Area/Locality" value={formData.area || ''} onChange={(v: any) => setFormData({ ...formData, area: v })} type="text" prefix="" />
-        <Field label="Town/City/District" value={formData.city || ''} onChange={(v: any) => setFormData({ ...formData, city: v })} type="text" prefix="" />
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            State *
-          </label>
-          <select
-            value={formData.state || ''}
-            onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="">-- Select State --</option>
-            <option value="01">01 - Andaman &amp; Nicobar Islands</option>
-            <option value="02">02 - Andhra Pradesh</option>
-            <option value="03">03 - Arunachal Pradesh</option>
-            <option value="04">04 - Assam</option>
-            <option value="05">05 - Bihar</option>
-            <option value="06">06 - Chandigarh</option>
-            <option value="07">07 - Dadra &amp; Nagar Haveli</option>
-            <option value="08">08 - Daman &amp; Diu</option>
-            <option value="09">09 - Delhi</option>
-            <option value="10">10 - Goa</option>
-            <option value="11">11 - Gujarat</option>
-            <option value="12">12 - Haryana</option>
-            <option value="13">13 - Himachal Pradesh</option>
-            <option value="14">14 - Jammu &amp; Kashmir</option>
-            <option value="15">15 - Karnataka</option>
-            <option value="16">16 - Kerala</option>
-            <option value="17">17 - Lakshadweep</option>
-            <option value="18">18 - Madhya Pradesh</option>
-            <option value="19">19 - Maharashtra</option>
-            <option value="20">20 - Manipur</option>
-            <option value="21">21 - Meghalaya</option>
-            <option value="22">22 - Mizoram</option>
-            <option value="23">23 - Nagaland</option>
-            <option value="24">24 - Odisha</option>
-            <option value="25">25 - Puducherry</option>
-            <option value="26">26 - Punjab</option>
-            <option value="27">27 - Rajasthan</option>
-            <option value="28">28 - Sikkim</option>
-            <option value="29">29 - Tamil Nadu</option>
-            <option value="30">30 - Tripura</option>
-            <option value="31">31 - Uttar Pradesh</option>
-            <option value="32">32 - West Bengal</option>
-            <option value="33">33 - Chhattisgarh</option>
-            <option value="34">34 - Uttarakhand</option>
-            <option value="35">35 - Jharkhand</option>
-            <option value="36">36 - Telangana</option>
-            <option value="37">37 - Ladakh</option>
-          </select>
-        </div>
-        <div>
-          <Field label="PIN Code" value={formData.pincode || ''} onChange={(v: any) => setFormData({ ...formData, pincode: v })} type="text" prefix="" />
-          <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>6-digit (e.g., 110001)</div>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Country *
-          </label>
-          <select
-            value={formData.country || '91'}
-            onChange={(e) => setFormData({ ...formData, country: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            {ITD_COUNTRY_CODES.map((option) => (
-              <option key={option.value} value={option.value}>{option.value} - {option.label}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Filing Details
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Return Filed u/s
-          </label>
-          <select
-            value={formData.filingSection || '139(1)'}
-            onChange={(e) => setFormData({ ...formData, filingSection: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="139(1)">139(1) - On or before due date</option>
-            <option value="139(4)">139(4) - Belated return</option>
-            <option value="139(5)">139(5) - Revised return</option>
-            <option value="119(2)(b)">119(2)(b) - After condonation of delay</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Residential Status
-          </label>
-          <select
-            value={formData.residentialStatus || 'ROR'}
-            onChange={(e) => setFormData({ ...formData, residentialStatus: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="ROR">Resident</option>
-            <option value="RNOR">Resident but Not Ordinarily Resident</option>
-            <option value="NR">Non-Resident</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Employer Category * (VR1-EC-001)
-          </label>
-          <select
-            value={formData.employerCategory || 'OTH'}
-            onChange={(e) => setFormData({ ...formData, employerCategory: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="CGOV">Central Government (CGOV)</option>
-            <option value="SGOV">State Government (SGOV)</option>
-            <option value="PSU">Public Sector Undertaking (PSU)</option>
-            <option value="PE">Pensioner (PE)</option>
-            <option value="PESG">Pensioner (State Government) (PESG)</option>
-            <option value="PEPS">Pensioner (PSU) (PEPS)</option>
-            <option value="PEO">Other Pensioner (PEO)</option>
-            <option value="OTH">Others (OTH)</option>
-            <option value="NA">Not Applicable (NA)</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <input type='checkbox' checked={formData.bankUseForRefund !== false} onChange={(e) => setFormData({ ...formData, bankUseForRefund: e.target.checked })} style={{ width: 16, height: 16 }} />
-            Use this account for refund
-          </label>
-        </div>
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Bank Account Details for Refund
-      </h3>
-      <BankAccountManager
-        data={formData.bankAccountData || { accounts: [] }}
-        onChange={onBanksChange}
-      />
-
-      <div style={{ marginTop: 16, padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)' }}>
-        Add every bank account used for refund and mark exactly one as the refund account.
-      </div>
-    </div>
-  );
 }

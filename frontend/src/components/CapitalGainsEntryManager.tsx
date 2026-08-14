@@ -186,16 +186,9 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
   const setRows = (key: SectionKey, rows: JsonRow[]): void => onChange({ ...data, [key]: rows });
   const importedSale = entries.reduce((sum, row) => sum + Number(row.saleValue ?? row.saleCost ?? 0), 0);
   const importedCost = entries.reduce((sum, row) => sum + Number(row.actualCost ?? row.purchaseCost ?? 0), 0);
-  const simpleSale = Number(data.simplified112A.totalSaleConsideration || 0);
-  const simpleCost = Number(data.simplified112A.totalCostAcquisition || 0);
-  // Only derive the gain when the user has entered both sale and cost.
-  // When cost is blank (0), we must NOT auto-cap sale to ₹1,25,000 — that
-  // would mislead the user into thinking the gain is ₹1,25,000 when they
-  // haven't actually provided the purchase value yet.
-  const costEntered = Number(data.simplified112A.totalCostAcquisition) > 0;
-  const simpleGain = costEntered
-    ? Math.max(0, Math.min(125000, simpleSale - simpleCost))
-    : 0;
+  // Taxable gain, the section 112A exemption, and ITR-form eligibility are
+  // statutory computations. They are calculated authoritatively by the backend
+  // after the complete draft is submitted; this editor only captures raw facts.
   const allIssues = (summary?.issues || issues).filter(Boolean);
 
   const rows = (key: SectionKey): JsonRow[] => Array.isArray(data[key]) ? data[key] as JsonRow[] : [];
@@ -238,8 +231,8 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
     <div style={cardStyle}><div style={gridStyle}>
       <Field spec={{ key: 'totalSaleConsideration', label: 'Total sale consideration *', kind: 'money', required: true }} row={data.simplified112A} patch={(patch) => patchObject('simplified112A', patch)} />
       <Field spec={{ key: 'totalCostAcquisition', label: 'Total cost of acquisition *', kind: 'money', required: true }} row={data.simplified112A} patch={(patch) => patchObject('simplified112A', patch)} />
-      <Readout label="Long-term capital gain u/s 112A *" value={simpleGain} />
-    </div><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>ITR-1/ITR-4 permit only this simplified 112A schedule and cap the reportable gain at ₹1,25,000. ITR-2/3 filers should use the full Schedule 112A in section C below for scrip-level detail.</div></div>
+      <div><label style={labelStyle}>Long-term capital gain u/s 112A</label><input readOnly value="Computed by tax engine after calculation" style={{ ...inputStyle, background: '#f8fafc', color: 'var(--text-muted)' }} /></div>
+    </div><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>ITR-1/ITR-4 permit only the simplified section 112A schedule. The tax engine computes the eligible gain and exemption from the raw sale and acquisition-cost values after calculation. ITR-2/3 filers should use the full Schedule 112A in section C below for scrip-level detail.</div></div>
 
     <SectionTitle title="A. Short-term capital gains" />
     <ApplicabilityBadge form={normalizedForm} permitted={!simple} />

@@ -347,17 +347,20 @@ def classify_itr(
         "classificationReason": reason
     }
 
-def get_decrypted_portal_password(client_identifier: str, db: Session) -> Optional[str]:
-    """
-    Retrieve and decrypt the portal password for a given client.
+def get_decrypted_portal_password(client_identifier: str | int, db: Session) -> Optional[str]:
+    """Retrieve and decrypt a client's stored portal password.
 
-    Accepts a public_id or legacy integer id.  This is an internal helper
-    for the automation module and is not exposed as a route.
+    Args:
+        client_identifier: Client public ID or legacy numeric database ID.
+        db: Active SQLAlchemy database session.
+
+    Returns:
+        The decrypted password when present; otherwise ``None``.
     """
-    from app.routers.clients import resolve_owned_client
-    client = db.query(Client).filter(Client.public_id == client_identifier).first()
-    if not client and client_identifier.isdigit():
-        client = db.query(Client).filter(Client.id == int(client_identifier)).first()
+    identifier = str(client_identifier)
+    client = db.query(Client).filter(Client.public_id == identifier).first()
+    if client is None and identifier.isdigit():
+        client = db.query(Client).filter(Client.id == int(identifier)).first()
     if not client or not client.portal_password:
         return None
     return decrypt_portal_password(client.portal_password)
