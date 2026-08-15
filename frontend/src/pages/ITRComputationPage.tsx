@@ -1715,10 +1715,11 @@ export default function ITRComputationPage() {
                   }
                 }
 
-                // ── Business: TDS-194C/194H/194R/194T/194N/194S/194IA ──
+                // ── Business: TDS-194C/194H/194R/194T/194N/194IA ──
+                // Note: TDS-194S is VDA/crypto income → Capital Gains, NOT business
                 if (section === 'B1' && code.startsWith('TDS-')) {
                   const tdsSection = code.replace('TDS-', '');
-                  if (['194C', '194H', '194R', '194T', '194N', '194S', '194IAR', '194IARV', '194K', '194BA'].includes(tdsSection)) {
+                  if (['194C', '194H', '194R', '194T', '194N', '194IAR', '194IARV', '194K', '194BA'].includes(tdsSection)) {
                     const totalIncome = sumActive2('AMOUNT PAID') || amount;
                     const totalTds = sumActive2('TDS DEDUCTED') || sumActive2('TAX COLLECTED') || 0;
                     businessEntries.push({
@@ -1728,6 +1729,26 @@ export default function ITRComputationPage() {
                       grossReceipts: totalIncome,
                       tdsDeducted: totalTds,
                       category,
+                    });
+                  }
+                  // ── Capital Gains: TDS-194S → VDA/crypto transactions ──
+                  if (tdsSection === '194S') {
+                    const totalIncome = sumActive2('AMOUNT PAID') || amount;
+                    const totalTds = sumActive2('TDS DEDUCTED') || 0;
+                    capitalGainTransactions.push({
+                      id: `cg-TDS-194S-${e.information_code}-${deductorName}`,
+                      recordKind: 'TRANSACTION',
+                      name: `VDA transfer — ${deductorName}`,
+                      fullConsideration: totalIncome,
+                      acquisitionCost: 0,
+                      improvementCost: 0,
+                      transferExpenses: 0,
+                      loss94: 0,
+                      assetType: 'STCG',  // VDA is short-term by default
+                      _isVda: true,
+                      deductorName,
+                      deductorTAN: deductorTan,
+                      tdsDeducted: totalTds,
                     });
                   }
                 }
@@ -1755,6 +1776,13 @@ export default function ITRComputationPage() {
               formDataUpdate.dividendShares = dividendEntries.reduce((s, e) => s + e.dividendAmount, 0);
             }
             if (capitalGainTransactions.length > 0) {
+              // The serializer reads capitalGainTransactions from INSIDE
+              // capitalGainsSchedule.capitalGainTransactions, not from a
+              // top-level field.  Nest them so they survive the round-trip.
+              formDataUpdate.capitalGainsSchedule = {
+                ...(formDataUpdate.capitalGainsSchedule || {}),
+                capitalGainTransactions,
+              };
               formDataUpdate.capitalGainTransactions = capitalGainTransactions;
               formDataUpdate.ltcgProperty = capitalGainTransactions
                 .filter((e) => e.assetType === 'LTCG')
