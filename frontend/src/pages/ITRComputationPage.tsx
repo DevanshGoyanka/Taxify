@@ -1373,33 +1373,90 @@ export default function ITRComputationPage() {
             const aisData = importedAIS || data;
             const tisData = importedTIS || data;
             const summary = aisData?.summary || {};
+            const incomeHeads = aisData?.income_heads || {};
             const formDataUpdate: any = {};
 
-            // AIS summary → flat fields + interest entries
-            if (summary.total_interest) {
-              formDataUpdate.interestSB = summary.total_interest;
-              formDataUpdate.interestEntries = [{
-                kind: 'SAVINGS_BANK',
-                grossAmount: summary.total_interest,
-                bankName: 'From AIS',
-                accountType: 'SAVINGS',
-                accountNumber: '',
-                tdsDeducted: 0,
-              }];
-              formDataUpdate.bankInterestEntries = formDataUpdate.interestEntries;
+            // ── Extract individual TDS entries from AIS income_heads ──
+            // Each income head has an `entries` array with TDS-194A, TDS-192,
+            // etc. entries carrying the deductor name+TAN, amount, and TDS.
+            const allTdsEntries: any[] = [];
+            const interestEntries: any[] = [];
+            const dividendEntries: any[] = [];
+
+            for (const [headName, headData] of Object.entries(incomeHeads)) {
+              const entries = (headData as any)?.entries || [];
+              for (const e of entries) {
+                const code = (e.information_code || '').toUpperCase();
+                const source = e.information_source || '';
+                const amount = e.amount || 0;
+                const category = (e.category || '').toLowerCase();
+                // Extract deductor name + TAN from information_source:
+                // "STATE BANK OF INDIA (MUMS89569E)" → name="STATE BANK OF INDIA", tan="MUMS89569E"
+                const sourceMatch = source.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+                const deductorName = sourceMatch ? sourceMatch[1].trim() : source;
+                const deductorTan = sourceMatch ? sourceMatch[2].split('.')[0].trim() : '';
+
+                // TDS entries (TDS-192, TDS-194A, etc.)
+                if (code.startsWith('TDS-')) {
+                  const section = code.replace('TDS-', '');
+                  allTdsEntries.push({
+                    section,
+                    deductorName,
+                    deductorTAN: deductorTan,
+                    deductorPAN: e.institution_pan || '',
+                    incomeAmount: amount,
+                    tdsDeducted: 0, // AIS doesn't carry per-entry TDS in the summary
+                    financialYear: '',
+                    verified26AS: true,
+                    claimedInReturn: true,
+                  });
+                }
+
+                // Interest entries (SFT-016(SB) = savings, TDS-194A = FD)
+                if (category.includes('interest') || code === 'TDS-194A') {
+                  const kind = category.includes('savings') ? 'SAVINGS_BANK' : 'TERM_DEPOSIT';
+                  interestEntries.push({
+                    kind,
+                    grossAmount: amount,
+                    bankName: deductorName,
+                    accountType: kind === 'SAVINGS_BANK' ? 'SAVINGS' : 'FD',
+                    accountNumber: '',
+                    tdsDeducted: 0,
+                    deductorName,
+                    deductorTAN: deductorTan,
+                  });
+                }
+
+                // Dividend entries (SFT-015 = dividend)
+                if (category.includes('dividend') || code === 'SFT-015') {
+                  dividendEntries.push({
+                    companyName: deductorName,
+                    companyPAN: e.institution_pan || '',
+                    dividendAmount: amount,
+                    tdsDeducted: 0,
+                    deductorTAN: deductorTan,
+                    isin: '',
+                    category: 'SHARES',
+                    section: '194',
+                  });
+                }
+              }
             }
-            if (summary.total_dividend) {
-              formDataUpdate.dividendShares = summary.total_dividend;
-              formDataUpdate.dividendEntries = [{
-                companyName: 'From AIS',
-                companyPAN: '',
-                dividendAmount: summary.total_dividend,
-                tdsDeducted: 0,
-                deductorTAN: '',
-                isin: '',
-                category: 'SHARES',
-                section: '194',
-              }];
+
+            if (allTdsEntries.length > 0) formDataUpdate.tdsEntries = allTdsEntries;
+            if (interestEntries.length > 0) {
+              formDataUpdate.interestEntries = interestEntries;
+              formDataUpdate.bankInterestEntries = interestEntries;
+              formDataUpdate.interestSB = interestEntries
+                .filter((e) => e.kind === 'SAVINGS_BANK')
+                .reduce((s, e) => s + e.grossAmount, 0);
+              formDataUpdate.interestFD = interestEntries
+                .filter((e) => e.kind === 'TERM_DEPOSIT')
+                .reduce((s, e) => s + e.grossAmount, 0);
+            }
+            if (dividendEntries.length > 0) {
+              formDataUpdate.dividendEntries = dividendEntries;
+              formDataUpdate.dividendShares = dividendEntries.reduce((s, e) => s + e.dividendAmount, 0);
             }
             if (summary.total_tds) formDataUpdate.totalTds = summary.total_tds;
 
@@ -1417,9 +1474,9 @@ export default function ITRComputationPage() {
             await itrApi.saveFormData(clientId, effectiveAssessmentYear, applied.snapshot);
             toast.dismiss();
             const parts: string[] = [];
-            if (summary.total_interest) parts.push(`interest ₹${summary.total_interest.toLocaleString('en-IN')}`);
-            if (summary.total_dividend) parts.push(`dividend ₹${summary.total_dividend.toLocaleString('en-IN')}`);
-            if (summary.total_tds) parts.push(`TDS ₹${summary.total_tds.toLocaleString('en-IN')}`);
+            if (allTdsEntries.length) parts.push(`${allTdsEntries.length} TDS entries`);
+            if (interestEntries.length) parts.push(`${interestEntries.length} interest entries`);
+            if (dividendEntries.length) parts.push(`${dividendEntries.length} dividends`);
             toast.success(`${typeStr.toUpperCase()} imported${parts.length ? ': ' + parts.join(', ') : ''}`);
             setShowImportMenu(false);
             return;
