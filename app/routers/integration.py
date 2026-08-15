@@ -563,7 +563,27 @@ def _map_legacy_26as(parsed: dict) -> dict:
             net_map[key]["amountPaid"] += e["amountPaid"]
             net_map[key]["taxDeducted"] += e["taxDeducted"]
             net_map[key]["taxDeposited"] += e["taxDeposited"]
-    partI = list(net_map.values())
+    # Build partI entries with BOTH sets of field names so the frontend's
+    # TDS transformation (which checks employerTAN/deductorTAN,
+    # incomeAmount/totalAmount, tdsDeducted/totalTDS) works correctly.
+    partI = []
+    for e in net_map.values():
+        partI.append({
+            "deductorName": e["deductorName"],
+            "employerName": e["deductorName"],
+            "tan": e["tan"],
+            "deductorTAN": e["tan"],
+            "employerTAN": e["tan"],
+            "section": e["section"],
+            "sectionCode": e["section"],
+            "amountPaid": e["amountPaid"],
+            "incomeAmount": e["amountPaid"],
+            "totalAmount": e["amountPaid"],
+            "taxDeducted": e["taxDeducted"],
+            "tdsDeducted": e["taxDeducted"],
+            "totalTDS": e["taxDeducted"],
+            "taxDeposited": e["taxDeposited"],
+        })
 
     # Build deductor_details and compute income heads from the NET entries.
     deductor_details: list[dict[str, Any]] = []
