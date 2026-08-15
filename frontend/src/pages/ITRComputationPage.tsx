@@ -1715,11 +1715,12 @@ export default function ITRComputationPage() {
                   }
                 }
 
-                // ── Business: TDS-194C/194H/194R/194T/194N/194IA ──
-                // Note: TDS-194S is VDA/crypto income → Capital Gains, NOT business
+                // ── Business: TDS-194C/194H/194R/194T/194N ──
+                // Note: TDS-194S is VDA/crypto → Capital Gains
+                // Note: TDS-194IA is real estate → Capital Gains
                 if (section === 'B1' && code.startsWith('TDS-')) {
                   const tdsSection = code.replace('TDS-', '');
-                  if (['194C', '194H', '194R', '194T', '194N', '194IAR', '194IARV', '194K', '194BA'].includes(tdsSection)) {
+                  if (['194C', '194H', '194R', '194T', '194N', '194K', '194BA'].includes(tdsSection)) {
                     const totalIncome = sumActive2('AMOUNT PAID') || amount;
                     const totalTds = sumActive2('TDS DEDUCTED') || sumActive2('TAX COLLECTED') || 0;
                     businessEntries.push({
@@ -1751,6 +1752,26 @@ export default function ITRComputationPage() {
                       tdsDeducted: totalTds,
                     });
                   }
+                  // ── Capital Gains: TDS-194IA → immovable property ──
+                  if (tdsSection === '194IA' || tdsSection === '194IAR' || tdsSection === '194IARV') {
+                    const totalIncome = sumActive2('AMOUNT PAID') || amount;
+                    const totalTds = sumActive2('TDS DEDUCTED') || 0;
+                    capitalGainTransactions.push({
+                      id: `cg-TDS-194IA-${e.information_code}-${deductorName}`,
+                      recordKind: 'TRANSACTION',
+                      name: `Property transfer — ${deductorName}`,
+                      fullConsideration: totalIncome,
+                      acquisitionCost: 0,
+                      improvementCost: 0,
+                      transferExpenses: 0,
+                      loss94: 0,
+                      assetType: 'STCG',  // default ST; user can change to LTCG
+                      _isImmovable: true,
+                      deductorName,
+                      deductorTAN: deductorTan,
+                      tdsDeducted: totalTds,
+                    });
+                  }
                 }
               }
             }
@@ -1776,12 +1797,59 @@ export default function ITRComputationPage() {
               formDataUpdate.dividendShares = dividendEntries.reduce((s, e) => s + e.dividendAmount, 0);
             }
             if (capitalGainTransactions.length > 0) {
-              // The serializer reads capitalGainTransactions from INSIDE
-              // capitalGainsSchedule.capitalGainTransactions, not from a
-              // top-level field.  Nest them so they survive the round-trip.
+              // Add field-name aliases the component reads:
+              //   saleValue/actualCost (for the 'Imported AIS reference' banner)
+              // and route each transaction into the correct CG schedule
+              // section so the actual schedule tables populate.
+              const stImmovable: any[] = [];
+              const ltImmovable: any[] = [];
+              const stEquity: any[] = [];
+              const stOtherAssets: any[] = [];
+              const ltOtherAssets: any[] = [];
+              const vda: any[] = [];
+              const schedule112A: any[] = [];
+              for (const tx of capitalGainTransactions) {
+                const routed = {
+                  ...tx,
+                  saleValue: tx.fullConsideration || 0,
+                  actualCost: tx.acquisitionCost || 0,
+                };
+                if (tx._isVda) {
+                  vda.push({
+                    ...routed,
+                    consideration: tx.fullConsideration || 0,
+                  });
+                } else if (tx._isImmovable) {
+                  if (tx.assetType === 'LTCG') ltImmovable.push(routed);
+                  else stImmovable.push(routed);
+                } else if (tx._isListedEquity || tx._isMF) {
+                  // Listed equity / MF → Schedule 112A (long-term) or
+                  // stEquity (short-term, section 111A)
+                  if (tx.assetType === 'LTCG') {
+                    schedule112A.push({
+                      ...routed,
+                      totalSaleValue: tx.fullConsideration || 0,
+                      costWithoutIndexation: tx.acquisitionCost || 0,
+                    });
+                  } else {
+                    stEquity.push(routed);
+                  }
+                } else {
+                  // Other assets
+                  if (tx.assetType === 'LTCG') ltOtherAssets.push(routed);
+                  else stOtherAssets.push(routed);
+                }
+              }
               formDataUpdate.capitalGainsSchedule = {
                 ...(formDataUpdate.capitalGainsSchedule || {}),
                 capitalGainTransactions,
+                stImmovable: stImmovable.length ? stImmovable : undefined,
+                ltImmovable: ltImmovable.length ? ltImmovable : undefined,
+                stEquity: stEquity.length ? stEquity : undefined,
+                stOtherAssets: stOtherAssets.length ? stOtherAssets : undefined,
+                ltOtherAssets: ltOtherAssets.length ? ltOtherAssets : undefined,
+                vda: vda.length ? vda : undefined,
+                schedule112A: schedule112A.length ? schedule112A : undefined,
               };
               formDataUpdate.capitalGainTransactions = capitalGainTransactions;
               formDataUpdate.ltcgProperty = capitalGainTransactions
