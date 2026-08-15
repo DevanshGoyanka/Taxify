@@ -989,19 +989,19 @@ export default function ITRComputationPage() {
     // Surface the filing advisory: if the current-AY return is already
     // filed (or was a revised return), the user must explicitly confirm
     // a revised-return flow before the filed-ITR data is populated.
-    const advisory = (reconciledImportData as any).filing_advisory;
-    if (advisory && advisory.current_ay_already_filed) {
-      if (advisory.current_ay_is_revised) {
+    const advisoryBanner = (reconciledImportData as any).filing_advisory;
+    if (advisoryBanner && advisoryBanner.current_ay_already_filed) {
+      if (advisoryBanner.current_ay_is_revised) {
         msgs.push(
-          `⚠️ ITR for AY ${advisory.download_assessment_year || ''} is already filed as a REVISED return ` +
-          `(section ${advisory.current_ay_filing_section || '139(5)'}). ` +
+          `⚠️ ITR for AY ${advisoryBanner.download_assessment_year || ''} is already filed as a REVISED return ` +
+          `(section ${advisoryBanner.current_ay_filing_section || '139(5)'}). ` +
           'The last filed ITR was a revised return. To file another revised return, ' +
           'explicitly confirm the revised-return flow.'
         );
       } else {
         msgs.push(
-          `⚠️ ITR for AY ${advisory.download_assessment_year || ''} is already filed ` +
-          `(section ${advisory.current_ay_filing_section || '139(1)'}). ` +
+          `⚠️ ITR for AY ${advisoryBanner.download_assessment_year || ''} is already filed ` +
+          `(section ${advisoryBanner.current_ay_filing_section || '139(1)'}). ` +
           'To file a revised return, explicitly confirm the revised-return flow.'
         );
       }
