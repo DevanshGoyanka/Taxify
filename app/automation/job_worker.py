@@ -57,6 +57,7 @@ from ais_extractor.as26_extractor import extract_26as as _extract_26as
 from ais_extractor.extractor import extract_ais as _extract_ais, ais_to_frontend_json as _ais_to_frontend
 from ais_extractor.tis_extractor import extract_tis as _extract_tis, tis_to_frontend_json as _tis_to_frontend
 from ais_extractor.reconciliation import reconcile as _reconcile_data
+from app.engine.importers.prefill_parser import parse_prefill_file as _parse_prefill_file, prefill_extraction_to_dict as _prefill_to_dict
 
 logger = logging.getLogger("taxify.automation.worker")
 install_automation_privacy_filter(logger)
@@ -828,7 +829,47 @@ async def _run_job(job_id: int) -> None:
             extract_errors if extract_errors else "none",
         )
 
-        # Step 4.6: Reconcile data across all three documents
+        # Step 4.6: Parse the Prefill JSON (form-agnostic extraction)
+        # The Prefill JSON is the CBDT's own pre-filled data — it carries
+        # salary break-up, deductions, bank accounts, employer TDS, and
+        # personal info that AIS/TIS/26AS don't have.  Extract it so the
+        # frontend can merge it with the reconciled data.
+        path_prefill = files.get("prefill")
+        if path_prefill and os.path.exists(path_prefill):
+            try:
+                prefill_extracted = _parse_prefill_file(
+                    path_prefill,
+                    assessment_year=assessment_year,
+                )
+                parsed["prefill"] = _prefill_to_dict(prefill_extracted)
+                log(
+                    f"[Worker] Prefill parsed: "
+                    f"employers={len(prefill_extracted.employer_entries)}, "
+                    f"bank_accounts={len(prefill_extracted.bank_accounts)}, "
+                    f"tds_salary={len(prefill_extracted.tds_salary_entries)}, "
+                    f"tds_other={len(prefill_extracted.tds_other_entries)}, "
+                    f"deductions_total={prefill_extracted.deductions.total_chap_via_deductions}"
+                )
+                logger.info(
+                    "Job %d: Prefill extraction OK — employers=%d, banks=%d, "
+                    "tds_sal=%d, tds_oth=%d, deductions=%d",
+                    job_id,
+                    len(prefill_extracted.employer_entries),
+                    len(prefill_extracted.bank_accounts),
+                    len(prefill_extracted.tds_salary_entries),
+                    len(prefill_extracted.tds_other_entries),
+                    prefill_extracted.deductions.total_chap_via_deductions,
+                )
+            except Exception as e:
+                err = f"Prefill extraction failed: {type(e).__name__}: {e}"
+                extract_errors.append(err)
+                log(f"[Worker] {err}")
+                logger.exception("Job %d: Prefill extraction error", job_id)
+        else:
+            # Prefill download is optional — the job may not have downloaded it.
+            logger.info("Job %d: Prefill file not found at %s — skipping", job_id, path_prefill)
+
+        # Step 4.7: Reconcile data across all three documents
         _update_job(job_id, current_step="extract", status_message="Reconciling data...", progress_pct=92)
         log("[Worker] Starting reconciliation across 26AS, AIS, and TIS...")
 
@@ -838,6 +879,12 @@ async def _run_job(job_id: int) -> None:
                 tis_data=parsed.get("tis", {}),
                 as26_data=parsed.get("26as", {}),
             )
+            # Attach the form-agnostic Prefill extraction to the reconciled
+            # output so the frontend can merge Prefill-provided fields
+            # (salary break-up, deductions, bank accounts, employer TDS,
+            # personal info) with the reconciled income/TDS data.
+            if "prefill" in parsed:
+                reconciled["prefill"] = parsed["prefill"]
             # Preserve extraction errors in reconciled output
             if extract_errors:
                 reconciled["_extraction_errors"] = extract_errors

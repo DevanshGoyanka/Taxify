@@ -36,6 +36,7 @@ import { activeSchedules, blockingSchedules, type ScheduleStatus } from '../doma
 import ImportConfirmationModal from '../components/ImportConfirmationModal';
 import type { ReconciledResults } from '../api/itrAutomation';
 import { mapReconciledToFormData } from '../utils/mapReconciledToFormData';
+import { mapPrefillToFormData } from '../utils/mapPrefillToFormData';
 import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
 
 const returnRepository = new HttpReturnRepository();
@@ -901,6 +902,15 @@ export default function ITRComputationPage() {
 
     const { formDataUpdate, discrepancies, summary } = mapReconciledToFormData(reconciledImportData);
 
+    // Also extract the form-agnostic Prefill data (if the automation job
+    // downloaded and parsed it).  The Prefill provides salary break-up,
+    // deductions, bank accounts, and personal info that AIS/TIS/26AS
+    // don't carry.  Merge it first, then let the reconciled update
+    // override income/TDS fields (reconciled is more authoritative for
+    // the current AY).
+    const prefillData = (reconciledImportData as any).prefill || null;
+    const prefillResult = mapPrefillToFormData(prefillData);
+
     // A portal import replaces a material portion of the draft. Any result
     // computed for the pre-import generation must not be presented as current.
     ++computationGenerationRef.current;
@@ -910,8 +920,11 @@ export default function ITRComputationPage() {
     setTaxResultError('Computation unavailable for the imported draft until recalculated.');
 
     // Build one merged snapshot and use it for both the editor and persistence.
-    // Empty imported arrays must not erase manually entered rows.
-    const safeUpdate = { ...formDataUpdate };
+    // Prefill first (provides personal info, deductions, bank accounts,
+    // salary break-up), then reconciled (provides income + TDS from
+    // AIS/TIS/26AS).  Empty imported arrays must not erase manually
+    // entered rows.
+    const safeUpdate = { ...prefillResult.formDataUpdate, ...formDataUpdate };
     const currentDraft = editorRef.current
       ? composeLegacyPayload(editorRef.current)
       : formData;
@@ -963,6 +976,18 @@ export default function ITRComputationPage() {
       `${summary.interestEntries} interest, ` +
       `${summary.dividendEntries} dividend, ${summary.capitalGainsEntries} capital gains entries`
     );
+
+    // Show a secondary toast with Prefill-specific imports (deductions,
+    // bank accounts, personal info) that AIS/TIS/26AS don't carry.
+    if (prefillResult.summary.personalInfo || prefillResult.summary.employerEntries > 0 || prefillResult.summary.bankAccounts > 0) {
+      const prefillParts: string[] = [];
+      if (prefillResult.summary.personalInfo) prefillParts.push('personal info');
+      if (prefillResult.summary.employerEntries > 0) prefillParts.push(`${prefillResult.summary.employerEntries} employer(s)`);
+      if (prefillResult.summary.bankAccounts > 0) prefillParts.push(`${prefillResult.summary.bankAccounts} bank account(s)`);
+      if (prefillResult.summary.deductionsTotal > 0) prefillParts.push(`deductions ₹${prefillResult.summary.deductionsTotal.toLocaleString('en-IN')}`);
+      if (prefillResult.summary.tdsSalaryEntries > 0) prefillParts.push(`${prefillResult.summary.tdsSalaryEntries} TDS-salary`);
+      toast(`Prefill: ${prefillParts.join(', ')}`, { icon: '📋' });
+    }
 
     // ── Reassess eligibility after import ────────────────────────────────
     setFormLockedByUser(false);
