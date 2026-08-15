@@ -387,43 +387,106 @@ export function mapPrefillToFormData(prefill: PrefillExtraction | null | undefin
     update.tds194A = tdsOthTotal;  // flat total — also populated per-entry above
   }
 
-  // ── Other Sources: bank interest entries (from TDS-other, section 194A/193) ──
-  // The Prefill's TDS-other entries with section 194A or 193 are interest
-  // income.  Build bankInterestEntries so the Other Sources tab shows them.
-  const interestTdsEntries = (prefill.tds_other_entries || []).filter((e) => {
-    const sec = (e.section || '').toUpperCase();
-    return sec === '194A' || sec === '193' || sec === '194K';
+  // ── Other Sources: bank interest entries ──
+  // The Prefill's other_sources.other_income_details array carries the
+  // CBDT's own breakdown of other-sources income by nature code:
+  //   IFD = Interest from Fixed Deposit
+  //   SAV = Interest from Savings Account
+  //   DIV = Dividend
+  //   OTH = Other income
+  // We build bankInterestEntries from IFD + SAV entries, and
+  // dividendEntries from DIV entries.  These arrays drive the Other
+  // Sources tab UI.
+  const otherIncomeDetails = os.other_income_details || [];
+  const interestDetails = otherIncomeDetails.filter((d) => {
+    const nat = (d.nature || '').toUpperCase();
+    return nat === 'IFD' || nat === 'SAV' || nat === 'INT' || nat === 'IDP';
   });
-  if (interestTdsEntries.length > 0) {
-    update.bankInterestEntries = interestTdsEntries.map((e) => ({
-      id: stableEntryId('bank-int', e),
-      bankName: e.deductor_name || 'Bank',
-      accountNumber: '',
-      accountType: 'SAVINGS',
-      interestEarned: e.gross_amount || e.income_amount || 0,
-      tdsDeducted: e.tds_deducted || 0,
-      deductorTAN: e.tan || '',
-      section: e.section || '194A',
+  if (interestDetails.length > 0) {
+    // Match each interest detail to a TDS-other entry by deductor name
+    // (if possible) so we can attach the TAN + TDS amount.
+    const tdsOther = prefill.tds_other_entries || [];
+    update.bankInterestEntries = interestDetails.map((d) => {
+      const matchingTds = tdsOther.find((t) =>
+        (t.deductor_name || '').toLowerCase().includes('bank') ||
+        (t.deductor_name || '').toLowerCase().includes('state') ||
+        (t.deductor_name || '').toLowerCase().includes('hdfc') ||
+        (t.deductor_name || '').toLowerCase().includes('icici') ||
+        (t.deductor_name || '').toLowerCase().includes('sbi'));
+      return {
+        id: stableEntryId('bank-int', d),
+        bankName: (matchingTds && matchingTds.deductor_name) || 'Bank',
+        accountNumber: '',
+        accountType: 'SAVINGS',
+        interestEarned: d.amount || 0,
+        tdsDeducted: (matchingTds && matchingTds.tds_deducted) || 0,
+        deductorTAN: (matchingTds && matchingTds.tan) || '',
+        section: (matchingTds && matchingTds.section) || '194A',
+      };
+    });
+  }
+
+  // ── Other Sources: dividend entries ──
+  const dividendDetails = otherIncomeDetails.filter((d) => {
+    const nat = (d.nature || '').toUpperCase();
+    return nat === 'DIV' || nat === 'DVD';
+  });
+  if (dividendDetails.length > 0) {
+    update.dividendEntries = dividendDetails.map((d) => ({
+      id: stableEntryId('div', d),
+      companyName: 'Dividend income',
+      companyPAN: '',
+      dividendAmount: d.amount || 0,
+      tdsDeducted: 0,
+      deductorTAN: '',
+      isin: '',
+      category: 'SHARES',
+      section: '194',
     }));
   }
 
-  // ── Other Sources: dividend entries (from TDS-other, section 194/194K) ──
-  const dividendTdsEntries = (prefill.tds_other_entries || []).filter((e) => {
-    const sec = (e.section || '').toUpperCase();
-    return sec === '194' || sec === '194K';
-  });
-  if (dividendTdsEntries.length > 0) {
-    update.dividendEntries = dividendTdsEntries.map((e) => ({
-      id: stableEntryId('div', e),
-      companyName: e.deductor_name || 'Company',
-      companyPAN: '',
-      dividendAmount: e.gross_amount || e.income_amount || 0,
-      tdsDeducted: e.tds_deducted || 0,
-      deductorTAN: e.tan || '',
-      isin: '',
-      category: 'SHARES',
-      section: e.section || '194',
-    }));
+  // ── Fallback: if other_income_details is empty, build from TDS-other ──
+  // Some prefill payloads may not carry other_income_details; in that
+  // case fall back to the TDS-other entries with section containing 'A'
+  // (194A/94A) for interest and section '194'/'94' for dividends.
+  if (!interestDetails.length && tdsOtherBuilt.length > 0) {
+    const fallbackInterest = (prefill.tds_other_entries || []).filter((e) => {
+      const sec = (e.section || '').toUpperCase();
+      // Match 194A, 94A, 193, 194K — but not 194/94 (dividend).
+      return sec.includes('A') || sec === '193';
+    });
+    if (fallbackInterest.length > 0) {
+      update.bankInterestEntries = fallbackInterest.map((e) => ({
+        id: stableEntryId('bank-int', e),
+        bankName: e.deductor_name || 'Bank',
+        accountNumber: '',
+        accountType: 'SAVINGS',
+        interestEarned: e.gross_amount || e.income_amount || 0,
+        tdsDeducted: e.tds_deducted || 0,
+        deductorTAN: e.tan || '',
+        section: e.section || '194A',
+      }));
+    }
+  }
+  if (!dividendDetails.length && tdsOtherBuilt.length > 0) {
+    const fallbackDiv = (prefill.tds_other_entries || []).filter((e) => {
+      const sec = (e.section || '').toUpperCase();
+      // Match 194 or 94 but NOT 194A/94A/194K (those are interest).
+      return (sec === '194' || sec === '94' || sec === '194K' || sec === '94K');
+    });
+    if (fallbackDiv.length > 0) {
+      update.dividendEntries = fallbackDiv.map((e) => ({
+        id: stableEntryId('div', e),
+        companyName: e.deductor_name || 'Company',
+        companyPAN: '',
+        dividendAmount: e.gross_amount || e.income_amount || 0,
+        tdsDeducted: e.tds_deducted || 0,
+        deductorTAN: e.tan || '',
+        isin: '',
+        category: 'SHARES',
+        section: e.section || '194',
+      }));
+    }
   }
 
   // ── Deductions (Chapter VI-A) ──
