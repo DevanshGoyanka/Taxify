@@ -35,10 +35,13 @@ export const integrationApi = {
     return multipartPost('/integration/tis/import', file, { pan, dob });
   },
   
-  import26AS: async (file: File, clientId: number): Promise<Form26ASData> => {
+  import26AS: async (file: File, clientId: number, pan?: string, dob?: string, assessmentYear?: string): Promise<Form26ASData> => {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('clientId', clientId.toString());
+    if (pan) fd.append('pan', pan);
+    if (dob) fd.append('dob', dob);
+    if (assessmentYear) fd.append('assessmentYear', assessmentYear);
     const { data } = await axiosInstance.post('/integration/26as/import', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });

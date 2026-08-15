@@ -1120,7 +1120,8 @@ export default function ITRComputationPage() {
         const pan = clientData?.pan;
         const dob = clientData?.dob; // YYYY-MM-DD format
 
-        // Validate PAN and DOB are available for encrypted documents (except TXT/ZIP)
+        // Validate PAN and DOB are available for encrypted documents
+        // (ZIP uploads need DOB to unlock; PDF/TXT don't need it upfront)
         if ((typeStr === 'ais-pdf' || typeStr === 'ais-json' || typeStr === 'tis-pdf' || typeStr === '26as-pdf') && (!pan || !dob)) {
           toast.dismiss();
           toast.error('Client PAN and Date of Birth are required for importing encrypted ITD documents');
@@ -1149,7 +1150,7 @@ export default function ITRComputationPage() {
         } else if (typeStr === '26as-txt' || typeStr === '26as-pdf') {
           const { integrationApi } = await import('../api/integration');
           // Backend will use client's DOB as password for ZIP files
-          data = await integrationApi.import26AS(file, legacyClientId!);
+          data = await integrationApi.import26AS(file, legacyClientId!, pan, dob, effectiveAssessmentYear);
           if (importGeneration !== loadGenerationRef.current) return;
           setImported26AS(data);
         }

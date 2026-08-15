@@ -336,14 +336,18 @@ def import_26as(
     file: UploadFile = File(...),
     clientId: Optional[str] = Form(None),
     assessmentYear: Optional[str] = Form(None),
+    pan: Optional[str] = Form(None),
+    dob: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Import a 26AS PDF, TXT, or JSON and return the parsed 26AS data.
+    """Import a 26AS PDF, ZIP, TXT, or JSON and return the parsed 26AS data.
 
     Uses the real ``extract_26as`` extractor for PDFs and the legacy
     ``parse_26as_txt`` for TXT files.  JSON uploads are parsed directly.
-    Raw + parsed content is persisted.
+    ZIP files (from the ITD/TRACES portal) are extracted using the DOB
+    in DDMMYYYY format as the password.  Raw + parsed content is
+    persisted.
     """
     content = file.file.read()
     file.file.seek(0)
@@ -362,6 +366,85 @@ def import_26as(
             raw_content=content.decode("utf-8", errors="replace"), parsed_content=parsed_str,
         )
         return data
+
+    # ── ZIP path (from TRACES portal) ──
+    # TRACES wraps the 26AS .txt inside a password-protected ZIP.
+    # Password is DOB in DDMMYYYY format (e.g. 01-01-1980 → 01011980).
+    import zipfile as _zipfile
+    import io as _io
+    is_zip = False
+    try:
+        is_zip = _zipfile.is_zipfile(_io.BytesIO(content))
+    except Exception:
+        is_zip = False
+    if is_zip:
+        zip_pwd = (dob or "").replace("-", "").encode() if dob else None
+        try:
+            with _zipfile.ZipFile(_io.BytesIO(content), "r") as zf:
+                names = zf.namelist()
+                # Prefer .txt, then .pdf
+                txt_name = next((n for n in names if n.lower().endswith(".txt")), None)
+                pdf_name = next((n for n in names if n.lower().endswith(".pdf")), None)
+                if txt_name:
+                    extracted = zf.read(txt_name, pwd=zip_pwd)
+                    # Re-run through the TXT path
+                    tmp_path = _write_temp(extracted, ".txt")
+                    try:
+                        if parse_26as_txt is not None:
+                            parsed = parse_26as_txt(tmp_path)
+                            data = _map_legacy_26as(parsed)
+                            parsed_str = json.dumps(data, ensure_ascii=False, default=str)
+                            _upsert_imported_document(
+                                db, client_db_id, current_user.id, ay, "26as", "upload",
+                                raw_content=_b64(content), parsed_content=parsed_str,
+                            )
+                            return data
+                        raise HTTPException(501, "26AS TXT extractor not available on this server.")
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:
+                            pass
+                elif pdf_name:
+                    extracted = zf.read(pdf_name, pwd=zip_pwd)
+                    if extract_26as is not None:
+                        tmp_path = _write_temp(extracted, ".pdf")
+                        try:
+                            data = extract_26as(tmp_path)
+                            parsed_str = json.dumps(data, ensure_ascii=False, default=str)
+                            _upsert_imported_document(
+                                db, client_db_id, current_user.id, ay, "26as", "upload",
+                                raw_content=_b64(content), parsed_content=parsed_str,
+                            )
+                            return data
+                        except Exception as exc:
+                            raise HTTPException(422, f"26AS PDF (from ZIP) extraction failed: {exc}")
+                        finally:
+                            try:
+                                os.unlink(tmp_path)
+                            except OSError:
+                                pass
+                    raise HTTPException(501, "26AS PDF extractor not available on this server.")
+                else:
+                    raise HTTPException(422, "26AS ZIP did not contain a .txt or .pdf file.")
+        except _zipfile.BadZipFile:
+            raise HTTPException(422, "Invalid 26AS ZIP file.")
+        except RuntimeError as exc:
+            if "bad password" in str(exc).lower() or "password" in str(exc).lower():
+                raise HTTPException(
+                    422,
+                    "26AS ZIP password incorrect. Please provide the correct DOB "
+                    "(format: DD-MM-YYYY) matching the PAN card."
+                )
+            raise HTTPException(422, f"26AS ZIP extraction failed: {exc}")
+        except Exception as exc:
+            if "password" in str(exc).lower() or "bad" in str(exc).lower():
+                raise HTTPException(
+                    422,
+                    "26AS ZIP password incorrect. Please provide the correct DOB "
+                    "(format: DD-MM-YYYY) matching the PAN card."
+                )
+            raise HTTPException(422, f"26AS ZIP extraction failed: {exc}")
 
     # ── PDF path (real extractor) ──
     if extract_26as is not None and file.filename and file.filename.lower().endswith(".pdf"):
