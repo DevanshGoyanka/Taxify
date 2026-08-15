@@ -224,7 +224,45 @@ def import_ais_json(
     ay = assessmentYear or ""
     client_db_id = _resolve_client_id(clientId, db, current_user)
 
-    # ── Encrypted JSON path ──
+    # ── PDF path (real extractor) — check FIRST ──
+    # A PDF starts with '%PDF' magic bytes.  Check this before trying the
+    # encrypted JSON path, because PDFs are also > 64 bytes.
+    filename_lower = (file.filename or "").lower()
+    is_pdf = content.startswith(b"%PDF") or filename_lower.endswith(".pdf")
+    if is_pdf:
+        tmp_path = _write_temp(content, ".pdf")
+        try:
+            doc = extract_ais(tmp_path)
+            parsed_str = extract_ais_json(tmp_path)
+            data = json.loads(parsed_str)
+            _upsert_imported_document(
+                db, client_db_id, current_user.id, ay, "ais", "upload",
+                raw_content=_b64(content), parsed_content=parsed_str,
+            )
+            return data
+        except Exception as exc:
+            raise HTTPException(422, f"AIS PDF extraction failed: {exc}")
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    # ── Plain JSON path (before encrypted JSON) ──
+    if content.startswith(b"{"):
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, f"Invalid AIS JSON: {exc}")
+        parsed_str = json.dumps(data, ensure_ascii=False, default=str)
+        _upsert_imported_document(
+            db, client_db_id, current_user.id, ay, "ais", "upload",
+            raw_content=content.decode("utf-8", errors="replace"), parsed_content=parsed_str,
+        )
+        return data
+
+    # ── Encrypted JSON path (from ITD portal) ──
+    # Only treat as encrypted JSON if it's NOT a PDF and NOT plain JSON.
     if len(content) > 64 and decrypt_ais_json is not None:
         tmp_path = _write_temp(content, ".json")
         try:
@@ -243,37 +281,7 @@ def import_ais_json(
             except OSError:
                 pass
 
-    # ── Plain JSON path ──
-    if content.startswith(b"{"):
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(422, f"Invalid AIS JSON: {exc}")
-        parsed_str = json.dumps(data, ensure_ascii=False, default=str)
-        _upsert_imported_document(
-            db, client_db_id, current_user.id, ay, "ais", "upload",
-            raw_content=content.decode("utf-8", errors="replace"), parsed_content=parsed_str,
-        )
-        return data
-
-    # ── PDF path (real extractor) ──
-    tmp_path = _write_temp(content, ".pdf")
-    try:
-        doc = extract_ais(tmp_path)
-        parsed_str = extract_ais_json(tmp_path)
-        data = json.loads(parsed_str)
-        _upsert_imported_document(
-            db, client_db_id, current_user.id, ay, "ais", "upload",
-            raw_content=_b64(content), parsed_content=parsed_str,
-        )
-        return data
-    except Exception as exc:
-        raise HTTPException(422, f"AIS PDF extraction failed: {exc}")
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    raise HTTPException(422, "Unrecognized AIS file format. Expected a PDF, plain JSON, or encrypted JSON from the ITD portal.")
 
 
 @router.post("/integration/tis/import")
@@ -298,6 +306,30 @@ def import_tis(
     ay = assessmentYear or ""
     client_db_id = _resolve_client_id(clientId, db, current_user)
 
+    # ── PDF path (real extractor) — check FIRST ──
+    # A PDF starts with '%PDF' magic bytes.  Check this before trying
+    # plain JSON, because a PDF won't start with '{'.
+    filename_lower = (file.filename or "").lower()
+    is_pdf = content.startswith(b"%PDF") or filename_lower.endswith(".pdf")
+    if is_pdf:
+        tmp_path = _write_temp(content, ".pdf")
+        try:
+            doc = extract_tis(tmp_path)
+            parsed_str = tis_to_frontend_json(doc)
+            data = json.loads(parsed_str)
+            _upsert_imported_document(
+                db, client_db_id, current_user.id, ay, "tis", "upload",
+                raw_content=_b64(content), parsed_content=parsed_str,
+            )
+            return data
+        except Exception as exc:
+            raise HTTPException(422, f"TIS PDF extraction failed: {exc}")
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
     # ── Plain JSON path ──
     if content.startswith(b"{"):
         try:
@@ -311,24 +343,7 @@ def import_tis(
         )
         return data
 
-    # ── PDF path (real extractor) ──
-    tmp_path = _write_temp(content, ".pdf")
-    try:
-        doc = extract_tis(tmp_path)
-        parsed_str = tis_to_frontend_json(doc)
-        data = json.loads(parsed_str)
-        _upsert_imported_document(
-            db, client_db_id, current_user.id, ay, "tis", "upload",
-            raw_content=_b64(content), parsed_content=parsed_str,
-        )
-        return data
-    except Exception as exc:
-        raise HTTPException(422, f"TIS PDF extraction failed: {exc}")
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    raise HTTPException(422, "Unrecognized TIS file format. Expected a PDF or JSON.")
 
 
 @router.post("/integration/26as/import")
