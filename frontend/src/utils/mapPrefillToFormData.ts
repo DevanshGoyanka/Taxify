@@ -255,7 +255,6 @@ function buildTdsOtherEntry(entry: PrefillTDSEntry) {
     _isSalaryTds: false,
   };
 }
-
 // ── Main mapper ──────────────────────────────────────────────────────────────
 
 export interface MapPrefillResult {
@@ -339,6 +338,11 @@ export function mapPrefillToFormData(prefill: PrefillExtraction | null | undefin
   // The Prefill employer entries carry gross_salary and salary (basic).
   // These are the CBDT's own pre-filled values — more authoritative than
   // AIS/TIS for salary break-up.  Set them only when the Prefill has data.
+  //
+  // IMPORTANT: Only true employer entries (from `salaries`) map to the
+  // salary head.  TDS-other entries (section 94A, 194A, etc.) are income
+  // from Other Sources, NOT salary — they must not be treated as employer
+  // entries even when the Prefill's salaries block is null.
   if (prefill.employer_entries && prefill.employer_entries.length > 0) {
     update.employerEntries = prefill.employer_entries.map(buildEmployerEntry);
     const totalSalary = prefill.employer_entries.reduce((s, e) => s + (e.salary || 0), 0);
@@ -362,16 +366,64 @@ export function mapPrefillToFormData(prefill: PrefillExtraction | null | undefin
     };
   }
 
-  // ── TDS on Salary ──
-  if (prefill.tds_salary_entries && prefill.tds_salary_entries.length > 0) {
-    const tdsSalTotal = prefill.tds_salary_entries.reduce((s, e) => s + (e.tds_deducted || 0), 0);
-    update.tdsS192 = tdsSalTotal;
+  // ── TDS entries (combined salary + other) ──
+  // The form's TDS tab expects a single `tdsEntries` array with every
+  // TDS entry (salary section 192 + other sections 194A/194/94A/etc.).
+  // Each entry carries its own `section` so the tab can route it.
+  const tdsSalaryBuilt = (prefill.tds_salary_entries || []).map(buildTdsSalaryEntry);
+  const tdsOtherBuilt = (prefill.tds_other_entries || []).map(buildTdsOtherEntry);
+  const allTdsEntries = [...tdsSalaryBuilt, ...tdsOtherBuilt];
+  if (allTdsEntries.length > 0) {
+    update.tdsEntries = allTdsEntries;
   }
 
-  // ── TDS on Other than Salary ──
-  if (prefill.tds_other_entries && prefill.tds_other_entries.length > 0) {
-    const tdsOthTotal = prefill.tds_other_entries.reduce((s, e) => s + (e.tds_deducted || 0), 0);
-    update.tds194A = tdsOthTotal;  // Simplified — real mapping needs section logic
+  // ── TDS totals (flat fields for ITR-1) ──
+  if (tdsSalaryBuilt.length > 0) {
+    const tdsSalTotal = tdsSalaryBuilt.reduce((s, e) => s + (e.tdsDeducted || 0), 0);
+    update.tdsS192 = tdsSalTotal;
+  }
+  if (tdsOtherBuilt.length > 0) {
+    const tdsOthTotal = tdsOtherBuilt.reduce((s, e) => s + (e.tdsDeducted || 0), 0);
+    update.tds194A = tdsOthTotal;  // flat total — also populated per-entry above
+  }
+
+  // ── Other Sources: bank interest entries (from TDS-other, section 194A/193) ──
+  // The Prefill's TDS-other entries with section 194A or 193 are interest
+  // income.  Build bankInterestEntries so the Other Sources tab shows them.
+  const interestTdsEntries = (prefill.tds_other_entries || []).filter((e) => {
+    const sec = (e.section || '').toUpperCase();
+    return sec === '194A' || sec === '193' || sec === '194K';
+  });
+  if (interestTdsEntries.length > 0) {
+    update.bankInterestEntries = interestTdsEntries.map((e) => ({
+      id: stableEntryId('bank-int', e),
+      bankName: e.deductor_name || 'Bank',
+      accountNumber: '',
+      accountType: 'SAVINGS',
+      interestEarned: e.gross_amount || e.income_amount || 0,
+      tdsDeducted: e.tds_deducted || 0,
+      deductorTAN: e.tan || '',
+      section: e.section || '194A',
+    }));
+  }
+
+  // ── Other Sources: dividend entries (from TDS-other, section 194/194K) ──
+  const dividendTdsEntries = (prefill.tds_other_entries || []).filter((e) => {
+    const sec = (e.section || '').toUpperCase();
+    return sec === '194' || sec === '194K';
+  });
+  if (dividendTdsEntries.length > 0) {
+    update.dividendEntries = dividendTdsEntries.map((e) => ({
+      id: stableEntryId('div', e),
+      companyName: e.deductor_name || 'Company',
+      companyPAN: '',
+      dividendAmount: e.gross_amount || e.income_amount || 0,
+      tdsDeducted: e.tds_deducted || 0,
+      deductorTAN: e.tan || '',
+      isin: '',
+      category: 'SHARES',
+      section: e.section || '194',
+    }));
   }
 
   // ── Deductions (Chapter VI-A) ──

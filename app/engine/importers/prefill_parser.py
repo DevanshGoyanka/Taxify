@@ -764,31 +764,12 @@ def _extract_employers(root: dict[str, Any]) -> list[PrefillEmployerEntry]:
     # employer's TDS return).  We don't extract employer entries from
     # form24q here; the TDS-on-salary extractor handles it.
 
-    # Source 4: When salaries is null, enrich stub employer entries from
-    # the TDS-other-than-salary entries.  The real ITD prefill often has
-    # null salaries but carries deductor names + TANs in
-    # form26as.tdsOnOthThanSals.  If a TDS entry's headOfIncome is "OS"
-    # (Other Sources) and it has a deductor name, treat it as an
-    # employer candidate.
-    if not employers or all(not e.employer_name for e in employers):
-        tds_other = _extract_tds_other(root)
-        for tds in tds_other:
-            if tds.deductor_name and tds.tan:
-                # If we already have stub entries, fill the first empty one.
-                filled = False
-                for emp in employers:
-                    if not emp.employer_name:
-                        emp.employer_name = tds.deductor_name
-                        emp.tan = tds.tan
-                        emp.gross_salary = tds.gross_amount
-                        filled = True
-                        break
-                if not filled:
-                    employers.append(PrefillEmployerEntry(
-                        employer_name=tds.deductor_name,
-                        tan=tds.tan,
-                        gross_salary=tds.gross_amount,
-                    ))
+    # Note: We do NOT enrich employer entries from TDS-other data.
+    # TDS-other entries (section 94A, 194A, 194, etc.) are income from
+    # Other Sources, NOT salary.  Treating them as employer entries
+    # misclassifies other-sources income as salary income.  The frontend
+    # mapper (mapPrefillToFormData) builds bankInterestEntries and
+    # dividendEntries from TDS-other entries based on their section code.
 
     # Deduplicate employer entries by TAN (keep first occurrence).
     seen_tans: set[str] = set()
