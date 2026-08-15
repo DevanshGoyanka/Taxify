@@ -202,10 +202,11 @@ function buildEmployerEntry(emp: PrefillEmployerEntry) {
 
 function buildBankAccount(acct: PrefillBankAccount) {
   return {
+    id: stableEntryId('bank', acct as any),
     bankName: acct.bank_name || '',
     accountNumber: acct.bank_account_no || '',
     ifscCode: acct.ifsc_code || '',
-    accountType: 'SB',  // Prefill schema doesn't carry account type; default to Savings
+    accountType: 'SB' as const,  // Prefill schema doesn't carry account type; default to Savings
     useForRefund: acct.use_for_refund === 'true',
   };
 }
