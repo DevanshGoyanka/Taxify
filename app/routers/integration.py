@@ -474,10 +474,14 @@ def import_26as(
             raise HTTPException(422, f"26AS ZIP extraction failed: {exc}")
 
     # ── PDF path (real extractor) ──
+    # extract_26as returns {"header": {...}, "parts": {"I": {...}, ...}}
+    # which is the same shape parse_26as_txt returns.  Map it through
+    # _map_legacy_26as so the frontend gets partIEntries + incomeBreakdown.
     if extract_26as is not None and file.filename and file.filename.lower().endswith(".pdf"):
         tmp_path = _write_temp(content, ".pdf")
         try:
-            data = extract_26as(tmp_path)
+            raw_26as = extract_26as(tmp_path)
+            data = _map_legacy_26as(raw_26as)
             parsed_str = json.dumps(data, ensure_ascii=False, default=str)
             _upsert_imported_document(
                 db, client_db_id, current_user.id, ay, "26as", "upload",
