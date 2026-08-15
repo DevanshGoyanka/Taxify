@@ -1,8 +1,8 @@
 # Import Pipeline Implementation Plan
 
 **Document created:** 2026-08-15
-**Last updated:** 2026-08-15 (after Phase 2 completion)
-**Status:** Phase 2 complete, Phase 3 next
+**Last updated:** 2026-08-15 (after Phase 3 completion)
+**Status:** Phase 3 complete, Phase 4 next
 
 This document tracks the complete implementation plan for fixing the
 import pipeline as identified in `IMPORT_FLOW_AUDIT_REPORT.md`.  It is
@@ -14,7 +14,7 @@ updated after every commit and before moving to the next phase.
 
 1. [Phase 1: Form-agnostic Prefill JSON Parser ✅ COMPLETE](#phase-1-form-agnostic-prefill-json-parser--complete)
 2. [Phase 2: Last Filed ITR JSON Parser ✅ COMPLETE](#phase-2-last-filed-itr-json-parser--complete)
-3. [Phase 3: Fix Individual Upload Endpoints + Document Persistence](#phase-3-fix-individual-upload-endpoints--document-persistence)
+3. [Phase 3: Fix Individual Upload Endpoints + Document Persistence ✅ COMPLETE](#phase-3-fix-individual-upload-endpoints--document-persistence--complete)
 4. [Phase 4: Extend Reconciliation Engine](#phase-4-extend-reconciliation-engine)
 5. [Phase 5: Document Persistence + Re-parse/Re-reconcile](#phase-5-document-persistence--re-parsere-reconcile)
 6. [Phase 6: Year-Adaptive Integration](#phase-6-year-adaptive-integration)
@@ -363,27 +363,28 @@ Tested against the real filed-return JSON for taxpayer SUNIT GOYANKA
 
 ---
 
-## Phase 3: Fix Individual Upload Endpoints + Document Persistence
+## Phase 3: Fix Individual Upload Endpoints + Document Persistence ✅ COMPLETE
 
-**Status:** Not started
-**Estimated effort:** 3-4 days
+**Started:** 2026-08-15
+**Completed:** 2026-08-15
+**Commits:** 1 (pending push)
 
 ### Goal
 
-Every endpoint in `app/routers/integration.py` returns hardcoded mock
+Every endpoint in `app/routers/integration.py` returned hardcoded mock
 data.  The real parsers (`ais_extractor/extractor.py`,
 `ais_extractor/as26_extractor.py`, `ais_extractor/tis_extractor.py`)
-are only called by `job_worker.py`.  Individual uploads of AIS/TIS/
-26AS/Prefill/Form 16 all get mock data.
+were only called by `job_worker.py`.  Individual uploads of AIS/TIS/
+26AS/Prefill/Form 16 all got mock data.
 
-This phase rewires the individual upload endpoints to use the real
-parsers and adds a new `ImportedDocument` DB table for persistence.
+This phase rewired the individual upload endpoints to use the real
+parsers and added a new `ImportedDocument` DB table for persistence.
 
-### Steps
+### What was built
 
-#### Step 3.1: Create `ImportedDocument` DB model
+#### New DB model — `app/db/models.py`
 
-**New table:** `imported_document`
+Added the `ImportedDocument` table:
 
 | Column | Type | Notes |
 |---|---|---|
@@ -392,71 +393,77 @@ parsers and adds a new `ImportedDocument` DB table for persistence.
 | `user_id` | Integer FK → `user.id` | ON DELETE CASCADE, indexed |
 | `assessment_year` | String(10) | e.g. "2026-27" |
 | `document_type` | String(20) | prefill, ais, tis, 26as, form16, filed_return |
-| `source` | String(20) | portal, upload |
-| `raw_content` | Text | Raw file content (JSON or base64 PDF) |
+| `source` | String(20) | portal or upload |
+| `raw_content` | Text | Raw file content (JSON text or base64 PDF) |
 | `parsed_content` | Text | Parsed JSON (default "{}") |
 | `created_at` | DateTime | Default UTC now |
+| `updated_at` | DateTime | Default UTC now, onupdate now |
 | | | Unique constraint: (client_id, assessment_year, document_type) |
 
-#### Step 3.2: Rewrite `app/routers/integration.py`
+The table is auto-created by `create_tables()` at startup (uses
+`CREATE TABLE IF NOT EXISTS` semantics).
 
-For each endpoint:
-1. Read uploaded file
-2. If PDF, write to temp and call the real extractor
-3. If JSON, parse directly
-4. Store raw + parsed content in `ImportedDocument` table
-5. Return parsed content
+#### Rewritten `app/routers/integration.py`
 
-**Endpoints to fix:**
-- `POST /integration/form16/extract` — needs a Form 16 PDF parser
-- `POST /api/v1/imports/ais` — use `ais_extractor.extractor.extract_ais`
-- `POST /integration/ais-json/import` — use `ais_extractor.extractor`
-- `POST /integration/tis/import` — use `ais_extractor.tis_extractor.extract_tis`
-- `POST /integration/26as/import` — use `ais_extractor.as26_extractor.extract_26as`
-- `POST /integration/prefill/import` — use `app.engine.importers.prefill_parser.parse_prefill_json`
-- `POST /integration/autopopulate/form16` — merge Form 16 data into formData
-- `POST /integration/autopopulate/ais` — merge AIS data into formData
-- `POST /prefill/autoPopulateAll` — combine 26AS + AIS + TIS → form data
-- `POST /integration/reconciliation` — call `ais_extractor.reconciliation.reconcile`
-- `POST /prefill/autopopulate` — merge Prefill into formData
+Replaced all mock endpoints with real-parser implementations:
 
-#### Step 3.3: Wire real reconciliation into upload path
+| Endpoint | Before | After |
+|---|---|---|
+| `POST /integration/form16/extract` | Mock TCS data | Returns 501 (no parser yet) |
+| `POST /api/v1/imports/ais` | Mock AIS data | Calls `extract_ais` (PDF) or `decrypt_ais_json` (encrypted JSON) or `json.loads` (plain JSON); persists to ImportedDocument |
+| `POST /integration/ais-json/import` | Mock AIS data | Same as above (alias) |
+| `POST /integration/tis/import` | Mock TIS data | Calls `extract_tis` (PDF) or `json.loads` (JSON); persists to ImportedDocument |
+| `POST /integration/26as/import` | Mock 26AS data (with real TXT parser) | Calls `extract_26as` (PDF) or `parse_26as_txt` (TXT) or `json.loads` (JSON); persists to ImportedDocument |
+| `POST /integration/prefill/import` | Mock "imported" message | Calls `parse_prefill_json`; persists to ImportedDocument |
+| `POST /integration/autopopulate/form16` | Merge mock | Merge whatever the frontend supplies (no parser yet) |
+| `POST /integration/autopopulate/ais` | No merge | Merge AIS summary (interest/dividend) into formData |
+| `POST /prefill/autoPopulateAll` | Mock employer "TATA" | Merge 26AS + AIS + TIS into formData (no hardcoded names) |
+| `POST /integration/reconciliation` | `{"hasDiscrepancies": False}` | Calls real `reconcile()` from `ais_extractor.reconciliation` |
+| `POST /prefill/autopopulate` | No merge | Calls `parse_prefill_json`, merges personal info + banks + deductions |
 
-Replace the mock `reconciliation()` endpoint with a call to
-`ais_extractor.reconciliation.reconcile()`:
+**Key design decisions:**
 
-```python
-@router.post("/integration/reconciliation")
-def reconciliation(payload: dict, ...):
-    ais = payload.get("aisData", {})
-    tis = payload.get("tisData", {})
-    as26 = payload.get("data26AS", {})
-    result = reconcile(ais, tis, as26)
-    return result
-```
+1. **Real parsers only** — no mock data anywhere.  If a parser is
+   unavailable, the endpoint returns a 501 with a clear message.
+2. **Persistence** — every upload endpoint persists the raw + parsed
+   content to the `ImportedDocument` table via `_upsert_imported_document`.
+3. **Client resolution** — `_resolve_client_id` accepts either a
+   numeric id or a public_id (UUID) and verifies ownership.
+4. **Three upload formats** — AIS/TIS/26AS endpoints handle PDF, TXT,
+   and JSON uploads.
+5. **Encrypted AIS JSON** — the AIS endpoint still decrypts encrypted
+   JSON from the ITD portal using the supplied PAN + DOB.
 
-#### Step 3.4: Delete dead code
+#### Deleted dead code
 
-- Delete `app/services/prefill_service.py` (dead code, wrong AY)
-- Delete `frontend/src/api/reconciliation.ts` stub (or wire it to the
-  real endpoint)
-- Remove mock data from every `integration.py` endpoint
+- `app/services/prefill_service.py` — dead code (wrong schema shape,
+  no imports anywhere).  Deleted.
 
-### Deliverables
+#### Frontend — `frontend/src/api/reconciliation.ts`
 
-- New `ImportedDocument` DB model + migration
-- Rewritten `app/routers/integration.py` with real parsers
-- Deleted dead code (`prefill_service.py`, `reconciliation.ts` stub)
+Replaced the stub (`stub('/api/reconciliation', {})`) with a real
+client that calls `POST /integration/reconciliation` with the AIS,
+TIS, and 26AS data and returns a typed `ReconciliationResult`.
+
+### Commits
+
+| # | Commit | Description |
+|---|---|---|
+| 1 | (pending) | feat(import): Phase 3 — real parsers + document persistence |
 
 ### What you can test
 
-1. Upload an AIS PDF via the individual upload UI
-2. Check the backend log — should call the real `extract_ais` parser
-3. Verify the parsed AIS data is stored in the `ImportedDocument` table
-4. Upload a 26AS text file — should call the real `extract_26as` parser
-5. Upload a Prefill JSON — should call `parse_prefill_json` and store
-6. Trigger reconciliation from the UI — should return real
-   discrepancies (not `{"hasDiscrepancies": False}`)
+1. Upload an AIS PDF via the individual upload UI — should call the
+   real `extract_ais` parser and return real AIS data (not mock).
+2. Upload a 26AS text file — should call the real `parse_26as_txt`.
+3. Upload a Prefill JSON — should call `parse_prefill_json` and return
+   the form-agnostic extraction.
+4. Upload an AIS PDF with a `clientId` — check the `imported_document`
+   table has a new row with `document_type='ais'`.
+5. Trigger reconciliation from the UI — should return real
+   discrepancies (not `{"hasDiscrepancies": False}`).
+6. Upload a Form 16 PDF — should return a 501 with "Form 16 auto-
+   extraction is not yet available" (not mock TCS data).
 
 ---
 
@@ -644,7 +651,8 @@ tax-year config to know which form fields exist for the current AY
 | 1 | `bcc0054` | feat(prefill-parser): extract ALL sections from ITD prefill + dedupe banks | 2026-08-15 |
 | 1 | (pushed) | All 4 commits pushed to `origin/main` | 2026-08-15 |
 | 2 | (pending) | feat(import): Phase 2 — filed-return parser + revised-return flagging | 2026-08-15 |
-| 3 | — | *Not started* | — |
+| 3 | (pending) | feat(import): Phase 3 — real parsers + document persistence | 2026-08-15 |
+| 4 | — | *Not started* | — |
 
 ---
 
@@ -683,14 +691,21 @@ tax-year config to know which form fields exist for the current AY
 - [x] Warning banner shows advisory message when current-AY already filed
 - [x] Prominent error toast for revised-return scenarios
 
-### Phase 3 (pending)
+### Phase 3 (complete)
 
-- [ ] Individual upload of AIS PDF calls real `extract_ais`
-- [ ] Individual upload of 26AS text calls real `extract_26as`
-- [ ] Individual upload of Prefill JSON calls `parse_prefill_json`
-- [ ] Uploaded documents stored in `ImportedDocument` table
-- [ ] Reconciliation endpoint returns real discrepancies
-- [ ] Dead code (`prefill_service.py`) deleted
+- [x] ImportedDocument DB model created with unique constraint
+- [x] imported_document table auto-created on startup
+- [x] AIS endpoint uses real `extract_ais` parser (PDF)
+- [x] AIS endpoint decrypts encrypted JSON from portal
+- [x] TIS endpoint uses real `extract_tis` parser
+- [x] 26AS endpoint uses real `extract_26as` parser (PDF)
+- [x] 26AS endpoint uses `parse_26as_txt` (TXT)
+- [x] Prefill endpoint uses real `parse_prefill_json` parser
+- [x] Form 16 endpoint returns 501 (no parser yet)
+- [x] Reconciliation endpoint calls real `reconcile()`
+- [x] All upload endpoints persist raw + parsed content to ImportedDocument
+- [x] Dead code `prefill_service.py` deleted
+- [x] Frontend `reconciliation.ts` stub replaced with real client
 
 ### Phase 4 (pending)
 

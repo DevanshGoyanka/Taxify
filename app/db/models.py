@@ -2,12 +2,14 @@
 SQLAlchemy ORM models.
 
 Tables:
-  - User           : registered users with hashed passwords.
-  - SavedReturn    : a user's submitted ITR calculation, with both
-                     the raw input and the computed result stored as JSON text.
-  - Client         : a client managed by a user.
-  - ClientITR      : ITR form data and calculation status for a client+AY.
-  - AutomationJob  : an automated download job (Playwright → ITD portal).
+  - User             : registered users with hashed passwords.
+  - SavedReturn      : a user's submitted ITR calculation, with both
+                       the raw input and the computed result stored as JSON text.
+  - Client           : a client managed by a user.
+  - ClientITR        : ITR form data and calculation status for a client+AY.
+  - AutomationJob    : an automated download job (Playwright → ITD portal).
+  - ImportedDocument : an imported source document (AIS/TIS/26AS/Prefill/
+                       Form 16/filed return) with raw + parsed content.
 """
 
 import datetime
@@ -224,3 +226,63 @@ class AutomationJob(Base):
     # ---- Retry ----
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+
+
+class ImportedDocument(Base):
+    """An imported source document for a client and assessment year.
+
+    Stores both the raw file content (JSON text or base64-encoded PDF
+    bytes) and the parsed JSON output from the relevant extractor.
+    Enables re-parse / re-reconcile flows without re-downloading from
+    the ITD portal.
+
+    document_type is one of:
+      - ``prefill``       (ITD pre-fill JSON)
+      - ``ais``           (Annual Information Statement PDF/JSON)
+      - ``tis``           (Tax Information Summary PDF/JSON)
+      - ``26as``          (Form 26AS PDF/TXT)
+      - ``form16``        (Form 16 PDF)
+      - ``filed_return``  (last-filed ITR JSON)
+    """
+
+    __tablename__ = "imported_document"
+    __table_args__ = (
+        UniqueConstraint(
+            "client_id",
+            "assessment_year",
+            "document_type",
+            name="uq_imported_doc_client_ay_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("client.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assessment_year: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    document_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="upload")
+    # Raw file content: JSON text for JSON files, base64 for PDFs.
+    raw_content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Parsed JSON output from the extractor.
+    parsed_content: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
