@@ -1378,14 +1378,21 @@ export default function ITRComputationPage() {
 
             // ── Extract individual entries from AIS income_heads ──
             // The AIS reports income under sections:
-            //   B1 = TDS-reported income (deductor's view) — for the TDS tab only
+            //   B1 = TDS-reported income (deductor's view) — for the TDS tab
             //   B2 = SFT-reported income (bank's view) — for the Other Sources tab
-            // The SAME interest income appears in BOTH B1 and B2 (reported by
-            // the deductor AND the bank).  To avoid duplication:
-            //   - TDS tab: use B1 (TDS-*) entries
-            //   - Other Sources tab: use B2 (SFT-016) entries ONLY
+            //
+            // The SAME interest often appears in BOTH B1 and B2 (e.g. SBI
+            // reports 261838 via TDS-194A AND 261841 via SFT-016(TD) — same
+            // income, reported twice).  To avoid duplication in Other Sources:
+            //   1. Use B2 (SFT-016) entries as the primary source for OS
+            //   2. Add B1 (TDS-194A) entries that DON'T have a matching B2
+            //      entry from the same deductor (e.g. Anand 60000 — an
+            //      individual who deducted TDS but didn't file SFT)
+            //
+            // TDS tab: use ALL B1 (TDS-*) entries regardless.
             const allTdsEntries: any[] = [];
-            const interestEntries: any[] = [];
+            const b1InterestEntries: any[] = [];  // B1 interest, may or may not dup B2
+            const interestEntries: any[] = [];     // B2 interest (primary)
             const dividendEntries: any[] = [];
 
             for (const [headName, headData] of Object.entries(incomeHeads)) {
@@ -1396,13 +1403,12 @@ export default function ITRComputationPage() {
                 const amount = e.amount || 0;
                 const category = (e.category || '').toLowerCase();
                 const section = e.section || '';
-                // Extract deductor name + TAN from information_source:
-                // "STATE BANK OF INDIA (MUMS89569E)" → name, tan
+                // Extract deductor name + TAN from information_source
                 const sourceMatch = source.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
                 const deductorName = sourceMatch ? sourceMatch[1].trim() : source;
                 const deductorTan = sourceMatch ? sourceMatch[2].split('.')[0].trim() : '';
 
-                // ── TDS tab: B1 (TDS-*) entries only ──
+                // ── TDS tab: B1 (TDS-*) entries ──
                 if (section === 'B1' && code.startsWith('TDS-')) {
                   const tdsSection = code.replace('TDS-', '');
                   allTdsEntries.push({
@@ -1416,14 +1422,23 @@ export default function ITRComputationPage() {
                     verified26AS: true,
                     claimedInReturn: true,
                   });
-                  // Do NOT add B1 entries to interestEntries — they'd
-                  // duplicate the B2 (SFT-016) entries.
+                  // Also collect B1 interest entries for dedup check below
+                  if (tdsSection === '194A' || tdsSection === '193') {
+                    b1InterestEntries.push({
+                      kind: 'TERM_DEPOSIT',
+                      grossAmount: amount,
+                      bankName: deductorName,
+                      accountType: 'FD',
+                      accountNumber: '',
+                      tdsDeducted: 0,
+                      deductorName,
+                      deductorTAN: deductorTan,
+                    });
+                  }
                   continue;
                 }
 
                 // ── Other Sources tab: B2 (SFT-016) interest entries ──
-                // SFT-016(SB) = savings bank interest
-                // SFT-016(TD) = term deposit interest
                 if (section === 'B2' && code.startsWith('SFT-016')) {
                   const isSavings = code.includes('(SB)') || category.includes('savings');
                   interestEntries.push({
@@ -1453,6 +1468,21 @@ export default function ITRComputationPage() {
                   });
                   continue;
                 }
+              }
+            }
+
+            // ── Dedup: add B1 interest entries that don't have a matching
+            // B2 entry from the same deductor ──
+            // Match by deductor name (case-insensitive).  This catches
+            // income like Anand's 60000 which only appears in B1 (TDS-194A)
+            // because individuals don't file SFT.
+            const b2DeductorNames = new Set(
+              interestEntries.map((e) => (e.deductorName || e.bankName || '').toLowerCase())
+            );
+            for (const b1Entry of b1InterestEntries) {
+              const name = (b1Entry.deductorName || '').toLowerCase();
+              if (!b2DeductorNames.has(name)) {
+                interestEntries.push(b1Entry);
               }
             }
 
