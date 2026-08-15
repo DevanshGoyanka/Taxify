@@ -597,6 +597,16 @@ async def _run_job(job_id: int) -> None:
         # reconcile, or compute from the downloaded artifact.
         advisory = generate_filing_advisory(classification, inventory_outcome)
         artifact_outcomes["filing_advisory"] = advisory.to_dict()
+        logger.info(
+            "Job %d: Advisory — already_filed=%s, is_revised=%s, filing_section=%s, "
+            "requires_confirmation=%s, download_ay=%s",
+            job_id,
+            advisory.current_ay_already_filed,
+            advisory.current_ay_is_revised,
+            advisory.current_ay_filing_section,
+            advisory.requires_user_confirmation_for_revision,
+            advisory.download_assessment_year,
+        )
         if advisory.already_filed_advisory:
             log(f"[ADVISORY] {advisory.already_filed_advisory_message}")
         prior_ref_ay = advisory.download_assessment_year
