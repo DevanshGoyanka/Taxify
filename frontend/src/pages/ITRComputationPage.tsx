@@ -1170,12 +1170,15 @@ export default function ITRComputationPage() {
           let tdsEntriesForForm = [];
           
           // Determine financial year from 26AS data
-          // Format from 26AS: "2025-2026" -> convert to "2025-26"
+          // Handles "2025-2026" → "2025-26" and "2025-26" → "2025-26"
           let fyFrom26AS = '2025-26'; // default
           if (data.financialYear) {
             const fyParts = data.financialYear.split('-');
             if (fyParts.length === 2) {
-              fyFrom26AS = fyParts[0] + '-' + fyParts[1].substring(2);
+              // If the second part is 4 digits (e.g. "2026"), shorten to 2 ("26")
+              // If it's already 2 digits (e.g. "26"), keep as-is
+              const secondPart = fyParts[1].length === 4 ? fyParts[1].substring(2) : fyParts[1];
+              fyFrom26AS = fyParts[0] + '-' + secondPart;
             }
           }
           
