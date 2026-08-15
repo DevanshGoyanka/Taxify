@@ -1151,7 +1151,6 @@ export default function ITRComputationPage() {
           const { integrationApi } = await import('../api/integration');
           // Backend will use client's DOB as password for ZIP files
           data = await integrationApi.import26AS(file, legacyClientId!, pan, dob, effectiveAssessmentYear);
-          console.log('[26AS IMPORT] Raw backend response:', { keys: Object.keys(data || {}), incomeBreakdown: data?.incomeBreakdown, partIEntries: data?.partIEntries?.length, pan: data?.pan });
           if (importGeneration !== loadGenerationRef.current) return;
           setImported26AS(data);
         }
@@ -1348,14 +1347,10 @@ export default function ITRComputationPage() {
             console.log('26AS Import - Dividend Entries:', dividendEntriesFrom26AS);
             console.log('26AS Import - Interest Entries:', bankInterestEntriesFrom26AS);
             
-            if (importGeneration !== loadGenerationRef.current || !editorRef.current) {
-              console.log('[26AS IMPORT] Early return — generation mismatch or no editor', { importGeneration, current: loadGenerationRef.current, hasEditor: !!editorRef.current });
-              return;
-            }
+            if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
             const applied = applyLegacyActionWithSnapshot(editorRef.current, formDataUpdate);
             editorRef.current = applied.model;
             setEditorModel(applied.model);
-            console.log('[26AS IMPORT] formDataUpdate applied:', { tdsEntries: formDataUpdate.tdsEntries?.length, bankInterestEntries: formDataUpdate.bankInterestEntries?.length, interestSB: formDataUpdate.interestSB, appliedSnapshot: applied.snapshot?.tdsEntries?.length });
             await itrApi.saveFormData(clientId, effectiveAssessmentYear, applied.snapshot);
             toast.dismiss();
             
