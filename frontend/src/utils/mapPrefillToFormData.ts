@@ -390,40 +390,43 @@ export function mapPrefillToFormData(prefill: PrefillExtraction | null | undefin
   // ── Other Sources: bank interest entries ──
   // The Prefill's other_sources.other_income_details array carries the
   // CBDT's own breakdown of other-sources income by nature code:
-  //   IFD = Interest from Fixed Deposit
-  //   SAV = Interest from Savings Account
+  //   IFD = Interest from Fixed Deposit  → kind: TERM_DEPOSIT
+  //   SAV = Interest from Savings Account → kind: SAVINGS_BANK
   //   DIV = Dividend
   //   OTH = Other income
-  // We build bankInterestEntries from IFD + SAV entries, and
-  // dividendEntries from DIV entries.  These arrays drive the Other
-  // Sources tab UI.
+  // We build interestEntries (the primary field the adapter reads) with
+  // the correct `kind` so the Other Sources tab classifies them.
+  // bankInterestEntries is also set for backwards compatibility.
   const otherIncomeDetails = os.other_income_details || [];
   const interestDetails = otherIncomeDetails.filter((d) => {
     const nat = (d.nature || '').toUpperCase();
     return nat === 'IFD' || nat === 'SAV' || nat === 'INT' || nat === 'IDP';
   });
-  if (interestDetails.length > 0) {
-    // Match each interest detail to a TDS-other entry by deductor name
-    // (if possible) so we can attach the TAN + TDS amount.
-    const tdsOther = prefill.tds_other_entries || [];
-    update.bankInterestEntries = interestDetails.map((d) => {
-      const matchingTds = tdsOther.find((t) =>
-        (t.deductor_name || '').toLowerCase().includes('bank') ||
-        (t.deductor_name || '').toLowerCase().includes('state') ||
-        (t.deductor_name || '').toLowerCase().includes('hdfc') ||
-        (t.deductor_name || '').toLowerCase().includes('icici') ||
-        (t.deductor_name || '').toLowerCase().includes('sbi'));
-      return {
-        id: stableEntryId('bank-int', d),
-        bankName: (matchingTds && matchingTds.deductor_name) || 'Bank',
-        accountNumber: '',
-        accountType: 'SAVINGS',
-        interestEarned: d.amount || 0,
-        tdsDeducted: (matchingTds && matchingTds.tds_deducted) || 0,
-        deductorTAN: (matchingTds && matchingTds.tan) || '',
-        section: (matchingTds && matchingTds.section) || '194A',
-      };
+  const interestEntries = interestDetails.map((d) => {
+    const nat = (d.nature || '').toUpperCase();
+    const kind = nat === 'SAV' ? 'SAVINGS_BANK' : nat === 'IFD' || nat === 'IDP' ? 'TERM_DEPOSIT' : 'OTHER';
+    // Match to a TDS-other entry by deductor name if possible.
+    const matchingTds = (prefill.tds_other_entries || []).find((t) => {
+      const name = (t.deductor_name || '').toLowerCase();
+      return name.includes('bank') || name.includes('state') ||
+             name.includes('hdfc') || name.includes('icici') || name.includes('sbi');
     });
+    return {
+      id: stableEntryId('interest', d),
+      kind,
+      grossAmount: d.amount || 0,
+      tdsDeducted: (matchingTds && matchingTds.tds_deducted) || 0,
+      bankName: (matchingTds && matchingTds.deductor_name) || '',
+      accountType: kind === 'SAVINGS_BANK' ? 'SAVINGS' : 'FD',
+      accountNumber: '',
+      ifscCode: '',
+      deductorName: (matchingTds && matchingTds.deductor_name) || '',
+      deductorTAN: (matchingTds && matchingTds.tan) || '',
+    };
+  });
+  if (interestEntries.length > 0) {
+    update.interestEntries = interestEntries;
+    update.bankInterestEntries = interestEntries;
   }
 
   // ── Other Sources: dividend entries ──
