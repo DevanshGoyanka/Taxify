@@ -521,12 +521,16 @@ def _map_legacy_26as(parsed: dict) -> dict:
 
     The legacy converter returns ``{"header": {...}, "parts": {"I": {...}}}``.
     The frontend expects ``{"partIEntries": [...], "incomeBreakdown": {...}}``.
+
+    Reversal entries (negative amounts) are netted against the matching
+    positive entry for the same deductor+section so the frontend sees
+    clean positive entries.
     """
     header = parsed.get("header", {})
     fy = header.get("Financial Year") or header.get("FINANCIAL YEAR") or ""
-    partI: list[dict[str, Any]] = []
-    deductor_details: list[dict[str, Any]] = []
-    total_tds = 0.0
+
+    # ── Collect raw Part I entries, then net reversals ──
+    raw_entries: list[dict[str, Any]] = []
     for row in parsed.get("parts", {}).get("I", {}).get("rows", []):
         name = row.get("Name of Deductor") or "Unknown Deductor"
         tan = row.get("TAN of Deductor") or ""
@@ -544,18 +548,42 @@ def _map_legacy_26as(parsed: dict) -> dict:
                 dep = float(str(d.get("TDS Deposited(Rs.)", "")).replace(",", "") or 0)
             except ValueError:
                 dep = 0.0
-            partI.append({
+            raw_entries.append({
                 "deductorName": name, "tan": tan, "section": sec,
                 "amountPaid": amt, "taxDeducted": tds, "taxDeposited": dep,
             })
-            deductor_details.append({
-                "sectionCode": sec, "employerName": name, "employerTAN": tan,
-                "totalAmount": amt, "totalTDS": tds,
-            })
-            total_tds += tds
+
+    # Net reversal entries: group by (deductorName, tan, section) and sum.
+    net_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for e in raw_entries:
+        key = (e["deductorName"], e["tan"], e["section"])
+        if key not in net_map:
+            net_map[key] = {**e}
+        else:
+            net_map[key]["amountPaid"] += e["amountPaid"]
+            net_map[key]["taxDeducted"] += e["taxDeducted"]
+            net_map[key]["taxDeposited"] += e["taxDeposited"]
+    partI = list(net_map.values())
+
+    # Build deductor_details and compute income heads from the NET entries.
+    deductor_details: list[dict[str, Any]] = []
+    total_tds = 0.0
+    for e in partI:
+        deductor_details.append({
+            "sectionCode": e["section"], "employerName": e["deductorName"],
+            "employerTAN": e["tan"], "totalAmount": e["amountPaid"],
+            "totalTDS": e["taxDeducted"],
+        })
+        total_tds += e["taxDeducted"]
+
     salary_income = sum(x["totalAmount"] for x in deductor_details if x["sectionCode"] in ("192", "192A"))
     interest_income = sum(x["totalAmount"] for x in deductor_details if x["sectionCode"] in ("194A", "193"))
     dividend_income = sum(x["totalAmount"] for x in deductor_details if x["sectionCode"] in ("194", "194K"))
+    pan_from_header = (
+        header.get("Permanent Account Number (PAN)")
+        or header.get("PAN")
+        or ""
+    )
     return {
         "partIEntries": partI,
         "partIVEntries": [],
@@ -577,6 +605,8 @@ def _map_legacy_26as(parsed: dict) -> dict:
         },
         "financialYear": fy,
         "totalTDS": total_tds,
+        "pan": pan_from_header,
+        "personalInfo": {"pan": pan_from_header} if pan_from_header else {},
     }
 
 
