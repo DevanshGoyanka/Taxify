@@ -1524,7 +1524,222 @@ export default function ITRComputationPage() {
               }
             }
 
+            // ── Second pass: extract salary, capital gains, business, MF dividends ──
+            // These income types were not captured by the first pass above.
+            const employerEntries: any[] = [];
+            const capitalGainTransactions: any[] = [];
+            const businessEntries: any[] = [];
+            const num2 = (v: any) => parseFloat((v || '0').toString().replace(/,/g, '')) || 0;
+
+            for (const [headName, headData] of Object.entries(incomeHeads)) {
+              const entries = (headData as any)?.entries || [];
+              for (const e of entries) {
+                const code = (e.information_code || '').toUpperCase();
+                const source = e.information_source || '';
+                const amount = e.amount || 0;
+                const category = (e.category || '').toLowerCase();
+                const section = e.section || '';
+                const sourceMatch = source.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+                const deductorName = sourceMatch ? sourceMatch[1].trim() : source;
+                const deductorTan = sourceMatch ? sourceMatch[2].split('.')[0].trim() : '';
+
+                const sumActive2 = (colNamePart: string) => {
+                  const header: string[] = e.detail_header || [];
+                  let idx = -1;
+                  for (let i = 0; i < header.length; i++) {
+                    if (header[i].toUpperCase().includes(colNamePart)) { idx = i; break; }
+                  }
+                  if (idx < 0) return 0;
+                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
+                  let total = 0;
+                  for (const d of (e.details || [])) {
+                    const dData = d.data || {};
+                    const status = (dData[statusCol] || '').toString().toUpperCase();
+                    if (status === 'ACTIVE') total += num2(dData[`col_${idx}`]);
+                  }
+                  return total;
+                };
+
+                // ── Salary: TDS-192 → employer entries ──
+                if (section === 'B1' && code === 'TDS-192') {
+                  const totalIncome = sumActive2('AMOUNT PAID') || amount;
+                  const totalTds = sumActive2('TDS DEDUCTED') || 0;
+                  employerEntries.push({
+                    employerName: deductorName,
+                    employerTAN: deductorTan,
+                    employerPAN: e.institution_pan || '',
+                    basic: totalIncome,
+                    da: 0, hra: 0, bonus: 0, allowances: 0, perquisites: 0,
+                    professionalTax: 0,
+                    tdsDeducted: totalTds,
+                    grossSalary: totalIncome,
+                    netSalary: totalIncome,
+                    financialYear: '',
+                    verified26AS: true,
+                  });
+                }
+
+                // ── Salary: B7 TDS-Ann.II-SAL → employer with break-up ──
+                if (section === 'B7' && code === 'TDS-ANN.II-SAL') {
+                  const header: string[] = e.detail_header || [];
+                  const findIdx = (part: string) => {
+                    for (let i = 0; i < header.length; i++) {
+                      if (header[i].toUpperCase().includes(part)) return i;
+                    }
+                    return -1;
+                  };
+                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
+                  const gross17Idx = findIdx('17(1)');
+                  const perqIdx = findIdx('VALUE OF PERQUISITES');
+                  const profitIdx = findIdx('PROFITS IN LIEU');
+                  const grossIdx = findIdx('GROSS SALARY');
+                  let basic = 0, perquisites = 0, profits = 0, gross = 0;
+                  for (const d of (e.details || [])) {
+                    const dData = d.data || {};
+                    const status = (dData[statusCol] || '').toString().toUpperCase();
+                    if (status === 'ACTIVE') {
+                      if (gross17Idx >= 0) basic += num2(dData[`col_${gross17Idx}`]);
+                      if (perqIdx >= 0) perquisites += num2(dData[`col_${perqIdx}`]);
+                      if (profitIdx >= 0) profits += num2(dData[`col_${profitIdx}`]);
+                      if (grossIdx >= 0) gross += num2(dData[`col_${grossIdx}`]);
+                    }
+                  }
+                  employerEntries.push({
+                    employerName: deductorName,
+                    employerTAN: deductorTan,
+                    employerPAN: e.institution_pan || '',
+                    basic,
+                    da: 0, hra: 0, bonus: 0, allowances: 0,
+                    perquisites,
+                    professionalTax: 0,
+                    tdsDeducted: 0,
+                    grossSalary: gross || basic,
+                    netSalary: basic,
+                    financialYear: '',
+                    verified26AS: true,
+                  });
+                }
+
+                // ── Other Sources: B2 SFT-018(DIV) dividend from MF ──
+                if (section === 'B2' && code === 'SFT-018(DIV)') {
+                  dividendEntries.push({
+                    companyName: deductorName,
+                    companyPAN: e.institution_pan || '',
+                    dividendAmount: amount,
+                    tdsDeducted: 0,
+                    deductorTAN: deductorTan,
+                    isin: '',
+                    category: 'MF',
+                    section: '194K',
+                  });
+                }
+
+                // ── Capital Gains: B2 sale of securities / MF ──
+                if (section === 'B2' && (code === 'SFT-17-LES(M)' || code === 'SFT-18-EMF(M)' || code === 'SFT-18-OTU(M)')) {
+                  const header: string[] = e.detail_header || [];
+                  const findIdx = (part: string) => {
+                    for (let i = 0; i < header.length; i++) {
+                      if (header[i].toUpperCase().includes(part)) return i;
+                    }
+                    return -1;
+                  };
+                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
+                  const dateIdx = findIdx('DATE OF SALE');
+                  const nameIdx = findIdx('SECURITY NAME');
+                  const classIdx = findIdx('SECURITY CLASS');
+                  const assetIdx = findIdx('ASSET TYPE');
+                  const qtyIdx = findIdx('QUANTITY');
+                  const priceIdx = findIdx('SALE PRICE');
+                  const saleIdx = findIdx('SALES CONSIDERATION');
+                  const costIdx = findIdx('COST OF ACQUISITION');
+                  for (const d of (e.details || [])) {
+                    const dData = d.data || {};
+                    const status = (dData[statusCol] || '').toString().toUpperCase();
+                    if (status !== 'ACTIVE') continue;
+                    const assetType = (assetIdx >= 0 ? dData[`col_${assetIdx}`] : '') || '';
+                    const isLongTerm = assetType.toLowerCase().includes('long');
+                    const secClass = (classIdx >= 0 ? dData[`col_${classIdx}`] : '') || '';
+                    const isMF = code.includes('18') || secClass.toLowerCase().includes('fund');
+                    capitalGainTransactions.push({
+                      id: `cg-${code}-${d.sr_no || ''}`,
+                      recordKind: 'TRANSACTION',
+                      name: nameIdx >= 0 ? dData[`col_${nameIdx}`] : deductorName,
+                      isin: dData.isin || '',
+                      quantity: qtyIdx >= 0 ? num2(dData[`col_${qtyIdx}`]) : 0,
+                      salePricePerUnit: priceIdx >= 0 ? num2(dData[`col_${priceIdx}`]) : 0,
+                      fullConsideration: saleIdx >= 0 ? num2(dData[`col_${saleIdx}`]) : amount,
+                      acquisitionCost: costIdx >= 0 ? num2(dData[`col_${costIdx}`]) : 0,
+                      improvementCost: 0,
+                      transferExpenses: 0,
+                      loss94: 0,
+                      dateOfSale: dateIdx >= 0 ? dData[`col_${dateIdx}`] : '',
+                      assetType: isLongTerm ? 'LTCG' : 'STCG',
+                      securityClass: secClass,
+                      _isMF: isMF,
+                      _isListedEquity: code === 'SFT-17-LES(M)',
+                    });
+                  }
+                }
+
+                // ── Capital Gains: B2 SFT-012 sale of immovable property ──
+                if (section === 'B2' && code === 'SFT-012') {
+                  const header: string[] = e.detail_header || [];
+                  const findIdx = (part: string) => {
+                    for (let i = 0; i < header.length; i++) {
+                      if (header[i].toUpperCase().includes(part)) return i;
+                    }
+                    return -1;
+                  };
+                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
+                  const dateIdx = findIdx('TRANSACTION DATE');
+                  const addrIdx = findIdx('PROPERTY ADDRESS');
+                  const amtIdx = findIdx('TRANSACTION AMOUNT');
+                  const stampIdx = findIdx('STAMP');
+                  for (const d of (e.details || [])) {
+                    const dData = d.data || {};
+                    const status = (dData[statusCol] || '').toString().toUpperCase();
+                    if (status !== 'ACTIVE') continue;
+                    capitalGainTransactions.push({
+                      id: `cg-SFT-012-${d.sr_no || ''}`,
+                      recordKind: 'TRANSACTION',
+                      fullConsideration: amtIdx >= 0 ? num2(dData[`col_${amtIdx}`]) : amount,
+                      stampDutyValue: stampIdx >= 0 ? num2(dData[`col_${stampIdx}`]) : 0,
+                      acquisitionCost: 0,
+                      improvementCost: 0,
+                      transferExpenses: 0,
+                      dateOfSale: dateIdx >= 0 ? dData[`col_${dateIdx}`] : '',
+                      propertyAddress: addrIdx >= 0 ? dData[`col_${addrIdx}`] : '',
+                      assetType: 'STCG',
+                      _isImmovable: true,
+                    });
+                  }
+                }
+
+                // ── Business: TDS-194C/194H/194R/194T/194N/194S/194IA ──
+                if (section === 'B1' && code.startsWith('TDS-')) {
+                  const tdsSection = code.replace('TDS-', '');
+                  if (['194C', '194H', '194R', '194T', '194N', '194S', '194IAR', '194IARV', '194K', '194BA'].includes(tdsSection)) {
+                    const totalIncome = sumActive2('AMOUNT PAID') || amount;
+                    const totalTds = sumActive2('TDS DEDUCTED') || sumActive2('TAX COLLECTED') || 0;
+                    businessEntries.push({
+                      deductorName,
+                      deductorTAN: deductorTan,
+                      section: tdsSection,
+                      grossReceipts: totalIncome,
+                      tdsDeducted: totalTds,
+                      category,
+                    });
+                  }
+                }
+              }
+            }
+
             if (allTdsEntries.length > 0) formDataUpdate.tdsEntries = allTdsEntries;
+            if (employerEntries.length > 0) {
+              formDataUpdate.employerEntries = employerEntries;
+              formDataUpdate.basic = employerEntries.reduce((s, e) => s + (e.basic || 0), 0);
+              formDataUpdate.grossSalary = employerEntries.reduce((s, e) => s + (e.grossSalary || 0), 0);
+            }
             if (interestEntries.length > 0) {
               formDataUpdate.interestEntries = interestEntries;
               formDataUpdate.bankInterestEntries = interestEntries;
@@ -1538,6 +1753,19 @@ export default function ITRComputationPage() {
             if (dividendEntries.length > 0) {
               formDataUpdate.dividendEntries = dividendEntries;
               formDataUpdate.dividendShares = dividendEntries.reduce((s, e) => s + e.dividendAmount, 0);
+            }
+            if (capitalGainTransactions.length > 0) {
+              formDataUpdate.capitalGainTransactions = capitalGainTransactions;
+              formDataUpdate.ltcgProperty = capitalGainTransactions
+                .filter((e) => e.assetType === 'LTCG')
+                .reduce((s, e) => s + ((e.fullConsideration || 0) - (e.acquisitionCost || 0)), 0);
+              formDataUpdate.stcgProperty = capitalGainTransactions
+                .filter((e) => e.assetType === 'STCG')
+                .reduce((s, e) => s + ((e.fullConsideration || 0) - (e.acquisitionCost || 0)), 0);
+            }
+            if (businessEntries.length > 0) {
+              formDataUpdate.businessEntries = businessEntries;
+              formDataUpdate.bizTurnover = businessEntries.reduce((s, e) => s + (e.grossReceipts || 0), 0);
             }
             if (summary.total_tds) formDataUpdate.totalTds = summary.total_tds;
 
@@ -1555,9 +1783,12 @@ export default function ITRComputationPage() {
             await itrApi.saveFormData(clientId, effectiveAssessmentYear, applied.snapshot);
             toast.dismiss();
             const parts: string[] = [];
+            if (employerEntries.length) parts.push(`${employerEntries.length} employer`);
             if (allTdsEntries.length) parts.push(`${allTdsEntries.length} TDS entries`);
             if (interestEntries.length) parts.push(`${interestEntries.length} interest entries`);
             if (dividendEntries.length) parts.push(`${dividendEntries.length} dividends`);
+            if (capitalGainTransactions.length) parts.push(`${capitalGainTransactions.length} capital gains`);
+            if (businessEntries.length) parts.push(`${businessEntries.length} business`);
             toast.success(`${typeStr.toUpperCase()} imported${parts.length ? ': ' + parts.join(', ') : ''}`);
             setShowImportMenu(false);
             return;
