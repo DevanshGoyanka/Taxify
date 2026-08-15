@@ -1411,13 +1411,51 @@ export default function ITRComputationPage() {
                 // ── TDS tab: B1 (TDS-*) entries ──
                 if (section === 'B1' && code.startsWith('TDS-')) {
                   const tdsSection = code.replace('TDS-', '');
+                  // Sum TDS DEDUCTED from the Active detail rows.
+                  // The detail_header is ['SR. NO.', 'QUARTER', 'DATE OF
+                  // PAYMENT/CREDIT', 'AMOUNT PAID/CREDITED', 'TDS DEDUCTED',
+                  // 'TDS DEPOSITED', 'STATUS'] and the last column is STATUS.
+                  const header: string[] = e.detail_header || [];
+                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
+                  let tdsColIdx = -1;
+                  for (let i = 0; i < header.length; i++) {
+                    if (header[i].toUpperCase().includes('TDS DEDUCTED')) {
+                      tdsColIdx = i;
+                      break;
+                    }
+                  }
+                  let amtColIdx = -1;
+                  for (let i = 0; i < header.length; i++) {
+                    if (header[i].toUpperCase().includes('AMOUNT PAID')) {
+                      amtColIdx = i;
+                      break;
+                    }
+                  }
+                  const tdsCol = tdsColIdx >= 0 ? `col_${tdsColIdx}` : '';
+                  const amtCol = amtColIdx >= 0 ? `col_${amtColIdx}` : '';
+                  let totalTds = 0;
+                  let totalIncome = 0;
+                  for (const d of (e.details || [])) {
+                    const dData = d.data || {};
+                    const status = (dData[statusCol] || '').toString().toUpperCase();
+                    if (status === 'ACTIVE') {
+                      if (tdsCol) {
+                        const tdsVal = parseFloat((dData[tdsCol] || '0').toString().replace(/,/g, '')) || 0;
+                        totalTds += tdsVal;
+                      }
+                      if (amtCol) {
+                        const amtVal = parseFloat((dData[amtCol] || '0').toString().replace(/,/g, '')) || 0;
+                        totalIncome += amtVal;
+                      }
+                    }
+                  }
                   allTdsEntries.push({
                     section: tdsSection,
                     deductorName,
                     deductorTAN: deductorTan,
                     deductorPAN: e.institution_pan || '',
-                    incomeAmount: amount,
-                    tdsDeducted: 0,
+                    incomeAmount: totalIncome || amount,
+                    tdsDeducted: totalTds,
                     financialYear: '',
                     verified26AS: true,
                     claimedInReturn: true,
@@ -1426,11 +1464,11 @@ export default function ITRComputationPage() {
                   if (tdsSection === '194A' || tdsSection === '193') {
                     b1InterestEntries.push({
                       kind: 'TERM_DEPOSIT',
-                      grossAmount: amount,
+                      grossAmount: totalIncome || amount,
                       bankName: deductorName,
                       accountType: 'FD',
                       accountNumber: '',
-                      tdsDeducted: 0,
+                      tdsDeducted: totalTds,
                       deductorName,
                       deductorTAN: deductorTan,
                     });
