@@ -378,15 +378,55 @@ def import_26as(
     except Exception:
         is_zip = False
     if is_zip:
-        zip_pwd = (dob or "").replace("-", "").encode() if dob else None
+        # TRACES ZIP password is DOB in DDMMYYYY format (e.g.
+        # 01-01-1980 → 01011980).  The client DOB is stored as
+        # YYYY-MM-DD.  Try multiple DOB formats for robustness.
+        zip_pwds: list[bytes] = []
+        if dob:
+            dob_clean = dob.replace("-", "").replace("/", "")
+            if len(dob_clean) == 8 and dob[:4].isdigit():
+                # YYYY-MM-DD stored → convert to DDMMYYYY and variants
+                yyyy, mm, dd = dob_clean[0:4], dob_clean[4:6], dob_clean[6:8]
+                zip_pwds = [
+                    (dd + mm + yyyy).encode(),    # DDMMYYYY — primary
+                    (dd + mm + yyyy[2:4]).encode(),  # DDMMYY
+                    (yyyy + mm + dd).encode(),    # YYYYMMDD — fallback
+                ]
+            else:
+                zip_pwds = [dob_clean.encode()]
         try:
             with _zipfile.ZipFile(_io.BytesIO(content), "r") as zf:
                 names = zf.namelist()
                 # Prefer .txt, then .pdf
                 txt_name = next((n for n in names if n.lower().endswith(".txt")), None)
                 pdf_name = next((n for n in names if n.lower().endswith(".pdf")), None)
+                # Try each password candidate
+                extracted = None
+                last_err = None
+                for pwd in zip_pwds:
+                    try:
+                        if txt_name:
+                            extracted = zf.read(txt_name, pwd=pwd)
+                            break
+                        elif pdf_name:
+                            extracted = zf.read(pdf_name, pwd=pwd)
+                            break
+                    except (RuntimeError, _zipfile.BadZipFile) as e:
+                        last_err = e
+                        continue
+                if extracted is None:
+                    if not zip_pwds:
+                        raise HTTPException(
+                            422,
+                            "26AS ZIP is password-protected but no DOB was supplied. "
+                            "Please provide the client's DOB."
+                        )
+                    raise HTTPException(
+                        422,
+                        "26AS ZIP password incorrect. Please verify the client's DOB "
+                        "matches the PAN card."
+                    )
                 if txt_name:
-                    extracted = zf.read(txt_name, pwd=zip_pwd)
                     # Re-run through the TXT path
                     tmp_path = _write_temp(extracted, ".txt")
                     try:
@@ -406,7 +446,6 @@ def import_26as(
                         except OSError:
                             pass
                 elif pdf_name:
-                    extracted = zf.read(pdf_name, pwd=zip_pwd)
                     if extract_26as is not None:
                         tmp_path = _write_temp(extracted, ".pdf")
                         try:
@@ -429,21 +468,9 @@ def import_26as(
                     raise HTTPException(422, "26AS ZIP did not contain a .txt or .pdf file.")
         except _zipfile.BadZipFile:
             raise HTTPException(422, "Invalid 26AS ZIP file.")
-        except RuntimeError as exc:
-            if "bad password" in str(exc).lower() or "password" in str(exc).lower():
-                raise HTTPException(
-                    422,
-                    "26AS ZIP password incorrect. Please provide the correct DOB "
-                    "(format: DD-MM-YYYY) matching the PAN card."
-                )
-            raise HTTPException(422, f"26AS ZIP extraction failed: {exc}")
+        except HTTPException:
+            raise
         except Exception as exc:
-            if "password" in str(exc).lower() or "bad" in str(exc).lower():
-                raise HTTPException(
-                    422,
-                    "26AS ZIP password incorrect. Please provide the correct DOB "
-                    "(format: DD-MM-YYYY) matching the PAN card."
-                )
             raise HTTPException(422, f"26AS ZIP extraction failed: {exc}")
 
     # ── PDF path (real extractor) ──
