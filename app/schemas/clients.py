@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Optional, List
 from datetime import datetime
 
@@ -7,14 +7,28 @@ PAN_PATTERN = r"^[A-Z]{3}[PCHFATBLJG][A-Z][0-9]{4}[A-Z]$"
 
 
 class ClientBase(BaseModel):
+    """Base client schema accepting both camelCase and snake_case input.
+
+    All name fields use ``AliasChoices`` so the frontend can send
+    ``firstName`` (camelCase) and internal callers can pass
+    ``first_name`` (snake_case).  The Python attribute name is camelCase
+    to match the JSON wire format.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
     pan: str = Field(..., min_length=10, max_length=10, pattern=PAN_PATTERN)
-    # ``name`` is the derived full name.  It is optional at input time —
-    # if blank, it is derived from first_name/middle_name/surname.  This
-    # lets the Add Client form submit 3 name parts without duplicating the
-    # full name in the payload.
     name: str = Field(default="", max_length=255)
-    first_name: str = Field(default="", max_length=25)
-    middle_name: str = Field(default="", max_length=25)
+    firstName: str = Field(
+        default="",
+        max_length=25,
+        validation_alias=AliasChoices("firstName", "first_name"),
+    )
+    middleName: str = Field(
+        default="",
+        max_length=25,
+        validation_alias=AliasChoices("middleName", "middle_name"),
+    )
     surname: str = Field(default="", max_length=75)
     email: Optional[str] = None
     mobile: Optional[str] = None
@@ -27,7 +41,7 @@ class ClientBase(BaseModel):
         """Normalize PAN before pattern validation and persistence."""
         return value.strip().upper() if isinstance(value, str) else value
 
-    @field_validator("name", "first_name", "middle_name", "surname", mode="before")
+    @field_validator("name", "firstName", "middleName", "surname", mode="before")
     @classmethod
     def normalize_name_parts(cls, value: object) -> object:
         """Strip whitespace from each name part."""
@@ -40,25 +54,38 @@ class ClientBase(BaseModel):
         ``surname`` is the mandatory CBDT name field.  When the caller
         supplies name parts but leaves ``name`` blank, derive it.  When
         the caller supplies only ``name`` (legacy path), leave the parts
-        empty — the ITR hydration will split it.  Raises if neither
-        ``name`` nor ``surname`` is provided.
+        empty.  Raises if neither ``name`` nor ``surname`` is provided.
         """
-        if not self.name and (self.first_name or self.middle_name or self.surname):
+        if not self.name and (self.firstName or self.middleName or self.surname):
             self.name = " ".join(
-                part for part in (self.first_name, self.middle_name, self.surname) if part
+                part for part in (self.firstName, self.middleName, self.surname) if part
             )
         if not self.name and not self.surname:
             raise ValueError("Either name or surname must be provided")
         return self
 
+
 class ClientCreate(ClientBase):
     portal_password: Optional[str] = None
 
+
 class ClientUpdate(BaseModel):
+    """Partial update schema accepting both camelCase and snake_case."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
     pan: Optional[str] = Field(default=None, min_length=10, max_length=10, pattern=PAN_PATTERN)
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    first_name: Optional[str] = Field(default=None, max_length=25)
-    middle_name: Optional[str] = Field(default=None, max_length=25)
+    firstName: Optional[str] = Field(
+        default=None,
+        max_length=25,
+        validation_alias=AliasChoices("firstName", "first_name"),
+    )
+    middleName: Optional[str] = Field(
+        default=None,
+        max_length=25,
+        validation_alias=AliasChoices("middleName", "middle_name"),
+    )
     surname: Optional[str] = Field(default=None, max_length=75)
     email: Optional[str] = None
     mobile: Optional[str] = None
@@ -72,11 +99,12 @@ class ClientUpdate(BaseModel):
         """Normalize an updated PAN before validation."""
         return value.strip().upper() if isinstance(value, str) else value
 
-    @field_validator("name", "first_name", "middle_name", "surname", mode="before")
+    @field_validator("name", "firstName", "middleName", "surname", mode="before")
     @classmethod
     def normalize_name(cls, value: object) -> object:
         """Remove surrounding whitespace from an updated client name."""
         return value.strip() if isinstance(value, str) else value
+
 
 class ClientYearResponse(BaseModel):
     year: str
@@ -85,14 +113,30 @@ class ClientYearResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class ClientResponse(BaseModel):
+    """Response schema serializing to camelCase JSON for the frontend.
+
+    Fields use ``AliasChoices`` so ``from_attributes=True`` can read
+    ``first_name`` from the ORM model while the Python attribute and JSON
+    output key are both ``firstName``.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     id: int
     publicId: str
     pan: str
     name: str
-    firstName: str = Field(default="", validation_alias="first_name", serialization_alias="firstName")
-    middleName: str = Field(default="", validation_alias="middle_name", serialization_alias="middleName")
-    surname: str = Field(default="", validation_alias="surname", serialization_alias="surname")
+    firstName: str = Field(
+        default="",
+        validation_alias=AliasChoices("first_name", "firstName"),
+    )
+    middleName: str = Field(
+        default="",
+        validation_alias=AliasChoices("middle_name", "middleName"),
+    )
+    surname: str = Field(default="", validation_alias=AliasChoices("surname"))
     email: Optional[str] = None
     mobile: Optional[str] = None
     aadhaar: Optional[str] = None
@@ -102,5 +146,3 @@ class ClientResponse(BaseModel):
     years: List[ClientYearResponse] = Field(default_factory=list)
     createdAt: datetime
     updatedAt: datetime
-
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)

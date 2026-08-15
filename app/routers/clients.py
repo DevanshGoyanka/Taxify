@@ -193,8 +193,8 @@ def create_client(
         user_id=current_user.id,
         pan=payload.pan.upper(),
         name=payload.name,
-        first_name=payload.first_name,
-        middle_name=payload.middle_name,
+        first_name=payload.firstName,
+        middle_name=payload.middleName,
         surname=payload.surname,
         email=payload.email,
         mobile=payload.mobile,
@@ -258,10 +258,10 @@ def update_client(
         client.pan = payload.pan
     if payload.name is not None:
         client.name = payload.name
-    if payload.first_name is not None:
-        client.first_name = payload.first_name
-    if payload.middle_name is not None:
-        client.middle_name = payload.middle_name
+    if payload.firstName is not None:
+        client.first_name = payload.firstName
+    if payload.middleName is not None:
+        client.middle_name = payload.middleName
     if payload.surname is not None:
         client.surname = payload.surname
     if payload.email is not None:
