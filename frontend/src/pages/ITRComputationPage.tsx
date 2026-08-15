@@ -1376,9 +1376,14 @@ export default function ITRComputationPage() {
             const incomeHeads = aisData?.income_heads || {};
             const formDataUpdate: any = {};
 
-            // ── Extract individual TDS entries from AIS income_heads ──
-            // Each income head has an `entries` array with TDS-194A, TDS-192,
-            // etc. entries carrying the deductor name+TAN, amount, and TDS.
+            // ── Extract individual entries from AIS income_heads ──
+            // The AIS reports income under sections:
+            //   B1 = TDS-reported income (deductor's view) — for the TDS tab only
+            //   B2 = SFT-reported income (bank's view) — for the Other Sources tab
+            // The SAME interest income appears in BOTH B1 and B2 (reported by
+            // the deductor AND the bank).  To avoid duplication:
+            //   - TDS tab: use B1 (TDS-*) entries
+            //   - Other Sources tab: use B2 (SFT-016) entries ONLY
             const allTdsEntries: any[] = [];
             const interestEntries: any[] = [];
             const dividendEntries: any[] = [];
@@ -1390,45 +1395,52 @@ export default function ITRComputationPage() {
                 const source = e.information_source || '';
                 const amount = e.amount || 0;
                 const category = (e.category || '').toLowerCase();
+                const section = e.section || '';
                 // Extract deductor name + TAN from information_source:
-                // "STATE BANK OF INDIA (MUMS89569E)" → name="STATE BANK OF INDIA", tan="MUMS89569E"
+                // "STATE BANK OF INDIA (MUMS89569E)" → name, tan
                 const sourceMatch = source.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
                 const deductorName = sourceMatch ? sourceMatch[1].trim() : source;
                 const deductorTan = sourceMatch ? sourceMatch[2].split('.')[0].trim() : '';
 
-                // TDS entries (TDS-192, TDS-194A, etc.)
-                if (code.startsWith('TDS-')) {
-                  const section = code.replace('TDS-', '');
+                // ── TDS tab: B1 (TDS-*) entries only ──
+                if (section === 'B1' && code.startsWith('TDS-')) {
+                  const tdsSection = code.replace('TDS-', '');
                   allTdsEntries.push({
-                    section,
+                    section: tdsSection,
                     deductorName,
                     deductorTAN: deductorTan,
                     deductorPAN: e.institution_pan || '',
                     incomeAmount: amount,
-                    tdsDeducted: 0, // AIS doesn't carry per-entry TDS in the summary
+                    tdsDeducted: 0,
                     financialYear: '',
                     verified26AS: true,
                     claimedInReturn: true,
                   });
+                  // Do NOT add B1 entries to interestEntries — they'd
+                  // duplicate the B2 (SFT-016) entries.
+                  continue;
                 }
 
-                // Interest entries (SFT-016(SB) = savings, TDS-194A = FD)
-                if (category.includes('interest') || code === 'TDS-194A') {
-                  const kind = category.includes('savings') ? 'SAVINGS_BANK' : 'TERM_DEPOSIT';
+                // ── Other Sources tab: B2 (SFT-016) interest entries ──
+                // SFT-016(SB) = savings bank interest
+                // SFT-016(TD) = term deposit interest
+                if (section === 'B2' && code.startsWith('SFT-016')) {
+                  const isSavings = code.includes('(SB)') || category.includes('savings');
                   interestEntries.push({
-                    kind,
+                    kind: isSavings ? 'SAVINGS_BANK' : 'TERM_DEPOSIT',
                     grossAmount: amount,
                     bankName: deductorName,
-                    accountType: kind === 'SAVINGS_BANK' ? 'SAVINGS' : 'FD',
+                    accountType: isSavings ? 'SAVINGS' : 'FD',
                     accountNumber: '',
                     tdsDeducted: 0,
                     deductorName,
                     deductorTAN: deductorTan,
                   });
+                  continue;
                 }
 
-                // Dividend entries (SFT-015 = dividend)
-                if (category.includes('dividend') || code === 'SFT-015') {
+                // ── Other Sources tab: B2 (SFT-015) dividend entries ──
+                if (section === 'B2' && code === 'SFT-015') {
                   dividendEntries.push({
                     companyName: deductorName,
                     companyPAN: e.institution_pan || '',
@@ -1439,6 +1451,7 @@ export default function ITRComputationPage() {
                     category: 'SHARES',
                     section: '194',
                   });
+                  continue;
                 }
               }
             }
