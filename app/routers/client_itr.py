@@ -146,40 +146,6 @@ def validate_client_itr(
         "warnings": warnings,
     }
 
-@router.get("/{year}/draft-json")
-def download_client_itr_draft_json(
-    client_id: str,
-    year: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Download the stored ITR form data as a draft JSON.
-
-    This is explicitly a draft/data snapshot, not an official CBDT return.
-    Official CBDT ITD-compliant JSON is produced by the form-specific
-    ``/itrN/compute-json`` endpoints.
-    """
-    client = resolve_owned_client(client_id, current_user.id, db)
-
-    itr = db.query(ClientITR).filter(ClientITR.client_id == client.id, ClientITR.year == year).first()
-    data = json.loads(itr.form_data) if itr else {}
-
-    form = str(data.get("form", data.get("itrForm", ""))).strip().upper()
-    if form == "ITR-3":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="ITR-3 draft export is not supported until ITR-3 filing is implemented.",
-        )
-
-    filename_suffix = f"Draft_{year}" if form != "ITR-3" else f"ITR3_Draft_{year}"
-
-    return Response(
-        content=json.dumps(data, indent=2, default=str),
-        media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename=Taxify_{client.pan}_{filename_suffix}.json'},
-    )
-
-
 @router.post("/{year}/generate-cbdt-json")
 def generate_client_cbdt_json(
     client_id: str,

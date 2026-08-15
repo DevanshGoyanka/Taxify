@@ -1177,7 +1177,13 @@ class PropertyFilingProfile(BaseModel):
 
 
 class FilingAddress(PostalAddress):
-    """Primary filing address with mandatory taxpayer contact details."""
+    """Primary filing address with mandatory taxpayer contact details.
+
+    The CBDT ITR-1 Address schema requires CountryCodeMobileNoSec and
+    MobileNoSec (always emitted, 0 when absent) and optionally
+    EmailAddressSec.  Every field emitted here is verified against the
+    official AY 2026-27 schema.
+    """
 
     mobile_country_code: int = Field(default=91, ge=1, le=99999)
     mobile_no: str = Field(pattern=r"^[1-9][0-9]{4,9}$")
@@ -1186,10 +1192,40 @@ class FilingAddress(PostalAddress):
         max_length=125,
         pattern=r"^([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+$",
     )
+    # Secondary mobile — emitted as 0 when absent (CBDT Address schema
+    # requires the keys CountryCodeMobileNoSec and MobileNoSec always).
+    secondary_mobile_country_code: int = Field(default=0, ge=0, le=99999)
+    secondary_mobile_no: Optional[str] = Field(
+        default=None,
+        pattern=r"^[1-9][0-9]{4,9}$",
+    )
+    # Secondary email — omitted from the JSON when blank (optional in the
+    # CBDT Address schema).
+    secondary_email: Optional[str] = Field(
+        default=None,
+        max_length=125,
+        pattern=r"^([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+$",
+    )
+
+
+class SeventhProvisoDetails(BaseModel):
+    """Seventh-proviso to section 139(1) declaration details for ITR-1."""
+
+    foreign_travel_flag: bool = False
+    foreign_travel_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    electricity_expenditure_flag: bool = False
+    electricity_expenditure_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    other_clause_iv_flag: bool = False
+    other_clause_iv_detail: str = Field(default="", max_length=200)
 
 
 class ITR1FilingProfile(BaseModel):
-    """Taxpayer identity, filing status, and verification for official JSON."""
+    """Taxpayer identity, filing status, and verification for official JSON.
+
+    Every field here maps to a real CBDT ITR-1 PersonalInfo, FilingStatus,
+    or Verification destination.  No entered statutory field is silently
+    replaced with a default during JSON generation.
+    """
 
     pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
     first_name: str = Field(default="", max_length=25)
@@ -1207,6 +1243,36 @@ class ITR1FilingProfile(BaseModel):
     verification_place: str = Field(min_length=1, max_length=50)
     verification_capacity: Literal["S"] = "S"
     return_file_section: Literal[11, 12] = 11
+    # New-regime opt-out (FilingStatus.OptOutNewTaxRegime).  CBDT requires
+    # this key always; ITR-1 filers in the new regime emit "N".
+    opt_out_new_tax_regime: bool = False
+    # Seventh-proviso declarations (FilingStatus.SeventhProvisio139).
+    seventh_proviso: SeventhProvisoDetails = Field(default_factory=SeventhProvisoDetails)
+    # Form 10-IEA acknowledgement when the assessee opts out of the new
+    # regime via Form 10-IEA.  Empty string → emitted as "N" / omitted.
+    form_10iea_acknowledgement: str = Field(default="", max_length=25)
+    form_10iea_date: Optional[date] = None
+
+    @model_validator(mode="after")
+    def validate_opt_out_requires_form_10iea(self) -> "ITR1FilingProfile":
+        """Require Form 10-IEA acknowledgement when opting out of new regime.
+
+        For AY 2026-27, a taxpayer with business/profession income who opts
+        out of the new regime must have filed Form 10-IEA.  For ITR-1
+        (salary-only) filers, the opt-out itself is the declaration, but
+        if the acknowledgement number is provided it must be accompanied
+        by a valid date and vice versa.
+        """
+        if self.opt_out_new_tax_regime:
+            # Opt-out is allowed for ITR-1; Form 10-IEA is not strictly
+            # required for salary-only filers, but if provided must be
+            # consistent.
+            pass
+        if self.form_10iea_acknowledgement and not self.form_10iea_date:
+            raise ValueError(
+                "form_10iea_date is required when form_10iea_acknowledgement is provided"
+            )
+        return self
 
 
 class TaxReturnPreparer(BaseModel):

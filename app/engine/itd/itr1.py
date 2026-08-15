@@ -32,6 +32,7 @@ from app.schemas.itr1 import (
     ITR1Input,
     PostalAddress,
     PropertyFilingProfile,
+    SeventhProvisoDetails,
 )
 
 
@@ -50,7 +51,13 @@ from app.engine.itd.common import (
 
 
 def _address_from_profile(address: PostalAddress, *, include_contact: bool) -> dict[str, Any]:
-    """Map a typed filing address to the official address structure."""
+    """Map a typed filing address to the official address structure.
+
+    The CBDT ITR-1 Address schema requires CountryCodeMobileNoSec and
+    MobileNoSec keys to always be present (emitted as 0 when the assessee
+    has no secondary mobile).  EmailAddressSec is optional and is omitted
+    entirely when the assessee has no secondary email.
+    """
     mapped: dict[str, Any] = {
         "ResidenceNo": address.residence_no,
         "ResidenceName": address.residence_name,
@@ -69,10 +76,15 @@ def _address_from_profile(address: PostalAddress, *, include_contact: bool) -> d
         mapped.update({
             "CountryCodeMobile": address.mobile_country_code,
             "MobileNo": int(address.mobile_no),
-            "CountryCodeMobileNoSec": 0,
-            "MobileNoSec": 0,
+            "CountryCodeMobileNoSec": address.secondary_mobile_country_code,
+            "MobileNoSec": int(address.secondary_mobile_no) if address.secondary_mobile_no else 0,
             "EmailAddress": address.email,
         })
+        # EmailAddressSec is optional in the CBDT schema — emit it only
+        # when the assessee actually entered a secondary email.  Never
+        # fabricate a placeholder.
+        if address.secondary_email:
+            mapped["EmailAddressSec"] = address.secondary_email
     return mapped
 
 
@@ -235,14 +247,40 @@ def _property_schedule(
 def _filing_status_itr1(
     return_file_sec: int = 11,
     opt_out_new_regime: str = "N",
+    *,
+    seventh_proviso: Optional["SeventhProvisoDetails"] = None,
+    assessee_representative_flag: bool = False,
 ) -> dict:
-    return {
+    """Build the ITR-1 FilingStatus block from real entered declarations.
+
+    Every seventh-proviso field is emitted only when the assessee actually
+    declared it.  The CBDT schema sets a minimum of 200000 on
+    AmtSeventhProvisio139ii and 100000 on AmtSeventhProvisio139iii, so
+    those amount keys must be omitted entirely when the corresponding
+    flag is "N" (emitting 0 violates the schema minimum).
+    """
+    sp = seventh_proviso
+    has_seventh = sp is not None and (
+        sp.foreign_travel_flag
+        or sp.electricity_expenditure_flag
+        or sp.other_clause_iv_flag
+    )
+    result: dict[str, Any] = {
         "ReturnFileSec": return_file_sec,
         "OptOutNewTaxRegime": opt_out_new_regime,
-        "SeventhProvisio139": "N",
-        "AsseseeRepFlg": "N",
+        "SeventhProvisio139": "Y" if has_seventh else "N",
+        "AsseseeRepFlg": "Y" if assessee_representative_flag else "N",
         "ItrFilingDueDate": "2026-07-31",
     }
+    if sp is not None:
+        result["IncrExpAggAmt2LkTrvFrgnCntryFlg"] = "Y" if sp.foreign_travel_flag else "N"
+        if sp.foreign_travel_flag:
+            result["AmtSeventhProvisio139ii"] = _to_rupees(sp.foreign_travel_amount)
+        result["IncrExpAggAmt1LkElctrctyPrYrFlg"] = "Y" if sp.electricity_expenditure_flag else "N"
+        if sp.electricity_expenditure_flag:
+            result["AmtSeventhProvisio139iii"] = _to_rupees(sp.electricity_expenditure_amount)
+        result["clauseiv7provisio139i"] = "Y" if sp.other_clause_iv_flag else "N"
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1351,6 +1389,8 @@ def build_itr1_json(
         filing = _filing_status_itr1(
             return_file_sec=profile.return_file_section,
             opt_out_new_regime=("Y" if input_data.tax_regime.value == "old" else "N"),
+            seventh_proviso=profile.seventh_proviso,
+            assessee_representative_flag=False,
         )
     else:
         assessee_name = f"{first_name} {last_name}".strip()

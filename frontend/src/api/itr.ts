@@ -50,14 +50,6 @@ export const itrApi = {
     const { data } = await axiosInstance.post(`/clients/${clientId}/itr/${year}/validate`, formData);
     return data as { valid: boolean; errors: string[]; warnings: string[] };
   },
-  downloadDraftJson: async (clientId: string, year: string) => {
-    const res = await axiosInstance.get(`/clients/${clientId}/itr/${year}/draft-json`, { responseType: 'blob' });
-    const url = URL.createObjectURL(new Blob([res.data]));
-    const a = document.createElement('a');
-    a.href = url; a.download = `Taxify_${clientId}_Draft_${year}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-  },
   /**
    * Generate and download official CBDT ITD-compliant JSON via the canonical
    * filing gateway (draft → typed input → compute → validate → build → schema check).

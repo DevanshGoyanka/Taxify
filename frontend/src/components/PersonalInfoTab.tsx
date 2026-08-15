@@ -194,7 +194,16 @@ export function PersonalInfoTab({ formData, itrForm, onChange, onBanksChange, on
         <Field label="Mobile Number" value={text(formData.mobile)} onChange={(value) => patch({ mobile: value.replace(/\D/g, '').slice(0, 15) })} required pattern="[0-9]{6,15}" maxLength={15} inputMode="tel" />
         <Field label="Primary Email Address" value={text(formData.email)} onChange={(value) => patch({ email: value.trim() })} type="email" required maxLength={125} />
         <SelectField label="Secondary Mobile Country Code" value={text(formData.secondaryMobileCountryCode || formData.mobileCountryCode || '91')} onChange={(value) => patch({ secondaryMobileCountryCode: value })}>{ITD_COUNTRY_CODES.map((country) => <option key={country.value} value={country.value}>+{country.value} — {country.label}</option>)}</SelectField>
-        <Field label="Secondary Mobile Number" value={text(formData.secondaryMobile)} onChange={(value) => patch({ secondaryMobile: value.replace(/\D/g, '').slice(0, 15) })} pattern="[0-9]{5,10}" maxLength={10} inputMode="tel" />
+        <Field label="Secondary Mobile Number" value={text(formData.secondaryMobile)} onChange={(value) => {
+          const cleaned = value.replace(/\D/g, '').slice(0, 15);
+          // Persist the primary country code as the default secondary
+          // country code when the user enters a number but has never
+          // explicitly selected a secondary country code.  Without this,
+          // validation sees a secondary number with a blank country code
+          // and rejects the otherwise-valid input.
+          const secondaryCc = formData.secondaryMobileCountryCode || formData.mobileCountryCode || '91';
+          patch({ secondaryMobile: cleaned, secondaryMobileCountryCode: secondaryCc });
+        }} pattern="[0-9]{5,10}" maxLength={10} inputMode="tel" />
         <Field label="Secondary Email Address" value={text(formData.secondaryEmail)} onChange={(value) => patch({ secondaryEmail: value.trim() })} type="email" maxLength={125} />
         <Field label="Telephone (STD-Number)" value={text(formData.telephone)} onChange={(value) => patch({ telephone: value.replace(/[^0-9-]/g, '').slice(0, 20) })} maxLength={20} inputMode="tel" />
       </div></div>

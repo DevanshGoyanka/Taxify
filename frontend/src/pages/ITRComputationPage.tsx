@@ -60,6 +60,13 @@ function buildPhase1Payload(source: any): any {
   data.countryCodeMobile = String(data.mobileCountryCode || '91');
   data.countryCode = String(data.country || '91');
   data.stateCode = String(data.state || '');
+  // Safety net: when a secondary mobile number is present but the
+  // secondary country code was never explicitly set, inherit the primary
+  // country code.  This mirrors the PersonalInfoTab UI fallback and
+  // prevents false validation failures on data imported via legacy paths.
+  if (data.secondaryMobile && !data.secondaryMobileCountryCode) {
+    data.secondaryMobileCountryCode = String(data.mobileCountryCode || '91');
+  }
   data.advanceTaxEntries = Array.isArray(data.advanceTaxEntries) ? data.advanceTaxEntries : [];
   if (data.advanceTaxEntries.length >= 0) {
     data.adv15Jun = 0; data.adv15Sep = 0; data.adv15Dec = 0; data.adv15Mar = 0;
@@ -822,14 +829,6 @@ export default function ITRComputationPage() {
     } finally {
       setValidating(false);
     }
-  };
-
-  const handleDownloadDraftJson = () => {
-    if (itrForm === 'ITR-3') {
-      toast.error('ITR-3 official export is not available yet. Save and validate the draft first.');
-      return;
-    }
-    itrApi.downloadDraftJson(clientId, effectiveAssessmentYear).catch(err => toast.error(err.message));
   };
 
   const handleGenerateCbdtJson = async () => {
@@ -1881,23 +1880,6 @@ export default function ITRComputationPage() {
           >
             {validating && <Spinner size={12} />}
             Validate
-          </button>
-
-          <button
-            onClick={handleDownloadDraftJson}
-            title={itrForm === 'ITR-3' ? 'ITR-3 CBDT export not yet available' : 'Download a draft data snapshot (not the official CBDT return)'}
-            style={{
-              padding: '6px 12px',
-              background: 'var(--accent-blue)',
-              color: 'white',
-              border: 'none',
-              borderRadius: 6,
-              fontSize: 12,
-              cursor: 'pointer',
-              opacity: itrForm === 'ITR-3' ? 0.55 : 1,
-            }}
-          >
-            {itrForm === 'ITR-3' ? 'JSON (Not Ready)' : 'Draft JSON'}
           </button>
 
           {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (

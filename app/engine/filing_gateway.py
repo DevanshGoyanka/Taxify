@@ -472,6 +472,7 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         FilingAddress, PostalAddress, PropertyFilingProfile, BankAccount,
         Donation80GGA, Schedule80GGA, Schedule80GGC, PoliticalContribution,
         Section80GGAClause, TaxReturnPreparer, HRADetails,
+        SeventhProvisoDetails,
     )
 
     age = int(payload.get("age", 30) or 30)
@@ -531,6 +532,26 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
     if not mobile_country_code_raw.isdigit():
         raise ValueError("mobileCountryCode must be numeric for official ITR-1 JSON")
 
+    # Secondary mobile: when a secondary number is provided but the
+    # country code is blank, inherit and persist the primary country code
+    # so the UI fallback no longer causes a false validation failure.
+    secondary_mobile_raw = str(payload.get("secondaryMobile", "")).strip()
+    secondary_mobile_country_raw = str(
+        payload.get("secondaryMobileCountryCode", "")
+    ).strip() or mobile_country_code_raw
+    secondary_mobile_no: Optional[str] = None
+    secondary_mobile_country_code: int = 0
+    if secondary_mobile_raw:
+        if not secondary_mobile_country_raw.isdigit():
+            raise ValueError(
+                "secondaryMobileCountryCode must be numeric for official ITR-1 JSON"
+            )
+        secondary_mobile_country_code = int(secondary_mobile_country_raw)
+        secondary_mobile_no = secondary_mobile_raw
+
+    # Secondary email: optional, omitted from JSON when blank.
+    secondary_email_raw = str(payload.get("secondaryEmail", "")).strip() or None
+
     primary_address = FilingAddress(
         residence_no=required_text("flatNo", max_length=50),
         residence_name=str(payload.get("premises", "")).strip(),
@@ -544,6 +565,9 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
         mobile_country_code=int(mobile_country_code_raw),
         mobile_no=required_text("mobile", max_length=10),
         email=required_text("email", max_length=125),
+        secondary_mobile_country_code=secondary_mobile_country_code,
+        secondary_mobile_no=secondary_mobile_no,
+        secondary_email=secondary_email_raw,
     )
 
     alternate_raw = payload.get("alternateAddress")
@@ -563,6 +587,26 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
             zip_code=str(alternate_raw.get("zipCode", "")).strip(),
         )
 
+    # Seventh-proviso to section 139(1) declarations (FilingStatus).
+    seventh_proviso_raw = payload.get("seventhProviso")
+    seventh_proviso = SeventhProvisoDetails()
+    if isinstance(seventh_proviso_raw, dict):
+        seventh_proviso = SeventhProvisoDetails(
+            foreign_travel_flag=bool(seventh_proviso_raw.get("foreignTravel", False)),
+            foreign_travel_amount=_money(seventh_proviso_raw.get("foreignTravelAmount")),
+            electricity_expenditure_flag=bool(seventh_proviso_raw.get("electricityExpenditure", False)),
+            electricity_expenditure_amount=_money(seventh_proviso_raw.get("electricityExpenditureAmount")),
+            other_clause_iv_flag=bool(seventh_proviso_raw.get("otherClauseIV", False)),
+            other_clause_iv_detail=str(seventh_proviso_raw.get("otherClauseIVDetail", "")).strip(),
+        )
+
+    # New-regime opt-out + Form 10-IEA.
+    regime_str_for_opt = str(payload.get("taxRegime", payload.get("regime", "NEW"))).upper()
+    opt_out_new_tax_regime = regime_str_for_opt == "OLD"
+    form_10iea_ack = str(payload.get("form10IEAAcknowledgement", "")).strip()
+    form_10iea_date_raw = payload.get("form10IEADate")
+    form_10iea_date = _date(form_10iea_date_raw, "form10IEADate") if form_10iea_date_raw else None
+
     filing_profile = ITR1FilingProfile(
         pan=required_text("pan", max_length=10).upper(),
         first_name=str(payload.get("firstName", "")).strip(),
@@ -580,6 +624,10 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
             payload.get("filingSection", "139(1)"),
             payload.get("returnFileSectionCode"),
         ),
+        opt_out_new_tax_regime=opt_out_new_tax_regime,
+        seventh_proviso=seventh_proviso,
+        form_10iea_acknowledgement=form_10iea_ack,
+        form_10iea_date=form_10iea_date,
     )
 
     # Salary — same mapping as tax.py
