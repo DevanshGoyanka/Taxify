@@ -59,6 +59,7 @@ from ais_extractor.extractor import extract_ais as _extract_ais, ais_to_frontend
 from ais_extractor.tis_extractor import extract_tis as _extract_tis, tis_to_frontend_json as _tis_to_frontend
 from ais_extractor.reconciliation import reconcile as _reconcile_data
 from app.engine.importers.prefill_parser import parse_prefill_file as _parse_prefill_file, prefill_extraction_to_dict as _prefill_to_dict
+from app.engine.importers.filed_return_parser import parse_filed_return_file as _parse_filed_return_file, filed_return_extraction_to_dict as _filed_return_to_dict
 
 logger = logging.getLogger("taxify.automation.worker")
 install_automation_privacy_filter(logger)
@@ -886,6 +887,52 @@ async def _run_job(job_id: int) -> None:
             # Prefill download is optional — the job may not have downloaded it.
             logger.info("Job %d: Prefill file not found at %s — skipping", job_id, path_prefill)
 
+        # Step 4.6.1: Parse the last filed ITR JSON (form-agnostic extraction)
+        # The filed-return JSON is the CBDT's official ITR JSON for the
+        # previous year (or, for revision, the current year).  It carries
+        # personal info, bank accounts, employer details, TDS, deductions,
+        # and carry-forward losses useful for the current-year return.
+        #
+        # IMPORTANT: If the current-AY return is already filed, the filed-
+        # return JSON is the current-AY return (downloaded for revision).
+        # In that case, the advisory has already flagged
+        # ``requires_user_confirmation_for_revision=True`` and the data is
+        # only populated after the user explicitly confirms a revised-
+        # return flow.  For a prior-AY return (normal filing), no user
+        # confirmation is needed.
+        path_filed = files.get("prior_year_return")
+        if path_filed and os.path.exists(path_filed):
+            try:
+                filed_extracted = _parse_filed_return_file(path_filed)
+                parsed["filed_return"] = _filed_return_to_dict(filed_extracted)
+                log(
+                    f"[Worker] Filed return parsed: "
+                    f"form={filed_extracted.form_name}, "
+                    f"employers={len(filed_extracted.employer_entries)}, "
+                    f"banks={len(filed_extracted.bank_accounts)}, "
+                    f"tds_sal={len(filed_extracted.tds_salary_entries)}, "
+                    f"tds_oth={len(filed_extracted.tds_other_entries)}, "
+                    f"losses={len(filed_extracted.carry_forward_losses)}"
+                )
+                logger.info(
+                    "Job %d: Filed-return extraction OK — form=%s, employers=%d, "
+                    "banks=%d, tds_sal=%d, tds_oth=%d, losses=%d",
+                    job_id,
+                    filed_extracted.form_name,
+                    len(filed_extracted.employer_entries),
+                    len(filed_extracted.bank_accounts),
+                    len(filed_extracted.tds_salary_entries),
+                    len(filed_extracted.tds_other_entries),
+                    len(filed_extracted.carry_forward_losses),
+                )
+            except Exception as e:
+                err = f"Filed-return extraction failed: {type(e).__name__}: {e}"
+                extract_errors.append(err)
+                log(f"[Worker] {err}")
+                logger.exception("Job %d: Filed-return extraction error", job_id)
+        else:
+            logger.info("Job %d: Filed-return file not found at %s — skipping", job_id, path_filed)
+
         # Step 4.7: Reconcile data across all three documents
         _update_job(job_id, current_step="extract", status_message="Reconciling data...", progress_pct=92)
         log("[Worker] Starting reconciliation across 26AS, AIS, and TIS...")
@@ -902,6 +949,21 @@ async def _run_job(job_id: int) -> None:
             # personal info) with the reconciled income/TDS data.
             if "prefill" in parsed:
                 reconciled["prefill"] = parsed["prefill"]
+            # Attach the form-agnostic filed-return extraction to the
+            # reconciled output so the frontend can merge brought-forward
+            # losses, prior-AY personal info, and bank accounts.  The
+            # filed-return data is only populated after the user confirms
+            # the revised-return flow when the current-AY return is already
+            # filed (the advisory flag is surfaced separately).
+            if "filed_return" in parsed:
+                reconciled["filed_return"] = parsed["filed_return"]
+            # Surface the filing advisory flags so the frontend can show
+            # whether the current-AY return is already filed (and whether
+            # it was a revised return) before populating any filed-ITR data.
+            if "filing_advisory" in artifact_outcomes:
+                reconciled["filing_advisory"] = artifact_outcomes["filing_advisory"]
+            if "filing_mode_classification" in artifact_outcomes:
+                reconciled["filing_mode_classification"] = artifact_outcomes["filing_mode_classification"]
             # Preserve extraction errors in reconciled output
             if extract_errors:
                 reconciled["_extraction_errors"] = extract_errors

@@ -1,8 +1,8 @@
 # Import Pipeline Implementation Plan
 
 **Document created:** 2026-08-15
-**Last updated:** 2026-08-15 (after Phase 1 completion)
-**Status:** Phase 1 complete, Phase 2 next
+**Last updated:** 2026-08-15 (after Phase 2 completion)
+**Status:** Phase 2 complete, Phase 3 next
 
 This document tracks the complete implementation plan for fixing the
 import pipeline as identified in `IMPORT_FLOW_AUDIT_REPORT.md`.  It is
@@ -13,7 +13,7 @@ updated after every commit and before moving to the next phase.
 ## Table of Contents
 
 1. [Phase 1: Form-agnostic Prefill JSON Parser ✅ COMPLETE](#phase-1-form-agnostic-prefill-json-parser--complete)
-2. [Phase 2: Last Filed ITR JSON Parser](#phase-2-last-filed-itr-json-parser)
+2. [Phase 2: Last Filed ITR JSON Parser ✅ COMPLETE](#phase-2-last-filed-itr-json-parser--complete)
 3. [Phase 3: Fix Individual Upload Endpoints + Document Persistence](#phase-3-fix-individual-upload-endpoints--document-persistence)
 4. [Phase 4: Extend Reconciliation Engine](#phase-4-extend-reconciliation-engine)
 5. [Phase 5: Document Persistence + Re-parse/Re-reconcile](#phase-5-document-persistence--re-parsere-reconcile)
@@ -186,10 +186,11 @@ Tested against the real ITD Prefill JSON for taxpayer SUNIT GOYANKA
 
 ---
 
-## Phase 2: Last Filed ITR JSON Parser
+## Phase 2: Last Filed ITR JSON Parser ✅ COMPLETE
 
-**Status:** Not started
-**Estimated effort:** 1-2 days
+**Started:** 2026-08-15
+**Completed:** 2026-08-15
+**Commits:** 1 (pending push)
 
 ### Goal
 
@@ -201,68 +202,164 @@ useful for:
 - Providing a baseline for year-over-year comparison
 - Carrying forward capital gains losses, brought-forward losses
 
-Currently `downloader_filed_return.py` downloads it, but
-`job_worker.py` never parses it.  The JSON is deleted after the job.
+Previously `downloader_filed_return.py` downloaded it, but
+`job_worker.py` never parsed it.  The JSON was deleted after the job.
 
-### Steps
+### Revised-return flagging
 
-#### Step 2.1: Study the filed-return JSON structure
+The download logic was extended to flag whether the current-AY return
+is already filed (and whether it was a revised return).  This prevents
+accidental overwriting of a filed return:
 
-The filed-return JSON is the CBDT's official ITR JSON for the previous
-year.  It follows the same schema as the current-year ITR JSON (see
-`PreFillSchemaJSON_V6.5.json` for the type library).  The top-level
-keys differ by ITR form (ITR-1, ITR-2, ITR-3, ITR-4, etc.).
+- If the current-AY return is **already filed** (original or revised),
+  the advisory sets `current_ay_already_filed=True` and
+  `requires_user_confirmation_for_revision=True`.  The user must
+  explicitly confirm the revised-return flow before the filed-ITR data
+  is populated.
+- If the last filed ITR was a **revised return** (section 139(5)),
+  the advisory sets `current_ay_is_revised=True` and shows a prominent
+  warning: "The last filed ITR was a revised return."
+- If the last filed ITR is for a **normal (prior) AY**, no issues —
+  proceed normally.
 
-**Action:** Run a portal automation import with diagnostic logging to
-dump the filed-return JSON structure (similar to how we dumped the
-Prefill JSON in Phase 1).
+### What was built
 
-#### Step 2.2: Create `app/engine/importers/filed_return_parser.py`
+#### Backend — `app/engine/importers/filed_return_parser.py` (560+ lines)
 
-A form-agnostic parser that extracts:
-- Personal info (name, address, DOB, PAN, Aadhaar, father's name)
-- Employer details (if same employer — name, TAN, salary)
-- Bank accounts (account no, bank name, IFSC, refund flag)
-- Brought-forward losses (capital gains, house property, business)
-- Section 80C cumulative deductions (for pension/PPF continuation)
-- Carry-forward capital gains losses (for setoff against current-year
-  gains)
-- Filing status (return section, residential status)
-- Verification details
+A form-agnostic parser that extracts **every section** from the CBDT's
+official ITR JSON payload.  The parser auto-detects the ITR form
+(ITR1, ITR2, ITR3, ITR4, ITR5, ITR6, ITR7) and extracts:
 
-#### Step 2.3: Wire into `job_worker.py`
+| Section | Source key | What it extracts |
+|---|---|---|
+| Personal info | `PartA_GEN1.PersonalInfo` | PAN, Aadhaar, name (3-part), DOB, status, address (residence/road/area/city/state/country/PIN), mobile, email, alternate address |
+| Filing status | `PartA_GEN1.FilingStatus` | Return section, residential status, 7th proviso, opt-out new regime, due date, director/partner/unlisted shares flags |
+| Employer entries | `ScheduleS.Salaries[]` | Employer name, nature of employment, TAN, gross salary, basic, perquisites, profits-in-lieu, address |
+| Bank accounts | `PartB_TTI.Refund.BankAccountDtls.AddtnlBankDetails[]` | Bank name, account number, IFSC, account type, refund flag — deduplicated, only ONE marked for refund |
+| TDS on salary | `ScheduleTDS1.TDSonSalariesDtls[]` | Deductor name, TAN, section 192, income, TDS, claimed |
+| TDS other | `ScheduleTDS2.TDSOthThanSalaryDtls[]` | Deductor name, TAN, section, gross, TDS deducted, TDS claimed, head of income, brought-forward TDS |
+| Deductions | `ScheduleVIA.UsrDeductUndChapVIA` | All section 80* deductions (80C, 80D, 80CCD, 80TTA, 80TTB, etc.) |
+| Other sources | `ScheduleOS` | Dividend, SB/FD interest, others, other income details |
+| Carry-forward losses | `ScheduleCFL.CarryFwdLossDetail` | Business loss, HP loss, LTCG loss, STCG loss, insurance, specified, race-horse |
+| Verification | `Verification` | Name, PAN, father name, capacity, place, date |
+| Capital gains | `ScheduleCGFor23` | Raw dict for frontend mapper (ITR-2/3) |
+| Schedule CYLA/BFLA/SI/IT/AMTC | raw dicts | Pass-through for form-specific mappers |
+| Tax totals | `PartB_TTI` | Total tax payments, bal tax payable, refund due, asset-outside-India flag |
 
-After downloading the filed-return JSON, call the parser and attach
-the extraction to the reconciled output under the `filed_return` key.
+**Key design decisions:**
 
-#### Step 2.4: Create `frontend/src/utils/mapFiledReturnToFormData.ts`
+1. **Form-agnostic** — auto-detects the ITR form and extracts all
+   fields regardless of form.
+2. **PascalCase keys** — the filed-return JSON uses PascalCase (unlike
+   the prefill's camelCase); the parser handles both via case-insensitive
+   matching.
+3. **Bank account deduplication** — same as the prefill parser.
+4. **Single refund account** — same as the prefill parser.
 
-Maps the filed-return extraction to the flat formData shape.  Only
-populate fields that are carry-forward (brought-forward losses,
-personal info if empty, bank accounts if empty).
+#### Classifier — `app/automation/filing_mode_classifier.py`
 
-#### Step 2.5: Merge in `ITRComputationPage`
+Extended `FilingModeClassification` with three new fields:
+- `current_ay_already_filed: bool`
+- `current_ay_is_revised: bool`
+- `current_ay_filing_section: Optional[str]`
 
-In `handleConfirmImport`, after `mapPrefillToFormData` and
-`mapReconciledToFormData`, also run `mapFiledReturnToFormData` and
-merge.  Prefill and reconciled take precedence; filed-return fills
-gaps.
+The classifier detects revised returns by checking the effective
+current-AY return's `filing_section` for "139(5)" and `filing_type`
+for "revised".
 
-### Deliverables
+#### Advisory — `app/automation/filing_advisory.py`
 
-- `app/engine/importers/filed_return_parser.py`
-- `frontend/src/utils/mapFiledReturnToFormData.ts`
-- Updated `app/automation/job_worker.py`
-- Updated `frontend/src/pages/ITRComputationPage.tsx`
+Extended `FilingAdvisory` with:
+- `current_ay_already_filed: bool`
+- `current_ay_is_revised: bool`
+- `current_ay_filing_section: Optional[str]`
+- `download_is_current_ay: bool`
+- `requires_user_confirmation_for_revision: bool`
+
+The advisory message is customized for revised returns: "ITR for AY
+2026-27 is already filed as a REVISED return (section 139(5)). The last
+filed ITR was a revised return."
+
+The download logic was made conservative: the current-AY return is
+**never** auto-downloaded for revision.  The advisory always surfaces
+`requires_user_confirmation_for_revision=True` when the current-AY
+return exists, and the user must explicitly confirm the revised-return
+flow before the data is populated.
+
+#### Job worker — `app/automation/job_worker.py`
+
+- Imported `parse_filed_return_file` and `filed_return_extraction_to_dict`
+- After downloading the filed-return JSON (Step 4.6.1), calls the parser
+  and attaches the extraction to the reconciled output under the
+  `filed_return` key
+- Logs extraction counts (form, employers, banks, TDS, losses) for
+  verification
+- Surfaces the filing advisory and classification in the reconciled
+  output so the frontend can show the flags
+
+#### Frontend — `frontend/src/utils/mapFiledReturnToFormData.ts` (280 lines)
+
+Converts the `FiledReturnExtraction` dict to the flat `formData` shape.
+Maps:
+- Personal info → `firstName`, `middleName`, `surnameOrOrgName`, `pan`,
+  `aadhaar`, `dob`, `status`
+- Address → `flatNo`, `premises`, `road`, `area`, `city`, `state`,
+  `country`, `pincode`
+- Contact → `mobileCountryCode`, `mobile`, `email`
+- Filing status → `filingSection`, `residentialStatus`
+- Employer entries → `employerEntries[]` (with stable IDs)
+- Bank accounts → `bankAccountData.accounts[]` (with stable IDs,
+  normalized account types)
+- Carry-forward losses → `carryForwardLosses[]` + flat `bfLossHP`,
+  `bfLossLTCG`, `bfLossSTCG`, `bfLossBusiness` fields
+- Verification → `assesseeVerName`, `assesseeVerPAN`, `fatherName`,
+  `capacity`, `place`
+- Metadata → `importedFromFiledReturn`
+
+#### ITRComputationPage — `frontend/src/pages/ITRComputationPage.tsx`
+
+- Imported `mapFiledReturnToFormData`
+- `handleConfirmImport` now merges filed-return data **first** (lowest
+  precedence: filed-return < Prefill < reconciled), then Prefill, then
+  reconciled
+- Added a tertiary toast showing filed-return imports (brought-forward
+  losses, bank accounts, employer details)
+- Added a prominent `toast.error` when the current-AY return is already
+  filed (with a different message for revised returns)
+- The warning banner now shows the filing-advisory message when the
+  current-AY return is already filed
+
+### Verification
+
+Tested against the real filed-return JSON for taxpayer SUNIT GOYANKA
+(PAN ACUPG3482G, ITR-2, AY 2026-27).  All sections extracted correctly:
+- ✅ Form: ITR-2, AY: 2026, Schema: Ver1.0
+- ✅ Personal info (name, PAN, Aadhaar, DOB, address, mobile, email)
+- ✅ 2 employer entries (ADV. RAVINDRA K. AGRAWAL, ADV. RAHUL R. AGRAWAL)
+- ✅ 1 bank account (SBI, deduplicated, 1 refund)
+- ✅ 2 TDS-other entries (with TAN, section, gross, TDS, claimed)
+- ✅ Capital gains schedule keys
+- ✅ Schedule CYLA, BFLA, AMTC, SI keys
+- ✅ Verification (name, PAN, father, capacity, place, date)
+- ✅ Refund due: 31890, Asset out India: NO
+
+### Commits
+
+| # | Commit | Description |
+|---|---|---|
+| 1 | (pending) | feat(import): Phase 2 — filed-return parser + revised-return flagging |
 
 ### What you can test
 
 1. Run a portal automation import
-2. Check the backend log — should say `Filed return extraction OK —
-   personal_info=Yes, banks=N, losses=N`
+2. Check the backend log — should say `Filed-return extraction OK —
+   form=ITR2, employers=2, banks=1, tds_sal=0, tds_oth=2, losses=0`
 3. Confirm the import — brought-forward losses should appear in the
-   capital gains / house property tabs
+   capital gains / house property tabs (if any)
 4. Personal info should be pre-populated (if not already from Prefill)
+5. If the current-AY return is already filed, a prominent error toast
+   should appear warning the user to confirm the revised-return flow
+6. The warning banner should show the advisory message
 
 ---
 
@@ -546,7 +643,8 @@ tax-year config to know which form fields exist for the current AY
 | 1 | `fb4ca8f` | fix(prefill-parser): match real ITD prefill JSON structure | 2026-08-15 |
 | 1 | `bcc0054` | feat(prefill-parser): extract ALL sections from ITD prefill + dedupe banks | 2026-08-15 |
 | 1 | (pushed) | All 4 commits pushed to `origin/main` | 2026-08-15 |
-| 2 | — | *Not started* | — |
+| 2 | (pending) | feat(import): Phase 2 — filed-return parser + revised-return flagging | 2026-08-15 |
+| 3 | — | *Not started* | — |
 
 ---
 
@@ -567,13 +665,23 @@ tax-year config to know which form fields exist for the current AY
 - [x] Secondary toast shows Prefill-specific imports
 - [x] Backend log shows correct extraction counts
 
-### Phase 2 (pending)
+### Phase 2 (complete)
 
-- [ ] Filed-return parser extracts personal info
-- [ ] Filed-return parser extracts bank accounts
-- [ ] Filed-return parser extracts brought-forward losses
-- [ ] Filed-return data merged into formData
-- [ ] Brought-forward losses appear in capital gains / house property tabs
+- [x] Filed-return parser auto-detects ITR form (ITR1-ITR7)
+- [x] Filed-return parser extracts personal info (PAN, Aadhaar, name, DOB, address)
+- [x] Filed-return parser extracts employer entries (name, TAN, salary)
+- [x] Filed-return parser extracts bank accounts (deduplicated, 1 refund)
+- [x] Filed-return parser extracts TDS-other entries
+- [x] Filed-return parser extracts carry-forward losses
+- [x] Filed-return parser extracts all other schedules (CYLA, BFLA, SI, AMTC, CG)
+- [x] Classifier detects revised returns (section 139(5))
+- [x] Advisory flags current_ay_already_filed and current_ay_is_revised
+- [x] Advisory requires user confirmation for revision
+- [x] Job worker parses filed-return JSON and attaches to reconciled output
+- [x] Frontend mapper converts extraction to flat formData
+- [x] ITRComputationPage merges filed-return data (lowest precedence)
+- [x] Warning banner shows advisory message when current-AY already filed
+- [x] Prominent error toast for revised-return scenarios
 
 ### Phase 3 (pending)
 

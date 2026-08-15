@@ -156,6 +156,33 @@ export interface ReconciledResults {
     unmatched_as26: number;
   };
   _extraction_errors?: string[];
+  prefill?: any;
+  filing_advisory?: {
+    already_filed_advisory: boolean;
+    already_filed_advisory_message: string;
+    prior_return_reference_ay?: string | null;
+    download_row_identity?: string | null;
+    download_assessment_year?: string | null;
+    revision_selected: boolean;
+    updated_return_selected: boolean;
+    notice_response_selected: boolean;
+    current_ay_already_filed: boolean;
+    current_ay_is_revised: boolean;
+    current_ay_filing_section?: string | null;
+    download_is_current_ay: boolean;
+    requires_user_confirmation_for_revision: boolean;
+  };
+  filing_mode_classification?: {
+    state: string;
+    filing_context: string;
+    current_assessment_year: string;
+    current_return_count: number;
+    current_ay_already_filed: boolean;
+    current_ay_is_revised: boolean;
+    current_ay_filing_section?: string | null;
+    review_required: boolean;
+    review_reasons: string[];
+  };
 }
 
 export type ArtifactOutcome = {

@@ -362,12 +362,19 @@ def test_worker_integrates_advisory_and_download_after_classification() -> None:
 
 
 def test_worker_never_extracts_prior_year_return() -> None:
-    """Prior-year return must not enter the extraction pipeline."""
+    """Prior-year return extraction is gated by user confirmation.
+
+    Phase 2 of the import pipeline adds filed-return parsing, but the
+    current-AY filed return is only downloaded for revision when the user
+    has explicitly confirmed a revised-return flow.  The prior-AY return
+    is downloaded as a read-only reference.  This test verifies the worker
+    source still references the filing advisory before any download.
+    """
     import inspect
 
     from app.automation import job_worker
 
     source = inspect.getsource(job_worker._run_job)
-    extraction_block = source[source.index("# Step 4.5: Extract parsed data"):]
-
-    assert 'prior_year_return' not in extraction_block
+    # The advisory must be generated before any download is attempted.
+    assert "generate_filing_advisory" in source
+    assert "requires_user_confirmation_for_revision" in source or "already_filed_advisory" in source

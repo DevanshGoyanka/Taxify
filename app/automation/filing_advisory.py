@@ -43,6 +43,17 @@ class FilingAdvisory:
         revision_selected: Always false at this phase.
         updated_return_selected: Always false at this phase.
         notice_response_selected: Always false at this phase.
+        current_ay_already_filed: True when the current AY has a filed return.
+        current_ay_is_revised: True when the effective current-AY return was
+            filed under section 139(5) — i.e. the last filed ITR for this AY
+            was already a revised return.
+        current_ay_filing_section: The filing section of the effective
+            current-AY return (e.g. "139(1)", "139(5)").
+        download_is_current_ay: True when the download target is the
+            current-AY return (for revision) rather than a prior-AY return.
+        requires_user_confirmation_for_revision: True when the user must
+            explicitly confirm a revised-return flow before the current-AY
+            filed ITR is populated.
     """
 
     already_filed_advisory: bool
@@ -53,6 +64,11 @@ class FilingAdvisory:
     revision_selected: bool = False
     updated_return_selected: bool = False
     notice_response_selected: bool = False
+    current_ay_already_filed: bool = False
+    current_ay_is_revised: bool = False
+    current_ay_filing_section: Optional[str] = None
+    download_is_current_ay: bool = False
+    requires_user_confirmation_for_revision: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe advisory without protected data."""
@@ -74,19 +90,36 @@ def generate_filing_advisory(
         flags are always false because no user confirmation has been obtained.
     """
     current_ay = classification.current_assessment_year
-    already_filed = classification.current_return_count > 0
+    already_filed = classification.current_ay_already_filed
+    is_revised = classification.current_ay_is_revised
     message = ""
     if already_filed:
-        message = (
-            f"ITR for AY {current_ay} is already filed. "
-            "To file a revised, updated, or belated return, select the "
-            "appropriate section in the Personal Info page."
-        )
+        if is_revised:
+            message = (
+                f"ITR for AY {current_ay} is already filed as a REVISED return "
+                f"(section {classification.current_ay_filing_section or '139(5)'}). "
+                "The last filed ITR was a revised return. To file another revised "
+                "return, explicitly confirm the revised-return flow."
+            )
+        else:
+            message = (
+                f"ITR for AY {current_ay} is already filed "
+                f"(section {classification.current_ay_filing_section or '139(1)'}). "
+                "To file a revised return, explicitly confirm the revised-return flow."
+            )
 
     prior_ay = classification.nearest_prior_assessment_year
     download_identity: Optional[str] = None
     download_ay: Optional[str] = None
 
+    # Download logic:
+    # - If the current AY is already filed, we need the current-AY filed
+    #   return for revision — but ONLY if the user has explicitly confirmed
+    #   a revised-return flow.  Since revision_selected is always false at
+    #   this phase, we do NOT download the current-AY return; we surface the
+    #   flag so the frontend can ask the user to confirm.
+    # - Otherwise, download the nearest prior-AY return as a read-only
+    #   reference (no user confirmation needed).
     if (
         prior_ay
         and classification.nearest_prior_effective_row_identity
@@ -101,4 +134,9 @@ def generate_filing_advisory(
         prior_return_reference_ay=prior_ay,
         download_row_identity=download_identity,
         download_assessment_year=download_ay,
+        current_ay_already_filed=already_filed,
+        current_ay_is_revised=is_revised,
+        current_ay_filing_section=classification.current_ay_filing_section,
+        download_is_current_ay=False,  # never auto-download current-AY for revision
+        requires_user_confirmation_for_revision=already_filed,
     )

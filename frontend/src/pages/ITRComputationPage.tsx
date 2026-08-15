@@ -37,6 +37,7 @@ import ImportConfirmationModal from '../components/ImportConfirmationModal';
 import type { ReconciledResults } from '../api/itrAutomation';
 import { mapReconciledToFormData } from '../utils/mapReconciledToFormData';
 import { mapPrefillToFormData } from '../utils/mapPrefillToFormData';
+import { mapFiledReturnToFormData } from '../utils/mapFiledReturnToFormData';
 import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
 
 const returnRepository = new HttpReturnRepository();
@@ -911,6 +912,22 @@ export default function ITRComputationPage() {
     const prefillData = (reconciledImportData as any).prefill || null;
     const prefillResult = mapPrefillToFormData(prefillData);
 
+    // Also extract the form-agnostic filed-return data (if the automation
+    // job downloaded and parsed it).  The filed-return provides brought-
+    // forward losses, prior-AY personal info, and bank accounts.  It
+    // has the LOWEST precedence (filed-return < Prefill < reconciled) so
+    // it goes first in the merge.
+    //
+    // IMPORTANT: If the current-AY return is already filed (advisory flag
+    // ``current_ay_already_filed``), the filed-return JSON is the
+    // current-AY return (for revision).  In that case, the user must
+    // explicitly confirm the revised-return flow before we populate
+    // the filed-ITR data.  For a prior-AY return (normal filing), no
+    // user confirmation is needed — always merge.
+    const advisory = (reconciledImportData as any).filing_advisory;
+    const filedReturnData = (reconciledImportData as any).filed_return || null;
+    const filedReturnResult = mapFiledReturnToFormData(filedReturnData);
+
     // A portal import replaces a material portion of the draft. Any result
     // computed for the pre-import generation must not be presented as current.
     ++computationGenerationRef.current;
@@ -920,11 +937,12 @@ export default function ITRComputationPage() {
     setTaxResultError('Computation unavailable for the imported draft until recalculated.');
 
     // Build one merged snapshot and use it for both the editor and persistence.
-    // Prefill first (provides personal info, deductions, bank accounts,
-    // salary break-up), then reconciled (provides income + TDS from
+    // Filed-return first (brought-forward losses, prior-AY personal info,
+    // bank accounts), then Prefill (current-AY personal info, deductions,
+    // bank accounts, salary break-up), then reconciled (income + TDS from
     // AIS/TIS/26AS).  Empty imported arrays must not erase manually
     // entered rows.
-    const safeUpdate = { ...prefillResult.formDataUpdate, ...formDataUpdate };
+    const safeUpdate = { ...filedReturnResult.formDataUpdate, ...prefillResult.formDataUpdate, ...formDataUpdate };
     const currentDraft = editorRef.current
       ? composeLegacyPayload(editorRef.current)
       : formData;
@@ -968,6 +986,26 @@ export default function ITRComputationPage() {
         `entries found in only one of ${parts.join('/')} were preserved for review.`
       );
     }
+    // Surface the filing advisory: if the current-AY return is already
+    // filed (or was a revised return), the user must explicitly confirm
+    // a revised-return flow before the filed-ITR data is populated.
+    const advisory = (reconciledImportData as any).filing_advisory;
+    if (advisory && advisory.current_ay_already_filed) {
+      if (advisory.current_ay_is_revised) {
+        msgs.push(
+          `⚠️ ITR for AY ${advisory.download_assessment_year || ''} is already filed as a REVISED return ` +
+          `(section ${advisory.current_ay_filing_section || '139(5)'}). ` +
+          'The last filed ITR was a revised return. To file another revised return, ' +
+          'explicitly confirm the revised-return flow.'
+        );
+      } else {
+        msgs.push(
+          `⚠️ ITR for AY ${advisory.download_assessment_year || ''} is already filed ` +
+          `(section ${advisory.current_ay_filing_section || '139(1)'}). ` +
+          'To file a revised return, explicitly confirm the revised-return flow.'
+        );
+      }
+    }
     setReconDiscrepancies(msgs);
 
     toast.success(
@@ -987,6 +1025,35 @@ export default function ITRComputationPage() {
       if (prefillResult.summary.deductionsTotal > 0) prefillParts.push(`deductions ₹${prefillResult.summary.deductionsTotal.toLocaleString('en-IN')}`);
       if (prefillResult.summary.tdsSalaryEntries > 0) prefillParts.push(`${prefillResult.summary.tdsSalaryEntries} TDS-salary`);
       toast(`Prefill: ${prefillParts.join(', ')}`, { icon: '📋' });
+    }
+
+    // Show a tertiary toast with filed-return imports (brought-forward
+    // losses, prior-AY bank accounts, employer details) that the Prefill
+    // and AIS/TIS/26AS don't carry.
+    if (filedReturnResult.summary.carryForwardLosses > 0 || filedReturnResult.summary.bankAccounts > 0) {
+      const frParts: string[] = [];
+      if (filedReturnResult.summary.carryForwardLosses > 0) frParts.push(`${filedReturnResult.summary.carryForwardLosses} brought-fwd loss(es)`);
+      if (filedReturnResult.summary.bankAccounts > 0) frParts.push(`${filedReturnResult.summary.bankAccounts} bank account(s)`);
+      if (filedReturnResult.summary.employerEntries > 0) frParts.push(`${filedReturnResult.summary.employerEntries} employer(s)`);
+      toast(`Filed return: ${frParts.join(', ')}`, { icon: '📄' });
+    }
+
+    // If the current-AY return is already filed, show a prominent warning
+    // that the user must explicitly confirm the revised-return flow.
+    if (advisory && advisory.current_ay_already_filed) {
+      if (advisory.current_ay_is_revised) {
+        toast.error(
+          `ITR for AY ${advisory.download_assessment_year || ''} is already filed as a REVISED return. ` +
+          'The last filed ITR was a revised return. To file another revised return, explicitly confirm the revised-return flow.',
+          { duration: 8000 }
+        );
+      } else {
+        toast.error(
+          `ITR for AY ${advisory.download_assessment_year || ''} is already filed. ` +
+          'To file a revised return, explicitly confirm the revised-return flow.',
+          { duration: 8000 }
+        );
+      }
     }
 
     // ── Reassess eligibility after import ────────────────────────────────

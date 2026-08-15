@@ -112,6 +112,18 @@ class FilingModeClassification:
     revision_selected: bool = False
     updated_return_selected: bool = False
     notice_response_selected: bool = False
+    # New fields for revised-return detection (Phase 2 of import pipeline).
+    # current_ay_already_filed: True when the current AY has at least one
+    #   filed return.  The user must explicitly choose to file a revised
+    #   return before we populate the filed-ITR data.
+    # current_ay_is_revised: True when the effective current-AY return was
+    #   filed under section 139(5) (revised) — i.e. the last filed ITR
+    #   for this AY was already a revised return.
+    # current_ay_filing_section: The filing section of the effective
+    #   current-AY return (e.g. "139(1)", "139(5)", "139(9)").
+    current_ay_already_filed: bool = False
+    current_ay_is_revised: bool = False
+    current_ay_filing_section: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize classification metadata without sensitive identifiers."""
@@ -130,6 +142,9 @@ class FilingModeClassification:
             "revision_selected": self.revision_selected,
             "updated_return_selected": self.updated_return_selected,
             "notice_response_selected": self.notice_response_selected,
+            "current_ay_already_filed": self.current_ay_already_filed,
+            "current_ay_is_revised": self.current_ay_is_revised,
+            "current_ay_filing_section": self.current_ay_filing_section,
         }
 
 
@@ -171,6 +186,23 @@ def classify_filing_mode(
     notice_indicators = _notice_indicators(records)
     reasons: list[str] = []
 
+    # Detect whether the effective current-AY return is a revised return
+    # (filed under section 139(5) or with filing_type containing "revised").
+    # The effective return is the one pointed to by current_group.
+    current_ay_filing_section: Optional[str] = None
+    current_ay_is_revised = False
+    if current_group and current_group.effective_row_identity:
+        effective_record = next(
+            (r for r in current_records if r.row_identity == current_group.effective_row_identity),
+            None,
+        )
+        if effective_record is not None:
+            current_ay_filing_section = effective_record.filing_section
+            section_norm = (effective_record.filing_section or "").strip().lower().replace(" ", "")
+            type_norm = (effective_record.filing_type or "").strip().lower()
+            if "139(5)" in section_norm or "1395" in section_norm or "revised" in type_norm:
+                current_ay_is_revised = True
+
     if not current_records:
         state = FilingModeState.NEW_FILING
     else:
@@ -208,6 +240,9 @@ def classify_filing_mode(
         review_reasons=tuple(reasons),
         notice_indicators=notice_indicators,
         version_groups=groups,
+        current_ay_already_filed=bool(current_records),
+        current_ay_is_revised=current_ay_is_revised,
+        current_ay_filing_section=current_ay_filing_section,
     )
 
 
