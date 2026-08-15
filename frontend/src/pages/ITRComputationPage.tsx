@@ -1826,10 +1826,21 @@ export default function ITRComputationPage() {
                   // Listed equity / MF → Schedule 112A (long-term) or
                   // stEquity (short-term, section 111A)
                   if (tx.assetType === 'LTCG') {
+                    const saleVal = tx.fullConsideration || 0;
+                    const costVal = tx.acquisitionCost || 0;
                     schedule112A.push({
                       ...routed,
-                      totalSaleValue: tx.fullConsideration || 0,
-                      costWithoutIndexation: tx.acquisitionCost || 0,
+                      // AIS doesn't carry acquisition date; default to
+                      // 'After 31-Jan-2018' since these are recent MF purchases
+                      shareOnOrBefore: 'AE',
+                      totalSaleValue: saleVal,
+                      costWithoutIndexation: costVal,
+                      totalFmv: 0,
+                      transferExpenses: tx.transferExpenses || 0,
+                      // LTCG before lower of B1/B2 = sale - cost (readout)
+                      ltcgBeforeLower: Math.max(0, saleVal - costVal),
+                      totalDeductions: tx.transferExpenses || 0,
+                      balance: Math.max(0, saleVal - costVal - (tx.transferExpenses || 0)),
                     });
                   } else {
                     stEquity.push(routed);
