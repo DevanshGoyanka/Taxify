@@ -610,30 +610,49 @@ async def _run_job(job_id: int) -> None:
         if advisory.already_filed_advisory:
             log(f"[ADVISORY] {advisory.already_filed_advisory_message}")
         prior_ref_ay = advisory.download_assessment_year
+        # ──────────────────────────────────────────────────────────────
+        # TEMPORARILY DISABLED (Phase 2 testing)
+        #
+        # The filed-return JSON download is commented out so the portal
+        # automation import doesn't surface the "already filed" blocking
+        # error during testing.  See FILED_RETURN_REACTIVATION_GUIDE.md
+        # for detailed instructions on reactivating this block.
+        #
+        # Reactivation checklist:
+        # 1. Uncomment the download block below (lines marked REACTIVATE).
+        # 2. Uncomment the filed-return parsing block in Step 4.6.1.
+        # 3. Uncomment the filed_return attachment in the reconciled output.
+        # 4. Uncomment the filed-return merge in ITRComputationPage.tsx.
+        # 5. Uncomment the advisory error toast + banner in
+        #    ITRComputationPage.tsx.
+        # 6. Uncomment the mapFiledReturnToFormData import in
+        #    ITRComputationPage.tsx.
+        # ──────────────────────────────────────────────────────────────
         if prior_ref_ay and advisory.download_row_identity:
-            _update_job(
-                job_id,
-                current_step="filed_return_download",
-                status_message="Downloading prior-year reference JSON...",
-                progress_pct=84,
-            )
-            log(f"[FILED RETURN DL] Downloading prior-year reference JSON for AY {prior_ref_ay}.")
-            prior_dl = await download_filed_return_json(
-                page=page,
-                assessment_year=prior_ref_ay,
-                target_row_identity=advisory.download_row_identity,
-                download_dir=dldir,
-                timeout_ms=60_000,
-                log=log,
-            )
-            page = await resolve_itd_anchor(page)
-            artifact_outcomes["prior_year_return"] = prior_dl.to_dict()
-            if prior_dl.state is FiledReturnDownloadState.DOWNLOADED:
-                files["prior_year_return"] = prior_dl.path
-                steps.append("prior_year_return_downloaded")
-                log(f"[FILED RETURN DL] Prior-year reference JSON saved for AY {prior_ref_ay}.")
-            else:
-                log(f"[FILED RETURN DL] Prior-year reference download: {prior_dl.state.value}")
+            # REACTIVATE: _update_job(
+            # REACTIVATE:     job_id,
+            # REACTIVATE:     current_step="filed_return_download",
+            # REACTIVATE:     status_message="Downloading prior-year reference JSON...",
+            # REACTIVATE:     progress_pct=84,
+            # REACTIVATE: )
+            # REACTIVATE: log(f"[FILED RETURN DL] Downloading prior-year reference JSON for AY {prior_ref_ay}.")
+            # REACTIVATE: prior_dl = await download_filed_return_json(
+            # REACTIVATE:     page=page,
+            # REACTIVATE:     assessment_year=prior_ref_ay,
+            # REACTIVATE:     target_row_identity=advisory.download_row_identity,
+            # REACTIVATE:     download_dir=dldir,
+            # REACTIVATE:     timeout_ms=60_000,
+            # REACTIVATE:     log=log,
+            # REACTIVATE: )
+            # REACTIVATE: page = await resolve_itd_anchor(page)
+            # REACTIVATE: artifact_outcomes["prior_year_return"] = prior_dl.to_dict()
+            # REACTIVATE: if prior_dl.state is FiledReturnDownloadState.DOWNLOADED:
+            # REACTIVATE:     files["prior_year_return"] = prior_dl.path
+            # REACTIVATE:     steps.append("prior_year_return_downloaded")
+            # REACTIVATE:     log(f"[FILED RETURN DL] Prior-year reference JSON saved for AY {prior_ref_ay}.")
+            # REACTIVATE: else:
+            # REACTIVATE:     log(f"[FILED RETURN DL] Prior-year reference download: {prior_dl.state.value}")
+            log(f"[FILED RETURN DL] SKIPPED (Phase 2 testing) — prior_ref_ay={prior_ref_ay}")
         else:
             log("[ADVISORY] No prior-year reference download targeted.")
         steps.append("filing_advisory_generated")
@@ -910,38 +929,48 @@ async def _run_job(job_id: int) -> None:
         # only populated after the user explicitly confirms a revised-
         # return flow.  For a prior-AY return (normal filing), no user
         # confirmation is needed.
-        path_filed = files.get("prior_year_return")
-        if path_filed and os.path.exists(path_filed):
-            try:
-                filed_extracted = _parse_filed_return_file(path_filed)
-                parsed["filed_return"] = _filed_return_to_dict(filed_extracted)
-                log(
-                    f"[Worker] Filed return parsed: "
-                    f"form={filed_extracted.form_name}, "
-                    f"employers={len(filed_extracted.employer_entries)}, "
-                    f"banks={len(filed_extracted.bank_accounts)}, "
-                    f"tds_sal={len(filed_extracted.tds_salary_entries)}, "
-                    f"tds_oth={len(filed_extracted.tds_other_entries)}, "
-                    f"losses={len(filed_extracted.carry_forward_losses)}"
-                )
-                logger.info(
-                    "Job %d: Filed-return extraction OK — form=%s, employers=%d, "
-                    "banks=%d, tds_sal=%d, tds_oth=%d, losses=%d",
-                    job_id,
-                    filed_extracted.form_name,
-                    len(filed_extracted.employer_entries),
-                    len(filed_extracted.bank_accounts),
-                    len(filed_extracted.tds_salary_entries),
-                    len(filed_extracted.tds_other_entries),
-                    len(filed_extracted.carry_forward_losses),
-                )
-            except Exception as e:
-                err = f"Filed-return extraction failed: {type(e).__name__}: {e}"
-                extract_errors.append(err)
-                log(f"[Worker] {err}")
-                logger.exception("Job %d: Filed-return extraction error", job_id)
-        else:
-            logger.info("Job %d: Filed-return file not found at %s — skipping", job_id, path_filed)
+        #
+        # ──────────────────────────────────────────────────────────────
+        # TEMPORARILY DISABLED (Phase 2 testing)
+        #
+        # The filed-return parsing is commented out so the portal
+        # automation import doesn't surface the "already filed" blocking
+        # error during testing.  See FILED_RETURN_REACTIVATION_GUIDE.md
+        # for detailed instructions on reactivating this block.
+        #
+        # REACTIVATE: path_filed = files.get("prior_year_return")
+        # REACTIVATE: if path_filed and os.path.exists(path_filed):
+        # REACTIVATE:     try:
+        # REACTIVATE:         filed_extracted = _parse_filed_return_file(path_filed)
+        # REACTIVATE:         parsed["filed_return"] = _filed_return_to_dict(filed_extracted)
+        # REACTIVATE:         log(
+        # REACTIVATE:             f"[Worker] Filed return parsed: "
+        # REACTIVATE:             f"form={filed_extracted.form_name}, "
+        # REACTIVATE:             f"employers={len(filed_extracted.employer_entries)}, "
+        # REACTIVATE:             f"banks={len(filed_extracted.bank_accounts)}, "
+        # REACTIVATE:             f"tds_sal={len(filed_extracted.tds_salary_entries)}, "
+        # REACTIVATE:             f"tds_oth={len(filed_extracted.tds_other_entries)}, "
+        # REACTIVATE:             f"losses={len(filed_extracted.carry_forward_losses)}"
+        # REACTIVATE:         )
+        # REACTIVATE:         logger.info(
+        # REACTIVATE:             "Job %d: Filed-return extraction OK — form=%s, employers=%d, "
+        # REACTIVATE:             "banks=%d, tds_sal=%d, tds_oth=%d, losses=%d",
+        # REACTIVATE:             job_id,
+        # REACTIVATE:             filed_extracted.form_name,
+        # REACTIVATE:             len(filed_extracted.employer_entries),
+        # REACTIVATE:             len(filed_extracted.bank_accounts),
+        # REACTIVATE:             len(filed_extracted.tds_salary_entries),
+        # REACTIVATE:             len(filed_extracted.tds_other_entries),
+        # REACTIVATE:             len(filed_extracted.carry_forward_losses),
+        # REACTIVATE:         )
+        # REACTIVATE:     except Exception as e:
+        # REACTIVATE:         err = f"Filed-return extraction failed: {type(e).__name__}: {e}"
+        # REACTIVATE:         extract_errors.append(err)
+        # REACTIVATE:         log(f"[Worker] {err}")
+        # REACTIVATE:         logger.exception("Job %d: Filed-return extraction error", job_id)
+        # REACTIVATE: else:
+        # REACTIVATE:     logger.info("Job %d: Filed-return file not found at %s — skipping", job_id, path_filed)
+        log("[Worker] Filed-return parsing SKIPPED (Phase 2 testing).")
 
         # Step 4.7: Reconcile data across all three documents
         _update_job(job_id, current_step="extract", status_message="Reconciling data...", progress_pct=92)
@@ -959,14 +988,16 @@ async def _run_job(job_id: int) -> None:
             # personal info) with the reconciled income/TDS data.
             if "prefill" in parsed:
                 reconciled["prefill"] = parsed["prefill"]
-            # Attach the form-agnostic filed-return extraction to the
-            # reconciled output so the frontend can merge brought-forward
-            # losses, prior-AY personal info, and bank accounts.  The
-            # filed-return data is only populated after the user confirms
-            # the revised-return flow when the current-AY return is already
-            # filed (the advisory flag is surfaced separately).
-            if "filed_return" in parsed:
-                reconciled["filed_return"] = parsed["filed_return"]
+            # ──────────────────────────────────────────────────────────────
+            # TEMPORARILY DISABLED (Phase 2 testing)
+            #
+            # The filed_return attachment is commented out so the portal
+            # automation import doesn't surface the "already filed"
+            # blocking error during testing.  See
+            # FILED_RETURN_REACTIVATION_GUIDE.md for reactivation.
+            #
+            # REACTIVATE: if "filed_return" in parsed:
+            # REACTIVATE:     reconciled["filed_return"] = parsed["filed_return"]
             # Surface the filing advisory flags so the frontend can show
             # whether the current-AY return is already filed (and whether
             # it was a revised return) before populating any filed-ITR data.

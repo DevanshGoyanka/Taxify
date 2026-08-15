@@ -37,7 +37,8 @@ import ImportConfirmationModal from '../components/ImportConfirmationModal';
 import type { ReconciledResults } from '../api/itrAutomation';
 import { mapReconciledToFormData } from '../utils/mapReconciledToFormData';
 import { mapPrefillToFormData } from '../utils/mapPrefillToFormData';
-import { mapFiledReturnToFormData } from '../utils/mapFiledReturnToFormData';
+// TEMPORARILY DISABLED (Phase 2 testing) — See FILED_RETURN_REACTIVATION_GUIDE.md
+// REACTIVATE: import { mapFiledReturnToFormData } from '../utils/mapFiledReturnToFormData';
 import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
 
 const returnRepository = new HttpReturnRepository();
@@ -912,21 +913,18 @@ export default function ITRComputationPage() {
     const prefillData = (reconciledImportData as any).prefill || null;
     const prefillResult = mapPrefillToFormData(prefillData);
 
-    // Also extract the form-agnostic filed-return data (if the automation
-    // job downloaded and parsed it).  The filed-return provides brought-
-    // forward losses, prior-AY personal info, and bank accounts.  It
-    // has the LOWEST precedence (filed-return < Prefill < reconciled) so
-    // it goes first in the merge.
+    // ──────────────────────────────────────────────────────────────────
+    // TEMPORARILY DISABLED (Phase 2 testing)
     //
-    // IMPORTANT: If the current-AY return is already filed (advisory flag
-    // ``current_ay_already_filed``), the filed-return JSON is the
-    // current-AY return (for revision).  In that case, the user must
-    // explicitly confirm the revised-return flow before we populate
-    // the filed-ITR data.  For a prior-AY return (normal filing), no
-    // user confirmation is needed — always merge.
-    const advisory = (reconciledImportData as any).filing_advisory;
-    const filedReturnData = (reconciledImportData as any).filed_return || null;
-    const filedReturnResult = mapFiledReturnToFormData(filedReturnData);
+    // The filed-return merge is commented out so the portal automation
+    // import doesn't surface the "already filed" blocking error during
+    // testing.  See FILED_RETURN_REACTIVATION_GUIDE.md for reactivation.
+    //
+    // REACTIVATE: const advisory = (reconciledImportData as any).filing_advisory;
+    // REACTIVATE: const filedReturnData = (reconciledImportData as any).filed_return || null;
+    // REACTIVATE: const filedReturnResult = mapFiledReturnToFormData(filedReturnData);
+    const advisory = null as any;
+    const filedReturnResult = { formDataUpdate: {}, summary: { carryForwardLosses: 0, bankAccounts: 0, employerEntries: 0 } } as any;
 
     // A portal import replaces a material portion of the draft. Any result
     // computed for the pre-import generation must not be presented as current.
@@ -986,26 +984,30 @@ export default function ITRComputationPage() {
         `entries found in only one of ${parts.join('/')} were preserved for review.`
       );
     }
-    // Surface the filing advisory: if the current-AY return is already
-    // filed (or was a revised return), the user must explicitly confirm
-    // a revised-return flow before the filed-ITR data is populated.
-    const advisoryBanner = (reconciledImportData as any).filing_advisory;
-    if (advisoryBanner && advisoryBanner.current_ay_already_filed) {
-      if (advisoryBanner.current_ay_is_revised) {
-        msgs.push(
-          `⚠️ ITR for AY ${advisoryBanner.download_assessment_year || ''} is already filed as a REVISED return ` +
-          `(section ${advisoryBanner.current_ay_filing_section || '139(5)'}). ` +
-          'The last filed ITR was a revised return. To file another revised return, ' +
-          'explicitly confirm the revised-return flow.'
-        );
-      } else {
-        msgs.push(
-          `⚠️ ITR for AY ${advisoryBanner.download_assessment_year || ''} is already filed ` +
-          `(section ${advisoryBanner.current_ay_filing_section || '139(1)'}). ` +
-          'To file a revised return, explicitly confirm the revised-return flow.'
-        );
-      }
-    }
+    // ──────────────────────────────────────────────────────────────────
+    // TEMPORARILY DISABLED (Phase 2 testing)
+    //
+    // The advisory banner is commented out so the portal automation
+    // import doesn't surface the "already filed" blocking warning during
+    // testing.  See FILED_RETURN_REACTIVATION_GUIDE.md for reactivation.
+    //
+    // REACTIVATE: const advisoryBanner = (reconciledImportData as any).filing_advisory;
+    // REACTIVATE: if (advisoryBanner && advisoryBanner.current_ay_already_filed) {
+    // REACTIVATE:   if (advisoryBanner.current_ay_is_revised) {
+    // REACTIVATE:     msgs.push(
+    // REACTIVATE:       `⚠️ ITR for AY ${advisoryBanner.download_assessment_year || ''} is already filed as a REVISED return ` +
+    // REACTIVATE:       `(section ${advisoryBanner.current_ay_filing_section || '139(5)'}). ` +
+    // REACTIVATE:       'The last filed ITR was a revised return. To file another revised return, ' +
+    // REACTIVATE:       'explicitly confirm the revised-return flow.'
+    // REACTIVATE:     );
+    // REACTIVATE:   } else {
+    // REACTIVATE:     msgs.push(
+    // REACTIVATE:       `⚠️ ITR for AY ${advisoryBanner.download_assessment_year || ''} is already filed ` +
+    // REACTIVATE:       `(section ${advisoryBanner.current_ay_filing_section || '139(1)'}). ` +
+    // REACTIVATE:       'To file a revised return, explicitly confirm the revised-return flow.'
+    // REACTIVATE:     );
+    // REACTIVATE:   }
+    // REACTIVATE: }
     setReconDiscrepancies(msgs);
 
     toast.success(
@@ -1027,34 +1029,37 @@ export default function ITRComputationPage() {
       toast(`Prefill: ${prefillParts.join(', ')}`, { icon: '📋' });
     }
 
-    // Show a tertiary toast with filed-return imports (brought-forward
-    // losses, prior-AY bank accounts, employer details) that the Prefill
-    // and AIS/TIS/26AS don't carry.
-    if (filedReturnResult.summary.carryForwardLosses > 0 || filedReturnResult.summary.bankAccounts > 0) {
-      const frParts: string[] = [];
-      if (filedReturnResult.summary.carryForwardLosses > 0) frParts.push(`${filedReturnResult.summary.carryForwardLosses} brought-fwd loss(es)`);
-      if (filedReturnResult.summary.bankAccounts > 0) frParts.push(`${filedReturnResult.summary.bankAccounts} bank account(s)`);
-      if (filedReturnResult.summary.employerEntries > 0) frParts.push(`${filedReturnResult.summary.employerEntries} employer(s)`);
-      toast(`Filed return: ${frParts.join(', ')}`, { icon: '📄' });
-    }
-
-    // If the current-AY return is already filed, show a prominent warning
-    // that the user must explicitly confirm the revised-return flow.
-    if (advisory && advisory.current_ay_already_filed) {
-      if (advisory.current_ay_is_revised) {
-        toast.error(
-          `ITR for AY ${advisory.download_assessment_year || ''} is already filed as a REVISED return. ` +
-          'The last filed ITR was a revised return. To file another revised return, explicitly confirm the revised-return flow.',
-          { duration: 8000 }
-        );
-      } else {
-        toast.error(
-          `ITR for AY ${advisory.download_assessment_year || ''} is already filed. ` +
-          'To file a revised return, explicitly confirm the revised-return flow.',
-          { duration: 8000 }
-        );
-      }
-    }
+    // ──────────────────────────────────────────────────────────────────
+    // TEMPORARILY DISABLED (Phase 2 testing)
+    //
+    // The filed-return toast and the "already filed" error toast are
+    // commented out so the portal automation import doesn't surface
+    // the blocking error during testing.  See
+    // FILED_RETURN_REACTIVATION_GUIDE.md for reactivation.
+    //
+    // REACTIVATE: if (filedReturnResult.summary.carryForwardLosses > 0 || filedReturnResult.summary.bankAccounts > 0) {
+    // REACTIVATE:   const frParts: string[] = [];
+    // REACTIVATE:   if (filedReturnResult.summary.carryForwardLosses > 0) frParts.push(`${filedReturnResult.summary.carryForwardLosses} brought-fwd loss(es)`);
+    // REACTIVATE:   if (filedReturnResult.summary.bankAccounts > 0) frParts.push(`${filedReturnResult.summary.bankAccounts} bank account(s)`);
+    // REACTIVATE:   if (filedReturnResult.summary.employerEntries > 0) frParts.push(`${filedReturnResult.summary.employerEntries} employer(s)`);
+    // REACTIVATE:   toast(`Filed return: ${frParts.join(', ')}`, { icon: '📄' });
+    // REACTIVATE: }
+    //
+    // REACTIVATE: if (advisory && advisory.current_ay_already_filed) {
+    // REACTIVATE:   if (advisory.current_ay_is_revised) {
+    // REACTIVATE:     toast.error(
+    // REACTIVATE:       `ITR for AY ${advisory.download_assessment_year || ''} is already filed as a REVISED return. ` +
+    // REACTIVATE:       'The last filed ITR was a revised return. To file another revised return, explicitly confirm the revised-return flow.',
+    // REACTIVATE:       { duration: 8000 }
+    // REACTIVATE:     );
+    // REACTIVATE:   } else {
+    // REACTIVATE:     toast.error(
+    // REACTIVATE:       `ITR for AY ${advisory.download_assessment_year || ''} is already filed. ` +
+    // REACTIVATE:       'To file a revised return, explicitly confirm the revised-return flow.',
+    // REACTIVATE:       { duration: 8000 }
+    // REACTIVATE:     );
+    // REACTIVATE:   }
+    // REACTIVATE: }
 
     // ── Reassess eligibility after import ────────────────────────────────
     setFormLockedByUser(false);
