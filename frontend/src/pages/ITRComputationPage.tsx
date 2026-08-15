@@ -1382,65 +1382,39 @@ export default function ITRComputationPage() {
         } else if (type === 'prefill') {
           // ITD Prefill - use backend import API with clientId tracking
           const { integrationApi } = await import('../api/integration');
-          
-          // Import to backend - this saves to database
+
+          // Import to backend - this parses + persists to ImportedDocument
+          // and returns the form-agnostic extraction dict.
           const importResult = await integrationApi.importITDPrefill(
-            file, 
+            file,
             legacyClientId!,
             effectiveAssessmentYear
           );
-          
-          console.log('Prefill import result:', importResult);
-          toast.success('Prefill imported successfully! Reloading data...');
-          
-          // Reload form data from backend to get the extracted data
-          const freshDraft = await returnRepository.get(clientId, effectiveAssessmentYear);
-          if (importGeneration !== loadGenerationRef.current) return;
-          const freshModel = createReturnEditorModelFromLegacy(composeLegacyPayload({ draft: freshDraft, extras: editorRef.current?.extras ?? {} }));
-          const freshFormData = composeLegacyPayload(freshModel) as any;
-          console.log('Fresh form data from backend:', freshFormData);
-          
-          // Update form with the extracted data - use direct assignment for numeric fields
-          if (importGeneration !== loadGenerationRef.current) return;
-          setFormData((prev: any) => ({ 
-            ...prev,
-            // Numeric fields - use ?? for null/undefined, allow 0 values through
-            interestSB: freshFormData.interestSB ?? prev.interestSB,
-            interestFD: freshFormData.interestFD ?? prev.interestFD,
-            bankInterest: freshFormData.bankInterest ?? prev.bankInterest,
-            totalDividend: freshFormData.totalDividend ?? prev.totalDividend,
-            dividends: freshFormData.dividends ?? prev.dividends,
-            itRefundInterest: freshFormData.itRefundInterest ?? prev.itRefundInterest,
-            incomeFromITRefund: freshFormData.incomeFromITRefund ?? prev.incomeFromITRefund,
-            s80TTB: freshFormData.s80TTB ?? prev.s80TTB,
-            s80C: freshFormData.s80C ?? prev.s80C,
-            s80D: freshFormData.s80D ?? prev.s80D,
-            s80E: freshFormData.s80E ?? prev.s80E,
-            s80TTA: freshFormData.s80TTA ?? prev.s80TTA,
-            s80G: freshFormData.s80G ?? prev.s80G,
-            s80CCD: freshFormData.s80CCD ?? prev.s80CCD,
-            s80CCC1B: freshFormData.s80CCC1B ?? prev.s80CCC1B,
-            totalTds: freshFormData.totalTds ?? prev.totalTds,
-            tds194A: freshFormData.tds194A ?? prev.tds194A,
-            // String fields - use || for empty strings
-            name: freshFormData.name || prev.name,
-            pan: freshFormData.pan || prev.pan,
-            email: freshFormData.email || prev.email,
-            mobile: freshFormData.mobile || prev.mobile,
-            aadhaar: freshFormData.aadhaar || prev.aadhaar,
-            // Array fields - preserve if empty
-            employerEntries: freshFormData.employerEntries || prev.employerEntries,
-            tdsEntries: freshFormData.tdsEntries || prev.tdsEntries,
-            bankAccountDetails: freshFormData.bankAccountDetails || prev.bankAccountDetails,
-            bankAccountData: freshFormData.bankAccountData || prev.bankAccountData || { accounts: [] },
-            bankInterestEntries: freshFormData.bankInterestEntries || prev.bankInterestEntries,
+
+          // importResult.data is the PrefillExtraction dict.  Run it
+          // through mapPrefillToFormData to get a flat formData patch
+          // (personal info, employer entries, bank accounts, deductions,
+          // TDS, other sources) and merge it into the current form.
+          const prefillResult = mapPrefillToFormData(importResult.data || importResult);
+
+          if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
+          // Persist the merged form data so a reload preserves the import.
+          const mergedUpdate = prefillResult.formDataUpdate;
+          await itrApi.saveFormData(clientId, effectiveAssessmentYear, composeLegacyPayload({
+            draft: { ...editorRef.current.draft, ...mergedUpdate } as any,
+            extras: editorRef.current.extras ?? {},
           }));
-          
+          setFormData((prev: any) => ({ ...prev, ...mergedUpdate }));
+
           setShowImportMenu(false);
-          
-          // All data is now loaded from backend, just show success message
+
+          const prefillParts: string[] = [];
+          if (prefillResult.summary.personalInfo) prefillParts.push('personal info');
+          if (prefillResult.summary.employerEntries > 0) prefillParts.push(`${prefillResult.summary.employerEntries} employer(s)`);
+          if (prefillResult.summary.bankAccounts > 0) prefillParts.push(`${prefillResult.summary.bankAccounts} bank account(s)`);
+          if (prefillResult.summary.deductionsTotal > 0) prefillParts.push(`deductions ₹${prefillResult.summary.deductionsTotal.toLocaleString('en-IN')}`);
           toast.dismiss();
-          toast.success('Prefill data imported and loaded successfully!');
+          toast.success(`Prefill imported: ${prefillParts.join(', ')}`);
         } else {
           if (importGeneration !== loadGenerationRef.current) return;
           setFormData((prev: any) => ({ ...prev, ...data }));
