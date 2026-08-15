@@ -11,6 +11,10 @@ export interface ClientRecord {
   publicId: string;
   pan: string;
   name: string;
+  /** CBDT three-part name.  Backend derives the full ``name`` from these. */
+  firstName?: string;
+  middleName?: string;
+  surname?: string;
   email?: string | null;
   mobile?: string | null;
   aadhaar?: string | null;
@@ -31,7 +35,11 @@ export interface ClientListParams {
 
 export interface ClientUpsertPayload {
   pan: string;
-  name: string;
+  /** Full name; derived from parts when firstName/middleName/surname are used. */
+  name?: string;
+  firstName?: string;
+  middleName?: string;
+  surname?: string;
   email?: string;
   mobile?: string;
   aadhaar?: string;
