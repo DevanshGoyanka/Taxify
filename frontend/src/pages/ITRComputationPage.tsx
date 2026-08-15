@@ -1364,7 +1364,67 @@ export default function ITRComputationPage() {
             setShowImportMenu(false);
             return;
           }
-          
+
+          // ── AIS / TIS direct mapping (no autoPopulateAll) ──
+          // The autoPopulateAll backend endpoint only reads from TIS/26AS,
+          // not from the AIS summary.  When only AIS (or only TIS) is
+          // uploaded, it returns all zeros.  Map the data directly here.
+          if (typeStr === 'ais-pdf' || typeStr === 'ais-json' || typeStr === 'tis-pdf') {
+            const aisData = importedAIS || data;
+            const tisData = importedTIS || data;
+            const summary = aisData?.summary || {};
+            const formDataUpdate: any = {};
+
+            // AIS summary → flat fields + interest entries
+            if (summary.total_interest) {
+              formDataUpdate.interestSB = summary.total_interest;
+              formDataUpdate.interestEntries = [{
+                kind: 'SAVINGS_BANK',
+                grossAmount: summary.total_interest,
+                bankName: 'From AIS',
+                accountType: 'SAVINGS',
+                accountNumber: '',
+                tdsDeducted: 0,
+              }];
+              formDataUpdate.bankInterestEntries = formDataUpdate.interestEntries;
+            }
+            if (summary.total_dividend) {
+              formDataUpdate.dividendShares = summary.total_dividend;
+              formDataUpdate.dividendEntries = [{
+                companyName: 'From AIS',
+                companyPAN: '',
+                dividendAmount: summary.total_dividend,
+                tdsDeducted: 0,
+                deductorTAN: '',
+                isin: '',
+                category: 'SHARES',
+                section: '194',
+              }];
+            }
+            if (summary.total_tds) formDataUpdate.totalTds = summary.total_tds;
+
+            // TIS data → flat fields (if TIS was uploaded)
+            if (tisData && (tisData.salaryAmount || tisData.dividendIncome || tisData.interestFromDeposit)) {
+              if (tisData.salaryAmount) formDataUpdate.basic = tisData.salaryAmount;
+              if (tisData.dividendIncome) formDataUpdate.dividendShares = tisData.dividendIncome;
+              if (tisData.interestFromDeposit) formDataUpdate.interestFD = tisData.interestFromDeposit;
+            }
+
+            if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
+            const applied = applyLegacyActionWithSnapshot(editorRef.current, formDataUpdate);
+            editorRef.current = applied.model;
+            setEditorModel(applied.model);
+            await itrApi.saveFormData(clientId, effectiveAssessmentYear, applied.snapshot);
+            toast.dismiss();
+            const parts: string[] = [];
+            if (summary.total_interest) parts.push(`interest ₹${summary.total_interest.toLocaleString('en-IN')}`);
+            if (summary.total_dividend) parts.push(`dividend ₹${summary.total_dividend.toLocaleString('en-IN')}`);
+            if (summary.total_tds) parts.push(`TDS ₹${summary.total_tds.toLocaleString('en-IN')}`);
+            toast.success(`${typeStr.toUpperCase()} imported${parts.length ? ': ' + parts.join(', ') : ''}`);
+            setShowImportMenu(false);
+            return;
+          }
+
           const { integrationApi } = await import('../api/integration');
 
           // Auto-populate from AIS and TIS documents
