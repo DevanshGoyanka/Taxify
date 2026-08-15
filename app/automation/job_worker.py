@@ -19,6 +19,7 @@ import datetime
 import json
 import logging
 import os
+from pathlib import Path
 import traceback
 from typing import Optional
 
@@ -860,6 +861,22 @@ async def _run_job(job_id: int) -> None:
                     len(prefill_extracted.tds_other_entries),
                     prefill_extracted.deductions.total_chap_via_deductions,
                 )
+                # Diagnostic: log the top-level keys so we can verify the
+                # parser is reading the real ITD structure correctly.
+                try:
+                    raw_payload = json.loads(
+                        Path(path_prefill).read_text(encoding="utf-8-sig")
+                    )
+                    if isinstance(raw_payload, dict):
+                        logger.info(
+                            "Job %d: Prefill raw top-level keys: %s",
+                            job_id, sorted(raw_payload.keys()),
+                        )
+                except Exception as diag_exc:
+                    logger.warning(
+                        "Job %d: Prefill diagnostic failed: %s",
+                        job_id, diag_exc,
+                    )
             except Exception as e:
                 err = f"Prefill extraction failed: {type(e).__name__}: {e}"
                 extract_errors.append(err)

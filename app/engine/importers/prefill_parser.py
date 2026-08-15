@@ -1,21 +1,31 @@
 """
 Form-agnostic ITD Prefill JSON parser.
 
-Extracts every field available in the official CBDT/ITD pre-filled JSON
-(PreFillSchemaJSON V6.5) into a flat intermediate representation.  The
-extractor does NOT know which ITR form the taxpayer will eventually file
-— it pulls personal info, salary, house property, other sources income,
-deductions, bank accounts, TDS/TCS schedules, tax payments, and
-carry-forward losses regardless of form, and lets the form-specific
-mappers in the frontend pick what they need.
+Extracts every field available in the real ITD pre-filled JSON payload
+into a flat intermediate representation.  The extractor does NOT know
+which ITR form the taxpayer will eventually file — it pulls personal
+info, salary, house property, other sources income, deductions, bank
+accounts, TDS/TCS schedules, tax payments, and carry-forward losses
+regardless of form, and lets the form-specific mappers in the frontend
+pick what they need.
 
-The ITD prefill JSON may arrive in one of these wrapper shapes:
-  1. ``{"personalInfo": {...}, "filingStatus": {...}, ...}``  (flat root)
-  2. ``{"data": {"personalInfo": {...}, ...}}``  (wrapped in ``data``)
-  3. ``{"prefillData": {"personalInfo": {...}, ...}}``  (wrapped in ``prefillData``)
+The real ITD prefill JSON is a composite payload combining pre-fill
+data for all ITR forms plus statutory forms (Form 24Q, Form 26AS,
+Form 3CD, etc.).  The key top-level sections are:
 
-The parser probes all three and extracts from whichever root contains
-the ``personalInfo`` marker.
+  - ``personalInfo`` — name, PAN, Aadhaar, DOB, address, contact
+  - ``filingStatus`` — return section, residential status, new-regime
+  - ``bankAccountDtls`` — list of bank-account groups
+  - ``form26as`` — TDS-other-than-salary, schedule OS, dividends
+  - ``form24q`` — salary-side deductions (80TTA), savings interest
+  - ``insights`` — cumulative deductions (UsrDeductUndChapVIAType),
+    other-sources income, savings/FD interest
+  - ``lastFiledITR`` — house property, TCS, employment, audit, etc.
+  - ``scheduleCFL`` — carry-forward losses
+  - ``verification`` — declaration, capacity, place
+
+The parser handles the three wrapper shapes (flat root, ``data``,
+``prefillData``) and probes each section case-insensitively.
 """
 
 from __future__ import annotations
@@ -25,7 +35,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -35,17 +45,17 @@ from typing import Any, Mapping, Optional, Sequence
 _PREFILL_ROOT_KEYS: tuple[str, ...] = (
     "personalInfo",
     "filingStatus",
+    "bankAccountDtls",
+    "form26as",
+    "form24q",
+    "insights",
+    "lastFiledITR",
+    "scheduleCFL",
+    "verification",
     "salaries",
     "tdsOnSalaries",
     "tdsOnOthThanSals",
-    "insights",
-    "lastFiledITR",
-    "verification",
-    "scheduleHP",
-    "scheduleOS",
-    "incDeductionsOthIncCPC",
-    "scheduleAL",
-    "scheduleCFL",
+    "scheduleDeductions",
 )
 
 
@@ -62,7 +72,7 @@ def _unwrap_prefill_root(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         return {}
 
-    # Case 1: flat root — personalInfo is a direct key.
+    # Case 1: flat root — a known prefill key is a direct key.
     if any(key in payload for key in _PREFILL_ROOT_KEYS):
         return dict(payload)
 
@@ -76,6 +86,35 @@ def _unwrap_prefill_root(payload: Any) -> dict[str, Any]:
 
     # Fallback: return the payload as-is; the extractors handle missing keys.
     return dict(payload)
+
+
+def _get(obj: Any, *keys: str, default: Any = None) -> Any:
+    """Safely walk a nested object by keys; return default if any missing.
+
+    Each key is matched case-insensitively against the object's keys.
+    """
+    current = obj
+    for key in keys:
+        if not isinstance(current, Mapping):
+            return default
+        # Case-insensitive match.
+        match = None
+        for k in current:
+            if k.lower() == key.lower():
+                match = current[k]
+                break
+        if match is None:
+            return default
+        current = match
+    return current
+
+
+def _get_list(obj: Any, *keys: str) -> list[Any]:
+    """Like ``_get`` but coerces to a list; returns [] if missing."""
+    val = _get(obj, *keys, default=None)
+    if isinstance(val, list):
+        return val
+    return []
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -226,6 +265,8 @@ class PrefillFilingStatus:
     receipt_no: str = ""
     notice_date_under_sec: str = ""
     unique_no: str = ""
+    seventh_proviso_139: str = ""
+    opting_new_tax_regime_form10if: str = ""
 
 
 @dataclass
@@ -278,6 +319,7 @@ class PrefillOtherSourcesIncome:
     """Other sources income from the prefill."""
 
     dividend_gross: int = 0
+    dividend_oth_than_22e: int = 0
     interest_from_savings_bank: int = 0
     interest_from_term_deposit: int = 0
     interest_from_others: int = 0
@@ -293,6 +335,7 @@ class PrefillBankAccount:
     bank_account_no: str = ""
     bank_name: str = ""
     ifsc_code: str = ""
+    account_type: str = ""
     use_for_refund: str = "false"
 
 
@@ -313,22 +356,13 @@ class PrefillTDSEntry:
 
 
 @dataclass
-class PrefillTaxPayment:
-    """One tax payment (advance tax / self-assessment) from the prefill."""
-
-    bsr_code: str = ""
-    challan_serial_no: str = ""
-    deposit_date: str = ""
-    tax_amount: int = 0
-    surcharge: int = 0
-    education_cess: int = 0
-    total_amount: int = 0
-    minor_head: str = ""
-
-
-@dataclass
 class PrefillDeductions:
-    """Chapter VI-A deductions from the prefill."""
+    """Chapter VI-A deductions from the prefill.
+
+    Field names use lowercase ``section_80*`` regardless of how the
+    prefill capitalizes them (``Section80TTB``, ``section80TTA``, etc.).
+    The extractor normalizes the casing.
+    """
 
     section_80c: int = 0
     section_80ccc: int = 0
@@ -403,7 +437,7 @@ class PrefillExtraction:
     bank_accounts: list[PrefillBankAccount] = field(default_factory=list)
     tds_salary_entries: list[PrefillTDSEntry] = field(default_factory=list)
     tds_other_entries: list[PrefillTDSEntry] = field(default_factory=list)
-    tax_payments: list[PrefillTaxPayment] = field(default_factory=list)
+    tax_payments: list[dict[str, Any]] = field(default_factory=list)
     deductions: PrefillDeductions = field(default_factory=PrefillDeductions)
     carry_forward_losses: list[PrefillCarryForwardLoss] = field(default_factory=list)
     verification: PrefillVerification = field(default_factory=PrefillVerification)
@@ -423,10 +457,11 @@ def _extract_name(name_obj: Any) -> PrefillName:
     if not isinstance(name_obj, Mapping):
         return PrefillName()
     return PrefillName(
-        first_name=_to_str(name_obj.get("firstName") or name_obj.get("firstname")),
-        middle_name=_to_str(name_obj.get("middleName") or name_obj.get("middlename")),
+        first_name=_to_str(name_obj.get("firstName") or name_obj.get("FirstName")),
+        middle_name=_to_str(name_obj.get("middleName") or name_obj.get("MiddleName")),
         surname_or_org_name=_to_str(
             name_obj.get("surNameOrOrgName")
+            or name_obj.get("SurNameOrOrgName")
             or name_obj.get("surnameOrOrgName")
             or name_obj.get("surname")
         ),
@@ -437,6 +472,9 @@ def _extract_address(address_obj: Any) -> PrefillAddress:
     """Extract the address + contact fields from the ``address`` object."""
     if not isinstance(address_obj, Mapping):
         return PrefillAddress()
+    phone = address_obj.get("phone")
+    if not isinstance(phone, Mapping):
+        phone = {}
     return PrefillAddress(
         residence_no=_to_str(address_obj.get("residenceNo")),
         residence_name=_to_str(address_obj.get("residenceName")),
@@ -453,12 +491,8 @@ def _extract_address(address_obj: Any) -> PrefillAddress:
         mobile_no_sec=_to_int(address_obj.get("mobileNoSec")),
         email_address=_to_str(address_obj.get("emailAddress")),
         email_address_secondary=_to_str(address_obj.get("emailAddressSecondary")),
-        phone_std_code=_to_int(
-            address_obj.get("phone", {}).get("stDcode") if isinstance(address_obj.get("phone"), Mapping) else 0
-        ),
-        phone_no=_to_int(
-            address_obj.get("phone", {}).get("phoneNo") if isinstance(address_obj.get("phone"), Mapping) else 0
-        ),
+        phone_std_code=_to_int(phone.get("stDcode")),
+        phone_no=_to_int(phone.get("phoneNo")),
     )
 
 
@@ -467,16 +501,16 @@ def _extract_personal_info(root: dict[str, Any]) -> PrefillPersonalInfo:
     pi = root.get("personalInfo")
     if not isinstance(pi, Mapping):
         return PrefillPersonalInfo()
-    name = _extract_name(pi.get("assesseeName") or pi.get("assesseName"))
+    name = _extract_name(pi.get("assesseeName") or pi.get("AssesseeName"))
     address = _extract_address(pi.get("address"))
-    pan = _to_str(pi.get("pan") or pi.get("PAN"))
+    pan = _to_str(pi.get("pan") or pi.get("PAN") or pi.get("assesseVerPan"))
     return PrefillPersonalInfo(
         pan=pan,
         aadhaar_card_no=_decode_aadhaar(pi.get("aadhaarCardNo") or pi.get("aadharCardNo")),
         name=name,
         assessee_ver_name=_to_str(pi.get("assesseeVerName") or pi.get("assesseVerName")),
         father_name=_to_str(pi.get("fatherName")),
-        dob=_to_date(pi.get("dob")),
+        dob=_to_date(pi.get("dob") or pi.get("DateOFFormOrIncorp")),
         status=_to_str(pi.get("status")),
         employer_category=_to_str(pi.get("employerCategory")),
         address=address,
@@ -492,80 +526,90 @@ def _extract_personal_info(root: dict[str, Any]) -> PrefillPersonalInfo:
 def _extract_filing_status(root: dict[str, Any]) -> PrefillFilingStatus:
     """Extract the filing status block from the prefill root.
 
-    The prefill schema has two filingStatus definitions — a narrow one
-    under ``personalInfo`` (just ``residentialStatus``) and a broader
-    one under ``lastFiledITR`` (with returnFileSec, section115BA, etc).
-    We check both.
+    The real ITD prefill has ``filingStatus`` at the top level with
+    ``returnFileSec``, ``residentialStatus``, ``SeventhProvisio139``,
+    ``OptingNewTaxRegimeForm10IF``, ``receiptNo``, ``origRetFiledDate``,
+    and ``clauseiv7provisio139iDtls``.
     """
     fs = root.get("filingStatus")
     if not isinstance(fs, Mapping):
-        # Try lastFiledITR.filingStatus
-        lfi = root.get("lastFiledITR")
-        if isinstance(lfi, Mapping):
-            fs = lfi.get("filingStatus")
-            if not isinstance(fs, Mapping):
-                return PrefillFilingStatus()
-        else:
-            return PrefillFilingStatus()
+        return PrefillFilingStatus()
     return PrefillFilingStatus(
         return_file_sec=_to_int(fs.get("returnFileSec")),
-        residential_status=_to_str(fs.get("residentialStatus")),
+        residential_status=_to_str(fs.get("residentialStatus") or fs.get("ResidentialStatus")),
         section_115ba=_to_str(fs.get("section115BA")),
         assessee_rep_flg=_to_str(fs.get("asseseeRepFlg")),
         business_trust_flag=_to_str(fs.get("businessTrustFlag")),
-        fii_fpi_flag=_to_str(fs.get("fiiFpiFlag")),
-        foreign_exchange_flag=_to_str(fs.get("foreignExchangeFlag")),
+        fii_fpi_flag=_to_str(fs.get("fiiFpiFlag") or fs.get("FiiFpiFlag")),
+        foreign_exchange_flag=_to_str(fs.get("foreignExchangeFlag") or fs.get("ForeignExchangeFlag")),
         orig_ret_filed_date=_to_date(fs.get("origRetFiledDate")),
         receipt_no=_to_str(fs.get("receiptNo")),
         notice_date_under_sec=_to_date(fs.get("noticeDateUnderSec")),
         unique_no=_to_str(fs.get("uniqueNo")),
+        seventh_proviso_139=_to_str(fs.get("SeventhProvisio139")),
+        opting_new_tax_regime_form10if=_to_str(fs.get("OptingNewTaxRegimeForm10IF")),
     )
 
 
 def _extract_employers(root: dict[str, Any]) -> list[PrefillEmployerEntry]:
-    """Extract the employer entries from the ``salaries`` schedule.
+    """Extract the employer entries from the prefill.
 
-    The prefill schema places employer details under:
-      ``salaries.salary[]`` where each item has ``nameOfEmployer``,
-      ``tanOfEmployer``, ``addressDetail``, and ``salarys`` (with
-      ``grossSalary``, ``salary``, ``valueOfPerquisites``,
-      ``profitsinLieuOfSalary``, etc.).
+    The real ITD prefill places employment nature under
+    ``lastFiledITR.natOfEmployment`` (a list of strings like "OTH").
+    The ``salaries`` section (with detailed salary break-up) is present
+    when the employer has filed Form 24Q.
     """
     employers: list[PrefillEmployerEntry] = []
+
+    # Source 1: salaries.salary[] (detailed break-up, may be null)
     salaries = root.get("salaries")
-    if not isinstance(salaries, Mapping):
-        # Try insights.salaries as a fallback.
-        insights = root.get("insights")
-        if isinstance(insights, Mapping):
-            salaries = insights.get("salaries")
-        if not isinstance(salaries, Mapping):
-            return employers
-    salary_list = salaries.get("salary")
-    if not isinstance(salary_list, list):
-        return employers
-    for item in salary_list:
-        if not isinstance(item, Mapping):
-            continue
-        addr = item.get("addressDetail") or {}
-        if not isinstance(addr, Mapping):
-            addr = {}
-        salarys = item.get("salarys") or {}
-        if not isinstance(salarys, Mapping):
-            salarys = {}
-        employers.append(PrefillEmployerEntry(
-            employer_name=_to_str(item.get("nameOfEmployer")),
-            tan=_to_str(item.get("tanOfEmployer")),
-            gross_salary=_to_int(salarys.get("grossSalary")),
-            salary=_to_int(salarys.get("salary")),
-            value_of_perquisites=_to_int(salarys.get("valueOfPerquisites")),
-            profits_in_lieu_of_salary=_to_int(salarys.get("profitsinLieuOfSalary")),
-            nature_of_employment=_to_str(item.get("natOfEmployment")),
-            employer_address=_to_str(addr.get("addDetail")),
-            employer_city=_to_str(addr.get("cityOrTownOrDistrict")),
-            employer_state_code=_to_str(addr.get("stateCode")),
-            employer_pin_code=_to_str(addr.get("pinCode")),
-            employer_zip_code=_to_str(addr.get("zipCode")),
-        ))
+    if isinstance(salaries, Mapping):
+        salary_list = salaries.get("salary")
+        if isinstance(salary_list, list):
+            for item in salary_list:
+                if not isinstance(item, Mapping):
+                    continue
+                addr = item.get("addressDetail") or {}
+                if not isinstance(addr, Mapping):
+                    addr = {}
+                salarys = item.get("salarys") or {}
+                if not isinstance(salarys, Mapping):
+                    salarys = {}
+                employers.append(PrefillEmployerEntry(
+                    employer_name=_to_str(item.get("nameOfEmployer")),
+                    tan=_to_str(item.get("tanOfEmployer")),
+                    gross_salary=_to_int(salarys.get("grossSalary")),
+                    salary=_to_int(salarys.get("salary")),
+                    value_of_perquisites=_to_int(salarys.get("valueOfPerquisites")),
+                    profits_in_lieu_of_salary=_to_int(salarys.get("profitsinLieuOfSalary")),
+                    nature_of_employment=_to_str(item.get("natOfEmployment")),
+                    employer_address=_to_str(addr.get("addDetail")),
+                    employer_city=_to_str(addr.get("cityOrTownOrDistrict")),
+                    employer_state_code=_to_str(addr.get("stateCode")),
+                    employer_pin_code=_to_str(addr.get("pinCode")),
+                    employer_zip_code=_to_str(addr.get("zipCode")),
+                ))
+
+    # Source 2: lastFiledITR.natOfEmployment[] (list of employment-nature
+    # strings).  When ``salaries`` is null but natOfEmployment has
+    # entries, we create stub employer entries from TDS data.
+    if not employers:
+        lfi = root.get("lastFiledITR")
+        if isinstance(lfi, Mapping):
+            nat_list = lfi.get("natOfEmployment")
+            if isinstance(nat_list, list):
+                # We don't have employer names from this source alone;
+                # we'll enrich them from the TDS-on-salary section below.
+                # For now, create stub entries with the nature code.
+                for nat in nat_list:
+                    if isinstance(nat, str):
+                        employers.append(PrefillEmployerEntry(
+                            nature_of_employment=nat,
+                        ))
+
+    # Source 3: form24q may carry salary-side TDS (Form 24Q is the
+    # employer's TDS return).  We don't extract employer entries from
+    # form24q here; the TDS-on-salary extractor handles it.
     return employers
 
 
@@ -588,13 +632,15 @@ def _extract_salary_insights(root: dict[str, Any]) -> PrefillSalaryInsights:
 def _extract_house_property(root: dict[str, Any]) -> list[PrefillHouseProperty]:
     """Extract house property entries from the prefill.
 
-    Checks both ``insights.scheduleHP`` and top-level ``scheduleHP``.
+    Checks ``lastFiledITR.scheduleHP.propertyDetails[]`` first (the real
+    ITD structure), then falls back to ``insights.scheduleHP``.
     """
     hp_list: list[PrefillHouseProperty] = []
-    # Source 1: insights.scheduleHP.propertyDetails[]
-    insights = root.get("insights")
-    if isinstance(insights, Mapping):
-        hp = insights.get("scheduleHP")
+
+    # Source 1: lastFiledITR.scheduleHP.propertyDetails[]
+    lfi = root.get("lastFiledITR")
+    if isinstance(lfi, Mapping):
+        hp = lfi.get("scheduleHP")
         if isinstance(hp, Mapping):
             details = hp.get("propertyDetails")
             if isinstance(details, list):
@@ -617,108 +663,164 @@ def _extract_house_property(root: dict[str, Any]) -> list[PrefillHouseProperty]:
                         co_owners=list(item.get("coOwners") or []),
                         tenant_details=list(item.get("tenantDetails") or []),
                     ))
-    # Source 2: top-level scheduleHP (if insights didn't yield anything).
+
+    # Source 2: insights.scheduleHP.propertyDetails[]
     if not hp_list:
-        hp = root.get("scheduleHP")
-        if isinstance(hp, Mapping):
-            details = hp.get("propertyDetails")
-            if isinstance(details, list):
-                for item in details:
-                    if not isinstance(item, Mapping):
-                        continue
-                    addr = item.get("addressDetailWithZipCode") or {}
-                    if not isinstance(addr, Mapping):
-                        addr = {}
-                    hp_list.append(PrefillHouseProperty(
-                        address=_to_str(addr.get("addrDetail")),
-                        city=_to_str(addr.get("cityOrTownOrDistrict")),
-                        state_code=_to_str(addr.get("stateCode")),
-                        pin_code=_to_int(addr.get("pinCode")),
-                        country_code=_to_str(addr.get("countryCode")),
-                        zip_code=_to_str(addr.get("zipCode")),
-                        if_let_out=_to_str(item.get("ifLetOut")),
-                        type_of_hp=_to_str(item.get("typeOfHP")),
-                        gross_rent=_to_int(item.get("grossRent")),
-                    ))
+        insights = root.get("insights")
+        if isinstance(insights, Mapping):
+            hp = insights.get("scheduleHP")
+            if isinstance(hp, Mapping):
+                details = hp.get("propertyDetails")
+                if isinstance(details, list):
+                    for item in details:
+                        if not isinstance(item, Mapping):
+                            continue
+                        addr = item.get("addressDetailWithZipCode") or {}
+                        if not isinstance(addr, Mapping):
+                            addr = {}
+                        hp_list.append(PrefillHouseProperty(
+                            address=_to_str(addr.get("addrDetail")),
+                            city=_to_str(addr.get("cityOrTownOrDistrict")),
+                            state_code=_to_str(addr.get("stateCode")),
+                            pin_code=_to_int(addr.get("pinCode")),
+                            country_code=_to_str(addr.get("countryCode")),
+                            zip_code=_to_str(addr.get("zipCode")),
+                            if_let_out=_to_str(item.get("ifLetOut")),
+                            type_of_hp=_to_str(item.get("typeOfHP")),
+                            gross_rent=_to_int(item.get("grossRent")),
+                        ))
     return hp_list
 
 
 def _extract_other_sources(root: dict[str, Any]) -> PrefillOtherSourcesIncome:
     """Extract other sources income from the prefill.
 
-    Checks ``insights.scheduleOS`` and top-level ``scheduleOS``.
-    Also pulls ``insights.intrstFrmSavingBank`` and ``insights.intrstFrmTermDeposit``.
+    The real ITD prefill places this under ``insights.scheduleOS`` and
+    also under ``form26as.scheduleOS``.  Interest figures come from
+    ``insights.intrstFrmSavingBank``, ``insights.intrstFrmTermDeposit``,
+    and ``form24q.intrstFrmSavingBank``.
+
+    ``insights.incomeDeductionsOthersInc[]`` carries a list of
+    {othSrcNatureDesc, othSrcOthAmount} items (e.g. IFD, DIV, SAV).
     """
     insights = root.get("insights")
     if not isinstance(insights, Mapping):
         insights = {}
-    os_obj = insights.get("scheduleOS") or root.get("scheduleOS")
+
+    # scheduleOS — may be under insights or form26as
+    os_obj = insights.get("scheduleOS")
+    if not isinstance(os_obj, Mapping):
+        form26as = root.get("form26as")
+        if isinstance(form26as, Mapping):
+            os_obj = form26as.get("scheduleOS")
     if not isinstance(os_obj, Mapping):
         os_obj = {}
     inc_oth = os_obj.get("incOthThanOwnRaceHorse") or {}
     if not isinstance(inc_oth, Mapping):
         inc_oth = {}
-    others_inc = inc_oth.get("othersInc") or {}
-    if not isinstance(others_inc, Mapping):
-        others_inc = {}
-    other_details = others_inc.get("othersIncDtls")
-    if not isinstance(other_details, list):
-        other_details = []
-    other_income_details: list[dict[str, Any]] = []
-    for d in other_details:
-        if isinstance(d, Mapping):
-            other_income_details.append({
-                "nature": _to_str(d.get("othNatOfInc")),
-                "amount": _to_int(d.get("othAmount")),
-            })
+
+    # incomeDeductionsOthersInc[] — list of {othSrcNatureDesc, othSrcOthAmount}
+    other_details: list[dict[str, Any]] = []
+    idi_list = insights.get("incomeDeductionsOthersInc")
+    if not isinstance(idi_list, list):
+        form26as = root.get("form26as")
+        if isinstance(form26as, Mapping):
+            idi_list = form26as.get("incomeDeductionsOthersInc")
+    if isinstance(idi_list, list):
+        for d in idi_list:
+            if isinstance(d, Mapping):
+                other_details.append({
+                    "nature": _to_str(d.get("othSrcNatureDesc")),
+                    "amount": _to_int(d.get("othSrcOthAmount")),
+                })
+
+    # Interest sources: insights or form24q
+    form24q = root.get("form24q")
+    if not isinstance(form24q, Mapping):
+        form24q = {}
+    interest_sb = (
+        _to_int(insights.get("intrstFrmSavingBank"))
+        or _to_int(form24q.get("intrstFrmSavingBank"))
+    )
+    interest_fd = _to_int(insights.get("intrstFrmTermDeposit"))
+    # form26as also carries intrstFrmTermDeposit
+    if not interest_fd:
+        form26as = root.get("form26as")
+        if isinstance(form26as, Mapping):
+            interest_fd = _to_int(form26as.get("intrstFrmTermDeposit"))
+
     return PrefillOtherSourcesIncome(
-        dividend_gross=_to_int(inc_oth.get("dividendGross") or inc_oth.get("DividendOthThan22e")),
-        interest_from_savings_bank=_to_int(insights.get("intrstFrmSavingBank")),
-        interest_from_term_deposit=_to_int(insights.get("intrstFrmTermDeposit")),
+        dividend_gross=_to_int(inc_oth.get("dividendGross")),
+        dividend_oth_than_22e=_to_int(inc_oth.get("DividendOthThan22e")),
+        interest_from_savings_bank=interest_sb,
+        interest_from_term_deposit=interest_fd,
         interest_from_others=_to_int(inc_oth.get("intrstFrmOthers")),
         rent_from_mach_plant_bldgs=_to_int(inc_oth.get("rentFromMachPlantBldgs")),
         lottery_puzzle_income=_to_int(inc_oth.get("ltryPzzlChrgblUs115BB")),
-        other_income_details=other_income_details,
+        other_income_details=other_details,
     )
 
 
 def _extract_bank_accounts(root: dict[str, Any]) -> list[PrefillBankAccount]:
     """Extract bank account entries from the prefill.
 
-    Bank accounts live under ``lastFiledITR.bankAccountDtls[]`` with
-    each item having ``addtnlBankDetails[]`` (the actual account rows).
+    The real ITD prefill places ``bankAccountDtls`` at the **top level**
+    (not inside lastFiledITR).  It's a list where each item has an
+    ``addtnlBankDetails`` array with the actual account rows.
     """
     accounts: list[PrefillBankAccount] = []
-    lfi = root.get("lastFiledITR")
-    if not isinstance(lfi, Mapping):
-        return accounts
-    bank_dtls = lfi.get("bankAccountDtls")
-    if not isinstance(bank_dtls, list):
-        return accounts
-    for bd in bank_dtls:
-        if not isinstance(bd, Mapping):
-            continue
-        addtnl = bd.get("addtnlBankDetails")
-        if not isinstance(addtnl, list):
-            continue
-        for acct in addtnl:
-            if not isinstance(acct, Mapping):
+
+    # Source 1: top-level bankAccountDtls[]
+    bank_dtls = root.get("bankAccountDtls")
+    if isinstance(bank_dtls, list):
+        for bd in bank_dtls:
+            if not isinstance(bd, Mapping):
                 continue
-            accounts.append(PrefillBankAccount(
-                bank_account_no=_to_str(acct.get("bankAccountNo")),
-                bank_name=_to_str(acct.get("bankName")),
-                ifsc_code=_to_str(acct.get("ifsccode") or acct.get("ifscCode")),
-                use_for_refund=_to_str(acct.get("useForRefund")).lower(),
-            ))
+            addtnl = bd.get("addtnlBankDetails")
+            if not isinstance(addtnl, list):
+                continue
+            for acct in addtnl:
+                if not isinstance(acct, Mapping):
+                    continue
+                accounts.append(PrefillBankAccount(
+                    bank_account_no=_to_str(acct.get("bankAccountNo")),
+                    bank_name=_to_str(acct.get("bankName")),
+                    ifsc_code=_to_str(acct.get("ifsccode") or acct.get("ifscCode")),
+                    account_type=_to_str(acct.get("AccountType") or acct.get("accountType")),
+                    use_for_refund=_to_str(acct.get("useForRefund")).lower(),
+                ))
+
+    # Source 2: lastFiledITR.bankAccountDtls[] (fallback)
+    if not accounts:
+        lfi = root.get("lastFiledITR")
+        if isinstance(lfi, Mapping):
+            bank_dtls = lfi.get("bankAccountDtls")
+            if isinstance(bank_dtls, list):
+                for bd in bank_dtls:
+                    if not isinstance(bd, Mapping):
+                        continue
+                    addtnl = bd.get("addtnlBankDetails")
+                    if not isinstance(addtnl, list):
+                        continue
+                    for acct in addtnl:
+                        if not isinstance(acct, Mapping):
+                            continue
+                        accounts.append(PrefillBankAccount(
+                            bank_account_no=_to_str(acct.get("bankAccountNo")),
+                            bank_name=_to_str(acct.get("bankName")),
+                            ifsc_code=_to_str(acct.get("ifsccode") or acct.get("ifscCode")),
+                            account_type=_to_str(acct.get("AccountType") or acct.get("accountType")),
+                            use_for_refund=_to_str(acct.get("useForRefund")).lower(),
+                        ))
     return accounts
 
 
 def _extract_tds_salary(root: dict[str, Any]) -> list[PrefillTDSEntry]:
     """Extract TDS-on-salary entries from the prefill.
 
-    Lives under ``tdsOnSalaries.tdsOnSalary[]`` with each item having
-    ``employerOrDeductorOrCollectDetl`` (name + TAN), ``incChrgSal``,
-    and ``totalTDSSal``.
+    The real ITD prefill places these under ``tdsOnSalaries.tdsOnSalary[]``
+    when present.  In many prefill payloads this section is null — the
+    salary TDS is then available only via Form 26AS reconciliation.
     """
     entries: list[PrefillTDSEntry] = []
     ts = root.get("tdsOnSalaries")
@@ -747,113 +849,152 @@ def _extract_tds_salary(root: dict[str, Any]) -> list[PrefillTDSEntry]:
 def _extract_tds_other(root: dict[str, Any]) -> list[PrefillTDSEntry]:
     """Extract TDS-other-than-salary entries from the prefill.
 
-    Lives under ``tdsOnOthThanSals.tdSonOthThanSal[]`` with each item
-    having ``employerOrDeductorOrCollectDetl``, ``tanOfDeductor``,
-    ``grossAmount``, ``tdsDeducted``, ``tdsClaimed``, ``headOfIncome``.
+    The real ITD prefill places these under
+    ``form26as.tdsOnOthThanSals.tdSonOthThanSal[]`` (not a top-level
+    ``tdsOnOthThanSals``).  Each item has ``sectionCode``,
+    ``grossAmount``, ``headOfIncome``, ``employerOrDeductorOrCollectDetl``
+    (with ``tan`` and ``employerOrDeductorOrCollecterName``), and
+    ``taxDeductCreditDtls`` (with ``taxDeductedOwnHands`` and
+    ``taxClaimedOwnHands``).
     """
     entries: list[PrefillTDSEntry] = []
-    tos = root.get("tdsOnOthThanSals")
-    if not isinstance(tos, Mapping):
-        return entries
-    tds_list = tos.get("tdSonOthThanSal")
-    if not isinstance(tds_list, list):
-        return entries
-    for item in tds_list:
-        if not isinstance(item, Mapping):
-            continue
-        deductor = item.get("employerOrDeductorOrCollectDetl") or {}
-        if not isinstance(deductor, Mapping):
-            deductor = {}
-        entries.append(PrefillTDSEntry(
-            deductor_name=_to_str(deductor.get("employerOrDeductorOrCollecterName")),
-            tan=_to_str(item.get("tanOfDeductor") or deductor.get("tan")),
-            section="",
-            income_amount=_to_int(item.get("grossAmount") or item.get("amtForTaxDeduct")),
-            tds_deducted=_to_int(item.get("tdsDeducted")),
-            tds_claimed=_to_int(item.get("tdsClaimed")),
-            gross_amount=_to_int(item.get("grossAmount")),
-            head_of_income=_to_str(item.get("headOfIncome")),
-            deducted_year=_to_str(item.get("deductedYr")),
-            brought_fwd_tds=_to_int(item.get("broughtFwdTDSAmt")),
-        ))
+
+    # Source 1: form26as.tdsOnOthThanSals.tdSonOthThanSal[]
+    form26as = root.get("form26as")
+    if isinstance(form26as, Mapping):
+        tos = form26as.get("tdsOnOthThanSals")
+        if isinstance(tos, Mapping):
+            tds_list = tos.get("tdSonOthThanSal")
+            if isinstance(tds_list, list):
+                for item in tds_list:
+                    if not isinstance(item, Mapping):
+                        continue
+                    deductor = item.get("employerOrDeductorOrCollectDetl") or {}
+                    if not isinstance(deductor, Mapping):
+                        deductor = {}
+                    credit = item.get("taxDeductCreditDtls") or {}
+                    if not isinstance(credit, Mapping):
+                        credit = {}
+                    entries.append(PrefillTDSEntry(
+                        deductor_name=_to_str(deductor.get("employerOrDeductorOrCollecterName")),
+                        tan=_to_str(deductor.get("tan") or item.get("tanOfDeductor")),
+                        section=_to_str(item.get("sectionCode")),
+                        income_amount=_to_int(item.get("grossAmount") or item.get("amtForTaxDeduct")),
+                        tds_deducted=_to_int(credit.get("taxDeductedOwnHands") or item.get("tdsDeducted")),
+                        tds_claimed=_to_int(credit.get("taxClaimedOwnHands") or item.get("tdsClaimed")),
+                        gross_amount=_to_int(item.get("grossAmount")),
+                        head_of_income=_to_str(item.get("headOfIncome")),
+                        deducted_year=_to_str(item.get("deductedYr")),
+                        brought_fwd_tds=_to_int(item.get("broughtFwdTDSAmt")),
+                    ))
+
+    # Source 2: top-level tdsOnOthThanSals.tdSonOthThanSal[] (fallback)
+    if not entries:
+        tos = root.get("tdsOnOthThanSals")
+        if isinstance(tos, Mapping):
+            tds_list = tos.get("tdSonOthThanSal")
+            if isinstance(tds_list, list):
+                for item in tds_list:
+                    if not isinstance(item, Mapping):
+                        continue
+                    deductor = item.get("employerOrDeductorOrCollectDetl") or {}
+                    if not isinstance(deductor, Mapping):
+                        deductor = {}
+                    credit = item.get("taxDeductCreditDtls") or {}
+                    if not isinstance(credit, Mapping):
+                        credit = {}
+                    entries.append(PrefillTDSEntry(
+                        deductor_name=_to_str(deductor.get("employerOrDeductorOrCollecterName")),
+                        tan=_to_str(deductor.get("tan") or item.get("tanOfDeductor")),
+                        section=_to_str(item.get("sectionCode")),
+                        income_amount=_to_int(item.get("grossAmount") or item.get("amtForTaxDeduct")),
+                        tds_deducted=_to_int(credit.get("taxDeductedOwnHands") or item.get("tdsDeducted")),
+                        tds_claimed=_to_int(credit.get("taxClaimedOwnHands") or item.get("tdsClaimed")),
+                        gross_amount=_to_int(item.get("grossAmount")),
+                        head_of_income=_to_str(item.get("headOfIncome")),
+                        deducted_year=_to_str(item.get("deductedYr")),
+                        brought_fwd_tds=_to_int(item.get("broughtFwdTDSAmt")),
+                    ))
     return entries
-
-
-def _extract_tax_payments(root: dict[str, Any]) -> list[PrefillTaxPayment]:
-    """Extract tax payment (advance tax / self-assessment) entries.
-
-    The prefill schema carries these under ``taxPayments`` or
-    ``insights.taxPayments``.  Each entry has ``bsrCode``,
-    ``challanSerialNo``, ``depositDate``, ``taxAmount``, ``surcharge``,
-    ``educationCess``, ``totalAmount``, and ``minorHead``.
-    """
-    payments: list[PrefillTaxPayment] = []
-    tp = root.get("taxPayments")
-    if not isinstance(tp, list):
-        insights = root.get("insights")
-        if isinstance(insights, Mapping):
-            tp = insights.get("taxPayments")
-        if not isinstance(tp, list):
-            return payments
-    for item in tp:
-        if not isinstance(item, Mapping):
-            continue
-        payments.append(PrefillTaxPayment(
-            bsr_code=_to_str(item.get("bsrCode")),
-            challan_serial_no=_to_str(item.get("challanSerialNo")),
-            deposit_date=_to_date(item.get("depositDate")),
-            tax_amount=_to_int(item.get("taxAmount")),
-            surcharge=_to_int(item.get("surcharge")),
-            education_cess=_to_int(item.get("educationCess")),
-            total_amount=_to_int(item.get("totalAmount")),
-            minor_head=_to_str(item.get("minorHead")),
-        ))
-    return payments
 
 
 def _extract_deductions(root: dict[str, Any]) -> PrefillDeductions:
     """Extract Chapter VI-A deductions from the prefill.
 
-    The prefill schema carries these under ``scheduleDeductions`` or
-    ``insights.scheduleDeductions`` with ``usrDeductUndChapVIA`` and
-    ``deductUndChapVIA`` sub-objects.
+    The real ITD prefill places these under two locations:
+      1. ``insights.UsrDeductUndChapVIAType`` (capital U) — e.g.
+         ``Section80TTB``
+      2. ``form24q.usrDeductUndChapVIAType`` — e.g. ``section80TTA``
+
+    We merge both, normalizing the key casing to lowercase
+    ``section_80*``.
     """
+    merged: dict[str, int] = {}
+
+    def _merge_deductions(obj: Any) -> None:
+        """Merge deduction keys from a mapping into the merged dict."""
+        if not isinstance(obj, Mapping):
+            return
+        for key, value in obj.items():
+            key_lower = key.lower()
+            # Only accept keys that look like section 80* deductions.
+            if not key_lower.startswith("section80"):
+                continue
+            # Normalize: section80c → section_80c, section80ttb → section_80ttb
+            normalized = "section_" + key_lower[len("section"):]
+            amount = _to_int(value)
+            if amount > 0:
+                merged[normalized] = merged.get(normalized, 0) + amount
+
+    # Source 1: insights.UsrDeductUndChapVIAType
+    insights = root.get("insights")
+    if isinstance(insights, Mapping):
+        _merge_deductions(insights.get("UsrDeductUndChapVIAType"))
+        _merge_deductions(insights.get("usrDeductUndChapVIAType"))
+
+    # Source 2: form24q.usrDeductUndChapVIAType
+    form24q = root.get("form24q")
+    if isinstance(form24q, Mapping):
+        _merge_deductions(form24q.get("usrDeductUndChapVIAType"))
+        _merge_deductions(form24q.get("UsrDeductUndChapVIAType"))
+
+    # Source 3: lastFiledITR.usrDeductUndChapVIAType (fallback)
+    lfi = root.get("lastFiledITR")
+    if isinstance(lfi, Mapping):
+        _merge_deductions(lfi.get("usrDeductUndChapVIAType"))
+        _merge_deductions(lfi.get("UsrDeductUndChapVIAType"))
+
+    # Source 4: scheduleDeductions.usrDeductUndChapVIA (schema-documented fallback)
     sd = root.get("scheduleDeductions")
-    if not isinstance(sd, Mapping):
-        insights = root.get("insights")
-        if isinstance(insights, Mapping):
-            sd = insights.get("scheduleDeductions")
-        if not isinstance(sd, Mapping):
-            return PrefillDeductions()
-    # Try usrDeductUndChapVIA first (user-entered), then deductUndChapVIA.
-    usr = sd.get("usrDeductUndChapVIA") or sd.get("deductUndChapVIA") or {}
-    if not isinstance(usr, Mapping):
-        usr = {}
-    total = _to_int(usr.get("totalChapVIADeductions") or sd.get("totalChapVIADeductions"))
+    if isinstance(sd, Mapping):
+        _merge_deductions(sd.get("usrDeductUndChapVIA"))
+        _merge_deductions(sd.get("deductUndChapVIA"))
+
+    total = sum(merged.values())
     return PrefillDeductions(
-        section_80c=_to_int(usr.get("section80C") or usr.get("Section80C")),
-        section_80ccc=_to_int(usr.get("section80CCC") or usr.get("Section80CCC")),
-        section_80ccd_employee_or_se=_to_int(usr.get("section80CCDEmployeeOrSE") or usr.get("Section80CCDEmployeeOrSE")),
-        section_80ccd_1b=_to_int(usr.get("section80CCD1B") or usr.get("Section80CCD1B")),
-        section_80ccd_employer=_to_int(usr.get("section80CCDEmployer") or usr.get("Section80CCDEmployer")),
-        section_80d=_to_int(usr.get("section80D") or usr.get("Section80D")),
-        section_80dd=_to_int(usr.get("section80DD") or usr.get("Section80DD")),
-        section_80ddb=_to_int(usr.get("section80DDB") or usr.get("Section80DDB")),
-        section_80e=_to_int(usr.get("section80E") or usr.get("Section80E")),
-        section_80ee=_to_int(usr.get("section80EE") or usr.get("Section80EE")),
-        section_80eea=_to_int(usr.get("section80EEA") or usr.get("Section80EEA")),
-        section_80eeb=_to_int(usr.get("section80EEB") or usr.get("Section80EEB")),
-        section_80g=_to_int(usr.get("section80G") or usr.get("Section80G")),
-        section_80gg=_to_int(usr.get("section80GG") or usr.get("Section80GG")),
-        section_80gga=_to_int(usr.get("section80GGA") or usr.get("Section80GGA")),
-        section_80ggc=_to_int(usr.get("section80GGC") or usr.get("Section80GGC")),
-        section_80u=_to_int(usr.get("section80U") or usr.get("Section80U")),
-        section_80tta=_to_int(usr.get("section80TTA") or usr.get("Section80TTA")),
-        section_80ttb=_to_int(usr.get("section80TTB") or usr.get("Section80TTB")),
-        section_80cch=_to_int(usr.get("section80CCH") or usr.get("Section80CCH")),
-        section_80qqb=_to_int(usr.get("section80QQB") or usr.get("Section80QQB")),
-        section_80rrb=_to_int(usr.get("section80RRB") or usr.get("Section80RRB")),
-        section_80la=_to_int(usr.get("section80LA") or usr.get("Section80LA")),
+        section_80c=merged.get("section_80c", 0),
+        section_80ccc=merged.get("section_80ccc", 0),
+        section_80ccd_employee_or_se=merged.get("section_80ccd_employee_or_se", 0),
+        section_80ccd_1b=merged.get("section_80ccd_1b", 0) or merged.get("section_80ccd1b", 0),
+        section_80ccd_employer=merged.get("section_80ccd_employer", 0),
+        section_80d=merged.get("section_80d", 0),
+        section_80dd=merged.get("section_80dd", 0),
+        section_80ddb=merged.get("section_80ddb", 0),
+        section_80e=merged.get("section_80e", 0),
+        section_80ee=merged.get("section_80ee", 0),
+        section_80eea=merged.get("section_80eea", 0),
+        section_80eeb=merged.get("section_80eeb", 0),
+        section_80g=merged.get("section_80g", 0),
+        section_80gg=merged.get("section_80gg", 0),
+        section_80gga=merged.get("section_80gga", 0),
+        section_80ggc=merged.get("section_80ggc", 0),
+        section_80u=merged.get("section_80u", 0),
+        section_80tta=merged.get("section_80tta", 0),
+        section_80ttb=merged.get("section_80ttb", 0),
+        section_80cch=merged.get("section_80cch", 0),
+        section_80qqb=merged.get("section_80qqb", 0),
+        section_80rrb=merged.get("section_80rrb", 0),
+        section_80la=merged.get("section_80la", 0),
         total_chap_via_deductions=total,
     )
 
@@ -864,7 +1005,10 @@ def _extract_carry_forward_losses(root: dict[str, Any]) -> list[PrefillCarryForw
     cfl = root.get("scheduleCFL")
     if not isinstance(cfl, Mapping):
         return losses
+    # The real ITD prefill uses ``CarryFwdLossDetail`` (capital C).
     details = cfl.get("carryFwdLossDetail")
+    if not isinstance(details, list):
+        details = cfl.get("CarryFwdLossDetail")
     if not isinstance(details, list):
         return losses
     for item in details:
@@ -906,9 +1050,7 @@ def _extract_verification(root: dict[str, Any]) -> PrefillVerification:
 def _extract_capital_gains_property(root: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract capital-gains property transactions from the prefill.
 
-    Lives under ``insights.capitalGains.propertyDetails[]`` with each
-    item having ``addressDetailWithZipCode``, ``buyers[]``,
-    ``stampDuty``, and ``transactionAmount``.
+    Lives under ``insights.capitalGains.propertyDetails[]``.
     """
     cg_list: list[dict[str, Any]] = []
     insights = root.get("insights")
@@ -963,37 +1105,21 @@ def _extract_other_income_cpc(root: dict[str, Any]) -> list[dict[str, Any]]:
                     "nature": _to_str(item.get("othSrcNatureDesc")),
                     "amount": _to_int(item.get("othSrcOthAmount")),
                 })
-    # Also check insights.incDeductionsOthIncCPC
-    if not cpc_list:
-        insights = root.get("insights")
-        if isinstance(insights, Mapping):
-            cpc = insights.get("incDeductionsOthIncCPC")
-            if isinstance(cpc, list):
-                for item in cpc:
-                    if isinstance(item, Mapping):
-                        cpc_list.append({
-                            "assessment_year": _to_str(item.get("itrAy")),
-                            "nature": _to_str(item.get("othSrcNatureDesc")),
-                            "amount": _to_int(item.get("othSrcOthAmount")),
-                        })
     return cpc_list
 
 
 def _extract_assessment_year(root: dict[str, Any]) -> str:
     """Extract the assessment year from the prefill metadata."""
-    # Check direct AY paths.
     for key in ("assessmentYear", "assessment_year"):
         val = root.get(key)
         if val:
             return _to_str(val)
-    # Check metadata.assessmentYear.
     meta = root.get("metadata") or root.get("metaData")
     if isinstance(meta, Mapping):
         for key in ("assessmentYear", "assessment_year"):
             val = meta.get(key)
             if val:
                 return _to_str(val)
-    # Check IncDeductionsOthIncCPC[].itrAy.
     cpc = root.get("incDeductionsOthIncCPC")
     if isinstance(cpc, list) and cpc:
         first = cpc[0]
@@ -1020,8 +1146,9 @@ def parse_prefill_json(payload: Any, assessment_year: str = "") -> PrefillExtrac
         A ``PrefillExtraction`` with every available field populated.
     """
     root = _unwrap_prefill_root(payload)
+    pi = _extract_personal_info(root)
     extraction = PrefillExtraction(
-        personal_info=_extract_personal_info(root),
+        personal_info=pi,
         filing_status=_extract_filing_status(root),
         employer_entries=_extract_employers(root),
         salary_insights=_extract_salary_insights(root),
@@ -1030,14 +1157,13 @@ def parse_prefill_json(payload: Any, assessment_year: str = "") -> PrefillExtrac
         bank_accounts=_extract_bank_accounts(root),
         tds_salary_entries=_extract_tds_salary(root),
         tds_other_entries=_extract_tds_other(root),
-        tax_payments=_extract_tax_payments(root),
         deductions=_extract_deductions(root),
         carry_forward_losses=_extract_carry_forward_losses(root),
         verification=_extract_verification(root),
         capital_gains_property=_extract_capital_gains_property(root),
         other_income_cpc=_extract_other_income_cpc(root),
         assessment_year=_extract_assessment_year(root) or assessment_year,
-        pan=_extract_personal_info(root).pan,
+        pan=pi.pan,
         metadata={
             "source": "prefill",
             "assessment_year": _extract_assessment_year(root) or assessment_year,

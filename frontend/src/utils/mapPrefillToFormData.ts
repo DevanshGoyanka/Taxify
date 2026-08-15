@@ -113,6 +113,7 @@ export interface PrefillBankAccount {
   bank_account_no: string;
   bank_name: string;
   ifsc_code: string;
+  account_type: string;
   use_for_refund: string;
 }
 
@@ -201,12 +202,18 @@ function buildEmployerEntry(emp: PrefillEmployerEntry) {
 }
 
 function buildBankAccount(acct: PrefillBankAccount) {
+  // Normalize the account type from the prefill (e.g. "SB", "CA", "CC",
+  // "OD", "NRO", "OTH").  The BankAccountManager accepts exactly these
+  // enum values.  Default to "SB" if missing or unrecognized.
+  const rawType = (acct.account_type || '').toUpperCase();
+  const validTypes = ['SB', 'CA', 'CC', 'OD', 'NRO', 'OTH'];
+  const accountType = validTypes.includes(rawType) ? rawType : 'SB';
   return {
     id: stableEntryId('bank', acct as any),
     bankName: acct.bank_name || '',
     accountNumber: acct.bank_account_no || '',
     ifscCode: acct.ifsc_code || '',
-    accountType: 'SB' as const,  // Prefill schema doesn't carry account type; default to Savings
+    accountType: accountType as 'SB' | 'CA' | 'CC' | 'OD' | 'NRO' | 'OTH',
     useForRefund: acct.use_for_refund === 'true',
   };
 }
