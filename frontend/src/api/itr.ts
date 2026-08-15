@@ -60,7 +60,8 @@ export const itrApi = {
     try {
       res = await axiosInstance.post(`/clients/${clientId}/itr/${year}/generate-cbdt-json`, liveDraft ?? {}, { responseType: 'blob' });
     } catch (err: any) {
-      // axios may reject non-2xx; the error body is a Blob for blob requests.
+      // axios rejects non-2xx (e.g. 422 with validation errors).  The error
+      // body is a Blob for blob requests — parse it into a structured error.
       const blob = err?.response?.data;
       if (blob instanceof Blob) {
         const text = await blob.text();
@@ -75,16 +76,10 @@ export const itrApi = {
       }
       throw err;
     }
-    // Defensive: status 422 with a JSON-typed Blob (non-throwing path).
-    if (res.data instanceof Blob && res.data.type.includes('json')) {
-      const text = await res.data.text();
-      let parsed: any = null;
-      try { parsed = JSON.parse(text); } catch { parsed = { message: text }; }
-      const detail = parsed?.detail ?? parsed;
-      const message = typeof detail === 'object' ? detail.message : (typeof detail === 'string' ? detail : 'CBDT JSON generation failed');
-      const errors = typeof detail === 'object' ? detail.errors : [];
-      throw Object.assign(new Error(message), { errors });
-    }
+    // Success: the official CBDT JSON is a Blob with type "application/json".
+    // Download it directly.  (Previously a defensive check here treated any
+    // JSON-typed blob as an error, which broke every successful generation
+    // because the success response IS a JSON blob.)
     const url = URL.createObjectURL(new Blob([res.data]));
     const a = document.createElement('a');
     const formPrefix = res.headers?.['x-cbdt-computation-status'] === 'PROVISIONAL_COMMON_INCOME_PREVIEW' ? 'Provisional_' : '';
