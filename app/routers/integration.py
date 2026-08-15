@@ -520,38 +520,85 @@ def import_26as(
     raise HTTPException(501, "26AS extractor not available on this server.")
 
 
+def _safe_float(val: Any) -> Optional[float]:
+    """Parse a string/number to float, returning None on failure.
+
+    Handles comma-formatted Indian amounts (e.g. '1,23,456.00') and
+    negative/parenthesized values.
+    """
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    if not s or s in ("-", "--"):
+        return None
+    s = s.replace(",", "").replace("₹", "").strip()
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def _map_legacy_26as(parsed: dict) -> dict:
-    """Map the legacy ``parse_26as_txt`` output into the frontend shape.
+    """Map the 26AS extractor output into the frontend shape.
 
-    The legacy converter returns ``{"header": {...}, "parts": {"I": {...}}}``.
-    The frontend expects ``{"partIEntries": [...], "incomeBreakdown": {...}}``.
+    Handles TWO input shapes:
+    1. TXT parser (``parse_26as_txt``): rows have ``_details`` with keys
+       ``Amount Paid / Credited(Rs.)``, ``Tax Deducted(Rs.)``,
+       ``TDS Deposited(Rs.)``.  No summary-level totals — must sum details.
+    2. PDF extractor (``extract_26as``): rows have summary-level totals
+       (``Total Amount Paid/Credited``, ``Total Tax Deducted``,
+       ``Total TDS Deposited``) AND ``_details`` with keys
+       ``Amount Paid/Credited``, ``Tax Deducted``, ``TDS Deposited``.
 
-    Reversal entries (negative amounts) are netted against the matching
-    positive entry for the same deductor+section so the frontend sees
-    clean positive entries.
+    For the PDF path, the summary-level totals are already netted
+    (reversals included), so we prefer them over summing details.
+
+    Reversal entries (negative amounts) are netted in both paths.
     """
     header = parsed.get("header", {})
     fy = header.get("Financial Year") or header.get("FINANCIAL YEAR") or ""
 
-    # ── Collect raw Part I entries, then net reversals ──
+    # ── Collect raw Part I entries ──
     raw_entries: list[dict[str, Any]] = []
     for row in parsed.get("parts", {}).get("I", {}).get("rows", []):
         name = row.get("Name of Deductor") or "Unknown Deductor"
         tan = row.get("TAN of Deductor") or ""
+        # PDF path: prefer summary-level totals (already netted)
+        summary_amt = _safe_float(row.get("Total Amount Paid/Credited"))
+        summary_tds = _safe_float(row.get("Total Tax Deducted"))
+        summary_dep = _safe_float(row.get("Total TDS Deposited"))
+        if summary_amt is not None or summary_tds is not None:
+            details = row.get("_details", [])
+            # PDF summary rows don't carry the section; take it from the
+            # first detail (all details for the same deductor share the
+            # same section in practice).
+            sec = "192"
+            if details:
+                sec = details[0].get("Section") or sec
+            raw_entries.append({
+                "deductorName": name, "tan": tan, "section": sec,
+                "amountPaid": summary_amt or 0.0,
+                "taxDeducted": summary_tds or 0.0,
+                "taxDeposited": summary_dep or 0.0,
+            })
+            continue
+        # TXT path: sum the details (with reversal entries)
         for d in row.get("_details", []):
             sec = d.get("Section") or "192"
-            try:
-                amt = float(str(d.get("Amount Paid / Credited(Rs.)", "")).replace(",", "") or 0)
-            except ValueError:
-                amt = 0.0
-            try:
-                tds = float(str(d.get("Tax Deducted(Rs.)", "")).replace(",", "") or 0)
-            except ValueError:
-                tds = 0.0
-            try:
-                dep = float(str(d.get("TDS Deposited(Rs.)", "")).replace(",", "") or 0)
-            except ValueError:
-                dep = 0.0
+            amt = _safe_float(
+                d.get("Amount Paid / Credited(Rs.)")
+                or d.get("Amount Paid/Credited")
+            ) or 0.0
+            tds = _safe_float(
+                d.get("Tax Deducted(Rs.)")
+                or d.get("Tax Deducted")
+            ) or 0.0
+            dep = _safe_float(
+                d.get("TDS Deposited(Rs.)")
+                or d.get("TDS Deposited")
+            ) or 0.0
             raw_entries.append({
                 "deductorName": name, "tan": tan, "section": sec,
                 "amountPaid": amt, "taxDeducted": tds, "taxDeposited": dep,
