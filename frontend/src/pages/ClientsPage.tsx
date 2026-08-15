@@ -229,6 +229,9 @@ export default function ClientsPage() {
 function ClientModal({ client, onClose, onSave }: any) {
   const [formData, setFormData] = useState({
     pan: client?.pan || '',
+    firstName: client?.firstName || client?.first_name || '',
+    middleName: client?.middleName || client?.middle_name || '',
+    surname: client?.surname || '',
     name: client?.name || '',
     email: client?.email || '',
     mobile: client?.mobile || '',
@@ -389,19 +392,51 @@ function ClientModal({ client, onClose, onSave }: any) {
             <label style={{ display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 500 }}>
               Name * (CBDT Mandatory)
             </label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              required
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                fontSize: 13
-              }}
-            />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              <input
+                type="text"
+                placeholder="First Name"
+                value={formData.firstName}
+                onChange={(e) => setFormData({ ...formData, firstName: e.target.value, name: [e.target.value, formData.middleName, formData.surname].filter(Boolean).join(' ') })}
+                maxLength={25}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  fontSize: 13
+                }}
+              />
+              <input
+                type="text"
+                placeholder="Middle Name"
+                value={formData.middleName}
+                onChange={(e) => setFormData({ ...formData, middleName: e.target.value, name: [formData.firstName, e.target.value, formData.surname].filter(Boolean).join(' ') })}
+                maxLength={25}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  fontSize: 13
+                }}
+              />
+              <input
+                type="text"
+                placeholder="Surname *"
+                value={formData.surname}
+                onChange={(e) => setFormData({ ...formData, surname: e.target.value, name: [formData.firstName, formData.middleName, e.target.value].filter(Boolean).join(' ') || e.target.value })}
+                required
+                maxLength={75}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  fontSize: 13
+                }}
+              />
+            </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>

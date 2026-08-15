@@ -62,6 +62,9 @@ def serialize_client(client: Client, db: Session, years: Optional[List[ClientYea
         publicId=client.public_id,
         pan=client.pan,
         name=client.name,
+        firstName=client.first_name,
+        middleName=client.middle_name,
+        surname=client.surname,
         email=client.email,
         mobile=client.mobile,
         aadhaar=client.aadhaar,
@@ -190,6 +193,9 @@ def create_client(
         user_id=current_user.id,
         pan=payload.pan.upper(),
         name=payload.name,
+        first_name=payload.first_name,
+        middle_name=payload.middle_name,
+        surname=payload.surname,
         email=payload.email,
         mobile=payload.mobile,
         aadhaar=payload.aadhaar,
@@ -252,6 +258,12 @@ def update_client(
         client.pan = payload.pan
     if payload.name is not None:
         client.name = payload.name
+    if payload.first_name is not None:
+        client.first_name = payload.first_name
+    if payload.middle_name is not None:
+        client.middle_name = payload.middle_name
+    if payload.surname is not None:
+        client.surname = payload.surname
     if payload.email is not None:
         client.email = payload.email
     if payload.mobile is not None:

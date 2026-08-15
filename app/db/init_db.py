@@ -37,6 +37,35 @@ def _apply_additive_sqlite_migrations() -> None:
             connection.execute(text("ALTER TABLE client ADD COLUMN public_id VARCHAR(36)"))
         if "archived_at" not in columns:
             connection.execute(text("ALTER TABLE client ADD COLUMN archived_at DATETIME"))
+        if "first_name" not in columns:
+            connection.execute(text("ALTER TABLE client ADD COLUMN first_name VARCHAR(25) NOT NULL DEFAULT ''"))
+        if "middle_name" not in columns:
+            connection.execute(text("ALTER TABLE client ADD COLUMN middle_name VARCHAR(25) NOT NULL DEFAULT ''"))
+        if "surname" not in columns:
+            connection.execute(text("ALTER TABLE client ADD COLUMN surname VARCHAR(75) NOT NULL DEFAULT ''"))
+
+        # Backfill first_name/middle_name/surname from the legacy single
+        # ``name`` column for existing clients.  Split on whitespace: the
+        # first token is the first name, the last token is the surname, and
+        # everything in between is the middle name.  Clients with a single
+        # token get it placed in surname (the only mandatory name field).
+        empty_name_clients = connection.execute(
+            text("SELECT id, name FROM client WHERE surname = ''")
+        ).fetchall()
+        for (client_id, full_name) in empty_name_clients:
+            parts = str(full_name or "").strip().split()
+            if not parts:
+                first, middle, surname = "", "", ""
+            elif len(parts) == 1:
+                first, middle, surname = "", "", parts[0]
+            else:
+                first, middle, surname = parts[0], " ".join(parts[1:-1]), parts[-1]
+            connection.execute(
+                text(
+                    "UPDATE client SET first_name = :first, middle_name = :middle, surname = :surname WHERE id = :cid"
+                ),
+                {"first": first, "middle": middle, "surname": surname, "cid": client_id},
+            )
 
         missing_ids = connection.execute(
             text("SELECT id FROM client WHERE public_id IS NULL OR public_id = ''")

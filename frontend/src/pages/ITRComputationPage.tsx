@@ -526,6 +526,9 @@ export default function ITRComputationPage() {
         setRegime(draft.regime);
         const hydrated = applyLegacyPatch(savedModel, {
           name: itrData.name || client.name,
+          firstName: itrData.firstName || client.firstName || '',
+          middleName: itrData.middleName || client.middleName || '',
+          surnameOrOrgName: itrData.surnameOrOrgName || client.surname || '',
           pan: itrData.pan || client.pan,
           email: itrData.email || client.email,
           mobile: itrData.mobile || client.mobile,
