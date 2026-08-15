@@ -1254,18 +1254,30 @@ export default function ITRComputationPage() {
             }));
             
             // ===== BUILD INTEREST ENTRIES (Summary per bank/deductor) =====
-            const interestDeductors = deductorDetails.filter((d: any) => 
+            const interestDeductors = deductorDetails.filter((d: any) =>
               d.sectionCode === '194A' || d.sectionCode === '193' || d.sectionCode === '194K'
             );
-            const bankInterestEntriesFrom26AS = interestDeductors.map((deductor: any) => ({
-              bankName: deductor.employerName || 'Bank',
-              accountNumber: '',
-              accountType: 'SAVINGS',
-              interestEarned: deductor.totalAmount || 0,
-              tdsDeducted: deductor.totalTDS || 0,
-              deductorTAN: deductor.employerTAN || '',
-              section: deductor.sectionCode || '194A'
-            }));
+            // Build interest entries with the `kind` field the legacy adapter
+            // (legacyAdapter.ts line 39) needs to classify them.
+            //   section 194A → TERM_DEPOSIT (FD interest)
+            //   section 193  → SAVINGS_BANK
+            //   section 194K → OTHER (MF distribution interest)
+            const bankInterestEntriesFrom26AS = interestDeductors.map((deductor: any) => {
+              const sec = (deductor.sectionCode || '194A').toUpperCase();
+              const kind = sec === '193' ? 'SAVINGS_BANK' : sec === '194K' ? 'OTHER' : 'TERM_DEPOSIT';
+              return {
+                kind,
+                grossAmount: deductor.totalAmount || 0,
+                bankName: deductor.employerName || 'Bank',
+                accountNumber: '',
+                accountType: 'SAVINGS',
+                interestEarned: deductor.totalAmount || 0,
+                tdsDeducted: deductor.totalTDS || 0,
+                deductorName: deductor.employerName || 'Bank',
+                deductorTAN: deductor.employerTAN || '',
+                section: deductor.sectionCode || '194A',
+              };
+            });
             
             // Calculate total income from all heads
             const totalIncomeFrom26AS = 
@@ -1306,6 +1318,12 @@ export default function ITRComputationPage() {
               
               // ===== BANK INTEREST ENTRIES (per bank) =====
               bankInterestEntries: bankInterestEntriesFrom26AS.length > 0 ? bankInterestEntriesFrom26AS : [],
+              // ===== INTEREST ENTRIES (primary field the legacy adapter reads) =====
+              // The adapter (legacyAdapter.ts line 67) reads from
+              // 'interestEntries' first, then 'bankInterestEntries'.  Without
+              // this, the Other Sources tab stays empty even when
+              // bankInterestEntries is populated.
+              interestEntries: bankInterestEntriesFrom26AS.length > 0 ? bankInterestEntriesFrom26AS : [],
               
               // ===== MAP TO RESPECTIVE INCOME HEADS =====
               // IMPORTANT: interestSB and interestFD must NOT both be set to
