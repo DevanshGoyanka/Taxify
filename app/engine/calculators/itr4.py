@@ -129,7 +129,20 @@ class ITR4Result:
 
 
 def _check_itr4_eligibility(input_data: ITR4Input) -> list[str]:
-    """Check all ITR-4 statutory eligibility conditions."""
+    """Check all ITR-4 statutory eligibility conditions.
+
+    ITR-4 (Sugam) is specifically for presumptive taxation under 44AD/44ADA/44AE.
+    Per CBDT Rule 140: "The Return of Income is filed using ITR 4, however,
+    income from business or profession under section 44AD or 44AE or 44ADA
+    is not disclosed." — filing ITR-4 without a presumptive scheme is a
+    Category A defect that blocks upload.
+
+    Args:
+        input_data: The ITR-4 input model to validate.
+
+    Returns:
+        A list of error strings. Empty list means eligibility passed.
+    """
     errors: list[str] = []
 
     if not getattr(input_data, "is_resident", True):
@@ -151,6 +164,34 @@ def _check_itr4_eligibility(input_data: ITR4Input) -> list[str]:
             "house properties. ITR-4 allows at most 1. File ITR-3."
         )
 
+    # GAP-1 FIX: ITR-4 requires a presumptive scheme (44AD/44ADA/44AE).
+    # CBDT Rule 140: filing ITR-4 without 44AD/44ADA/44AE income is a
+    # Category A defect. PresumptiveScheme.NONE is not a valid ITR-4 election.
+    if input_data.presumptive_scheme == PresumptiveScheme.NONE:
+        errors.append(
+            "Ineligible for ITR-4: No presumptive scheme selected. "
+            "ITR-4 (Sugam) requires income under Section 44AD, 44ADA, or 44AE. "
+            "If the assessee has no presumptive business/professional income, "
+            "file ITR-1 or ITR-2 as applicable."
+        )
+
+    # GAP-1 FIX: The selected scheme must have its corresponding sub-model populated.
+    if input_data.presumptive_scheme == PresumptiveScheme.S44AD and not input_data.business_income_44ad:
+        errors.append(
+            "Ineligible for ITR-4: Presumptive scheme '44AD' selected but "
+            "business_income_44ad details not provided. Mandatory."
+        )
+    if input_data.presumptive_scheme == PresumptiveScheme.S44ADA and not input_data.professional_income_44ada:
+        errors.append(
+            "Ineligible for ITR-4: Presumptive scheme '44ADA' selected but "
+            "professional_income_44ada details not provided. Mandatory."
+        )
+    if input_data.presumptive_scheme == PresumptiveScheme.S44AE and not input_data.goods_carriage_44ae:
+        errors.append(
+            "Ineligible for ITR-4: Presumptive scheme '44AE' selected but "
+            "goods_carriage_44ae details not provided. Mandatory."
+        )
+
     return errors
 
 
@@ -168,26 +209,106 @@ def compute(input_data: ITR4Input) -> ITR4Result:
     age = input_data.age_bracket
 
     # ── 1. Presumptive Business Income ────────────────────────────────────────
-    # Business limit checks (only cap violations are Pydantic-level;
-    # cash-ratio and vehicle-count checks are soft errors reported here.)
+    # GAP-3 FIX: Cash-receipts check for 44AD/44ADA uses the statute-correct
+    # field (cash_receipts / cash_turnover). The enhanced turnover limit
+    # (₹3cr for 44AD, ₹75L for 44ADA) applies ONLY when cash receipts are
+    # ≤5% of total receipts. If cash >5%, the base limit (₹2cr / ₹50L) applies
+    # and ITR-4 is still eligible, but the cash ratio must be reported.
     if input_data.business_income_44ad:
         biz = input_data.business_income_44ad
+        # Statute (Section 44AD(1) proviso): enhanced ₹3cr limit applies only
+        # if cash receipts ≤ 5% of total turnover. The schema field
+        # `cash_turnover` represents cash receipts.
         if biz.total_turnover > Decimal("20000000"):
-            cash_ratio = biz.cash_turnover / biz.total_turnover if biz.total_turnover > 0 else Decimal("0")
+            # Enhanced threshold territory (₹2cr < turnover ≤ ₹3cr)
+            cash_ratio = (biz.cash_turnover / biz.total_turnover
+                          if biz.total_turnover > 0 else Decimal("0"))
             if cash_ratio > Decimal("0.05"):
-                result.errors.append("Cash receipts exceed 5% limit for enhanced 3 crore threshold")
+                result.errors.append(
+                    f"Ineligible for ITR-4: 44AD turnover Rs {biz.total_turnover} "
+                    f"exceeds ₹2 crore base limit and cash receipts "
+                    f"({cash_ratio * 100:.1f}%) exceed 5% threshold. "
+                    f"Enhanced ₹3 crore limit not applicable. "
+                    f"Tax audit u/s 44AB required — file ITR-3/ITR-5."
+                )
+        # Cross-field consistency: digital + cash must equal total
+        _turnover_sum = biz.digital_turnover + biz.cash_turnover
+        if abs(_turnover_sum - biz.total_turnover) > Decimal("1"):
+            result.errors.append(
+                f"44AD: digital_turnover (Rs {biz.digital_turnover}) + "
+                f"cash_turnover (Rs {biz.cash_turnover}) = Rs {_turnover_sum} "
+                f"does not match total_turnover (Rs {biz.total_turnover})."
+            )
 
     if input_data.professional_income_44ada:
         prof = input_data.professional_income_44ada
+        # Statute (Section 44ADA proviso): enhanced ₹75L limit applies only
+        # if cash receipts ≤ 5% of total gross receipts.
         if prof.gross_receipts > Decimal("5000000"):
-            cash_ratio = prof.cash_receipts / prof.gross_receipts if prof.gross_receipts > 0 else Decimal("0")
+            cash_ratio = (prof.cash_receipts / prof.gross_receipts
+                          if prof.gross_receipts > 0 else Decimal("0"))
             if cash_ratio > Decimal("0.05"):
-                result.errors.append("Cash receipts exceed 5% limit for enhanced 75 lakh threshold")
+                result.errors.append(
+                    f"Ineligible for ITR-4: 44ADA gross receipts Rs "
+                    f"{prof.gross_receipts} exceed ₹50 lakh base limit and "
+                    f"cash receipts ({cash_ratio * 100:.1f}%) exceed 5% "
+                    f"threshold. Enhanced ₹75 lakh limit not applicable. "
+                    f"Tax audit u/s 44AB required — file ITR-3/ITR-5."
+                )
+        # Cross-field consistency: digital + cash must equal gross
+        _receipts_sum = prof.digital_receipts + prof.cash_receipts
+        if abs(_receipts_sum - prof.gross_receipts) > Decimal("1"):
+            result.errors.append(
+                f"44ADA: digital_receipts (Rs {prof.digital_receipts}) + "
+                f"cash_receipts (Rs {prof.cash_receipts}) = Rs "
+                f"{_receipts_sum} does not match gross_receipts "
+                f"(Rs {prof.gross_receipts})."
+            )
 
     if input_data.goods_carriage_44ae:
         vehicles = input_data.goods_carriage_44ae.vehicles
+        # GAP-2 FIX: Vehicle count limit (Section 44AE(1) proviso: ≤10 vehicles)
         if len(vehicles) > 10:
-            result.errors.append("cannot own more than 10 vehicles under 44AE")
+            result.errors.append(
+                f"Ineligible for ITR-4: 44AE: {len(vehicles)} vehicles listed. "
+                f"Section 44AE(1) proviso limits ITR-4 to 10 goods carriages. "
+                f"File ITR-3."
+            )
+        # GAP-2 FIX: Aggregate months check (CBDT Rule 141)
+        # "Number of months for which goods carriage was owned/leased/hired
+        #  by assessee more than 12 months AND/OR total period of holding
+        #  more than 120 months" → Category A defect
+        _total_months = sum(v.months_owned for v in vehicles)
+        if _total_months > 120:
+            result.errors.append(
+                f"Ineligible for ITR-4: 44AE: aggregate holding period "
+                f"({_total_months} months across {len(vehicles)} vehicles) "
+                f"exceeds 120 months. CBDT Rule 141: total period of holding "
+                f"cannot exceed 120 months. File ITR-3."
+            )
+        # Per-vehicle month cap already enforced by schema (months_owned: 1-12)
+        # but double-check at calculator level for safety
+        for _i, _v in enumerate(vehicles):
+            if _v.months_owned > 12:
+                result.errors.append(
+                    f"Ineligible for ITR-4: 44AE vehicle {_i+1}: months_owned "
+                    f"({_v.months_owned}) exceeds 12. A vehicle cannot be "
+                    f"owned for more than 12 months in a single previous year."
+                )
+        # GAP-2 FIX: Vehicle registration number uniqueness (CBDT Rule 213)
+        _regnos = [v for v in input_data.vehicle_registration_numbers
+                   if v] if input_data.vehicle_registration_numbers else []
+        if _regnos:
+            _seen = set()
+            for _reg in _regnos:
+                if _reg in _seen:
+                    result.errors.append(
+                        f"Ineligible for ITR-4: 44AE: vehicle registration "
+                        f"number '{_reg}' is repeated. CBDT Rule 213: "
+                        f"Registration No. cannot be repeated in section 44AE."
+                    )
+                    break
+                _seen.add(_reg)
 
     pres = compute_presumptive(input_data)
     result.schedules["presumptive"] = pres
@@ -375,18 +496,22 @@ def compute(input_data: ITR4Input) -> ITR4Result:
     result.taxable_income = ti
 
     # ── 9. Normal slab tax (income excluding special-rate income) ─────────────
+    # normal_income = TI − 112A (112A taxed at special 12.5% rate, not slab)
     normal_income = max(Decimal("0"), ti - cg_112a_income)
     slab_tax = compute_slab_tax(normal_income, age, regime)
     result.slab_tax = slab_tax
 
-    # Partial integration of agricultural income (old regime only, net agri > Rs 5,000)
+    # Partial integration of agricultural income (old regime only, net agri > Rs 5,000).
+    # F7 FIX: NAI (non-agricultural income) for partial integration = TI (total
+    # taxable income), NOT normal_income. 112A LTCG is non-agricultural income
+    # and must be included in NAI per Finance Act Part I First Schedule.
     pi_tax = Decimal("0")
     if (regime == TaxRegime.OLD and result.net_agricultural_income > Decimal("5000")
-            and normal_income > 0):
+            and ti > 0):
         from app.engine.constants import BASIC_EXEMPTION_LIMITS
         basic_exemption = BASIC_EXEMPTION_LIMITS.get(age.value, Decimal("250000"))
         pi_tax = compute_partial_integration_tax(
-            normal_income, result.net_agricultural_income,
+            ti, result.net_agricultural_income,
             basic_exemption, compute_slab_tax,
             age, regime,
         )
@@ -446,8 +571,19 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         )
         ay_start = date(due_date.year, 4, 1)
         result.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
+        # F1 FIX: Pass self-assessment-tax challans to 234B so interest runs
+        # only until each challan's actual deposit date, not the filing date.
+        # Mirrors the ITR-1 calculator's wiring (see itr1.py ~L545).
+        _sat_payments = [
+            (entry.payment_date, entry.amount)
+            for entry in (input_data.tax_payment_entries or [])
+            if getattr(entry, "payment_type", "") == "self_assessment"
+            and getattr(entry, "payment_date", None) is not None
+            and getattr(entry, "amount", Decimal("0")) > 0
+        ]
         result.interest_234b = compute_234b(advance_tax_assessed,
-            input_data.advance_tax_paid, filing_date, ay_start)
+            input_data.advance_tax_paid, filing_date, ay_start,
+            self_assessment_payments=_sat_payments)
         is_presumptive = input_data.presumptive_scheme in (
             PresumptiveScheme.S44AD, PresumptiveScheme.S44ADA)
         if (input_data.advance_tax_q1 is not None or input_data.advance_tax_q2 is not None
@@ -459,7 +595,34 @@ def compute(input_data: ITR4Input) -> ITR4Result:
                 input_data.advance_tax_q4 or Decimal("0"),
             ]
         else:
-            quarterly = [input_data.advance_tax_paid] if input_data.advance_tax_paid > 0 else [Decimal("0")]
+            # F10 FIX: When only a lump-sum advance_tax_paid is given (no
+            # quarterly breakdown), bucket tax_payment_entries by their deposit
+            # date into the correct quarter. This prevents the old fallback
+            # (which put the entire lump-sum into Q1) from understating 234C.
+            if input_data.advance_tax_paid > 0 and input_data.tax_payment_entries:
+                _q = [Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")]
+                for _entry in input_data.tax_payment_entries:
+                    if getattr(_entry, "payment_type", "") != "advance":
+                        continue
+                    _d = getattr(_entry, "payment_date", None)
+                    _amt = getattr(_entry, "amount", Decimal("0"))
+                    if _d is None or _amt <= 0:
+                        continue
+                    # AY runs Apr(prev year)–Mar(current year).
+                    # Q1: Apr–Jun (15 Jun due)  | Q2: Jul–Sep (15 Sep)
+                    # Q3: Oct–Dec (15 Dec)      | Q4: Jan–Mar (15 Mar)
+                    _month = _d.month
+                    if _month >= 4 and _month <= 6:
+                        _q[0] += _amt
+                    elif _month >= 7 and _month <= 9:
+                        _q[1] += _amt
+                    elif _month >= 10 and _month <= 12:
+                        _q[2] += _amt
+                    else:  # Jan–Mar
+                        _q[3] += _amt
+                quarterly = _q
+            else:
+                quarterly = [input_data.advance_tax_paid] if input_data.advance_tax_paid > 0 else [Decimal("0")]
         result.interest_234c = compute_234c(
             quarterly, advance_tax_assessed, ay_start,
             is_presumptive_44ad_44ada=is_presumptive)

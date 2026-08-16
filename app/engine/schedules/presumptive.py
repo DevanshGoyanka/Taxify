@@ -64,8 +64,23 @@ def _compute_44ae(ae: PresumptiveGoodsCarriage44AE) -> tuple[Decimal, bool]:
 
 
 def compute(input_data: ITR4Input) -> PresumptiveResult:
+    """Compute presumptive income under 44AD / 44ADA / 44AE.
+
+    Per CBDT Rule 140, ITR-4 must disclose income under at least one of
+    Section 44AD, 44ADA, or 44AE. ``PresumptiveScheme.NONE`` is not a valid
+    election for ITR-4 — the calculator's eligibility gate rejects it before
+    reaching this function. If called with ``NONE`` (defensive), returns an
+    empty result with scheme label ``"INVALID"`` so downstream consumers can
+    detect the inconsistency.
+
+    Args:
+        input_data: The ITR-4 input model with a populated presumptive scheme.
+
+    Returns:
+        PresumptiveResult with 44AD/44ADA/44AE income breakdown.
+    """
     if input_data.presumptive_scheme == PresumptiveScheme.NONE:
-        return PresumptiveResult()
+        return PresumptiveResult(scheme="INVALID")
 
     scheme = input_data.presumptive_scheme.value
     inc_44ad = Decimal("0")

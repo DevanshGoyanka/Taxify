@@ -2,7 +2,7 @@
 
 """Statutory monetary rounding helpers for AY 2026-27."""
 
-from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 
 
 def round_to_nearest_rupee(val: Decimal) -> Decimal:
@@ -16,12 +16,15 @@ def round_to_nearest_rupee(val: Decimal) -> Decimal:
 
 
 def vba_round(val: Decimal) -> Decimal:
-    """Round to nearest integer using legacy ITD VBA half-even behaviour.
+    """Round to nearest rupee using statutory half-up rounding.
 
-    Retained only for legacy builder compatibility. New statutory calculation
-    paths should use :func:`round_to_nearest_rupee` or Section 288A/288B.
+    Previously used ``ROUND_HALF_EVEN`` (banker's rounding) for legacy ITD
+    VBA compatibility, but the Income-tax Act and CBDT utility both use
+    half-up (50 paise rounds upward). Banker's rounding would round ₹100.50
+    to ₹100 instead of ₹101, producing off-by-one discrepancies at every
+    .50 boundary. Now aligned with :func:`round_to_nearest_rupee`.
     """
-    return val.quantize(Decimal("1"), rounding=ROUND_HALF_EVEN)
+    return val.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
 
 
 def round_to_nearest_10(val: Decimal) -> Decimal:

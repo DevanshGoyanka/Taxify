@@ -174,6 +174,12 @@ def itr4_compute(
 
     # Run calculation validation post-computation
     calc_report = itr4_calc_val(body, result)
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
     response = _build_itr4_response(result)
     response.validation = calc_report.to_dict()
     return response
@@ -468,6 +474,7 @@ def itr4_compute_json(
 ) -> Response:
     """Compute ITR-4 and return CBDT ITD-compliant JSON."""
     from app.engine.itd.itr4 import build_itr4_json
+    from app.engine.itd.itr4_schema import ITR4SchemaValidationError, validate_itr4_json
 
     # Run validation
     input_report = itr4_input_val(body)
@@ -483,12 +490,46 @@ def itr4_compute_json(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    if result.errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITR-4 calculation rejected", "errors": result.errors},
+        )
+
+    # Run calculation validation post-computation
+    calc_report = itr4_calc_val(body, result)
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
+
     try:
         itd_json = build_itr4_json(result, body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITD JSON input is incomplete", "error": str(exc)},
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"ITD JSON generation failed: {exc}",
+        )
+
+    # Validate against the official CBDT schema — hard fail on any violation.
+    try:
+        validate_itr4_json(itd_json)
+    except ITR4SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Official ITR-4 schema validation failed", "errors": exc.errors},
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Official ITR-4 schema is unavailable: {exc}",
         )
 
     return Response(

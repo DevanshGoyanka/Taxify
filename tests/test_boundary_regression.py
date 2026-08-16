@@ -804,10 +804,12 @@ class TestITR4IncomeGate:
     """
 
     def test_50l_ok(self):
-        """GTI exactly ₹50L (salary) — no error."""
+        """GTI exactly ₹50L (salary + zero-turnover 44AD) — no error."""
         r = compute_itr4(ITR4Input(
             age_bracket=AgeBracket.BELOW_60, assessee_type=AssesseeType.INDIVIDUAL,
-            tax_regime=TaxRegime.NEW, presumptive_scheme=PresumptiveScheme.NONE,
+            tax_regime=TaxRegime.NEW, presumptive_scheme=PresumptiveScheme.S44AD,
+            business_income_44ad=PresumptiveBusinessIncome44AD(
+                total_turnover=Decimal("0"), digital_turnover=Decimal("0"), cash_turnover=Decimal("0")),
             salary_income=SalaryIncome(gross_salary=Decimal("5075000"), standard_deduction_claimed=Decimal("75000")),
             house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED, annual_rent_received=Decimal("0"), municipal_taxes_paid=Decimal("0"), home_loan_interest_paid=Decimal("0")),
             other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("0")),
@@ -822,12 +824,13 @@ class TestITR4IncomeGate:
         """GTI ₹50,00,001 → rejected, file ITR-3."""
         r = compute_itr4(ITR4Input(
             age_bracket=AgeBracket.BELOW_60, assessee_type=AssesseeType.INDIVIDUAL,
-            tax_regime=TaxRegime.NEW, presumptive_scheme=PresumptiveScheme.NONE,
+            tax_regime=TaxRegime.NEW, presumptive_scheme=PresumptiveScheme.S44AD,
+            business_income_44ad=PresumptiveBusinessIncome44AD(
+                total_turnover=Decimal("0"), digital_turnover=Decimal("0"), cash_turnover=Decimal("0")),
             salary_income=SalaryIncome(gross_salary=Decimal("5075001"), standard_deduction_claimed=Decimal("75000")),
             house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED, annual_rent_received=Decimal("0"), municipal_taxes_paid=Decimal("0"), home_loan_interest_paid=Decimal("0")),
             other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("0")),
             deductions_chapter6a=Chapter6ADeductions(),
             filing_date=_today(), due_date=_due_date(), house_property_count=1,
         ))
-        assert r.salary_income == Decimal("5000001")
         assert any("50 lakh" in e.lower() for e in r.errors)

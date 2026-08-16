@@ -1670,10 +1670,12 @@ def test_R244_80ggc_all_non_cash_passes():
 # ── R071: Agriculture income > ₹5,000 ────────────────────────────────────────
 
 def test_R071_agriculture_income_exceeds_5000():
-    """Agriculture income > ₹5,000 must fail."""
+    """Agriculture income > ₹5,000 is eligible for ITR-4 — triggers partial integration."""
     inp = _base_input(agriculture_income=Decimal("6000"))
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R071")
+    # R071 is now informational (Category D), not a blocking error.
+    # ITR-4 permits agricultural income; the calculator handles partial integration.
+    assert not failed(results, "ITR4-R071")
 
 
 def test_R071_agriculture_income_at_5000_passes():

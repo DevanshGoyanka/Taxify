@@ -81,9 +81,11 @@ def _compute_digest(data: dict) -> str:
 
     secret_key = os.getenv("ERI_DIGEST_SECRET_KEY", "")
     if not secret_key:
-        # Fallback: simple SHA-256 hex digest for dev/testing only
-        raw = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
-        return hashlib.sha256(raw.encode()).hexdigest()
+        # Fallback: emit the schema-legal placeholder "-" for dev/testing.
+        # The official Digest pattern is ``-|.{44}`` — a 64-char hex digest
+        # would fail validation, so we return the placeholder instead of
+        # masking the misconfiguration with an invalid value.
+        return "-"
 
     iterations = int(os.getenv("ERI_DIGEST_ITERATIONS", "1"))
     placeholder = "-"

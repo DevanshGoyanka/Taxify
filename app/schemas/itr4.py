@@ -23,12 +23,15 @@ within ITR-4 scope.
 
 from decimal import Decimal
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Literal
 from datetime import date
 
 from pydantic import BaseModel, Field, model_validator
 
-# Shared income / deduction models — do NOT redefine, import directly.
+# Shared tax-domain primitives (PAN/TAN patterns, donation, loan, TDS entry
+# shapes — these represent tax concepts, not ITR-1 form logic). The ITR-4
+# form-specific workflow lives entirely in app/engine/itd/itr4.py and
+# app/engine/calculators/itr4.py.
 from app.schemas.itr1 import (
     AgeBracket,
     AssesseeType,
@@ -333,6 +336,122 @@ class ScheduleBPFinancial(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# ITR-4-specific filing profile, address, bank, property, TRP types
+# ---------------------------------------------------------------------------
+
+class ITR4AssesseeStatus(str, Enum):
+    """ITR-4 PersonalInfo.Status — assessee entity type.
+
+    I : Individual; H : HUF; F : Firm (other than LLP).
+    """
+    INDIVIDUAL = "I"
+    HUF = "H"
+    FIRM = "F"
+
+
+class ITR4PostalAddress(BaseModel):
+    """Postal address used by the ITR-4 AlternateAddress block."""
+    residence_no: str = Field(default="", max_length=50)
+    residence_name: str = Field(default="", max_length=50)
+    road_or_street: str = Field(default="", max_length=50)
+    locality_or_area: str = Field(default="", max_length=50)
+    city_or_town_or_district: str = Field(default="", max_length=50)
+    state_code: str = Field(default="", max_length=2)
+    country_code: str = Field(default="91", max_length=5)
+    pin_code: Optional[str] = Field(default=None, max_length=6)
+    zip_code: str = Field(default="", max_length=10)
+
+
+class ITR4FilingAddress(ITR4PostalAddress):
+    """Primary filing address with mandatory contact details (Phone + Mobile)."""
+    mobile_country_code: int = Field(ge=1, le=99999)
+    mobile_no: str = Field(min_length=1, max_length=10)
+    email: str = Field(min_length=1, max_length=125)
+    secondary_mobile_country_code: int = Field(default=0, ge=0, le=99999)
+    secondary_mobile_no: Optional[str] = Field(default=None, max_length=10)
+    secondary_email: Optional[str] = Field(default=None, max_length=125)
+    # Landline (Address.Phone in the CBDT schema) — optional, defaults to "0".
+    landline_std_code: int = Field(default=0, ge=0, le=99999)
+    landline_phone_no: str = Field(default="0", max_length=12)
+
+
+class ITR4PropertyProfile(BaseModel):
+    """Address profile for the single ITR-4 house property."""
+    address_detail: str = Field(min_length=1, max_length=50)
+    city_or_town_or_district: str = Field(min_length=1, max_length=50)
+    state_code: str = Field(min_length=1, max_length=2)
+    country_code: str = Field(default="91", max_length=5)
+    pin_code: Optional[str] = Field(default=None, max_length=6)
+    zip_code: Optional[str] = Field(default=None, max_length=10)
+
+
+class ITR4BankAccount(BaseModel):
+    """Bank account disclosed for ITR-4 refund credit."""
+    account_number: str = Field(min_length=1, max_length=20)
+    ifsc_code: str = Field(min_length=11, max_length=11)
+    bank_name: str = Field(min_length=1, max_length=125)
+    account_type: str = Field(min_length=1, max_length=20)
+    is_primary: bool = False
+
+
+class ITR4TaxReturnPreparer(BaseModel):
+    """ITR-4 Tax Return Preparer details, when a TRP prepares the return."""
+    identification_number: str = Field(pattern=r"^(T[0-9]{9}|[0-9]{6})$")
+    name: str = Field(min_length=1, max_length=125)
+    reimbursement_from_government: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class ITR4SeventhProvisoDetails(BaseModel):
+    """Seventh-proviso to Section 139(1) declarations for ITR-4 FilingStatus."""
+    foreign_travel_flag: bool = False
+    foreign_travel_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    electricity_expenditure_flag: bool = False
+    electricity_expenditure_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    other_clause_iv_flag: bool = False
+    other_clause_iv_detail: str = Field(default="", max_length=125)
+
+
+class ITR4FilingProfile(BaseModel):
+    """ITR-4 taxpayer identity, filing status, and verification.
+
+    Every field here maps to a real CBDT ITR-4 PersonalInfo, FilingStatus,
+    or Verification destination. No entered statutory field is silently
+    replaced with a default during JSON generation.
+    """
+    pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    first_name: str = Field(default="", max_length=25)
+    middle_name: str = Field(default="", max_length=25)
+    surname: str = Field(min_length=1, max_length=75)
+    date_of_birth: date
+    employer_category: str = Field(
+        default="OTH",
+        pattern=r"^(CGOV|SGOV|PSU|PE|PESG|PEPS|PEO|OTH|NA)$",
+    )
+    aadhaar_number: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    assessee_status: ITR4AssesseeStatus = Field(default=ITR4AssesseeStatus.INDIVIDUAL)
+    primary_address: ITR4FilingAddress
+    alternate_address: Optional[ITR4PostalAddress] = None
+    father_name: str = Field(min_length=1, max_length=125)
+    verification_place: str = Field(min_length=1, max_length=50)
+    verification_capacity: Literal["S"] = "S"
+    return_file_section: Literal[11, 12, 13, 14, 16, 17, 18, 20] = 11
+    seventh_proviso: ITR4SeventhProvisoDetails = Field(default_factory=ITR4SeventhProvisoDetails)
+    # Form 10-IEA cascade (ITR-4 uses this, not OptOutNewTaxRegime).
+    form_10iea_earlier_ay_old_regime: str = Field(default="NA", pattern=r"^(NA|Y|N)$")
+    form_10iea_ass_year: str = Field(default="", pattern=r"^(2024-25|2025-26)?$")
+    form_10iea_earlier_ay_ack_old_regime: int = Field(default=0, ge=0)
+    f10iea_earlier_ay_new_regime: str = Field(default="N", pattern=r"^(Y|N)$")
+    ass_yr_f10iea_new_tax_reg: str = Field(default="", pattern=r"^(2024-25|2025-26)?$")
+    form_10iea_earlier_ay_ack_new_regime: int = Field(default=0, ge=0)
+    f10iea_curr_ay_new_regime: str = Field(default="N", pattern=r"^(Y|N)$")
+    f10iea_date_curr_ay_new_tax: str = Field(default="", max_length=10)
+    f10iea_ack_no_curr_ay_new_tax: int = Field(default=0, ge=0)
+    f10iea_curr_ay_old_regime: str = Field(default="N", pattern=r"^(Y|N)$")
+    f10iea_date_curr_ay_old_tax: str = Field(default="", max_length=10)
+    f10iea_ack_no_curr_ay_old_tax: int = Field(default=0, ge=0)
+
+
+# ---------------------------------------------------------------------------
 # Top-level ITR-4 input model
 # ---------------------------------------------------------------------------
 
@@ -566,3 +685,27 @@ class ITR4Input(BaseModel):
     profession_code: Optional[str] = Field(default=None, description="Profession code for 44ADA")
     # --- Vehicle registration (44AE) ---
     vehicle_registration_numbers: list[str] = Field(default_factory=list, description="Vehicle registration numbers for 44AE duplicate check")
+    # --- ITR-4-specific filing profile, bank accounts, TRP ---
+    filing_profile: Optional[ITR4FilingProfile] = Field(
+        default=None,
+        description=(
+            "Taxpayer identity, filing status, and verification details. "
+            "Required for official ITR-4 JSON generation — maps to "
+            "PersonalInfo, FilingStatus, and Verification nodes."
+        ),
+    )
+    property_profile: Optional[ITR4PropertyProfile] = Field(
+        default=None,
+        description=(
+            "Address profile for the single house property allowed in ITR-4. "
+            "Maps to PropertyDetails[].AddressDetailWithZipCode in the ITD JSON."
+        ),
+    )
+    bank_accounts: List[ITR4BankAccount] = Field(
+        default_factory=list,
+        description="Bank accounts for refund credit. Exactly one must be marked is_primary.",
+    )
+    tax_return_preparer: Optional[ITR4TaxReturnPreparer] = Field(
+        default=None,
+        description="Tax Return Preparer details, when a TRP prepares the return.",
+    )
