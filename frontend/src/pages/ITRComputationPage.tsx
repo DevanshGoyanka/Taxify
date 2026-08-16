@@ -1719,6 +1719,19 @@ export default function ITRComputationPage() {
                       loss94: 0,
                       dateOfSale: toIso(dData.transfer_date),
                       dateOfTransfer: toIso(dData.transfer_date),
+                      // The backend's compute_restricted_112a looks for
+                      // 'aisHoldingPeriod' to recognize the AIS's own
+                      // long-term/short-term classification — without it,
+                      // the row is treated as evidence and never computed.
+                      aisHoldingPeriod: dData.asset_type || '',
+                      // Backend also checks 'transferDate' (not just
+                      // dateOfTransfer) for completed-sale detection.
+                      transferDate: toIso(dData.transfer_date),
+                      acquisitionDate: '',  // AIS doesn't carry this
+                      // Backend checks 'saleValue' for positive sale.
+                      saleValue: num2(dData.sales_consideration),
+                      // Backend checks 'actualCost' for positive cost.
+                      actualCost: num2(dData.cost_of_acquisition),
                       assetType: isLongTerm ? 'LTCG' : 'STCG',
                       debitType: dData.debit_type || '',
                       creditType: dData.credit_type || '',
