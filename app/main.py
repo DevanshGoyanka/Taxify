@@ -62,6 +62,7 @@ from app.routers import (
     itr as itr_router,
     clients as clients_router,
     client_itr as client_itr_router,
+    client_itr_v2 as client_itr_v2_router,
     integration as integration_router,
     pan as pan_router,
     tax as tax_router,
@@ -179,6 +180,7 @@ app.include_router(auth_router.router)
 app.include_router(itr_router.router)
 app.include_router(clients_router.router)
 app.include_router(client_itr_router.router)
+app.include_router(client_itr_v2_router.router)
 app.include_router(integration_router.router)
 app.include_router(pan_router.router)
 app.include_router(tax_router.router)

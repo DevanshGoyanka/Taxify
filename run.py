@@ -1,15 +1,26 @@
 """
 Standalone entry point for the FastAPI server.
 
-Uses loop="none" to bypass uvicorn's asyncio_setup() which on Windows 3.10
+Uses loop="none" to bypass uvicorn's asyncio_setup() which on Windows
 deliberately switches to WindowsSelectorEventLoopPolicy — a loop that cannot
 spawn subprocesses (NotImplementedError). Keeping the default
 WindowsProactorEventLoopPolicy lets Playwright launch Chromium.
+
+As defense-in-depth, we *also* set WindowsProactorEventLoopPolicy
+explicitly before importing uvicorn, so that even if a caller runs
+``uvicorn app.main:app --reload`` (which bypasses run.py) the policy is
+already correct for the imported app's background tasks.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 import sysconfig
+
+if sys.platform == "win32":
+    # The Proactor event loop supports subprocesses (required by Playwright).
+    # This must run BEFORE any uvicorn import that calls asyncio.set_event_loop_policy.
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 import uvicorn
 
