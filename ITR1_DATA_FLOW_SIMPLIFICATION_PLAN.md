@@ -139,7 +139,22 @@ Each phase is **independently testable** and ends with a manual-test gate. The n
 4. With `VITE_USE_V2=0` (or unset), the legacy flow still works (regression).
 5. No console errors; eligibility + tax compute still fire on the `/v2` endpoints.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-17. Phase 3 repository tests (12 canonical + 8 factory + 2 legacy = 22) passed and the full frontend suite has no new regressions (the one `returns.test.ts` Schedule HP failure pre-exists on clean `main`). The v2 path is feature-flagged behind `VITE_USE_V2=1`; the legacy flow is unchanged when the flag is off.
+
+**Implemented:**
+- `frontend/src/api/itrV2.ts` — typed API client for `/v2/clients/{id}/itr/{year}` (GET/PUT), `/v2/tax-summary/compute`, and `…/generate-cbdt-json` (blob download + `CbdtGenerationError`).
+- `frontend/src/domain/returns/canonicalRepository.ts` — `CanonicalReturnRepository` with `stripCompatibility` (deep-clone + remove the legacy `compatibility` envelope the strict backend rejects), `assertCanonicalDraft`, `enforceAssessmentYear`, `createEmptyPersonalInfo`.
+- `frontend/src/domain/returns/repositoryFactory.ts` — `isCanonicalV2Enabled` (`VITE_USE_V2 === '1'`) + `createReturnRepository` factory.
+- `frontend/src/domain/returns/types.ts` — new `PersonalInfo` interface (additive filing-profile fields mirroring the backend Phase 2 schema); `ReturnDraft.personal` typed as `PersonalInfo`.
+- `frontend/src/domain/returns/factory.ts`, `legacyAdapter.ts`, `index.ts`, `repository.ts` (legacy `HttpReturnRepository` marked `@deprecated`).
+- `frontend/src/pages/ITRComputationPage.tsx` — surgical feature-flag wiring for compute/save/generate at existing boundaries; legacy flag-off behavior fully preserved.
+- `frontend/src/domain/returns/canonicalRepository.test.ts` (12) and `repositoryFactory.test.ts` (8).
+
+**Validation:** 22 targeted tests passed; full suite 115/116 (1 pre-existing). `tsc -b` reports 5 pre-existing errors in externally-edited files; 0 in Phase 3 files.
+
+**Deferred follow-ups:**
+- Editor direct-draft mutation (eliminating `composeLegacyPayload`/`buildPhase1Payload`) is Phase 4.
+- Typed import mappers are Phase 5.
 
 ---
 

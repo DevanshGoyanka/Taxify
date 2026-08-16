@@ -20,7 +20,14 @@ export function createEmptyUnexplainedIncome() {
 export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['form'] = 'ITR-1', regime: ReturnDraft['regime'] = 'new'): ReturnDraft {
   return {
     schemaVersion: 1, assessmentYear, form, regime,
-    personal: { name: '', pan: '', email: '', mobile: '', dateOfBirth: null },
+    personal: {
+      name: '', firstName: '', middleName: '', surnameOrOrgName: '', fatherName: '',
+      pan: '', aadhaar: '', email: '', mobile: '',
+      secondaryEmail: '', secondaryMobile: '', secondaryMobileCountryCode: '',
+      dateOfBirth: null,
+      flatNo: '', residenceName: '', roadOrStreet: '', localityOrArea: '',
+      city: '', stateCode: '', countryCode: '91', pinCode: '', zipCode: '',
+    },
     filing: { filingSection: '139(1)', returnType: 'ORIGINAL', originalAcknowledgementNumber: '', originalFilingDate: null, noticeNumber: '' },
     employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: {},
     otherSources: {

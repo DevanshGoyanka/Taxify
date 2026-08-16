@@ -338,9 +338,33 @@ export interface ExemptIncomeSchedule {
 export interface ImportProvenance { source: 'MANUAL' | 'FORM16' | 'AIS' | 'TIS' | '26AS' | 'ITD_PREFILL' | 'LEGACY'; importedAt: string | null; reference: string; }
 export interface Verification { capacity: 'SELF' | 'REPRESENTATIVE'; place: string; date: string | null; declarationAccepted: boolean; }
 export interface LegacyCompatibilityEnvelope { source: 'legacy-flat-v1'; unknownFields: Readonly<Record<string, unknown>>; }
+export interface PersonalInfo {
+  name: string;
+  firstName: string;
+  middleName: string;
+  surnameOrOrgName: string;
+  fatherName: string;
+  pan: string;
+  aadhaar: string;
+  email: string;
+  mobile: string;
+  secondaryEmail: string;
+  secondaryMobile: string;
+  secondaryMobileCountryCode: string;
+  dateOfBirth: string | null;
+  flatNo: string;
+  residenceName: string;
+  roadOrStreet: string;
+  localityOrArea: string;
+  city: string;
+  stateCode: string;
+  countryCode: string;
+  pinCode: string;
+  zipCode: string;
+}
 export interface ReturnDraft {
   schemaVersion: 1; assessmentYear: string; form: ItrForm; regime: TaxRegime;
-  personal: { name: string; pan: string; email: string; mobile: string; dateOfBirth: string | null };
+  personal: PersonalInfo;
   filing: FilingStatus; employers: Employer[]; houseProperties: HouseProperty[]; housePropertyPassThroughIncome: number; businesses: PresumptiveBusiness[]; capitalGainsSchedule: Record<string, unknown>;
   otherSources: {
     interest: InterestIncome[];

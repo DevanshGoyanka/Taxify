@@ -11,7 +11,9 @@ export interface ReturnRepository {
   save(clientId: string | number, draft: ReturnDraft): Promise<ReturnDraft>;
 }
 
-/** HTTP repository backed by the existing authenticated Axios instance. */
+/** HTTP repository backed by the existing authenticated Axios instance.
+ * @deprecated Use {@link CanonicalReturnRepository} via the v2 feature flag.
+ * The legacy flat endpoints remain for the flag-off path only. */
 export class HttpReturnRepository implements ReturnRepository {
   /** Loads a return through the legacy endpoint. */
   public async get(clientId: string | number, assessmentYear: string): Promise<ReturnDraft> {

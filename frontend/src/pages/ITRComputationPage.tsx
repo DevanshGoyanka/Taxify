@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback, type SetState
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAY } from '../contexts/AYContext';
 import { itrApi } from '../api/itr';
+import { itrV2 } from '../api/itrV2';
 import { clientsApi } from '../api/clients';
 import { itrAutomationApi } from '../api/itrAutomation';
 import type { AutomationJob } from '../api/itrAutomation';
@@ -19,7 +20,8 @@ import EmployerReconciliationModal from '../components/EmployerReconciliationMod
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import ExemptIncomeWorkspace from '../components/exemptincome/ExemptIncomeWorkspace';
 import {
-  HttpReturnRepository, applyLegacyActionWithSnapshot, applyLegacyPatch, applyLegacySetStateAction,
+  createReturnRepository, isCanonicalV2Enabled, stripCompatibility,
+  applyLegacyActionWithSnapshot, applyLegacyPatch, applyLegacySetStateAction,
   banksToManager, challansToManager, composeLegacyPayload, createReturnEditorModelFromLegacy,
   deductionLoansToManager, familyPensionToManager, giftsToManager, interestToManager, tdsToManager,
   updateBankAccounts, updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
@@ -41,7 +43,8 @@ import { mapPrefillToFormData } from '../utils/mapPrefillToFormData';
 // REACTIVATE: import { mapFiledReturnToFormData } from '../utils/mapFiledReturnToFormData';
 import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
 
-const returnRepository = new HttpReturnRepository();
+const useCanonicalV2 = isCanonicalV2Enabled();
+const returnRepository = createReturnRepository();
 
 /**
  * Derive age from DOB using the shared assessment-year-aware utility.
@@ -845,7 +848,22 @@ export default function ITRComputationPage() {
     try {
       const currentEditor = editorRef.current;
       const liveDraft = currentEditor ? { ...buildPhase1Payload(composeLegacyPayload(currentEditor)), form: itrForm, itrForm: itrForm } : undefined;
-      await itrApi.generateCbdtJson(clientId, effectiveAssessmentYear, liveDraft);
+      if (useCanonicalV2) {
+        // Phase 3 v2 path: generate from the saved canonical draft only.
+        // The v2 endpoint requires a previously-persisted draft, so save
+        // first to guarantee the latest editor state is on the server.
+        if (currentEditor?.draft) {
+          await returnRepository.save(clientId, {
+            ...currentEditor.draft,
+            assessmentYear: effectiveAssessmentYear,
+            form: itrForm,
+            regime,
+          });
+        }
+        await itrV2.generate(clientId, effectiveAssessmentYear);
+      } else {
+        await itrApi.generateCbdtJson(clientId, effectiveAssessmentYear, liveDraft);
+      }
       toast.success(`CBDT ${itrForm} JSON generated ✓`);
     } catch (err: any) {
       const message = err?.message || 'CBDT JSON generation failed';
