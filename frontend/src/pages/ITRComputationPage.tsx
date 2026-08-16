@@ -1636,47 +1636,61 @@ export default function ITRComputationPage() {
 
                 // ── Capital Gains: B2 sale of securities / MF ──
                 if (section === 'B2' && (code === 'SFT-17-LES(M)' || code === 'SFT-18-EMF(M)' || code === 'SFT-18-OTU(M)')) {
-                  const header: string[] = e.detail_header || [];
-                  const findIdx = (part: string) => {
-                    for (let i = 0; i < header.length; i++) {
-                      if (header[i].toUpperCase().includes(part)) return i;
-                    }
-                    return -1;
-                  };
-                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
-                  const dateIdx = findIdx('DATE OF SALE');
-                  const nameIdx = findIdx('SECURITY NAME');
-                  const classIdx = findIdx('SECURITY CLASS');
-                  const assetIdx = findIdx('ASSET TYPE');
-                  const qtyIdx = findIdx('QUANTITY');
-                  const priceIdx = findIdx('SALE PRICE');
-                  const saleIdx = findIdx('SALES CONSIDERATION');
-                  const costIdx = findIdx('COST OF ACQUISITION');
+                  // SFT-17-LES(M): sale of listed equity shares
+                  // SFT-18-EMF(M): sale of equity-oriented MF units
+                  // SFT-18-OTU(M): sale of other units
+                  // Detail rows carry NAMED fields (asset_type, cost_of_acquisition,
+                  // stt, unit_fmv, fair_market_value, indexed_cost_of_acquisition,
+                  // etc.) — extract every field the AIS provides verbatim.
                   for (const d of (e.details || [])) {
                     const dData = d.data || {};
-                    const status = (dData[statusCol] || '').toString().toUpperCase();
+                    const status = (dData.status || '').toString().toUpperCase();
                     if (status !== 'ACTIVE') continue;
-                    const assetType = (assetIdx >= 0 ? dData[`col_${assetIdx}`] : '') || '';
-                    const isLongTerm = assetType.toLowerCase().includes('long');
-                    const secClass = (classIdx >= 0 ? dData[`col_${classIdx}`] : '') || '';
+                    const assetTypeRaw = (dData.asset_type || '').toString().toLowerCase();
+                    const isLongTerm = assetTypeRaw.includes('long');
+                    const secClass = (dData.security_class || '').toString();
                     const isMF = code.includes('18') || secClass.toLowerCase().includes('fund');
+                    const qty = num2(dData.quantity);
+                    const salePrice = num2(dData.sale_price_per_unit);
+                    const saleCons = num2(dData.sales_consideration);
+                    const cost = num2(dData.cost_of_acquisition);
+                    const stt = num2(dData.stt);
+                    const unitFmv = num2(dData.unit_fmv);
+                    const totalFmv = num2(dData.fair_market_value);
+                    const indexedCost = num2(dData.indexed_cost_of_acquisition);
                     capitalGainTransactions.push({
                       id: `cg-${code}-${d.sr_no || ''}`,
                       recordKind: 'TRANSACTION',
-                      name: nameIdx >= 0 ? dData[`col_${nameIdx}`] : deductorName,
-                      isin: dData.isin || '',
-                      quantity: qtyIdx >= 0 ? num2(dData[`col_${qtyIdx}`]) : 0,
-                      salePricePerUnit: priceIdx >= 0 ? num2(dData[`col_${priceIdx}`]) : 0,
-                      fullConsideration: saleIdx >= 0 ? num2(dData[`col_${saleIdx}`]) : amount,
-                      acquisitionCost: costIdx >= 0 ? num2(dData[`col_${costIdx}`]) : 0,
-                      improvementCost: 0,
+                      // Core AIS fields (extracted verbatim — no assumptions)
+                      name: dData.security_name || deductorName,
+                      isin: dData.isin || dData.security_code || '',
+                      securityClass: secClass,
+                      securityCode: dData.security_code || '',
+                      amcName: dData.amc_name || '',
+                      quantity: qty,
+                      salePricePerUnit: salePrice,
+                      fullConsideration: saleCons,
+                      totalSaleValue: saleCons,
+                      saleValue: saleCons,
+                      acquisitionCost: cost,
+                      costWithoutIndexation: cost,
+                      actualCost: cost,
+                      stt,
+                      fmvPerUnit: unitFmv,
+                      totalFmv,
+                      fairMarketValue: totalFmv,
+                      indexedAcquisitionCost: indexedCost,
+                      indexedCostOfAcquisition: indexedCost,
                       transferExpenses: 0,
                       loss94: 0,
-                      dateOfSale: dateIdx >= 0 ? dData[`col_${dateIdx}`] : '',
+                      dateOfSale: dData.transfer_date || '',
+                      dateOfTransfer: dData.transfer_date || '',
                       assetType: isLongTerm ? 'LTCG' : 'STCG',
-                      securityClass: secClass,
+                      debitType: dData.debit_type || '',
+                      creditType: dData.credit_type || '',
                       _isMF: isMF,
                       _isListedEquity: code === 'SFT-17-LES(M)',
+                      _rawAssetType: dData.asset_type || '',
                     });
                   }
                 }
@@ -1830,17 +1844,21 @@ export default function ITRComputationPage() {
                     const costVal = tx.acquisitionCost || 0;
                     schedule112A.push({
                       ...routed,
-                      // AIS doesn't carry acquisition date; default to
-                      // 'After 31-Jan-2018' since these are recent MF purchases
-                      shareOnOrBefore: 'AE',
+                      // AIS carries these fields verbatim — pass them through
+                      isin: tx.isin || '',
+                      name: tx.name || '',
+                      quantity: tx.quantity || 0,
+                      salePricePerUnit: tx.salePricePerUnit || 0,
                       totalSaleValue: saleVal,
                       costWithoutIndexation: costVal,
-                      totalFmv: 0,
+                      acquisitionCost: costVal,
+                      fmvPerUnit: tx.fmvPerUnit || 0,
+                      totalFmv: tx.totalFmv || 0,
                       transferExpenses: tx.transferExpenses || 0,
-                      // LTCG before lower of B1/B2 = sale - cost (readout)
-                      ltcgBeforeLower: Math.max(0, saleVal - costVal),
-                      totalDeductions: tx.transferExpenses || 0,
-                      balance: Math.max(0, saleVal - costVal - (tx.transferExpenses || 0)),
+                      // NOTE: 'shareOnOrBefore' (BE/AE) is NOT set because
+                      // the AIS doesn't carry the acquisition date.  The
+                      // user must select it — it's a required statutory
+                      // field.  Don't assume.
                     });
                   } else {
                     stEquity.push(routed);
