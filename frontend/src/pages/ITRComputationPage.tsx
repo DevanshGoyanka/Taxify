@@ -638,9 +638,9 @@ export default function ITRComputationPage() {
             setBackendTaxResult((previous: any) => ({
               ...(previous || {}),
               capitalGainsSummary,
-              capitalGainsStatus: details?.status || capitalGainsSummary.status,
-              capitalGainsIssues: details?.issues || capitalGainsSummary.issues || [],
-              capitalGainsEligibility: details?.eligibility || capitalGainsSummary.eligibility || {},
+              capitalGainsStatus: details?.capitalGainsStatus || capitalGainsSummary.status,
+              capitalGainsIssues: details?.capitalGainsIssues || capitalGainsSummary.issues || [],
+              capitalGainsEligibility: details?.capitalGainsEligibility || capitalGainsSummary.eligibility || {},
             }));
           }
           const msg = typeof err?.message === 'string' && err.message.length > 0

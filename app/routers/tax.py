@@ -1168,7 +1168,20 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
     if res.errors:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"message": "Tax computation is not valid for the selected form.", "errors": res.errors},
+            detail={
+                "message": "Tax computation is not valid for the selected form.",
+                "errors": res.errors,
+                # Include the capital-gains summary so the frontend can
+                # overlay the backend's per-scrip computed values even
+                # when the overall computation fails (e.g. 112A losses
+                # or ITR-1 eligibility failures).  Without this, the CG
+                # tab readouts show ₹0 because the frontend's .catch
+                # handler can't find the summary.
+                "capitalGainsSummary": capital_gains_summary,
+                "capitalGainsStatus": capital_gains_summary["status"] if capital_gains_summary else "LEGACY",
+                "capitalGainsIssues": capital_gains_summary["issues"] if capital_gains_summary else [],
+                "capitalGainsEligibility": capital_gains_summary["eligibility"] if capital_gains_summary else {"ITR-1": True, "ITR-4": True},
+            },
         )
         
     # Build frontend response structure
