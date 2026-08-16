@@ -180,7 +180,20 @@ Each phase is **independently testable** and ends with a manual-test gate. The n
 4. No legacy alias zeroing code runs (`buildPhase1Payload`'s `s80C=0` etc. is gone on this path).
 5. Eligibility engine reads typed fields (`draft.employers.length`, `draft.taxes.tds.length`) — no scalar drift.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed (partial) on 2026-08-17. The compute, save, and generate paths now operate directly on the typed draft when `VITE_USE_V2=1` — `composeLegacyPayload` and `buildPhase1Payload` no longer run on those paths. A canonical immutable `editorModelV2` (no `extras`/compatibility envelope) is exported and tested for Phase 5 migration. Flat import-merge patches (`setFormData`) still route through the legacy envelope until Phase 5 provides typed import mappers; this is the documented remaining boundary, not a regression.
+
+**Implemented:**
+- `frontend/src/domain/returns/editorModelV2.ts` — `ReturnEditorModelV2 = { draft: ReturnDraft }`, immutable updaters delegating to the existing typed draft-only logic with `compatibility` stripped.
+- `frontend/src/domain/returns/editorModel.ts` — `composeLegacyPayload`/`applyLegacyPatch`/`applyLegacySetStateAction`/`applyLegacyActionWithSnapshot` marked `@deprecated`.
+- `frontend/src/domain/returns/index.ts` — re-exports.
+- `frontend/src/pages/ITRComputationPage.tsx` — `taxSummaryPayload` memo returns a minimal object under v2; `handleSave` persists `currentEditor.draft` directly; `handleGenerateCbdtJson` v2 branch saves then generates without composing a legacy payload.
+- `frontend/src/domain/returns/editorModelV2.test.ts` — 3 tests (immutability, idempotent updates, no compatibility envelope).
+
+**Validation:** 29 targeted tests passed (3 editorModelV2 + 18 editorModel + 8 repositoryFactory); `tsc -b` reports the same 5 pre-existing errors, 0 in Phase 4 files.
+
+**Deferred follow-ups:**
+- Migrate `setFormData`/import-merge patches and `updateEditor` manager bindings to consume `editorModelV2` directly (Phase 5 typed import mappers).
+- Validate flow remains legacy until Phase 5+.
 
 ---
 

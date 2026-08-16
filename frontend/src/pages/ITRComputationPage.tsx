@@ -596,8 +596,12 @@ export default function ITRComputationPage() {
   }, [eligibilityResult, formLockedByUser, itrForm]);
 
   const taxSummaryPayload = useMemo(
-    () => ({ ...buildPhase1Payload(formData), form: itrForm }),
-    [formData, itrForm],
+    // Phase 4 (v2): the canonical draft is sent directly to the v2 compute
+    // endpoint via editorRef.current.draft (see the effect below). This
+    // memo only feeds the legacy flat-blob compute path, so under v2 we
+    // return a minimal object to avoid composing legacy fields unnecessarily.
+    () => useCanonicalV2 ? { form: itrForm, assessmentYear: effectiveAssessmentYear, regime } : { ...buildPhase1Payload(formData), form: itrForm },
+    [useCanonicalV2, formData, itrForm, effectiveAssessmentYear, regime],
   );
   // Editor synchronization can recreate an equivalent formData object many
   // times. Depend on the serialized calculation contract so identity-only
@@ -758,6 +762,21 @@ export default function ITRComputationPage() {
     try {
       const currentEditor = editorRef.current;
       if (!currentEditor) throw new Error('Return is not loaded');
+
+      // Phase 4 v2 path: operate directly on the typed draft and avoid the
+      // legacy flat-blob round-trip (composeLegacyPayload / buildPhase1Payload)
+      // entirely on save. The canonical repository strips compatibility${crlf}      // and pins the AY.
+      if (useCanonicalV2 && currentEditor.draft) {
+        await returnRepository.save(clientId, {
+          ...currentEditor.draft,
+          assessmentYear: effectiveAssessmentYear,
+          form: itrForm,
+          regime,
+        });
+        toast.success('Saved ✓');
+        return;
+      }
+
       const currentSnapshot = composeLegacyPayload(currentEditor);
       // Saving persists an incomplete draft. Official validation is deliberately
       // performed only by the Validate flow and before JSON generation/filing.
@@ -847,9 +866,9 @@ export default function ITRComputationPage() {
     }
     try {
       const currentEditor = editorRef.current;
-      const liveDraft = currentEditor ? { ...buildPhase1Payload(composeLegacyPayload(currentEditor)), form: itrForm, itrForm: itrForm } : undefined;
       if (useCanonicalV2) {
-        // Phase 3 v2 path: generate from the saved canonical draft only.
+        // Phase 4 v2 path: generate from the typed canonical draft without
+        // composing or normalizing a legacy payload.
         // The v2 endpoint requires a previously-persisted draft, so save
         // first to guarantee the latest editor state is on the server.
         if (currentEditor?.draft) {
@@ -862,6 +881,7 @@ export default function ITRComputationPage() {
         }
         await itrV2.generate(clientId, effectiveAssessmentYear);
       } else {
+        const liveDraft = currentEditor ? { ...buildPhase1Payload(composeLegacyPayload(currentEditor)), form: itrForm, itrForm: itrForm } : undefined;
         await itrApi.generateCbdtJson(clientId, effectiveAssessmentYear, liveDraft);
       }
       toast.success(`CBDT ${itrForm} JSON generated ✓`);

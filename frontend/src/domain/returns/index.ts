@@ -7,6 +7,8 @@ export * from './canonicalRepository';
 export * from './repositoryFactory';
 export * from './state';
 export * from './editorModel';
+export * as editorModelV2 from './editorModelV2';
+export type { ReturnEditorModelV2, DraftUpdater } from './editorModelV2';
 export * from './tdsSections';
 
 // ── CBDT eligibility & schedule registry ─────────────────────────────────────

@@ -212,7 +212,10 @@ export function createReturnEditorModel(draft: ReturnDraft, extras: LegacyRecord
   return { draft: cleanDraft, extras: { ...clone(compatibility), ...clone(extras) } };
 }
 
-/** Composes the legacy projection; canonical serialization always wins over extras. */
+/** Composes the legacy projection; canonical serialization always wins over extras.
+ * @deprecated Under the v2 flag the editor operates on the typed draft via
+ * `editorModelV2` and avoids composing a legacy flat blob. Use the v2
+ * convenience updaters when `VITE_USE_V2=1`. */
 export function composeLegacyPayload(model: ReturnEditorModel): LegacyRecord {
   return mergeCompatibility(model.extras, serializeReturnDraftToLegacy(clone(model.draft))) as LegacyRecord;
 }
@@ -222,13 +225,18 @@ export function patchCompatibilityExtras(model: ReturnEditorModel, patch: Legacy
   return { draft: clone(model.draft), extras: { ...clone(model.extras), ...clone(patch) } };
 }
 
-/** Applies a flat import patch atomically while retaining all unrelated current data. */
+/** Applies a flat import patch atomically while retaining all unrelated current data.
+ * @deprecated This compatibility boundary is retained for legacy/import merges.
+ * Canonical v2 field editing should use `editorModelV2` updaters. */
 export function applyLegacyPatch(model: ReturnEditorModel, patch: LegacyRecord): ReturnEditorModel {
   const merged = mergeCompatibility(composeLegacyPayload(model), patch) as LegacyRecord;
   return createReturnEditorModelFromLegacy(merged);
 }
 
-/** Evaluates a React-style legacy update against the latest projection and applies it atomically. */
+/** Evaluates a React-style legacy update against the latest projection and applies it atomically.
+ * @deprecated Under the v2 flag field updates should route through typed
+ * `editorModelV2` updaters. This path remains for the legacy-compat import
+ * merge only. */
 export function applyLegacySetStateAction(model: ReturnEditorModel, action: LegacySetStateAction): ReturnEditorModel {
   const current = composeLegacyPayload(model);
   const requested = typeof action === 'function' ? action(clone(current)) : action;
@@ -236,7 +244,9 @@ export function applyLegacySetStateAction(model: ReturnEditorModel, action: Lega
   return applyLegacyPatch(model, clone(requested));
 }
 
-/** Applies an update and returns the exact detached payload that should be saved immediately. */
+/** Applies an update and returns the exact detached payload that should be saved immediately.
+ * @deprecated Under the v2 flag the editor persists the typed draft directly
+ * and no longer needs an immediate-save snapshot. Prefer `editorModelV2` updaters. */
 export function applyLegacyActionWithSnapshot(
   model: ReturnEditorModel,
   action: LegacySetStateAction,
