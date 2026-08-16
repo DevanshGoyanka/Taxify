@@ -1560,23 +1560,16 @@ export default function ITRComputationPage() {
                   return total;
                 };
 
-                // ── Salary: TDS-192 → employer entries ──
+                // ── Salary: TDS-192 → TDS tab entries ONLY ──
+                // Do NOT create employer entries from B1 TDS-192 — that
+                // double-counts salary.  The authoritative salary figure
+                // comes from B7 TDS-Ann.II-SAL (Annexure II), handled in
+                // the second pass below.
                 if (section === 'B1' && code === 'TDS-192') {
                   const totalIncome = sumActive2('AMOUNT PAID') || amount;
                   const totalTds = sumActive2('TDS DEDUCTED') || 0;
-                  employerEntries.push({
-                    employerName: deductorName,
-                    employerTAN: deductorTan,
-                    employerPAN: e.institution_pan || '',
-                    basic: totalIncome,
-                    da: 0, hra: 0, bonus: 0, allowances: 0, perquisites: 0,
-                    professionalTax: 0,
-                    tdsDeducted: totalTds,
-                    grossSalary: totalIncome,
-                    netSalary: totalIncome,
-                    financialYear: '',
-                    verified26AS: true,
-                  });
+                  // TDS tab entry only — no employer entry here
+                  // (employer entries come from B7 TDS-Ann.II-SAL)
                 }
 
                 // ── Salary: B7 TDS-Ann.II-SAL → employer with break-up ──
@@ -1826,17 +1819,29 @@ export default function ITRComputationPage() {
                   const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
                   const purIdx = findIdx('PURCHASE');
                   const saleIdx = findIdx('SALES');
+                  const amcIdx = findIdx('AMC NAME');
+                  const clientIdx = findIdx('CLIENT ID');
+                  const holderIdx = findIdx('HOLDER FLAG');
                   for (const d of (e.details || [])) {
                     const dData = d.data || {};
                     const status = (dData[statusCol] || '').toString().toUpperCase();
                     if (status !== 'ACTIVE') continue;
                     const purchaseAmount = purIdx >= 0 ? num2(dData[`col_${purIdx}`]) : amount;
+                    const saleAmount = saleIdx >= 0 ? num2(dData[`col_${saleIdx}`]) : 0;
+                    // AMC name may span 2 columns (col_3 + col_4) because
+                    // the RTA name is split across cells.  Join them.
+                    const amcName = amcIdx >= 0
+                      ? [dData[`col_${amcIdx}`], dData[`col_${amcIdx + 1}`]].filter(Boolean).join(' ')
+                      : deductorName;
                     capitalGainTransactions.push({
                       id: `cg-${code}-pur-${d.sr_no || ''}`,
                       recordKind: 'EVIDENCE',
                       evidenceSide: 'PURCHASE',
                       assetType: backendAssetType,
-                      name: deductorName,
+                      name: amcName,
+                      amcName,
+                      clientId: clientIdx >= 0 ? dData[`col_${clientIdx}`] : '',
+                      holderFlag: holderIdx >= 0 ? dData[`col_${holderIdx}`] : '',
                       // Purchase evidence: cost is set, sale is 0
                       saleValue: 0,
                       actualCost: purchaseAmount,
