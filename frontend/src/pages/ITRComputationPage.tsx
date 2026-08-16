@@ -42,6 +42,13 @@ import { mapPrefillToFormData } from '../utils/mapPrefillToFormData';
 // TEMPORARILY DISABLED (Phase 2 testing) — See FILED_RETURN_REACTIVATION_GUIDE.md
 // REACTIVATE: import { mapFiledReturnToFormData } from '../utils/mapFiledReturnToFormData';
 import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
+import { mergeDraft } from '../domain/returns/draftPatch';
+import { replaceDraft } from '../domain/returns/editorModelV2';
+import { mapPrefillToDraftPatch } from '../utils/mapPrefillToDraftPatch';
+import { mapReconciledToDraftPatch } from '../utils/mapReconciledToDraftPatch';
+import { mapAisToDraftPatch } from '../utils/mapAisToDraftPatch';
+import { map26asToDraftPatch } from '../utils/map26asToDraftPatch';
+import { mapTisToDraftPatch } from '../utils/mapTisToDraftPatch';
 
 const useCanonicalV2 = isCanonicalV2Enabled();
 const returnRepository = createReturnRepository();
@@ -989,8 +996,17 @@ export default function ITRComputationPage() {
         delete safeUpdate[key];
       }
     }
-    const mergedImportData = { ...currentDraft, ...safeUpdate };
-    setFormData(mergedImportData);
+    const mergedImportData = useCanonicalV2 && editorRef.current
+      ? mergeDraft(
+          mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(prefillData)),
+          mapReconciledToDraftPatch(reconciledImportData),
+        )
+      : { ...currentDraft, ...safeUpdate };
+    if (useCanonicalV2) {
+      updateEditor((current) => ({ ...replaceDraft(mergedImportData as any), extras: current.extras }));
+    } else {
+      setFormData(mergedImportData);
+    }
 
     // Collect discrepancy messages for the warning banner
     const msgs: string[] = [];
@@ -1102,9 +1118,11 @@ export default function ITRComputationPage() {
     // ── Reassess eligibility after import ────────────────────────────────
     setFormLockedByUser(false);
 
-    // Save to backend so form state persists
-    itrApi.saveFormData(clientId, effectiveAssessmentYear, mergedImportData)
-      .catch(err => console.warn('Background save after import failed:', err));
+    // Save to backend so form state persists using the active storage contract.
+    const importSave = useCanonicalV2
+      ? returnRepository.save(clientId, mergedImportData as any)
+      : itrApi.saveFormData(clientId, effectiveAssessmentYear, mergedImportData);
+    importSave.catch(err => console.warn('Background save after import failed:', err));
 
     setShowImportConfirmModal(false);
     setShowStatusBox(false);
@@ -1202,6 +1220,23 @@ export default function ITRComputationPage() {
           return;
         }
         
+        // Canonical v2 imports bypass the legacy flat-blob adapter entirely.
+        // The inline mappings below remain unchanged for flag-off behavior.
+        if (useCanonicalV2 && editorRef.current && typeStr !== 'prefill') {
+          const patch = typeStr === '26as-pdf' || typeStr === '26as-txt'
+            ? map26asToDraftPatch(data)
+            : typeStr === 'tis-pdf'
+              ? mapTisToDraftPatch(data)
+              : mapAisToDraftPatch(data);
+          const merged = mergeDraft(editorRef.current.draft, patch);
+          updateEditor((current) => ({ ...replaceDraft(merged), extras: current.extras }));
+          await returnRepository.save(clientId, merged);
+          toast.dismiss();
+          toast.success(`${typeStr.toUpperCase()} imported into the canonical draft`);
+          setShowImportMenu(false);
+          return;
+        }
+
         // Auto-populate from all available documents
         if (type === 'ais-pdf' || type === 'ais-json' || type === 'tis-pdf' || type === '26as-pdf' || type === '26as-txt') {
           // For 26AS, transform TDS entries to frontend format
@@ -2147,13 +2182,19 @@ export default function ITRComputationPage() {
           const prefillResult = mapPrefillToFormData(importResult.data || importResult);
 
           if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
-          // Persist the merged form data so a reload preserves the import.
-          const mergedUpdate = prefillResult.formDataUpdate;
-          await itrApi.saveFormData(clientId, effectiveAssessmentYear, composeLegacyPayload({
-            draft: { ...editorRef.current.draft, ...mergedUpdate } as any,
-            extras: editorRef.current.extras ?? {},
-          }));
-          setFormData((prev: any) => ({ ...prev, ...mergedUpdate }));
+          if (useCanonicalV2) {
+            const merged = mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(importResult.data || importResult));
+            updateEditor((current) => ({ ...replaceDraft(merged), extras: current.extras }));
+            await returnRepository.save(clientId, merged);
+          } else {
+            // Persist the merged form data so a reload preserves the import.
+            const mergedUpdate = prefillResult.formDataUpdate;
+            await itrApi.saveFormData(clientId, effectiveAssessmentYear, composeLegacyPayload({
+              draft: { ...editorRef.current.draft, ...mergedUpdate } as any,
+              extras: editorRef.current.extras ?? {},
+            }));
+            setFormData((prev: any) => ({ ...prev, ...mergedUpdate }));
+          }
 
           setShowImportMenu(false);
 

@@ -221,7 +221,7 @@ Each phase is **independently testable** and ends with a manual-test gate. The n
 6. Each import persists the **typed draft** (not flat blob) — verify via DB.
 7. No `interestSB`/`interestFD`/`dividendShares` legacy scalars are written by any import path.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-17. The `VITE_USE_V2=1` import paths now map Prefill, reconciled portal data, AIS, TIS, and 26AS directly into canonical `ReturnDraftPatch` values and merge them with `mergeDraft`; the flag-off inline/flat paths remain intact. Twelve focused mapper/merge tests pass, the full frontend suite passes 130/131 with only the pre-existing Schedule HP test failure, and TypeScript reports only the five pre-existing errors with zero errors in Phase 5 files. Live portal/DB persistence verification remains a manual follow-up.
 
 ---
 
