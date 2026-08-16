@@ -1806,6 +1806,53 @@ export default function ITRComputationPage() {
                   }
                 }
 
+                // ── Capital Gains: B2 SFT-17(Pur) / SFT-18(Pur) purchase evidence ──
+                // These are PURCHASE records (holdings), not disposals.
+                // They are evidence for future sale matching, not taxable
+                // transactions.  Add them as evidence rows so the backend's
+                // compute_restricted_112a can match them against future sales.
+                // They carry NO sale value (saleValue=0, actualCost>0) so the
+                // backend treats them as purchase-only evidence.
+                if (section === 'B2' && (code === 'SFT-17(PUR)' || code === 'SFT-18(PUR)')) {
+                  const isMF = code.includes('18');
+                  const backendAssetType = isMF ? 'EQUITY_ORIENTED_MUTUAL_FUND' : 'LISTED_EQUITY';
+                  const header: string[] = e.detail_header || [];
+                  const findIdx = (part: string) => {
+                    for (let i = 0; i < header.length; i++) {
+                      if (header[i].toUpperCase().includes(part)) return i;
+                    }
+                    return -1;
+                  };
+                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
+                  const purIdx = findIdx('PURCHASE');
+                  const saleIdx = findIdx('SALES');
+                  for (const d of (e.details || [])) {
+                    const dData = d.data || {};
+                    const status = (dData[statusCol] || '').toString().toUpperCase();
+                    if (status !== 'ACTIVE') continue;
+                    const purchaseAmount = purIdx >= 0 ? num2(dData[`col_${purIdx}`]) : amount;
+                    capitalGainTransactions.push({
+                      id: `cg-${code}-pur-${d.sr_no || ''}`,
+                      recordKind: 'EVIDENCE',
+                      evidenceSide: 'PURCHASE',
+                      assetType: backendAssetType,
+                      name: deductorName,
+                      // Purchase evidence: cost is set, sale is 0
+                      saleValue: 0,
+                      actualCost: purchaseAmount,
+                      fullConsideration: 0,
+                      acquisitionCost: purchaseAmount,
+                      acquisitionDate: '',
+                      transferDate: '',
+                      transferExpenses: 0,
+                      _isPurchase: true,
+                      _isMF: isMF,
+                      _isListedEquity: !isMF,
+                      _isLongTerm: false,
+                    });
+                  }
+                }
+
                 // ── Business: TDS-194C/194H/194R/194T/194N ──
                 // Note: TDS-194S is VDA/crypto → Capital Gains
                 // Note: TDS-194IA is real estate → Capital Gains
@@ -1905,6 +1952,12 @@ export default function ITRComputationPage() {
                   saleValue: tx.fullConsideration || 0,
                   actualCost: tx.acquisitionCost || 0,
                 };
+                // Purchase-only evidence rows are NOT routed to any CG
+                // schedule section — they're holdings, not disposals.
+                // They stay in capitalGainTransactions as evidence.
+                if (tx._isPurchase) {
+                  continue;
+                }
                 if (tx._isVda) {
                   vda.push({
                     ...routed,
