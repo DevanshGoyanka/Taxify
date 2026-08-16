@@ -1654,6 +1654,8 @@ export default function ITRComputationPage() {
                   if (details.length === 0) {
                     // Summary-only entry: no per-scrip detail, use the
                     // top-level amount as the sale consideration.
+                    const isMF = code.includes('18');
+                    const backendAssetType = isMF ? 'EQUITY_ORIENTED_MUTUAL_FUND' : 'LISTED_EQUITY';
                     capitalGainTransactions.push({
                       id: `cg-${code}-${e.information_code || deductorName}`,
                       recordKind: 'TRANSACTION',
@@ -1670,10 +1672,18 @@ export default function ITRComputationPage() {
                       transferExpenses: 0,
                       loss94: 0,
                       dateOfSale: '',
-                      assetType: 'STCG',  // default; user can reclassify
+                      // Backend fields for completed-sale detection
+                      aisHoldingPeriod: '',
+                      transferDate: '',
+                      acquisitionDate: '',
+                      assetType: backendAssetType,
+                      sttPaidOnAcquisition: !isMF,
+                      sttPaidOnTransfer: !isMF,
+                      recognizedExchange: !isMF,
                       _isListedEquity: code === 'SFT-17-LES(M)',
-                      _isMF: code.includes('18'),
+                      _isMF: isMF,
                       _rawAssetType: '',
+                      _isLongTerm: false,
                     });
                   } else {
                   for (const d of details) {
@@ -1682,8 +1692,11 @@ export default function ITRComputationPage() {
                     if (status !== 'ACTIVE') continue;
                     const assetTypeRaw = (dData.asset_type || '').toString().toLowerCase();
                     const isLongTerm = assetTypeRaw.includes('long');
-                    const secClass = (dData.security_class || '').toString();
-                    const isMF = code.includes('18') || secClass.toLowerCase().includes('fund');
+                    const secClass = (dData.security_class || '').toString().toLowerCase();
+                    const isMF = code.includes('18') || secClass.includes('fund');
+                    // Map to the backend's _ASSET_ALIASES keys:
+                    //   'LISTED_EQUITY' or 'EQUITY_ORIENTED_MUTUAL_FUND'
+                    const backendAssetType = isMF ? 'EQUITY_ORIENTED_MUTUAL_FUND' : 'LISTED_EQUITY';
                     const qty = num2(dData.quantity);
                     const salePrice = num2(dData.sale_price_per_unit);
                     const saleCons = num2(dData.sales_consideration);
@@ -1732,12 +1745,23 @@ export default function ITRComputationPage() {
                       saleValue: num2(dData.sales_consideration),
                       // Backend checks 'actualCost' for positive cost.
                       actualCost: num2(dData.cost_of_acquisition),
-                      assetType: isLongTerm ? 'LTCG' : 'STCG',
-                      debitType: dData.debit_type || '',
-                      creditType: dData.credit_type || '',
+                      // Map to the backend's _ASSET_ALIASES keys so the
+                      // row is recognized as a valid 112A asset (not an
+                      // unsupported asset that gets skipped).
+                      assetType: backendAssetType,
+                      // For LISTED_EQUITY the backend requires STT flags.
+                      // The AIS SFT-17-LES(M) is a depository-reported sale
+                      // of listed equity on a recognized exchange — STT is
+                      // paid.  Set these so the backend doesn't reject the row.
+                      sttPaidOnAcquisition: !isMF,
+                      sttPaidOnTransfer: !isMF,
+                      recognizedExchange: !isMF,
                       _isMF: isMF,
                       _isListedEquity: code === 'SFT-17-LES(M)',
                       _rawAssetType: dData.asset_type || '',
+                      _isLongTerm: isLongTerm,
+                      debitType: dData.debit_type || '',
+                      creditType: dData.credit_type || '',
                     });
                   }
                   }
@@ -1887,12 +1911,12 @@ export default function ITRComputationPage() {
                     consideration: tx.fullConsideration || 0,
                   });
                 } else if (tx._isImmovable) {
-                  if (tx.assetType === 'LTCG') ltImmovable.push(routed);
+                  if (tx._isLongTerm) ltImmovable.push(routed);
                   else stImmovable.push(routed);
                 } else if (tx._isListedEquity || tx._isMF) {
                   // Listed equity / MF → Schedule 112A (long-term) or
                   // stEquity (short-term, section 111A)
-                  if (tx.assetType === 'LTCG') {
+                  if (tx._isLongTerm) {
                     const saleVal = tx.fullConsideration || 0;
                     const costVal = tx.acquisitionCost || 0;
                     schedule112A.push({
@@ -1918,7 +1942,7 @@ export default function ITRComputationPage() {
                   }
                 } else {
                   // Other assets
-                  if (tx.assetType === 'LTCG') ltOtherAssets.push(routed);
+                  if (tx._isLongTerm) ltOtherAssets.push(routed);
                   else stOtherAssets.push(routed);
                 }
               }
@@ -1935,10 +1959,10 @@ export default function ITRComputationPage() {
               };
               formDataUpdate.capitalGainTransactions = capitalGainTransactions;
               formDataUpdate.ltcgProperty = capitalGainTransactions
-                .filter((e) => e.assetType === 'LTCG')
+                .filter((e) => e._isLongTerm)
                 .reduce((s, e) => s + ((e.fullConsideration || 0) - (e.acquisitionCost || 0)), 0);
               formDataUpdate.stcgProperty = capitalGainTransactions
-                .filter((e) => e.assetType === 'STCG')
+                .filter((e) => !e._isLongTerm)
                 .reduce((s, e) => s + ((e.fullConsideration || 0) - (e.acquisitionCost || 0)), 0);
             }
             if (businessEntries.length > 0) {
