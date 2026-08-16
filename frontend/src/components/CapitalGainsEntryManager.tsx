@@ -193,10 +193,11 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
 
   // Overlay the backend's computed per-scrip values onto each schedule112A
   // row so the readout fields (ltcgBeforeLower, balance, totalDeductions)
-  // display the engine's computation instead of a stale row value.
+  // display the engine's computation.  These are READ-ONLY overlays — the
+  // user edits the underlying row, and the readouts are re-derived.
   // The backend's summary.transactions[i] corresponds to schedule112A row i.
   const computedTx: JsonRow[] = Array.isArray(summary?.transactions) ? summary!.transactions as JsonRow[] : [];
-  const schedule112AComputed: JsonRow[] = (data.schedule112A || []).map((row, index) => {
+  const overlayComputedReadouts = (rows: JsonRow[]): JsonRow[] => rows.map((row, index) => {
     const ct = computedTx[index];
     if (!ct) return row;
     const saleValue = Number(row.totalSaleValue ?? row.saleValue ?? 0);
@@ -205,15 +206,13 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
     const gain = Number(ct.gain ?? 0);
     return {
       ...row,
-      // ltcgBeforeLower: the engine's computed gain (signed) for this scrip
       ltcgBeforeLower: gain,
-      // totalDeductions: transfer expenses (statutory, no indexation for 112A)
       totalDeductions: transferExpenses,
-      // balance: sale - cost - deductions (signed)
       balance: saleValue - actualCost - transferExpenses,
     };
   });
-  const schedule112AData = { ...data, schedule112A: schedule112AComputed };
+  const schedule112AForDisplay = overlayComputedReadouts(data.schedule112A || []);
+  const setSchedule112ARows = (rows: JsonRow[]): void => onChange({ ...data, schedule112A: rows });
 
   const rows = (key: SectionKey): JsonRow[] => Array.isArray(data[key]) ? data[key] as JsonRow[] : [];
   const sumRows = (key: string, field: string): number => rows(key as SectionKey).reduce((acc, row) => acc + Number(row[field] || 0), 0);
@@ -288,8 +287,8 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
 
     <SectionTitle title="C. Schedule 112A — equity shares, equity-oriented funds and business-trust units" />
     <ApplicabilityBadge form={normalizedForm} permitted={!simple} />
-    <RowSection title="Schedule 112A scrip details" disabled={simple} rows={schedule112AData.schedule112A} fields={SCRIP_FIELDS} onChange={(rows) => setRows('schedule112A', rows)} />
-    <ScheduleTotals title="Schedule 112A totals" rows={schedule112AData.schedule112A} />
+    <RowSection title="Schedule 112A scrip details" disabled={simple} rows={schedule112AForDisplay} fields={SCRIP_FIELDS} onChange={setSchedule112ARows} />
+    <ScheduleTotals title="Schedule 112A totals" rows={schedule112AForDisplay} />
     <AggregateCard fields={[{ key: 'balance', label: 'NRI / FII Schedule 112A balance', kind: 'signed' }, { key: 'deduction54F', label: 'NRI / FII deduction u/s 54F', kind: 'money' }]} row={data.ltNri112A} disabled={simple} patch={(patch) => patchObject('ltNri112A', patch)} />
     <SectionTitle title="D. Schedule 115AD — FII/FPI securities" />
     <RowSection title="Schedule 115AD scrip details" disabled={simple} rows={data.schedule115AD} fields={SCRIP_FIELDS} onChange={(rows) => setRows('schedule115AD', rows)} />
