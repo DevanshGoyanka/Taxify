@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -160,3 +160,97 @@ def save_client_itr_v2(
 
     # Return the exact typed JSON we persisted — round-trip fidelity.
     return json.loads(payload_json)
+
+
+@router.post("/{year}/generate-cbdt-json")
+def generate_client_cbdt_json_v2(
+    client_id: str,
+    year: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Generate schema-valid CBDT JSON from the saved canonical draft only.
+
+    Unlike the legacy endpoint, this route does not accept a live flat body.
+    It loads ``ClientITR.form_data``, requires a ``schemaVersion`` marker,
+    validates the complete ``ReturnDraft``, then runs the Phase 2 single-
+    compute filing gateway.
+
+    Args:
+        client_id: Public UUID or legacy numeric client identifier.
+        year: Assessment year of the saved draft.
+        current_user: Authenticated owner injected by FastAPI.
+        db: Request database session.
+
+    Returns:
+        Download response containing validated official CBDT JSON.
+
+    Raises:
+        HTTPException: For missing drafts, legacy blobs, canonical validation,
+            mapping/computation errors, or official schema failures.
+    """
+    client = resolve_owned_client(client_id, current_user.id, db)
+    itr = (
+        db.query(ClientITR)
+        .filter(ClientITR.client_id == client.id, ClientITR.year == year)
+        .first()
+    )
+    if itr is None or not itr.form_data or itr.form_data == "{}":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No saved canonical ITR draft exists for this assessment year.",
+        )
+    try:
+        payload = json.loads(itr.form_data)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": "Saved ITR data is not valid JSON.", "errors": [str(exc)]},
+        ) from exc
+    if not isinstance(payload, dict) or "schemaVersion" not in payload:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Saved ITR data is a legacy flat blob.",
+                "errors": [
+                    "Migrate or save this return through the canonical /v2 endpoint before CBDT generation."
+                ],
+            },
+        )
+    try:
+        draft = ReturnDraft.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Saved ITR draft failed canonical validation.",
+                "errors": [str(error) for error in exc.errors()],
+            },
+        ) from exc
+    if draft.assessmentYear and draft.assessmentYear != year:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Saved draft assessment year does not match the requested year.",
+                "errors": [f"Draft has {draft.assessmentYear}; URL requests {year}."],
+            },
+        )
+    from app.engine.filing_gateway_v2 import FilingGatewayV2Error, generate_cbdt_json
+
+    try:
+        official_json, _summary = generate_cbdt_json(draft)
+    except FilingGatewayV2Error as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": exc.message, "errors": exc.errors},
+        ) from exc
+    content = json.dumps(official_json, indent=2, default=str)
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f"attachment; filename=CBDT-ITR1_{client.pan}_{year}.json",
+            "X-CBDT-Computation-Status": "FORM_COMPUTATION",
+            "X-CBDT-Schema-Valid": "true",
+        },
+    )

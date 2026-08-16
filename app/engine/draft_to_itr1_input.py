@@ -553,7 +553,7 @@ def _map_bank_accounts(banks: list[DraftBankAccount]) -> list[BankAccount]:
             account_number=b.accountNumber or None,
             ifsc_code=b.ifscCode or None,
             account_type=_BANK_TYPE_MAP.get(b.accountType, BankAccountType("savings")),
-            is_primary_refund_account=b.useForRefund or idx == 0,
+            is_primary=b.useForRefund or idx == 0,
         ))
     return mapped
 

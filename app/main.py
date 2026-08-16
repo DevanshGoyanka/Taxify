@@ -66,6 +66,7 @@ from app.routers import (
     integration as integration_router,
     pan as pan_router,
     tax as tax_router,
+    tax_v2 as tax_v2_router,
     dashboard as dashboard_router,
     automation as automation_router,
 )
@@ -184,6 +185,7 @@ app.include_router(client_itr_v2_router.router)
 app.include_router(integration_router.router)
 app.include_router(pan_router.router)
 app.include_router(tax_router.router)
+app.include_router(tax_v2_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(eri_router.router)
 app.include_router(automation_router.router)

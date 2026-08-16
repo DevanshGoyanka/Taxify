@@ -108,6 +108,36 @@ def test_rich_draft_round_trip():
     assert restored.bankAccounts[0].accountType == "SB"
 
 
+def test_official_personal_fields_are_additive_and_round_trip():
+    draft = create_empty_draft("2026-27")
+    draft.personal.firstName = "Rahul"
+    draft.personal.middleName = "Kumar"
+    draft.personal.surnameOrOrgName = "Sharma"
+    draft.personal.fatherName = "Mohan Sharma"
+    draft.personal.aadhaar = "123412341234"
+    draft.personal.flatNo = "12A"
+    draft.personal.residenceName = "Taxify Heights"
+    draft.personal.roadOrStreet = "MG Road"
+    draft.personal.localityOrArea = "Central"
+    draft.personal.city = "Delhi"
+    draft.personal.stateCode = "07"
+    draft.personal.countryCode = "91"
+    draft.personal.pinCode = "110001"
+    restored = ReturnDraft.model_validate_json(draft.model_dump_json())
+    assert restored.personal.firstName == "Rahul"
+    assert restored.personal.surnameOrOrgName == "Sharma"
+    assert restored.personal.fatherName == "Mohan Sharma"
+    assert restored.personal.pinCode == "110001"
+
+
+def test_official_personal_fields_default_without_breaking_old_drafts():
+    draft = ReturnDraft.model_validate({"assessmentYear": "2026-27", "personal": {"name": "Rahul"}})
+    assert draft.personal.name == "Rahul"
+    assert draft.personal.firstName == ""
+    assert draft.personal.fatherName == ""
+    assert draft.personal.countryCode == "91"
+
+
 # ── extra="forbid" ───────────────────────────────────────────────────────────
 
 def test_rejects_unknown_top_level_key():

@@ -102,7 +102,21 @@ Each phase is **independently testable** and ends with a manual-test gate. The n
 4. The CBDT JSON from `/v2` is byte-identical (modulo key order) to the legacy gateway output for the same draft.
 5. No double compute: `/v2` generate calls `compute_itr1` exactly once (verify via log count or a counter in tests).
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-17. Phase 2 tests (3 compute + 5 filing gateway + 2 additive schema = 10 new) and legacy ITR-1/ERI regressions passed. The v2 compute endpoint is authenticated and the v2 CBDT endpoint refuses legacy flat blobs until Phase 7 migration.
+
+**Implemented:**
+- `app/engine/filing_gateway_v2.py` — single-pipeline service `compute_canonical_itr1` + `generate_cbdt_json` (compute once, reuse for summary + official JSON).
+- `app/routers/tax_v2.py` — `POST /v2/tax-summary/compute` (authenticated) accepting a canonical `ReturnDraft` body.
+- `app/routers/client_itr_v2.py` — `POST /v2/clients/{id}/itr/{year}/generate-cbdt-json` (loads saved canonical draft, rejects legacy blobs, validates, generates).
+- `app/main.py` — mounted `tax_v2_router`.
+- `app/schemas/return_draft.py` — additive `PersonalInfo` filing-profile fields (firstName/middleName/surnameOrOrgName/fatherName/aadhaar, primary + secondary contact, structured address) so the canonical draft can construct an `ITR1FilingProfile`; existing Phase 1 drafts remain valid.
+- `app/engine/draft_to_itr1_input.py` — 1-line bugfix (`is_primary_refund_account` → `is_primary`) matching the real `BankAccount` schema.
+- `tests/test_tax_v2_compute.py`, `tests/test_filing_gateway_v2.py`, extended `tests/test_return_draft_schema.py`.
+
+**Validation:** 52 backend tests passed (31 focused Phase 1/2 + 20 legacy regression + 1 event-loop policy), including a compute-once spy test and a real `validate_itr1_json` round-trip on a filing-ready draft.
+
+**Deferred follow-ups:**
+- Headline parity vs legacy compute is covered for GTI/tax/TDS/credits; the v2 summary is intentionally slimmer than the legacy 200-key dict (display fields are frontend concerns).
 
 ---
 

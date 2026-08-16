@@ -853,11 +853,30 @@ class FilingStatus(_StrictModel):
 
 
 class PersonalInfo(_StrictModel):
+    """Canonical taxpayer identity, contact, and official filing address."""
+
     name: str = Field(default="")
+    firstName: str = Field(default="")
+    middleName: str = Field(default="")
+    surnameOrOrgName: str = Field(default="")
+    fatherName: str = Field(default="")
     pan: str = Field(default="")
+    aadhaar: str = Field(default="")
     email: str = Field(default="")
     mobile: str = Field(default="")
+    secondaryEmail: str = Field(default="")
+    secondaryMobile: str = Field(default="")
+    secondaryMobileCountryCode: str = Field(default="")
     dateOfBirth: Optional[str] = Field(default=None)
+    flatNo: str = Field(default="")
+    residenceName: str = Field(default="")
+    roadOrStreet: str = Field(default="")
+    localityOrArea: str = Field(default="")
+    city: str = Field(default="")
+    stateCode: str = Field(default="")
+    countryCode: str = Field(default="91")
+    pinCode: str = Field(default="")
+    zipCode: str = Field(default="")
 
 
 class Verification(_StrictModel):
@@ -918,12 +937,29 @@ def draft_from_client_seed(client: object, assessment_year: str) -> ReturnDraft:
     """Seed a draft from a Client master row (personal info only).
 
     Mirrors the legacy ``GET /clients/{id}/itr/{year}`` fallback that
-    returns client master fields when no draft exists yet.
+    returns client master fields when no draft exists yet. The additive
+    official filing fields (firstName/surnameOrOrgName/fatherName/aadhaar/
+    address components) are seeded from the Client master when present so
+    the Phase 2 ``ITR1FilingProfile`` can be constructed without a
+    separate ``PersonalInfoTab`` import.
     """
     draft = create_empty_draft(assessment_year=assessment_year)
+    name = getattr(client, "name", "") or ""
+    first_name = getattr(client, "first_name", "") or ""
+    middle_name = getattr(client, "middle_name", "") or ""
+    surname = getattr(client, "surname", "") or ""
+    if not first_name and not surname and name:
+        # Client master only stored the full name — keep it on `name`
+        # so the mapper can surface it without losing the empty split.
+        pass
     draft.personal = PersonalInfo(
-        name=getattr(client, "name", "") or "",
+        name=name,
+        firstName=first_name,
+        middleName=middle_name,
+        surnameOrOrgName=surname,
+        fatherName=getattr(client, "father_name", "") or "",
         pan=getattr(client, "pan", "") or "",
+        aadhaar=getattr(client, "aadhaar", "") or "",
         email=getattr(client, "email", "") or "",
         mobile=getattr(client, "mobile", "") or "",
         dateOfBirth=getattr(client, "dob", None),
