@@ -1642,7 +1642,41 @@ export default function ITRComputationPage() {
                   // Detail rows carry NAMED fields (asset_type, cost_of_acquisition,
                   // stt, unit_fmv, fair_market_value, indexed_cost_of_acquisition,
                   // etc.) — extract every field the AIS provides verbatim.
-                  for (const d of (e.details || [])) {
+                  // When details is empty (summary-only), build a transaction
+                  // from the top-level entry amount.
+                  // Convert AIS date DD/MM/YYYY → ISO YYYY-MM-DD for the backend.
+                  const toIso = (d: any) => {
+                    const s = (d || '').toString();
+                    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                    return m ? `${m[3]}-${m[2]}-${m[1]}` : s;
+                  };
+                  const details = e.details || [];
+                  if (details.length === 0) {
+                    // Summary-only entry: no per-scrip detail, use the
+                    // top-level amount as the sale consideration.
+                    capitalGainTransactions.push({
+                      id: `cg-${code}-${e.information_code || deductorName}`,
+                      recordKind: 'TRANSACTION',
+                      name: deductorName,
+                      isin: '',
+                      quantity: 0,
+                      salePricePerUnit: 0,
+                      fullConsideration: amount,
+                      totalSaleValue: amount,
+                      saleValue: amount,
+                      acquisitionCost: 0,
+                      costWithoutIndexation: 0,
+                      actualCost: 0,
+                      transferExpenses: 0,
+                      loss94: 0,
+                      dateOfSale: '',
+                      assetType: 'STCG',  // default; user can reclassify
+                      _isListedEquity: code === 'SFT-17-LES(M)',
+                      _isMF: code.includes('18'),
+                      _rawAssetType: '',
+                    });
+                  } else {
+                  for (const d of details) {
                     const dData = d.data || {};
                     const status = (dData.status || '').toString().toUpperCase();
                     if (status !== 'ACTIVE') continue;
@@ -1683,8 +1717,8 @@ export default function ITRComputationPage() {
                       indexedCostOfAcquisition: indexedCost,
                       transferExpenses: 0,
                       loss94: 0,
-                      dateOfSale: dData.transfer_date || '',
-                      dateOfTransfer: dData.transfer_date || '',
+                      dateOfSale: toIso(dData.transfer_date),
+                      dateOfTransfer: toIso(dData.transfer_date),
                       assetType: isLongTerm ? 'LTCG' : 'STCG',
                       debitType: dData.debit_type || '',
                       creditType: dData.credit_type || '',
@@ -1692,6 +1726,7 @@ export default function ITRComputationPage() {
                       _isListedEquity: code === 'SFT-17-LES(M)',
                       _rawAssetType: dData.asset_type || '',
                     });
+                  }
                   }
                 }
 
@@ -1709,6 +1744,11 @@ export default function ITRComputationPage() {
                   const addrIdx = findIdx('PROPERTY ADDRESS');
                   const amtIdx = findIdx('TRANSACTION AMOUNT');
                   const stampIdx = findIdx('STAMP');
+                  const toIsoProp = (d: any) => {
+                    const s = (d || '').toString();
+                    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                    return m ? `${m[3]}-${m[2]}-${m[1]}` : s;
+                  };
                   for (const d of (e.details || [])) {
                     const dData = d.data || {};
                     const status = (dData[statusCol] || '').toString().toUpperCase();
@@ -1721,7 +1761,7 @@ export default function ITRComputationPage() {
                       acquisitionCost: 0,
                       improvementCost: 0,
                       transferExpenses: 0,
-                      dateOfSale: dateIdx >= 0 ? dData[`col_${dateIdx}`] : '',
+                      dateOfSale: toIsoProp(dateIdx >= 0 ? dData[`col_${dateIdx}`] : ''),
                       propertyAddress: addrIdx >= 0 ? dData[`col_${addrIdx}`] : '',
                       assetType: 'STCG',
                       _isImmovable: true,
