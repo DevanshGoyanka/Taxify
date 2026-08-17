@@ -20,8 +20,8 @@ import EmployerReconciliationModal from '../components/EmployerReconciliationMod
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import ExemptIncomeWorkspace from '../components/exemptincome/ExemptIncomeWorkspace';
 import {
-  createReturnRepository, isCanonicalV2Enabled, stripCompatibility,
-  applyLegacyActionWithSnapshot, applyLegacyPatch, applyLegacySetStateAction,
+  createReturnRepository, stripCompatibility,
+  applyLegacyPatch, applyLegacySetStateAction,
   banksToManager, challansToManager, composeLegacyPayload, createReturnEditorModelFromLegacy,
   deductionLoansToManager, familyPensionToManager, giftsToManager, interestToManager, tdsToManager,
   updateBankAccounts, updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
@@ -50,7 +50,6 @@ import { mapAisToDraftPatch } from '../utils/mapAisToDraftPatch';
 import { map26asToDraftPatch } from '../utils/map26asToDraftPatch';
 import { mapTisToDraftPatch } from '../utils/mapTisToDraftPatch';
 
-const useCanonicalV2 = isCanonicalV2Enabled();
 const returnRepository = createReturnRepository();
 
 /**
@@ -61,134 +60,6 @@ const returnRepository = createReturnRepository();
  */
 function calculateAgeFromDob(dob: string | undefined | null): number {
   return deriveAgeFromDob(dob, '2026-27');
-}
-
-function buildPhase1Payload(source: any): any {
-  const data = { ...source };
-  data.s80C = 0;
-  data.s80D = 0;
-  data.s80E = 0;
-  data.s80G = 0;
-  data.bankAccountDetails = (data.bankAccountData?.accounts || []).map((account: any) => ({ ...account }));
-  data.countryCodeMobile = String(data.mobileCountryCode || '91');
-  data.countryCode = String(data.country || '91');
-  data.stateCode = String(data.state || '');
-  // Safety net: when a secondary mobile number is present but the
-  // secondary country code was never explicitly set, inherit the primary
-  // country code.  This mirrors the PersonalInfoTab UI fallback and
-  // prevents false validation failures on data imported via legacy paths.
-  if (data.secondaryMobile && !data.secondaryMobileCountryCode) {
-    data.secondaryMobileCountryCode = String(data.mobileCountryCode || '91');
-  }
-  data.advanceTaxEntries = Array.isArray(data.advanceTaxEntries) ? data.advanceTaxEntries : [];
-  if (data.advanceTaxEntries.length >= 0) {
-    data.adv15Jun = 0; data.adv15Sep = 0; data.adv15Dec = 0; data.adv15Mar = 0;
-  }
-
-  return data;
-}
-
-function validatePhase1Payload(data: any, assessmentYear: string): string | null {
-  const panPattern = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
-  const ifscPattern = /^[A-Z]{4}0[A-Z0-9]{6}$/;
-  const bsrPattern = /^[0-9]{3}[0-9A-Z]{4}$/;
-  const ackPattern = /^[0-9]{15}$/;
-  const indianPinPattern = /^[1-9][0-9]{5}$/;
-  const filingSection = String(data.filingSection || '139(1)');
-  if (!data.surnameOrOrgName && !data.name) return 'Enter the required surname or organisation name.';
-  if (String(data.firstName || '').length > 25 || String(data.middleName || '').length > 25 || String(data.surnameOrOrgName || data.name || '').length > 75) return 'Name fields exceed the official schema length limit.';
-  if (!panPattern.test(String(data.pan || ''))) return 'Enter a valid PAN in the format ABCDE1234F.';
-  if (!data.dob || new Date(`${data.dob}T00:00:00`) > new Date(`${getReferenceDate(assessmentYear)}T00:00:00`)) return 'Enter a valid date of birth/formation on or before 31 March of the assessment year.';
-  if (!/^[0-9]{1,5}$/.test(String(data.mobileCountryCode || ''))) return 'Select a valid mobile country code.';
-  if (!/^[1-9][0-9]{4,9}$/.test(String(data.mobile || ''))) return 'Mobile number must contain 5 to 10 digits and cannot start with zero.';
-  if (!data.email) return 'Enter the required primary email address.';
-  if (!data.flatNo || !data.area || !data.city) return 'Complete the required residence number, locality/area and city/district.';
-  if (!data.country) return 'Select a country code.';
-  if (String(data.country) === '91' && !data.state) return 'Select an Indian state code.';
-  if (String(data.country) === '91' && !indianPinPattern.test(String(data.pincode || ''))) return 'Indian address requires a valid 6-digit PIN code.';
-  if (String(data.country) !== '91' && !data.zipCode) return 'Foreign address requires a ZIP/postal code.';
-  if (String(data.country) !== '91' && String(data.zipCode).length > 8) return 'Foreign ZIP/postal code cannot exceed 8 characters.';
-  if (data.aadhaar && !/^[0-9]{12}$/.test(String(data.aadhaar))) return 'Aadhaar number must contain exactly 12 digits when provided.';
-  if (data.secondaryMobile && (!/^[0-9]{1,5}$/.test(String(data.secondaryMobileCountryCode || '')) || !/^[1-9][0-9]{4,9}$/.test(String(data.secondaryMobile)))) return 'Secondary mobile requires a valid country code and a 5 to 10 digit mobile number.';
-  if (data.secondaryAddressDifferent) {
-    const address = data.alternateAddress || {};
-    if (!address.cityOrTownOrDistrict || !address.countryCode) return 'Complete alternate address city and country when correspondence address is different.';
-    if (String(address.countryCode) === '91' && (!address.stateCode || !indianPinPattern.test(String(address.pinCode || '')))) return 'Complete alternate Indian address state and valid 6-digit PIN code.';
-    if (String(address.countryCode) !== '91' && !address.zipCode) return 'Complete alternate foreign address ZIP/postal code.';
-  }
-  if (['139(5)', '139(9)'].includes(filingSection) && (!ackPattern.test(String(data.originalAcknowledgementNumber || '')) || !data.originalFilingDate)) return 'Revised or defective-return responses require the 15-digit original acknowledgement number and original filing date.';
-  if (['142(1)', '148', '153C', '139(9)'].includes(filingSection) && (!data.noticeNumber || !data.noticeDate)) return 'The selected filing section requires the notice/order number and date.';
-  if (data.assesseRepFlg) {
-    const representative = data.representativeAssessee || {};
-    if (!representative.name || !panPattern.test(String(representative.pan || '')) || !representative.email || !/^[0-9]{1,5}$/.test(String(representative.countryCode || '')) || !/^[1-9][0-9]{4,9}$/.test(String(representative.mobile || ''))) return 'Complete representative assessee name, PAN, email, mobile country code and mobile number.';
-  }
-  if (data.isFiiFpi && !/^IN[a-zA-Z]{2}FP[0-9]{6}$/.test(String(data.sebiRegistrationNumber || ''))) return 'FII/FPI declaration requires a valid SEBI registration number.';
-  if (data.leiNumber && (!/^[A-Z0-9]{20}$/.test(String(data.leiNumber)) || !data.leiValidUptoDate)) return 'LEI requires an exact 20-character number and validity date.';
-  if (data.isDirector) {
-    if (!Array.isArray(data.directorDetails) || data.directorDetails.length === 0) return 'Add at least one company detail when director declaration is Yes.';
-    if (data.directorDetails.some((row: any) => !row.companyName || !['D', 'F'].includes(row.companyType) || !['L', 'U'].includes(row.shareType) || (row.companyPan && !panPattern.test(row.companyPan)) || (row.din && !/^[0-9]{8}$/.test(row.din)))) return 'Complete each director row with company name, domestic/foreign type, listed/unlisted share type, and valid PAN/DIN where supplied.';
-  }
-  if (data.partnerInFirm) {
-    if (!Array.isArray(data.partnerFirmDetails) || data.partnerFirmDetails.length === 0 || data.partnerFirmDetails.some((row: any) => !row.firmName || !panPattern.test(String(row.firmPan || '')))) return 'Complete each partnership-firm name and PAN when partner-in-firm is Yes.';
-  }
-  if (data.holdsUnlistedShares) {
-    if (!Array.isArray(data.unlistedShareHoldings) || data.unlistedShareHoldings.length === 0) return 'Add at least one unlisted share holding when the declaration is Yes.';
-    if (data.unlistedShareHoldings.some((row: any) => !row.companyName || !['D', 'F'].includes(row.companyType) || !String(row.openingNumberOfShares ?? '').match(/^[0-9]+$/) || !String(row.openingCostOfAcquisition ?? '').match(/^\d+(\.\d{1,2})?$/) || !String(row.closingNumberOfShares ?? '').match(/^[0-9]+$/) || !String(row.closingCostOfAcquisition ?? '').match(/^\d+(\.\d{1,2})?$/))) return 'Complete each unlisted-share row with company, domestic/foreign type, opening and closing number of shares, and opening/closing cost of acquisition.';
-  }
-  if (data.foreignExchangeFlag === undefined && data.form === 'ITR-3') return 'Select whether foreign exchange was involved for ITR-3.';
-  for (const entry of data.donationEntries || []) {
-    if (!entry.doneeName || !panPattern.test(entry.doneePAN || '') || !entry.addrDetail || !entry.city || !entry.stateCode || !/^[1-9][0-9]{5}$/.test(entry.pinCode || '')) return 'Complete every 80G donee name, PAN, address, state and PIN code before saving.';
-  }
-  for (const investment of data.section80C?.investments || []) {
-    if (!investment.investmentType || !investment.dateOfInvestment || !investment.institutionName || !panPattern.test(investment.institutionPAN || '') || !investment.accountOrPolicyNo || Number(investment.amount) <= 0) return 'Complete every 80C investment, including date, institution PAN, account/policy number and amount.';
-  }
-  const categories = data.section80D ? [data.section80D.selfFamily, data.section80D.selfFamilySenior, data.section80D.parents, data.section80D.parentsSenior] : [];
-  for (const category of categories) for (const policy of category?.policies || []) {
-    if (!policy.insurerName || !policy.policyNo || !policy.policyType || !policy.dateOfCommencement || Number(policy.premiumAmount) <= 0) return 'Complete every 80D policy, including policy type and commencement date.';
-  }
-  for (const section of ['section80E', 'section80EE', 'section80EEA', 'section80EEB']) for (const loan of data.deductionLoans?.[section]?.loans || []) {
-    if (!loan.bankOrInstnName || !panPattern.test(loan.lenderPAN || '') || !loan.loanAccNo || !loan.dateOfLoan || Number(loan.interestAmount) <= 0) return `Complete every ${section.replace('section', '')} loan, including lender PAN and interest.`;
-    if (section === 'section80EE' && loan.firstTimeBuyerEligible !== true) return '80EE loans require first-time home buyer eligibility confirmation.';
-    if (section === 'section80EEB' && !loan.vehicleRegNo) return '80EEB loans require the vehicle registration number.';
-  }
-  for (const property of data.housePropertyEntries || []) {
-    const form = String(data.form || data.itrForm || '').replace('-', '');
-    const addressLimit = form === 'ITR1' || form === 'ITR4' ? 50 : 200;
-    if (!property.address || String(property.address).length > addressLimit || !property.city || String(property.city).length > 50 || !property.state || !property.countryCode) return `Complete each house property address (maximum ${addressLimit}), city, state and country.`;
-    if (String(property.state) === '99') {
-      if (String(property.countryCode) === '91') return 'Foreign house property state code 99 requires a country other than India.';
-      if (!property.zipCode || String(property.zipCode).length > 8) return 'Foreign house property requires a ZIP/postal code of at most 8 characters.';
-    } else {
-      if (String(property.countryCode) !== '91') return 'Indian house property state codes require country code 91 (India).';
-      if (!indianPinPattern.test(String(property.pinCode || ''))) return 'Indian house property requires a valid 6-digit PIN code.';
-    }
-    if (!['SE', 'MI', 'SP', 'OT'].includes(String(property.propertyOwnerType || ''))) return 'Select the official owner type for every house property.';
-    if (property.propertyOwnerType === 'OT' && (!property.propertyOwnerOther || String(property.propertyOwnerOther).length > 50)) return 'Other property owner type requires a description of at most 50 characters.';
-    const ownShare = Number(property.ownershipShare);
-    if (property.isCoOwned) {
-      if (!Number.isFinite(ownShare) || ownShare < 0 || ownShare > 100 || !Array.isArray(property.coOwners) || property.coOwners.length === 0) return 'Co-owned properties require your valid share and at least one co-owner.';
-      for (const owner of property.coOwners) if (!owner.name || String(owner.name).length > 125 || (owner.pan && !panPattern.test(String(owner.pan))) || (owner.aadhaar && !/^[0-9]{12}$/.test(String(owner.aadhaar))) || Number(owner.share) < 0 || Number(owner.share) > 100) return 'Complete every co-owner with name, valid optional PAN/Aadhaar and an optional share from 0 to 100.';
-    }
-    for (const tenant of property.tenantDetails || []) if (!tenant.name || String(tenant.name).length > 125 || (tenant.pan && !panPattern.test(String(tenant.pan))) || (tenant.aadhaar && !/^[0-9]{12}$/.test(String(tenant.aadhaar))) || (tenant.panOrTan && !/^(?:[A-Z]{5}[0-9]{4}[A-Z]|[A-Z]{4}[0-9]{5}[A-Z])$/.test(String(tenant.panOrTan)))) return 'Complete every tenant with name and valid optional PAN, TAN or Aadhaar.';
-    for (const loan of property.homeLoans || []) if (!['B', 'I'].includes(String(loan.lenderType)) || !loan.lenderName || String(loan.lenderName).length > 125 || !loan.loanAccountNo || String(loan.loanAccountNo).length > 20 || !/^[A-Za-z0-9 /-]+$/.test(String(loan.loanAccountNo)) || !loan.dateOfLoan || Number(loan.totalLoanAmount) < 0 || Number(loan.loanOutstandingAmount) < 0 || Number(loan.interestUs24B) < 0) return 'Complete every section 24(b) loan with source, lender, account/reference, date and non-negative amounts.';
-  }
-  for (const employer of data.employerEntries || []) {
-    if (!employer.employerName || !['CGOV', 'SGOV', 'PSU', 'PE', 'PESG', 'PEPS', 'PEO', 'OTH'].includes(String(employer.natureOfEmployment || '')) || !employer.employerAddress || !employer.employerCity || !employer.employerStateCode) return 'Complete each salary employer name, employment category and address details.';
-    if (employer.employerTAN && !/^[A-Z]{4}[0-9]{5}[A-Z]$/.test(String(employer.employerTAN))) return 'Employer TAN must use the format ABCD12345E when provided.';
-    if (employer.employerStateCode !== '99' && employer.employerPinCode && !indianPinPattern.test(String(employer.employerPinCode))) return 'Employer PIN code must contain 6 digits and cannot start with zero.';
-    if (employer.employerStateCode === '99' && !employer.employerZipCode) return 'Employer outside India requires a ZIP/postal code.';
-    for (const row of [...(employer.salaryNatureRows || []), ...(employer.perquisiteNatureRows || []), ...(employer.section10ExemptionRows || [])]) if (!row.natureCode || Number(row.amount) < 0 || (row.natureCode === 'OTH' && !row.otherDescription)) return 'Complete each itemised salary, perquisite or section 10 row with a nature, non-negative amount, and other description where applicable.';
-    if (Number(employer.hra || 0) > 0 && (Number(employer.rentPaid || 0) <= 0 || !employer.city)) return 'HRA received requires annual rent paid and city of employment before validation.';
-    if (Number(employer.commutedPension || 0) > 0 && employer.gratuityAlsoReceived === undefined) return 'Commuted pension requires confirmation whether gratuity was also received.';
-    if (Number(employer.lta || 0) > 0 && (Number(employer.actualLtaFare || 0) <= 0 || employer.isDomesticTravel === false || Number(employer.journeysInBlock || 0) <= 0)) return 'LTA claim requires actual domestic travel fare and journeys used in the block.';
-  }
-  const accounts = data.bankAccountData?.accounts || [];
-  if (accounts.length > 0 && !accounts.some((account: any) => account.useForRefund)) return 'Mark one bank account for refund.';
-  for (const account of accounts) if (!account.bankName || !account.accountNumber || !ifscPattern.test(account.ifscCode || '')) return 'Complete every bank account with a valid 11-character IFSC code.';
-  for (const payment of data.advanceTaxEntries || []) if (!bsrPattern.test(payment.bsrCode || '') || !payment.depositDate || !payment.challanSerialNo || Number(payment.amount) <= 0) return 'Complete every advance-tax challan with valid BSR code, date, serial number and amount.';
-  const cgError = validateCapitalGainsSchedule(data.capitalGainsSchedule, String(data.form || data.itrForm || '').replace('-', '').toUpperCase());
-  if (cgError) return cgError;
-  return null;
 }
 
 function validateCapitalGainsSchedule(schedule: any, form: string): string | null {
@@ -591,10 +462,10 @@ export default function ITRComputationPage() {
   // (capital-gains, business, VDA, foreign-remittance evidence) escalate
   // the form recommendation — the import layer must never be silently ignored.
   const eligibilityResult = useMemo<FormRecommendation>(
-    () => useCanonicalV2 && editorModel?.draft
+    () => editorModel?.draft
       ? assessFormEligibilityFromDraft(formData, editorModel.draft, backendTaxResult)
       : assessFormEligibility(formData, backendTaxResult),
-    [useCanonicalV2, editorModel?.draft, formData, backendTaxResult],
+    [editorModel?.draft, formData, backendTaxResult],
   );
 
   useEffect(() => {
@@ -609,12 +480,11 @@ export default function ITRComputationPage() {
   }, [eligibilityResult, formLockedByUser, itrForm]);
 
   const taxSummaryPayload = useMemo(
-    // Phase 4 (v2): the canonical draft is sent directly to the v2 compute
-    // endpoint via `editorRef.current.draft` (see the effect below).  This
-    // memo only feeds the legacy flat-blob compute path, so under v2 we
-    // return a minimal object to avoid composing legacy fields unnecessarily.
-    () => useCanonicalV2 ? { form: itrForm, assessmentYear: effectiveAssessmentYear, regime } : { ...buildPhase1Payload(formData), form: itrForm },
-    [useCanonicalV2, formData, itrForm, effectiveAssessmentYear, regime],
+    // The canonical draft is sent directly to the v2 compute endpoint via
+    // `editorRef.current.draft` (see the effect below).  This memo feeds the
+    // payload-key memo for debounce gating only.
+    () => ({ form: itrForm, assessmentYear: effectiveAssessmentYear, regime }),
+    [itrForm, effectiveAssessmentYear, regime],
   );
   // Editor synchronization can recreate an equivalent formData object many
   // times. Depend on the serialized calculation contract so identity-only
@@ -642,7 +512,7 @@ export default function ITRComputationPage() {
 
     taxResultDebounceRef.current = setTimeout(() => {
       const currentDraft = editorRef.current?.draft;
-      const computePromise = useCanonicalV2 && currentDraft
+      const computePromise = currentDraft
         ? itrV2.compute(stripCompatibility({ ...currentDraft, assessmentYear: effectiveAssessmentYear, form: itrForm, regime }))
         : itrApi.computeTaxSummary(taxSummaryPayload, effectiveAssessmentYear, regime);
       computePromise
@@ -780,11 +650,10 @@ export default function ITRComputationPage() {
       const currentEditor = editorRef.current;
       if (!currentEditor) throw new Error('Return is not loaded');
 
-      // Phase 4 v2 path: operate directly on the typed draft and avoid the
-      // legacy flat-blob round-trip (composeLegacyPayload / buildPhase1Payload)
-      // entirely on save.  The canonical repository strips `compatibility`
-      // and pins the AY.
-      if (useCanonicalV2 && currentEditor.draft) {
+      // Operate directly on the typed draft and avoid the legacy flat-blob
+      // round-trip entirely on save.  The canonical repository strips
+      // `compatibility` and pins the AY.
+      if (currentEditor.draft) {
         await returnRepository.save(clientId, {
           ...currentEditor.draft,
           assessmentYear: effectiveAssessmentYear,
@@ -795,52 +664,7 @@ export default function ITRComputationPage() {
         return;
       }
 
-      const currentSnapshot = composeLegacyPayload(currentEditor);
-      // Saving persists an incomplete draft. Official validation is deliberately
-      // performed only by the Validate flow and before JSON generation/filing.
-      const dataToSave = buildPhase1Payload(currentSnapshot);
-      // The backend now persists the user's selected form exactly; never infer it.
-      dataToSave.form = itrForm;
-      dataToSave.itrForm = itrForm;
-      if (!dataToSave.filingSection) dataToSave.filingSection = '139(1)';
-      if (!dataToSave.residentialStatus) dataToSave.residentialStatus = 'ROR';
-      if (!dataToSave.employerCategory) dataToSave.employerCategory = 'OTH';
-      
-      // Clear legacy TDS/SAT fields
-      if (dataToSave.tdsEntries && dataToSave.tdsEntries.length >= 0) {
-        dataToSave.tdsS192 = 0;
-        dataToSave.tds194A = 0;
-        dataToSave.tdsOther = 0;
-      }
-      if (dataToSave.selfAssessmentTaxEntries && dataToSave.selfAssessmentTaxEntries.length >= 0) {
-        dataToSave.selfTax = 0;
-      }
-      
-      // Clear legacy salary fields if using multi-employer
-      if (dataToSave.employerEntries && dataToSave.employerEntries.length > 0) {
-        dataToSave.basic = 0;
-        dataToSave.da = 0;
-        dataToSave.hra = 0;
-        dataToSave.bonus = 0;
-      }
-      
-      // Preserve both structured transactions and legacy capital-gain fields.
-      // The backend owns compatibility projection and authoritative computation;
-      // deleting either representation here can destroy imported evidence.
-      
-      // NOTE: Do NOT zero interestSB/interestFD when bankInterestEntries exist.
-      // tax.py reads interestSB, interestFD, interestRD, nscInterest,
-      // scssInterest, postOfficeInterest, otherInterest — NOT bankInterestEntries.
-      // Zeroing them makes all interest income invisible to the tax engine.
-      // bankInterestEntries are for display/reference only.
-      
-      // Clear legacy 80G field if using donation entries
-      if (dataToSave.donationEntries && dataToSave.donationEntries.length > 0) {
-        dataToSave.s80G = 0;
-      }
-
-      await itrApi.saveFormData(clientId, effectiveAssessmentYear, dataToSave);
-      toast.success('Saved ✓');
+      throw new Error('Return draft is not loaded');
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -854,14 +678,29 @@ export default function ITRComputationPage() {
     setValidationReport(null);
     try {
       if (!currentEditor) throw new Error('Return is not loaded');
-      const currentSnapshot = composeLegacyPayload(currentEditor);
-      const validationError = validatePhase1Payload(currentSnapshot, effectiveAssessmentYear);
-      if (validationError) {
-        toast.error(validationError);
-        return;
+      // Validate via the v2 compute path: persist the draft, run the canonical
+      // compute (which surfaces engine eligibility + cross-field errors), and
+      // report structured errors/warnings.  The legacy flat validate endpoint is
+      // retired with the flat-blob bridge.
+      const draft = {
+        ...currentEditor.draft,
+        assessmentYear: effectiveAssessmentYear,
+        form: itrForm,
+        regime,
+      };
+      await returnRepository.save(clientId, draft);
+      let report: { valid: boolean; errors: string[]; warnings: string[] };
+      try {
+        const result = await itrV2.compute(stripCompatibility(draft));
+        const errors: string[] = Array.isArray(result?.errors) ? result.errors : [];
+        const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+        report = { valid: errors.length === 0, errors, warnings };
+      } catch (err: any) {
+        const errors: string[] = Array.isArray(err?.errors) ? err.errors
+          : Array.isArray(err?.details?.errors) ? err.details.errors
+          : [err?.message || 'Validation failed'];
+        report = { valid: false, errors, warnings: [] };
       }
-      const payload = buildPhase1Payload(currentSnapshot);
-      const report = await itrApi.validate(clientId, effectiveAssessmentYear, payload);
       setValidationReport(report);
       if (report.valid && report.warnings.length === 0) {
         toast.success('Validation passed ✓');
@@ -884,23 +723,18 @@ export default function ITRComputationPage() {
     }
     try {
       const currentEditor = editorRef.current;
-      if (useCanonicalV2) {
-        // Phase 4 v2 path: generate from the typed canonical draft without
-        // composing or normalizing a legacy payload. The v2 endpoint requires
-        // a persisted draft, so save first to publish the latest editor state.
-        if (currentEditor?.draft) {
-          await returnRepository.save(clientId, {
-            ...currentEditor.draft,
-            assessmentYear: effectiveAssessmentYear,
-            form: itrForm,
-            regime,
-          });
-        }
-        await itrV2.generate(clientId, effectiveAssessmentYear);
-      } else {
-        const liveDraft = currentEditor ? { ...buildPhase1Payload(composeLegacyPayload(currentEditor)), form: itrForm, itrForm: itrForm } : undefined;
-        await itrApi.generateCbdtJson(clientId, effectiveAssessmentYear, liveDraft);
+      // Generate from the typed canonical draft without composing or
+      // normalizing a legacy payload. The v2 endpoint requires a persisted
+      // draft, so save first to publish the latest editor state.
+      if (currentEditor?.draft) {
+        await returnRepository.save(clientId, {
+          ...currentEditor.draft,
+          assessmentYear: effectiveAssessmentYear,
+          form: itrForm,
+          regime,
+        });
       }
+      await itrV2.generate(clientId, effectiveAssessmentYear);
       toast.success(`CBDT ${itrForm} JSON generated ✓`);
     } catch (err: any) {
       const message = err?.message || 'CBDT JSON generation failed';
@@ -989,33 +823,21 @@ export default function ITRComputationPage() {
     setTaxResultLoading(true);
     setTaxResultError('Computation unavailable for the imported draft until recalculated.');
 
-    // Build one merged snapshot and use it for both the editor and persistence.
-    // Filed-return first (brought-forward losses, prior-AY personal info,
-    // bank accounts), then Prefill (current-AY personal info, deductions,
-    // bank accounts, salary break-up), then reconciled (income + TDS from
-    // AIS/TIS/26AS).  Empty imported arrays must not erase manually
-    // entered rows.
+    // Build one merged snapshot for the editor and persistence.  The typed
+    // draft path merges via `mergeDraft` (Prefill + reconciled patches) and
+    // commits it directly; the legacy `safeUpdate` is only retained to source
+    // filed-return compatibility fields that have no typed patch yet.
     const safeUpdate = { ...filedReturnResult.formDataUpdate, ...prefillResult.formDataUpdate, ...formDataUpdate };
-    const currentDraft = editorRef.current
-      ? composeLegacyPayload(editorRef.current)
-      : formData;
     const EMPTY_KEEP_KEYS = ['employerEntries', 'dividendEntries', 'bankInterestEntries', 'interestEntries',
       'capitalGainTransactions', 'tdsEntries', 'tcsEntries'];
-    for (const key of EMPTY_KEEP_KEYS) {
-      if (Array.isArray(safeUpdate[key]) && safeUpdate[key].length === 0 && currentDraft[key]?.length > 0) {
-        delete safeUpdate[key];
-      }
-    }
-    const mergedImportData = useCanonicalV2 && editorRef.current
-      ? mergeDraft(
-          mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(prefillData)),
-          mapReconciledToDraftPatch(reconciledImportData),
-        )
-      : { ...currentDraft, ...safeUpdate };
-    if (useCanonicalV2) {
+    let mergedImportData: any = null;
+    if (editorRef.current) {
+      // Merge the typed draft patches; this is the authoritative import path.
+      mergedImportData = mergeDraft(
+        mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(prefillData)),
+        mapReconciledToDraftPatch(reconciledImportData),
+      );
       updateEditor((current) => ({ ...replaceDraft(mergedImportData as any), extras: current.extras }));
-    } else {
-      setFormData(mergedImportData);
     }
 
     // Collect discrepancy messages for the warning banner
@@ -1128,11 +950,10 @@ export default function ITRComputationPage() {
     // ── Reassess eligibility after import ────────────────────────────────
     setFormLockedByUser(false);
 
-    // Save to backend so form state persists using the active storage contract.
-    const importSave = useCanonicalV2
-      ? returnRepository.save(clientId, mergedImportData as any)
-      : itrApi.saveFormData(clientId, effectiveAssessmentYear, mergedImportData);
-    importSave.catch(err => console.warn('Background save after import failed:', err));
+    // Save to backend so form state persists using the canonical repository.
+    if (mergedImportData) {
+      returnRepository.save(clientId, mergedImportData as any).catch(err => console.warn('Background save after import failed:', err));
+    }
 
     setShowImportConfirmModal(false);
     setShowStatusBox(false);
@@ -1241,9 +1062,9 @@ export default function ITRComputationPage() {
           return;
         }
 
-        // Canonical v2 imports bypass the legacy flat-blob adapter entirely.
-        // The inline mappings below remain unchanged for flag-off behavior.
-        if (useCanonicalV2 && editorRef.current && typeStr !== 'prefill') {
+        // Canonical imports bypass the legacy flat-blob adapter entirely.
+        // The typed draft is patched and persisted directly.
+        if (editorRef.current && typeStr !== 'prefill') {
           const patch = typeStr === '26as-pdf' || typeStr === '26as-txt'
             ? map26asToDraftPatch(data)
             : typeStr === 'tis-pdf'
@@ -1257,901 +1078,8 @@ export default function ITRComputationPage() {
           setShowImportMenu(false);
           return;
         }
-        
-        // Auto-populate from all available documents
-        if (type === 'ais-pdf' || type === 'ais-json' || type === 'tis-pdf' || type === '26as-pdf' || type === '26as-txt') {
-          // For 26AS, transform TDS entries to frontend format
-          let tdsEntriesForForm = [];
-          
-          // Determine financial year from 26AS data
-          // Handles "2025-2026" → "2025-26" and "2025-26" → "2025-26"
-          let fyFrom26AS = '2025-26'; // default
-          if (data.financialYear) {
-            const fyParts = data.financialYear.split('-');
-            if (fyParts.length === 2) {
-              // If the second part is 4 digits (e.g. "2026"), shorten to 2 ("26")
-              // If it's already 2 digits (e.g. "26"), keep as-is
-              const secondPart = fyParts[1].length === 4 ? fyParts[1].substring(2) : fyParts[1];
-              fyFrom26AS = fyParts[0] + '-' + secondPart;
-            }
-          }
-          
-          if (type === '26as-txt' || type === '26as-pdf') {
-            const tdsFrom26AS = data.tdsEntries || data.deductorAggregates || [];
-            tdsEntriesForForm = tdsFrom26AS.map((entry: any) => ({
-              section: entry.sectionCode || entry.section || '192',
-              deductorName: entry.employerName || entry.deductorName || 'Unknown Employer',
-              deductorTAN: entry.employerTAN || entry.deductorTAN || '',
-              deductorPAN: entry.deductorPAN || '',
-              incomeAmount: entry.incomeAmount || entry.totalAmount || 0,
-              tdsDeducted: entry.tdsDeducted || entry.totalTDS || 0,
-              certificateNo: entry.certificateNo || '',
-              deductionDate: entry.transactionDate || entry.deductionDate || '',
-              uniqueTransactionNo: entry.uniqueTransactionNo || entry.utrNo || '',
-              financialYear: fyFrom26AS, // Use correct FY from 26AS
-              verified26AS: true,
-              claimedInReturn: true
-            }));
-            console.log('26AS TDS entries transformed with FY:', fyFrom26AS, tdsEntriesForForm);
-          }
-          
-          // For 26AS only, directly set form data without calling autoPopulateAll
-          if (type === '26as-txt' || type === '26as-pdf') {
-            const incomeBreakdown = data.incomeBreakdown || {};
-            const deductorDetails = incomeBreakdown.deductorDetails || [];
-            
-            // Get financial year from 26AS data (format: "2025-2026" -> "2025-26")
-            let fyFrom26AS = data.financialYear || '2025-26';
-            if (fyFrom26AS.includes("2025")) {
-              fyFrom26AS = '2025-26';
-            } else if (fyFrom26AS.includes("2024")) {
-              fyFrom26AS = '2025-26';
-            }
-            
-            // TDS entries only (where TDS > 0)
-            const tdsOnlyEntries = tdsEntriesForForm.filter((e: any) => (e.tdsDeducted || 0) > 0);
-            
-            // ===== BUILD EMPLOYER ENTRIES (Summary per employer) =====
-            const salaryDeductors = deductorDetails.filter((d: any) => 
-              d.sectionCode === '192' || d.sectionCode === '192A'
-            );
-            
-            const employerEntriesFrom26AS = salaryDeductors.map((deductor: any) => ({
-              employerName: deductor.employerName || 'Employer',
-              employerTAN: deductor.employerTAN || '',
-              employerPAN: '',
-              basic: deductor.totalAmount || 0,
-              da: 0,
-              hra: 0,
-              bonus: 0,
-              allowances: 0,
-              perquisites: 0,
-              professionalTax: 0,
-              tdsDeducted: deductor.totalTDS || 0,
-              grossSalary: deductor.totalAmount || 0,
-              // TDS is a tax credit, not a salary deduction. Net taxable salary
-              // is computed by the backend after statutory exemptions/deductions.
-              netSalary: 0,
-              financialYear: fyFrom26AS,
-              verified26AS: true
-            }));
-            
-            // ===== BUILD DIVIDEND ENTRIES (Summary per company) =====
-            const dividendDeductors = deductorDetails.filter((d: any) => d.sectionCode === '194');
-            const dividendEntriesFrom26AS = dividendDeductors.map((deductor: any) => ({
-              companyName: deductor.employerName || 'Company',
-              companyPAN: '',
-              dividendAmount: deductor.totalAmount || 0,
-              tdsDeducted: deductor.totalTDS || 0,
-              deductorTAN: deductor.employerTAN || '',
-              isin: '',
-              category: 'SHARES',
-              section: deductor.sectionCode || '194'
-            }));
-            
-            // ===== BUILD INTEREST ENTRIES (Summary per bank/deductor) =====
-            const interestDeductors = deductorDetails.filter((d: any) =>
-              d.sectionCode === '194A' || d.sectionCode === '193' || d.sectionCode === '194K'
-            );
-            // Build interest entries with the `kind` field the legacy adapter
-            // (legacyAdapter.ts line 39) needs to classify them.
-            //   section 194A → TERM_DEPOSIT (FD interest)
-            //   section 193  → SAVINGS_BANK
-            //   section 194K → OTHER (MF distribution interest)
-            const bankInterestEntriesFrom26AS = interestDeductors.map((deductor: any) => {
-              const sec = (deductor.sectionCode || '194A').toUpperCase();
-              const kind = sec === '193' ? 'SAVINGS_BANK' : sec === '194K' ? 'OTHER' : 'TERM_DEPOSIT';
-              return {
-                kind,
-                grossAmount: deductor.totalAmount || 0,
-                bankName: deductor.employerName || 'Bank',
-                accountNumber: '',
-                accountType: 'SAVINGS',
-                interestEarned: deductor.totalAmount || 0,
-                tdsDeducted: deductor.totalTDS || 0,
-                deductorName: deductor.employerName || 'Bank',
-                deductorTAN: deductor.employerTAN || '',
-                section: deductor.sectionCode || '194A',
-              };
-            });
-            
-            // Calculate total income from all heads
-            const totalIncomeFrom26AS = 
-              (incomeBreakdown.salaryIncome || 0) + 
-              (incomeBreakdown.dividendIncome || 0) + 
-              (incomeBreakdown.interestIncome || 0) +
-              (incomeBreakdown.housePropertyIncome || 0) +
-              (incomeBreakdown.capitalGains || 0) +
-              (incomeBreakdown.businessIncome || 0) +
-              (incomeBreakdown.lotteryIncome || 0) +
-              (incomeBreakdown.vdaIncome || 0) +
-              (incomeBreakdown.onlineGamingIncome || 0) +
-              (incomeBreakdown.tcsIncome || 0);
-            
-            const formDataUpdate: any = {
-              // ===== SALARY ENTRIES =====
-              employerEntries: employerEntriesFrom26AS.length > 0 ? employerEntriesFrom26AS : [],
-              basic: employerEntriesFrom26AS.length > 0 ? employerEntriesFrom26AS[0].basic : 0,
-              
-              // ===== TDS ENTRIES =====
-              tdsEntries: tdsOnlyEntries,
-              tdsS192: incomeBreakdown.salaryIncome > 0 ? (data.totalTdsSalary || 0) : 0,
-              tds194A: incomeBreakdown.interestIncome > 0 ? (data.totalTdsInterest || 0) : 0,
-              tdsOther: (data.totalTDS || 0) - (data.totalTdsSalary || 0) - (data.totalTdsInterest || 0),
-              
-              // Store 26AS import info for display
-              imported26AS: {
-                totalTDS: data.totalTDS,
-                totalIncome: totalIncomeFrom26AS,
-                financialYear: fyFrom26AS,
-                assessmentYear: data.assessmentYear || '2026-27',
-                deductorCount: tdsOnlyEntries.length,
-                incomeBreakdown: incomeBreakdown
-              },
-              
-              // ===== DIVIDEND ENTRIES (per company) =====
-              dividendEntries: dividendEntriesFrom26AS.length > 0 ? dividendEntriesFrom26AS : [],
-              
-              // ===== BANK INTEREST ENTRIES (per bank) =====
-              bankInterestEntries: bankInterestEntriesFrom26AS.length > 0 ? bankInterestEntriesFrom26AS : [],
-              // ===== INTEREST ENTRIES (primary field the legacy adapter reads) =====
-              // The adapter (legacyAdapter.ts line 67) reads from
-              // 'interestEntries' first, then 'bankInterestEntries'.  Without
-              // this, the Other Sources tab stays empty even when
-              // bankInterestEntries is populated.
-              interestEntries: bankInterestEntriesFrom26AS.length > 0 ? bankInterestEntriesFrom26AS : [],
-              
-              // ===== MAP TO RESPECTIVE INCOME HEADS =====
-              // IMPORTANT: interestSB and interestFD must NOT both be set to
-              // interestIncome, because tax.py sums them (savings_bank = interestSB
-              // + postOfficeInterest, fixed_deposit = interestFD + interestRD + ...).
-              // Setting both to X gives 2X in GTI. Same for dividends vs dividendShares.
-              grossRent: incomeBreakdown.housePropertyIncome || 0,
-              ltcgProperty: incomeBreakdown.capitalGains || 0,
-              bizTurnover: incomeBreakdown.businessIncome || 0,
-              interestSB: incomeBreakdown.interestIncome || 0,
-              interestFD: 0,
-              dividendShares: incomeBreakdown.dividendIncome || 0,
-              lotteryIncome: incomeBreakdown.lotteryIncome || 0,
-              horseRaceIncome: incomeBreakdown.horseRaceIncome || 0,
-              vdaGains: incomeBreakdown.vdaIncome || 0,
-              onlineGamingIncome: incomeBreakdown.onlineGamingIncome || 0,
-              tcsCollections: incomeBreakdown.tcsIncome || 0,
-              incomeBreakdown26AS: incomeBreakdown,
-            };
-            
-            console.log('26AS Import - Employer Entries:', employerEntriesFrom26AS);
-            console.log('26AS Import - Dividend Entries:', dividendEntriesFrom26AS);
-            console.log('26AS Import - Interest Entries:', bankInterestEntriesFrom26AS);
-            
-            if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
-            const applied = applyLegacyActionWithSnapshot(editorRef.current, formDataUpdate);
-            editorRef.current = applied.model;
-            setEditorModel(applied.model);
-            await itrApi.saveFormData(clientId, effectiveAssessmentYear, applied.snapshot);
-            toast.dismiss();
-            
-            const message = `26AS imported! ${tdsOnlyEntries.length} TDS entries. ` +
-              `Salary: ${employerEntriesFrom26AS.length} employer (₹${(incomeBreakdown.salaryIncome || 0).toLocaleString('en-IN')}), ` +
-              `Dividends: ${dividendEntriesFrom26AS.length} companies (₹${(incomeBreakdown.dividendIncome || 0).toLocaleString('en-IN')})`;
-            toast.success(message);
-            setShowImportMenu(false);
-            return;
-          }
 
-          // ── AIS / TIS direct mapping (no autoPopulateAll) ──
-          // The autoPopulateAll backend endpoint only reads from TIS/26AS,
-          // not from the AIS summary.  When only AIS (or only TIS) is
-          // uploaded, it returns all zeros.  Map the data directly here.
-          if (typeStr === 'ais-pdf' || typeStr === 'ais-json' || typeStr === 'tis-pdf') {
-            const aisData = importedAIS || data;
-            const tisData = importedTIS || data;
-            const summary = aisData?.summary || {};
-            const incomeHeads = aisData?.income_heads || {};
-            const formDataUpdate: any = {};
-
-            // ── Extract individual entries from AIS income_heads ──
-            // The AIS reports income under sections:
-            //   B1 = TDS-reported income (deductor's view) — for the TDS tab
-            //   B2 = SFT-reported income (bank's view) — for the Other Sources tab
-            //
-            // The SAME interest often appears in BOTH B1 and B2 (e.g. SBI
-            // reports 261838 via TDS-194A AND 261841 via SFT-016(TD) — same
-            // income, reported twice).  To avoid duplication in Other Sources:
-            //   1. Use B2 (SFT-016) entries as the primary source for OS
-            //   2. Add B1 (TDS-194A) entries that DON'T have a matching B2
-            //      entry from the same deductor (e.g. Anand 60000 — an
-            //      individual who deducted TDS but didn't file SFT)
-            //
-            // TDS tab: use ALL B1 (TDS-*) entries regardless.
-            const allTdsEntries: any[] = [];
-            const b1InterestEntries: any[] = [];  // B1 interest, may or may not dup B2
-            const interestEntries: any[] = [];     // B2 interest (primary)
-            const dividendEntries: any[] = [];
-
-            for (const [headName, headData] of Object.entries(incomeHeads)) {
-              const entries = (headData as any)?.entries || [];
-              for (const e of entries) {
-                const code = (e.information_code || '').toUpperCase();
-                const source = e.information_source || '';
-                const amount = e.amount || 0;
-                const category = (e.category || '').toLowerCase();
-                const section = e.section || '';
-                // Extract deductor name + TAN from information_source
-                const sourceMatch = source.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-                const deductorName = sourceMatch ? sourceMatch[1].trim() : source;
-                const deductorTan = sourceMatch ? sourceMatch[2].split('.')[0].trim() : '';
-
-                // ── TDS tab: B1 (TDS-*) entries ──
-                if (section === 'B1' && code.startsWith('TDS-')) {
-                  const tdsSection = code.replace('TDS-', '');
-                  // Sum TDS DEDUCTED from the Active detail rows.
-                  // The detail_header is ['SR. NO.', 'QUARTER', 'DATE OF
-                  // PAYMENT/CREDIT', 'AMOUNT PAID/CREDITED', 'TDS DEDUCTED',
-                  // 'TDS DEPOSITED', 'STATUS'] and the last column is STATUS.
-                  const header: string[] = e.detail_header || [];
-                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
-                  let tdsColIdx = -1;
-                  for (let i = 0; i < header.length; i++) {
-                    if (header[i].toUpperCase().includes('TDS DEDUCTED')) {
-                      tdsColIdx = i;
-                      break;
-                    }
-                  }
-                  let amtColIdx = -1;
-                  for (let i = 0; i < header.length; i++) {
-                    if (header[i].toUpperCase().includes('AMOUNT PAID')) {
-                      amtColIdx = i;
-                      break;
-                    }
-                  }
-                  const tdsCol = tdsColIdx >= 0 ? `col_${tdsColIdx}` : '';
-                  const amtCol = amtColIdx >= 0 ? `col_${amtColIdx}` : '';
-                  let totalTds = 0;
-                  let totalIncome = 0;
-                  for (const d of (e.details || [])) {
-                    const dData = d.data || {};
-                    const status = (dData[statusCol] || '').toString().toUpperCase();
-                    if (status === 'ACTIVE') {
-                      if (tdsCol) {
-                        const tdsVal = parseFloat((dData[tdsCol] || '0').toString().replace(/,/g, '')) || 0;
-                        totalTds += tdsVal;
-                      }
-                      if (amtCol) {
-                        const amtVal = parseFloat((dData[amtCol] || '0').toString().replace(/,/g, '')) || 0;
-                        totalIncome += amtVal;
-                      }
-                    }
-                  }
-                  allTdsEntries.push({
-                    section: tdsSection,
-                    deductorName,
-                    deductorTAN: deductorTan,
-                    deductorPAN: e.institution_pan || '',
-                    incomeAmount: totalIncome || amount,
-                    tdsDeducted: totalTds,
-                    financialYear: '',
-                    verified26AS: true,
-                    claimedInReturn: true,
-                  });
-                  // Also collect B1 interest entries for dedup check below
-                  if (tdsSection === '194A' || tdsSection === '193') {
-                    b1InterestEntries.push({
-                      kind: 'TERM_DEPOSIT',
-                      grossAmount: totalIncome || amount,
-                      bankName: deductorName,
-                      accountType: 'FD',
-                      accountNumber: '',
-                      tdsDeducted: totalTds,
-                      deductorName,
-                      deductorTAN: deductorTan,
-                    });
-                  }
-                  continue;
-                }
-
-                // ── Other Sources tab: B2 (SFT-016) interest entries ──
-                if (section === 'B2' && code.startsWith('SFT-016')) {
-                  const isSavings = code.includes('(SB)') || category.includes('savings');
-                  interestEntries.push({
-                    kind: isSavings ? 'SAVINGS_BANK' : 'TERM_DEPOSIT',
-                    grossAmount: amount,
-                    bankName: deductorName,
-                    accountType: isSavings ? 'SAVINGS' : 'FD',
-                    accountNumber: '',
-                    tdsDeducted: 0,
-                    deductorName,
-                    deductorTAN: deductorTan,
-                  });
-                  continue;
-                }
-
-                // ── Other Sources tab: B2 (SFT-015) dividend entries ──
-                if (section === 'B2' && code === 'SFT-015') {
-                  dividendEntries.push({
-                    companyName: deductorName,
-                    companyPAN: e.institution_pan || '',
-                    dividendAmount: amount,
-                    tdsDeducted: 0,
-                    deductorTAN: deductorTan,
-                    isin: '',
-                    category: 'SHARES',
-                    section: '194',
-                  });
-                  continue;
-                }
-              }
-            }
-
-            // ── Dedup: add B1 interest entries that don't have a matching
-            // B2 entry from the same deductor ──
-            // Match by deductor name (case-insensitive).  This catches
-            // income like Anand's 60000 which only appears in B1 (TDS-194A)
-            // because individuals don't file SFT.
-            const b2DeductorNames = new Set(
-              interestEntries.map((e) => (e.deductorName || e.bankName || '').toLowerCase())
-            );
-            for (const b1Entry of b1InterestEntries) {
-              const name = (b1Entry.deductorName || '').toLowerCase();
-              if (!b2DeductorNames.has(name)) {
-                interestEntries.push(b1Entry);
-              }
-            }
-
-            // ── Second pass: extract salary, capital gains, business, MF dividends ──
-            // These income types were not captured by the first pass above.
-            const employerEntries: any[] = [];
-            const capitalGainTransactions: any[] = [];
-            const businessEntries: any[] = [];
-            const num2 = (v: any) => parseFloat((v || '0').toString().replace(/,/g, '')) || 0;
-
-            for (const [headName, headData] of Object.entries(incomeHeads)) {
-              const entries = (headData as any)?.entries || [];
-              for (const e of entries) {
-                const code = (e.information_code || '').toUpperCase();
-                const source = e.information_source || '';
-                const amount = e.amount || 0;
-                const category = (e.category || '').toLowerCase();
-                const section = e.section || '';
-                const sourceMatch = source.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-                const deductorName = sourceMatch ? sourceMatch[1].trim() : source;
-                const deductorTan = sourceMatch ? sourceMatch[2].split('.')[0].trim() : '';
-
-                const sumActive2 = (colNamePart: string) => {
-                  const header: string[] = e.detail_header || [];
-                  let idx = -1;
-                  for (let i = 0; i < header.length; i++) {
-                    if (header[i].toUpperCase().includes(colNamePart)) { idx = i; break; }
-                  }
-                  if (idx < 0) return 0;
-                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
-                  let total = 0;
-                  for (const d of (e.details || [])) {
-                    const dData = d.data || {};
-                    const status = (dData[statusCol] || '').toString().toUpperCase();
-                    if (status === 'ACTIVE') total += num2(dData[`col_${idx}`]);
-                  }
-                  return total;
-                };
-
-                // ── Salary: TDS-192 → TDS tab entries ONLY ──
-                // Do NOT create employer entries from B1 TDS-192 — that
-                // double-counts salary.  The authoritative salary figure
-                // comes from B7 TDS-Ann.II-SAL (Annexure II), handled in
-                // the second pass below.
-                if (section === 'B1' && code === 'TDS-192') {
-                  const totalIncome = sumActive2('AMOUNT PAID') || amount;
-                  const totalTds = sumActive2('TDS DEDUCTED') || 0;
-                  // TDS tab entry only — no employer entry here
-                  // (employer entries come from B7 TDS-Ann.II-SAL)
-                }
-
-                // ── Salary: B7 TDS-Ann.II-SAL → employer with break-up ──
-                if (section === 'B7' && code === 'TDS-ANN.II-SAL') {
-                  const header: string[] = e.detail_header || [];
-                  const findIdx = (part: string) => {
-                    for (let i = 0; i < header.length; i++) {
-                      if (header[i].toUpperCase().includes(part)) return i;
-                    }
-                    return -1;
-                  };
-                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
-                  const gross17Idx = findIdx('17(1)');
-                  const perqIdx = findIdx('VALUE OF PERQUISITES');
-                  const profitIdx = findIdx('PROFITS IN LIEU');
-                  const grossIdx = findIdx('GROSS SALARY');
-                  let basic = 0, perquisites = 0, profits = 0, gross = 0;
-                  for (const d of (e.details || [])) {
-                    const dData = d.data || {};
-                    const status = (dData[statusCol] || '').toString().toUpperCase();
-                    if (status === 'ACTIVE') {
-                      if (gross17Idx >= 0) basic += num2(dData[`col_${gross17Idx}`]);
-                      if (perqIdx >= 0) perquisites += num2(dData[`col_${perqIdx}`]);
-                      if (profitIdx >= 0) profits += num2(dData[`col_${profitIdx}`]);
-                      if (grossIdx >= 0) gross += num2(dData[`col_${grossIdx}`]);
-                    }
-                  }
-                  employerEntries.push({
-                    employerName: deductorName,
-                    employerTAN: deductorTan,
-                    employerPAN: e.institution_pan || '',
-                    basic,
-                    da: 0, hra: 0, bonus: 0, allowances: 0,
-                    perquisites,
-                    professionalTax: 0,
-                    tdsDeducted: 0,
-                    grossSalary: gross || basic,
-                    netSalary: basic,
-                    financialYear: '',
-                    verified26AS: true,
-                  });
-                }
-
-                // ── Other Sources: B2 SFT-018(DIV) dividend from MF ──
-                if (section === 'B2' && code === 'SFT-018(DIV)') {
-                  dividendEntries.push({
-                    companyName: deductorName,
-                    companyPAN: e.institution_pan || '',
-                    dividendAmount: amount,
-                    tdsDeducted: 0,
-                    deductorTAN: deductorTan,
-                    isin: '',
-                    category: 'MF',
-                    section: '194K',
-                  });
-                }
-
-                // ── Capital Gains: B2 sale of securities / MF ──
-                if (section === 'B2' && (code === 'SFT-17-LES(M)' || code === 'SFT-18-EMF(M)' || code === 'SFT-18-OTU(M)')) {
-                  // SFT-17-LES(M): sale of listed equity shares
-                  // SFT-18-EMF(M): sale of equity-oriented MF units
-                  // SFT-18-OTU(M): sale of other units
-                  // Detail rows carry NAMED fields (asset_type, cost_of_acquisition,
-                  // stt, unit_fmv, fair_market_value, indexed_cost_of_acquisition,
-                  // etc.) — extract every field the AIS provides verbatim.
-                  // When details is empty (summary-only), build a transaction
-                  // from the top-level entry amount.
-                  // Convert AIS date DD/MM/YYYY → ISO YYYY-MM-DD for the backend.
-                  const toIso = (d: any) => {
-                    const s = (d || '').toString();
-                    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-                    return m ? `${m[3]}-${m[2]}-${m[1]}` : s;
-                  };
-                  const details = e.details || [];
-                  if (details.length === 0) {
-                    // Summary-only entry: no per-scrip detail, use the
-                    // top-level amount as the sale consideration.
-                    const isMF = code.includes('18');
-                    const backendAssetType = isMF ? 'EQUITY_ORIENTED_MUTUAL_FUND' : 'LISTED_EQUITY';
-                    capitalGainTransactions.push({
-                      id: `cg-${code}-${e.information_code || deductorName}`,
-                      recordKind: 'TRANSACTION',
-                      name: deductorName,
-                      isin: '',
-                      quantity: 0,
-                      salePricePerUnit: 0,
-                      fullConsideration: amount,
-                      totalSaleValue: amount,
-                      saleValue: amount,
-                      acquisitionCost: 0,
-                      costWithoutIndexation: 0,
-                      actualCost: 0,
-                      transferExpenses: 0,
-                      loss94: 0,
-                      dateOfSale: '',
-                      // Backend fields for completed-sale detection
-                      aisHoldingPeriod: '',
-                      transferDate: '',
-                      acquisitionDate: '',
-                      assetType: backendAssetType,
-                      sttPaidOnAcquisition: !isMF,
-                      sttPaidOnTransfer: !isMF,
-                      recognizedExchange: !isMF,
-                      _isListedEquity: code === 'SFT-17-LES(M)',
-                      _isMF: isMF,
-                      _rawAssetType: '',
-                      _isLongTerm: false,
-                    });
-                  } else {
-                  for (const d of details) {
-                    const dData = d.data || {};
-                    const status = (dData.status || '').toString().toUpperCase();
-                    if (status !== 'ACTIVE') continue;
-                    const assetTypeRaw = (dData.asset_type || '').toString().toLowerCase();
-                    const isLongTerm = assetTypeRaw.includes('long');
-                    const secClass = (dData.security_class || '').toString().toLowerCase();
-                    const isMF = code.includes('18') || secClass.includes('fund');
-                    // Map to the backend's _ASSET_ALIASES keys:
-                    //   'LISTED_EQUITY' or 'EQUITY_ORIENTED_MUTUAL_FUND'
-                    const backendAssetType = isMF ? 'EQUITY_ORIENTED_MUTUAL_FUND' : 'LISTED_EQUITY';
-                    const qty = num2(dData.quantity);
-                    const salePrice = num2(dData.sale_price_per_unit);
-                    const saleCons = num2(dData.sales_consideration);
-                    const cost = num2(dData.cost_of_acquisition);
-                    const stt = num2(dData.stt);
-                    const unitFmv = num2(dData.unit_fmv);
-                    const totalFmv = num2(dData.fair_market_value);
-                    const indexedCost = num2(dData.indexed_cost_of_acquisition);
-                    capitalGainTransactions.push({
-                      id: `cg-${code}-${d.sr_no || ''}`,
-                      recordKind: 'TRANSACTION',
-                      // Core AIS fields (extracted verbatim — no assumptions)
-                      name: dData.security_name || deductorName,
-                      isin: dData.isin || dData.security_code || '',
-                      securityClass: secClass,
-                      securityCode: dData.security_code || '',
-                      amcName: dData.amc_name || '',
-                      quantity: qty,
-                      salePricePerUnit: salePrice,
-                      fullConsideration: saleCons,
-                      totalSaleValue: saleCons,
-                      saleValue: saleCons,
-                      acquisitionCost: cost,
-                      costWithoutIndexation: cost,
-                      actualCost: cost,
-                      stt,
-                      fmvPerUnit: unitFmv,
-                      totalFmv,
-                      fairMarketValue: totalFmv,
-                      indexedAcquisitionCost: indexedCost,
-                      indexedCostOfAcquisition: indexedCost,
-                      transferExpenses: 0,
-                      loss94: 0,
-                      dateOfSale: toIso(dData.transfer_date),
-                      dateOfTransfer: toIso(dData.transfer_date),
-                      // The backend's compute_restricted_112a looks for
-                      // 'aisHoldingPeriod' to recognize the AIS's own
-                      // long-term/short-term classification — without it,
-                      // the row is treated as evidence and never computed.
-                      aisHoldingPeriod: dData.asset_type || '',
-                      // Backend also checks 'transferDate' (not just
-                      // dateOfTransfer) for completed-sale detection.
-                      transferDate: toIso(dData.transfer_date),
-                      acquisitionDate: '',  // AIS doesn't carry this
-                      // Backend checks 'saleValue' for positive sale.
-                      saleValue: num2(dData.sales_consideration),
-                      // Backend checks 'actualCost' for positive cost.
-                      actualCost: num2(dData.cost_of_acquisition),
-                      // Map to the backend's _ASSET_ALIASES keys so the
-                      // row is recognized as a valid 112A asset (not an
-                      // unsupported asset that gets skipped).
-                      assetType: backendAssetType,
-                      // For LISTED_EQUITY the backend requires STT flags.
-                      // The AIS SFT-17-LES(M) is a depository-reported sale
-                      // of listed equity on a recognized exchange — STT is
-                      // paid.  Set these so the backend doesn't reject the row.
-                      sttPaidOnAcquisition: !isMF,
-                      sttPaidOnTransfer: !isMF,
-                      recognizedExchange: !isMF,
-                      _isMF: isMF,
-                      _isListedEquity: code === 'SFT-17-LES(M)',
-                      _rawAssetType: dData.asset_type || '',
-                      _isLongTerm: isLongTerm,
-                      debitType: dData.debit_type || '',
-                      creditType: dData.credit_type || '',
-                    });
-                  }
-                  }
-                }
-
-                // ── Capital Gains: B2 SFT-012 sale of immovable property ──
-                if (section === 'B2' && code === 'SFT-012') {
-                  const header: string[] = e.detail_header || [];
-                  const findIdx = (part: string) => {
-                    for (let i = 0; i < header.length; i++) {
-                      if (header[i].toUpperCase().includes(part)) return i;
-                    }
-                    return -1;
-                  };
-                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
-                  const dateIdx = findIdx('TRANSACTION DATE');
-                  const addrIdx = findIdx('PROPERTY ADDRESS');
-                  const amtIdx = findIdx('TRANSACTION AMOUNT');
-                  const stampIdx = findIdx('STAMP');
-                  const toIsoProp = (d: any) => {
-                    const s = (d || '').toString();
-                    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-                    return m ? `${m[3]}-${m[2]}-${m[1]}` : s;
-                  };
-                  for (const d of (e.details || [])) {
-                    const dData = d.data || {};
-                    const status = (dData[statusCol] || '').toString().toUpperCase();
-                    if (status !== 'ACTIVE') continue;
-                    capitalGainTransactions.push({
-                      id: `cg-SFT-012-${d.sr_no || ''}`,
-                      recordKind: 'TRANSACTION',
-                      fullConsideration: amtIdx >= 0 ? num2(dData[`col_${amtIdx}`]) : amount,
-                      stampDutyValue: stampIdx >= 0 ? num2(dData[`col_${stampIdx}`]) : 0,
-                      acquisitionCost: 0,
-                      improvementCost: 0,
-                      transferExpenses: 0,
-                      dateOfSale: toIsoProp(dateIdx >= 0 ? dData[`col_${dateIdx}`] : ''),
-                      propertyAddress: addrIdx >= 0 ? dData[`col_${addrIdx}`] : '',
-                      assetType: 'STCG',
-                      _isImmovable: true,
-                    });
-                  }
-                }
-
-                // ── Capital Gains: B2 SFT-17(Pur) / SFT-18(Pur) purchase evidence ──
-                // These are PURCHASE records (holdings), not disposals.
-                // They are evidence for future sale matching, not taxable
-                // transactions.  Add them as evidence rows so the backend's
-                // compute_restricted_112a can match them against future sales.
-                // They carry NO sale value (saleValue=0, actualCost>0) so the
-                // backend treats them as purchase-only evidence.
-                if (section === 'B2' && (code === 'SFT-17(PUR)' || code === 'SFT-18(PUR)')) {
-                  const isMF = code.includes('18');
-                  const backendAssetType = isMF ? 'EQUITY_ORIENTED_MUTUAL_FUND' : 'LISTED_EQUITY';
-                  const header: string[] = e.detail_header || [];
-                  const findIdx = (part: string) => {
-                    for (let i = 0; i < header.length; i++) {
-                      if (header[i].toUpperCase().includes(part)) return i;
-                    }
-                    return -1;
-                  };
-                  const statusCol = header.length > 0 ? `col_${header.length - 1}` : '';
-                  const purIdx = findIdx('PURCHASE');
-                  const saleIdx = findIdx('SALES');
-                  const amcIdx = findIdx('AMC NAME');
-                  const clientIdx = findIdx('CLIENT ID');
-                  const holderIdx = findIdx('HOLDER FLAG');
-                  for (const d of (e.details || [])) {
-                    const dData = d.data || {};
-                    const status = (dData[statusCol] || '').toString().toUpperCase();
-                    if (status !== 'ACTIVE') continue;
-                    const purchaseAmount = purIdx >= 0 ? num2(dData[`col_${purIdx}`]) : amount;
-                    const saleAmount = saleIdx >= 0 ? num2(dData[`col_${saleIdx}`]) : 0;
-                    // AMC name may span 2 columns (col_3 + col_4) because
-                    // the RTA name is split across cells.  Join them.
-                    const amcName = amcIdx >= 0
-                      ? [dData[`col_${amcIdx}`], dData[`col_${amcIdx + 1}`]].filter(Boolean).join(' ')
-                      : deductorName;
-                    capitalGainTransactions.push({
-                      id: `cg-${code}-pur-${d.sr_no || ''}`,
-                      recordKind: 'EVIDENCE',
-                      evidenceSide: 'PURCHASE',
-                      assetType: backendAssetType,
-                      name: amcName,
-                      amcName,
-                      clientId: clientIdx >= 0 ? dData[`col_${clientIdx}`] : '',
-                      holderFlag: holderIdx >= 0 ? dData[`col_${holderIdx}`] : '',
-                      // Purchase evidence: cost is set, sale is 0
-                      saleValue: 0,
-                      actualCost: purchaseAmount,
-                      fullConsideration: 0,
-                      acquisitionCost: purchaseAmount,
-                      acquisitionDate: '',
-                      transferDate: '',
-                      transferExpenses: 0,
-                      _isPurchase: true,
-                      _isMF: isMF,
-                      _isListedEquity: !isMF,
-                      _isLongTerm: false,
-                    });
-                  }
-                }
-
-                // ── Business: TDS-194C/194H/194R/194T/194N ──
-                // Note: TDS-194S is VDA/crypto → Capital Gains
-                // Note: TDS-194IA is real estate → Capital Gains
-                if (section === 'B1' && code.startsWith('TDS-')) {
-                  const tdsSection = code.replace('TDS-', '');
-                  if (['194C', '194H', '194R', '194T', '194N', '194K', '194BA'].includes(tdsSection)) {
-                    const totalIncome = sumActive2('AMOUNT PAID') || amount;
-                    const totalTds = sumActive2('TDS DEDUCTED') || sumActive2('TAX COLLECTED') || 0;
-                    businessEntries.push({
-                      deductorName,
-                      deductorTAN: deductorTan,
-                      section: tdsSection,
-                      grossReceipts: totalIncome,
-                      tdsDeducted: totalTds,
-                      category,
-                    });
-                  }
-                  // ── Capital Gains: TDS-194S → VDA/crypto transactions ──
-                  if (tdsSection === '194S') {
-                    const totalIncome = sumActive2('AMOUNT PAID') || amount;
-                    const totalTds = sumActive2('TDS DEDUCTED') || 0;
-                    capitalGainTransactions.push({
-                      id: `cg-TDS-194S-${e.information_code}-${deductorName}`,
-                      recordKind: 'TRANSACTION',
-                      name: `VDA transfer — ${deductorName}`,
-                      fullConsideration: totalIncome,
-                      acquisitionCost: 0,
-                      improvementCost: 0,
-                      transferExpenses: 0,
-                      loss94: 0,
-                      assetType: 'STCG',  // VDA is short-term by default
-                      _isVda: true,
-                      deductorName,
-                      deductorTAN: deductorTan,
-                      tdsDeducted: totalTds,
-                    });
-                  }
-                  // ── Capital Gains: TDS-194IA → immovable property ──
-                  if (tdsSection === '194IA' || tdsSection === '194IAR' || tdsSection === '194IARV') {
-                    const totalIncome = sumActive2('AMOUNT PAID') || amount;
-                    const totalTds = sumActive2('TDS DEDUCTED') || 0;
-                    capitalGainTransactions.push({
-                      id: `cg-TDS-194IA-${e.information_code}-${deductorName}`,
-                      recordKind: 'TRANSACTION',
-                      name: `Property transfer — ${deductorName}`,
-                      fullConsideration: totalIncome,
-                      acquisitionCost: 0,
-                      improvementCost: 0,
-                      transferExpenses: 0,
-                      loss94: 0,
-                      assetType: 'STCG',  // default ST; user can change to LTCG
-                      _isImmovable: true,
-                      deductorName,
-                      deductorTAN: deductorTan,
-                      tdsDeducted: totalTds,
-                    });
-                  }
-                }
-              }
-            }
-
-            if (allTdsEntries.length > 0) formDataUpdate.tdsEntries = allTdsEntries;
-            if (employerEntries.length > 0) {
-              formDataUpdate.employerEntries = employerEntries;
-              formDataUpdate.basic = employerEntries.reduce((s, e) => s + (e.basic || 0), 0);
-              formDataUpdate.grossSalary = employerEntries.reduce((s, e) => s + (e.grossSalary || 0), 0);
-            }
-            if (interestEntries.length > 0) {
-              formDataUpdate.interestEntries = interestEntries;
-              formDataUpdate.bankInterestEntries = interestEntries;
-              formDataUpdate.interestSB = interestEntries
-                .filter((e) => e.kind === 'SAVINGS_BANK')
-                .reduce((s, e) => s + e.grossAmount, 0);
-              formDataUpdate.interestFD = interestEntries
-                .filter((e) => e.kind === 'TERM_DEPOSIT')
-                .reduce((s, e) => s + e.grossAmount, 0);
-            }
-            if (dividendEntries.length > 0) {
-              formDataUpdate.dividendEntries = dividendEntries;
-              formDataUpdate.dividendShares = dividendEntries.reduce((s, e) => s + e.dividendAmount, 0);
-            }
-            if (capitalGainTransactions.length > 0) {
-              // Add field-name aliases the component reads:
-              //   saleValue/actualCost (for the 'Imported AIS reference' banner)
-              // and route each transaction into the correct CG schedule
-              // section so the actual schedule tables populate.
-              const stImmovable: any[] = [];
-              const ltImmovable: any[] = [];
-              const stEquity: any[] = [];
-              const stOtherAssets: any[] = [];
-              const ltOtherAssets: any[] = [];
-              const vda: any[] = [];
-              const schedule112A: any[] = [];
-              for (const tx of capitalGainTransactions) {
-                const routed = {
-                  ...tx,
-                  saleValue: tx.fullConsideration || 0,
-                  actualCost: tx.acquisitionCost || 0,
-                };
-                // Purchase-only evidence rows are NOT routed to any CG
-                // schedule section — they're holdings, not disposals.
-                // They stay in capitalGainTransactions as evidence.
-                if (tx._isPurchase) {
-                  continue;
-                }
-                if (tx._isVda) {
-                  vda.push({
-                    ...routed,
-                    consideration: tx.fullConsideration || 0,
-                  });
-                } else if (tx._isImmovable) {
-                  if (tx._isLongTerm) ltImmovable.push(routed);
-                  else stImmovable.push(routed);
-                } else if (tx._isListedEquity || tx._isMF) {
-                  // Listed equity / MF → Schedule 112A (long-term) or
-                  // stEquity (short-term, section 111A)
-                  if (tx._isLongTerm) {
-                    const saleVal = tx.fullConsideration || 0;
-                    const costVal = tx.acquisitionCost || 0;
-                    schedule112A.push({
-                      ...routed,
-                      // AIS carries these fields verbatim — pass them through
-                      isin: tx.isin || '',
-                      name: tx.name || '',
-                      quantity: tx.quantity || 0,
-                      salePricePerUnit: tx.salePricePerUnit || 0,
-                      totalSaleValue: saleVal,
-                      costWithoutIndexation: costVal,
-                      acquisitionCost: costVal,
-                      fmvPerUnit: tx.fmvPerUnit || 0,
-                      totalFmv: tx.totalFmv || 0,
-                      transferExpenses: tx.transferExpenses || 0,
-                      // NOTE: 'shareOnOrBefore' (BE/AE) is NOT set because
-                      // the AIS doesn't carry the acquisition date.  The
-                      // user must select it — it's a required statutory
-                      // field.  Don't assume.
-                    });
-                  } else {
-                    stEquity.push(routed);
-                  }
-                } else {
-                  // Other assets
-                  if (tx._isLongTerm) ltOtherAssets.push(routed);
-                  else stOtherAssets.push(routed);
-                }
-              }
-              formDataUpdate.capitalGainsSchedule = {
-                ...(formDataUpdate.capitalGainsSchedule || {}),
-                capitalGainTransactions,
-                stImmovable: stImmovable.length ? stImmovable : undefined,
-                ltImmovable: ltImmovable.length ? ltImmovable : undefined,
-                stEquity: stEquity.length ? stEquity : undefined,
-                stOtherAssets: stOtherAssets.length ? stOtherAssets : undefined,
-                ltOtherAssets: ltOtherAssets.length ? ltOtherAssets : undefined,
-                vda: vda.length ? vda : undefined,
-                schedule112A: schedule112A.length ? schedule112A : undefined,
-              };
-              formDataUpdate.capitalGainTransactions = capitalGainTransactions;
-              formDataUpdate.ltcgProperty = capitalGainTransactions
-                .filter((e) => e._isLongTerm)
-                .reduce((s, e) => s + ((e.fullConsideration || 0) - (e.acquisitionCost || 0)), 0);
-              formDataUpdate.stcgProperty = capitalGainTransactions
-                .filter((e) => !e._isLongTerm)
-                .reduce((s, e) => s + ((e.fullConsideration || 0) - (e.acquisitionCost || 0)), 0);
-            }
-            if (businessEntries.length > 0) {
-              formDataUpdate.businessEntries = businessEntries;
-              formDataUpdate.bizTurnover = businessEntries.reduce((s, e) => s + (e.grossReceipts || 0), 0);
-            }
-            if (summary.total_tds) formDataUpdate.totalTds = summary.total_tds;
-
-            // TIS data → flat fields (if TIS was uploaded)
-            if (tisData && (tisData.salaryAmount || tisData.dividendIncome || tisData.interestFromDeposit)) {
-              if (tisData.salaryAmount) formDataUpdate.basic = tisData.salaryAmount;
-              if (tisData.dividendIncome) formDataUpdate.dividendShares = tisData.dividendIncome;
-              if (tisData.interestFromDeposit) formDataUpdate.interestFD = tisData.interestFromDeposit;
-            }
-
-            if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
-            const applied = applyLegacyActionWithSnapshot(editorRef.current, formDataUpdate);
-            editorRef.current = applied.model;
-            setEditorModel(applied.model);
-            await itrApi.saveFormData(clientId, effectiveAssessmentYear, applied.snapshot);
-            toast.dismiss();
-            const parts: string[] = [];
-            if (employerEntries.length) parts.push(`${employerEntries.length} employer`);
-            if (allTdsEntries.length) parts.push(`${allTdsEntries.length} TDS entries`);
-            if (interestEntries.length) parts.push(`${interestEntries.length} interest entries`);
-            if (dividendEntries.length) parts.push(`${dividendEntries.length} dividends`);
-            if (capitalGainTransactions.length) parts.push(`${capitalGainTransactions.length} capital gains`);
-            if (businessEntries.length) parts.push(`${businessEntries.length} business`);
-            toast.success(`${typeStr.toUpperCase()} imported${parts.length ? ': ' + parts.join(', ') : ''}`);
-            setShowImportMenu(false);
-            return;
-          }
-
-          // For prefill uploads, the autoPopulateAll fallback below was dead
-          // code (all document types above return early).  Prefill is handled
-          // by the dedicated branch that follows.
-        } else if (type === 'prefill') {
+        if (type === 'prefill') {
           // ITD Prefill - use backend import API with clientId tracking
           const { integrationApi } = await import('../api/integration');
 
@@ -2164,25 +1092,16 @@ export default function ITRComputationPage() {
           );
 
           // importResult.data is the PrefillExtraction dict.  Run it
-          // through mapPrefillToFormData to get a flat formData patch
+          // through mapPrefillToFormData to surface the import summary
           // (personal info, employer entries, bank accounts, deductions,
-          // TDS, other sources) and merge it into the current form.
+          // TDS, other sources) for the toast, then merge the typed draft
+          // patch and persist it.
           const prefillResult = mapPrefillToFormData(importResult.data || importResult);
 
           if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
-          if (useCanonicalV2) {
-            const merged = mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(importResult.data || importResult));
-            updateEditor((current) => ({ ...replaceDraft(merged), extras: current.extras }));
-            await returnRepository.save(clientId, merged);
-          } else {
-            // Persist the merged form data so a reload preserves the import.
-            const mergedUpdate = prefillResult.formDataUpdate;
-            await itrApi.saveFormData(clientId, effectiveAssessmentYear, composeLegacyPayload({
-              draft: { ...editorRef.current.draft, ...mergedUpdate } as any,
-              extras: editorRef.current.extras ?? {},
-            }));
-            setFormData((prev: any) => ({ ...prev, ...mergedUpdate }));
-          }
+          const merged = mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(importResult.data || importResult));
+          updateEditor((current) => ({ ...replaceDraft(merged), extras: current.extras }));
+          await returnRepository.save(clientId, merged);
 
           setShowImportMenu(false);
 
