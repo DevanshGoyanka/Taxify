@@ -317,7 +317,17 @@ Each phase is **independently testable** and ends with a manual-test gate. The n
 7. Bundle size reduced (verify via `vite build` output).
 8. No reference to `composeLegacyPayload`, `adaptLegacyReturn`, `buildPhase1Payload`, `applyLegacyActionWithSnapshot` anywhere in `frontend/src`.
 
-**Status:** ⬜ Not started
+**Status:** 🟡 In progress (checkpoint 1 of 2 landed at commit `99b1208`).
+
+**Implemented (checkpoint 1 — 2026-08-18):**
+- `frontend/src/domain/returns/editorModelV2.ts` — fully self-contained: the 25+ `update*` functions, all manager-entry types (`InterestManagerEntry`, `DividendManagerEntry`, `TdsManagerEntry`, `ChallanManagerEntry`, `BankManagerData`, etc.), the projection helpers (`interestToManager`/`interestFromManager`, `tdsToManager`/`tdsFromManager`, `deductionLoansToManager`/`deductionLoansFromManager`, `replaceChallanKind`, `deriveCin`, etc.) are ported from `editorModel.ts` and operate directly on `ReturnEditorModelV2`. `editorModelV2` no longer imports anything from `editorModel`.
+- `frontend/src/pages/ITRComputationPage.tsx` — removed the `USE_V2` flag gate and collapsed all 10 `useCanonicalV2` branch points to the canonical v2 path only. Deleted ~1017 lines of dead legacy code: the inline AIS/TIS/26AS flat-blob mapper (~889 lines), `buildPhase1Payload`, `validatePhase1Payload`, the legacy save/generate/import/validate fallbacks, and the `autoPopulateAll` dead block. `handleValidate` now runs the v2 compute and surfaces its structured errors/warnings. All compute/save/generate/import paths route through the canonical repository + `itrV2` endpoints; `formData` remains as a view projection only.
+
+**Remaining (checkpoint 2 — multi-session):**
+- Migrate the 6 tab components (`BusinessTab`, `VDATab`, `LossesTab`, `TDSTab`, `OtherSourcesTab`, `DeductionsTab`, `PersonalInfoTab`, `CapitalGainsTab`) off `formData`/`setFormData`/`composeLegacyPayload` onto `editorModel.draft` + `editorModelV2` updaters. The tabs still read flat-blob fields for: business presumptive (`bizPresumptive`/`bizTurnover`/`bizDeclared`/`bpNetProfit`), brought-forward losses (`bfLossHP`/`bfLossBusiness`/`bfLossSpeculation`/`bfLossSTCG`/`bfLossLTCG`), VDA gains, and 26AS/AIS import snapshots (`imported26AS`/`aisImported`/`incomeBreakdown26AS`). These need typed-draft equivalents or a minimal inline projection before the serializer can be retired.
+- After the tab migration: delete `editorModel.ts`, `legacyAdapter.ts`, `legacySerializer.ts`, `HttpReturnRepository` (relocate the `ReturnRepository` interface to `canonicalRepository.ts` or a shared types file), `repository.ts`'s legacy class, the `map*ToFormData` utils, and the 4 scratch `patch_*.py` files. Update `domain/returns/index.ts` re-exports.
+
+**Validation:** 377 backend tests pass (corpus + reconciliation + v2 compute + golden + profile + boundary + 112A unification + draft mapper + calculator regressions); 165/166 frontend tests pass (only the known pre-existing Schedule HP failure); TypeScript introduces zero new errors.
 
 ---
 
