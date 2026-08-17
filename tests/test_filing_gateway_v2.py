@@ -8,7 +8,14 @@ from typing import Any
 import pytest
 
 import app.engine.filing_gateway_v2 as gateway
-from app.schemas.return_draft import BankAccount, Employer, ReturnDraft, create_empty_draft
+from app.schemas.return_draft import (
+    BankAccount,
+    Employer,
+    ReconciliationDiscrepancy,
+    ReconciliationEvidence,
+    ReturnDraft,
+    create_empty_draft,
+)
 
 
 def _filing_ready_draft() -> ReturnDraft:
@@ -96,3 +103,92 @@ def test_generation_rejects_unsupported_filing_section() -> None:
     with pytest.raises(gateway.FilingGatewayV2Error) as caught:
         gateway.generate_cbdt_json(draft)
     assert "139(1)" in " ".join(caught.value.errors)
+
+
+def test_compute_canonical_itr1_rejects_pending_reconciliation() -> None:
+    """Pending reconciliation discrepancies block the canonical gateway."""
+    draft = _filing_ready_draft()
+    draft.reconciliation.discrepancies.append(ReconciliationDiscrepancy(
+        id="reconciliation-1",
+        category="interest from savings bank",
+        description="AIS/TIS mismatch.",
+        aisAmount=Decimal("157"),
+        tisAcceptedAmount=Decimal("90"),
+        as26Amount=Decimal("0"),
+        difference=Decimal("67"),
+        status="PENDING",
+    ))
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.compute_canonical_itr1(draft)
+    assert "reconciliation" in " ".join(caught.value.errors).lower()
+
+
+def test_compute_canonical_itr1_allows_confirmed_reconciliation() -> None:
+    """A confirmed discrepancy no longer blocks the gateway."""
+    draft = _filing_ready_draft()
+    draft.reconciliation.discrepancies.append(ReconciliationDiscrepancy(
+        id="reconciliation-1",
+        category="interest from savings bank",
+        description="AIS/TIS mismatch.",
+        aisAmount=Decimal("157"),
+        tisAcceptedAmount=Decimal("90"),
+        as26Amount=Decimal("0"),
+        difference=Decimal("67"),
+        status="CONFIRMED_AIS",
+    ))
+    result = gateway.compute_canonical_itr1(draft)
+    assert result.computation.gross_total_income >= Decimal("0")
+
+
+def test_compute_canonical_itr1_rejects_out_of_scope_import_evidence() -> None:
+    """Imported taxable evidence outside ITR-1 forces form escalation."""
+    draft = _filing_ready_draft()
+    draft.reconciliation.evidence.append(ReconciliationEvidence(
+        id="ais-sft-012-1",
+        source="AIS",
+        sourceCode="SFT-012",
+        sourceSection="B2",
+        incomeHead="Capital gains",
+        category="Sale of immovable property",
+        description="Property sale evidence.",
+        sourceName="Sub-registrar",
+        sourceIdentifier="",
+        role="OUT_OF_SCOPE_TAXABLE",
+        relatedTab="CAPITAL_GAINS",
+        canonicalDestination="none",
+        evidenceKind="SOURCE_DETAIL",
+        reportedAmount=Decimal("5000000"),
+        processedAmount=Decimal("5000000"),
+        acceptedAmount=Decimal("0"),
+        taxAmount=Decimal("0"),
+        status="SFT-012",
+        requiresReview=True,
+        raw={"information_code": "SFT-012"},
+    ))
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.compute_canonical_itr1(draft)
+    message = f"{caught.value} {' '.join(caught.value.errors)}".lower()
+    assert "outside itr-1" in message
+    assert "sft-012" in message
+
+
+def test_compute_canonical_itr1_purchase_only_does_not_fabricate_112a_gain() -> None:
+    """A purchase-only MF entry (no sale) must never be treated as a 112A gain.
+
+    Reproduces the bug where a client with a ₹4,99,975 MF purchase and no sale
+    was blocked with "LTCG u/s 112A of Rs 499975 exceeds Rs 125000 limit".
+    A purchase is an acquisition, not a disposal — there is no gain event.
+    """
+    draft = _filing_ready_draft()
+    # Simulate the simplified 112A block with only a cost (purchase) and no sale.
+    draft.capitalGainsSchedule = {
+        "simplified112A": {
+            "totalSaleConsideration": 0,
+            "totalCostAcquisition": Decimal("499975"),
+        },
+    }
+    result = gateway.compute_canonical_itr1(draft)
+    # The gain must be 0 (sale - cost floored at 0), so ITR-1 stays eligible.
+    assert result.computation.capital_gains_112a == Decimal("0")
+    assert not result.computation.errors
+

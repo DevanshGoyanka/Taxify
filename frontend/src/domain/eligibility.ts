@@ -36,6 +36,23 @@ export interface EligibilityFacts {
   // ── Computed / derived ──
   totalIncome: number;
   presumptiveScheme?: '44AD' | '44ADA' | '44AE' | 'Regular';
+
+  // ── Evidence-driven facts (form-agnostic import reconciliation) ──
+  /** True when any imported evidence row is classified OUT_OF_SCOPE_TAXABLE
+   *  (non-112A capital gains, business receipts, VDA, lottery) — forces ITR-2/3/4. */
+  hasOutOfScopeTaxableEvidence: boolean;
+  /** True when AIS/TIS/26AS evidence indicates non-112A capital-gains transactions. */
+  hasNon112ACapitalGainsEvidence: boolean;
+  /** True when evidence indicates business/professional receipts. */
+  hasBusinessIncomeEvidence: boolean;
+  /** True when TCS 206CQ/206CG foreign-remittance evidence is present. */
+  hasForeignRemittanceEvidence: boolean;
+  /** True when unclassified evidence (PARSER_WARNING) needs manual review. */
+  hasUnreviewedEvidence: boolean;
+  /** Total accepted amount of restricted Section 112A capital gains (listed
+   *  equity / equity MF). Allowed in ITR-1/4 up to ₹1,25,000 exemption; any
+   *  gain above that threshold must be reported in Schedule 112A. */
+  restricted112AAmount: number;
 }
 
 export interface FormRecommendation {
@@ -106,10 +123,122 @@ export function collectEligibilityFacts(
     residentialStatus, isDirector, hasUnlistedShares, agriculturalIncome,
     isAudited: Boolean(formData.isAudited), hasBroughtForwardLosses,
     totalIncome, presumptiveScheme,
+    hasOutOfScopeTaxableEvidence: false,
+    hasNon112ACapitalGainsEvidence: false,
+    hasBusinessIncomeEvidence: false,
+    hasForeignRemittanceEvidence: false,
+    hasUnreviewedEvidence: false,
+    restricted112AAmount: 0,
   };
 }
 
 // ── Rule helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Derives evidence-driven eligibility facts from a canonical typed draft.
+ *
+ * This is the form-agnostic bridge: it reads every classified
+ * ``ReconciliationEvidence`` row produced by the import mappers and infers
+ * which ITR form the taxpayer *must* file — before any form-specific
+ * projection has happened.  Evidence classified ``OUT_OF_SCOPE_TAXABLE``
+ * (capital gains, business receipts, VDA, lottery) forces escalation
+ * away from ITR-1; foreign-remittance TCS evidence forces ITR-2/3.
+ */
+export function collectEligibilityFactsFromDraft(
+  draft: { reconciliation?: { evidence?: Array<{ role: string; source?: string; sourceCode?: string; relatedTab?: string; evidenceKind?: string; acceptedAmount?: number; processedAmount?: number; reportedAmount?: number }> } } | null | undefined,
+  taxResult?: Record<string, unknown> | null,
+): EligibilityFacts {
+  const evidence = draft?.reconciliation?.evidence ?? [];
+  const roles = new Set(evidence.map((row) => row.role));
+
+  // Non-112A capital gains evidence: real estate (SFT-012), debt/other MF
+  // (SFT-18-OTU), property TDS (194IA), VDA, or any OUT_OF_SCOPE_TAXABLE row
+  // under CAPITAL_GAINS that is NOT classified RESTRICTED_112A_TAXABLE.
+  const hasNon112ACapitalGainsEvidence = evidence.some(
+    (row) => row.role === 'OUT_OF_SCOPE_TAXABLE' && row.relatedTab === 'CAPITAL_GAINS',
+  );
+
+  // Section 112A restricted: listed equity / equity MF sales. ITR-1/4 are
+  // allowed as long as total accepted proceeds ≤ ₹1,25,000 (₹125,000).
+  // We sum the accepted/processed/reported amounts of RESTRICTED_112A_TAXABLE
+  // rows (category controls from TIS, or SOURCE_DETAIL rows from AIS).
+  const restricted112ARows = evidence.filter((row) => row.role === 'RESTRICTED_112A_TAXABLE');
+  const restricted112AAmount = restricted112ARows.reduce((sum, row) => {
+    const a = row.acceptedAmount ?? row.processedAmount ?? row.reportedAmount ?? 0;
+    return sum + Number(a);
+  }, 0);
+
+  // 112A sale evidence forces ITR-2 only when proceeds exceed the ₹1.25L limit.
+  // Below (or equal to) ₹1.25L, ITR-1 and ITR-4 can use restricted Schedule 112A.
+  const restricted112AExceedsThreshold = restricted112AAmount > 125_000;
+
+  const hasBusinessIncomeEvidence = evidence.some((row) => row.role === 'OUT_OF_SCOPE_TAXABLE' && row.relatedTab === 'BUSINESS');
+  const hasForeignRemittanceEvidence = evidence.some(
+    (row) => row.source === '26AS' && (row.sourceCode === '206CQ' || row.sourceCode === '206CG'),
+  );
+  const hasUnreviewedEvidence = roles.has('PARSER_WARNING');
+  const hasOutOfScopeTaxableEvidence = hasNon112ACapitalGainsEvidence || hasBusinessIncomeEvidence || restricted112AExceedsThreshold;
+
+  // hasCapitalGains for the base eligibility fact: only true when there are
+  // non-112A gains OR when 112A proceeds exceed the ITR-1/4 permitted threshold.
+  const hasCapitalGainsFromEvidence = hasNon112ACapitalGainsEvidence || restricted112AExceedsThreshold;
+
+  const totalIncome = Number(taxResult?.totalIncome ?? 0) || 0;
+  return {
+    hasSalary: false,
+    hasCapitalGains: hasCapitalGainsFromEvidence,
+    hasBusinessIncome: hasBusinessIncomeEvidence,
+    hasProfessionalIncome: false,
+    hasLotteryOrGamingIncome: evidence.some((row) => String(row.sourceCode || '').includes('194BA')),
+    hasVdaIncome: evidence.some((row) => row.relatedTab === 'CAPITAL_GAINS' && String(row.sourceCode || '').includes('VDA')),
+    hasForeignIncomeOrAssets: hasForeignRemittanceEvidence,
+    hasMultipleHouseProperties: false,
+    residentialStatus: 'ROR',
+    isDirector: false,
+    hasUnlistedShares: false,
+    agriculturalIncome: 0,
+    isAudited: false,
+    hasBroughtForwardLosses: false,
+    totalIncome,
+    presumptiveScheme: undefined,
+    hasOutOfScopeTaxableEvidence,
+    hasNon112ACapitalGainsEvidence,
+    hasBusinessIncomeEvidence,
+    hasForeignRemittanceEvidence,
+    hasUnreviewedEvidence,
+    restricted112AAmount,
+  };
+}
+
+/**
+ * Merges flat-form-data facts with evidence-driven draft facts.  Evidence
+ * facts are authoritative: a classified ``OUT_OF_SCOPE_TAXABLE`` row wins
+ * over an absent flat-form-data field, so import evidence cannot be silently
+ * ignored by the eligibility engine.
+ */
+export function assessFormEligibilityFromDraft(
+  formData: Record<string, unknown>,
+  draft: { reconciliation?: { evidence?: Array<{ role: string; source?: string; sourceCode?: string; relatedTab?: string; evidenceKind?: string; acceptedAmount?: number; processedAmount?: number; reportedAmount?: number }> } } | null | undefined,
+  taxResult?: Record<string, unknown> | null,
+): FormRecommendation {
+  const base = collectEligibilityFacts(formData, taxResult);
+  const evidenceFacts = collectEligibilityFactsFromDraft(draft, taxResult);
+  const merged: EligibilityFacts = {
+    ...base,
+    hasForeignIncomeOrAssets: base.hasForeignIncomeOrAssets || evidenceFacts.hasForeignRemittanceEvidence,
+    hasCapitalGains: base.hasCapitalGains || evidenceFacts.hasNon112ACapitalGainsEvidence || evidenceFacts.restricted112AAmount > 125_000,
+    hasBusinessIncome: base.hasBusinessIncome || evidenceFacts.hasBusinessIncomeEvidence,
+    hasVdaIncome: base.hasVdaIncome || evidenceFacts.hasVdaIncome,
+    hasLotteryOrGamingIncome: base.hasLotteryOrGamingIncome || evidenceFacts.hasLotteryOrGamingIncome,
+    hasOutOfScopeTaxableEvidence: evidenceFacts.hasOutOfScopeTaxableEvidence,
+    hasNon112ACapitalGainsEvidence: evidenceFacts.hasNon112ACapitalGainsEvidence,
+    hasBusinessIncomeEvidence: evidenceFacts.hasBusinessIncomeEvidence,
+    hasForeignRemittanceEvidence: evidenceFacts.hasForeignRemittanceEvidence,
+    hasUnreviewedEvidence: evidenceFacts.hasUnreviewedEvidence,
+    restricted112AAmount: evidenceFacts.restricted112AAmount,
+  };
+  return evaluateEligibility(merged);
+}
 
 const ITR_FORMS: readonly ItrForm[] = ['ITR-1', 'ITR-2', 'ITR-3', 'ITR-4'] as const;
 
@@ -148,6 +277,20 @@ export function evaluateEligibility(facts: EligibilityFacts): FormRecommendation
     blockers['ITR-1'].push('More than one house property requires ITR-2');
   if (facts.hasVdaIncome)
     blockers['ITR-1'].push('VDA income requires ITR-2');
+  // ── Evidence-driven ITR-1 escalation ────────────────────────────────────
+  // Non-112A capital gains (real estate, debt MF, VDA) always block ITR-1.
+  if (facts.hasNon112ACapitalGainsEvidence)
+    blockers['ITR-1'].push('AIS/TIS evidence shows non-112A capital gains (property sale, debt MF, VDA) that require ITR-2');
+  // Section 112A gains (listed equity / equity MF) are allowed in ITR-1 up to
+  // ₹1,25,000. Above that threshold, Schedule 112A in ITR-2 is required.
+  if (facts.restricted112AAmount > 125_000)
+    blockers['ITR-1'].push(`Section 112A sale proceeds ₹${facts.restricted112AAmount.toLocaleString('en-IN')} exceed the ₹1,25,000 ITR-1 limit (full Schedule 112A required — use ITR-2)`);
+  if (facts.hasBusinessIncomeEvidence)
+    blockers['ITR-1'].push('AIS/26AS evidence shows business receipts (TDS-194C/194D/194H/194R/194T) — use ITR-3 or ITR-4');
+  if (facts.hasForeignRemittanceEvidence)
+    blockers['ITR-1'].push('26AS TCS evidence shows foreign remittance (206CQ/206CG) — use ITR-2');
+  if (facts.hasUnreviewedEvidence)
+    blockers['ITR-1'].push('Imported evidence has unclassified rows requiring manual review before form selection');
 
   // ── ITR-4 rules (presumptive only) ──────────────────────────────────────
   if (!facts.hasBusinessIncome)
@@ -164,9 +307,15 @@ export function evaluateEligibility(facts: EligibilityFacts): FormRecommendation
     blockers['ITR-4'].push('Unlisted equity holders cannot file ITR-4');
   if (facts.hasForeignIncomeOrAssets)
     blockers['ITR-4'].push('Foreign income / assets are outside ITR-4');
-  // Capital gains outside restricted 112A also block ITR-4.
-  if (facts.hasCapitalGains)
-    blockers['ITR-4'].push('Capital gains outside restricted Section 112A are outside ITR-4');
+  // Non-112A capital gains block ITR-4; 112A gains up to ₹1.25L are permitted.
+  if (facts.hasNon112ACapitalGainsEvidence)
+    blockers['ITR-4'].push('Non-112A capital gains (property, debt MF, VDA) are outside ITR-4 — use ITR-2 or ITR-3');
+  if (facts.hasCapitalGains && !facts.hasNon112ACapitalGainsEvidence && facts.restricted112AAmount > 125_000)
+    blockers['ITR-4'].push(`Section 112A sale proceeds ₹${facts.restricted112AAmount.toLocaleString('en-IN')} exceed the ₹1,25,000 ITR-4 limit — use ITR-2`);
+  if (facts.hasForeignRemittanceEvidence)
+    blockers['ITR-4'].push('Foreign-remittance TCS evidence is outside ITR-4');
+  if (facts.hasUnreviewedEvidence)
+    blockers['ITR-4'].push('Unclassified evidence requires manual review before ITR-4 selection');
 
   // ── ITR-3 rules (business, but not presumptive-only) ────────────────────
   if (!facts.hasBusinessIncome)

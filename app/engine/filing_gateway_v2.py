@@ -136,6 +136,28 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
         raise FilingGatewayV2Error(
             "The v2 canonical compute endpoint currently supports ITR-1 only."
         )
+    pending = [item for item in draft.reconciliation.discrepancies if item.status == "PENDING"]
+    if pending:
+        categories = ", ".join(sorted({item.category for item in pending}))
+        raise FilingGatewayV2Error(
+            "Manual confirmation is required for imported AIS/TIS reconciliation discrepancies before compute or generation.",
+            [f"Pending reconciliation discrepancy: {category}." for category in sorted({item.category for item in pending})],
+        )
+    # Evidence-contradiction guard: any imported row classified OUT_OF_SCOPE_TAXABLE
+    # proves that income outside ITR-1 scope exists in the taxpayer's AIS/TIS/26AS.
+    # Allowing a compute with these rows present would silently ignore income that
+    # requires ITR-2/3.  The taxpayer must correct the form selection first.
+    out_of_scope = [
+        e for e in draft.reconciliation.evidence
+        if e.role == "OUT_OF_SCOPE_TAXABLE"
+    ]
+    if out_of_scope:
+        codes = sorted({e.sourceCode for e in out_of_scope if e.sourceCode})
+        raise FilingGatewayV2Error(
+            "Imported evidence contains income outside ITR-1 scope. "
+            "Please select the correct form (ITR-2 or ITR-3) before computing.",
+            [f"OUT_OF_SCOPE_TAXABLE evidence: {', '.join(codes) or 'unknown codes'}."],
+        )
     try:
         typed_input, breakdown = draft_to_itr1_input(draft)
         result = compute_itr1(typed_input)
@@ -181,18 +203,18 @@ def _filing_profile(draft: ReturnDraft) -> ITR1FilingProfile:
     return_section = section_codes.get(draft.filing.filingSection)
     if return_section is None:
         raise FilingGatewayV2Error(
-            "ITR-1 filing profile is invalid.",
-            ["Official v2 generation currently supports filing sections 139(1) and 139(4)."],
+            "Official v2 generation currently supports filing sections 139(1) and 139(4).",
+            [f"filingSection {draft.filing.filingSection!r} is not supported — use 139(1) or 139(4) for v2 ITR-1 generation."],
         )
     if not draft.verification.declarationAccepted:
         raise FilingGatewayV2Error(
-            "ITR-1 filing profile is incomplete.",
+            "Verification declaration must be accepted for official ITR-1 JSON.",
             ["verification.declarationAccepted must be true."],
         )
     if draft.verification.capacity != "SELF":
         raise FilingGatewayV2Error(
-            "ITR-1 filing profile is invalid.",
-            ["Representative verification is not supported by v2 ITR-1 generation."],
+            "Representative verification is not supported by v2 ITR-1 generation.",
+            ["verification.capacity must be SELF for official ITR-1 JSON."],
         )
     secondary_mobile = personal.secondaryMobile.strip() or None
     secondary_email = personal.secondaryEmail.strip() or None
@@ -251,13 +273,18 @@ def _property_profiles(draft: ReturnDraft) -> list[PropertyFilingProfile]:
             personal.zipCode,
         )]
     else:
+        # Fall back to the property name, then the primary address; also fall
+        # back to the taxpayer's city/state/country/pin so a property row that
+        # omits those fields still produces a valid PropertyFilingProfile
+        # (mirrors the legacy mapper's fallback chain).
+        primary_address = draft.personal.flatNo or draft.personal.residenceName
         rows_data = [(
-            row.address or row.premisesName,
-            row.city,
-            row.state,
-            row.countryCode,
-            row.pinCode,
-            row.zipCode,
+            row.address or row.premisesName or row.name or primary_address,
+            row.city or draft.personal.city,
+            row.state or draft.personal.stateCode,
+            row.countryCode or draft.personal.countryCode,
+            row.pinCode or draft.personal.pinCode,
+            row.zipCode or draft.personal.zipCode,
         ) for row in rows]
     try:
         return [PropertyFilingProfile(

@@ -670,11 +670,46 @@ def _map_legacy_26as(parsed: dict) -> dict:
         or header.get("PAN")
         or ""
     )
+
+    # Preserve every original 26AS part row, including nested transaction
+    # details. Projection into tax schedules is separate from this lossless
+    # evidence collection so unsupported/non-taxable parts are never dropped.
+    source_rows: list[dict[str, Any]] = []
+    for part, part_data in parsed.get("parts", {}).items():
+        for index, row in enumerate(part_data.get("rows") or []):
+            details = row.get("_details") or []
+            section = ""
+            if details:
+                section = str(details[0].get("Section") or "")
+            source_rows.append({
+                "part": str(part),
+                "rowIndex": index,
+                "sectionCode": section,
+                "title": str(part_data.get("title") or ""),
+                "credit": bool(part_data.get("credit", False)),
+                "raw": row,
+            })
+
+    tcs_entries: list[dict[str, Any]] = []
+    for row in parsed.get("parts", {}).get("VI", {}).get("rows", []):
+        details = row.get("_details") or []
+        section = str(details[0].get("Section") or "206C") if details else "206C"
+        tcs_entries.append({
+            "collectorName": row.get("Name of Collector") or "Unknown Collector",
+            "collectorTAN": row.get("TAN of Collector") or "",
+            "sectionCode": section,
+            "grossAmount": _safe_float(row.get("Total Amount Paid/Debited")) or 0.0,
+            "taxCollected": _safe_float(row.get("Total Tax Collected")) or 0.0,
+            "taxDeposited": _safe_float(row.get("Total TCS Deposited")) or 0.0,
+        })
+
     return {
         "partIEntries": partI,
         "partIVEntries": [],
         "partVIIEntries": [],
         "tdsEntries": partI,
+        "tcsEntries": tcs_entries,
+        "sourceRows": source_rows,
         "deductorAggregates": partI,
         "incomeBreakdown": {
             "salaryIncome": salary_income,
@@ -729,128 +764,6 @@ def import_prefill(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Autopopulate / merge endpoints
-# ──────────────────────────────────────────────────────────────────────────────
-
-@router.post("/integration/autopopulate/form16")
-def autopopulate_form16(
-    payload: dict,
-    current_user: User = Depends(get_current_user),
-):
-    """Merge Form 16 data into formData.
-
-    No Form 16 parser exists yet, so this endpoint just merges whatever
-    the frontend supplies in ``form16Data`` into ``formData``.  When a
-    parser is added, it will populate ``form16Data`` automatically.
-    """
-    form_16 = payload.get("form16Data", {})
-    form_data = payload.get("formData", {})
-    updates = {
-        "basic": form_16.get("basic", 0.0),
-        "da": form_16.get("da", 0.0),
-        "hraReceived": form_16.get("hra", 0.0),
-        "bonus": form_16.get("bonus", 0.0),
-        "profTax": form_16.get("professionalTax", 0.0),
-        "tdsS192": form_16.get("tdsDeducted", 0.0),
-    }
-    return {**form_data, **updates}
-
-
-@router.post("/integration/autopopulate/ais")
-def autopopulate_ais(
-    payload: dict,
-    current_user: User = Depends(get_current_user),
-):
-    """Merge AIS data into formData.
-
-    Maps the AIS income heads (salary, dividend, interest, capital
-    gains) into the flat formData fields.  The frontend's
-    ``mapReconciledToFormData`` does the heavy lifting; this endpoint
-    is a thin server-side merge for callers that don't use the frontend
-    mapper.
-    """
-    ais_data = payload.get("aisData", {})
-    form_data = payload.get("formData", {})
-    summary = ais_data.get("summary", {}) if isinstance(ais_data, dict) else {}
-    updates: dict[str, Any] = {}
-    if summary:
-        if summary.get("total_interest"):
-            updates["interestSB"] = summary["total_interest"]
-        if summary.get("total_dividend"):
-            updates["dividends"] = summary["total_dividend"]
-    return {**form_data, **updates}
-
-
-@router.post("/prefill/autoPopulateAll")
-def autopopulate_all(
-    payload: dict,
-    current_user: User = Depends(get_current_user),
-):
-    """Combine 26AS + AIS + TIS into a flat formData patch.
-
-    This endpoint is a thin server-side merge.  The real reconciliation
-    + mapping happens in the frontend via ``mapReconciledToFormData``
-    after the portal automation import.  This endpoint is kept for
-    callers that upload individual documents and want a merged view.
-    """
-    ais = payload.get("aisData") or {}
-    f26as = payload.get("form26ASData") or {}
-    tis = payload.get("tisData") or {}
-    salary = 0.0
-    dividend = 0.0
-    interest = 0.0
-    if tis:
-        salary = tis.get("salaryAmount", 0.0)
-        dividend = tis.get("dividendIncome", 0.0)
-        interest = tis.get("interestFromDeposit", 0.0)
-    elif f26as:
-        ib = f26as.get("incomeBreakdown", {})
-        salary = ib.get("salaryIncome", 0.0)
-        dividend = ib.get("dividendIncome", 0.0)
-        interest = ib.get("interestIncome", 0.0)
-    tds_entries = f26as.get("tdsEntries") or []
-    employer_entries: list[dict[str, Any]] = []
-    if salary > 0:
-        employer_entries.append({
-            "employerName": "From 26AS",
-            "employerTAN": "",
-            "employerPAN": "",
-            "basic": salary, "da": 0, "hra": 0, "bonus": 0, "allowances": 0,
-            "perquisites": 0, "professionalTax": 0,
-            "tdsDeducted": sum(x.get("taxDeducted", 0.0) for x in tds_entries if x.get("section") == "192"),
-            "grossSalary": salary, "netSalary": salary,
-            "financialYear": "", "verified26AS": True,
-        })
-    bank_interest_entries: list[dict[str, Any]] = []
-    if interest > 0:
-        bank_interest_entries.append({
-            "bankName": "From 26AS", "accountNumber": "", "accountType": "SAVINGS",
-            "interestEarned": interest,
-            "tdsDeducted": sum(x.get("taxDeducted", 0.0) for x in tds_entries if x.get("section") == "194A"),
-            "deductorTAN": "", "section": "194A",
-        })
-    dividend_entries: list[dict[str, Any]] = []
-    if dividend > 0:
-        dividend_entries.append({
-            "companyName": "From 26AS", "companyPAN": "",
-            "dividendAmount": dividend, "tdsDeducted": 0.0,
-            "deductorTAN": "", "isin": "", "category": "SHARES", "section": "194",
-        })
-    tds_salary = sum(x.get("taxDeducted", 0.0) for x in tds_entries if x.get("section") == "192")
-    tds_interest = sum(x.get("taxDeducted", 0.0) for x in tds_entries if x.get("section") == "194A")
-    tds_other = sum(x.get("taxDeducted", 0.0) for x in tds_entries if x.get("section") not in ("192", "194A"))
-    return {
-        "basic": salary, "grossSalary": salary, "salaryIncome": salary,
-        "interestSB": interest, "interestFD": 0.0, "dividends": dividend,
-        "employerEntries": employer_entries,
-        "bankInterestEntries": bank_interest_entries,
-        "dividendEntries": dividend_entries,
-        "tdsEntries": tds_entries,
-        "tdsS192": tds_salary, "tds194A": tds_interest, "tdsOther": tds_other,
-    }
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Reconciliation endpoint (real)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -874,75 +787,6 @@ def reconciliation(
         return _reconcile(ais_data, tis_data, as26_data)
     except Exception as exc:
         raise HTTPException(422, f"Reconciliation failed: {exc}")
-
-
-@router.post("/prefill/autopopulate")
-def prefill_autopopulate(
-    payload: dict,
-    current_user: User = Depends(get_current_user),
-):
-    """Merge Prefill data into formData.
-
-    Uses the real ``parse_prefill_json`` parser to extract form-agnostic
-    fields from the uploaded Prefill JSON, then merges them into the
-    supplied formData.
-    """
-    if parse_prefill_json is None:
-        raise HTTPException(501, "Prefill parser not available on this server.")
-    prefill = payload.get("prefillData", {})
-    form_data = payload.get("formData", {})
-    if not prefill:
-        return {**form_data}
-    try:
-        extraction = parse_prefill_json(prefill)
-        extraction_dict = prefill_extraction_to_dict(extraction)
-    except Exception as exc:
-        raise HTTPException(422, f"Prefill parse failed: {exc}")
-    # Thin server-side merge: personal info + bank accounts + deductions.
-    pi = extraction_dict.get("personal_info", {})
-    name = pi.get("name", {})
-    addr = pi.get("address", {})
-    banks = extraction_dict.get("bank_accounts", [])
-    deductions = extraction_dict.get("deductions", {})
-    updates: dict[str, Any] = {}
-    if pi.get("pan"):
-        updates["pan"] = pi["pan"]
-    if name.get("first_name"):
-        updates["firstName"] = name["first_name"]
-    if name.get("middle_name"):
-        updates["middleName"] = name["middle_name"]
-    if name.get("surname_or_org_name"):
-        updates["surnameOrOrgName"] = name["surname_or_org_name"]
-    if pi.get("dob"):
-        updates["dob"] = pi["dob"]
-    if addr.get("city_or_town_or_district"):
-        updates["city"] = addr["city_or_town_or_district"]
-    if addr.get("state_code"):
-        updates["state"] = addr["state_code"]
-    if addr.get("pin_code"):
-        updates["pincode"] = str(addr["pin_code"])
-    if banks:
-        updates["bankAccountData"] = {
-            "accounts": [
-                {
-                    "bankName": b.get("bank_name", ""),
-                    "accountNumber": b.get("bank_account_no", ""),
-                    "ifscCode": b.get("ifsc_code", ""),
-                    "accountType": (b.get("account_type") or "SB").upper(),
-                    "useForRefund": b.get("use_for_refund") == "true",
-                }
-                for b in banks
-            ]
-        }
-    if deductions.get("section_80tta"):
-        updates["s80TTA"] = deductions["section_80tta"]
-    if deductions.get("section_80ttb"):
-        updates["s80TTB"] = deductions["section_80ttb"]
-    if deductions.get("section_80c"):
-        updates["s80C"] = deductions["section_80c"]
-    if deductions.get("section_80d"):
-        updates["s80D"] = deductions["section_80d"]
-    return {**form_data, **updates}
 
 
 # ── ITD ERI Integration Routes ────────────────────────────────────────────────

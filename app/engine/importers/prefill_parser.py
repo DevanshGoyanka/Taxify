@@ -285,6 +285,7 @@ class PrefillEmployerEntry:
     employer_state_code: str = ""
     employer_pin_code: str = ""
     employer_zip_code: str = ""
+    tds_deducted_from_salary: int = 0
 
 
 @dataclass
@@ -763,6 +764,34 @@ def _extract_employers(root: dict[str, Any]) -> list[PrefillEmployerEntry]:
     # Source 3: form24q may carry salary-side TDS (Form 24Q is the
     # employer's TDS return).  We don't extract employer entries from
     # form24q here; the TDS-on-salary extractor handles it.
+
+    # Source 4: tdsOnSalaries.tdsOnSalary[].  When the detailed salary
+    # breakdown (``salaries.salary[]``) is absent, the salary TDS rows
+    # still carry the employer's name + TAN + income charged + total TDS.
+    # Derive employer stubs from them so the frontend can populate the
+    # salary schedule even when only Form 24Q data is present.
+    if not employers:
+        ts = root.get("tdsOnSalaries")
+        if isinstance(ts, Mapping):
+            tds_list = ts.get("tdsOnSalary")
+            if isinstance(tds_list, list):
+                for item in tds_list:
+                    if not isinstance(item, Mapping):
+                        continue
+                    deductor = item.get("employerOrDeductorOrCollectDetl") or {}
+                    if not isinstance(deductor, Mapping):
+                        deductor = {}
+                    name = _to_str(deductor.get("employerOrDeductorOrCollecterName"))
+                    tan = _to_str(deductor.get("tan"))
+                    if not name and not tan:
+                        continue
+                    employers.append(PrefillEmployerEntry(
+                        employer_name=name,
+                        tan=tan,
+                        gross_salary=_to_int(item.get("incChrgSal")),
+                        salary=_to_int(item.get("incChrgSal")),
+                        tds_deducted_from_salary=_to_int(item.get("totalTDSSal")),
+                    ))
 
     # Note: We do NOT enrich employer entries from TDS-other data.
     # TDS-other entries (section 94A, 194A, 194, etc.) are income from

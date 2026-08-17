@@ -32,7 +32,7 @@ import {
   type ReturnEditorModel,
 } from '../domain/returns';
 import {
-  assessFormEligibility, collectEligibilityFacts, type FormRecommendation, type ItrForm,
+  assessFormEligibility, assessFormEligibilityFromDraft, collectEligibilityFacts, type FormRecommendation, type ItrForm,
 } from '../domain/returns';
 import { activeSchedules, blockingSchedules, type ScheduleStatus } from '../domain/returns';
 import ImportConfirmationModal from '../components/ImportConfirmationModal';
@@ -586,9 +586,15 @@ export default function ITRComputationPage() {
   // Debounce timer ref for tax summary API calls
   const taxResultDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // ── CBDT Eligibility (recomputed on every form edit) ────────────────────
+  // Under the canonical v2 path, the eligibility engine reads the typed
+  // draft's reconciliation evidence so imported OUT_OF_SCOPE_TAXABLE rows
+  // (capital-gains, business, VDA, foreign-remittance evidence) escalate
+  // the form recommendation — the import layer must never be silently ignored.
   const eligibilityResult = useMemo<FormRecommendation>(
-    () => assessFormEligibility(formData, backendTaxResult),
-    [formData, backendTaxResult],
+    () => useCanonicalV2 && editorModel?.draft
+      ? assessFormEligibilityFromDraft(formData, editorModel.draft, backendTaxResult)
+      : assessFormEligibility(formData, backendTaxResult),
+    [useCanonicalV2, editorModel?.draft, formData, backendTaxResult],
   );
 
   useEffect(() => {
@@ -604,7 +610,7 @@ export default function ITRComputationPage() {
 
   const taxSummaryPayload = useMemo(
     // Phase 4 (v2): the canonical draft is sent directly to the v2 compute
-    // endpoint via editorRef.current.draft (see the effect below). This
+    // endpoint via `editorRef.current.draft` (see the effect below).  This
     // memo only feeds the legacy flat-blob compute path, so under v2 we
     // return a minimal object to avoid composing legacy fields unnecessarily.
     () => useCanonicalV2 ? { form: itrForm, assessmentYear: effectiveAssessmentYear, regime } : { ...buildPhase1Payload(formData), form: itrForm },
@@ -635,7 +641,11 @@ export default function ITRComputationPage() {
     setTaxResultError(null);
 
     taxResultDebounceRef.current = setTimeout(() => {
-      itrApi.computeTaxSummary(taxSummaryPayload, effectiveAssessmentYear, regime)
+      const currentDraft = editorRef.current?.draft;
+      const computePromise = useCanonicalV2 && currentDraft
+        ? itrV2.compute(stripCompatibility({ ...currentDraft, assessmentYear: effectiveAssessmentYear, form: itrForm, regime }))
+        : itrApi.computeTaxSummary(taxSummaryPayload, effectiveAssessmentYear, regime);
+      computePromise
         .then((result: any) => {
           if (requestId !== computationGenerationRef.current) return;
           setBackendTaxResult(result);
@@ -772,7 +782,8 @@ export default function ITRComputationPage() {
 
       // Phase 4 v2 path: operate directly on the typed draft and avoid the
       // legacy flat-blob round-trip (composeLegacyPayload / buildPhase1Payload)
-      // entirely on save. The canonical repository strips compatibility${crlf}      // and pins the AY.
+      // entirely on save.  The canonical repository strips `compatibility`
+      // and pins the AY.
       if (useCanonicalV2 && currentEditor.draft) {
         await returnRepository.save(clientId, {
           ...currentEditor.draft,
@@ -827,7 +838,7 @@ export default function ITRComputationPage() {
       if (dataToSave.donationEntries && dataToSave.donationEntries.length > 0) {
         dataToSave.s80G = 0;
       }
-      
+
       await itrApi.saveFormData(clientId, effectiveAssessmentYear, dataToSave);
       toast.success('Saved ✓');
     } catch (err: any) {
@@ -875,9 +886,8 @@ export default function ITRComputationPage() {
       const currentEditor = editorRef.current;
       if (useCanonicalV2) {
         // Phase 4 v2 path: generate from the typed canonical draft without
-        // composing or normalizing a legacy payload.
-        // The v2 endpoint requires a previously-persisted draft, so save
-        // first to guarantee the latest editor state is on the server.
+        // composing or normalizing a legacy payload. The v2 endpoint requires
+        // a persisted draft, so save first to publish the latest editor state.
         if (currentEditor?.draft) {
           await returnRepository.save(clientId, {
             ...currentEditor.draft,
@@ -1162,9 +1172,20 @@ export default function ITRComputationPage() {
       toast.loading(`Importing ${type}...`);
       
       if (type === 'form16-pdf' || type === 'form16-json') {
-        const data = await import('../api/integration').then(m => m.integrationApi.extractForm16(file));
+        const form16Data = await import('../api/integration').then(m => m.integrationApi.extractForm16(file));
         if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
-        const populated = await import('../api/integration').then(m => m.integrationApi.autoPopulateFromForm16(composeLegacyPayload(editorRef.current!), data));
+        // The legacy /integration/autopopulate/form16 endpoint was a thin
+        // server-side merge with no real Form 16 parser.  Inline the same
+        // merge here so Form 16 import keeps working without the dead endpoint.
+        const populated: Record<string, unknown> = {
+          ...composeLegacyPayload(editorRef.current!),
+          basic: form16Data?.basic ?? 0,
+          da: form16Data?.da ?? 0,
+          hraReceived: form16Data?.hra ?? 0,
+          bonus: form16Data?.bonus ?? 0,
+          profTax: form16Data?.professionalTax ?? 0,
+          tdsS192: form16Data?.tdsDeducted ?? 0,
+        };
         if (importGeneration !== loadGenerationRef.current) return;
         setFormData((prev: any) => ({ ...prev, ...populated }));
         toast.dismiss();
@@ -1219,7 +1240,7 @@ export default function ITRComputationPage() {
           setShowImportMenu(false);
           return;
         }
-        
+
         // Canonical v2 imports bypass the legacy flat-blob adapter entirely.
         // The inline mappings below remain unchanged for flag-off behavior.
         if (useCanonicalV2 && editorRef.current && typeStr !== 'prefill') {
@@ -1236,7 +1257,7 @@ export default function ITRComputationPage() {
           setShowImportMenu(false);
           return;
         }
-
+        
         // Auto-populate from all available documents
         if (type === 'ais-pdf' || type === 'ais-json' || type === 'tis-pdf' || type === '26as-pdf' || type === '26as-txt') {
           // For 26AS, transform TDS entries to frontend format
@@ -2127,42 +2148,9 @@ export default function ITRComputationPage() {
             return;
           }
 
-          const { integrationApi } = await import('../api/integration');
-
-          // Auto-populate from AIS and TIS documents
-          const populated = await integrationApi.autoPopulateAll(
-            legacyClientId!,
-            effectiveAssessmentYear,
-            importedAIS || data,
-            imported26AS || data,
-            importedTIS || data
-          );
-          
-          if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
-          const applied = applyLegacyActionWithSnapshot(editorRef.current, populated);
-          editorRef.current = applied.model;
-          setEditorModel(applied.model);
-          
-          // If both AIS and 26AS available, check reconciliation
-          const ais = importedAIS || data;
-          const f26as = imported26AS || data;
-          const tis = importedTIS || data;
-          
-          if (ais && f26as) {
-            const report = await integrationApi.getReconciliationReport(ais, f26as, tis);
-            if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
-            if (report.hasDiscrepancies) {
-              toast.dismiss();
-              toast.error(`${type.toUpperCase()} imported. Reconciliation needed - ${report.items.length} discrepancies found.`);
-              setShowImportMenu(false);
-              return;
-            }
-          }
-
-          if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
-          await itrApi.saveFormData(clientId, effectiveAssessmentYear, composeLegacyPayload(editorRef.current));
-          toast.dismiss();
-          toast.success(`${type.toUpperCase()} imported and auto-populated successfully!`);
+          // For prefill uploads, the autoPopulateAll fallback below was dead
+          // code (all document types above return early).  Prefill is handled
+          // by the dedicated branch that follows.
         } else if (type === 'prefill') {
           // ITD Prefill - use backend import API with clientId tracking
           const { integrationApi } = await import('../api/integration');

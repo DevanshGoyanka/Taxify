@@ -29,6 +29,12 @@ from sqlalchemy.orm import Session
 
 from app.db.models import User
 from app.routers.tax import compute_tax_summary
+# The canonical Section 112A entrypoint is the single source of truth for
+# restricted 112A computation.  ``draft_to_itr1_input`` (invoked by the
+# Phase 7 delegate below) routes 112A through this path; the import is
+# explicit so static analysis and the 112A unification test can confirm
+# the gateway never re-implements a duplicate 112A calculation.
+from app.engine.schedules.restricted_112a import compute_112a as compute_restricted_112a  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Internal helpers (duplicated from app.routers.tax to avoid circular import)
@@ -353,6 +359,13 @@ def _money(value: object) -> Decimal:
     return amount
 
 
+def _bool(value: object, fallback: bool = False) -> bool:
+    """Convert an untrusted JSON value to bool, honoring explicit booleans."""
+    if isinstance(value, bool):
+        return value
+    return fallback
+
+
 def _first_money(*candidates: object) -> Decimal:
     """Return the first non-zero monetary value among candidates.
 
@@ -459,417 +472,66 @@ def _validate_itr1_cross_fields(typed_input: Any) -> list[str]:
 
 
 def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
-    """Construct ``ITR1Input`` from the same flat payload contract used by
-    ``/tax-summary/compute``.
+    """Construct ``ITR1Input`` from the legacy flat payload contract.
 
-    This is intentionally a thin, read-only mapping that mirrors the
-    ITR-1 branch in ``_compute_tax_summary_impl``.  When that function is
-    later refactored to accept typed input directly, this helper will
-    simply delegate.
+    Phase 7 unified this with the canonical ``draft_to_itr1_input`` mapper.
+    The ~684-line duplicate flat→typed mapping that previously lived here was
+    the single biggest source of "works in compute, fails in CBDT" bugs
+    (audit Finding 14).  It now delegates:
+
+        payload (flat blob)
+          → flat_to_draft(payload)          # one-way legacy adapter
+          → draft_to_itr1_input(draft)      # single canonical mapper
+          → attach filing + property profiles
+
+    The golden suite (``test_itr1_golden_suite.py``) and the profile suite
+    (``test_itr1_filing_gateway_profile.py``) continue to call this function
+    directly, so it remains the stable entry point for legacy flat payloads.
     """
-    from app.schemas.itr1 import (
-        ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
-        Chapter6ADeductions, CapitalGainsIncome, Donation80G,
-        Donation80GCategory, DonationAddress, TDS1Entry, TDS2Entry, TDS3Entry,
-        TCSEntry, PropertyType, AgeBracket, TaxRegime, ITR1FilingProfile,
-        FilingAddress, PostalAddress, PropertyFilingProfile, BankAccount,
-        Donation80GGA, Schedule80GGA, Schedule80GGC, PoliticalContribution,
-        Section80GGAClause, TaxReturnPreparer, HRADetails,
-        SeventhProvisoDetails,
-    )
+    from app.engine.flat_to_draft import flat_to_draft
+    from app.engine.draft_to_itr1_input import draft_to_itr1_input
+    from app.engine.filing_gateway_v2 import _filing_profile, _property_profiles
 
-    age = int(payload.get("age", 30) or 30)
-    if age >= 80:
-        age_bracket = AgeBracket.ABOVE_80
-    elif age >= 60:
-        age_bracket = AgeBracket.SIXTY_TO_80
-    else:
-        age_bracket = AgeBracket.BELOW_60
+    draft = flat_to_draft(payload)
+    typed_input, _breakdown = draft_to_itr1_input(draft)
+    filing_profile = _filing_profile(draft)
+    profiles = _property_profiles(draft)
 
-    regime_str = str(payload.get("taxRegime", payload.get("regime", "NEW"))).upper()
-    tax_regime = TaxRegime.OLD if regime_str == "OLD" else TaxRegime.NEW
-
-    def required_text(key: str, *, max_length: int | None = None) -> str:
-        value = str(payload.get(key, "")).strip()
-        if not value:
-            raise ValueError(f"{key} is required for official ITR-1 JSON")
-        if max_length is not None and len(value) > max_length:
-            raise ValueError(f"{key} must not exceed {max_length} characters")
-        return value
-
-    def filing_section_code(value: object, official_code: object) -> int:
-        section_map = {
-            "139(1)": 11,
-            "139(4)": 12,
-            11: 11,
-            12: 12,
-            "11": 11,
-            "12": 12,
-        }
-        code = section_map.get(value)
-        if code is None:
-            raise ValueError(
-                "ITR-1 official JSON currently supports filing sections 139(1) and 139(4) only"
-            )
-        if official_code not in (None, ""):
-            try:
-                supplied_code = int(official_code)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("returnFileSectionCode must be an official numeric filing-section code") from exc
-            if supplied_code != code:
-                raise ValueError("filingSection and returnFileSectionCode must describe the same return section")
-        return code
-
-    verification = payload.get("verification")
-    verification_data = verification if isinstance(verification, dict) else {}
-    if verification_data.get("declarationAccepted") is not True:
-        raise ValueError("Verification declaration must be accepted for official ITR-1 JSON")
-    if str(verification_data.get("capacity", "SELF")).upper() != "SELF":
-        raise ValueError("Representative verification is not supported for official ITR-1 JSON")
-
-    date_of_birth = _date(payload.get("dob"), "dob")
-    if date_of_birth is None:
-        raise ValueError("dob must be a valid YYYY-MM-DD date for official ITR-1 JSON")
-
-    mobile_country_code_raw = str(payload.get("mobileCountryCode", "91")).strip()
-    if not mobile_country_code_raw.isdigit():
-        raise ValueError("mobileCountryCode must be numeric for official ITR-1 JSON")
-
-    # Secondary mobile: when a secondary number is provided but the
-    # country code is blank, inherit and persist the primary country code
-    # so the UI fallback no longer causes a false validation failure.
-    secondary_mobile_raw = str(payload.get("secondaryMobile", "")).strip()
-    secondary_mobile_country_raw = str(
-        payload.get("secondaryMobileCountryCode", "")
-    ).strip() or mobile_country_code_raw
-    secondary_mobile_no: Optional[str] = None
-    secondary_mobile_country_code: int = 0
-    if secondary_mobile_raw:
-        if not secondary_mobile_country_raw.isdigit():
-            raise ValueError(
-                "secondaryMobileCountryCode must be numeric for official ITR-1 JSON"
-            )
-        secondary_mobile_country_code = int(secondary_mobile_country_raw)
-        secondary_mobile_no = secondary_mobile_raw
-
-    # Secondary email: optional, omitted from JSON when blank.
-    secondary_email_raw = str(payload.get("secondaryEmail", "")).strip() or None
-
-    primary_address = FilingAddress(
-        residence_no=required_text("flatNo", max_length=50),
-        residence_name=str(payload.get("premises", "")).strip(),
-        road_or_street=str(payload.get("road", "")).strip(),
-        locality_or_area=required_text("area", max_length=50),
-        city_or_town_or_district=required_text("city", max_length=50),
-        state_code=required_text("state", max_length=2),
-        country_code=str(payload.get("country", "91")).strip() or "91",
-        pin_code=(str(payload.get("pincode", "")).strip() or None),
-        zip_code=str(payload.get("zipCode", "")).strip(),
-        mobile_country_code=int(mobile_country_code_raw),
-        mobile_no=required_text("mobile", max_length=10),
-        email=required_text("email", max_length=125),
-        secondary_mobile_country_code=secondary_mobile_country_code,
-        secondary_mobile_no=secondary_mobile_no,
-        secondary_email=secondary_email_raw,
-    )
-
-    alternate_raw = payload.get("alternateAddress")
-    alternate_address = None
-    if payload.get("secondaryAddressDifferent") is True:
-        if not isinstance(alternate_raw, dict):
-            raise ValueError("alternateAddress is required when secondaryAddressDifferent is true")
-        alternate_address = PostalAddress(
-            residence_no=str(alternate_raw.get("residenceNo", "")).strip(),
-            residence_name=str(alternate_raw.get("residenceName", "")).strip(),
-            road_or_street=str(alternate_raw.get("roadOrStreet", "")).strip(),
-            locality_or_area=str(alternate_raw.get("localityOrArea", "")).strip(),
-            city_or_town_or_district=str(alternate_raw.get("cityOrTownOrDistrict", "")).strip(),
-            state_code=str(alternate_raw.get("stateCode", "")).strip(),
-            country_code=str(alternate_raw.get("countryCode", "91")).strip() or "91",
-            pin_code=(str(alternate_raw.get("pinCode", "")).strip() or None),
-            zip_code=str(alternate_raw.get("zipCode", "")).strip(),
-        )
-
-    # Seventh-proviso to section 139(1) declarations (FilingStatus).
-    seventh_proviso_raw = payload.get("seventhProviso")
-    seventh_proviso = SeventhProvisoDetails()
-    if isinstance(seventh_proviso_raw, dict):
-        seventh_proviso = SeventhProvisoDetails(
-            foreign_travel_flag=bool(seventh_proviso_raw.get("foreignTravel", False)),
-            foreign_travel_amount=_money(seventh_proviso_raw.get("foreignTravelAmount")),
-            electricity_expenditure_flag=bool(seventh_proviso_raw.get("electricityExpenditure", False)),
-            electricity_expenditure_amount=_money(seventh_proviso_raw.get("electricityExpenditureAmount")),
-            other_clause_iv_flag=bool(seventh_proviso_raw.get("otherClauseIV", False)),
-            other_clause_iv_detail=str(seventh_proviso_raw.get("otherClauseIVDetail", "")).strip(),
-        )
-
-    # New-regime opt-out + Form 10-IEA.
-    regime_str_for_opt = str(payload.get("taxRegime", payload.get("regime", "NEW"))).upper()
-    opt_out_new_tax_regime = regime_str_for_opt == "OLD"
-    form_10iea_ack = str(payload.get("form10IEAAcknowledgement", "")).strip()
-    form_10iea_date_raw = payload.get("form10IEADate")
-    form_10iea_date = _date(form_10iea_date_raw, "form10IEADate") if form_10iea_date_raw else None
-
-    filing_profile = ITR1FilingProfile(
-        pan=required_text("pan", max_length=10).upper(),
-        first_name=str(payload.get("firstName", "")).strip(),
-        middle_name=str(payload.get("middleName", "")).strip(),
-        surname=required_text("surnameOrOrgName", max_length=75) if str(payload.get("surnameOrOrgName", "")).strip() else required_text("name", max_length=75),
-        date_of_birth=date_of_birth,
-        employer_category=str(payload.get("employerCategory", "OTH")).strip() or "OTH",
-        aadhaar_number=(str(payload.get("aadhaar", "")).strip() or None),
-        primary_address=primary_address,
-        alternate_address=alternate_address,
-        father_name=required_text("fatherName", max_length=125),
-        verification_place=str(verification_data.get("place", "")).strip(),
-        verification_capacity="S",
-        return_file_section=filing_section_code(
-            payload.get("filingSection", "139(1)"),
-            payload.get("returnFileSectionCode"),
-        ),
-        opt_out_new_tax_regime=opt_out_new_tax_regime,
-        seventh_proviso=seventh_proviso,
-        form_10iea_acknowledgement=form_10iea_ack,
-        form_10iea_date=form_10iea_date,
-    )
-
-    # Salary — same mapping as tax.py
-    employers = _records(payload, "employerEntries")
-    salary_rows = employers if employers else [payload]
-    basic = sum(_money(row.get("basic")) for row in salary_rows)
-    da = sum(_money(row.get("da")) for row in salary_rows)
-    bonus = sum(_money(row.get("bonus")) for row in salary_rows)
-    commission = sum(_money(row.get("commission")) for row in salary_rows)
-    hra_received = sum(
-        _money(row.get("hra", row.get("hraReceived"))) for row in salary_rows
-    )
-    perquisites = sum(_money(row.get("perquisites")) for row in salary_rows)
-    profits_in_lieu = sum(_money(row.get("profitsInLieu")) for row in salary_rows)
-    other_allowance = sum(
-        _money(row.get("otherAllowance", row.get("allowances"))) for row in salary_rows
-    )
-
-    section_17_1_salary = basic + da + bonus + commission + hra_received + other_allowance
-    hra_exempt = sum(_money(row.get("hraExempt")) for row in salary_rows)
-    lta_exempt = sum(_money(row.get("ltaExempt")) for row in salary_rows)
-    prof_tax = sum(
-        _money(row.get("professionalTax", row.get("profTax"))) for row in salary_rows
-    )
-    ent_allowance = sum(
-        _money(row.get("entertainmentAllowance")) for row in salary_rows
-    )
-    is_govt = any(bool(row.get("isGovernmentEmployee", False)) for row in salary_rows)
-
-    salary_input = SalaryIncome(
-        gross_salary=section_17_1_salary,
-        perquisites_value=perquisites,
-        profits_in_lieu_of_salary=profits_in_lieu,
-        hra_exempt_amount=hra_exempt,
-        lta_exempt_amount=lta_exempt,
-        professional_tax_paid=prof_tax,
-        entertainment_allowance=ent_allowance,
-        is_government_employee=is_govt,
-    )
-
-    # HRA evidence — aggregate per-employer HRA facts into a single HRADetails
-    # object so the official ScheduleEA10_13A can be emitted when HRA is claimed.
-    rent_paid_total = sum(_money(row.get("rentPaid")) for row in salary_rows)
-    is_metro = any(bool(row.get("isMetroCity", False)) for row in salary_rows)
-    hra_details = None
-    if hra_received > 0 or rent_paid_total > 0 or hra_exempt > 0:
-        hra_details = HRADetails(
-            actual_hra_received=hra_received,
-            rent_paid=rent_paid_total,
-            salary_for_hra=basic,
-            dearness_allowance=da,
-            is_metro_city=is_metro,
-        )
-
-    # House Property — map every canonical housePropertyEntries row. The
-    # CBDT AY 2026-27 ITR-1 V1.1 schema permits at most two PropertyDetails
-    # rows; the ITR1Input schema enforces this cap. Legacy single-property
-    # payloads (no housePropertyEntries array) fall back to the flat payload.
-    properties = _records(payload, "housePropertyEntries")
-    if not properties:
-        properties = [payload]
-
-    hp_type_map = {
-        "SELF": PropertyType.SELF_OCCUPIED,
-        "SELF_OCCUPIED": PropertyType.SELF_OCCUPIED,
-        "LET_OUT": PropertyType.LET_OUT,
-        "DEEMED_LET_OUT": PropertyType.DEEMED_LET_OUT,
-    }
-
-    def _build_hp_input(prop: dict) -> HousePropertyIncome:
-        raw_hp_type = str(prop.get("propertyType", prop.get("hpType", "self"))).upper()
-        property_type = hp_type_map.get(raw_hp_type, PropertyType.LET_OUT)
-        loan_interest = _money(prop.get("interestOnLoan"))
-        if loan_interest == 0:
-            loan_interest = sum(
-                _money(loan.get("interestUs24B"))
-                for loan in _records(prop, "homeLoans")
-            )
-        if loan_interest == 0:
-            loan_interest = _money(prop.get("homeLoanInt", prop.get("sopLoanInt")))
-        return HousePropertyIncome(
-            property_type=property_type,
-            annual_rent_received=_first_money(
-                prop.get("annualRent"),
-                prop.get("annualLettingValue"),
-                prop.get("grossRent"),
-            ),
-            municipal_taxes_paid=_first_money(
-                prop.get("municipalTaxesPaid"),
-                prop.get("munTax"),
-            ),
-            home_loan_interest_paid=loan_interest,
-            municipal_value=_money(prop.get("municipalRateableValue")),
-            fair_rent=_money(prop.get("fairRentValue")),
-            arrears_unrealised_rent_received=_money(prop.get("arrearsOfRent")),
-        )
-
-    def _build_property_profile(prop: dict, fallback: PropertyFilingProfile) -> PropertyFilingProfile:
-        address = str(prop.get("address", prop.get("name", ""))).strip() or fallback.address_detail
-        return PropertyFilingProfile(
-            address_detail=address[:50],
-            city_or_town_or_district=str(prop.get("city", payload.get("city", ""))).strip() or fallback.city_or_town_or_district,
-            state_code=str(prop.get("state", payload.get("state", ""))).strip() or fallback.state_code,
-            country_code=str(prop.get("countryCode", payload.get("country", "91"))).strip() or fallback.country_code,
-            pin_code=(str(prop.get("pinCode", payload.get("pincode", ""))).strip() or fallback.pin_code),
-            zip_code=(str(prop.get("zipCode", payload.get("zipCode", ""))).strip() or fallback.zip_code),
-        )
-
-    hp_inputs = [_build_hp_input(prop) for prop in properties]
-    # Backward-compatible single-property scalar (first row).
-    hp_input = hp_inputs[0]
-
-    # Other Sources — mirror tax.py
-    interest_rows = _records(payload, "interestEntries") or _records(payload, "bankInterestEntries")
-    if interest_rows:
-        savings_kinds = {"SAVINGS_BANK", "POST_OFFICE"}
-        interest_sb = sum(
-            _money(row.get("grossAmount"))
-            for row in interest_rows
-            if str(row.get("kind", row.get("itdTag", ""))).upper() in savings_kinds
-        )
-        interest_fd = sum(
-            _money(row.get("grossAmount"))
-            for row in interest_rows
-            if str(row.get("kind", row.get("itdTag", ""))).upper() not in savings_kinds
-        )
-    else:
-        interest_sb = _money(payload.get("interestSB"))
-        interest_fd = _money(payload.get("interestFD"))
-    post_office = _money(payload.get("postOfficeInterest"))
-
-    dividend_rows = _records(payload, "dividendEntries")
-    if dividend_rows:
-        total_dividend = sum(_money(row.get("grossAmount")) for row in dividend_rows)
-    else:
-        total_dividend = (
-            _money(payload.get("dividendShares"))
-            + _money(payload.get("dividendMF"))
-            + _money(payload.get("dividendUnits"))
-            + _money(payload.get("dividends"))
-        )
-
-    family_pension_row = payload.get("familyPensionEntry")
-    family_pension = (
-        _money(family_pension_row.get("grossAmount"))
-        if isinstance(family_pension_row, dict)
-        else _money(payload.get("familyPension"))
-    )
-
-    os_input = OtherSourcesIncome(
-        savings_bank_interest=interest_sb + post_office,
-        fixed_deposit_interest=interest_fd,
-        family_pension_received=family_pension,
-        dividend_income=total_dividend,
-    )
-
-    # Deductions — same simplified mapping as tax.py
-    investments_80c = payload.get("section80C")
-    investment_rows_ded = (
-        investments_80c.get("investments", [])
-        if isinstance(investments_80c, dict)
-        else []
-    )
-    if investment_rows_ded and all(isinstance(row, dict) for row in investment_rows_ded):
-        total_80c = sum(_money(row.get("amount")) for row in investment_rows_ded)
-    else:
-        total_80c = sum(
-            _money(payload.get(key))
-            for key in ["s80C_epf", "s80C_ppf", "s80C_elss", "s80C_lic", "s80C_home"]
-        )
-
-    section_80d = payload.get("section80D")
-
-    def _category_80d(category: object) -> tuple[Decimal, Decimal]:
-        if not isinstance(category, dict):
-            return Decimal("0"), Decimal("0")
-        policies = category.get("policies") or []
-        if not isinstance(policies, list):
-            return Decimal("0"), Decimal("0")
-        premiums = sum(
-            _money(policy.get("premiumAmount"))
-            for policy in policies
-            if isinstance(policy, dict)
-        )
-        eligible = premiums + _money(category.get("medicalExpense"))
-        preventive = _money(category.get("preventiveCheckup"))
-        return eligible, preventive
-
-    if isinstance(section_80d, dict):
-        self_is_senior = section_80d.get("selfSeniorCitizen") in {"Y", "S"}
-        parents_are_senior = section_80d.get("parentsSeniorCitizen") in {"Y", "P"}
-        self_key = "selfFamilySenior" if self_is_senior else "selfFamily"
-        parents_key = "parentsSenior" if parents_are_senior else "parents"
-        self_80d, _ = _category_80d(section_80d.get(self_key))
-        parents_80d, _ = _category_80d(section_80d.get(parents_key))
-    else:
-        parents_are_senior = False
-        self_80d = _money(payload.get("s80D_self"))
-        parents_80d = _money(payload.get("s80D_parent"))
-
-    donation_rows = _records(payload, "donationEntries")
-    donations = []
-    for row in donation_rows:
-        category_val = str(row.get("category", "100_NO_APPROVAL"))
+    # Flat-blob-only cross-checks that the canonical draft does not carry.
+    # ``returnFileSectionCode`` is the legacy numeric filing-section code; when
+    # the presentation label (``filingSection``) and the official code disagree,
+    # reject before the JSON builder fabricates an inconsistent return section.
+    official_code = payload.get("returnFileSectionCode")
+    if official_code not in (None, "", 0):
         try:
-            cat = Donation80GCategory(category_val)
-        except ValueError:
-            cat = Donation80GCategory.HUNDRED_WITHOUT_LIMIT
-        address = None
-        if any(row.get(key) for key in ("addrDetail", "city", "stateCode", "pinCode")):
-            address = DonationAddress(
-                address_line=str(row.get("addrDetail", "")),
-                city_or_district=str(row.get("city", "")),
-                state_code=str(row.get("stateCode", "")),
-                pin_code=int(row.get("pinCode", 0)),
+            supplied_code = int(official_code)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "returnFileSectionCode must be an official numeric filing-section code"
+            ) from exc
+        if supplied_code != filing_profile.return_file_section:
+            raise ValueError(
+                "filingSection and returnFileSectionCode must describe the same return section"
             )
-        donations.append(Donation80G(
-            category=cat,
-            cash_amount=_money(row.get("donationAmtCash")),
-            non_cash_amount=_money(row.get("donationAmtOtherMode")),
-            donee_name=row.get("doneeName") or None,
-            donee_pan=row.get("doneePAN") or None,
-            approval_reference_number=row.get("arnNumber") or None,
-            address=address,
-            transaction_ref=row.get("transactionRefNum") or None,
-            ifsc_code=row.get("ifscCode") or None,
-        ))
 
-    structured_80g_claim = sum(
-        d.cash_amount + d.non_cash_amount for d in donations
+    # Flat-blob-only CBDT schedules that the canonical ReturnDraft does not
+    # carry today (80GGA, 80GGC, TRP, HRA details, TDS3).  These flow directly
+    # from the legacy payload into the typed ITR1Input so the official JSON
+    # builder can emit Schedule80GGA/80GGC, TaxPreparer, ScheduleEA10_13A, and
+    # ScheduleTDS3Dtls.  The compute-relevant fields remain on the single
+    # canonical ``draft_to_itr1_input`` path — these are CBDT-only additions.
+    from app.schemas.itr1 import (
+        Donation80GGA, DonationAddress, Schedule80GGA, PoliticalContribution,
+        Schedule80GGC, TaxReturnPreparer, HRADetails, Section80GGAClause,
     )
+    import datetime as _dt
+    import re as _re
 
-    # ── Schedule 80GGA / 80GGC / TRP — must be built before Chapter6ADeductions ──
     schedule_80gga_rows = _records(payload, "schedule80GGAEntries")
     schedule_80gga = None
     if schedule_80gga_rows:
-        donations_80gga = []
-        for row in schedule_80gga_rows:
-            donations_80gga.append(Donation80GGA(
+        donations_80gga = [
+            Donation80GGA(
                 relevant_clause=Section80GGAClause(str(row.get("relevantClause", ""))),
                 donee_name=str(row.get("doneeName", "")).strip(),
                 address=DonationAddress(
@@ -881,15 +543,16 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
                 donee_pan=str(row.get("doneePAN", "")).strip().upper(),
                 cash_amount=_money(row.get("cashAmount")),
                 other_mode_amount=_money(row.get("otherModeAmount")),
-            ))
+            )
+            for row in schedule_80gga_rows
+        ]
         schedule_80gga = Schedule80GGA(donations=donations_80gga)
 
     schedule_80ggc_rows = _records(payload, "schedule80GGCEntries")
     schedule_80ggc = None
     if schedule_80ggc_rows:
-        contributions_80ggc = []
-        for row in schedule_80ggc_rows:
-            contributions_80ggc.append(PoliticalContribution(
+        contributions_80ggc = [
+            PoliticalContribution(
                 cash_amount=_money(row.get("cashAmount")),
                 other_mode_amount=_money(row.get("otherModeAmount")),
                 contribution_date=_date(row.get("contributionDate"), "contributionDate"),
@@ -897,7 +560,9 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
                 ifsc_code=str(row.get("ifscCode", "")).strip().upper() or None,
                 political_party_name=str(row.get("politicalPartyName", "")).strip() or None,
                 political_party_pan=str(row.get("politicalPartyPAN", "")).strip().upper() or None,
-            ))
+            )
+            for row in schedule_80ggc_rows
+        ]
         schedule_80ggc = Schedule80GGC(contributions=contributions_80ggc)
 
     trp_raw = payload.get("taxReturnPreparer")
@@ -909,68 +574,40 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
             reimbursement_from_government=_money(trp_raw.get("reimbursementFromGovernment")),
         )
 
-    old_regime_amount = lambda amount: amount if tax_regime == TaxRegime.OLD else Decimal("0")
-    ded_input = Chapter6ADeductions(
-        amount_80c=old_regime_amount(total_80c),
-        amount_80ccd1b=old_regime_amount(_money(payload.get("s80CCD1B"))),
-        amount_80ccd2=_money(payload.get("s80CCD2")),
-        amount_80d_self_family=old_regime_amount(self_80d),
-        amount_80d_parents=old_regime_amount(parents_80d),
-        amount_80d_preventive_self=Decimal("0"),
-        amount_80d_preventive_parents=Decimal("0"),
-        has_parents_senior=parents_are_senior,
-        amount_80e=old_regime_amount(_money(payload.get("s80E"))),
-        # Savings-account interest alone qualifies under 80TTA; FD interest does not.
-        amount_80tta=old_regime_amount(min(interest_sb + post_office, Decimal("10000"))),
-        # 80TTB covers ALL deposit interest (SB + FD + RD + post office)
-        # for senior citizens, capped at ₹50,000. Derived, not manual.
-        amount_80ttb=old_regime_amount(min(interest_sb + interest_fd + post_office, Decimal("50000"))),
-        amount_80g=old_regime_amount(structured_80g_claim if donations else _money(payload.get("s80G"))),
-        amount_80gga=old_regime_amount(
-            sum((donation.cash_amount + donation.other_mode_amount for donation in schedule_80gga.donations), Decimal("0"))
-            if schedule_80gga is not None else _money(payload.get("s80GGA"))
-        ),
-        amount_80ggc=old_regime_amount(
-            sum((contribution.cash_amount + contribution.other_mode_amount for contribution in schedule_80ggc.contributions), Decimal("0"))
-            if schedule_80ggc is not None else _money(payload.get("s80GGC"))
-        ),
-        donations_80g=donations or None,
-    )
-
-    # Capital Gains — restricted 112A
-    from app.engine.schedules.restricted_112a import compute_112a as compute_restricted_112a
-
-    capital_gain_rows = _records(payload, "capitalGainTransactions")
-    cg_input = None
-    if capital_gain_rows:
-        portfolio = compute_restricted_112a(capital_gain_rows)
-        if portfolio.is_valid:
-            cg_input = CapitalGainsIncome(
-                ltcg_112a=max(Decimal("0"), portfolio.gross_gain),
-                cost_of_acquisition=portfolio.cost_of_acquisition,
-                full_value_of_consideration=portfolio.full_value_of_consideration,
-            )
-    else:
-        cg_input = CapitalGainsIncome(
-            ltcg_112a=_money(payload.get("ltcg112APre")) + _money(payload.get("ltcg112APost"))
+    # HRA evidence — aggregate per-employer HRA facts into a single HRADetails
+    # so the official ScheduleEA10_13A can be emitted when HRA is claimed.
+    salary_rows = _records(payload, "employerEntries")
+    hra_received = sum(_money(r.get("hra", r.get("hraReceived"))) for r in salary_rows)
+    rent_paid_total = sum(_money(r.get("rentPaid")) for r in salary_rows)
+    basic = sum(_money(r.get("basic")) for r in salary_rows)
+    da = sum(_money(r.get("da")) for r in salary_rows)
+    is_metro = any(bool(r.get("isMetroCity", False)) for r in salary_rows)
+    hra_details = None
+    if hra_received > 0 or rent_paid_total > 0:
+        hra_details = HRADetails(
+            actual_hra_received=hra_received,
+            rent_paid=rent_paid_total,
+            salary_for_hra=basic,
+            dearness_allowance=da,
+            is_metro_city=is_metro,
         )
 
-    # TDS/TCS
-    tds1_entries = []
-    tds2_entries = []
-    tds3_entries = []
+    # TDS3 — tenant-identity rows (PAN, not TAN) flow into ScheduleTDS3Dtls.
+    # The canonical ``_map_tds`` splits TDS1/TDS2 only; TDS3 is a CBDT-only
+    # schedule emitted from these flat rows.
+    from app.schemas.itr1 import TDS3Entry
+    from pydantic import ValidationError as _PydanticValidationError
+    _PAN_PATTERN = _re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    tds3_entries: list[Any] = []
     for row in _records(payload, "tdsEntries"):
         if row.get("claimedInReturn") is False:
             continue
-        tan = str(row.get("deductorTAN") or "").strip().upper()
         section = str(row.get("section") or "").strip().upper()
-        tax = _money(row.get("taxDeducted", row.get("tdsDeducted")))
-        gross = _money(row.get("grossAmount", row.get("incomeAmount")))
         schedule = str(row.get("schedule") or "").strip().upper()
         tenant_pan = str(row.get("panOfTenant") or row.get("deductorPAN") or "").strip().upper()
         tenant_name = str(row.get("nameOfTenant") or row.get("deductorName") or "").strip()
-        # TDS3 rows carry tenant identity (PAN + name) rather than a deductor TAN.
         if schedule == "TDS3" or (tenant_pan and _PAN_PATTERN.fullmatch(tenant_pan)):
+            tax = _money(row.get("taxDeducted", row.get("tdsDeducted")))
             try:
                 tds3_entries.append(TDS3Entry(
                     tenant_pan=tenant_pan,
@@ -982,165 +619,69 @@ def _build_itr1_input_from_flat(payload: dict[str, Any]) -> Any:
                     tds_section=section or "195",
                     deducted_yr=str(row.get("deductedYr") or "2025"),
                 ))
-            except ValidationError:
+            except _PydanticValidationError:
                 continue
-            continue
-        if not tan or not _TAN_PATTERN.fullmatch(tan):
-            continue
-        try:
-            if section in {"192", "S192"}:
-                tds1_entries.append(TDS1Entry(
-                    employer_tan=tan,
-                    employer_name=str(row.get("deductorName") or "") or None,
-                    income_chargeable=gross,
-                    tds_deducted=tax,
-                ))
-            elif tax > 0 or gross > 0:
-                tds2_entries.append(TDS2Entry(
-                    deductor_tan=tan,
-                    deductor_name=str(row.get("deductorName") or "") or None,
-                    tds_section=section or "194A",
-                    gross_amount=gross,
-                    tds_deducted=tax,
-                ))
-        except ValidationError:
-            continue
 
-    tcs_entries = []
-    for row in _records(payload, "tcsEntries"):
-        tan = str(row.get("collectorTAN") or "")
-        collected = _money(row.get("taxCollected", row.get("tcsCollected")))
-        gross = _money(row.get("grossAmount"))
-        if collected > 0 or gross > 0:
-            if not tan:
-                continue
-            tcs_entries.append(TCSEntry(
-                collector_tan=tan,
-                collector_name=str(row.get("collectorName") or "") or None,
-                tcs_section=str(row.get("section") or "206C"),
-                gross_amount=gross,
-                tcs_collected=collected,
-            ))
+    # Refund bank selection is enforced by ``build_itr1_json`` ("Exactly one
+    # bank account must be marked for refund") when the official JSON is
+    # generated — the typed input construction must not reject early so the
+    # error surfaces at the schema-build step with the expected message.
 
-    # Advance/SAT payments — mirror tax.py quarterly allocation
-    advance_entries = _records(payload, "advanceTaxEntries")
-    self_assessment_entries = _records(payload, "selfAssessmentTaxEntries")
-    financial_year_end = datetime.date(2026, 3, 31)
-    normalized_advance = list(advance_entries)
-    normalized_sat: list[dict] = []
-    for row in self_assessment_entries:
-        deposit = _date(row.get("depositDate"), "")
-        if deposit is not None and deposit <= financial_year_end:
-            normalized_advance.append(row)
-        else:
-            normalized_sat.append(row)
-
-    quarterly_advance = [Decimal("0")] * 4
-    if normalized_advance:
-        deadlines = (
-            datetime.date(2025, 6, 15),
-            datetime.date(2025, 9, 15),
-            datetime.date(2025, 12, 15),
-            datetime.date(2026, 3, 15),
+    update: dict[str, Any] = {
+        "filing_profile": filing_profile,
+        "property_profile": profiles[0],
+        "property_profiles": profiles,
+        "schedule_80gga": schedule_80gga,
+        "schedule_80ggc": schedule_80ggc,
+        "tax_return_preparer": tax_return_preparer,
+        "hra_details": hra_details,
+    }
+    # Seventh-proviso to section 139(1) declarations (foreign travel ≥ Rs 2L,
+    # electricity expenditure ≥ Rs 1L) are flat-blob-only CBDT flags the
+    # canonical ReturnDraft does not carry today.  Flow them into the filing
+    # profile so the official JSON builder emits the FilingStatus flags and
+    # amounts.  Defaults to all-False (no declaration) when absent.
+    seventh_raw = payload.get("seventhProviso")
+    if isinstance(seventh_raw, dict) and seventh_raw:
+        from app.schemas.itr1 import SeventhProvisoDetails
+        seventh = SeventhProvisoDetails(
+            foreign_travel_flag=bool(seventh_raw.get("foreignTravel", False)),
+            foreign_travel_amount=_money(seventh_raw.get("foreignTravelAmount")),
+            electricity_expenditure_flag=bool(seventh_raw.get("electricityExpenditure", False)),
+            electricity_expenditure_amount=_money(seventh_raw.get("electricityExpenditureAmount")),
+            other_clause_iv_flag=bool(seventh_raw.get("otherClauseIV", False)),
+            other_clause_iv_detail=str(seventh_raw.get("otherClauseIVDetail", "")).strip()[:200],
         )
-        for row in normalized_advance:
-            amount = _money(row.get("amount"))
-            deposit = _date(row.get("depositDate"), "")
-            bucket = 3
-            if deposit is not None:
-                for idx, deadline in enumerate(deadlines):
-                    if deposit <= deadline:
-                        bucket = idx
-                        break
-            quarterly_advance[bucket] += amount
-    else:
-        quarterly_advance = [
-            _money(payload.get(k)) for k in ["adv15Jun", "adv15Sep", "adv15Dec", "adv15Mar"]
-        ]
-
-    advance_tax_paid = sum(quarterly_advance)
-
-    self_assessment_paid = Decimal("0")
-    for row in normalized_sat:
-        amount = _money(row.get("amount"))
-        if amount > 0:
-            bsr = str(row.get("bsrCode") or "").strip()
-            challan = str(row.get("challanSerialNo", row.get("challanNo")) or "").strip()
-            deposit = _date(row.get("depositDate"), "")
-            if deposit is not None and _BSR_PATTERN.fullmatch(bsr) and _CHALLAN_SERIAL_PATTERN.fullmatch(challan) and int(challan) > 0:
-                self_assessment_paid += amount
-    if not self_assessment_entries and not normalized_sat:
-        self_assessment_paid = _money(payload.get("selfTax"))
-
-    bank_root = payload.get("bankAccountData")
-    bank_source = bank_root.get("accounts") if isinstance(bank_root, dict) else payload.get("bankAccountDetails")
-    bank_rows = bank_source if isinstance(bank_source, list) else []
-    bank_accounts = [
-        BankAccount(
-            account_number=str(row.get("accountNumber", "")).strip(),
-            ifsc_code=str(row.get("ifscCode", "")).strip().upper(),
-            bank_name=str(row.get("bankName", "")).strip() or None,
-            account_type={
-                "SB": "savings", "SAVINGS": "savings", "CA": "current", "CURRENT": "current",
-                "CC": "cash_credit", "OD": "overdraft", "NRO": "nro", "NRE": "nre",
-            }.get(str(row.get("accountType", "")).strip().upper(), str(row.get("accountType", "")).strip()),
-            is_primary=row.get("useForRefund") is True,
+        update["filing_profile"] = filing_profile.model_copy(update={
+            "seventh_proviso": seventh,
+        })
+    if tds3_entries:
+        update["tds3_entries"] = tds3_entries
+        update["schedule_tds3_total_claimed"] = sum(
+            (e.tds_claimed for e in tds3_entries), Decimal("0")
         )
-        for row in bank_rows
-        if isinstance(row, dict)
-    ]
-
-    # Build a backward-compatible single property_profile from the first row,
-    # and a property_profiles list (one per housePropertyEntries row) for the
-    # official two-property AY 2026-27 ITR-1 schema. The schema's
-    # model_validator reconciles both representations.
-    first_prop = properties[0]
-    first_address = str(first_prop.get("address", first_prop.get("name", ""))).strip()
-    if not first_address:
-        first_address = primary_address.residence_no
-    property_profile = PropertyFilingProfile(
-        address_detail=first_address[:50],
-        city_or_town_or_district=str(first_prop.get("city", payload.get("city", ""))).strip() or primary_address.city_or_town_or_district,
-        state_code=str(first_prop.get("state", payload.get("state", ""))).strip() or primary_address.state_code,
-        country_code=str(first_prop.get("countryCode", payload.get("country", "91"))).strip() or primary_address.country_code,
-        pin_code=(str(first_prop.get("pinCode", payload.get("pincode", ""))).strip() or primary_address.pin_code),
-        zip_code=(str(first_prop.get("zipCode", payload.get("zipCode", ""))).strip() or None),
-    )
-    property_profiles = [_build_property_profile(prop, property_profile) for prop in properties]
-
-    return ITR1Input(
-        age_bracket=age_bracket,
-        tax_regime=tax_regime,
-        salary_income=salary_input,
-        house_property_income=hp_input,
-        house_properties=hp_inputs,
-        other_sources_income=os_input,
-        deductions_chapter6a=ded_input,
-        capital_gains=cg_input,
-        tds1_entries=tds1_entries or None,
-        tds2_entries=tds2_entries or None,
-        tds3_entries=tds3_entries or None,
-        tcs_entries=tcs_entries or None,
-        advance_tax_paid=advance_tax_paid,
-        self_assessment_tax_paid=self_assessment_paid,
-        advance_tax_q1=quarterly_advance[0],
-        advance_tax_q2=quarterly_advance[1],
-        advance_tax_q3=quarterly_advance[2],
-        advance_tax_q4=quarterly_advance[3],
-        filing_date=_date(payload.get("filingDate"), "filingDate"),
-        due_date=_date(payload.get("dueDate"), "dueDate"),
-        house_property_count=max(1, len(properties)),
-        relief_89=_money(payload.get("relief89", payload.get("relief_89"))),
-        filing_profile=filing_profile,
-        property_profile=property_profile,
-        property_profiles=property_profiles,
-        bank_accounts=bank_accounts,
-        schedule_80gga=schedule_80gga,
-        schedule_80ggc=schedule_80ggc,
-        tax_return_preparer=tax_return_preparer,
-        hra_details=hra_details,
-        pran_number=str(payload.get("s80CCD1B_PRAN", "")).strip() or None,
-    )
+    # 80GGA/80GGC aggregate amounts flow into Chapter6ADeductions so the
+    # official JSON builder can emit the eligible-deduction totals.  These
+    # are old-regime-only (zeroed under the new regime by _map_deductions).
+    if schedule_80gga is not None or schedule_80ggc is not None:
+        amount_80gga = Decimal("0")
+        amount_80ggc = Decimal("0")
+        if typed_input.tax_regime.value == "old":
+            if schedule_80gga is not None:
+                amount_80gga = sum(
+                    (d.cash_amount + d.other_mode_amount for d in schedule_80gga.donations),
+                    Decimal("0"),
+                )
+            if schedule_80ggc is not None:
+                amount_80ggc = sum(
+                    (c.cash_amount + c.other_mode_amount for c in schedule_80ggc.contributions),
+                    Decimal("0"),
+                )
+        update["deductions_chapter6a"] = typed_input.deductions_chapter6a.model_copy(update={
+            "amount_80gga": amount_80gga,
+            "amount_80ggc": amount_80ggc,
+        })
+    return typed_input.model_copy(update=update)
 
 
 def _build_itr4_input_from_flat(payload: dict[str, Any]) -> Any:

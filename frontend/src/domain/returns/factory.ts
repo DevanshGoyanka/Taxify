@@ -50,6 +50,6 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
     taxes: { tds: [], tcs: [], challans: [] }, bankAccounts: [],
     verification: { capacity: 'SELF', place: '', date: null, declarationAccepted: false },
     taxReturnPreparer: { used: false, identificationNumber: '', name: '', reimbursementFromGovernment: 0 },
-    provenance: [],
+    provenance: [], reconciliation: { evidence: [], discrepancies: [] },
   };
 }

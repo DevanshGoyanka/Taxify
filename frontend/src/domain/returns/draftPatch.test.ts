@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyReturnDraft } from './factory';
+import { EMPTY_TDS_CREDIT } from './types';
 import { mergeDraft, type ReturnDraftPatch } from './draftPatch';
 
 describe('mergeDraft', () => {
@@ -22,6 +23,35 @@ describe('mergeDraft', () => {
     expect(merged.personal.name).toBe('Existing');
     expect(merged.verification.declarationAccepted).toBe(false);
     expect(merged.housePropertyPassThroughIncome).toBe(0);
+  });
+
+  it('preserves pre-existing rows with blank ids when a later import adds identified rows', () => {
+    const base = createEmptyReturnDraft();
+    base.taxes.tds = [{
+      ...structuredClone(EMPTY_TDS_CREDIT),
+      id: '', section: '192', deductorName: '26AS Employer', deductorTAN: 'AAAA12345A',
+      grossAmount: 500000, taxDeducted: 50000, financialYear: '2025-26',
+      verified26AS: true, claimedInReturn: true, schedule: 'TDS1', headOfIncome: 'NA',
+      claimOutOfTotTDSOnAmtPaid: 50000,
+    }];
+
+    const merged = mergeDraft(base, { taxes: { tds: [{ id: 'ais-tds-1', deductorName: 'AIS Bank' }] } });
+
+    expect(merged.taxes.tds).toHaveLength(2);
+    expect(merged.taxes.tds[0].deductorName).toBe('26AS Employer');
+    expect(merged.taxes.tds[1]).toMatchObject({ id: 'ais-tds-1', deductorName: 'AIS Bank' });
+  });
+
+  it('deduplicates duplicate incoming ids deterministically', () => {
+    const base = createEmptyReturnDraft();
+    const merged = mergeDraft(base, {
+      bankAccounts: [
+        { id: 'same', bankName: 'First' },
+        { id: 'same', bankName: 'Final', accountNumber: '2' },
+      ],
+    });
+    expect(merged.bankAccounts).toHaveLength(1);
+    expect(merged.bankAccounts[0]).toMatchObject({ id: 'same', bankName: 'Final', accountNumber: '2' });
   });
 
   it('replaces non-identified arrays and preserves them for an empty patch array', () => {

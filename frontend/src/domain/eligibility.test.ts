@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   assessFormEligibility,
+  assessFormEligibilityFromDraft,
   collectEligibilityFacts,
+  collectEligibilityFactsFromDraft,
   evaluateEligibility,
   type EligibilityFacts,
   type FormRecommendation,
@@ -28,6 +30,12 @@ function makeFacts(overrides: Partial<EligibilityFacts> = {}): EligibilityFacts 
     hasBroughtForwardLosses: false,
     totalIncome: 500_000,
     presumptiveScheme: undefined,
+    hasOutOfScopeTaxableEvidence: false,
+    hasNon112ACapitalGainsEvidence: false,
+    hasBusinessIncomeEvidence: false,
+    hasForeignRemittanceEvidence: false,
+    hasUnreviewedEvidence: false,
+    restricted112AAmount: 0,
     ...overrides,
   };
 }
@@ -194,5 +202,177 @@ describe('assessFormEligibility', () => {
     }, { totalIncome: 600_000 });
     expect(rec.recommendedForm).toBe('ITR-2');
     expect(rec.eligibleForms['ITR-1']).toBe(false);
+  });
+});
+
+// ── Evidence-driven eligibility ──────────────────────────────────────────────
+
+describe('collectEligibilityFactsFromDraft', () => {
+  function draftWithEvidence(rows: Array<{ role: string; source?: string; sourceCode?: string; relatedTab?: string; acceptedAmount?: number; processedAmount?: number; reportedAmount?: number }>) {
+    return { reconciliation: { evidence: rows, discrepancies: [] } };
+  }
+
+  it('returns all-false for a draft with no evidence', () => {
+    const facts = collectEligibilityFactsFromDraft(draftWithEvidence([]));
+    expect(facts).toMatchObject({
+      hasOutOfScopeTaxableEvidence: false,
+      hasNon112ACapitalGainsEvidence: false,
+      hasBusinessIncomeEvidence: false,
+      hasForeignRemittanceEvidence: false,
+      hasUnreviewedEvidence: false,
+      restricted112AAmount: 0,
+    });
+  });
+
+  it('detects non-112A capital-gains evidence (SFT-012, 194IA) and blocks ITR-1', () => {
+    const facts = collectEligibilityFactsFromDraft(draftWithEvidence([
+      { role: 'OUT_OF_SCOPE_TAXABLE', source: 'AIS', sourceCode: 'SFT-012', relatedTab: 'CAPITAL_GAINS' },
+    ]));
+    expect(facts.hasNon112ACapitalGainsEvidence).toBe(true);
+    expect(facts.hasCapitalGains).toBe(true);
+  });
+
+  it('classifies 112A sale evidence (SFT-17-LES) as RESTRICTED_112A_TAXABLE, not OUT_OF_SCOPE', () => {
+    const facts = collectEligibilityFactsFromDraft(draftWithEvidence([
+      { role: 'RESTRICTED_112A_TAXABLE', source: 'AIS', sourceCode: 'SFT-17-LES(M)', relatedTab: 'CAPITAL_GAINS', acceptedAmount: 100_000 },
+    ]));
+    expect(facts.hasNon112ACapitalGainsEvidence).toBe(false);
+    expect(facts.restricted112AAmount).toBe(100_000);
+    // ₹1L is within the ₹1.25L ITR-1/4 exemption — does NOT block ITR-1.
+    expect(facts.hasCapitalGains).toBe(false);
+  });
+
+  it('blocks ITR-1 when 112A proceeds exceed ₹1.25L', () => {
+    const facts = collectEligibilityFactsFromDraft(draftWithEvidence([
+      { role: 'RESTRICTED_112A_TAXABLE', source: 'AIS', sourceCode: 'SFT-17-LES(M)', relatedTab: 'CAPITAL_GAINS', acceptedAmount: 200_000 },
+    ]));
+    expect(facts.restricted112AAmount).toBe(200_000);
+    expect(facts.hasCapitalGains).toBe(true);
+  });
+
+  it('detects business-income evidence (TDS-194C/194D/194H)', () => {
+    const facts = collectEligibilityFactsFromDraft(draftWithEvidence([
+      { role: 'OUT_OF_SCOPE_TAXABLE', source: 'AIS', sourceCode: 'TDS-194C', relatedTab: 'BUSINESS' },
+    ]));
+    expect(facts.hasBusinessIncomeEvidence).toBe(true);
+  });
+
+  it('detects foreign-remittance TCS evidence (206CQ)', () => {
+    const facts = collectEligibilityFactsFromDraft(draftWithEvidence([
+      { role: 'TAX_CREDIT', source: '26AS', sourceCode: '206CQ', relatedTab: 'TAXES' },
+    ]));
+    expect(facts.hasForeignRemittanceEvidence).toBe(true);
+  });
+
+  it('detects unclassified evidence (PARSER_WARNING)', () => {
+    const facts = collectEligibilityFactsFromDraft(draftWithEvidence([
+      { role: 'PARSER_WARNING', source: 'AIS', sourceCode: 'UNKNOWN', relatedTab: 'RECONCILIATION' },
+    ]));
+    expect(facts.hasUnreviewedEvidence).toBe(true);
+  });
+});
+
+describe('assessFormEligibilityFromDraft', () => {
+  function draftWithEvidence(rows: Array<{ role: string; source?: string; sourceCode?: string; relatedTab?: string; acceptedAmount?: number; processedAmount?: number; reportedAmount?: number }>) {
+    return { reconciliation: { evidence: rows, discrepancies: [] } };
+  }
+
+  it('keeps ITR-1 when evidence is only salary and interest', () => {
+    const rec = assessFormEligibilityFromDraft(
+      { basic: 600_000, residentialStatus: 'ROR' },
+      draftWithEvidence([
+        { role: 'TAXABLE_ITR1', source: 'AIS', sourceCode: 'TDS-192', relatedTab: 'SALARY' },
+        { role: 'TAXABLE_ITR1', source: 'AIS', sourceCode: 'SFT-016(SB)', relatedTab: 'OTHER_SOURCES' },
+      ]),
+      { totalIncome: 600_000 },
+    );
+    expect(rec.recommendedForm).toBe('ITR-1');
+    expect(rec.eligibleForms['ITR-1']).toBe(true);
+  });
+
+  it('keeps ITR-1 eligible when 112A sale proceeds are within ₹1.25L exemption', () => {
+    const rec = assessFormEligibilityFromDraft(
+      { basic: 600_000, residentialStatus: 'ROR' },
+      draftWithEvidence([
+        { role: 'RESTRICTED_112A_TAXABLE', source: 'AIS', sourceCode: 'SFT-17-LES(M)', relatedTab: 'CAPITAL_GAINS', acceptedAmount: 100_000 },
+        { role: 'RESTRICTED_112A_TAXABLE', source: 'AIS', sourceCode: 'SFT-18-EMF(M)', relatedTab: 'CAPITAL_GAINS', acceptedAmount: 25_000 },
+      ]),
+      { totalIncome: 600_000 },
+    );
+    expect(rec.eligibleForms['ITR-1']).toBe(true);
+    expect(rec.recommendedForm).toBe('ITR-1');
+  });
+
+  it('escalates to ITR-2 when 112A proceeds exceed ₹1.25L', () => {
+    const rec = assessFormEligibilityFromDraft(
+      { basic: 600_000, residentialStatus: 'ROR' },
+      draftWithEvidence([
+        { role: 'RESTRICTED_112A_TAXABLE', source: 'AIS', sourceCode: 'SFT-17-LES(M)', relatedTab: 'CAPITAL_GAINS', acceptedAmount: 200_000 },
+      ]),
+      { totalIncome: 600_000 },
+    );
+    expect(rec.eligibleForms['ITR-1']).toBe(false);
+    expect(rec.blockersByForm['ITR-1'].some((b) => b.includes('112A'))).toBe(true);
+  });
+
+  it('escalates to ITR-2 when AIS has non-112A capital-gains evidence (property sale)', () => {
+    const rec = assessFormEligibilityFromDraft(
+      { basic: 600_000, residentialStatus: 'ROR' },
+      draftWithEvidence([
+        { role: 'OUT_OF_SCOPE_TAXABLE', source: 'AIS', sourceCode: 'SFT-012', relatedTab: 'CAPITAL_GAINS' },
+      ]),
+      { totalIncome: 600_000 },
+    );
+    expect(rec.eligibleForms['ITR-1']).toBe(false);
+    expect(rec.blockersByForm['ITR-1'].some((b) => b.includes('non-112A'))).toBe(true);
+  });
+
+  it('does NOT treat purchase-only evidence as capital gains', () => {
+    const rec = assessFormEligibilityFromDraft(
+      { basic: 600_000, residentialStatus: 'ROR' },
+      draftWithEvidence([
+        { role: 'ACQUISITION_ONLY', source: 'AIS', sourceCode: 'SFT-17(PUR)', relatedTab: 'RECONCILIATION' },
+        { role: 'ACQUISITION_ONLY', source: 'AIS', sourceCode: 'SFT-012(P)', relatedTab: 'RECONCILIATION' },
+      ]),
+      { totalIncome: 600_000 },
+    );
+    expect(rec.eligibleForms['ITR-1']).toBe(true);
+    expect(rec.recommendedForm).toBe('ITR-1');
+  });
+
+  it('escalates away from ITR-1 when AIS has business receipts', () => {
+    const rec = assessFormEligibilityFromDraft(
+      { basic: 600_000, residentialStatus: 'ROR' },
+      draftWithEvidence([
+        { role: 'OUT_OF_SCOPE_TAXABLE', source: 'AIS', sourceCode: 'TDS-194C', relatedTab: 'BUSINESS' },
+      ]),
+      { totalIncome: 600_000 },
+    );
+    expect(rec.eligibleForms['ITR-1']).toBe(false);
+    expect(rec.blockersByForm['ITR-1'].some((b) => b.includes('business'))).toBe(true);
+  });
+
+  it('blocks ITR-1 and ITR-4 when foreign-remittance TCS evidence is present', () => {
+    const rec = assessFormEligibilityFromDraft(
+      { basic: 600_000, residentialStatus: 'ROR' },
+      draftWithEvidence([
+        { role: 'TAX_CREDIT', source: '26AS', sourceCode: '206CQ', relatedTab: 'TAXES' },
+      ]),
+      { totalIncome: 600_000 },
+    );
+    expect(rec.eligibleForms['ITR-1']).toBe(false);
+    expect(rec.eligibleForms['ITR-4']).toBe(false);
+  });
+
+  it('blocks ITR-1 when unclassified evidence requires review', () => {
+    const rec = assessFormEligibilityFromDraft(
+      { basic: 600_000, residentialStatus: 'ROR' },
+      draftWithEvidence([
+        { role: 'PARSER_WARNING', source: 'AIS', sourceCode: 'UNKNOWN', relatedTab: 'RECONCILIATION' },
+      ]),
+      { totalIncome: 600_000 },
+    );
+    expect(rec.eligibleForms['ITR-1']).toBe(false);
+    expect(rec.blockersByForm['ITR-1'].some((b) => b.includes('review'))).toBe(true);
   });
 });

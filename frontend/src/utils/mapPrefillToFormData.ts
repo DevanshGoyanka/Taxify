@@ -79,6 +79,7 @@ export interface PrefillEmployerEntry {
   employer_state_code: string;
   employer_pin_code: string;
   employer_zip_code: string;
+  tds_deducted_from_salary?: number;
 }
 
 export interface PrefillSalaryInsights {

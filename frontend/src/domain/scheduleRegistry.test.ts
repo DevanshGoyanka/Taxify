@@ -18,6 +18,10 @@ function makeFacts(overrides: Partial<EligibilityFacts> = {}): EligibilityFacts 
     isDirector: false, hasUnlistedShares: false, agriculturalIncome: 0,
     isAudited: false, hasBroughtForwardLosses: false, totalIncome: 500_000,
     presumptiveScheme: undefined,
+    hasOutOfScopeTaxableEvidence: false, hasNon112ACapitalGainsEvidence: false,
+    hasBusinessIncomeEvidence: false,
+    hasForeignRemittanceEvidence: false, hasUnreviewedEvidence: false,
+    restricted112AAmount: 0,
     ...overrides,
   };
 }

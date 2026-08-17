@@ -27,20 +27,45 @@ function isEmpty(value: unknown): boolean {
 
 function mergeArrays(base: unknown[], patch: unknown[]): unknown[] {
   if (patch.length === 0) return structuredClone(base);
-  const identified = patch.every(isIdentified) && base.every(isIdentified);
-  if (!identified) return structuredClone(patch);
 
-  const incomingById = new Map(patch.map((item) => [item.id, item]));
-  const result = base.map((item) => {
-    const incoming = incomingById.get(item.id);
-    if (!incoming) return structuredClone(item);
-    incomingById.delete(item.id);
-    return mergeValue(item, incoming);
-  });
+  // Identified rows merge by id in base order; new incoming ids append.
+  // UNIDENTIFIED rows are append-only: an incoming blank-id row never
+  // matches or overwrites an existing row, so a second import (e.g. AIS
+  // after 26AS) cannot wipe rows that lack a stable id. Only a row whose
+  // id matches an existing one is treated as an update.
+  const incomingById = new Map<string, unknown>();
   for (const item of patch) {
-    if (incomingById.has(item.id)) {
+    if (isIdentified(item)) {
+      incomingById.set(item.id, item);
+    }
+  }
+  // Arrays whose incoming rows have no stable ids (for example provenance)
+  // retain ordinary replacement semantics.
+  if (incomingById.size === 0) return structuredClone(patch);
+
+  const result: unknown[] = [];
+  const consumedIds = new Set<string>();
+  for (const item of base) {
+    if (isIdentified(item) && incomingById.has(item.id)) {
+      consumedIds.add(item.id);
+      result.push(mergeValue(item, incomingById.get(item.id)));
+    } else {
       result.push(structuredClone(item));
-      incomingById.delete(item.id);
+    }
+  }
+
+  // Append every incoming row whose id did not match a base row. This
+  // includes identified rows with new ids and all unidentified rows.
+  for (const item of patch) {
+    if (isIdentified(item)) {
+      if (!consumedIds.has(item.id)) {
+        // Use the map value so duplicate ids within the patch resolve
+        // deterministically to the final incoming row and append once.
+        result.push(structuredClone(incomingById.get(item.id)));
+        consumedIds.add(item.id);
+      }
+    } else {
+      result.push(structuredClone(item));
     }
   }
   return result;

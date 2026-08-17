@@ -1,5 +1,6 @@
 import { EMPTY_TDS_CREDIT, type Employer, type InterestIncome, type DividendIncome, type TdsCredit } from '../domain/returns/types';
 import type { DeepPartial, ReturnDraftPatch } from '../domain/returns/draftPatch';
+import { createReconciliationEvidence } from '../domain/returns/evidence';
 import type { PrefillEmployerEntry, PrefillExtraction, PrefillTDSEntry } from './mapPrefillToFormData';
 import { normalizeNatureOfEmployment } from './normalizeNatureOfEmployment';
 
@@ -25,7 +26,7 @@ function employer(entry: PrefillEmployerEntry): DeepPartial<Employer> {
     city: entry.employer_city || '', isMetroCity: false, isGovernmentEmployee: false, isDisabledEmployee: false, commutedPension: 0, gratuity: 0, leaveEncashment: 0,
     averageMonthlySalary: 0, yearsOfService: 0, unavailedLeaveDays: 0, actualLtaFare: 0, isDomesticTravel: true, journeysInBlock: 0, ltaExempt: 0,
     numberOfChildren: 0, gratuityAlsoReceived: false, transportAllowance: 0, childrenEducationAllowance: 0, hostelExpenditureAllowance: 0, uniformAllowance: 0,
-    entertainmentAllowance: 0, professionalTax: 0, vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0, tdsDeducted: 0, employerNPS: 0,
+    entertainmentAllowance: 0, professionalTax: 0, vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0, tdsDeducted: entry.tds_deducted_from_salary || 0, employerNPS: 0,
   };
 }
 
@@ -64,10 +65,10 @@ function filingSection(code: number | string | undefined): '139(1)' | '139(4)' |
 
 /** Maps an ITD prefill extraction directly into canonical draft fields. */
 export function mapPrefillToDraftPatch(prefill: PrefillExtraction | null | undefined): ReturnDraftPatch {
-  if (!prefill?.personal_info) return {};
+  if (!prefill) return {};
   const pi = prefill.personal_info;
-  const name = pi.name;
-  const address = pi.address;
+  const name = pi?.name;
+  const address = pi?.address;
   const other = prefill.other_sources;
   const interests: InterestIncome[] = [];
   if (other?.interest_from_savings_bank) interests.push(interest('SAVINGS_BANK', other.interest_from_savings_bank, interests.length));
@@ -80,15 +81,25 @@ export function mapPrefillToDraftPatch(prefill: PrefillExtraction | null | undef
   const dividends = (other?.other_income_details || []).filter((item) => ['DIV', 'DVD'].includes(item.nature?.toUpperCase())).map((item, index) => dividend(item.amount || 0, index));
   if (dividends.length === 0 && other?.dividend_gross) dividends.push(dividend(other.dividend_gross, 0));
   const ded = prefill.deductions;
+  const topLevelSections: Array<[keyof PrefillExtraction, unknown]> = [
+    ['personal_info', prefill.personal_info], ['filing_status', prefill.filing_status], ['employer_entries', prefill.employer_entries],
+    ['salary_insights', prefill.salary_insights], ['house_property', prefill.house_property], ['other_sources', prefill.other_sources],
+    ['bank_accounts', prefill.bank_accounts], ['tds_salary_entries', prefill.tds_salary_entries], ['tds_other_entries', prefill.tds_other_entries],
+    ['deductions', prefill.deductions], ['verification', prefill.verification], ['assessment_year', prefill.assessment_year], ['pan', prefill.pan],
+  ];
+  const evidence = topLevelSections.filter(([, value]) => value !== null && value !== undefined && value !== '' && (!Array.isArray(value) || value.length > 0)).map(([section, value]) => createReconciliationEvidence({
+    source: 'ITD_PREFILL', code: String(section), section: String(section), category: String(section).replace(/_/g, ' '),
+    description: `ITD prefill ${String(section)}`, raw: { value } as Record<string, unknown>, identity: [section],
+  }));
   return {
     assessmentYear: prefill.assessment_year || undefined,
     personal: {
       name: [name?.first_name, name?.middle_name, name?.surname_or_org_name].filter(Boolean).join(' '), firstName: name?.first_name,
-      middleName: name?.middle_name, surnameOrOrgName: name?.surname_or_org_name, fatherName: pi.father_name, pan: pi.pan || prefill.pan,
-      aadhaar: pi.aadhaar_card_no, email: address?.email_address, mobile: address?.mobile_no ? String(address.mobile_no) : undefined,
+      middleName: name?.middle_name, surnameOrOrgName: name?.surname_or_org_name, fatherName: pi?.father_name, pan: pi?.pan || prefill.pan,
+      aadhaar: pi?.aadhaar_card_no, email: address?.email_address, mobile: address?.mobile_no ? String(address.mobile_no) : undefined,
       secondaryEmail: address?.email_address_secondary, secondaryMobile: address?.mobile_no_sec ? String(address.mobile_no_sec) : undefined,
       secondaryMobileCountryCode: address?.country_code_mobile_sec ? String(address.country_code_mobile_sec) : undefined,
-      dateOfBirth: pi.dob || undefined, flatNo: address?.residence_no, residenceName: address?.residence_name, roadOrStreet: address?.road_or_street,
+      dateOfBirth: pi?.dob || undefined, flatNo: address?.residence_no, residenceName: address?.residence_name, roadOrStreet: address?.road_or_street,
       localityOrArea: address?.locality_or_area, city: address?.city_or_town_or_district, stateCode: address?.state_code, countryCode: address?.country_code,
       pinCode: address?.pin_code ? String(address.pin_code) : undefined, zipCode: address?.zip_code,
     },
@@ -99,6 +110,7 @@ export function mapPrefillToDraftPatch(prefill: PrefillExtraction | null | undef
     deductions: { chapterVIA: { section80C: ded?.section_80c, section80D: ded?.section_80d, section80E: ded?.section_80e, section80G: ded?.section_80g, section80CCD1B: ded?.section_80ccd_1b, section80TTA: ded?.section_80tta, section80TTB: ded?.section_80ttb, anyOtherSection80CCH: ded?.section_80ccch, totalChapterVIADeductions: ded?.total_chap_via_deductions } },
     otherSources: { interest: interests, dividends, otherIncome: (other?.other_income_details || []).filter((item) => !['SAV', 'IFD', 'IDP', 'INT', 'DIV', 'DVD'].includes(item.nature?.toUpperCase())).map((item, index) => ({ id: id('prefill-other', item.nature, index), nature: item.nature || 'OTHER', description: item.nature || '', amount: item.amount || 0 })) },
     verification: { place: prefill.verification?.place, capacity: prefill.verification?.capacity?.toUpperCase().includes('REP') ? 'REPRESENTATIVE' : undefined },
-    provenance: [{ source: 'ITD_PREFILL', importedAt: new Date().toISOString(), reference: prefill.pan || pi.pan || '' }],
+    provenance: [{ source: 'ITD_PREFILL', importedAt: new Date().toISOString(), reference: prefill.pan || pi?.pan || '' }],
+    reconciliation: { evidence, discrepancies: [] },
   };
 }

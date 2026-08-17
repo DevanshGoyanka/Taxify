@@ -78,7 +78,7 @@ def test_mapper_produces_valid_itr1_input():
     assert itr1_input.salary_income.gross_salary == Decimal("1277000")  # 1.2M+12k+60k+5k
     assert itr1_input.other_sources_income.savings_bank_interest == Decimal("15000")
     assert itr1_input.other_sources_income.dividend_income == Decimal("10000")
-    assert itr1_input.deductions_chapter6a.amount_80c == Decimal("50000")
+    assert itr1_input.deductions_chapter6a.amount_80c == Decimal("0")  # new regime excludes 80C
     assert len(itr1_input.tds1_entries) == 1
     assert itr1_input.tds1_entries[0].tds_deducted == Decimal("80000")
     assert len(itr1_input.bank_accounts) == 1

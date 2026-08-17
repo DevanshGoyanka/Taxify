@@ -29,6 +29,28 @@ describe('mapPrefillToDraftPatch', () => {
     expect(patch.otherSources?.dividends?.[0].grossAmount).toBe(100);
   });
 
+  it('maps employer and TDS data even when personal_info is absent', () => {
+    const patch = mapPrefillToDraftPatch({
+      assessment_year: '2026-27',
+      pan: 'ABCDE1234F',
+      employer_entries: [{
+        employer_name: 'ACME', tan: 'ABCD12345E', gross_salary: 900000,
+        salary: 900000, value_of_perquisites: 0, profits_in_lieu_of_salary: 0,
+        nature_of_employment: 'PE', employer_address: '', employer_city: '',
+        employer_state_code: '', employer_pin_code: '', employer_zip_code: '',
+        tds_deducted_from_salary: 90000,
+      }],
+      tds_salary_entries: [{
+        deductor_name: 'ACME', tan: 'ABCD12345E', section: '192',
+        income_amount: 900000, tds_deducted: 90000, tds_claimed: 90000,
+        gross_amount: 900000, head_of_income: '', deducted_year: '2025-26',
+      }],
+    } as PrefillExtraction);
+
+    expect(patch.employers?.[0]).toMatchObject({ basic: 900000, tdsDeducted: 90000 });
+    expect(patch.taxes?.tds?.[0]).toMatchObject({ section: '192', taxDeducted: 90000 });
+  });
+
   it('returns an empty patch for missing input', () => expect(mapPrefillToDraftPatch(undefined)).toEqual({}));
 
   it('maps a revised-return filing section 139(4) canonical code', () => {

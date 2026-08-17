@@ -336,6 +336,22 @@ export interface ExemptIncomeSchedule {
   totalExemptIncome: Money;
 }
 export interface ImportProvenance { source: 'MANUAL' | 'FORM16' | 'AIS' | 'TIS' | '26AS' | 'ITD_PREFILL' | 'LEGACY'; importedAt: string | null; reference: string; }
+export type ReconciliationRole = 'TAXABLE_ITR1' | 'RESTRICTED_112A_TAXABLE' | 'TAX_CREDIT' | 'OUT_OF_SCOPE_TAXABLE' | 'CONTROL_ONLY' | 'ACQUISITION_ONLY' | 'INFORMATIONAL' | 'PARSER_WARNING';
+export type RelatedTab = 'SALARY' | 'OTHER_SOURCES' | 'CAPITAL_GAINS' | 'BUSINESS' | 'TAXES' | 'HOUSE_PROPERTY' | 'RECONCILIATION';
+export interface ReconciliationEvidence extends Identified {
+  source: 'AIS' | 'TIS' | '26AS' | 'ITD_PREFILL'; sourceCode: string; sourceSection: string;
+  incomeHead: string; category: string; description: string; sourceName: string; sourceIdentifier: string;
+  role: ReconciliationRole; relatedTab: RelatedTab; canonicalDestination?: string;
+  evidenceKind: 'CATEGORY_CONTROL' | 'SOURCE_DETAIL' | 'SECTION_SUMMARY';
+  reportedAmount: Money; processedAmount: Money; acceptedAmount: Money; taxAmount: Money;
+  status: string; requiresReview: boolean; raw: Record<string, unknown>;
+}
+export type ReconciliationDiscrepancyStatus = 'PENDING' | 'CONFIRMED_TIS' | 'CONFIRMED_AIS' | 'IGNORED';
+export interface ReconciliationDiscrepancy extends Identified {
+  category: string; description: string; aisAmount: Money; tisAcceptedAmount: Money; as26Amount: Money;
+  difference: Money; status: ReconciliationDiscrepancyStatus;
+}
+export interface ReconciliationState { evidence: ReconciliationEvidence[]; discrepancies: ReconciliationDiscrepancy[]; }
 export interface Verification { capacity: 'SELF' | 'REPRESENTATIVE'; place: string; date: string | null; declarationAccepted: boolean; }
 export interface LegacyCompatibilityEnvelope { source: 'legacy-flat-v1'; unknownFields: Readonly<Record<string, unknown>>; }
 export interface PersonalInfo {
@@ -386,5 +402,5 @@ export interface ReturnDraft {
   exemptIncome: ExemptIncomeSchedule;
   deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions; chapterVIA: ChapterVIA; schedule80GGA: Schedule80GGAEntry[]; schedule80GGC: Schedule80GGCEntry[] };
   taxes: { tds: TdsCredit[]; tcs: TcsCredit[]; challans: TaxChallan[] }; bankAccounts: BankAccount[];
-  verification: Verification; taxReturnPreparer: TaxReturnPreparer; provenance: ImportProvenance[]; compatibility?: LegacyCompatibilityEnvelope;
+  verification: Verification; taxReturnPreparer: TaxReturnPreparer; provenance: ImportProvenance[]; compatibility?: LegacyCompatibilityEnvelope; reconciliation: ReconciliationState;
 }

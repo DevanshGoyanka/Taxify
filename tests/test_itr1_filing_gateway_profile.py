@@ -449,3 +449,39 @@ def test_cross_field_rejects_tds_claimed_exceeding_deducted() -> None:
     typed = typed.model_copy(update={"tds2_entries": [bad_entry]})
     errors = _validate_itr1_cross_fields(typed)
     assert any("exceeds the deducted amount" in e for e in errors)
+
+
+def test_phase7_delegate_uses_single_canonical_mapper() -> None:
+    """Phase 7: the legacy flat→typed delegate routes through the canonical
+    ``draft_to_itr1_input`` mapper rather than a duplicate inline mapping.
+
+    This is the structural guarantee behind "works in compute, works in CBDT":
+    the compute path (v2) and the CBDT path (filing gateway) must share one
+    mapper.  The delegate must (a) import ``flat_to_draft`` and
+    ``draft_to_itr1_input``, and (b) produce an ``ITR1Input`` whose salary,
+    PAN, and regime survive the round-trip — proving the flat blob no longer
+    carries a parallel mapping that can drift from the canonical path.
+    """
+    import inspect
+
+    from app.engine import filing_gateway
+    from app.engine import flat_to_draft as flat_mod
+    from app.engine import draft_to_itr1_input as draft_mod
+
+    source = inspect.getsource(filing_gateway._build_itr1_input_from_flat)
+    # The delegate must reference both adapters — no inline duplicate mapping.
+    assert "flat_to_draft" in source
+    assert "draft_to_itr1_input" in source
+    # The adapters themselves exist as the canonical entry points.
+    assert hasattr(flat_mod, "flat_to_draft")
+    assert hasattr(draft_mod, "draft_to_itr1_input")
+
+    # Behavioural parity: a flat payload round-trips through the delegate
+    # into a valid typed input with compute-relevant fields intact.
+    payload = _payload()
+    typed = _build_itr1_input_from_flat(payload)
+    assert typed.filing_profile.pan == "ABCDE1234F"
+    assert typed.tax_regime.value == "old"
+    # Salary survives the flat→draft→typed round-trip via the canonical mapper.
+    assert typed.salary_income.gross_salary == Decimal("600000")
+

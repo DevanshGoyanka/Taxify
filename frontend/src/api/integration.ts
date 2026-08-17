@@ -58,41 +58,7 @@ export const integrationApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
-  
-  autoPopulateFromForm16: async (itrData: any, form16Data: any) => {
-    const { data } = await axiosInstance.post('/integration/autopopulate/form16', {
-      formData: itrData,
-      form16Data: form16Data
-    });
-    return data;
-  },
-  
-  autoPopulateFromAIS: async (itrData: any, aisData: any) => {
-    const { data } = await axiosInstance.post('/integration/autopopulate/ais', {
-      formData: itrData,
-      aisData: aisData
-    });
-    return data;
-  },
-  
-  autoPopulateAll: async (
-    clientId: number,
-    year: string,
-    aisData?: AISData,
-    form26ASData?: Form26ASData,
-    tisData?: TISData
-  ) => {
-    const { data } = await axiosInstance.post('/prefill/autoPopulateAll', {
-      clientId,
-      year,
-      aisData,
-      form26ASData,
-      tisData,
-      itrType: 'ITR-1'
-    });
-    return data;
-  },
-  
+
   getReconciliationReport: async (
     aisData: AISData,
     data26AS: Form26ASData,
@@ -102,14 +68,6 @@ export const integrationApi = {
       aisData,
       data26AS,
       tisData
-    });
-    return data;
-  },
-  
-  autoPopulateFromPrefill: async (itrData: any, prefillData: any) => {
-    const { data } = await axiosInstance.post('/prefill/autopopulate', {
-      formData: itrData,
-      prefillData: prefillData
     });
     return data;
   },

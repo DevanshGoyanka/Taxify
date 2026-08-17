@@ -127,7 +127,14 @@ def test_new_regime_house_property_loss_cannot_reduce_itr4_business_income() -> 
 
 
 def test_permitted_112a_gain_remains_part_of_gross_total_income() -> None:
-    """A permitted 112A gain is included in GTI even when no tax is due on it."""
+    """A permitted 112A gain below the Rs 1.25L exemption is fully exempt.
+
+    The annual Section 112A exemption removes the exempt portion from total
+    income entirely (not merely from the 12.5% special-rate tax).  A Rs 1L
+    gain is within the exemption, so it reports as ``capital_gains_112a``
+    (the pre-exemption net gain, for display/reconciliation) but contributes
+    zero to GTI, taxable income, the slab base, and the special-rate tax.
+    """
     result = compute_itr1(
         _itr1_input(
             regime=TaxRegime.OLD,
@@ -136,9 +143,9 @@ def test_permitted_112a_gain_remains_part_of_gross_total_income() -> None:
     )
 
     assert result.errors == []
-    assert result.capital_gains_112a == Decimal("100000")
-    assert result.gross_total_income == Decimal("100000")
-    assert result.taxable_income == Decimal("100000")
+    assert result.capital_gains_112a == Decimal("100000")  # reported net gain
+    assert result.gross_total_income == Decimal("0")        # exempt → not in GTI
+    assert result.taxable_income == Decimal("0")
     assert result.special_rate_tax == Decimal("0")
 
 
@@ -391,7 +398,10 @@ def test_tax_summary_computes_canonical_restricted_112a_rows() -> None:
     assert result["capitalGainsStatus"] == "VALID"
     assert result["capitalGainsSummary"]["gross112AGain"] == 19000.0
     assert result["capitalGainsSummary"]["costOfAcquisition"] == 101000.0
-    assert result["gti"] == 19000.0
+    # The Rs 19,000 gain is below the Rs 1.25L Section 112A annual exemption,
+    # so it is fully exempt and does not enter GTI (the exemption removes the
+    # exempt portion from total income, not merely from the 12.5% tax).
+    assert result["gti"] == 0.0
 
 
 def test_tax_summary_returns_structured_restricted_112a_issues() -> None:

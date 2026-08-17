@@ -8,7 +8,13 @@ import pytest
 from fastapi import HTTPException
 
 from app.routers.tax_v2 import compute_tax_summary_v2
-from app.schemas.return_draft import Employer, ReturnDraft, WinningIncome, create_empty_draft
+from app.schemas.return_draft import (
+    Employer,
+    ReconciliationDiscrepancy,
+    ReturnDraft,
+    WinningIncome,
+    create_empty_draft,
+)
 
 
 def test_compute_v2_returns_compatible_headline_keys() -> None:
@@ -46,3 +52,45 @@ def test_compute_v2_surfaces_engine_eligibility_errors() -> None:
         compute_tax_summary_v2(draft)
     assert caught.value.status_code == 422
     assert "Lottery" in " ".join(caught.value.detail["errors"])
+
+
+def test_compute_v2_rejects_pending_reconciliation_discrepancies() -> None:
+    """A pending reconciliation discrepancy blocks compute with 422."""
+    draft = create_empty_draft("2026-27", "ITR-1", "new")
+    draft.employers = [Employer(id="e1", basic=Decimal("800000"))]
+    draft.reconciliation.discrepancies.append(
+        ReconciliationDiscrepancy(
+            id="reconciliation-test",
+            category="interest from savings bank",
+            description="AIS/TIS mismatch.",
+            aisAmount=Decimal("157"),
+            tisAcceptedAmount=Decimal("90"),
+            as26Amount=Decimal("0"),
+            difference=Decimal("67"),
+            status="PENDING",
+        )
+    )
+    with pytest.raises(HTTPException) as caught:
+        compute_tax_summary_v2(draft)
+    assert caught.value.status_code == 422
+    assert "reconciliation" in " ".join(caught.value.detail["errors"]).lower()
+
+
+def test_compute_v2_allows_confirmed_reconciliation_discrepancies() -> None:
+    """A confirmed (non-pending) discrepancy no longer blocks compute."""
+    draft = create_empty_draft("2026-27", "ITR-1", "new")
+    draft.employers = [Employer(id="e1", basic=Decimal("800000"))]
+    draft.reconciliation.discrepancies.append(
+        ReconciliationDiscrepancy(
+            id="reconciliation-test",
+            category="interest from savings bank",
+            description="AIS/TIS mismatch.",
+            aisAmount=Decimal("157"),
+            tisAcceptedAmount=Decimal("90"),
+            as26Amount=Decimal("0"),
+            difference=Decimal("67"),
+            status="CONFIRMED_TIS",
+        )
+    )
+    summary = compute_tax_summary_v2(draft)
+    assert summary["calculationStatus"].startswith("CALCULATED")

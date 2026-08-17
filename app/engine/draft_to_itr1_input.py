@@ -353,23 +353,41 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
         Decimal("0"),
     )
 
+    # New regime (u/s 115BAC) excludes almost all Chapter VI-A deductions
+    # except employer NPS (80CCD(2)) and the new-regime-specific 80TTA/80TTB
+    # exclusion (which is 0 anyway).  Old-regime-only deductions (80C, 80D,
+    # 80E, 80G, 80CCD(1B), 80EE/EEA/EEB, 80GG, 80GGA, 80GGC, 80DD, 80DDB,
+    # 80U, 80QQB, 80RRB) must be zeroed under the new regime so saved
+    # old-regime values cannot leak into new-regime compute.  The draft
+    # preserves them for auditability; only the typed compute input is zeroed.
+    if tax_regime == TaxRegime.NEW:
+        total_80c = Decimal("0")
+        self_80d = parents_80d = prev_self = prev_parents = Decimal("0")
+        parents_senior = False
+        donations = None
+        structured_80g = Decimal("0")
+        amount_80e = amount_80g = Decimal("0")
+    else:
+        amount_80e = via.section80E
+        amount_80g = structured_80g if donations else via.section80G
+
     ded_input = Chapter6ADeductions(
         amount_80c=total_80c,
-        amount_80ccd1b=via.section80CCD1B,
+        amount_80ccd1b=Decimal("0") if tax_regime == TaxRegime.NEW else via.section80CCD1B,
         amount_80ccd2=via.section80CCDEmployer,
         amount_80d_self_family=self_80d,
         amount_80d_parents=parents_80d,
         amount_80d_preventive_self=prev_self,
         amount_80d_preventive_parents=prev_parents,
         has_parents_senior=parents_senior,
-        amount_80e=via.section80E,
+        amount_80e=amount_80e,
         amount_80tta=(
             min(interest_sb, Decimal("10000"))
             if tax_regime == TaxRegime.OLD
             else Decimal("0")
         ),
         amount_80ttb=Decimal("0") if tax_regime == TaxRegime.NEW else via.section80TTB,
-        amount_80g=structured_80g if donations else via.section80G,
+        amount_80g=amount_80g,
         donations_80g=donations or None,
     )
     return ded_input, structured_80g
@@ -383,13 +401,25 @@ def _map_capital_gains(draft: ReturnDraft) -> CapitalGainsIncome | None:
     """Map the capital-gains schedule to the ITR-1 ``CapitalGainsIncome``.
 
     ITR-1 permits LTCG u/s 112A only. The canonical draft carries the raw
-    ``capitalGainsSchedule`` dict (Phase 1 does not type it); we read the
-    computed taxable 112A gain if present. Full 112A portfolio computation
-    remains in ``app.engine.schedules.restricted_112a`` (invoked by the
-    Phase 2 compute endpoint).
+    ``capitalGainsSchedule`` dict; the authoritative ITR-1/ITR-4 source is
+    the structured ``simplified112A`` block (sale consideration minus cost
+    of acquisition, floored at 0).  A bare ``ltcg112A`` scalar is NOT
+    trusted — older import paths wrote a purchase cost into it,
+    fabricating a fake gain that blocked ITR-1 with
+    "LTCG u/s 112A of Rs 499975 exceeds Rs 125000".  A purchase with no
+    sale is never a capital gain; only a positive (sale - cost) is.
+    Full 112A portfolio computation remains in
+    ``app.engine.schedules.restricted_112a`` (invoked by the Phase 2
+    compute endpoint when canonical transaction evidence is present).
     """
     sched = draft.capitalGainsSchedule or {}
-    ltcg_112a = Decimal(str(sched.get("ltcg112A", 0) or 0))
+    simplified = sched.get("simplified112A") or {}
+    if simplified:
+        sale = Decimal(str(simplified.get("totalSaleConsideration", 0) or 0))
+        cost = Decimal(str(simplified.get("totalCostAcquisition", 0) or 0))
+        ltcg_112a = max(Decimal("0"), sale - cost)
+    else:
+        ltcg_112a = Decimal("0")
     return CapitalGainsIncome(ltcg_112a=ltcg_112a)
 
 
@@ -548,12 +578,16 @@ _BANK_TYPE_MAP = {
 def _map_bank_accounts(banks: list[DraftBankAccount]) -> list[BankAccount]:
     mapped: list[BankAccount] = []
     for idx, b in enumerate(banks):
+        # ``is_primary`` follows the explicit ``useForRefund`` flag only —
+        # ``build_itr1_json`` enforces "exactly one primary" so a defaulting
+        # fallback here would mask that validation.  The first account is no
+        # longer auto-primary when the flag is unset.
         mapped.append(BankAccount(
             bank_name=b.bankName or None,
             account_number=b.accountNumber or None,
             ifsc_code=b.ifscCode or None,
             account_type=_BANK_TYPE_MAP.get(b.accountType, BankAccountType("savings")),
-            is_primary=b.useForRefund or idx == 0,
+            is_primary=b.useForRefund,
         ))
     return mapped
 

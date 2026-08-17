@@ -751,9 +751,23 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
                 full_value_of_consideration=portfolio.full_value_of_consideration,
             )
     else:
-        cg_input = CapitalGainsIncome(
-            ltcg_112a=_money(payload.get("ltcg112APre")) + _money(payload.get("ltcg112APost"))
-        )
+        # ITR-1/ITR-4 simplified Section 112A: the authoritative source is the
+        # structured ``capitalGainsSchedule.simplified112A`` block (sale
+        # consideration minus cost of acquisition, floored at 0).  The legacy
+        # bare scalars ``ltcg112APre``/``ltcg112APost`` are NOT trusted here —
+        # older import paths wrote a purchase cost into ``ltcg112APre``,
+        # fabricating a fake gain that blocked ITR-1 with
+        # "LTCG u/s 112A of Rs 499975 exceeds Rs 125000".  A purchase with no
+        # sale is never a capital gain; only a positive (sale - cost) is.
+        cg_schedule = payload.get("capitalGainsSchedule") or {}
+        simplified = cg_schedule.get("simplified112A") or {}
+        if simplified:
+            sale = _money(simplified.get("totalSaleConsideration"))
+            cost = _money(simplified.get("totalCostAcquisition"))
+            simplified_gain = max(Decimal("0"), sale - cost)
+        else:
+            simplified_gain = Decimal("0")
+        cg_input = CapitalGainsIncome(ltcg_112a=simplified_gain)
 
     tds1_entries = []
     tds2_entries = []

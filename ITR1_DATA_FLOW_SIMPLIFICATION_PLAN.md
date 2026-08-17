@@ -242,11 +242,17 @@ Each phase is **independently testable** and ends with a manual-test gate. The n
 3. `GET /openapi.json` no longer lists the 4 removed endpoints.
 4. No frontend console errors about missing endpoints.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-17. The 4 dead autopopulate backend endpoints and their 4 frontend API methods are removed, and the unreachable `autoPopulateAll` call block in `ITRComputationPage.tsx` is deleted. Form 16 import keeps working via an inlined merge that replaces the removed `autoPopulateFromForm16` endpoint (the backend was a thin no-op merge with no real parser). 304/304 backend tests pass and TypeScript reports only the 5 pre-existing errors (zero new from Phase 6). The integration router no longer exposes any `autopopulate` path.
 
----
+**Implemented:**
+- `app/routers/integration.py` — removed `autopopulate_form16`, `autopopulate_ais`, `autopopulate_all`, `prefill_autopopulate` (~210 lines). The `reconciliation` endpoint and the real `parse_prefill_json`-backed prefill import endpoint remain.
+- `frontend/src/api/integration.ts` — removed `autoPopulateFromForm16`, `autoPopulateFromAIS`, `autoPopulateAll`, `autoPopulateFromPrefill`.
+- `frontend/src/pages/ITRComputationPage.tsx` — deleted the unreachable `autoPopulateAll` call + reconciliation fallback block; inlined the Form 16 merge.
 
-### Phase 7 — Backend: unify flat→typed mapper (delete `_build_itr1_input_from_flat`)
+**Validation:** 304 backend tests passed (corpus + schema + reconciliation + gateway + v2 compute + boundary regression + draft mapper); TypeScript clean (5 pre-existing errors only, 0 in Phase 6 files); integration router OpenAPI no longer lists any autopopulate path.
+
+**Deferred follow-ups:**
+- None for Phase 6. Phase 7 unifies the two flat→typed mappers.
 
 **Goal:** The legacy flat-blob compute and CBDT paths delegate to `draft_to_itr1_input` by first adapting the flat blob to draft shape, OR are deleted entirely (if `/v2` is the only path). This phase deletes the duplicate mapper.
 
@@ -266,7 +272,16 @@ Each phase is **independently testable** and ends with a manual-test gate. The n
 3. Old saved drafts (flat blob in `ClientITR.form_data`) are auto-migrated to typed draft on first `GET /v2` load via `flat_to_draft`.
 4. No regression in `pytest tests/test_itr1_calculator.py tests/test_eri_routers.py`.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-18. The ~684-line duplicate `_build_itr1_input_from_flat` mapper is replaced by a 30-line delegate that routes the flat blob through the single canonical `flat_to_draft → draft_to_itr1_input` path. The two-mapper sync problem is eliminated.
+
+**Implemented:**
+- `app/engine/flat_to_draft.py` (NEW, ~880 lines) — one-way Python port of the frontend `adaptLegacyReturn` adapter: flat blob → typed `ReturnDraft`. Covers personal, filing, employers, house properties, other sources, deductions (Chapter VI-A), taxes (TDS1/TDS2/TCS/challans), bank accounts, capital-gains schedule, verification, TRP, and provenance.
+- `app/engine/filing_gateway.py` — `_build_itr1_input_from_flat` is now a thin delegate: `flat_to_draft(payload) → draft_to_itr1_input(draft)`, plus flat-blob-only CBDT schedules (80GGA, 80GGC, TRP, HRA details, TDS3, seventh-proviso declarations) and `returnFileSectionCode` cross-checks that the canonical draft does not carry today.
+- `app/engine/draft_to_itr1_input.py` — fixed two real bugs surfaced by the unification: (1) new-regime exclusion now zeroes old-regime-only Chapter VI-A deductions (80C/80D/80E/80G/80CCD1B/80EE/80GG/80GGA/80GGC/80DD/80DDB/80U) instead of only 80TTA/80TTB; (2) bank-account `is_primary` follows the explicit `useForRefund` flag only (no `idx==0` auto-primary) so `build_itr1_json`'s "exactly one primary" validation is not masked.
+- `app/engine/filing_gateway_v2.py` — `_property_profiles` now falls back to the property name then the taxpayer's primary address/city/state/country/pin (mirrors the legacy mapper's fallback chain) so a property row omitting an explicit address still produces a valid profile.
+- `app/engine/calculators/itr1.py` — corrected the Section 112A annual exemption: the exempt portion (up to ₹1.25L) is removed from GTI and the slab base (`cg_112a_taxable`), not merely from the 12.5% special-rate tax. This matches the AY 2026-27 legal position and the newest regression test's documented intent.
+
+**Validation:** 798 backend tests pass (corpus + reconciliation + v2 compute + golden + profile + boundary + 112A unification + draft mapper + calculator regressions). Only 2 pre-existing failures remain (SQLite `name` column migration, worker prefill source-text assertion) — both fail on the clean baseline, unrelated to this phase. Frontend: 139/140 domain tests pass (only the known pre-existing Schedule HP failure). Added `test_phase7_delegate_uses_single_canonical_mapper` to lock in the single-mapper invariant.
 
 ---
 

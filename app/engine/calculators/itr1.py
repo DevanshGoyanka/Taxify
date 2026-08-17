@@ -285,6 +285,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
 
     # Capital Gains (112A only for ITR-1)
     cg_112a_income = Decimal("0")
+    cg_112a_taxable = Decimal("0")
     cg_112a_tax = Decimal("0")
     if input_data.cg_transactions:
         # Standalone CG schedule runs the complete suite (112A / 111A /
@@ -322,6 +323,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
             return result
         entry = compute_112a(gain_112a)
         cg_112a_income = entry.net_income
+        cg_112a_taxable = entry.taxable_income
         cg_112a_tax = entry.tax_amount
         result.schedules["capital_gains_112a"] = entry
     elif input_data.capital_gains:
@@ -334,14 +336,23 @@ def compute(input_data: ITR1Input) -> ITR1Result:
             )
             return result
         entry = compute_112a(cg.ltcg_112a)
+        # ``capital_gains_112a`` reports the net 112A gain (pre-exemption) for
+        # display and reconciliation.  GTI, however, excludes the annual
+        # Rs 1.25 lakh 112A exemption — only ``taxable_income`` (post-exemption)
+        # flows into total income, so gains within the exemption do not
+        # inflate GTI or the slab base.
         cg_112a_income = entry.net_income
+        cg_112a_taxable = entry.taxable_income
         cg_112a_tax = entry.tax_amount
         result.schedules["capital_gains_112a"] = entry
 
     result.capital_gains_112a = cg_112a_income
 
     # ── 2. Gross Total Income ────────────────────────────────────────────────
-    gti = result.salary_income + result.house_property_income + result.other_sources_income + cg_112a_income
+    # GTI uses the post-exemption taxable 112A amount so the annual Rs 1.25L
+    # exemption removes the exempt portion from total income (and therefore
+    # from the slab base), not merely from the 12.5% special-rate tax.
+    gti = result.salary_income + result.house_property_income + result.other_sources_income + cg_112a_taxable
     result.gross_total_income = gti
     result.net_agricultural_income = input_data.agriculture_income
     result.aggregate_income = gti + result.net_agricultural_income
@@ -442,7 +453,11 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.taxable_income = ti
 
     # ── 5. Normal slab tax (income excluding special-rate income) ─────────────
-    normal_income = max(Decimal("0"), ti - cg_112a_income)
+    # ``cg_112a_taxable`` is the post-exemption special-rate income; the
+    # exempt portion (up to Rs 1.25L) never enters GTI (Step 2) and so must
+    # not be subtracted again from the slab base.  Using ``net_income``
+    # (pre-exemption) here would double-count the exemption.
+    normal_income = max(Decimal("0"), ti - cg_112a_taxable)
     exemption_limit = get_basic_exemption_limit(age, regime)
     result.basic_exemption_limit = exemption_limit
     result.normal_rate_income = normal_income

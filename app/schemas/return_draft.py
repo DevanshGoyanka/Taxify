@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -899,6 +899,49 @@ class ImportProvenance(_StrictModel):
     reference: str = Field(default="")
 
 
+class ReconciliationEvidence(Identified):
+    """One lossless, classified source row retained for reconciliation."""
+
+    source: Literal["AIS", "TIS", "26AS", "ITD_PREFILL"]
+    sourceCode: str = Field(default="")
+    sourceSection: str = Field(default="")
+    incomeHead: str = Field(default="")
+    category: str = Field(default="")
+    description: str = Field(default="")
+    sourceName: str = Field(default="")
+    sourceIdentifier: str = Field(default="")
+    role: Literal["TAXABLE_ITR1", "RESTRICTED_112A_TAXABLE", "TAX_CREDIT", "OUT_OF_SCOPE_TAXABLE", "CONTROL_ONLY", "ACQUISITION_ONLY", "INFORMATIONAL", "PARSER_WARNING"]
+    relatedTab: Literal["SALARY", "OTHER_SOURCES", "CAPITAL_GAINS", "BUSINESS", "TAXES", "HOUSE_PROPERTY", "RECONCILIATION"]
+    canonicalDestination: Optional[str] = Field(default=None)
+    evidenceKind: Literal["CATEGORY_CONTROL", "SOURCE_DETAIL", "SECTION_SUMMARY"] = Field(default="SOURCE_DETAIL")
+    reportedAmount: Money = Field(default=Decimal("0"))
+    processedAmount: Money = Field(default=Decimal("0"))
+    acceptedAmount: Money = Field(default=Decimal("0"))
+    taxAmount: Money = Field(default=Decimal("0"))
+    status: str = Field(default="")
+    requiresReview: bool = Field(default=False)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReconciliationDiscrepancy(Identified):
+    """An AIS/TIS/26AS amount conflict requiring an explicit decision."""
+
+    category: str = Field(default="")
+    description: str = Field(default="")
+    aisAmount: Money = Field(default=Decimal("0"))
+    tisAcceptedAmount: Money = Field(default=Decimal("0"))
+    as26Amount: Money = Field(default=Decimal("0"))
+    difference: Money = Field(default=Decimal("0"))
+    status: Literal["PENDING", "CONFIRMED_TIS", "CONFIRMED_AIS", "IGNORED"] = Field(default="PENDING")
+
+
+class ReconciliationState(_StrictModel):
+    """Lossless import evidence and deterministic discrepancy decisions."""
+
+    evidence: list[ReconciliationEvidence] = Field(default_factory=list)
+    discrepancies: list[ReconciliationDiscrepancy] = Field(default_factory=list)
+
+
 class ReturnDraft(_StrictModel):
     """Canonical ITR return draft — the single typed persisted shape.
 
@@ -926,6 +969,7 @@ class ReturnDraft(_StrictModel):
     verification: Verification = Field(default_factory=Verification)
     taxReturnPreparer: TaxReturnPreparer = Field(default_factory=TaxReturnPreparer)
     provenance: list[ImportProvenance] = Field(default_factory=list)
+    reconciliation: ReconciliationState = Field(default_factory=ReconciliationState)
 
 
 def create_empty_draft(assessment_year: str = "", form: ItrForm = "ITR-1", regime: TaxRegime = "new") -> ReturnDraft:
