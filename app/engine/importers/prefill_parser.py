@@ -927,7 +927,13 @@ def _extract_other_sources(root: dict[str, Any]) -> PrefillOtherSourcesIncome:
         inc_oth = {}
 
     # incomeDeductionsOthersInc[] — list of {othSrcNatureDesc, othSrcOthAmount}
+    # These may duplicate the flat interest fields below (e.g. the same
+    # SAV/IFD amounts appear both in insights.intrstFrmSavingBank and in
+    # incomeDeductionsOthersInc[].othSrcNatureDesc="SAV").  Deduplicate by
+    # collecting them into a set first, then skip flat fields for any
+    # nature that's already present in other_details.
     other_details: list[dict[str, Any]] = []
+    seen_interest_natures: set[str] = set()
     idi_list = insights.get("incomeDeductionsOthersInc")
     if not isinstance(idi_list, list):
         form26as = root.get("form26as")
@@ -936,25 +942,31 @@ def _extract_other_sources(root: dict[str, Any]) -> PrefillOtherSourcesIncome:
     if isinstance(idi_list, list):
         for d in idi_list:
             if isinstance(d, Mapping):
-                other_details.append({
-                    "nature": _to_str(d.get("othSrcNatureDesc")),
-                    "amount": _to_int(d.get("othSrcOthAmount")),
-                })
+                nature = _to_str(d.get("othSrcNatureDesc"))
+                amount = _to_int(d.get("othSrcOthAmount"))
+                other_details.append({"nature": nature, "amount": amount})
+                seen_interest_natures.add(nature.upper())
 
-    # Interest sources: insights or form24q
+    # Interest sources: insights or form24q.  Skip if already present in
+    # other_details to avoid duplicates (e.g. SAV in both
+    # insights.intrstFrmSavingBank and incomeDeductionsOthersInc).
     form24q = root.get("form24q")
     if not isinstance(form24q, Mapping):
         form24q = {}
-    interest_sb = (
-        _to_int(insights.get("intrstFrmSavingBank"))
-        or _to_int(form24q.get("intrstFrmSavingBank"))
-    )
-    interest_fd = _to_int(insights.get("intrstFrmTermDeposit"))
-    # form26as also carries intrstFrmTermDeposit
-    if not interest_fd:
-        form26as = root.get("form26as")
-        if isinstance(form26as, Mapping):
-            interest_fd = _to_int(form26as.get("intrstFrmTermDeposit"))
+    interest_sb: int = 0
+    if "SAV" not in seen_interest_natures:
+        interest_sb = (
+            _to_int(insights.get("intrstFrmSavingBank"))
+            or _to_int(form24q.get("intrstFrmSavingBank"))
+        )
+    interest_fd: int = 0
+    if "IFD" not in seen_interest_natures:
+        # Try insights first, then form26as as fallback
+        interest_fd = _to_int(insights.get("intrstFrmTermDeposit"))
+        if not interest_fd:
+            form26as = root.get("form26as")
+            if isinstance(form26as, Mapping):
+                interest_fd = _to_int(form26as.get("intrstFrmTermDeposit"))
 
     return PrefillOtherSourcesIncome(
         dividend_gross=_to_int(inc_oth.get("dividendGross")),

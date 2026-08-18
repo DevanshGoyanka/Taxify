@@ -87,3 +87,43 @@ def test_last_filed_itr_natofemployment_does_not_create_employer_stubs() -> None
     # Sanity: TDS-other rows must still produce bank-interest entries
     # (the 94A sections are interest, not salary).
     assert result.tds_other_entries and result.tds_other_entries[0].section == "94A"
+
+
+def test_other_sources_interest_not_duplicated_between_flat_and_array() -> None:
+    """Interest amounts must not appear twice — once in the flat fields
+    (insights.intrstFrmSavingBank, insights.intrstFrmTermDeposit) and
+    again inside insights.incomeDeductionsOthersInc[].
+
+    The ITD prefill sometimes emits the same interest amount in both
+    places, which used to create duplicate interest entries in the
+    frontend (e.g. two SAV entries with the same amount).  The fix
+    deduplicates by skipping flat fields when the array already contains
+    that nature.
+    """
+    payload = {
+        "personalInfo": {"pan": "ACUPG3482G"},
+        "insights": {
+            # Flat interest fields
+            "intrstFrmSavingBank": 6105,
+            "intrstFrmTermDeposit": 325458,
+            # Same amounts also appear in the array below
+            "incomeDeductionsOthersInc": [
+                {"othSrcNatureDesc": "SAV", "othSrcOthAmount": 6105},
+                {"othSrcNatureDesc": "IFD", "othSrcOthAmount": 325458},
+            ],
+        },
+    }
+
+    result = parse_prefill_json(payload, assessment_year="2026-27")
+
+    # The flat fields should be 0 because we deduplicate in favor of the array
+    # (skip flat field when array already has that nature)
+    assert result.other_sources.interest_from_savings_bank == 0
+    assert result.other_sources.interest_from_term_deposit == 0
+
+    # The array entries should contain the interest amounts
+    assert len(result.other_sources.other_income_details) == 2
+    # Verify the array has both SAV and IFD with correct amounts
+    natures = {d["nature"]: d["amount"] for d in result.other_sources.other_income_details}
+    assert natures.get("SAV") == 6105
+    assert natures.get("IFD") == 325458
