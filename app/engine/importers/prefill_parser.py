@@ -708,10 +708,18 @@ def _extract_filing_status(root: dict[str, Any]) -> PrefillFilingStatus:
 def _extract_employers(root: dict[str, Any]) -> list[PrefillEmployerEntry]:
     """Extract the employer entries from the prefill.
 
-    The real ITD prefill places employment nature under
-    ``lastFiledITR.natOfEmployment`` (a list of strings like "OTH").
-    The ``salaries`` section (with detailed salary break-up) is present
-    when the employer has filed Form 24Q.
+    Two authoritative sources feed this function:
+
+    * ``salaries.salary[]`` — detailed per-employer break-up
+      (gross salary, perquisites, profits-in-lieu, address).  Present
+      when the employer has filed Form 24Q.
+    * ``tdsOnSalaries.tdsOnSalary[]`` — fallback that derives employer
+      stubs (name, TAN, income charged, total TDS) from Form 24Q
+      salary-TDS rows when the detailed salary section is absent.
+
+    The previous ``lastFiledITR.natOfEmployment`` fallback that
+    produced empty stub rows has been removed — see the comment at
+    Source 2 below for the rationale.
     """
     employers: list[PrefillEmployerEntry] = []
 
@@ -744,22 +752,21 @@ def _extract_employers(root: dict[str, Any]) -> list[PrefillEmployerEntry]:
                     employer_zip_code=_to_str(addr.get("zipCode")),
                 ))
 
-    # Source 2: lastFiledITR.natOfEmployment[] (list of employment-nature
-    # strings).  When ``salaries`` is null but natOfEmployment has
-    # entries, we create stub employer entries from TDS data.
-    if not employers:
-        lfi = root.get("lastFiledITR")
-        if isinstance(lfi, Mapping):
-            nat_list = lfi.get("natOfEmployment")
-            if isinstance(nat_list, list):
-                # We don't have employer names from this source alone;
-                # we'll enrich them from the TDS-on-salary section below.
-                # For now, create stub entries with the nature code.
-                for nat in nat_list:
-                    if isinstance(nat, str):
-                        employers.append(PrefillEmployerEntry(
-                            nature_of_employment=nat,
-                        ))
+    # Source 2: REMOVED.  The previous fallback created stub
+    # ``PrefillEmployerEntry`` rows from ``lastFiledITR.natOfEmployment``
+    # alone — rows with empty employer_name, empty TAN, and only a
+    # nature-of-employment string (e.g. "OTH").  These stubs carried
+    # no salary data and collapsed into a single
+    # ``id: 'employer-UNKNOWN'`` row in the frontend (because both
+    # ``mergeDraft`` and the mapper hash empty
+    # ``(tan || employer_name)`` to the same id), surfacing as a
+    # "Employer from Prefill" placeholder with every salary field at
+    # ₹0 and confusing the user.
+    #
+    # The correct behaviour is: emit an employer row only when the
+    # prefill carries actual employer identity or income data (Source 1
+    # or Source 4).  When neither is present, the taxpayer isn't
+    # salaried for this AY and the Salary tab should render empty.
 
     # Source 3: form24q may carry salary-side TDS (Form 24Q is the
     # employer's TDS return).  We don't extract employer entries from
