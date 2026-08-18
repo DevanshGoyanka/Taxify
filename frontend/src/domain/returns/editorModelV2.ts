@@ -259,6 +259,17 @@ export function updateChapterVIA(model: ReturnEditorModelV2, value: ChapterVIA):
   return withDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, chapterVIA: clone(value) } });
 }
 
+/** Replaces Schedule CYLA brought-forward losses immutably. */
+export function updateLossesBroughtForward(model: ReturnEditorModelV2, value: ReturnDraft['lossesBroughtForward']): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, lossesBroughtForward: clone(value) });
+}
+
+/** Updates the non-presumptive PGBP net-profit figure immutably. */
+export function updateBpNetProfit(model: ReturnEditorModelV2, value: number): ReturnEditorModelV2 {
+  const sanitized = typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+  return withDraft(model, { ...model.draft, bpNetProfit: sanitized });
+}
+
 /** Replaces Schedule 80GGA rows immutably. */
 export function updateSchedule80GGA(model: ReturnEditorModelV2, entries: readonly Schedule80GGAEntry[]): ReturnEditorModelV2 {
   return withDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, schedule80GGA: cloneArray(entries) } });

@@ -1,5 +1,5 @@
 import type { Category80D, FinancialParticulars, ReturnDraft } from './types';
-import { EMPTY_CHAPTER_VIA } from './types';
+import { EMPTY_BROUGHT_FORWARD_LOSSES, EMPTY_CHAPTER_VIA } from './types';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _FactoryTypeGuard = ReturnDraft;
@@ -48,6 +48,8 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
     },
     deductions: { section80C: [], section80D: { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: createEmpty80DCategory(), selfFamilySenior: createEmpty80DCategory(), parents: createEmpty80DCategory(), parentsSenior: createEmpty80DCategory() }, section80G: [], loans: { loans: [], section80EEAStampDutyValue: 0 }, chapterVIA: { ...EMPTY_CHAPTER_VIA, businessDeductions: { ...EMPTY_CHAPTER_VIA.businessDeductions } }, schedule80GGA: [], schedule80GGC: [] },
     taxes: { tds: [], tcs: [], challans: [] }, bankAccounts: [],
+    lossesBroughtForward: { ...EMPTY_BROUGHT_FORWARD_LOSSES },
+    bpNetProfit: 0,
     verification: { capacity: 'SELF', place: '', date: null, declarationAccepted: false },
     taxReturnPreparer: { used: false, identificationNumber: '', name: '', reimbursementFromGovernment: 0 },
     provenance: [], reconciliation: { evidence: [], discrepancies: [] },

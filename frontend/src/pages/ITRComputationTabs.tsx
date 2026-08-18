@@ -42,7 +42,7 @@ export interface CanonicalManagerBindings {
   taxReturnPreparer: (next: import('../domain/returns/types').TaxReturnPreparer) => void;
 }
 
-export function BusinessTab({ formData, setFormData, taxResult }: any) {
+export function BusinessTab({ taxResult, draft, onChangeBusinesses, onChangeBpNetProfit }: { taxResult: any; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void }) {
   return (
     <div>
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}>
@@ -55,46 +55,74 @@ export function BusinessTab({ formData, setFormData, taxResult }: any) {
       <div style={{ marginBottom: 16 }}>
         <label style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 500 }}>Presumptive Scheme</label>
         <div style={{ display: 'flex', gap: 12 }}>
-          {['44AD', '44ADA', 'Regular'].map(scheme => (
-            <button
-              key={scheme}
-              onClick={() => setFormData({ ...formData, bizPresumptive: scheme })}
-              style={{
-                padding: '8px 16px',
-                background: formData.bizPresumptive === scheme ? 'var(--gold)' : 'var(--bg)',
-                color: formData.bizPresumptive === scheme ? 'white' : 'var(--text-primary)',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                fontSize: 13,
-                cursor: 'pointer'
-              }}
-            >
-              {scheme}
-            </button>
-          ))}
+          {['44AD', '44ADA', 'Regular'].map(schemeOption => {
+            const schemeState = (draft.businesses[0]?.scheme === '44AD' || draft.businesses[0]?.scheme === '44ADA') ? draft.businesses[0]!.scheme : 'Regular';
+            return (
+              <button
+                key={schemeOption}
+                onClick={() => onChangeBusinesses(schemeOption === 'Regular' ? [] : [createBusinessStub(schemeOption as '44AD' | '44ADA', draft.businesses[0])])}
+                style={{
+                  padding: '8px 16px',
+                  background: schemeState === schemeOption ? 'var(--gold)' : 'var(--bg)',
+                  color: schemeState === schemeOption ? 'white' : 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  cursor: 'pointer'
+                }}
+              >
+                {schemeOption}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
-        <Field label="Gross Turnover/Receipts" value={formData.bizTurnover} onChange={(v: any) => setFormData({ ...formData, bizTurnover: v })} />
-        {formData.bizPresumptive !== 'Regular' && (
-          <Field label="Declared Income" value={formData.bizDeclared} onChange={(v: any) => setFormData({ ...formData, bizDeclared: v })} />
+        <Field label="Gross Turnover/Receipts" value={aggregateGrossTurnover(draft.businesses)} computed />
+        {(draft.businesses[0]?.scheme === '44AD' || draft.businesses[0]?.scheme === '44ADA') && (
+          <Field label="Declared Income" value={aggregateDeclaredIncome(draft.businesses)} computed />
         )}
-        {formData.bizPresumptive === 'Regular' && (
-          <Field label="Net Profit from P&L" value={formData.bpNetProfit} onChange={(v: any) => setFormData({ ...formData, bpNetProfit: v })} />
+        {(!draft.businesses[0] || draft.businesses[0]?.scheme !== '44AD' && draft.businesses[0]?.scheme !== '44ADA') && (
+          <Field label="Net Profit from P&L" value={draft.bpNetProfit} onChange={(v: any) => onChangeBpNetProfit(Number(v) || 0)} />
         )}
-        <Field label="Taxable Business Income" value={taxResult.bizIncome} computed />
+        <Field label="Taxable Business Income" value={taxResult?.bizIncome} computed />
       </div>
 
       <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
         Brought Forward Losses - Business/Profession
       </h4>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-        <Field label="Business Loss B/F" value={formData.bfLossBusiness || 0} onChange={(v: any) => setFormData({ ...formData, bfLossBusiness: v })} />
-        <Field label="Speculation Loss B/F" value={formData.bfLossSpeculation || 0} onChange={(v: any) => setFormData({ ...formData, bfLossSpeculation: v })} />
+        <Field label="Business Loss B/F" value={draft.lossesBroughtForward?.bfLossBusiness ?? 0} computed />
+        <Field label="Speculation Loss B/F" value={draft.lossesBroughtForward?.bfLossSpeculation ?? 0} computed />
       </div>
     </div>
   );
+}
+
+function createBusinessStub(scheme: '44AD' | '44ADA', existing: ReturnDraft['businesses'][number] | undefined): ReturnDraft['businesses'][number] {
+  if (existing && existing.scheme === scheme) return existing;
+  return {
+    id: `business-${scheme.toLowerCase()}-${Date.now()}`,
+    businessName: '', natureCode: '', description: '',
+    digitalReceipts: 0, nonDigitalReceipts: 0, declaredIncome: 0,
+    gstinTurnovers: [], financialParticulars: { cashBalance: 0, bankBalance: 0, inventory: 0, sundryDebtors: 0, sundryCreditors: 0, otherAssets: 0, totalAssets: 0, securedLoans: 0, unsecuredLoans: 0, advances: 0, otherLiabilities: 0, totalLiabilities: 0, grossProfit: 0, expenses: 0, netProfit: 0 },
+    scheme,
+    ...(scheme === '44ADA' ? { grossReceipts: 0 } : {}),
+  } as ReturnDraft['businesses'][number];
+}
+
+function aggregateGrossTurnover(businesses: ReturnDraft['businesses']): number {
+  return businesses.reduce<number>((sum, entry) => {
+    if (entry.scheme === '44ADA') return sum + (entry.grossReceipts || 0);
+    if (entry.scheme === '44AD') return sum + (entry.digitalReceipts || 0) + (entry.nonDigitalReceipts || 0);
+    if (entry.scheme === '44AE') return sum + entry.vehicles.reduce<number>((vSum, vehicle) => vSum + (vehicle.presumptiveIncome || 0), 0);
+    return sum;
+  }, 0);
+}
+
+function aggregateDeclaredIncome(businesses: ReturnDraft['businesses']): number {
+  return businesses.reduce<number>((sum, entry) => sum + (entry.declaredIncome || 0), 0);
 }
 
 export function OtherSourcesTab({ taxResult, managers, itrForm, regime, editorModel }: any) {
@@ -115,267 +143,32 @@ export function OtherSourcesTab({ taxResult, managers, itrForm, regime, editorMo
   return <ScheduleOSWorkspace form={(itrForm ?? 'ITR-1') as ItrForm} regime={(regime ?? 'new') === 'old' ? 'old' : 'new'} otherSources={os} onChange={updateOS} />;
 }
 
-// Legacy OtherSourcesTab implementation retained below for reference until backend wiring is complete.
-function _LegacyOtherSourcesTab({ formData, setFormData, taxResult, managers }: any) {
-  // Calculate totals from 26AS
-  const totalTDSFrom26AS = formData.tdsEntries ? formData.tdsEntries.reduce((sum: number, e: any) => sum + (e.tdsDeducted || 0), 0) : 0;
-  const incomeBreakdown = formData.incomeBreakdown26AS || {};
-
-  // Get income from 26AS breakdown
-  const dividendFrom26AS = incomeBreakdown.dividendIncome || 0;
-  const interestFrom26AS = incomeBreakdown.interestIncome || 0;
-  const salaryFrom26AS = incomeBreakdown.salaryIncome || 0;
-  
-  // Calculate total income from 26AS
-  const totalIncomeFrom26AS = salaryFrom26AS + dividendFrom26AS + interestFrom26AS;
-  
-  return (
-    <div style={{ padding: '16px', background: '#fafafa' }}>
-      {/* 26AS Import Summary */}
-      {formData.imported26AS && (
-        <div style={{ marginBottom: 24, padding: 16, background: 'var(--gold-pale)', borderRadius: 6, border: '1px solid var(--gold)' }}>
-          <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--gold)' }}>
-            📊 Form 26AS Import Summary
-          </h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16 }}>
-            <div style={{ padding: 12, background: 'white', borderRadius: 6 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Total Income (26AS)</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>₹{totalIncomeFrom26AS.toLocaleString('en-IN')}</div>
-            </div>
-            <div style={{ padding: 12, background: 'white', borderRadius: 6 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Total TDS Credit</div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--gold)' }}>₹{totalTDSFrom26AS.toLocaleString('en-IN')}</div>
-            </div>
-            <div style={{ padding: 12, background: 'white', borderRadius: 6 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Salary (192)</div>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>₹{salaryFrom26AS.toLocaleString('en-IN')}</div>
-            </div>
-            <div style={{ padding: 12, background: 'white', borderRadius: 6 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Interest (193, 194A, 194K)</div>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>₹{interestFrom26AS.toLocaleString('en-IN')}</div>
-            </div>
-            <div style={{ padding: 12, background: 'white', borderRadius: 6 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Dividends (194)</div>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>₹{dividendFrom26AS.toLocaleString('en-IN')}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 20, color: '#1a237e', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ background: '#1a237e', color: 'white', padding: '4px 10px', borderRadius: 4, fontSize: 12 }}>OS</span>
-        Income from Other Sources
-        <span style={{ fontSize: 11, color: '#666', fontWeight: 400 }}>Schedule OS - Sec 56-59</span>
-      </h3>
-
-      {/* ===== INTEREST INCOME (ITD Tags 17A-17H) ===== */}
-      <div style={{ marginBottom: 20, background: 'white', borderRadius: 8, padding: 16, borderLeft: '4px solid #1565c0', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-        <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: '#1565c0', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ background: '#e3f2fd', color: '#1565c0', padding: '2px 8px', borderRadius: 4, fontSize: 10 }}>17A-17H</span>
-          Interest Income
-          <span style={{ fontSize: 11, color: '#888', fontWeight: 400 }}>Sec 194A, 194K, 244A</span>
-        </h4>
-        <InterestEntryManager
-          entries={formData.interestEntries || []}
-          onChange={managers.interest}
-        />
-      </div>
-
-      {/* DIVIDEND income section - ITD Compliant */}
-      <div style={{ marginBottom: 20, background: 'white', borderRadius: 8, padding: 16, borderLeft: '4px solid #2e7d32', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-        <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: '#2e7d32', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ background: '#e8f5e9', color: '#2e7d32', padding: '2px 8px', borderRadius: 4, fontSize: 10 }}>DIV</span>
-          Dividend Income
-          <span style={{ fontSize: 11, color: '#888', fontWeight: 400 }}>Sec 2(22)(e), 2(22)(f), 194</span>
-        </h4>
-        <DividendEntryManager
-          entries={formData.dividendEntries || []}
-          onChange={managers.dividends}
-        />
-      </div>
-
-      {/* FAMILY PENSION section - ITD Compliant */}
-      <div style={{ marginBottom: 20, background: 'white', borderRadius: 8, padding: 16, borderLeft: '4px solid #7b1fa2', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-        <FamilyPensionManager
-          entry={formData.familyPensionEntry || null}
-          onChange={managers.familyPension}
-        />
-      </div>
-
-      {/* WINNINGS section - ITD Compliant */}
-      <div style={{ marginBottom: 20, background: 'white', borderRadius: 8, padding: 16, borderLeft: '4px solid #c62828', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-        <WinningsManager
-          entries={formData.winningsEntries || []}
-          onChange={managers.winnings}
-        />
-      </div>
-
-      {/* GIFTS section - ITD Compliant */}
-      <div style={{ marginBottom: 20, background: 'white', borderRadius: 8, padding: 16, borderLeft: '4px solid #ef6c00', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-        <GiftPropertyManager
-          entries={formData.giftEntries || []}
-          onChange={managers.gifts}
-        />
-      </div>
-
-      {/* VDA section */}
-      <div style={{ marginBottom: 20, background: 'white', borderRadius: 8, padding: 16, borderLeft: '4px solid #e65100', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-        <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: '#e65100', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ background: '#fff3e0', color: '#e65100', padding: '2px 8px', borderRadius: 4, fontSize: 10 }}>VDA</span>
-          Virtual Digital Assets
-          <span style={{ fontSize: 11, color: '#888', fontWeight: 400 }}>Sec 194S / 115BBH</span>
-        </h4>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-          <div>
-            <label style={{ display: 'block', fontSize: 11, color: '#888', marginBottom: 4 }}>VDA Gains (₹)</label>
-            <input type="number" value={formData.vdaGains || ''}
-              onChange={(v: any) => setFormData({ ...formData, vdaGains: parseFloat(v.target.value) || 0 })}
-              style={{ width: '100%', padding: 8, border: '1px solid var(--border)', borderRadius: 4 }} />
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: 11, color: '#888', marginBottom: 4 }}>VDA Tax @ 30%</label>
-            <input type="number" value={taxResult.vdaTax || 0} readOnly
-              style={{ width: '100%', padding: 8, border: '1px solid var(--border)', borderRadius: 4, background: '#fff3e0', color: '#e65100', fontWeight: 600 }} />
-          </div>
-        </div>
-        <div style={{ marginTop: 8, fontSize: 11, color: '#e65100', fontStyle: 'italic' }}>
-          ⚠️ VDA income taxed @ 30% + 4% cess. No loss set-off allowed.
-        </div>
-      </div>
-
-      {/* ===== OTHER SOURCES SUMMARY (CBDT Schedule OS) ===== */}
-      <div style={{ marginTop: 32, padding: 20, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
-        <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}>
-          Income from Other Sources - Summary (Backend Computed)
-          <span title="Schedule OS - Sec 56-59 (Calculated by backend as per CBDT rules)" style={{ cursor: 'help', fontSize: 12, color: 'var(--gold)', border: '1px solid var(--gold)', borderRadius: '50%', width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, marginLeft: 8 }}>i</span>
-        </h3>
-        
-        <div style={{ marginBottom: 16 }}>
-          {/* Interest Income - ITD Tags 17A-17H */}
-          {(taxResult.intrFrmSavingBank || taxResult.intrFrmTermDeposit || taxResult.intrFrmIncmTaxRefund || 
-            taxResult.intrSec10XIFirstProviso || taxResult.intrSec10XISecondProviso || taxResult.intrSec10XIIFirstProviso) > 0 && (
-            <>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#1565c0', marginBottom: 8 }}>Interest Income (17A-17H)</div>
-              {(taxResult.intrFrmSavingBank ?? 0) > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>17A - Savings Bank</span>
-                  <span style={{ fontWeight: 500 }}>₹{(taxResult.intrFrmSavingBank ?? 0).toLocaleString('en-IN')}</span>
-                </div>
-              )}
-              {(taxResult.intrFrmTermDeposit ?? 0) > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>17B - Term Deposit</span>
-                  <span style={{ fontWeight: 500 }}>₹{(taxResult.intrFrmTermDeposit ?? 0).toLocaleString('en-IN')}</span>
-                </div>
-              )}
-              {(taxResult.intrSec10XIFirstProviso ?? 0) > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>17D - Post Office</span>
-                  <span style={{ fontWeight: 500 }}>₹{(taxResult.intrSec10XIFirstProviso ?? 0).toLocaleString('en-IN')}</span>
-                </div>
-              )}
-              {(taxResult.intrSec10XISecondProviso ?? 0) > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>17E - NSC (Exempt)</span>
-                  <span style={{ fontWeight: 500, color: '#2e7d32' }}>₹{(taxResult.intrSec10XISecondProviso ?? 0).toLocaleString('en-IN')}</span>
-                </div>
-              )}
-              {(taxResult.intrSec10XIIFirstProviso ?? 0) > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>17F - SCSS (Exempt)</span>
-                  <span style={{ fontWeight: 500, color: '#2e7d32' }}>₹{(taxResult.intrSec10XIIFirstProviso ?? 0).toLocaleString('en-IN')}</span>
-                </div>
-              )}
-            </>
-          )}
-          
-          {/* Dividend - ITD Taxable (2(22)(e), 2(22)(f), 194) */}
-          {(taxResult.dividend22e || taxResult.dividend22f || taxResult.dividend) > 0 && (
-            <>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#2e7d32', margin: '12px 0 8px' }}>Dividend Income</div>
-              {(taxResult.dividend ?? 0) > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>194 - Regular Dividend</span>
-                  <span style={{ fontWeight: 500 }}>₹{(taxResult.dividend ?? 0).toLocaleString('en-IN')}</span>
-                </div>
-              )}
-              {(taxResult.dividend22e ?? 0) > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>2(22)(e) - Deemed Dividend</span>
-                  <span style={{ fontWeight: 500 }}>₹{(taxResult.dividend22e ?? 0).toLocaleString('en-IN')}</span>
-                </div>
-              )}
-              {(taxResult.dividend22f ?? 0) > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>2(22)(f) - Capital Reduction</span>
-                  <span style={{ fontWeight: 500 }}>₹{(taxResult.dividend22f ?? 0).toLocaleString('en-IN')}</span>
-                </div>
-              )}
-            </>
-          )}
-          
-          {/* Family Pension */}
-          {(taxResult.familyPensionIncome ?? 0) > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--border)', marginTop: 8 }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Family Pension (Gross)</span>
-              <span style={{ fontWeight: 600 }}>₹{(taxResult.familyPensionIncome ?? 0).toLocaleString('en-IN')}</span>
-            </div>
-          )}
-          {(taxResult.familyPensionDed ?? 0) > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>Less: Deduction u/s 57(iia)</span>
-              <span style={{ fontWeight: 500, color: '#2e7d32' }}>-₹{(taxResult.familyPensionDed ?? 0).toLocaleString('en-IN')}</span>
-            </div>
-          )}
-          
-          {/* Winnings */}
-          {(taxResult.totalWinnings ?? 0) > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--border)', marginTop: 8 }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Winnings (194B/194BB) @ 30%</span>
-              <span style={{ fontWeight: 600 }}>₹{(taxResult.totalWinnings ?? 0).toLocaleString('en-IN')}</span>
-            </div>
-          )}
-          
-          {/* VDA */}
-          {(taxResult.vdaGains ?? 0) > 0 && (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--border)', marginTop: 8 }}>
-                <span style={{ color: 'var(--text-secondary)' }}>VDA Gains (115BBH)</span>
-                <span style={{ fontWeight: 600 }}>₹{(taxResult.vdaGains ?? 0).toLocaleString('en-IN')}</span>
-              </div>
-            </>
-          )}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderTop: '2px solid var(--gold)', marginTop: 8 }}>
-          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Gross Income from Other Sources</span>
-          <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--gold)' }}>₹{(taxResult.otherIncome ?? 0).toLocaleString('en-IN')}</span>
-        </div>
-        <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-muted)' }}>
-          Note: Winnings (Lottery/Betting/Horse Race) and VDA are taxed at 30% + 4% cess. Family pension deduction u/s 57(iia) applied by backend.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export function VDATab({ formData, setFormData, taxResult }: any) {
+export function VDATab({ draft, taxResult }: { draft: ReturnDraft; taxResult: any }) {
+  // VDA rows are edited inside CapitalGainsEntryManager; this tab only surfaces
+  // the aggregate as a read-only summary (computed either from the backend
+  // tax result or derived from draft.capitalGainsSchedule.vda[]).
+  const vdaRows = Array.isArray((draft.capitalGainsSchedule as { vda?: Array<{ consideration?: number; acquisitionCost?: number }> } | undefined)?.vda)
+    ? (draft.capitalGainsSchedule as { vda: Array<{ consideration?: number; acquisitionCost?: number }> }).vda
+    : [];
+  const derivedVdaGain = vdaRows.reduce<number>((sum, row) => sum + ((Number(row.consideration) || 0) - (Number(row.acquisitionCost) || 0)), 0);
+  const vdaGains = Number(taxResult?.vdaGains ?? derivedVdaGain);
   return (
     <div>
       <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
         Virtual Digital Assets (VDA) - Section 115BBH
       </h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-        <Field label="Net VDA Gains" value={formData.vdaGains} onChange={(v: any) => setFormData({ ...formData, vdaGains: v })} />
-        <Field label="VDA Tax @ 30%" value={taxResult.vdaTax} computed />
+        <Field label="Net VDA Gains" value={vdaGains} computed />
+        <Field label="VDA Tax @ 30%" value={taxResult?.vdaTax} computed />
       </div>
       <div style={{ marginTop: 12, padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)' }}>
-        No loss set-off allowed for VDA transactions as per CBDT rules
+        VDA rows are edited in the Capital Gains tab. No loss set-off allowed for VDA transactions as per CBDT rules.
       </div>
     </div>
   );
 }
 
-export function DeductionsTab({ regime, taxResult, managers, form, editorModel }: { formData?: any; setFormData?: any; regime: 'old' | 'new'; taxResult: any; managers: CanonicalManagerBindings; form: ItrForm; editorModel?: import('../domain/returns').ReturnEditorModel | null }) {
+export function DeductionsTab({ regime, taxResult, managers, form, editorModel }: { regime: 'old' | 'new'; taxResult: any; managers: CanonicalManagerBindings; form: ItrForm; editorModel?: import('../domain/returns').ReturnEditorModelV2 | null }) {
   const draftDeductions = editorModel?.draft.deductions;
   const via = (draftDeductions?.chapterVIA ?? {}) as import('../domain/returns/types').ChapterVIA;
   const schedule80GGA = draftDeductions?.schedule80GGA ?? [];
@@ -400,17 +193,21 @@ export function DeductionsTab({ regime, taxResult, managers, form, editorModel }
     />
   );
 }
-export function LossesTab({ formData, setFormData, taxResult }: any) {
+export function LossesTab({ draft, taxResult, onChange }: { draft: ReturnDraft; taxResult: any; onChange: (patch: ReturnDraft['lossesBroughtForward']) => void }) {
   // HP loss disallowed (above the ₹2L set-off ceiling) is computed by the
   // backend engine (apply_inter_head_loss_limit). The frontend must not
   // recompute statutory loss set-off or carry-forward amounts.
   const hpLossDisallowed = taxResult?.hpLossDisallowed ?? 0;
-  const currentYearHpLoss = (formData.incomeFromHouseProperty || 0) < 0
-    ? formData.incomeFromHouseProperty
+  const currentYearHpLoss = (taxResult?.incomeFromHouseProperty ?? 0) < 0
+    ? taxResult.incomeFromHouseProperty
     : 0;
-  const pastYearHpLoss = formData.bfLossHP || 0;
+  const losses = draft.lossesBroughtForward ?? { bfLossHP: 0, bfLossBusiness: 0, bfLossSTCG: 0, bfLossLTCG: 0, bfLossSpeculation: 0 };
+  const pastYearHpLoss = losses.bfLossHP ?? 0;
   // Display-only total; the backend owns the set-off computation.
   const totalHpLossDisplay = Math.abs(currentYearHpLoss) + Math.abs(pastYearHpLoss);
+  const patch = (key: keyof ReturnDraft['lossesBroughtForward'], value: number): void => {
+    onChange({ ...losses, [key]: Math.max(0, Number(value) || 0) });
+  };
 
   return (
     <div>
@@ -434,8 +231,8 @@ export function LossesTab({ formData, setFormData, taxResult }: any) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
           <Field
             label="House Property Loss B/F from Prev Year (₹)"
-            value={formData.bfLossHP || 0}
-            onChange={(v: any) => setFormData({ ...formData, bfLossHP: v })}
+            value={pastYearHpLoss}
+            onChange={(v: any) => patch('bfLossHP', Number(v) || 0)}
           />
         </div>
         <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>
@@ -460,13 +257,13 @@ export function LossesTab({ formData, setFormData, taxResult }: any) {
           </div>
         </div>
       )}
-      
+
       {/* Other Losses - Manual Entry */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Business Loss B/F" value={formData.bfLossBusiness || 0} onChange={(v: any) => setFormData({ ...formData, bfLossBusiness: v })} />
-        <Field label="Speculation Loss B/F" value={formData.bfLossSpeculation || 0} onChange={(v: any) => setFormData({ ...formData, bfLossSpeculation: v })} />
-        <Field label="Short Term Capital Loss B/F" value={formData.bfLossSTCG || 0} onChange={(v: any) => setFormData({ ...formData, bfLossSTCG: v })} />
-        <Field label="Long Term Capital Loss B/F" value={formData.bfLossLTCG || 0} onChange={(v: any) => setFormData({ ...formData, bfLossLTCG: v })} />
+        <Field label="Business Loss B/F" value={losses.bfLossBusiness ?? 0} onChange={(v: any) => patch('bfLossBusiness', Number(v) || 0)} />
+        <Field label="Speculation Loss B/F" value={losses.bfLossSpeculation ?? 0} onChange={(v: any) => patch('bfLossSpeculation', Number(v) || 0)} />
+        <Field label="Short Term Capital Loss B/F" value={losses.bfLossSTCG ?? 0} onChange={(v: any) => patch('bfLossSTCG', Number(v) || 0)} />
+        <Field label="Long Term Capital Loss B/F" value={losses.bfLossLTCG ?? 0} onChange={(v: any) => patch('bfLossLTCG', Number(v) || 0)} />
       </div>
       <div style={{ marginTop: 12, padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)' }}>
         <strong>CBDT Loss Set-off Rules:</strong>
@@ -482,7 +279,7 @@ export function LossesTab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function TDSTab({ formData, setFormData, taxResult, managers, editorModel }: { formData: any; setFormData: any; taxResult: any; managers: CanonicalManagerBindings; editorModel?: import('../domain/returns').ReturnEditorModel | null }) {
+export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; managers: CanonicalManagerBindings; editorModel?: import('../domain/returns').ReturnEditorModelV2 | null }) {
   // Source TDS + challan entries from the canonical draft via the typed
   // projection helpers.  The legacy `formData.tdsEntries` snapshot is no
   // longer authoritative; the draft (`draft.taxes.tds`, `draft.taxes.challans`)

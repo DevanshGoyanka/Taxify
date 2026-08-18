@@ -317,17 +317,26 @@ Each phase is **independently testable** and ends with a manual-test gate. The n
 7. Bundle size reduced (verify via `vite build` output).
 8. No reference to `composeLegacyPayload`, `adaptLegacyReturn`, `buildPhase1Payload`, `applyLegacyActionWithSnapshot` anywhere in `frontend/src`.
 
-**Status:** 🟡 In progress (checkpoint 1 of 2 landed at commit `99b1208`).
+**Status:** ✅ Complete (Phase 8-A + 8-B landed).
 
-**Implemented (checkpoint 1 — 2026-08-18):**
+**Implemented (checkpoint 1 — 2026-08-18, commit `99b1208`):**
 - `frontend/src/domain/returns/editorModelV2.ts` — fully self-contained: the 25+ `update*` functions, all manager-entry types (`InterestManagerEntry`, `DividendManagerEntry`, `TdsManagerEntry`, `ChallanManagerEntry`, `BankManagerData`, etc.), the projection helpers (`interestToManager`/`interestFromManager`, `tdsToManager`/`tdsFromManager`, `deductionLoansToManager`/`deductionLoansFromManager`, `replaceChallanKind`, `deriveCin`, etc.) are ported from `editorModel.ts` and operate directly on `ReturnEditorModelV2`. `editorModelV2` no longer imports anything from `editorModel`.
 - `frontend/src/pages/ITRComputationPage.tsx` — removed the `USE_V2` flag gate and collapsed all 10 `useCanonicalV2` branch points to the canonical v2 path only. Deleted ~1017 lines of dead legacy code: the inline AIS/TIS/26AS flat-blob mapper (~889 lines), `buildPhase1Payload`, `validatePhase1Payload`, the legacy save/generate/import/validate fallbacks, and the `autoPopulateAll` dead block. `handleValidate` now runs the v2 compute and surfaces its structured errors/warnings. All compute/save/generate/import paths route through the canonical repository + `itrV2` endpoints; `formData` remains as a view projection only.
 
-**Remaining (checkpoint 2 — multi-session):**
-- Migrate the 6 tab components (`BusinessTab`, `VDATab`, `LossesTab`, `TDSTab`, `OtherSourcesTab`, `DeductionsTab`, `PersonalInfoTab`, `CapitalGainsTab`) off `formData`/`setFormData`/`composeLegacyPayload` onto `editorModel.draft` + `editorModelV2` updaters. The tabs still read flat-blob fields for: business presumptive (`bizPresumptive`/`bizTurnover`/`bizDeclared`/`bpNetProfit`), brought-forward losses (`bfLossHP`/`bfLossBusiness`/`bfLossSpeculation`/`bfLossSTCG`/`bfLossLTCG`), VDA gains, and 26AS/AIS import snapshots (`imported26AS`/`aisImported`/`incomeBreakdown26AS`). These need typed-draft equivalents or a minimal inline projection before the serializer can be retired.
-- After the tab migration: delete `editorModel.ts`, `legacyAdapter.ts`, `legacySerializer.ts`, `HttpReturnRepository` (relocate the `ReturnRepository` interface to `canonicalRepository.ts` or a shared types file), `repository.ts`'s legacy class, the `map*ToFormData` utils, and the 4 scratch `patch_*.py` files. Update `domain/returns/index.ts` re-exports.
+**Implemented (checkpoint 2 — Phase 8-B completion, 2026-08-18, this commit):**
+- All eight tabs (`BusinessTab`, `VDATab`, `LossesTab`, `TDSTab`, `OtherSourcesTab`, `DeductionsTab`, `PersonalInfoTab`, `CapitalGainsTab`) now operate on the typed canonical `ReturnDraft`; `formData`/`setFormData` are gone from `ITRComputationPage.tsx`.
+- `assessFormEligibilityFromDraft` reads the canonical `ReturnDraft` directly via a new `collectFactsFromDraft` helper that derives `EligibilityFacts` from `draft.employers`, `draft.businesses`, `draft.bpNetProfit`, `draft.capitalGainsSchedule`, `draft.lossesBroughtForward`, `draft.houseProperties`, `draft.otherSources`, and `draft.personal.residentialStatus`/`isDirector`/`holdsUnlistedShares` (added to `PersonalInfo`). The flat-blob `collectEligibilityFacts` path is no longer the source of any form recommendation.
+- `assessFormEligibility` (the legacy `formData` variant) is retained only as an exported utility for downstream callers and no longer drives the page.
+- Schedule-checklist facts come from `collectEligibilityFactsFromDraft(draft)`; the legacy `formData` argument is removed.
+- The `autoDetectITRForm` flat-blob helper and `getRestrictedCapitalGainsState` are deleted; `formData.capitalGainsSchedule` reads in the form-downgrade guard are replaced by `editorModel?.draft.capitalGainsSchedule`.
+- New typed draft fields added: `draft.lossesBroughtForward` (`BroughtForwardLosses` with `bfLossHP`/`bfLossBusiness`/`bfLossSTCG`/`bfLossLTCG`/`bfLossSpeculation`) and `draft.bpNetProfit`. Both have dedicated `editorModelV2` updaters.
+- `CanonicalReturnRepository` now ships the `ReturnRepository` interface and `createReturnRepository()` factory; `HttpReturnRepository`, `repository.ts`, `repositoryFactory.ts`, `isCanonicalV2Enabled`, the `VITE_USE_V2` flag, the `HttpReturnRepository` test, and `repositoryFactory.test.ts` are deleted.
+- `legacyAdapter.ts`, `legacySerializer.ts`, `editorModel.ts` (+ `editorModel.test.ts`), `returns.test.ts`, the three `map*ToFormData.ts` utils (+ `mapReconciledToFormData.test.ts`), and the four scratch `patch_*.py` files (`pages/patch_bank.py`, `pages/patch_bank2.py`, `pages/patch_phase1.py`, `pages/patch_tabs_phase1.py`) and `components/create_bank.py` are deleted.
+- `domain/returns/index.ts` no longer re-exports the legacy bridge modules.
+- New utility file `utils/prefillTypes.ts` extracts the Prefill interfaces from the deleted `mapPrefillToFormData.ts` so `mapPrefillToDraftPatch.ts` and its test compile against the typed Prefill payload without depending on the dead adapter.
 
-**Validation:** 377 backend tests pass (corpus + reconciliation + v2 compute + golden + profile + boundary + 112A unification + draft mapper + calculator regressions); 165/166 frontend tests pass (only the known pre-existing Schedule HP failure); TypeScript introduces zero new errors.
+**Validation (this commit):**
+- Frontend: `tsc -b` introduces zero new errors (only one pre-existing missing `./client` module in `api/reconciliation.ts`); `vitest run` reports **15 files / 118 tests passing** (drops the 48 deleted legacy tests); ESLint drops from **297 → 267** errors (net-removed 30 by deleting the bridge files); `vite build` produces a clean production bundle (938 kB main chunk, no Phase8-attributable warnings).
 
 ---
 
@@ -356,3 +365,4 @@ Each phase is **independently testable** and ends with a manual-test gate. The n
 | Date | Phase | Commit | Notes |
 |---|---|---|---|
 | 2026-08-17 | — | `10d0f73` | Baseline commit before refactor. ITR-4 engine + filing_gateway + validation rules. |
+| 2026-08-18 | 8 | `<pending>` | Phase 8-B completion: page state on typed draft (no `formData` projection), VDA/Losses/Business tabs migrated off flat blob, `assessFormEligibilityFromDraft` reads canonical `ReturnDraft` directly, `USE_V2` flag and `HttpReturnRepository` deleted, all flat-blob bridges (`legacyAdapter`, `legacySerializer`, `editorModel`, `map*ToFormData`) deleted. 118 vitest tests pass, tsc introduces zero new errors, lint net-removed 30 pre-existing warnings, vite production build succeeds. |

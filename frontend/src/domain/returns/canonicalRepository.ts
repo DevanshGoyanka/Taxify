@@ -1,6 +1,13 @@
 import type { PersonalInfo, ReturnDraft } from './types';
-import type { ReturnRepository } from './repository';
 import { itrV2 } from '../../api/itrV2';
+
+/** Persistence boundary for the canonical income-tax return draft. */
+export interface ReturnRepository {
+  /** Loads and normalizes a saved draft. */
+  get(clientId: string | number, assessmentYear: string): Promise<ReturnDraft>;
+  /** Persists a normalized draft and returns the backend's normalized response. */
+  save(clientId: string | number, draft: ReturnDraft): Promise<ReturnDraft>;
+}
 
 /**
  * Deep-clones a value and removes every `compatibility` key recursively
@@ -103,4 +110,11 @@ export class CanonicalReturnRepository implements ReturnRepository {
     assertCanonicalDraft(response);
     return enforceAssessmentYear(structuredClone(response), payload.assessmentYear);
   }
+}
+
+/** Returns the singleton canonical repository. Phase 8 retired the legacy
+ *  flat-blob repository and the `VITE_USE_V2` flag; the v2 endpoints are now
+ *  the only path. */
+export function createReturnRepository(): ReturnRepository {
+  return new CanonicalReturnRepository();
 }

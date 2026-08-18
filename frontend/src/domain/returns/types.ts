@@ -377,6 +377,11 @@ export interface PersonalInfo {
   countryCode: string;
   pinCode: string;
   zipCode: string;
+  /** Questionnaire inputs surfaced as canonical draft fields for the
+   *  eligibility engine (formerly read from the flat blob). */
+  residentialStatus?: 'ROR' | 'RNOR' | 'NR';
+  isDirector?: boolean;
+  holdsUnlistedShares?: boolean;
 }
 export interface ReturnDraft {
   schemaVersion: 1; assessmentYear: string; form: ItrForm; regime: TaxRegime;
@@ -402,5 +407,22 @@ export interface ReturnDraft {
   exemptIncome: ExemptIncomeSchedule;
   deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions; chapterVIA: ChapterVIA; schedule80GGA: Schedule80GGAEntry[]; schedule80GGC: Schedule80GGCEntry[] };
   taxes: { tds: TdsCredit[]; tcs: TcsCredit[]; challans: TaxChallan[] }; bankAccounts: BankAccount[];
+  /** Brought-forward loss inputs from previous assessment years (Schedule CYLA). */
+  lossesBroughtForward: BroughtForwardLosses;
+  /** Net profit from P&L when the user files regular books under Section 44AA/regular PGBP (non-presumptive). */
+  bpNetProfit: Money;
   verification: Verification; taxReturnPreparer: TaxReturnPreparer; provenance: ImportProvenance[]; compatibility?: LegacyCompatibilityEnvelope; reconciliation: ReconciliationState;
 }
+
+/** Canonical aggregate of brought-forward losses the user is carrying into the current year. */
+export interface BroughtForwardLosses {
+  bfLossHP: Money;
+  bfLossBusiness: Money;
+  bfLossSTCG: Money;
+  bfLossLTCG: Money;
+  bfLossSpeculation: Money;
+}
+
+export const EMPTY_BROUGHT_FORWARD_LOSSES: BroughtForwardLosses = {
+  bfLossHP: 0, bfLossBusiness: 0, bfLossSTCG: 0, bfLossLTCG: 0, bfLossSpeculation: 0,
+};

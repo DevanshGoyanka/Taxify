@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PrefillExtraction } from './mapPrefillToFormData';
+import type { PrefillExtraction } from './prefillTypes';
 import { mapPrefillToDraftPatch } from './mapPrefillToDraftPatch';
 
 function prefill(): PrefillExtraction {

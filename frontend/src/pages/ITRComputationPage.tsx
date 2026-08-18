@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, type SetStateAction } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAY } from '../contexts/AYContext';
-import { itrApi } from '../api/itr';
 import { itrV2 } from '../api/itrV2';
 import { clientsApi } from '../api/clients';
 import { itrAutomationApi } from '../api/itrAutomation';
@@ -25,31 +24,25 @@ import {
 import {
   banksToManager, challansToManager, deductionLoansToManager, familyPensionToManager, giftsToManager,
   interestToManager, tdsToManager, winningsToManager,
-  updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
+  updateBanksFromManager, updateBpNetProfit, updateChallanKindFromManager, updateDeductionLoansFromManager,
   updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
-  updateHouseProperties, updateInterestFromManager, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
+  updateHouseProperties, updateInterestFromManager, updateLossesBroughtForward, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
   updateChapterVIA, updateTdsFromManager, updateTcsCredits, updateWinningsFromManager,
   updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
   replaceDraft, type ReturnEditorModelV2,
 } from '../domain/returns/editorModelV2';
 import { createEmptyReturnDraft } from '../domain/returns/factory';
-import { adaptLegacyReturn } from '../domain/returns/legacyAdapter';
-import { serializeReturnDraftToLegacy } from '../domain/returns/legacySerializer';
 import type { ReturnDraft } from '../domain/returns/types';
 import type {
   BankManagerData, ChallanManagerEntry, DeductionLoanManagerData, FamilyPensionManagerEntry,
   GiftManagerEntry, InterestManagerEntry, TdsManagerEntry, WinningManagerEntry,
 } from '../domain/returns/editorModelV2';
 import {
-  assessFormEligibility, assessFormEligibilityFromDraft, collectEligibilityFacts, type FormRecommendation, type ItrForm,
+  assessFormEligibilityFromDraft, collectEligibilityFactsFromDraft, type FormRecommendation, type ItrForm,
 } from '../domain/returns';
 import { activeSchedules, blockingSchedules, type ScheduleStatus } from '../domain/returns';
 import ImportConfirmationModal from '../components/ImportConfirmationModal';
 import type { ReconciledResults } from '../api/itrAutomation';
-import { mapReconciledToFormData } from '../utils/mapReconciledToFormData';
-import { mapPrefillToFormData } from '../utils/mapPrefillToFormData';
-// TEMPORARILY DISABLED (Phase 2 testing) — See FILED_RETURN_REACTIVATION_GUIDE.md
-// REACTIVATE: import { mapFiledReturnToFormData } from '../utils/mapFiledReturnToFormData';
 import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
 import { mergeDraft } from '../domain/returns/draftPatch';
 import { mapPrefillToDraftPatch } from '../utils/mapPrefillToDraftPatch';
@@ -133,51 +126,10 @@ function validateCapitalGainsSchedule(schedule: any, form: string): string | nul
   return null;
 }
 
-function getRestrictedCapitalGainsState(formData: any, taxResult: any): {
-  hasTransactions: boolean;
-  hasEvidence: boolean;
-  hasUnsupportedRows: boolean;
-  hasIneligibleIssues: boolean;
-  hasIncompleteEvidence: boolean;
-  hasFormLevelLosses: boolean;
-  eligibility: Record<string, boolean>;
-} {
-  const transactions = Array.isArray(formData.capitalGainTransactions) ? formData.capitalGainTransactions : [];
-  const supportedAssets = new Set(['LISTED_EQUITY', 'EQUITY_ORIENTED_MUTUAL_FUND', 'BUSINESS_TRUST_UNIT']);
-  const summary = taxResult?.capitalGainsSummary || {};
-  const issues = Array.isArray(summary.issues)
-    ? summary.issues
-    : Array.isArray(taxResult?.capitalGainsIssues) ? taxResult.capitalGainsIssues : [];
-  const eligibilityCodes = new Set(['UNSUPPORTED_ASSET', 'NOT_LONG_TERM', 'SECTION_112A_LOSS', 'AGGREGATE_LIMIT_EXCEEDED']);
-  const evidenceCodes = new Set([
-    'INVALID_TRANSACTION', 'MISSING_ACQUISITION_DATE', 'MISSING_TRANSFER_DATE', 'INVALID_DATE_ORDER',
-    'MISSING_SALE_VALUE', 'INVALID_SALE_VALUE', 'MISSING_ACTUAL_COST', 'INVALID_ACTUAL_COST',
-    'INVALID_TRANSFER_EXPENSES', 'MISSING_STT_ACQUISITION', 'MISSING_STT_TRANSFER',
-    'MISSING_RECOGNIZED_EXCHANGE', 'MISSING_FMV_31_JAN_2018', 'INVALID_FMV_31_JAN_2018',
-  ]);
-  const hasAnyEntry = transactions.length > 0;
-  const hasSaleEntry = transactions.some((entry: any) => Number(entry?.saleCost || entry?.saleValue) > 0);
-  // Form-data-only loss detection: if any 112A-eligible transaction has a
-  // negative gain (sale value < actual cost), it will produce a SECTION_112A_LOSS
-  // issue and require ITR-2.  This lets us detect ITR-2 eligibility *before*
-  // the first backend compute, so the correct endpoint is called from the
-  // start instead of falling back after a 422 rejection.
-  const hasFormLevelLosses = transactions.some((entry: any) => {
-    const isSupported = supportedAssets.has(String(entry?.assetType || ''));
-    const sale = Number(entry?.saleCost || entry?.saleValue || 0);
-    const cost = Number(entry?.actualCost || entry?.purchaseCost || 0);
-    return isSupported && sale > 0 && cost > 0 && sale < cost;
-  });
-  return {
-    hasTransactions: hasAnyEntry,
-    hasEvidence: hasAnyEntry,
-    hasUnsupportedRows: transactions.some((entry: any) => !supportedAssets.has(String(entry?.assetType || ''))),
-    hasIneligibleIssues: issues.some((issue: any) => eligibilityCodes.has(String(issue?.code || ''))),
-    hasIncompleteEvidence: issues.some((issue: any) => evidenceCodes.has(String(issue?.code || ''))),
-    hasFormLevelLosses,
-    eligibility: summary.eligibility || taxResult?.capitalGainsEligibility || {},
-  };
-}
+// Restricted-112A detection was folded into assessFormEligibilityFromDraft
+// in Phase 8: it reads draft.capitalGainsSchedule and the backend's
+// structured capital-gains issues directly. The standalone helper below was
+// deleted with the rest of the flat-blob bridge.
 
 import {
   OtherSourcesTab,
@@ -230,20 +182,8 @@ export default function ITRComputationPage() {
   const [reconciledImportData, setReconciledImportData] = useState<ReconciledResults | null>(null);
   const [reconDiscrepancies, setReconDiscrepancies] = useState<string[]>([]);
 
-  // The canonical draft is editor state and persistence state. A flat object is
-  // retained only as a read projection for the still-unmigrated ITR-3/4
-  // eligibility/import display helpers.
-  const formData = useMemo<any>(() => editorModel ? serializeReturnDraftToLegacy(editorModel.draft) : {}, [editorModel]);
-  const setFormData = useCallback((action: SetStateAction<Record<string, unknown>>): void => {
-    setEditorModel((current) => {
-      if (!current) return current;
-      const currentView = serializeReturnDraftToLegacy(current.draft);
-      const requested = typeof action === 'function' ? action(structuredClone(currentView)) : action;
-      const next = replaceDraft(adaptLegacyReturn(requested));
-      editorRef.current = next;
-      return next;
-    });
-  }, []);
+  // The canonical draft is editor state, persistence state, and the only
+  // payload the rest of the page reads. No flat-blob projection survives.
   const updateEditor = useCallback((update: (current: ReturnEditorModelV2) => ReturnEditorModelV2): void => {
     setEditorModel((current) => {
       if (!current) return current;
@@ -356,16 +296,16 @@ export default function ITRComputationPage() {
   // draft's reconciliation evidence so imported OUT_OF_SCOPE_TAXABLE rows
   // (capital-gains, business, VDA, foreign-remittance evidence) escalate
   // the form recommendation — the import layer must never be silently ignored.
-  const eligibilityResult = useMemo<FormRecommendation>(
+  const eligibilityResult = useMemo<FormRecommendation | null>(
     () => editorModel?.draft
-      ? assessFormEligibilityFromDraft(formData, editorModel.draft, backendTaxResult)
-      : assessFormEligibility(formData, backendTaxResult),
-    [editorModel?.draft, formData, backendTaxResult],
+      ? assessFormEligibilityFromDraft(editorModel.draft, backendTaxResult)
+      : null,
+    [editorModel?.draft, backendTaxResult],
   );
 
   useEffect(() => {
+    if (!eligibilityResult) { setEligibility(null); return; }
     setEligibility(eligibilityResult);
-    // When not locked by user, follow the recommendation.
     if (!formLockedByUser && eligibilityResult.recommendedForm !== itrForm) {
       setItrForm(eligibilityResult.recommendedForm);
       if (eligibilityResult.recommendedForm !== 'ITR-1') {
@@ -374,19 +314,12 @@ export default function ITRComputationPage() {
     }
   }, [eligibilityResult, formLockedByUser, itrForm]);
 
-  const taxSummaryPayload = useMemo(
+  const taxSummaryPayloadKey = useMemo(
     // The canonical draft is sent directly to the v2 compute endpoint via
     // `editorRef.current.draft` (see the effect below).  This memo feeds the
     // payload-key memo for debounce gating only.
-    () => ({ form: itrForm, assessmentYear: effectiveAssessmentYear, regime }),
+    () => JSON.stringify({ form: itrForm, regime, ay: effectiveAssessmentYear }),
     [itrForm, effectiveAssessmentYear, regime],
-  );
-  // Editor synchronization can recreate an equivalent formData object many
-  // times. Depend on the serialized calculation contract so identity-only
-  // rerenders do not trigger duplicate backend computations.
-  const taxSummaryPayloadKey = useMemo(
-    () => JSON.stringify(taxSummaryPayload),
-    [taxSummaryPayload],
   );
 
   // Fetch backend-computed tax summary - replaces local computeTax()
@@ -407,9 +340,8 @@ export default function ITRComputationPage() {
 
     taxResultDebounceRef.current = setTimeout(() => {
       const currentDraft = editorRef.current?.draft;
-      const computePromise = currentDraft
-        ? itrV2.compute(stripCompatibility({ ...currentDraft, assessmentYear: effectiveAssessmentYear, form: itrForm, regime }))
-        : itrApi.computeTaxSummary(taxSummaryPayload, effectiveAssessmentYear, regime);
+      if (!currentDraft) return;
+      const computePromise = itrV2.compute(stripCompatibility({ ...currentDraft, assessmentYear: effectiveAssessmentYear, form: itrForm, regime }));
       computePromise
         .then((result: any) => {
           if (requestId !== computationGenerationRef.current) return;
@@ -516,28 +448,16 @@ export default function ITRComputationPage() {
     };
   }, [backendTaxResult]);
 
-  // ── Recomputation‑triggered eligibility update ──
-  // The eligibilityResult memo above already updates on every formData change.
-  // We also mark user‑locked when the form is explicitly set by the user
-  // (e.g. after confirming an import recommendation or switching manually).
-  // suppressAutoDetectRef prevents the first render from overwriting a saved form.
+  // Recomputation-triggered eligibility: the eligibilityResult memo above
+  // already updates on every canonical-draft change via the typed
+  // assessFormEligibilityFromDraft evaluator.  This effect only resets the
+  // suppress flag after the first saved-form load so the engine doesn't
+  // immediately override the user-saved form choice.
   useEffect(() => {
     if (suppressAutoDetectRef.current) {
       suppressAutoDetectRef.current = false;
-      return;
     }
-    // The eligibility engine automatically recommends the best form.
-    // No separate autoDetectITRForm call needed — the memo + effect above handle it.
-  }, [
-    formData.basic, formData.bizTurnover, formData.bpNetProfit, formData.bizPresumptive,
-    formData.stcgPre, formData.stcgPost, formData.stcgOther,
-    formData.ltcgPre, formData.ltcgPost, formData.ltcgOther,
-    formData.vdaGains, formData.grossRent, formData.interestFD, formData.dividends,
-    formData.isDirector, formData.holdsUnlistedShares, formData.agriculturalIncome,
-    formData.residentialStatus, formData.bfLossHP, formData.bfLossBusiness,
-    formData.bfLossSTCG, formData.bfLossLTCG, formData.capitalGainTransactions,
-    taxResult.capitalGainsSummary, taxResult.capitalGainsIssues,
-  ]);
+  }, [editorModel?.draft]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -643,6 +563,7 @@ export default function ITRComputationPage() {
 
   const handleDownloadPdf = async () => {
     try {
+      const { itrApi } = await import('../api/itr');
       await itrApi.downloadPdf(clientId, effectiveAssessmentYear);
       toast.success('PDF downloaded successfully');
     } catch (err: any) {
@@ -680,22 +601,16 @@ export default function ITRComputationPage() {
   };
 
   const handleConfirmImport = () => {
-    // Map reconciled data to form fields using the existing formData shape
+    // Both AIS/TIS/26AS and the form-agnostic ITD Prefill are merged into the
+    // canonical draft via typed patches. There is no flat-blob intermediate.
     if (!reconciledImportData) {
       toast.error('No import data available');
       return;
     }
 
-    const { formDataUpdate, discrepancies, summary } = mapReconciledToFormData(reconciledImportData);
-
-    // Also extract the form-agnostic Prefill data (if the automation job
-    // downloaded and parsed it).  The Prefill provides salary break-up,
-    // deductions, bank accounts, and personal info that AIS/TIS/26AS
-    // don't carry.  Merge it first, then let the reconciled update
-    // override income/TDS fields (reconciled is more authoritative for
-    // the current AY).
+    const discrepancies = Array.isArray((reconciledImportData as any).discrepancies) ? (reconciledImportData as any).discrepancies : [];
+    const summary = (reconciledImportData as any).summary ?? { totalIncome: 0, salaryEntries: 0, businessEntries: 0, interestEntries: 0, dividendEntries: 0, capitalGainsEntries: 0, unmatched_tis: 0, unmatched_ais: 0, unmatched_as26: 0 };
     const prefillData = (reconciledImportData as any).prefill || null;
-    const prefillResult = mapPrefillToFormData(prefillData);
 
     // ──────────────────────────────────────────────────────────────────
     // TEMPORARILY DISABLED (Phase 2 testing)
@@ -703,12 +618,8 @@ export default function ITRComputationPage() {
     // The filed-return merge is commented out so the portal automation
     // import doesn't surface the "already filed" blocking error during
     // testing.  See FILED_RETURN_REACTIVATION_GUIDE.md for reactivation.
-    //
     // REACTIVATE: const advisory = (reconciledImportData as any).filing_advisory;
-    // REACTIVATE: const filedReturnData = (reconciledImportData as any).filed_return || null;
-    // REACTIVATE: const filedReturnResult = mapFiledReturnToFormData(filedReturnData);
     const advisory = null as any;
-    const filedReturnResult = { formDataUpdate: {}, summary: { carryForwardLosses: 0, bankAccounts: 0, employerEntries: 0 } } as any;
 
     // A portal import replaces a material portion of the draft. Any result
     // computed for the pre-import generation must not be presented as current.
@@ -718,21 +629,13 @@ export default function ITRComputationPage() {
     setTaxResultLoading(true);
     setTaxResultError('Computation unavailable for the imported draft until recalculated.');
 
-    // Build one merged snapshot for the editor and persistence.  The typed
-    // draft path merges via `mergeDraft` (Prefill + reconciled patches) and
-    // commits it directly; the legacy `safeUpdate` is only retained to source
-    // filed-return compatibility fields that have no typed patch yet.
-    const safeUpdate = { ...filedReturnResult.formDataUpdate, ...prefillResult.formDataUpdate, ...formDataUpdate };
-    const EMPTY_KEEP_KEYS = ['employerEntries', 'dividendEntries', 'bankInterestEntries', 'interestEntries',
-      'capitalGainTransactions', 'tdsEntries', 'tcsEntries'];
-    let mergedImportData: any = null;
+    let mergedImportData: ReturnDraft | null = null;
     if (editorRef.current) {
-      // Merge the typed draft patches; this is the authoritative import path.
       mergedImportData = mergeDraft(
         mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(prefillData)),
         mapReconciledToDraftPatch(reconciledImportData),
       );
-      updateEditor((current) => replaceDraft(mergedImportData as any));
+      updateEditor((current) => replaceDraft(mergedImportData as ReturnDraft));
     }
 
     // Collect discrepancy messages for the warning banner
@@ -744,8 +647,8 @@ export default function ITRComputationPage() {
         'Review highlighted entries in Salary, Interest, Dividends, and Capital Gains tabs.'
       );
     }
-    if ((reconciledImportData.category_control_discrepancies?.length || 0) > 0) {
-      for (const discrepancy of reconciledImportData.category_control_discrepancies || []) {
+    if (((reconciledImportData as any).category_control_discrepancies?.length || 0) > 0) {
+      for (const discrepancy of (reconciledImportData as any).category_control_discrepancies || []) {
         msgs.push(
           `${discrepancy.category}: TIS accepted total ₹${discrepancy.tis_accepted_total.toLocaleString('en-IN')} ` +
           `differs from annexure detail total ₹${discrepancy.tis_detail_total.toLocaleString('en-IN')}. ` +
@@ -753,15 +656,13 @@ export default function ITRComputationPage() {
         );
       }
     }
-    if (reconciledImportData.summary.unmatched_tis > 0 ||
-        reconciledImportData.summary.unmatched_ais > 0 ||
-        reconciledImportData.summary.unmatched_as26 > 0) {
-      const parts = [];
-      if (reconciledImportData.summary.unmatched_tis) parts.push('TIS');
-      if (reconciledImportData.summary.unmatched_ais) parts.push('AIS');
-      if (reconciledImportData.summary.unmatched_as26) parts.push('26AS');
+    if ((summary.unmatched_tis || 0) > 0 || (summary.unmatched_ais || 0) > 0 || (summary.unmatched_as26 || 0) > 0) {
+      const parts: string[] = [];
+      if (summary.unmatched_tis) parts.push('TIS');
+      if (summary.unmatched_ais) parts.push('AIS');
+      if (summary.unmatched_as26) parts.push('26AS');
       msgs.push(
-        `${reconciledImportData.summary.unmatched_tis + reconciledImportData.summary.unmatched_ais + reconciledImportData.summary.unmatched_as26} ` +
+        `${(summary.unmatched_tis || 0) + (summary.unmatched_ais || 0) + (summary.unmatched_as26 || 0)} ` +
         `entries found in only one of ${parts.join('/')} were preserved for review.`
       );
     }
@@ -792,21 +693,23 @@ export default function ITRComputationPage() {
     setReconDiscrepancies(msgs);
 
     toast.success(
-      `Import complete: ${summary.totalIncome.toLocaleString('en-IN')} total income, ` +
-      `${summary.salaryEntries} salary, ${(summary as any).businessEntries || 0} business, ` +
-      `${summary.interestEntries} interest, ` +
-      `${summary.dividendEntries} dividend, ${summary.capitalGainsEntries} capital gains entries`
+      `Import complete: ${Number(summary.totalIncome || 0).toLocaleString('en-IN')} total income, ` +
+      `${Number(summary.salaryEntries || 0)} salary, ${Number((summary as any).businessEntries || 0)} business, ` +
+      `${Number(summary.interestEntries || 0)} interest, ` +
+      `${Number(summary.dividendEntries || 0)} dividend, ${Number(summary.capitalGainsEntries || 0)} capital gains entries`
     );
 
     // Show a secondary toast with Prefill-specific imports (deductions,
     // bank accounts, personal info) that AIS/TIS/26AS don't carry.
-    if (prefillResult.summary.personalInfo || prefillResult.summary.employerEntries > 0 || prefillResult.summary.bankAccounts > 0) {
+    const prefillSummary = (prefillData as any)?.summary ?? (prefillData as any) ?? {};
+    const prefillHasContent = !!prefillSummary.personalInfo || Number(prefillSummary.employerEntries || 0) > 0 || Number(prefillSummary.bankAccounts || 0) > 0;
+    if (prefillHasContent) {
       const prefillParts: string[] = [];
-      if (prefillResult.summary.personalInfo) prefillParts.push('personal info');
-      if (prefillResult.summary.employerEntries > 0) prefillParts.push(`${prefillResult.summary.employerEntries} employer(s)`);
-      if (prefillResult.summary.bankAccounts > 0) prefillParts.push(`${prefillResult.summary.bankAccounts} bank account(s)`);
-      if (prefillResult.summary.deductionsTotal > 0) prefillParts.push(`deductions ₹${prefillResult.summary.deductionsTotal.toLocaleString('en-IN')}`);
-      if (prefillResult.summary.tdsSalaryEntries > 0) prefillParts.push(`${prefillResult.summary.tdsSalaryEntries} TDS-salary`);
+      if (prefillSummary.personalInfo) prefillParts.push('personal info');
+      if (Number(prefillSummary.employerEntries || 0) > 0) prefillParts.push(`${prefillSummary.employerEntries} employer(s)`);
+      if (Number(prefillSummary.bankAccounts || 0) > 0) prefillParts.push(`${prefillSummary.bankAccounts} bank account(s)`);
+      if (Number(prefillSummary.deductionsTotal || 0) > 0) prefillParts.push(`deductions ₹${Number(prefillSummary.deductionsTotal).toLocaleString('en-IN')}`);
+      if (Number(prefillSummary.tdsSalaryEntries || 0) > 0) prefillParts.push(`${prefillSummary.tdsSalaryEntries} TDS-salary`);
       toast(`Prefill: ${prefillParts.join(', ')}`, { icon: '📋' });
     }
 
@@ -847,7 +750,7 @@ export default function ITRComputationPage() {
 
     // Save to backend so form state persists using the canonical repository.
     if (mergedImportData) {
-      returnRepository.save(clientId, mergedImportData as any).catch(err => console.warn('Background save after import failed:', err));
+      returnRepository.save(clientId, mergedImportData).catch(err => console.warn('Background save after import failed:', err));
     }
 
     setShowImportConfirmModal(false);
@@ -1009,34 +912,33 @@ export default function ITRComputationPage() {
             effectiveAssessmentYear
           );
 
-          // importResult.data is the PrefillExtraction dict.  Run it
-          // through mapPrefillToFormData to surface the import summary
-          // (personal info, employer entries, bank accounts, deductions,
-          // TDS, other sources) for the toast, then merge the typed draft
-          // patch and persist it.
-          const prefillResult = mapPrefillToFormData(importResult.data || importResult);
+          // importResult.data is the PrefillExtraction dict.  Pull its summary
+          // block directly (the typed patcher below carries every
+          // employer/bank/deduction entry into the draft).
+          const prefillPayload = importResult.data || importResult;
 
           if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
-          const merged = mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(importResult.data || importResult));
+          const merged = mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(prefillPayload));
           updateEditor((current) => replaceDraft(merged));
           await returnRepository.save(clientId, merged);
 
           setShowImportMenu(false);
 
+          const prefillSummary = (prefillPayload as any)?.summary ?? (prefillPayload as any) ?? {};
           const prefillParts: string[] = [];
-          if (prefillResult.summary.personalInfo) prefillParts.push('personal info');
-          if (prefillResult.summary.employerEntries > 0) prefillParts.push(`${prefillResult.summary.employerEntries} employer(s)`);
-          if (prefillResult.summary.bankAccounts > 0) prefillParts.push(`${prefillResult.summary.bankAccounts} bank account(s)`);
-          if (prefillResult.summary.deductionsTotal > 0) prefillParts.push(`deductions ₹${prefillResult.summary.deductionsTotal.toLocaleString('en-IN')}`);
+          if (prefillSummary.personalInfo) prefillParts.push('personal info');
+          if (Number(prefillSummary.employerEntries || 0) > 0) prefillParts.push(`${prefillSummary.employerEntries} employer(s)`);
+          if (Number(prefillSummary.bankAccounts || 0) > 0) prefillParts.push(`${prefillSummary.bankAccounts} bank account(s)`);
+          if (Number(prefillSummary.deductionsTotal || 0) > 0) prefillParts.push(`deductions ₹${Number(prefillSummary.deductionsTotal).toLocaleString('en-IN')}`);
           toast.dismiss();
-          toast.success(`Prefill imported: ${prefillParts.join(', ')}`);
+          toast.success(`Prefill imported: ${prefillParts.join(', ') || 'canonical draft updated'}`);
         } else {
-          if (importGeneration !== loadGenerationRef.current) return;
-          setFormData((prev: any) => ({ ...prev, ...data }));
+          // All non-prefill import types now flow through the typed patcher
+          // branch above; if any new type falls through here, surface an
+          // explicit error rather than silently writing to a flat blob.
+          toast.dismiss();
+          toast.error(`No typed patcher wired for ${String(type).toUpperCase()}; import aborted.`);
         }
-        
-        toast.dismiss();
-        toast.success(`${type.toUpperCase()} imported and validated`);
       }
       setShowImportMenu(false);
     } catch (err: any) {
@@ -1096,138 +998,9 @@ export default function ITRComputationPage() {
     }
   };
 
-  const autoDetectITRForm = () => {
-    // Comprehensive ITR form detection based on CBDT rules - AY 2026-27
-    const hasBusinessIncome = (formData.bizTurnover || 0) > 0 || (formData.bpNetProfit || 0) > 0;
-    const hasPresumptiveIncome = hasBusinessIncome && formData.bizPresumptive && formData.bizPresumptive !== 'Regular';
-    
-    // Restricted long-term Section 112A gains are permitted in ITR-1/ITR-4.
-    // Unsupported preserved rows or backend eligibility failures require ITR-2/3.
-    // hasFormLevelLosses detects signed 112A losses from form data alone so
-    // ITR-2 is detected *before* the first backend compute.
-    const restrictedCapitalGains = getRestrictedCapitalGainsState(formData, taxResult);
-    const hasLegacyCapitalGains =
-      (formData.stcgPre || 0) > 0 ||
-      (formData.stcgPost || 0) > 0 ||
-      (formData.stcgOther || 0) > 0 ||
-      (formData.ltcgPre || 0) > 0 ||
-      (formData.ltcgPost || 0) > 0 ||
-      (formData.ltcgOther || 0) > 0 ||
-      (formData.vdaGains || 0) > 0;
-    const hasCapitalGainsRequiringFutureForm = hasLegacyCapitalGains || restrictedCapitalGains.hasUnsupportedRows || restrictedCapitalGains.hasIneligibleIssues || restrictedCapitalGains.hasFormLevelLosses;
-    
-    // Special Income - Lottery, Online Gaming, Card Games, Race Winnings
-    const hasSpecialIncome = 
-      (formData.winnings || 0) > 0 || 
-      (formData.lotteryIncome || 0) > 0 ||
-      (formData.onlineGamingIncome || 0) > 0 ||
-      (formData.cardGameIncome || 0) > 0 ||
-      (formData.raceWinnings || 0) > 0;
-    
-    // Exempt Income (Schedule EI)
-    const hasExemptIncome = 
-      (formData.agriculturalIncome || 0) > 0 ||
-      (formData.rajarshi || 0) > 0 ||
-      (formData.municipal || 0) > 0 ||
-      (formData.scholarship || 0) > 0 ||
-      (formData.gratuity || 0) > 0 ||
-      (formData.severance || 0) > 0 ||
-      (formData.vrs || 0) > 0;
-    
-    const housePropertyEntries = Array.isArray(formData.housePropertyEntries) ? formData.housePropertyEntries : [];
-    const hasMultipleProperties = housePropertyEntries.length > 2;
-    const hasForeignIncome = (formData.foreignIncome || 0) > 0 || (formData.foreignAssets || 0) > 0;
-    const totalIncome = taxResult.totalIncome || 0;
-    const agriculturalIncome = formData.agriculturalIncome || 0;
-    const isDirector = formData.isDirector || false;
-    const hasUnlistedShares = formData.holdsUnlistedShares || false;
-    const isNonResident = formData.residentialStatus && formData.residentialStatus !== 'ROR';
-    const hasBFLoss = (formData.bfLossHP || 0) > 0 || (formData.bfLossBusiness || 0) > 0 || 
-                      (formData.bfLossSTCG || 0) > 0 || (formData.bfLossLTCG || 0) > 0;
-
-    let detectedForm: ItrForm = 'ITR-1';
-    let reason = '';
-
-    // Priority 1: ITR-4 for presumptive income only while restricted CG remains eligible.
-    if (hasPresumptiveIncome && !hasCapitalGainsRequiringFutureForm) {
-      detectedForm = 'ITR-4';
-      reason = 'Presumptive income under 44AD/44ADA';
-    }
-    // Presumptive business plus CG outside restricted 112A requires the ITR-3 workflow.
-    else if (hasPresumptiveIncome && hasCapitalGainsRequiringFutureForm) {
-      detectedForm = 'ITR-3';
-      reason = 'Presumptive income with capital gains outside restricted Section 112A eligibility';
-    }
-    // Priority 2: ITR-3 (Business/Professional income - non-presumptive)
-    else if (hasBusinessIncome) {
-      detectedForm = 'ITR-3';
-      reason = 'Business or professional income';
-    }
-    // Priority 3: ITR-2 conditions - Capital Gains (Real-estate, Movable, Foreign, Securities, VDA)
-    else if (hasCapitalGainsRequiringFutureForm) {
-      detectedForm = hasBusinessIncome ? 'ITR-3' : 'ITR-2';
-      reason = 'Capital-gains facts outside restricted Section 112A eligibility';
-    }
-    // Priority 4: ITR-2 - Special Income (Lottery, Online Gaming)
-    else if (hasSpecialIncome) {
-      detectedForm = 'ITR-2';
-      reason = 'Lottery/Online gaming/Card game winnings (Section 115BB)';
-    }
-    // Priority 5: ITR-2 - Multiple house properties
-    else if (hasMultipleProperties) {
-      detectedForm = 'ITR-2';
-      reason = 'Multiple house properties';
-    }
-    // Priority 6: ITR-2 - Foreign income/assets
-    else if (hasForeignIncome) {
-      detectedForm = 'ITR-2';
-      reason = 'Foreign income or assets';
-    }
-    // Priority 7: ITR-2 - Total income > ₹50 lakh
-    else if (totalIncome > 5000000) {
-      detectedForm = 'ITR-2';
-      reason = 'Total income exceeds ₹50 lakhs';
-    }
-    // Priority 8: ITR-2 - Non-resident
-    else if (isNonResident) {
-      detectedForm = 'ITR-2';
-      reason = 'Non-resident or RNOR status';
-    }
-    // Priority 9: ITR-2 - Director in company/firm
-    else if (isDirector) {
-      detectedForm = 'ITR-2';
-      reason = 'Director in a company';
-    }
-    // Priority 10: ITR-2 - Holds unlisted shares
-    else if (hasUnlistedShares) {
-      detectedForm = 'ITR-2';
-      reason = 'Holds unlisted equity shares';
-    }
-    // Priority 11: ITR-2 - Agricultural income > ₹5,000
-    else if (agriculturalIncome > 5000) {
-      detectedForm = 'ITR-2';
-      reason = 'Agricultural income exceeds ₹5,000';
-    }
-    // Priority 12: ITR-2 - Exempt income
-    else if (hasExemptIncome) {
-      detectedForm = 'ITR-2';
-      reason = 'Exempt income (Schedule EI)';
-    }
-    // Priority 13: ITR-2 - Brought forward losses
-    else if (hasBFLoss) {
-      detectedForm = 'ITR-2';
-      reason = 'Brought forward losses';
-    }
-    else {
-      reason = 'Salary with simple income structure';
-    }
-
-    // Only update if form changed
-    if (detectedForm !== itrForm) {
-      setItrForm(detectedForm);
-      toast(`Auto-detected: ${detectedForm} - ${reason}`, { icon: '🔍', duration: 4000 });
-    }
-  };
+  // The legacy autoDetectITRForm function was deleted in Phase 8: ITR form
+  // selection now flows through assessFormEligibilityFromDraft and the
+  // `eligibilityResult` useMemo above, which reads the typed canonical draft.
 
   if (loading) {
     return (
@@ -1299,7 +1072,7 @@ export default function ITRComputationPage() {
                   }
                   // Block downgrade to ITR-1/4 when non-112A Capital Gains data exists.
                   const isDowngrade = (newForm === 'ITR-1' || newForm === 'ITR-4') && (itrForm === 'ITR-2' || itrForm === 'ITR-3');
-                  if (isDowngrade && hasNonSimplifiedCapitalGains(formData.capitalGainsSchedule)) {
+                  if (isDowngrade && hasNonSimplifiedCapitalGains(editorModel?.draft.capitalGainsSchedule)) {
                     const confirmDowngrade = window.confirm(
                       `Switching to ${newForm} will prevent the following Capital Gains data from being filed:\n\n` +
                       `• Full Schedule CG (STCG/LTCG land & building, equity, NRI, other assets, slump sales)\n` +
@@ -1722,8 +1495,8 @@ export default function ITRComputationPage() {
       )}
 
       {/* ── Schedule Checklist (dynamic per form) ─────────────────────── */}
-      {eligibility && (() => {
-        const facts = collectEligibilityFacts(formData, backendTaxResult);
+      {eligibility && editorModel && (() => {
+        const facts = collectEligibilityFactsFromDraft(editorModel.draft, backendTaxResult);
         const schedules = activeSchedules(itrForm as ItrForm, facts);
         if (schedules.length === 0) return null;
         const blocking = new Set(blockingSchedules(itrForm as ItrForm, facts).map(s => s.id));
@@ -1804,11 +1577,11 @@ export default function ITRComputationPage() {
         {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={tdsToManager(editorModel?.draft?.taxes?.tds ?? [])} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} taxResult={backendTaxResult} />}
         {activeTab === 3 && <CapitalGainsTab taxResult={taxResult} itrForm={itrForm} data={editorModel?.draft.capitalGainsSchedule} entries={(editorModel?.draft.capitalGainsSchedule as { capitalGainTransactions?: any[] })?.capitalGainTransactions} onChange={(schedule: any) => updateEditor((model) => replaceDraft({ ...model.draft, capitalGainsSchedule: schedule }))} />}
-        {activeTab === 4 && <BusinessTab taxResult={taxResult} itrForm={itrForm} data={editorModel?.draft.capitalGainsSchedule} onChange={(schedule: any) => updateEditor((model) => replaceDraft({ ...model.draft, capitalGainsSchedule: schedule }))} />}
-        {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel as any} />}
+        {activeTab === 4 && editorModel && <BusinessTab taxResult={taxResult} draft={editorModel.draft} onChangeBusinesses={(entries: ReturnDraft['businesses']) => updateEditor((model) => replaceDraft({ ...model.draft, businesses: entries }))} onChangeBpNetProfit={(value: number) => updateEditor((model) => updateBpNetProfit(model, value))} />}
+        {activeTab === 5 && <OtherSourcesTab taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel as any} />}
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
-        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
-        {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} editorModel={editorModel as any} />}
+        {activeTab === 7 && editorModel && <DeductionsTab regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
+        {activeTab === 8 && editorModel && <TDSTab taxResult={taxResult} managers={managers} editorModel={editorModel as any} />}
         {activeTab === 9 && (!backendTaxResult && taxResultError
           ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until the first computation succeeds.</div>
           : <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />)}

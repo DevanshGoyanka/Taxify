@@ -1,7 +1,7 @@
 import { EMPTY_TDS_CREDIT, type Employer, type InterestIncome, type DividendIncome, type TdsCredit } from '../domain/returns/types';
 import type { DeepPartial, ReturnDraftPatch } from '../domain/returns/draftPatch';
 import { createReconciliationEvidence } from '../domain/returns/evidence';
-import type { PrefillEmployerEntry, PrefillExtraction, PrefillTDSEntry } from './mapPrefillToFormData';
+import type { PrefillEmployerEntry, PrefillExtraction, PrefillTDSEntry } from './prefillTypes';
 import { normalizeNatureOfEmployment } from './normalizeNatureOfEmployment';
 
 function id(prefix: string, ...parts: unknown[]): string {

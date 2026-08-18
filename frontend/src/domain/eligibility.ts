@@ -9,6 +9,7 @@
  * All rules reference the official IT Master Circular and the CBDT
  * AY 2026-27 notification for ITR-1 / ITR-2 / ITR-3 / ITR-4.
  */
+import type { ReturnDraft } from './returns/types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -217,19 +218,18 @@ export function collectEligibilityFactsFromDraft(
  * ignored by the eligibility engine.
  */
 export function assessFormEligibilityFromDraft(
-  formData: Record<string, unknown>,
-  draft: { reconciliation?: { evidence?: Array<{ role: string; source?: string; sourceCode?: string; relatedTab?: string; evidenceKind?: string; acceptedAmount?: number; processedAmount?: number; reportedAmount?: number }> } } | null | undefined,
+  draft: Pick<ReturnDraft, 'employers' | 'houseProperties' | 'businesses' | 'bpNetProfit' | 'capitalGainsSchedule' | 'lossesBroughtForward' | 'otherSources' | 'personal' | 'reconciliation'> | null | undefined,
   taxResult?: Record<string, unknown> | null,
 ): FormRecommendation {
-  const base = collectEligibilityFacts(formData, taxResult);
+  const facts = collectFactsFromDraft(draft, taxResult);
   const evidenceFacts = collectEligibilityFactsFromDraft(draft, taxResult);
   const merged: EligibilityFacts = {
-    ...base,
-    hasForeignIncomeOrAssets: base.hasForeignIncomeOrAssets || evidenceFacts.hasForeignRemittanceEvidence,
-    hasCapitalGains: base.hasCapitalGains || evidenceFacts.hasNon112ACapitalGainsEvidence || evidenceFacts.restricted112AAmount > 125_000,
-    hasBusinessIncome: base.hasBusinessIncome || evidenceFacts.hasBusinessIncomeEvidence,
-    hasVdaIncome: base.hasVdaIncome || evidenceFacts.hasVdaIncome,
-    hasLotteryOrGamingIncome: base.hasLotteryOrGamingIncome || evidenceFacts.hasLotteryOrGamingIncome,
+    ...facts,
+    hasForeignIncomeOrAssets: facts.hasForeignIncomeOrAssets || evidenceFacts.hasForeignRemittanceEvidence,
+    hasCapitalGains: facts.hasCapitalGains || evidenceFacts.hasNon112ACapitalGainsEvidence || evidenceFacts.restricted112AAmount > 125_000,
+    hasBusinessIncome: facts.hasBusinessIncome || evidenceFacts.hasBusinessIncomeEvidence,
+    hasVdaIncome: facts.hasVdaIncome || evidenceFacts.hasVdaIncome,
+    hasLotteryOrGamingIncome: facts.hasLotteryOrGamingIncome || evidenceFacts.hasLotteryOrGamingIncome,
     hasOutOfScopeTaxableEvidence: evidenceFacts.hasOutOfScopeTaxableEvidence,
     hasNon112ACapitalGainsEvidence: evidenceFacts.hasNon112ACapitalGainsEvidence,
     hasBusinessIncomeEvidence: evidenceFacts.hasBusinessIncomeEvidence,
@@ -238,6 +238,73 @@ export function assessFormEligibilityFromDraft(
     restricted112AAmount: evidenceFacts.restricted112AAmount,
   };
   return evaluateEligibility(merged);
+}
+
+/**
+ * Derives EligibilityFacts directly from the canonical typed draft. This is
+ * the single Phase-8 source for "what does this return look like?" — no
+ * flat-blob projection is involved.
+ */
+function collectFactsFromDraft(
+  draft: Pick<ReturnDraft, 'employers' | 'houseProperties' | 'businesses' | 'bpNetProfit' | 'capitalGainsSchedule' | 'lossesBroughtForward' | 'otherSources' | 'personal' | 'reconciliation'> | null | undefined,
+  taxResult?: Record<string, unknown> | null,
+): EligibilityFacts {
+  const employers = draft?.employers ?? [];
+  const houseProperties = draft?.houseProperties ?? [];
+  const businesses = draft?.businesses ?? [];
+  const losses = draft?.lossesBroughtForward;
+  const capitalGainsSchedule = (draft?.capitalGainsSchedule ?? {}) as Record<string, unknown>;
+
+  const hasSalary = employers.length > 0;
+  const hasCapitalGains = hasCapitalGainsRows(capitalGainsSchedule);
+  const hasBusinessIncome = businesses.length > 0 || (draft?.bpNetProfit ?? 0) > 0;
+  const hasLotteryOrGamingIncome = (draft?.otherSources?.winnings ?? []).some((row) => (row.grossAmount ?? 0) > 0);
+  const hasVdaIncome = (Array.isArray(capitalGainsSchedule.vda) && (capitalGainsSchedule.vda as Array<Record<string, unknown>>).some((row) => ((Number(row.consideration) || 0) - (Number(row.acquisitionCost) || 0)) > 0));
+  const hasForeignIncomeOrAssets = ((draft?.otherSources?.dtaaIncome ?? []) as unknown[]).length > 0;
+  const hasMultipleHouseProperties = houseProperties.length > 2;
+
+  const presumptive = businesses.find((entry) => entry.scheme === '44AD' || entry.scheme === '44ADA' || entry.scheme === '44AE');
+  const presumptiveScheme: EligibilityFacts['presumptiveScheme'] = presumptive ? presumptive.scheme : (hasBusinessIncome ? 'Regular' : undefined);
+
+  const totalIncome = Number(taxResult?.totalIncome ?? 0) || 0;
+  const residentialStatus = (draft?.personal?.residentialStatus ?? 'ROR') as EligibilityFacts['residentialStatus'];
+
+  return {
+    hasSalary,
+    hasCapitalGains,
+    hasBusinessIncome,
+    hasProfessionalIncome: hasBusinessIncome && presumptiveScheme === 'Regular',
+    hasLotteryOrGamingIncome,
+    hasVdaIncome,
+    hasForeignIncomeOrAssets,
+    hasMultipleHouseProperties,
+    residentialStatus,
+    isDirector: Boolean(draft?.personal?.isDirector),
+    hasUnlistedShares: Boolean(draft?.personal?.holdsUnlistedShares),
+    agriculturalIncome: Number((draft?.otherSources as { agriculturalIncome?: number } | undefined)?.agriculturalIncome ?? 0),
+    isAudited: Boolean((draft as { isAudited?: boolean } | undefined)?.isAudited),
+    hasBroughtForwardLosses: Boolean(losses) && (
+      (losses!.bfLossHP > 0) ||
+      (losses!.bfLossBusiness > 0) ||
+      (losses!.bfLossSTCG > 0) ||
+      (losses!.bfLossLTCG > 0) ||
+      (losses!.bfLossSpeculation > 0)
+    ),
+    totalIncome,
+    presumptiveScheme,
+    hasOutOfScopeTaxableEvidence: false,
+    hasNon112ACapitalGainsEvidence: false,
+    hasBusinessIncomeEvidence: false,
+    hasForeignRemittanceEvidence: false,
+    hasUnreviewedEvidence: false,
+    restricted112AAmount: 0,
+  };
+}
+
+function hasCapitalGainsRows(schedule: Record<string, unknown>): boolean {
+  if (!schedule) return false;
+  const keys = ['stImmovable', 'stEquity', 'stNriUnlisted', 'stOtherAssets', 'stSlumpSale', 'ltImmovable', 'ltProviso112', 'ltNri112115', 'ltForeignAssets', 'ltOtherAssets', 'ltSlumpSale', 'schedule112A', 'schedule115V', 'vda', 'stDtaa', 'ltDtaa'];
+  return keys.some((key) => Array.isArray(schedule[key]) && (schedule[key] as unknown[]).length > 0);
 }
 
 const ITR_FORMS: readonly ItrForm[] = ['ITR-1', 'ITR-2', 'ITR-3', 'ITR-4'] as const;
