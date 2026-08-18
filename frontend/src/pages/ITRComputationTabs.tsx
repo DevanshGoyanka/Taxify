@@ -18,6 +18,7 @@ import type {
   GiftManagerEntry, InterestManagerEntry, TdsManagerEntry, WinningManagerEntry,
 } from '../domain/returns';
 import { classifyTdsSchedule, isTcsSection, DEDUCTED_YR_OPTIONS } from '../domain/returns/tdsSections';
+import { tdsToManager, challansToManager, deductionLoansToManager } from '../domain/returns/editorModelV2';
 
 export interface CanonicalManagerBindings {
   interest: (entries: InterestManagerEntry[]) => void;
@@ -96,11 +97,10 @@ export function BusinessTab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function OtherSourcesTab({ formData, setFormData, taxResult, managers, itrForm, regime, editorModel }: any) {
+export function OtherSourcesTab({ taxResult, managers, itrForm, regime, editorModel }: any) {
   // ── Unified canonical Schedule OS workspace ──────────────────────────────────
-  // The complete seven-card editor reads/writes the canonical ReturnDraft.otherSources
-  // superset. Legacy scalar fields are preserved by the legacy serializer/adapter
-  // during the UI-only phase; backend JSON projectors will be wired in a later phase.
+  // The complete seven-card editor reads/writes the canonical
+  // ReturnDraft.otherSources superset directly via the typed managers.
   const os: ReturnDraft['otherSources'] = editorModel?.draft?.otherSources ?? {
     interest: [], dividends: [], familyPension: { grossAmount: 0, payerName: '', relationToPensioner: '' },
     winnings: [], gifts: [], otherIncome: [], dtaaIncome: [], dtaaAggregates: { totalAmountTaxUsDtaa: 0 },
@@ -110,11 +110,9 @@ export function OtherSourcesTab({ formData, setFormData, taxResult, managers, it
     deductions: { expenses: 0, interestExpenseUs57: 0, interestExpenseEligibleUs57: 0, familyPensionDeductionUs57iia: 0, depreciation: 0, totalDeductions: 0, amountNotDeductibleUs58: 0, profitChargeableUs59: 0 },
   };
   const updateOS = (next: ReturnDraft['otherSources']): void => {
-    if (managers?.otherSources) { managers.otherSources(next); return; }
-    // Fallback: write through formData so state still advances if editor binding is absent.
-    setFormData({ ...formData, osOtherIncomeEntries: next.otherIncome, osDtaaEntries: next.dtaaIncome, osSection89AEntries: next.section89A, osAccumulatedPfEntries: next.accumulatedPf, osUnexplainedIncome: next.unexplainedIncome, osDeductions: next.deductions });
+    managers?.otherSources?.(next);
   };
-  return <ScheduleOSWorkspace form={(itrForm ?? formData?.form ?? 'ITR-1') as ItrForm} regime={(regime ?? formData?.regime ?? 'new') === 'old' ? 'old' : 'new'} otherSources={os} onChange={updateOS} />;
+  return <ScheduleOSWorkspace form={(itrForm ?? 'ITR-1') as ItrForm} regime={(regime ?? 'new') === 'old' ? 'old' : 'new'} otherSources={os} onChange={updateOS} />;
 }
 
 // Legacy OtherSourcesTab implementation retained below for reference until backend wiring is complete.
@@ -377,19 +375,19 @@ export function VDATab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function DeductionsTab({ formData, regime, taxResult, managers, form, editorModel }: { formData: any; setFormData: any; regime: 'old' | 'new'; taxResult: any; managers: CanonicalManagerBindings; form: ItrForm; editorModel?: import('../domain/returns').ReturnEditorModel | null }) {
-  const via = (formData?.chapterVIA ?? {}) as import('../domain/returns/types').ChapterVIA;
+export function DeductionsTab({ regime, taxResult, managers, form, editorModel }: { formData?: any; setFormData?: any; regime: 'old' | 'new'; taxResult: any; managers: CanonicalManagerBindings; form: ItrForm; editorModel?: import('../domain/returns').ReturnEditorModel | null }) {
   const draftDeductions = editorModel?.draft.deductions;
+  const via = (draftDeductions?.chapterVIA ?? {}) as import('../domain/returns/types').ChapterVIA;
   const schedule80GGA = draftDeductions?.schedule80GGA ?? [];
   const schedule80GGC = draftDeductions?.schedule80GGC ?? [];
   return (
     <DeductionsWorkspace
       form={form}
       regime={regime}
-      section80C={formData?.section80C?.investments ?? []}
-      section80D={formData?.section80D ?? { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, selfFamilySenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, parents: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 } }}
-      section80G={formData?.donationEntries ?? []}
-      loans={formData?.deductionLoans ?? { section80E: { loans: [] }, section80EE: { loans: [] }, section80EEA: { loans: [], stampDutyValue: 0 }, section80EEB: { loans: [] } }}
+      section80C={draftDeductions?.section80C ?? []}
+      section80D={draftDeductions?.section80D ?? { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, selfFamilySenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, parents: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 } }}
+      section80G={draftDeductions?.section80G ?? []}
+      loans={deductionLoansToManager(draftDeductions?.loans ?? { loans: [], section80EEAStampDutyValue: 0 })}
       chapterVIA={via}
       onChangeChapterVIA={managers.chapterVIA}
       managers={managers}
@@ -484,9 +482,16 @@ export function LossesTab({ formData, setFormData, taxResult }: any) {
   );
 }
 
-export function TDSTab({ formData, setFormData, taxResult, managers }: { formData: any; setFormData: any; taxResult: any; managers: CanonicalManagerBindings }) {
-  const tdsEntries = formData.tdsEntries || [];
-  const selfAssessmentTaxEntries = formData.selfAssessmentTaxEntries || [];
+export function TDSTab({ formData, setFormData, taxResult, managers, editorModel }: { formData: any; setFormData: any; taxResult: any; managers: CanonicalManagerBindings; editorModel?: import('../domain/returns').ReturnEditorModel | null }) {
+  // Source TDS + challan entries from the canonical draft via the typed
+  // projection helpers.  The legacy `formData.tdsEntries` snapshot is no
+  // longer authoritative; the draft (`draft.taxes.tds`, `draft.taxes.challans`)
+  // is the single source of truth, written through the typed managers.
+  const draftTds = editorModel?.draft?.taxes?.tds ?? [];
+  const draftChallans = editorModel?.draft?.taxes?.challans ?? [];
+  const tdsEntries = tdsToManager(draftTds);
+  const selfAssessmentTaxEntries = challansToManager(draftChallans, 'SELF_ASSESSMENT');
+  const advanceTaxEntries = challansToManager(draftChallans, 'ADVANCE_TAX');
   // TAN is jurisdiction-prefixed per the official schema (e.g. DELA12345B).
   const tanPattern = /^(HYD|VPN|BBN|BPL|JBP|CHE|CMB|MRI|DEL|CAL|MRT|AHM|BRD|RKT|SRT|BLR|AGR|KNP|CHN|TVD|ALD|LKN|MUM|NGP|AMR|JLD|PTL|RTK|KLP|NSK|PNE|PTN|RCH|JDH|JPR|SHL)[A-Z][0-9]{5}[A-Z]$/;
   // BSR Code: first 3 digits, then 4 alphanumeric (per TaxPayment.BSRCode pattern).
@@ -573,26 +578,13 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
     else if (sched === 'TDS3') acc.tds3 += amount;
     return acc;
   }, { tds1: 0, tds2: 0, tds3: 0, tcs: 0 });
-  const advanceTotal = (formData.advanceTaxEntries || []).reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+  const advanceTotal = advanceTaxEntries.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
   const satTotal = selfAssessmentTaxEntries.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
 
   return (
     <div>
-      {/* Auto-populated TDS entries from AIS/26AS */}
-      {(formData.aisImported || formData.imported26AS) && (
-        <div style={{ marginBottom: 24, padding: 16, background: 'var(--success-bg)', borderRadius: 6, border: '1px solid var(--success)' }}>
-          <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--success)' }}>
-            ✓ 26AS Data Imported
-          </h3>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            TDS entries were populated from Form 26AS.{' '}
-            Current draft claims ₹{Number(taxResult.enteredCredits?.tds || 0).toLocaleString('en-IN')} of TDS across {tdsEntries.filter((entry: any) => entry.claimedInReturn !== false).length} selected row(s).
-            {Number((formData.imported26AS || {}).totalTDS || 0) !== Number(taxResult.enteredCredits?.tds || 0) && (
-              <> The imported snapshot reported ₹{Number((formData.imported26AS || {}).totalTDS || 0).toLocaleString('en-IN')}; review manually edited values and supporting evidence.</>
-            )}
-          </div>
-        </div>
-      )}
+      {/* TDS entries are sourced from the canonical draft; the 26AS/AIS
+          import snapshot banner was removed with the flat-blob bridge. */}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>
@@ -851,7 +843,7 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
         </h3>
         <button
           onClick={() => {
-            const entries = formData.advanceTaxEntries || [];
+            const entries = advanceTaxEntries;
             managers.advanceTax([...entries, { id: '', bsrCode: '', depositDate: '', challanSerialNo: 0, amount: 0 }]);
           }}
           style={{
@@ -867,12 +859,12 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
           + Add Advance Tax
         </button>
       </div>
-      {(formData.advanceTaxEntries || []).length === 0 && (
+      {(advanceTaxEntries).length === 0 && (
         <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 6, marginBottom: 24 }}>
           No advance tax entries. Click "+ Add Advance Tax" to add per-challan payments with BSR code, date, and challan serial number.
         </div>
       )}
-      {(formData.advanceTaxEntries || []).map((entry: any, index: number) => (
+      {(advanceTaxEntries).map((entry: any, index: number) => (
         <div key={index} style={{ marginBottom: 16, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h4 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
@@ -880,7 +872,7 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
             </h4>
             <button
               onClick={() => {
-                const updated = [...(formData.advanceTaxEntries || [])];
+                const updated = [...(advanceTaxEntries)];
                 updated.splice(index, 1);
                 managers.advanceTax(updated);
               }}
@@ -891,7 +883,7 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>BSR Code *</label>
               <input type="text" inputMode="text" value={entry.bsrCode || ''} onChange={(e) => {
-                const updated = [...(formData.advanceTaxEntries || [])];
+                const updated = [...(advanceTaxEntries)];
                 updated[index] = { ...updated[index], bsrCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7) };
                 managers.advanceTax(updated);
               }} placeholder="3 digits + 4 alphanumeric" maxLength={7} aria-invalid={Boolean(entry.bsrCode) && !bsrPattern.test(entry.bsrCode)} style={{ width: '100%', padding: '6px 8px', border: `1px solid ${entry.bsrCode && !bsrPattern.test(entry.bsrCode) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 4, fontSize: 12 }} />
@@ -900,7 +892,7 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Deposit Date *</label>
               <input type="date" value={entry.depositDate || ''} onChange={(e) => {
-                const updated = [...(formData.advanceTaxEntries || [])];
+                const updated = [...(advanceTaxEntries)];
                 updated[index] = { ...updated[index], depositDate: e.target.value };
                 managers.advanceTax(updated);
               }} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }} />
@@ -908,7 +900,7 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Challan Serial No. *</label>
               <input type="text" inputMode="numeric" value={entry.challanSerialNo || ''} onChange={(e) => {
-                const updated = [...(formData.advanceTaxEntries || [])];
+                const updated = [...(advanceTaxEntries)];
                 updated[index] = { ...updated[index], challanSerialNo: e.target.value.replace(/\D/g, '').slice(0, 5) };
                 managers.advanceTax(updated);
               }} placeholder="1-5 digits" maxLength={5} aria-invalid={Boolean(entry.challanSerialNo) && (!challanPattern.test(String(entry.challanSerialNo)) || Number(entry.challanSerialNo) <= 0)} style={{ width: '100%', padding: '6px 8px', border: `1px solid ${entry.challanSerialNo && (!challanPattern.test(String(entry.challanSerialNo)) || Number(entry.challanSerialNo) <= 0) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 4, fontSize: 12 }} />
@@ -917,7 +909,7 @@ export function TDSTab({ formData, setFormData, taxResult, managers }: { formDat
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Amount (₹) *</label>
               <input type="number" value={entry.amount || ''} onChange={(e) => {
-                const updated = [...(formData.advanceTaxEntries || [])];
+                const updated = [...(advanceTaxEntries)];
                 updated[index] = { ...updated[index], amount: parseFloat(e.target.value) || 0 };
                 managers.advanceTax(updated);
               }} placeholder="0" min={0} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontWeight: 600 }} />

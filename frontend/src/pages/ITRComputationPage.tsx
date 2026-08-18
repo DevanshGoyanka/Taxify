@@ -21,16 +21,25 @@ import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import ExemptIncomeWorkspace from '../components/exemptincome/ExemptIncomeWorkspace';
 import {
   createReturnRepository, stripCompatibility,
-  applyLegacyPatch, applyLegacySetStateAction,
-  banksToManager, challansToManager, composeLegacyPayload, createReturnEditorModelFromLegacy,
-  deductionLoansToManager, familyPensionToManager, giftsToManager, interestToManager, tdsToManager,
-  updateBankAccounts, updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
+} from '../domain/returns';
+import {
+  banksToManager, challansToManager, deductionLoansToManager, familyPensionToManager, giftsToManager,
+  interestToManager, tdsToManager, winningsToManager,
+  updateBanksFromManager, updateChallanKindFromManager, updateDeductionLoansFromManager,
   updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
   updateHouseProperties, updateInterestFromManager, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
-  updateChapterVIA, updateTdsFromManager, updateTcsCredits, updateWinningsFromManager, winningsToManager, type LegacyRecord,
+  updateChapterVIA, updateTdsFromManager, updateTcsCredits, updateWinningsFromManager,
   updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
-  type ReturnEditorModel,
-} from '../domain/returns';
+  replaceDraft, type ReturnEditorModelV2,
+} from '../domain/returns/editorModelV2';
+import { createEmptyReturnDraft } from '../domain/returns/factory';
+import { adaptLegacyReturn } from '../domain/returns/legacyAdapter';
+import { serializeReturnDraftToLegacy } from '../domain/returns/legacySerializer';
+import type { ReturnDraft } from '../domain/returns/types';
+import type {
+  BankManagerData, ChallanManagerEntry, DeductionLoanManagerData, FamilyPensionManagerEntry,
+  GiftManagerEntry, InterestManagerEntry, TdsManagerEntry, WinningManagerEntry,
+} from '../domain/returns/editorModelV2';
 import {
   assessFormEligibility, assessFormEligibilityFromDraft, collectEligibilityFacts, type FormRecommendation, type ItrForm,
 } from '../domain/returns';
@@ -43,7 +52,6 @@ import { mapPrefillToFormData } from '../utils/mapPrefillToFormData';
 // REACTIVATE: import { mapFiledReturnToFormData } from '../utils/mapFiledReturnToFormData';
 import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
 import { mergeDraft } from '../domain/returns/draftPatch';
-import { replaceDraft } from '../domain/returns/editorModelV2';
 import { mapPrefillToDraftPatch } from '../utils/mapPrefillToDraftPatch';
 import { mapReconciledToDraftPatch } from '../utils/mapReconciledToDraftPatch';
 import { mapAisToDraftPatch } from '../utils/mapAisToDraftPatch';
@@ -214,126 +222,29 @@ export default function ITRComputationPage() {
   // Employer reconciliation state
   const [showReconciliationModal, setShowReconciliationModal] = useState(false);
   const [reconciliationResult, setReconciliationResult] = useState<any>(null);
-  const emptyFormDataRef = useRef<LegacyRecord>({
-    // Personal Info - CBDT Mandatory Fields
-    gender: 'M', fatherName: '', maritalStatus: 'SINGLE', nationality: 'INDIA', residentialStatus: 'ROR',
-    mobileCountryCode: '91', country: '91', state: '',
-    isDirector: false, holdsUnlistedShares: false, agriculturalIncome: 0,
-    
-    // ===== SALARY INCOME - 101% CBDT COMPLIANT =====
-    // Section 17(1) - Salary Components
-    basic: 0, da: 0, bonus: 0, commission: 0,
-    // Allowances under Section 17(1)
-    hraReceived: 0, ltaReceived: 0, ceaReceived: 0, 
-    hostelAllowanceReceived: 0, transportAllowanceReceived: 0,
-    medicalReimbursementReceived: 0, conveyanceAllowanceReceived: 0, 
-    uniformAllowanceReceived: 0, otherAllowance: 0,
-    // Perquisites under Section 17(2)
-    perquisites: 0,
-    rentFreeAccommodationValue: 0, carValue: 0, gasFuelPowerValue: 0,
-    freeHolidayValue: 0, freeGoodsValue: 0, freeServicesValue: 0,
-    stockOptionsValue: 0, professionalTaxValue: 0,
-    // Profits in Lieu under Section 17(3)
-    profitsInLieu: 0,
-    gratuityReceived: 0, leaveEncashmentReceived: 0, 
-    commutationOfPensionReceived: 0, retrenchmentCompensation: 0, vrsCompensation: 0,
-    // Retirement Details
-    daForRetirement: 0, retirementDate: null,
-    isGovernmentEmployee: false, isPensioner: false,
-    
-    // ===== HRA EXEMPTION u/s 10(13A) =====
-    hraRent: 0, hraMetro: false, landlordPAN: '', landlordName: '',
-    
-    // ===== OTHER EXEMPTIONS =====
-    ltaExempt: 0, ceaExempt: 0, entertainmentAllowance: 0, otherExempt: 0,
-    
-    // ===== PROFESSIONAL TAX u/s 16(iii) =====
-    profTax: 0,
-    
-    // ===== LEGACY FIELDS (backward compatibility) =====  
-    allowances: 0, hra: 0, // Legacy HRA received field
-    // House Property
-    hpType: 'self', grossRent: 0, munTax: 0, homeLoanInt: 0, sopLoanInt: 0,
-    // Capital Gains
-    stcgEquityPre: 0, stcgEquityPost: 0, stcgOtherSlab: 0, 
-    ltcg112APre: 0, ltcg112APost: 0, ltcgOtherPre: 0, ltcgOtherPost: 0,
-    // Business Income
-    bizPresumptive: '44AD', bizTurnover: 0, bizDeclared: 0, bpNetProfit: 0, businessSchedule: {},
-    // ===== OTHER SOURCES - CBDT COMPLIANT =====
-    // Interest Income
-    interestSB: 0, interestFD: 0, interestRD: 0, nscInterest: 0, scssInterest: 0, postOfficeInterest: 0, otherInterest: 0,
-    // Dividend Income
-    dividendShares: 0, dividendMF: 0, dividendUnits: 0, 
-    dividendCompanyName: '', dividendCompanyTAN: '',
-    // Winnings (Section 115BB - 30%)
-    lotteryIncome: 0, crosswordPuzzleIncome: 0, horseRaceIncome: 0, cardGameIncome: 0,
-    // Gifts (Section 56(2)(x))
-    giftsFromRelatives: 0, giftsFromNonRelatives: 0,
-    // Other
-    familyPension: 0, incomeFromITRefund: 0, accumulatedSPF: 0, casualIncome: 0,
-    // Legacy
-    dividends: 0, otherMisc: 0,
-    // VDA
-    vdaGains: 0,
-    // Deductions
-    s80C_epf: 0, s80C_ppf: 0, s80C_elss: 0, s80C_lic: 0, s80C_home: 0,
-    s80CCD1B: 0, s80CCD2: 0, s80D_self: 0, s80D_parent: 0, s80E: 0, s80TTA: 0, s80G: 0,
-    // Losses - CBDT Compliant
-    bfLossHP: 0, bfLossBusiness: 0, bfLossSTCG: 0, bfLossLTCG: 0, bfLossSpeculation: 0,
-    // Phase 1 Multi-Entry Structures (CBDT Compliant)
-    employerEntries: [],
-    capitalGainTransactions: [],
-    capitalGainsSchedule: {},
-    bankInterestEntries: [],
-    interestEntries: [],
-    donationEntries: [],
-    section80C: { investments: [] },
-    section80D: {
-      selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N',
-      selfFamily: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
-      selfFamilySenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
-      parents: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
-      parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 },
-    },
-    deductionLoans: {
-      section80E: { loans: [] }, section80EE: { loans: [] },
-      section80EEA: { loans: [], stampDutyValue: 0 }, section80EEB: { loans: [] },
-    },
-    s80DDB_usrType: '', s80DDB_diseaseCode: '',
-    s80DD_natureOfDisability: '', s80DD_typeOfDisability: '', s80DD_dependentType: '',
-    s80U_natureOfDisability: '', s80U_typeOfDisability: '',
-    // Tax Payments - Multi-entry structures
-    tdsEntries: [],
-    tcsEntries: [],
-    advanceTaxEntries: [],
-    selfAssessmentTaxEntries: [],
-    bankAccountDetails: [],
-    bankAccountData: { accounts: [] },
-    // Legacy single-value fields (for backward compatibility)
-    tdsS192: 0, tds194A: 0, tdsOther: 0,
-    adv15Jun: 0, adv15Sep: 0, adv15Dec: 0, adv15Mar: 0, selfTax: 0,
-    // Age is derived from DOB when a return is hydrated; never default to a
-    // potentially incorrect statutory age bracket.
-    age: 0
-  });
-  const [editorModel, setEditorModel] = useState<ReturnEditorModel | null>(null);
-  const editorRef = useRef<ReturnEditorModel | null>(null);
+  const [editorModel, setEditorModel] = useState<ReturnEditorModelV2 | null>(null);
+  const editorRef = useRef<ReturnEditorModelV2 | null>(null);
 
   // Import confirmation modal state
   const [showImportConfirmModal, setShowImportConfirmModal] = useState(false);
   const [reconciledImportData, setReconciledImportData] = useState<ReconciledResults | null>(null);
   const [reconDiscrepancies, setReconDiscrepancies] = useState<string[]>([]);
 
-  const formData = useMemo<any>(() => editorModel ? composeLegacyPayload(editorModel) : {}, [editorModel]);
-  const setFormData = useCallback((action: SetStateAction<LegacyRecord>): void => {
+  // The canonical draft is editor state and persistence state. A flat object is
+  // retained only as a read projection for the still-unmigrated ITR-3/4
+  // eligibility/import display helpers.
+  const formData = useMemo<any>(() => editorModel ? serializeReturnDraftToLegacy(editorModel.draft) : {}, [editorModel]);
+  const setFormData = useCallback((action: SetStateAction<Record<string, unknown>>): void => {
     setEditorModel((current) => {
       if (!current) return current;
-      const next = applyLegacySetStateAction(current, action);
+      const currentView = serializeReturnDraftToLegacy(current.draft);
+      const requested = typeof action === 'function' ? action(structuredClone(currentView)) : action;
+      const next = replaceDraft(adaptLegacyReturn(requested));
       editorRef.current = next;
       return next;
     });
   }, []);
-  const updateEditor = useCallback((update: (current: ReturnEditorModel) => ReturnEditorModel): void => {
+  const updateEditor = useCallback((update: (current: ReturnEditorModelV2) => ReturnEditorModelV2): void => {
     setEditorModel((current) => {
       if (!current) return current;
       const next = update(current);
@@ -343,10 +254,7 @@ export default function ITRComputationPage() {
   }, []);
   const handleRegimeChange = useCallback((nextRegime: 'old' | 'new'): void => {
     setRegime(nextRegime);
-    updateEditor((current) => ({
-      draft: { ...current.draft, regime: nextRegime },
-      extras: { ...current.extras, regime: nextRegime, taxRegime: nextRegime, optOutNewTaxRegime: nextRegime === 'old' ? 'Y' : 'N' },
-    }));
+    updateEditor((current) => replaceDraft({ ...current.draft, regime: nextRegime }));
   }, [updateEditor]);
 
   const managers = useMemo<CanonicalManagerBindings>(() => ({
@@ -384,7 +292,7 @@ export default function ITRComputationPage() {
     setImportedTIS(null);
     setReconciliationResult(null);
     setShowReconciliationModal(false);
-    const resetModel = createReturnEditorModelFromLegacy(structuredClone(emptyFormDataRef.current));
+    const resetModel = replaceDraft(createEmptyReturnDraft(effectiveAssessmentYear, itrForm, regime));
     editorRef.current = resetModel;
     setEditorModel(resetModel);
     if (!clientId) {
@@ -398,37 +306,27 @@ export default function ITRComputationPage() {
     ])
       .then(([client, draft]) => {
         if (requestId !== loadGenerationRef.current) return;
-        const savedModel = createReturnEditorModelFromLegacy({
-          ...structuredClone(emptyFormDataRef.current),
-          ...composeLegacyPayload({ draft, extras: {} }),
-        });
-        const itrData = composeLegacyPayload(savedModel) as any;
         loadedReturnKeyRef.current = `${clientId}:${effectiveAssessmentYear}`;
         setClientData(client);
         suppressAutoDetectRef.current = true;
         setItrForm(draft.form);
         setRegime(draft.regime);
-        const hydrated = applyLegacyPatch(savedModel, {
-          name: itrData.name || client.name,
-          firstName: itrData.firstName || client.firstName || '',
-          middleName: itrData.middleName || client.middleName || '',
-          surnameOrOrgName: itrData.surnameOrOrgName || client.surname || '',
-          pan: itrData.pan || client.pan,
-          email: itrData.email || client.email,
-          mobile: itrData.mobile || client.mobile,
-          aadhaar: itrData.aadhaar || client.aadhaar,
-          dob: itrData.dob || client.dob,
-          // Always derive age from DOB — never trust a persisted or
-          // hardcoded age value. A 65-year-old senior citizen must get
-          // the ₹3L exemption bracket, not the under-60 ₹2.5L bracket.
-          age: calculateAgeFromDob(itrData.dob || client.dob),
-          flatNo: itrData.flatDoorNo || itrData.flatNo,
-          premises: itrData.premisesName || itrData.premises,
-          road: itrData.roadStreet || itrData.road,
-          city: itrData.townCity || itrData.city,
-          pincode: itrData.pinCode || itrData.pincode,
-          mobileCountryCode: String(itrData.mobileCountryCode || itrData.countryCodeMobile || '91'),
-          country: String(itrData.countryCode || itrData.country || '91'),
+        // Hydrate the canonical personal-info block from the saved draft,
+        // falling back to the client record only when the draft is silent.
+        const hydrated: ReturnEditorModelV2 = replaceDraft({
+          ...draft,
+          personal: {
+            ...draft.personal,
+            name: draft.personal.name || client.name || '',
+            firstName: draft.personal.firstName || client.firstName || '',
+            middleName: draft.personal.middleName || client.middleName || '',
+            surnameOrOrgName: draft.personal.surnameOrOrgName || client.surname || '',
+            pan: draft.personal.pan || client.pan || '',
+            email: draft.personal.email || client.email || '',
+            mobile: draft.personal.mobile || client.mobile || '',
+            aadhaar: draft.personal.aadhaar || client.aadhaar || '',
+            dateOfBirth: draft.personal.dateOfBirth || client.dob || null,
+          },
         });
         editorRef.current = hydrated;
         setEditorModel(hydrated);
@@ -444,10 +342,7 @@ export default function ITRComputationPage() {
   useEffect(() => {
     if (!editorModel) return;
     if (editorModel.draft.form === itrForm && editorModel.draft.regime === regime) return;
-    updateEditor((current) => ({
-      draft: { ...current.draft, form: itrForm as ReturnEditorModel['draft']['form'], regime },
-      extras: current.extras,
-    }));
+    updateEditor((current) => replaceDraft({ ...current.draft, form: itrForm, regime }));
   }, [editorModel, itrForm, regime, updateEditor]);
 
   const [backendTaxResult, setBackendTaxResult] = useState<any>(null);
@@ -837,7 +732,7 @@ export default function ITRComputationPage() {
         mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(prefillData)),
         mapReconciledToDraftPatch(reconciledImportData),
       );
-      updateEditor((current) => ({ ...replaceDraft(mergedImportData as any), extras: current.extras }));
+      updateEditor((current) => replaceDraft(mergedImportData as any));
     }
 
     // Collect discrepancy messages for the warning banner
@@ -996,21 +891,44 @@ export default function ITRComputationPage() {
         const form16Data = await import('../api/integration').then(m => m.integrationApi.extractForm16(file));
         if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
         // The legacy /integration/autopopulate/form16 endpoint was a thin
-        // server-side merge with no real Form 16 parser.  Inline the same
-        // merge here so Form 16 import keeps working without the dead endpoint.
-        const populated: Record<string, unknown> = {
-          ...composeLegacyPayload(editorRef.current!),
-          basic: form16Data?.basic ?? 0,
-          da: form16Data?.da ?? 0,
-          hraReceived: form16Data?.hra ?? 0,
-          bonus: form16Data?.bonus ?? 0,
-          profTax: form16Data?.professionalTax ?? 0,
-          tdsS192: form16Data?.tdsDeducted ?? 0,
-        };
-        if (importGeneration !== loadGenerationRef.current) return;
-        setFormData((prev: any) => ({ ...prev, ...populated }));
+        // server-side merge with no real Form 16 parser.  Patch the first
+        // employer row directly on the canonical draft instead of round-
+        // tripping through a flat-blob composition.
+        const data = (form16Data || {}) as {
+            basic?: number; da?: number; hra?: number; bonus?: number;
+            professionalTax?: number; tdsDeducted?: number;
+          };
+        updateEditor((current) => {
+          const first = current.draft.employers[0] ?? {
+            id: 'employer-form16', customEmployerName: '', employerName: '', employerTAN: '',
+            natureOfEmployment: '', employerAddress: '', employerCity: '', employerStateCode: '',
+            employerPinCode: '', employerZipCode: '',
+            salaryNatureRows: [], perquisiteNatureRows: [], section10ExemptionRows: [],
+            basic: 0, da: 0, commission: 0, hra: 0, bonus: 0, allowances: 0, lta: 0,
+            otherAllowance: 0, arrearSalary: 0, perquisites: 0, profitsInLieu: 0, rentPaid: 0,
+            city: '', isMetroCity: false, isGovernmentEmployee: false, isDisabledEmployee: false,
+            commutedPension: 0, gratuity: 0, leaveEncashment: 0, averageMonthlySalary: 0,
+            yearsOfService: 0, unavailedLeaveDays: 0, actualLtaFare: 0, isDomesticTravel: false,
+            journeysInBlock: 0, ltaExempt: 0, numberOfChildren: 0, gratuityAlsoReceived: false,
+            transportAllowance: 0, childrenEducationAllowance: 0, hostelExpenditureAllowance: 0,
+            uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
+            vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0, tdsDeducted: 0,
+            employerNPS: 0,
+          };
+          const patched = {
+            ...first,
+            basic: data.basic ?? first.basic,
+            da: data.da ?? first.da,
+            hra: data.hra ?? first.hra,
+            bonus: data.bonus ?? first.bonus,
+            professionalTax: data.professionalTax ?? first.professionalTax,
+            tdsDeducted: data.tdsDeducted ?? first.tdsDeducted,
+          };
+          const employers = current.draft.employers.length > 0 ? [patched, ...current.draft.employers.slice(1)] : [patched];
+          return replaceDraft({ ...current.draft, employers });
+        });
         toast.dismiss();
-        toast.success('Form 16 imported and auto-populated');
+        toast.success('Form 16 imported into the canonical draft');
       } else if (type === 'ais-pdf' || type === 'ais-json' || type === 'tis-pdf' || type === '26as-pdf' || type === '26as-txt' || type === 'prefill') {
         const typeStr = type as string;
         let data: any;
@@ -1071,7 +989,7 @@ export default function ITRComputationPage() {
               ? mapTisToDraftPatch(data)
               : mapAisToDraftPatch(data);
           const merged = mergeDraft(editorRef.current.draft, patch);
-          updateEditor((current) => ({ ...replaceDraft(merged), extras: current.extras }));
+          updateEditor((current) => replaceDraft(merged));
           await returnRepository.save(clientId, merged);
           toast.dismiss();
           toast.success(`${typeStr.toUpperCase()} imported into the canonical draft`);
@@ -1100,7 +1018,7 @@ export default function ITRComputationPage() {
 
           if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
           const merged = mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(importResult.data || importResult));
-          updateEditor((current) => ({ ...replaceDraft(merged), extras: current.extras }));
+          updateEditor((current) => replaceDraft(merged));
           await returnRepository.save(clientId, merged);
 
           setShowImportMenu(false);
@@ -1134,15 +1052,15 @@ export default function ITRComputationPage() {
       return;
     }
 
-    // Update employer entries based on action
-    const updatedEntries = formData.employerEntries.map((entry: any) => {
-      const matchingDiscrepancy = reconciliationResult?.discrepancies?.find(
-        (d: any) => d.employerTAN === entry.employerTAN
-      );
-      
-      if (matchingDiscrepancy && matchingDiscrepancy.employerTAN === discrepancy.employerTAN) {
-        if (action === 'USE_NEW') {
-          // Apply new values from discrepancy
+    // Update employer entries based on action.  Apply new values directly to
+    // the canonical draft.employers list and strip any reconciliation row
+    // matching the same TAN from the displayed discrepancies.
+    updateEditor((current) => {
+      const list = current.draft.employers.map((entry: any) => {
+        const matchingDiscrepancy = reconciliationResult?.discrepancies?.find(
+          (d: any) => d.employerTAN === entry.employerTAN,
+        );
+        if (matchingDiscrepancy && matchingDiscrepancy.employerTAN === discrepancy.employerTAN && action === 'USE_NEW') {
           const updated = { ...entry };
           matchingDiscrepancy.fieldDiscrepancies.forEach((field: any) => {
             const fieldKey = field.fieldName.toLowerCase().replace(/\s+/g, '');
@@ -1159,12 +1077,10 @@ export default function ITRComputationPage() {
           });
           return updated;
         }
-        // KEEP_EXISTING - no changes needed
-      }
-      return entry;
+        return entry;
+      });
+      return replaceDraft({ ...current.draft, employers: list });
     });
-
-    setFormData((previous: LegacyRecord) => ({ ...previous, employerEntries: updatedEntries }));
     toast.success(`Applied ${action === 'USE_NEW' ? 'new' : 'existing'} values for ${discrepancy.employerName}`);
     
     // Remove resolved discrepancy
@@ -1874,15 +1790,25 @@ export default function ITRComputationPage() {
         borderRadius: 'var(--radius)',
         border: '1px solid var(--border)'
       }}>
-        {activeTab === 0 && <PersonalInfoTab formData={formData} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={setFormData} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} />}
-        {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={formData.tdsEntries || []} />}
+        {activeTab === 0 && editorModel && <PersonalInfoTab draft={editorModel.draft} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={(patch: any) => updateEditor((current) => ({
+          ...current,
+          draft: {
+            ...current.draft,
+            ...(patch.regime ? { regime: patch.regime } : {}),
+            ...(patch.personal ? { personal: { ...current.draft.personal, ...patch.personal } } : {}),
+            ...(patch.filing ? { filing: { ...current.draft.filing, ...patch.filing } } : {}),
+            ...(patch.verification ? { verification: { ...current.draft.verification, ...patch.verification } } : {}),
+            ...(patch.taxReturnPreparer ? { taxReturnPreparer: { ...current.draft.taxReturnPreparer, ...patch.taxReturnPreparer } } : {}),
+          },
+        }))} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} />}
+        {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={tdsToManager(editorModel?.draft?.taxes?.tds ?? [])} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} taxResult={backendTaxResult} />}
-        {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
-        {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
-        {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel} />}
+        {activeTab === 3 && <CapitalGainsTab taxResult={taxResult} itrForm={itrForm} data={editorModel?.draft.capitalGainsSchedule} entries={(editorModel?.draft.capitalGainsSchedule as { capitalGainTransactions?: any[] })?.capitalGainTransactions} onChange={(schedule: any) => updateEditor((model) => replaceDraft({ ...model.draft, capitalGainsSchedule: schedule }))} />}
+        {activeTab === 4 && <BusinessTab taxResult={taxResult} itrForm={itrForm} data={editorModel?.draft.capitalGainsSchedule} onChange={(schedule: any) => updateEditor((model) => replaceDraft({ ...model.draft, capitalGainsSchedule: schedule }))} />}
+        {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel as any} />}
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
-        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel} />}
-        {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} />}
+        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
+        {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} managers={managers} editorModel={editorModel as any} />}
         {activeTab === 9 && (!backendTaxResult && taxResultError
           ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until the first computation succeeds.</div>
           : <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />)}
@@ -2055,22 +1981,22 @@ function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm, taxRe
   return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} taxResult={taxResult} />;
 }
 
-function CapitalGainsTab({ formData, setFormData, taxResult, itrForm }: any) {
+function CapitalGainsTab({ taxResult, itrForm, data, entries, onChange }: any) {
   const summary = taxResult?.capitalGainsSummary || null;
   return <CapitalGainsEntryManager
-    data={formData.capitalGainsSchedule || {}}
-    entries={formData.capitalGainTransactions || []}
-    onChange={(capitalGainsSchedule) => setFormData({ ...formData, capitalGainsSchedule })}
+    data={data || {}}
+    entries={entries || []}
+    onChange={onChange}
     selectedForm={itrForm}
     summary={summary}
     issues={taxResult?.capitalGainsIssues || summary?.issues || []}
   />;
 }
 
-function BusinessTab({ formData, setFormData, taxResult, itrForm }: any) {
+function BusinessTab({ taxResult, itrForm, data, onChange }: any) {
   return <BusinessProfessionEntryManager
-    data={formData.businessSchedule || {}}
-    onChange={(businessSchedule) => setFormData({ ...formData, businessSchedule })}
+    data={data || {}}
+    onChange={onChange}
     selectedForm={itrForm}
     taxResult={taxResult}
   />;
