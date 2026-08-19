@@ -168,7 +168,8 @@ Both workstreams are sequenced into **5 phases**. After each phase: update this 
 | Date | Phase | Commit | Status |
 |---|---|---|---|
 | 2026-08-19 | 1 | `a416bd3` | ✅ Complete — approved by user |
-| 2026-08-19 | 2 | `<pending push>` | ✅ Complete — awaiting user test |
+| 2026-08-19 | 2 | `327300f` | ✅ Complete — approved by user (re-validated 2026-08-19) |
+| 2026-08-19 | 3 | — | 🚧 In progress |
 
 ---
 
@@ -234,6 +235,15 @@ Both workstreams are sequenced into **5 phases**. After each phase: update this 
 7. Run `npx vitest run` → 131 tests pass. Run `npx tsc -b` → no new errors.
 
 Once you confirm Phase 2 is green, I'll update this MD, commit, push, and proceed to **Phase 3** (typed CapitalGainsTab + auto-populate UI wiring).
+
+### Re-validation — 2026-08-19 (approved)
+Re-ran the full Phase 2 validation before starting Phase 3:
+- `vitest run`: **16 files / 131 tests pass** (matches MD; `mapCapitalGainsToDraftPatch` 10 tests + `mapReconciledToDraftPatch` 3 tests all green).
+- `tsc -b`: 1 error only — `api/reconciliation.ts` missing `./client` — **pre-existing**, documented above; no new errors.
+- `pytest tests/`: **1014 passed, 3 failed**. The 3 failures (`test_automation_phase1::test_additive_migration_backfills_legacy_job_assessment_year`, `test_automation_phase2::test_prefill_uses_one_total_elapsed_budget`, `test_automation_phase2::test_worker_integrates_prefill_after_core_downloads_without_extraction`) are **pre-existing automation tests unrelated to Phase 2** — the Phase 2 commit `327300f` does not touch those test files, and they reference no Phase 2 symbols (parse-reconcile / capital_gain_evidence / mapCapitalGains).
+- `/v2/imports/parse-reconcile` endpoint confirmed present in `app/routers/tax_v2.py`.
+
+**Verdict:** Phase 2 functionally green. Approved by user. Proceeding to Phase 3.
 
 ---
 
