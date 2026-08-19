@@ -73,13 +73,27 @@ def _compute_digest(data: dict) -> str:
       3. HMAC-SHA256 with secret key (UTF-8 encoded), repeated N iterations
       4. Base64-encode the final hash
 
-    Reads from environment variables:
-      ERI_DIGEST_SECRET_KEY   — HMAC secret key string, UTF-8 encoded as key bytes
-      ERI_DIGEST_ITERATIONS   — number of HMAC iterations (default: 1)
+    The ``(secret_key, iterations)`` pair is resolved from ``.env`` via
+    :func:`app.eri.config.get_eri_credentials`, scoped to the active
+    ``(ERI_MODE, ERI_ENV)`` pair. This guarantees the Digest is computed
+    with the same environment's secret that matches the ``SWCreatedBy``
+    stamped in ``CreationInfo``.
     """
     import re
+    from app.eri.config import get_eri_credentials
 
-    secret_key = os.getenv("ERI_DIGEST_SECRET_KEY", "")
+    # Resolve the (mode, environment)-scoped secret key + iterations. If
+    # the resolver is misconfigured (e.g. ERI_SW_ID_<MODE>_<ENV> unset in
+    # a dev environment without .env), degrade to the schema-legal
+    # placeholder "-" rather than crashing JSON generation.
+    try:
+        creds = get_eri_credentials()
+        secret_key = creds.digest_secret_key or ""
+        iterations = int(creds.digest_iterations or 1)
+    except Exception:
+        secret_key = ""
+        iterations = 1
+
     if not secret_key:
         # Fallback: emit the schema-legal placeholder "-" for dev/testing.
         # The official Digest pattern is ``-|.{44}`` — a 64-char hex digest
@@ -87,7 +101,6 @@ def _compute_digest(data: dict) -> str:
         # masking the misconfiguration with an invalid value.
         return "-"
 
-    iterations = int(os.getenv("ERI_DIGEST_ITERATIONS", "1"))
     placeholder = "-"
     digest_regex = r'"Digest"\s*:\s*"[^"]*"'
 
@@ -137,7 +150,23 @@ def _compute_digest(data: dict) -> str:
 # ---------------------------------------------------------------------------
 
 _SW_VERSION = "1.0"
-_SW_CODE = os.getenv("ERI_SW_ID", "SW00000001")
+
+
+def _resolve_sw_id() -> str:
+    """Resolve the SWCreatedBy for the active (mode, environment) pair.
+
+    Reads via :func:`app.eri.config.get_eri_credentials` so the SW_ID
+    stamped in CreationInfo matches the environment whose digest secret
+    was used to compute the Digest. Falls back to a dev placeholder if
+    the resolver is unavailable (e.g. during standalone unit tests that
+    don't load .env).
+    """
+    try:
+        from app.eri.config import get_eri_credentials
+        creds = get_eri_credentials()
+        return creds.sw_id or "SW00000001"
+    except Exception:
+        return "SW00000001"
 
 
 # ---------------------------------------------------------------------------
@@ -147,11 +176,11 @@ _SW_CODE = os.getenv("ERI_SW_ID", "SW00000001")
 def _creation_info() -> dict:
     return {
         "SWVersionNo": _SW_VERSION,
-        "SWCreatedBy": _SW_CODE,
-        "JSONCreatedBy": _SW_CODE,
+        "SWCreatedBy": _resolve_sw_id(),
+        "JSONCreatedBy": _resolve_sw_id(),
         "JSONCreationDate": _today(),
         "IntermediaryCity": "Delhi",
-        "Digest": "-" * 44,
+        "Digest": "-",   # placeholder, replaced by _compute_digest at builder end
     }
 
 

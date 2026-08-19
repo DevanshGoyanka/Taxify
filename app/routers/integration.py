@@ -800,8 +800,26 @@ from app.schemas.eri import (
     ERIRegisterClientRequest,
     ERIValidateRegOtpRequest
 )
-from app.eri.client import eri_post
+from app.eri.config import get_eri_credentials
+from app.eri.type2.client import eri_post
 from app.eri.envelope import encrypt_password
+
+
+def _require_type2_mode() -> None:
+    """Guard: Type-2 API routes must only run when ERI_MODE=type2.
+
+    In Type-3 mode these routes return 503 because the Type-2 gateway
+    credentials, AWS whitelisted IP, and DSC signing are not provisioned.
+    """
+    creds = get_eri_credentials()
+    if creds.mode != "type2":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ERI Type-2 API integration is not enabled in the current mode "
+                f"(ERI_MODE={creds.mode}). Set ERI_MODE=type2 to use these endpoints."
+            ),
+        )
 
 
 def extract_auth_token(req: Request) -> Optional[str]:
@@ -817,10 +835,11 @@ def login_eri(
     current_user: User = Depends(get_current_user),
 ):
     """Logs in ERI and establishes session with ITD.
-    
+
     Cites: Docs/API_Login_v1.1.pdf Section 4.
     """
-    from app.eri.login import eri_login
+    _require_type2_mode()
+    from app.eri.type2.login import eri_login
     
     try:
         res = eri_login()
@@ -842,10 +861,11 @@ def logout_eri(
     current_user: User = Depends(get_current_user),
 ):
     """Terminates the ERI session with ITD.
-    
+
     Cites: Docs/API_Login_v1.1.pdf Section 4.7.
     """
-    from app.eri.login import eri_logout
+    _require_type2_mode()
+    from app.eri.type2.login import eri_logout
     
     auth_token = extract_auth_token(req)
     if not auth_token:
@@ -870,10 +890,11 @@ def eri_add_client_route(
     current_user: User = Depends(get_current_user),
 ):
     """Submits request to add registered taxpayer as client.
-    
+
     Cites: Docs/API_AddClientFlow_v1.1.pdf Section 4.
     """
-    from app.eri.add_client import addClient
+    _require_type2_mode()
+    from app.eri.type2.add_client import addClient
     auth_token = extract_auth_token(req)
     if not auth_token:
         raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
@@ -899,10 +920,11 @@ def eri_validate_client_otp_route(
     current_user: User = Depends(get_current_user),
 ):
     """Validates the OTP to accept add client request.
-    
+
     Cites: Docs/API_AddClientFlow_v1.1.pdf Section 5.
     """
-    from app.eri.add_client import validateClientOtp
+    _require_type2_mode()
+    from app.eri.type2.add_client import validateClientOtp
     auth_token = extract_auth_token(req)
     if not auth_token:
         raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
@@ -930,10 +952,11 @@ def eri_register_client_route(
     current_user: User = Depends(get_current_user),
 ):
     """Registers an unregistered individual taxpayer and adds them as ERI client.
-    
+
     Cites: Docs/API_AddClientFlow_v1.1.pdf Section 6.
     """
-    from app.eri.add_client import addRegisterClient
+    _require_type2_mode()
+    from app.eri.type2.add_client import addRegisterClient
     auth_token = extract_auth_token(req)
     if not auth_token:
         raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
@@ -980,10 +1003,11 @@ def eri_validate_reg_otp_route(
     current_user: User = Depends(get_current_user),
 ):
     """Validates registration OTP from taxpayer to complete registration and client addition.
-    
+
     Cites: Docs/API_AddClientFlow_v1.1.pdf Section 7.
     """
-    from app.eri.add_client import validateRegOtp
+    _require_type2_mode()
+    from app.eri.type2.add_client import validateRegOtp
     auth_token = extract_auth_token(req)
     if not auth_token:
         raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")

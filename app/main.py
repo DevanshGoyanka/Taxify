@@ -84,6 +84,12 @@ install_uvicorn_access_privacy_filter(logging.getLogger("uvicorn.access"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: create tables + launch background worker.  Shutdown: stop worker."""
+    # Validate the active ERI credential bundle (mode/env) is sane before
+    # serving traffic. Fails fast on production misconfiguration (mock DSC,
+    # missing AWS host for Type-2, missing digest secret).
+    from app.eri.config import assert_credentials_at_startup
+    assert_credentials_at_startup()
+
     create_tables()
     start_worker()
     yield
@@ -171,8 +177,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-from app.routers import eri as eri_router
-
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
@@ -187,7 +191,6 @@ app.include_router(pan_router.router)
 app.include_router(tax_router.router)
 app.include_router(tax_v2_router.router)
 app.include_router(dashboard_router.router)
-app.include_router(eri_router.router)
 app.include_router(automation_router.router)
 
 # ---------------------------------------------------------------------------
