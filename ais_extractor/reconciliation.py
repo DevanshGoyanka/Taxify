@@ -37,9 +37,11 @@ CATEGORY_TO_INCOME_HEAD = {
     "cash withdrawals":                 "Income from Other Sources",
     "winnings from online games":       "Income from Other Sources",
     "purchase of vehicle":              "Income from Other Sources",
-    "commission income":                "Income from Other Sources",
+    "commission income":                "Profits and Gains of Business or Profession",
     "insurance commission":             "Profits and Gains of Business or Profession",
     "receipt from partnership firm":    "Profits and Gains of Business or Profession",
+    "professional fees":                "Profits and Gains of Business or Profession",
+    "receipts on transfer of virtual digital asset": "Capital Gains",
     "tax payments":                     "Taxes Paid",
     "refund":                           "Refund",
     # TCS (Tax Collected at Source) is a tax credit, not income.  CBDT rules
@@ -65,8 +67,11 @@ SECTION_TO_CATEGORY = {
     "194C": "business receipts", "194D": "insurance commission",
     "194H": "commission income", "194I": "business receipts",
     "194J": "business receipts", "194M": "business receipts",
-    "194N": "business receipts", "194O": "business receipts",
-    "194Q": "business receipts", "194S": "business receipts",
+    "194N": "cash withdrawals", "194O": "business receipts",
+    "194Q": "business receipts",
+    # 194S = TDS on transfer of Virtual Digital Asset — a capital-gains
+    # transaction (Schedule VDA), NOT business receipts.
+    "194S": "receipts on transfer of virtual digital asset",
     "194IA": "sale of land or building", "194IB": "sale of land or building",
     "206C": "business receipts", "206CE": "business receipts",
     "206CF": "business receipts",
@@ -77,6 +82,7 @@ TRANSACTION_LEVEL_CATEGORIES = frozenset({
     "purchase of securities and units of mutual funds",
     "sale of land or building",
     "purchase of immovable property",
+    "receipts on transfer of virtual digital asset",
 })
 
 
@@ -124,7 +130,7 @@ _CATEGORY_CANON_PATTERNS: list[tuple[str, str]] = [
     # ── Capital gains ── (sale/purchase of securities/MF)
     (r"sale.*equity|sale.*securities|sale.*mutual fund|sale.*units", "sale of securities and units of mutual fund"),
     (r"purchase.*securities|purchase.*mutual fund|purchase.*units", "purchase of securities and units of mutual funds"),
-    (r"sale.*land|sale.*building|sale.*immovable", "sale of land or building"),
+    (r"sale.*land|sale.*building|sale.*immovable|transfer.*immovable|receipts.*immovable", "sale of land or building"),
     (r"purchase.*immovable|purchase.*property", "purchase of immovable property"),
     # ── SFT deposit purchases ──
     (r"purchase.*time deposit|time deposit", "purchase of time deposits"),
@@ -132,15 +138,22 @@ _CATEGORY_CANON_PATTERNS: list[tuple[str, str]] = [
     (r"cash withdrawal", "cash withdrawals"),
     # ── Salary / business ──
     (r"salary", "salary"),
-    (r"business receipts|business receipt", "business receipts"),
-    (r"gst turnover", "gst turnover"),
-    (r"gst purchase", "gst purchases"),
+    (r"business receipts|business receipt|receipts from contract|perquisites.*business|benefits.*business", "business receipts"),
+    (r"gst turnover|sales reported under gstr|sales.*gstr", "gst turnover"),
+    (r"gst purchase|purchases reported under gstr|purchases.*gstr", "gst purchases"),
     (r"receipt.*partnership|partnership.*firm", "receipt from partnership firm"),
     (r"insurance commission", "insurance commission"),
     (r"commission or brokerage|commission income", "commission income"),
     (r"professional fees", "professional fees"),
     (r"purchase.*vehicle", "purchase of vehicle"),
-    (r"winnings.*online|online.*games|virtual digital asset|vda", "winnings from online games"),
+    # ── VDA (Virtual Digital Asset) — capital gains, NOT winnings ──
+    # TIS "Receipts on transfer of virtual digital asset" and AIS
+    # "TDS-194S Amount received on transfer of virtual digital asset" are
+    # capital-gains transactions (Schedule VDA in ITR-2/3), distinct from
+    # "Winnings from Online Games" (194BA) which is Other Sources.  Keep
+    # them separate so VDA routes to the Capital Gains tab.
+    (r"virtual digital asset|vda|transfer of virtual digital", "receipts on transfer of virtual digital asset"),
+    (r"winnings.*online|online.*games", "winnings from online games"),
     (r"rent", "rent"),
 ]
 

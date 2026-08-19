@@ -68,11 +68,22 @@ SFT_TO_INCOME_HEAD: dict[str, IncomeHead] = {
     "sale of land or building": IncomeHead.CAPITAL_GAINS,
     "purchase of securities and units of mutual funds": IncomeHead.CAPITAL_GAINS,
     "purchase of immovable property": IncomeHead.CAPITAL_GAINS,
+    # Virtual Digital Asset transfers are capital-gains transactions
+    # (Schedule VDA in ITR-2/3), not Other Sources.
+    "receipts on transfer of virtual digital asset": IncomeHead.CAPITAL_GAINS,
     "gst turnover": IncomeHead.BUSINESS_PROFESSION,
     "gst purchases": IncomeHead.BUSINESS_PROFESSION,
+    # Commission / insurance commission / partner receipts are business
+    # income (PGBP), not Other Sources.
+    "commission income": IncomeHead.BUSINESS_PROFESSION,
+    "insurance commission": IncomeHead.BUSINESS_PROFESSION,
+    "receipt from partnership firm": IncomeHead.BUSINESS_PROFESSION,
+    "professional fees": IncomeHead.BUSINESS_PROFESSION,
     "purchase of time deposits": IncomeHead.OTHER_SOURCES,
     "cash deposits": IncomeHead.OTHER_SOURCES,
     "cash withdrawals": IncomeHead.OTHER_SOURCES,
+    "winnings from online games": IncomeHead.OTHER_SOURCES,
+    "purchase of vehicle": IncomeHead.OTHER_SOURCES,
 }
 
 B1_CATEGORIES = [
