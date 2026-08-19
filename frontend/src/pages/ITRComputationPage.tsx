@@ -11,7 +11,7 @@ import { EmployerEntryManager } from '../components/EmployerEntryManager';
 import { BankAccountManager } from '../components/BankAccountManager';
 import { PersonalInfoTab } from '../components/PersonalInfoTab';
 import { hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
-import { BusinessProfessionEntryManager } from '../components/BusinessProfessionEntryManager';
+import { BusinessProfessionEntryManager, type BusinessProfessionScheduleData } from '../components/BusinessProfessionEntryManager';
 import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
@@ -1636,7 +1636,7 @@ export default function ITRComputationPage() {
         {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={tdsToManager(editorModel?.draft?.taxes?.tds ?? [])} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} taxResult={backendTaxResult} />}
         {activeTab === 3 && editorModel && <CapitalGainsTab draft={editorModel.draft} taxResult={taxResult} itrForm={itrForm as ItrForm} onChange={(schedule) => updateEditor((model) => updateCapitalGainsSchedule(model, schedule))} />}
-        {activeTab === 4 && editorModel && <BusinessTab taxResult={taxResult} draft={editorModel.draft} onChangeBusinesses={(entries: ReturnDraft['businesses']) => updateEditor((model) => replaceDraft({ ...model.draft, businesses: entries }))} onChangeBpNetProfit={(value: number) => updateEditor((model) => updateBpNetProfit(model, value))} />}
+        {activeTab === 4 && editorModel && <BusinessTab taxResult={taxResult} itrForm={itrForm as string} draft={editorModel.draft} onChangeBusinesses={(entries: ReturnDraft['businesses']) => updateEditor((model) => replaceDraft({ ...model.draft, businesses: entries }))} onChangeBpNetProfit={(value: number) => updateEditor((model) => updateBpNetProfit(model, value))} />}
         {activeTab === 5 && <OtherSourcesTab taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel as any} />}
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
         {activeTab === 7 && editorModel && <DeductionsTab regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
@@ -1813,10 +1813,29 @@ function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm, taxRe
   return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} taxResult={taxResult} />;
 }
 
-function BusinessTab({ taxResult, itrForm, data, onChange }: any) {
+function BusinessTab({ taxResult, itrForm, draft }: { taxResult: any; itrForm: string; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void }): React.ReactElement {
+  // The draft does not (yet) carry a full ITR-3 Schedule BP or ITR-4
+  // Schedule BP block — PresumptiveBusiness[] only holds the simplified
+  // 44AD/44ADA/44AE presumptive scheme rows.  The BusinessProfessionEntryManager
+  // captures the full official Schedule BP, so we keep its state in a
+  // localStorage-backed cache keyed by PAN+AY+form so switching tabs
+  // (which unmounts this component) does not lose the captured data.
+  const cacheKey = `biz-schedule-${draft.personal?.pan || 'unknown'}-${draft.assessmentYear || ''}-${itrForm}`;
+  const [data, setData] = useState<BusinessProfessionScheduleData>(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      return raw ? JSON.parse(raw) as BusinessProfessionScheduleData : {};
+    } catch {
+      return {};
+    }
+  });
+  const handleChange = useCallback((next: BusinessProfessionScheduleData) => {
+    setData(next);
+    try { localStorage.setItem(cacheKey, JSON.stringify(next)); } catch { /* ignore quota */ }
+  }, [cacheKey]);
   return <BusinessProfessionEntryManager
-    data={data || {}}
-    onChange={onChange}
+    data={data}
+    onChange={handleChange}
     selectedForm={itrForm}
     taxResult={taxResult}
   />;

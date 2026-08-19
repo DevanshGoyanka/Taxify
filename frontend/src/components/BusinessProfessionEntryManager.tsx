@@ -22,16 +22,20 @@ const cardStyle: React.CSSProperties = { marginBottom: 20, padding: 16, backgrou
 
 /** Routes Business/Profession capture to the exact official schema for the selected ITR form. */
 export function BusinessProfessionEntryManager({ data = {}, onChange, selectedForm, taxResult }: Props): React.ReactElement {
-  const normalizedForm = selectedForm.replace('-', '').toUpperCase();
+  // Guard against an undefined/empty selectedForm so this component never
+  // throws during render (a missing form would otherwise crash on
+  // .replace below and blank the whole screen).
+  const safeForm = (selectedForm || '').toString();
+  const normalizedForm = safeForm.replace('-', '').toUpperCase();
   const itr3 = normalizedForm === 'ITR3';
   const itr4 = normalizedForm === 'ITR4';
 
   if (!itr3 && !itr4) {
     return <div>
-      <Header selectedForm={selectedForm} detail="Business income is not reportable in the selected form." />
+      <Header selectedForm={safeForm || '—'} detail="Business income is not reportable in the selected form." />
       <div style={{ marginBottom: 16, padding: '14px 16px', background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 8, fontSize: 13, color: '#92400e' }}>
         <strong style={{ fontSize: 14, display: 'block', marginBottom: 4 }}>⚠ Switch to ITR-3 or ITR-4</strong>
-        <div>{selectedForm} does not contain a Business or Profession schedule. Use ITR-3 for full PGBP/accounts or ITR-4 for eligible presumptive income under sections 44AD, 44ADA, or 44AE.</div>
+        <div>{safeForm || 'The selected form'} does not contain a Business or Profession schedule. Use ITR-3 for full PGBP/accounts or ITR-4 for eligible presumptive income under sections 44AD, 44ADA, or 44AE.</div>
       </div>
     </div>;
   }
