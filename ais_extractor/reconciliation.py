@@ -32,16 +32,18 @@ CATEGORY_TO_INCOME_HEAD = {
     "purchase of immovable property":   "Capital Gains",
     "gst turnover":                     "Profits and Gains of Business or Profession",
     "gst purchases":                    "Profits and Gains of Business or Profession",
-    "purchase of time deposits":        "Income from Other Sources",
-    "cash deposits":                    "Income from Other Sources",
-    "cash withdrawals":                 "Income from Other Sources",
+    "purchase of time deposits":        "Informational Transaction",
+    "cash deposits":                     "Informational Transaction",
+    "cash withdrawals":                 "Informational Transaction",
     "winnings from online games":       "Income from Other Sources",
-    "purchase of vehicle":              "Income from Other Sources",
+    "purchase of vehicle":              "Informational Transaction",
     "commission income":                "Profits and Gains of Business or Profession",
     "insurance commission":             "Profits and Gains of Business or Profession",
     "receipt from partnership firm":    "Profits and Gains of Business or Profession",
     "professional fees":                "Profits and Gains of Business or Profession",
     "receipts on transfer of virtual digital asset": "Capital Gains",
+    "miscellaneous payment":            "Informational Transaction",
+    "outward foreign remittance":       "Informational Transaction",
     "tax payments":                     "Taxes Paid",
     "refund":                           "Refund",
     # TCS (Tax Collected at Source) is a tax credit, not income.  CBDT rules
@@ -73,8 +75,15 @@ SECTION_TO_CATEGORY = {
     # transaction (Schedule VDA), NOT business receipts.
     "194S": "receipts on transfer of virtual digital asset",
     "194IA": "sale of land or building", "194IB": "sale of land or building",
-    "206C": "business receipts", "206CE": "business receipts",
-    "206CF": "business receipts",
+    # 206CF (vehicle purchase TCS), 206CQ (LRS remittance TCS), and the
+    # generic 206C are Tax Collected at Source — they are NOT income.  The
+    # assessee who buys a car or remits forex is not earning income; the
+    # amount is only a tax credit claimable against tax payable.  Route to
+    # the ``tcs credit`` bucket so no income entry is produced (only the
+    # Schedule TCS credit), while the transaction still surfaces in the
+    # import summary for transparency.
+    "206C": "tcs credit", "206CF": "tcs credit", "206CQ": "tcs credit",
+    "206CE": "tcs credit", "206CG": "tcs credit",
 }
 
 TRANSACTION_LEVEL_CATEGORIES = frozenset({
@@ -83,6 +92,35 @@ TRANSACTION_LEVEL_CATEGORIES = frozenset({
     "sale of land or building",
     "purchase of immovable property",
     "receipts on transfer of virtual digital asset",
+})
+
+# ── Informational / tax-credit-only categories (NOT income) ───────────────────
+# CBDT placement (Income Tax Act 1961, AY 2026-27): the following AIS/TIS
+# transactions are NOT chargeable as income — they are SFT reportable
+# events or TDS/TCS book entries where the assessee is the payor/buyer,
+# not a recipient of income.  They must NOT produce an income entry; any
+# tax deducted/collected (TDS/TCS) flows only as a Schedule TDS/TCS
+# credit claimable against tax payable.  The transactions still appear in
+# the import summary for transparency.
+#
+#   * ``purchase of time deposits`` (SFT-005): buying an FD is not income;
+#     the interest from the FD is, captured separately as SFT-016 interest.
+#   * ``cash deposits`` / ``cash withdrawals`` (SFT-004, SFT-003): cash
+#     movements into/out of a bank account; not income.  §194N TDS on cash
+#     withdrawals is a refundable credit.
+#   * ``purchase of vehicle`` (§206CF): TCS collected on vehicle purchase;
+#     the buyer earns no income — only a TCS credit.
+#   * ``miscellaneous payment`` (SFT-006 credit-card payments): a payment,
+#     not income.
+#   * ``outward foreign remittance`` (§206CQ LRS): TCS on forex remittance;
+#     a credit, not income.
+NON_INCOME_CATEGORIES: frozenset[str] = frozenset({
+    "purchase of time deposits",
+    "cash deposits",
+    "cash withdrawals",
+    "purchase of vehicle",
+    "miscellaneous payment",
+    "outward foreign remittance",
 })
 
 
