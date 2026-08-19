@@ -234,11 +234,134 @@ export function mapAisToDraftPatch(data: AisImportData | null | undefined): Retu
     });
   });
 
+  const cgPatch = extractAisCapitalGains(entries);
+
   return {
     employers,
     otherSources: { interest: [...sftInterest, ...b1Interest], dividends },
     taxes: { tds: tdsEntries },
+    capitalGainsSchedule: cgPatch.capitalGainsSchedule,
     provenance: [{ source: 'AIS', importedAt: new Date().toISOString(), reference: 'direct-import' }],
     reconciliation: { evidence, discrepancies: [] },
   };
+}
+
+// ── Capital Gains extraction from raw AIS detail rows ────────────────────────
+//
+// The direct (non-reconciled) AIS import path reads the raw AIS JSON, where
+// each CG entry's `details[].data` carries the parsed scrip keys produced by
+// `ais_extractor.extractor._parse_listed_equity_sale_rows` /
+// `_parse_equity_mutual_fund_sale_rows`.  This helper reads those keys
+// directly (no reconciliation needed) and builds a CG schedule patch.
+
+function num(value: unknown): number {
+  if (value === null || value === undefined) return 0;
+  const n = typeof value === 'string' ? Number(value.replace(/,/g, '')) : Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function str(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Build a CG scrip patch from raw AIS detail `data` rows of a SALE entry. */
+function extractAisCapitalGains(entries: PortalEntry[]): ReturnDraftPatch {
+  const schedule112A: NonNullable<NonNullable<NonNullable<ReturnDraftPatch['capitalGainsSchedule']>>['schedule112A']> = [];
+  const schedule115AD: typeof schedule112A = [];
+  const stEquity: Record<string, unknown>[] = [];
+  const vda: Record<string, unknown>[] = [];
+  const stImmovable: Record<string, unknown>[] = [];
+  const ltImmovable: Record<string, unknown>[] = [];
+  let simplifiedSale = 0;
+  let simplifiedCost = 0;
+
+  for (const entry of entries) {
+    const category = (entry.category || '').toLowerCase();
+    const isCgCategory =
+      category.includes('securities') ||
+      category.includes('virtual digital asset') ||
+      category.includes('land or building') ||
+      category.includes('immovable');
+    if (!isCgCategory) continue;
+    if (!entry.details || entry.details.length === 0) continue;
+
+    for (const detail of entry.details) {
+      const d = detail.data || {};
+      const isin = str(d.isin || d.security_code);
+      const assetType = str(d.asset_type).toLowerCase();
+      const isLongTerm = assetType.includes('long');
+      const isShortTerm = assetType.includes('short');
+
+      const saleValue = num(d.sales_consideration || entry.amount);
+      const cost = num(d.cost_of_acquisition);
+
+      if (category.includes('virtual digital asset')) {
+        vda.push({
+          id: `ais-vda-${entry.information_code}-${detail.sr_no ?? isin}`,
+          dateOfAcquisition: '', dateOfTransfer: str(d.transfer_date), head: 'CG',
+          acquisitionCost: cost, consideration: saleValue,
+        });
+        continue;
+      }
+
+      if (category.includes('land or building') || category.includes('immovable')) {
+        const row = {
+          id: `ais-immovable-${entry.information_code}-${detail.sr_no ?? isin}`,
+          dateOfSale: str(d.transfer_date || d.date_of_sale),
+          fullConsideration: saleValue, acquisitionCost: cost, transferExpenses: 0,
+        };
+        // AIS doesn't carry purchase date for property sales — default to
+        // long-term (> 24 months) unless the asset_type says short-term.
+        if (isShortTerm) stImmovable.push(row);
+        else ltImmovable.push(row);
+        continue;
+      }
+
+      // Listed equity / equity-MF sale
+      const securityClass = str(d.security_class).toLowerCase();
+      const isFii = securityClass.includes('fii') || securityClass.includes('fpi');
+      const scrip = {
+        id: `ais-112a-${entry.information_code}-${detail.sr_no ?? isin}-${str(d.transfer_date)}`.replace(/\s+/g, '_').toUpperCase(),
+        shareOnOrBefore: '' as 'BE' | 'AE' | '',
+        isin,
+        name: str(d.security_name),
+        quantity: num(d.quantity),
+        salePricePerUnit: num(d.sale_price_per_unit),
+        totalSaleValue: saleValue,
+        costWithoutIndexation: cost,
+        acquisitionCost: cost,
+        fmvPerUnit: num(d.unit_fmv || d.fair_market_value),
+        totalFmv: num(d.fair_market_value),
+        transferExpenses: 0,
+      };
+
+      if (isShortTerm) {
+        stEquity.push({
+          id: `ais-steq-${entry.information_code}-${detail.sr_no ?? isin}`.toUpperCase(),
+          fullConsideration: saleValue, acquisitionCost: cost, improvementCost: 0, transferExpenses: 0,
+          isin, securityName: str(d.security_name), quantity: num(d.quantity), salePricePerUnit: num(d.sale_price_per_unit),
+        });
+      } else {
+        if (isLongTerm) {
+          simplifiedSale += saleValue;
+          simplifiedCost += cost;
+        }
+        if (isFii) schedule115AD.push(scrip);
+        else schedule112A.push(scrip);
+      }
+    }
+  }
+
+  const schedule: NonNullable<ReturnDraftPatch['capitalGainsSchedule']> = {};
+  if (schedule112A.length) schedule.schedule112A = schedule112A;
+  if (schedule115AD.length) schedule.schedule115AD = schedule115AD;
+  if (stEquity.length) schedule.stEquity = stEquity as never;
+  if (ltImmovable.length) schedule.ltImmovable = ltImmovable as never;
+  if (stImmovable.length) schedule.stImmovable = stImmovable as never;
+  if (vda.length) schedule.vda = vda as never;
+  if (simplifiedSale > 0 || simplifiedCost > 0) {
+    schedule.simplified112A = { totalSaleConsideration: simplifiedSale, totalCostAcquisition: simplifiedCost };
+  }
+  if (Object.keys(schedule).length === 0) return {};
+  return { capitalGainsSchedule: schedule };
 }

@@ -167,7 +167,73 @@ Both workstreams are sequenced into **5 phases**. After each phase: update this 
 
 | Date | Phase | Commit | Status |
 |---|---|---|---|
-| 2026-08-19 | 1 | `<pending push>` | ✅ Complete — awaiting user test |
+| 2026-08-19 | 1 | `a416bd3` | ✅ Complete — approved by user |
+| 2026-08-19 | 2 | `<pending push>` | ✅ Complete — awaiting user test |
+
+---
+
+## Phase 2 — Completed 2026-08-19
+
+### Changes shipped
+
+#### Frontend — CG auto-population mappers
+1. **`frontend/src/utils/mapCapitalGainsToDraftPatch.ts`** (new, 230 lines) — `mapCapitalGainsEvidence(evidence)` consumes `capital_gain_evidence` from a reconciled payload and projects it into the typed `CapitalGainsSchedule`:
+   - AIS SFT-17-LES / SFT-18-EMF SALE + Long-term → `schedule112A[]` (scrip-level)
+   - AIS SFT-17-LES / SFT-18-EMF SALE + Short-term → `stEquity[]` (engine computes 111A later)
+   - FII/FPI scrips (security_class contains FII/FPI) → `schedule115AD[]`
+   - SFT-012 / 194IA property-sale → `ltImmovable[]` (long-term by default) or `stImmovable[]` (short-term)
+   - VDA rows → `vda[]`
+   - LTCG sale scrips also aggregate into `simplified112A` quick-entry totals (for ITR-1/4)
+   - PURCHASE-side rows are skipped (evidence only)
+   - Deterministic ids → `mergeDraft` id-merge prevents duplicates on re-import
+   - Null/undefined numeric fields coerce to 0 (no NaN)
+
+2. **`frontend/src/utils/mapReconciledToDraftPatch.ts`** — wired `mapCapitalGainsEvidence` into the reconciled automation path. `mapReconciledToDraftPatch` now emits `capitalGainsSchedule` from `results.capital_gain_evidence`.
+
+3. **`frontend/src/utils/mapAisToDraftPatch.ts`** — added `extractAisCapitalGains(entries)` helper that reads raw AIS `details[].data` (the parsed keys: `isin`, `security_name`, `quantity`, `sale_price_per_unit`, `sales_consideration`, `cost_of_acquisition`, `asset_type`, `transfer_date`, `unit_fmv`, `fair_market_value`) and builds a CG schedule patch for the direct (non-reconciled) AIS import path.
+
+#### Backend — Unified import endpoint
+4. **`app/routers/tax_v2.py`** — added `POST /v2/imports/parse-reconcile`:
+   - Takes multipart form: `ais`, `tis`, `form26as`, `prefill` (any combination, each optional)
+   - Accepts raw PDF bytes (`%PDF-` magic detected) or UTF-8 JSON
+   - Runs the SAME parsers as automation (`extract_ais`, `extract_tis`, `extract_26as`, `parse_prefill_json`) + `reconcile()`
+   - Persists each supplied document to `ImportedDocument` (durable re-reconciliation without re-download)
+   - Returns the full `ReconciledResults` payload (including `capital_gain_evidence`, `capital_gain_controls`, `capital_gain_control_discrepancies`) + prefill under the `prefill` key
+   - Prefill-only import returns `{ prefill: {...} }` (no reconciliation to run)
+   - Prefix changed from `/v2/tax-summary` to `/v2` so both routes coexist: `/v2/tax-summary/compute` (unchanged) + `/v2/imports/parse-reconcile` (new)
+
+#### Tests
+5. **`frontend/src/utils/mapCapitalGainsToDraftPatch.test.ts`** (new, 10 tests) — covers:
+   - null/undefined/empty evidence
+   - long-term SALE → schedule112A scrip
+   - simplified112A aggregate totals (LTCG only)
+   - short-term SALE → stEquity (not 112A)
+   - PURCHASE-side rows skipped
+   - property-sale → ltImmovable
+   - VDA → vda[]
+   - FII/FPI → schedule115AD
+   - deterministic ids (no re-import duplicates)
+   - null numeric fields → 0 (no NaN)
+
+6. **`frontend/src/utils/mapReconciledToDraftPatch.test.ts`** — added a 3rd test: `projects capital_gain_evidence into the CG schedule`.
+
+### Validation
+- `tsc -b`: zero new errors (only pre-existing `api/reconciliation.ts` missing `./client`).
+- `vitest run`: 15 files / 131 tests pass (120 from Phase 1 + 11 new in Phase 2).
+- `vite build`: clean production bundle (built in 285ms).
+- Backend `pytest`: 16 tests pass (prefill parser + ITR-1 calculator).
+- Backend router imports clean: `[/v2/tax-summary/compute, /v2/imports/parse-reconcile]`.
+
+### User test plan
+1. Restart the backend: `.\.venv314\Scripts\python.exe .\run.py`
+2. Restart the frontend: `cd frontend; npm run dev`
+3. **Direct AIS import test:** Go to a client → manually import the `COVPC5929M_ais.json` (or any AIS sample with CG scrips). Open the Capital Gains tab → `schedule112A[]` should populate with ISIN, quantity, sale price, cost (imported from AIS). For ITR-1/4, the simplified 112A aggregate (sale consideration + cost) should also populate.
+4. **Reconciled automation test:** Trigger an automation job for a client with AIS+TIS+26AS. After the job completes, open the Capital Gains tab → scrips populate from `capital_gain_evidence` (the reconciled CG ledger).
+5. **Unified endpoint test (optional, via curl/Postman):** `POST http://127.0.0.1:8000/v2/imports/parse-reconcile` with multipart form fields `ais` (PDF file), `tis` (PDF file), `form26as` (PDF file) → returns the full `ReconciledResults` JSON including `capital_gain_evidence`.
+6. Re-importing the same AIS a second time → no duplicate scrips (id-merge dedup).
+7. Run `npx vitest run` → 131 tests pass. Run `npx tsc -b` → no new errors.
+
+Once you confirm Phase 2 is green, I'll update this MD, commit, push, and proceed to **Phase 3** (typed CapitalGainsTab + auto-populate UI wiring).
 
 ---
 

@@ -31,4 +31,28 @@ describe('mapReconciledToDraftPatch', () => {
   });
 
   it('returns an empty patch for missing results', () => expect(mapReconciledToDraftPatch(undefined)).toEqual({}));
+
+  it('projects capital_gain_evidence into the CG schedule', () => {
+    const withCG: ReconciledResults = {
+      ...results(),
+      capital_gain_evidence: [
+        {
+          evidence_id: 'ev-1', granularity: 'TRANSACTION_DETAIL', side: 'SALE',
+          category: 'sale of securities and units of mutual fund',
+          information_code: 'SFT-18-EMF', summary_sr_no: 1, detail_sr_no: 1,
+          reporting_source: 'CAMS', transaction_date: '30/03/2026',
+          security_name: 'Reliance', security_identifier: 'INE123456789',
+          asset_type: 'Long term', quantity: 100, amount: 250000,
+          acquisition_cost: 175000, sale_price_per_unit: 2500,
+          unit_fmv: 2400, fair_market_value: 240000, parser_confidence: 'HIGH',
+        },
+      ],
+    };
+    const patch = mapReconciledToDraftPatch(withCG);
+    expect(patch.capitalGainsSchedule?.schedule112A).toHaveLength(1);
+    expect(patch.capitalGainsSchedule?.schedule112A?.[0].isin).toBe('INE123456789');
+    expect(patch.capitalGainsSchedule?.simplified112A).toEqual({
+      totalSaleConsideration: 250000, totalCostAcquisition: 175000,
+    });
+  });
 });

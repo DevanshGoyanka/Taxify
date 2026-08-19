@@ -2,6 +2,7 @@ import type { ReconciledEntry, ReconciledResults } from '../api/itrAutomation';
 import { EMPTY_TDS_CREDIT, type DividendIncome, type Employer, type InterestIncome, type Presumptive44AD, type Presumptive44ADA, type TdsCredit } from '../domain/returns/types';
 import { createEmptyFinancialParticulars } from '../domain/returns/factory';
 import type { ReturnDraftPatch } from '../domain/returns/draftPatch';
+import { mapCapitalGainsEvidence } from './mapCapitalGainsToDraftPatch';
 
 function id(prefix: string, entry: ReconciledEntry): string {
   const text = entry.source_id || `${entry.source}|${entry.section}|${entry.final_amount}`;
@@ -71,11 +72,13 @@ export function mapReconciledToDraftPatch(results: ReconciledResults | null | un
   const dividends = entries.filter((entry) => (entry.category || '').toLowerCase() === 'dividend');
   const businesses = entries.filter((entry) => entry.income_head === 'Profits and Gains of Business or Profession');
   const tdsRows = entries.filter((entry) => entry.credit_type !== 'TCS' && (entry.as26_tds || 0) > 0);
+  const cgPatch = mapCapitalGainsEvidence(results.capital_gain_evidence);
   return {
     employers: salaries.map(employer),
     otherSources: { interest: interests.map(interest), dividends: dividends.map(dividend) },
     taxes: { tds: tdsRows.map(tds) },
     businesses: businesses.length ? [business(businesses)] : undefined,
+    capitalGainsSchedule: cgPatch.capitalGainsSchedule,
     provenance: [{ source: 'AIS', importedAt: new Date().toISOString(), reference: results.metadata.pan || results.metadata.financial_year || '' }],
   };
 }
