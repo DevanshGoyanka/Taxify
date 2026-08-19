@@ -164,4 +164,56 @@ describe('mapCapitalGainsEvidence', () => {
     expect(row?.totalFmv).toBe(0);
     expect(row?.salePricePerUnit).toBe(0);
   });
+
+  it('does NOT create a phantom scrip from a SALE summary-aggregate row', () => {
+    // Real shape from AEDPD0736M: the SFT-17-LES(M) SALE entry is summary-only
+    // (granularity REPORTING_SOURCE_AGGREGATE) — it carries the category sale
+    // total (496301) but no ISIN / per-scrip cost / quantity.  Previously the
+    // reconciled mapper turned this aggregate into a single schedule112A scrip
+    // with totalSaleValue=496301 and cost/ISIN=0 — a phantom scrip.
+    const summarySale: CapitalGainEvidence = {
+      evidence_id: 'ev-summary',
+      granularity: 'REPORTING_SOURCE_AGGREGATE',
+      side: 'SALE',
+      category: 'sale of securities and units of mutual fund',
+      information_code: 'SFT-17-LES(M)',
+      summary_sr_no: 26,
+      detail_sr_no: null,
+      reporting_source: 'AAACC6233AMUMC09975A',
+      reporting_entity_pan: 'AAACC6233AM',
+      amount: 496301,
+      acquisition_cost: null,
+      security_identifier: '',
+      quantity: null,
+      sale_price_per_unit: null,
+      asset_type: '',
+      security_class: '',
+      parser_confidence: 'MEDIUM',
+    };
+    const patch = mapCapitalGainsEvidence([summarySale]);
+    // No phantom scrip.
+    expect(patch.capitalGainsSchedule?.schedule112A ?? []).toHaveLength(0);
+    expect(patch.capitalGainsSchedule?.schedule115AD ?? []).toHaveLength(0);
+    expect(patch.capitalGainsSchedule?.stEquity ?? []).toHaveLength(0);
+    // A summary aggregate with no asset_type cannot be determined long-term,
+    // so it does not contribute to the LTCG-only simplified112A aggregate.
+    // The row is correctly skipped entirely (no phantom scrip, no aggregate).
+    expect(patch.capitalGainsSchedule?.simplified112A).toBeUndefined();
+  });
+
+  it('does NOT create scrips from PURCHASE-side rows', () => {
+    const purchase: CapitalGainEvidence = {
+      ...scrip(),
+      side: 'PURCHASE',
+      category: 'purchase of securities and units of mutual funds',
+      amount: 456609,
+      acquisition_cost: 456609,
+    };
+    const patch = mapCapitalGainsEvidence([purchase]);
+    expect(patch.capitalGainsSchedule?.schedule112A ?? []).toHaveLength(0);
+    expect(patch.capitalGainsSchedule?.stEquity ?? []).toHaveLength(0);
+    // PURCHASE rows are evidence only — they don't aggregate into the
+    // simplified sale total either.
+    expect(patch.capitalGainsSchedule?.simplified112A).toBeUndefined();
+  });
 });

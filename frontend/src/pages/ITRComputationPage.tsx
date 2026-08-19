@@ -10,7 +10,7 @@ import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
 import { BankAccountManager } from '../components/BankAccountManager';
 import { PersonalInfoTab } from '../components/PersonalInfoTab';
-import { CapitalGainsEntryManager, hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
+import { hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
 import { BusinessProfessionEntryManager } from '../components/BusinessProfessionEntryManager';
 import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
@@ -24,7 +24,7 @@ import {
 import {
   banksToManager, challansToManager, deductionLoansToManager, familyPensionToManager, giftsToManager,
   interestToManager, tdsToManager, winningsToManager,
-  updateBanksFromManager, updateBpNetProfit, updateChallanKindFromManager, updateDeductionLoansFromManager,
+  updateBanksFromManager, updateBpNetProfit, updateCapitalGainsSchedule, updateChallanKindFromManager, updateDeductionLoansFromManager,
   updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
   updateHouseProperties, updateInterestFromManager, updateLossesBroughtForward, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
   updateChapterVIA, updateTdsFromManager, updateTcsCredits, updateWinningsFromManager,
@@ -135,7 +135,8 @@ import {
   OtherSourcesTab,
   DeductionsTab,
   TDSTab,
-  TaxComputationTab, type CanonicalManagerBindings
+  TaxComputationTab, type CanonicalManagerBindings,
+  CapitalGainsTab,
 } from './ITRComputationTabs';
 
 export default function ITRComputationPage() {
@@ -637,9 +638,61 @@ export default function ITRComputationPage() {
 
     let mergedImportData: ReturnDraft | null = null;
     if (editorRef.current) {
+      // An import is AUTHORITATIVE for the sections it covers (income
+      // heads, employers, banks, TDS/TCS, businesses, capital gains,
+      // house property, losses).  It must REPLACE those sections, not
+      // accumulate via mergeDraft's append-only list semantics —
+      // otherwise every re-import layers new entries on top of old
+      // ones and the same interest appears 2×, 3×, 4×...  Personal info
+      // is preserved from the existing draft (the import may not carry
+      // it if the prefill didn't download).  See
+      // IMPORTS_AND_RECONCILIATION_END_TO_END.md §4.
+      // Prefill contributes ONLY personal info + refund bank account.
+      // Everything else (income heads, employers, TDS/TCS, deductions,
+      // capital gains) comes from the reconciled patch (26AS/AIS/TIS).
+      // This is the single source of truth — no duplication possible.
+      const prefillPatch = mapPrefillToDraftPatch(prefillData);
+      const reconciledPatch = mapReconciledToDraftPatch(reconciledImportData);
+      // Start from a baseline that keeps personal/filing/regime/form
+      // but BLANKS every import-owned list so the patches populate them
+      // fresh (no accumulation across re-imports).
+      const prior = editorRef.current.draft;
+      // Clone personal/filing/form/regime + the house-property pass-through
+      // and exempt-income state from the prior draft (the import may not
+      // carry these), but BLANK every import-owned list so patches
+      // populate them fresh — no accumulation across re-imports.
+      const blankedBaseline: ReturnDraft = {
+        ...prior,
+        employers: [],
+        bankAccounts: [],
+        businesses: [],
+        houseProperties: [],
+        capitalGainsSchedule: {
+          ...prior.capitalGainsSchedule,
+          schedule112A: [],
+          schedule115AD: [],
+          vda: [],
+          stDtaa: [],
+          ltDtaa: [],
+        },
+        otherSources: {
+          ...prior.otherSources,
+          interest: [],
+          dividends: [],
+          winnings: [],
+          gifts: [],
+          otherIncome: [],
+          dtaaIncome: [],
+          section89A: [],
+          accumulatedPf: [],
+          specialRateIncome: [],
+        },
+        taxes: { tds: [], tcs: [], challans: [] },
+        provenance: [],
+      };
       mergedImportData = mergeDraft(
-        mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(prefillData)),
-        mapReconciledToDraftPatch(reconciledImportData),
+        mergeDraft(blankedBaseline, prefillPatch),
+        reconciledPatch,
       );
       updateEditor((current) => replaceDraft(mergedImportData as ReturnDraft));
     }
@@ -1582,7 +1635,7 @@ export default function ITRComputationPage() {
         }))} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} />}
         {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={tdsToManager(editorModel?.draft?.taxes?.tds ?? [])} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} taxResult={backendTaxResult} />}
-        {activeTab === 3 && <CapitalGainsTab taxResult={taxResult} itrForm={itrForm} data={editorModel?.draft.capitalGainsSchedule} entries={(editorModel?.draft.capitalGainsSchedule as { capitalGainTransactions?: any[] })?.capitalGainTransactions} onChange={(schedule: any) => updateEditor((model) => replaceDraft({ ...model.draft, capitalGainsSchedule: schedule }))} />}
+        {activeTab === 3 && editorModel && <CapitalGainsTab draft={editorModel.draft} taxResult={taxResult} itrForm={itrForm as ItrForm} onChange={(schedule) => updateEditor((model) => updateCapitalGainsSchedule(model, schedule))} />}
         {activeTab === 4 && editorModel && <BusinessTab taxResult={taxResult} draft={editorModel.draft} onChangeBusinesses={(entries: ReturnDraft['businesses']) => updateEditor((model) => replaceDraft({ ...model.draft, businesses: entries }))} onChangeBpNetProfit={(value: number) => updateEditor((model) => updateBpNetProfit(model, value))} />}
         {activeTab === 5 && <OtherSourcesTab taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel as any} />}
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
@@ -1758,18 +1811,6 @@ function SalaryTab({ entries, onChange, taxResult, ayParam, regime, tdsEntries }
 
 function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm, taxResult }: any) {
   return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} taxResult={taxResult} />;
-}
-
-function CapitalGainsTab({ taxResult, itrForm, data, entries, onChange }: any) {
-  const summary = taxResult?.capitalGainsSummary || null;
-  return <CapitalGainsEntryManager
-    data={data || {}}
-    entries={entries || []}
-    onChange={onChange}
-    selectedForm={itrForm}
-    summary={summary}
-    issues={taxResult?.capitalGainsIssues || summary?.issues || []}
-  />;
 }
 
 function BusinessTab({ taxResult, itrForm, data, onChange }: any) {

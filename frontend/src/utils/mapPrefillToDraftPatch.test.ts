@@ -17,38 +17,31 @@ function prefill(): PrefillExtraction {
 }
 
 describe('mapPrefillToDraftPatch', () => {
-  it('maps personal, employer, bank, TDS, deductions and other sources canonically', () => {
+  it('contributes ONLY personal info + refund bank account (no employers/TDS/income/deductions)', () => {
     const patch = mapPrefillToDraftPatch(prefill());
+    // Personal info is emitted.
     expect(patch.personal).toMatchObject({ name: 'A B C', pan: 'ABCDE1234F', city: 'City' });
     expect(patch.filing?.filingSection).toBe('139(1)');
-    expect(patch.employers?.[0]).toMatchObject({ employerName: 'Acme', natureOfEmployment: 'PE', employerAddress: 'Office', basic: 900 });
-    expect(patch.bankAccounts?.[0]).toMatchObject({ accountNumber: '123', useForRefund: true });
-    expect(patch.taxes?.tds?.[0]).toMatchObject({ section: '192', taxDeducted: 100, schedule: 'TDS1' });
-    expect(patch.deductions?.chapterVIA?.section80C).toBe(150000);
-    expect(patch.otherSources?.interest).toHaveLength(2);
-    expect(patch.otherSources?.dividends?.[0].grossAmount).toBe(100);
+    // Refund bank account is emitted.
+    expect(patch.bankAccounts?.[0]).toMatchObject({ accountNumber: '123', bankName: 'Bank', useForRefund: true });
+    // Everything else is owned by the reconciled patch — prefill must NOT
+    // emit it, otherwise mergeDraft's append-only list semantics duplicate
+    // the same employer/TDS/income across prefill + reconciled.
+    expect(patch.employers).toBeUndefined();
+    expect(patch.taxes).toBeUndefined();
+    expect(patch.otherSources).toBeUndefined();
+    expect(patch.deductions).toBeUndefined();
   });
 
-  it('maps employer and TDS data even when personal_info is absent', () => {
+  it('maps personal info even when only pan + personal_info are present', () => {
     const patch = mapPrefillToDraftPatch({
       assessment_year: '2026-27',
       pan: 'ABCDE1234F',
-      employer_entries: [{
-        employer_name: 'ACME', tan: 'ABCD12345E', gross_salary: 900000,
-        salary: 900000, value_of_perquisites: 0, profits_in_lieu_of_salary: 0,
-        nature_of_employment: 'PE', employer_address: '', employer_city: '',
-        employer_state_code: '', employer_pin_code: '', employer_zip_code: '',
-        tds_deducted_from_salary: 90000,
-      }],
-      tds_salary_entries: [{
-        deductor_name: 'ACME', tan: 'ABCD12345E', section: '192',
-        income_amount: 900000, tds_deducted: 90000, tds_claimed: 90000,
-        gross_amount: 900000, head_of_income: '', deducted_year: '2025-26',
-      }],
+      personal_info: { pan: 'ABCDE1234F', name: { first_name: 'Solo' }, dob: '1990-01-01' },
     } as PrefillExtraction);
-
-    expect(patch.employers?.[0]).toMatchObject({ basic: 900000, tdsDeducted: 90000 });
-    expect(patch.taxes?.tds?.[0]).toMatchObject({ section: '192', taxDeducted: 90000 });
+    expect(patch.personal).toMatchObject({ name: 'Solo', pan: 'ABCDE1234F' });
+    expect(patch.employers).toBeUndefined();
+    expect(patch.taxes).toBeUndefined();
   });
 
   it('returns an empty patch for missing input', () => expect(mapPrefillToDraftPatch(undefined)).toEqual({}));

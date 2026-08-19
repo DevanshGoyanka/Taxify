@@ -283,6 +283,13 @@ function extractAisCapitalGains(entries: PortalEntry[]): ReturnDraftPatch {
       category.includes('land or building') ||
       category.includes('immovable');
     if (!isCgCategory) continue;
+    // Purchase-side AIS entries (SFT-17(Pur)/SFT-18(Pur)) are evidence of the
+    // cost basis, not realisations.  They carry no sale consideration and
+    // must not become Schedule 112A scrips.  Their detail rows use column
+    // keys (col_0..col_n) with no parsed `sales_consideration`/`isin`/`cost`
+    // fields, so previously the `entry.amount` fallback mislabelled each
+    // purchase total as a sale value — producing phantom scrips with cost 0.
+    if (category.includes('purchase')) continue;
     if (!entry.details || entry.details.length === 0) continue;
 
     for (const detail of entry.details) {
@@ -292,10 +299,17 @@ function extractAisCapitalGains(entries: PortalEntry[]): ReturnDraftPatch {
       const isLongTerm = assetType.includes('long');
       const isShortTerm = assetType.includes('short');
 
-      const saleValue = num(d.sales_consideration || entry.amount);
-      const cost = num(d.cost_of_acquisition);
+      // Use the parsed sale-consideration field only.  Do NOT fall back to
+      // ``entry.amount`` here — for a SALE entry that fell through to the
+      // column-keyed detail path (no parsed keys), ``entry.amount`` is the
+      // AIS summary total, which would mislabel a category aggregate as a
+      // per-scrip sale value.  A detail row without an explicit
+      // ``sales_consideration`` carries no realisation and is skipped.
+      const saleValue = num(d.sales_consideration || d.sale_consideration || d.total_sale_value || d.sale_value);
+      const cost = num(d.cost_of_acquisition || d.acquisition_cost || d.cost);
 
       if (category.includes('virtual digital asset')) {
+        if (!saleValue && !cost) continue;
         vda.push({
           id: `ais-vda-${entry.information_code}-${detail.sr_no ?? isin}`,
           dateOfAcquisition: '', dateOfTransfer: str(d.transfer_date), head: 'CG',
@@ -305,6 +319,7 @@ function extractAisCapitalGains(entries: PortalEntry[]): ReturnDraftPatch {
       }
 
       if (category.includes('land or building') || category.includes('immovable')) {
+        if (!saleValue && !cost) continue;
         const row = {
           id: `ais-immovable-${entry.information_code}-${detail.sr_no ?? isin}`,
           dateOfSale: str(d.transfer_date || d.date_of_sale),
@@ -316,6 +331,12 @@ function extractAisCapitalGains(entries: PortalEntry[]): ReturnDraftPatch {
         else ltImmovable.push(row);
         continue;
       }
+
+      // Listed equity / equity-MF sale — a real scrip requires either a
+      // sale value or a cost (preferably both).  Skip rows that carry
+      // neither (column-keyed PURCHASE-style rows that slipped past the
+      // purchase guard, or empty detail rows).
+      if (!saleValue && !cost) continue;
 
       // Listed equity / equity-MF sale
       const securityClass = str(d.security_class).toLowerCase();

@@ -201,11 +201,48 @@ def extract_pan(source: str) -> str:
 
 
 def map_to_head(category: str, section: str = "B2") -> str:
+    """Map an AIS entry's category+section to its CBDT income head.
+
+    CBDT placement rules (ITR schedules + AIS Part B1/B2/B7 design):
+
+    * **Salary** (TDS-192/192A in Part B1, ``category == "salary"``) →
+      Income from Salary.
+    * **Dividend** (SFT-015 in B2, TDS-194/194K/194D in B1) → Income from
+      Other Sources — dividend is chargeable u/s 56(2)(i)/(ii) under OS, not
+      PGBP.  A dealer-in-securities may report trading dividends under PGBP,
+      but that is the taxpayer's elective reclassification at return-filing
+      time; the AIS faithfully reports dividend under OS by default.
+    * **Interest** (SFT-016 savings/term-deposit in B2, TDS-193/194A in B1)
+      → Income from Other Sources.
+    * Listed-equity / MF security sales (SFT-17/18) → Capital Gains.
+    * Immovable property (SFT-012 sale / SFT-003 purchase) → Capital Gains.
+    * GST turnover / GST purchases → Profits and Gains of Business or
+      Profession.
+
+    Previously every non-salary Part B1 TDS entry was force-routed to PGBP,
+    which misclassified TDS-194 (dividend) and TDS-194A (interest) credits
+    as business income — contrary to CBDT.  B1 now routes by the same
+    category map as B2, falling back to OS (the residual head for income
+    with no more-specific match), with only ``salary`` explicitly routed
+    to Salary.
+    """
     cat = category.lower().strip()
     if section == "B1":
         if "salary" in cat:
             return IncomeHead.SALARY.value
-        return IncomeHead.BUSINESS_PROFESSION.value
+        # Route by underlying income nature (dividend/interest/etc.) — the
+        # AIS category on a B1 TDS entry describes what the tax was deducted
+        # on, which determines the income head for return filing.
+        for key, head in SFT_TO_INCOME_HEAD.items():
+            if key in cat:
+                return head.value
+        # GST turnover / purchases and business receipts stay PGBP.
+        if "gst" in cat or "business" in cat or "receipts" in cat:
+            return IncomeHead.BUSINESS_PROFESSION.value
+        # Anything else in B1 (e.g. commission, professional fees, rent,
+        # winnings, contract) is reported under Other Sources unless the
+        # taxpayer elects PGBP — OS is the CBDT residual head.
+        return IncomeHead.OTHER_SOURCES.value
     for key, head in SFT_TO_INCOME_HEAD.items():
         if key in cat:
             return head.value
@@ -398,8 +435,112 @@ def _read_detail_header(lines: list[str], idx: int) -> tuple[list[str], int]:
         tokens.append(line)
         i += 1
 
-    # Also handle multi-word tokens like "SR.\nNO." from bad text extraction
-    return tokens, i
+    # PyMuPDF splits multi-word column header phrases (``REPORTED ON``,
+    # ``PROPERTY ADDRESS``, ``TRANSACTION AMOUNT``, ``VALUE OF PROPERTY FOR
+    # STAMP DUTY``) across separate lines, inflating the token count past the
+    # true column count and causing ``collect_row_tokens`` to overshoot each
+    # data row into the next entry.  Merge consecutive tokens back into their
+    # canonical single-token column names (longest phrases first).
+    return _merge_multi_word_header_tokens(tokens), i
+
+
+# Multi-word AIS detail-header column phrases, ordered longest-first so that
+# ``VALUE OF PROPERTY FOR STAMP DUTY`` is merged as one token before any of
+# its sub-phrases (``STAMP DUTY``, ``PROPERTY``) are considered.
+_MULTI_WORD_HEADER_PHRASES: list[str] = [
+    "VALUE OF PROPERTY FOR STAMP DUTY",
+    "TRANSACTION AMOUNT ASSIGNED",
+    "TRANSACTION AMOUNT",
+    "TRANSACTION DATE",
+    "TRANSACTION TYPE",
+    "GROSS AMOUNT RECEIVED FROM THE PERSON",
+    "GROSS AMOUNT PAID TO THE PERSON",
+    "GROSS AMOUNT",
+    "COST OF ACQUISITION",
+    "INDEXED COST OF ACQUISITION",
+    "SALE PRICE PER UNIT",
+    "SALES CONSIDERATION",
+    "FAIR MARKET VALUE",
+    "UNIT FMV",
+    "DATE OF SALE/TRANSFER",
+    "DATE OF PURCHASE",
+    "REPORTED ON",
+    "PROPERTY ADDRESS",
+    "PROPERTY TYPE",
+    "SECURITY NAME (SECURITY CODE)",
+    "SECURITY NAME",
+    "SECURITY CLASS",
+    "DEBIT TYPE",
+    "CREDIT TYPE",
+    "ASSET TYPE",
+    "AMC NAME (CODE)",
+    "HOLDER FLAG",
+    "PARTY COUNT",
+    "STAMP DUTY",
+    "DEPOSIT DATE",
+    "DATE OF DEPOSIT",
+    "ACCOUNT TYPE",
+    "ACCOUNT NUMBER",
+    "DIVIDEND AMOUNT",
+    "INTEREST AMOUNT",
+    "BSR CODE",
+    "CHALLAN SERIAL NUMBER",
+    "CHALLAN IDENTIFICATION NUMBER",
+    "MAJOR HEAD",
+    "MINOR HEAD",
+    "MODE",
+    "NATURE OF REFUND",
+    "REFUND AMOUNT",
+    "DATE OF PAYMENT",
+    "FINANCIAL YEAR",
+    "TAX (A)",
+    "SURCHARGE (B)",
+    "EDUCATION CESS (C)",
+    "OTHERS (D)",
+    "TOTAL (A+B+C+D)",
+    "MARKET PURCHASE",
+    "MARKET SALES",
+    "TOTAL PURCHASE AMOUNT",
+    "TOTAL SALES VALUE",
+    "CLIENT ID",
+    "QUARTER",
+    "STATUS",
+]
+
+
+def _merge_multi_word_header_tokens(tokens: list[str]) -> list[str]:
+    """Merge consecutive detail-header tokens that form known multi-word column phrases.
+
+    Scans the token list and, wherever a run of consecutive tokens (joined
+    with a single space) matches a known phrase, collapses the run into a
+    single token.  Phrases are matched longest-first so a long phrase like
+    ``VALUE OF PROPERTY FOR STAMP DUTY`` is merged before its sub-phrases.
+    """
+    if not tokens:
+        return tokens
+    result: list[str] = []
+    i = 0
+    while i < len(tokens):
+        merged: str | None = None
+        consumed = 0
+        # Try the longest possible phrase starting at i (cap at 8 tokens).
+        max_run = min(8, len(tokens) - i)
+        for run_len in range(max_run, 1, -1):
+            candidate = " ".join(tokens[i : i + run_len]).upper()
+            for phrase in _MULTI_WORD_HEADER_PHRASES:
+                if phrase == candidate:
+                    merged = " ".join(tokens[i : i + run_len])
+                    consumed = run_len
+                    break
+            if merged is not None:
+                break
+        if merged is not None:
+            result.append(merged)
+            i += consumed
+        else:
+            result.append(tokens[i])
+            i += 1
+    return result
 
 
 def _read_detail_rows(lines: list[str], idx: int, col_count: int) -> tuple[list[DetailRow], int]:
@@ -416,6 +557,14 @@ def _read_detail_rows(lines: list[str], idx: int, col_count: int) -> tuple[list[
             i += 1
             continue
         if line == "SR. NO.":
+            break
+        # A detail table ends where the next summary entry begins.  The summary
+        # header signature (``SR. NO.`` + ``INFORMATION CODE`` + ...) is the
+        # reliable terminator — without it, the next entry's serial number +
+        # information-code/description/source/count/amount tokens are misread
+        # as a detail row of this entry (the "detail bleeding" bug where an
+        # SFT-012 property table acquired SFT-005 deposit summary rows).
+        if is_summary_header(lines, i):
             break
         if is_category_line(line):
             break
@@ -454,7 +603,18 @@ def _read_detail_rows(lines: list[str], idx: int, col_count: int) -> tuple[list[
 
 
 def collect_row_tokens(lines: list[str], idx: int, expected_cols: int) -> list[str]:
-    """Collect expected_cols tokens starting at idx, handling multi-line cell values."""
+    """Collect ``expected_cols`` tokens starting at idx.
+
+    Each AIS detail row begins with a serial number immediately followed by a
+    date (``dd/mm/yyyy``).  PyMuPDF emits every cell on a separate line, but
+    multi-word column headers (``REPORTED ON``, ``PROPERTY ADDRESS``) are
+    split across lines and the ``detail_header`` token count can overshoot the
+    true data width.  To avoid overshooting one row into the next entry's
+    summary (the "detail bleeding" bug), collection stops early when it hits
+    a structural marker — a category line, a summary-header signature, a
+    page footer, or the start of the next detail row (a serial number
+    followed by a date).
+    """
     tokens: list[str] = []
     i = idx
     while i < len(lines) and len(tokens) < expected_cols:
@@ -464,9 +624,34 @@ def collect_row_tokens(lines: list[str], idx: int, expected_cols: int) -> list[s
             continue
         if line == "SR. NO.":
             break
+        if is_summary_header(lines, i):
+            break
         if is_category_line(line):
             break
-        if line.startswith("Note -"):
+        if line.startswith("Note -") or line.startswith("Note-"):
+            break
+        if line.startswith("---"):
+            break
+        if "No Transactions Present" in line:
+            break
+        if line.startswith("Annual Information Statement"):
+            break
+        if line.startswith("Financial Year"):
+            break
+        if line.startswith("Download ID"):
+            break
+        if line.startswith("PAN") and i + 1 < len(lines) and lines[i + 1].strip().startswith("Name"):
+            break
+        # Stop at the next detail row's start: a serial number immediately
+        # followed by a date.  ``isdigit`` here matches a 1-4 digit sr token,
+        # and the date guard prevents swallowing the current row's own sr as
+        # a column value once we've already captured it.
+        if (
+            tokens
+            and line.isdigit()
+            and i + 1 < len(lines)
+            and re.match(r"^\d{2}/\d{2}/\d{4}$", lines[i + 1].strip())
+        ):
             break
         tokens.append(line)
         i += 1
@@ -523,11 +708,24 @@ def _parse_listed_equity_sale_rows(text: str) -> tuple[list[str], list[DetailRow
     starts = list(row_start.finditer(text))
     rows: list[DetailRow] = []
     numeric = r"[\d,]+(?:\.\d+)?"
+    # PyMuPDF splits multi-word cell tokens (``Listed Equity Share``, ``Off
+    # market``, ``Short term``) across lines arbitrarily — for example
+    # ``Listed Equity \nShare`` or ``Off \nmarket`` with a trailing space
+    # before the newline.  Each ``\w+`` sub-token below matches one word and
+    # ``[\s]*`` allows any amount of whitespace/newlines between words, so the
+    # pattern matches regardless of how the cell was wrapped.  The original
+    # rigid ``Listed\s*\nEquity Share\s*\n`` form failed on ``Listed Equity
+    # \nShare`` and parsed zero rows (the whole entry collapsed to a
+    # summary-only aggregate with ``amount`` but no detail rows).
+    listed_equity_share = r"Listed[\s]*Equity[\s]*Share"
+    off_market = r"Off[\s]*market"
+    market_or_off = rf"(?:Market|{off_market})"
+    short_or_long_term = r"(?:Short|Long)[\s]*term"
     body_pattern = re.compile(
-        rf"^(?P<security>.*?)\s*\nListed\s*\nEquity Share\s*\n"
-        rf"(?P<debit>Market|Off\s+market)\s*\n"
-        rf"(?P<credit>Market|Off\s+market)\s*\n"
-        rf"(?P<term>Short|Long)\s*\nterm\s*\n"
+        rf"^(?P<security>.*?)\s*\n{listed_equity_share}\s*\n"
+        rf"(?P<debit>{market_or_off})\s*\n"
+        rf"(?P<credit>{market_or_off})\s*\n"
+        rf"(?P<term>{short_or_long_term})\s*\n"
         rf"(?P<quantity>{numeric})\s*\n"
         rf"(?P<sale_price>{numeric})\s*\n"
         rf"(?P<consideration>{numeric})\s*\n"
@@ -550,9 +748,17 @@ def _parse_listed_equity_sale_rows(text: str) -> tuple[list[str], list[DetailRow
         isin_match = re.search(r"\b(IN[EA][A-Z0-9]{9})\b", security, re.IGNORECASE)
         isin = isin_match.group(1).upper() if isin_match else ""
         description = re.sub(r"\s*\(?IN[EA][A-Z0-9]{9}\)?\s*$", "", security, flags=re.IGNORECASE).strip()
-        debit_type = re.sub(r"\s+", " ", match.group("debit")).title()
-        credit_type = re.sub(r"\s+", " ", match.group("credit")).title()
-        asset_type = f"{match.group('term').title()} term"
+        # Normalize whitespace (incl. the newlines PyMuPDF leaves inside the
+        # multi-word ``Off market`` / ``Short term`` captures) before casing.
+        debit_type = re.sub(r"\s+", " ", match.group("debit")).strip().title()
+        credit_type = re.sub(r"\s+", " ", match.group("credit")).strip().title()
+        # The ``term`` capture group already includes the word ``term``
+        # (pattern ``(?:Short|Long)[\s]*term``), so no suffix is appended.
+        # Normalise whitespace then capitalise only the first letter, so the
+        # canonical form is ``Long term`` / ``Short term`` (matching the AIS
+        # detail-header and the frontend CG mapper's expected casing).
+        raw_term = re.sub(r"\s+", " ", match.group("term")).strip()
+        asset_type = raw_term[:1].upper() + raw_term[1:] if raw_term else ""
         values = [
             str(int(start.group("sr"))),
             start.group("date"),
@@ -1234,12 +1440,27 @@ def ais_to_frontend_json(doc: AISDocument, indent: int = 2) -> str:
 
 
 # ============================================================
-# Convenience
+# Convenience — delegates to the pdfplumber-based implementation.
+#
+# The pdfplumber extractor (``ais_extractor.ais_pdfplumber``) replaces the
+# PyMuPDF line-state-machine parsing core because pdfplumber recovers proper
+# cell boundaries and eliminates the multi-word-cell wrapping / detail-row
+# bleeding regressions.  The ``AISDocument`` / ``AISEntry`` / ``DetailRow``
+# dataclass contract and the JSON serialisation are unchanged, so callers
+# (``reconciliation.py``, the frontend mappers, the corpus tests) work
+# unchanged.  The legacy ``AISExtractor`` class above is retained for
+# reference but is no longer the live path.
 # ============================================================
 
 def extract_ais(pdf_path: str) -> AISDocument:
-    return AISExtractor(pdf_path).extract()
+    """Extract an AIS PDF via the pdfplumber-based implementation."""
+    from .ais_pdfplumber import extract_ais as _extract_ais
+
+    return _extract_ais(pdf_path)
 
 
 def extract_ais_json(pdf_path: str, indent: int = 2) -> str:
-    return ais_to_frontend_json(extract_ais(pdf_path), indent)
+    """Extract an AIS PDF to JSON via the pdfplumber-based implementation."""
+    from .ais_pdfplumber import extract_ais_json as _extract_ais_json
+
+    return _extract_ais_json(pdf_path, indent)

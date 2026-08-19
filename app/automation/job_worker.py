@@ -611,14 +611,14 @@ async def _run_job(job_id: int) -> None:
             log(f"[ADVISORY] {advisory.already_filed_advisory_message}")
         prior_ref_ay = advisory.download_assessment_year
         # ──────────────────────────────────────────────────────────────
-        # TEMPORARILY DISABLED (Phase 2 testing)
+        # TEMPORARILY DISABLED (Phase 2 testing) — FILED-RETURN NOT WIRED
         #
-        # The filed-return JSON download is commented out so the portal
-        # automation import doesn't surface the "already filed" blocking
-        # error during testing.  See FILED_RETURN_REACTIVATION_GUIDE.md
-        # for detailed instructions on reactivating this block.
+        # The filed-return JSON download is deliberately left commented out
+        # and is NOT wired anywhere in the implementation.  It is kept as a
+        # reference block only (per project decision).  Do not reactivate.
+        # See FILED_RETURN_REACTIVATION_GUIDE.md for the historical context.
         #
-        # Reactivation checklist:
+        # Reactivation checklist (NOT applied — kept for reference only):
         # 1. Uncomment the download block below (lines marked REACTIVATE).
         # 2. Uncomment the filed-return parsing block in Step 4.6.1.
         # 3. Uncomment the filed_return attachment in the reconciled output.
@@ -652,7 +652,7 @@ async def _run_job(job_id: int) -> None:
             # REACTIVATE:     log(f"[FILED RETURN DL] Prior-year reference JSON saved for AY {prior_ref_ay}.")
             # REACTIVATE: else:
             # REACTIVATE:     log(f"[FILED RETURN DL] Prior-year reference download: {prior_dl.state.value}")
-            log(f"[FILED RETURN DL] SKIPPED (Phase 2 testing) — prior_ref_ay={prior_ref_ay}")
+            log(f"[FILED RETURN DL] SKIPPED (filed-return not wired) — prior_ref_ay={prior_ref_ay}")
         else:
             log("[ADVISORY] No prior-year reference download targeted.")
         steps.append("filing_advisory_generated")
@@ -859,7 +859,6 @@ async def _run_job(job_id: int) -> None:
             job_id, list(parsed.keys()), len(extract_errors),
             extract_errors if extract_errors else "none",
         )
-
         # Step 4.6: Parse the Prefill JSON (form-agnostic extraction)
         # The Prefill JSON is the CBDT's own pre-filled data — it carries
         # salary break-up, deductions, bank accounts, employer TDS, and
@@ -972,6 +971,68 @@ async def _run_job(job_id: int) -> None:
         # REACTIVATE:     logger.info("Job %d: Filed-return file not found at %s — skipping", job_id, path_filed)
         log("[Worker] Filed-return parsing SKIPPED (Phase 2 testing).")
 
+        # Step 4.6.2: Persist every parsed document to ``imported_document``
+        # (remediation P1/P2).  This unifies the automation and manual paths
+        # on one dedup key (client × AY × document_type) so a manual
+        # re-upload replaces the automation's row in place, and a server-
+        # side re-reconcile can reload 26AS instead of silently losing TDS
+        # credits (P6).  See IMPORTS_AND_RECONCILIATION_END_TO_END.md §5.3.
+        try:
+            from app.db.imported_document_service import (
+                upsert_imported_document as _upsert_doc,
+                encode_bytes as _enc_bytes,
+                SOURCE_AUTOMATION,
+            )
+            from app.db.database import SessionLocal as _PersistSession
+            persist_db = _PersistSession()
+            try:
+                doc_map = {
+                    "ais": parsed.get("ais"),
+                    "tis": parsed.get("tis"),
+                    "26as": parsed.get("26as"),
+                    "prefill": parsed.get("prefill"),
+                }
+                persisted_types: list[str] = []
+                for doc_type, parsed_dict in doc_map.items():
+                    if not parsed_dict:
+                        continue
+                    # Read the raw file bytes back for storage; fall back to
+                    # the parsed JSON if the file isn't on disk.
+                    file_path = files.get(
+                        {"ais": "ais", "tis": "tis", "26as": "26as", "prefill": "prefill"}[doc_type]
+                    )
+                    raw_str: str = ""
+                    if file_path and os.path.exists(file_path):
+                        with open(file_path, "rb") as f:
+                            raw_bytes = f.read()
+                        raw_str = _enc_bytes(raw_bytes)
+                    parsed_str = json.dumps(parsed_dict, ensure_ascii=False, default=str)
+                    _upsert_doc(
+                        db=persist_db,
+                        client_id=client_id,
+                        user_id=job.user_id,
+                        assessment_year=assessment_year,
+                        document_type=doc_type,
+                        source=SOURCE_AUTOMATION,
+                        raw_content=raw_str,
+                        parsed_content=parsed_str,
+                    )
+                    persisted_types.append(doc_type)
+                persist_db.commit()
+                log(f"[Worker] Persisted documents to imported_document: {persisted_types}")
+                logger.info(
+                    "Job %d: persisted documents to imported_document — types=%s",
+                    job_id, persisted_types,
+                )
+            finally:
+                persist_db.close()
+        except Exception as persist_exc:
+            # Persistence is best-effort — the job's reconciled blob is still
+            # stored on AutomationJob.parsed_results, so a persistence failure
+            # must not fail the whole job.
+            log(f"[Worker] imported_document persistence FAILED (non-fatal): {persist_exc}")
+            logger.exception("Job %d: imported_document persistence error", job_id)
+
         # Step 4.7: Reconcile data across all three documents
         _update_job(job_id, current_step="extract", status_message="Reconciling data...", progress_pct=92)
         log("[Worker] Starting reconciliation across 26AS, AIS, and TIS...")
@@ -981,6 +1042,7 @@ async def _run_job(job_id: int) -> None:
                 ais_data=parsed.get("ais", {}),
                 tis_data=parsed.get("tis", {}),
                 as26_data=parsed.get("26as", {}),
+                prefill_data=parsed.get("prefill"),
             )
             # Attach the form-agnostic Prefill extraction to the reconciled
             # output so the frontend can merge Prefill-provided fields

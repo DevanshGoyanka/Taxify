@@ -56,3 +56,66 @@ describe('mapReconciledToDraftPatch', () => {
     });
   });
 });
+
+/**
+ * Regression: the portal-automation "Import All" merge must not triplicate
+ * income-head entries across re-imports.  The bug: mergeDraft is append-
+ * only for rows with new ids, so (a) prefill + reconciled both emit the
+ * same interest/dividend → 2×, and (b) re-importing on top of a draft
+ * that already has the entries → 3×, 4×, ...
+ *
+ * Fix: mapPrefillToDraftPatch now contributes ONLY personal info + refund
+ * bank account (no income heads/employers/TDS/deductions), and
+ * handleConfirmImport builds the merge on a blankedBaseline that resets
+ * the import-owned lists so patches populate them fresh.
+ */
+describe('handleConfirmImport merge regression (no triplication)', () => {
+  it('produces exactly one entry per reconciled source, not 3× across re-imports', async () => {
+    // Simulate the handleConfirmImport merge sequence.
+    const { mergeDraft } = await import('../domain/returns/draftPatch');
+    const { createEmptyReturnDraft } = await import('../domain/returns/factory');
+    const { mapPrefillToDraftPatch } = await import('./mapPrefillToDraftPatch');
+
+    // Reconciled patch owns income-head entries (1 interest + 1 dividend).
+    const reconciledPatch = mapReconciledToDraftPatch(results());
+    expect(reconciledPatch.otherSources?.interest).toHaveLength(1);
+    expect(reconciledPatch.otherSources?.dividends).toHaveLength(1);
+
+    // Prefill patch emits ONLY personal info + bank account — no income
+    // heads, so it cannot duplicate the reconciled income.
+    const prefill = {
+      personal_info: { pan: 'ABCDE1234F', name: { first_name: 'A' } },
+      other_sources: { interest_from_savings_bank: 200, dividend_gross: 100 },
+    } as any;
+    const prefillPatch = mapPrefillToDraftPatch(prefill);
+    expect(prefillPatch.otherSources?.interest).toBeUndefined();
+    expect(prefillPatch.otherSources?.dividends).toBeUndefined();
+
+    // First import: blanked baseline + prefill + reconciled.
+    const prior1 = createEmptyReturnDraft('2026-27', 'ITR-1', 'new');
+    const blanked1: any = {
+      ...prior1,
+      employers: [], bankAccounts: [], businesses: [], houseProperties: [],
+      otherSources: { ...prior1.otherSources, interest: [], dividends: [], otherIncome: [] },
+      taxes: { tds: [], tcs: [], challans: [] },
+    };
+    let merged = mergeDraft(mergeDraft(blanked1, prefillPatch), reconciledPatch);
+    expect(merged.otherSources.interest).toHaveLength(1);
+    expect(merged.otherSources.dividends).toHaveLength(1);
+    expect(merged.otherSources.interest[0].grossAmount).toBe(200);
+    expect(merged.otherSources.dividends[0].grossAmount).toBe(100);
+
+    // Re-import on top of the already-populated draft: the blanked
+    // baseline MUST reset the lists, so the count stays at 1 (not 2 or 3).
+    const prior2 = merged;
+    const blanked2: any = {
+      ...prior2,
+      employers: [], bankAccounts: [], businesses: [], houseProperties: [],
+      otherSources: { ...prior2.otherSources, interest: [], dividends: [], otherIncome: [] },
+      taxes: { tds: [], tcs: [], challans: [] },
+    };
+    merged = mergeDraft(mergeDraft(blanked2, prefillPatch), reconciledPatch);
+    expect(merged.otherSources.interest).toHaveLength(1);
+    expect(merged.otherSources.dividends).toHaveLength(1);
+  });
+});

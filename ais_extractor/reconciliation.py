@@ -42,6 +42,17 @@ CATEGORY_TO_INCOME_HEAD = {
     "receipt from partnership firm":    "Profits and Gains of Business or Profession",
     "tax payments":                     "Taxes Paid",
     "refund":                           "Refund",
+    # TCS (Tax Collected at Source) is a tax credit, not income.  CBDT rules
+    # place TCS on business receipts ONLY when the collectee is in business
+    # for the corresponding goods; for a non-business collectee (e.g. a
+    # salaried person buying a car under 206CF) the TCS is a refundable/
+    # brought-forward credit against tax payable, NOT PGBP income.  26AS
+    # alone cannot determine collectee business status, so the safe CBDT-
+    # compliant default is to route every 206C* section to a dedicated
+    # ``TCS Credit`` bucket (remediation R1).  The engine surfaces TCS via
+    # ``as26_tcs`` on the entry regardless of routing, so the credit is
+    # preserved; only the income-head attribution changes.
+    "tcs credit":                       "TCS Credit",
 }
 
 SECTION_TO_CATEGORY = {
@@ -90,13 +101,134 @@ class SelectedSource(str, Enum):
 
 _CODE_SUFFIX_RE = re.compile(r'\s*\([A-Z0-9.]+\s*\)\s*$', re.IGNORECASE)
 
+
+# ── Canonical category normalization ─────────────────────────────────────────
+# The AIS and TIS extractors sometimes emit semantically-identical categories
+# under different text labels (e.g. AIS ``interest income (sft-016) – savings``
+# vs TIS ``interest from savings bank``).  Without canonicalization, the
+# reconciliation engine treats these as different categories, so the same
+# income appears as two separate entries instead of being merged.  This
+# function maps every known variant label to its canonical form, so the
+# engine's ``Entry.key`` and ``CATEGORY_TO_INCOME_HEAD`` lookups produce
+# matching keys across documents.
+_CATEGORY_CANON_PATTERNS: list[tuple[str, str]] = [
+    # ── Interest ──
+    # AIS emits "interest income (sft-016) – savings" / "– term deposit";
+    # TIS emits "interest from savings bank" / "interest from deposit".
+    # AIS also emits "interest other than "interest on securities" received
+    # (section 194a)" — the same as TIS "interest from deposit".
+    (r"sft[- ]?016.*savings|interest.*savings|savings.*interest", "interest from savings bank"),
+    (r"sft[- ]?016.*term|interest.*deposit|deposit.*interest|sft[- ]?016.*td|interest\s+other\s+than.*securities|interest\s+other\s+than.*194a", "interest from deposit"),
+    # ── Dividend ── (AIS "Dividend income (SFT-015)" already matches, but be safe)
+    (r"dividend", "dividend"),
+    # ── Capital gains ── (sale/purchase of securities/MF)
+    (r"sale.*equity|sale.*securities|sale.*mutual fund|sale.*units", "sale of securities and units of mutual fund"),
+    (r"purchase.*securities|purchase.*mutual fund|purchase.*units", "purchase of securities and units of mutual funds"),
+    (r"sale.*land|sale.*building|sale.*immovable", "sale of land or building"),
+    (r"purchase.*immovable|purchase.*property", "purchase of immovable property"),
+    # ── SFT deposit purchases ──
+    (r"purchase.*time deposit|time deposit", "purchase of time deposits"),
+    (r"cash deposit", "cash deposits"),
+    (r"cash withdrawal", "cash withdrawals"),
+    # ── Salary / business ──
+    (r"salary", "salary"),
+    (r"business receipts|business receipt", "business receipts"),
+    (r"gst turnover", "gst turnover"),
+    (r"gst purchase", "gst purchases"),
+    (r"receipt.*partnership|partnership.*firm", "receipt from partnership firm"),
+    (r"insurance commission", "insurance commission"),
+    (r"commission or brokerage|commission income", "commission income"),
+    (r"professional fees", "professional fees"),
+    (r"purchase.*vehicle", "purchase of vehicle"),
+    (r"winnings.*online|online.*games|virtual digital asset|vda", "winnings from online games"),
+    (r"rent", "rent"),
+]
+
+
+def canonical_category(category: str) -> str:
+    """Map any variant category label to its canonical form.
+
+    This is the single point of truth for category equivalence across the
+    AIS, TIS, and 26AS extractors.  Every ``Entry`` is canonicalized at
+    construction so ``Entry.key``, ``CATEGORY_TO_INCOME_HEAD``, and the
+    cross-document matchers all see the same canonical label regardless
+    of which extractor produced the row.  Without this, the AIS label
+    ``interest income (sft-016) – savings`` and the TIS label
+    ``interest from savings bank`` would produce different keys and the
+    engine would emit duplicate entries for the same income.
+    """
+    if not category:
+        return "other"
+    c = category.strip().lower()
+    for pattern, canonical in _CATEGORY_CANON_PATTERNS:
+        if re.search(pattern, c):
+            return canonical
+    return c
+
+
+# Trailing descriptive suffixes that TIS/26AS append to the source name but
+# AIS does not (e.g. "Total purchase amount 24,999 24,999", "Value of
+# consideration 1,40,229 1,40,229", "Amount paid/ credited 60,000 60,000",
+# "Gross purchase amount 13,50,000 13,50,000", "Interest 839 839").  These
+# make the same reporting entity produce different normalized names across
+# AIS and TIS/26AS, which breaks transaction-level (capital-gains) and
+# interest matching.  Stripped before normalization.
+_TRAILING_AMOUNT_SUFFIX_RE = re.compile(
+    r'\s*(?:'
+    r'total\s+\w+\s+amount|'
+    r'value\s+of\s+consideration|'
+    r'amount\s+paid\s*/?\s*credited|'
+    r'amount\s+paid|'
+    r'gross\s+purchase\s+amount|'
+    r'gross\s+sale\s+amount|'
+    r'interest|'
+    r'dividend\s+amount|'
+    r'total\s+amount'
+    r')'
+    r'\s+-?[\d,]+(?:\.\d+)?'           # first amount (optional leading -)
+    r'(?:\s+-?[\d,]+(?:\.\d+)?)?'      # optional second amount
+    r'\s*-\s*$'                        # OR trailing " -" reversal marker
+    r'|\s*(?:'
+    r'total\s+\w+\s+amount|value\s+of\s+consideration|amount\s+paid\s*/?\s*credited|'
+    r'amount\s+paid|gross\s+purchase\s+amount|gross\s+sale\s+amount|interest|'
+    r'dividend\s+amount|total\s+amount'
+    r')\s+[\d,]+(?:\.\d+)?(?:\s+[\d,]+(?:\.\d+)?)?\s*$',
+    re.IGNORECASE,
+)
+
+
 def normalize_name(name: str) -> str:
-    """Strip identifier suffixes, lowercase text, and collapse whitespace."""
+    """Equivalence-normalize a reporting-entity name for cross-document matching.
+
+    This is the single identity function used to match the same deductor
+    across AIS, TIS, and 26AS, which key on different identifiers (AIS SFT
+    entries carry a PAN; 26AS Part I rows carry a TAN, never a PAN; TIS SFT
+    entries carry a PAN).  Because the PAN and TAN differ for the same bank,
+    the NAME is the only stable bridge.  Evidence from the 61-client corpus:
+
+      * AIS reports SBI interest as "STATE BANK OF INDIA (AAACS8577K.AB703)"
+        under SFT-016 (PAN) AND as "STATE BANK OF INDIA (MUMS89569E)" under
+        TDS-194A (TAN) — same bank, different identifier suffix.
+      * 26AS reports the same SBI as "STATE BANK OF INDIA" with TAN
+        MUMS89569E.
+      * Co-operative banks appear as both "CO-OP" and "CO-OPERATIVE".
+
+    So this function: lowercases; strips parenthetical PAN/TAN codes; strips
+    trailing descriptive amount suffixes ("Total purchase amount 24,999
+    24,999", "Amount paid/ credited 60,000 60,000", "Interest 839 839");
+    collapses CO-OP/CO-OPERATIVE → coop, LIMITED → ltd; drops a leading
+    "the"; and collapses whitespace.  The result is a stable identity that
+    matches across all three documents for the same real-world deductor.
+    """
     if not name:
         return ""
-    n = _CODE_SUFFIX_RE.sub('', name)
+    n = _TRAILING_AMOUNT_SUFFIX_RE.sub('', name)
+    n = _CODE_SUFFIX_RE.sub('', n)
     n = re.sub(r'\s*\([^)]*\)\s*', ' ', n)
+    n = re.sub(r'co[- ]?operative', 'coop', n, flags=re.IGNORECASE)
+    n = re.sub(r'\blimited\b', 'ltd', n, flags=re.IGNORECASE)
     n = re.sub(r'[^a-z0-9\s]', '', n.lower())
+    n = re.sub(r'^the\s+', '', n)
     n = re.sub(r'\s+', ' ', n).strip()
     return n
 
@@ -659,17 +791,59 @@ class Entry:
     tan: str = ""
     credit_type: Optional[CreditType] = None
 
+    def __post_init__(self) -> None:
+        """Canonicalize the category so every Entry built from any extractor
+        uses the same label, regardless of the source PDF's wording.
+
+        This is the single chokepoint that prevents the same income from
+        appearing as two entries when AIS and TIS label it differently
+        (e.g. ``interest income (sft-016) – savings`` vs ``interest from
+        savings bank``).  ``Entry.key`` and ``CATEGORY_TO_INCOME_HEAD``
+        both consume ``self.category``, so canonicalizing here makes every
+        downstream match consistent.
+        """
+        if self.category:
+            self.category = canonical_category(self.category)
+        # Keep income_head consistent with the canonical category if the
+        # caller didn't set a meaningful head (some callers pass "" and
+        # rely on the engine to fill it later).
+        if self.income_head and self.income_head not in (
+            CATEGORY_TO_INCOME_HEAD.get(self.category, self.income_head),
+        ):
+            # Re-derive from the canonical category when the caller's head
+            # was set against the pre-canonical label.
+            mapped = CATEGORY_TO_INCOME_HEAD.get(self.category)
+            if mapped:
+                self.income_head = mapped
+
     @property
     def key(self) -> str:
-        category = self.category.strip().lower()
+        """Stable cross-document identity for this income/credit entry.
+
+        Evidence-based design (61-client corpus): AIS SFT entries key on a
+        PAN, 26AS Part I rows key on a TAN (never a PAN), and TIS SFT
+        entries key on a PAN — but the PAN and TAN differ for the same
+        deductor (e.g. SBI: PAN AAACS8577K in SFT, TAN MUMS89569E in 26AS).
+        So PAN/TAN CANNOT be the identity.  The normalized deductor NAME is
+        the only stable bridge, so it is the primary key.
+
+        For transaction-level capital-gains categories, the same broker
+        reports multiple distinct funds, so the full source description
+        (broker + fund name) is preserved as the transaction identity.
+
+        Matching priority at the engine level: section → amount → name/PAN.
+        The key encodes (canonical_category, identity); sections_compatible
+        and the amount-based validation gate actual merges.
+        """
+        category = canonical_category(self.category)
         identity = normalize_source_identity(category, self.source)
         if category in TRANSACTION_LEVEL_CATEGORIES:
             # A reporting entity can report multiple distinct funds/assets.
             # Preserve the full source description as transaction identity.
             return f"{category}|transaction:{identity}"
-        identifier = self.tan.strip().upper() or self.pan.strip().upper()
-        if identifier:
-            return f"{category}|id:{identifier}"
+        # Non-transaction categories: identity is the normalized deductor
+        # name.  PAN/TAN are carried as metadata, not as the key, because
+        # they differ across documents for the same deductor.
         return f"{category}|name:{identity}"
 
 
@@ -769,6 +943,15 @@ def _extract_26as(as26: dict) -> list[Entry]:
                     cat = SECTION_TO_CATEGORY.get(sec.strip().upper(), "other")
                     break
 
+            # R1 (CBDT compliance): Part VI is TCS.  Route TCS rows to the
+            # ``tcs credit`` bucket (a tax-credit income head), NOT to the
+            # section's default business-receipts category.  26AS cannot
+            # determine the collectee's business status, so the safe default
+            # is the dedicated credit bucket rather than PGBP income.
+            is_tcs_part = (part_id == "VI")
+            if is_tcs_part:
+                cat = "tcs credit"
+
             entries.append(Entry(
                 category=cat, source=src, raw_source=raw,
                 amount=amt, tds=tds,
@@ -809,6 +992,53 @@ def _extract_26as(as26: dict) -> list[Entry]:
             ))
 
     return entries
+
+
+def _collapse_within_map_by_name(
+    m: dict[str, list[Entry]],
+) -> None:
+    """Collapse entries within a single map that share category + identity.
+
+    A single document (especially TIS) can produce two rows for the same
+    reporting entity under different keys: one keyed by PAN/TAN
+    (``|id:AAACS8577K``) and one keyed by name only (``|name:state bank of
+    india``) when the detail row carries no PAN.  The cross-document
+    matchers only merge ACROSS maps, so without this collapse the same
+    entity appears as two separate entries in the final reconciled list.
+
+    This merges the name-only-keyed rows into the id-keyed rows when both
+    share the same canonical category and normalized source identity.
+    """
+    # Build (category, identity) -> list of keys, preferring id-keyed over name-keyed.
+    by_identity: dict[tuple[str, str], list[str]] = {}
+    for key, grouped in m.items():
+        if not grouped:
+            continue
+        first = grouped[0]
+        if first.category in TRANSACTION_LEVEL_CATEGORIES:
+            continue
+        identity = normalize_source_identity(first.category, first.source)
+        if not identity:
+            continue
+        by_identity.setdefault((first.category, identity), []).append(key)
+
+    for (cat, identity), keys in by_identity.items():
+        if len(keys) < 2:
+            continue
+        # Only collapse when one entry is a no-amount "book" row (e.g. the
+        # TIS TDS detail with amount 0 and no PAN) and another is a real
+        # income row (amount > 0, has PAN/TAN).  This avoids merging two
+        # genuinely-distinct AIS line items (e.g. SFT-016 interest 261841
+        # and 194A interest 261841) which would double-count the income.
+        real_keys = [k for k in keys if max((e.amount for e in m[k]), default=0.0) > 0]
+        book_keys = [k for k in keys if max((e.amount for e in m[k]), default=0.0) == 0]
+        if not real_keys or not book_keys:
+            continue
+        preferred = real_keys[0]
+        for k in keys:
+            if k == preferred:
+                continue
+            m.setdefault(preferred, []).extend(m.pop(k))
 
 
 def _pan_cross_match(
@@ -899,7 +1129,7 @@ class ReconciledEntry:
     discrepancy_detail: str = ""
 
 
-def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
+def reconcile(ais_data: dict, tis_data: dict, as26_data: dict, prefill_data: dict | None = None) -> dict:
     ais_entries = _extract_ais(ais_data)
     tis_entries = _extract_tis(tis_data)
     as26_entries = _extract_26as(as26_data)
@@ -919,6 +1149,14 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
         tis_map.setdefault(e.key, []).append(e)
     for e in as26_entries:
         as26_map.setdefault(e.key, []).append(e)
+
+    # === Within-map collapse by name ===
+    # A single document (especially TIS) can produce two rows for the same
+    # entity under different keys (one id-keyed, one name-keyed).  Collapse
+    # them before cross-document matching so the entity isn't duplicated.
+    _collapse_within_map_by_name(ais_map)
+    _collapse_within_map_by_name(tis_map)
+    _collapse_within_map_by_name(as26_map)
 
     # === PAN-based cross-matching for unmatched entries ===
     # If entry A from doc1 and entry B from doc2 share category + PAN but
@@ -947,9 +1185,19 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
         t = tis_map.get(key, [])
         as_list = as26_map.get(key, [])
 
-        ais_total = sum(e.amount for e in a)
+        # AIS total: use max (not sum) because AIS reports the same income
+        # under multiple codes (SFT-016 income + TDS-194A book entry for the
+        # same deductor); summing would double-count the income in the
+        # displayed ais_amount and trigger a spurious discrepancy.  The
+        # canonical AIS income for a deductor is the single largest figure.
+        ais_total = max((e.amount for e in a), default=0.0)
+        # TIS total: use sum to preserve the full detail total so the
+        # category-control discrepancy (accepted overview vs detail sum) is
+        # surfaced correctly (e.g. dividend accepted 514 vs details 528).
         tis_total = sum(e.amount for e in t)
-        as26_total = sum(e.amount for e in as_list)
+        # 26AS amount: deductor-level total already aggregated by the
+        # extractor; max is correct (one canonical amount per deductor).
+        as26_total = max((e.amount for e in as_list), default=0.0)
         as26_tds_total = sum(e.tds for e in as_list if e.credit_type is CreditType.TDS)
         as26_tcs_total = sum(e.tds for e in as_list if e.credit_type is CreditType.TCS)
 
@@ -1103,6 +1351,55 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
             "income_head": e.income_head, "pan": e.pan, "tan": e.tan,
         }
 
+    # === Prefill-TDS vs 26AS-TDS cross-check (R2) ===
+    # Compare the Prefill's TDS entries (salary TDS + other TDS) against the
+    # reconciled 26AS TDS entries.  Each prefill TDS entry that matches a 26AS
+    # entry by TAN (+/- section) is reported as a duplicate-match (kept, 26AS
+    # TAN authoritative); each prefill TDS entry with NO 26AS match is
+    # flagged as "prefill-only" (the deductor isn't in 26AS — investigate).
+    prefill_tds_discrepancies: list[dict[str, object]] = []
+    prefill_tds_match_count = 0
+    prefill_tds_only_count = 0
+    if prefill_data:
+        # Collect prefill TDS entries from both the salary and other-sources
+        # sections of the prefill extraction.
+        prefill_tds_entries: list[dict[str, object]] = []
+        for src_list in (
+            prefill_data.get("tds_salary_entries", []),
+            prefill_data.get("tds_other_entries", []),
+        ):
+            for entry in src_list or []:
+                prefill_tds_entries.append(entry)
+        # Index reconciled 26AS TDS entries by uppercased TAN.
+        as26_tds_by_tan: dict[str, list[ReconciledEntry]] = {}
+        for rec in reconciled:
+            if rec.credit_type is CreditType.TDS and rec.tan:
+                as26_tds_by_tan.setdefault(rec.tan.upper(), []).append(rec)
+        for pt in prefill_tds_entries:
+            tan = str(pt.get("tan", "") or pt.get("deductor_tan", "") or "").strip().upper()
+            amount = _parse_amount(pt.get("tds_amount", pt.get("tax_deducted", "0")))
+            matched = as26_tds_by_tan.get(tan, []) if tan else []
+            if matched:
+                prefill_tds_match_count += 1
+                as26_amt = sum(r.as26_tds for r in matched)
+                if abs(as26_amt - amount) > 1.0:
+                    prefill_tds_discrepancies.append({
+                        "type": "amount_mismatch",
+                        "tan": tan,
+                        "deductor": pt.get("deductor_name", matched[0].source),
+                        "prefill_tds": round(amount, 2),
+                        "as26_tds": round(as26_amt, 2),
+                        "difference": round(amount - as26_amt, 2),
+                    })
+            else:
+                prefill_tds_only_count += 1
+                prefill_tds_discrepancies.append({
+                    "type": "prefill_only_no_26as_match",
+                    "tan": tan or "(no TAN)",
+                    "deductor": pt.get("deductor_name", "Unknown"),
+                    "prefill_tds": round(amount, 2),
+                })
+
     def _rec_dict(r: ReconciledEntry) -> dict:
         return {
             "category": r.category, "source": r.source,
@@ -1234,7 +1531,10 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict) -> dict:
             "unmatched_tis": len(unmatched_tis),
             "unmatched_ais": len(unmatched_ais),
             "unmatched_as26": len(unmatched_as26),
+            "prefill_tds_matched": prefill_tds_match_count,
+            "prefill_tds_only": prefill_tds_only_count,
         },
+        "prefill_tds_discrepancies": prefill_tds_discrepancies,
     }
 
     return result

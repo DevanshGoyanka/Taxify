@@ -186,15 +186,27 @@ export function mapCapitalGainsEvidence(
     const assetType = (row.asset_type || '').toLowerCase();
     const isLongTerm = assetType.includes('long');
     const isShortTerm = assetType.includes('short');
+    // A REPORTING_SOURCE_AGGREGATE row is a category total — it has no scrip
+    // identity (no ISIN, no per-scrip cost, no quantity).  It must NOT become
+    // a Schedule 112A scrip, an stEquity row, an immovable stub, or a VDA
+    // entry: doing so produces phantom rows whose sale value is the category
+    // aggregate and whose cost/ISIN are zero.  Only TRANSACTION_DETAIL rows
+    // carry per-scrip facts.  A SALE-side aggregate may still contribute its
+    // amount to the simplified112A quick-entry aggregate below.
+    const isDetail = row.granularity === 'TRANSACTION_DETAIL';
 
-    // VDA — any side, any granularity
+    // VDA — any side, but only transaction-detail rows (aggregates have no
+    // per-asset acquisition cost / consideration split).
     if (isVdaCategory(category)) {
-      vda.push(toVdaEntry(row));
+      if (isDetail) vda.push(toVdaEntry(row));
       continue;
     }
 
-    // Immovable property (land/building) — SFT-012 / 26AS 194IA
+    // Immovable property (land/building) — SFT-012 / 26AS 194IA.  Only
+    // transaction-detail rows become property stubs; an aggregate has no
+    // purchase date / per-property consideration.
     if (isPropertyCategory(category)) {
+      if (!isDetail) continue;
       const longTerm = isLongTermImmovable(row.transaction_date);
       if (longTerm) ltImmovable.push(toImmovableGain(row, true));
       else stImmovable.push(toImmovableGain(row, false));
@@ -206,12 +218,19 @@ export function mapCapitalGainsEvidence(
       // Purchase-side rows don't create gains; they're evidence only.
       if (side === 'PURCHASE') continue;
 
-      // Aggregate into simplified112A for ITR-1/4 quick-entry
-      // (LTCG only — short-term gains aren't 112A-eligible)
-      if (row.granularity === 'TRANSACTION_DETAIL' && isLongTerm) {
+      // Aggregate into simplified112A for ITR-1/4 quick-entry.  Both
+      // transaction-detail and SALE-side aggregate rows contribute their
+      // sale amount (and cost, where present) to the simplified totals —
+      // for a client whose AIS carries only a summary sale (no per-scrip
+      // detail), the aggregate is the only sale figure available.
+      if (isLongTerm) {
         simplifiedSale += toNum(row.amount);
         simplifiedCost += toNum(row.acquisition_cost);
       }
+
+      // Only transaction-detail rows become scrips.  A summary aggregate
+      // has no ISIN / per-scrip cost and would be a phantom scrip.
+      if (!isDetail) continue;
 
       if (isShortTerm) {
         // STCG listed equity → stEquity (engine computes 111A/115AD(1)(b)(ii) proviso)

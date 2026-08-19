@@ -170,4 +170,55 @@ describe('direct typed import mappers against real extractor fixtures', () => {
     expect(mergedAis.otherSources.interest).toHaveLength(1);
     expect(mergedAis.otherSources.interest[0]).toMatchObject({ grossAmount: 12000 });
   });
+
+  it('does NOT create phantom 112A scrips from PURCHASE-side AIS entries', () => {
+    // Real shape from AEDPD0736M_ais.json: the SALE entry (SFT-17-LES(M)) is
+    // summary-only (no details), and the PURCHASE entries (SFT-17(Pur) /
+    // SFT-18(Pur)) carry column-keyed detail rows with TOTAL PURCHASE AMOUNT /
+    // TOTAL SALES VALUE — no parsed `sales_consideration`/`isin`/`cost` keys.
+    // Previously the direct-import mapper fell back to `entry.amount` for the
+    // sale value, producing phantom scrips whose `totalSaleValue` was the
+    // PURCHASE aggregate (456609, 11999, ...) and whose cost/ISIN were 0.
+    const patch = mapAisToDraftPatch({
+      income_heads: {
+        'Capital Gains': { entries: [
+          // Summary-only SALE — no detail rows; must not yield scrips.
+          { sr_no: 26, information_code: 'SFT-17-LES(M)', category: 'sale of securities and units of mutual fund', amount: 496301, detail_header: [], details: [] },
+          // PURCHASE entries with column-keyed details — must be skipped.
+          { sr_no: 27, information_code: 'SFT-17(Pur)', category: 'purchase of securities and units of mutual funds', amount: 456609, detail_header: ['SR. NO.', 'QUARTER', 'CLIENT ID', 'HOLDER FLAG', 'MARKET PURCHASE', 'MARKET SALES', 'STATUS'], details: [{ sr_no: 1, data: { col_0: '1', col_1: '-', col_2: '26674871', col_3: 'First', col_4: '4,56,609', col_5: '4,95,332', col_6: 'Active' } }] },
+          { sr_no: 30, information_code: 'SFT-18(Pur)', category: 'purchase of securities and units of mutual funds', amount: 11999, detail_header: ['SR. NO.', 'QUARTER', 'CLIENT ID', 'AMC NAME (CODE)', 'HOLDER FLAG', 'TOTAL PURCHASE AMOUNT', 'TOTAL SALES VALUE', 'STATUS'], details: [{ sr_no: 1, data: { col_0: '1', col_1: 'Q4(Jan-Mar)', col_2: '91041541744', col_3: 'AXIS MUTUAL FUND(128)', col_4: 'First', col_5: '3,000', col_6: '0', col_7: 'Active' } }] },
+        ] },
+      },
+    } as never);
+
+    // No phantom scrips — the CG schedule is empty (the AIS genuinely has no
+    // per-scrip SALE detail for this client; only purchase-side aggregates).
+    expect(patch.capitalGainsSchedule?.schedule112A ?? []).toHaveLength(0);
+    expect(patch.capitalGainsSchedule?.schedule115AD ?? []).toHaveLength(0);
+    expect(patch.capitalGainsSchedule?.stEquity ?? []).toHaveLength(0);
+    // No simplified112A aggregate either (no realisation rows).
+    expect(patch.capitalGainsSchedule?.simplified112A).toBeUndefined();
+  });
+
+  it('creates a 112A scrip from a SALE detail row with parsed keys', () => {
+    // A real listed-equity SALE detail row where the extractor populated the
+    // parsed keys (isin, sales_consideration, cost_of_acquisition, etc.).
+    const patch = mapAisToDraftPatch({
+      income_heads: {
+        'Capital Gains': { entries: [
+          { sr_no: 1, information_code: 'SFT-17-LES', category: 'sale of securities and units of mutual fund', amount: 456609, detail_header: ['SR. NO.', 'DATE OF SALE/TRANSFER', 'SECURITY NAME', 'SALES CONSIDERATION', 'COST OF ACQUISITION', 'ASSET TYPE', 'STATUS'], details: [{ sr_no: 1, data: { isin: 'INE123A01014', security_name: 'RELIANCE INDUSTRIES', sales_consideration: '4,56,609', cost_of_acquisition: '3,00,000', quantity: '50', sale_price_per_unit: '9132.18', asset_type: 'Long term', transfer_date: '2026-02-15' } }] },
+        ] },
+      },
+    } as never);
+
+    expect(patch.capitalGainsSchedule?.schedule112A).toHaveLength(1);
+    expect(patch.capitalGainsSchedule?.schedule112A?.[0]).toMatchObject({
+      isin: 'INE123A01014', name: 'RELIANCE INDUSTRIES', totalSaleValue: 456609,
+      costWithoutIndexation: 300000, acquisitionCost: 300000, quantity: 50,
+    });
+    // The LTCG sale aggregates into the simplified112A quick-entry totals.
+    expect(patch.capitalGainsSchedule?.simplified112A).toMatchObject({
+      totalSaleConsideration: 456609, totalCostAcquisition: 300000,
+    });
+  });
 });

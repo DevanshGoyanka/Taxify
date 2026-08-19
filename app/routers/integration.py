@@ -115,31 +115,15 @@ def _upsert_imported_document(
     raw_content: str,
     parsed_content: str,
 ) -> ImportedDocument:
-    """Insert or update an ImportedDocument row.
+    """Insert or update an ImportedDocument row (delegates to shared service).
 
-    If a row already exists for (client_id, assessment_year,
-    document_type), update its raw + parsed content and bumped
-    ``updated_at``.  Otherwise insert a new row.
+    Delegates to ``app.db.imported_document_service.upsert_imported_document``
+    so the automation worker and the manual-upload endpoints share one
+    dedup key and one provenance field (remediation P1/P2/P4).
     """
-    if client_id is None:
-        # No client context — use a sentinel client_id of 0 so the row
-        # is still persisted (the unique constraint allows it).  In
-        # practice every upload should pass a clientId, but we degrade
-        # gracefully rather than dropping the document.
-        client_id = 0
-    existing = db.query(ImportedDocument).filter(
-        ImportedDocument.client_id == client_id,
-        ImportedDocument.assessment_year == assessment_year,
-        ImportedDocument.document_type == document_type,
-    ).first()
-    if existing is not None:
-        existing.raw_content = raw_content
-        existing.parsed_content = parsed_content
-        existing.source = source
-        db.commit()
-        db.refresh(existing)
-        return existing
-    doc = ImportedDocument(
+    from app.db.imported_document_service import upsert_imported_document
+    return upsert_imported_document(
+        db=db,
         client_id=client_id,
         user_id=user_id,
         assessment_year=assessment_year,
@@ -148,10 +132,6 @@ def _upsert_imported_document(
         raw_content=raw_content,
         parsed_content=parsed_content,
     )
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
-    return doc
 
 
 def _b64(content: bytes) -> str:
@@ -787,6 +767,60 @@ def reconciliation(
         return _reconcile(ais_data, tis_data, as26_data)
     except Exception as exc:
         raise HTTPException(422, f"Reconciliation failed: {exc}")
+
+
+@router.get("/integration/reconciliation/client/{client_id}")
+def reconcile_persisted(
+    client_id: str,
+    assessmentYear: str = "",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Reconcile the persisted import set for a client+AY, server-side.
+
+    This closes P6 (silent TDS/TCS credit loss): it loads every parsed
+    document row from ``imported_document`` for the client+AY and runs
+    ``reconcile()`` on the combination present — it never depends on the
+    frontend's in-memory state, so a page refresh between upload and
+    reconcile no longer silently drops 26AS credits.
+
+    Requires ``clientId`` + ``assessmentYear`` query params.  Returns the
+    full ``ReconciledResults`` payload (plus ``prefill`` if a prefill row
+    exists).  If no AIS/TIS/26AS rows exist, returns an empty shell.
+    """
+    from app.db.imported_document_service import reconcile_imported_documents
+    from app.routers.clients import resolve_owned_client
+
+    client = resolve_owned_client(db, current_user, client_id)
+    ay = assessmentYear or ""
+    if not ay:
+        raise HTTPException(400, "assessmentYear query parameter is required.")
+    try:
+        return reconcile_imported_documents(db, client.id, ay)
+    except Exception as exc:
+        raise HTTPException(422, f"Reconciliation failed: {exc}")
+
+
+def _auto_reconcile_after_upload(
+    db: Session,
+    client_id: Optional[int],
+    assessment_year: str,
+) -> Optional[dict]:
+    """Run a server-side reconcile on the current import set (P3).
+
+    Called after a successful manual per-document upload so the caller
+    gets a fresh reconciled view alongside the per-document parsed JSON,
+    without needing a separate reconcile call.  Returns ``None`` if no
+    AIS/TIS/26AS rows are present yet (e.g. a prefill-only upload).
+    """
+    if client_id is None or not assessment_year:
+        return None
+    from app.db.imported_document_service import reconcile_imported_documents
+    try:
+        return reconcile_imported_documents(db, client_id, assessment_year)
+    except Exception:
+        # Best-effort: a reconcile failure must not fail the upload itself.
+        return None
 
 
 # ── ITD ERI Integration Routes ────────────────────────────────────────────────

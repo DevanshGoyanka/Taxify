@@ -1,5 +1,5 @@
 import type { ReconciledEntry, ReconciledResults } from '../api/itrAutomation';
-import { EMPTY_TDS_CREDIT, type DividendIncome, type Employer, type InterestIncome, type Presumptive44AD, type Presumptive44ADA, type TdsCredit } from '../domain/returns/types';
+import { EMPTY_TDS_CREDIT, EMPTY_TCS_CREDIT, type DividendIncome, type Employer, type InterestIncome, type Presumptive44AD, type Presumptive44ADA, type TdsCredit, type TcsCredit } from '../domain/returns/types';
 import { createEmptyFinancialParticulars } from '../domain/returns/factory';
 import type { ReturnDraftPatch } from '../domain/returns/draftPatch';
 import { mapCapitalGainsEvidence } from './mapCapitalGainsToDraftPatch';
@@ -72,13 +72,34 @@ export function mapReconciledToDraftPatch(results: ReconciledResults | null | un
   const dividends = entries.filter((entry) => (entry.category || '').toLowerCase() === 'dividend');
   const businesses = entries.filter((entry) => entry.income_head === 'Profits and Gains of Business or Profession');
   const tdsRows = entries.filter((entry) => entry.credit_type !== 'TCS' && (entry.as26_tds || 0) > 0);
+  // R1: TCS rows now route to the dedicated "TCS Credit" income head (a tax
+  // credit, not PGBP income).  Map them to the Schedule TCS credit list so
+  // the tax credit is claimed against tax payable, not counted as income.
+  const tcsRows = entries.filter((entry) => entry.credit_type === 'TCS' && (entry.as26_tcs || 0) > 0);
   const cgPatch = mapCapitalGainsEvidence(results.capital_gain_evidence);
   return {
     employers: salaries.map(employer),
     otherSources: { interest: interests.map(interest), dividends: dividends.map(dividend) },
-    taxes: { tds: tdsRows.map(tds) },
+    taxes: { tds: tdsRows.map(tds), tcs: tcsRows.map(tcsCredit) },
     businesses: businesses.length ? [business(businesses)] : undefined,
     capitalGainsSchedule: cgPatch.capitalGainsSchedule,
     provenance: [{ source: 'AIS', importedAt: new Date().toISOString(), reference: results.metadata.pan || results.metadata.financial_year || '' }],
   };
+}
+
+function tcsCredit(entry: ReconciledEntry): TcsCredit {
+  const section = (entry.section || '206C').replace(/\s+/g, '').toUpperCase();
+  const tax = entry.as26_tcs || 0;
+  return {
+    ...structuredClone(EMPTY_TCS_CREDIT),
+    id: id('recon-tcs', entry),
+    collectorName: entry.source || 'Collector from Portal',
+    collectorTAN: entry.tan || '',
+    grossAmount: entry.final_amount || 0,
+    taxCollected: tax,
+    tcsAmtCollOwnHand: tax,
+    tcsClaimedAmtCollOwnHand: tax,
+    deductedYr: '',
+    section: section === '206C' ? '206C' : section,
+  } as TcsCredit;
 }
