@@ -1,5 +1,5 @@
 import type { Category80D, FinancialParticulars, ReturnDraft } from './types';
-import { EMPTY_BROUGHT_FORWARD_LOSSES, EMPTY_CHAPTER_VIA } from './types';
+import { EMPTY_BROUGHT_FORWARD_LOSSES, EMPTY_CAPITAL_GAINS_SCHEDULE, EMPTY_CHAPTER_VIA } from './types';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _FactoryTypeGuard = ReturnDraft;
@@ -29,7 +29,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       city: '', stateCode: '', countryCode: '91', pinCode: '', zipCode: '',
     },
     filing: { filingSection: '139(1)', returnType: 'ORIGINAL', originalAcknowledgementNumber: '', originalFilingDate: null, noticeNumber: '' },
-    employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: {},
+    employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: { ...EMPTY_CAPITAL_GAINS_SCHEDULE },
     otherSources: {
       interest: [], dividends: [], familyPension: { grossAmount: 0, payerName: '', relationToPensioner: '' },
       winnings: [], gifts: [], otherIncome: [], dtaaIncome: [], dtaaAggregates: { totalAmountTaxUsDtaa: 0 },

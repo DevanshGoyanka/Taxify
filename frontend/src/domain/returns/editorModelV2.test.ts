@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { createEmptyReturnDraft } from './factory';
 import {
   replaceDraft,
+  updateCapitalGainsSchedule,
   updateDraft,
   updateEmployers,
   updateSection80C,
   type ReturnEditorModelV2,
 } from './editorModelV2';
-import type { Employer, Investment80C } from './types';
+import type { CapitalGainsSchedule, Employer, Investment80C } from './types';
 
 function employer(): Employer {
   return {
@@ -64,5 +65,53 @@ describe('ReturnEditorModelV2', () => {
     expect(updated).not.toHaveProperty('extras');
     expect(updated.draft).not.toHaveProperty('compatibility');
     expect(updated.draft.deductions.section80C).toHaveLength(1);
+  });
+
+  it('seeds the capital gains schedule as the typed EMPTY_CAPITAL_GAINS_SCHEDULE', () => {
+    const draft = createEmptyReturnDraft('2026-27');
+    const schedule = draft.capitalGainsSchedule as CapitalGainsSchedule;
+    expect(schedule.simplified112A).toEqual({ totalSaleConsideration: 0, totalCostAcquisition: 0 });
+    expect(schedule.schedule112A).toEqual([]);
+    expect(schedule.schedule115AD).toEqual([]);
+    expect(schedule.vda).toEqual([]);
+    expect(schedule.stImmovable).toEqual([]);
+    expect(schedule.ltImmovable).toEqual([]);
+    expect(schedule.stUnutilizedFlag).toBe('N');
+    expect(schedule.ltUnutilizedFlag).toBe('N');
+    expect(schedule.aggregates).toEqual({
+      stPassThrough: 0, stPassThrough20: 0, stPassThrough30: 0, stPassThroughApplicable: 0,
+      ltPassThrough: 0, ltPassThrough112A: 0, ltPassThrough125: 0,
+    });
+  });
+
+  it('replaces the capital gains schedule immutably via updateCapitalGainsSchedule', () => {
+    const model = replaceDraft(createEmptyReturnDraft('2026-27'));
+    const newSchedule: CapitalGainsSchedule = {
+      ...model.draft.capitalGainsSchedule,
+      simplified112A: { totalSaleConsideration: 250000, totalCostAcquisition: 180000 },
+      schedule112A: [{
+        id: 'scrip-1', shareOnOrBefore: 'AE', isin: 'INE123456789', name: 'Reliance',
+        quantity: 100, salePricePerUnit: 2500, totalSaleValue: 250000,
+        costWithoutIndexation: 180000, acquisitionCost: 175000, fmvPerUnit: 2400,
+        totalFmv: 240000, transferExpenses: 5000,
+      }],
+    };
+    const updated = updateCapitalGainsSchedule(model, newSchedule);
+
+    // Immutable: original unchanged
+    expect(model.draft.capitalGainsSchedule.simplified112A.totalSaleConsideration).toBe(0);
+    expect(model.draft.capitalGainsSchedule.schedule112A).toEqual([]);
+
+    // Updated: new values
+    expect(updated).not.toBe(model);
+    expect(updated.draft).not.toBe(model.draft);
+    expect(updated.draft.capitalGainsSchedule).not.toBe(model.draft.capitalGainsSchedule);
+    expect(updated.draft.capitalGainsSchedule.simplified112A.totalSaleConsideration).toBe(250000);
+    expect(updated.draft.capitalGainsSchedule.schedule112A).toHaveLength(1);
+    expect(updated.draft.capitalGainsSchedule.schedule112A[0].isin).toBe('INE123456789');
+
+    // Detached: mutating the input after the call does not affect the model
+    newSchedule.schedule112A[0].isin = 'MUTATED';
+    expect(updated.draft.capitalGainsSchedule.schedule112A[0].isin).toBe('INE123456789');
   });
 });

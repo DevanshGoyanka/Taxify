@@ -1,6 +1,7 @@
 import { classifyTdsSchedule, toSchemaSectionCode } from './tdsSections';
 import type {
   BankAccount,
+  CapitalGainsSchedule,
   ChapterVIA,
   DeductionLoan,
   DividendIncome,
@@ -268,6 +269,15 @@ export function updateLossesBroughtForward(model: ReturnEditorModelV2, value: Re
 export function updateBpNetProfit(model: ReturnEditorModelV2, value: number): ReturnEditorModelV2 {
   const sanitized = typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
   return withDraft(model, { ...model.draft, bpNetProfit: sanitized });
+}
+
+/** Replaces the entire Capital Gains Schedule immutably.
+ *
+ *  The schedule is a single typed object (not an id-merged array), so a
+ *  whole-replacement clone is the correct immutable update — every
+ *  sub-array inside is deep-cloned by `clone`. */
+export function updateCapitalGainsSchedule(model: ReturnEditorModelV2, schedule: CapitalGainsSchedule): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, capitalGainsSchedule: clone(schedule) });
 }
 
 /** Replaces Schedule 80GGA rows immutably. */

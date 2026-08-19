@@ -1,4 +1,5 @@
 import React from 'react';
+import type { CapitalGainsSchedule as CanonicalCapitalGainsSchedule } from '../domain/returns/types';
 
 const MONEY_MAX = 99999999999999;
 const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: '#fff', color: 'var(--text-primary)', boxSizing: 'border-box' };
@@ -49,7 +50,7 @@ export interface CapitalGainsScheduleData {
 }
 
 interface Props {
-  data?: Partial<CapitalGainsScheduleData>;
+  data?: Partial<CapitalGainsScheduleData> | CanonicalCapitalGainsSchedule;
   entries?: CapitalGainTransaction[];
   onChange: (data: CapitalGainsScheduleData) => void;
   selectedForm: string;
@@ -65,7 +66,7 @@ const emptyData = (): CapitalGainsScheduleData => ({
   quarterly: {}, stSection48: { nriSttPaid: 0, nriSttNotPaid: 0 }, ltNriProviso48: { ltcgWithoutBenefit: 0, deduction54F: 0 }, ltNri112A: {}, stUnutilizedFlag: 'N', ltUnutilizedFlag: 'N', lossSetOff: {}, aggregates: { stPassThrough: 0, stPassThrough20: 0, stPassThrough30: 0, stPassThroughApplicable: 0, ltPassThrough: 0, ltPassThrough112A: 0, ltPassThrough125: 0 },
 });
 
-const normalizeData = (value?: Partial<CapitalGainsScheduleData>): CapitalGainsScheduleData => {
+const normalizeData = (value?: Partial<CapitalGainsScheduleData> | CanonicalCapitalGainsSchedule): CapitalGainsScheduleData => {
   const base = emptyData();
   if (!value) return base;
   const result = { ...base, ...value } as CapitalGainsScheduleData;
@@ -164,7 +165,7 @@ const QUARTERS: FieldSpec[] = [
   { key: 'upto31March', label: '16 March–31 March', kind: 'money' },
 ];
 
-export function hasNonSimplifiedCapitalGains(schedule: Partial<CapitalGainsScheduleData> | undefined): boolean {
+export function hasNonSimplifiedCapitalGains(schedule: Partial<CapitalGainsScheduleData> | CanonicalCapitalGainsSchedule | undefined): boolean {
   if (!schedule) return false;
   const arrays: Array<keyof CapitalGainsScheduleData> = ['stImmovable','stEquity','stNriUnlisted','stOtherAssets','stSlumpSale','ltImmovable','ltProviso112','ltNri112115','ltForeignAssets','ltOtherAssets','ltSlumpSale','schedule112A','schedule115AD','vda','stUnutilized','ltUnutilized','stDtaa','ltDtaa','buyBackLosses','deductionClaims'];
   for (const key of arrays) { const rows = schedule[key]; if (Array.isArray(rows) && rows.length > 0) return true; }

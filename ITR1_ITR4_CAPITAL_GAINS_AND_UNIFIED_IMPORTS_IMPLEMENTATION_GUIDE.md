@@ -167,7 +167,44 @@ Both workstreams are sequenced into **5 phases**. After each phase: update this 
 
 | Date | Phase | Commit | Status |
 |---|---|---|---|
-| 2026-08-19 | 1 | — | In progress |
+| 2026-08-19 | 1 | `<pending push>` | ✅ Complete — awaiting user test |
+
+---
+
+## Phase 1 — Completed 2026-08-19
+
+### Changes shipped
+1. **`frontend/src/domain/returns/types.ts`** — added fully-typed `CapitalGainsSchedule` interface with typed element interfaces:
+   - `Scrip112A` (listed equity/MF scrips with ISIN, quantity, sale price, cost, FMV, transfer expenses)
+   - `Scrip115AD` (FII/FPI scrips — same shape as 112A)
+   - `VdaEntry` (VDA transactions with acquisition cost, consideration, head of income)
+   - `ImmovableAssetGain` (STCG/LTCG land/building with nested `TransfereeDetail[]`, `ImprovementDetail[]`, `ExemptionClaim[]`)
+   - `DtaaEntry`, `DeductionClaim`, `UnutilizedDeposit`, `CapitalGainsAggregates`, `LossSetOff`, `QuarterlyMatrix`
+   - `JsonRow` type alias (for sub-arrays the existing `CapitalGainsEntryManager` edits with field-spec validation — full rewrite out of scope)
+   - `EMPTY_CAPITAL_GAINS_SCHEDULE` constant
+   - Changed `ReturnDraft.capitalGainsSchedule` from `Record<string, unknown>` to `CapitalGainsSchedule`
+2. **`frontend/src/domain/returns/factory.ts`** — `createEmptyReturnDraft` now seeds `capitalGainsSchedule: { ...EMPTY_CAPITAL_GAINS_SCHEDULE }`.
+3. **`frontend/src/domain/returns/editorModelV2.ts`** — added `updateCapitalGainsSchedule(model, schedule)` updater (deep-clone whole-replacement, same pattern as `updateBpNetProfit`).
+4. **`frontend/src/components/CapitalGainsEntryManager.tsx`** — broadened `Props.data` and `hasNonSimplifiedCapitalGains` to accept `CanonicalCapitalGainsSchedule` (the typed schedule) in addition to the local `CapitalGainsScheduleData`. This avoids a massive rewrite of the field-spec-driven editor while letting the typed draft flow in.
+5. **`frontend/src/domain/returns/editorModelV2.test.ts`** — added 2 tests:
+   - `seeds the capital gains schedule as the typed EMPTY_CAPITAL_GAINS_SCHEDULE`
+   - `replaces the capital gains schedule immutably via updateCapitalGainsSchedule`
+
+### Validation
+- `tsc -b`: zero new errors (only pre-existing `api/reconciliation.ts` missing `./client` module).
+- `vitest run`: 15 files / 120 tests pass (118 existing + 2 new).
+- `vite build`: clean production bundle (939 kB main chunk).
+
+### User test plan
+1. Restart the frontend (`npm run dev` in `frontend/`).
+2. Load any client — the ITR computation page should render without crashes (the CG tab now reads the typed `EMPTY_CAPITAL_GAINS_SCHEDULE`).
+3. Open the Capital Gains tab — it should render the full Schedule CG editor (simplified 112A quick-entry enabled for ITR-1/4; full Schedule CG sections greyed-out with "Switch to ITR-2/ITR-3" badges).
+4. Switch form to ITR-2 — the full Schedule CG sections should become enabled.
+5. Editing any CG field should update the typed draft (no console errors).
+6. Run `npx vitest run` — 120 tests pass.
+7. Run `npx tsc -b` — no new errors.
+
+Once you confirm Phase 1 is green, I'll update this MD, commit, push, and proceed to Phase 2 (CG auto-population mappers + unified import endpoint).
 
 ---
 

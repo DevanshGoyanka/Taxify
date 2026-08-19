@@ -383,10 +383,275 @@ export interface PersonalInfo {
   isDirector?: boolean;
   holdsUnlistedShares?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Capital Gains Schedule (Schedule CG)
+// ---------------------------------------------------------------------------
+//
+// The canonical typed shape of the CBDT Schedule CG.  Each sub-array
+// corresponds to a part of the official schedule:
+//   - simplified112A  : ITR-1/4 quick-entry aggregate (sale − cost)
+//   - schedule112A[]  : scrip-level 112A transactions (listed equity/MF)
+//   - schedule115AD[] : scrip-level 115AD transactions (FII/FPI)
+//   - vda[]           : Virtual Digital Asset transactions (s.115BBH)
+//   - stImmovable[]/ltImmovable[] : land/building STCG/LTCG (with nested
+//                                  transferees, improvements, exemptions)
+//   - stDtaa[]/ltDtaa[] : DTAA-rate capital gains
+//   - deductionClaims[] : s.54/54B/54EC/54F/115F/54D/54G/54GA claims
+//   - stUnutilized[]/ltUnutilized[] : prior-year unutilized CG deposits
+//   - aggregates/lossSetOff/quarterly : pass-through + computation matrix
+//
+// The element interfaces below are typed for the sub-arrays that the
+// unified import pipeline auto-populates from AIS/TIS/26AS evidence
+// (112A scrips, 115AD scrips, VDA, immovable property).  The remaining
+// sub-arrays (stEquity, stNriUnlisted, stOtherAssets, ltProviso112,
+// ltNri112115, ltForeignAssets, ltOtherAssets, stSlumpSale, ltSlumpSale,
+// buyBackLosses) are kept as JsonRow[] because the existing
+// CapitalGainsEntryManager already edits them with field-spec validation
+// and a full rewrite is out of scope for Phase 1.
+
+/** A generic JSON row (preserves the existing component's flexibility). */
+export type JsonRow = Record<string, unknown>;
+
+/** One scrip in Schedule 112A (listed equity / equity-oriented MF). */
+export interface Scrip112A {
+  id: string;
+  /** Whether the sale/transfer is on or before 31-Jan-2018 ('BE') or after ('AE'). */
+  shareOnOrBefore: 'BE' | 'AE' | '';
+  /** ISIN of the security. */
+  isin: string;
+  /** Name of the security / fund scheme. */
+  name: string;
+  quantity: number;
+  salePricePerUnit: number;
+  totalSaleValue: number;
+  costWithoutIndexation: number;
+  acquisitionCost: number;
+  fmvPerUnit: number;
+  totalFmv: number;
+  transferExpenses: number;
+  /** Computed by the tax engine — lower of cost or FMV (grandfathering). */
+  ltcgBeforeLower?: number;
+  /** Computed by the tax engine — total deductions. */
+  totalDeductions?: number;
+  /** Computed by the tax engine — taxable balance after ₹1.25L exemption. */
+  balance?: number;
+}
+
+/** One scrip in Schedule 115AD (FII/FPI). Same shape as 112A. */
+export interface Scrip115AD extends Scrip112A {}
+
+/** One Virtual Digital Asset transaction (s.115BBH). */
+export interface VdaEntry {
+  id: string;
+  dateOfAcquisition: string;
+  dateOfTransfer: string;
+  /** Head of income: 'CG' (capital gains) or 'BI' (business income, ITR-3 only). */
+  head: 'CG' | 'BI' | '';
+  acquisitionCost: number;
+  consideration: number;
+  /** Computed income from VDA (consideration − acquisitionCost). */
+  incomeFromVda?: number;
+}
+
+/** A transferee detail nested inside stImmovable/ltImmovable rows. */
+export interface TransfereeDetail {
+  id: string;
+  name: string;
+  pan: string;
+  aadhaar?: string;
+  panOrTan?: string;
+  share: number;
+  amount: number;
+  address?: string;
+  stateCode?: string;
+  countryCode?: string;
+  pinCode?: string;
+  zipCode?: string;
+}
+
+/** An improvement-cost detail nested inside ltImmovable rows. */
+export interface ImprovementDetail {
+  id: string;
+  serialNumber: number;
+  cost: number;
+  financialYear: string;
+  indexedCost?: number;
+}
+
+/** An exemption claim nested inside ltImmovable rows. */
+export interface ExemptionClaim {
+  id: string;
+  section: '54' | '54B' | '54EC' | '54F' | '115F' | '54D' | '54G' | '54GA' | '';
+  amount: number;
+}
+
+/** One STCG/LTCG land-or-building row (Schedule CG A1/B1). */
+export interface ImmovableAssetGain {
+  id: string;
+  dateOfPurchase?: string;
+  dateOfSale: string;
+  fullConsideration: number;
+  stampDutyValue?: number;
+  /** Section 50C consideration (if stamp duty > consideration). */
+  consideration50C?: number;
+  acquisitionCost: number;
+  improvementCost?: number;
+  transferExpenses: number;
+  deduction54B?: number;
+  totalDeductions?: number;
+  balance?: number;
+  capitalGain?: number;
+  /** LTCG-only: indexed acquisition cost. */
+  indexedAcquisitionCost?: number;
+  /** LTCG-only: indexed improvement cost. */
+  indexedImprovementCost?: number;
+  improvementFinancialYear?: string;
+  exemptionSection?: '54' | '54B' | '54EC' | '54F' | '115F' | '54D' | '54G' | '54GA' | '';
+  exemptionAmount?: number;
+  transferees?: TransfereeDetail[];
+  improvements?: ImprovementDetail[];
+  exemptions?: ExemptionClaim[];
+}
+
+/** A DTAA-rate capital gains row (Schedule CG A6/B7). */
+export interface DtaaEntry {
+  id: string;
+  amount: number;
+  itemNumber?: string;
+  countryName: string;
+  countryCode?: string;
+  article: string;
+  treatyRate?: number;
+  trcAvailable?: boolean;
+  itActSection?: string;
+  itActRate?: number;
+  applicableRate?: number;
+}
+
+/** A s.54/54B/54EC/54F/115F/54D/54G/54GA deduction claim (Schedule CG F). */
+export interface DeductionClaim {
+  id: string;
+  section: '54' | '54B' | '54EC' | '54F' | '115F' | '54D' | '54G' | '54GA' | '';
+  dateOfTransfer: string;
+  newAssetCost?: number;
+  dateOfPurchase?: string;
+  amountDeposited?: number;
+  depositDate?: string;
+  accountNumber?: string;
+  ifsc?: string;
+  amountDeducted: number;
+}
+
+/** Prior-year unutilized CG deposit (s.54/54B/54D/54G/54GA reinvestment). */
+export interface UnutilizedDeposit {
+  id: string;
+  transferPreviousYear: string;
+  sectionClaimed: string;
+  yearAssetAcquired?: string;
+  amountUtilized: number;
+  amountUnutilized: number;
+}
+
+/** Pass-through STCG/LTCG aggregates for the schedule. */
+export interface CapitalGainsAggregates {
+  stPassThrough: number;
+  stPassThrough20: number;
+  stPassThrough30: number;
+  stPassThroughApplicable: number;
+  ltPassThrough: number;
+  ltPassThrough112A: number;
+  ltPassThrough125: number;
+}
+
+/** Current-year loss set-off matrix (Schedule CG H). */
+export type LossSetOff = Record<string, number>;
+
+/** Instalment-period accrual matrix (Schedule CG G). */
+export type QuarterlyMatrix = Record<string, number>;
+
+/** The fully-typed canonical Capital Gains Schedule. */
+export interface CapitalGainsSchedule {
+  /** ITR-1/4 quick-entry aggregate. Auto-populated from imported scrips. */
+  simplified112A: { totalSaleConsideration: number; totalCostAcquisition: number };
+  /** STCG land/building (A1). */
+  stImmovable: ImmovableAssetGain[];
+  /** STCG equity/STT (A2). */
+  stEquity: JsonRow[];
+  /** STCG NRI unlisted (A3). */
+  stNriUnlisted: JsonRow[];
+  /** STCG other assets (A4). */
+  stOtherAssets: JsonRow[];
+  /** STCG slump sale (A5, ITR-3 only). */
+  stSlumpSale: JsonRow[];
+  /** LTCG land/building (B1). */
+  ltImmovable: ImmovableAssetGain[];
+  /** LTCG proviso to s.112 (B2). */
+  ltProviso112: JsonRow[];
+  /** LTCG NRI u/s 112/115 (B3). */
+  ltNri112115: JsonRow[];
+  /** LTCG NRI specified foreign assets (B4, s.115F). */
+  ltForeignAssets: JsonRow[];
+  /** LTCG other assets (B5). */
+  ltOtherAssets: JsonRow[];
+  /** LTCG slump sale (B6, ITR-3 only). */
+  ltSlumpSale: JsonRow[];
+  /** Schedule 112A scrips (C) — auto-populated from AIS SFT-17-LES. */
+  schedule112A: Scrip112A[];
+  /** Schedule 115AD scrips (D) — auto-populated from AIS SFT-18-EMF (FII). */
+  schedule115AD: Scrip115AD[];
+  /** VDA transactions (E) — auto-populated from AIS/26AS VDA rows. */
+  vda: VdaEntry[];
+  /** Prior-year unutilized STCG deposits. */
+  stUnutilized: UnutilizedDeposit[];
+  /** Prior-year unutilized LTCG deposits. */
+  ltUnutilized: UnutilizedDeposit[];
+  /** STCG under DTAA (A6). */
+  stDtaa: DtaaEntry[];
+  /** LTCG under DTAA (B7). */
+  ltDtaa: DtaaEntry[];
+  /** Capital loss on buy-back of shares. */
+  buyBackLosses: JsonRow[];
+  /** s.54/54B/54EC/54F/115F/54D/54G/54GA deduction claims (F). */
+  deductionClaims: DeductionClaim[];
+  /** NRI STT paid/not-paid aggregates. */
+  stSection48: { nriSttPaid: number; nriSttNotPaid: number };
+  /** NRI LTCG without indexation + s.54F. */
+  ltNriProviso48: { ltcgWithoutBenefit: number; deduction54F: number };
+  /** NRI/FII Schedule 112A balance + s.54F. */
+  ltNri112A: Record<string, number>;
+  /** Whether prior-year STCG unutilized deposits exist ('Y'/'N'/'X'). */
+  stUnutilizedFlag: 'Y' | 'N' | 'X';
+  /** Whether prior-year LTCG unutilized deposits exist ('Y'/'N'/'X'). */
+  ltUnutilizedFlag: 'Y' | 'N' | 'X';
+  /** Instalment-period accrual matrix (G). */
+  quarterly: QuarterlyMatrix;
+  /** Pass-through STCG/LTCG aggregates. */
+  aggregates: CapitalGainsAggregates;
+  /** Current-year loss set-off matrix (H). */
+  lossSetOff: LossSetOff;
+}
+
+/** Empty (factory-seed) capital gains schedule. */
+export const EMPTY_CAPITAL_GAINS_SCHEDULE: CapitalGainsSchedule = {
+  simplified112A: { totalSaleConsideration: 0, totalCostAcquisition: 0 },
+  stImmovable: [], stEquity: [], stNriUnlisted: [], stOtherAssets: [], stSlumpSale: [],
+  ltImmovable: [], ltProviso112: [], ltNri112115: [], ltForeignAssets: [], ltOtherAssets: [], ltSlumpSale: [],
+  schedule112A: [], schedule115AD: [], vda: [], stUnutilized: [], ltUnutilized: [], stDtaa: [], ltDtaa: [], buyBackLosses: [], deductionClaims: [],
+  stSection48: { nriSttPaid: 0, nriSttNotPaid: 0 },
+  ltNriProviso48: { ltcgWithoutBenefit: 0, deduction54F: 0 },
+  ltNri112A: {},
+  stUnutilizedFlag: 'N',
+  ltUnutilizedFlag: 'N',
+  quarterly: {},
+  aggregates: { stPassThrough: 0, stPassThrough20: 0, stPassThrough30: 0, stPassThroughApplicable: 0, ltPassThrough: 0, ltPassThrough112A: 0, ltPassThrough125: 0 },
+  lossSetOff: {},
+};
+
 export interface ReturnDraft {
   schemaVersion: 1; assessmentYear: string; form: ItrForm; regime: TaxRegime;
   personal: PersonalInfo;
-  filing: FilingStatus; employers: Employer[]; houseProperties: HouseProperty[]; housePropertyPassThroughIncome: number; businesses: PresumptiveBusiness[]; capitalGainsSchedule: Record<string, unknown>;
+  filing: FilingStatus; employers: Employer[]; houseProperties: HouseProperty[]; housePropertyPassThroughIncome: number; businesses: PresumptiveBusiness[]; capitalGainsSchedule: CapitalGainsSchedule;
   otherSources: {
     interest: InterestIncome[];
     dividends: DividendIncome[];
