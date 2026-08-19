@@ -176,6 +176,11 @@ export default function ITRComputationPage() {
   const [reconciliationResult, setReconciliationResult] = useState<any>(null);
   const [editorModel, setEditorModel] = useState<ReturnEditorModelV2 | null>(null);
   const editorRef = useRef<ReturnEditorModelV2 | null>(null);
+  // Monotonic counter bumped on every draft mutation so the debounced
+  // compute effect re-fires after imports/edits (not just on form/regime
+  // changes).  Without this, a prefill import that only changes the
+  // draft content would leave the tax summary stale at ₹0.
+  const [draftVersion, setDraftVersion] = useState(0);
 
   // Import confirmation modal state
   const [showImportConfirmModal, setShowImportConfirmModal] = useState(false);
@@ -189,6 +194,7 @@ export default function ITRComputationPage() {
       if (!current) return current;
       const next = update(current);
       editorRef.current = next;
+      setDraftVersion((v) => v + 1);
       return next;
     });
   }, []);
@@ -378,7 +384,7 @@ export default function ITRComputationPage() {
     return () => {
       if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
     };
-  }, [clientId, effectiveAssessmentYear, regime, taxSummaryPayloadKey, loading]);
+  }, [clientId, effectiveAssessmentYear, regime, taxSummaryPayloadKey, loading, draftVersion]);
 
   // Invalidate all asynchronous completions after unmount.
   useEffect(() => () => {
