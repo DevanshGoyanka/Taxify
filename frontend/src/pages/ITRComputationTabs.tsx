@@ -56,11 +56,12 @@ export function BusinessTab({ taxResult, draft, onChangeBusinesses, onChangeBpNe
         <label style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 500 }}>Presumptive Scheme</label>
         <div style={{ display: 'flex', gap: 12 }}>
           {['44AD', '44ADA', 'Regular'].map(schemeOption => {
-            const schemeState = (draft.businesses[0]?.scheme === '44AD' || draft.businesses[0]?.scheme === '44ADA') ? draft.businesses[0]!.scheme : 'Regular';
+            const firstBusiness = draft.businesses?.[0];
+            const schemeState = (firstBusiness?.scheme === '44AD' || firstBusiness?.scheme === '44ADA') ? firstBusiness.scheme : 'Regular';
             return (
               <button
                 key={schemeOption}
-                onClick={() => onChangeBusinesses(schemeOption === 'Regular' ? [] : [createBusinessStub(schemeOption as '44AD' | '44ADA', draft.businesses[0])])}
+                onClick={() => onChangeBusinesses(schemeOption === 'Regular' ? [] : [createBusinessStub(schemeOption as '44AD' | '44ADA', firstBusiness)])}
                 style={{
                   padding: '8px 16px',
                   background: schemeState === schemeOption ? 'var(--gold)' : 'var(--bg)',
@@ -80,11 +81,11 @@ export function BusinessTab({ taxResult, draft, onChangeBusinesses, onChangeBpNe
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
         <Field label="Gross Turnover/Receipts" value={aggregateGrossTurnover(draft.businesses)} computed />
-        {(draft.businesses[0]?.scheme === '44AD' || draft.businesses[0]?.scheme === '44ADA') && (
+        {(draft.businesses?.[0]?.scheme === '44AD' || draft.businesses?.[0]?.scheme === '44ADA') && (
           <Field label="Declared Income" value={aggregateDeclaredIncome(draft.businesses)} computed />
         )}
-        {(!draft.businesses[0] || draft.businesses[0]?.scheme !== '44AD' && draft.businesses[0]?.scheme !== '44ADA') && (
-          <Field label="Net Profit from P&L" value={draft.bpNetProfit} onChange={(v: any) => onChangeBpNetProfit(Number(v) || 0)} />
+        {(!draft.businesses?.[0] || (draft.businesses[0]?.scheme !== '44AD' && draft.businesses[0]?.scheme !== '44ADA')) && (
+          <Field label="Net Profit from P&L" value={draft.bpNetProfit ?? 0} onChange={(v: any) => onChangeBpNetProfit(Number(v) || 0)} />
         )}
         <Field label="Taxable Business Income" value={taxResult?.bizIncome} computed />
       </div>
@@ -112,17 +113,17 @@ function createBusinessStub(scheme: '44AD' | '44ADA', existing: ReturnDraft['bus
   } as ReturnDraft['businesses'][number];
 }
 
-function aggregateGrossTurnover(businesses: ReturnDraft['businesses']): number {
-  return businesses.reduce<number>((sum, entry) => {
+function aggregateGrossTurnover(businesses: ReturnDraft['businesses'] | undefined | null): number {
+  return (businesses || []).reduce<number>((sum, entry) => {
     if (entry.scheme === '44ADA') return sum + (entry.grossReceipts || 0);
     if (entry.scheme === '44AD') return sum + (entry.digitalReceipts || 0) + (entry.nonDigitalReceipts || 0);
-    if (entry.scheme === '44AE') return sum + entry.vehicles.reduce<number>((vSum, vehicle) => vSum + (vehicle.presumptiveIncome || 0), 0);
+    if (entry.scheme === '44AE') return sum + (entry.vehicles || []).reduce<number>((vSum, vehicle) => vSum + (vehicle.presumptiveIncome || 0), 0);
     return sum;
   }, 0);
 }
 
-function aggregateDeclaredIncome(businesses: ReturnDraft['businesses']): number {
-  return businesses.reduce<number>((sum, entry) => sum + (entry.declaredIncome || 0), 0);
+function aggregateDeclaredIncome(businesses: ReturnDraft['businesses'] | undefined | null): number {
+  return (businesses || []).reduce<number>((sum, entry) => sum + (entry.declaredIncome || 0), 0);
 }
 
 export function OtherSourcesTab({ taxResult, managers, itrForm, regime, editorModel }: any) {
