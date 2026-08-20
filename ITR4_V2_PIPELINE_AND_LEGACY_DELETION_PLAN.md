@@ -174,16 +174,19 @@ Legacy flat-blob paths (DELETED):
 2. `pytest tests/test_itr4_calculator.py tests/test_itr4_schemas.py tests/test_itr4_input_validation.py -v` stays green (ITR-4 engine unchanged).
 3. ITR-1 suite green.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-21
 
 **Implemented:**
-- *(filled in after completion)*
+- `app/engine/draft_to_itr4_input.py` (NEW) — single canonical ITR-4 mapper `draft_to_itr4_input(draft) -> tuple[ITR4Input, breakdown]`. Mirrors the ITR-1 mapper's contract (typed input + breakdown dict). Replaces the ~560-line standalone `_build_itr4_input_from_flat`.
+  - `_age_bracket_from_age(age)` — ITR-4 derives the bracket from the explicit `personal.age` field (ITR-1 uses DOB).
+  - `_map_presumptive(businesses)` — maps the discriminated-union `draft.businesses` list → the active `PresumptiveScheme` + sub-model (44AD/44ADA/44AE). Handles empty-list default (44AD zero-turnover), gross-receipts derivation, and heavy/light vehicle mapping.
+  - **Shared-helper reuse**: salary, house property, other sources, deductions, 112A capital gains, TDS, TCS, and tax payments all delegate to the private helpers already implemented + tested in `draft_to_itr1_input.py`. One implementation per shared head — no second copy to drift (audit Finding 14 fixed for ITR-4).
+- `tests/test_draft_to_itr4_input_itr4.py` (NEW) — 10 golden vectors: 44AD/44ADA/44AE scheme mapping, age-bracket derivation, combined salary+HP+OS+TDS draft, regime mapping, lottery-winnings scope rejection (ITR-4 rejects like ITR-1), empty-businesses default.
 
-**Validation:**
-- *(filled in after completion)*
+**Validation:** 10 Phase 2 tests pass. Full ITR-1 + ITR-4 regression matrix green (215 passed): `test_draft_to_itr1_input`, `test_itr1_calculator`, `test_itr1_golden_suite`, `test_itr1_filing_gateway_profile`, `test_filing_gateway_v2`, `test_return_draft_schema`, `test_itr4_calculator`, `test_itr4_schemas`, `test_itr4_input_validation`. The shared-helper reuse did not break ITR-1.
 
 **Deferred follow-ups:**
-- *(filled in after completion)*
+- The `filing_date` placeholder (set to DOB) will be corrected in Phase 3 — the gateway sets the real filing date from `draft.filing`. The mapper leaves `filing_profile`/`property_profile`/`bank_accounts` empty; Phase 3 constructs them.
 
 ---
 
