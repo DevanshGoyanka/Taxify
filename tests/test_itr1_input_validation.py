@@ -38,6 +38,124 @@ def get_result(results, rule_id: str):
     return None
 
 
+def test_R145_dividend_breakup_includes_fifth_period():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+        ),
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("500")),
+        deductions_chapter6a=Chapter6ADeductions(),
+        dividend_quarterly_breakdown={
+            "Q1": Decimal("0"),
+            "Q2": Decimal("0"),
+            "Q3": Decimal("0"),
+            "Q4": Decimal("0"),
+            "Q5": Decimal("500"),
+        },
+    )
+
+    results = validate_itr1_input(inp)
+
+    assert not failed(results, "ITR1-R145")
+
+
+def test_R145_zero_breakup_fails_when_dividend_is_declared():
+    """When a quarterly breakup IS provided with non-zero values that do NOT
+    total the dividend income, R145 fails as Category A."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+        ),
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("500")),
+        deductions_chapter6a=Chapter6ADeductions(),
+        dividend_quarterly_breakdown={
+            "Q1": Decimal("100"),
+            "Q2": Decimal("100"),
+            "Q3": Decimal("100"),
+            "Q4": Decimal("100"),
+            "Q5": Decimal("0"),   # total 400 ≠ 500
+        },
+    )
+
+    results = validate_itr1_input(inp)
+
+    assert failed(results, "ITR1-R145")
+
+
+def test_R145_no_breakup_is_warning_not_block():
+    """When dividend income is declared but no quarterly breakup is provided,
+    R145 emits a Category B (non-blocking) warning instead of a Category A block.
+
+    The CBDT rule text is an equality check between dividend income and the
+    breakup sum — it only applies when a breakup IS present.  AIS / TIS /
+    Prefill do not expose per-receipt dates, so a breakup cannot always be
+    derived from source documents.
+    """
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+        ),
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("130")),
+        deductions_chapter6a=Chapter6ADeductions(),
+        # dividend_quarterly_breakdown intentionally omitted / empty
+    )
+
+    results = validate_itr1_input(inp)
+
+    # Should NOT be a blocking Category A failure
+    assert not failed(results, "ITR1-R145")
+
+    # Should be a Category B warning (passed=True, severity=B)
+    r145 = get_result(results, "ITR1-R145")
+    assert r145 is not None
+    assert r145.passed is True
+    assert r145.severity == Severity.B
+
+
+def test_R145_all_zero_breakup_is_warning_not_block():
+    """When dividend income is declared and the breakup object exists but all
+    five periods are zero (the AIS/TIS/Prefill case where no per-receipt dates
+    are available), R145 emits a Category B warning, not a Category A block.
+    """
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+        ),
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("130")),
+        deductions_chapter6a=Chapter6ADeductions(),
+        dividend_quarterly_breakdown={
+            "Q1": Decimal("0"),
+            "Q2": Decimal("0"),
+            "Q3": Decimal("0"),
+            "Q4": Decimal("0"),
+            "Q5": Decimal("0"),
+        },
+    )
+
+    results = validate_itr1_input(inp)
+
+    # Should NOT be a blocking Category A failure
+    assert not failed(results, "ITR1-R145")
+
+    # Should be a Category B warning (passed=True, severity=B)
+    r145 = get_result(results, "ITR1-R145")
+    assert r145 is not None
+    assert r145.passed is True
+    assert r145.severity == Severity.B
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 80C / 80CCC / 80CCD(1) Combined Limits
 # ═══════════════════════════════════════════════════════════════════════════════

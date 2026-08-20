@@ -282,59 +282,106 @@ async def navigate_income_tax_returns(
     timeout_ms: int = 30_000,
     log: Optional[LogCallback] = None,
 ) -> Any:
-    """Semantically open ``e-File`` then ``Income Tax Returns`` dashboard menus."""
+    """Open ``e-File`` then ``Income Tax Returns`` dashboard menus.
+
+    Mirrors the proven prefill JSON download navigation: uses
+    ``_find_semantic``-style discovery (roles → text → XPath) and
+    ``click()`` with ``force=True`` fallback (not hover). This is
+    the exact pattern that works reliably for the prefill downloader.
+    """
+    import re as _re
+    import asyncio as _asyncio
+
     deadline = MonotonicDeadline.after(timeout_ms)
-    if log is not None:
-        log("[NAV] Waiting for ITD dashboard overlays to clear.")
-    overlay_clear = await wait_for_overlay_clearance(
-        page, timeout_ms=deadline.remaining_ms, selectors=(".customLoaderBackdrop",)
-    )
-    if not overlay_clear:
-        raise RuntimeError("ITD dashboard overlay did not clear before navigation timeout.")
 
-    if log is not None:
-        log("[NAV] Opening dashboard navigation menu when collapsed.")
-    hamburger_budget_ms = min(2_000, deadline.remaining_ms)
-    hamburger_opened = await open_hamburger(
-        page, timeout_ms=hamburger_budget_ms, log=log
-    )
-    if log is not None and not hamburger_opened:
-        log("[NAV] No hamburger control visible; navigation may already be expanded.")
-
+    # Step 1: Find and click e-File menu
     if log is not None:
         log("[NAV] Finding e-File menu.")
-    efile = await _semantic_locator(
+    efile = await _nav_find_semantic(
         page,
-        "e-File",
-        deadline,
-        selectors=(
-            "a#e-File",
-            "//*[normalize-space(.)='e-File']",
-        ),
+        _re.compile(r"^\s*e-File\s*$", _re.IGNORECASE),
+        ("a#e-File", "//*[normalize-space(.)='e-File']"),
+        min(2_000, deadline.remaining_ms),
     )
     if efile is None:
         raise RuntimeError("e-File dashboard menu was not found before navigation timeout.")
-    await _hover_or_click(efile, deadline.remaining_ms)
+    try:
+        await efile.click(timeout=max(1, min(750, deadline.remaining_ms)))
+    except Exception:
+        try:
+            await efile.click(force=True, timeout=max(1, min(750, deadline.remaining_ms)))
+        except Exception:
+            raise RuntimeError("e-File menu click failed.")
+    await _asyncio.sleep(0.5)
 
+    # Step 2: Find and click Income Tax Returns submenu
     if log is not None:
         log("[NAV] Finding Income Tax Returns submenu.")
-    returns = await _semantic_locator(
+    returns = await _nav_find_semantic(
         page,
-        "Income Tax Returns",
-        deadline,
-        selectors=(
+        _re.compile(r"^\s*Income\s+Tax\s+Returns\s*$", _re.IGNORECASE),
+        (
             "//*[normalize-space(.)='Income Tax Returns']",
             "//*[text()='Income Tax Returns']",
         ),
+        min(2_000, deadline.remaining_ms),
     )
     if returns is None:
         raise RuntimeError(
             "Income Tax Returns submenu was not found before navigation timeout."
         )
-    await _hover_or_click(returns, deadline.remaining_ms)
+    try:
+        await returns.click(timeout=max(1, min(750, deadline.remaining_ms)))
+    except Exception:
+        try:
+            await returns.hover(timeout=max(1, min(750, deadline.remaining_ms)))
+        except Exception:
+            raise RuntimeError("Income Tax Returns submenu click failed.")
+    await _asyncio.sleep(0.5)
+
     if log is not None:
         log("[NAV] Income Tax Returns submenu ready.")
     return returns
+
+
+async def _nav_find_semantic(
+    page: Any,
+    name: "re.Pattern[str]",
+    xpaths: Sequence[str],
+    timeout_ms: int,
+) -> Optional[Any]:
+    """Find a visible control using roles, exact text, and normalized XPath.
+
+    This is the same discovery pattern used by the prefill downloader's
+    ``_find_semantic``: try ``get_by_role`` (link/button/menuitem), then
+    ``get_by_text``, then XPath fallbacks, polling under one shared deadline.
+    """
+    deadline = MonotonicDeadline.after(timeout_ms)
+    while True:
+        candidates: list[Any] = []
+        for role in ("link", "button", "menuitem"):
+            try:
+                candidates.append(page.get_by_role(role, name=name).first)
+            except Exception:
+                pass
+        try:
+            candidates.append(page.get_by_text(name, exact=True).first)
+        except Exception:
+            pass
+        for xpath in xpaths:
+            try:
+                candidates.append(page.locator(xpath).first)
+            except Exception:
+                pass
+        for candidate in candidates:
+            try:
+                if await candidate.is_visible(timeout=1):
+                    return candidate
+            except Exception:
+                continue
+        if deadline.expired:
+            return None
+        await deadline.sleep(0.05)
 
 
 async def race_portal_navigation(
@@ -455,11 +502,36 @@ async def _semantic_locator(
 
 
 async def _hover_or_click(locator: Any, timeout_ms: int) -> None:
-    """Hover a semantic menu item, falling back to click when necessary."""
+    """Hover a semantic menu item without ever triggering a click navigation.
+
+    On the ITD Angular SPA, menu items are ``<a>`` tags with real ``href``
+    values. A click fallback (used previously when ``hover()`` timed out)
+    navigates the browser to that href, which reloads the Angular route and
+    can drop a rate-limited session. This helper now attempts hover exactly
+    once, then falls back to a JS ``mouseover``/``mouseenter`` dispatch —
+    never a click, and never a retry loop (repeated hovers make the Angular
+    menu flicker open/closed, which triggers the portal's anti-automation
+    protection and can cause a logout).
+    """
+    budget = max(1, min(2_000, timeout_ms))
     try:
-        await locator.hover(timeout=max(1, timeout_ms))
+        await locator.hover(timeout=budget)
+        return
     except Exception:
-        await locator.click(timeout=max(1, timeout_ms))
+        pass
+    # Final fallback: dispatch synthetic mouse events via JS — does not
+    # navigate, but still signals the Angular menu directive to expand.
+    try:
+        handle = await locator.element_handle(timeout=budget)
+        if handle is not None:
+            await handle.evaluate(
+                "(el) => {"
+                "el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));"
+                "el.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true}));"
+                "}"
+            )
+    except Exception:
+        pass
 
 
 async def _body_text(page: Any) -> str:
@@ -487,3 +559,95 @@ def _page_is_closed(page: Any) -> bool:
         return bool(page.is_closed())
     except Exception:
         return False
+
+
+async def dismiss_portal_modals(
+    page: Any,
+    *,
+    max_rounds: int = 5,
+    log: Optional[LogCallback] = None,
+) -> None:
+    """Dismiss ITD portal security/logout/notification modals.
+
+    Ported from the NRITAX portal-fetch service. The ITD portal shows
+    several interstitial popups during automation that, if not dismissed,
+    block all further interaction and can close the session:
+
+    1. ``"Sure you want to Logout?"`` confirmation — click ``No`` to stay.
+    2. ``#securityReasonPopup`` — a security notice; click ``OK``/``No``
+       depending on whether the text mentions logout.
+    3. ``#continueBtnNav`` / ``#confirmBtnFooter`` / ``#efNotificationPopUp_continue``
+       — generic notification continue buttons; click them to proceed.
+
+    This helper loops up to ``max_rounds`` times because multiple modals can
+    stack. Each round re-checks all three categories. It never raises — a
+    failure to dismiss is best-effort.
+    """
+    for _ in range(max_rounds):
+        # 1. "Sure you want to Logout?" → click No
+        try:
+            logout_text = page.get_by_text(
+                re.compile(r"sure you want to Logout", re.I)
+            ).first
+            if await logout_text.is_visible(timeout=400):
+                no_btn = page.get_by_role("button", name=re.compile(r"^no$", re.I)).first
+                if await no_btn.is_visible(timeout=300):
+                    await no_btn.click(force=True)
+                    await asyncio.sleep(0.4)
+                    continue
+        except Exception:
+            pass
+
+        # 2. #securityReasonPopup
+        try:
+            security = page.locator(
+                "#securityReasonPopup.modal.show, "
+                "#securityReasonPopup.show, "
+                "#securityReasonPopup"
+            ).first
+            if await security.is_visible(timeout=400):
+                text = ""
+                try:
+                    text = await security.inner_text(timeout=200)
+                except Exception:
+                    pass
+                if re.search(r"logout", text or "", re.I):
+                    no_btn = security.get_by_role(
+                        "button", name=re.compile(r"^no$", re.I)
+                    ).first
+                    if await no_btn.is_visible(timeout=300):
+                        await no_btn.click(force=True)
+                        await asyncio.sleep(0.3)
+                        continue
+                else:
+                    btn = security.get_by_role(
+                        "button",
+                        name=re.compile(r"ok|continue|close|got it|confirm|agree", re.I),
+                    ).first
+                    if await btn.is_visible(timeout=500):
+                        await btn.click(force=True)
+                        await asyncio.sleep(0.3)
+                        continue
+                    else:
+                        try:
+                            await page.keyboard.press("Escape")
+                            await asyncio.sleep(0.2)
+                        except Exception:
+                            pass
+                        continue
+        except Exception:
+            pass
+
+        # 3. Generic notification continue buttons
+        try:
+            confirm = page.locator(
+                "#continueBtnNav, #confirmBtnFooter, #efNotificationPopUp_continue"
+            ).first
+            if await confirm.is_visible(timeout=250):
+                await confirm.click(force=True)
+                await asyncio.sleep(0.25)
+                continue
+        except Exception:
+            pass
+
+        break

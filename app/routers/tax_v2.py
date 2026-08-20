@@ -28,6 +28,10 @@ def compute_tax_summary_v2(
 ) -> dict[str, Any]:
     """Compute a tax summary directly from a canonical ReturnDraft.
 
+    For ITR-1, uses the v2 canonical pipeline. For ITR-2/3/4, delegates
+    to the legacy ``/tax-summary/compute`` endpoint which already supports
+    all forms via the flat-payload gateway.
+
     Args:
         draft: Canonical typed return draft supplied as the direct JSON body.
 
@@ -37,6 +41,33 @@ def compute_tax_summary_v2(
     Raises:
         HTTPException: With status 422 for mapping or computation failures.
     """
+    # ITR-1 uses the v2 canonical pipeline; other forms use the legacy
+    # compute path which already supports ITR-2/3/4.
+    if draft.form != "ITR-1":
+        from app.routers.tax import _compute_tax_summary_impl
+        # Convert the canonical ReturnDraft to the flat payload the legacy
+        # compute path expects.
+        payload = draft.model_dump(by_alias=True, exclude_none=True)
+        payload["form"] = draft.form
+        if draft.assessmentYear:
+            payload["assessmentYear"] = draft.assessmentYear
+        try:
+            return _compute_tax_summary_impl(
+                payload,
+                regime="OLD" if draft.regime == "old" else "NEW",
+                current_user=current_user,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "message": f"{draft.form} computation failed: {exc}",
+                    "errors": [str(exc)],
+                },
+            ) from exc
+
     try:
         return compute_canonical_itr1(draft).summary
     except FilingGatewayV2Error as exc:

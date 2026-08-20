@@ -154,6 +154,14 @@ async def _click_btn(
         return False
     log("[Auth] Clicking portal Continue control.")
     try:
+        # Wait for the button to be stable and enabled before clicking.
+        # Angular's form-submit button is disabled until the form is valid
+        # and touched; clicking too early can fire before the CSRF interceptor
+        # is ready, causing "Request is not authenticated" on the first submit.
+        try:
+            await button.wait_for(state="stable", timeout=min(2000, timeout))
+        except Exception:
+            pass
         await button.click(timeout=max(1, timeout))
         return True
     except Exception:
@@ -479,7 +487,28 @@ async def _do_login(
         raise RuntimeError("Password field did not appear after selecting login method.")
 
     log_callback("[Auth] Entering password...")
-    await page.fill("id=loginPasswordField", password)
+    # IMPORTANT: page.fill() sets the DOM .value directly and does NOT trigger
+    # Angular's reactive-form change detection. If we click Continue in the
+    # same instant, Angular has not yet bound the password to its form model,
+    # so the backend receives an empty/invalid credential payload and rejects
+    # with "Request is not authenticated". That rejection triggers the retry,
+    # which hits the Max-attempts popup and places the session in a restricted
+    # state where filing is disabled. Use press_sequentially (real per-key
+    # events), then press Tab to blur the field — this triggers Angular's
+    # form validation, marks the control as touched/dirty, and ensures the
+    # ngSubmit handler (with CSRF interceptor) is ready before we click.
+    password_input = page.locator("id=loginPasswordField").first
+    try:
+        await password_input.click(timeout=2000)
+    except Exception:
+        pass
+    await password_input.press_sequentially(password, delay=30)
+    # Blur the field to trigger Angular's reactive-form validation chain
+    try:
+        await password_input.press("Tab")
+    except Exception:
+        pass
+    await asyncio.sleep(0.5)
     auth_timeline.mark("password submitted")
 
     terminal_error = _authentication_error("", page.url)
@@ -495,13 +524,24 @@ async def _do_login(
             log_callback(f"[Auth] Submit attempt {attempt}/4...")
             await asyncio.sleep(3)
 
-        clicked = await _click_btn(page, log_callback, timeout=10000)
-        if not clicked:
-            log_callback("[Auth] Continue not found — pressing Enter")
-            try:
-                await page.locator("id=loginPasswordField").first.press("Enter")
-            except Exception:
-                pass
+        # Submit via Enter on the password field to fire Angular's ngSubmit
+        # handler (which includes the CSRF interceptor). A button click does
+        # not reliably trigger ngSubmit on Angular reactive forms — it can
+        # fire before the form is in a valid/touched state, causing the
+        # backend to reject with "Request is not authenticated".
+        log_callback("[Auth] Submitting via Enter on password field.")
+        try:
+            await page.locator("id=loginPasswordField").first.press("Enter")
+        except Exception:
+            # Fallback: click the Continue/Submit button if Enter fails
+            log_callback("[Auth] Enter failed — clicking Continue button.")
+            clicked = await _click_btn(page, log_callback, timeout=10000)
+            if not clicked:
+                log_callback("[Auth] Continue not found — pressing Enter again")
+                try:
+                    await page.locator("id=loginPasswordField").first.press("Enter")
+                except Exception:
+                    pass
 
         # Wait up to 7.5s for URL change or known error
         for _ in range(15):
@@ -525,11 +565,14 @@ async def _do_login(
                     try:
                         await page.wait_for_url(
                             lambda u: "dashboard" in u.lower(), timeout=10000)
-                        # ITD throttles the session after a max-attempts popup — the 
+                        # ITD throttles the session after a max-attempts popup — the
                         # Angular router may silently drop navigation events for a few
-                        # seconds. Wait for the portal to fully recover before returning.
+                        # seconds, and crucially the portal can place the session in
+                        # a restricted state where filing actions are disabled
+                        # (class="disabledRoute"). Wait long enough for the portal
+                        # to fully restore session privileges before returning.
                         log_callback("[Auth] Rate-limit recovered — waiting for session to stabilise...")
-                        await asyncio.sleep(6)
+                        await asyncio.sleep(12)
                         return True
                     except Exception:
                         return False

@@ -53,6 +53,7 @@ from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import get_current_user
 from app.automation.job_worker import start_worker, stop_worker
+from app.filing_automation.worker import start_filing_worker, stop_filing_worker
 from app.automation.privacy import install_uvicorn_access_privacy_filter
 from app.db.init_db import create_tables
 from app.db.models import User
@@ -69,6 +70,7 @@ from app.routers import (
     tax_v2 as tax_v2_router,
     dashboard as dashboard_router,
     automation as automation_router,
+    filing as filing_router,
 )
 from app.schemas.auth import UserResponse
 
@@ -98,7 +100,9 @@ async def lifespan(app: FastAPI):
 
     create_tables()
     start_worker()
+    start_filing_worker()
     yield
+    await stop_filing_worker()
     await stop_worker()
 
 
@@ -198,6 +202,7 @@ app.include_router(tax_router.router)
 app.include_router(tax_v2_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(automation_router.router)
+app.include_router(filing_router.router)
 
 # ---------------------------------------------------------------------------
 # Standalone endpoints

@@ -8,6 +8,7 @@ headline summary and official JSON generation.
 from __future__ import annotations
 
 import datetime
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -17,9 +18,11 @@ from pydantic import ValidationError
 from app.engine.calculators.itr1 import ITR1Result, compute as compute_itr1
 from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input
 from app.engine.itd.itr1 import build_itr1_json
-from app.engine.itd.itr1_schema import validate_itr1_json
+from app.engine.itd.itr1_schema import ITR1SchemaValidationError, validate_itr1_json
 from app.schemas.itr1 import FilingAddress, ITR1FilingProfile, ITR1Input, PropertyFilingProfile
 from app.schemas.return_draft import ReturnDraft
+
+logger = logging.getLogger("taxify.filing_gateway_v2")
 
 
 class FilingGatewayV2Error(ValueError):
@@ -356,9 +359,36 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
     try:
         official_json = build_itr1_json(pipeline.computation, typed_input)
         validate_itr1_json(official_json)
-    except Exception as exc:
+    except ITR1SchemaValidationError as exc:
+        # Official ITR-1 Draft-4 schema violations.  Surface every violation
+        # (path + schema path + message), not just the first one, so the
+        # operator can fix all defects in one pass instead of round-tripping.
+        detail_lines: list[str] = []
+        for item in exc.errors:
+            detail_lines.append(
+                f"schema path {item.get('schema_path') or '$'}: "
+                f"json path {item.get('path') or '$'} -> {item.get('message')}"
+            )
+        logger.error(
+            "ITR-1 official schema validation failed: %d violation(s).",
+            len(exc.errors),
+        )
+        for line in detail_lines:
+            logger.error("  schema violation: %s", line)
         raise FilingGatewayV2Error(
-            "ITR-1 official JSON generation or schema validation failed.",
-            [str(exc)],
+            "ITR-1 official JSON schema validation failed.",
+            detail_lines,
+        ) from exc
+    except Exception as exc:
+        # Any other failure inside the builder (mapping, encoding, digest,
+        # unexpected).  Log the full traceback so the root cause is visible
+        # in server output rather than just the one-line repr.
+        logger.exception(
+            "ITR-1 official JSON generation failed: %s: %s",
+            type(exc).__name__, exc,
+        )
+        raise FilingGatewayV2Error(
+            "ITR-1 official JSON generation failed.",
+            [f"{type(exc).__name__}: {exc}"],
         ) from exc
     return official_json, pipeline.summary

@@ -1592,24 +1592,59 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 ))
 
     # R145: Dividend income = sum of quarterly breakup
+    #
+    # CBDT rule text (AY 2026-27, Category A):
+    #   "In income details total of Dividend income should be equal to sum of
+    #    Quarterly breakup of Dividend Income"
+    #
+    # This is a cross-field *equality* check.  It only applies when a quarterly
+    # breakup has actually been provided with at least one non-zero period
+    # value.  The rule text does not make the quarterly breakup field
+    # mandatory, and the official ITR-1 JSON schema marks ``DividendInc`` (and
+    # therefore its ``DateRange`` buckets) as optional.  AIS / TIS / ITD
+    # Prefill do not expose per-receipt dates for dividends, so a breakup
+    # often cannot be derived from source documents and importers legitimately
+    # leave all five periods at zero.
+    #
+    # Behaviour:
+    #   - Breakup present and totals dividend income -> PASS
+    #   - Breakup present but does NOT total dividend income -> Category A fail
+    #   - Breakup absent or entirely zero (i.e. no real data) -> Category B
+    #     warning, non-blocking, so JSON generation/upload is not prevented
+    #     when the taxpayer has no per-period receipt evidence.
     if osi and osi.dividend_income > _z and inp.dividend_quarterly_breakdown:
         qbr = inp.dividend_quarterly_breakdown
         div_sum = (qbr.get("Q1", _z) + qbr.get("Q2", _z)
-                   + qbr.get("Q3", _z) + qbr.get("Q4", _z))
-        if div_sum > _z:
-            if abs(osi.dividend_income - div_sum) > Decimal("1"):
-                results.append(_make(
-                    "ITR1-R145", False,
-                    f"Dividend income (Rs {osi.dividend_income}) does not equal "
-                    f"sum of quarterly breakup: Q1({qbr.get('Q1', 0)}) + Q2({qbr.get('Q2', 0)}) + "
-                    f"Q3({qbr.get('Q3', 0)}) + Q4({qbr.get('Q4', 0)}) = Rs {div_sum}",
-                    "dividend_quarterly_breakdown",
-                ))
+                   + qbr.get("Q3", _z) + qbr.get("Q4", _z)
+                   + qbr.get("Q5", _z))
+        if div_sum > _z and abs(osi.dividend_income - div_sum) > Decimal("1"):
+            # A genuine non-zero breakup was supplied but does not match.
+            results.append(_make(
+                "ITR1-R145", False,
+                f"Dividend income (Rs {osi.dividend_income}) does not equal "
+                f"sum of quarterly breakup: Q1({qbr.get('Q1', 0)}) + Q2({qbr.get('Q2', 0)}) + "
+                f"Q3({qbr.get('Q3', 0)}) + Q4({qbr.get('Q4', 0)}) + "
+                f"Q5({qbr.get('Q5', 0)}) = Rs {div_sum}",
+                "dividend_quarterly_breakdown",
+            ))
+        elif div_sum == _z:
+            # Breakup object exists but every period is zero: the taxpayer has
+            # not entered per-period amounts.  Treat as "not provided".
+            results.append(_warn(
+                "ITR1-R145",
+                f"Dividend income (Rs {osi.dividend_income}) declared but quarterly "
+                f"breakup not provided. The breakup is optional in the ITR-1 schema; "
+                f"if entered, it must total Rs {osi.dividend_income}.",
+                "dividend_quarterly_breakdown",
+            ))
     elif osi and osi.dividend_income > _z and not inp.dividend_quarterly_breakdown:
-        results.append(_make(
-            "ITR1-R145", False,
+        # Breakup absent: R145 equality has nothing to compare, so it cannot
+        # fail.  Warn (Category B) that the portal may prompt for the breakup.
+        results.append(_warn(
+            "ITR1-R145",
             f"Dividend income (Rs {osi.dividend_income}) declared but quarterly "
-            f"breakup not provided. CBDT requires quarterly breakup of dividend income.",
+            f"breakup not provided. The breakup is optional in the ITR-1 schema; "
+            f"if entered, it must total Rs {osi.dividend_income}.",
             "dividend_quarterly_breakdown",
         ))
 

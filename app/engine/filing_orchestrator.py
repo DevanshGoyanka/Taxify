@@ -25,13 +25,18 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Client, ClientITR, ImportedDocument, User
+from app.db.models import ImportedDocument, User
 
 _log = logging.getLogger("taxify.engine.filing_orchestrator")
 
 
 class FilingOrchestratorError(ValueError):
     """Raised when ITD JSON generation fails (computation, schema, or digest)."""
+
+    def __init__(self, message: str, errors: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.errors = errors or [message]
 
 
 def produce_itd_json(
@@ -81,7 +86,6 @@ def produce_itd_json(
 
     payload = dict(flat_draft)
     payload["form"] = form
-    payload["itrForm"] = form
 
     _log.info("Producing ITD JSON for client_id=%s ay=%s form=%s",
               client_id, ay, form)
@@ -94,17 +98,36 @@ def produce_itd_json(
         # CBDT rule validators (run_input_validation + run_calc_validation)
         # before building the official JSON, so every Category A rule is
         # enforced on this path.
-        from app.engine.flat_to_draft import flat_to_draft
         from app.engine.filing_gateway_v2 import (
             FilingGatewayV2Error,
             generate_cbdt_json,
         )
+        from app.schemas.return_draft import ReturnDraft
         try:
-            draft = flat_to_draft(payload)
+            if "schemaVersion" not in payload:
+                raise FilingOrchestratorError(
+                    "ITR-1 filing requires a canonical /v2 ReturnDraft. "
+                    "Save the return through /v2/clients/{client_id}/itr/{year} "
+                    "before generating or submitting it."
+                )
+            draft = ReturnDraft.model_validate(payload)
+            if draft.form != "ITR-1":
+                raise FilingOrchestratorError(
+                    f"Saved canonical draft form is {draft.form}, not ITR-1."
+                )
+            if draft.assessmentYear and draft.assessmentYear != ay:
+                raise FilingOrchestratorError(
+                    f"Saved draft assessment year {draft.assessmentYear} "
+                    f"does not match requested year {ay}."
+                )
+            draft.assessmentYear = ay
             official_json, _summary = generate_cbdt_json(draft)
+        except FilingOrchestratorError:
+            raise
         except FilingGatewayV2Error as exc:
             raise FilingOrchestratorError(
                 f"ITR-1 JSON generation failed: {exc}",
+                errors=list(exc.errors),
             ) from exc
         except Exception as exc:
             raise FilingOrchestratorError(
@@ -116,6 +139,7 @@ def produce_itd_json(
         # The ITR-4 path runs the full CBDT rule validators
         # (run_input_validation + run_calc_validation) inside
         # _build_itr4_official_json before building the JSON.
+        payload["itrForm"] = form
         try:
             result = generate_filing_artifact(
                 flat_draft=payload,
@@ -126,6 +150,7 @@ def produce_itd_json(
         except FilingGatewayError as exc:
             raise FilingOrchestratorError(
                 f"ITD JSON generation failed for {form}: {exc}",
+                errors=list(exc.errors),
             ) from exc
         official_json = result.official_json
 
@@ -158,22 +183,36 @@ def _persist_generated_json(
 ) -> None:
     """Persist a generated ITD JSON blob into the ImportedDocument table.
 
-    Stores under ``document_type="filed_return"``, ``source="generated"`` so
-    the export/upload step can retrieve it without recomputing the tax.
-    Uses ``merge`` to upsert on the (client_id, ay, document_type) unique
-    constraint.
+    Stores under ``document_type="generated_itr"``, ``source="generated"``.
+    This is intentionally distinct from ``filed_return`` so producing a new
+    return can never overwrite a prior/current return downloaded from ITD.
     """
     raw_content = json.dumps(official_json, ensure_ascii=False)
-    doc = ImportedDocument(
-        client_id=client_id,
-        user_id=user_id,
-        assessment_year=ay,
-        document_type="filed_return",
-        source="generated",
-        raw_content=raw_content,
-        parsed_content=raw_content,
+    existing = (
+        db.query(ImportedDocument)
+        .filter(
+            ImportedDocument.client_id == client_id,
+            ImportedDocument.assessment_year == ay,
+            ImportedDocument.document_type == "generated_itr",
+        )
+        .first()
     )
-    db.merge(doc)
+    if existing is None:
+        existing = ImportedDocument(
+            client_id=client_id,
+            user_id=user_id,
+            assessment_year=ay,
+            document_type="generated_itr",
+            source="generated",
+            raw_content=raw_content,
+            parsed_content=raw_content,
+        )
+        db.add(existing)
+    else:
+        existing.user_id = user_id
+        existing.source = "generated"
+        existing.raw_content = raw_content
+        existing.parsed_content = raw_content
     db.commit()
     _log.info(
         "Persisted generated ITD JSON (client_id=%s ay=%s form=%s, %d bytes)",

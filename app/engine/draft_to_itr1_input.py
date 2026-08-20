@@ -600,6 +600,26 @@ def _map_bank_accounts(banks: list[DraftBankAccount]) -> list[BankAccount]:
     return mapped
 
 
+def _map_dividend_quarterly_breakdown(draft: ReturnDraft) -> dict[str, Decimal]:
+    """Aggregate the five statutory dividend periods from canonical rows.
+
+    The canonical draft stores the periods per dividend row.  Importers that
+    do not have a reliable receipt/accrual date leave these values at zero;
+    this mapper must preserve genuine user-entered or source-backed values
+    rather than inventing a breakup from aggregate dividend income.
+    """
+    dividends = draft.otherSources.dividends
+    if not dividends:
+        return {}
+    return {
+        "Q1": sum((row.q1 for row in dividends), Decimal("0")),
+        "Q2": sum((row.q2 for row in dividends), Decimal("0")),
+        "Q3": sum((row.q3 for row in dividends), Decimal("0")),
+        "Q4": sum((row.q4 for row in dividends), Decimal("0")),
+        "Q5": sum((row.q5 for row in dividends), Decimal("0")),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -681,7 +701,7 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         total_exempt_income=None,
         other_sources_dropdowns=[],
         other_sources_total=None,
-        dividend_quarterly_breakdown={},
+        dividend_quarterly_breakdown=_map_dividend_quarterly_breakdown(draft),
         full_value_of_consideration=None,
         schedule_80d=None,
         schedule_80g=None,

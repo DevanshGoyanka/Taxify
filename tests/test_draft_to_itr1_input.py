@@ -49,7 +49,9 @@ def _sample_draft() -> ReturnDraft:
     )]
     draft.otherSources.dividends = [DividendIncome(
         id="d1", section="194", grossAmount=Decimal("10000"),
-        tdsDeducted=Decimal("1000"),
+        tdsDeducted=Decimal("1000"), q1=Decimal("1000"),
+        q2=Decimal("2000"), q3=Decimal("3000"),
+        q4=Decimal("1500"), q5=Decimal("2500"),
     )]
     draft.deductions.section80C = [Investment80C(
         id="c1", investmentType="EPF", amount=Decimal("50000"),
@@ -78,6 +80,13 @@ def test_mapper_produces_valid_itr1_input():
     assert itr1_input.salary_income.gross_salary == Decimal("1277000")  # 1.2M+12k+60k+5k
     assert itr1_input.other_sources_income.savings_bank_interest == Decimal("15000")
     assert itr1_input.other_sources_income.dividend_income == Decimal("10000")
+    assert itr1_input.dividend_quarterly_breakdown == {
+        "Q1": Decimal("1000"),
+        "Q2": Decimal("2000"),
+        "Q3": Decimal("3000"),
+        "Q4": Decimal("1500"),
+        "Q5": Decimal("2500"),
+    }
     assert itr1_input.deductions_chapter6a.amount_80c == Decimal("0")  # new regime excludes 80C
     assert len(itr1_input.tds1_entries) == 1
     assert itr1_input.tds1_entries[0].tds_deducted == Decimal("80000")
@@ -90,6 +99,32 @@ def test_mapper_produces_valid_itr1_input():
     assert breakdown["total_interest"] == Decimal("15000")
     assert breakdown["total_dividend"] == Decimal("10000")
     assert breakdown["claimed_tds"] == Decimal("80000")
+
+
+def test_mapper_aggregates_all_five_dividend_periods_across_rows():
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1")
+    draft.otherSources.dividends = [
+        DividendIncome(
+            id="d1", grossAmount=Decimal("500"),
+            q1=Decimal("100"), q2=Decimal("100"), q3=Decimal("100"),
+            q4=Decimal("100"), q5=Decimal("100"),
+        ),
+        DividendIncome(
+            id="d2", grossAmount=Decimal("1000"),
+            q1=Decimal("50"), q2=Decimal("150"), q3=Decimal("200"),
+            q4=Decimal("250"), q5=Decimal("350"),
+        ),
+    ]
+
+    itr1_input, _ = draft_to_itr1_input(draft)
+
+    assert itr1_input.dividend_quarterly_breakdown == {
+        "Q1": Decimal("150"),
+        "Q2": Decimal("250"),
+        "Q3": Decimal("300"),
+        "Q4": Decimal("350"),
+        "Q5": Decimal("450"),
+    }
 
 
 def test_compute_runs_cleanly_on_mapped_input():

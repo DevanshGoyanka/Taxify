@@ -18,6 +18,7 @@ Phase 1 scope: load + save only. Compute and CBDT-generation move to
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -30,6 +31,7 @@ from app.db.models import Client, ClientITR, User
 from app.routers.clients import ensure_client_active, resolve_owned_client
 from app.schemas.return_draft import ReturnDraft, create_empty_draft, draft_from_client_seed
 
+logger = logging.getLogger("taxify.routers.client_itr_v2")
 
 router = APIRouter(prefix="/v2/clients/{client_id}/itr", tags=["client_itr_v2"])
 
@@ -240,6 +242,12 @@ def generate_client_cbdt_json_v2(
     try:
         official_json, _summary = generate_cbdt_json(draft)
     except FilingGatewayV2Error as exc:
+        logger.error(
+            "CBDT JSON generation failed for client %s AY %s: %s",
+            client.pan, year, exc.message,
+        )
+        for issue in exc.errors:
+            logger.error("  blocking issue: %s", issue)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"message": exc.message, "errors": exc.errors},

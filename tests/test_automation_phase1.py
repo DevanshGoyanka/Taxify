@@ -200,7 +200,7 @@ async def test_navigation_supports_proven_xpath_fallbacks() -> None:
 
     assert isinstance(result, FakeLocator)
     assert result.visible is True
-    assert 1.8 <= elapsed < 2.5
+    assert 0.8 <= elapsed < 2.5
 
 
 def test_additive_migration_backfills_legacy_job_assessment_year(

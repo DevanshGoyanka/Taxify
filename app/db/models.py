@@ -8,6 +8,8 @@ Tables:
   - Client           : a client managed by a user.
   - ClientITR        : ITR form data and calculation status for a client+AY.
   - AutomationJob    : an automated download job (Playwright → ITD portal).
+  - FilingRecord     : durable Type-2/Type-3 filing lifecycle and artifacts.
+  - FilingJob        : independent Type-3 portal-upload worker job.
   - ImportedDocument : an imported source document (AIS/TIS/26AS/Prefill/
                        Form 16/filed return) with raw + parsed content.
 """
@@ -155,6 +157,106 @@ class ClientITR(Base):
     )
 
 
+class FilingRecord(Base):
+    """Durable filing state shared by Type-3 portal and future Type-2 API flows."""
+
+    __tablename__ = "filing_record"
+    __table_args__ = (
+        UniqueConstraint(
+            "client_id",
+            "assessment_year",
+            "itr_type",
+            name="uq_filing_record_client_ay_form",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("client.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assessment_year: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    itr_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    eri_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="type3")
+    eri_environment: Mapped[str] = mapped_column(String(20), nullable=False, default="uat")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="generated")
+    json_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    acknowledgement_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    everify_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    acknowledgement_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    portal_result: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class FilingJob(Base):
+    """Independent queue record for Type-3 portal upload automation."""
+
+    __tablename__ = "filing_job"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    filing_record_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("filing_record.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    client_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("client.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assessment_year: Mapped[str] = mapped_column(String(10), nullable=False)
+    itr_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    verification_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="LATER"
+    )
+    json_path: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    current_step: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    progress_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    result: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    started_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class AutomationJob(Base):
     """
     An automated download job via Playwright into the ITD portal.
@@ -243,6 +345,7 @@ class ImportedDocument(Base):
       - ``26as``          (Form 26AS PDF/TXT)
       - ``form16``        (Form 16 PDF)
       - ``filed_return``  (last-filed ITR JSON)
+      - ``generated_itr`` (locally generated CBDT JSON awaiting filing)
     """
 
     __tablename__ = "imported_document"

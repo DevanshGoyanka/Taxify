@@ -83,6 +83,13 @@ def _input(*, amount_80c: str = "100000", amount_80d: str = "25000") -> ITR1Inpu
             dividend_income=Decimal("4000"),
             interest_on_it_refund=Decimal("1000"),
         ),
+        dividend_quarterly_breakdown={
+            "Q1": Decimal("500"),
+            "Q2": Decimal("1000"),
+            "Q3": Decimal("750"),
+            "Q4": Decimal("1250"),
+            "Q5": Decimal("500"),
+        },
         deductions_chapter6a=Chapter6ADeductions(
             amount_80c=Decimal(amount_80c),
             amount_80d_self_family=Decimal(amount_80d),
@@ -473,6 +480,18 @@ def test_builder_preserves_allowance_and_other_source_details() -> None:
         "TAX": 1000,
         "FAP": 30000,
         "DIV": 4000,
+    }
+    dividend = next(
+        row
+        for row in income["OthersInc"]["OthersIncDtlsOthSrc"]
+        if row["OthSrcNatureDesc"] == "DIV"
+    )
+    assert dividend["DividendInc"]["DateRange"] == {
+        "Upto15Of6": 500,
+        "Upto15Of9": 1000,
+        "Up16Of9To15Of12": 750,
+        "Up16Of12To15Of3": 1250,
+        "Up16Of3To31Of3": 500,
     }
     assert income["DeductionUs57iia"] == 10000
     assert income["ExemptIncAgriOthUs10"]["ExemptIncAgriOthUs10Total"] == 5000

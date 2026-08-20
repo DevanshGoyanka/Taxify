@@ -15,7 +15,7 @@ Phases are implemented one at a time. Each phase is committed only after the use
 |---|---|---|---|
 | **Phase 1 — Type-3 Foundation** | ✅ TESTED & COMMITTED | Phase 1 commit | A1, A2, A4, B1, B2 done. User-tested & approved 2026-08-19. |
 | **Phase 2 — Type-3 Validation Layer** | ✅ TESTED & COMMITTED | `7f8e223` | Validators wired into live paths. Recovery verified after portal passwords were re-saved; portal automation passed on 2026-08-20. |
-| Phase 3 — Type-3 Submission Automation | ⏳ NOT STARTED | — | JSON exporter, Playwright uploader, ack download, e-verify. |
+| **Phase 3 — Type-3 Submission Automation** | ✅ IMPLEMENTED — AWAITING UAT | (pending approval) | Dedicated filing worker, deterministic JSON export, portal upload, e-verify, acknowledgement, and unified filing API. Existing Prefill/download worker is unchanged. **Phase 3 Addendum (2026-08-21):** R145 dividend-breakup correctness (Category B warning when no per-receipt data), detailed CBDT schema-violation logging in the 422 path, and a frontend **Direct Submit** button wired to the Type-3 portal upload flow. |
 | Phase 4 — Type-3 UAT Certification | ⏳ NOT STARTED | — | UAT sanity pack → ITD → SW_ID enablement. |
 | Phase 5 — Type-3 Production | ⏳ NOT STARTED | — | Switch ERI_ENV=production. |
 | Phase 6 — Type-2 Completion | ⏳ NOT STARTED | — | Next season. |
@@ -143,6 +143,144 @@ While rewriting `.env` during Phase 1, redaction markers (`****…`) in the tool
 **Prevention rule going forward:** `.env` is never edited via a full-file rewrite. All `.env` edits target a single specific line via exact string replacement, and the startup backup ensures a recovery point always exists on disk.
 
 ✅ **Recovery verified on 2026-08-20:** client portal password re-saved successfully and portal automation passed the password-decryption step. Proceeding to Phase 3.
+
+---
+
+### Phase 3 — Type-3 Submission Automation (IMPLEMENTED, awaiting UAT approval)
+
+**Isolation requirement:** The proven import automation remains untouched. `app/automation/job_worker.py` and `app/routers/automation.py` match their committed versions exactly. Portal filing is implemented as a separate subsystem under `app/filing_automation/`, with its own queue, worker lifecycle, `FilingJob` table, and polling API.
+
+**Work items delivered:**
+
+| Step | Work Item | Status | Implementation |
+|---|---|---|---|
+| 3.1 | A5 deterministic CBDT JSON exporter | ✅ | `app/eri/type3/json_exporter.py`; sorted-key, UTF-8, whitespace-free serialization matching Digest canonicalization; rejects placeholder/malformed Digest |
+| 3.2 | Saved-draft filing boundary | ✅ | ITR-1 requires the canonical `/v2` `ReturnDraft`; ITR-4 continues through its validated legacy gateway; form/AY mismatches block export |
+| 3.3 | Generated artifact persistence | ✅ | Generated JSON uses `ImportedDocument.document_type="generated_itr"` and cannot overwrite an ITD-downloaded `filed_return` |
+| 3.4 | A6 portal uploader | ✅ | `app/filing_automation/uploader.py`; upload state machine, offline JSON flow, structured portal-validation failures, acknowledgement extraction |
+| 3.5 | A7 acknowledgement download | ✅ | Downloads acknowledgement PDF after verified submission and persists its path in `FilingRecord` |
+| 3.6 | A8 e-Verify | ✅ | Verify Later, Aadhaar OTP, and Bank EVC flows; OTP/EVC handoff is in-memory only and never stored/logged |
+| 3.7 | A9 unified filing API | ✅ | Generate, manual download, submit, filing-job polling, OTP/EVC handoff, durable filing status, acknowledgement download |
+| 3.8 | A10 independent filing worker | ✅ | `app/filing_automation/worker.py` + `FilingJob`; independent queue/start/stop lifecycle; no Prefill/AIS/TIS/26AS code |
+| 3.9 | Durable filing lifecycle | ✅ | `FilingRecord` stores mode/environment/status, JSON path, acknowledgement number/path, e-verify status, portal result, and safe error state |
+
+**API endpoints:**
+
+```text
+POST /api/v1/filing/{client_id}/{ay}/{itr_type}/generate
+GET  /api/v1/filing/{client_id}/{ay}/{itr_type}/download
+POST /api/v1/filing/{client_id}/{ay}/{itr_type}/submit
+GET  /api/v1/filing/jobs/{job_id}
+POST /api/v1/filing/jobs/{job_id}/otp
+GET  /api/v1/filing/{client_id}/{ay}/status
+GET  /api/v1/filing/{client_id}/{ay}/{itr_type}/acknowledgement
+```
+
+**Automated verification completed:**
+
+```text
+132 passed, 2 deselected
+Python compilation passed for all new/modified Phase 3 modules
+app/automation/job_worker.py matches HEAD
+app/routers/automation.py matches HEAD
+```
+
+The two deselected tests are pre-existing repository contradictions unrelated to Phase 3: one builds an intentionally incomplete legacy `client` table that the existing migration cannot backfill, and one asserts Prefill is not parsed although the committed worker explicitly parses it.
+
+**Required user UAT before commit:**
+
+1. Restart the backend and confirm both workers start without affecting `DOWNLOAD_ALL`.
+2. Run one existing Prefill/download automation job and confirm behavior is unchanged.
+3. Generate and manually download a known-good ITR-1 JSON; confirm SWCreatedBy and 44-character Digest.
+4. Upload the same JSON manually to the Type-3 UAT portal as the control.
+5. Queue `/submit` with `verification_mode="LATER"` first; confirm the portal returns an acknowledgement and filing status becomes `submitted`.
+6. After Verify Later works, test Aadhaar OTP or Bank EVC through the ephemeral `/jobs/{job_id}/otp` endpoint.
+7. Confirm the acknowledgement PDF becomes available after successful e-verification.
+8. **NEW** — Click the **Direct Submit** button in the ITR Computation header (beside **PDF**) and confirm the full flow (generate → queue → visible-browser upload → acknowledgement pill) works end-to-end from the frontend, with no manual JSON download required.
+
+**Awaiting:** User Type-3 UAT approval. Do not commit or push Phase 3 until approval.
+
+---
+
+### Phase 3 Addendum — Validation, Diagnostics & Direct Submit (2026-08-21)
+
+Three evidence-backed corrections layered on top of the Phase 3 implementation during live UAT. All three are exercised by the new **Direct Submit** button.
+
+#### Addendum-1 — CBDT Rule 145 (dividend quarterly breakup) correctness
+
+**Root cause:** `app/engine/validators/itr1/input_rules.py` interpreted Rule 145 — *"total of Dividend income should be equal to sum of Quarterly breakup of Dividend Income"* — as a hard requirement that the quarterly breakup MUST be provided whenever dividend income is declared. The official AY 2026-27 ITR-1 JSON schema marks `DividendInc` (and therefore its `DateRange` buckets) as **optional**, and AIS / TIS / ITD Prefill do not expose per-receipt dividend dates, so a breakup cannot always be derived from source documents. The `REPORTED ON` field in AIS is the *reporting* date (e.g. 22 May 2026, outside FY 2025-26), not the dividend receipt date — fabricating a breakup from it would be incorrect.
+
+**Fix (`app/engine/validators/itr1/input_rules.py`):** R145 now has three branches:
+
+| Situation | Outcome |
+|---|---|
+| Breakup present, non-zero, totals dividend income | **PASS** |
+| Breakup present, non-zero, does **not** total dividend income | **Category A block** (genuine mismatch) |
+| Breakup absent **or** all five periods zero (no per-receipt data) | **Category B warning** (non-blocking; `passed=True`, `severity=B`) |
+
+Category B warnings don't set `can_upload = False`, so JSON generation and upload proceed when the taxpayer has no per-period receipt evidence.
+
+**Tests added (`tests/test_itr1_input_validation.py`):**
+- `test_R145_dividend_breakup_includes_fifth_period` — Q5 included in the sum (pass)
+- `test_R145_zero_breakup_fails_when_dividend_is_declared` — non-zero mismatch still fails as Category A
+- `test_R145_no_breakup_is_warning_not_block` — omitted breakup → Category B warning
+- `test_R145_all_zero_breakup_is_warning_not_block` — all-zero breakup (the real AIS/TIS case) → Category B warning
+
+#### Addendum-2 — Detailed CBDT validation error diagnostics
+
+**Root cause:** `generate_cbdt_json` in `app/engine/filing_gateway_v2.py` caught every `Exception` from the JSON builder / schema validator and stuffed only `str(exc)` into the 422 response. The rich `ITR1SchemaValidationError.errors` list (path + schema_path + message per violation) was thrown away, so the operator saw only `422 Unprocessable Content` with no indication of which field violated which constraint.
+
+**Fix:**
+
+1. `app/engine/filing_gateway_v2.py` — the catch block now splits into two arms:
+   - `ITR1SchemaValidationError`: iterates `exc.errors`, logs every violation with count, and passes all of them through as the `errors` list so all defects can be fixed in one pass instead of round-tripping per violation.
+   - Any other `Exception` inside the builder: `logger.exception(...)` prints the full traceback (type + message + stack) to the server log, and the 422 body carries `"<ExceptionType>: <message>"`.
+2. `app/routers/client_itr_v2.py` — added `logging.getLogger("taxify.routers.client_itr_v2")`; the `FilingGatewayV2Error` handler now logs the client PAN, AY, high-level message, and each blocking issue to the server log **before** raising the 422. The HTTP response body shape is unchanged (`{"message", "errors"}`), so the frontend contract is preserved.
+
+**Result:** the next 422 now logs every schema violation (path + schema path + message) server-side and returns them in the response body.
+
+#### Addendum-3 — Direct Submit button (frontend → backend Type-3 flow)
+
+**Feature:** a **Direct Submit** button is now rendered in the ITR Computation header beside the **PDF** button. It triggers the full Type-3 portal upload automation from the frontend with no manual JSON download required.
+
+**New frontend module — `frontend/src/api/filingSubmit.ts`:**
+
+Typed wrapper around the existing `/api/v1/filing/*` backend routes (`app/routers/filing.py`):
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `submit()` | `POST /api/v1/filing/{client_id}/{ay}/{itr_type}/submit` | Generate + validate CBDT JSON on the backend and queue a Playwright upload job |
+| `getJobStatus()` | `GET /api/v1/filing/jobs/{job_id}` | Poll the queued/running job |
+| `supplyOtp()` | `POST /api/v1/filing/jobs/{job_id}/otp` | Deliver an OTP/EVC when the job is awaiting one |
+| `getStatus()` | `GET /api/v1/filing/{client_id}/{ay}/status` | Read durable filing state (acknowledgement number, e-verify status) |
+
+**`ITRComputationPage.tsx` changes:**
+
+- **State:** `filingJobId`, `filingSubmitting`, `filingJob`.
+- **`handleDirectSubmit`** flow: confirm form is ITR-1/ITR-4 → `window.confirm` (consequential-action guard) → save current canonical draft → `filingSubmitApi.submit(..., 'LATER')` → backend generates + validates JSON and enqueues a `FilingJob` → set `filingJobId`.
+- **Polling effect (every 2 s):** `queued`/`running` → pill with pulsing dot; `completed` → green pill "Submitted ✓ ARN: XXXXX" + success toast, auto-dismiss after 6 s; `failed` → **stop the polling interval immediately** (bug fix: previously the interval kept firing forever because `filingJobId` was not cleared on failure), keep the red failed pill visible so the operator can read the reason, clear only via the ✕ button.
+- **Button placement:** `[Validate] [CBDT JSON] [PDF] [Direct Submit] [filing pill when active]`. Navy (`--accent-navy`), disabled while a submit is in flight or a job is running, hidden for ITR-2/ITR-3.
+
+**Visible-browser requirement (bug fix 2026-08-21):** the filing worker (`app/filing_automation/worker.py`) originally called `browser_manager.get_context(interactive=False)` → headless browser. Direct-Submit is an operator-driven, consequential flow where the taxpayer must be able to watch the portal upload and intervene on unexpected prompts, so it now calls `get_context(interactive=True)` → visible Chromium window. Headless mode is reserved for future unattended batch jobs.
+
+**Backend contract (unchanged, already implemented in Phase 3):** `POST /api/v1/filing/{client_id}/{ay}/{itr_type}/submit` resolves the client, requires `portal_password` (400 otherwise), generates the JSON via `export_itd_json_file`, upserts a `FilingRecord` (status `queued`), creates a `FilingJob`, commits, calls `enqueue_filing_job(job.id)` — the independent filing worker (`app/filing_automation/worker.py`, started on app boot) picks it up, logs in as the taxpayer, uploads the JSON, optionally e-verifies, and persists the acknowledgement.
+
+**Verification:**
+- Frontend `tsc --noEmit`: clean (no type errors)
+- Frontend vitest (`mapDirectImportsToDraftPatch`): 8 passed
+- Backend `import app.main`: OK
+- Backend focused suites: 182 passed (R145 + draft→input + ITD builder + gateway v2 + orchestrator)
+- Real-client generation (`EPPPG3078Q`): R145 dividend blocker resolved; generation proceeds past it.
+
+**Files added:**
+- `frontend/src/api/filingSubmit.ts`
+
+**Files modified:**
+- `app/engine/validators/itr1/input_rules.py` — R145 three-branch logic + Category B warning
+- `app/engine/filing_gateway_v2.py` — detailed schema-violation logging + `logger` + `ITR1SchemaValidationError` import
+- `app/routers/client_itr_v2.py` — `logger` + per-issue server-side logging on 422
+- `tests/test_itr1_input_validation.py` — 2 new R145 warning/mismatch tests
+- `frontend/src/pages/ITRComputationPage.tsx` — `filingSubmitApi` import, filing-job state, `handleDirectSubmit`, polling `useEffect`, Direct Submit button + inline status pill
 
 ---
 
@@ -624,7 +762,7 @@ def export_itd_json_file(client_id: int, ay: str, itr_type: str, db: Session) ->
 
 ### A6: Type-3 Portal Uploader (Playwright)
 
-**File:** `app/automation/uploader_itr.py` (new), reusing `browser.py`, `auth.py`, `navigation.py`.
+**Implemented file:** `app/filing_automation/uploader.py` (new), reusing only the stable browser/auth/navigation primitives from `app/automation/`.
 
 This is the Playwright automation that logs in as the taxpayer and uploads the JSON. It's the Type-3 analog of the Type-2 `submitItr` API.
 
@@ -676,7 +814,7 @@ class PortalUploader:
 
 ### A7: Type-3 Acknowledgement Downloader (Playwright)
 
-**File:** `app/automation/uploader_itr.py::download_acknowledgement` (same file, reuses the session).
+**Implemented file:** `app/filing_automation/uploader.py::download_acknowledgement` (same file, reuses the filing session).
 
 After upload + e-verify, the acknowledgement PDF is downloadable from the portal's "View Filed Returns" page. Reuse the existing Playwright downloader pattern (`downloader_filed_return.py`):
 
@@ -691,7 +829,7 @@ async def download_acknowledgement(self, client_id, ay, arn, ctx, log_callback):
 
 ### A8: Type-3 e-Verify on Portal (Playwright)
 
-**File:** `app/automation/uploader_itr.py::everify_on_portal`.
+**Implemented file:** `app/filing_automation/uploader.py::everify_on_portal`.
 
 After upload, the return must be e-verified. Options (taxpayer chooses):
 - **Aadhaar OTP** — portal generates OTP to Aadhaar-linked mobile.
@@ -776,11 +914,11 @@ def download_acknowledgement(client_id: int, ay: str, ...):
     ...
 ```
 
-### A10: Automation Job Worker Extension
+### A10: Independent Filing Job Worker
 
-**File:** `app/automation/job_worker.py` (existing, extend).
+**Files:** `app/filing_automation/worker.py` (new), `FilingJob` table (new).
 
-The existing worker processes `DOWNLOAD_ALL` jobs. Add `PORTAL_UPLOAD_ITR` and `PORTAL_DOWNLOAD_ACK` job types. The worker dispatches to `PortalUploader` / ack downloader / everify based on `job_type`. Reuse the existing `AutomationJob` table (add `job_type` values).
+**Implemented isolation decision:** Do **not** modify or dispatch through the existing `app/automation/job_worker.py`; it remains the proven Prefill/AIS/TIS/26AS import worker. Type-3 filing has its own serial queue, startup/shutdown lifecycle, `FilingJob` table, polling endpoint, uploader, OTP handoff, acknowledgement handling, and status persistence. It reuses only browser/login/navigation primitives, not the import worker or `AutomationJob` table.
 
 ### A11: Type-3 UAT Sanity Pack
 
@@ -959,7 +1097,7 @@ Every filing action (generate, validate, upload, everify, ack) is audit-logged w
 | 3.3 | A7: Acknowledgement downloader | PDF downloaded from portal |
 | 3.4 | A8: e-Verify on portal | Aadhaar OTP / Bank EVC / Verify Later |
 | 3.5 | A9: Unified filing router | All `/api/v1/filing/*` endpoints live |
-| 3.6 | A10: Job worker extension | `PORTAL_UPLOAD_ITR` jobs processed |
+| 3.6 | A10: Independent filing worker | Dedicated `FilingJob` queue processes portal uploads; existing import worker remains unchanged |
 
 ### Phase 4 — Type-3 UAT Certification (Week 6-8)
 

@@ -5,6 +5,7 @@ import { itrV2 } from '../api/itrV2';
 import { clientsApi } from '../api/clients';
 import { itrAutomationApi } from '../api/itrAutomation';
 import type { AutomationJob } from '../api/itrAutomation';
+import { filingSubmitApi, type FilingJobStatus, type VerificationMode } from '../api/filingSubmit';
 import { Spinner } from '../components/ui/Spinner';import StatusPill from '../components/StatusPill';
 import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
@@ -166,6 +167,13 @@ export default function ITRComputationPage() {
   const [automationJobId, setAutomationJobId] = useState<number | null>(null);
   const [showStatusBox, setShowStatusBox] = useState(false);
   const [statusBoxJob, setStatusBoxJob] = useState<AutomationJob | null>(null);
+
+  // Type-3 Direct Submit (portal upload automation) state.
+  // The backend generates + validates the CBDT JSON and enqueues a
+  // Playwright upload job; we poll it here and surface the result inline.
+  const [filingJobId, setFilingJobId] = useState<number | null>(null);
+  const [filingSubmitting, setFilingSubmitting] = useState(false);
+  const [filingJob, setFilingJob] = useState<FilingJobStatus | null>(null);
   
   // Part 2: Import document state
   const [importedAIS, setImportedAIS] = useState<any>(null);
@@ -575,6 +583,114 @@ export default function ITRComputationPage() {
       toast.success('PDF downloaded successfully');
     } catch (err: any) {
       toast.error(err.message || 'PDF download failed');
+    }
+  };
+
+  // === Type-3 Direct Submit (portal upload automation) ===
+
+  /**
+   * Polling hook for a queued Direct-Submit filing job.
+   *
+   * Polls ``/api/v1/filing/jobs/{job_id}`` every 2s until the job reaches a
+   * terminal state, then surfaces the acknowledgement number or error.
+   */
+  useEffect(() => {
+    if (filingJobId === null) return;
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const stopPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+    const poll = async () => {
+      try {
+        const status = await filingSubmitApi.getJobStatus(filingJobId);
+        if (cancelled) return;
+        setFilingJob(status);
+        if (status.status === 'completed') {
+          stopPolling();
+          const filing = status.result?.filing;
+          const ack = filing?.acknowledgement_number;
+          if (filing?.everify_status === 'verified') {
+            toast.success(`Return submitted & e-verified ✓  ARN: ${ack ?? 'n/a'}`);
+          } else if (ack) {
+            toast.success(`Return submitted ✓  ARN: ${ack}`);
+          } else {
+            toast.success('Return submitted ✓');
+          }
+          // Auto-dismiss the success pill after 6s so the operator sees the
+          // result, then clear job state so the button re-enables.
+          setTimeout(() => {
+            if (cancelled) return;
+            setFilingJobId(null);
+            setFilingJob(null);
+            setFilingSubmitting(false);
+          }, 6000);
+        } else if (status.status === 'failed') {
+          // STOP the interval — otherwise the poll keeps firing forever.
+          // Keep the failed pill visible (no auto-clear) so the operator
+          // can read the reason; the ✕ button clears job state.
+          stopPolling();
+          setFilingSubmitting(false);
+          const reason = status.error_message || status.result?.filing?.reason || 'Portal upload failed';
+          toast.error(`Submit failed: ${reason.slice(0, 200)}`, { duration: 10000 });
+        }
+      } catch {
+        // transient poll error — retry on next tick
+      }
+    };
+    poll();
+    interval = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      stopPolling();
+    };
+  }, [filingJobId]);
+
+  const handleDirectSubmit = async () => {
+    if (itrForm === 'ITR-3' || itrForm === 'ITR-2') {
+      toast.error('Direct Submit is available for ITR-1 and ITR-4 only this season.');
+      return;
+    }
+    if (!clientId || filingSubmitting || filingJobId !== null) return;
+
+    // Consequential action — confirm before launching the portal upload.
+    const ay = effectiveAssessmentYear;
+    const ok = window.confirm(
+      `Direct Submit will generate the CBDT JSON and launch a visible browser\n` +
+      `that logs into the ITD portal as ${clientData?.pan ?? 'the taxpayer'} and uploads\n` +
+      `the ${itrForm} return for AY ${ay}.\n\n` +
+      `Verification mode: LATER (no OTP needed — verify after submission).\n\n` +
+      `Continue?`,
+    );
+    if (!ok) return;
+
+    setFilingSubmitting(true);
+    setFilingJob(null);
+    try {
+      const currentEditor = editorRef.current;
+      if (currentEditor?.draft) {
+        await returnRepository.save(clientId, {
+          ...currentEditor.draft,
+          assessmentYear: ay,
+          form: itrForm,
+          regime,
+        });
+      }
+      const verificationMode: VerificationMode = 'LATER';
+      const res = await filingSubmitApi.submit(clientId, ay, itrForm, verificationMode);
+      setFilingJobId(res.job_id);
+      toast.success('Filing job queued — a browser will open to upload the JSON…');
+    } catch (err: any) {
+      setFilingSubmitting(false);
+      const message = err?.message || 'Direct Submit failed';
+      const errors: string[] = Array.isArray(err?.details?.errors) ? err.details.errors : [];
+      toast.error(
+        errors.length > 0 ? `${message}\n\n${errors.join('\n')}` : message,
+        { duration: 10000 },
+      );
     }
   };
 
@@ -1453,6 +1569,95 @@ export default function ITRComputationPage() {
           >
             PDF
           </button>
+
+          {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (
+            <button
+              onClick={handleDirectSubmit}
+              disabled={filingSubmitting || filingJobId !== null}
+              title="Generate the CBDT JSON and launch a visible browser that logs into the ITD portal and uploads the return (Type-3, verification mode: LATER)"
+              style={{
+                padding: '6px 12px',
+                background: (filingSubmitting || filingJobId !== null)
+                  ? 'var(--border)'
+                  : 'var(--accent-navy, #0b3d6b)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: (filingSubmitting || filingJobId !== null) ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {filingSubmitting && <Spinner size={12} />}
+              Direct Submit
+            </button>
+          )}
+
+          {filingJobId !== null && filingJob && (
+            <span
+              className={`badge badge-${filingJob.status === 'completed' ? 'success' : filingJob.status === 'failed' ? 'danger' : 'info'}`}
+              style={{
+                fontSize: 11.5,
+                padding: '5px 10px',
+                borderRadius: 'var(--radius-sm)',
+                lineHeight: 1.3,
+                userSelect: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+              title={filingJob.error_message ? filingJob.error_message.slice(0, 200) : undefined}
+            >
+              {filingJob.status !== 'completed' && filingJob.status !== 'failed' && (
+                <span
+                  style={{
+                    display: 'inline-block',
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: 'currentColor',
+                    animation: 'pulse 1.2s ease-in-out infinite',
+                  }}
+                />
+              )}
+              <span>
+                {filingJob.status === 'queued' && 'Filing queued…'}
+                {filingJob.status === 'running' && (filingJob.progress_label || filingJob.status_message || 'Uploading…')}
+                {filingJob.status === 'completed' && (() => {
+                  const ack = filingJob.result?.filing?.acknowledgement_number;
+                  return ack ? `Submitted ✓ ${ack}` : 'Submitted ✓';
+                })()}
+                {filingJob.status === 'failed' && 'Submit failed'}
+              </span>
+              {filingJob.status !== 'completed' && (
+                <button
+                  onClick={() => {
+                    setFilingJobId(null);
+                    setFilingJob(null);
+                    setFilingSubmitting(false);
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    margin: 0,
+                    marginLeft: 2,
+                    fontSize: 10,
+                    color: 'inherit',
+                    opacity: 0.6,
+                    lineHeight: 1,
+                  }}
+                  title="Dismiss"
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          )}
         </div>
       </div>
 

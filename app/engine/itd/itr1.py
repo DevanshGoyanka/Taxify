@@ -1167,7 +1167,10 @@ def _allowance_rows(input_data: Optional[ITR1Input], result: ITR1Result) -> list
     return _positive_rows(amounts, "SalNatureDesc", "SalOthAmount")
 
 
-def _other_source_rows(result: ITR1Result) -> list[dict[str, Any]]:
+def _other_source_rows(
+    result: ITR1Result,
+    input_data: Optional[ITR1Input],
+) -> list[dict[str, Any]]:
     """Build exact other-source category rows retained by the calculator."""
     schedule = result.schedules.get("os") if result.schedules else None
     if schedule is None:
@@ -1179,7 +1182,24 @@ def _other_source_rows(result: ITR1Result) -> list[dict[str, Any]]:
         "FAP": schedule.family_pension_gross,
         "DIV": schedule.dividend_income,
     }
-    return _positive_rows(amounts, "OthSrcNatureDesc", "OthSrcOthAmount")
+    rows = _positive_rows(amounts, "OthSrcNatureDesc", "OthSrcOthAmount")
+    if input_data is None:
+        return rows
+
+    qbr = input_data.dividend_quarterly_breakdown
+    for row in rows:
+        if row["OthSrcNatureDesc"] != "DIV":
+            continue
+        row["DividendInc"] = {
+            "DateRange": {
+                "Upto15Of6": _to_rupees(qbr.get("Q1", Decimal("0"))),
+                "Upto15Of9": _to_rupees(qbr.get("Q2", Decimal("0"))),
+                "Up16Of9To15Of12": _to_rupees(qbr.get("Q3", Decimal("0"))),
+                "Up16Of12To15Of3": _to_rupees(qbr.get("Q4", Decimal("0"))),
+                "Up16Of3To31Of3": _to_rupees(qbr.get("Q5", Decimal("0"))),
+            },
+        }
+    return rows
 
 
 def _exempt_income_rows(input_data: Optional[ITR1Input]) -> list[dict[str, Any]]:
@@ -1440,7 +1460,7 @@ def build_itr1_json(
 
     os_schedule = result.schedules.get("os") if result.schedules else None
     allowance_rows = _allowance_rows(input_data, result)
-    other_source_rows = _other_source_rows(result)
+    other_source_rows = _other_source_rows(result, input_data)
     exempt_income_rows = _exempt_income_rows(input_data)
     exempt_income_total = (
         input_data.agriculture_income if input_data is not None else Decimal("0")

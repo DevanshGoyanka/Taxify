@@ -78,7 +78,9 @@ describe('direct typed import mappers against real extractor fixtures', () => {
     expect(patch.otherSources?.interest).toHaveLength(2);
     expect(patch.otherSources?.interest?.[0]).toMatchObject({ kind: 'SAVINGS_BANK', grossAmount: 157 });
     expect(patch.otherSources?.interest?.[1]).toMatchObject({ kind: 'TERM_DEPOSIT', grossAmount: 839 });
-    expect(patch.otherSources?.dividends?.[0]).toMatchObject({ grossAmount: 130 });
+    expect(patch.otherSources?.dividends?.[0]).toMatchObject({
+      grossAmount: 130, q1: 0, q2: 0, q3: 0, q4: 0, q5: 0,
+    });
     expect(patch.employers).toHaveLength(0);
   });
 
@@ -89,7 +91,9 @@ describe('direct typed import mappers against real extractor fixtures', () => {
     expect(patch.otherSources?.interest).toHaveLength(2);
     expect(patch.otherSources?.interest?.[0]).toMatchObject({ kind: 'SAVINGS_BANK', grossAmount: 157 });
     expect(patch.otherSources?.interest?.[1]).toMatchObject({ kind: 'TERM_DEPOSIT', grossAmount: 839 });
-    expect(patch.otherSources?.dividends?.[0]).toMatchObject({ grossAmount: 130 });
+    expect(patch.otherSources?.dividends?.[0]).toMatchObject({
+      grossAmount: 130, q1: 0, q2: 0, q3: 0, q4: 0, q5: 0,
+    });
   });
 
   it('maps a TIS accepted salary total when no AIS employer rows exist', () => {
