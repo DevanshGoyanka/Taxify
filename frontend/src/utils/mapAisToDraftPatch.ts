@@ -279,6 +279,8 @@ function extractAisCapitalGains(entries: PortalEntry[]): ReturnDraftPatch {
     const category = (entry.category || '').toLowerCase();
     const isCgCategory =
       category.includes('securities') ||
+      category.includes('unit') ||
+      category.includes('mutual fund') ||
       category.includes('virtual digital asset') ||
       category.includes('land or building') ||
       category.includes('immovable');

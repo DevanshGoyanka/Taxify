@@ -653,6 +653,20 @@ export default function ITRComputationPage() {
       // This is the single source of truth — no duplication possible.
       const prefillPatch = mapPrefillToDraftPatch(prefillData);
       const reconciledPatch = mapReconciledToDraftPatch(reconciledImportData);
+      // Debug: trace what the import patches contain so blank-tab issues
+      // can be diagnosed without a debugger.
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] reconciledPatch keys:', Object.keys(reconciledPatch));
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] CG sales:', (reconciledImportData as any)?.capital_gain_sales?.length, 'purchases:', (reconciledImportData as any)?.capital_gain_purchases?.length);
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] CG schedule:', Object.keys(reconciledPatch.capitalGainsSchedule || {}));
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] businesses:', reconciledPatch.businesses?.length);
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] income_heads:', Object.keys((reconciledImportData as any)?.income_heads || {}));
+      }
       // Start from a baseline that keeps personal/filing/regime/form
       // but BLANKS every import-owned list so the patches populate them
       // fresh (no accumulation across re-imports).
@@ -671,9 +685,14 @@ export default function ITRComputationPage() {
           ...prior.capitalGainsSchedule,
           schedule112A: [],
           schedule115AD: [],
+          purchases: [],
+          stEquity: [],
+          stImmovable: [],
+          ltImmovable: [],
           vda: [],
           stDtaa: [],
           ltDtaa: [],
+          simplified112A: { totalSaleConsideration: 0, totalCostAcquisition: 0 },
         },
         otherSources: {
           ...prior.otherSources,
@@ -1813,30 +1832,62 @@ function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm, taxRe
   return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} taxResult={taxResult} />;
 }
 
-function BusinessTab({ taxResult, itrForm, draft }: { taxResult: any; itrForm: string; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void }): React.ReactElement {
-  // The draft does not (yet) carry a full ITR-3 Schedule BP or ITR-4
-  // Schedule BP block — PresumptiveBusiness[] only holds the simplified
-  // 44AD/44ADA/44AE presumptive scheme rows.  The BusinessProfessionEntryManager
-  // captures the full official Schedule BP, so we keep its state in a
-  // localStorage-backed cache keyed by PAN+AY+form so switching tabs
-  // (which unmounts this component) does not lose the captured data.
+function BusinessTab({ taxResult, itrForm, draft, onChangeBusinesses }: { taxResult: any; itrForm: string; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void }): React.ReactElement {
+  // Surface the reconciled business income the import produced (GST
+  // turnover, business receipts, commission, etc. rolled into a presumptive
+  // 44AD/44ADA entry on draft.businesses).  The BusinessProfessionEntryManager
+  // below captures the full official ITR-3/4 Schedule BP beyond the
+  // presumptive roll-up; that fuller state is kept in a localStorage cache
+  // keyed by PAN+AY+form so switching tabs (which unmounts this component)
+  // does not lose it.
   const cacheKey = `biz-schedule-${draft.personal?.pan || 'unknown'}-${draft.assessmentYear || ''}-${itrForm}`;
+  const importedBusiness = draft.businesses[0] as any;
+  const importedData: BusinessProfessionScheduleData = (importedBusiness?.businessSpecific ?? {}) as BusinessProfessionScheduleData;
   const [data, setData] = useState<BusinessProfessionScheduleData>(() => {
     try {
       const raw = localStorage.getItem(cacheKey);
-      return raw ? JSON.parse(raw) as BusinessProfessionScheduleData : {};
+      return raw ? JSON.parse(raw) as BusinessProfessionScheduleData : importedData;
     } catch {
-      return {};
+      return importedData;
     }
   });
+  // When the import's business roll-up changes (e.g. re-import), re-seed
+  // from the draft so the imported figures are never lost behind a stale
+  // cache.
+  useEffect(() => {
+    setData((prev) => {
+      const seed = importedData;
+      const hasImport = Object.keys(seed).length > 0;
+      if (!hasImport) return prev;
+      return { ...prev, ...seed };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey, draft.businesses]);
   const handleChange = useCallback((next: BusinessProfessionScheduleData) => {
     setData(next);
     try { localStorage.setItem(cacheKey, JSON.stringify(next)); } catch { /* ignore quota */ }
   }, [cacheKey]);
-  return <BusinessProfessionEntryManager
-    data={data}
-    onChange={handleChange}
-    selectedForm={itrForm}
-    taxResult={taxResult}
-  />;
+  // Imported presumptive roll-up banner (turnover + scheme + declared
+  // income) so the user sees the reconciled business income even before
+  // they fill the full Schedule BP.
+  const importedRollup = importedBusiness
+    ? { scheme: importedBusiness.scheme, turnover: Number(importedBusiness.digitalReceipts ?? importedBusiness.grossReceipts ?? 0), declaredIncome: Number(importedBusiness.declaredIncome ?? 0), businessName: importedBusiness.businessName || '' }
+    : null;
+  return <>
+    {importedRollup && (
+      <div style={{ marginBottom: 12, padding: '10px 14px', background: 'var(--gold-pale)', border: '1px solid var(--gold)', borderRadius: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+        <strong>Reconciled business income (from AIS/TIS):</strong>
+        &nbsp;{importedRollup.businessName} — {importedRollup.scheme} —
+        Gross receipts ₹{Number(importedRollup.turnover || 0).toLocaleString('en-IN')} →
+        Presumptive income ₹{Number(importedRollup.declaredIncome || 0).toLocaleString('en-IN')}.
+        &nbsp;Review and adjust the Schedule BP below.
+      </div>
+    )}
+    <BusinessProfessionEntryManager
+      data={data}
+      onChange={handleChange}
+      selectedForm={itrForm}
+      taxResult={taxResult}
+    />
+  </>;
 }
