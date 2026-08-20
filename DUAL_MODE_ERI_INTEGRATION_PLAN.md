@@ -14,7 +14,7 @@ Phases are implemented one at a time. Each phase is committed only after the use
 | Phase | Status | Commit | Notes |
 |---|---|---|---|
 | **Phase 1 — Type-3 Foundation** | ✅ TESTED & COMMITTED | Phase 1 commit | A1, A2, A4, B1, B2 done. User-tested & approved 2026-08-19. |
-| **Phase 2 — Type-3 Validation Layer** | ✅ COMPLETE (+ recovery) | (pending commit) | Validators wired into live paths. .env regression recovered: new PORTAL_ENCRYPTION_KEY, broken portal_passwords cleared, automatic .env backup safeguard added. Awaiting user to re-save client portal passwords. |
+| **Phase 2 — Type-3 Validation Layer** | ✅ TESTED & COMMITTED | `7f8e223` | Validators wired into live paths. Recovery verified after portal passwords were re-saved; portal automation passed on 2026-08-20. |
 | Phase 3 — Type-3 Submission Automation | ⏳ NOT STARTED | — | JSON exporter, Playwright uploader, ack download, e-verify. |
 | Phase 4 — Type-3 UAT Certification | ⏳ NOT STARTED | — | UAT sanity pack → ITD → SW_ID enablement. |
 | Phase 5 — Type-3 Production | ⏳ NOT STARTED | — | Switch ERI_ENV=production. |
@@ -77,7 +77,7 @@ all module imports OK
 
 ---
 
-### Phase 2 — Type-3 Validation Layer (COMPLETE, awaiting test approval)
+### Phase 2 — Type-3 Validation Layer (COMPLETE — user-tested & approved 2026-08-20)
 
 **Key finding during Phase 2:** the existing CBDT Category A/B/D rule validators (`app/engine/validators/itr1/` and `itr4/` — `input_rules.py` + `calc_rules.py`, ~3500 + ~4800 + ~750 + ~800 lines respectively) were **implemented but NEVER called from the production JSON-build path**. They were only called from:
 - `tests/` (the validator test suites)
@@ -128,7 +128,7 @@ pytest tests/test_itr1_rule_matrix_completion.py tests/test_itr1_route_validatio
 4. Generate an ITR-4 CBDT JSON via the legacy route (`POST /api/v1/clients/{client_id}/itr/{year}/generate-cbdt-json`) with a known-good and a known-bad input → same rejection behavior.
 5. Confirm the existing test suites still pass (already verified: 227 + 45 = 272 tests green).
 
-**Awaiting:** User test approval → then commit + push + start Phase 3 (Type-3 Submission Automation: JSON exporter + Playwright portal uploader).
+✅ **User-tested and approved on 2026-08-20.** The available Phase 2 suite passed (`240 passed`), and portal automation passed after the client password was re-saved. Phase 2 implementation is present in commit `7f8e223`.
 
 ### ⚠️ Recovery incident (2026-08-19, resolved same day)
 
@@ -142,7 +142,7 @@ While rewriting `.env` during Phase 1, redaction markers (`****…`) in the tool
 
 **Prevention rule going forward:** `.env` is never edited via a full-file rewrite. All `.env` edits target a single specific line via exact string replacement, and the startup backup ensures a recovery point always exists on disk.
 
-**Awaiting:** User re-saves client portal passwords + confirms portal automation works → then commit Phase 2 + start Phase 3.
+✅ **Recovery verified on 2026-08-20:** client portal password re-saved successfully and portal automation passed the password-decryption step. Proceeding to Phase 3.
 
 ---
 
