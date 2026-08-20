@@ -19,12 +19,14 @@ from decimal import Decimal
 import pytest
 
 from app.schemas.return_draft import (
+    AlternateAddress,
     BankAccount,
     Employer,
     DividendIncome,
     Investment80C,
     InterestIncome,
     ReturnDraft,
+    SeventhProviso,
     TdsCredit,
     TaxChallan,
     create_empty_draft,
@@ -198,3 +200,69 @@ def test_draft_from_client_seed():
     assert draft.personal.dateOfBirth == "1990-01-15"
     assert draft.employers == []
     assert draft.taxes.tds == []
+
+
+# ── Phase 1: additive ITR-4 fields (must not break ITR-1) ────────────────────
+
+def test_empty_itr4_draft_validates():
+    """An empty ITR-4 draft validates with default additive fields."""
+    draft = create_empty_draft("2026-27", "ITR-4", "new")
+    payload = draft.model_dump_json()
+    restored = ReturnDraft.model_validate_json(payload)
+    assert restored.form == "ITR-4"
+    assert restored.personal.age == 30
+    assert restored.personal.assesseeStatus == "I"
+    assert restored.personal.employerCategory == "OTH"
+    assert restored.personal.landlineStdCode == "0"
+    assert restored.personal.landlinePhoneNo == "0"
+    assert restored.personal.secondaryAddressDifferent is False
+    assert restored.personal.alternateAddress is None
+    assert restored.filing.form10IEAAcknowledgement == ""
+    assert restored.filing.form10IEADate is None
+    assert restored.filing.seventhProviso.foreignTravel is False
+
+
+def test_additive_itr4_fields_round_trip():
+    """Populated ITR-4 additive fields survive a JSON round-trip exactly."""
+    draft = create_empty_draft("2026-27", "ITR-4", "old")
+    draft.personal.age = 65
+    draft.personal.assesseeStatus = "H"
+    draft.personal.employerCategory = "PSU"
+    draft.personal.landlineStdCode = "011"
+    draft.personal.landlinePhoneNo = "2345678"
+    draft.personal.secondaryAddressDifferent = True
+    draft.personal.alternateAddress = AlternateAddress(
+        residenceNo="5B", cityOrTownOrDistrict="Mumbai",
+        stateCode="27", pinCode="400001",
+    )
+    draft.filing.form10IEAAcknowledgement = "123456789012345"
+    draft.filing.form10IEADate = "2026-04-15"
+    draft.filing.seventhProviso = SeventhProviso(
+        foreignTravel=True, foreignTravelAmount=Decimal("250000"),
+        electricityExpenditure=False,
+    )
+    restored = ReturnDraft.model_validate_json(draft.model_dump_json())
+    assert restored.personal.age == 65
+    assert restored.personal.assesseeStatus == "H"
+    assert restored.personal.employerCategory == "PSU"
+    assert restored.personal.landlineStdCode == "011"
+    assert restored.personal.landlinePhoneNo == "2345678"
+    assert restored.personal.secondaryAddressDifferent is True
+    assert restored.personal.alternateAddress is not None
+    assert restored.personal.alternateAddress.cityOrTownOrDistrict == "Mumbai"
+    assert restored.personal.alternateAddress.pinCode == "400001"
+    assert restored.filing.form10IEAAcknowledgement == "123456789012345"
+    assert restored.filing.form10IEADate == "2026-04-15"
+    assert restored.filing.seventhProviso.foreignTravel is True
+    assert restored.filing.seventhProviso.foreignTravelAmount == Decimal("250000")
+
+
+def test_itr1_draft_without_additive_fields_still_validates():
+    """Regression: an ITR-1 draft with only ITR-1 personal fields still works."""
+    draft = ReturnDraft.model_validate({
+        "assessmentYear": "2026-27", "form": "ITR-1",
+        "personal": {"name": "Rahul", "pan": "ABCDE1234F", "age": 30},
+    })
+    assert draft.personal.assesseeStatus == "I"
+    assert draft.personal.employerCategory == "OTH"
+    assert draft.filing.seventhProviso.foreignTravel is False

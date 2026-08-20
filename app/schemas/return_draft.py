@@ -125,6 +125,49 @@ class Identified(_StrictModel):
 
 
 # ---------------------------------------------------------------------------
+# ITR-4 additive types (assessed-status, alternate address, seventh proviso)
+# ---------------------------------------------------------------------------
+
+AssesseeStatus = Literal["I", "H", "F"]
+"""ITR-4 assessee entity type: Individual / HUF / Firm (other than LLP)."""
+
+
+class AlternateAddress(_StrictModel):
+    """ITR-4 AlternateAddress block (secondary postal address).
+
+    Only emitted when ``PersonalInfo.secondaryAddressDifferent`` is true.
+    Mirrors the legacy ``alternateAddress`` flat-blob sub-object read by
+    ``_build_itr4_input_from_flat``.
+    """
+
+    residenceNo: str = Field(default="")
+    residenceName: str = Field(default="")
+    roadOrStreet: str = Field(default="")
+    localityOrArea: str = Field(default="")
+    cityOrTownOrDistrict: str = Field(default="")
+    stateCode: str = Field(default="")
+    countryCode: str = Field(default="91")
+    pinCode: str = Field(default="")
+    zipCode: str = Field(default="")
+
+
+class SeventhProviso(_StrictModel):
+    """Seventh-proviso to Section 139(1) declarations (ITR-4 FilingStatus).
+
+    Carries the foreign-travel and electricity-expenditure disclosure flags
+    the legacy mapper read from the ``seventhProviso`` flat sub-object.
+    ITR-1 ignores this block; it is additive and defaults to all-false.
+    """
+
+    foreignTravel: bool = Field(default=False)
+    foreignTravelAmount: Money = Field(default=Decimal("0"))
+    electricityExpenditure: bool = Field(default=False)
+    electricityExpenditureAmount: Money = Field(default=Decimal("0"))
+    otherClauseIV: bool = Field(default=False)
+    otherClauseIVDetail: str = Field(default="")
+
+
+# ---------------------------------------------------------------------------
 # Salary (Schedule S)
 # ---------------------------------------------------------------------------
 
@@ -850,6 +893,22 @@ class FilingStatus(_StrictModel):
     originalAcknowledgementNumber: str = Field(default="")
     originalFilingDate: Optional[str] = Field(default=None)
     noticeNumber: str = Field(default="")
+    # ── Additive ITR-4 Form 10-IEA cascade fields (ignored by ITR-1) ──────
+    form10IEAAcknowledgement: str = Field(
+        default="",
+        description="Acknowledgement number of a previously filed Form 10-IEA "
+        "(ITR-4 new/old regime opt-in/opt-out). ITR-4 FilingStatus field.",
+    )
+    form10IEADate: Optional[str] = Field(
+        default=None,
+        description="Date Form 10-IEA was filed for the current AY old-regime "
+        "election (YYYY-MM-DD). ITR-4 only.",
+    )
+    seventhProviso: SeventhProviso = Field(
+        default_factory=SeventhProviso,
+        description="Seventh-proviso to Section 139(1) declarations. ITR-4 "
+        "FilingStatus field; ignored by ITR-1.",
+    )
 
 
 class PersonalInfo(_StrictModel):
@@ -877,6 +936,41 @@ class PersonalInfo(_StrictModel):
     countryCode: str = Field(default="91")
     pinCode: str = Field(default="")
     zipCode: str = Field(default="")
+    # ── Additive ITR-4 fields (ignored by the ITR-1 pipeline) ─────────────
+    age: int = Field(
+        default=30, ge=0, le=120,
+        description="Assessee age as on 31 March — drives the ITR-4 AgeBracket. "
+        "ITR-1 derives its bracket from dateOfBirth and ignores this field.",
+    )
+    assesseeStatus: AssesseeStatus = Field(
+        default="I",
+        description="ITR-4 entity type: I=Individual, H=HUF, F=Firm. "
+        "Ignored by ITR-1.",
+    )
+    employerCategory: str = Field(
+        default="OTH",
+        description="CBDT employer category (CGOV/SGOV/PSU/PE/PESG/PEPS/PEO/OTH/NA). "
+        "ITR-4 FilingStatus field; ignored by ITR-1.",
+    )
+    landlineStdCode: str = Field(
+        default="0",
+        description="Landline STD code for the ITR-4 Address.Phone block. "
+        "Defaults to '0' (CBDT uses '0' when no landline is declared).",
+    )
+    landlinePhoneNo: str = Field(
+        default="0",
+        description="Landline phone number for the ITR-4 Address.Phone block.",
+    )
+    secondaryAddressDifferent: bool = Field(
+        default=False,
+        description="True when the ITR-4 assessee declares an alternate address "
+        "(e.g. for firm/HUF correspondence). When true, alternateAddress must be set.",
+    )
+    alternateAddress: Optional[AlternateAddress] = Field(
+        default=None,
+        description="ITR-4 AlternateAddress block. Emitted only when "
+        "secondaryAddressDifferent is true.",
+    )
 
 
 class Verification(_StrictModel):

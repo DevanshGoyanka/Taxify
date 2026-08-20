@@ -122,20 +122,26 @@ Legacy flat-blob paths (DELETED):
 2. `pytest tests/test_itr1_*.py -v` stays green (ITR-1 regression — additive fields don't break it).
 3. `extra="forbid"` still rejects unknown keys on a draft with ITR-4 fields populated.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-21
 
 **Implemented:**
-- *(filled in after completion)*
+- `app/schemas/return_draft.py` — added additive ITR-4 fields (all with defaults so existing ITR-1 drafts stay valid):
+  - `AssesseeStatus = Literal["I","H","F"]` type alias.
+  - `AlternateAddress` model (ITR-4 secondary postal address block).
+  - `SeventhProviso` model (seventh-proviso to §139(1) declarations).
+  - `PersonalInfo.age` (int, default 30), `assesseeStatus` ("I"), `employerCategory` ("OTH"), `landlineStdCode` ("0"), `landlinePhoneNo` ("0"), `secondaryAddressDifferent` (False), `alternateAddress` (None).
+  - `FilingStatus.form10IEAAcknowledgement` (""), `form10IEADate` (None), `seventhProviso` (default factory).
+- `tests/test_return_draft_schema.py` — 3 new Phase 1 tests: empty ITR-4 draft validates; additive ITR-4 fields round-trip exactly; ITR-1 draft without additive fields still validates (regression).
 
-**Validation:**
-- *(filled in after completion)*
+**Validation:** 12 schema tests pass (3 new + 9 existing). ITR-1 regression suites (`test_itr1_calculator`, `test_draft_to_itr1_input`, `test_filing_gateway_v2`) stay green. The `extra="forbid"` invariant holds — unknown keys still rejected. The one pre-existing failure (`test_compute_v2_rejects_non_itr1_form_with_422`) remains, documented for Phase 6.
 
 **Deferred follow-ups:**
-- *(filled in after completion)*
+- None for Phase 1. Phase 2 builds the canonical ITR-4 mapper that consumes these fields.
 
 ---
 
 ### Phase 2 — Build `draft_to_itr4_input.py` (canonical ITR-4 mapper)
+- None for Phase 1. Phase 2 builds the canonical ITR-4 mapper that consumes these fields.
 
 **Goal:** A single canonical mapper `draft_to_itr4_input(draft) -> ITR4Input` that replaces the ~560-line standalone `_build_itr4_input_from_flat`. Reads the typed `ReturnDraft` (no alias guessing), emits `ITR4Input`. Does NOT build the filing profile (Phase 3 does that, mirroring ITR-1's split).
 
