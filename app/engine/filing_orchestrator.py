@@ -66,9 +66,7 @@ def produce_itd_json(
         FilingOrchestratorError: If the form is unsupported, computation
             fails, schema validation fails, or the builder rejects the input.
     """
-    # Local import to avoid a circular dependency at module load time
-    # (filing_gateway imports from app.engine, which imports app.engine.itd,
-    # which would import this module if we imported eagerly here).
+    # Local imports to avoid a circular dependency at module load time.
     from app.engine.filing_gateway import (
         FilingGatewayError,
         generate_filing_artifact,
@@ -88,19 +86,49 @@ def produce_itd_json(
     _log.info("Producing ITD JSON for client_id=%s ay=%s form=%s",
               client_id, ay, form)
 
-    try:
-        result = generate_filing_artifact(
-            flat_draft=payload,
-            user=user,
-            db=db,
-            include_official_json=include_official_json,
-        )
-    except FilingGatewayError as exc:
-        raise FilingOrchestratorError(
-            f"ITD JSON generation failed for {form}: {exc}",
-        ) from exc
+    official_json: Optional[dict[str, Any]] = None
 
-    official_json: Optional[dict[str, Any]] = result.official_json
+    if form == "ITR-1":
+        # ITR-1 uses the v2 canonical pipeline (the live path the v2
+        # frontend routes call). v2's generate_cbdt_json runs the full
+        # CBDT rule validators (run_input_validation + run_calc_validation)
+        # before building the official JSON, so every Category A rule is
+        # enforced on this path.
+        from app.engine.flat_to_draft import flat_to_draft
+        from app.engine.filing_gateway_v2 import (
+            FilingGatewayV2Error,
+            generate_cbdt_json,
+        )
+        try:
+            draft = flat_to_draft(payload)
+            official_json, _summary = generate_cbdt_json(draft)
+        except FilingGatewayV2Error as exc:
+            raise FilingOrchestratorError(
+                f"ITR-1 JSON generation failed: {exc}",
+            ) from exc
+        except Exception as exc:
+            raise FilingOrchestratorError(
+                f"ITR-1 draft mapping or generation failed: {exc}",
+            ) from exc
+    else:
+        # ITR-2/3/4 still flow through the legacy filing_gateway. Only ITR-4
+        # can produce an official JSON today (ITR-2/3 raise in the gateway).
+        # The ITR-4 path runs the full CBDT rule validators
+        # (run_input_validation + run_calc_validation) inside
+        # _build_itr4_official_json before building the JSON.
+        try:
+            result = generate_filing_artifact(
+                flat_draft=payload,
+                user=user,
+                db=db,
+                include_official_json=include_official_json,
+            )
+        except FilingGatewayError as exc:
+            raise FilingOrchestratorError(
+                f"ITD JSON generation failed for {form}: {exc}",
+            ) from exc
+        official_json = result.official_json
+
     if not include_official_json or official_json is None:
         # Dry-run preview: return an empty placeholder.
         return {}

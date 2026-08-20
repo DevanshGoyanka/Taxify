@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import { INR } from '../utils/formatters';
 import ScheduleOSWorkspace from '../components/othersources/ScheduleOSWorkspace';
 import DeductionsWorkspace from '../components/deductions/DeductionsWorkspace';
@@ -19,6 +20,9 @@ import type {
 } from '../domain/returns';
 import { classifyTdsSchedule, isTcsSection, DEDUCTED_YR_OPTIONS } from '../domain/returns/tdsSections';
 import { tdsToManager, challansToManager, deductionLoansToManager } from '../domain/returns/editorModelV2';
+import { CapitalGainsEntryManager, hasNonSimplifiedCapitalGains, type CapitalGainsScheduleData } from '../components/CapitalGainsEntryManager';
+import type { CapitalGainsSchedule } from '../domain/returns/types';
+import { EMPTY_CAPITAL_GAINS_SCHEDULE } from '../domain/returns/types';
 
 export interface CanonicalManagerBindings {
   interest: (entries: InterestManagerEntry[]) => void;
@@ -40,6 +44,36 @@ export interface CanonicalManagerBindings {
   schedule80GGA: (entries: import('../domain/returns/types').Schedule80GGAEntry[]) => void;
   schedule80GGC: (entries: import('../domain/returns/types').Schedule80GGCEntry[]) => void;
   taxReturnPreparer: (next: import('../domain/returns/types').TaxReturnPreparer) => void;
+}
+
+export function CapitalGainsTab({ draft, taxResult, itrForm, onChange }: {
+  draft: ReturnDraft;
+  taxResult: any;
+  itrForm: ItrForm;
+  onChange: (schedule: CapitalGainsSchedule) => void;
+}): ReactElement {
+  // Typed wrapper around the full Schedule CG editor.  The draft field is now
+  // the typed `CapitalGainsSchedule` (Phase 1), so `onChange` flows through the
+  // `updateCapitalGainsSchedule` updater instead of a raw `replaceDraft`
+  // whole-blob replacement.  The editor internally works with the field-spec
+  // driven `CapitalGainsScheduleData` (JsonRow-based) shape, so the editor's
+  // output is widened to the typed schedule on the way out — the typed
+  // schedule is a structural superset and the editor preserves every field.
+  const schedule: CapitalGainsSchedule = draft.capitalGainsSchedule ?? EMPTY_CAPITAL_GAINS_SCHEDULE;
+  const summary = taxResult?.capitalGainsSummary ?? null;
+  const handleEditorChange = (data: CapitalGainsScheduleData): void => {
+    onChange(data as unknown as CapitalGainsSchedule);
+  };
+  return (
+    <CapitalGainsEntryManager
+      data={schedule}
+      entries={[]}
+      onChange={handleEditorChange}
+      selectedForm={itrForm}
+      summary={summary}
+      issues={taxResult?.capitalGainsIssues || summary?.issues || []}
+    />
+  );
 }
 
 export function BusinessTab({ taxResult, draft, onChangeBusinesses, onChangeBpNetProfit }: { taxResult: any; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void }) {

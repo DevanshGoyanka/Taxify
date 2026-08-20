@@ -137,8 +137,10 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
             "The v2 canonical compute endpoint currently supports ITR-1 only."
         )
     pending = [item for item in draft.reconciliation.discrepancies if item.status == "PENDING"]
+    print(f"[DEBUG compute_canonical_itr1] form={draft.form} discrepancies={len(draft.reconciliation.discrepancies)} pending={len(pending)} evidence={len(draft.reconciliation.evidence)}", flush=True)
     if pending:
         categories = ", ".join(sorted({item.category for item in pending}))
+        print(f"[DEBUG compute_canonical_itr1] REJECT: pending discrepancies categories={categories}", flush=True)
         raise FilingGatewayV2Error(
             "Manual confirmation is required for imported AIS/TIS reconciliation discrepancies before compute or generation.",
             [f"Pending reconciliation discrepancy: {category}." for category in sorted({item.category for item in pending})],
@@ -153,6 +155,7 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
     ]
     if out_of_scope:
         codes = sorted({e.sourceCode for e in out_of_scope if e.sourceCode})
+        print(f"[DEBUG compute_canonical_itr1] REJECT: out_of_scope={len(out_of_scope)} codes={codes}", flush=True)
         raise FilingGatewayV2Error(
             "Imported evidence contains income outside ITR-1 scope. "
             "Please select the correct form (ITR-2 or ITR-3) before computing.",
@@ -162,12 +165,15 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
         typed_input, breakdown = draft_to_itr1_input(draft)
         result = compute_itr1(typed_input)
     except (DraftMappingError, ValidationError, ValueError) as exc:
+        print(f"[DEBUG compute_canonical_itr1] REJECT: mapping/compute error: {exc}", flush=True)
         raise FilingGatewayV2Error("ITR-1 mapping or computation failed.", [str(exc)]) from exc
     if result.errors:
+        print(f"[DEBUG compute_canonical_itr1] REJECT: result.errors={result.errors}", flush=True)
         raise FilingGatewayV2Error(
             "ITR-1 computation rejected the canonical draft.",
             [str(error) for error in result.errors],
         )
+    print(f"[DEBUG compute_canonical_itr1] OK: gti={result.gross_total_income} taxable={result.taxable_income} tax={result.net_tax_liability}", flush=True)
     return ITR1PipelineResult(
         typed_input=typed_input,
         computation=result,
@@ -321,6 +327,32 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
         "property_profile": profiles[0],
         "property_profiles": profiles,
     })
+
+    # ── Full CBDT Category A/B/D rule validation ───────────────────────
+    # Run the SAME rule suite the interactive /tax compute endpoints
+    # enforce, against the typed input + computed result, BEFORE building
+    # the official JSON. A Category A (blocking) failure aborts JSON
+    # emission so no non-compliant ITR-1 JSON can leave this gateway —
+    # critical for Type-3 portal upload where the portal's own validation
+    # is the only downstream safety net.
+    from app.engine.validators.itr1 import (
+        run_input_validation,
+        run_calc_validation,
+    )
+
+    input_report = run_input_validation(typed_input)
+    if not input_report.can_upload:
+        raise FilingGatewayV2Error(
+            "ITR-1 CBDT Category A input validation failed.",
+            [r.message for r in input_report.blocking_errors],
+        )
+    calc_report = run_calc_validation(typed_input, pipeline.computation)
+    if not calc_report.can_upload:
+        raise FilingGatewayV2Error(
+            "ITR-1 CBDT Category A calculation validation failed.",
+            [r.message for r in calc_report.blocking_errors],
+        )
+
     try:
         official_json = build_itr1_json(pipeline.computation, typed_input)
         validate_itr1_json(official_json)

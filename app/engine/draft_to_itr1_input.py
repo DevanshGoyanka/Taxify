@@ -459,7 +459,15 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
         # Strict engine models receive only filing-valid identifiers. The
         # raw malformed value remains untouched in the editable draft and
         # is surfaced as a structured issue above.
-        if tax > 0 and not _TAN_PATTERN.fullmatch(tan):
+        # Strict engine models receive only filing-valid identifiers. The
+        # raw malformed value remains untouched in the editable draft and
+        # is surfaced as a structured issue above.  The guard applies to
+        # every emitted row (TDS1 salary *and* TDS2 non-salary) regardless
+        # of the tax amount — a TDS-2 row with tax == 0 but gross > 0 still
+        # reaches the typed ``TDS2Entry`` constructor, whose ``deductor_tan``
+        # field enforces the TAN pattern, so an empty/malformed TAN must be
+        # skipped here (and surfaced) rather than crashing Pydantic below.
+        if not _TAN_PATTERN.fullmatch(tan):
             issues.append({
                 "creditType": "TDS",
                 "section": section,

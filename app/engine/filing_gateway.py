@@ -318,6 +318,28 @@ def _build_itr4_official_json(
             errors=[str(exc)],
         )
 
+    # Step B-bis: full CBDT Category A/B/D rule validation for ITR-4.
+    # ITR-4 has no v2 pipeline yet, so this gateway IS the live JSON-build
+    # path for ITR-4 (called by the legacy /client/.../generate-cbdt-json
+    # route and by the filing orchestrator). Run the full rule suite
+    # against the typed input + computed result BEFORE building the JSON.
+    # A Category A (blocking) failure aborts emission so no non-compliant
+    # ITR-4 JSON can be uploaded to the portal.
+    from app.engine.validators.itr4 import run_input_validation, run_calc_validation
+
+    input_report = run_input_validation(typed_input)
+    if not input_report.can_upload:
+        raise FilingGatewayError(
+            "ITR-4 CBDT Category A input validation failed.",
+            errors=[r.message for r in input_report.blocking_errors],
+        )
+    calc_report = run_calc_validation(typed_input, result)
+    if not calc_report.can_upload:
+        raise FilingGatewayError(
+            "ITR-4 CBDT Category A calculation validation failed.",
+            errors=[r.message for r in calc_report.blocking_errors],
+        )
+
     # Step C: determine business kwargs for builder
     biz_kwargs = _itr4_builder_kwargs(engine_payload)
 

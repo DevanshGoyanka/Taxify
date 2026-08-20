@@ -1,0 +1,255 @@
+Application Programming Interface Specifications
+
+            Integrated e-filing and CPC 2.0 Project
+
+
+
+
+API Name            Acknowledgement API Flow
+
+API Description     API used to get acknowledgement for submitted ITRs
+Table of Contents
+1. Overview............................................................................................................................. 3
+2. About API ........................................................................................................................... 3
+3. Target Audience and Pre-requisites ...................................................................................... 3
+4. getAcknowledgement API Details ........................................................................................ 4
+   4.1 API Usage Scenario ....................................................................................................... 4
+   4.2 API Request process....................................................................................................... 4
+   4.3 API Protocol .................................................................................................................. 4
+   4.4 Request Parameters ........................................................................................................ 4
+       4.4.1 Request Header: ...................................................................................................... 4
+       4.4.2 Request Body: ......................................................................................................... 5
+       4.4.3 Details of data attribute:........................................................................................... 5
+   4.5 Response Parameters ...................................................................................................... 6
+   4.6 getAcknowledgement API - Sample Request format........................................................ 6
+   4.7 getAcknowledgement API - Sample Response format ..................................................... 6
+5. API Exception Details.......................................................................................................... 7
+1. Overview
+As noted in the ERI Specification Overview document the interaction during the submission
+phase includes 3 key steps in addition to the Login and Logout. This document defines the
+specification to get the acknowledgement for submitted ITR as highlighted in the figure below.
+
+
+Post Submission
+
+
+
+
+2. About API
+Requester              Type-2 ERI
+Provider               ItrWeb
+                       These APIs shall be used to get acknowledgment after submission of the
+Description
+                       ITRs
+Mode of
+Integration         Real Time
+(Real time / Batch)
+Processing Details
+                       User should have established a session using the Login API
+Pre-Processing         specifications.
+Details                Taxpayers should have submitted the ITR through this ERI
+                       Taxpayers get acknowledgement when ITR verification is completed.
+Service Name           ItrService
+API URL                http<hostname>/itrweb/auth/v0.1/returns/getAcknowledgement
+
+
+
+
+3. Target Audience and Pre-requisites
+This is technical document and is target to ERIs working in their application and interested to
+integrate their application with IEC 2.0 platform.
+The pre-requisites to call this API is that ERI is already registered with IEC 2.0 platform. They
+have valid credentials to call the API.
+4. getAcknowledgement API Details
+This service is used to get acknowledge of the ITR after the taxpayer has submitted the ITR.
+
+4.1 API Usage Scenario
+ERI can get the acknowledge for their client (taxpayer) in the eFiling system using this API.
+When client or taxpayer has already submitted the ITR and ERI wants to get acknowledgement
+for their client.
+When ERI submits request for get acknowledgement, there are two high level activities are
+performed:
+
+   1. ERI application will get acknowledgement number from the taxpayer.
+   2. ERI application will call getAcknowledgement API to get the acknowledgement.
+
+4.2 API Request process
+ERI application must have already establish the login session and auth token with eFiling system
+using the login API. Application will initiate getAcknowledgement request as below:
+
+   1. ERI application will capture the taxpayer's details as explained as part of the request
+      attribute details.
+   2. Application will call getAcknowledgement API with values captured from the taxpayer
+      as per request attribute details.
+   3. API will return the PDF as base64 format.
+   4. ERI application can show PDF document to the taxpayer.
+
+4.3 API Protocol
+getAcknowledgement API is exposed as REST API over the HTTPS. The input data should be
+sent as JSON document using Content-Type "application/json".
+
+4.4 Request Parameters
+The request will consist of request header and request body:
+
+4.4.1 Request Header:
+
+Header is mandatory and will consists of following values:
+Mandatory Request Header Parameters:
+
+Header Name Header Value
+Content-type     application/json
+clientId         clientId value which is provided to ERI as part of the registration
+clientSecret     clientSecret value which is provided to ERI as part of the registration
+authToken        Auth token from the Login Flow
+accessMode       "API"
+
+
+
+
+4.4.2 Request Body:
+
+Request body will consist of below attributes:
+
+   1. data: data attribute will be Base64 encoded string of API request json. Details of request
+      json attributes are explained in request data element details.
+   2. eriUserId: It is mandatory and valid value is user ID of the ERI
+   3. sign:
+   • The API request data attribute should be digitally signed for the message integrity and
+      non-repudiation purposes.
+   • Digital signing should always be performed by the ERI from value of data attribute which
+      was generated from request json.
+   • The signature should be generated using a valid X.509 certificate
+   • signature value should be generated from data field using ERI's DSC private key.
+   • ERI should share their DSC public key with ITD to validate the signature.
+
+4.4.3 Details of data attribute:
+
+Below are the request parameters, which is request json used to create data attribute as
+explained above data attribute of the request body:
+
+Name of the        Data     Max       Is
+                                                      Description
+Parameter          type     length    Mandatory
+                                                     It is mandatory and valid value is
+serviceName        String   60        Yes
+                                                     "EriGetAckowledgement"
+                                                     It is mandatory and valid value is PAN
+Pan                String   10        Yes
+                                                     of the taxpayer
+                                                     Unique acknowledgement receipt
+arnNumber          String   15        Yes
+                                                     number
+4.5 Response Parameters
+
+                                   Max      Is
+Name of the         Data type                           Description
+                                   length   Mandatory
+Parameter
+                                                        List of information messages. There
+                                                        can be one or more messages. The
+                                            Yes (on     messages array will be null if there are
+Messages            List<String>
+                                            error)      no messages.
+
+                                                        "messages": []
+                                                        List of errors. The value will be null if
+                                            Yes (on     there is no error.
+Errors              List<Error>
+                                            error)
+                                                        "errors": []
+                                            Yes (on
+successFlag         Boolean                             Possible value is false.
+                                            error)
+                                            Yes (on
+Ack                 Byte Array                          Binary format PDF
+                                            Success)
+
+
+
+
+4.6 getAcknowledgement API - Sample Request format
+{
+"data": "",
+"sign": "",
+"eriUserId": ""
+}
+data tag will be Base64Encoded string from following request json
+{
+"serviceName": "EriGetAckowledgement",
+"pan": "",
+    " arnNumber ": "123466645",
+}
+
+4.7 getAcknowledgement API - Sample Response format
+For Errors:
+
+{
+    "messages": [
+      {
+          "code": "EF500058",
+          "type": "ERROR",
+          "desc": "The PAN is not a valid client for this ERI.",
+          "fieldName": null
+       }
+    ],
+    "errors": [],
+    "successFlag": false,
+    "header": {
+       "formName": null
+    }
+}
+
+
+
+On Success:
+
+<<Downloadable PDF File in binary format>>
+
+
+
+
+5. API Exception Details
+                          Error                                                            Message
+Scenario                              Details                      Error String
+                          code                                                             Type
+                                                                   Invalid Receipt
+                                      When user enters
+                                                                   number. Please retry
+When user enters                      incorrect arnNumber
+                    EF20038                                        and enter correct       ERROR
+incorrect arnNumber                   (Acknowledgment
+                                                                   acknowledgement
+                                      Number)
+                                                                   number.
+                                                     Acknowledgement
+                            When ack number given
+When arnNumber is                                    form cannot be
+                            is not submitted by that
+not accessible for EF500053                          generated for this ITR                ERROR
+                            Eri user who is calling
+Eri user                                             as it is not submitted
+                            getAcknowledgment.
+                                                     through this ERI.
+                                                                   PAN cannot be null or
+                                      When user does not
+When PAN is null          EF20008                                  empty. Please enter     ERROR
+                                      enter the PAN
+                                                                   correct PAN
+                                   When the PAN is not a
+When ERI client                                                    The PAN is not a valid
+                          EF500058 valid client of logged in                              ERROR
+linkage fails                                                      client for this ERI.
+                                   ERI user
+                                                        The entered
+When                            When user enters        Acknowledgement
+Acknowledgement                 Acknowledgement         number is not linked to
+                      EF00158                                                   ERROR
+number is not for the           number which is not     the PAN entered in the
+entered PAN                     linked with given PAN   database, please enter
+                                                        correct PAN.
+When attributes are
+                                When request data is
+incorrect in json     EF20123                           Invalid Request Data   ERROR
+                                invalid
+request data
+

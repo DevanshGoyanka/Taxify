@@ -71,5 +71,23 @@ export const integrationApi = {
     });
     return data;
   },
+
+  /**
+   * Server-side reconcile (P6 fix): loads the persisted import set for the
+   * client+AY from `imported_document` and reconciles on the backend. This
+   * avoids silent TDS/TCS credit loss when the frontend's in-memory state
+   * is dropped (page refresh) between upload and reconcile. Prefer this over
+   * `getReconciliationReport` whenever a clientId+assessmentYear is available.
+   */
+  getReconciliationReportFromServer: async (
+    clientId: number,
+    assessmentYear: string
+  ): Promise<ReconciliationReport> => {
+    const { data } = await axiosInstance.get(
+      `/integration/reconciliation/client/${clientId}`,
+      { params: { assessmentYear } }
+    );
+    return data;
+  },
 };
 

@@ -231,6 +231,30 @@ def test_invalid_tan_row_skipped_and_surfaced():
     assert issues[0]["amount"] == 80000.0
 
 
+def test_empty_tan_tds2_row_with_zero_tax_skipped_not_crashed():
+    """A TDS-2 (non-salary) row with an empty TAN and tax==0 but gross>0
+    must be skipped and surfaced as an issue — not passed to the
+    ``TDS2Entry`` constructor, whose ``deductor_tan`` field enforces the
+    TAN pattern and would otherwise raise a Pydantic validation error.
+
+    Regression for the compute-time crash:
+    "TDS2Entry deductor_tan String should match pattern '^[A-Z]{4}[0-9]{5}[A-Z]$'".
+    """
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1")
+    draft.taxes.tds = [
+        TdsCredit(id="t1", section="194A", deductorTAN="",
+                  grossAmount=Decimal("100000"), taxDeducted=Decimal("0"),
+                  claimedInReturn=True),
+    ]
+    # Must not raise.
+    itr1_input, breakdown = draft_to_itr1_input(draft)
+    assert itr1_input.tds2_entries is None or len(itr1_input.tds2_entries) == 0
+    issues = breakdown["credit_validation_issues"]
+    assert len(issues) == 1
+    assert issues[0]["code"] == "INVALID_TAN_FORMAT"
+    assert issues[0]["enteredValue"] == ""
+
+
 # ── Tax-payment reclassification ─────────────────────────────────────────────
 
 def test_sat_before_fy_end_reclassified_as_advance():

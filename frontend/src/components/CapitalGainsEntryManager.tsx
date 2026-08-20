@@ -215,6 +215,42 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
   const schedule112AForDisplay = overlayComputedReadouts(data.schedule112A || []);
   const setSchedule112ARows = (rows: JsonRow[]): void => onChange({ ...data, schedule112A: rows });
 
+  // Aggregate every scrip in schedule112A[] and schedule115AD[] into the
+  // ITR-1/4 simplified 112A quick-entry totals (sale consideration + cost).
+  // For ITR-1/4 the simplified schedule is the only CG surface the form
+  // permits, so this collapses the scrip-level detail (entered under the
+  // full Schedule CG, which is locked for these forms) into the two numbers
+  // the simplified schedule actually captures.  The tax engine still computes
+  // the eligible gain / ₹1.25L exemption from these raw totals.
+  const importedScripCount = (Array.isArray(data.schedule112A) ? data.schedule112A.length : 0)
+    + (Array.isArray(data.schedule115AD) ? data.schedule115AD.length : 0);
+  const populateFromImportedScrips = (): void => {
+    const sumField = (rows: JsonRow[], field: string): number =>
+      rows.reduce<number>((acc, row) => acc + (Number(row[field] ?? 0) || 0), 0);
+    const scrips112A = Array.isArray(data.schedule112A) ? data.schedule112A : [];
+    const scrips115AD = Array.isArray(data.schedule115AD) ? data.schedule115AD : [];
+    const allScrips = [...scrips112A, ...scrips115AD];
+    // Prefer the explicit total-sale-value field; fall back to per-unit price
+    // multiplied by quantity for rows that only carry those (AIS evidence).
+    const totalSaleConsideration = allScrips.reduce<number>((acc, row) => {
+      const total = Number(row.totalSaleValue ?? 0);
+      if (total) return acc + total;
+      const perUnit = Number(row.salePricePerUnit ?? 0) || 0;
+      const qty = Number(row.quantity ?? 0) || 0;
+      return acc + perUnit * qty;
+    }, 0);
+    const totalCostAcquisition = sumField(allScrips, 'costWithoutIndexation')
+      || sumField(allScrips, 'acquisitionCost');
+    onChange({
+      ...data,
+      simplified112A: {
+        ...data.simplified112A,
+        totalSaleConsideration: Math.round(totalSaleConsideration),
+        totalCostAcquisition: Math.round(totalCostAcquisition),
+      },
+    });
+  };
+
   const rows = (key: SectionKey): JsonRow[] => Array.isArray(data[key]) ? data[key] as JsonRow[] : [];
   const sumRows = (key: string, field: string): number => rows(key as SectionKey).reduce((acc, row) => acc + Number(row[field] || 0), 0);
   const countRows = (key: SectionKey): number => rows(key).length;
@@ -256,7 +292,21 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
       <Field spec={{ key: 'totalSaleConsideration', label: 'Total sale consideration *', kind: 'money', required: true }} row={data.simplified112A} patch={(patch) => patchObject('simplified112A', patch)} />
       <Field spec={{ key: 'totalCostAcquisition', label: 'Total cost of acquisition *', kind: 'money', required: true }} row={data.simplified112A} patch={(patch) => patchObject('simplified112A', patch)} />
       <div><label style={labelStyle}>Long-term capital gain u/s 112A</label><input readOnly value="Computed by tax engine after calculation" style={{ ...inputStyle, background: '#f8fafc', color: 'var(--text-muted)' }} /></div>
-    </div><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>ITR-1/ITR-4 permit only the simplified section 112A schedule. The tax engine computes the eligible gain and exemption from the raw sale and acquisition-cost values after calculation. ITR-2/3 filers should use the full Schedule 112A in section C below for scrip-level detail.</div></div>
+    </div><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>ITR-1/ITR-4 permit only the simplified section 112A schedule. The tax engine computes the eligible gain and exemption from the raw sale and acquisition-cost values after calculation. ITR-2/3 filers should use the full Schedule 112A in section C below for scrip-level detail.</div>
+    {simple && importedScripCount > 0 && (
+      <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button
+          type="button"
+          onClick={populateFromImportedScrips}
+          style={{ padding: '6px 12px', background: 'var(--gold)', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}
+        >
+          Populate from imported scrips
+        </button>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          Sums {importedScripCount} imported Schedule 112A/115AD scrip(s) into the simplified totals above.
+        </span>
+      </div>
+    )}</div>
 
     <SectionTitle title="A. Short-term capital gains" />
     <ApplicabilityBadge form={normalizedForm} permitted={!simple} />

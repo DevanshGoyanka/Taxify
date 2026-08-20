@@ -102,20 +102,15 @@ def _upsert_imported_document(
     raw_content: str,
     parsed_content: str,
 ) -> None:
-    """Insert or update an ImportedDocument row (Phase 2 unified persistence)."""
-    if client_id is None:
-        client_id = 0
-    existing = db.query(ImportedDocument).filter(
-        ImportedDocument.client_id == client_id,
-        ImportedDocument.assessment_year == assessment_year,
-        ImportedDocument.document_type == document_type,
-    ).first()
-    if existing is not None:
-        existing.raw_content = raw_content
-        existing.parsed_content = parsed_content
-        db.commit()
-        return
-    row = ImportedDocument(
+    """Insert or update an ImportedDocument row (delegates to shared service).
+
+    Delegates to ``app.db.imported_document_service.upsert_imported_document``
+    so the automation worker and the manual-upload endpoints share one dedup
+    key and one provenance field (remediation P1/P2/P4).
+    """
+    from app.db.imported_document_service import upsert_imported_document
+    upsert_imported_document(
+        db=db,
         client_id=client_id,
         user_id=user_id,
         assessment_year=assessment_year,
@@ -124,8 +119,6 @@ def _upsert_imported_document(
         raw_content=raw_content,
         parsed_content=parsed_content,
     )
-    db.add(row)
-    db.commit()
 
 
 def _parse_one_pdf(parsers: dict, doc_type: str, content: bytes) -> dict:
@@ -189,6 +182,7 @@ async def parse_reconcile(
 
     parsed: dict[str, Any] = {}
     raw_blobs: dict[str, bytes] = {}
+    extraction_errors: list[str] = []  # P5: attach consistently with automation
 
     for name, upload in (("ais", ais), ("tis", tis), ("form26as", form26as), ("prefill", prefill)):
         if upload is None:
@@ -196,15 +190,20 @@ async def parse_reconcile(
         content = await upload.read()
         await upload.seek(0)
         raw_blobs[name] = content
-        if name == "prefill":
-            try:
-                payload = json.loads(content.decode("utf-8-sig"))
-            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                raise HTTPException(422, f"Invalid Prefill JSON: {exc}") from exc
-            extraction = parsers["parse_prefill_json"](payload, assessment_year=ay)
-            parsed["prefill"] = parsers["prefill_extraction_to_dict"](extraction)
-        else:
-            parsed[name] = _parse_one_pdf(parsers, name, content)
+        try:
+            if name == "prefill":
+                try:
+                    payload = json.loads(content.decode("utf-8-sig"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    raise HTTPException(422, f"Invalid Prefill JSON: {exc}") from exc
+                extraction = parsers["parse_prefill_json"](payload, assessment_year=ay)
+                parsed["prefill"] = parsers["prefill_extraction_to_dict"](extraction)
+            else:
+                parsed[name] = _parse_one_pdf(parsers, name, content)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            extraction_errors.append(f"{name} extraction failed: {type(exc).__name__}: {exc}")
 
     # Persist each supplied document to ImportedDocument (durable re-recon).
     for name, content in raw_blobs.items():
@@ -222,14 +221,20 @@ async def parse_reconcile(
             ais_data=parsed.get("ais", {}),
             tis_data=parsed.get("tis", {}),
             as26_data=parsed.get("form26as", {}),
+            prefill_data=parsed.get("prefill"),
         )
         if parsed.get("prefill"):
             reconciled["prefill"] = parsed["prefill"]
+        if extraction_errors:
+            reconciled["_extraction_errors"] = extraction_errors
         return reconciled
 
     # Prefill-only import (no AIS/TIS/26AS) — return the prefill extraction
     # wrapped in the prefill key (no reconciliation to run).
     if parsed.get("prefill"):
-        return {"prefill": parsed["prefill"]}
+        out: dict[str, Any] = {"prefill": parsed["prefill"]}
+        if extraction_errors:
+            out["_extraction_errors"] = extraction_errors
+        return out
 
     return {"message": "No documents supplied."}
