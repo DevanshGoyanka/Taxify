@@ -18,9 +18,8 @@ export interface ReconciliationResult {
     unmatched_ais: number;
     unmatched_as26: number;
   };
-  capital_gain_evidence?: any[];
-  capital_gain_controls?: any[];
-  capital_gain_control_discrepancies?: any[];
+  capital_gain_sales?: any[];
+  capital_gain_purchases?: any[];
 }
 
 export const reconciliationApi = {

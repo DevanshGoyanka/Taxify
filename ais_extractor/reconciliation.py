@@ -166,7 +166,7 @@ _CATEGORY_CANON_PATTERNS: list[tuple[str, str]] = [
     # ── Dividend ── (AIS "Dividend income (SFT-015)" already matches, but be safe)
     (r"dividend", "dividend"),
     # ── Capital gains ── (sale/purchase of securities/MF)
-    (r"sale.*equity|sale.*securities|sale.*mutual fund|sale.*units", "sale of securities and units of mutual fund"),
+    (r"sale.*equity|sale.*securities|sale.*mutual fund|sale.*unit", "sale of securities and units of mutual fund"),
     (r"purchase.*securities|purchase.*mutual fund|purchase.*units", "purchase of securities and units of mutual funds"),
     (r"sale.*land|sale.*building|sale.*immovable|transfer.*immovable|receipts.*immovable", "sale of land or building"),
     (r"purchase.*immovable|purchase.*property", "purchase of immovable property"),
@@ -568,264 +568,275 @@ def _parse_sft17_detail(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extract_capital_gain_ledger(ais: dict, tis: dict) -> tuple[list[CapitalGainEvidence], list[CapitalGainControl], list[dict[str, object]]]:
-    """Extract every detail row from each AIS CG entry.
+def _extract_capital_gain_ledger(ais: dict, tis: dict) -> tuple[list[dict], list[dict]]:
+    """Extract flat, per-transaction capital-gains rows from the AIS.
 
-    Each AIS entry is one fund/account.  Each quarterly detail row within
-    that entry becomes a separate evidence row so the user can see every
-    transaction and reconcile it against TIS accepted totals.
+    Returns two simple lists — ``sales`` and ``purchases`` — each a list of
+    plain dicts carrying the per-scrip/per-transaction fields the Capital
+    Gains tab needs (ISIN, name, quantity, sale price, total sale value,
+    cost, FMV, date for sales; AMC name, period, amount, account id for
+    purchases).  No evidence/granularity/control abstraction — the AIS is
+    the single source, each detail row becomes one entry, and the frontend
+    maps them directly onto the schedule.
+
+    Recognised AIS detail tables:
+      * SFT-17-LES / SFT-18-EMF sale tables  → sales[]
+      * SFT-17(Pur) / SFT-18(Pur) purchase tables → purchases[]
+      * SFT-012 sale of immovable property → sales[] (immovable)
+      * SFT-012(P) purchase of immovable property → purchases[]
+      * VDA (194S) rows without an AIS table arrive via the income-head
+        bridge in the frontend; nothing to do here.
     """
-    evidence: list[CapitalGainEvidence] = []
-    controls: list[CapitalGainControl] = []
+    sales: list[dict] = []
+    purchases: list[dict] = []
     financial_year = str(ais.get("metadata", {}).get("financial_year", ""))
     download_id = str(ais.get("metadata", {}).get("download_id", ""))
 
     for income_head in ais.get("income_heads", {}).values():
         for entry in income_head.get("entries", []):
-            category = str(entry.get("category", "")).strip().lower()
+            category = canonical_category(str(entry.get("category", "")).strip())
             if category not in TRANSACTION_LEVEL_CATEGORIES:
                 continue
-            side = _capital_gain_side(category)
             source = str(entry.get("information_source", ""))
             code = str(entry.get("information_code", ""))
             pan = str(entry.get("institution_pan", "")) or extract_pan(source)
             summary_sr = int(entry.get("sr_no", 0) or 0)
-            summary_amount = _parse_amount(entry.get("amount", 0))
-            if summary_amount <= 0:
-                continue
-
-            # AIS control for TIS cross-foot
-            controls.append(CapitalGainControl(
-                control_id=_stable_source_id("AIS", financial_year, download_id, code, summary_sr, source, summary_amount),
-                source_document="AIS",
-                granularity=RecordGranularity.REPORTING_SOURCE_AGGREGATE,
-                category=category,
-                side=side,
-                information_code=code,
-                reporting_source=source,
-                reporting_entity_pan=pan,
-                amount=summary_amount,
-            ))
-
             headers = [str(h) for h in entry.get("detail_header", [])]
-            headers_upper = " ".join(headers).upper()
-            is_sft18 = "AMC NAME" in headers_upper and "TOTAL PURCHASE AMOUNT" in headers_upper
-            is_sft17 = "MARKET PURCHASE" in headers_upper
-            is_listed_equity_sale = (
-                "DATE OF SALE/TRANSFER" in headers_upper
+            # Collapse internal whitespace so 'DATE OF SALE/ TRANSFER' (space
+            # after the slash) matches 'DATE OF SALE/TRANSFER'.
+            headers_upper = re.sub(r"\s+", " ", " ".join(headers)).upper().replace("/ ", "/")
+            is_immovable_property_table = "PROPERTY ADDRESS" in headers_upper
+            is_sale_table = (
+                not is_immovable_property_table
+                and "DATE OF SALE/TRANSFER" in headers_upper
                 and "SECURITY NAME" in headers_upper
                 and "SALES CONSIDERATION" in headers_upper
-                and "COST OF ACQUISITION" in headers_upper
+            )
+            is_purchase_table = (
+                not is_immovable_property_table
+                and (
+                    ("AMC NAME" in headers_upper and "TOTAL PURCHASE AMOUNT" in headers_upper)
+                    or "MARKET PURCHASE" in headers_upper
+                )
             )
             details = entry.get("details", [])
 
+            # Summary-only entry (no per-scrip detail table).  Emit one
+            # aggregate sale row so the reconciled total still surfaces in
+            # the Capital Gains tab even when the AIS carries only a total.
             if not details:
-                # Summary-only entry (e.g. SFT-18-EMF(M), SFT-17-LES(M)).
-                # Emit one evidence row with the summary amount.
-                evidence.append(CapitalGainEvidence(
-                    evidence_id=_stable_source_id("AIS", financial_year, download_id, code, summary_sr, side, "SUMMARY"),
-                    granularity=RecordGranularity.REPORTING_SOURCE_AGGREGATE,
-                    side=side,
-                    category=category,
-                    information_code=code,
-                    summary_sr_no=summary_sr,
-                    detail_sr_no=None,
-                    reporting_source=source,
-                    reporting_entity_pan=pan,
-                    amount=summary_amount,
-                    parser_confidence="MEDIUM",
-                ))
+                summary_amount = _parse_amount(entry.get("amount", 0))
+                if summary_amount <= 0:
+                    continue
+                row = {
+                    "id": _stable_source_id("AIS", financial_year, download_id, code, summary_sr, "SUMMARY"),
+                    "information_code": code,
+                    "reporting_source": source,
+                    "reporting_entity_pan": pan,
+                    "security_name": "",
+                    "security_identifier": "",
+                    "quantity": None,
+                    "sale_price_per_unit": None,
+                    "total_sale_value": summary_amount,
+                    "acquisition_cost": None,
+                    "fair_market_value": None,
+                    "unit_fmv": None,
+                    "transaction_date": "",
+                    "asset_type": "",
+                    "security_class": "",
+                    "status": "",
+                    "is_summary": True,
+                }
+                if "purchase" in category:
+                    purchases.append({**row, "period": "", "account_id": ""})
+                else:
+                    sales.append(row)
                 continue
 
-            # Parse every detail row
             for detail in details:
                 data = detail.get("data", {})
                 detail_sr = int(detail.get("sr_no", 0) or 0)
 
-                if is_listed_equity_sale:
+                if is_immovable_property_table:
+                    cells, _ = _detail_cells(headers, detail)
+                    property_address = _first_semantic_value(cells, "PROPERTY", "ADDRESS")
+                    property_type = _first_semantic_value(cells, "PROPERTY", "TYPE")
+                    transaction_type = _first_semantic_value(cells, "TRANSACTION", "TYPE")
+                    # SFT-012(P) has a "TRANSACTION RELATION" column.
+                    transaction_relation = _first_semantic_value(cells, "TRANSACTION", "RELATION")
+                    transaction_date = _first_semantic_value(cells, "TRANSACTION", "DATE")
+                    transaction_amount = _first_amount(cells, (
+                        ("TRANSACTION", "AMOUNT", "ASSIGNED"),
+                        ("TRANSACTION", "AMOUNT"),
+                    ))
+                    stamp_duty_value = _first_amount(cells, (
+                        ("VALUE", "PROPERTY", "STAMP", "DUTY"),
+                        ("VALUE", "STAMP", "DUTY"),
+                    ))
+                    amount_assigned = _first_amount(cells, (
+                        ("TRANSACTION", "AMOUNT", "ASSIGNED"),
+                    ))
+                    reported_on = _first_semantic_value(cells, "REPORTED", "ON")
+                    status = _first_semantic_value(cells, "STATUS")
+                    party_count_raw = _first_semantic_value(cells, "PARTY")
+                    is_purchase = "purchase" in category
+                    # The sale-amount for CG purposes is the transaction
+                    # amount assigned to the assessee (per-party share when
+                    # multiple parties are involved).
+                    sale_value = amount_assigned or transaction_amount or 0.0
+                    if sale_value <= 0:
+                        continue
+                    base = {
+                        "id": _stable_source_id(
+                            "AIS", financial_year, download_id, code,
+                            summary_sr, detail_sr,
+                            "IMMPUR" if is_purchase else "IMMSAL",
+                            property_address, transaction_date, sale_value,
+                        ),
+                        "information_code": code,
+                        "reporting_source": source,
+                        "reporting_entity_pan": pan,
+                        "security_name": property_address or source,
+                        "transaction_date": transaction_date,
+                        "asset_type": "Immovable Property",
+                        "security_class": property_type,
+                        "status": status,
+                        "is_summary": False,
+                        "property_address": property_address,
+                        "property_type": property_type,
+                        "transaction_type": transaction_type,
+                        "transaction_amount": transaction_amount,
+                        "stamp_duty_value": stamp_duty_value,
+                        "transaction_amount_assigned": amount_assigned,
+                        "reported_on": reported_on,
+                        "party_count": _optional_number(party_count_raw),
+                    }
+                    if is_purchase:
+                        purchases.append({
+                            **base,
+                            "purchase_amount": sale_value,
+                            "transaction_relation": transaction_relation,
+                        })
+                    else:
+                        sales.append({
+                            **base,
+                            "security_identifier": "",
+                            "quantity": None,
+                            "sale_price_per_unit": None,
+                            "total_sale_value": sale_value,
+                            "acquisition_cost": None,
+                            "fair_market_value": stamp_duty_value,
+                            "unit_fmv": None,
+                        })
+                    continue
+
+                if is_sale_table:
                     cells, _ = _detail_cells(headers, detail)
                     security_value = _first_semantic_value(cells, "SECURITY", "NAME")
                     identifier_match = re.search(r"\b(IN[EA][A-Z0-9]{9})\b", security_value, re.IGNORECASE)
-                    security_identifier = identifier_match.group(1).upper() if identifier_match else str(data.get("isin", ""))
+                    security_identifier = identifier_match.group(1).upper() if identifier_match else ""
                     security_name = re.sub(
                         r"\s*\(?IN[EA][A-Z0-9]{9}\)?\s*$",
                         "",
                         security_value,
                         flags=re.IGNORECASE,
-                    ).strip() or str(data.get("security_name", ""))
-                    transaction_date = _first_semantic_value(cells, "DATE", "SALE") or str(data.get("transfer_date", ""))
+                    ).strip()
+                    transaction_date = _first_semantic_value(cells, "DATE", "SALE")
                     consideration = _first_amount(cells, (("SALES", "CONSIDERATION"),))
                     acquisition_cost = _first_amount(cells, (("COST", "ACQUISITION"),))
                     fair_market_value = _first_amount(cells, (("FAIR", "MARKET", "VALUE"),))
                     unit_fmv = _first_amount(cells, (("UNIT", "FMV"),))
                     sale_price = _first_amount(cells, (("SALE", "PRICE", "UNIT"),))
-                    stt_amount = _first_amount(cells, (("STT",),))
                     quantity = _optional_number(_first_semantic_value(cells, "QUANTITY"))
-                    debit_type = _first_semantic_value(cells, "DEBIT", "TYPE")
-                    credit_type = _first_semantic_value(cells, "CREDIT", "TYPE")
                     asset_type = _first_semantic_value(cells, "ASSET", "TYPE")
-                    status = _first_semantic_value(cells, "STATUS")
                     security_class = _first_semantic_value(cells, "SECURITY", "CLASS")
+                    status = _first_semantic_value(cells, "STATUS")
                     if consideration is None:
                         continue
-                    evidence.append(CapitalGainEvidence(
-                        evidence_id=_stable_source_id(
-                            "AIS", financial_year, download_id, code, summary_sr,
-                            detail_sr, "SALE", security_identifier, transaction_date,
-                            consideration,
-                        ),
-                        granularity=RecordGranularity.TRANSACTION_DETAIL,
-                        side="SALE",
-                        category=category,
-                        information_code=code,
-                        summary_sr_no=summary_sr,
-                        detail_sr_no=detail_sr,
-                        reporting_source=source,
-                        reporting_entity_pan=pan,
-                        transaction_date=transaction_date,
-                        security_class=security_class,
-                        security_name=security_name,
-                        security_identifier=security_identifier,
-                        quantity=quantity,
-                        amount=consideration,
-                        acquisition_cost=acquisition_cost,
-                        fair_market_value=fair_market_value,
-                        unit_fmv=unit_fmv,
-                        sale_price_per_unit=sale_price,
-                        stt_amount=stt_amount,
-                        debit_type=debit_type,
-                        credit_type=credit_type,
-                        asset_type=asset_type,
-                        status=status,
-                        parser_confidence="HIGH",
-                    ))
+                    sales.append({
+                        "id": _stable_source_id("AIS", financial_year, download_id, code, summary_sr, detail_sr, "SALE", security_identifier, transaction_date, consideration),
+                        "information_code": code,
+                        "reporting_source": source,
+                        "reporting_entity_pan": pan,
+                        "security_name": security_name,
+                        "security_identifier": security_identifier,
+                        "quantity": quantity,
+                        "sale_price_per_unit": sale_price,
+                        "total_sale_value": consideration,
+                        "acquisition_cost": acquisition_cost,
+                        "fair_market_value": fair_market_value,
+                        "unit_fmv": unit_fmv,
+                        "transaction_date": transaction_date,
+                        "asset_type": asset_type,
+                        "security_class": security_class,
+                        "status": status,
+                        "is_summary": False,
+                    })
                     continue
 
-                if is_sft18:
-                    parsed = _parse_sft18_detail(data)
-                elif is_sft17:
-                    parsed = _parse_sft17_detail(data)
-                else:
-                    # Unknown schema — use summary amount and skip detail parsing
+                if is_purchase_table:
+                    parsed = _parse_sft18_detail(data) if "AMC NAME" in headers_upper else _parse_sft17_detail(data)
+                    purchase_amount = parsed["purchase_amount"]
+                    sale_amount = parsed.get("sale_amount", 0) or 0
+                    if purchase_amount and purchase_amount > 0:
+                        purchases.append({
+                            "id": _stable_source_id("AIS", financial_year, download_id, code, summary_sr, detail_sr, "PUR", parsed["client_id"], purchase_amount),
+                            "information_code": code,
+                            "reporting_source": source,
+                            "reporting_entity_pan": pan,
+                            "security_name": parsed["amc_name"],
+                            "account_id": parsed["client_id"],
+                            "period": parsed.get("quarter", ""),
+                            "purchase_amount": purchase_amount,
+                            "status": parsed["status"],
+                            "is_summary": False,
+                        })
+                    # SFT-18(Pur) / SFT-17(Pur) tables also carry a "TOTAL SALES
+                    # VALUE" / "MARKET SALES" column representing actual sales
+                    # of securities/MF units by the assessee.  Emit those as
+                    # sale entries so the Capital Gains tab can compute gains.
+                    if sale_amount and sale_amount > 0:
+                        sales.append({
+                            "id": _stable_source_id("AIS", financial_year, download_id, code, summary_sr, detail_sr, "SALE", parsed["client_id"], sale_amount),
+                            "information_code": code,
+                            "reporting_source": source,
+                            "reporting_entity_pan": pan,
+                            "security_name": parsed["amc_name"],
+                            "security_identifier": "",
+                            "quantity": None,
+                            "sale_price_per_unit": None,
+                            "total_sale_value": sale_amount,
+                            "acquisition_cost": None,
+                            "fair_market_value": None,
+                            "unit_fmv": None,
+                            "transaction_date": "",
+                            "asset_type": "",
+                            "security_class": "",
+                            "status": parsed["status"],
+                            "is_summary": False,
+                        })
                     continue
 
-                amc_name = parsed["amc_name"]
-                client_id = parsed["client_id"]
-                purchase_amount = parsed["purchase_amount"]
-                sale_amount = parsed["sale_amount"]
-                status = parsed["status"]
+                # SFT-012 immovable property (sale/purchase) — only a summary
+                # amount is available; emit a single aggregate row.
+                summary_amount = _parse_amount(entry.get("amount", 0))
+                if summary_amount <= 0:
+                    continue
+                is_purchase = "purchase" in category
+                row = {
+                    "id": _stable_source_id("AIS", financial_year, download_id, code, summary_sr, "IMM" + ("PUR" if is_purchase else "SAL")),
+                    "information_code": code,
+                    "reporting_source": source,
+                    "reporting_entity_pan": pan,
+                    "security_name": source,
+                    "transaction_date": "",
+                    "status": "",
+                    "is_summary": True,
+                    "total_sale_value" if not is_purchase else "purchase_amount": summary_amount,
+                }
+                (purchases if is_purchase else sales).append(row)
 
-                # Emit purchase row (only when the parent AIS entry is a purchase category)
-                if purchase_amount and purchase_amount > 0 and "purchase" in category:
-                    evidence.append(CapitalGainEvidence(
-                        evidence_id=_stable_source_id("AIS", financial_year, download_id, code, summary_sr, detail_sr, "PUR", client_id, purchase_amount),
-                        granularity=RecordGranularity.TRANSACTION_DETAIL,
-                        side="PURCHASE",
-                        category="purchase of securities and units of mutual funds",
-                        information_code=code,
-                        summary_sr_no=summary_sr,
-                        detail_sr_no=detail_sr,
-                        reporting_source=source,
-                        reporting_entity_pan=pan,
-                        account_id=client_id,
-                        transaction_date=parsed.get("quarter", ""),
-                        quarter=parsed.get("quarter", ""),
-                        security_name=amc_name,
-                        amount=purchase_amount,
-                        status=status,
-                        parser_confidence="HIGH",
-                    ))
-
-                # SFT-18 detail rows explicitly report the total sales value.
-                # Preserve every non-zero detail-side value as immutable evidence;
-                # later reconciliation controls are responsible for detecting or
-                # resolving cross-source duplication, never the parser.
-                if sale_amount and sale_amount > 0 and ("sale" in category or is_sft18):
-                    evidence.append(CapitalGainEvidence(
-                        evidence_id=_stable_source_id("AIS", financial_year, download_id, code, summary_sr, detail_sr, "SALE", client_id, sale_amount),
-                        granularity=RecordGranularity.TRANSACTION_DETAIL,
-                        side="SALE",
-                        category="sale of securities and units of mutual fund",
-                        transaction_date=parsed.get("quarter", ""),
-                        quarter=parsed.get("quarter", ""),
-                        information_code=code,
-                        summary_sr_no=summary_sr,
-                        detail_sr_no=detail_sr,
-                        reporting_source=source,
-                        reporting_entity_pan=pan,
-                        account_id=client_id,
-                        security_name=amc_name,
-                        amount=sale_amount,
-                        status=status,
-                        parser_confidence="HIGH",
-                    ))
-
-    for income_head in tis.get("income_heads", {}).values():
-        for entry in income_head.get("entries", []):
-            category = str(entry.get("category", "")).strip().lower()
-            if category not in TRANSACTION_LEVEL_CATEGORIES:
-                continue
-            side = _capital_gain_side(category)
-            accepted = _parse_amount(entry.get("accepted_by_taxpayer", 0))
-            for detail in entry.get("details", []):
-                source = str(detail.get("information_source", ""))
-                pan = str(detail.get("institution_pan", "")) or extract_pan(source)
-                amount = _parse_amount(detail.get("accepted_by_taxpayer", 0))
-                code = str(detail.get("part", ""))
-                sr_no = int(detail.get("sr_no", 0) or 0)
-                controls.append(CapitalGainControl(
-                    control_id=_stable_source_id("TIS", category, sr_no, source, amount),
-                    source_document="TIS",
-                    granularity=RecordGranularity.REPORTING_SOURCE_AGGREGATE,
-                    category=category,
-                    side=side,
-                    information_code=code,
-                    reporting_source=source,
-                    reporting_entity_pan=pan,
-                    amount=amount,
-                    accepted_amount=amount,
-                ))
-            controls.append(CapitalGainControl(
-                control_id=_stable_source_id("TIS", category, "CATEGORY", accepted),
-                source_document="TIS",
-                granularity=RecordGranularity.CATEGORY_CONTROL,
-                category=category,
-                side=side,
-                information_code="",
-                reporting_source="",
-                reporting_entity_pan="",
-                amount=accepted,
-                accepted_amount=accepted,
-            ))
-
-    discrepancies: list[dict[str, object]] = []
-    for category in sorted({control.category for control in controls}):
-        detail_total = sum(item.amount for item in evidence if item.category == category)
-        ais_total = sum(
-            control.amount
-            for control in controls
-            if control.source_document == "AIS" and control.category == category
-        )
-        tis_category_controls = [
-            control
-            for control in controls
-            if control.source_document == "TIS"
-            and control.granularity is RecordGranularity.CATEGORY_CONTROL
-            and control.category == category
-        ]
-        tis_total = sum(control.amount for control in tis_category_controls)
-        reference_total = tis_total if tis_category_controls else ais_total
-        difference = detail_total - reference_total
-        if abs(difference) > 0.01:
-            discrepancies.append({
-                "category": category,
-                "side": _capital_gain_side(category),
-                "detail_total": round(detail_total, 2),
-                "ais_control_total": round(ais_total, 2),
-                "tis_accepted_total": round(tis_total, 2),
-                "difference": round(difference, 2),
-            })
-    return evidence, controls, discrepancies
+    return sales, purchases
 
 
 @dataclass
@@ -1185,9 +1196,7 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict, prefill_data: dic
     tis_entries = _extract_tis(tis_data)
     as26_entries = _extract_26as(as26_data)
     tis_accepted_totals = _tis_accepted_totals(tis_data)
-    capital_gain_evidence, capital_gain_controls, capital_gain_control_discrepancies = (
-        _extract_capital_gain_ledger(ais_data, tis_data)
-    )
+    capital_gain_sales, capital_gain_purchases = _extract_capital_gain_ledger(ais_data, tis_data)
 
     # Index by key
     ais_map: dict[str, list[Entry]] = {}
@@ -1506,63 +1515,8 @@ def reconcile(ais_data: dict, tis_data: dict, as26_data: dict, prefill_data: dic
             for category, amount in sorted(tis_accepted_totals.items())
         },
         "category_control_discrepancies": category_control_discrepancies,
-        "capital_gain_evidence": [
-            {
-                "evidence_id": item.evidence_id,
-                "granularity": item.granularity.value,
-                "side": item.side,
-                "category": item.category,
-                "information_code": item.information_code,
-                "summary_sr_no": item.summary_sr_no,
-                "detail_sr_no": item.detail_sr_no,
-                "reporting_source": item.reporting_source,
-                "reporting_entity_pan": item.reporting_entity_pan,
-                "account_id": item.account_id,
-                "transaction_date": item.transaction_date,
-                "quarter": item.quarter,
-                "security_class": item.security_class,
-                "security_name": item.security_name,
-                "security_identifier": item.security_identifier,
-                "quantity": item.quantity,
-                "amount": round(item.amount, 2),
-                "acquisition_cost": item.acquisition_cost,
-                "fair_market_value": item.fair_market_value,
-                "unit_fmv": item.unit_fmv,
-                "sale_price_per_unit": item.sale_price_per_unit,
-                "stt_amount": item.stt_amount,
-                "debit_type": item.debit_type,
-                "credit_type": item.credit_type,
-                "asset_type": item.asset_type,
-                "stt_paid_on_acquisition": item.stt_paid_on_acquisition,
-                "stt_paid_on_transfer": item.stt_paid_on_transfer,
-                "recognized_exchange": item.recognized_exchange,
-                "acquired_before_31_jan_2018": item.acquired_before_31_jan_2018,
-                "acquisition_mode": item.acquisition_mode,
-                "status": item.status,
-                "parser_confidence": item.parser_confidence,
-            }
-            for item in capital_gain_evidence
-        ],
-        "capital_gain_controls": [
-            {
-                "control_id": item.control_id,
-                "source_document": item.source_document,
-                "granularity": item.granularity.value,
-                "category": item.category,
-                "side": item.side,
-                "information_code": item.information_code,
-                "reporting_source": item.reporting_source,
-                "reporting_entity_pan": item.reporting_entity_pan,
-                "amount": round(item.amount, 2),
-                "accepted_amount": (
-                    round(item.accepted_amount, 2)
-                    if item.accepted_amount is not None
-                    else None
-                ),
-            }
-            for item in capital_gain_controls
-        ],
-        "capital_gain_control_discrepancies": capital_gain_control_discrepancies,
+        "capital_gain_sales": capital_gain_sales,
+        "capital_gain_purchases": capital_gain_purchases,
         "unmatched": {
             "tis_only": [_entry_dict(e) for e in unmatched_tis],
             "ais_only": [_entry_dict(e) for e in unmatched_ais],

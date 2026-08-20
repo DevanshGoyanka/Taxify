@@ -413,6 +413,29 @@ export interface PersonalInfo {
 /** A generic JSON row (preserves the existing component's flexibility). */
 export type JsonRow = Record<string, unknown>;
 
+/** A read-only purchase reference row (AIS SFT-18(Pur) / SFT-17(Pur)).
+ *  Purchases are cost-base evidence for future sales, not gains; they
+ *  surface in the Capital Gains tab for transparency only. */
+export interface CapitalGainPurchase {
+  id: string;
+  /** AIS information code, e.g. SFT-18(Pur), SFT-17(Pur). */
+  informationCode: string;
+  /** Reporting entity (RTA / depository / AMC). */
+  reportingSource: string;
+  /** Security / scheme name when available. */
+  securityName: string;
+  /** ISIN when available. */
+  isin: string;
+  /** Quarter or transaction date the purchase was reported for. */
+  period: string;
+  /** Total purchase amount (consideration paid). */
+  purchaseAmount: number;
+  /** Account/client id at the RTA, when available. */
+  accountId: string;
+  /** AIS-reported status ('Active', etc.). */
+  status: string;
+}
+
 /** One scrip in Schedule 112A (listed equity / equity-oriented MF). */
 export interface Scrip112A {
   id: string;
@@ -493,6 +516,8 @@ export interface ImmovableAssetGain {
   dateOfSale: string;
   fullConsideration: number;
   stampDutyValue?: number;
+  /** Property address from AIS SFT-012 detail. */
+  propertyAddress?: string;
   /** Section 50C consideration (if stamp duty > consideration). */
   consideration50C?: number;
   acquisitionCost: number;
@@ -600,6 +625,11 @@ export interface CapitalGainsSchedule {
   schedule112A: Scrip112A[];
   /** Schedule 115AD scrips (D) — auto-populated from AIS SFT-18-EMF (FII). */
   schedule115AD: Scrip115AD[];
+  /** Purchase reference rows (informational only, read-only).  AIS SFT-18(Pur)
+   *  and SFT-17(Pur) purchase transactions are NOT capital gains — they are
+   *  cost-base evidence for future sales.  They surface here so the user can
+   *  see every purchase the AIS reported, but they contribute no gain. */
+  purchases: CapitalGainPurchase[];
   /** VDA transactions (E) — auto-populated from AIS/26AS VDA rows. */
   vda: VdaEntry[];
   /** Prior-year unutilized STCG deposits. */
@@ -637,7 +667,7 @@ export const EMPTY_CAPITAL_GAINS_SCHEDULE: CapitalGainsSchedule = {
   simplified112A: { totalSaleConsideration: 0, totalCostAcquisition: 0 },
   stImmovable: [], stEquity: [], stNriUnlisted: [], stOtherAssets: [], stSlumpSale: [],
   ltImmovable: [], ltProviso112: [], ltNri112115: [], ltForeignAssets: [], ltOtherAssets: [], ltSlumpSale: [],
-  schedule112A: [], schedule115AD: [], vda: [], stUnutilized: [], ltUnutilized: [], stDtaa: [], ltDtaa: [], buyBackLosses: [], deductionClaims: [],
+  schedule112A: [], schedule115AD: [], purchases: [], vda: [], stUnutilized: [], ltUnutilized: [], stDtaa: [], ltDtaa: [], buyBackLosses: [], deductionClaims: [],
   stSection48: { nriSttPaid: 0, nriSttNotPaid: 0 },
   ltNriProviso48: { ltcgWithoutBenefit: 0, deduction54F: 0 },
   ltNri112A: {},

@@ -1,8 +1,8 @@
-import type { CapitalGainEvidence, ReconciledEntry, ReconciledResults } from '../api/itrAutomation';
+import type { CapitalGainSale, ReconciledEntry, ReconciledResults } from '../api/itrAutomation';
 import { EMPTY_TDS_CREDIT, EMPTY_TCS_CREDIT, type DividendIncome, type Employer, type InterestIncome, type Presumptive44AD, type Presumptive44ADA, type TdsCredit, type TcsCredit } from '../domain/returns/types';
 import { createEmptyFinancialParticulars } from '../domain/returns/factory';
 import type { ReturnDraftPatch } from '../domain/returns/draftPatch';
-import { mapCapitalGainsEvidence } from './mapCapitalGainsToDraftPatch';
+import { mapCapitalGains } from './mapCapitalGainsToDraftPatch';
 
 function id(prefix: string, entry: ReconciledEntry): string {
   const text = entry.source_id || `${entry.source}|${entry.section}|${entry.final_amount}`;
@@ -77,40 +77,38 @@ export function mapReconciledToDraftPatch(results: ReconciledResults | null | un
   // the tax credit is claimed against tax payable, not counted as income.
   const tcsRows = entries.filter((entry) => entry.credit_type === 'TCS' && (entry.as26_tcs || 0) > 0);
 
-  // Capital Gains: the engine emits CG entries in two places:
-  //   1. `capital_gain_evidence` — the AIS per-scrip detail ledger (listed
-  //      equity/MF sales, property sales).
+  // Capital Gains: the engine emits CG data in two places:
+  //   1. `capital_gain_sales` / `capital_gain_purchases` — the flat AIS
+  //      per-scrip detail ledger (listed equity/MF sales, property sales,
+  //      purchases).
   //   2. `income_heads["Capital Gains"]` — reconciled entries for VDA and
   //      property that arrive via 26AS/TIS without an AIS detail table.
-  // The CG mapper consumes `capital_gain_evidence`; bridge the income-head
-  // CG entries into synthetic evidence rows so VDA/property are routed to
-  // the Capital Gains tab and not dropped.
+  // Bridge the income-head CG entries into synthetic sale dicts so VDA /
+  // property totals surface in the Capital Gains tab.
   const cgHeadEntries = entries.filter((entry) => entry.income_head === 'Capital Gains');
-  const bridgedCgEvidence: CapitalGainEvidence[] = cgHeadEntries.map((entry) => ({
-    evidence_id: `recon-cg-${entry.source_id || entry.source || ''}-${entry.final_amount || 0}`,
-    summary_sr_no: 0,
-    detail_sr_no: null,
+  const bridgedCgSales: CapitalGainSale[] = cgHeadEntries.map((entry) => ({
+    id: `recon-cg-${entry.source_id || entry.source || ''}-${entry.final_amount || 0}`,
     information_code: entry.section || '',
-    category: entry.category || '',
-    side: (/purchase/i.test(entry.category || '') ? 'PURCHASE' : 'SALE') as 'PURCHASE' | 'SALE',
-    granularity: 'TRANSACTION_DETAIL',
     reporting_source: entry.source || '',
+    reporting_entity_pan: entry.pan || '',
     security_name: entry.source || '',
-    security_identifier: entry.pan || '',
+    security_identifier: '',
     quantity: null,
     sale_price_per_unit: null,
-    amount: entry.final_amount || 0,
-    acquisition_cost: 0,
+    total_sale_value: entry.final_amount || 0,
+    acquisition_cost: null,
+    fair_market_value: null,
     unit_fmv: null,
-    fair_market_value: 0,
     transaction_date: '',
-    quarter: '',
     asset_type: '',
     security_class: '',
-    acquired_before_31_jan_2018: undefined,
-    parser_confidence: 'HIGH',
+    status: '',
+    is_summary: true,
   }));
-  const cgPatch = mapCapitalGainsEvidence([...(results.capital_gain_evidence || []), ...bridgedCgEvidence]);
+  const cgPatch = mapCapitalGains(
+    [...(results.capital_gain_sales || []), ...bridgedCgSales],
+    results.capital_gain_purchases,
+  );
 
   return {
     employers: salaries.map(employer),

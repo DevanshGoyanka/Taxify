@@ -32,19 +32,20 @@ describe('mapReconciledToDraftPatch', () => {
 
   it('returns an empty patch for missing results', () => expect(mapReconciledToDraftPatch(undefined)).toEqual({}));
 
-  it('projects capital_gain_evidence into the CG schedule', () => {
+  it('projects capital_gain_sales into the CG schedule', () => {
     const withCG: ReconciledResults = {
       ...results(),
-      capital_gain_evidence: [
+      capital_gain_sales: [
         {
-          evidence_id: 'ev-1', granularity: 'TRANSACTION_DETAIL', side: 'SALE',
-          category: 'sale of securities and units of mutual fund',
-          information_code: 'SFT-18-EMF', summary_sr_no: 1, detail_sr_no: 1,
-          reporting_source: 'CAMS', transaction_date: '30/03/2026',
+          id: 'sale-1', information_code: 'SFT-18-EMF',
+          reporting_source: 'CAMS', reporting_entity_pan: 'AAACC3035G',
+          transaction_date: '30/03/2026',
           security_name: 'Reliance', security_identifier: 'INE123456789',
-          asset_type: 'Long term', quantity: 100, amount: 250000,
+          asset_type: 'Long term', quantity: 100, total_sale_value: 250000,
           acquisition_cost: 175000, sale_price_per_unit: 2500,
-          unit_fmv: 2400, fair_market_value: 240000, parser_confidence: 'HIGH',
+          unit_fmv: 2400, fair_market_value: 240000,
+          security_class: 'Unit of Equity Oriented Mutual Fund',
+          status: 'Active', is_summary: false,
         },
       ],
     };

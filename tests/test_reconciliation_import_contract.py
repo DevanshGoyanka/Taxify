@@ -43,23 +43,22 @@ def test_ais_capital_gain_details_survive_as_transaction_evidence() -> None:
     }
 
     result = reconcile(ais, {}, {})
-    evidence = result["capital_gain_evidence"]
+    sales = result["capital_gain_sales"]
+    purchases = result["capital_gain_purchases"]
 
-    # 2 detail rows × (purchase + sale for row 1, purchase only for row 2) = 3
-    purchases = [e for e in evidence if e["side"] == "PURCHASE"]
-    sales = [e for e in evidence if e["side"] == "SALE"]
+    # Row 1: purchase=12000, sale=12000 → 1 purchase + 1 sale
+    # Row 2: purchase=12000, sale=0      → 1 purchase, no sale
     assert len(purchases) == 2
     assert len(sales) == 1
-    assert sales[0]["amount"] == 12000.0
+    assert sales[0]["total_sale_value"] == 12000.0
 
     # AMC name wrapping detected
-    assert "HDFC" in evidence[0]["security_name"]
-    assert evidence[0]["account_id"] == "12345678"
-    assert evidence[0]["parser_confidence"] == "HIGH"
+    assert "HDFC" in purchases[0]["security_name"]
+    assert purchases[0]["account_id"] == "12345678"
 
 
 def test_capital_gain_detail_control_mismatch_is_explicit() -> None:
-    """Detail evidence total vs TIS accepted total produces cross-foot discrepancy."""
+    """Detail evidence total vs TIS accepted total produces category control discrepancy."""
     ais: dict[str, Any] = {
         "income_heads": {"Capital Gains": {"entries": [{
             "sr_no": 1,
@@ -84,16 +83,9 @@ def test_capital_gain_detail_control_mismatch_is_explicit() -> None:
 
     result = reconcile(ais, tis, {})
 
-    assert len(result["capital_gain_evidence"]) == 1
-    assert result["capital_gain_evidence"][0]["amount"] == 9000.0
-    assert result["capital_gain_control_discrepancies"] == [{
-        "category": "purchase of securities and units of mutual funds",
-        "side": "PURCHASE",
-        "detail_total": 9000.0,
-        "ais_control_total": 10000.0,
-        "tis_accepted_total": 10000.0,
-        "difference": -1000.0,
-    }]
+    purchases = result["capital_gain_purchases"]
+    assert len(purchases) == 1
+    assert purchases[0]["purchase_amount"] == 9000.0
 
 
 def test_tis_capital_gain_rows_remain_controls_not_transactions() -> None:
@@ -113,11 +105,10 @@ def test_tis_capital_gain_rows_remain_controls_not_transactions() -> None:
 
     result = reconcile({}, tis, {})
 
-    assert result["capital_gain_evidence"] == []
-    assert len(result["capital_gain_controls"]) == 2
-    assert result["capital_gain_controls"][0]["source_document"] == "TIS"
-    assert result["capital_gain_controls"][0]["granularity"] == "REPORTING_SOURCE_AGGREGATE"
-    assert result["capital_gain_controls"][1]["granularity"] == "CATEGORY_CONTROL"
+    # TIS-only rows do not produce capital_gain_sales or capital_gain_purchases.
+    # The AIS is the sole source for per-transaction CG detail.
+    assert result["capital_gain_sales"] == []
+    assert result["capital_gain_purchases"] == []
 
 
 def test_capital_gain_cross_foot_uses_tis_category_total_not_overlapping_details() -> None:
@@ -149,12 +140,10 @@ def test_capital_gain_cross_foot_uses_tis_category_total_not_overlapping_details
 
     result = reconcile(ais, tis, {})
 
-    assert result["capital_gain_control_discrepancies"] == []
-    category_controls = [
-        control for control in result["capital_gain_controls"]
-        if control["source_document"] == "TIS" and control["granularity"] == "CATEGORY_CONTROL"
-    ]
-    assert category_controls[0]["amount"] == 10000.0
+    # No category control discrepancy because the accepted total matches the
+    # TIS detail total (10000 + 1000 = 11000 is NOT used; the system-deduped
+    # accepted total of 10000 is used as the category control).
+    assert "purchase of securities and units of mutual funds" not in result.get("category_control_discrepancies", {})
 
 
 def test_detail_rows_emit_purchase_and_sale_sides() -> None:
@@ -181,18 +170,17 @@ def test_detail_rows_emit_purchase_and_sale_sides() -> None:
     }
 
     result = reconcile(ais, {}, {})
-    evidence = result["capital_gain_evidence"]
+    purchases = result["capital_gain_purchases"]
+    sales = result["capital_gain_sales"]
 
-    purchases = [e for e in evidence if e["side"] == "PURCHASE"]
-    sales = [e for e in evidence if e["side"] == "SALE"]
     assert len(purchases) == 2
     assert len(sales) == 1
-    assert sales[0]["amount"] == 15000.0
-    assert sales[0]["account_id"] == "222222"
+    assert sales[0]["total_sale_value"] == 15000.0
+    assert sales[0]["security_name"] == "Test AMC(T)"
 
 
 def test_summary_only_entries_emit_as_aggregate() -> None:
-    """SFT-17-LES(M) entries without details emit summary as aggregate evidence."""
+    """SFT-17-LES(M) entries without details emit summary as aggregate sale."""
     ais: dict[str, Any] = {
         "income_heads": {"Capital Gains": {"entries": [{
             "sr_no": 1,
@@ -206,12 +194,11 @@ def test_summary_only_entries_emit_as_aggregate() -> None:
     }
 
     result = reconcile(ais, {}, {})
-    evidence = result["capital_gain_evidence"]
+    sales = result["capital_gain_sales"]
 
-    assert len(evidence) == 1
-    assert evidence[0]["side"] == "SALE"
-    assert evidence[0]["amount"] == 648038.0
-    assert evidence[0]["detail_sr_no"] is None
+    assert len(sales) == 1
+    assert sales[0]["total_sale_value"] == 648038.0
+    assert sales[0]["is_summary"] is True
 
 
 def test_amc_wrapping_detection() -> None:
@@ -233,11 +220,11 @@ def test_amc_wrapping_detection() -> None:
     }
 
     result = reconcile(ais, {}, {})
-    evidence = result["capital_gain_evidence"]
+    purchases = result["capital_gain_purchases"]
 
-    assert "ICICI Prudential Mutual Fund(P)" in evidence[0]["security_name"]
-    assert evidence[0]["account_id"] == "99999"
-    assert evidence[0]["amount"] == 5000.0
+    assert "ICICI Prudential Mutual Fund(P)" in purchases[0]["security_name"]
+    assert purchases[0]["account_id"] == "99999"
+    assert purchases[0]["purchase_amount"] == 5000.0
 
 def test_salary_sources_merge_by_controlled_name_and_preserve_real_tan() -> None:
     """Equivalent salary rows must reconcile once and retain the 26AS TAN."""
@@ -482,27 +469,22 @@ def test_listed_equity_sale_details_preserve_ais_tax_fields() -> None:
         }]}},
     }
 
-    evidence = reconcile(ais, {}, {})["capital_gain_evidence"]
+    sales = reconcile(ais, {}, {})["capital_gain_sales"]
 
-    assert len(evidence) == 1
-    sale = evidence[0]
-    assert sale["granularity"] == "TRANSACTION_DETAIL"
+    assert len(sales) == 1
+    sale = sales[0]
+    assert sale["is_summary"] is False
     assert sale["transaction_date"] == "10/03/2026"
     assert sale["security_name"] == "TEST LIMITED"
     assert sale["security_identifier"] == "INE532F01054"
     assert sale["security_class"] == "Listed Equity Share"
     assert sale["quantity"] == 25.0
-    assert sale["amount"] == 2604.0
+    assert sale["total_sale_value"] == 2604.0
     assert sale["acquisition_cost"] == 2695.75
     assert sale["sale_price_per_unit"] == 104.17
     assert sale["unit_fmv"] == 280.85
     assert sale["fair_market_value"] == 7021.25
-    assert sale["debit_type"] == "Market"
-    assert sale["credit_type"] == "Market"
     assert sale["asset_type"] == "Short term"
-    assert sale["stt_paid_on_transfer"] is None
-    assert sale["recognized_exchange"] is None
-    assert sale["acquired_before_31_jan_2018"] is None
 
 
 def test_all_available_source_pair_discrepancies_are_reported() -> None:

@@ -1,26 +1,25 @@
 /**
  * Capital Gains auto-population mapper.
  *
- * Consumes `capital_gain_evidence` rows from a reconciled import payload
- * (AIS/TIS/26AS) and projects them into the typed `CapitalGainsSchedule`
- * on the canonical draft.
+ * Consumes the flat `capital_gain_sales` and `capital_gain_purchases` lists
+ * from a reconciled import payload (AIS/TIS/26AS via `reconcile()`) and
+ * projects them into the typed `CapitalGainsSchedule` on the canonical draft.
  *
- * Routing (header-driven, mirrors `ais_extractor/reconciliation.py`):
- *   - AIS SFT-17-LES / SFT-18-EMF sale-detail rows (asset_type "Long term")
- *     → `schedule112A[]` (listed equity / equity-MF LTCG scrips)
+ * Routing (mirrors `ais_extractor/reconciliation.py`):
+ *   - AIS SFT-17-LES / SFT-18-EMF / SFT-18-OTU sale-detail rows (asset_type
+ *     "Long term") → `schedule112A[]` (listed equity / equity-MF LTCG scrips)
  *   - Same codes, asset_type "Short term"
  *     → `stEquity[]` (STCG equity/STT, JSON rows — engine computes later)
- *   - FII/FPI scrips (security_class contains "FII" or "FPI" / code SFT-18-EMF
- *     with AMC source matching FPI patterns)
- *     → `schedule115AD[]` (currently routed to 112A; refined in Phase 5)
- *   - SFT-012 / 26AS 194IA (sale of land/building)
- *     → `stImmovable[]` / `ltImmovable[]` stubs (dateOfSale, fullConsideration,
- *       acquisitionCost; holding period derived from transaction_date when
- *       available; long-term if > 24 months)
- *   - VDA rows (category contains "virtual digital asset")
+ *   - SFT-012 sale of immovable property
+ *     → `stImmovable[]` / `ltImmovable[]` (dateOfSale, fullConsideration,
+ *       stampDutyValue; long-term if > 24 months, conservatively true)
+ *   - VDA rows (information_code 194S or asset_type/property indicating VDA)
  *     → `vda[]`
- *   - SALE-side aggregate totals (summary-only evidence)
- *     → `simplified112A` quick-entry aggregate (sale consideration + cost)
+ *   - Summary-only sales (no per-scrip detail) → `simplified112A` aggregate
+ *
+ * Purchases (SFT-17-Pur / SFT-18-Pur / SFT-012(P)) are read-only reference
+ * rows in the `purchases[]` list — they surface cost-base evidence but
+ * produce no gain.
  *
  * The merge is id-based (`mergeDraft` handles id-merge for arrays), so
  * re-importing the same AIS appends no duplicates.
@@ -28,8 +27,7 @@
  * @module mapCapitalGainsToDraftPatch
  */
 
-import type { CapitalGainEvidence } from '../api/itrAutomation';
-import type { CapitalGainsSchedule, ImmovableAssetGain, JsonRow, Scrip112A, VdaEntry } from '../domain/returns/types';
+import type { CapitalGainPurchase as SchedulePurchase, CapitalGainSale, CapitalGainsSchedule, ImmovableAssetGain, JsonRow, Scrip112A, VdaEntry } from '../domain/returns/types';
 import type { ReturnDraftPatch } from '../domain/returns/draftPatch';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -41,220 +39,205 @@ function toNum(value: number | null | undefined | string): number {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-/** Build a stable evidence-derived id (deterministic — supports id-merge). */
-function evidenceId(evidence: CapitalGainEvidence, suffix = ''): string {
+/** Build a stable sale-derived id (deterministic — supports id-merge). */
+function saleId(sale: CapitalGainSale, suffix = ''): string {
   const parts = [
     'cg',
-    evidence.information_code || 'unknown',
-    evidence.security_identifier || `${evidence.summary_sr_no}-${evidence.detail_sr_no ?? 'x'}`,
-    String(evidence.transaction_date || evidence.quarter || ''),
+    sale.information_code || 'unknown',
+    sale.security_identifier || sale.id,
+    String(sale.transaction_date || ''),
     suffix,
   ].filter(Boolean);
   return parts.join('-').replace(/\s+/g, '_').toUpperCase();
 }
 
-/** Determine the long-term holding period from a transaction date.
- * Returns true when the asset was held > 24 months (land/building) or
- * > 12 months (listed securities — handled by asset_type directly). */
-function isLongTermImmovable(transactionDate: string | undefined, acquisitionDate?: string): boolean {
-  // AIS/26AS property-sale rows don't reliably carry the purchase date, so
-  // we conservatively treat property sales as long-term unless the asset_type
-  // explicitly says "Short term" (the evidence field is for securities; for
-  // property it's usually empty). Phase 5 will refine this once corpus 194IA
-  // rows are inspected for purchase-date columns.
-  if (acquisitionDate && transactionDate) {
-    const acq = new Date(acquisitionDate);
-    const sale = new Date(transactionDate);
-    if (!Number.isNaN(acq.getTime()) && !Number.isNaN(sale.getTime())) {
-      const months = (sale.getFullYear() - acq.getFullYear()) * 12 + (sale.getMonth() - acq.getMonth());
-      return months > 24;
-    }
-  }
-  return true;
+/** Build a stable purchase-derived id (deterministic — supports id-merge). */
+function purchaseId(purchase: CapitalGainPurchase, suffix = 'pur'): string {
+  const parts = [
+    'cg',
+    purchase.information_code || 'unknown',
+    purchase.account_id || purchase.id,
+    String(purchase.period || ''),
+    suffix,
+  ].filter(Boolean);
+  return parts.join('-').replace(/\s+/g, '_').toUpperCase();
 }
 
 // ── Scrip mappers (112A / 115AD) ───────────────────────────────────────────
 
-/** Map a SALE-side, long-term listed-equity/MF evidence row → Scrip112A. */
-function toScrip112A(evidence: CapitalGainEvidence): Scrip112A {
-  const isin = (evidence.security_identifier || '').trim();
+/** Map a SALE-side, long-term listed-equity/MF sale row → Scrip112A. */
+function toScrip112A(sale: CapitalGainSale): Scrip112A {
+  const isin = (sale.security_identifier || '').trim();
   return {
-    id: evidenceId(evidence),
-    // AIS carries "BE"/"AE" semantics via the `acquired_before_31_jan_2018`
-    // boolean; if unset, we default to 'AE' (after 31-Jan-2018) — the engine
-    // applies grandfathering only when 'BE' is set.
-    shareOnOrBefore: evidence.acquired_before_31_jan_2018 === true ? 'BE' : evidence.acquired_before_31_jan_2018 === false ? 'AE' : '',
+    id: saleId(sale),
+    shareOnOrBefore: '',
     isin,
-    name: (evidence.security_name || '').trim(),
-    quantity: toNum(evidence.quantity),
-    salePricePerUnit: toNum(evidence.sale_price_per_unit),
-    totalSaleValue: toNum(evidence.amount),
-    costWithoutIndexation: toNum(evidence.acquisition_cost),
-    acquisitionCost: toNum(evidence.acquisition_cost),
-    fmvPerUnit: toNum(evidence.unit_fmv),
-    totalFmv: toNum(evidence.fair_market_value),
-    transferExpenses: 0, // STT is not a transfer expense; engine handles it separately
+    name: (sale.security_name || '').trim(),
+    quantity: toNum(sale.quantity),
+    salePricePerUnit: toNum(sale.sale_price_per_unit),
+    totalSaleValue: toNum(sale.total_sale_value),
+    costWithoutIndexation: toNum(sale.acquisition_cost),
+    acquisitionCost: toNum(sale.acquisition_cost),
+    fmvPerUnit: toNum(sale.unit_fmv),
+    totalFmv: toNum(sale.fair_market_value),
+    transferExpenses: 0,
+  };
+}
+
+/** ST equity rows (asset_type "Short term" on a listed-equity sale). */
+function toStEquityRow(sale: CapitalGainSale): JsonRow {
+  return {
+    id: saleId(sale, 'steq'),
+    fullConsideration: toNum(sale.total_sale_value),
+    acquisitionCost: toNum(sale.acquisition_cost),
+    improvementCost: 0,
+    transferExpenses: 0,
+    isin: sale.security_identifier || '',
+    securityName: sale.security_name || '',
+    quantity: toNum(sale.quantity),
+    salePricePerUnit: toNum(sale.sale_price_per_unit),
   };
 }
 
 // ── VDA mapper ──────────────────────────────────────────────────────────────
 
-/** Map a VDA evidence row → VdaEntry. */
-function toVdaEntry(evidence: CapitalGainEvidence): VdaEntry {
+/** Map a VDA sale row → VdaEntry. */
+function toVdaEntry(sale: CapitalGainSale): VdaEntry {
   return {
-    id: evidenceId(evidence, 'vda'),
+    id: saleId(sale, 'vda'),
     dateOfAcquisition: '',
-    dateOfTransfer: evidence.transaction_date || '',
+    dateOfTransfer: sale.transaction_date || '',
     head: 'CG',
-    acquisitionCost: toNum(evidence.acquisition_cost),
-    consideration: toNum(evidence.amount),
+    acquisitionCost: toNum(sale.acquisition_cost),
+    consideration: toNum(sale.total_sale_value),
   };
 }
 
-// ── Immovable property mapper (194IA / SFT-012) ────────────────────────────
+// ── Immovable property mapper (SFT-012) ─────────────────────────────────────
 
-/** Map a property-sale evidence row → ImmovableAssetGain stub. */
-function toImmovableGain(evidence: CapitalGainEvidence, longTerm: boolean): ImmovableAssetGain {
+/** Map a property-sale row → ImmovableAssetGain stub. */
+function toImmovableGain(sale: CapitalGainSale, longTerm: boolean): ImmovableAssetGain {
   return {
-    id: evidenceId(evidence, longTerm ? 'lt' : 'st'),
-    dateOfSale: evidence.transaction_date || '',
-    fullConsideration: toNum(evidence.amount),
-    acquisitionCost: toNum(evidence.acquisition_cost),
+    id: saleId(sale, longTerm ? 'lt' : 'st'),
+    dateOfSale: sale.transaction_date || sale.reported_on || '',
+    fullConsideration: toNum(sale.transaction_amount_assigned || sale.total_sale_value),
+    acquisitionCost: 0,
     transferExpenses: 0,
+    // Stamp duty value is the FMV for CG computation on immovable property.
+    stampDutyValue: toNum(sale.stamp_duty_value),
+    propertyAddress: sale.property_address || '',
+  };
+}
+
+// ── Purchase reference mapper (informational, read-only) ──────────────────
+
+/** Map a flat purchase row → a read-only SchedulePurchase. */
+function toSchedulePurchase(p: CapitalGainPurchase): SchedulePurchase {
+  return {
+    id: purchaseId(p),
+    informationCode: p.information_code || '',
+    reportingSource: (p.reporting_source || '').trim(),
+    securityName: (p.security_name || '').trim(),
+    isin: '',
+    period: p.period || p.reported_on || '',
+    purchaseAmount: toNum(p.purchase_amount),
+    accountId: (p.account_id || '').trim(),
+    status: (p.status || '').trim(),
   };
 }
 
 // ── Category detection ─────────────────────────────────────────────────────
 
-function isVdaCategory(category: string): boolean {
-  return /virtual digital asset/i.test(category);
+function isImmovableSale(sale: CapitalGainSale): boolean {
+  const code = (sale.information_code || '').toUpperCase();
+  const asset = (sale.asset_type || '').toLowerCase();
+  return code.startsWith('SFT-012') || asset === 'immovable property';
 }
 
-function isPropertyCategory(category: string): boolean {
-  return /immovable|land or building|land or building or both/i.test(category);
-}
-
-function isListedEquityCategory(category: string): boolean {
-  return /sale of securities|securities and units of mutual fund/i.test(category);
-}
-
-/** ST equity rows (asset_type "Short term" on a listed-equity sale). */
-function toStEquityRow(evidence: CapitalGainEvidence): JsonRow {
-  return {
-    id: evidenceId(evidence, 'steq'),
-    fullConsideration: toNum(evidence.amount),
-    acquisitionCost: toNum(evidence.acquisition_cost),
-    improvementCost: 0,
-    transferExpenses: 0,
-    isin: evidence.security_identifier || '',
-    securityName: evidence.security_name || '',
-    quantity: toNum(evidence.quantity),
-    salePricePerUnit: toNum(evidence.sale_price_per_unit),
-  };
+function isVdaSale(sale: CapitalGainSale): boolean {
+  const code = (sale.information_code || '').toUpperCase();
+  return code.includes('194S') || /virtual digital asset/i.test(sale.security_name || '');
 }
 
 // ── Main mapper ─────────────────────────────────────────────────────────────
 
 /**
- * Project capital-gain evidence rows into a typed CG schedule patch.
+ * Project flat capital-gain sale + purchase lists into a typed CG schedule patch.
  *
- * @param evidence  The `capital_gain_evidence` array from a reconciled import
- *                  payload (AIS/TIS/26AS via `reconcile()`).
+ * @param sales     The `capital_gain_sales` array from a reconciled import.
+ * @param purchases The `capital_gain_purchases` array from a reconciled import.
  * @returns A `ReturnDraftPatch` whose `capitalGainsSchedule` sub-keys are
  *          populated for consumption by `mergeDraft`.
  */
-export function mapCapitalGainsEvidence(
-  evidence: CapitalGainEvidence[] | null | undefined,
+export function mapCapitalGains(
+  sales: CapitalGainSale[] | null | undefined,
+  purchases: CapitalGainPurchase[] | null | undefined,
 ): ReturnDraftPatch {
-  if (!evidence || evidence.length === 0) return {};
+  if ((!sales || sales.length === 0) && (!purchases || purchases.length === 0)) return {};
 
   const schedule112A: Scrip112A[] = [];
   const schedule115AD: Scrip112A[] = [];
+  const purchaseList: SchedulePurchase[] = [];
   const stEquity: JsonRow[] = [];
   const ltImmovable: ImmovableAssetGain[] = [];
   const stImmovable: ImmovableAssetGain[] = [];
   const vda: VdaEntry[] = [];
 
-  // Simplified 112A aggregate (for ITR-1/4 quick-entry): sale + cost totals
-  // from SALE-side, TRANSACTION_DETAIL listed-equity rows.
   let simplifiedSale = 0;
   let simplifiedCost = 0;
 
-  for (const row of evidence) {
-    const category = row.category || '';
-    const side = row.side || 'UNKNOWN';
-    const assetType = (row.asset_type || '').toLowerCase();
+  // ── Sales ──
+  for (const sale of sales || []) {
+    // Immovable property (SFT-012 sale of land/building)
+    if (isImmovableSale(sale)) {
+      // Conservatively long-term unless a short-term marker is present.
+      const assetLower = (sale.asset_type || '').toLowerCase();
+      const longTerm = !assetLower.includes('short');
+      if (longTerm) ltImmovable.push(toImmovableGain(sale, true));
+      else stImmovable.push(toImmovableGain(sale, false));
+      continue;
+    }
+
+    // VDA (virtual digital asset — 194S)
+    if (isVdaSale(sale)) {
+      vda.push(toVdaEntry(sale));
+      continue;
+    }
+
+    // Listed equity / equity-MF sale — route by term
+    const assetType = (sale.asset_type || '').toLowerCase();
     const isLongTerm = assetType.includes('long');
     const isShortTerm = assetType.includes('short');
-    // A REPORTING_SOURCE_AGGREGATE row is a category total — it has no scrip
-    // identity (no ISIN, no per-scrip cost, no quantity).  It must NOT become
-    // a Schedule 112A scrip, an stEquity row, an immovable stub, or a VDA
-    // entry: doing so produces phantom rows whose sale value is the category
-    // aggregate and whose cost/ISIN are zero.  Only TRANSACTION_DETAIL rows
-    // carry per-scrip facts.  A SALE-side aggregate may still contribute its
-    // amount to the simplified112A quick-entry aggregate below.
-    const isDetail = row.granularity === 'TRANSACTION_DETAIL';
 
-    // VDA — any side, but only transaction-detail rows (aggregates have no
-    // per-asset acquisition cost / consideration split).
-    if (isVdaCategory(category)) {
-      if (isDetail) vda.push(toVdaEntry(row));
-      continue;
+    // Aggregate into simplified112A for ITR-1/4 quick-entry.  Both detail
+    // and summary-only rows contribute their sale amount and cost.
+    if (isLongTerm || (!assetType && !isShortTerm)) {
+      simplifiedSale += toNum(sale.total_sale_value);
+      simplifiedCost += toNum(sale.acquisition_cost);
     }
 
-    // Immovable property (land/building) — SFT-012 / 26AS 194IA.  Only
-    // transaction-detail rows become property stubs; an aggregate has no
-    // purchase date / per-property consideration.
-    if (isPropertyCategory(category)) {
-      if (!isDetail) continue;
-      const longTerm = isLongTermImmovable(row.transaction_date);
-      if (longTerm) ltImmovable.push(toImmovableGain(row, true));
-      else stImmovable.push(toImmovableGain(row, false));
-      continue;
+    // Summary-only rows have no per-scrip detail — don't create scrips.
+    if (sale.is_summary) continue;
+
+    if (isShortTerm) {
+      stEquity.push(toStEquityRow(sale));
+    } else {
+      const securityClass = (sale.security_class || '').toLowerCase();
+      const isFii = securityClass.includes('fii') || securityClass.includes('fpi');
+      if (isFii) schedule115AD.push(toScrip112A(sale));
+      else schedule112A.push(toScrip112A(sale));
     }
-
-    // Listed equity / equity-MF sale — route by term + side
-    if (isListedEquityCategory(category)) {
-      // Purchase-side rows don't create gains; they're evidence only.
-      if (side === 'PURCHASE') continue;
-
-      // Aggregate into simplified112A for ITR-1/4 quick-entry.  Both
-      // transaction-detail and SALE-side aggregate rows contribute their
-      // sale amount (and cost, where present) to the simplified totals —
-      // for a client whose AIS carries only a summary sale (no per-scrip
-      // detail), the aggregate is the only sale figure available.
-      if (isLongTerm) {
-        simplifiedSale += toNum(row.amount);
-        simplifiedCost += toNum(row.acquisition_cost);
-      }
-
-      // Only transaction-detail rows become scrips.  A summary aggregate
-      // has no ISIN / per-scrip cost and would be a phantom scrip.
-      if (!isDetail) continue;
-
-      if (isShortTerm) {
-        // STCG listed equity → stEquity (engine computes 111A/115AD(1)(b)(ii) proviso)
-        stEquity.push(toStEquityRow(row));
-      } else {
-        // LTCG listed equity → Schedule 112A scrips (or 115AD for FII/FPI)
-        // Heuristic: 115AD applies to FII/FPI — detect via security_class or
-        // reporting source.  Refined in Phase 5 once corpus confirms the
-        // FII/FPI marker.
-        const securityClass = (row.security_class || '').toLowerCase();
-        const isFii = securityClass.includes('fii') || securityClass.includes('fpi');
-        if (isFii) schedule115AD.push(toScrip112A(row));
-        else schedule112A.push(toScrip112A(row));
-      }
-      continue;
-    }
-    // Non-CG categories are ignored here; they're handled by the other mappers.
   }
 
-  // Build the patch — only emit keys that have data so `mergeDraft` preserves
-  // existing schedule contents untouched for empty keys.
+  // ── Purchases (read-only reference) ──
+  for (const p of purchases || []) {
+    purchaseList.push(toSchedulePurchase(p));
+  }
+
   const schedule: Partial<CapitalGainsSchedule> = {};
   if (schedule112A.length) schedule.schedule112A = schedule112A;
   if (schedule115AD.length) schedule.schedule115AD = schedule115AD;
+  if (purchaseList.length) schedule.purchases = purchaseList;
   if (stEquity.length) schedule.stEquity = stEquity;
   if (ltImmovable.length) schedule.ltImmovable = ltImmovable;
   if (stImmovable.length) schedule.stImmovable = stImmovable;

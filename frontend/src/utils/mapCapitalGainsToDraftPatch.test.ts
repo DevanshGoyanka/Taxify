@@ -1,44 +1,55 @@
 import { describe, expect, it } from 'vitest';
-import type { CapitalGainEvidence } from '../api/itrAutomation';
-import { mapCapitalGainsEvidence } from './mapCapitalGainsToDraftPatch';
+import type { CapitalGainPurchase, CapitalGainSale } from '../api/itrAutomation';
+import { mapCapitalGains } from './mapCapitalGainsToDraftPatch';
 
-function scrip(overrides: Partial<CapitalGainEvidence> = {}): CapitalGainEvidence {
+function sale(overrides: Partial<CapitalGainSale> = {}): CapitalGainSale {
   return {
-    evidence_id: 'ev-1',
-    granularity: 'TRANSACTION_DETAIL',
-    side: 'SALE',
-    category: 'sale of securities and units of mutual fund',
+    id: 'sale-1',
     information_code: 'SFT-18-EMF',
-    summary_sr_no: 1,
-    detail_sr_no: 1,
     reporting_source: 'CAMS',
     reporting_entity_pan: 'AAACC3035G',
-    transaction_date: '30/03/2026',
     security_name: 'Bandhan Financial Services Fund-Regular Plan-Growth',
     security_identifier: 'INF194KB1GE6',
-    security_class: 'Unit of Equity Oriented Mutual Fund',
-    asset_type: 'Long term',
     quantity: 1169.15,
-    amount: 15000,
-    acquisition_cost: 16044.20,
     sale_price_per_unit: 12.83,
-    unit_fmv: 0,
+    total_sale_value: 15000,
+    acquisition_cost: 16044.20,
     fair_market_value: 0,
-    stt_amount: 0.15,
-    parser_confidence: 'HIGH',
+    unit_fmv: 0,
+    transaction_date: '30/03/2026',
+    asset_type: 'Long term',
+    security_class: 'Unit of Equity Oriented Mutual Fund',
+    status: 'Active',
+    is_summary: false,
     ...overrides,
   };
 }
 
-describe('mapCapitalGainsEvidence', () => {
-  it('returns an empty patch for null/undefined/empty evidence', () => {
-    expect(mapCapitalGainsEvidence(null)).toEqual({});
-    expect(mapCapitalGainsEvidence(undefined)).toEqual({});
-    expect(mapCapitalGainsEvidence([])).toEqual({});
+function purchase(overrides: Partial<CapitalGainPurchase> = {}): CapitalGainPurchase {
+  return {
+    id: 'pur-1',
+    information_code: 'SFT-18(Pur)',
+    reporting_source: 'CAMS',
+    reporting_entity_pan: 'AAACC3035G',
+    security_name: 'HDFC Asset Management Company Limited(H)',
+    account_id: '85102941',
+    period: 'Q4(Jan-Mar)',
+    purchase_amount: 5000,
+    status: 'Active',
+    is_summary: false,
+    ...overrides,
+  };
+}
+
+describe('mapCapitalGains', () => {
+  it('returns an empty patch for null/undefined/empty inputs', () => {
+    expect(mapCapitalGains(null, null)).toEqual({});
+    expect(mapCapitalGains(undefined, undefined)).toEqual({});
+    expect(mapCapitalGains([], [])).toEqual({});
   });
 
-  it('maps a long-term listed-equity SALE row → schedule112A scrip', () => {
-    const patch = mapCapitalGainsEvidence([scrip()]);
+  it('maps a long-term listed-equity sale → schedule112A scrip', () => {
+    const patch = mapCapitalGains([sale()], []);
     const sched = patch.capitalGainsSchedule;
     expect(sched?.schedule112A).toHaveLength(1);
     const row = sched?.schedule112A?.[0];
@@ -53,15 +64,14 @@ describe('mapCapitalGainsEvidence', () => {
       totalFmv: 0,
       shareOnOrBefore: '',
     });
-    // Deterministic id for id-merge dedup
     expect(row?.id).toContain('INF194KB1GE6');
   });
 
-  it('aggregates SALE scrips into simplified112A quick-entry totals', () => {
-    const patch = mapCapitalGainsEvidence([
-      scrip({ amount: 15000, acquisition_cost: 16000 }),
-      scrip({ evidence_id: 'ev-2', detail_sr_no: 2, amount: 50000, acquisition_cost: 40000 }),
-    ]);
+  it('aggregates LTCG sales into simplified112A quick-entry totals', () => {
+    const patch = mapCapitalGains([
+      sale({ total_sale_value: 15000, acquisition_cost: 16000 }),
+      sale({ id: 'sale-2', total_sale_value: 50000, acquisition_cost: 40000 }),
+    ], []);
     expect(patch.capitalGainsSchedule?.simplified112A).toEqual({
       totalSaleConsideration: 65000,
       totalCostAcquisition: 56000,
@@ -69,9 +79,8 @@ describe('mapCapitalGainsEvidence', () => {
     expect(patch.capitalGainsSchedule?.schedule112A).toHaveLength(2);
   });
 
-  it('routes short-term listed-equity SALE rows → stEquity (not 112A)', () => {
-    const patch = mapCapitalGainsEvidence([scrip({ asset_type: 'Short term' })]);
-    // schedule112A key is absent (no LTCG scrips) — mergeDraft preserves base
+  it('routes short-term listed-equity sales → stEquity (not 112A)', () => {
+    const patch = mapCapitalGains([sale({ asset_type: 'Short term' })], []);
     expect(patch.capitalGainsSchedule?.schedule112A).toBeUndefined();
     expect(patch.capitalGainsSchedule?.stEquity).toHaveLength(1);
     expect(patch.capitalGainsSchedule?.stEquity?.[0]).toMatchObject({
@@ -79,53 +88,47 @@ describe('mapCapitalGainsEvidence', () => {
       fullConsideration: 15000,
       acquisitionCost: 16044.20,
     });
-    // Short-term rows don't aggregate into simplified112A (112A is LTCG-only)
     expect(patch.capitalGainsSchedule?.simplified112A).toBeUndefined();
   });
 
-  it('skips PURCHASE-side rows (they are evidence only, not gains)', () => {
-    const patch = mapCapitalGainsEvidence([scrip({ side: 'PURCHASE' })]);
-    expect(patch.capitalGainsSchedule?.schedule112A).toBeUndefined();
-    expect(patch.capitalGainsSchedule?.stEquity).toBeUndefined();
-    expect(patch.capitalGainsSchedule?.simplified112A).toBeUndefined();
-  });
-
-  it('maps property-sale (194IA/SFT-012) rows → ltImmovable by default', () => {
-    const patch = mapCapitalGainsEvidence([
-      scrip({
-        category: 'sale of land or building',
+  it('maps property-sale (SFT-012) rows → ltImmovable with stamp duty', () => {
+    const patch = mapCapitalGains([
+      sale({
+        id: 'prop-1',
         information_code: 'SFT-012',
+        security_name: 'Survey Number 63/1',
         security_identifier: '',
-        security_name: '',
-        transaction_date: '15/02/2026',
-        amount: 5000000,
-        acquisition_cost: 2000000,
-        asset_type: '',
+        transaction_date: '05/07/2025',
+        total_sale_value: 3725000,
+        acquisition_cost: null,
+        asset_type: 'Immovable Property',
+        property_address: 'Survey Number 63/1',
+        stamp_duty_value: 0,
+        transaction_amount_assigned: 3725000,
       }),
-    ]);
+    ], []);
     expect(patch.capitalGainsSchedule?.ltImmovable).toHaveLength(1);
     expect(patch.capitalGainsSchedule?.ltImmovable?.[0]).toMatchObject({
-      dateOfSale: '15/02/2026',
-      fullConsideration: 5000000,
-      acquisitionCost: 2000000,
+      dateOfSale: '05/07/2025',
+      fullConsideration: 3725000,
+      propertyAddress: 'Survey Number 63/1',
     });
-    // stImmovable key absent (no short-term property)
     expect(patch.capitalGainsSchedule?.stImmovable).toBeUndefined();
   });
 
-  it('maps VDA rows → vda[]', () => {
-    const patch = mapCapitalGainsEvidence([
-      scrip({
-        category: 'receipts on transfer of virtual digital asset',
-        information_code: 'SFT-128',
+  it('maps VDA sales → vda[]', () => {
+    const patch = mapCapitalGains([
+      sale({
+        id: 'vda-1',
+        information_code: '194S',
+        security_name: 'Bitcoin',
         security_identifier: '',
-        security_name: '',
-        amount: 100000,
+        total_sale_value: 100000,
         acquisition_cost: 30000,
         transaction_date: '20/03/2026',
         asset_type: '',
       }),
-    ]);
+    ], []);
     expect(patch.capitalGainsSchedule?.vda).toHaveLength(1);
     expect(patch.capitalGainsSchedule?.vda?.[0]).toMatchObject({
       dateOfTransfer: '20/03/2026',
@@ -136,27 +139,27 @@ describe('mapCapitalGainsEvidence', () => {
   });
 
   it('routes FII/FPI scrips → schedule115AD', () => {
-    const patch = mapCapitalGainsEvidence([
-      scrip({ security_class: 'FII units' }),
-      scrip({ security_class: 'Unit of Equity Oriented Mutual Fund' }),
-    ]);
+    const patch = mapCapitalGains([
+      sale({ security_class: 'FII units' }),
+      sale({ id: 'sale-2', security_class: 'Unit of Equity Oriented Mutual Fund' }),
+    ], []);
     expect(patch.capitalGainsSchedule?.schedule115AD).toHaveLength(1);
     expect(patch.capitalGainsSchedule?.schedule112A).toHaveLength(1);
   });
 
   it('does not double-count when re-imported: ids are deterministic', () => {
-    const evidence = [scrip()];
-    const a = mapCapitalGainsEvidence(evidence);
-    const b = mapCapitalGainsEvidence(evidence);
+    const s = [sale()];
+    const a = mapCapitalGains(s, []);
+    const b = mapCapitalGains(s, []);
     expect(a.capitalGainsSchedule?.schedule112A?.[0].id).toBe(
       b.capitalGainsSchedule?.schedule112A?.[0].id,
     );
   });
 
   it('handles null/undefined numeric fields gracefully (zero, not NaN)', () => {
-    const patch = mapCapitalGainsEvidence([
-      scrip({ quantity: null, acquisition_cost: null, unit_fmv: null, fair_market_value: null, sale_price_per_unit: null }),
-    ]);
+    const patch = mapCapitalGains([
+      sale({ quantity: null, acquisition_cost: null, unit_fmv: null, fair_market_value: null, sale_price_per_unit: null }),
+    ], []);
     const row = patch.capitalGainsSchedule?.schedule112A?.[0];
     expect(row?.quantity).toBe(0);
     expect(row?.acquisitionCost).toBe(0);
@@ -165,55 +168,35 @@ describe('mapCapitalGainsEvidence', () => {
     expect(row?.salePricePerUnit).toBe(0);
   });
 
-  it('does NOT create a phantom scrip from a SALE summary-aggregate row', () => {
-    // Real shape from AEDPD0736M: the SFT-17-LES(M) SALE entry is summary-only
-    // (granularity REPORTING_SOURCE_AGGREGATE) — it carries the category sale
-    // total (496301) but no ISIN / per-scrip cost / quantity.  Previously the
-    // reconciled mapper turned this aggregate into a single schedule112A scrip
-    // with totalSaleValue=496301 and cost/ISIN=0 — a phantom scrip.
-    const summarySale: CapitalGainEvidence = {
-      evidence_id: 'ev-summary',
-      granularity: 'REPORTING_SOURCE_AGGREGATE',
-      side: 'SALE',
-      category: 'sale of securities and units of mutual fund',
-      information_code: 'SFT-17-LES(M)',
-      summary_sr_no: 26,
-      detail_sr_no: null,
-      reporting_source: 'AAACC6233AMUMC09975A',
-      reporting_entity_pan: 'AAACC6233AM',
-      amount: 496301,
-      acquisition_cost: null,
+  it('does NOT create a phantom scrip from a summary-only sale', () => {
+    const summarySale = sale({
+      id: 'summary-1',
+      is_summary: true,
       security_identifier: '',
+      security_name: '',
       quantity: null,
       sale_price_per_unit: null,
+      acquisition_cost: null,
+      total_sale_value: 496301,
       asset_type: '',
       security_class: '',
-      parser_confidence: 'MEDIUM',
-    };
-    const patch = mapCapitalGainsEvidence([summarySale]);
-    // No phantom scrip.
+    });
+    const patch = mapCapitalGains([summarySale], []);
     expect(patch.capitalGainsSchedule?.schedule112A ?? []).toHaveLength(0);
     expect(patch.capitalGainsSchedule?.schedule115AD ?? []).toHaveLength(0);
     expect(patch.capitalGainsSchedule?.stEquity ?? []).toHaveLength(0);
-    // A summary aggregate with no asset_type cannot be determined long-term,
-    // so it does not contribute to the LTCG-only simplified112A aggregate.
-    // The row is correctly skipped entirely (no phantom scrip, no aggregate).
-    expect(patch.capitalGainsSchedule?.simplified112A).toBeUndefined();
   });
 
-  it('does NOT create scrips from PURCHASE-side rows', () => {
-    const purchase: CapitalGainEvidence = {
-      ...scrip(),
-      side: 'PURCHASE',
-      category: 'purchase of securities and units of mutual funds',
-      amount: 456609,
-      acquisition_cost: 456609,
-    };
-    const patch = mapCapitalGainsEvidence([purchase]);
-    expect(patch.capitalGainsSchedule?.schedule112A ?? []).toHaveLength(0);
-    expect(patch.capitalGainsSchedule?.stEquity ?? []).toHaveLength(0);
-    // PURCHASE rows are evidence only — they don't aggregate into the
-    // simplified sale total either.
-    expect(patch.capitalGainsSchedule?.simplified112A).toBeUndefined();
+  it('maps purchase rows → purchases[] (read-only reference)', () => {
+    const patch = mapCapitalGains([], [purchase(), purchase({ id: 'pur-2', purchase_amount: 3000 })]);
+    expect(patch.capitalGainsSchedule?.purchases).toHaveLength(2);
+    const p = patch.capitalGainsSchedule?.purchases?.[0];
+    expect(p).toMatchObject({
+      informationCode: 'SFT-18(Pur)',
+      securityName: 'HDFC Asset Management Company Limited(H)',
+      accountId: '85102941',
+      period: 'Q4(Jan-Mar)',
+      purchaseAmount: 5000,
+    });
   });
 });

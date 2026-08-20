@@ -64,62 +64,56 @@ export interface ReconciledUnmatchedEntry {
   section: string;
 }
 
-export interface CapitalGainEvidence {
-  evidence_id: string;
-  granularity: 'TRANSACTION_DETAIL' | 'ACCOUNT_PERIOD_AGGREGATE' | 'REPORTING_SOURCE_AGGREGATE' | 'CATEGORY_CONTROL';
-  side: 'PURCHASE' | 'SALE' | 'UNKNOWN';
-  category: string;
+export interface CapitalGainSale {
+  id: string;
   information_code: string;
-  summary_sr_no: number;
-  detail_sr_no: number | null;
   reporting_source: string;
   reporting_entity_pan?: string;
-  account_id?: string;
-  transaction_date?: string;
-  /** AIS-reported quarter for SFT-18(Pur) purchase aggregates, e.g. "Q2(Jul-Sep)". */
-  quarter?: string;
-  security_class?: string;
-  security_name?: string;
-  security_identifier?: string;
+  security_name: string;
+  security_identifier: string;
   quantity?: number | null;
-  amount: number;
+  sale_price_per_unit?: number | null;
+  total_sale_value: number;
   acquisition_cost?: number | null;
   fair_market_value?: number | null;
   unit_fmv?: number | null;
-  sale_price_per_unit?: number | null;
-  stt_amount?: number | null;
-  debit_type?: string;
-  credit_type?: string;
-  asset_type?: string;
-  stt_paid_on_acquisition?: boolean | null;
-  stt_paid_on_transfer?: boolean | null;
-  recognized_exchange?: boolean | null;
-  acquired_before_31_jan_2018?: boolean | null;
-  acquisition_mode?: string;
-  status?: string;
-  parser_confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  transaction_date: string;
+  asset_type: string;
+  security_class: string;
+  status: string;
+  is_summary: boolean;
+  /** Immovable-property-only fields (SFT-012 sale). */
+  property_address?: string;
+  property_type?: string;
+  transaction_type?: string;
+  transaction_amount?: number | null;
+  stamp_duty_value?: number | null;
+  transaction_amount_assigned?: number | null;
+  reported_on?: string;
+  party_count?: number | null;
 }
 
-export interface CapitalGainControl {
-  control_id: string;
-  source_document: 'AIS' | 'TIS';
-  granularity: 'REPORTING_SOURCE_AGGREGATE' | 'CATEGORY_CONTROL';
-  category: string;
-  side: 'PURCHASE' | 'SALE' | 'UNKNOWN';
+export interface CapitalGainPurchase {
+  id: string;
   information_code: string;
   reporting_source: string;
   reporting_entity_pan?: string;
-  amount: number;
-  accepted_amount?: number | null;
-}
-
-export interface CapitalGainControlDiscrepancy {
-  category: string;
-  side: 'PURCHASE' | 'SALE' | 'UNKNOWN';
-  detail_total: number;
-  ais_control_total: number;
-  tis_accepted_total: number;
-  difference: number;
+  security_name: string;
+  account_id: string;
+  period: string;
+  purchase_amount: number;
+  status: string;
+  is_summary: boolean;
+  /** Immovable-property-only fields (SFT-012(P) purchase). */
+  property_address?: string;
+  property_type?: string;
+  transaction_type?: string;
+  transaction_relation?: string;
+  transaction_amount?: number | null;
+  stamp_duty_value?: number | null;
+  transaction_amount_assigned?: number | null;
+  reported_on?: string;
+  party_count?: number | null;
 }
 
 export interface ReconciledResults {
@@ -136,9 +130,8 @@ export interface ReconciledResults {
     tis_detail_total: number;
     difference: number;
   }>;
-  capital_gain_evidence?: CapitalGainEvidence[];
-  capital_gain_controls?: CapitalGainControl[];
-  capital_gain_control_discrepancies?: CapitalGainControlDiscrepancy[];
+  capital_gain_sales?: CapitalGainSale[];
+  capital_gain_purchases?: CapitalGainPurchase[];
   unmatched: {
     tis_only: ReconciledUnmatchedEntry[];
     ais_only: ReconciledUnmatchedEntry[];
