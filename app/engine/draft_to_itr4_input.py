@@ -277,7 +277,7 @@ def draft_to_itr4_input(
     os_input, total_interest, total_dividend, family_pension, total_winnings = (
         _map_other_sources(draft)
     )
-    ded_input, structured_80g = _map_deductions(draft, tax_regime)
+    ded_input, structured_80g, _schedule_80c_entries = _map_deductions(draft, tax_regime)
     cg_input = _map_capital_gains(draft)
 
     tds1, tds2, tds_salary, tds_interest, tds_other, claimed_tds, tds_issues = (

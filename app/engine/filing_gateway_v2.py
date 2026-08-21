@@ -232,12 +232,28 @@ def _filing_profile(draft: ReturnDraft) -> ITR1FilingProfile:
             "ITR-1 filing profile is invalid.",
             ["personal.dateOfBirth must be a valid YYYY-MM-DD date."],
         ) from exc
-    section_codes = {"139(1)": 11, "139(4)": 12}
+    # CBDT FilingStatus.ReturnFileSec enum (min=11, max=20): the filing
+    # section codes the official ITR-1/ITR-4 schema accepts. The frontend
+    # FilingStatus.filingSection string codes map to these integers.
+    section_codes = {
+        "139(1)": 11,   # Before due date u/s 139(1)
+        "139(4)": 12,   # Belated/after due date u/s 139(4)
+        "139(5)": 17,   # Revised return u/s 139(5)
+        "139(9)": 13,   # Defective return u/s 139(9)
+        "167": 14,      # Notice u/s 148 (reopening)
+        "119(2)(b)": 16,  # Condonation of delay u/s 119(2)(b)
+        "173": 18,      # Reassessment u/s 173
+        "148": 20,      # Notice u/s 148 (post-search)
+    }
     return_section = section_codes.get(draft.filing.filingSection)
     if return_section is None:
         raise FilingGatewayV2Error(
-            "Official v2 generation currently supports filing sections 139(1) and 139(4).",
-            [f"filingSection {draft.filing.filingSection!r} is not supported — use 139(1) or 139(4) for v2 ITR-1 generation."],
+            "The v2 pipeline could not map filingSection to a CBDT ReturnFileSec code.",
+            [
+                f"filingSection {draft.filing.filingSection!r} is not a supported "
+                "section code. Use one of: 139(1), 139(4), 139(5), 139(9), "
+                "119(2)(b), 167, 173, 148."
+            ],
         )
     if not draft.verification.declarationAccepted:
         raise FilingGatewayV2Error(
@@ -284,6 +300,11 @@ def _filing_profile(draft: ReturnDraft) -> ITR1FilingProfile:
             verification_place=_required(draft.verification.place, "verification.place"),
             verification_capacity="S",
             return_file_section=return_section,
+            return_type="R" if draft.filing.returnType == "REVISED" else "O",
+            original_acknowledgement_no=(
+                draft.filing.originalAcknowledgementNumber.strip() or None
+                if draft.filing.returnType == "REVISED" else None
+            ),
             opt_out_new_tax_regime=draft.regime == "old",
         )
     except (ValidationError, ValueError) as exc:

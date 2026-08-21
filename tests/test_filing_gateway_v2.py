@@ -97,12 +97,27 @@ def test_generation_requires_canonical_filing_fields() -> None:
 
 
 def test_generation_rejects_unsupported_filing_section() -> None:
-    """Official generation rejects sections unsupported by the CBDT builder."""
+    """Official generation rejects filing sections outside the CBDT enum."""
     draft = _filing_ready_draft()
-    draft.filing.filingSection = "139(5)"
+    draft.filing.filingSection = "NOT_A_REAL_SECTION"
     with pytest.raises(gateway.FilingGatewayV2Error) as caught:
         gateway.generate_cbdt_json(draft)
-    assert "139(1)" in " ".join(caught.value.errors)
+    assert "ReturnFileSec" in " ".join(caught.value.errors) or caught.value.message
+
+
+def test_generation_accepts_revised_filing_section() -> None:
+    """Filing section 139(5) (revised return) maps to CBDT code 17."""
+    draft = _filing_ready_draft()
+    draft.filing.filingSection = "139(5)"
+    draft.filing.returnType = "REVISED"
+    draft.filing.originalAcknowledgementNumber = "123456789012345"
+    # Must not raise the unsupported-section error (it may still fail on
+    # other gates, but not on the ReturnFileSec map).
+    try:
+        gateway.generate_cbdt_json(draft)
+    except gateway.FilingGatewayV2Error as exc:
+        assert "ReturnFileSec" not in " ".join(exc.errors)
+        assert "not supported" not in exc.message.lower()
 
 
 def test_compute_canonical_itr1_rejects_pending_reconciliation() -> None:

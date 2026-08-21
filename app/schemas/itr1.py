@@ -1242,7 +1242,16 @@ class ITR1FilingProfile(BaseModel):
     father_name: str = Field(min_length=1, max_length=125)
     verification_place: str = Field(min_length=1, max_length=50)
     verification_capacity: Literal["S"] = "S"
-    return_file_section: Literal[11, 12] = 11
+    # CBDT FilingStatus.ReturnFileSec enum (min=11, max=20). Widened from
+    # Literal[11, 12] to the full schema enum so revised (17), belated (12),
+    # defective (13), notice (14/16/18/20) filings are all representable.
+    return_file_section: Literal[11, 12, 13, 14, 16, 17, 18, 20] = 11
+    # Revised-return metadata (required by the CBDT schema only when
+    # return_file_section == 17).  Captured here so the builder can emit
+    # OriginalAckNo / OrigRetFileSec when the taxpayer files a revised return.
+    return_type: Literal["O", "R"] = "O"
+    original_acknowledgement_no: Optional[str] = Field(default=None, max_length=15)
+    original_return_date: Optional[date] = None
     # New-regime opt-out (FilingStatus.OptOutNewTaxRegime).  CBDT requires
     # this key always; ITR-1 filers in the new regime emit "N".
     opt_out_new_tax_regime: bool = False

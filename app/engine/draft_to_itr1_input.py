@@ -296,6 +296,26 @@ def _map_80c(investments: list[Investment80C]) -> Decimal:
     return sum((i.amount for i in investments), Decimal("0"))
 
 
+def _map_80c_entries(investments: list[Investment80C]) -> list:
+    """Map canonical 80C investments → official ``Schedule80CEntry`` rows.
+
+    The CBDT Category A validator requires at least one detail row with an
+    identifier number whenever an 80C deduction is claimed. Each canonical
+    ``Investment80C`` carries ``identificationNo``/``accountOrPolicyNo`` +
+    ``amount`` — these map directly to the official row's
+    ``identifier_number``/``payment_type``/``amount``.
+    """
+    from app.schemas.itr1 import Schedule80CEntry
+    entries: list = []
+    for inv in investments:
+        entries.append(Schedule80CEntry(
+            amount=inv.amount,
+            payment_type=(inv.accountOrPolicyNo or inv.investmentType or None),
+            identifier_number=(inv.identificationNo or None),
+        ))
+    return entries
+
+
 def _map_80d_category(cat) -> tuple[Decimal, Decimal]:
     """Return ``(eligible_amount, preventive)`` for a canonical 80D category."""
     premiums = sum((p.premiumAmount for p in cat.policies), Decimal("0"))
@@ -344,6 +364,7 @@ def _map_donations(donations: list[Donation80G]) -> tuple[list[ITR1Donation80G],
 def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6ADeductions, Decimal]:
     """Map canonical deductions → ``Chapter6ADeductions`` + total 80G."""
     total_80c = _map_80c(draft.deductions.section80C)
+    schedule_80c_entries = _map_80c_entries(draft.deductions.section80C)
     self_80d, parents_80d, prev_self, prev_parents, parents_senior = _map_80d(
         draft.deductions.section80D
     )
@@ -364,6 +385,7 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
     # preserves them for auditability; only the typed compute input is zeroed.
     if tax_regime == TaxRegime.NEW:
         total_80c = Decimal("0")
+        schedule_80c_entries = []
         self_80d = parents_80d = prev_self = prev_parents = Decimal("0")
         parents_senior = False
         donations = None
@@ -392,7 +414,7 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
         amount_80g=amount_80g,
         donations_80g=donations or None,
     )
-    return ded_input, structured_80g
+    return ded_input, structured_80g, schedule_80c_entries
 
 
 # ---------------------------------------------------------------------------
@@ -649,7 +671,7 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
     salary_input, section_17_1, gross_salary = _map_salary(draft.employers)
     hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
     os_input, total_interest, total_dividend, family_pension, total_winnings = _map_other_sources(draft)
-    ded_input, structured_80g = _map_deductions(draft, tax_regime)
+    ded_input, structured_80g, schedule_80c_entries = _map_deductions(draft, tax_regime)
     cg_input = _map_capital_gains(draft)
 
     tds1, tds2, tds_salary, tds_interest, tds_other, claimed_tds, tds_issues = _map_tds(draft.taxes.tds)
@@ -712,7 +734,7 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         schedule_80ggc=None,
         schedule_80dd=None,
         schedule_80u=None,
-        schedule_80c_entries=[],
+        schedule_80c_entries=schedule_80c_entries,
         schedule_80ccc_entries=[],
         schedule_80e_entries=[],
         loan_details_80ee_list=[],

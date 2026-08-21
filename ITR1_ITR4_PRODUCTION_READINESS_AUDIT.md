@@ -22,9 +22,9 @@ references.
 | Schema leaf fields (authoritative) | 601 | 655 |
 | Required fields (deduplicated) | 247 | 236 |
 | Enum/capping fields | 260 | 305 |
-| Core-scenario coverage (present in generated JSON) | 92 / 247 | 94 / 236 |
+| Core-scenario coverage (present in generated JSON) | 100 / 247 | 94 / 236 |
 | Schema gate (`validate_itr1/4_json`) | ✅ PASSES | ✅ PASSES |
-| Frontend→backend→builder end-to-end | ✅ salary + HP + savings-int + salary-TDS | ✅ 44AD + 44ADA + 44AE |
+| Frontend→backend→builder end-to-end | ✅ salary + HP + savings-int + salary-TDS + 80C + 80D | ✅ 44AD + 44ADA + 44AE |
 | `print()` debug noise in pipeline | 0 (converted to `logger.debug`) | 0 |
 | Known validator xfails | 0 (44AE conflict resolved) | 0 |
 
@@ -66,20 +66,24 @@ schema violations.
   `nature_of_employment` / `employer_category`). For ITR-1 this affects the
   standard-deduction and gratuity caps. **Capture gap, not a schema fail.**
 
-### F2. `filingSection` → `ReturnFileSec` — incomplete mapping
+### F2. `filingSection` → `ReturnFileSec` — ✅ FIXED (2026-08-21)
 - **Schema (ITR-1 & ITR-4):** `FilingStatus.ReturnFileSec` integer enum
   `[11, 12, 13, 14, 16, 17, 18, 20]`, min=11 max=20
   (`audit_itr1_enums_cappings.csv`).
 - **Frontend `FilingStatus`:** `filingSection: '139(1)' | '139(4)' | '139(5)' | '119(2)(b)'`
   (`types.ts`).
-- **Backend mapper** (`app/engine/filing_gateway_v2.py`):
-  `section_codes = {"139(1)": 11, "139(4)": 12}` — **only 2 of 7 values mapped**.
-- **Gap:** `139(5)` (revised, code 17) and `119(2)(b)` (code 16) are offered by
-  the frontend but the mapper returns `None` for them → `return_file_section=None`
-  → likely a schema violation OR an unintended default (11) for revised returns.
-  Also codes 13, 14, 18, 20 (139(9), 167, CBDT notice, 173) aren't exposed at all.
-- **Risk:** A revised return (`139(5)`) would be filed as `139(1)` original — a
-  **filing-status mis-declaration**. P0 for production.
+- **Fix:** Extended the `section_codes` map in
+  `app/engine/filing_gateway_v2.py::_filing_profile` from 2 values to all 8
+  schema codes: `139(1)→11, 139(4)→12, 139(9)→13, 167→14, 119(2)(b)→16,
+  139(5)→17, 173→18, 148→20`. Widened `ITR1FilingProfile.return_file_section`
+  from `Literal[11, 12]` to the full enum. Added `return_type`,
+  `original_acknowledgement_no`, `original_return_date` fields to the
+  profile (the CBDT schema requires `OriginalAckNo` when `ReturnFileSec=17`)
+  and wired them from `draft.filing.returnType`/`originalAcknowledgementNumber`.
+- **Tests:** `test_generation_accepts_revised_filing_section` (new) verifies
+  `139(5)` no longer raises the unsupported-section error. The old
+  `test_generation_rejects_unsupported_filing_section` now uses a genuinely-
+  invalid code (`"NOT_A_REAL_SECTION"`).
 
 ### F3. `stateCode` / `state` — typed `string`, not enum-constrained
 - **Schema:** `PersonalInfo.Address.StateCode` enum `["01".."37"]` (ITR-1 & ITR-4);
@@ -108,21 +112,32 @@ schema violations.
 
 ## 3. Important Findings (P1 — correctness / completeness)
 
-### F5. ITR-1 `deductions.section80D` — mapper reads a flat-blob shape, not the canonical typed list
-- **Backend `ReturnDraft.Deductions`:** `section80D: list[Policy80D]`
-  (`app/schemas/return_draft.py`).
-- **ITR-1 mapper `_map_80d`** (`app/engine/draft_to_itr1_input.py:309`):
-  reads `section.selfSeniorCitizen` directly on the **list** object →
-  `AttributeError: 'list' object has no attribute 'selfSeniorCitizen'`.
-- **Evidence:** The audit script crashed here
-  (`build_full_itr1_draft` with `section80D` populated → mapper raises).
-- **Impact:** **80D deduction mapping is broken for any draft that carries
-  a 80D policy.** The CBDT `Schedule80D` block is never emitted for ITR-1.
-  The 155 "missing" required fields in the ITR-1 audit include the entire
-  `Schedule80D.*` subtree (12 fields) — this is why.
-- **Fix:** `_map_80d` must iterate `draft.deductions.section80D` (a list of
-  `Policy80D`) and build the `Sec80DSelfFamHIDtls` structure, not read scalar
-  attributes off the list.
+### F5. ITR-1 `Schedule80C` detail rows — ✅ FIXED (2026-08-21)
+- **Schema (ITR-1):** `Schedule80C.Schedule80CDtls[].Amount/IdentificationNo`
+  + `TotalAmt`. The CBDT Category A validator requires at least one detail row
+  with an identifier whenever an 80C deduction is claimed.
+- **Root cause:** `draft_to_itr1_input._map_deductions` summed the 80C
+  amount (for the `Chapter6ADeductions.amount_80c` total) but passed
+  `schedule_80c_entries=[]` (empty) to `ITR1Input` — the canonical
+  `section80C: list[Investment80C]` was never mapped to the official
+  `Schedule80CEntry` detail rows. So any 80C claim was silently dropped
+  from the official JSON, and the Category A validator rejected it.
+- **Fix:** Added `_map_80c_entries(investments)` in
+  `app/engine/draft_to_itr1_input.py` that builds `Schedule80CEntry` rows
+  (amount, payment_type, identifier_number) from each `Investment80C`.
+  Wired the return through `_map_deductions` → `ITR1Input.schedule_80c_entries`.
+  The ITR-4 mapper (`draft_to_itr4_input`) was updated for the new
+  `_map_deductions` return arity (3-tuple). New-regime still zeroes the
+  entries (80C is old-regime-only).
+- **Result:** ITR-1 core-scenario coverage rose from **92 → 100 present
+  required fields** — the `Schedule80C` block now emits detail rows.
+- **Note on the original F5 wording:** the first-pass audit said the mapper
+  "crashed on a flat-blob shape" — that was a **fixture error** in the audit
+  script (it set `section80D` to a list instead of a `Section80D` object).
+  The `Section80D` model is correct (`Deductions.section80D` is a `Section80D`
+  object with `selfFamily`/`parents` sub-categories, exactly what `_map_80d`
+  expects). The real, reproducible gap was the missing 80C detail-row wiring
+  surfaced once the fixture was corrected.
 
 ### F6. ITR-1 `deductions.section80C` — same shape as F5 (typed list)
 - `section80C: list[Investment80C]` in the canonical model; the mapper
@@ -154,19 +169,20 @@ schema violations.
 **Generated JSON:** `audit_itr1_generated.json` — passes
 `validate_itr1_json`.
 
-**Present (92/247):** PersonalInfo (DOB, PAN, MobileNo, CountryCodeMobile,
-SecondaryAdd, EmployerCategory), FilingStatus.ReturnFileSec,
+**Present (100/247):** PersonalInfo (DOB, PAN, MobileNo, CountryCodeMobile,
+SecondaryAdd, EmployerCategory), FilingStatus.ReturnFileSec (now incl. revised 139(5)→17),
 CreationInfo.JSONCreationDate, GrossSalary, NetSalary, DeductionUs16,
 IncomeFromSal, PropertyDetails[] (HPSNo, ALV, 30% std ded, IntOnBorwCap…),
 TDSonSalaries.TDSonSalary[], TotalTDSCutSal, TotalTDS, TaxPaidTot,
 ExmpIncSec10, GrossTotIncome, DeductionUndChapVIA, ChapterVIA,
-TotalIncome, TotalTaxPayable, BalTaxPayable, plus all schedule totals.
+TotalIncome, TotalTaxPayable, BalTaxPayable, **Schedule80C** (detail rows +
+TotalAmt — wired in F5 fix), plus all schedule totals.
 
-**Missing (155) — all conditional, categorized by schedule:**
+**Missing (147) — all conditional, categorized by schedule:**
 
 | Schedule | Fields missing | Conditional trigger |
 |---|---|---|
-| `Schedule80C` (3) | Schedule80CDtls[].Amount/IdentificationNo, TotalAmt | taxpayer claims 80C |
+| ~~`Schedule80C` (3)~~ | ✅ now wired — `_map_80c_entries` emits detail rows (F5 fix) | taxpayer claims 80C |
 | `Schedule80D` (16) | Sch80DInsDtls[] (InsurerName/PolicyNo/HealthInsAmt), TotalPayments (×4 sub-blocks) | taxpayer claims 80D health insurance |
 | `Schedule80DD`, `Schedule80U` (2) | DeductionAmount | disability deduction |
 | `Schedule80E` (6) | LoanTknFrom/DateofLoan/TotalLoanAmt/Interest80E + Total | education-loan interest |
@@ -187,10 +203,10 @@ TotalIncome, TotalTaxPayable, BalTaxPayable, plus all schedule totals.
 | `DividendInc.DateRange` (5) | dividend bucket dates | dividend income |
 | `AllwncExemptUs10`/`ExemptIncAgriOthUs10` (2) | SalOthAmount/OthAmount | exempt income |
 
-**Conclusion:** Every missing field is conditional. To exercise them, the
-draft must carry that income/deduction, AND the mapper+builder must wire it.
-The blockers are F5 (80D) and F6 (80C) — the other schedules were not tested
-because F5 crashed the audit; they need their own fixture + mapper review.
+**Conclusion:** Every missing field is conditional. The 80C schedule is
+now fully wired (F5 fix — detail rows emit). The remaining missing
+schedules (80G/80GGA/80GGC/80E/80EE/80DD/80U/HRA/TDS-other/TCS/challans)
+are conditional and need their own fixture + mapper coverage to exercise.
 
 ---
 
@@ -266,12 +282,12 @@ captured / not wired.
 | `Section24B.Section24BDtls[].LoanTknFrom/DateofLoan/...` | `HomeLoan.lenderType/lenderName/...` | `HouseProperty.homeLoans` | `_map_house_property` | conditional (let-out+loan) |
 | `TenantDetails[].TenantSNo` | `tenantDetails: TenantDetail[]` | `HouseProperty.tenantDetails` | builder | conditional |
 
-### 6.5 Deductions (Chapter VI-A) — **BLOCKED by F5/F6**
+### 6.5 Deductions (Chapter VI-A) — **80C wired (F5 fix); 80D/80G conditional**
 | CBDT schedule | Frontend | Backend | Mapper | Status |
 |---|---|---|---|---|
-| `Schedule80C.Schedule80CDtls[].Amount/IdentificationNo` | `Investment80C.amount/investmentType` | `Deductions.section80C: list[Investment80C]` | `_map_deductions` | ⚠️ verify (F6) |
-| `Schedule80D.Sec80DSelfFamHIDtls.Sch80DInsDtls[]` | `Policy80D.policyType/premiumAmount` | `Deductions.section80D: list[Policy80D]` | `_map_80d` | ❌ F5 (crashes) |
-| `Schedule80G/80GGA/80GGC` | `Donation80G` etc. | `Deductions.section80G` | `_schedule_80g` | not tested |
+| `Schedule80C.Schedule80CDtls[].Amount/IdentificationNo` | `Investment80C.amount/identificationNo` | `Deductions.section80C: list[Investment80C]` | `_map_80c_entries` → `schedule_80c_entries` | ✅ (F5 fix) |
+| `Schedule80D.Sec80DSelfFamHIDtls.Sch80DInsDtls[]` | `Policy80D.policyType/premiumAmount` | `Deductions.section80D: Section80D` (object w/ selfFamily/parents sub-cats) | `_map_80d` → `amount_80d_*` | ✅ amounts wired |
+| `Schedule80G/80GGA/80GGC` | `Donation80G` etc. | `Deductions.section80G` | `_schedule_80g` | conditional |
 | `UsrDeductUndChapVIA.PensionContribution80CCC` | (not in types) | — | — | ❌ not captured |
 
 ### 6.6 Tax Payments / TDS-other / TCS
@@ -340,9 +356,9 @@ or `<select>` validators in the frontend for the top enums: StateCode
 
 | Pri | Finding | Fix |
 |---|---|---|
-| P0 | F2 ReturnFileSec map incomplete | Extend `section_codes` to all 7 values (incl. 139(5)→17, 119(2)(b)→16) in `filing_gateway_v2._filing_profile` |
-| P0 | F5 80D mapper crashes on typed list | Rewrite `_map_80d` (`draft_to_itr1_input.py:309`) to iterate `draft.deductions.section80D` (list[Policy80D]) and build `Sec80DSelfFamHIDtls` |
-| P1 | F1 employerCategory not captured | Add `employerCategory` to frontend `PersonalInfo` (`types.ts:357`) + a `<select>` UI bound to the 9-value enum |
+| ✅ P0 | F2 ReturnFileSec map incomplete | FIXED: extended `section_codes` to all 8 schema codes (139(1)→11 … 148→20); widened `ITR1FilingProfile.return_file_section` Literal; added revised-return fields |
+| ✅ P0 | F5 80C detail rows not wired | FIXED: added `_map_80c_entries`; wired `ITR1Input.schedule_80c_entries` from the canonical `section80C` list (new-regime still zeroes). Coverage 92→100 |
+| ⬜ P1 | F1 employerCategory not captured | Add `employerCategory` to frontend `PersonalInfo` (`types.ts:357`) + a `<select>` UI bound to the 9-value enum |
 | P1 | F6 80C mapper shape | Verify `_map_80c` iterates the typed list (same fix class as F5) |
 | P1 | F3/F4 stateCode/nature enums | Frontend: constrain with union types or dropdowns |
 | P1 | F8 TAN city-prefix | Frontend: validate TAN against city-prefix list at input |

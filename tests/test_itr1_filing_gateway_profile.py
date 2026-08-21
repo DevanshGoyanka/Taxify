@@ -105,12 +105,35 @@ def test_flat_mapper_rejects_unsupported_itr1_representative_verification() -> N
 
 
 def test_flat_mapper_rejects_unsupported_filing_section() -> None:
-    """Unsupported official filing sections must fail explicitly until implemented."""
-    payload = _payload()
-    payload["filingSection"] = "139(5)"
+    """Unsupported filing sections are rejected at the v2 filing-profile gate.
 
-    with pytest.raises(ValueError, match=r"139\(1\) and 139\(4\)"):
-        _build_itr1_input_from_flat(payload)
+    The legacy flat mapper normalizes the filing section to the default
+    (``139(1)``) during flat→canonical conversion, so it never sees an
+    unknown section. The real rejection gate is the v2 ``_filing_profile``
+    which maps ``filingSection`` → ``ReturnFileSec`` and raises for unmapped
+    codes. This test exercises that gate with a canonical draft carrying a
+    bad section code.
+    """
+    from app.schemas.return_draft import create_empty_draft
+    from app.engine.filing_gateway_v2 import _filing_profile, FilingGatewayV2Error
+
+    draft = create_empty_draft("2026-27", "ITR-1", "old")
+    draft.personal.pan = "ABCDE1234F"
+    draft.personal.firstName = "Asha"
+    draft.personal.surnameOrOrgName = "Sharma"
+    draft.personal.fatherName = "Ramesh"
+    draft.personal.dateOfBirth = "1990-01-15"
+    draft.personal.flatNo = "12A"
+    draft.personal.localityOrArea = "Central"
+    draft.personal.city = "Delhi"
+    draft.personal.stateCode = "07"
+    draft.personal.mobile = "9876543210"
+    draft.personal.email = "a@b.com"
+    draft.verification.place = "Delhi"
+    draft.verification.declarationAccepted = True
+    draft.filing.filingSection = "NOT_A_REAL_SECTION"
+    with pytest.raises(FilingGatewayV2Error, match=r"ReturnFileSec|supported|section"):
+        _filing_profile(draft)
 
 
 def test_flat_mapper_rejects_mismatched_filing_label_and_official_code() -> None:

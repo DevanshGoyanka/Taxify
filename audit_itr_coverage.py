@@ -22,12 +22,14 @@ from typing import Any
 from app.engine.filing_gateway_v2 import generate_cbdt_json, FilingGatewayV2Error
 from app.schemas.return_draft import (
     BankAccount,
+    Category80D,
     Employer,
     HomeLoan,
     HouseProperty,
     InterestIncome,
     Investment80C,
     Policy80D,
+    Section80D,
     TdsCredit,
     ReturnDraft,
     create_empty_draft,
@@ -138,10 +140,30 @@ def build_full_itr1_draft() -> ReturnDraft:
     draft.otherSources.interest = [InterestIncome(
         id="i1", kind="SAVINGS_BANK", grossAmount=Decimal("10000"),
     )]
-    # NOTE: deductions omitted — see audit findings. The ITR-1 mapper
-    # _map_80d reads section80D.selfSeniorCitizen (flat-blob shape) but the
-    # canonical Deductions.section80D is list[Policy80D] (typed shape). This
-    # is a real mapper/canonical mismatch that breaks 80D mapping.
+    # 80C investments + 80D health insurance (correct canonical shape:
+    # Deductions.section80C is list[Investment80C]; section80D is a
+    # Section80D object with selfFamily/parents sub-categories).
+    draft.deductions.section80C = [Investment80C(
+        id="c1", investmentType="PF", amount=Decimal("150000"),
+        identificationNo="PF-12345", accountOrPolicyNo="EPF-001",
+    )]
+    draft.deductions.section80D = Section80D(
+        selfSeniorCitizen="N", parentsSeniorCitizen="N",
+        selfFamily=Category80D(
+            policies=[Policy80D(
+                id="d1", policyType="INDIVIDUAL", premiumAmount=Decimal("20000"),
+                insurerName="Star Health", policyNo="SH-001",
+            )],
+            preventiveCheckup=Decimal("5000"), medicalExpense=Decimal("0"),
+        ),
+        parents=Category80D(
+            policies=[Policy80D(
+                id="d2", policyType="FAMILY_FLOATER", premiumAmount=Decimal("25000"),
+                insurerName="HDFC Ergo", policyNo="HE-002",
+            )],
+            preventiveCheckup=Decimal("0"), medicalExpense=Decimal("0"),
+        ),
+    )
     # TDS credit (salary TDS — deductor is the employer). The CBDT schema
     # enforces a city-prefix TAN pattern (DEL/BLR/MUM/...); use a valid one.
     draft.taxes.tds = [TdsCredit(
