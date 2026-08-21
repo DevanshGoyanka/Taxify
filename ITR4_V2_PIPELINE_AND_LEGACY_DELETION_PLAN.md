@@ -390,16 +390,25 @@ Legacy flat-blob paths (DELETED):
 4. Frontend `npm run build` succeeds (no broken imports).
 5. ITR-1 and ITR-4 end-to-end compute + generate CBDT JSON work via v2 only.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-21
 
 **Implemented:**
-- *(filled in after completion)*
+- `app/engine/filing_gateway.py` — deleted the three dead ITR-4 functions:
+  - `_build_itr4_official_json` (~80 lines) — the ITR-4 official-JSON pipeline replaced by `filing_gateway_v2._generate_cbdt_json_itr4` (Phase 3).
+  - `_build_itr4_input_from_flat` (~700 lines) — the standalone flat-blob ITR-4 mapper replaced by `draft_to_itr4_input` (Phase 2).
+  - `_itr4_builder_kwargs` (~40 lines) — the ITR-4 builder-kwargs helper, only used by the deleted `_build_itr4_official_json`.
+  - Replaced the `form == "ITR-4"` branch inside `generate_filing_artifact` with a raise pointing ITR-4 callers to `POST /v2/clients/{id}/itr/{year}/generate-cbdt-json`. The legacy endpoint now supports ITR-1/2/3 only (ITR-4 fully on v2).
+  - File went from 1442 → 636 lines (~57% reduction). `generate_filing_artifact` and `_build_itr1_input_from_flat` stay (ITR-1/2/3 + legacy tests still use them).
+- `frontend/src/api/itr.ts` — **deleted entirely**. Verified zero callers: no static or dynamic import references `itrApi` anywhere in `frontend/src` (Phase 6 repointed the page's download buttons to `itrV2`). The legacy `itrApi` methods (`getFormData`, `saveFormData`, `computeTax`, `computeTaxSummary`, `validate`, `generateCbdtJson`, `downloadJson`, `downloadPdf`, `calculateBusinessIncome`, `calculateCapitalGains`) are all replaced by `itrV2` or the unified import flow.
+- `app/schemas/return_draft.py` + `app/engine/draft_to_itr4_input.py` — cleaned stale docstring references to the deleted `_build_itr4_input_from_flat`.
+- `tests/test_draft_to_itr4_input_itr4.py` — updated the module docstring (the legacy `_build_itr4_input_from_flat` is deleted, not just "without alias guessing").
 
-**Validation:**
-- *(filled in after completion)*
+**Validation:** 279 passed, 1 xfailed (known 44AE validator conflict), 0 failed across the full ITR-1 + ITR-4 + v2 regression matrix (added `test_itr4_calculator`, `test_itr4_input_validation`, `test_integration_routers`, `test_personal_info_contract`, `test_112a_unification` to the gate). Frontend TypeScript: zero new errors (the deletion left no dangling references — confirmed no caller imported `itrApi`).
 
 **Deferred follow-ups:**
-- *(filled in after completion)*
+- `app/engine/filing_gateway.py` itself is NOT deleted — `generate_filing_artifact` + `_build_itr1_input_from_flat` remain the live path for ITR-1 (legacy `POST /clients/{id}/itr/{year}/generate-cbdt-json` endpoint) and ITR-2/3 (which raise in the gateway). Full deletion waits until ITR-2/3 move to canonical drafts (a future workstream).
+- `tests/test_itr1_golden_suite.py` + `tests/test_itr1_filing_gateway_profile.py` still import `_build_itr1_input_from_flat` directly and pass. They're kept as regression coverage for the still-live ITR-1 legacy endpoint. The canonical `tests/test_itr1_filing_gateway_profile_v2.py` (added in Phase 6) covers the v2 path.
+- The legacy `app/routers/client_itr.py` endpoints (`GET/PUT /clients/{id}/itr/{year}`, `POST .../validate`, `POST .../generate-cbdt-json`, `GET .../download-pdf`) remain — they're the live path for ITR-1/2/3 callers still on the flat-blob flow. Deleted when those forms move to canonical drafts.
 
 ---
 

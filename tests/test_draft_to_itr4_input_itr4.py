@@ -1,8 +1,9 @@
 """Phase 2 tests — canonical draft_to_itr4_input mapper.
 
 Golden vectors: canonical ``ReturnDraft`` → ``ITR4Input``. Verifies the
-single canonical ITR-4 mapper produces the same typed fields the legacy
-``_build_itr4_input_from_flat`` produced, but without alias guessing.
+single canonical ITR-4 mapper produces the correct typed fields by reading
+the typed draft directly (no alias guessing). The legacy
+``_build_itr4_input_from_flat`` flat-blob mapper was deleted in Phase 7.
 
 Run: pytest tests/test_draft_to_itr4_input_itr4.py -v
 """

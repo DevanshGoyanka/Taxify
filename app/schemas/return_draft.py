@@ -136,8 +136,7 @@ class AlternateAddress(_StrictModel):
     """ITR-4 AlternateAddress block (secondary postal address).
 
     Only emitted when ``PersonalInfo.secondaryAddressDifferent`` is true.
-    Mirrors the legacy ``alternateAddress`` flat-blob sub-object read by
-    ``_build_itr4_input_from_flat``.
+    Mirrors the legacy ``alternateAddress`` flat-blob sub-object.
     """
 
     residenceNo: str = Field(default="")

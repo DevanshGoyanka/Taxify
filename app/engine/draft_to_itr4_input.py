@@ -1,11 +1,10 @@
 """Canonical mapper: ReturnDraft → ITR4Input.
 
 This is the SINGLE typed mapper for ITR-4 — the ITR-4 analogue of
-:func:`app.engine.draft_to_itr1_input.draft_to_itr1_input`. It mirrors the
-legacy ``app/engine/filing_gateway.py::_build_itr4_input_from_flat``
-(~560-line standalone flat-blob mapper) but reads the canonical typed
-``ReturnDraft`` — no alias guessing (``row.get("hra", row.get("hraReceived"))``),
-no ``_first_money`` fallbacks. The duplicate-mapper problem the ITR-1 audit
+:func:`app.engine.draft_to_itr1_input.draft_to_itr1_input`. It reads the
+canonical typed ``ReturnDraft`` — no alias guessing
+(``row.get("hra", row.get("hraReceived"))``), no ``_first_money`` fallbacks.
+The duplicate-mapper problem the ITR-1 audit
 called out as "the single biggest source of *works in compute, fails in CBDT*
 bugs" is eliminated for ITR-4 here.
 
