@@ -3045,8 +3045,8 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # Sl 4: E25 Total Assets = components
         if bpf.total_assets > z:
             assets_sum = (bpf.fixed_assets + bpf.investments_bp + bpf.inventories
-                          + bpf.sundry_debtors + bpf.balance_with_banks + bpf.cash_in_hand
-                          + bpf.loans_and_advances + bpf.other_assets)
+                          + bpf.sundry_debtors + bpf.bank_balance + bpf.cash_in_hand
+                          + bpf.loans_and_advances_given + bpf.other_assets)
             if abs(bpf.total_assets - assets_sum) > Decimal("1"):
                 results.append(_make("ITR4-R004", False,
                     f"BP E25: Total assets (Rs {bpf.total_assets}) "

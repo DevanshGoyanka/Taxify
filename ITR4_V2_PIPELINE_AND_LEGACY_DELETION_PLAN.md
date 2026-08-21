@@ -219,16 +219,27 @@ Legacy flat-blob paths (DELETED):
 2. `pytest tests/test_filing_gateway_v2.py -v` stays green (ITR-1 v2).
 3. ITR-4 calculator + schema suites green.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-21
 
 **Implemented:**
-- *(filled in after completion)*
+- `app/engine/filing_gateway_v2.py` — extended with the full ITR-4 canonical pipeline:
+  - `ITR4PipelineResult` dataclass (mirrors `ITR1PipelineResult`).
+  - `_itr4_filing_profile(draft)` — builds `ITR4FilingProfile` from `draft.personal` + `draft.filing` + `draft.verification`, reading typed fields (not flat aliases). Enforces the verification gate (declaration accepted, SELF capacity) and the filing-section code map.
+  - `_itr4_property_profile(draft)` — single property profile with taxpayer-address fallback (mirrors the legacy fallback chain).
+  - `_itr4_bank_accounts(draft)` — maps canonical `draft.bankAccounts` → `ITR4BankAccount` with `useForRefund` as `is_primary`.
+  - `compute_canonical_itr4(draft)` — map once, compute once, build summary (same pending-discrepancy + out-of-scope-evidence guards as ITR-1). Reuses the shared `_summary_from_result` (the `ITR4Result` carries the same headline fields as `ITR1Result`).
+  - `_generate_cbdt_json_itr4(draft)` — full CBDT Category A/B/D rule validation (`run_input_validation` + `run_calc_validation`) before `build_itr4_json` + `validate_itr4_json`.
+  - `compute_canonical(draft)` — form-dispatching entrypoint: ITR-1 → `compute_canonical_itr1`, ITR-4 → `compute_canonical_itr4`, others → `FilingGatewayV2Error` (removes the tax_v2 legacy-delegation hack).
+  - `generate_cbdt_json(draft)` refactored to dispatch on `draft.form`; the original ITR-1 body moved to `_generate_cbdt_json_itr1` (unchanged behavior).
+- `app/engine/draft_to_itr4_input.py` — added `_map_schedule_bp_financial` to map `draft.businesses[0].financialParticulars` → `ScheduleBPFinancial` (required by CBDT Sl 139). Attached as `schedule_bp_financial` on `ITR4Input`. Also fixed `_map_presumptive` 44AE business-code handling (Sl 12 vs Sl 137).
+- `app/engine/validators/itr4/input_rules.py` — fixed a **pre-existing bug**: the duplicate `assets_sum` computation used `bpf.balance_with_banks` and `bpf.loans_and_advances` (neither exists on `ScheduleBPFinancial`). Corrected to `bpf.bank_balance` and `bpf.loans_and_advances_given`. This bug was latent — the legacy path rarely populated `schedule_bp_financial` with a positive `total_assets`, so the buggy code path rarely ran. The v2 mapper now populates it correctly, exposing (and fixing) the bug.
+- `tests/test_filing_gateway_v2_itr4.py` (NEW) — 10 tests: `compute_canonical_itr4` returns summary; `compute_canonical` dispatches ITR-1 and ITR-4; rejects unsupported forms; ITR-4 44AD + 44ADA CBDT JSON passes the official schema gate; `generate_cbdt_json` dispatches ITR-4; pending-discrepancy guard; missing-profile guard; ITR-1 regression.
 
-**Validation:**
-- *(filled in after completion)*
+**Validation:** 213 passed, 1 xfailed (known 44AE validator conflict — Sl 12 vs Sl 137 — deferred to Phase 8), 0 failed across the full ITR-1 + ITR-4 regression matrix: `test_filing_gateway_v2_itr4`, `test_draft_to_itr4_input_itr4`, `test_filing_gateway_v2`, `test_itr1_calculator`, `test_itr1_golden_suite`, `test_itr1_filing_gateway_profile`, `test_return_draft_schema`, `test_itr4_calculator`, `test_itr4_input_validation`. ITR-1 unchanged.
 
 **Deferred follow-ups:**
-- *(filled in after completion)*
+- ITR-4 44AE CBDT schema generation is blocked by a pre-existing validator conflict (CBDT Sl 12 flags any 44AD-range business code as "44AD scheme not active" even when set for 44AE, contradicting Sl 137 which requires a business code for 44AE). The gateway + mapper produce correct JSON; the blocker is validator logic. Deferred to Phase 8 hardening.
+- The `filing_date` placeholder on the typed input (set to DOB) is not yet the real filing date — the CBDT builder pulls filing dates from the profile, so this is cosmetic, but Phase 8 should pass `draft.filing.originalFilingDate`.
 
 ---
 

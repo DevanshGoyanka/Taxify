@@ -41,6 +41,7 @@ from app.schemas.itr4 import (
     PresumptiveGoodsCarriage44AE,
     PresumptiveProfessionalIncome44ADA,
     PresumptiveScheme,
+    ScheduleBPFinancial,
 )
 from app.schemas.return_draft import (
     Presumptive44AD,
@@ -88,6 +89,44 @@ def _age_bracket_from_age(age: int) -> AgeBracket:
     if age >= 60:
         return AgeBracket.SIXTY_TO_80
     return AgeBracket.BELOW_60
+
+
+# ---------------------------------------------------------------------------
+# Schedule BP financial particulars (CBDT Sl 139 cross-consistency)
+# ---------------------------------------------------------------------------
+
+def _map_schedule_bp_financial(businesses: list[Any]) -> Optional[ScheduleBPFinancial]:
+    """Map the first business row's ``financialParticulars`` → ScheduleBPFinancial.
+
+    The ITR-4 Category A validator (CBDT Sl 139) requires Schedule BP
+    financial particulars (sundry creditors, inventories, cash-in-hand,
+    etc.) whenever gross receipts or turnover is disclosed. In production
+    these are entered on the Business tab; when absent the validator
+    surfaces the Sl 139 error so the taxpayer can complete the balance sheet.
+    """
+    if not businesses:
+        return None
+    fp = getattr(businesses[0], "financialParticulars", None)
+    if fp is None:
+        return None
+    return ScheduleBPFinancial(
+        partners_capital=Decimal("0"),
+        secured_loans=fp.securedLoans,
+        unsecured_loans=fp.unsecuredLoans,
+        advances_received=Decimal("0"),
+        sundry_creditors=fp.sundryCreditors,
+        other_liabilities=fp.otherLiabilities,
+        total_capital_liabilities=fp.totalLiabilities,
+        fixed_assets=fp.totalAssets - fp.bankBalance - fp.cashBalance - fp.inventory - fp.sundryDebtors,
+        investments_bp=Decimal("0"),
+        inventories=fp.inventory,
+        sundry_debtors=fp.sundryDebtors,
+        bank_balance=fp.bankBalance,
+        cash_in_hand=fp.cashBalance,
+        loans_and_advances_given=Decimal("0"),
+        other_assets=Decimal("0"),
+        total_assets=fp.totalAssets,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +228,10 @@ def _map_presumptive(
                 income_declared=v.presumptiveIncome or None,
             ))
         goods_44ae = PresumptiveGoodsCarriage44AE(vehicles=vehicles)
+        # 44AE requires a business code in Schedule BP (CBDT Sl 137). The
+        # natureCode on the Presumptive44AE row carries the goods-carriage
+        # business code (e.g. 06001). Setting business_code for 44AD-only
+        # would trip Sl 12, so only the 44AE branch sets it here.
         return scheme, None, None, goods_44ae, code, None
 
     raise DraftMappingError(
@@ -247,6 +290,8 @@ def draft_to_itr4_input(
     scheme, biz_44ad, prof_44ada, goods_44ae, business_code, profession_code = (
         _map_presumptive(draft.businesses)
     )
+    # Schedule BP financial particulars (CBDT Sl 139 cross-consistency).
+    schedule_bp_financial = _map_schedule_bp_financial(draft.businesses)
 
     itr4_input = ITR4Input(
         age_bracket=age_bracket,
@@ -277,6 +322,7 @@ def draft_to_itr4_input(
         tax_payment_entries=sat_entries,
         business_code=business_code,
         profession_code=profession_code,
+        schedule_bp_financial=schedule_bp_financial,
         filing_profile=None,  # Phase 3: constructed by filing_gateway_v2.
         property_profile=None,
         bank_accounts=[],

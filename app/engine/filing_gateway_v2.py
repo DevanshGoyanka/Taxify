@@ -16,10 +16,25 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.engine.calculators.itr1 import ITR1Result, compute as compute_itr1
+from app.engine.calculators.itr4 import ITR4Result, compute as compute_itr4
 from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input
+from app.engine.draft_to_itr4_input import draft_to_itr4_input
 from app.engine.itd.itr1 import build_itr1_json
 from app.engine.itd.itr1_schema import ITR1SchemaValidationError, validate_itr1_json
+from app.engine.itd.itr4 import build_itr4_json
+from app.engine.itd.itr4_schema import validate_itr4_json
 from app.schemas.itr1 import FilingAddress, ITR1FilingProfile, ITR1Input, PropertyFilingProfile
+from app.schemas.itr4 import (
+    ITR4BankAccount,
+    ITR4FilingAddress,
+    ITR4FilingProfile,
+    ITR4PostalAddress,
+    ITR4PropertyProfile,
+    ITR4Input,
+    ITR4AssesseeStatus,
+    ITR4SeventhProvisoDetails,
+    ITR4TaxReturnPreparer,
+)
 from app.schemas.return_draft import ReturnDraft
 
 logger = logging.getLogger("taxify.filing_gateway_v2")
@@ -310,11 +325,416 @@ def _property_profiles(draft: ReturnDraft) -> list[PropertyFilingProfile]:
         raise FilingGatewayV2Error("ITR-1 property filing profile is invalid.", [str(exc)]) from exc
 
 
+# ===========================================================================
+# ITR-4 canonical pipeline (Phase 3)
+# ===========================================================================
+
+@dataclass(frozen=True)
+class ITR4PipelineResult:
+    """Immutable output from one canonical ITR-4 computation."""
+
+    typed_input: ITR4Input
+    computation: ITR4Result
+    breakdown: dict[str, Any]
+    summary: dict[str, Any]
+
+
+def _itr4_filing_profile(draft: ReturnDraft) -> ITR4FilingProfile:
+    """Construct the official ITR-4 filing profile from canonical fields.
+
+    Mirrors the legacy ``_build_itr4_input_from_flat`` profile construction,
+    but reads the typed ``ReturnDraft`` personal/filing/verification fields
+    instead of flat-blob aliases. Enforces the same verification gate
+    (declaration accepted, SELF capacity) and required-field checks.
+    """
+    personal = draft.personal
+    filing = draft.filing
+    verification = draft.verification
+
+    def _required(value: str | None, field: str) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            raise FilingGatewayV2Error(
+                "ITR-4 filing profile is incomplete.",
+                [f"personal.{field} is required for official CBDT JSON."],
+            )
+        return cleaned
+
+    try:
+        dob = datetime.date.fromisoformat(_required(personal.dateOfBirth, "dateOfBirth"))
+    except ValueError as exc:
+        if isinstance(exc, FilingGatewayV2Error):
+            raise
+        raise FilingGatewayV2Error(
+            "ITR-4 filing profile is invalid.",
+            ["personal.dateOfBirth must be a valid YYYY-MM-DD date."],
+        ) from exc
+
+    if not verification.declarationAccepted:
+        raise FilingGatewayV2Error(
+            "Verification declaration must be accepted for official ITR-4 JSON.",
+            ["verification.declarationAccepted must be true."],
+        )
+    if verification.capacity != "SELF":
+        raise FilingGatewayV2Error(
+            "Representative verification is not supported by v2 ITR-4 generation.",
+            ["verification.capacity must be SELF for official ITR-4 JSON."],
+        )
+
+    # Filing-section code map (mirrors the legacy _filing_section_code).
+    section_map = {
+        "139(1)": 11, "139(4)": 12, "142(1)": 13, "148": 14,
+        "153C": 16, "139(5)": 17, "139(9)": 18, "119(2)(b)": 20,
+    }
+    return_section = section_map.get(filing.filingSection)
+    if return_section is None:
+        raise FilingGatewayV2Error(
+            "Official v2 ITR-4 generation supports filing sections 139(1), "
+            "139(4), 142(1), 148, 153C, 139(5), 139(9), 119(2)(b).",
+            [f"filingSection {filing.filingSection!r} is not supported."],
+        )
+
+    mobile_cc_raw = (personal.countryCode or "91").strip() or "91"
+    if not mobile_cc_raw.isdigit():
+        raise FilingGatewayV2Error(
+            "ITR-4 filing profile is invalid.",
+            ["personal.countryCode must be numeric."],
+        )
+
+    secondary_mobile_raw = (personal.secondaryMobile or "").strip()
+    secondary_mobile_cc_raw = (
+        (personal.secondaryMobileCountryCode or "").strip() or mobile_cc_raw
+    )
+    secondary_mobile_no: str | None = None
+    secondary_mobile_cc: int = 0
+    if secondary_mobile_raw:
+        if not secondary_mobile_cc_raw.isdigit():
+            raise FilingGatewayV2Error(
+                "ITR-4 filing profile is invalid.",
+                ["personal.secondaryMobileCountryCode must be numeric."],
+            )
+        secondary_mobile_cc = int(secondary_mobile_cc_raw)
+        secondary_mobile_no = secondary_mobile_raw
+
+    secondary_email = (personal.secondaryEmail or "").strip() or None
+
+    landline_std = (personal.landlineStdCode or "0").strip() or "0"
+    landline_phone = (personal.landlinePhoneNo or "0").strip() or "0"
+    if not landline_std.isdigit():
+        landline_std = "0"
+    if not landline_phone.isdigit():
+        landline_phone = "0"
+
+    status_map = {
+        "I": ITR4AssesseeStatus.INDIVIDUAL,
+        "H": ITR4AssesseeStatus.HUF,
+        "F": ITR4AssesseeStatus.FIRM,
+    }
+    assessee_status = status_map.get(
+        personal.assesseeStatus, ITR4AssesseeStatus.INDIVIDUAL
+    )
+
+    try:
+        primary_address = ITR4FilingAddress(
+            residence_no=_required(personal.flatNo, "flatNo")[:50],
+            residence_name=(personal.residenceName or "").strip()[:50],
+            road_or_street=(personal.roadOrStreet or "").strip()[:50],
+            locality_or_area=_required(personal.localityOrArea, "localityOrArea")[:50],
+            city_or_town_or_district=_required(personal.city, "city")[:50],
+            state_code=_required(personal.stateCode, "stateCode")[:2],
+            country_code=(personal.countryCode or "91").strip() or "91",
+            pin_code=(personal.pinCode or "").strip() or None,
+            zip_code=(personal.zipCode or "").strip(),
+            mobile_country_code=int(mobile_cc_raw),
+            mobile_no=_required(personal.mobile, "mobile")[:10],
+            email=_required(personal.email, "email")[:125],
+            secondary_mobile_country_code=secondary_mobile_cc,
+            secondary_mobile_no=secondary_mobile_no,
+            secondary_email=secondary_email,
+            landline_std_code=int(landline_std),
+            landline_phone_no=landline_phone[:12],
+        )
+    except (ValidationError, ValueError) as exc:
+        if isinstance(exc, FilingGatewayV2Error):
+            raise
+        raise FilingGatewayV2Error(
+            "ITR-4 filing profile is invalid.", [str(exc)]
+        ) from exc
+
+    alternate_address: ITR4PostalAddress | None = None
+    if personal.secondaryAddressDifferent:
+        alt = personal.alternateAddress
+        if alt is None:
+            raise FilingGatewayV2Error(
+                "ITR-4 filing profile is incomplete.",
+                ["personal.alternateAddress is required when "
+                 "secondaryAddressDifferent is true."],
+            )
+        alternate_address = ITR4PostalAddress(
+            residence_no=(alt.residenceNo or "").strip()[:50],
+            residence_name=(alt.residenceName or "").strip()[:50],
+            road_or_street=(alt.roadOrStreet or "").strip()[:50],
+            locality_or_area=(alt.localityOrArea or "").strip()[:50],
+            city_or_town_or_district=(alt.cityOrTownOrDistrict or "").strip()[:50],
+            state_code=(alt.stateCode or "").strip()[:2],
+            country_code=(alt.countryCode or "91").strip() or "91",
+            pin_code=(alt.pinCode or "").strip() or None,
+            zip_code=(alt.zipCode or "").strip(),
+        )
+
+    seventh = draft.filing.seventhProviso
+    seventh_proviso = ITR4SeventhProvisoDetails(
+        foreign_travel_flag=seventh.foreignTravel,
+        foreign_travel_amount=seventh.foreignTravelAmount,
+        electricity_expenditure_flag=seventh.electricityExpenditure,
+        electricity_expenditure_amount=seventh.electricityExpenditureAmount,
+        other_clause_iv_flag=seventh.otherClauseIV,
+        other_clause_iv_detail=(seventh.otherClauseIVDetail or "").strip()[:125],
+    )
+
+    f10iea_date = ""
+    if filing.form10IEADate:
+        parsed = _to_date(filing.form10IEADate)
+        f10iea_date = parsed.isoformat() if parsed else ""
+
+    surname = (personal.surnameOrOrgName or "").strip() or (personal.name or "").strip()
+    try:
+        return ITR4FilingProfile(
+            pan=_required(personal.pan, "pan").upper(),
+            first_name=(personal.firstName or "").strip()[:25],
+            middle_name=(personal.middleName or "").strip()[:25],
+            surname=_required(surname, "surnameOrOrgName")[:75],
+            date_of_birth=dob,
+            employer_category=(personal.employerCategory or "OTH").strip() or "OTH",
+            aadhaar_number=(personal.aadhaar or "").strip() or None,
+            assessee_status=assessee_status,
+            primary_address=primary_address,
+            alternate_address=alternate_address,
+            father_name=_required(personal.fatherName, "fatherName")[:125],
+            verification_place=_required(verification.place, "verification.place")[:50],
+            verification_capacity="S",
+            return_file_section=return_section,
+            seventh_proviso=seventh_proviso,
+            f10iea_curr_ay_old_regime=("Y" if draft.regime == "old" else "N"),
+            f10iea_date_curr_ay_old_tax=f10iea_date,
+        )
+    except (ValidationError, ValueError) as exc:
+        if isinstance(exc, FilingGatewayV2Error):
+            raise
+        raise FilingGatewayV2Error(
+            "ITR-4 filing profile is invalid.", [str(exc)]
+        ) from exc
+
+
+def _itr4_property_profile(draft: ReturnDraft) -> ITR4PropertyProfile | None:
+    """Build the single ITR-4 property profile (one house property allowed).
+
+    Falls back to the taxpayer's primary address when no property row exists
+    (mirrors the legacy mapper's fallback chain).
+    """
+    rows = draft.houseProperties
+    if rows:
+        row = rows[0]
+        address = (row.address or row.premisesName or row.name
+                   or draft.personal.flatNo or draft.personal.residenceName).strip()
+        city = (row.city or draft.personal.city).strip()
+        state = (row.state or draft.personal.stateCode).strip()
+        country = (row.countryCode or draft.personal.countryCode or "91").strip()
+        pin = (row.pinCode or draft.personal.pinCode).strip() or None
+        zip_code = (row.zipCode or draft.personal.zipCode).strip() or None
+    else:
+        address = (draft.personal.flatNo or draft.personal.residenceName).strip()
+        city = draft.personal.city.strip()
+        state = draft.personal.stateCode.strip()
+        country = (draft.personal.countryCode or "91").strip()
+        pin = draft.personal.pinCode.strip() or None
+        zip_code = draft.personal.zipCode.strip() or None
+    if not address:
+        return None
+    try:
+        return ITR4PropertyProfile(
+            address_detail=address[:50],
+            city_or_town_or_district=(city or "City")[:50],
+            state_code=(state or "07")[:2],
+            country_code=country or "91",
+            pin_code=pin,
+            zip_code=zip_code,
+        )
+    except (ValidationError, ValueError) as exc:
+        raise FilingGatewayV2Error(
+            "ITR-4 property filing profile is invalid.", [str(exc)]
+        ) from exc
+
+
+def _itr4_bank_accounts(draft: ReturnDraft) -> list[ITR4BankAccount]:
+    """Map canonical bank-account rows → the ITR-4 bank-account type."""
+    accounts: list[ITR4BankAccount] = []
+    for b in draft.bankAccounts:
+        account_number = (b.accountNumber or "").strip()
+        ifsc = (b.ifscCode or "").strip().upper()
+        bank_name = (b.bankName or "").strip()
+        if not account_number or not ifsc or not bank_name:
+            continue
+        try:
+            accounts.append(ITR4BankAccount(
+                account_number=account_number[:20],
+                ifsc_code=ifsc,
+                bank_name=bank_name[:125],
+                account_type=(b.accountType or "savings").strip()[:20],
+                is_primary=b.useForRefund,
+            ))
+        except (ValidationError, ValueError):
+            continue
+    return accounts
+
+
+def compute_canonical_itr4(draft: ReturnDraft) -> ITR4PipelineResult:
+    """Map and compute a canonical ITR-4 draft exactly once.
+
+    Args:
+        draft: Validated canonical return draft (``form == "ITR-4"``).
+
+    Returns:
+        Typed input, computation, mapping breakdown, and response summary.
+
+    Raises:
+        FilingGatewayV2Error: If mapping or computation fails, or pending
+            reconciliation discrepancies / out-of-scope evidence block compute.
+    """
+    if draft.form != "ITR-4":
+        raise FilingGatewayV2Error(
+            "compute_canonical_itr4 requires draft.form == 'ITR-4'."
+        )
+    pending = [
+        item for item in draft.reconciliation.discrepancies
+        if item.status == "PENDING"
+    ]
+    if pending:
+        categories = ", ".join(sorted({item.category for item in pending}))
+        raise FilingGatewayV2Error(
+            "Manual confirmation is required for imported AIS/TIS "
+            "reconciliation discrepancies before compute or generation.",
+            [f"Pending reconciliation discrepancy: {category}."
+             for category in sorted({item.category for item in pending})],
+        )
+    out_of_scope = [
+        e for e in draft.reconciliation.evidence
+        if e.role == "OUT_OF_SCOPE_TAXABLE"
+    ]
+    if out_of_scope:
+        codes = sorted({e.sourceCode for e in out_of_scope if e.sourceCode})
+        raise FilingGatewayV2Error(
+            "Imported evidence contains income outside ITR-4 scope. "
+            "Please select the correct form (ITR-2 or ITR-3) before computing.",
+            [f"OUT_OF_SCOPE_TAXABLE evidence: {', '.join(codes) or 'unknown codes'}."],
+        )
+    try:
+        typed_input, breakdown = draft_to_itr4_input(draft)
+        result = compute_itr4(typed_input)
+    except (DraftMappingError, ValidationError, ValueError) as exc:
+        raise FilingGatewayV2Error(
+            "ITR-4 mapping or computation failed.", [str(exc)]
+        ) from exc
+    if result.errors:
+        raise FilingGatewayV2Error(
+            "ITR-4 computation rejected the canonical draft.",
+            [str(error) for error in result.errors],
+        )
+    return ITR4PipelineResult(
+        typed_input=typed_input,
+        computation=result,
+        breakdown=breakdown,
+        summary=_summary_from_result(result, breakdown),
+    )
+
+
+def _generate_cbdt_json_itr4(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build + validate the official ITR-4 CBDT JSON from a canonical draft.
+
+    Runs the full CBDT Category A/B/D rule validators before JSON emission
+    (parity with the legacy ``_build_itr4_official_json``).
+    """
+    pipeline = compute_canonical_itr4(draft)
+    filing_profile = _itr4_filing_profile(draft)
+    property_profile = _itr4_property_profile(draft)
+    bank_accounts = _itr4_bank_accounts(draft)
+    typed_input = pipeline.typed_input.model_copy(update={
+        "filing_profile": filing_profile,
+        "property_profile": property_profile,
+        "bank_accounts": bank_accounts,
+        "tax_return_preparer": None,
+    })
+
+    from app.engine.validators.itr4 import (
+        run_input_validation,
+        run_calc_validation,
+    )
+
+    input_report = run_input_validation(typed_input)
+    if not input_report.can_upload:
+        raise FilingGatewayV2Error(
+            "ITR-4 CBDT Category A input validation failed.",
+            [r.message for r in input_report.blocking_errors],
+        )
+    calc_report = run_calc_validation(typed_input, pipeline.computation)
+    if not calc_report.can_upload:
+        raise FilingGatewayV2Error(
+            "ITR-4 CBDT Category A calculation validation failed.",
+            [r.message for r in calc_report.blocking_errors],
+        )
+
+    try:
+        official_json = build_itr4_json(pipeline.computation, typed_input)
+        validate_itr4_json(official_json)
+    except Exception as exc:
+        logger.exception(
+            "ITR-4 official JSON generation failed: %s: %s",
+            type(exc).__name__, exc,
+        )
+        raise FilingGatewayV2Error(
+            "ITR-4 official JSON generation failed.",
+            [f"{type(exc).__name__}: {exc}"],
+        ) from exc
+    return official_json, pipeline.summary
+
+
+def compute_canonical(draft: ReturnDraft) -> ITR1PipelineResult | ITR4PipelineResult:
+    """Form-dispatching compute entrypoint (Phase 3).
+
+    Used by ``tax_v2.compute_tax_summary_v2`` so ITR-1 and ITR-4 both compute
+    via the single canonical pipeline — no legacy delegation.
+
+    Args:
+        draft: Validated canonical return draft.
+
+    Returns:
+        The per-form pipeline result (``ITR1PipelineResult`` or
+        ``ITR4PipelineResult``).
+
+    Raises:
+        FilingGatewayV2Error: If the form is not ITR-1 or ITR-4 (ITR-2/3 not
+            yet supported by the v2 pipeline).
+    """
+    if draft.form == "ITR-1":
+        return compute_canonical_itr1(draft)
+    if draft.form == "ITR-4":
+        return compute_canonical_itr4(draft)
+    raise FilingGatewayV2Error(
+        "The v2 canonical compute endpoint currently supports ITR-1 and "
+        "ITR-4 only.",
+        [f"Form {draft.form!r} is not supported by the v2 pipeline yet."],
+    )
+
+
 def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, Any]]:
     """Compute once, build official JSON, and validate the CBDT schema.
 
+    Dispatches on ``draft.form``: ITR-1 → the existing ITR-1 path; ITR-4 →
+    the Phase 3 ITR-4 path. Both forms run the full CBDT Category A/B/D rule
+    validators before JSON emission.
+
     Args:
-        draft: Saved canonical ITR-1 draft.
+        draft: Saved canonical draft.
 
     Returns:
         A pair of official CBDT JSON and the summary from the same computation.
@@ -323,6 +743,14 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
         FilingGatewayV2Error: If profile construction, generation, or official
             schema validation fails.
     """
+    if draft.form == "ITR-4":
+        return _generate_cbdt_json_itr4(draft)
+    # Default: ITR-1 path (unchanged).
+    return _generate_cbdt_json_itr1(draft)
+
+
+def _generate_cbdt_json_itr1(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, Any]]:
+    """ITR-1 official JSON generation (the original generate_cbdt_json body)."""
     pipeline = compute_canonical_itr1(draft)
     profiles = _property_profiles(draft)
     typed_input = pipeline.typed_input.model_copy(update={
@@ -331,13 +759,6 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
         "property_profiles": profiles,
     })
 
-    # ── Full CBDT Category A/B/D rule validation ───────────────────────
-    # Run the SAME rule suite the interactive /tax compute endpoints
-    # enforce, against the typed input + computed result, BEFORE building
-    # the official JSON. A Category A (blocking) failure aborts JSON
-    # emission so no non-compliant ITR-1 JSON can leave this gateway —
-    # critical for Type-3 portal upload where the portal's own validation
-    # is the only downstream safety net.
     from app.engine.validators.itr1 import (
         run_input_validation,
         run_calc_validation,
@@ -360,9 +781,6 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
         official_json = build_itr1_json(pipeline.computation, typed_input)
         validate_itr1_json(official_json)
     except ITR1SchemaValidationError as exc:
-        # Official ITR-1 Draft-4 schema violations.  Surface every violation
-        # (path + schema path + message), not just the first one, so the
-        # operator can fix all defects in one pass instead of round-tripping.
         detail_lines: list[str] = []
         for item in exc.errors:
             detail_lines.append(
@@ -380,9 +798,6 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
             detail_lines,
         ) from exc
     except Exception as exc:
-        # Any other failure inside the builder (mapping, encoding, digest,
-        # unexpected).  Log the full traceback so the root cause is visible
-        # in server output rather than just the one-line repr.
         logger.exception(
             "ITR-1 official JSON generation failed: %s: %s",
             type(exc).__name__, exc,
