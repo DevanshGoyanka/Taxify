@@ -262,16 +262,24 @@ Legacy flat-blob paths (DELETED):
 3. With an ITR-4 client, the Business tab edits persist to `draft.businesses` and reload exactly (round-trip fidelity).
 4. Generate CBDT JSON for ITR-4 hits `/v2/clients/{id}/itr/{year}/generate-cbdt-json`.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-21
 
 **Implemented:**
-- *(filled in after completion)*
+- **Backend prefill parser** (`app/engine/importers/prefill_parser.py`) — extended `PrefillPresumptiveIncome` + `_extract_presumptive_income` to extract the full 44AD/44ADA/44AE business data the CBDT Prefill schema (V6.5) actually carries. Verified against real client Prefill JSONs in `downloads/` — e.g. AEDPD0736M carries `natOfBus44AD` → `[{scheme:"44AD", code:"21008", name:"SIDDHESWAR DALAL"}]`, ACUPG3482G carries `natOfBus44ADA` → `[{scheme:"44ADA", code:"16001", name:"ADV. SUNIT GOYANKA"}]`. New sub-models: `PrefillPresumptiveBusiness`, `PrefillGstinTurnover`, `PrefillGoodsCarriage44AE`. The old parser only extracted 44ADA; it now extracts all three schemes + GSTIN turnover (`form26as.scheduleBP.turnoverGrsRcptForGSTIN`) + 44AE vehicles (`lastFiledITR.goodsDtlsUs44AE`).
+- **Frontend prefill type** (`frontend/src/utils/prefillTypes.ts`) — added `PrefillPresumptiveBusiness`, `PrefillGstinTurnover`, `PrefillGoodsCarriage44AE`, `PrefillPresumptiveIncome` mirroring the backend, and added `presumptive_income` to `PrefillExtraction`.
+- **Prefill→draft mapper** (`frontend/src/utils/mapPrefillToDraftPatch.ts`) — extended `mapPrefillToDraftPatch` to populate `draft.businesses` canonical typed fields (`Presumptive44AD/44ADA/44AE`) from the prefill's prior-year business rows + current-year 44ADA gross receipts + GSTIN turnover + 44AE vehicles. Updated the module docstring (the old "prefill contributes ONLY personal info + refund bank account" decision is superseded). Added `buildPriorYearBPData(prefill)` to construct a CBDT-shaped `ITR4ScheduleBPData` for read-only reference display.
+- **Business tab UI** (`frontend/src/components/business/ITR4ScheduleBPManager.tsx`) — added a `priorYearData` prop. The `Field` component now renders a small gold read-only "Last year filed" reference label (₹ amount) above each input field when prior-year data exists. Wired prior-year figures into the 44AD/44ADA/44AE income fields, the 44AE summary, and the financial-particulars fields. Added a banner explaining the reference labels when prior-year data is present.
+- **Business tab wiring** (`frontend/src/components/BusinessProfessionEntryManager.tsx`, `frontend/src/pages/ITRComputationPage.tsx`) — threaded `priorYearData` from the page (constructed via `buildPriorYearBPData((reconciledImportData).prefill)`) through `BusinessTab` → `BusinessProfessionEntryManager` → `ITR4ScheduleBPManager`.
+- **Tests** — 2 new prefill mapper tests: base fixture still emits no businesses; prior-year 44AD/44ADA/44AE rows + vehicles seed `draft.businesses` correctly. Updated the existing "contributes ONLY personal info" test for the new contract.
 
 **Validation:**
-- *(filled in after completion)*
+- Backend: 51 passed, 1 xfailed (known 44AE validator conflict), 0 failed across `test_filing_gateway_v2_itr4`, `test_draft_to_itr4_input_itr4`, `test_itr4_calculator`, `test_itr1_calculator`, `test_return_draft_schema`.
+- Frontend: 5 prefill mapper tests pass. TypeScript build shows 5 errors — **all pre-existing** (`reconciliation.ts` missing `./client`, `mapCapitalGainsToDraftPatch.ts` `CapitalGainSale`/`CapitalGainPurchase`); zero new errors from Phase 4.
+- Real client data verified: the parser correctly extracts 44AD business (AEDPD0736M) and 44ADA profession (ACUPG3482G) from real Prefill JSONs.
 
 **Deferred follow-ups:**
-- *(filled in after completion)*
+- The Business tab manager (`ITR4ScheduleBPManager`) stores its full Schedule BP state in `draft.businesses[0].businessSpecific` (a side-channel), separate from the canonical typed `Presumptive44AD` fields the compute engine reads. Phase 6/7 should unify this so the manager reads/writes the canonical typed fields directly (eliminating the `businessSpecific` side-channel), so the user-entered Schedule BP figures flow into compute + CBDT. The prior-year reference labels are wired now; the side-channel unification is a separate frontend refactor.
+- The prefill's prior-year financial-particulars (sundry creditors, inventories, etc. from `lastFiledITR`) are not extracted by the backend parser yet — only the business rows + GSTIN turnover + 44AE vehicles. The CBDT schema carries them under `PARTAPL`/`lastFiledITR` but the real client Prefills observed do not populate them, so extraction is deferred until a client with that data appears.
 
 ---
 

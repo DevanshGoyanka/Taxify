@@ -107,6 +107,10 @@ export interface ITR4ScheduleBPData {
 export interface ITR4ScheduleBPManagerProps {
   data?: ITR4ScheduleBPData | null;
   onChange: (data: ITR4ScheduleBPData) => void;
+  /** Prior-year (lastFiledITR) figures shown as read-only reference labels
+   *  above each input field, so the user can see last year's filed values
+   *  while entering this year's figures. */
+  priorYearData?: ITR4ScheduleBPData | null;
 }
 
 type NatureRow = NatOfBus44AD | NatOfBus44ADA | NatOfBus44AE;
@@ -127,6 +131,9 @@ const styles: Record<string, React.CSSProperties> = {
   remove: { padding: '4px 8px', background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' },
   empty: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 6, marginBottom: 24 },
   sectionHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  priorLabel: { display: 'block', marginBottom: 2, fontSize: 10, color: 'var(--text-muted)', fontStyle: 'italic' },
+  priorValue: { display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', background: 'var(--gold-pale)', padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)' },
+  priorBanner: { marginBottom: 16, padding: '10px 14px', background: 'var(--gold-pale)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, color: 'var(--text-secondary)' },
 };
 
 const toAmount = (value: string, maximum: number = MONEY_MAX, minimum = 0): number => {
@@ -137,6 +144,7 @@ const toAmount = (value: string, maximum: number = MONEY_MAX, minimum = 0): numb
 };
 
 const amount = (value: number | undefined): string => value ? String(value) : '';
+const formatRupee = (value: number | undefined): string => value ? `₹${Number(value).toLocaleString('en-IN')} (last year)` : '';
 const sum = (values: Array<number | undefined>): number => Math.min(MONEY_MAX, values.reduce<number>((total, value) => total + (value ?? 0), 0));
 
 const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
@@ -179,8 +187,15 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
   return result;
 };
 
-function Field({ label, value, onChange, max = MONEY_MAX, min = 0, readOnly = false }: { label: string; value?: number; onChange?: (value: number) => void; max?: number; min?: number; readOnly?: boolean }): React.JSX.Element {
-  return <label><span style={styles.label}>{label}</span><input aria-label={label} type="number" min={min} max={max} step="1" value={amount(value)} readOnly={readOnly} onChange={(event) => onChange?.(toAmount(event.target.value, max, min))} style={readOnly ? styles.readOnly : styles.input} /></label>;
+function Field({ label, value, onChange, max = MONEY_MAX, min = 0, readOnly = false, priorValue }: { label: string; value?: number; onChange?: (value: number) => void; max?: number; min?: number; readOnly?: boolean; priorValue?: number }): React.JSX.Element {
+  return <label>
+    <span style={styles.label}>{label}</span>
+    {priorValue !== undefined && priorValue !== 0 && <>
+      <span style={styles.priorLabel}>Last year filed</span>
+      <span style={styles.priorValue}>{formatRupee(priorValue)}</span>
+    </>}
+    <input aria-label={label} type="number" min={min} max={max} step="1" value={amount(value)} readOnly={readOnly} onChange={(event) => onChange?.(toAmount(event.target.value, max, min))} style={readOnly ? styles.readOnly : styles.input} />
+  </label>;
 }
 
 function Card({ title, subtitle, action, children }: { title: string; subtitle?: string; action?: React.ReactNode; children: React.ReactNode }): React.JSX.Element {
@@ -213,8 +228,9 @@ function NatureEditor({ title, arrayKey, codeKey, rows, options, emit, details }
 }
 
 /** Edits the exact official AY 2026-27 ITR-4 ScheduleBP structure. */
-export default function ITR4ScheduleBPManager({ data, onChange }: ITR4ScheduleBPManagerProps): React.JSX.Element {
+export default function ITR4ScheduleBPManager({ data, onChange, priorYearData }: ITR4ScheduleBPManagerProps): React.JSX.Element {
   const current = derive(data);
+  const prior = priorYearData ? derive(priorYearData) : null;
   const lastNormalized = useRef<string>('');
   useEffect(() => {
     const incoming = JSON.stringify(data ?? {});
@@ -233,6 +249,16 @@ export default function ITR4ScheduleBPManager({ data, onChange }: ITR4ScheduleBP
   const vehicles = current.GoodsDtlsUs44AE ?? [];
   const gstRows = current.TurnoverGrsRcptForGSTIN ?? [];
   const financial = current.FinanclPartclrOfBusiness ?? {};
+  const priorAd = prior?.PersumptiveInc44AD;
+  const priorAda = prior?.PersumptiveInc44ADA;
+  const priorAe = prior?.PersumptiveInc44AE;
+  const priorFinancial = prior?.FinanclPartclrOfBusiness;
+  const hasPrior = prior !== null && (
+    (priorAd && (priorAd.GrsTotalTrnOver || priorAd.TotPersumptiveInc44AD)) !== undefined
+    || (priorAda && (priorAda.GrsReceipt || priorAda.TotPersumptiveInc44ADA))
+    || (priorAe && priorAe.TotPersumInc44AE)
+    || (priorFinancial && (priorFinancial.TotalAssets || priorFinancial.TotCapLiabilities))
+  );
 
   const setVehicle = (index: number, patch: Partial<GoodsDtlsUs44AE>): void => emit({ GoodsDtlsUs44AE: vehicles.map((row, i) => i === index ? { ...row, ...patch } : row) });
   const addVehicle = (): void => { if (vehicles.length < 10) emit({ GoodsDtlsUs44AE: [...vehicles, { RegNumberGoodsCarriage: '', OwnedLeasedHiredFlag: 'OWN', TonnageCapacity: 0, HoldingPeriod: 1, PresumptiveIncome: 7500 }] }); };
@@ -243,27 +269,30 @@ export default function ITR4ScheduleBPManager({ data, onChange }: ITR4ScheduleBP
       <span style={{ background: 'var(--gold)', color: '#fff', padding: '4px 10px', borderRadius: 4, fontSize: 12, fontWeight: 600 }}>BP</span>
       <div><h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>Presumptive Business or Profession</h3><div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-muted)' }}>Schedule BP — sections 44AD, 44ADA and 44AE — AY 2026-27</div></div>
     </div>
+    {hasPrior && <div style={styles.priorBanner}>
+      <strong>Last year's filed figures shown above each field</strong> — small read-only reference labels (gold) display the prior-year values from your previously filed ITR, so you can compare while entering this year's figures.
+    </div>}
     <NatureEditor title="Section 44AD - Nature of business" arrayKey="NatOfBus44AD" codeKey="CodeAD" rows={current.NatOfBus44AD ?? []} options={NATURE_CODES_44AD} emit={emit} details={<div>
       <div style={{ marginBottom: 12 }}><h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>Section 44AD - Presumptive income</h4><div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11 }}>Gross turnover and total income are derived</div></div>
       <div style={styles.grid}>
-        <Field label="Turnover through banking modes" value={ad.GrsTrnOverBank} max={AD_MAX} onChange={(v) => updateObject('PersumptiveInc44AD', { GrsTrnOverBank: v })} />
-        <Field label="Turnover in cash" value={ad.GrsTotalTrnOverInCash} max={AD_MAX} onChange={(v) => updateObject('PersumptiveInc44AD', { GrsTotalTrnOverInCash: v })} />
-        <Field label="Turnover through any other mode" value={ad.GrsTrnOverAnyOthMode} max={AD_MAX} onChange={(v) => updateObject('PersumptiveInc44AD', { GrsTrnOverAnyOthMode: v })} />
-        <Field label="Gross total turnover" value={ad.GrsTotalTrnOver} max={AD_MAX} readOnly />
-        <Field label="Presumptive income @ 6%" value={ad.PersumptiveInc44AD6Per} max={AD_MAX} onChange={(v) => updateObject('PersumptiveInc44AD', { PersumptiveInc44AD6Per: v })} />
-        <Field label="Presumptive income @ 8%" value={ad.PersumptiveInc44AD8Per} max={AD_MAX} onChange={(v) => updateObject('PersumptiveInc44AD', { PersumptiveInc44AD8Per: v })} />
-        <Field label="Total presumptive income u/s 44AD" value={ad.TotPersumptiveInc44AD} max={AD_MAX} readOnly />
+        <Field label="Turnover through banking modes" value={ad.GrsTrnOverBank} max={AD_MAX} priorValue={priorAd?.GrsTrnOverBank} onChange={(v) => updateObject('PersumptiveInc44AD', { GrsTrnOverBank: v })} />
+        <Field label="Turnover in cash" value={ad.GrsTotalTrnOverInCash} max={AD_MAX} priorValue={priorAd?.GrsTotalTrnOverInCash} onChange={(v) => updateObject('PersumptiveInc44AD', { GrsTotalTrnOverInCash: v })} />
+        <Field label="Turnover through any other mode" value={ad.GrsTrnOverAnyOthMode} max={AD_MAX} priorValue={priorAd?.GrsTrnOverAnyOthMode} onChange={(v) => updateObject('PersumptiveInc44AD', { GrsTrnOverAnyOthMode: v })} />
+        <Field label="Gross total turnover" value={ad.GrsTotalTrnOver} max={AD_MAX} priorValue={priorAd?.GrsTotalTrnOver} readOnly />
+        <Field label="Presumptive income @ 6%" value={ad.PersumptiveInc44AD6Per} max={AD_MAX} priorValue={priorAd?.PersumptiveInc44AD6Per} onChange={(v) => updateObject('PersumptiveInc44AD', { PersumptiveInc44AD6Per: v })} />
+        <Field label="Presumptive income @ 8%" value={ad.PersumptiveInc44AD8Per} max={AD_MAX} priorValue={priorAd?.PersumptiveInc44AD8Per} onChange={(v) => updateObject('PersumptiveInc44AD', { PersumptiveInc44AD8Per: v })} />
+        <Field label="Total presumptive income u/s 44AD" value={ad.TotPersumptiveInc44AD} max={AD_MAX} priorValue={priorAd?.TotPersumptiveInc44AD} readOnly />
       </div>
     </div>} />
 
     <NatureEditor title="Section 44ADA - Nature of profession" arrayKey="NatOfBus44ADA" codeKey="CodeADA" rows={current.NatOfBus44ADA ?? []} options={NATURE_CODES_44ADA} emit={emit} details={<div>
       <div style={{ marginBottom: 12 }}><h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>Section 44ADA - Presumptive income</h4><div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11 }}>Gross receipts are derived</div></div>
       <div style={styles.grid}>
-        <Field label="Receipts through banking modes" value={ada.GrsTrnOverBank44ADA} max={ADA_MAX} onChange={(v) => updateObject('PersumptiveInc44ADA', { GrsTrnOverBank44ADA: v })} />
-        <Field label="Receipts in cash" value={ada.GrsTotalTrnOverInCash44ADA} max={ADA_MAX} onChange={(v) => updateObject('PersumptiveInc44ADA', { GrsTotalTrnOverInCash44ADA: v })} />
-        <Field label="Receipts through any other mode" value={ada.GrsTrnOverAnyOthMode44ADA} max={ADA_MAX} onChange={(v) => updateObject('PersumptiveInc44ADA', { GrsTrnOverAnyOthMode44ADA: v })} />
-        <Field label="Gross receipt" value={ada.GrsReceipt} max={ADA_MAX} readOnly />
-        <Field label="Total presumptive income u/s 44ADA" value={ada.TotPersumptiveInc44ADA} max={ADA_MAX} onChange={(v) => updateObject('PersumptiveInc44ADA', { TotPersumptiveInc44ADA: v })} />
+        <Field label="Receipts through banking modes" value={ada.GrsTrnOverBank44ADA} max={ADA_MAX} priorValue={priorAda?.GrsTrnOverBank44ADA} onChange={(v) => updateObject('PersumptiveInc44ADA', { GrsTrnOverBank44ADA: v })} />
+        <Field label="Receipts in cash" value={ada.GrsTotalTrnOverInCash44ADA} max={ADA_MAX} priorValue={priorAda?.GrsTotalTrnOverInCash44ADA} onChange={(v) => updateObject('PersumptiveInc44ADA', { GrsTotalTrnOverInCash44ADA: v })} />
+        <Field label="Receipts through any other mode" value={ada.GrsTrnOverAnyOthMode44ADA} max={ADA_MAX} priorValue={priorAda?.GrsTrnOverAnyOthMode44ADA} onChange={(v) => updateObject('PersumptiveInc44ADA', { GrsTrnOverAnyOthMode44ADA: v })} />
+        <Field label="Gross receipt" value={ada.GrsReceipt} max={ADA_MAX} priorValue={priorAda?.GrsReceipt} readOnly />
+        <Field label="Total presumptive income u/s 44ADA" value={ada.TotPersumptiveInc44ADA} max={ADA_MAX} priorValue={priorAda?.TotPersumptiveInc44ADA} onChange={(v) => updateObject('PersumptiveInc44ADA', { TotPersumptiveInc44ADA: v })} />
       </div>
     </div>} />
 
@@ -283,10 +312,10 @@ export default function ITR4ScheduleBPManager({ data, onChange }: ITR4ScheduleBP
       <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
         <div style={{ marginBottom: 12 }}><h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>Section 44AE - Income summary</h4><div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11 }}>Computed from goods-carriage entries</div></div>
         <div style={styles.grid}>
-          <Field label="Total presumptive income u/s 44AE" value={ae.TotPersumInc44AE} readOnly />
-          <Field label="Salary / interest from firm" value={ae.SalInterestByFirm} onChange={(v) => updateObject('PersumptiveInc44AE', { SalInterestByFirm: v })} />
-          <Field label="Total presumptive income" value={ae.TotalPersumptiveInc} readOnly />
-          <Field label="Income chargeable under business" value={ae.IncChargeableUnderBus} readOnly />
+          <Field label="Total presumptive income u/s 44AE" value={ae.TotPersumInc44AE} priorValue={priorAe?.TotPersumInc44AE} readOnly />
+          <Field label="Salary / interest from firm" value={ae.SalInterestByFirm} priorValue={priorAe?.SalInterestByFirm} onChange={(v) => updateObject('PersumptiveInc44AE', { SalInterestByFirm: v })} />
+          <Field label="Total presumptive income" value={ae.TotalPersumptiveInc} priorValue={priorAe?.TotalPersumptiveInc} readOnly />
+          <Field label="Income chargeable under business" value={ae.IncChargeableUnderBus} priorValue={priorAe?.IncChargeableUnderBus} readOnly />
         </div>
       </div>
     </div>} />
@@ -306,12 +335,12 @@ export default function ITR4ScheduleBPManager({ data, onChange }: ITR4ScheduleBP
     <Card title="Financial particulars of business" subtitle="As on 31 March 2026; totals are derived"><div style={styles.grid}>
       {([
         ['PartnerMemberOwnCapital', 'Partners / members own capital'], ['SecuredLoans', 'Secured loans'], ['UnSecuredLoans', 'Unsecured loans'], ['Advances', 'Advances'], ['SundryCreditors', 'Sundry creditors'], ['OthrCurrLiab', 'Other current liabilities'],
-      ] as Array<[keyof FinanclPartclrOfBusiness, string]>).map(([key, label]) => <Field key={key} label={label} value={financial[key]} onChange={(v) => updateObject('FinanclPartclrOfBusiness', { [key]: v })} />)}
-      <Field label="Total capital and liabilities" value={financial.TotCapLiabilities} readOnly />
+      ] as Array<[keyof FinanclPartclrOfBusiness, string]>).map(([key, label]) => <Field key={key} label={label} value={financial[key]} priorValue={priorFinancial?.[key]} onChange={(v) => updateObject('FinanclPartclrOfBusiness', { [key]: v })} />)}
+      <Field label="Total capital and liabilities" value={financial.TotCapLiabilities} priorValue={priorFinancial?.TotCapLiabilities} readOnly />
       {([
         ['FixedAssets', 'Fixed assets'], ['Investments', 'Investments'], ['Inventories', 'Inventories'], ['SundryDebtors', 'Sundry debtors'], ['BalWithBanks', 'Balance with banks'], ['CashInHand', 'Cash in hand'], ['LoansAndAdvances', 'Loans and advances'], ['OtherAssets', 'Other assets'],
-      ] as Array<[keyof FinanclPartclrOfBusiness, string]>).map(([key, label]) => <Field key={key} label={label} value={financial[key]} onChange={(v) => updateObject('FinanclPartclrOfBusiness', { [key]: v })} />)}
-      <Field label="Total assets" value={financial.TotalAssets} readOnly />
+      ] as Array<[keyof FinanclPartclrOfBusiness, string]>).map(([key, label]) => <Field key={key} label={label} value={financial[key]} priorValue={priorFinancial?.[key]} onChange={(v) => updateObject('FinanclPartclrOfBusiness', { [key]: v })} />)}
+      <Field label="Total assets" value={financial.TotalAssets} priorValue={priorFinancial?.TotalAssets} readOnly />
     </div></Card>
   </div>;
 }

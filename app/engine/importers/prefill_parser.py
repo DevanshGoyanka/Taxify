@@ -435,12 +435,65 @@ class PrefillTCSEntry:
 
 
 @dataclass
+class PrefillPresumptiveBusiness:
+    """One prior-year business/profession row from the prefill.
+
+    Mirrors ``lastFiledITR.natOfBus44AD/44ADA/44AE`` items: a business
+    code, the business name, and a description. The ``scheme`` field
+    records which array the row came from so the frontend can route it
+    to the correct presumptive sub-model.
+    """
+
+    scheme: str = ""  # "44AD" | "44ADA" | "44AE"
+    code: str = ""  # codeAD / codeADA / codeAE
+    name_of_business: str = ""
+    description: str = ""
+
+
+@dataclass
+class PrefillGstinTurnover:
+    """One GSTIN turnover row from ``form26as.scheduleBP``."""
+
+    gstin: str = ""
+    amount: int = 0
+
+
+@dataclass
+class PrefillGoodsCarriage44AE:
+    """One 44AE goods-carriage row from ``lastFiledITR.goodsDtlsUs44AE``."""
+
+    reg_number: str = ""
+    tonnage: int = 0
+    holding_period: int = 0  # months owned/leased/hired
+    owned_leased_hired: str = ""  # OWN | LEASE | HIRED
+
+
+@dataclass
 class PrefillPresumptiveIncome:
-    """Presumptive income details (44AD/44ADA) from the prefill."""
+    """Presumptive income details (44AD/44ADA/44AE) from the prefill.
+
+    Sources (per the CBDT PreFillSchemaJSON_V6.5):
+      - ``form26as.persumptiveInc44ADA`` → ``gross_receipt_44ada``,
+        ``declared_income_44ada`` (current-year 44ADA).
+      - ``form26as.scheduleBP.turnoverGrsRcptForGSTIN`` →
+        ``gstin_turnovers`` (GSTIN-wise turnover, shared by all schemes).
+      - ``lastFiledITR.natOfBus44AD/44ADA/44AE`` → ``businesses``
+        (prior-year business rows with code + name).
+      - ``lastFiledITR.goodsDtlsUs44AE`` → ``goods_carriages_44ae``
+        (prior-year 44AE vehicle details).
+    """
 
     gross_receipt_44ada: int = 0
     declared_income_44ada: int = 0
     business_nature_codes: list[dict[str, str]] = field(default_factory=list)
+    # ── Phase 4: full 44AD/44ADA/44AE business extraction ──────────────
+    total_presumptive_income_44ad: int = 0
+    total_presumptive_income_44ada: int = 0
+    presumptive_income_44ad_6pct: int = 0
+    presumptive_income_44ad_8pct: int = 0
+    businesses: list[PrefillPresumptiveBusiness] = field(default_factory=list)
+    gstin_turnovers: list[PrefillGstinTurnover] = field(default_factory=list)
+    goods_carriages_44ae: list[PrefillGoodsCarriage44AE] = field(default_factory=list)
 
 
 @dataclass
@@ -1413,33 +1466,105 @@ def _extract_tcs_entries(root: dict[str, Any]) -> list[PrefillTCSEntry]:
 
 
 def _extract_presumptive_income(root: dict[str, Any]) -> PrefillPresumptiveIncome:
-    """Extract presumptive income (44AD/44ADA) from the prefill.
+    """Extract presumptive income (44AD/44ADA/44AE) from the prefill.
 
-    Lives under ``form26as.persumptiveInc44ADA`` and
-    ``lastFiledITR.natOfBus44ADA``.
+    Sources (per CBDT PreFillSchemaJSON_V6.5):
+      - ``form26as.persumptiveInc44ADA`` → current-year 44ADA gross receipts
+        and total presumptive income.
+      - ``form26as.scheduleBP.turnoverGrsRcptForGSTIN`` → GSTIN-wise
+        turnover rows (shared by all three schemes).
+      - ``lastFiledITR.natOfBus44AD/44ADA/44AE`` → prior-year business rows
+        (code + name + description), tagged with the originating scheme.
+      - ``lastFiledITR.goodsDtlsUs44AE`` → prior-year 44AE vehicle details
+        (registration, tonnage, holding period, ownership type).
     """
     gross_receipt = 0
+    total_inc_44ada = 0
+    gstin_turnovers: list[PrefillGstinTurnover] = []
+
     form26as = root.get("form26as")
     if isinstance(form26as, Mapping):
         pi = form26as.get("persumptiveInc44ADA")
         if isinstance(pi, Mapping):
             gross_receipt = _to_int(pi.get("grsReceipt"))
+            total_inc_44ada = _to_int(pi.get("totPersumptiveInc44ADA"))
+        # GSTIN-wise turnover rows — shared across schemes (Schedule BP).
+        sbp = form26as.get("scheduleBP")
+        if isinstance(sbp, Mapping):
+            gts = sbp.get("turnoverGrsRcptForGSTIN")
+            if isinstance(gts, list):
+                for item in gts:
+                    if isinstance(item, Mapping):
+                        gstin_turnovers.append(PrefillGstinTurnover(
+                            gstin=_to_str(item.get("gstinNo")),
+                            amount=_to_int(item.get("amtTurnGrossRcptGSTIN")),
+                        ))
 
     business_codes: list[dict[str, str]] = []
+    businesses: list[PrefillPresumptiveBusiness] = []
+    carriages: list[PrefillGoodsCarriage44AE] = []
+
     lfi = root.get("lastFiledITR")
     if isinstance(lfi, Mapping):
-        nat_list = lfi.get("natOfBus44ADA")
-        if isinstance(nat_list, list):
-            for item in nat_list:
+        # 44AD prior-year businesses.
+        nat_44ad = lfi.get("natOfBus44AD")
+        if isinstance(nat_44ad, list):
+            for item in nat_44ad:
                 if isinstance(item, Mapping):
-                    business_codes.append({
-                        "code": _to_str(item.get("codeADA")),
-                        "name": _to_str(item.get("nameOfBusiness")),
-                    })
+                    code = _to_str(item.get("codeAD"))
+                    name = _to_str(item.get("nameOfBusiness"))
+                    businesses.append(PrefillPresumptiveBusiness(
+                        scheme="44AD", code=code, name_of_business=name,
+                        description=_to_str(item.get("description")),
+                    ))
+                    business_codes.append({"code": code, "name": name})
+
+        # 44ADA prior-year professions.
+        nat_44ada = lfi.get("natOfBus44ADA")
+        if isinstance(nat_44ada, list):
+            for item in nat_44ada:
+                if isinstance(item, Mapping):
+                    code = _to_str(item.get("codeADA"))
+                    name = _to_str(item.get("nameOfBusiness"))
+                    businesses.append(PrefillPresumptiveBusiness(
+                        scheme="44ADA", code=code, name_of_business=name,
+                        description=_to_str(item.get("description")),
+                    ))
+                    business_codes.append({"code": code, "name": name})
+
+        # 44AE prior-year businesses.
+        nat_44ae = lfi.get("natOfBus44AE")
+        if isinstance(nat_44ae, list):
+            for item in nat_44ae:
+                if isinstance(item, Mapping):
+                    code = _to_str(item.get("codeAE"))
+                    name = _to_str(item.get("nameOfBusiness"))
+                    businesses.append(PrefillPresumptiveBusiness(
+                        scheme="44AE", code=code, name_of_business=name,
+                        description=_to_str(item.get("description")),
+                    ))
+                    business_codes.append({"code": code, "name": name})
+
+        # 44AE goods-carriage vehicle details.
+        goods = lfi.get("goodsDtlsUs44AE")
+        if isinstance(goods, list):
+            for item in goods:
+                if isinstance(item, Mapping):
+                    carriages.append(PrefillGoodsCarriage44AE(
+                        reg_number=_to_str(item.get("regNumberGoodsCarriage")),
+                        tonnage=_to_int(item.get("tonnageCapacity")),
+                        holding_period=_to_int(item.get("holdingPeriod")),
+                        owned_leased_hired=_to_str(item.get("ownedLeasedHiredFlag")),
+                    ))
 
     return PrefillPresumptiveIncome(
         gross_receipt_44ada=gross_receipt,
+        declared_income_44ada=total_inc_44ada,
+        total_presumptive_income_44ada=total_inc_44ada,
         business_nature_codes=business_codes,
+        businesses=businesses,
+        gstin_turnovers=gstin_turnovers,
+        goods_carriages_44ae=carriages,
     )
 
 

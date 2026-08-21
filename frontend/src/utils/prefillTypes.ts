@@ -127,6 +127,57 @@ export interface PrefillVerification {
   place: string;
 }
 
+// ── Presumptive business (44AD/44ADA/44AE) — prior-year + current-year ────
+
+/** One prior-year business/profession row from lastFiledITR. */
+export interface PrefillPresumptiveBusiness {
+  /** Which scheme the row came from: '44AD' | '44ADA' | '44AE'. */
+  scheme: string;
+  /** Business/profession code (codeAD / codeADA / codeAE). */
+  code: string;
+  /** Business name as filed last year. */
+  name_of_business: string;
+  /** Optional description. */
+  description: string;
+}
+
+/** One GSTIN turnover row from form26as.scheduleBP. */
+export interface PrefillGstinTurnover {
+  gstin: string;
+  amount: number;
+}
+
+/** One 44AE goods-carriage row from lastFiledITR.goodsDtlsUs44AE. */
+export interface PrefillGoodsCarriage44AE {
+  reg_number: string;
+  tonnage: number;
+  /** Months owned/leased/hired. */
+  holding_period: number;
+  /** 'OWN' | 'LEASE' | 'HIRED'. */
+  owned_leased_hired: string;
+}
+
+/** Presumptive income details (44AD/44ADA/44AE) from the prefill. */
+export interface PrefillPresumptiveIncome {
+  /** Current-year 44ADA gross receipts (form26as.persumptiveInc44ADA.grsReceipt). */
+  gross_receipt_44ada: number;
+  /** Current-year 44ADA total presumptive income declared. */
+  declared_income_44ada: number;
+  /** Prior-year business rows (code + name), tagged by scheme. */
+  business_nature_codes: Array<{ code: string; name: string }>;
+  // ── Full 44AD/44ADA/44AE extraction ──────────────────────────────────
+  total_presumptive_income_44ad: number;
+  total_presumptive_income_44ada: number;
+  presumptive_income_44ad_6pct: number;
+  presumptive_income_44ad_8pct: number;
+  /** Prior-year businesses, tagged with the originating scheme. */
+  businesses: PrefillPresumptiveBusiness[];
+  /** GSTIN-wise turnover rows (shared by all schemes). */
+  gstin_turnovers: PrefillGstinTurnover[];
+  /** Prior-year 44AE vehicle details. */
+  goods_carriages_44ae: PrefillGoodsCarriage44AE[];
+}
+
 export interface PrefillExtraction {
   personal_info: PrefillPersonalInfo;
   filing_status: PrefillFilingStatus;
@@ -139,6 +190,8 @@ export interface PrefillExtraction {
   tds_other_entries: PrefillTDSEntry[];
   deductions: PrefillDeductions;
   verification: PrefillVerification;
+  /** Presumptive business income (44AD/44ADA/44AE) — prior-year + current-year. */
+  presumptive_income: PrefillPresumptiveIncome;
   assessment_year: string;
   pan: string;
 }
@@ -156,4 +209,5 @@ function stableEntryId(prefix: string, entry: { employer_name?: string; tan?: st
 }
 
 // ── Entry builders ──────────────────────────────────────────────────────────
-
+
+

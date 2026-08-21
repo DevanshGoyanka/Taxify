@@ -46,7 +46,8 @@ import ImportConfirmationModal from '../components/ImportConfirmationModal';
 import type { ReconciledResults } from '../api/itrAutomation';
 import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
 import { mergeDraft } from '../domain/returns/draftPatch';
-import { mapPrefillToDraftPatch } from '../utils/mapPrefillToDraftPatch';
+import { buildPriorYearBPData, mapPrefillToDraftPatch } from '../utils/mapPrefillToDraftPatch';
+import type { ITR4ScheduleBPData } from '../components/business/ITR4ScheduleBPManager';
 import { mapReconciledToDraftPatch } from '../utils/mapReconciledToDraftPatch';
 import { mapAisToDraftPatch } from '../utils/mapAisToDraftPatch';
 import { map26asToDraftPatch } from '../utils/map26asToDraftPatch';
@@ -1860,7 +1861,7 @@ export default function ITRComputationPage() {
         {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={tdsToManager(editorModel?.draft?.taxes?.tds ?? [])} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} taxResult={backendTaxResult} />}
         {activeTab === 3 && editorModel && <CapitalGainsTab draft={editorModel.draft} taxResult={taxResult} itrForm={itrForm as ItrForm} onChange={(schedule) => updateEditor((model) => updateCapitalGainsSchedule(model, schedule))} />}
-        {activeTab === 4 && editorModel && <BusinessTab taxResult={taxResult} itrForm={itrForm as string} draft={editorModel.draft} onChangeBusinesses={(entries: ReturnDraft['businesses']) => updateEditor((model) => replaceDraft({ ...model.draft, businesses: entries }))} onChangeBpNetProfit={(value: number) => updateEditor((model) => updateBpNetProfit(model, value))} />}
+        {activeTab === 4 && editorModel && <BusinessTab taxResult={taxResult} itrForm={itrForm as string} draft={editorModel.draft} onChangeBusinesses={(entries: ReturnDraft['businesses']) => updateEditor((model) => replaceDraft({ ...model.draft, businesses: entries }))} onChangeBpNetProfit={(value: number) => updateEditor((model) => updateBpNetProfit(model, value))} priorYearData={buildPriorYearBPData((reconciledImportData as any)?.prefill)} />}
         {activeTab === 5 && <OtherSourcesTab taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel as any} />}
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
         {activeTab === 7 && editorModel && <DeductionsTab regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
@@ -2037,7 +2038,7 @@ function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm, taxRe
   return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} taxResult={taxResult} />;
 }
 
-function BusinessTab({ taxResult, itrForm, draft, onChangeBusinesses }: { taxResult: any; itrForm: string; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void }): React.ReactElement {
+function BusinessTab({ taxResult, itrForm, draft, onChangeBusinesses, priorYearData }: { taxResult: any; itrForm: string; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void; priorYearData?: ITR4ScheduleBPData | null }): React.ReactElement {
   // Surface the reconciled business income the import produced (GST
   // turnover, business receipts, commission, etc. rolled into a presumptive
   // 44AD/44ADA entry on draft.businesses).  The BusinessProfessionEntryManager
@@ -2093,6 +2094,7 @@ function BusinessTab({ taxResult, itrForm, draft, onChangeBusinesses }: { taxRes
       onChange={handleChange}
       selectedForm={itrForm}
       taxResult={taxResult}
+      priorYearData={priorYearData}
     />
   </>;
 }

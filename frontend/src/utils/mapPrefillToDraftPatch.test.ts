@@ -12,18 +12,22 @@ function prefill(): PrefillExtraction {
     bank_accounts: [{ bank_account_no: '123', bank_name: 'Bank', ifsc_code: 'BANK0123456', account_type: 'SB', use_for_refund: 'true' }],
     tds_salary_entries: [{ deductor_name: 'Acme', tan: 'ABCD12345E', section: '192', income_amount: 1000, tds_deducted: 100, tds_claimed: 100, gross_amount: 1000, head_of_income: '', deducted_year: '2025-26' }], tds_other_entries: [],
     deductions: { section_80c: 150000, section_80d: 0, section_80e: 0, section_80g: 0, section_80ccd_1b: 0, section_80tta: 0, section_80ttb: 0, section_80ccch: 0, total_chap_via_deductions: 150000 },
-    verification: { assessee_ver_name: '', assessee_ver_pan: '', father_name: '', capacity: '', place: 'City' }, assessment_year: '2026-27', pan: 'ABCDE1234F',
+    verification: { assessee_ver_name: '', assessee_ver_pan: '', father_name: '', capacity: '', place: 'City' },
+    presumptive_income: { gross_receipt_44ada: 0, declared_income_44ada: 0, business_nature_codes: [], total_presumptive_income_44ad: 0, total_presumptive_income_44ada: 0, presumptive_income_44ad_6pct: 0, presumptive_income_44ad_8pct: 0, businesses: [], gstin_turnovers: [], goods_carriages_44ae: [] },
+    assessment_year: '2026-27', pan: 'ABCDE1234F',
   };
 }
 
 describe('mapPrefillToDraftPatch', () => {
-  it('contributes ONLY personal info + refund bank account (no employers/TDS/income/deductions)', () => {
+  it('contributes personal info + refund bank account + presumptive business (no employers/TDS/income/deductions)', () => {
     const patch = mapPrefillToDraftPatch(prefill());
     // Personal info is emitted.
     expect(patch.personal).toMatchObject({ name: 'A B C', pan: 'ABCDE1234F', city: 'City' });
     expect(patch.filing?.filingSection).toBe('139(1)');
     // Refund bank account is emitted.
     expect(patch.bankAccounts?.[0]).toMatchObject({ accountNumber: '123', bankName: 'Bank', useForRefund: true });
+    // No presumptive business data in the base fixture → businesses undefined.
+    expect(patch.businesses).toBeUndefined();
     // Everything else is owned by the reconciled patch — prefill must NOT
     // emit it, otherwise mergeDraft's append-only list semantics duplicate
     // the same employer/TDS/income across prefill + reconciled.
@@ -31,6 +35,29 @@ describe('mapPrefillToDraftPatch', () => {
     expect(patch.taxes).toBeUndefined();
     expect(patch.otherSources).toBeUndefined();
     expect(patch.deductions).toBeUndefined();
+  });
+
+  it('seeds draft.businesses from prior-year 44AD/44ADA/44AE rows', () => {
+    const data = prefill();
+    data.presumptive_income!.businesses = [
+      { scheme: '44AD', code: '01001', name_of_business: 'Acme Traders', description: '' },
+      { scheme: '44ADA', code: '14001', name_of_business: 'Legal Practice', description: '' },
+      { scheme: '44AE', code: '08001', name_of_business: 'Transport Co', description: '' },
+    ];
+    data.presumptive_income!.gross_receipt_44ada = 4000000;
+    data.presumptive_income!.goods_carriages_44ae = [
+      { reg_number: 'KA01', tonnage: 16, holding_period: 12, owned_leased_hired: 'OWN' },
+    ];
+    const patch = mapPrefillToDraftPatch(data);
+    expect(patch.businesses).toBeDefined();
+    expect(patch.businesses).toHaveLength(3);
+    const ad = patch.businesses!.find((b) => b.scheme === '44AD');
+    expect(ad).toMatchObject({ scheme: '44AD', businessName: 'Acme Traders', natureCode: '01001' });
+    const ada = patch.businesses!.find((b) => b.scheme === '44ADA');
+    expect(ada).toMatchObject({ scheme: '44ADA', businessName: 'Legal Practice', natureCode: '14001', grossReceipts: 4000000 });
+    const ae = patch.businesses!.find((b) => b.scheme === '44AE') as any;
+    expect(ae?.vehicles).toHaveLength(1);
+    expect(ae?.vehicles?.[0]).toMatchObject({ vehicleNumber: 'KA01', vehicleType: 'HEAVY', tonnage: 16, ownedMonths: 12, leasedOrHired: false });
   });
 
   it('maps personal info even when only pan + personal_info are present', () => {

@@ -16,12 +16,14 @@ interface Props {
   onChange: (data: BusinessProfessionScheduleData) => void;
   selectedForm: string;
   taxResult?: { bizIncome?: number } | null;
+  /** Prior-year (lastFiledITR) Schedule BP figures for read-only reference. */
+  priorYearData?: ITR4ScheduleBPData | null;
 }
 
 const cardStyle: React.CSSProperties = { marginBottom: 20, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' };
 
 /** Routes Business/Profession capture to the exact official schema for the selected ITR form. */
-export function BusinessProfessionEntryManager({ data = {}, onChange, selectedForm, taxResult }: Props): React.ReactElement {
+export function BusinessProfessionEntryManager({ data = {}, onChange, selectedForm, taxResult, priorYearData }: Props): React.ReactElement {
   // Guard against an undefined/empty selectedForm so this component never
   // throws during render (a missing form would otherwise crash on
   // .replace below and blank the whole screen).
@@ -45,6 +47,7 @@ export function BusinessProfessionEntryManager({ data = {}, onChange, selectedFo
       <Header selectedForm={selectedForm} detail="Official Schedule BP: 44AD, 44ADA, 44AE, GST turnover and financial particulars." />
       <ITR4ScheduleBPManager
         data={data.ITR4ScheduleBP}
+        priorYearData={priorYearData}
         onChange={(ITR4ScheduleBP) => onChange({ ...data, ITR4ScheduleBP })}
       />
       <ComputedIncome value={Number(taxResult?.bizIncome || 0)} />
