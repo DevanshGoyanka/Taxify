@@ -275,6 +275,32 @@ class GoodsCarriageVehicle(BaseModel):
             "If None, the engine computes income at the statutory rate."
         ),
     )
+    reg_number: str = Field(
+        default="",
+        description=(
+            "Registration number of the goods carriage (CBDT schema "
+            "``RegNumberGoodsCarriage``). Required by the official ITR-4 "
+            "schema even though it is not used for the income computation."
+        ),
+    )
+    owned_leased_hired_flag: str = Field(
+        default="OWN",
+        description=(
+            "Whether the vehicle was owned ('OWN'), leased ('LEASE'), or "
+            "hired ('HIRED'). CBDT schema ``OwnedLeasedHiredFlag``. Defaults "
+            "to 'OWN'; the computation does not depend on this flag today."
+        ),
+    )
+    tonnage_capacity: Optional[Decimal] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Tonnage capacity of the goods carriage (CBDT schema "
+            "``TonnageCapacity``). For a heavy goods vehicle this mirrors "
+            "``gross_vehicle_weight_tons``; emitted in the official JSON "
+            "even when not used by the statutory rate calculation."
+        ),
+    )
 
 
 class PresumptiveGoodsCarriage44AE(BaseModel):

@@ -412,8 +412,14 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "Business code must be provided in Schedule BP when declaring income "
                 "under 44AD (CBDT Sl 11).",
                 "business_code"))
-    # Rule 12: Business code selected → must declare 44AD income — HARD
-    if inp.business_code and inp.presumptive_scheme != PresumptiveScheme.S44AD:
+    # Rule 12: 44AD business code selected → must declare 44AD income — HARD
+    # A business code is valid for 44AD, 44ADA, and 44AE (Sl 137 requires it
+    # for each). This rule only fires when a business code is present but NO
+    # presumptive scheme is active — i.e. the taxpayer picked a 44AD-range
+    # code without opting into 44AD. 44ADA/44AE have their own code checks.
+    if inp.business_code and inp.presumptive_scheme not in (
+        PresumptiveScheme.S44AD, PresumptiveScheme.S44ADA, PresumptiveScheme.S44AE,
+    ):
         results.append(_make(
             "ITR4-R012", False,
             f"Business code '{inp.business_code}' for 44AD is selected but 44AD scheme "

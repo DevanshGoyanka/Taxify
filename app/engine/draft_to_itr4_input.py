@@ -225,6 +225,9 @@ def _map_presumptive(
                 gross_vehicle_weight_tons=tonnage,
                 months_owned=months,
                 income_declared=v.presumptiveIncome or None,
+                reg_number=v.vehicleNumber or "",
+                owned_leased_hired_flag="HIRED" if getattr(v, "leasedOrHired", False) else ("LEASE" if str(getattr(v, "leasedOrHired", "")).upper() == "LEASE" else "OWN"),
+                tonnage_capacity=tonnage,
             ))
         goods_44ae = PresumptiveGoodsCarriage44AE(vehicles=vehicles)
         # 44AE requires a business code in Schedule BP (CBDT Sl 137). The

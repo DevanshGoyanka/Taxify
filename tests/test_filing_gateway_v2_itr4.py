@@ -108,7 +108,7 @@ def _filing_ready_itr4(scheme: str = "44AD") -> ReturnDraft:
         )]
     elif scheme == "44AE":
         draft.businesses = [Presumptive44AE(
-            id="b1", natureCode="06001",
+            id="b1", natureCode="08001",
             vehicles=[
                 {"vehicleType": "HEAVY", "tonnage": Decimal("16"),
                  "ownedMonths": 12, "vehicleNumber": "KA01"},
@@ -170,20 +170,17 @@ def test_generate_cbdt_json_itr4_44ada_passes_schema():
     validate_itr4_json(official_json)
 
 
-@pytest.mark.xfail(
-    reason="Known pre-existing ITR-4 validator conflict (CBDT Sl 12 vs Sl 137): "
-    "Sl 137 requires a business code for 44AE, but Sl 12 flags any 44AD-range "
-    "business code as '44AD scheme not active'. The 44AE goods-carriage code "
-    "shares the 0600x numeric range with 44AD business codes, so the two rules "
-    "contradict. Deferred to Phase 8 validator hardening. The v2 gateway + "
-    "mapper correctly produce the JSON; the blocker is the validator logic."
-)
 def test_generate_cbdt_json_itr4_44ae_passes_schema():
     """ITR-4 44AE CBDT JSON validates against the official schema.
 
-    xfailed due to a pre-existing validator conflict (Sl 12 vs Sl 137) — see
-    the marker reason above. The gateway + mapper pipeline is correct; the
-    blocker is validator logic that mis-categorizes the 44AE business code.
+    The pre-existing validator conflict (CBDT Sl 12 vs Sl 137) is resolved:
+    Rule 12 (ITR4-R012) now only fires when a business code is present but
+    NO presumptive scheme is active — 44ADA/44AE carry their own business
+    codes (Sl 137) and no longer trip the 44AD-specific check. The 44AE
+    goods-carriage builder also emits the official schema fields
+    (RegNumberGoodsCarriage, OwnedLeasedHiredFlag, TonnageCapacity,
+    HoldingPeriod, PresumptiveIncome) instead of the old
+    IsHeavyGoodsVehicle/NoOfMonthsOwned/GrossVehicleWeight fields.
     """
     draft = _filing_ready_itr4("44AE")
     official_json, _ = generate_cbdt_json(draft)

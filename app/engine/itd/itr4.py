@@ -608,20 +608,40 @@ def _financial_particulars(financial: Optional[Any]) -> dict[str, Any]:
 
 
 def _goods_dtls_44ae(vehicle: Any) -> dict[str, Any]:
-    """Build one GoodsDtlsUs44AE row from a typed GoodsCarriageVehicle."""
+    """Build one GoodsDtlsUs44AE row from a typed GoodsCarriageVehicle.
+
+    Emits the official CBDT ITR-4 schema fields: ``RegNumberGoodsCarriage``,
+    ``OwnedLeasedHiredFlag``, ``TonnageCapacity``, ``HoldingPeriod``, and
+    ``PresumptiveIncome``. ``HoldingPeriod`` is the months owned (1-12);
+    ``TonnageCapacity`` mirrors the gross vehicle weight for heavy goods
+    vehicles and is 0 for light vehicles; ``PresumptiveIncome`` is the
+    statutory per-vehicle amount (₹1,000 × GVW tons × months for heavy,
+    ₹7,500 × months for light) unless the taxpayer declared a higher amount.
+    """
     is_heavy = bool(getattr(vehicle, "is_heavy_goods_vehicle", False))
-    gvw = getattr(vehicle, "gross_vehicle_weight_tons", None)
+    gvw = getattr(vehicle, "gross_vehicle_weight_tons", None) or getattr(vehicle, "tonnage_capacity", None)
     months = int(getattr(vehicle, "months_owned", 0) or 0)
     if months <= 0:
         raise ValueError("44AE vehicle requires months_owned > 0")
-    row: dict[str, Any] = {
-        "IsHeavyGoodsVehicle": "Y" if is_heavy else "N",
-        "NoOfMonthsOwned": months,
-    }
+    # Statutory presumptive income per Section 44AE(2).
     if is_heavy:
         if gvw is None or gvw <= 0:
             raise ValueError("Heavy goods vehicle requires gross_vehicle_weight_tons")
-        row["GrossVehicleWeight"] = _to_rupees(gvw)
+        statutory = Decimal("1000") * Decimal(gvw) * Decimal(months)
+    else:
+        statutory = Decimal("7500") * Decimal(months)
+    declared = getattr(vehicle, "income_declared", None)
+    income = max(statutory, Decimal(declared) if declared is not None else Decimal("0"))
+    flag = str(getattr(vehicle, "owned_leased_hired_flag", "OWN") or "OWN").upper()
+    if flag not in ("OWN", "LEASE", "HIRED"):
+        flag = "OWN"
+    row: dict[str, Any] = {
+        "RegNumberGoodsCarriage": getattr(vehicle, "reg_number", "") or "",
+        "OwnedLeasedHiredFlag": flag,
+        "TonnageCapacity": _to_rupees(gvw) if (gvw is not None and gvw > 0) else 0,
+        "HoldingPeriod": months,
+        "PresumptiveIncome": _to_rupees(income),
+    }
     return row
 
 

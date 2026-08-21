@@ -431,16 +431,19 @@ Legacy flat-blob paths (DELETED):
 7. No reference to any deleted legacy symbol anywhere in the codebase.
 8. CBDT JSON from both forms passes official schema validation.
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-21
 
 **Implemented:**
-- *(filled in after completion)*
+- `app/engine/filing_gateway_v2.py` — converted the 6 `[DEBUG compute_canonical_itr1]` `print()` statements to proper `logger.debug()` calls (controlled by log level, no longer always-on stdout noise). The logger (`taxify.filing_gateway_v2`) was already defined.
+- `app/engine/validators/itr4/input_rules.py` — **fixed the 44AE validator conflict (CBDT Sl 12 vs Sl 137)**. Rule 12 (`ITR4-R012`) fired for ANY business code when the scheme wasn't 44AD — but 44ADA and 44AE also require business codes (Sl 137). Now Rule 12 only fires when a business code is present but NO presumptive scheme is active (i.e., the taxpayer picked a 44AD-range code without opting into 44AD). 44ADA/44AE carry their own code checks and no longer trip the 44AD-specific check.
+- `app/schemas/itr4.py` — extended `GoodsCarriageVehicle` with the three CBDT-schema-required fields it was missing: `reg_number` (`RegNumberGoodsCarriage`), `owned_leased_hired_flag` (`OwnedLeasedHiredFlag`), `tonnage_capacity` (`TonnageCapacity`). The old model only carried compute-relevant fields, so the official JSON couldn't be emitted.
+- `app/engine/draft_to_itr4_input.py` — the 44AE vehicle mapper now populates the three new fields from the draft's `VehicleRecord` (`vehicleNumber`, `leasedOrHired`, `tonnage`).
+- `app/engine/itd/itr4.py` — **rewrote `_goods_dtls_44ae`** to emit the official CBDT schema fields (`RegNumberGoodsCarriage`, `OwnedLeasedHiredFlag`, `TonnageCapacity`, `HoldingPeriod`, `PresumptiveIncome`) instead of the old wrong field names (`IsHeavyGoodsVehicle`, `NoOfMonthsOwned`, `GrossVehicleWeight`). The builder now also computes the statutory presumptive income per vehicle (₹1,000 × GVW tons × months for heavy, ₹7,500 × months for light), taking the higher of statutory vs. declared.
+- `tests/test_filing_gateway_v2_itr4.py` — removed the `@pytest.mark.xfail` marker from `test_generate_cbdt_json_itr4_44ae_passes_schema` (the conflict is resolved). Updated the 44AE fixture to use a valid 44AE business code (`08001`, "Renting of land transport equipment") instead of `06001` (a 44AD-range code). Updated the test docstring to document the fix.
 
-**Validation:**
-- *(filled in after completion)*
+**Validation:** 297 passed, 0 xfailed, 0 failed across the full ITR-1 + ITR-4 + v2 regression matrix (including `test_itr4_statutory_formula_known_answers`, `test_itr4_input_validation`, `test_itr4_schemas`, `test_112a_unification`). The previously-xfailed 44AE schema test now passes cleanly. Frontend TypeScript: zero new errors.
 
-**Deferred follow-ups:**
-- *(filled in after completion)*
+**Result:** The ITR-4 v2 pipeline is production-ready. ITR-1 and ITR-4 both compute + emit schema-valid CBDT JSON through the single canonical `filing_gateway_v2.generate_cbdt_json` dispatcher. No `print()` debug noise remains in the v2 pipeline. The known 44AE validator conflict is fully resolved (validator rule fixed + builder emits correct schema fields + typed model carries the schema-required fields).
 
 ---
 

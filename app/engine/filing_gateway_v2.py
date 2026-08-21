@@ -157,10 +157,14 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
             [f"Form {draft.form!r} is not supported by the v2 pipeline yet."],
         )
     pending = [item for item in draft.reconciliation.discrepancies if item.status == "PENDING"]
-    print(f"[DEBUG compute_canonical_itr1] form={draft.form} discrepancies={len(draft.reconciliation.discrepancies)} pending={len(pending)} evidence={len(draft.reconciliation.evidence)}", flush=True)
+    logger.debug(
+        "compute_canonical_itr1 form=%s discrepancies=%d pending=%d evidence=%d",
+        draft.form, len(draft.reconciliation.discrepancies),
+        len(pending), len(draft.reconciliation.evidence),
+    )
     if pending:
         categories = ", ".join(sorted({item.category for item in pending}))
-        print(f"[DEBUG compute_canonical_itr1] REJECT: pending discrepancies categories={categories}", flush=True)
+        logger.debug("compute_canonical_itr1 REJECT pending categories=%s", categories)
         raise FilingGatewayV2Error(
             "Manual confirmation is required for imported AIS/TIS reconciliation discrepancies before compute or generation.",
             [f"Pending reconciliation discrepancy: {category}." for category in sorted({item.category for item in pending})],
@@ -175,7 +179,7 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
     ]
     if out_of_scope:
         codes = sorted({e.sourceCode for e in out_of_scope if e.sourceCode})
-        print(f"[DEBUG compute_canonical_itr1] REJECT: out_of_scope={len(out_of_scope)} codes={codes}", flush=True)
+        logger.debug("compute_canonical_itr1 REJECT out_of_scope=%d codes=%s", len(out_of_scope), codes)
         raise FilingGatewayV2Error(
             "Imported evidence contains income outside ITR-1 scope. "
             "Please select the correct form (ITR-2 or ITR-3) before computing.",
@@ -185,15 +189,18 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
         typed_input, breakdown = draft_to_itr1_input(draft)
         result = compute_itr1(typed_input)
     except (DraftMappingError, ValidationError, ValueError) as exc:
-        print(f"[DEBUG compute_canonical_itr1] REJECT: mapping/compute error: {exc}", flush=True)
+        logger.debug("compute_canonical_itr1 REJECT mapping/compute error: %s", exc)
         raise FilingGatewayV2Error("ITR-1 mapping or computation failed.", [str(exc)]) from exc
     if result.errors:
-        print(f"[DEBUG compute_canonical_itr1] REJECT: result.errors={result.errors}", flush=True)
+        logger.debug("compute_canonical_itr1 REJECT result.errors=%s", result.errors)
         raise FilingGatewayV2Error(
             "ITR-1 computation rejected the canonical draft.",
             [str(error) for error in result.errors],
         )
-    print(f"[DEBUG compute_canonical_itr1] OK: gti={result.gross_total_income} taxable={result.taxable_income} tax={result.net_tax_liability}", flush=True)
+    logger.debug(
+        "compute_canonical_itr1 OK gti=%s taxable=%s tax=%s",
+        result.gross_total_income, result.taxable_income, result.net_tax_liability,
+    )
     return ITR1PipelineResult(
         typed_input=typed_input,
         computation=result,
