@@ -94,4 +94,42 @@ export const itrV2 = {
       await parseBlobError(error);
     }
   },
+
+  /** Downloads the saved canonical draft as a typed JSON file. */
+  async download(clientId: string | number, assessmentYear: string): Promise<void> {
+    try {
+      const response = await axiosInstance.get<Blob>(
+        `/v2/clients/${encoded(clientId)}/itr/${encoded(assessmentYear)}/download`,
+        { responseType: 'blob' },
+      );
+      const blob = response.data instanceof Blob ? response.data : new Blob([response.data]);
+      const disposition = String(response.headers?.['content-disposition'] ?? '');
+      const filename = extractFilename(disposition) ?? `ITR_${clientId}_${assessmentYear}.json`;
+      downloadBlob(blob, filename);
+    } catch (error: unknown) {
+      await parseBlobError(error);
+    }
+  },
+
+  /** Downloads a one-page PDF snapshot of the saved canonical draft. */
+  async downloadPdf(clientId: string | number, assessmentYear: string): Promise<void> {
+    try {
+      const response = await axiosInstance.get<Blob>(
+        `/v2/clients/${encoded(clientId)}/itr/${encoded(assessmentYear)}/download-pdf`,
+        { responseType: 'blob' },
+      );
+      const blob = response.data instanceof Blob ? response.data : new Blob([response.data]);
+      const disposition = String(response.headers?.['content-disposition'] ?? '');
+      const filename = extractFilename(disposition) ?? `ITR_${clientId}_${assessmentYear}.pdf`;
+      downloadBlob(blob, filename);
+    } catch (error: unknown) {
+      await parseBlobError(error);
+    }
+  },
 };
+
+/** Extract the filename from a Content-Disposition header value. */
+function extractFilename(disposition: string): string | null {
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  return match ? match[1] : null;
+}

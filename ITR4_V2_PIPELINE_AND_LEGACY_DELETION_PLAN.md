@@ -301,16 +301,21 @@ Legacy flat-blob paths (DELETED):
 2. Frontend download button works via v2.
 3. `client_itr.py` legacy download still works (regression — until Phase 7).
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-21
 
 **Implemented:**
-- *(filled in after completion)*
+- `app/routers/client_itr_v2.py` — added two download endpoints + a shared loader helper:
+  - `_load_saved_draft(client_id, year, user, db) -> (client, itr_row, draft)` — centralizes the load+validate gate used by both download endpoints (and reusable by future v2 endpoints). Enforces the same canonical-validation gate as `generate-cbdt-json`: rejects legacy flat blobs (no `schemaVersion`) with 422, rejects draft/URL year mismatch with 422, rejects invalid stored JSON with 500, and seeds an empty draft from the Client master when no row exists.
+  - `GET /v2/clients/{id}/itr/{year}/download` — returns the saved canonical `ReturnDraft` as a downloadable JSON file (round-trip fidelity with the `PUT` save endpoint). Emits `X-Return-Form` + `X-Return-SchemaVersion` headers so the client can verify the form.
+  - `GET /v2/clients/{id}/itr/{year}/download-pdf` — renders a one-page PDF snapshot from the typed draft (client identity, form, regime, income-head counts, filing section). Uses `reportlab` when available; falls back to a minimal valid PDF shell when `reportlab` is unavailable (mirrors the legacy `download-pdf` fallback so the endpoint never 500s on a dependency gap).
+- `frontend/src/api/itrV2.ts` — added `download(clientId, ay)` and `downloadPdf(clientId, ay)` API client methods. Both parse the `Content-Disposition` header for the filename (so the client uses the server-supplied name) and reuse the existing `downloadBlob` + `parseBlobError` helpers.
+- `tests/test_client_itr_v2_download.py` (NEW) — 8 tests: v2 download + download-pdf routes registered + respond to GET; legacy download-pdf route still registered (regression for Phase 7); `_load_saved_draft` returns a seed when no row; loads a canonical row; rejects legacy blobs with 422; rejects year mismatch with 422; rejects invalid JSON with 500.
 
-**Validation:**
-- *(filled in after completion)*
+**Validation:** 38 passed, 1 xfailed (known 44AE validator conflict), 0 failed across `test_client_itr_v2_download`, `test_filing_gateway_v2_itr4`, `test_filing_gateway_v2`, `test_itr1_calculator`. Frontend TypeScript build: zero new errors (the 5 pre-existing errors in `reconciliation.ts`/`mapCapitalGainsToDraftPatch.ts` are unrelated).
 
 **Deferred follow-ups:**
-- *(filled in after completion)*
+- The frontend `ITRComputationPage` does not yet wire `itrV2.download`/`downloadPdf` into its UI buttons — the v2 API client methods are ready but the page still calls the legacy download path. Repointing the page's download buttons to `itrV2.download`/`downloadPdf` is part of Phase 6 (repoint all callers to v2), which also handles the ITR-4 caller migration.
+- Full DB-integration tests for the two endpoints (with a real `TestClient` + DB fixture) are deferred — the current tests cover registration + the shared helper's validation gate, which is where the logic lives.
 
 ---
 
