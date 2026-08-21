@@ -679,6 +679,7 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         is_director=False,
         has_foreign_assets=False,
         has_unlisted_equity=False,
+        nature_of_employment=(draft.employers[0].natureOfEmployment or None) if draft.employers else None,
         house_property_count=max(1, len(draft.houseProperties)),
         relief_89=Decimal("0"),
         agriculture_income=draft.exemptIncome.grossAgriculturalReceipts,

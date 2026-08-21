@@ -92,12 +92,12 @@ def produce_itd_json(
 
     official_json: Optional[dict[str, Any]] = None
 
-    if form == "ITR-1":
-        # ITR-1 uses the v2 canonical pipeline (the live path the v2
-        # frontend routes call). v2's generate_cbdt_json runs the full
-        # CBDT rule validators (run_input_validation + run_calc_validation)
-        # before building the official JSON, so every Category A rule is
-        # enforced on this path.
+    if form in {"ITR-1", "ITR-4"}:
+        # ITR-1 and ITR-4 use the v2 canonical pipeline (the live path the
+        # v2 frontend routes call). v2's generate_cbdt_json dispatches by
+        # draft.form and runs the full CBDT rule validators
+        # (run_input_validation + run_calc_validation) before building the
+        # official JSON, so every Category A rule is enforced on this path.
         from app.engine.filing_gateway_v2 import (
             FilingGatewayV2Error,
             generate_cbdt_json,
@@ -106,14 +106,14 @@ def produce_itd_json(
         try:
             if "schemaVersion" not in payload:
                 raise FilingOrchestratorError(
-                    "ITR-1 filing requires a canonical /v2 ReturnDraft. "
+                    f"{form} filing requires a canonical /v2 ReturnDraft. "
                     "Save the return through /v2/clients/{client_id}/itr/{year} "
                     "before generating or submitting it."
                 )
             draft = ReturnDraft.model_validate(payload)
-            if draft.form != "ITR-1":
+            if draft.form != form:
                 raise FilingOrchestratorError(
-                    f"Saved canonical draft form is {draft.form}, not ITR-1."
+                    f"Saved canonical draft form is {draft.form}, not {form}."
                 )
             if draft.assessmentYear and draft.assessmentYear != ay:
                 raise FilingOrchestratorError(
@@ -126,19 +126,17 @@ def produce_itd_json(
             raise
         except FilingGatewayV2Error as exc:
             raise FilingOrchestratorError(
-                f"ITR-1 JSON generation failed: {exc}",
+                f"{form} JSON generation failed: {exc}",
                 errors=list(exc.errors),
             ) from exc
         except Exception as exc:
             raise FilingOrchestratorError(
-                f"ITR-1 draft mapping or generation failed: {exc}",
+                f"{form} draft mapping or generation failed: {exc}",
             ) from exc
     else:
-        # ITR-2/3/4 still flow through the legacy filing_gateway. Only ITR-4
-        # can produce an official JSON today (ITR-2/3 raise in the gateway).
-        # The ITR-4 path runs the full CBDT rule validators
-        # (run_input_validation + run_calc_validation) inside
-        # _build_itr4_official_json before building the JSON.
+        # ITR-2/3 still flow through the legacy filing_gateway (the v2
+        # pipeline does not support them yet). Phase 7 will delete this
+        # branch once ITR-2/3 move to canonical drafts.
         payload["itrForm"] = form
         try:
             result = generate_filing_artifact(

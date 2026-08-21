@@ -579,11 +579,19 @@ export default function ITRComputationPage() {
 
   const handleDownloadPdf = async () => {
     try {
-      const { itrApi } = await import('../api/itr');
-      await itrApi.downloadPdf(clientId, effectiveAssessmentYear);
+      await itrV2.downloadPdf(clientId, effectiveAssessmentYear);
       toast.success('PDF downloaded successfully');
     } catch (err: any) {
       toast.error(err.message || 'PDF download failed');
+    }
+  };
+
+  const handleDownloadJson = async () => {
+    try {
+      await itrV2.download(clientId, effectiveAssessmentYear);
+      toast.success('Draft JSON downloaded successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Draft JSON download failed');
     }
   };
 
@@ -1569,6 +1577,22 @@ export default function ITRComputationPage() {
             }}
           >
             PDF
+          </button>
+
+          <button
+            onClick={handleDownloadJson}
+            title="Download the saved canonical ReturnDraft as a JSON file"
+            style={{
+              padding: '6px 12px',
+              background: 'var(--accent-purple)',
+              color: 'white',
+              border: 'none',
+              borderRadius: 6,
+              fontSize: 12,
+              cursor: 'pointer'
+            }}
+          >
+            Draft JSON
           </button>
 
           {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (

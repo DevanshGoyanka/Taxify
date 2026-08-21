@@ -39,7 +39,7 @@ def test_compute_v2_rejects_non_itr1_form_with_422() -> None:
     with pytest.raises(HTTPException) as caught:
         compute_tax_summary_v2(draft)
     assert caught.value.status_code == 422
-    assert "ITR-1 only" in caught.value.detail["errors"][0]
+    assert "not supported by the v2 pipeline" in caught.value.detail["errors"][0]
 
 
 def test_compute_v2_surfaces_engine_eligibility_errors() -> None:

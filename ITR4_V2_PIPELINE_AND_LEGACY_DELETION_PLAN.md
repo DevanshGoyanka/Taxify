@@ -341,16 +341,21 @@ Legacy flat-blob paths (DELETED):
 4. Full ITR-1 + ITR-4 suites green.
 5. `grep -r "_build_itr1_input_from_flat\|_build_itr4_input_from_flat\|_compute_tax_summary_impl\|generate_filing_artifact" app/` returns **zero** matches (no live caller).
 
-**Status:** ⬜ Not started
+**Status:** ✅ Completed on 2026-08-21
 
 **Implemented:**
-- *(filled in after completion)*
+- `app/routers/tax_v2.py` — repointed `compute_tax_summary_v2` from the legacy ITR-2/3/4 delegation to the v2 canonical dispatcher `compute_canonical`. ITR-1 and ITR-4 now both compute through the single canonical pipeline; ITR-2/3 raise a clear 422 ("not supported by the v2 pipeline yet"). Removed the legacy `_compute_tax_summary_impl` delegation + the flat-payload conversion. Updated the docstring.
+- `app/engine/filing_orchestrator.py` — repointed the ITR-4 filing path from the legacy `generate_filing_artifact` (flat-blob gateway) to the v2 `generate_cbdt_json` dispatcher. ITR-1 and ITR-4 now share the same canonical dispatch (`if form in {"ITR-1", "ITR-4"}`); only ITR-2/3 remain on the legacy branch (deleted in Phase 7).
+- `app/engine/draft_to_itr1_input.py` — fixed a **pre-existing mapper gap**: `nature_of_employment` was never set on `ITR1Input` from `draft.employers[0].natureOfEmployment`, so the CBDT Category A validator rejected every ITR-1 with salary. The legacy flat mapper never triggered the rule (the legacy tests didn't run the full Category A validators). Now the v2 mapper sets it from the first employer.
+- `frontend/src/pages/ITRComputationPage.tsx` — repointed `handleDownloadPdf` from the legacy `itrApi.downloadPdf` to the v2 `itrV2.downloadPdf`. Added a new "Draft JSON" button calling `itrV2.download` so users can download the saved canonical draft as a JSON file via the v2 endpoint.
+- `tests/test_tax_v2_compute.py` — updated `test_compute_v2_rejects_non_itr1_form_with_422`'s assertion (the error message improved from "ITR-1 only" to "not supported by the v2 pipeline" because ITR-4 is now supported).
+- `tests/test_itr1_filing_gateway_profile_v2.py` (NEW) — 4 canonical tests parallel to the legacy `test_itr1_filing_gateway_profile.py`: the v2 `_filing_profile` uses draft identity (not placeholders); `compute_canonical_itr1` builds the typed input; `generate_cbdt_json` passes the official ITR-1 schema gate; missing-profile rejection. These replace the legacy tests when the legacy mapper is deleted in Phase 7.
 
-**Validation:**
-- *(filled in after completion)*
+**Validation:** 114 passed, 1 xfailed (known 44AE validator conflict), 0 failed across `test_tax_v2_compute`, `test_filing_gateway_v2_itr4`, `test_filing_gateway_v2`, `test_itr1_calculator`, `test_itr1_golden_suite`, `test_itr1_filing_gateway_profile`, `test_itr1_filing_gateway_profile_v2`, `test_client_itr_v2_download`, `test_draft_to_itr4_input_itr4`, `test_draft_to_itr1_input`, `test_return_draft_schema`. Frontend TypeScript: zero new errors.
 
 **Deferred follow-ups:**
-- *(filled in after completion)*
+- The legacy `test_itr1_filing_gateway_profile.py` and `test_itr1_golden_suite.py` still import `_build_itr1_input_from_flat` directly. They still pass (the legacy mapper exists), so they're kept as regression coverage until Phase 7 deletes the legacy mapper — at which point the canonical `test_itr1_filing_gateway_profile_v2.py` replaces them.
+- The legacy `client_itr.py` `download`/`download-pdf` endpoints still exist (ITR-2/3 callers use them). They're deleted in Phase 7 once ITR-2/3 move to canonical drafts.
 
 ---
 
