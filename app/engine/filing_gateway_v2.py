@@ -152,7 +152,9 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
     """
     if draft.form != "ITR-1":
         raise FilingGatewayV2Error(
-            "The v2 canonical compute endpoint currently supports ITR-1 only."
+            "The v2 canonical compute endpoint currently supports ITR-1 and "
+            "ITR-4 only.",
+            [f"Form {draft.form!r} is not supported by the v2 pipeline yet."],
         )
     pending = [item for item in draft.reconciliation.discrepancies if item.status == "PENDING"]
     print(f"[DEBUG compute_canonical_itr1] form={draft.form} discrepancies={len(draft.reconciliation.discrepancies)} pending={len(pending)} evidence={len(draft.reconciliation.evidence)}", flush=True)
@@ -743,10 +745,14 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
         FilingGatewayV2Error: If profile construction, generation, or official
             schema validation fails.
     """
+    if draft.form == "ITR-1":
+        return _generate_cbdt_json_itr1(draft)
     if draft.form == "ITR-4":
         return _generate_cbdt_json_itr4(draft)
-    # Default: ITR-1 path (unchanged).
-    return _generate_cbdt_json_itr1(draft)
+    raise FilingGatewayV2Error(
+        "The v2 canonical pipeline currently supports ITR-1 and ITR-4 only.",
+        [f"Form {draft.form!r} is not supported by the v2 pipeline yet."],
+    )
 
 
 def _generate_cbdt_json_itr1(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, Any]]:

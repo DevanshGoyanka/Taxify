@@ -1,15 +1,17 @@
 """
 Canonical mapper: ReturnDraft → ITR1Input.
 
-This is the SINGLE flat→typed mapper for ITR-1. It replaces the two
-duplicate mappers that must currently stay in sync:
+This is the SINGLE typed mapper for ITR-1. It replaced the two duplicate
+flat→typed mappers that had to stay in sync:
 
   - ``app/routers/tax.py::_compute_tax_summary_impl`` (the ITR-1 branch,
-    ~790 lines) — maps flat blob → typed input for COMPUTE.
+    ~790 lines) — mapped flat blob → typed input for COMPUTE.
   - ``app/engine/filing_gateway.py::_build_itr1_input_from_flat`` (~300
-    lines) — maps flat blob → typed input for CBDT JSON generation.
+    lines) — mapped flat blob → typed input for CBDT JSON generation
+    (deleted in Phase 7; the legacy CBDT endpoint now routes through
+    ``flat_to_draft`` → this mapper → the v2 pipeline).
 
-Both currently re-implement the same alias-parsing (``row.get("hra",
+Both re-implemented the same alias-parsing (``row.get("hra",
 row.get("hraReceived"))``, ``_first_money(...)`` etc.). This module
 does the mapping ONCE, from the canonical typed ``ReturnDraft`` — no
 aliases, no guessing.

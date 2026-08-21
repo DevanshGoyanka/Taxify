@@ -4,7 +4,8 @@ This is the Python mirror of the frontend ``adaptLegacyReturn`` in
 ``frontend/src/domain/returns/legacyAdapter.ts``.  It exists so the legacy
 flat-blob CBDT path can delegate to the single canonical mapper
 ``draft_to_itr1_input`` instead of maintaining a duplicate ~300-line
-flat→typed mapper in ``filing_gateway._build_itr1_input_from_flat``.
+flat→typed mapper (the legacy ``_build_itr1_input_from_flat`` was deleted
+in Phase 7; ``flat_to_draft`` is now the sole flat→canonical converter).
 
 Authority: ``frontend/src/domain/returns/legacyAdapter.ts`` (the canonical
 TypeScript adapter).  Field names and alias precedence match that file so a
@@ -620,10 +621,9 @@ def flat_to_draft(payload: Any) -> ReturnDraft:
     """Convert a legacy flat formData blob into a canonical ``ReturnDraft``.
 
     This is the Python mirror of ``frontend/src/domain/returns/legacyAdapter.ts::
-    adaptLegacyReturn``.  It is used by the legacy CBDT pipeline so that the
-    duplicate flat→typed mapper ``_build_itr1_input_from_flat`` can delegate
-    to the single canonical ``draft_to_itr1_input`` instead of re-implementing
-    the same alias parsing.
+    adaptLegacyReturn``.  It converts the legacy flat-blob payload to a
+    canonical ``ReturnDraft`` so the v2 pipeline can compute + emit CBDT JSON
+    without re-implementing the same alias parsing.
 
     Args:
         payload: The raw flat JSON blob persisted by the frontend.

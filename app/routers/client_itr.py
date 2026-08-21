@@ -1,5 +1,6 @@
 import json
 from fastapi import APIRouter, Depends, HTTPException, status, Response
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
@@ -154,22 +155,25 @@ def generate_client_cbdt_json(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Generate official CBDT ITD-compliant JSON via the canonical filing gateway.
+    """Generate official CBDT ITD-compliant JSON via the v2 canonical pipeline.
 
     This endpoint consumes the current live draft (POST body) or falls back
-    to the persisted form_data.  It then runs:
+    to the persisted form_data, converts it to a canonical ``ReturnDraft``
+    (for legacy flat blobs) and runs the v2 pipeline:
 
       draft → typed input → compute → validate → build JSON → schema check
 
     Returns the official CBDT JSON for download, or 422 with actionable
     errors if the pipeline cannot produce a valid artifact.
 
-    Supported forms: ITR-1, ITR-4.
+    ITR-1 and ITR-4 are supported (both via the v2 canonical pipeline).
     Blocked forms: ITR-2, ITR-3 (require dedicated canonical mappers).
     """
     client = resolve_owned_client(client_id, current_user.id, db)
 
-    from app.engine.filing_gateway import generate_filing_artifact, FilingGatewayError
+    from app.engine.filing_gateway_v2 import FilingGatewayV2Error, generate_cbdt_json
+    from app.schemas.return_draft import ReturnDraft
+    from app.engine.flat_to_draft import flat_to_draft
 
     import json as _json
 
@@ -183,41 +187,64 @@ def generate_client_cbdt_json(
 
     flat_draft.setdefault("assessmentYear", year or "2026-27")
 
-    try:
-        result = generate_filing_artifact(
-            flat_draft=flat_draft,
-            user=current_user,
-            db=db,
-            include_official_json=True,
+    # Convert the payload to a canonical ReturnDraft. A payload that already
+    # carries ``schemaVersion`` is a typed draft (validate directly); a legacy
+    # flat blob is routed through ``flat_to_draft`` so the v2 pipeline never
+    # sees alias keys.
+    if isinstance(flat_draft, dict) and "schemaVersion" in flat_draft:
+        try:
+            draft = ReturnDraft.model_validate(flat_draft)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "message": "Canonical draft validation failed.",
+                    "errors": [str(error) for error in exc.errors()],
+                },
+            )
+    else:
+        try:
+            draft = flat_to_draft(flat_draft)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "message": f"Flat draft → canonical draft conversion failed: {exc}",
+                    "errors": [str(exc)],
+                },
+            ) from exc
+
+    if draft.assessmentYear and draft.assessmentYear != year:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Draft assessment year does not match the requested year.",
+                "errors": [f"Draft has {draft.assessmentYear}; URL requests {year}."],
+            },
         )
-    except FilingGatewayError as exc:
+    draft.assessmentYear = year
+
+    try:
+        official_json, _summary = generate_cbdt_json(draft)
+    except FilingGatewayV2Error as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "message": str(exc),
                 "errors": exc.errors,
             },
-        )
+        ) from exc
 
-    if not result.has_official_json:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "message": "The filing gateway did not produce official JSON.",
-                "errors": ["No official JSON was generated."],
-            },
-        )
-
-    form_file_prefix = result.form.replace("-", "")
-    content = _json.dumps(result.official_json, indent=2, default=str)
+    form_file_prefix = draft.form.replace("-", "") if draft.form else "ITR1"
+    content = _json.dumps(official_json, indent=2, default=str)
 
     return Response(
         content=content,
         media_type="application/json",
         headers={
             "Content-Disposition": f"attachment; filename=CBDT-{form_file_prefix}_{client.pan}_{year}.json",
-            "X-CBDT-Computation-Status": result.computation_status,
-            "X-CBDT-Schema-Valid": "true" if not result.validation_errors else "false",
+            "X-CBDT-Computation-Status": "FORM_COMPUTATION",
+            "X-CBDT-Schema-Valid": "true",
         },
     )
 
