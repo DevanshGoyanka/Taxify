@@ -69,6 +69,7 @@ def test_flat_mapper_builds_real_filing_profile_and_schema_valid_json() -> None:
     assert typed.filing_profile is not None
     assert typed.filing_profile.pan == "ABCDE1234F"
     assert typed.filing_profile.surname == "Sharma"
+    assert typed.filing_profile.employer_category == "OTH"
     assert typed.filing_profile.primary_address.city_or_town_or_district == "Delhi"
     assert typed.filing_profile.verification_place == "Delhi"
     assert typed.filing_profile.return_file_section == 11

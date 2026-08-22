@@ -27,6 +27,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       dateOfBirth: null,
       flatNo: '', residenceName: '', roadOrStreet: '', localityOrArea: '',
       city: '', stateCode: '', countryCode: '91', pinCode: '', zipCode: '',
+      employerCategory: '',
     },
     filing: { filingSection: '139(1)', returnType: 'ORIGINAL', originalAcknowledgementNumber: '', originalFilingDate: null, noticeNumber: '' },
     employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: { ...EMPTY_CAPITAL_GAINS_SCHEDULE },

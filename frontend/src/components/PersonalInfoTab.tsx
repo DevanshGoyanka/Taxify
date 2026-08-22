@@ -3,6 +3,12 @@ import { BankAccountManager, type BankAccountData } from './BankAccountManager';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import { calculateAgeFromDob } from '../utils/age';
 import type { ReturnDraft } from '../domain/returns/types';
+import {
+  EMPLOYER_CATEGORY_OPTIONS,
+  STATE_CODE_OPTIONS,
+  type EmployerCategory,
+  type StateCode,
+} from '../domain/returns/cbdtEnums';
 
 export type SupportedItrForm = 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4';
 
@@ -45,10 +51,6 @@ const INPUT_STYLE: React.CSSProperties = { width: '100%', boxSizing: 'border-box
 const GRID_STYLE: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 14 };
 const PAN_PATTERN = '[A-Z]{5}[0-9]{4}[A-Z]';
 const PIN_PATTERN = '[1-9][0-9]{5}';
-
-const INDIAN_STATES = [
-  ['01', 'Andaman & Nicobar Islands'], ['02', 'Andhra Pradesh'], ['03', 'Arunachal Pradesh'], ['04', 'Assam'], ['05', 'Bihar'], ['06', 'Chandigarh'], ['07', 'Dadra & Nagar Haveli'], ['08', 'Daman & Diu'], ['09', 'Delhi'], ['10', 'Goa'], ['11', 'Gujarat'], ['12', 'Haryana'], ['13', 'Himachal Pradesh'], ['14', 'Jammu & Kashmir'], ['15', 'Karnataka'], ['16', 'Kerala'], ['17', 'Lakshadweep'], ['18', 'Madhya Pradesh'], ['19', 'Maharashtra'], ['20', 'Manipur'], ['21', 'Meghalaya'], ['22', 'Mizoram'], ['23', 'Nagaland'], ['24', 'Odisha'], ['25', 'Puducherry'], ['26', 'Punjab'], ['27', 'Rajasthan'], ['28', 'Sikkim'], ['29', 'Tamil Nadu'], ['30', 'Tripura'], ['31', 'Uttar Pradesh'], ['32', 'West Bengal'], ['33', 'Chhattisgarh'], ['34', 'Uttarakhand'], ['35', 'Jharkhand'], ['36', 'Telangana'], ['37', 'Ladakh'], ['99', 'Outside India'],
-] as const;
 
 function text(value: unknown): string { return value == null ? '' : String(value); }
 function bool(value: unknown): boolean { return value === true; }
@@ -96,7 +98,10 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
   const updateVerification = (patch: Partial<Verification>): void => onChange({ verification: patch });
   const updatePrimaryAddress = (key: keyof AddressData, value: string): void => {
     const next = { ...primaryAddress, [key]: value };
-    updatePersonal({ flatNo: next.residenceNo, residenceName: next.residenceName, roadOrStreet: next.roadOrStreet, localityOrArea: next.localityOrArea, city: next.city, stateCode: next.stateCode, countryCode: next.countryCode, pinCode: next.pinCode, zipCode: next.zipCode });
+    if (key === 'countryCode') {
+      next.stateCode = value === '91' ? (next.stateCode === '99' ? '' : next.stateCode) : '99';
+    }
+    updatePersonal({ flatNo: next.residenceNo, residenceName: next.residenceName, roadOrStreet: next.roadOrStreet, localityOrArea: next.localityOrArea, city: next.city, stateCode: next.stateCode as StateCode | '', countryCode: next.countryCode, pinCode: next.pinCode, zipCode: next.zipCode });
   };
   const renderAddress = (address: AddressData, update: (key: keyof AddressData, value: string) => void, prefix: string): React.JSX.Element => {
     const india = address.countryCode === '91';
@@ -107,7 +112,7 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       <Field label={`${prefix} Area / Locality`} value={address.localityOrArea} onChange={(value) => update('localityOrArea', value)} required maxLength={50} />
       <Field label={`${prefix} Town / City / District`} value={address.city} onChange={(value) => update('city', value)} required maxLength={50} />
       <SelectField label={`${prefix} Country`} value={address.countryCode} onChange={(value) => update('countryCode', value)} required>{ITD_COUNTRY_CODES.map((country) => <option key={country.value} value={country.value}>{country.value} — {country.label}</option>)}</SelectField>
-      <SelectField label={`${prefix} State`} value={address.stateCode} onChange={(value) => update('stateCode', value)} required={india}><option value="">-- Select state --</option>{INDIAN_STATES.map(([code, label]) => <option key={code} value={code}>{code} — {label}</option>)}</SelectField>
+      <SelectField label={`${prefix} State`} value={address.stateCode} onChange={(value) => update('stateCode', value)} required><option value="">-- Select state --</option>{STATE_CODE_OPTIONS.filter(({ code }) => india ? code !== '99' : code === '99').map(({ code, label }) => <option key={code} value={code}>{code} — {label}</option>)}</SelectField>
       {india ? <Field label={`${prefix} PIN Code`} value={address.pinCode} onChange={(value) => update('pinCode', value.replace(/\D/g, '').slice(0, 6))} required pattern={PIN_PATTERN} maxLength={6} inputMode="numeric" /> : <Field label={`${prefix} ZIP / Postal Code`} value={address.zipCode} onChange={(value) => update('zipCode', value)} required maxLength={20} />}
     </div>;
   };
@@ -127,6 +132,10 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       <Field label="Date of Birth / Formation" value={personal.dateOfBirth || ''} onChange={(value) => updatePersonal({ dateOfBirth: value || null })} type="date" required />
       <Field label="Age as on 31 March 2026" value={age} onChange={() => undefined} disabled />
       <Field label="Father's Name" value={personal.fatherName} onChange={(value) => updatePersonal({ fatherName: value })} required maxLength={125} />
+      <SelectField label="Employer Category" value={personal.employerCategory} onChange={(value) => updatePersonal({ employerCategory: value as EmployerCategory })} required>
+        <option value="">-- Select employer category --</option>
+        {EMPLOYER_CATEGORY_OPTIONS.map(({ code, label }) => <option key={code} value={code}>{code} — {label}</option>)}
+      </SelectField>
     </div></div>
     <div style={CARD_STYLE}><h4 style={{ marginTop: 0, fontSize: 14 }}>Contact details</h4><div style={GRID_STYLE}>
       <Field label="Mobile Number" value={personal.mobile} onChange={(value) => updatePersonal({ mobile: value.replace(/\D/g, '').slice(0, 15) })} required pattern="[0-9]{6,15}" maxLength={15} inputMode="tel" />

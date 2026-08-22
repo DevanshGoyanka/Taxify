@@ -947,9 +947,9 @@ class PersonalInfo(_StrictModel):
         "Ignored by ITR-1.",
     )
     employerCategory: str = Field(
-        default="OTH",
+        default="",
         description="CBDT employer category (CGOV/SGOV/PSU/PE/PESG/PEPS/PEO/OTH/NA). "
-        "ITR-4 FilingStatus field; ignored by ITR-1.",
+        "Required in PersonalInfo for both ITR-1 and ITR-4.",
     )
     landlineStdCode: str = Field(
         default="0",

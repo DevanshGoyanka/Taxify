@@ -52,6 +52,7 @@ import { mapReconciledToDraftPatch } from '../utils/mapReconciledToDraftPatch';
 import { mapAisToDraftPatch } from '../utils/mapAisToDraftPatch';
 import { map26asToDraftPatch } from '../utils/map26asToDraftPatch';
 import { mapTisToDraftPatch } from '../utils/mapTisToDraftPatch';
+import { validateCbdtFrontendFields } from '../domain/returns/filingPreflight';
 
 const returnRepository = createReturnRepository();
 
@@ -519,6 +520,13 @@ export default function ITRComputationPage() {
         form: itrForm,
         regime,
       };
+      const frontendErrors = validateCbdtFrontendFields(draft);
+      if (frontendErrors.length > 0) {
+        const report = { valid: false, errors: frontendErrors, warnings: [] };
+        setValidationReport(report);
+        toast.error(`${frontendErrors.length} blocking error(s) — see report`);
+        return;
+      }
       await returnRepository.save(clientId, draft);
       let report: { valid: boolean; errors: string[]; warnings: string[] };
       try {
@@ -554,17 +562,20 @@ export default function ITRComputationPage() {
     }
     try {
       const currentEditor = editorRef.current;
+      if (!currentEditor?.draft) throw new Error('Return is not loaded');
+      const frontendErrors = validateCbdtFrontendFields(currentEditor.draft);
+      if (frontendErrors.length > 0) {
+        throw Object.assign(new Error('Correct the CBDT-constrained fields before generating JSON.'), { errors: frontendErrors });
+      }
       // Generate from the typed canonical draft without composing or
       // normalizing a legacy payload. The v2 endpoint requires a persisted
       // draft, so save first to publish the latest editor state.
-      if (currentEditor?.draft) {
-        await returnRepository.save(clientId, {
-          ...currentEditor.draft,
-          assessmentYear: effectiveAssessmentYear,
-          form: itrForm,
-          regime,
-        });
-      }
+      await returnRepository.save(clientId, {
+        ...currentEditor.draft,
+        assessmentYear: effectiveAssessmentYear,
+        form: itrForm,
+        regime,
+      });
       await itrV2.generate(clientId, effectiveAssessmentYear);
       toast.success(`CBDT ${itrForm} JSON generated ✓`);
     } catch (err: any) {
@@ -680,14 +691,17 @@ export default function ITRComputationPage() {
     setFilingJob(null);
     try {
       const currentEditor = editorRef.current;
-      if (currentEditor?.draft) {
-        await returnRepository.save(clientId, {
-          ...currentEditor.draft,
-          assessmentYear: ay,
-          form: itrForm,
-          regime,
-        });
+      if (!currentEditor?.draft) throw new Error('Return is not loaded');
+      const frontendErrors = validateCbdtFrontendFields(currentEditor.draft);
+      if (frontendErrors.length > 0) {
+        throw Object.assign(new Error('Correct the CBDT-constrained fields before direct submission.'), { details: { errors: frontendErrors } });
       }
+      await returnRepository.save(clientId, {
+        ...currentEditor.draft,
+        assessmentYear: ay,
+        form: itrForm,
+        regime,
+      });
       const verificationMode: VerificationMode = 'LATER';
       const res = await filingSubmitApi.submit(clientId, ay, itrForm, verificationMode);
       setFilingJobId(res.job_id);

@@ -9,23 +9,7 @@
 // and cash vs other-mode amount split per the official ITD schema.
 
 import React, { useState, useMemo } from 'react';
-
-// ---- State codes per ITD schema (01–37) ----
-const STATE_CODES: Record<string, string> = {
-  '01': 'Andaman & Nicobar', '02': 'Andhra Pradesh', '03': 'Arunachal Pradesh',
-  '04': 'Assam', '05': 'Bihar', '06': 'Chandigarh',
-  '07': 'Dadra & Nagar Haveli', '08': 'Daman & Diu', '09': 'Delhi',
-  '10': 'Goa', '11': 'Gujarat', '12': 'Haryana',
-  '13': 'Himachal Pradesh', '14': 'Jammu & Kashmir', '15': 'Karnataka',
-  '16': 'Kerala', '17': 'Lakshadweep', '18': 'Madhya Pradesh',
-  '19': 'Maharashtra', '20': 'Manipur', '21': 'Meghalaya',
-  '22': 'Mizoram', '23': 'Nagaland', '24': 'Odisha',
-  '25': 'Puducherry', '26': 'Punjab', '27': 'Rajasthan',
-  '28': 'Sikkim', '29': 'Tamil Nadu', '30': 'Tripura',
-  '31': 'Uttar Pradesh', '32': 'West Bengal', '33': 'Chhattisgarh',
-  '34': 'Uttarakhand', '35': 'Jharkhand', '36': 'Telangana',
-  '37': 'Ladakh',
-};
+import { INDIAN_STATE_CODE_OPTIONS, type StateCode } from '../domain/returns/cbdtEnums';
 
 // ---- 4 official 80G categories ----
 type DonationCategory = '100_NO_APPROVAL' | '50_NO_APPROVAL' | '100_APPROVAL_REQD' | '50_APPROVAL_REQD';
@@ -47,7 +31,7 @@ export interface DoneeEntry {
   // AddressDetail (required by schema)
   addrDetail: string;              // → AddrDetail (max 200, required)
   city: string;                    // → CityOrTownOrDistrict (max 50, required)
-  stateCode: string;               // → StateCode (01–37, required)
+  stateCode: StateCode | '';       // → StateCode (01–37, required)
   pinCode: string;                 // → PinCode (100000–999999, required)
   // Amount split — cash vs other mode
   donationAmtCash: number;         // → DonationAmtCash (required)
@@ -312,11 +296,11 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
                   <div>
                     <label style={labelStyle}>State *</label>
                     <select value={entry.stateCode}
-                      onChange={e => updateEntry(entry.id, 'stateCode', e.target.value)}
+                      onChange={e => updateEntry(entry.id, 'stateCode', e.target.value as StateCode | '')}
                       style={inputStyle}>
                       <option value="">— Select State —</option>
-                      {Object.entries(STATE_CODES).map(([code, name]) => (
-                        <option key={code} value={code}>{code} — {name}</option>
+                      {INDIAN_STATE_CODE_OPTIONS.map(({ code, label }) => (
+                        <option key={code} value={code}>{code} — {label}</option>
                       ))}
                     </select>
                   </div>

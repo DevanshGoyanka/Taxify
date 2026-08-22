@@ -35,6 +35,7 @@ def _filing_ready_draft() -> ReturnDraft:
     draft.personal.stateCode = "07"
     draft.personal.countryCode = "91"
     draft.personal.pinCode = "110001"
+    draft.personal.employerCategory = "OTH"
     draft.verification.place = "Delhi"
     draft.verification.declarationAccepted = True
     draft.employers = [Employer(id="e1", basic=Decimal("800000"))]
@@ -94,6 +95,24 @@ def test_generation_requires_canonical_filing_fields() -> None:
     with pytest.raises(gateway.FilingGatewayV2Error) as caught:
         gateway.generate_cbdt_json(draft)
     assert "required" in " ".join(caught.value.errors).lower()
+
+
+def test_generation_requires_explicit_personal_employer_category() -> None:
+    """Mandatory CBDT EmployerCategory must not silently fall back to OTH."""
+    draft = _filing_ready_draft()
+    draft.personal.employerCategory = ""
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.generate_cbdt_json(draft)
+    assert "personal.employerCategory" in " ".join(caught.value.errors)
+
+
+def test_generation_emits_selected_personal_employer_category() -> None:
+    """The personal category is independent of the number of employer rows."""
+    draft = _filing_ready_draft()
+    draft.personal.employerCategory = "CGOV"
+    draft.employers = []
+    official, _ = gateway.generate_cbdt_json(draft)
+    assert official["ITR"]["ITR1"]["PersonalInfo"]["EmployerCategory"] == "CGOV"
 
 
 def test_generation_rejects_unsupported_filing_section() -> None:

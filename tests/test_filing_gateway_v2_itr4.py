@@ -73,6 +73,7 @@ def _filing_ready_itr4(scheme: str = "44AD") -> ReturnDraft:
     p.firstName = "Rahul"
     p.surnameOrOrgName = "Sharma"
     p.fatherName = "Mohan Sharma"
+    p.employerCategory = "OTH"
     p.dateOfBirth = "1980-05-15"
     p.age = 45
     p.flatNo = "12A"

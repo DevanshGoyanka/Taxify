@@ -46,25 +46,19 @@ schema violations.
 
 ## 2. Critical Findings (P0 — must fix before broad production rollout)
 
-### F1. `PersonalInfo.employerCategory` — frontend never captures it
+### F1. `PersonalInfo.employerCategory` — ✅ FIXED
 - **Schema (ITR-1 & ITR-4):** `PersonalInfo.EmployerCategory` is **required**,
   enum `["CGOV","SGOV","PSU","PE","PESG","PEPS","PEO","OTH","NA"]`.
   Evidence: `audit_itr1_enums_cappings.csv` row `ITR.ITR1.PersonalInfo.EmployerCategory`.
-- **Backend `ReturnDraft.PersonalInfo`:** `employerCategory: str` exists
-  (`app/schemas/return_draft.py`).
-- **Frontend `types.ts` `PersonalInfo`:** **MISSING the field** — see
-  `frontend/src/domain/returns/types.ts:357-385` (fields end at
-  `holdsUnlistedShares`).
-- **`grep employerCategory frontend/src` → 0 matches** — the field appears
-  nowhere in the frontend.
-- **Builder behaviour:** `_filing_profile` defaults to `"OTH"`
-  (`app/engine/filing_gateway_v2.py`): `employer_category=(personal.employerCategory or "OTH")`.
-- **Risk:** `"OTH"` is schema-valid, so JSON passes — but a Central/State
-  Govt employee is mislabelled as "OTH", which feeds the 80DD/80U and
-  retrenchment rule branches in the CBDT validators
-  (`app/engine/validators/itr1/input_rules.py`: rules keyed on
-  `nature_of_employment` / `employer_category`). For ITR-1 this affects the
-  standard-deduction and gratuity caps. **Capture gap, not a schema fail.**
+- **Fix:** Added the nine-value `EmployerCategory` union to the canonical
+  frontend model and a required selector in Personal Information. The value
+  remains personal-level and independent of the number of employer rows.
+  Prefill values are normalized against the official enum.
+- **Backend gate:** New drafts default the field to blank, and both ITR-1 and
+  ITR-4 official generation now require it explicitly. The previous silent
+  `"OTH"` fallback has been removed.
+- **Regression:** `test_generation_emits_selected_personal_employer_category`
+  verifies a selected category is emitted even with zero employer rows.
 
 ### F2. `filingSection` → `ReturnFileSec` — ✅ FIXED (2026-08-21)
 - **Schema (ITR-1 & ITR-4):** `FilingStatus.ReturnFileSec` integer enum
@@ -85,28 +79,25 @@ schema violations.
   `test_generation_rejects_unsupported_filing_section` now uses a genuinely-
   invalid code (`"NOT_A_REAL_SECTION"`).
 
-### F3. `stateCode` / `state` — typed `string`, not enum-constrained
+### F3. `stateCode` / `state` — ✅ FIXED
 - **Schema:** `PersonalInfo.Address.StateCode` enum `["01".."37"]` (ITR-1 & ITR-4);
   `PinCode` integer min=100000 max=999999.
-- **Frontend `types.ts`:** `stateCode: string` (PersonalInfo),
-  `state: string` (HouseProperty), `employerStateCode: string` (Employer) —
-  **no enum union type**, no numeric capping on pin codes.
-- **Backend:** mapper passes the string through; the schema gate rejects invalid
-  values at generation time.
-- **Risk:** The user can type any string into a state field; the backend rejects
-  it only at CBDT-generation → the user loses work. Not a schema fail, but a
-  **UX + data-quality gap**. The frontend should constrain state selection to
-  the schema's enum (a `<select>` of 36 state codes).
+- **Fix:** Added the official `StateCode` union (`01`–`37`, `99`) and shared
+  labelled options. Personal, employer, house-property, 80G, and 80GGA state
+  inputs now use constrained selectors. Foreign house-property addresses
+  automatically use `99`; personal/prefill values are normalized.
+- **Preflight:** Official validation, generation, and direct submission are
+  blocked when required personal, house-property, or donation state codes are
+  invalid.
 
-### F4. `Employer.natureOfEmployment` — typed `string`, schema enum unconstrained
+### F4. `Employer.natureOfEmployment` — ✅ FIXED
 - **Schema (ITR-1):** drives `ITR1Input.nature_of_employment`; the CBDT rule
   suite branches on government/private/PSU (`app/engine/validators/itr1/input_rules.py`
   — rules keyed on `inp.nature_of_employment`).
-- **Frontend `types.ts`:** `natureOfEmployment: string` — no enum.
-- **Mapper** (`app/engine/draft_to_itr1_input.py:678`): sets
-  `nature_of_employment` from `draft.employers[0].natureOfEmployment` (fixed in Phase 6).
-- **Risk:** Free-text → mismatches the CBDT enum branches → Category A rule
-  misfire or, if the schema validates the value, a generation failure.
+- **Fix:** Added the CBDT `NatureOfEmployment` union and a required per-employer
+  selector. Imported pensioner labels now normalize to the appropriate CBDT
+  pensioner codes instead of a generic fallback. Filing preflight rejects
+  missing or invalid values before an official action.
 
 ---
 
@@ -139,28 +130,23 @@ schema violations.
   expects). The real, reproducible gap was the missing 80C detail-row wiring
   surfaced once the fixture was corrected.
 
-### F6. ITR-1 `deductions.section80C` — same shape as F5 (typed list)
-- `section80C: list[Investment80C]` in the canonical model; the mapper
-  (`_map_deductions` / `_map_80c`) must iterate the list. Verify it doesn't
-  read scalar attributes off the list (same bug class as F5). The audit
-  couldn't test this because F5 crashed first.
+### F6. ITR-1 `deductions.section80C` — ✅ VERIFIED
+- `_map_80c` and `_map_80c_entries` both iterate the canonical
+  `list[Investment80C]`; the schema-valid audit fixture exercises the list and
+  emits Schedule 80C totals plus detail rows.
 
-### F7. ITR-1 `employerCategory` capture — F1 above means the CBDT validators'
-  government-employee branches never fire correctly.
-  Evidence: `app/engine/validators/itr1/input_rules.py` rules keyed on
-  `inp.nature_of_employment` (e.g. gratuity/retrenchment caps) — these take
-  the "OTH" default path for every taxpayer.
+### F7. ITR-1 `employerCategory` capture — ✅ FIXED WITH F1
+- The personal category is now explicitly captured and emitted, so government
+  and pensioner category branches no longer depend on a silent `"OTH"` default.
 
-### F8. TAN must match a city-prefix pattern, not just the `AAAAA9999A` regex
+### F8. TAN city-prefix validation — ✅ FIXED
 - **Schema (ITR-1):** `TDSonSalaries…EmployerOrDeductorOrCollectDetl.TAN`
   pattern is a long alternation of city prefixes
   (`DEL[A-Z][0-9]{5}[A-Z] | BLR... | MUM... | ...`).
-- **Frontend `Employer.employerTAN: string`** — no pattern enforcement.
-- **Evidence:** The audit's first TDS fixture used `ABCD12345E` → schema
-  rejected it; switched to `DELX12345A` → passed.
-- **Risk:** A taxpayer entering a syntactically-valid-but-city-wrong TAN is
-  rejected only at generation. The frontend should validate against the city
-  prefix list (or at least warn).
+- **Fix:** Added a shared CBDT jurisdiction-prefix TAN validator and uppercase
+  normalizer. Employer, TDS1/TDS2, and TCS entry controls validate inline;
+  official actions run the same preflight. TDS3 is correctly excluded because
+  that schedule identifies the tenant by PAN/Aadhaar rather than TAN.
 
 ---
 
@@ -253,9 +239,9 @@ captured / not wired.
 | `DOB` (date pattern) | `dateOfBirth: string\|null` | `dateOfBirth` | `_filing_profile` | ✅ |
 | `Address.CountryCodeMobile` | `countryCode: string` | `countryCode` | `_filing_profile` | ✅ |
 | `Address.MobileNo` | `mobile: string` | `mobile` | `_filing_profile` | ✅ |
-| `Address.StateCode` (enum 01-37) | `stateCode: string` ⚠️ | `stateCode` | `_filing_profile` | ⚠️ F3 |
+| `Address.StateCode` (enum 01-37) | `stateCode: StateCode` | `stateCode` | `_filing_profile` | ✅ |
 | `Address.PinCode` (int 100000-999999) | `pinCode: string` | `pinCode` | `_filing_profile` | ⚠️ no capping |
-| `EmployerCategory` (enum) | **MISSING** ❌ | `employerCategory` | defaults to `"OTH"` | ❌ F1 |
+| `EmployerCategory` (enum) | `employerCategory: EmployerCategory` | `employerCategory` | required by filing gateway | ✅ |
 | `SecondaryAdd` (Y/N) | (not on PersonalInfo) | `secondaryAddressDifferent` | `_filing_profile` | ✅ |
 | `Aadhaar` | `aadhaar` | `aadhaar` | `_filing_profile` | ✅ |
 | `Status` (I/H/F) | (not exposed) | `status` | `_filing_profile` | ✅ defaults |
@@ -263,16 +249,16 @@ captured / not wired.
 ### 6.2 FilingStatus (`ITR.ITR1.FilingStatus`)
 | CBDT field | Frontend | Backend | Builder | Status |
 |---|---|---|---|---|
-| `ReturnFileSec` (enum 11-20) | `filingSection: '139(1)'\|'139(4)'\|'139(5)'\|'119(2)(b)'` | `filing.filingSection` | `section_codes` map | ❌ F2 (only 2/7 mapped) |
+| `ReturnFileSec` (enum 11-20) | constrained filing-section union | `filing.filingSection` | complete `section_codes` map | ✅ |
 | `ReturnType` (O/R) | `returnType: 'ORIGINAL'\|'REVISED'` | `filing.returnType` | `_filing_profile` | ✅ |
 
 ### 6.3 Salary / TDS (`ITR.ITR1.ITR1_IncomeDeductions` + `TDSonSalaries`)
 | CBDT field | Frontend | Backend | Builder | Status |
 |---|---|---|---|---|
 | `GrossSalary` | `Employer.basic/da/...` | `Employer` list | `draft_to_itr1_input._map_salary` | ✅ |
-| `TDSonSalaries[].EmployerOrDeductorOrCollectDetl.TAN` (city pattern) | `employerTAN: string` ⚠️ | `Employer.employerTAN` | `_tds_salary_from_input` | ⚠️ F8 |
+| `TDSonSalaries[].EmployerOrDeductorOrCollectDetl.TAN` (city pattern) | shared inline + preflight validation | `Employer.employerTAN` | `_tds_salary_from_input` | ✅ |
 | `TDSonSalaries[].EmployerOrDeductorOrCollectDetl.Name` | `employerName` | `Employer.employerName` | `_tds_salary_from_input` | ✅ |
-| `NatureOfEmployment` (drives rules) | `natureOfEmployment: string` ⚠️ | `Employer.natureOfEmployment` | `draft_to_itr1_input:678` | ⚠️ F4 |
+| `NatureOfEmployment` (drives rules) | `natureOfEmployment: NatureOfEmployment` selector | `Employer.natureOfEmployment` | `draft_to_itr1_input` | ✅ |
 
 ### 6.4 House Property (`PropertyDetails[]`)
 | CBDT field | Frontend | Backend | Builder | Status |
@@ -303,7 +289,7 @@ captured / not wired.
 ## 7. Field-by-Field Mapping: ITR-4
 
 ### 7.1 PersonalInfo / FilingStatus — same as ITR-1 §6.1-6.2 (shares the model).
-Same gaps (F1 employerCategory, F2 ReturnFileSec, F3 stateCode).
+The shared F1/F2/F3 personal-information and filing-status gaps are fixed.
 
 ### 7.2 ScheduleBP (`ITR.ITR4.ScheduleBP`) — **fully wired**
 | CBDT field | Frontend | Backend | Builder | Status |
@@ -341,14 +327,11 @@ JSON can be emitted**. Key constraint families:
 | Numeric enums (ReturnFileSec, etc.) | shared | schema gate |
 | Pattern (PAN/Aadhaar/TAN/dates) | many | schema gate |
 
-**Frontend enforcement gap:** the frontend `types.ts` uses `string` for
-most enum-capped fields (`stateCode`, `natureOfEmployment`, `employerTAN`,
-`filingSection` partial). Only `propertyOwnerType`, `lenderType`,
-`residentialStatus`, `propertyType` use union types. The schema gate is the
-**sole** enforcement point for most enums — meaning invalid values surface
-late (at CBDT-generation, not at input). **Recommendation:** add union types
-or `<select>` validators in the frontend for the top enums: StateCode
-(36), EmployerCategory (9), ReturnFileSec (7), natureOfEmployment, TAN city-prefix.
+**Frontend enforcement:** the high-risk StateCode, EmployerCategory,
+NatureOfEmployment, and TAN constraints now have shared types/options or
+validators, constrained controls, and a common preflight before all official
+actions. The backend schema gate remains the final authority for the full
+260/305-field constraint inventory.
 
 ---
 
@@ -358,10 +341,10 @@ or `<select>` validators in the frontend for the top enums: StateCode
 |---|---|---|
 | ✅ P0 | F2 ReturnFileSec map incomplete | FIXED: extended `section_codes` to all 8 schema codes (139(1)→11 … 148→20); widened `ITR1FilingProfile.return_file_section` Literal; added revised-return fields |
 | ✅ P0 | F5 80C detail rows not wired | FIXED: added `_map_80c_entries`; wired `ITR1Input.schedule_80c_entries` from the canonical `section80C` list (new-regime still zeroes). Coverage 92→100 |
-| ⬜ P1 | F1 employerCategory not captured | Add `employerCategory` to frontend `PersonalInfo` (`types.ts:357`) + a `<select>` UI bound to the 9-value enum |
-| P1 | F6 80C mapper shape | Verify `_map_80c` iterates the typed list (same fix class as F5) |
-| P1 | F3/F4 stateCode/nature enums | Frontend: constrain with union types or dropdowns |
-| P1 | F8 TAN city-prefix | Frontend: validate TAN against city-prefix list at input |
+| ✅ P1 | F1 employerCategory not captured | FIXED: personal-level nine-value selector, normalized prefill, explicit backend filing requirement, no silent fallback |
+| ✅ P1 | F6 80C mapper shape | VERIFIED: total and detail mappers iterate `list[Investment80C]`; audit emits schema-valid Schedule 80C |
+| ✅ P1 | F3/F4 stateCode/nature enums | FIXED: shared union types, labelled selectors, normalization, and filing preflight |
+| ✅ P1 | F8 TAN city-prefix | FIXED: shared official-prefix validator on employer/TDS/TCS inputs plus filing preflight |
 | P2 | Exercise conditional schedules | Add fixtures + mapper coverage for 80G/80E/80EE/TDS-other/TCS/challans/HRA (build out the "missing 155/142") |
 
 ---
@@ -374,7 +357,14 @@ or `<select>` validators in the frontend for the top enums: StateCode
 - `audit_itr4_enums_cappings.csv` — 305 enum/capping fields
 - `audit_itr1_generated.json` — official CBDT JSON from the audit draft (passes schema)
 - `audit_itr4_generated.json` — official CBDT JSON from the audit draft (passes schema)
-- `audit_itr1_present.csv` / `audit_itr1_missing.csv` — 92 present / 155 missing (conditional)
+- `audit_itr1_present.csv` / `audit_itr1_missing.csv` — 100 present / 147 missing (conditional)
 - `audit_itr4_present.csv` / `audit_itr4_missing.csv` — 94 present / 142 missing (conditional)
 
 **Reproducible:** `python extract_schema_inventory.py && python extract_enums_cappings.py && python audit_itr_coverage.py`
+
+**Latest validation:** frontend Vitest 146/146 passed; focused legacy and
+canonical filing pytest 62/62 passed; generated ITR-1 and ITR-4 documents pass
+their official schema gates. The maintained backend suite reached 1204 passed
+with 12 unrelated baseline failures in automation/ERI/router expectations.
+The full frontend build remains blocked by pre-existing missing `api/client`
+and capital-gains type/import errors outside this P1 change.

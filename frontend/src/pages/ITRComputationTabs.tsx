@@ -23,6 +23,7 @@ import { tdsToManager, challansToManager, deductionLoansToManager } from '../dom
 import { CapitalGainsEntryManager, hasNonSimplifiedCapitalGains, type CapitalGainsScheduleData } from '../components/CapitalGainsEntryManager';
 import type { CapitalGainsSchedule } from '../domain/returns/types';
 import { EMPTY_CAPITAL_GAINS_SCHEDULE } from '../domain/returns/types';
+import { CBDT_TAN_PATTERN, isValidTan, normalizeTan } from '../utils/taxIdentifiers';
 
 export interface CanonicalManagerBindings {
   interest: (entries: InterestManagerEntry[]) => void;
@@ -325,7 +326,6 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
   const selfAssessmentTaxEntries = challansToManager(draftChallans, 'SELF_ASSESSMENT');
   const advanceTaxEntries = challansToManager(draftChallans, 'ADVANCE_TAX');
   // TAN is jurisdiction-prefixed per the official schema (e.g. DELA12345B).
-  const tanPattern = /^(HYD|VPN|BBN|BPL|JBP|CHE|CMB|MRI|DEL|CAL|MRT|AHM|BRD|RKT|SRT|BLR|AGR|KNP|CHN|TVD|ALD|LKN|MUM|NGP|AMR|JLD|PTL|RTK|KLP|NSK|PNE|PTN|RCH|JDH|JPR|SHL)[A-Z][0-9]{5}[A-Z]$/;
   // BSR Code: first 3 digits, then 4 alphanumeric (per TaxPayment.BSRCode pattern).
   const bsrPattern = /^[0-9]{3}[0-9A-Z]{4}$/;
   // Challan serial is an integer 1..99999 per the schema.
@@ -575,13 +575,15 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
               <input
                 type="text"
                 value={entry.deductorTAN || ''}
-                onChange={(e) => updateTDSEntry(index, 'deductorTAN', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))}
+                onChange={(e) => updateTDSEntry(index, 'deductorTAN', normalizeTan(e.target.value))}
                 placeholder="DELA12345B"
                 maxLength={10}
-                aria-invalid={Boolean(entry.deductorTAN) && !tanPattern.test(entry.deductorTAN)}
-                style={{ width: '100%', padding: '8px 12px', border: `1px solid ${entry.deductorTAN && !tanPattern.test(entry.deductorTAN) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 6, fontSize: 13 }}
+                pattern={CBDT_TAN_PATTERN.source}
+                required
+                aria-invalid={Boolean(entry.deductorTAN) && !isValidTan(entry.deductorTAN)}
+                style={{ width: '100%', padding: '8px 12px', border: `1px solid ${entry.deductorTAN && !isValidTan(entry.deductorTAN) ? 'var(--danger)' : 'var(--border)'}`, borderRadius: 6, fontSize: 13 }}
               />
-              {entry.deductorTAN && !tanPattern.test(entry.deductorTAN) && (
+              {entry.deductorTAN && !isValidTan(entry.deductorTAN) && (
                 <div style={inputErrorStyle}>TAN must be a 10-char jurisdiction code (e.g. DELA12345B).</div>
               )}
             </div>

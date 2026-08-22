@@ -654,6 +654,7 @@ def flat_to_draft(payload: Any) -> ReturnDraft:
         middleName=_text(source.get("middleName")),
         surnameOrOrgName=_text(source.get("surnameOrOrgName")),
         fatherName=_text(source.get("fatherName")),
+        employerCategory=_text(source.get("employerCategory")),
         pan=_text(source.get("pan")),
         aadhaar=_text(source.get("aadhaar")),
         email=_text(source.get("email")),

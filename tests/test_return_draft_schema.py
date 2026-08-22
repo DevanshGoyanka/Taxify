@@ -212,7 +212,7 @@ def test_empty_itr4_draft_validates():
     assert restored.form == "ITR-4"
     assert restored.personal.age == 30
     assert restored.personal.assesseeStatus == "I"
-    assert restored.personal.employerCategory == "OTH"
+    assert restored.personal.employerCategory == ""
     assert restored.personal.landlineStdCode == "0"
     assert restored.personal.landlinePhoneNo == "0"
     assert restored.personal.secondaryAddressDifferent is False
@@ -264,5 +264,5 @@ def test_itr1_draft_without_additive_fields_still_validates():
         "personal": {"name": "Rahul", "pan": "ABCDE1234F", "age": 30},
     })
     assert draft.personal.assesseeStatus == "I"
-    assert draft.personal.employerCategory == "OTH"
+    assert draft.personal.employerCategory == ""
     assert draft.filing.seventhProviso.foreignTravel is False

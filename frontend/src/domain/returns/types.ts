@@ -1,11 +1,13 @@
+import type { EmployerCategory, NatureOfEmployment, StateCode } from './cbdtEnums';
+
 export type ItrForm = 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4';
 export type TaxRegime = 'old' | 'new';
 export type Money = number;
 export interface Identified { id: string; }
 
 export interface Employer extends Identified {
-  customEmployerName: string; employerName: string; employerTAN: string; natureOfEmployment: string;
-  employerAddress: string; employerCity: string; employerStateCode: string; employerPinCode: string; employerZipCode: string;
+  customEmployerName: string; employerName: string; employerTAN: string; natureOfEmployment: NatureOfEmployment | '';
+  employerAddress: string; employerCity: string; employerStateCode: StateCode | ''; employerPinCode: string; employerZipCode: string;
   salaryNatureRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
   perquisiteNatureRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
   section10ExemptionRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
@@ -23,7 +25,7 @@ export interface TenantDetail { tenantSNo: number; name: string; pan: string; aa
 export interface HomeLoan { lenderType: 'B' | 'I'; lenderName: string; lenderPAN: string; loanAccountNo: string; dateOfLoan: string; totalLoanAmount: Money; loanOutstandingAmount: Money; interestUs24B: Money; constructionCompletionDate: string; completedWithin5Years: boolean; preConstructionInterest: Money; }
 export interface HouseProperty extends Identified {
   name: string; propertySequenceNo: number; propertyType: 'SELF_OCCUPIED' | 'LET_OUT' | 'DEEMED_LET_OUT';
-  address: string; premisesName: string; roadOrStreet: string; area: string; city: string; state: string; pinCode: string; zipCode: string;
+  address: string; premisesName: string; roadOrStreet: string; area: string; city: string; state: StateCode | ''; pinCode: string; zipCode: string;
   countryCode: string; propertyIdentificationNo: string; propertyOwnerType: 'SE' | 'MI' | 'SP' | 'OT'; propertyOwnerOther: string; ownershipType: 'SOLE' | 'JOINT';
   ownershipShare: number; isCoOwned: boolean; isPropertyInJointOwnership: boolean; coOwners: CoOwner[];
   annualRent: Money; municipalRateableValue: Money; fairRentValue: Money; standardRent: Money; annualLettingValue: Money;
@@ -69,7 +71,7 @@ export interface Investment80C extends Identified { investmentType: string; iden
 export interface Policy80D extends Identified { insurerName: string; policyNo: string; premiumAmount: Money; policyType: 'INDIVIDUAL' | 'FAMILY_FLOATER' | 'GROUP' | 'OTHER'; dateOfCommencement: string; }
 export interface Category80D { policies: Policy80D[]; preventiveCheckup: Money; medicalExpense: Money; }
 export interface Section80D { selfSeniorCitizen: 'Y' | 'N' | 'S'; parentsSeniorCitizen: 'Y' | 'N' | 'P'; selfFamily: Category80D; selfFamilySenior: Category80D; parents: Category80D; parentsSenior: Category80D; }
-export interface Donation80G extends Identified { category: '100_NO_APPROVAL' | '50_NO_APPROVAL' | '100_APPROVAL_REQD' | '50_APPROVAL_REQD'; doneeName: string; doneePAN: string; arnNumber: string; addrDetail: string; city: string; stateCode: string; pinCode: string; donationAmtCash: Money; donationAmtOtherMode: Money; transactionRefNum: string; ifscCode: string; donationDate: string; receiptNumber: string; notes: string; }
+export interface Donation80G extends Identified { category: '100_NO_APPROVAL' | '50_NO_APPROVAL' | '100_APPROVAL_REQD' | '50_APPROVAL_REQD'; doneeName: string; doneePAN: string; arnNumber: string; addrDetail: string; city: string; stateCode: StateCode | ''; pinCode: string; donationAmtCash: Money; donationAmtOtherMode: Money; transactionRefNum: string; ifscCode: string; donationDate: string; receiptNumber: string; notes: string; }
 export interface DeductionLoan extends Identified { section: '80E' | '80EE' | '80EEA' | '80EEB'; loanTakenFrom: 'B' | 'I'; lenderName: string; lenderPAN: string; loanAccountNo: string; dateOfLoan: string; totalLoanAmount: Money; outstandingAmount: Money; interestAmount: Money; firstTimeBuyerEligible: boolean; vehicleRegNo: string; }
 export interface LoanDeductions { loans: DeductionLoan[]; section80EEAStampDutyValue: Money; }
 
@@ -83,7 +85,7 @@ export interface Schedule80GGAEntry extends Identified {
   doneePAN: string;
   addressLine: string;
   city: string;
-  stateCode: string;
+  stateCode: StateCode | '';
   pinCode: string;
   cashAmount: Money;
   otherModeAmount: Money;
@@ -373,10 +375,12 @@ export interface PersonalInfo {
   roadOrStreet: string;
   localityOrArea: string;
   city: string;
-  stateCode: string;
+  stateCode: StateCode | '';
   countryCode: string;
   pinCode: string;
   zipCode: string;
+  /** Mandatory CBDT PersonalInfo category, independent of employer row count. */
+  employerCategory: EmployerCategory | '';
   /** Questionnaire inputs surfaced as canonical draft fields for the
    *  eligibility engine (formerly read from the flat blob). */
   residentialStatus?: 'ROR' | 'RNOR' | 'NR';

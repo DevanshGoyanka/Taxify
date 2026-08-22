@@ -53,6 +53,7 @@ export function createEmptyPersonalInfo(): PersonalInfo {
     dateOfBirth: null,
     flatNo: '', residenceName: '', roadOrStreet: '', localityOrArea: '',
     city: '', stateCode: '', countryCode: '91', pinCode: '', zipCode: '',
+    employerCategory: '',
   };
 }
 

@@ -1,18 +1,7 @@
 import React from 'react';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import type { HomeLoan, HouseProperty, TenantDetail } from '../domain/returns/types';
-
-const STATES: Array<[string, string]> = [
-  ['01', 'Andaman and Nicobar Islands'], ['02', 'Andhra Pradesh'], ['03', 'Arunachal Pradesh'], ['04', 'Assam'],
-  ['05', 'Bihar'], ['06', 'Chandigarh'], ['07', 'Dadra and Nagar Haveli'], ['08', 'Daman and Diu'],
-  ['09', 'Delhi'], ['10', 'Goa'], ['11', 'Gujarat'], ['12', 'Haryana'], ['13', 'Himachal Pradesh'],
-  ['14', 'Jammu and Kashmir'], ['15', 'Karnataka'], ['16', 'Kerala'], ['17', 'Lakshadweep'],
-  ['18', 'Madhya Pradesh'], ['19', 'Maharashtra'], ['20', 'Manipur'], ['21', 'Meghalaya'], ['22', 'Mizoram'],
-  ['23', 'Nagaland'], ['24', 'Odisha'], ['25', 'Puducherry'], ['26', 'Punjab'], ['27', 'Rajasthan'],
-  ['28', 'Sikkim'], ['29', 'Tamil Nadu'], ['30', 'Tripura'], ['31', 'Uttar Pradesh'], ['32', 'West Bengal'],
-  ['33', 'Chhattisgarh'], ['34', 'Uttarakhand'], ['35', 'Jharkhand'], ['36', 'Telangana'], ['37', 'Ladakh'],
-  ['99', 'Foreign / State outside India'],
-];
+import { STATE_CODE_OPTIONS, type StateCode } from '../domain/returns/cbdtEnums';
 const MONEY_MAX = 99999999999999;
 const PAN_PATTERN = '[A-Z]{5}[0-9]{4}[A-Z]';
 const PAN_TAN_PATTERN = '(?:[A-Z]{5}[0-9]{4}[A-Z]|[A-Z]{4}[0-9]{5}[A-Z])';
@@ -68,8 +57,8 @@ export function HousePropertyEntryManager({ entries, passThroughIncome, onChange
           <Select label="Property type *" value={entry.propertyType} required onChange={(value) => patch(index, { propertyType: value as HouseProperty['propertyType'] })} options={[['SELF_OCCUPIED','Self occupied'],['LET_OUT','Let out'],['DEEMED_LET_OUT','Deemed let out']]} />
           <Field label="Address *" type="text" value={entry.address} required maxLength={addressMax} onValue={(value) => patch(index, { address: String(value) })} />
           <Field label="City / Town / District *" type="text" value={entry.city} required maxLength={50} onValue={(value) => patch(index, { city: String(value) })} />
-          <Select label="State code *" value={entry.state} required onChange={(value) => patch(index, { state: value, pinCode: value === '99' ? '' : entry.pinCode, zipCode: value === '99' ? entry.zipCode : '' })} options={[["", "Select state"], ...STATES.map(([code, name]) => [code, `${code} — ${name}`] as [string,string])]} />
-          <Select label="Country code *" value={entry.countryCode} required onChange={(value) => patch(index, { countryCode: value })} options={[['','Select'], ...ITD_COUNTRY_CODES.map((country) => [country.value, `${country.value} — ${country.label}`] as [string,string])]} />
+          <Select label="State code *" value={entry.state} required onChange={(value) => patch(index, { state: value as StateCode | '', pinCode: value === '99' ? '' : entry.pinCode, zipCode: value === '99' ? entry.zipCode : '' })} options={[["", "Select state"], ...STATE_CODE_OPTIONS.map(({ code, label }) => [code, `${code} — ${label}`] as [string,string])]} />
+          <Select label="Country code *" value={entry.countryCode} required onChange={(value) => patch(index, { countryCode: value, state: value === '91' ? (entry.state === '99' ? '' : entry.state) : '99', pinCode: value === '91' ? entry.pinCode : '', zipCode: value === '91' ? '' : entry.zipCode })} options={[['','Select'], ...ITD_COUNTRY_CODES.map((country) => [country.value, `${country.value} — ${country.label}`] as [string,string])]} />
           {entry.state === '99' ? <Field label="ZIP / Postal code *" type="text" value={entry.zipCode} required maxLength={8} onValue={(value) => patch(index, { zipCode: String(value) })} /> : <Field label="PIN code *" type="text" value={entry.pinCode} required inputMode="numeric" pattern="[1-9][0-9]{5}" maxLength={6} onValue={(value) => patch(index, { pinCode: String(value) })} />}
         </div></Section>
         <Section title="Ownership"><div style={gridStyle}>

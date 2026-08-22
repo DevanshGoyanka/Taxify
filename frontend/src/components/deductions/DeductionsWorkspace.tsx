@@ -11,6 +11,7 @@ import { Section80CManager } from '../Section80CManager';
 import { Section80DManager } from '../Section80DManager';
 import { DonationEntryManager } from '../DonationEntryManager';
 import { DeductionLoanManager } from '../DeductionLoanManager';
+import { INDIAN_STATE_CODE_OPTIONS, type StateCode } from '../../domain/returns/cbdtEnums';
 
 interface SubManagers {
   section80C: (data: { investments: Investment80C[] }) => void;
@@ -154,7 +155,7 @@ function Schedule80GGAEditor({ entries, onChange }: { entries: Schedule80GGAEntr
           <TextField label="Donee PAN" value={entry.doneePAN} maxLength={10} placeholder="ABCDE1234F" onChange={(value) => update(entry.id, { doneePAN: value.toUpperCase() })} />
           <TextField label="Address line" value={entry.addressLine} maxLength={200} placeholder="Donee address" onChange={(value) => update(entry.id, { addressLine: value })} />
           <TextField label="City / District" value={entry.city} maxLength={50} placeholder="City" onChange={(value) => update(entry.id, { city: value })} />
-          <TextField label="State code" value={entry.stateCode} maxLength={2} placeholder="01-37" onChange={(value) => update(entry.id, { stateCode: value })} hint="Indian state code (01-37)" />
+          <SelectField label="State code" value={entry.stateCode} options={[{ value: '' as const, label: '-- Select state --' }, ...INDIAN_STATE_CODE_OPTIONS.map(({ code, label }) => ({ value: code, label: `${code} — ${label}` }))]} onChange={(value) => update(entry.id, { stateCode: value as StateCode | '' })} hint="CBDT Indian state code (01-37)" />
           <TextField label="Pin code" value={entry.pinCode} maxLength={6} placeholder="6-digit PIN" onChange={(value) => update(entry.id, { pinCode: value.replace(/\D/g, '').slice(0, 6) })} />
           <NumberField label="Cash donation (₹)" value={entry.cashAmount} hint="Cash not allowed for 80GGA — keep 0" onChange={(value) => update(entry.id, { cashAmount: value })} />
           <NumberField label="Non-cash donation (₹)" value={entry.otherModeAmount} onChange={(value) => update(entry.id, { otherModeAmount: value })} />

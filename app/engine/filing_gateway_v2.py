@@ -294,6 +294,9 @@ def _filing_profile(draft: ReturnDraft) -> ITR1FilingProfile:
             middle_name=personal.middleName.strip(),
             surname=_required(surname, "surnameOrOrgName"),
             date_of_birth=dob,
+            employer_category=_required(
+                personal.employerCategory, "personal.employerCategory"
+            ),
             aadhaar_number=personal.aadhaar.strip() or None,
             primary_address=address,
             father_name=_required(personal.fatherName, "fatherName"),
@@ -535,7 +538,9 @@ def _itr4_filing_profile(draft: ReturnDraft) -> ITR4FilingProfile:
             middle_name=(personal.middleName or "").strip()[:25],
             surname=_required(surname, "surnameOrOrgName")[:75],
             date_of_birth=dob,
-            employer_category=(personal.employerCategory or "OTH").strip() or "OTH",
+            employer_category=_required(
+                personal.employerCategory, "personal.employerCategory"
+            ),
             aadhaar_number=(personal.aadhaar or "").strip() or None,
             assessee_status=assessee_status,
             primary_address=primary_address,

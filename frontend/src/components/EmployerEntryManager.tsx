@@ -1,13 +1,20 @@
 import React from 'react';
+import {
+  INDIAN_STATE_CODE_OPTIONS,
+  NATURE_OF_EMPLOYMENT_OPTIONS,
+  type NatureOfEmployment,
+  type StateCode,
+} from '../domain/returns/cbdtEnums';
+import { isValidTan, normalizeTan } from '../utils/taxIdentifiers';
 
 interface EmployerEntry {
   id: string;
   employerName?: string;
   employerTAN?: string;
-  natureOfEmployment?: 'CGOV' | 'SGOV' | 'PSU' | 'PE' | 'PESG' | 'PEPS' | 'PEO' | 'OTH';
+  natureOfEmployment?: NatureOfEmployment;
   employerAddress?: string;
   employerCity?: string;
-  employerStateCode?: string;
+  employerStateCode?: StateCode | '';
   employerPinCode?: string;
   employerZipCode?: string;
   basic?: number;
@@ -404,19 +411,22 @@ function EmployerForm({
           <TextInput value={entry.employerName} onChange={(v) => onChange({ employerName: v.slice(0, 125) })} maxLength={125} />
         </Field>
         <Field label="Nature of Employment" required>
-          <select value={entry.natureOfEmployment || 'OTH'} onChange={(e) => onChange({ natureOfEmployment: e.target.value as EmployerEntry['natureOfEmployment'] })} style={INPUT_STYLE}>
-            <option value="CGOV">Central Government</option>
-            <option value="SGOV">State Government</option>
-            <option value="PSU">Public Sector Unit</option>
-            <option value="PE">Pensioner -- Central Government</option>
-            <option value="PESG">Pensioner -- State Government</option>
-            <option value="PEPS">Pensioner -- PSU</option>
-            <option value="PEO">Pensioner -- Others</option>
-            <option value="OTH">Others</option>
+          <select required value={entry.natureOfEmployment || ''} onChange={(e) => onChange({ natureOfEmployment: e.target.value as EmployerEntry['natureOfEmployment'] })} style={INPUT_STYLE}>
+            <option value="">-- Select nature --</option>
+            {NATURE_OF_EMPLOYMENT_OPTIONS.map(({ code, label }) => <option key={code} value={code}>{code} — {label}</option>)}
           </select>
         </Field>
-        <Field label="Employer TAN" help="Optional when unavailable; format ABCD12345E.">
-          <TextInput value={entry.employerTAN} onChange={(v) => onChange({ employerTAN: v.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) })} maxLength={10} />
+        <Field label="Employer TAN" help="Optional when unavailable. If entered, use a CBDT jurisdiction TAN such as DELA12345B.">
+          <input
+            type="text"
+            value={entry.employerTAN || ''}
+            onChange={(event) => onChange({ employerTAN: normalizeTan(event.target.value) })}
+            maxLength={10}
+            placeholder="DELA12345B"
+            aria-invalid={Boolean(entry.employerTAN) && !isValidTan(entry.employerTAN)}
+            style={{ ...INPUT_STYLE, borderColor: entry.employerTAN && !isValidTan(entry.employerTAN) ? 'var(--danger)' : 'var(--border-strong)' }}
+          />
+          {entry.employerTAN && !isValidTan(entry.employerTAN) && <div style={{ marginTop: 4, color: 'var(--danger)', fontSize: 11 }}>Enter a valid CBDT jurisdiction TAN.</div>}
         </Field>
         <Field label="Employer Address" required>
           <TextInput value={entry.employerAddress} onChange={(v) => onChange({ employerAddress: v.slice(0, 200) })} maxLength={200} />
@@ -425,7 +435,10 @@ function EmployerForm({
           <TextInput value={entry.employerCity} onChange={(v) => onChange({ employerCity: v.slice(0, 50) })} maxLength={50} />
         </Field>
         <Field label="Employer State Code" required>
-          <TextInput value={entry.employerStateCode} onChange={(v) => onChange({ employerStateCode: v.replace(/\D/g, '').slice(0, 2) })} maxLength={2} />
+          <select value={entry.employerStateCode || ''} onChange={(event) => onChange({ employerStateCode: event.target.value as StateCode | '' })} style={INPUT_STYLE}>
+            <option value="">-- Select state --</option>
+            {INDIAN_STATE_CODE_OPTIONS.map(({ code, label }) => <option key={code} value={code}>{code} — {label}</option>)}
+          </select>
         </Field>
         <Field label="Employer PIN Code">
           <TextInput value={entry.employerPinCode} onChange={(v) => onChange({ employerPinCode: v.replace(/\D/g, '').slice(0, 6) })} maxLength={6} />
@@ -558,7 +571,7 @@ export function EmployerEntryManager({
   entries = [], onChange, assessmentYear, taxRegime = 'OLD', backendResult, tdsEntries = [],
 }: Props): React.JSX.Element {
   const addEmployer = (): void =>
-    onChange([...entries, { id: generateId(), natureOfEmployment: 'OTH', isDomesticTravel: true }]);
+    onChange([...entries, { id: generateId(), natureOfEmployment: undefined, isDomesticTravel: true }]);
 
   const updateEmployer = (id: string, patch: Partial<EmployerEntry>): void =>
     onChange(entries.map((e) => (e.id === id ? { ...e, ...patch } : e)));

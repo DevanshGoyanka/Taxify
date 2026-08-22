@@ -1,5 +1,6 @@
 import type { ReturnDraftPatch } from '../domain/returns/draftPatch';
 import { createReconciliationEvidence } from '../domain/returns/evidence';
+import { normalizeEmployerCategory, normalizeStateCode } from '../domain/returns/cbdtEnums';
 import type { ITR4ScheduleBPData } from '../components/business/ITR4ScheduleBPManager';
 import type {
   PrefillExtraction,
@@ -180,8 +181,11 @@ export function mapPrefillToDraftPatch(
       secondaryEmail: address?.email_address_secondary, secondaryMobile: address?.mobile_no_sec ? String(address.mobile_no_sec) : undefined,
       secondaryMobileCountryCode: address?.country_code_mobile_sec ? String(address.country_code_mobile_sec) : undefined,
       dateOfBirth: pi?.dob || undefined, flatNo: address?.residence_no, residenceName: address?.residence_name, roadOrStreet: address?.road_or_street,
-      localityOrArea: address?.locality_or_area, city: address?.city_or_town_or_district, stateCode: address?.state_code, countryCode: address?.country_code,
+      localityOrArea: address?.locality_or_area, city: address?.city_or_town_or_district,
+      stateCode: normalizeStateCode(address?.state_code) || undefined,
+      countryCode: address?.country_code,
       pinCode: address?.pin_code ? String(address.pin_code) : undefined, zipCode: address?.zip_code,
+      employerCategory: normalizeEmployerCategory(pi?.employer_category) || undefined,
     },
     filing: { filingSection: filingSection(prefill.filing_status?.return_file_sec) },
     bankAccounts: (prefill.bank_accounts || []).map((account) => ({ id: id('prefill-bank', account.bank_account_no, account.ifsc_code), bankName: account.bank_name || '', accountNumber: account.bank_account_no || '', ifscCode: account.ifsc_code || '', accountType: ['SB', 'CA', 'CC', 'OD', 'NRO', 'OTH'].includes(account.account_type?.toUpperCase()) ? account.account_type.toUpperCase() as 'SB' | 'CA' | 'CC' | 'OD' | 'NRO' | 'OTH' : 'SB', useForRefund: String(account.use_for_refund).toLowerCase() === 'true' })),
