@@ -152,21 +152,35 @@ def test_ack_result_dataclass_round_trips() -> None:
     """The AcknowledgementDownloadResult dataclass carries the outcome."""
     ok = AcknowledgementDownloadResult(
         success=True,
+        assessment_year="2026-27",
         acknowledgement_number="123456789012345",
         acknowledgement_path="/tmp/ITR-Acknowledgement.pdf",
     )
     assert ok.success is True
+    assert ok.not_filed is False
     assert ok.error is None
+    assert ok.assessment_year == "2026-27"
     assert ok.acknowledgement_path.endswith("ITR-Acknowledgement.pdf")
 
     fail = AcknowledgementDownloadResult(
         success=False,
-        acknowledgement_number="123456789012345",
-        error="Could not locate the row for ARN 123456789012345.",
+        assessment_year="2026-27",
+        acknowledgement_number="",
+        error="Could not locate the download control for AY 2026-27.",
     )
     assert fail.success is False
+    assert fail.not_filed is False
     assert fail.acknowledgement_path is None
-    assert "ARN" in fail.error
+    assert "AY" in fail.error
+
+    not_filed = AcknowledgementDownloadResult(
+        success=False,
+        assessment_year="2026-27",
+        not_filed=True,
+        error="No filed return exists on the portal for AY 2026-27.",
+    )
+    assert not_filed.not_filed is True
+    assert not_filed.acknowledgement_path is None
 
 
 def test_ack_download_error_is_runtime_subclass() -> None:

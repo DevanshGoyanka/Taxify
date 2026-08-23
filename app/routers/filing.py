@@ -341,25 +341,10 @@ async def fetch_acknowledgement(
     portal uploader — to log in as the taxpayer, navigate to View Filed
     Returns, and download the ITR-V PDF for the return's acknowledgement
     number. The saved path is persisted on the ``FilingRecord`` so the
-    existing ``GET .../acknowledgement`` endpoint serves it on subsequent
-    requests without a re-download.
+    existing ``GET .../acknowledgement`` endpoint serves the PDF subsequently.
     """
     client = resolve_owned_client(client_id, current_user.id, db)
     form = _normalize_form(itr_type)
-    record = (
-        db.query(FilingRecord)
-        .filter(
-            FilingRecord.client_id == client.id,
-            FilingRecord.assessment_year == ay,
-            FilingRecord.itr_type == form,
-        )
-        .first()
-    )
-    if record is None or not record.acknowledgement_number:
-        raise HTTPException(
-            status_code=404,
-            detail="No acknowledgement number is recorded for this filing.",
-        )
     if not client.pan:
         raise HTTPException(
             status_code=400,
@@ -376,7 +361,7 @@ async def fetch_acknowledgement(
         result = await download_acknowledgement_pdf(
             pan=client.pan,
             portal_password_cipher=client.portal_password,
-            acknowledgement_number=record.acknowledgement_number,
+            assessment_year=ay,
             output_dir=output_dir,
         )
     except AcknowledgementDownloadError as exc:
@@ -389,6 +374,19 @@ async def fetch_acknowledgement(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
+
+    # Not filed for this AY -> surface a clear "file the ITR first" message.
+    if result.not_filed:
+        log_filing_action(
+            db=db, user=current_user, client=client, assessment_year=ay,
+            itr_type=form, action="ack", outcome="error",
+            message=f"Not filed for AY {ay}.",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"ITR for AY {ay} is not filed on the portal. "
+            "Kindly file the ITR first to download the acknowledgement.",
+        )
     if not result.success or not result.acknowledgement_path:
         log_filing_action(
             db=db, user=current_user, client=client, assessment_year=ay,
@@ -400,14 +398,44 @@ async def fetch_acknowledgement(
             detail=result.error or "Acknowledgement download failed.",
         )
 
-    record.acknowledgement_path = result.acknowledgement_path
-    record.status = "acknowledged"
-    db.commit()
+    # Persist the discovered ARN + path. Upsert the FilingRecord so a
+    # manually-uploaded return (no prior record) gets one now.
+    record = (
+        db.query(FilingRecord)
+        .filter(
+            FilingRecord.client_id == client.id,
+            FilingRecord.assessment_year == ay,
+            FilingRecord.itr_type == form,
+        )
+        .first()
+    )
+    creds = get_eri_credentials()
+    if record is None:
+        record = upsert_filing_record(
+            db=db,
+            client_id=client.id,
+            user_id=current_user.id,
+            assessment_year=ay,
+            itr_type=form,
+            eri_mode=creds.mode,
+            eri_environment=creds.environment,
+            status="acknowledged",
+            acknowledgement_number=result.acknowledgement_number or None,
+            acknowledgement_path=result.acknowledgement_path,
+            json_path=None,
+            error_message=None,
+        )
+    else:
+        if result.acknowledgement_number:
+            record.acknowledgement_number = result.acknowledgement_number
+        record.acknowledgement_path = result.acknowledgement_path
+        record.status = "acknowledged"
+        db.commit()
 
     log_filing_action(
         db=db, user=current_user, client=client, assessment_year=ay,
         itr_type=form, action="ack", outcome="ok",
-        message="Acknowledgement PDF downloaded from portal.",
+        message=f"Acknowledgement PDF downloaded from portal (AY {ay}).",
     )
     return FileResponse(
         result.acknowledgement_path,

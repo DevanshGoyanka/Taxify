@@ -3,10 +3,15 @@
 Per the Dual-Mode ERI Integration Plan §A7, after a return is uploaded and
 e-verified, the acknowledgement (ITR-V) PDF is downloadable from the ITD
 portal's "View Filed Returns" page. This module is a STANDALONE downloader
-that logs in as the taxpayer, navigates to View Filed Returns, locates the
-row for a given acknowledgement number, and downloads the acknowledgement
-PDF — without depending on (or touching) the working portal uploader in
-``app/filing_automation/uploader.py``.
+that logs in as the taxpayer, navigates to View Filed Returns, locates
+the row matching the **assessment year** (no pre-known ARN required — the
+return may have been uploaded manually outside Taxify), and downloads the
+acknowledgement PDF — without depending on (or touching) the working
+portal uploader in ``app/filing_automation/uploader.py``.
+
+When no filed return exists for the assessment year, the result carries
+``not_filed=True`` so the caller can surface a clear "file the ITR first"
+message rather than a generic error.
 
 It reuses only the stable, proven automation primitives from
 :mod:`app.automation`:
@@ -18,11 +23,10 @@ It reuses only the stable, proven automation primitives from
   - :class:`app.automation.timing.AutomationTimeline` (credential-safe
     timing instrumentation)
 
-The download selectors ("View Filed Returns" → row containing the ack
-number → "Download Receipt"/"Download Acknowledgement" →
-``page.expect_download``) mirror the proven path the uploader uses, so
-the standalone downloader navigates the same portal UI that is already
-known to work.
+The download selectors ("View Filed Returns" → row matching the AY →
+"Download Receipt"/"Download Acknowledgement" → ``page.expect_download``)
+mirror the proven path the uploader uses, so the standalone downloader
+navigates the same portal UI that is already known to work.
 """
 
 from __future__ import annotations
@@ -52,13 +56,21 @@ class AcknowledgementDownloadResult:
 
     Attributes:
         success: Whether the acknowledgement PDF was downloaded and saved.
-        acknowledgement_number: The ARN used to locate the row.
+        assessment_year: The assessment year searched for (e.g. "2026-27").
+        not_filed: True when no filed return exists on the portal for the
+            given assessment year. The caller should surface a clear
+            "file the ITR first" message rather than a generic error.
+        acknowledgement_number: The ARN of the located row (discovered on
+            the portal), or empty when not_filed.
         acknowledgement_path: Absolute path to the saved PDF, or None.
-        error: A human-readable error message when ``success`` is False.
+        error: A human-readable error message when ``success`` is False
+            and ``not_filed`` is False (a real failure).
     """
 
     success: bool
-    acknowledgement_number: str
+    assessment_year: str
+    not_filed: bool = False
+    acknowledgement_number: str = ""
     acknowledgement_path: Optional[str] = None
     error: Optional[str] = None
 
@@ -106,30 +118,36 @@ async def download_acknowledgement(
     *,
     pan: str,
     portal_password_cipher: str,
-    acknowledgement_number: str,
+    assessment_year: str,
     output_dir: str | Path,
     timeout_ms: int = 120_000,
     log_callback: Optional[LogCallback] = None,
     interactive: bool = True,
 ) -> AcknowledgementDownloadResult:
-    """Download the acknowledgement (ITR-V) PDF for a filed return.
+    """Download the acknowledgement (ITR-V) PDF for a filed return by AY.
 
-    Standalone flow (no uploader dependency):
+    Standalone flow (no uploader dependency, no pre-known ARN required):
 
       1. Decrypt the client's portal password (vault AES-256-GCM).
       2. Launch a visible Chromium context via ``browser_manager``.
       3. Log in as the taxpayer (PAN + portal password) via ``login_itd``.
       4. Navigate to e-File → Income Tax Return → View Filed Returns.
-      5. Locate the row whose text contains the acknowledgement number.
-      6. Click the row's "Download Receipt" / "Download Acknowledgement"
+      5. Locate the row whose text contains the assessment year. If none
+         matches, the return was not filed for this AY — return a result
+         with ``not_filed=True`` so the caller can surface a clear
+         "file the ITR first" message.
+      6. Capture the acknowledgement number from that row's text.
+      7. Click the row's "Download Receipt" / "Download Acknowledgement"
          control and capture the browser download.
-      7. Save the PDF to ``output_dir`` and return the path.
+      8. Save the PDF to ``output_dir`` and return the path + ARN.
 
     Args:
         pan: The taxpayer's PAN (portal user id).
         portal_password_cipher: The encrypted portal password ciphertext
             stored on ``Client.portal_password``.
-        acknowledgement_number: The ARN of the filed return to download.
+        assessment_year: The assessment year to search for (e.g. "2026-27").
+            The portal's View Filed Returns lists each filed return with
+            its assessment year, so the row is located by AY match.
         output_dir: Directory to save the acknowledgement PDF into.
         timeout_ms: Overall wall-clock deadline for the download attempt.
         log_callback: Optional progress callback (operator-visible log).
@@ -137,8 +155,10 @@ async def download_acknowledgement(
             the operator must be able to intervene on unexpected prompts).
 
     Returns:
-        An :class:`AcknowledgementDownloadResult` with the saved PDF path
-        on success, or an error message on failure.
+        An :class:`AcknowledgementDownloadResult`. On success, it carries
+        the saved PDF path + the ARN discovered on the portal. When the
+        return was not filed for the AY, ``not_filed`` is True. On a real
+        failure, ``error`` carries a human-readable message.
     """
 
     def _emit(message: str) -> None:
@@ -197,12 +217,49 @@ async def download_acknowledgement(
             )
         await view.click(timeout=max(1, min(2_000, _remaining())))
 
-        _emit(f"[ACK] Locating the row for ARN {acknowledgement_number}.")
-        row = page.get_by_text(acknowledgement_number, exact=False).first
+        _emit(f"[ACK] Locating a filed row for AY {assessment_year}.")
+        # The portal lists each filed return with its assessment year. Match
+        # the row by AY text. Normalize AY formats so "2026-27" and "202627"
+        # both match (the portal may render either).
+        ay_text = assessment_year.strip()
+        ay_compact = ay_text.replace("-", "")
+        row_locator = page.get_by_text(ay_text, exact=False).first
         try:
-            card = row.locator(
+            await row_locator.wait_for(state="visible", timeout=10_000)
+        except Exception:
+            # No row shows this assessment year → not filed.
+            _emit(f"[ACK] No filed return found for AY {assessment_year}.")
+            return AcknowledgementDownloadResult(
+                success=False,
+                assessment_year=assessment_year,
+                not_filed=True,
+                error=f"No filed return exists on the portal for AY "
+                f"{assessment_year}. File the ITR first, then download "
+                "the acknowledgement.",
+            )
+
+        # Capture the row's card (mat-card or table row) so we can both
+        # extract the ARN and click the download control within it.
+        try:
+            card = row_locator.locator(
                 "xpath=ancestor::*[self::mat-card or @role='row'][1]"
             )
+            card_text = await card.inner_text(timeout=5_000)
+        except Exception as exc:
+            raise AcknowledgementDownloadError(
+                "Could not read the filed-return row on the portal "
+                f"for AY {assessment_year}."
+            ) from exc
+
+        # Extract the ARN (15-digit number) from the row text. The portal
+        # renders the acknowledgement number as a long numeric string.
+        arn_match = re.search(r"\b(\d{15})\b", card_text)
+        discovered_arn = arn_match.group(1) if arn_match else ""
+        if discovered_arn:
+            _emit(f"[ACK] Found acknowledgement {discovered_arn} for AY {assessment_year}.")
+
+        # Locate the download control within the row's card.
+        try:
             receipt = card.get_by_text(
                 re.compile(r"Download\s+(?:Receipt|Acknowledgement)", re.I)
             ).first
@@ -221,7 +278,7 @@ async def download_acknowledgement(
         if receipt is None:
             raise AcknowledgementDownloadError(
                 "Could not locate the acknowledgement download control for "
-                f"ARN {acknowledgement_number}. The return may not yet be "
+                f"AY {assessment_year}. The return may be filed but not yet "
                 "acknowledged on the portal."
             )
 
@@ -247,21 +304,22 @@ async def download_acknowledgement(
         _emit(f"[ACK] Acknowledgement receipt saved to {final_path}.")
         return AcknowledgementDownloadResult(
             success=True,
-            acknowledgement_number=acknowledgement_number,
+            assessment_year=assessment_year,
+            acknowledgement_number=discovered_arn,
             acknowledgement_path=str(final_path),
         )
     except AcknowledgementDownloadError as exc:
         _emit(f"[ACK] Download failed: {exc}")
         return AcknowledgementDownloadResult(
             success=False,
-            acknowledgement_number=acknowledgement_number,
+            assessment_year=assessment_year,
             error=str(exc),
         )
     except Exception as exc:
         _emit(f"[ACK] Unexpected download failure: {exc}")
         return AcknowledgementDownloadResult(
             success=False,
-            acknowledgement_number=acknowledgement_number,
+            assessment_year=assessment_year,
             error=f"{type(exc).__name__}: {exc}",
         )
     finally:

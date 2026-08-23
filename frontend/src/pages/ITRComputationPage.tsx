@@ -728,22 +728,19 @@ export default function ITRComputationPage() {
   /**
    * Trigger the standalone Type-3 acknowledgement downloader. The backend
    * logs in as the taxpayer, navigates to View Filed Returns, locates the
-   * row for the return's acknowledgement number, and downloads the ITR-V
-   * PDF (independent of the working portal uploader). The button is only
-   * enabled once a completed Direct Submit has produced an ARN.
+   * row for the current assessment year (no pre-known ARN needed — the
+   * return may have been uploaded manually), and downloads the ITR-V PDF.
+   * If the ITR is not filed for the selected AY, the backend returns a
+   * 404 with a "file the ITR first" message which we surface here.
    */
   const handleFetchAcknowledgement = async () => {
     if (!clientId || fetchingAck) return;
-    const ack = filingJob?.result?.filing?.acknowledgement_number;
-    if (!ack) {
-      toast.error('No acknowledgement number is available yet. Submit the return first.');
-      return;
-    }
     const ay = effectiveAssessmentYear;
     const ok = window.confirm(
       `This will open a visible browser, log into the ITD portal as ` +
-      `${clientData?.pan ?? 'the taxpayer'}, and download the ITR-V ` +
-      `acknowledgement PDF for ARN ${ack} (AY ${ay}).\n\nProceed?`,
+      `${clientData?.pan ?? 'the taxpayer'}, and check whether the ` +
+      `${itrForm} for AY ${ay} has been filed. If it has, the ITR-V ` +
+      `acknowledgement PDF will be downloaded.\n\nProceed?`,
     );
     if (!ok) return;
     setFetchingAck(true);
@@ -758,9 +755,27 @@ export default function ITRComputationPage() {
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
-      toast.success(`Acknowledgement PDF downloaded (ARN: ${ack}).`);
+      toast.success(`Acknowledgement PDF downloaded for AY ${ay}.`);
     } catch (err: any) {
-      const message = err?.response?.data?.detail || err?.message || 'Acknowledgement download failed';
+      // The backend returns errors as JSON ({detail: "..."}), but because
+      // the success path is responseType:'blob', axios delivers the error
+      // body as a Blob too. Parse it to surface the "file the ITR first"
+      // message cleanly.
+      let message = 'Acknowledgement download failed';
+      const errBlob = err?.response?.data;
+      if (errBlob instanceof Blob) {
+        try {
+          const text = await errBlob.text();
+          const parsed = JSON.parse(text);
+          message = parsed?.detail || message;
+        } catch {
+          message = await errBlob.text().catch(() => message);
+        }
+      } else if (typeof errBlob?.detail === 'string') {
+        message = errBlob.detail;
+      } else if (err?.message) {
+        message = err.message;
+      }
       toast.error(message, { duration: 10000 });
     } finally {
       setFetchingAck(false);
@@ -1685,15 +1700,18 @@ export default function ITRComputationPage() {
               Direct Submit
             </button>
             {/* Standalone acknowledgement (ITR-V) downloader — separate from
-                the working uploader. Only enabled once a completed Direct
-                Submit has produced an acknowledgement number. */}
+                the working uploader. Always available in ITR-1/ITR-4: the
+                return for the selected AY may already be filed (manually or
+                via Direct Submit), so the button logs in and checks the
+                portal. The backend returns a "file the ITR first" message
+                when no acknowledgement exists for the AY. */}
             <button
               onClick={handleFetchAcknowledgement}
-              disabled={fetchingAck || !filingJob || filingJob.status !== 'completed' || !filingJob.result?.filing?.acknowledgement_number}
-              title="Log into the ITD portal and download the ITR-V acknowledgement PDF for the submitted return (standalone downloader, separate from Direct Submit)"
+              disabled={fetchingAck}
+              title="Log into the ITD portal and download the ITR-V acknowledgement PDF for the current AY (standalone downloader, separate from Direct Submit). If the ITR is not filed for this AY, you will be prompted to file it first."
               style={{
                 padding: '6px 12px',
-                background: (fetchingAck || !filingJob || filingJob.status !== 'completed' || !filingJob.result?.filing?.acknowledgement_number)
+                background: fetchingAck
                   ? 'var(--border)'
                   : 'var(--accent-green, #1a7f4b)',
                 color: 'white',
@@ -1701,7 +1719,7 @@ export default function ITRComputationPage() {
                 borderRadius: 6,
                 fontSize: 12,
                 fontWeight: 600,
-                cursor: (fetchingAck || !filingJob || filingJob.status !== 'completed' || !filingJob.result?.filing?.acknowledgement_number) ? 'not-allowed' : 'pointer',
+                cursor: fetchingAck ? 'not-allowed' : 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
@@ -1710,7 +1728,8 @@ export default function ITRComputationPage() {
               {fetchingAck && <Spinner size={12} />}
               Acknowledgement
             </button>
-          </>}
+            </>
+          )}
 
           {filingJobId !== null && filingJob && (
             <span
