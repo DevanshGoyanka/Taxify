@@ -2265,9 +2265,14 @@ def build_itr4_json(
         )
 
     # -- Digest (appended last) ---------------------------------------------
-    itr4["CreationInfo"]["Digest"] = _compute_digest(itr4)
+    # Digest is computed over the COMPLETE ITR document (the whole
+    # ``{"ITR": {"ITR4": ...}}`` JSON, matching the ITD reference
+    # ``API_Testing/digest_generator.py`` and SOP §5.3 Step 1), with the
+    # Digest value replaced by the placeholder "-".
+    wrapped = {"ITR": {"ITR4": itr4}}
+    itr4["CreationInfo"]["Digest"] = _compute_digest(wrapped)
 
-    return {"ITR": {"ITR4": itr4}}
+    return wrapped
 
 
 # ===========================================================================

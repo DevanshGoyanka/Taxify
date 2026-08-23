@@ -275,12 +275,27 @@ Two silent-fallback paths that violated this invariant were removed:
 Both now raise `ERIConfigurationError` so generation fails loudly instead of
 emitting a half-credentialed JSON. A new `ERIConfigurationError` exception
 (`app/eri/config.py`) surfaces resolver failures as one consistent type, and
-9 regression tests (`tests/test_eri_creation_info_invariant.py`) lock the
-invariant: no placeholder SW_ID, no placeholder Digest, and the SW_ID and
-Digest secret always come from the same credential bundle. The audit
-generator now `load_dotenv()`s before any builder import, so the real
+12 regression tests (`tests/test_eri_creation_info_invariant.py`) lock the
+invariant: no placeholder SW_ID, no placeholder Digest, the SW_ID and
+Digest secret always come from the same credential bundle, the Digest is
+byte-identical to the reference `API_Testing/digest_generator.py`, and it
+is computed over the COMPLETE ITR document (not the inner form dict). The
+audit generator now `load_dotenv()`s before any builder import, so the real
 Type-3 UAT credentials (`SW20014122` + 44-char Digest) flow into every
 generated JSON.
+
+The Digest computation is now consolidated into a single ERI-owned module
+(`app/eri/digest.py`) per the Dual-Mode ERI Integration Plan and the SOP
+"Digest_generation_ERI 2 (2).pdf" §5.3. `_compute_digest` in
+`app/engine/itd/common.py` is a thin delegate to
+`app.eri.digest.compute_digest`, and the Type-3 file exporter
+(`serialize_itd_json`) delegates to the same canonical serializer
+(`serialize_for_upload`) — so the bytes hashed are byte-identical to the
+bytes uploaded. The Digest is HMAC-SHA256 iterated N times (where N is the
+ERI-resolved iteration count) over the minified full document with the
+Digest value set to `"-"`, then Base64-encoded — verified byte-identical
+to `API_Testing/digest_generator.py` across both Type-2 UAT (1344) and
+Type-3 UAT (1038) credentials.
 
 ## Validation evidence
 
@@ -299,7 +314,7 @@ generated JSON.
 - Audit generator: every variant passed the official JSON schema gate;
   ITR-1 measured **421/421**, ITR-4 measured **408/408**. Zero missing,
   zero empty.
-- Maintained backend `tests/`: **1291 passed, 0 failed**. The ERI Type-2
+- Maintained backend `tests/`: **1294 passed, 0 failed**. The ERI Type-2
   router tests were updated to align with the Dual-Mode ERI Integration
   Plan (Phase 1 — Type-2 modules moved to `app/eri/type2/`, mode guard
   returns 503 in Type-3 mode); the additive `init_db` migration now guards

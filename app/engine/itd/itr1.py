@@ -2005,6 +2005,13 @@ def build_itr1_json(
             long_cap_112a=result.capital_gains_112a,
         )
 
-    itr1["CreationInfo"]["Digest"] = _compute_digest(itr1)
+    # Digest is computed over the COMPLETE ITR document (the whole
+    # ``{"ITR": {"ITR1": ...}}`` JSON, matching the ITD reference
+    # ``API_Testing/digest_generator.py`` and the SOP §5.3 Step 1 "Read
+    # the Input JSON"), with the Digest value replaced by the placeholder
+    # "-". Hashing only the inner ITR1 dict would diverge from the bytes
+    # the portal hashes over the uploaded file.
+    wrapped = {"ITR": {"ITR1": itr1}}
+    itr1["CreationInfo"]["Digest"] = _compute_digest(wrapped)
 
-    return {"ITR": {"ITR1": itr1}}
+    return wrapped

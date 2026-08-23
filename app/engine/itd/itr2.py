@@ -1668,5 +1668,10 @@ def build_itr2_json(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]
         "ScheduleTCS": _schedule_tcs(input_data),
     }
     itr2.update({k: v for k, v in optional.items() if v is not None})
-    itr2["CreationInfo"]["Digest"] = _compute_digest(itr2)
-    return {"ITR": {"ITR2": itr2}}
+    # Digest is computed over the COMPLETE ITR document (the whole
+    # ``{"ITR": {"ITR2": ...}}`` JSON, matching the ITD reference
+    # ``API_Testing/digest_generator.py`` and SOP §5.3 Step 1), with the
+    # Digest value replaced by the placeholder "-".
+    wrapped = {"ITR": {"ITR2": itr2}}
+    itr2["CreationInfo"]["Digest"] = _compute_digest(wrapped)
+    return wrapped

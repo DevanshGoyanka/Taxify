@@ -8,11 +8,6 @@ itr4.py, etc.
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
-import os
 from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
@@ -65,90 +60,23 @@ def _today() -> str:
 
 
 def _compute_digest(data: dict) -> str:
-    """Compute ITD-compliant Digest using iterative HMAC-SHA256.
+    """Compute the official ITR JSON ``Digest`` via the ERI flow.
 
-    Per SOP Section 5.3:
-      1. Serialize then minify the dict to JSON (all interstitial spaces removed)
-      2. Replace "Digest" value with placeholder "-"
-      3. HMAC-SHA256 with secret key (UTF-8 encoded), repeated N iterations
-      4. Base64-encode the final hash
-
-    The ``(secret_key, iterations)`` pair is resolved from ``.env`` via
-    :func:`app.eri.config.get_eri_credentials`, scoped to the active
-    ``(ERI_MODE, ERI_ENV)`` pair. This guarantees the Digest is computed
-    with the same environment's secret that matches the ``SWCreatedBy``
-    stamped in ``CreationInfo``.
+    This is a thin delegate to :func:`app.eri.digest.compute_digest` — the
+    SINGLE canonical Digest computation in Taxify. Per the ERI onboarding
+    SOP ("Digest_generation_ERI 2 (2).pdf" §5.3) and the Dual-Mode ERI
+    Integration Plan §3/§A2, the Digest MUST be computed strictly by the
+    ERI flow using the secret key + iteration count for the active
+    ``(ERI_MODE, ERI_ENV)`` credential bundle. There is no other Digest
+    computation path and no non-ERI source for these credentials.
 
     Raises:
-        ERIConfigurationError: If the active ERI credential bundle cannot
-            be resolved or the digest secret is absent. The Digest must
-            ALWAYS flow from the selected ERI credentials — a placeholder
-            Digest would produce a JSON whose CreationInfo identity does
-            not match the ERI type used to generate it, so generation
-            fails loudly instead of emitting a half-credentialed JSON.
+        ERIDigestError: If the active ERI credential bundle cannot be
+            resolved or has no digest secret. A placeholder ``-`` Digest
+            is never returned — generation fails loudly instead.
     """
-    import re
-    from app.eri.config import ERIConfigurationError, get_eri_credentials
-
-    try:
-        creds = get_eri_credentials()
-    except ERIConfigurationError:
-        raise
-    except Exception as exc:
-        raise ERIConfigurationError(
-            f"Could not resolve ERI credentials for Digest computation: {exc}"
-        ) from exc
-    secret_key = creds.digest_secret_key
-    if not secret_key:
-        raise ERIConfigurationError(
-            f"ERI_DIGEST_SECRET_KEY_{creds.mode.upper()}_{creds.environment.upper()} "
-            "is not set. The Digest must be computed with the secret for the "
-            "selected ERI type; a placeholder Digest is not permitted."
-        )
-    iterations = int(creds.digest_iterations or 1)
-
-    placeholder = "-"
-    digest_regex = r'"Digest"\s*:\s*"[^"]*"'
-
-    # Step 1: Serialize to JSON
-    raw = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
-
-    # Step 2: Minify — remove all interstitial whitespace outside quoted strings
-    result: list[str] = []
-    in_string = False
-    escape = False
-    for ch in raw:
-        if in_string:
-            if escape:
-                escape = False
-                result.append(ch)
-            elif ch == '\\':
-                escape = True
-                result.append(ch)
-            elif ch == '"':
-                in_string = False
-                result.append(ch)
-            else:
-                result.append(ch)
-        else:
-            if ch in (' ', '\t', '\n', '\r'):
-                continue
-            if ch == '"':
-                in_string = True
-            result.append(ch)
-    minified = ''.join(result)
-
-    # Step 3: Replace Digest value with placeholder
-    minified = re.sub(digest_regex, f'"Digest":"{placeholder}"', minified)
-
-    # Step 4+5: HMAC-SHA256 with secret key (UTF-8 bytes), iterated N times
-    key_bytes = secret_key.encode("utf-8")
-    payload = minified.encode("utf-8")
-    for _ in range(iterations):
-        payload = hmac.new(key_bytes, payload, hashlib.sha256).digest()
-
-    # Step 6: Base64 encode the final hash
-    return base64.b64encode(payload).decode("utf-8")
+    from app.eri.digest import compute_digest
+    return compute_digest(data)
 
 
 # ---------------------------------------------------------------------------

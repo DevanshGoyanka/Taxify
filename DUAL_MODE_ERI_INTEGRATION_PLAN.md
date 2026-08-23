@@ -13,7 +13,7 @@ Phases are implemented one at a time. Each phase is committed only after the use
 
 | Phase | Status | Commit | Notes |
 |---|---|---|---|
-| **Phase 1 — Type-3 Foundation** | ✅ TESTED & COMMITTED | Phase 1 commit | A1, A2, A4, B1, B2 done. User-tested & approved 2026-08-19. ERI router tests reconciled to the moved `app/eri/type2/*` paths and the B2 mode guard (503 in Type-3 mode) on 2026-08-23. |
+| **Phase 1 — Type-3 Foundation** | ✅ TESTED & COMMITTED | Phase 1 commit | A1, A2, A4, B1, B2 done. User-tested & approved 2026-08-19. ERI router tests reconciled to the moved `app/eri/type2/*` paths and the B2 mode guard (503 in Type-3 mode) on 2026-08-23. **A2 hardened 2026-08-23:** Digest computation consolidated into a single ERI-owned module (`app/eri/digest.py`); `_compute_digest`/`_resolve_sw_id` raise `ERIConfigurationError` instead of silent placeholder fallbacks; the Digest is computed over the COMPLETE ITR document (matching the SOP "Digest_generation_ERI 2 (2).pdf" §5.3 + the reference `API_Testing/digest_generator.py`), byte-identical across both Type-2 UAT (1344) and Type-3 UAT (1038) credentials. |
 | **Phase 2 — Type-3 Validation Layer** | ✅ TESTED & COMMITTED | `7f8e223` | Validators wired into live paths. Recovery verified after portal passwords were re-saved; portal automation passed on 2026-08-20. |
 | **Phase 3 — Type-3 Submission Automation** | ✅ IMPLEMENTED — AWAITING UAT | (pending approval) | Dedicated filing worker, deterministic JSON export, portal upload, e-verify, acknowledgement, and unified filing API. Existing Prefill/download worker is unchanged. **Phase 3 Addendum (2026-08-21):** R145 dividend-breakup correctness (Category B warning when no per-receipt data), detailed CBDT schema-violation logging in the 422 path, and a frontend **Direct Submit** button wired to the Type-3 portal upload flow. |
 | Phase 4 — Type-3 UAT Certification | ⏳ NOT STARTED | — | UAT sanity pack → ITD → SW_ID enablement. |
@@ -611,35 +611,68 @@ def get_eri_credentials() -> ERICredentials:
 
 ### A2: Env-Scoped Digest Computation
 
-**File:** `app/engine/itd/common.py` (modify `_compute_digest`).
+**File:** `app/eri/digest.py` (the single ERI-owned digest service);
+`app/engine/itd/common.py::_compute_digest` is a thin delegate to it.
 
-Current `_compute_digest` reads `ERI_DIGEST_SECRET_KEY` and `ERI_DIGEST_ITERATIONS` directly from env. Change to resolve via `get_eri_credentials()`:
-
-```python
-def _compute_digest(data: dict) -> str:
-    creds = get_eri_credentials()
-    if not creds.digest_secret_key:
-        return "-"   # dev placeholder
-    iterations = creds.digest_iterations or 1
-    # ... rest unchanged: minify, replace Digest, iterated HMAC-SHA256, base64
-```
-
-And `_creation_info` uses `creds.sw_id` instead of `os.getenv("ERI_SW_ID")`:
+The Digest is computed **strictly by the ERI flow** per the SOP
+"Digest_generation_ERI 2 (2).pdf" §5.3, using the secret key + iteration
+count for the active `(ERI_MODE, ERI_ENV)` credential bundle. There is
+no other Digest computation path and no non-ERI source for these
+credentials. The `SWCreatedBy`/`JSONCreatedBy` and the
+`(secret_key, iterations)` are read from the SAME `(mode, environment)`
+suffix, so the identity stamped in `CreationInfo` always matches the
+credentials that produced the `Digest`.
 
 ```python
-def _creation_info() -> dict:
-    creds = get_eri_credentials()
-    return {
-        "SWVersionNo": _SW_VERSION,
-        "SWCreatedBy": creds.sw_id,
-        "JSONCreatedBy": creds.sw_id,
-        "JSONCreationDate": _today(),
-        "IntermediaryCity": "Delhi",
-        "Digest": "-",   # placeholder, replaced by _compute_digest
-    }
+# app/eri/digest.py — the SINGLE canonical Digest computation
+def compute_digest(itr_json: dict) -> str:
+    creds = _resolve_creds()                    # raises ERIDigestError, never returns "-"
+    secret_key = creds.digest_secret_key
+    if not secret_key:
+        raise ERIDigestError(...)               # no placeholder fallback
+    iterations = int(creds.digest_iterations or 1)
+    payload_text = canonicial_digest_payload(itr_json)   # minify + Digest -> "-"
+    # HMAC-SHA256, iterated N times, then Base64
+    digest_bytes = payload_text.encode("utf-8")
+    key_bytes = secret_key.encode("utf-8")
+    for _ in range(iterations):
+        digest_bytes = hmac.new(key_bytes, digest_bytes, hashlib.sha256).digest()
+    return base64.b64encode(digest_bytes).decode("utf-8")
 ```
 
-**Validation:** Generate an ITR-1 JSON with Type-3 UAT creds → submit manually to ITD UAT portal → passes validation. Repeat with Type-3 prod creds → passes on prod portal.
+`canonicial_digest_payload` and `serialize_for_upload` are the SINGLE
+canonical serializer shared by the Digest computation AND the file
+export (`app/eri/type3/json_exporter.py::serialize_itd_json` delegates
+to it), so the bytes hashed are byte-identical to the bytes uploaded.
+
+The builders (`app/engine/itd/itr1..4.py`) compute the Digest over the
+**COMPLETE ITR document** (`{"ITR": {"ITRn": ...}}`) — matching the
+reference `API_Testing/digest_generator.py` and SOP §5.3 Step 1 "Read
+the Input JSON" — NOT just the inner form dict. The portal hashes the
+uploaded file's bytes, so hashing a smaller scope would diverge.
+
+```python
+# app/engine/itd/itr1.py (and itr2/3/4) — hash the COMPLETE document
+wrapped = {"ITR": {"ITR1": itr1}}
+itr1["CreationInfo"]["Digest"] = _compute_digest(wrapped)   # delegates to app.eri.digest
+return wrapped
+```
+
+`_creation_info` uses `creds.sw_id` for both `SWCreatedBy` and
+`JSONCreatedBy` (no hardcoded placeholder `SW00000001` fallback — it
+raises `ERIConfigurationError` if the resolver cannot supply the SW_ID).
+
+**Validation:**
+- Cross-check against `API_Testing/digest_generator.py` — byte-identical
+  Digest output for the same input + (secret, iterations), across both
+  Type-2 UAT (1344) and Type-3 UAT (1038) credentials.
+- The bytes hashed round-trip: `compute_digest(stamped_doc) == stamped_digest`.
+- 12 regression tests in `tests/test_eri_creation_info_invariant.py`
+  lock the invariant (no placeholder SW_ID, no placeholder Digest,
+  same-bundle rule, full-document scope, reference byte-identity).
+- Generate an ITR-1 JSON with Type-3 UAT creds → submit manually to ITD
+  UAT portal → passes validation. Repeat with Type-3 prod creds → passes
+  on prod portal.
 
 ### A3: Local CBDT Validation Layer (CRITICAL for Type-3)
 

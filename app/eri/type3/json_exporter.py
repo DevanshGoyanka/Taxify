@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Client, ClientITR, User
 from app.engine.filing_orchestrator import produce_itd_json
+from app.eri.digest import serialize_for_upload
 
 
 class Type3JsonExportError(ValueError):
@@ -18,21 +19,19 @@ class Type3JsonExportError(ValueError):
 
 
 def serialize_itd_json(itr_json: dict[str, Any]) -> str:
-    """Return the canonical UTF-8 JSON text used by digest generation.
+    """Return the canonical UTF-8 JSON text for upload to the ITD portal.
 
-    ``_compute_digest`` sorts object keys and removes interstitial whitespace
-    before hashing. Exporting with the same settings keeps the uploaded bytes
-    deterministic and prevents an insertion-order-dependent digest mismatch.
+    Delegates to :func:`app.eri.digest.serialize_for_upload` — the SINGLE
+    canonical serializer shared with the Digest computation. The bytes
+    written to the ``.json`` file are therefore byte-identical to the
+    bytes hashed by :func:`app.eri.digest.compute_digest` (with only the
+    ``Digest`` value differing from the placeholder ``"-"`` to the
+    computed 44-char digest), so the portal's integrity check never
+    mismatches due to formatting drift.
     """
     if not isinstance(itr_json, dict) or not itr_json:
         raise Type3JsonExportError("The ITD JSON payload is empty or invalid.")
-    return json.dumps(
-        itr_json,
-        sort_keys=True,
-        ensure_ascii=False,
-        default=str,
-        separators=(",", ":"),
-    )
+    return serialize_for_upload(itr_json)
 
 
 def export_itd_json_file(

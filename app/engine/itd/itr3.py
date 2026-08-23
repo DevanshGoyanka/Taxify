@@ -1120,6 +1120,11 @@ def build_itr3_json(
     # ITR-3 Verification requires Date
     itr3["Verification"]["Date"] = "2026-07-31"
 
-    itr3["CreationInfo"]["Digest"] = _compute_digest(itr3)
+    # Digest is computed over the COMPLETE ITR document (the whole
+    # ``{"ITR": {"ITR3": ...}}`` JSON, matching the ITD reference
+    # ``API_Testing/digest_generator.py`` and SOP §5.3 Step 1), with the
+    # Digest value replaced by the placeholder "-".
+    wrapped = {"ITR": {"ITR3": itr3}}
+    itr3["CreationInfo"]["Digest"] = _compute_digest(wrapped)
 
-    return {"ITR": {"ITR3": itr3}}
+    return wrapped
