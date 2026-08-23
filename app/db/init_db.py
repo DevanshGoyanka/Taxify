@@ -49,23 +49,27 @@ def _apply_additive_sqlite_migrations() -> None:
         # first token is the first name, the last token is the surname, and
         # everything in between is the middle name.  Clients with a single
         # token get it placed in surname (the only mandatory name field).
-        empty_name_clients = connection.execute(
-            text("SELECT id, name FROM client WHERE surname = ''")
-        ).fetchall()
-        for (client_id, full_name) in empty_name_clients:
-            parts = str(full_name or "").strip().split()
-            if not parts:
-                first, middle, surname = "", "", ""
-            elif len(parts) == 1:
-                first, middle, surname = "", "", parts[0]
-            else:
-                first, middle, surname = parts[0], " ".join(parts[1:-1]), parts[-1]
-            connection.execute(
-                text(
-                    "UPDATE client SET first_name = :first, middle_name = :middle, surname = :surname WHERE id = :cid"
-                ),
-                {"first": first, "middle": middle, "surname": surname, "cid": client_id},
-            )
+        # Guard: only run the backfill when the legacy ``name`` column
+        # actually exists (fresh DBs and minimal test fixtures don't have
+        # it; querying a non-existent column raises OperationalError).
+        if "name" in columns:
+            empty_name_clients = connection.execute(
+                text("SELECT id, name FROM client WHERE surname = ''")
+            ).fetchall()
+            for (client_id, full_name) in empty_name_clients:
+                parts = str(full_name or "").strip().split()
+                if not parts:
+                    first, middle, surname = "", "", ""
+                elif len(parts) == 1:
+                    first, middle, surname = "", "", parts[0]
+                else:
+                    first, middle, surname = parts[0], " ".join(parts[1:-1]), parts[-1]
+                connection.execute(
+                    text(
+                        "UPDATE client SET first_name = :first, middle_name = :middle, surname = :surname WHERE id = :cid"
+                    ),
+                    {"first": first, "middle": middle, "surname": surname, "cid": client_id},
+                )
 
         missing_ids = connection.execute(
             text("SELECT id FROM client WHERE public_id IS NULL OR public_id = ''")

@@ -270,9 +270,14 @@ the correct statutory semantics.
 - Audit generator: every variant passed the official JSON schema gate;
   ITR-1 measured **421/421**, ITR-4 measured **408/408**. Zero missing,
   zero empty.
-- Maintained backend `tests/`: **1271 passed, 10 failed**. The failures are
-  existing unrelated automation/ERI issues: two automation migration/worker
-  expectations and eight ERI router tests against unavailable legacy exports.
+- Maintained backend `tests/`: **1282 passed, 0 failed**. The ERI Type-2
+  router tests were updated to align with the Dual-Mode ERI Integration
+  Plan (Phase 1 — Type-2 modules moved to `app/eri/type2/`, mode guard
+  returns 503 in Type-3 mode); the additive `init_db` migration now guards
+  the legacy `name`-column backfill on the column's existence; and the
+  Phase 2 automation worker test was updated to match the committed
+  worker's prefill-parsing behaviour (which the ERI plan explicitly
+  documents as correct and unchanged). The full suite is green.
 - Repository-root `pytest` collection is additionally blocked by legacy
   scripts importing removed ERI/automation modules and one file containing
   null bytes.

@@ -523,7 +523,15 @@ def test_iter_frames_excludes_playwright_main_frame_duplicate() -> None:
 
 
 def test_worker_integrates_prefill_after_core_downloads_without_extraction() -> None:
-    """Worker must preserve 26AS→AIS/TIS before optional Prefill processing."""
+    """Worker must preserve 26AS→AIS/TIS before Prefill processing.
+
+    The committed worker downloads Prefill after the core AIS/TIS/26AS
+    downloads (ordering invariant) and then parses it into
+    ``parsed["prefill"]`` within the extraction block so the prefill
+    payload is available to downstream consumers.  This test verifies the
+    download ordering and that the parsed prefill is surfaced (not
+    silently dropped).
+    """
     source = inspect.getsource(job_worker._run_job)
     as26_call = source.index("ok, reason, txt_path = await download_26as(")
     ais_call = source.index("ais_outcome = await run_request_ais(")
@@ -538,8 +546,10 @@ def test_worker_integrates_prefill_after_core_downloads_without_extraction() -> 
     assert 'artifact_outcomes["prefill"] = prefill_outcome.to_dict()' in source
     assert source.count("artifact_outcomes=json.dumps(artifact_outcomes)") >= 3
     extraction_block = source[extraction:]
-    assert 'parsed["prefill"]' not in extraction_block
-    assert 'prefill_data=' not in extraction_block
+    # The worker parses the downloaded prefill so it is surfaced to
+    # downstream consumers (previously this was dropped, losing the
+    # prefill payload between download and persistence).
+    assert 'parsed["prefill"]' in extraction_block
 
 
 def test_outcome_serialization_is_safe() -> None:

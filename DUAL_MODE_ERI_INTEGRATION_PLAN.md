@@ -13,7 +13,7 @@ Phases are implemented one at a time. Each phase is committed only after the use
 
 | Phase | Status | Commit | Notes |
 |---|---|---|---|
-| **Phase 1 — Type-3 Foundation** | ✅ TESTED & COMMITTED | Phase 1 commit | A1, A2, A4, B1, B2 done. User-tested & approved 2026-08-19. |
+| **Phase 1 — Type-3 Foundation** | ✅ TESTED & COMMITTED | Phase 1 commit | A1, A2, A4, B1, B2 done. User-tested & approved 2026-08-19. ERI router tests reconciled to the moved `app/eri/type2/*` paths and the B2 mode guard (503 in Type-3 mode) on 2026-08-23. |
 | **Phase 2 — Type-3 Validation Layer** | ✅ TESTED & COMMITTED | `7f8e223` | Validators wired into live paths. Recovery verified after portal passwords were re-saved; portal automation passed on 2026-08-20. |
 | **Phase 3 — Type-3 Submission Automation** | ✅ IMPLEMENTED — AWAITING UAT | (pending approval) | Dedicated filing worker, deterministic JSON export, portal upload, e-verify, acknowledgement, and unified filing API. Existing Prefill/download worker is unchanged. **Phase 3 Addendum (2026-08-21):** R145 dividend-breakup correctness (Category B warning when no per-receipt data), detailed CBDT schema-violation logging in the 422 path, and a frontend **Direct Submit** button wired to the Type-3 portal upload flow. |
 | Phase 4 — Type-3 UAT Certification | ⏳ NOT STARTED | — | UAT sanity pack → ITD → SW_ID enablement. |
