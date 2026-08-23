@@ -211,29 +211,47 @@ GSTIN-turnover/goods-vehicle Schedule BP rows) are now all covered by
 dedicated variants in `audit_itr_coverage.py`. See the generated CSVs
 `audit_itr1_present.csv` (421) and `audit_itr4_present.csv` (408).
 
-### Known validator inconsistencies surfaced by a positive 112A gain
+### Resolved: 112A capital-gains GTI inconsistency
 
-While wiring the restricted-112A fixture, the audit surfaced two pre-existing
-validator inconsistencies that only appear with a **positive** (sale > cost)
-112A gain, and were never exercised by any gateway test before:
+While wiring the restricted-112A fixture, the audit surfaced two
+inconsistencies between the ITR-1 calculator and its validators (and an
+ITR-4 validator comparison) that only appeared with a **positive** (sale >
+cost) 112A gain. Both are now fixed, and the audit fixture exercises a
+positive ₹80,000 112A gain end-to-end.
 
-- **ITR1-R022** expects `GTI = Salary + HP + OS + capital_gains_112a`
-  (pre-exemption net), but the calculator builds GTI from the
-  **post-exemption** taxable 112A. GTI is short by the exempted gain whenever
-  `0 < gain ≤ ₹1,25,000`.
-- **ITR4-R264** expects `result.capital_gains_112a` (pre-exemption) to equal
-  the schedule-112A `taxable_income` (post-exemption).
-- A positive gain also cascades into the 80G ceiling: adjusted GTI subtracts
-  `cg_112a_income`, dropping eligible 80G below the user claim and tripping
-  the 80G VIA-claim cross-check.
+**Root cause.** The ITR-1 calculator built Gross Total Income from the
+**post-exemption** taxable 112A (`cg_112a_taxable`), while
+`result.capital_gains_112a` held the **pre-exemption** net gain. This
+violated the CBDT schema's two distinct GTI fields:
+`GrossTotIncomeIncLTCG112A` ("Gross Total Income **including** LTCG u/s
+112A") and `GrossTotIncome` ("Gross Total Income **without** LTCG u/s
+112A"). The annual ₹1.25L Section 112A exemption is a **special-rate-tax
+reduction only** — it zeroes the 12.5% tax on a gain within the threshold —
+not a GTI reduction. The full pre-exemption gain must flow into GTI.
 
-To keep the audit's scope (fixture-only, no builder/validator edits) the
-112A fixture uses `sale == cost` (gain = ₹0) so the three `LTCG112A` fields
-are emitted as non-empty whole-rupee ints without distorting tax. The fields
-are PRESENT, which is the audit's objective; the underlying validator
-inconsistencies are flagged here for a follow-up fix (either compare against
-the post-exemption taxable 112A, or have the calculator expose the
-post-exemption amount on `result.capital_gains_112a`).
+**Fix.**
+- `app/engine/calculators/itr1.py`: GTI now uses `cg_112a_income`
+  (pre-exemption); the slab base subtracts the full `cg_112a_income` (the
+  entire 112A gain is taxed at the special rate, which the exemption then
+  zeroes). The exemption is now applied exactly once, in `cg_112a_tax`.
+- `app/engine/validators/itr4/calc_rules.py` (R264): now compares
+  `result.capital_gains_112a` against `cg_sched.net_income` (pre-exemption),
+  not `taxable_income` (post-exemption). The ITR-4 calculator was already
+  correct; only the validator compared against the wrong field.
+- The 80G/80GG adjusted-GTI ceiling
+  (`app/engine/schedules/deductions/__init__.py`) already subtracted the
+  full `cg_112a_income` and needed no change.
+
+**Verification.** The audit fixture now carries a positive ₹80,000 112A
+gain (sale ₹1,80,000 − cost ₹1,00,000). The generated CBDT JSON confirms:
+`LTCG112A.LongCap112A = 80000`, `GrossTotIncomeIncLTCG112A = 695800`
+(salary + OS + full 112A), `GrossTotIncome = 615800` (excluding 112A),
+special-rate tax = 0 (gain below ₹1.25L exemption). Two existing tests that
+encoded the old buggy expectation
+(`test_permitted_112a_gain_remains_part_of_gross_total_income`,
+`test_itr1_ltcg_112a_exemption_and_slab_isolation`,
+`test_tax_summary_computes_canonical_restricted_112a_rows`) were updated to
+the correct statutory semantics.
 
 ## Validation evidence
 
@@ -243,7 +261,10 @@ post-exemption amount on `result.capital_gains_112a`).
   paths and each other.
 - Focused backend mapper, calculator, builder, gateway, and validator suites
   (draft-to-input, ITR-1/ITR-4 ITD builder, filing-gateway v2, ITR-1/ITR-4
-  input + calc validation, ITR-1/ITR-4 calculator): **409 passed**.
+  input + calc validation, ITR-1/ITR-4 calculator, ITR-1 filing-gateway
+  profile, AY 2026-27 calculator regressions, AY 2026-27 special-tax
+  hardening, boundary regression, 112A unification, standalone CG schedule):
+  **555 passed**.
 - Complete frontend unit suite: **160 passed**, TypeScript compilation and
   the production frontend build pass.
 - Audit generator: every variant passed the official JSON schema gate;
@@ -268,12 +289,12 @@ Schedule BP variants) now have a dedicated canonical fixture variant and
 schema assertion in `audit_itr_coverage.py`. No conditional branch remains
 unproven end-to-end.
 
-The remaining follow-up is the **112A validator inconsistency** documented
-above: a positive (non-zero) 112A gain trips ITR1-R022 / ITR4-R264 and the
-80G ceiling cascade. Until that is resolved, the audit fixture reports the
-112A fields with a zero gain (PRESENT, schema-valid), and live filers with a
-positive listed-equity LTCG above the ₹1.25L exemption should be validated
-against the slab computation before bulk filing.
+The 112A capital-gains GTI inconsistency documented above is **resolved**
+— the audit fixture now exercises a positive ₹80,000 listed-equity LTCG
+gain end-to-end, and the generated CBDT JSON correctly reports the full
+pre-exemption gain in `GrossTotIncomeIncLTCG112A` while the ₹1.25L
+exemption zeroes the special-rate tax. Live filers with a positive
+listed-equity LTCG are now computed correctly.
 
 ## Reproduction
 

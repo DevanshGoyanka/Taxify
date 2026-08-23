@@ -492,25 +492,18 @@ def build_full_itr1_draft(*, loan_variant: str = "80EEA") -> ReturnDraft:
     # ``totalCostAcquisition``, floored at 0). The builder's
     # ``_ltcg_112a_schedule`` emits the three official fields
     # (TotSaleCnsdrn / TotCstAcqisn / LongCap112A) whenever BOTH sale and
-    # cost are non-None — which is the case as soon as the block exists,
-    # regardless of the ₹1,25,000 exemption. To keep the gateway's
-    # Category-A calc validators green WITHOUT touching builders/validators
-    # (out of scope for this audit-fixture task), the sale and cost are set
-    # EQUAL so the 112A gain is exactly ₹0. This sidesteps two pre-existing
-    # validator inconsistencies that only surface with a POSITIVE 112A gain
-    # and were never exercised by any gateway test before:
-    #   (1) ITR1-R022 expects GTI = Salary+HP+OS+capital_gains_112a
-    #       (pre-exemption net), but the calculator builds GTI from the
-    #       post-exemption taxable 112A (so GTI is short by the exempted
-    #       gain whenever 0 < gain ≤ ₹1.25L).
-    #   (2) ITR4-R264 expects result.capital_gains_112a (pre-exemption) ==
-    #       schedule 112A taxable_income (post-exemption).
-    # A zero gain keeps both sides at 0 and leaves the three LTCG112A fields
-    # emitted as non-empty whole-rupee ints (100000 / 100000 / 0), so the
-    # audit's PRESENCE check passes while no tax is distorted.
+    # cost are non-None. A POSITIVE gain (₹80,000, under the ₹1,25,000
+    # annual exemption) now exercises the corrected GTI path: the FULL
+    # pre-exemption gain flows into GrossTotIncomeIncLTCG112A, the
+    # exemption zeroes the 12.5% special-rate tax, and the gain is removed
+    # from the normal slab base. This was previously blocked by two
+    # validator/calculator inconsistencies (ITR1-R022 expected GTI built
+    # from the post-exemption taxable 112A; ITR4-R264 compared
+    # result.capital_gains_112a against the post-exemption taxable_income);
+    # both are now fixed so a positive gain validates cleanly.
     draft.capitalGainsSchedule = {
         "simplified112A": {
-            "totalSaleConsideration": Decimal("100000"),
+            "totalSaleConsideration": Decimal("180000"),
             "totalCostAcquisition": Decimal("100000"),
         },
     }

@@ -566,14 +566,19 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                     f"112A taxable income ({cg_sched.taxable_income}) exceeds "
                     f"gross 112A ({cg.ltcg_112a})",
                     "capital_gains.ltcg_112a"))
-            # Rule 264: LTCG 112A capital gains = GTI 112A component
-            if result.capital_gains_112a != cg_sched.taxable_income:
+            # Rule 264: LTCG 112A capital gains = GTI 112A component.
+            # ``result.capital_gains_112a`` holds the FULL pre-exemption
+            # net LTCG gain (it flows into GTI), so it must equal the
+            # schedule's ``net_income`` (pre-exemption), NOT
+            # ``taxable_income`` (post the Rs 1.25L special-rate exemption).
+            # The exemption reduces only the special-rate tax, not GTI.
+            if result.capital_gains_112a != cg_sched.net_income:
                 results.append(_make(
                     "ITR4-R264", False,
                     f"GTI capital gains 112A ({result.capital_gains_112a}) != "
-                    f"Schedule 112A taxable ({cg_sched.taxable_income})",
+                    f"Schedule 112A net income ({cg_sched.net_income})",
                     "capital_gains_112a",
-                    expected=str(cg_sched.taxable_income),
+                    expected=str(cg_sched.net_income),
                     actual=str(result.capital_gains_112a)))
 
     # ═══════════════════════════════════════════════════════════════════════

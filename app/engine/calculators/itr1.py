@@ -356,10 +356,15 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.capital_gains_112a = cg_112a_income
 
     # ── 2. Gross Total Income ────────────────────────────────────────────────
-    # GTI uses the post-exemption taxable 112A amount so the annual Rs 1.25L
-    # exemption removes the exempt portion from total income (and therefore
-    # from the slab base), not merely from the 12.5% special-rate tax.
-    gti = result.salary_income + result.house_property_income + result.other_sources_income + cg_112a_taxable
+    # GTI includes the FULL pre-exemption LTCG u/s 112A gain. The annual
+    # Rs 1.25L exemption is a special-rate-tax reduction only (applied in
+    # ``cg_112a_tax`` on the post-exemption ``cg_112a_taxable`` amount); it
+    # does NOT reduce GTI. This matches the CBDT schema, which emits two
+    # distinct fields: ``GrossTotIncomeIncLTCG112A`` (GTI including the full
+    # LTCG) and ``GrossTotIncome`` (GTI excluding LTCG 112A). The
+    # deductions schedule's 80G/80GG adjusted-GTI ceiling subtracts the full
+    # ``cg_112a_income`` (see app/engine/schedules/deductions/__init__.py).
+    gti = result.salary_income + result.house_property_income + result.other_sources_income + cg_112a_income
     result.gross_total_income = gti
     result.net_agricultural_income = input_data.agriculture_income
     result.aggregate_income = gti + result.net_agricultural_income
@@ -460,11 +465,15 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.taxable_income = ti
 
     # ── 5. Normal slab tax (income excluding special-rate income) ─────────────
-    # ``cg_112a_taxable`` is the post-exemption special-rate income; the
-    # exempt portion (up to Rs 1.25L) never enters GTI (Step 2) and so must
-    # not be subtracted again from the slab base.  Using ``net_income``
-    # (pre-exemption) here would double-count the exemption.
-    normal_income = max(Decimal("0"), ti - cg_112a_taxable)
+    # The slab base excludes the FULL LTCG u/s 112A (it is taxed at the
+    # special 12.5% rate separately). The annual Rs 1.25L exemption is
+    # applied exactly once — in ``cg_112a_tax`` (12.5% on the
+    # post-exemption ``cg_112a_taxable``). Subtracting ``cg_112a_income``
+    # (pre-exemption) here removes the entire 112A gain from the slab base;
+    # subtracting ``cg_112a_taxable`` would leave the exempt portion in the
+    # slab base and tax it twice (once at slab rate, once implicitly via the
+    # missed exemption).
+    normal_income = max(Decimal("0"), ti - cg_112a_income)
     exemption_limit = get_basic_exemption_limit(age, regime)
     result.basic_exemption_limit = exemption_limit
     result.normal_rate_income = normal_income

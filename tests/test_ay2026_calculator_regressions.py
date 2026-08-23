@@ -127,13 +127,15 @@ def test_new_regime_house_property_loss_cannot_reduce_itr4_business_income() -> 
 
 
 def test_permitted_112a_gain_remains_part_of_gross_total_income() -> None:
-    """A permitted 112A gain below the Rs 1.25L exemption is fully exempt.
+    """A permitted 112A gain below the Rs 1.25L exemption is in GTI but untaxed.
 
-    The annual Section 112A exemption removes the exempt portion from total
-    income entirely (not merely from the 12.5% special-rate tax).  A Rs 1L
-    gain is within the exemption, so it reports as ``capital_gains_112a``
-    (the pre-exemption net gain, for display/reconciliation) but contributes
-    zero to GTI, taxable income, the slab base, and the special-rate tax.
+    The annual Section 112A exemption is a special-rate-tax reduction only:
+    it zeroes the 12.5% special-rate tax on a gain within Rs 1.25L, but the
+    FULL pre-exemption gain still flows into Gross Total Income (per the CBDT
+    schema: ``GrossTotIncomeIncLTCG112A`` = GTI including LTCG 112A). The
+    gain is removed from the normal slab base (taxed at the special rate,
+    which the exemption then zeroes), so no tax arises, but GTI and taxable
+    income still reflect the gain.
     """
     result = compute_itr1(
         _itr1_input(
@@ -143,10 +145,10 @@ def test_permitted_112a_gain_remains_part_of_gross_total_income() -> None:
     )
 
     assert result.errors == []
-    assert result.capital_gains_112a == Decimal("100000")  # reported net gain
-    assert result.gross_total_income == Decimal("0")        # exempt → not in GTI
-    assert result.taxable_income == Decimal("0")
-    assert result.special_rate_tax == Decimal("0")
+    assert result.capital_gains_112a == Decimal("100000")  # full net gain
+    assert result.gross_total_income == Decimal("100000")  # full gain in GTI
+    assert result.taxable_income == Decimal("100000")      # no deductions
+    assert result.special_rate_tax == Decimal("0")          # exempt from 112A tax
 
 
 def test_section_89_relief_reduces_final_liability() -> None:
@@ -399,9 +401,11 @@ def test_tax_summary_computes_canonical_restricted_112a_rows() -> None:
     assert result["capitalGainsSummary"]["gross112AGain"] == 19000.0
     assert result["capitalGainsSummary"]["costOfAcquisition"] == 101000.0
     # The Rs 19,000 gain is below the Rs 1.25L Section 112A annual exemption,
-    # so it is fully exempt and does not enter GTI (the exemption removes the
-    # exempt portion from total income, not merely from the 12.5% tax).
-    assert result["gti"] == 0.0
+    # so the special-rate 12.5% tax is zeroed, but the FULL pre-exemption
+    # gain still flows into Gross Total Income (per CBDT:
+    # GrossTotIncomeIncLTCG112A = GTI including LTCG 112A; the exemption is
+    # a special-rate-tax reduction only, not a GTI reduction).
+    assert result["gti"] == 19000.0
 
 
 def test_tax_summary_returns_structured_restricted_112a_issues() -> None:
@@ -1287,10 +1291,11 @@ def test_itr1_ltcg_112a_exemption_and_slab_isolation() -> None:
     always ₹0. The engine must:
       (a) keep the ₹1,25,000 LTCG out of the slab-rate income pool,
       (b) not apply 87A rebate machinery to the (zero) taxable LTCG,
-      (c) use Total Income (including the zero taxable LTCG, not the gross
-          ₹1,25,000) for the marginal-relief threshold test.
+      (c) include the FULL pre-exemption ₹1,25,000 LTCG in Gross Total
+          Income (per CBDT: ``GrossTotIncomeIncLTCG112A`` = GTI including
+          LTCG 112A; the exemption is a special-rate-tax reduction only).
     """
-    # New regime: 13,25,000 gross - 75,000 std = 12,50,000 salary income.
+    # New regime: 5,75,000 gross - 75,000 std = 5,00,000 salary income.
     # LTCG 112A gross = 1,25,000 (exactly at the ITR-1 cap / exemption).
     result = compute_tax_summary(
         payload={
@@ -1299,7 +1304,7 @@ def test_itr1_ltcg_112a_exemption_and_slab_isolation() -> None:
             "itrForm": "ITR-1",
             "age": 31,
             "residentialStatus": "ROR",
-            "employerEntries": [{"basic": "1325000"}],
+            "employerEntries": [{"basic": "575000"}],
             "capitalGainsSchedule": {
                 "simplified112A": {
                     "totalSaleConsideration": "350000",
@@ -1311,19 +1316,22 @@ def test_itr1_ltcg_112a_exemption_and_slab_isolation() -> None:
         current_user=None,
     )
 
-    # (a) Normal-rate income excludes the ₹1,25,000 LTCG.
-    assert Decimal(str(result["normalRateIncome"])) == Decimal("1250000")
-    # Total income includes only the (zero) taxable LTCG, not gross ₹1,25,000.
-    assert Decimal(str(result["totalIncome"])) == Decimal("1250000")
+    # (c) GTI includes the FULL ₹1,25,000 LTCG (pre-exemption) per CBDT
+    #     schema (GrossTotIncomeIncLTCG112A = GTI including LTCG 112A).
+    assert Decimal(str(result["gti"])) == Decimal("625000")
+    # Total income = GTI (std deduction already applied; no other deductions).
+    assert Decimal(str(result["totalIncome"])) == Decimal("625000")
+    # (a) Normal-rate income excludes the ₹1,25,000 LTCG (taxed at the
+    #     special rate, which the exemption then zeroes).
+    assert Decimal(str(result["normalRateIncome"])) == Decimal("500000")
     # (b) CG special-rate tax is zero (exemption correctly applied).
     assert Decimal(str(result["cgTax"])) == Decimal("0")
-    # Slab tax on 12,50,000: 20,000 + 40,000 + 15%×50,000 = 67,500.
-    assert Decimal(str(result["normalTax"])) == Decimal("67500")
-    # (c) Marginal relief: cap = 12,50,000 - 12,00,000 = 50,000 < 67,500,
-    # so tax capped at 50,000. Cess 4% = 2,000 -> net = 52,000.
-    assert Decimal(str(result["rebate87A"])) == Decimal("17500")
-    assert Decimal(str(result["grossTaxLiability"])) == Decimal("52000")
-    assert Decimal(str(result["netTaxLiability"])) == Decimal("52000")
+    # Slab tax on 5,00,000 (new regime, age < 60): 0–4L 0% + 4–5L 5%×1L = 5,000.
+    assert Decimal(str(result["normalTax"])) == Decimal("5000")
+    # 87A rebate zeroes tax below ₹12,70,590 (new regime) — full ₹5,000 rebated.
+    assert Decimal(str(result["rebate87A"])) == Decimal("5000")
+    assert Decimal(str(result["grossTaxLiability"])) == Decimal("0")
+    assert Decimal(str(result["netTaxLiability"])) == Decimal("0")
 
 
 # ---------------------------------------------------------------------------
