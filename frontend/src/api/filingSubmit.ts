@@ -115,6 +115,10 @@ export const filingSubmitApi = {
    * ITR-V PDF, and persists the path on the FilingRecord. Returns the PDF
    * as a Blob so the frontend can save/open it. Requires that a filing for
    * this (client, AY, ITR-type) already has an acknowledgement_number.
+   *
+   * Uses a long timeout (5 minutes): the call drives a full visible-browser
+   * session (launch + login + navigate + locate row + download + logout),
+   * which routinely exceeds the default 30s axios timeout.
    */
   async fetchAcknowledgement(
     clientId: string | number,
@@ -124,7 +128,7 @@ export const filingSubmitApi = {
     const response = await axiosInstance.post(
       `/api/v1/filing/${encoded(clientId)}/${encoded(assessmentYear)}/${encoded(itrType)}/acknowledgement/fetch`,
       null,
-      { responseType: 'blob' },
+      { responseType: 'blob', timeout: 300000 },
     );
     return response.data;
   },

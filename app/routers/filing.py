@@ -65,6 +65,19 @@ def _filing_dir(client_id: int, ay: str) -> Path:
     return _PROJECT_ROOT / "downloads" / str(client_id) / year.fiscal_year / "filing"
 
 
+def _imports_dir(client_id: int, ay: str) -> Path:
+    """Return the AY imports folder shared with AIS/26AS/TIS/Prefill.
+
+    All portal-downloaded source documents for a client+AY live under
+    ``downloads/{client_id}/{fiscal_year}/`` (see
+    :func:`app.automation.job_worker._download_dir`). The acknowledgement
+    PDF is saved in the SAME folder so every portal artefact for the AY
+    sits together, rather than being isolated under a ``filing/`` sub-dir.
+    """
+    year = TaxYearContext.from_assessment_year(ay)
+    return _PROJECT_ROOT / "downloads" / str(client_id) / year.fiscal_year
+
+
 def _draft(db: Session, client_id: int, ay: str, form: str) -> dict:
     try:
         return load_saved_filing_draft(
@@ -356,7 +369,7 @@ async def fetch_acknowledgement(
             detail="Client does not have an ITD portal password.",
         )
 
-    output_dir = _filing_dir(client.id, ay)
+    output_dir = _imports_dir(client.id, ay)
     try:
         result = await download_acknowledgement_pdf(
             pan=client.pan,
