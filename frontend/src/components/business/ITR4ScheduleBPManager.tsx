@@ -190,12 +190,15 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
     // The taxpayer may offer MORE than the presumptive minimum (Section 44AD
     // lets the assessee declare higher income). When the override flag is
     // off, the field auto-computes to the statutory minimum and is read-only.
-    // When on, the user-entered value is preserved (clamped to >= minimum so
-    // it can never fall below the statutory floor).
+    // When on, the user-entered value is preserved AS-TYPED (no per-keystroke
+    // clamp to the statutory floor) so the user can select-and-replace, clear,
+    // or type a new value freely; the floor is enforced at compute/validate
+    // time. toNum() still coerces to a finite non-negative integer and the
+    // Field's toAmount() clamps to [0, AD_MAX], so values stay sane.
     if (!p._override6Per) p.PersumptiveInc44AD6Per = statutorySix;
-    else p.PersumptiveInc44AD6Per = Math.max(statutorySix, toNum(p.PersumptiveInc44AD6Per));
+    else p.PersumptiveInc44AD6Per = toNum(p.PersumptiveInc44AD6Per);
     if (!p._override8Per) p.PersumptiveInc44AD8Per = statutoryEight;
-    else p.PersumptiveInc44AD8Per = Math.max(statutoryEight, toNum(p.PersumptiveInc44AD8Per));
+    else p.PersumptiveInc44AD8Per = toNum(p.PersumptiveInc44AD8Per);
     p.TotPersumptiveInc44AD = sum([p.PersumptiveInc44AD6Per, p.PersumptiveInc44AD8Per]);
     result.PersumptiveInc44AD = p;
   }
