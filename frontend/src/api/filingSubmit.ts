@@ -106,4 +106,26 @@ export const filingSubmitApi = {
     );
     return data;
   },
+
+  /**
+   * Trigger the STANDALONE Type-3 acknowledgement downloader.
+   *
+   * The backend logs in as the taxpayer, navigates to View Filed Returns,
+   * locates the row for the return's acknowledgement number, downloads the
+   * ITR-V PDF, and persists the path on the FilingRecord. Returns the PDF
+   * as a Blob so the frontend can save/open it. Requires that a filing for
+   * this (client, AY, ITR-type) already has an acknowledgement_number.
+   */
+  async fetchAcknowledgement(
+    clientId: string | number,
+    assessmentYear: string,
+    itrType: string,
+  ): Promise<Blob> {
+    const response = await axiosInstance.post(
+      `/api/v1/filing/${encoded(clientId)}/${encoded(assessmentYear)}/${encoded(itrType)}/acknowledgement/fetch`,
+      null,
+      { responseType: 'blob' },
+    );
+    return response.data;
+  },
 };

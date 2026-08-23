@@ -176,6 +176,11 @@ export default function ITRComputationPage() {
   // Playwright upload job; we poll it here and surface the result inline.
   const [filingJobId, setFilingJobId] = useState<number | null>(null);
   const [filingSubmitting, setFilingSubmitting] = useState(false);
+  // Standalone acknowledgement (ITR-V) downloader state. The button is
+  // gated on a completed Direct Submit that produced an acknowledgement
+  // number; it triggers the standalone downloader (separate from the
+  // working uploader) to fetch the receipt PDF from the ITD portal.
+  const [fetchingAck, setFetchingAck] = useState(false);
   const [filingJob, setFilingJob] = useState<FilingJobStatus | null>(null);
   
   // Part 2: Import document state
@@ -716,6 +721,49 @@ export default function ITRComputationPage() {
         errors.length > 0 ? `${message}\n\n${errors.join('\n')}` : message,
         { duration: 10000 },
       );
+    }
+  };
+
+  // === Standalone Acknowledgement (ITR-V) download ===
+  /**
+   * Trigger the standalone Type-3 acknowledgement downloader. The backend
+   * logs in as the taxpayer, navigates to View Filed Returns, locates the
+   * row for the return's acknowledgement number, and downloads the ITR-V
+   * PDF (independent of the working portal uploader). The button is only
+   * enabled once a completed Direct Submit has produced an ARN.
+   */
+  const handleFetchAcknowledgement = async () => {
+    if (!clientId || fetchingAck) return;
+    const ack = filingJob?.result?.filing?.acknowledgement_number;
+    if (!ack) {
+      toast.error('No acknowledgement number is available yet. Submit the return first.');
+      return;
+    }
+    const ay = effectiveAssessmentYear;
+    const ok = window.confirm(
+      `This will open a visible browser, log into the ITD portal as ` +
+      `${clientData?.pan ?? 'the taxpayer'}, and download the ITR-V ` +
+      `acknowledgement PDF for ARN ${ack} (AY ${ay}).\n\nProceed?`,
+    );
+    if (!ok) return;
+    setFetchingAck(true);
+    try {
+      const blob = await filingSubmitApi.fetchAcknowledgement(clientId, ay, itrForm);
+      // Persist the PDF to the user's downloads via a synthetic anchor.
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${itrForm}_${ay}_Acknowledgement.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      toast.success(`Acknowledgement PDF downloaded (ARN: ${ack}).`);
+    } catch (err: any) {
+      const message = err?.response?.data?.detail || err?.message || 'Acknowledgement download failed';
+      toast.error(message, { duration: 10000 });
+    } finally {
+      setFetchingAck(false);
     }
   };
 
@@ -1612,6 +1660,7 @@ export default function ITRComputationPage() {
           </button>
 
           {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (
+            <>
             <button
               onClick={handleDirectSubmit}
               disabled={filingSubmitting || filingJobId !== null}
@@ -1635,7 +1684,33 @@ export default function ITRComputationPage() {
               {filingSubmitting && <Spinner size={12} />}
               Direct Submit
             </button>
-          )}
+            {/* Standalone acknowledgement (ITR-V) downloader — separate from
+                the working uploader. Only enabled once a completed Direct
+                Submit has produced an acknowledgement number. */}
+            <button
+              onClick={handleFetchAcknowledgement}
+              disabled={fetchingAck || !filingJob || filingJob.status !== 'completed' || !filingJob.result?.filing?.acknowledgement_number}
+              title="Log into the ITD portal and download the ITR-V acknowledgement PDF for the submitted return (standalone downloader, separate from Direct Submit)"
+              style={{
+                padding: '6px 12px',
+                background: (fetchingAck || !filingJob || filingJob.status !== 'completed' || !filingJob.result?.filing?.acknowledgement_number)
+                  ? 'var(--border)'
+                  : 'var(--accent-green, #1a7f4b)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: (fetchingAck || !filingJob || filingJob.status !== 'completed' || !filingJob.result?.filing?.acknowledgement_number) ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {fetchingAck && <Spinner size={12} />}
+              Acknowledgement
+            </button>
+          </>}
 
           {filingJobId !== null && filingJob && (
             <span
