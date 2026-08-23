@@ -405,7 +405,9 @@ def download_client_itr_v2(
         headers={
             "Content-Disposition": f"attachment; filename=ITR_{form_slug}_{client.pan}_{year}.json",
             "X-Return-Form": draft.form or "ITR-1",
-            "X-Return-SchemaVersion": draft.schemaVersion,
+            # Starlette requires every header value to be a str; schemaVersion
+            # is an int on the ReturnDraft model, so coerce it explicitly.
+            "X-Return-SchemaVersion": str(draft.schemaVersion),
         },
     )
 
