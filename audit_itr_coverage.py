@@ -23,13 +23,24 @@ from app.engine.filing_gateway_v2 import generate_cbdt_json, FilingGatewayV2Erro
 from app.schemas.return_draft import (
     BankAccount,
     Category80D,
+    CoOwner,
+    DeductionLoan,
+    DividendIncome,
+    Donation80G,
     Employer,
     HomeLoan,
     HouseProperty,
     InterestIncome,
     Investment80C,
+    OtherIncomeEntry,
+    PensionContribution80CCC,
     Policy80D,
+    Schedule80GGAEntry,
+    Schedule80GGCEntry,
     Section80D,
+    TaxChallan,
+    TcsCredit,
+    TenantDetail,
     TdsCredit,
     ReturnDraft,
     create_empty_draft,
@@ -58,32 +69,28 @@ def _load_required_fields(form: str) -> list[str]:
 
 
 def _get_path(obj: Any, path: str) -> Any:
-    """Resolve a dotted schema path (with [] for arrays) against the JSON."""
-    parts = path.replace("[]", "[0]").split(".")
-    cur: Any = obj
-    for part in parts:
-        if part == "":
-            continue
-        if "[" in part and part.endswith("]"):
-            name, _, idx = part.partition("[")
-            idx = idx.rstrip("]")
-            if name and isinstance(cur, dict):
-                cur = cur.get(name, {})
-            if isinstance(cur, list) and cur:
-                try:
-                    cur = cur[int(idx)]
-                except (ValueError, IndexError):
-                    cur = {}
-            elif isinstance(cur, list) and not cur:
-                cur = {}
-            else:
-                cur = {}
-            continue
-        if isinstance(cur, dict):
-            cur = cur.get(part)
-        else:
+    """Resolve a dotted schema path, matching any row for ``[]`` segments."""
+    parts = path.split(".")
+
+    def resolve(cur: Any, index: int) -> Any:
+        if index == len(parts):
+            return cur
+        part = parts[index]
+        is_array = part.endswith("[]")
+        key = part[:-2] if is_array else part
+        if key:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(key)
+        if not is_array:
+            return resolve(cur, index + 1)
+        if not isinstance(cur, list):
             return None
-    return cur
+        values = [resolve(item, index + 1) for item in cur]
+        populated = [value for value in values if not _is_empty(value)]
+        return populated[0] if populated else None
+
+    return resolve(obj, 0)
 
 
 def _is_empty(val: Any) -> bool:
@@ -128,23 +135,61 @@ def build_full_itr1_draft() -> ReturnDraft:
         ifscCode="SBIN0001234", accountType="SB", useForRefund=True,
     )]
     draft.employers = [Employer(
-        id="e1", employerName="Acme Corp", basic=Decimal("600000"),
+        id="e1", employerName="Acme Corp", employerTAN="DELX12345A",
+        employerAddress="1 Business Park", employerCity="Delhi",
+        employerStateCode="07", employerPinCode="110001",
+        basic=Decimal("600000"), hra=Decimal("120000"),
+        rentPaid=Decimal("180000"), isMetroCity=True,
         natureOfEmployment="PE",
     )]
-    # House property (self-occupied + one let-out with home loan).
+    # Maximally populated property row, including conditional co-owner,
+    # tenant, rent, and Section 24(b) structures.
     draft.houseProperties = [HouseProperty(
-        id="h1", propertyType="SELF_OCCUPIED", address="12A MG Road Delhi",
-        ownershipShare=100,
+        id="h1", propertySequenceNo=1, propertyType="LET_OUT",
+        address="12A MG Road", city="Delhi", state="07", countryCode="91",
+        pinCode="110001", propertyOwnerType="OT",
+        propertyOwnerOther="Family trust", ownershipType="JOINT",
+        ownershipShare=Decimal("70"), isCoOwned=True,
+        isPropertyInJointOwnership=True,
+        coOwners=[CoOwner(
+            coOwnerSNo=1, name="Co Owner", pan="EFGHI1234J",
+            aadhaar="234567890123", share=Decimal("30"),
+        )],
+        tenantDetails=[TenantDetail(
+            tenantSNo=1, name="Example Tenant", pan="JKLMN1234K",
+            aadhaar="345678901234", panOrTan="DELA12345B",
+        )],
+        annualLettingValue=Decimal("300000"),
+        unrealizedRent=Decimal("10000"),
+        municipalTaxesPaid=Decimal("20000"),
+        arrearsOfRent=Decimal("5000"),
+        interestOnLoan=Decimal("100000"),
+        homeLoans=[HomeLoan(
+            lenderType="B", lenderName="Example Bank",
+            loanAccountNo="HOME123", dateOfLoan="2020-04-01",
+            totalLoanAmount=Decimal("3000000"),
+            loanOutstandingAmount=Decimal("2500000"),
+            interestUs24B=Decimal("100000"),
+        )],
     )]
     # Other-sources interest + deductions.
     draft.otherSources.interest = [InterestIncome(
         id="i1", kind="SAVINGS_BANK", grossAmount=Decimal("10000"),
     )]
+    draft.otherSources.dividends = [DividendIncome(
+        id="d1", section="194", grossAmount=Decimal("15000"),
+        q1=Decimal("1000"), q2=Decimal("2000"), q3=Decimal("3000"),
+        q4=Decimal("4000"), q5=Decimal("5000"),
+    )]
+    draft.otherSources.otherIncome = [OtherIncomeEntry(
+        id="os1", nature="OTHER", description="Consulting honorarium",
+        amount=Decimal("5000"),
+    )]
     # 80C investments + 80D health insurance (correct canonical shape:
     # Deductions.section80C is list[Investment80C]; section80D is a
     # Section80D object with selfFamily/parents sub-categories).
     draft.deductions.section80C = [Investment80C(
-        id="c1", investmentType="PF", amount=Decimal("150000"),
+        id="c1", investmentType="PF", amount=Decimal("140000"),
         identificationNo="PF-12345", accountOrPolicyNo="EPF-001",
     )]
     draft.deductions.section80D = Section80D(
@@ -164,21 +209,100 @@ def build_full_itr1_draft() -> ReturnDraft:
             preventiveCheckup=Decimal("0"), medicalExpense=Decimal("0"),
         ),
     )
+    draft.deductions.pensionContribution80CCC = [PensionContribution80CCC(
+        id="ccc1", identifierType="PRAN", identifierName="PRAN123456",
+        amount=Decimal("10000"),
+    )]
+    draft.deductions.chapterVIA.section80CCC = Decimal("10000")
+    draft.deductions.chapterVIA.section80D = Decimal("45000")
+    draft.deductions.section80G = [Donation80G(
+        id="g1", category="50_APPROVAL_REQD", doneeName="Relief Fund",
+        doneePAN="AAAAA1234A", arnNumber="ARN123",
+        addrDetail="1 Main Road", city="Delhi", stateCode="07",
+        pinCode="110001", donationAmtOtherMode=Decimal("10000"),
+        transactionRefNum="UTR80G1", ifscCode="SBIN0001234",
+    )]
+    draft.deductions.chapterVIA.section80G = Decimal("4500")
+    draft.deductions.loans.loans = [
+        DeductionLoan(
+            id="edu1", section="80E", loanTakenFrom="B", lenderName="Example Bank",
+            loanAccountNo="EDU123", dateOfLoan="2022-01-01",
+            totalLoanAmount=Decimal("200000"), outstandingAmount=Decimal("150000"),
+            interestAmount=Decimal("10000"),
+        ),
+        DeductionLoan(
+            id="eea1", section="80EEA", loanTakenFrom="B",
+            lenderName="Example Bank", loanAccountNo="HOME123",
+            dateOfLoan="2020-04-01", totalLoanAmount=Decimal("3000000"),
+            outstandingAmount=Decimal("2500000"),
+            interestAmount=Decimal("50000"),
+        ),
+    ]
+    draft.deductions.chapterVIA.section80E = Decimal("10000")
+    draft.deductions.chapterVIA.section80EEA = Decimal("50000")
+    draft.deductions.loans.section80EEAStampDutyValue = Decimal("4000000")
+    draft.deductions.schedule80GGA = [Schedule80GGAEntry(
+        id="gga1", relevantClause="80GGA2a", doneeName="Research Fund",
+        doneePAN="BBBBB1234B", addressLine="2 Science Road", city="Delhi",
+        stateCode="07", pinCode="110001", otherModeAmount=Decimal("3000"),
+    )]
+    draft.deductions.chapterVIA.section80GGA = Decimal("3000")
+    draft.deductions.schedule80GGC = [Schedule80GGCEntry(
+        id="ggc1", otherModeAmount=Decimal("4000"),
+        contributionDate="2025-06-01", transactionRef="UTR80GGC1",
+        ifscCode="SBIN0001234", politicalPartyName="Example Party",
+        politicalPartyPAN="CCCCC1234C",
+    )]
+    draft.deductions.chapterVIA.section80GGC = Decimal("4000")
     # TDS credit (salary TDS — deductor is the employer). The CBDT schema
     # enforces a city-prefix TAN pattern (DEL/BLR/MUM/...); use a valid one.
     draft.taxes.tds = [TdsCredit(
         id="t1", deductorTAN="DELX12345A", deductorName="Acme Corp",
         section="192", taxDeducted=Decimal("30000"),
         grossAmount=Decimal("600000"),
+    ), TdsCredit(
+        id="t2", deductorTAN="DELY12345B", deductorName="Example Bank",
+        section="194A", schedule="TDS2", deductedYr=2025,
+        taxDeducted=Decimal("1000"), grossAmount=Decimal("10000"),
+    ), TdsCredit(
+        id="t3", schedule="TDS3", section="194IB", tdsSectionCode="194IB",
+        nameOfTenant="Example Tenant", panOfTenant="DDDDD1234D",
+        grsRcptToTaxDeduct=Decimal("120000"), taxDeducted=Decimal("6000"),
+        tdsClaimed=Decimal("6000"), deductedYr=2025,
     )]
+    draft.taxes.tcs = [TcsCredit(
+        id="tcs1", collectorName="Example Collector", collectorTAN="DELZ12345C",
+        grossAmount=Decimal("100000"), taxCollected=Decimal("1000"),
+        tcsClaimedAmtCollOwnHand=Decimal("1000"), deductedYr=2025,
+    )]
+    draft.taxes.challans = [
+        TaxChallan(
+            id="at1", kind="ADVANCE_TAX", bsrCode="1234567",
+            depositDate="2025-06-15", challanSerialNo=1, amount=Decimal("5000"),
+        ),
+        TaxChallan(
+            id="sat1", kind="SELF_ASSESSMENT", bsrCode="1234567",
+            depositDate="2026-04-15", challanSerialNo=2, amount=Decimal("2000"),
+        ),
+    ]
     return draft
 
 
 def build_full_itr4_draft() -> ReturnDraft:
     """A maximally-populated canonical ITR-4 draft (44AD)."""
-    from app.schemas.return_draft import Presumptive44AD
     from tests.test_filing_gateway_v2_itr4 import _filing_ready_itr4
-    return _filing_ready_itr4("44AD")
+    draft = _filing_ready_itr4("44AD")
+    conditional = build_full_itr1_draft()
+    draft.regime = "old"
+    draft.employers = conditional.employers
+    draft.houseProperties = conditional.houseProperties
+    draft.otherSources = conditional.otherSources
+    draft.deductions = conditional.deductions
+    # 80GGA is not available to a taxpayer with business income in ITR-4.
+    draft.deductions.schedule80GGA = []
+    draft.deductions.chapterVIA.section80GGA = Decimal("0")
+    draft.taxes = conditional.taxes
+    return draft
 
 
 def audit(form: str, draft: ReturnDraft) -> None:

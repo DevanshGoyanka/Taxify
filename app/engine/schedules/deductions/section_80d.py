@@ -87,12 +87,27 @@ def compute_details(
         max(_ZERO, SECTION_80D_PREVENTIVE_CHECKUP_LIMIT - preventive_self),
     )
 
+    self_premium = ded.amount_80d_self_family
+    parents_premium = ded.amount_80d_parents
+    if schedule is not None:
+        self_premium = (
+            schedule.premium_1b_senior
+            if is_senior
+            else schedule.premium_1a_non_senior
+        )
+        parents_premium = (
+            schedule.premium_2b_parents_senior
+            if is_parents_senior
+            else schedule.premium_2a_parents_non_senior
+        )
+
     cap_self = (
         SECTION_80D_SELF_FAMILY_SENIOR_LIMIT
         if is_senior
         else SECTION_80D_SELF_FAMILY_LIMIT
     )
-    total_self = ded.amount_80d_self_family + preventive_self
+    medical_self = schedule.medical_expense_self_senior if schedule else _ZERO
+    total_self = self_premium + preventive_self + medical_self
     eligible_self = min(total_self, cap_self)
 
     parents_cap = (
@@ -100,12 +115,15 @@ def compute_details(
         if is_parents_senior
         else SECTION_80D_PARENTS_LIMIT
     )
-    total_parents = ded.amount_80d_parents + preventive_parents
+    medical_parents = (
+        schedule.medical_expense_parents_senior if schedule else _ZERO
+    )
+    total_parents = parents_premium + preventive_parents + medical_parents
     eligible_parents = min(total_parents, parents_cap)
 
     return Section80DResult(
-        self_premium=ded.amount_80d_self_family,
-        parents_premium=ded.amount_80d_parents,
+        self_premium=self_premium,
+        parents_premium=parents_premium,
         preventive_self=preventive_self,
         preventive_parents=preventive_parents,
         eligible_self=eligible_self,

@@ -28,8 +28,8 @@ import {
   updateBanksFromManager, updateBpNetProfit, updateCapitalGainsSchedule, updateChallanKindFromManager, updateDeductionLoansFromManager,
   updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
   updateHouseProperties, updateInterestFromManager, updateLossesBroughtForward, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
-  updateChapterVIA, updateTdsFromManager, updateTcsCredits, updateWinningsFromManager,
-  updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
+  updateChapterVIA, updateTaxCreditsFromManager, updateTcsCredits, updateWinningsFromManager,
+  updatePensionContribution80CCC, updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
   replaceDraft, type ReturnEditorModelV2,
 } from '../domain/returns/editorModelV2';
 import { createEmptyReturnDraft } from '../domain/returns/factory';
@@ -48,6 +48,7 @@ import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../ut
 import { mergeDraft } from '../domain/returns/draftPatch';
 import { buildPriorYearBPData, mapPrefillToDraftPatch } from '../utils/mapPrefillToDraftPatch';
 import type { ITR4ScheduleBPData } from '../components/business/ITR4ScheduleBPManager';
+import { businessesFromScheduleBp, scheduleBpFromBusinesses } from '../domain/returns/scheduleBpAdapter';
 import { mapReconciledToDraftPatch } from '../utils/mapReconciledToDraftPatch';
 import { mapAisToDraftPatch } from '../utils/mapAisToDraftPatch';
 import { map26asToDraftPatch } from '../utils/map26asToDraftPatch';
@@ -226,10 +227,11 @@ export default function ITRComputationPage() {
     donations: (entries) => updateEditor((model) => updateSection80G(model, entries)),
     deductionLoans: (data) => updateEditor((model) => updateDeductionLoansFromManager(model, data)),
     chapterVIA: (next) => updateEditor((model) => updateChapterVIA(model, next)),
+    pensionContribution80CCC: (entries) => updateEditor((model) => updatePensionContribution80CCC(model, entries)),
     schedule80GGA: (entries) => updateEditor((model) => updateSchedule80GGA(model, entries)),
     schedule80GGC: (entries) => updateEditor((model) => updateSchedule80GGC(model, entries)),
     taxReturnPreparer: (next) => updateEditor((model) => updateTaxReturnPreparer(model, next)),
-    tds: (entries) => updateEditor((model) => updateTdsFromManager(model, entries)),
+    tds: (entries) => updateEditor((model) => updateTaxCreditsFromManager(model, entries)),
     tcs: (entries) => updateEditor((model) => updateTcsCredits(model, entries)),
     advanceTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'ADVANCE_TAX', entries)),
     selfAssessmentTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'SELF_ASSESSMENT', entries)),
@@ -2077,6 +2079,15 @@ function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm, taxRe
 }
 
 function BusinessTab({ taxResult, itrForm, draft, onChangeBusinesses, priorYearData }: { taxResult: any; itrForm: string; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void; priorYearData?: ITR4ScheduleBPData | null }): React.ReactElement {
+  if (itrForm === 'ITR-4') {
+    return <BusinessProfessionEntryManager
+      data={{ ITR4ScheduleBP: scheduleBpFromBusinesses(draft.businesses) }}
+      onChange={(next) => onChangeBusinesses(businessesFromScheduleBp(next.ITR4ScheduleBP ?? {}))}
+      selectedForm={itrForm}
+      taxResult={taxResult}
+      priorYearData={priorYearData}
+    />;
+  }
   // Surface the reconciled business income the import produced (GST
   // turnover, business receipts, commission, etc. rolled into a presumptive
   // 44AD/44ADA entry on draft.businesses).  The BusinessProfessionEntryManager

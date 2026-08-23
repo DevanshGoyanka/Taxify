@@ -631,7 +631,13 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             # Rule 138: 80D in VIA must match Schedule 80D total
             sch_total = (sd80d.premium_1a_non_senior + sd80d.premium_1b_senior
                          + sd80d.premium_2a_parents_non_senior + sd80d.premium_2b_parents_senior
-                         + sd80d.preventive_checkup_self + sd80d.preventive_checkup_parents)
+                         + sd80d.preventive_checkup_self + sd80d.preventive_checkup_parents
+                         + sd80d.medical_expense_self_senior
+                         + sd80d.medical_expense_parents_senior)
+            d_total += (
+                ch6a.amount_80d_preventive_self
+                + ch6a.amount_80d_preventive_parents
+            )
             if is_old and d_total > 0 and d_total != sch_total:
                 results.append(_make(
                     "ITR1-R138", False,
@@ -2157,16 +2163,16 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             results.append(_make(
                 "ITR1-R337", False,
                 "80CCC deduction claimed (Rs {ch6a.amount_80ccc}) but no row details "
-                "provided in Schedule 80CCC. Insurer name, policy number and amount "
+                "provided in PensionContribution80CCC. Identifier type, name and amount "
                 "are mandatory.",
                 "deductions_chapter6a.amount_80ccc"))
         else:
             for i, e in enumerate(inp.schedule_80ccc_entries):
-                if e.amount > _z and (not e.insurer_name or not e.policy_number):
+                if e.amount > _z and (not e.identifier_type or not e.identifier_name):
                     results.append(_make(
                         "ITR1-R337b", False,
                         f"Schedule 80CCC row {i+1}: amount of Rs {e.amount} entered but "
-                        f"insurer name and/or policy number missing.",
+                        f"identifier type and/or name missing.",
                         f"schedule_80ccc_entries[{i}]",
                     ))
 
@@ -2507,8 +2513,34 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "co_ownership_details.ownership_percentage",
             ))
 
-    # Rule 300: Assessee PAN and co-owner PAN cannot be the same
-    # (Informational — schema doesn't store assessee PAN; portal-level check)
+    # Per-property typed ownership profiles are authoritative for the current
+    # ITR-1 path. Legacy scalar fields above remain for backward compatibility.
+    hp_inputs = inp.reconciled_house_properties()
+    property_profiles = inp.reconciled_property_profiles()
+    for index, profile in enumerate(property_profiles):
+        path = f"property_profiles[{index}]"
+        if index < len(hp_inputs) and (
+            hp_inputs[index].ownership_share_percentage
+            != profile.assessee_share_percentage
+        ):
+            results.append(_make(
+                "ITR1-R295", False,
+                f"Property {index + 1}: calculation ownership share "
+                f"({hp_inputs[index].ownership_share_percentage}%) does not match "
+                f"the filing profile ({profile.assessee_share_percentage}%).",
+                f"{path}.assessee_share_percentage",
+            ))
+        if inp.assessee_pan:
+            duplicate_rows = [
+                row.serial_number for row in profile.co_owners
+                if row.pan == inp.assessee_pan
+            ]
+            if duplicate_rows:
+                results.append(_make(
+                    "ITR1-R300", False,
+                    f"Property {index + 1}: co-owner PAN cannot equal the assessee PAN.",
+                    f"{path}.co_owners",
+                ))
 
     # ========================================================================
     # SECTION: Rules 272-291 — Eligible Deduction ≤ User-Entered Amount
@@ -2617,15 +2649,15 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # SECTION: Rules 336 — Unrealized Rent ≤ Gross Rent Received
     # ========================================================================
 
-    if hp.arrears_unrealised_rent_received > _z:
-        total_rent = (hp.annual_rent_received or _z) + (hp.arrears_unrealised_rent_received or _z)
-        if hp.arrears_unrealised_rent_received > hp.annual_rent_received:
+    for index, hp_row in enumerate(inp.reconciled_house_properties()):
+        if hp_row.rent_not_realized > hp_row.annual_rent_received:
             results.append(_make(
                 "ITR1-R336", False,
-                f"Arrears/Unrealised rent (Rs {hp.arrears_unrealised_rent_received}) "
-                f"exceeds gross rent received/receivable (Rs {hp.annual_rent_received}). "
+                f"Property {index + 1}: rent not realized "
+                f"(Rs {hp_row.rent_not_realized}) exceeds gross rent "
+                f"received/receivable (Rs {hp_row.annual_rent_received}). "
                 f"Unrealized rent cannot be more than the total gross rent.",
-                "house_property_income.arrears_unrealised_rent_received",
+                f"house_properties[{index}].rent_not_realized",
             ))
 
     # Schedule 80GGA: Donee PAN uniqueness

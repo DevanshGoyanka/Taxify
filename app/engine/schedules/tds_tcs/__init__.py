@@ -56,7 +56,11 @@ def compute_all(
             result.tds_unmatched += tds_val
 
     for e in (tcs_entries or []):
-        tcs_val = getattr(e, "tcs_collected", Decimal("0"))
+        tcs_val = getattr(
+            e,
+            "tcs_credit_claimed",
+            getattr(e, "tcs_collected", Decimal("0")),
+        )
         result.total_tcs += tcs_val
         if getattr(e, "matched_with_26as", True):
             result.tcs_matched_26as += tcs_val

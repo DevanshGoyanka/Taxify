@@ -14,7 +14,12 @@ import json
 
 import pytest
 
-from app.routers.client_itr_v2 import _load_saved_draft, router as v2_router
+from app.routers.client_itr_v2 import (
+    get_client_itr_v2,
+    _load_saved_draft,
+    _migrate_stored_canonical_payload,
+    router as v2_router,
+)
 from app.routers.client_itr import router as legacy_router
 
 
@@ -124,6 +129,58 @@ def test_load_saved_draft_loads_canonical_row(monkeypatch) -> None:
     assert itr is itr_row
     assert draft.form == "ITR-1"
     assert draft.personal.pan == "ABCDE1234F"
+
+
+def test_load_saved_draft_accepts_empty_legacy_clause_iv_placeholder(monkeypatch) -> None:
+    """Old v2 drafts with an empty scalar placeholder remain loadable."""
+    monkeypatch.setattr(
+        "app.routers.client_itr_v2.resolve_owned_client",
+        lambda client_id, user_id, db: _FakeClient(),
+    )
+    payload = json.loads(_canonical_draft_json())
+    payload["filing"]["seventhProviso"]["otherClauseIVDetail"] = ""
+    itr_row = _FakeITR(json.dumps(payload), "ITR1")
+
+    _, _, draft = _load_saved_draft(
+        "c1", "2026-27", _FakeUser(), _FakeDb(itr_row)
+    )
+
+    assert draft.filing.seventhProviso.clauseIVDetails == []
+
+
+def test_get_client_itr_v2_migrates_empty_legacy_clause_iv_placeholder(
+    monkeypatch,
+) -> None:
+    """The canonical GET must not return 500 for the historical empty field."""
+    monkeypatch.setattr(
+        "app.routers.client_itr_v2.resolve_owned_client",
+        lambda client_id, user_id, db: _FakeClient(),
+    )
+    payload = json.loads(_canonical_draft_json())
+    payload["filing"]["seventhProviso"]["otherClauseIVDetail"] = ""
+    itr_row = _FakeITR(json.dumps(payload), "ITR1")
+
+    result = get_client_itr_v2(
+        "c1", "2026-27", _FakeUser(), _FakeDb(itr_row)
+    )
+
+    seventh = result["filing"]["seventhProviso"]
+    assert "otherClauseIVDetail" not in seventh
+    assert seventh["clauseIVDetails"] == []
+
+
+def test_stored_draft_migration_preserves_nonempty_legacy_clause_iv_detail() -> None:
+    """Ambiguous historical disclosure text must never be silently discarded."""
+    payload = json.loads(_canonical_draft_json())
+    seventh = payload["filing"]["seventhProviso"]
+    seventh["otherClauseIVDetail"] = "Historical taxpayer disclosure"
+
+    migrated = _migrate_stored_canonical_payload(payload)
+
+    assert (
+        migrated["filing"]["seventhProviso"]["otherClauseIVDetail"]
+        == "Historical taxpayer disclosure"
+    )
 
 
 def test_load_saved_draft_rejects_legacy_blob(monkeypatch) -> None:

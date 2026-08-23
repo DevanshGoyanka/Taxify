@@ -66,9 +66,12 @@ ExemptIncomeCategory = Literal["AGRI", "GOVC", "ISI", "SSRA", "SRSC", "SRST", "S
 DtaaExemptHeadOfIncome = Literal["SA", "HP", "PG", "CG", "OS"]
 TaxChallanKind = Literal["ADVANCE_TAX", "SELF_ASSESSMENT"]
 BankAccountType = Literal["SB", "CA", "CC", "OD", "NRO", "OTH"]
-FilingSection = Literal["139(1)", "139(4)", "139(5)", "119(2)(b)"]
+FilingSection = Literal[
+    "139(1)", "139(4)", "142(1)", "148", "153C", "139(5)", "139(9)",
+    "119(2)(b)",
+]
 ReturnType = Literal["ORIGINAL", "REVISED"]
-VerificationCapacity = Literal["SELF", "REPRESENTATIVE"]
+VerificationCapacity = Literal["SELF", "REPRESENTATIVE", "KARTA", "PARTNER"]
 ImportSource = Literal["MANUAL", "FORM16", "AIS", "TIS", "26AS", "ITD_PREFILL", "LEGACY"]
 DeductionLoanSection = Literal["80E", "80EE", "80EEA", "80EEB"]
 SeniorCitizenFlag = Literal["Y", "N", "S", "P"]
@@ -79,7 +82,10 @@ PolicyType80D = Literal["INDIVIDUAL", "FAMILY_FLOATER", "GROUP", "OTHER"]
 AccountTypeInterest = Literal["SAVINGS", "CURRENT", "FD", ""]
 DividendCategory = Literal["EQUITY", "PREFERENCE", "MUTUAL_FUND", ""]
 Donation80GCategory = Literal["100_NO_APPROVAL", "50_NO_APPROVAL", "100_APPROVAL_REQD", "50_APPROVAL_REQD"]
-Section80GGAClause = Literal["80GGA2a", "80GGA2b", "80GGA2c", "80GGA2d", "80GGA2e"]
+Section80GGAClause = Literal[
+    "80GGA2a", "80GGA2aa", "80GGA2b", "80GGA2bb",
+    "80GGA2c", "80GGA2cc", "80GGA2d", "80GGA2e",
+]
 TdsCreditName = Literal["S", "O"]
 HeadOfIncome = Literal["HP", "CG", "OS", "BP", "EI", "NA"]
 TdsSchedule = Literal["TDS1", "TDS2", "TDS3"]
@@ -150,20 +156,33 @@ class AlternateAddress(_StrictModel):
     zipCode: str = Field(default="")
 
 
+class SeventhProvisoClause(Identified):
+    """One clause-(iv) seventh-proviso disclosure row."""
+
+    nature: Literal["1", "2", "3", "4"] = Field(default="1")
+    amount: Money = Field(default=Decimal("0"))
+
+
 class SeventhProviso(_StrictModel):
-    """Seventh-proviso to Section 139(1) declarations (ITR-4 FilingStatus).
+    """Seventh-proviso to Section 139(1) declarations."""
 
-    Carries the foreign-travel and electricity-expenditure disclosure flags
-    the legacy mapper read from the ``seventhProviso`` flat sub-object.
-    ITR-1 ignores this block; it is additive and defaults to all-false.
-    """
-
+    depositExceedsOneCrore: bool = Field(default=False)
+    depositAmount: Money = Field(default=Decimal("0"))
     foreignTravel: bool = Field(default=False)
     foreignTravelAmount: Money = Field(default=Decimal("0"))
     electricityExpenditure: bool = Field(default=False)
     electricityExpenditureAmount: Money = Field(default=Decimal("0"))
     otherClauseIV: bool = Field(default=False)
-    otherClauseIVDetail: str = Field(default="")
+    clauseIVDetails: list[SeventhProvisoClause] = Field(default_factory=list)
+
+
+class RepresentativeAssessee(_StrictModel):
+    """Representative assessee contact details for FilingStatus.AssesseeRep."""
+
+    name: str = Field(default="")
+    email: str = Field(default="")
+    mobileCountryCode: str = Field(default="91")
+    mobile: str = Field(default="")
 
 
 # ---------------------------------------------------------------------------
@@ -330,11 +349,15 @@ class GstinTurnoverRow(Identified):
 
 
 class FinancialParticulars(_StrictModel):
+    partnerMemberOwnCapital: Money = Field(default=Decimal("0"))
     cashBalance: Money = Field(default=Decimal("0"))
     bankBalance: Money = Field(default=Decimal("0"))
     inventory: Money = Field(default=Decimal("0"))
     sundryDebtors: Money = Field(default=Decimal("0"))
     sundryCreditors: Money = Field(default=Decimal("0"))
+    fixedAssets: Money = Field(default=Decimal("0"))
+    investments: Money = Field(default=Decimal("0"))
+    loansAndAdvances: Money = Field(default=Decimal("0"))
     otherAssets: Money = Field(default=Decimal("0"))
     totalAssets: Money = Field(default=Decimal("0"))
     securedLoans: Money = Field(default=Decimal("0"))
@@ -359,6 +382,7 @@ class VehicleRecord(Identified):
     tonnage: Money = Field(default=Decimal("0"))
     ownedMonths: int = Field(default=0)
     leasedOrHired: bool = Field(default=False)
+    ownedLeasedHiredFlag: Literal["OWN", "LEASE", "HIRED"] = Field(default="OWN")
     presumptiveIncome: Money = Field(default=Decimal("0"))
 
 
@@ -366,6 +390,7 @@ class Presumptive44AD(Identified, BusinessIdentity):
     scheme: Literal["44AD"] = Field(default="44AD")
     digitalReceipts: Money = Field(default=Decimal("0"))
     nonDigitalReceipts: Money = Field(default=Decimal("0"))
+    otherModeReceipts: Money = Field(default=Decimal("0"))
     digitalPresumptiveIncome: Money = Field(default=Decimal("0"))
     nonDigitalPresumptiveIncome: Money = Field(default=Decimal("0"))
     declaredIncome: Money = Field(default=Decimal("0"))
@@ -378,6 +403,7 @@ class Presumptive44ADA(Identified, BusinessIdentity):
     grossReceipts: Money = Field(default=Decimal("0"))
     digitalReceipts: Money = Field(default=Decimal("0"))
     nonDigitalReceipts: Money = Field(default=Decimal("0"))
+    otherModeReceipts: Money = Field(default=Decimal("0"))
     declaredIncome: Money = Field(default=Decimal("0"))
     gstinTurnovers: list[GstinTurnoverRow] = Field(default_factory=list)
     financialParticulars: FinancialParticulars = Field(default_factory=FinancialParticulars)
@@ -387,6 +413,7 @@ class Presumptive44AE(Identified, BusinessIdentity):
     scheme: Literal["44AE"] = Field(default="44AE")
     vehicles: list[VehicleRecord] = Field(default_factory=list)
     declaredIncome: Money = Field(default=Decimal("0"))
+    salaryInterestFromFirm: Money = Field(default=Decimal("0"))
     gstinTurnovers: list[GstinTurnoverRow] = Field(default_factory=list)
     financialParticulars: FinancialParticulars = Field(default_factory=FinancialParticulars)
 
@@ -629,6 +656,14 @@ class Investment80C(Identified):
     institutionPAN: str = Field(default="")
 
 
+class PensionContribution80CCC(Identified):
+    """One official PensionContribution80CCC identifier row."""
+
+    identifierType: Literal["PRAN", "OTHPRAN"] = Field(default="OTHPRAN")
+    identifierName: str = Field(default="")
+    amount: Money = Field(default=Decimal("0"))
+
+
 class Policy80D(Identified):
     insurerName: str = Field(default="")
     policyNo: str = Field(default="")
@@ -782,6 +817,7 @@ class Schedule80GGCEntry(Identified):
 
 class Deductions(_StrictModel):
     section80C: list[Investment80C] = Field(default_factory=list)
+    pensionContribution80CCC: list[PensionContribution80CCC] = Field(default_factory=list)
     section80D: Section80D = Field(default_factory=Section80D)
     section80G: list[Donation80G] = Field(default_factory=list)
     loans: LoanDeductions = Field(default_factory=LoanDeductions)
@@ -892,6 +928,8 @@ class FilingStatus(_StrictModel):
     originalAcknowledgementNumber: str = Field(default="")
     originalFilingDate: Optional[str] = Field(default=None)
     noticeNumber: str = Field(default="")
+    noticeDate: Optional[str] = Field(default=None)
+    representative: Optional[RepresentativeAssessee] = Field(default=None)
     # ── Additive ITR-4 Form 10-IEA cascade fields (ignored by ITR-1) ──────
     form10IEAAcknowledgement: str = Field(
         default="",
@@ -903,6 +941,18 @@ class FilingStatus(_StrictModel):
         description="Date Form 10-IEA was filed for the current AY old-regime "
         "election (YYYY-MM-DD). ITR-4 only.",
     )
+    form10IEAEarlierAYOldRegime: Literal["Y", "N", "NA"] = Field(default="NA")
+    form10IEAAssessmentYear: Literal["", "2024-25", "2025-26"] = Field(default="")
+    form10IEAEarlierAYAckOldRegime: str = Field(default="")
+    form10IEAEarlierAYNewRegime: Literal["Y", "N"] = Field(default="N")
+    form10IEANewRegimeAssessmentYear: Literal["", "2025-26"] = Field(default="")
+    form10IEAEarlierAYAckNewRegime: str = Field(default="")
+    form10IEACurrentAYNewRegime: bool = Field(default=False)
+    form10IEACurrentAYNewRegimeDate: Optional[str] = Field(default=None)
+    form10IEACurrentAYNewRegimeAck: str = Field(default="")
+    form10IEACurrentAYOldRegime: bool = Field(default=False)
+    form10IEACurrentAYOldRegimeDate: Optional[str] = Field(default=None)
+    form10IEACurrentAYOldRegimeAck: str = Field(default="")
     seventhProviso: SeventhProviso = Field(
         default_factory=SeventhProviso,
         description="Seventh-proviso to Section 139(1) declarations. ITR-4 "
@@ -922,6 +972,7 @@ class PersonalInfo(_StrictModel):
     aadhaar: str = Field(default="")
     email: str = Field(default="")
     mobile: str = Field(default="")
+    mobileCountryCode: str = Field(default="91")
     secondaryEmail: str = Field(default="")
     secondaryMobile: str = Field(default="")
     secondaryMobileCountryCode: str = Field(default="")

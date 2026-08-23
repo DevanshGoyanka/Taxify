@@ -7,7 +7,7 @@ type _FactoryTypeGuard = ReturnDraft;
 /** Creates an empty 80D category with independent policy storage. */
 export function createEmpty80DCategory(): Category80D { return { policies: [], preventiveCheckup: 0, medicalExpense: 0 }; }
 /** Creates empty Schedule BP financial particulars. */
-export function createEmptyFinancialParticulars(): FinancialParticulars { return { cashBalance: 0, bankBalance: 0, inventory: 0, sundryDebtors: 0, sundryCreditors: 0, otherAssets: 0, totalAssets: 0, securedLoans: 0, unsecuredLoans: 0, advances: 0, otherLiabilities: 0, totalLiabilities: 0, grossProfit: 0, expenses: 0, netProfit: 0 }; }
+export function createEmptyFinancialParticulars(): FinancialParticulars { return { partnerMemberOwnCapital: 0, cashBalance: 0, bankBalance: 0, inventory: 0, sundryDebtors: 0, sundryCreditors: 0, fixedAssets: 0, investments: 0, loansAndAdvances: 0, otherAssets: 0, totalAssets: 0, securedLoans: 0, unsecuredLoans: 0, advances: 0, otherLiabilities: 0, totalLiabilities: 0, grossProfit: 0, expenses: 0, netProfit: 0 }; }
 /** Creates an empty Schedule OS deductions block. */
 export function createEmptyOtherSourcesDeductions() {
   return { expenses: 0, interestExpenseUs57: 0, interestExpenseEligibleUs57: 0, familyPensionDeductionUs57iia: 0, depreciation: 0, totalDeductions: 0, amountNotDeductibleUs58: 0, profitChargeableUs59: 0 };
@@ -22,14 +22,33 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
     schemaVersion: 1, assessmentYear, form, regime,
     personal: {
       name: '', firstName: '', middleName: '', surnameOrOrgName: '', fatherName: '',
-      pan: '', aadhaar: '', email: '', mobile: '',
+      pan: '', aadhaar: '', email: '', mobile: '', mobileCountryCode: '91',
       secondaryEmail: '', secondaryMobile: '', secondaryMobileCountryCode: '',
       dateOfBirth: null,
       flatNo: '', residenceName: '', roadOrStreet: '', localityOrArea: '',
       city: '', stateCode: '', countryCode: '91', pinCode: '', zipCode: '',
-      employerCategory: '',
+      employerCategory: '', age: 30, assesseeStatus: 'I',
+      landlineStdCode: '0', landlinePhoneNo: '0',
+      secondaryAddressDifferent: false, alternateAddress: null,
     },
-    filing: { filingSection: '139(1)', returnType: 'ORIGINAL', originalAcknowledgementNumber: '', originalFilingDate: null, noticeNumber: '' },
+    filing: {
+      filingSection: '139(1)', returnType: 'ORIGINAL',
+      originalAcknowledgementNumber: '', originalFilingDate: null,
+      noticeNumber: '', noticeDate: null, representative: null,
+      form10IEAAcknowledgement: '', form10IEADate: null,
+      form10IEAEarlierAYOldRegime: 'NA', form10IEAAssessmentYear: '',
+      form10IEAEarlierAYAckOldRegime: '', form10IEAEarlierAYNewRegime: 'N',
+      form10IEANewRegimeAssessmentYear: '', form10IEAEarlierAYAckNewRegime: '',
+      form10IEACurrentAYNewRegime: false, form10IEACurrentAYNewRegimeDate: null,
+      form10IEACurrentAYNewRegimeAck: '', form10IEACurrentAYOldRegime: false,
+      form10IEACurrentAYOldRegimeDate: null, form10IEACurrentAYOldRegimeAck: '',
+      seventhProviso: {
+        depositExceedsOneCrore: false, depositAmount: 0,
+        foreignTravel: false, foreignTravelAmount: 0,
+        electricityExpenditure: false, electricityExpenditureAmount: 0,
+        otherClauseIV: false, clauseIVDetails: [],
+      },
+    },
     employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: { ...EMPTY_CAPITAL_GAINS_SCHEDULE },
     otherSources: {
       interest: [], dividends: [], familyPension: { grossAmount: 0, payerName: '', relationToPensioner: '' },
@@ -47,7 +66,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       incomeNotChargeableToTax: 0, incomeChargeableAsPerDtaa: 0,
       passThroughIncomeNotChargeableToTax: 0, totalExemptIncome: 0,
     },
-    deductions: { section80C: [], section80D: { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: createEmpty80DCategory(), selfFamilySenior: createEmpty80DCategory(), parents: createEmpty80DCategory(), parentsSenior: createEmpty80DCategory() }, section80G: [], loans: { loans: [], section80EEAStampDutyValue: 0 }, chapterVIA: { ...EMPTY_CHAPTER_VIA, businessDeductions: { ...EMPTY_CHAPTER_VIA.businessDeductions } }, schedule80GGA: [], schedule80GGC: [] },
+    deductions: { section80C: [], pensionContribution80CCC: [], section80D: { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: createEmpty80DCategory(), selfFamilySenior: createEmpty80DCategory(), parents: createEmpty80DCategory(), parentsSenior: createEmpty80DCategory() }, section80G: [], loans: { loans: [], section80EEAStampDutyValue: 0 }, chapterVIA: { ...EMPTY_CHAPTER_VIA, businessDeductions: { ...EMPTY_CHAPTER_VIA.businessDeductions } }, schedule80GGA: [], schedule80GGC: [] },
     taxes: { tds: [], tcs: [], challans: [] }, bankAccounts: [],
     lossesBroughtForward: { ...EMPTY_BROUGHT_FORWARD_LOSSES },
     bpNetProfit: 0,

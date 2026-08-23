@@ -27,7 +27,18 @@
  * @module mapCapitalGainsToDraftPatch
  */
 
-import type { CapitalGainPurchase as SchedulePurchase, CapitalGainSale, CapitalGainsSchedule, ImmovableAssetGain, JsonRow, Scrip112A, VdaEntry } from '../domain/returns/types';
+import type {
+  CapitalGainPurchase as SourcePurchase,
+  CapitalGainSale,
+} from '../api/itrAutomation';
+import type {
+  CapitalGainPurchase as SchedulePurchase,
+  CapitalGainsSchedule,
+  ImmovableAssetGain,
+  JsonRow,
+  Scrip112A,
+  VdaEntry,
+} from '../domain/returns/types';
 import type { ReturnDraftPatch } from '../domain/returns/draftPatch';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -52,7 +63,7 @@ function saleId(sale: CapitalGainSale, suffix = ''): string {
 }
 
 /** Build a stable purchase-derived id (deterministic — supports id-merge). */
-function purchaseId(purchase: CapitalGainPurchase, suffix = 'pur'): string {
+function purchaseId(purchase: SourcePurchase, suffix = 'pur'): string {
   const parts = [
     'cg',
     purchase.information_code || 'unknown',
@@ -132,7 +143,7 @@ function toImmovableGain(sale: CapitalGainSale, longTerm: boolean): ImmovableAss
 // ── Purchase reference mapper (informational, read-only) ──────────────────
 
 /** Map a flat purchase row → a read-only SchedulePurchase. */
-function toSchedulePurchase(p: CapitalGainPurchase): SchedulePurchase {
+function toSchedulePurchase(p: SourcePurchase): SchedulePurchase {
   return {
     id: purchaseId(p),
     informationCode: p.information_code || '',
@@ -171,7 +182,7 @@ function isVdaSale(sale: CapitalGainSale): boolean {
  */
 export function mapCapitalGains(
   sales: CapitalGainSale[] | null | undefined,
-  purchases: CapitalGainPurchase[] | null | undefined,
+  purchases: SourcePurchase[] | null | undefined,
 ): ReturnDraftPatch {
   if ((!sales || sales.length === 0) && (!purchases || purchases.length === 0)) return {};
 

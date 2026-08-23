@@ -518,17 +518,21 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         return HousePropertyIncome(
             property_type=property_type,
             annual_rent_received=_first_money(
-                property_row.get("annualRent"),
                 property_row.get("annualLettingValue"),
+                property_row.get("annualRent"),
                 property_row.get("grossRent"),
+            ),
+            rent_not_realized=_money(property_row.get("unrealizedRent")),
+            ownership_share_percentage=(
+                _money(property_row.get("ownershipShare")) or Decimal("100")
+                if bool(property_row.get("isCoOwned"))
+                else Decimal("100")
             ),
             municipal_taxes_paid=_first_money(
                 property_row.get("municipalTaxesPaid"),
                 property_row.get("munTax"),
             ),
             home_loan_interest_paid=loan_interest,
-            municipal_value=_money(property_row.get("municipalRateableValue")),
-            fair_rent=_money(property_row.get("fairRentValue")),
             arrears_unrealised_rent_received=_money(property_row.get("arrearsOfRent")),
         )
 

@@ -19,11 +19,12 @@ import type {
   GiftManagerEntry, InterestManagerEntry, TdsManagerEntry, WinningManagerEntry,
 } from '../domain/returns';
 import { classifyTdsSchedule, isTcsSection, DEDUCTED_YR_OPTIONS } from '../domain/returns/tdsSections';
-import { tdsToManager, challansToManager, deductionLoansToManager } from '../domain/returns/editorModelV2';
+import { tcsToManager, tdsToManager, challansToManager, deductionLoansToManager } from '../domain/returns/editorModelV2';
 import { CapitalGainsEntryManager, hasNonSimplifiedCapitalGains, type CapitalGainsScheduleData } from '../components/CapitalGainsEntryManager';
 import type { CapitalGainsSchedule } from '../domain/returns/types';
 import { EMPTY_CAPITAL_GAINS_SCHEDULE } from '../domain/returns/types';
 import { CBDT_TAN_PATTERN, isValidTan, normalizeTan } from '../utils/taxIdentifiers';
+import { createEmptyFinancialParticulars } from '../domain/returns/factory';
 
 export interface CanonicalManagerBindings {
   interest: (entries: InterestManagerEntry[]) => void;
@@ -44,6 +45,7 @@ export interface CanonicalManagerBindings {
   banks: (data: BankManagerData) => void;
   schedule80GGA: (entries: import('../domain/returns/types').Schedule80GGAEntry[]) => void;
   schedule80GGC: (entries: import('../domain/returns/types').Schedule80GGCEntry[]) => void;
+  pensionContribution80CCC: (entries: import('../domain/returns/types').PensionContribution80CCC[]) => void;
   taxReturnPreparer: (next: import('../domain/returns/types').TaxReturnPreparer) => void;
 }
 
@@ -141,8 +143,8 @@ function createBusinessStub(scheme: '44AD' | '44ADA', existing: ReturnDraft['bus
   return {
     id: `business-${scheme.toLowerCase()}-${Date.now()}`,
     businessName: '', natureCode: '', description: '',
-    digitalReceipts: 0, nonDigitalReceipts: 0, declaredIncome: 0,
-    gstinTurnovers: [], financialParticulars: { cashBalance: 0, bankBalance: 0, inventory: 0, sundryDebtors: 0, sundryCreditors: 0, otherAssets: 0, totalAssets: 0, securedLoans: 0, unsecuredLoans: 0, advances: 0, otherLiabilities: 0, totalLiabilities: 0, grossProfit: 0, expenses: 0, netProfit: 0 },
+    digitalReceipts: 0, nonDigitalReceipts: 0, otherModeReceipts: 0, declaredIncome: 0,
+    gstinTurnovers: [], financialParticulars: createEmptyFinancialParticulars(),
     scheme,
     ...(scheme === '44ADA' ? { grossReceipts: 0 } : {}),
   } as ReturnDraft['businesses'][number];
@@ -214,11 +216,13 @@ export function DeductionsTab({ regime, taxResult, managers, form, editorModel }
       form={form}
       regime={regime}
       section80C={draftDeductions?.section80C ?? []}
+      pensionContribution80CCC={draftDeductions?.pensionContribution80CCC ?? []}
       section80D={draftDeductions?.section80D ?? { selfSeniorCitizen: 'N', parentsSeniorCitizen: 'N', selfFamily: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, selfFamilySenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, parents: { policies: [], preventiveCheckup: 0, medicalExpense: 0 }, parentsSenior: { policies: [], preventiveCheckup: 0, medicalExpense: 0 } }}
       section80G={draftDeductions?.section80G ?? []}
       loans={deductionLoansToManager(draftDeductions?.loans ?? { loans: [], section80EEAStampDutyValue: 0 })}
       chapterVIA={via}
       onChangeChapterVIA={managers.chapterVIA}
+      onChangePensionContribution80CCC={managers.pensionContribution80CCC}
       managers={managers}
       schedule80GGA={schedule80GGA}
       schedule80GGC={schedule80GGC}
@@ -321,8 +325,9 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
   // longer authoritative; the draft (`draft.taxes.tds`, `draft.taxes.challans`)
   // is the single source of truth, written through the typed managers.
   const draftTds = editorModel?.draft?.taxes?.tds ?? [];
+  const draftTcs = editorModel?.draft?.taxes?.tcs ?? [];
   const draftChallans = editorModel?.draft?.taxes?.challans ?? [];
-  const tdsEntries = tdsToManager(draftTds);
+  const tdsEntries = [...tdsToManager(draftTds), ...tcsToManager(draftTcs)];
   const selfAssessmentTaxEntries = challansToManager(draftChallans, 'SELF_ASSESSMENT');
   const advanceTaxEntries = challansToManager(draftChallans, 'ADVANCE_TAX');
   // TAN is jurisdiction-prefixed per the official schema (e.g. DELA12345B).
@@ -629,6 +634,8 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
                     <div><label style={labelStyle}>Gross Receipt to Tax Deduct (₹)</label><input style={inputStyle} type="number" min={0} value={entry.grsRcptToTaxDeduct || ''} onChange={(e) => updateTDSEntry(index, 'grsRcptToTaxDeduct', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
                     <div><label style={labelStyle}>TDS Claimed (₹)</label><input style={inputStyle} type="number" min={0} value={entry.tdsClaimed || ''} onChange={(e) => updateTDSEntry(index, 'tdsClaimed', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
                     <div><label style={labelStyle}>Head of Income</label><select style={inputStyle} value={entry.headOfIncome || 'NA'} onChange={(e) => updateTDSEntry(index, 'headOfIncome', e.target.value as 'HP' | 'CG' | 'OS' | 'BP' | 'EI' | 'NA')}><option value="NA">NA — Not Applicable</option><option value="HP">HP — House Property</option><option value="CG">CG — Capital Gains</option><option value="OS">OS — Other Sources</option><option value="BP">BP — Business/Profession</option><option value="EI">EI — Exempt Income</option></select></div>
+                    <div><label style={labelStyle}>Brought-fwd TDS Amt (₹)</label><input style={inputStyle} type="number" min={0} value={entry.broughtFwdTDSAmt || ''} onChange={(e) => updateTDSEntry(index, 'broughtFwdTDSAmt', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Carried-fwd TDS Amt (₹)</label><input style={inputStyle} type="number" min={0} value={entry.amtCarriedFwd || ''} onChange={(e) => updateTDSEntry(index, 'amtCarriedFwd', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
                   </div>
                 </div>
               );

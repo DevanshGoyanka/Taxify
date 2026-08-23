@@ -3,13 +3,13 @@ Schedule HP: House Property Income (u/s 22-27).
 
 Section 23: Gross Annual Value (GAV)
   For let-out / deemed let-out property:
-    GAV = max(Municipal Value, Fair Rent, Actual Rent received/receivable)
+    GAV is the AnnualLetableValue reported in the official Schedule HP.
 
   For self-occupied property: GAV = Nil.
 
-The caller provides the pre-computed GAV as ``annual_rent_received``.
-When ``municipal_value`` and ``fair_rent`` are also provided, the engine
-re-computes GAV = max(municipal_value, fair_rent, annual_rent_received).
+The caller provides this value as ``annual_rent_received`` for backward
+compatibility with the existing typed compute contract. Canonical drafts map
+``HouseProperty.annualLettingValue`` to that field.
 
 Section 24(a): 30% standard deduction on NAV (Net Annual Value = GAV - municipal taxes)
 Section 24(b): Interest on borrowed capital
@@ -37,8 +37,10 @@ from app.schemas.itr1 import HousePropertyIncome, PropertyType, TaxRegime
 class HPResult:
     property_type: str = ""
     gross_annual_value: Decimal = Decimal("0")
+    rent_not_realized: Decimal = Decimal("0")
     municipal_taxes: Decimal = Decimal("0")
     net_annual_value: Decimal = Decimal("0")
+    annual_value_owned: Decimal = Decimal("0")
     standard_deduction_30pct: Decimal = Decimal("0")
     interest_on_loan: Decimal = Decimal("0")
     arrears_unrealised_rent: Decimal = Decimal("0")
@@ -70,7 +72,11 @@ def apply_inter_head_loss_limit(hp_result: HPResult, regime: TaxRegime) -> HPLos
     )
 
 
-def compute(input_data: Optional[HousePropertyIncome], regime: TaxRegime) -> HPResult:
+def compute(
+    input_data: Optional[HousePropertyIncome],
+    regime: TaxRegime,
+    ownership_share_percentage: Decimal = Decimal("100"),
+) -> HPResult:
     if not input_data:
         return HPResult()
 
@@ -96,22 +102,29 @@ def compute(input_data: Optional[HousePropertyIncome], regime: TaxRegime) -> HPR
             loss_carried_forward=loss_cf,
         )
 
-    # Let Out / Deemed Let Out: GAV = max(Municipal Value, Fair Rent, Actual Rent)
-    actual_rent = input_data.annual_rent_received
-    muni_val = getattr(input_data, 'municipal_value', None)
-    fair_rent = getattr(input_data, 'fair_rent', None)
-    if muni_val is not None and fair_rent is not None:
-        gav = max(muni_val, fair_rent, actual_rent)
-    else:
-        gav = actual_rent
+    # Let Out / Deemed Let Out: canonical input is the official Schedule HP
+    # AnnualLetableValue. Municipal/fair-rent helper fields are not part of
+    # the ITR-1/ITR-4 JSON contract and must not silently override it.
+    gav = input_data.annual_rent_received
 
-    nav = max(Decimal("0"), gav - input_data.municipal_taxes_paid)
-    std_ded = nav * HOUSE_PROPERTY_STANDARD_DEDUCTION if nav > 0 else Decimal("0")
+    balance_alv = max(
+        Decimal("0"),
+        gav - input_data.rent_not_realized - input_data.municipal_taxes_paid,
+    )
+    annual_value_owned = (
+        balance_alv * ownership_share_percentage / Decimal("100")
+    )
+    std_ded = (
+        annual_value_owned * HOUSE_PROPERTY_STANDARD_DEDUCTION
+        if annual_value_owned > 0 else Decimal("0")
+    )
     interest = input_data.home_loan_interest_paid
     arrears = input_data.arrears_unrealised_rent_received
     # Section 25A: Only 70% of arrears/unrealised rent is taxable
     # (30% deduction is deemed to cover collection costs)
-    hp_income = nav - std_ded - interest + (arrears * Decimal("0.7"))
+    hp_income = (
+        annual_value_owned - std_ded - interest + (arrears * Decimal("0.7"))
+    )
 
     # For new regime: pass through signed income (losses blocked at CYLA,
     # not at schedule level — allows intra-head netting between two let-out properties).
@@ -120,8 +133,10 @@ def compute(input_data: Optional[HousePropertyIncome], regime: TaxRegime) -> HPR
         return HPResult(
             property_type=pt,
             gross_annual_value=gav,
+            rent_not_realized=input_data.rent_not_realized,
             municipal_taxes=input_data.municipal_taxes_paid,
-            net_annual_value=nav,
+            net_annual_value=balance_alv,
+            annual_value_owned=annual_value_owned,
             standard_deduction_30pct=std_ded,
             interest_on_loan=interest,
             arrears_unrealised_rent=arrears,
@@ -132,8 +147,10 @@ def compute(input_data: Optional[HousePropertyIncome], regime: TaxRegime) -> HPR
     return HPResult(
         property_type=pt,
         gross_annual_value=gav,
+        rent_not_realized=input_data.rent_not_realized,
         municipal_taxes=input_data.municipal_taxes_paid,
-        net_annual_value=nav,
+        net_annual_value=balance_alv,
+        annual_value_owned=annual_value_owned,
         standard_deduction_30pct=std_ded,
         interest_on_loan=interest,
         arrears_unrealised_rent=arrears,

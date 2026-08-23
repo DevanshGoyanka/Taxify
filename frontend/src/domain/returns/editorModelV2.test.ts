@@ -3,9 +3,14 @@ import { createEmptyReturnDraft } from './factory';
 import {
   replaceDraft,
   updateCapitalGainsSchedule,
+  updateDeductionLoansFromManager,
   updateDraft,
   updateEmployers,
+  updateSchedule80GGA,
+  updateSchedule80GGC,
   updateSection80C,
+  updateTaxReturnPreparer,
+  updateTaxCreditsFromManager,
   type ReturnEditorModelV2,
 } from './editorModelV2';
 import type { CapitalGainsSchedule, Employer, Investment80C } from './types';
@@ -113,5 +118,90 @@ describe('ReturnEditorModelV2', () => {
     // Detached: mutating the input after the call does not affect the model
     newSchedule.schedule112A[0].isin = 'MUTATED';
     expect(updated.draft.capitalGainsSchedule.schedule112A[0].isin).toBe('INE123456789');
+  });
+
+  it('synchronizes loan detail interest into Chapter VI-A scalar claims', () => {
+    const model = replaceDraft(createEmptyReturnDraft('2026-27'));
+    const updated = updateDeductionLoansFromManager(model, {
+      section80E: { loans: [{ id: 'e', loanTakenFrom: 'B', bankOrInstnName: 'Bank', lenderPAN: '', loanAccNo: 'E-1', dateOfLoan: '2025-01-01', totalLoanAmt: 100000, loanOutstandingAmt: 90000, interestAmount: 5000 }] },
+      section80EE: { loans: [{ id: 'ee', loanTakenFrom: 'B', bankOrInstnName: 'Bank', lenderPAN: '', loanAccNo: 'EE-1', dateOfLoan: '2025-01-01', totalLoanAmt: 200000, loanOutstandingAmt: 180000, interestAmount: 6000 }] },
+      section80EEA: { loans: [{ id: 'eea', loanTakenFrom: 'B', bankOrInstnName: 'Bank', lenderPAN: '', loanAccNo: 'EEA-1', dateOfLoan: '2025-01-01', totalLoanAmt: 300000, loanOutstandingAmt: 250000, interestAmount: 7000 }], stampDutyValue: 4000000 },
+      section80EEB: { loans: [{ id: 'eeb', loanTakenFrom: 'I', bankOrInstnName: 'Lender', lenderPAN: '', loanAccNo: 'EEB-1', dateOfLoan: '2025-01-01', totalLoanAmt: 400000, loanOutstandingAmt: 300000, interestAmount: 8000 }] },
+    });
+
+    expect(updated.draft.deductions.chapterVIA).toMatchObject({
+      section80E: 5000,
+      section80EE: 6000,
+      section80EEA: 7000,
+      section80EEAStampDutyValue: 4000000,
+      section80EEB: 8000,
+    });
+  });
+
+  it('synchronizes non-cash 80GGA and 80GGC detail totals', () => {
+    const model = replaceDraft(createEmptyReturnDraft('2026-27'));
+    const withGga = updateSchedule80GGA(model, [{
+      id: 'gga', relevantClause: '80GGA2aa', doneeName: 'Research Trust',
+      doneePAN: 'ABCDE1234F', addressLine: '1 Road', city: 'Delhi',
+      stateCode: '07', pinCode: '110001', cashAmount: 100, otherModeAmount: 3000,
+    }]);
+    const withGgc = updateSchedule80GGC(withGga, [{
+      id: 'ggc', cashAmount: 200, otherModeAmount: 4000,
+      contributionDate: '2025-06-01', transactionRef: 'UTR-1',
+      ifscCode: 'SBIN0001234', politicalPartyName: 'Party',
+      politicalPartyPAN: 'ABCDE1234F',
+    }]);
+
+    expect(withGgc.draft.deductions.chapterVIA.section80GGA).toBe(3000);
+    expect(withGgc.draft.deductions.chapterVIA.section80GGC).toBe(4000);
+  });
+
+  it('persists complete Tax Return Preparer details immutably', () => {
+    const model = replaceDraft(createEmptyReturnDraft('2026-27'));
+    const updated = updateTaxReturnPreparer(model, {
+      used: true,
+      identificationNumber: 'T123456789',
+      name: 'Registered Tax Preparer',
+      reimbursementFromGovernment: 750,
+    });
+
+    expect(updated.draft.taxReturnPreparer).toEqual({
+      used: true,
+      identificationNumber: 'T123456789',
+      name: 'Registered Tax Preparer',
+      reimbursementFromGovernment: 750,
+    });
+    expect(model.draft.taxReturnPreparer.used).toBe(false);
+  });
+
+  it('partitions combined editor rows into canonical TDS and TCS schedules', () => {
+    const model = replaceDraft(createEmptyReturnDraft('2026-27'));
+    const updated = updateTaxCreditsFromManager(model, [
+      {
+        id: 'tds3', section: '194IB', deductorName: 'Tenant',
+        deductorTAN: '', incomeAmount: 100000, tdsDeducted: 5000,
+        nameOfTenant: 'Tenant', panOfTenant: 'ABCDE1234F',
+        deductedYr: 2024, headOfIncome: 'HP', broughtFwdTDSAmt: 100,
+        amtCarriedFwd: 200, tdsClaimed: 4700,
+      },
+      {
+        id: 'tcs', section: '206C', deductorName: 'Collector',
+        deductorTAN: 'DELA12345B', incomeAmount: 200000, tdsDeducted: 2000,
+        deductedYr: 2024, tcsCreditOwner: '1', tcsAmtCollOwnHand: 2000,
+        tcsClaimedAmtCollOwnHand: 1800,
+      },
+    ]);
+
+    expect(updated.draft.taxes.tds).toHaveLength(1);
+    expect(updated.draft.taxes.tds[0]).toMatchObject({
+      id: 'tds3', schedule: 'TDS3', deductedYr: 2024, headOfIncome: 'HP',
+      broughtFwdTDSAmt: 100, amtCarriedFwd: 200, tdsClaimed: 4700,
+    });
+    expect(updated.draft.taxes.tcs).toHaveLength(1);
+    expect(updated.draft.taxes.tcs[0]).toMatchObject({
+      id: 'tcs', collectorName: 'Collector', collectorTAN: 'DELA12345B',
+      grossAmount: 200000, taxCollected: 2000, deductedYr: 2024,
+      tcsAmtCollOwnHand: 2000, tcsClaimedAmtCollOwnHand: 1800,
+    });
   });
 });

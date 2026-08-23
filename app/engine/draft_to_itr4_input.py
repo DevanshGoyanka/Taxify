@@ -32,9 +32,11 @@ import datetime
 from decimal import Decimal
 from typing import Any, Optional
 
-from app.schemas.itr1 import AgeBracket, TaxRegime
+from app.schemas.itr1 import AgeBracket, AssesseeType, TaxRegime
 from app.schemas.itr4 import (
     GoodsCarriageVehicle,
+    ITR4BusinessNature,
+    ITR4GstinTurnover,
     ITR4Input,
     PresumptiveBusinessIncome44AD,
     PresumptiveGoodsCarriage44AE,
@@ -53,12 +55,22 @@ from app.engine.draft_to_itr1_input import (
     DraftMappingError,
     _map_capital_gains,
     _map_deductions,
+    _map_deduction_loans,
+    _map_disability_schedules,
+    _map_dividend_quarterly_breakdown,
+    _map_compact_exempt_income,
+    _map_hra_details,
+    _map_24b_loans,
     _map_house_properties,
+    _map_80d_schedule,
+    _map_80gga,
+    _map_80ggc,
     _map_other_sources,
     _map_salary,
     _map_tax_payments,
     _map_tcs,
     _map_tds,
+    _map_tds3,
     _to_date,
 )
 
@@ -109,21 +121,21 @@ def _map_schedule_bp_financial(businesses: list[Any]) -> Optional[ScheduleBPFina
     if fp is None:
         return None
     return ScheduleBPFinancial(
-        partners_capital=Decimal("0"),
+        partners_capital=fp.partnerMemberOwnCapital,
         secured_loans=fp.securedLoans,
         unsecured_loans=fp.unsecuredLoans,
-        advances_received=Decimal("0"),
+        advances_received=fp.advances,
         sundry_creditors=fp.sundryCreditors,
         other_liabilities=fp.otherLiabilities,
         total_capital_liabilities=fp.totalLiabilities,
-        fixed_assets=fp.totalAssets - fp.bankBalance - fp.cashBalance - fp.inventory - fp.sundryDebtors,
-        investments_bp=Decimal("0"),
+        fixed_assets=fp.fixedAssets,
+        investments_bp=fp.investments,
         inventories=fp.inventory,
         sundry_debtors=fp.sundryDebtors,
         bank_balance=fp.bankBalance,
         cash_in_hand=fp.cashBalance,
-        loans_and_advances_given=Decimal("0"),
-        other_assets=Decimal("0"),
+        loans_and_advances_given=fp.loansAndAdvances,
+        other_assets=fp.otherAssets,
         total_assets=fp.totalAssets,
     )
 
@@ -142,104 +154,110 @@ def _map_presumptive(
     Optional[str],
     Optional[str],
 ]:
-    """Map the canonical presumptive-business rows → the active scheme.
-
-    ITR-4 permits exactly one presumptive scheme per return (44AD, 44ADA, or
-    44AE). The canonical ``ReturnDraft.businesses`` list is a discriminated
-    union of :class:`Presumptive44AD`, :class:`Presumptive44ADA`,
-    :class:`Presumptive44AE`. The first row determines the active scheme —
-    mirroring the legacy mapper's ``business_rows[0]`` selection.
+    """Map canonical business rows into every applicable presumptive block.
 
     Args:
         businesses: The ``draft.businesses`` list (any of the three union members).
 
     Returns:
-        ``(scheme, business_44ad, professional_44ada, goods_44ae,
-        business_code, profession_code)``. Only the sub-model matching the
-        active scheme is non-None; the other two are ``None``. When the list
-        is empty, the scheme defaults to ``S44AD`` with a zero-turnover
-        sub-model so the compute input is always valid.
-
-    Raises:
-        DraftMappingError: If a business row's scheme is not one of the three
-            supported values, or if two rows declare different schemes.
+        ``(primary_scheme, business_44ad, professional_44ada, goods_44ae,
+        business_code, profession_code)``. The primary scheme is retained for
+        compatibility; populated sub-models are authoritative.
     """
     if not businesses:
-        # Default to 44AD with a zero-turnover sub-model — the compute engine
-        # accepts a zero-presumptive ITR-4 (an ITR-4 with only salary/HP/OS
-        # income is unusual but schema-valid).
-        return PresumptiveScheme.S44AD, PresumptiveBusinessIncome44AD(
-            total_turnover=Decimal("0"),
-            digital_turnover=Decimal("0"),
-            cash_turnover=Decimal("0"),
-            income_declared=None,
-        ), None, None, None, None
+        return PresumptiveScheme.NONE, None, None, None, None, None
 
-    first = businesses[0]
-    # natureCode is the shared business/profession code surface on
-    # BusinessIdentity (inherited by all three presumptive sub-models).
-    code = getattr(first, "natureCode", "") or None
+    ad_rows = [row for row in businesses if isinstance(row, Presumptive44AD)]
+    ada_rows = [row for row in businesses if isinstance(row, Presumptive44ADA)]
+    ae_rows = [row for row in businesses if isinstance(row, Presumptive44AE)]
+    if len(ad_rows) + len(ada_rows) + len(ae_rows) != len(businesses):
+        bad = next(
+            row for row in businesses
+            if not isinstance(row, (Presumptive44AD, Presumptive44ADA, Presumptive44AE))
+        )
+        raise DraftMappingError(
+            f"Unsupported presumptive business row type: {type(bad).__name__}."
+        )
 
-    if isinstance(first, Presumptive44AD):
-        scheme = PresumptiveScheme.S44AD
-        digital = first.digitalReceipts
-        cash = first.nonDigitalReceipts
-        total_turnover = digital + cash
-        declared = first.declaredIncome or None
+    biz_44ad: Optional[PresumptiveBusinessIncome44AD] = None
+    prof_44ada: Optional[PresumptiveProfessionalIncome44ADA] = None
+    goods_44ae: Optional[PresumptiveGoodsCarriage44AE] = None
+
+    if ad_rows:
+        rows = ad_rows
+        digital = sum((row.digitalReceipts for row in rows), Decimal("0"))
+        cash = sum((row.nonDigitalReceipts for row in rows), Decimal("0"))
+        other = sum((row.otherModeReceipts for row in rows), Decimal("0"))
+        total_turnover = digital + cash + other
+        declared_total = sum((row.declaredIncome for row in rows), Decimal("0"))
+        declared = declared_total or None
         biz_44ad = PresumptiveBusinessIncome44AD(
             total_turnover=total_turnover,
             digital_turnover=digital,
             cash_turnover=cash,
+            other_mode_turnover=other,
+            income_at_six_percent=(
+                sum((row.digitalPresumptiveIncome for row in rows), Decimal("0"))
+                or None
+            ),
+            income_at_eight_percent=(
+                sum((row.nonDigitalPresumptiveIncome for row in rows), Decimal("0"))
+                or None
+            ),
             income_declared=declared,
         )
-        return scheme, biz_44ad, None, None, code, None
-
-    if isinstance(first, Presumptive44ADA):
-        scheme = PresumptiveScheme.S44ADA
-        gross = first.grossReceipts
-        digital = first.digitalReceipts
-        cash = first.nonDigitalReceipts
+    if ada_rows:
+        rows = ada_rows
+        gross = sum((row.grossReceipts for row in rows), Decimal("0"))
+        digital = sum((row.digitalReceipts for row in rows), Decimal("0"))
+        cash = sum((row.nonDigitalReceipts for row in rows), Decimal("0"))
+        other = sum((row.otherModeReceipts for row in rows), Decimal("0"))
         if gross == 0:
-            gross = digital + cash
-        declared = first.declaredIncome or None
+            gross = digital + cash + other
+        declared_total = sum((row.declaredIncome for row in rows), Decimal("0"))
+        declared = declared_total or None
         prof_44ada = PresumptiveProfessionalIncome44ADA(
             gross_receipts=gross,
             digital_receipts=digital,
             cash_receipts=cash,
+            other_mode_receipts=other,
             income_declared=declared,
         )
-        return scheme, None, prof_44ada, None, None, code
-
-    if isinstance(first, Presumptive44AE):
-        scheme = PresumptiveScheme.S44AE
+    if ae_rows:
         vehicles: list[GoodsCarriageVehicle] = []
-        for v in first.vehicles:
-            vehicle_type = (v.vehicleType or "OTHER").upper()
-            is_heavy = vehicle_type == "HEAVY"
-            tonnage = v.tonnage if is_heavy else None
-            months = v.ownedMonths or 1
-            if months < 1:
-                months = 1
-            vehicles.append(GoodsCarriageVehicle(
-                is_heavy_goods_vehicle=is_heavy,
-                gross_vehicle_weight_tons=tonnage,
-                months_owned=months,
-                income_declared=v.presumptiveIncome or None,
-                reg_number=v.vehicleNumber or "",
-                owned_leased_hired_flag="HIRED" if getattr(v, "leasedOrHired", False) else ("LEASE" if str(getattr(v, "leasedOrHired", "")).upper() == "LEASE" else "OWN"),
-                tonnage_capacity=tonnage,
-            ))
+        rows = ae_rows
+        for business in rows:
+          for v in business.vehicles:
+              vehicle_type = (v.vehicleType or "OTHER").upper()
+              is_heavy = vehicle_type == "HEAVY"
+              tonnage = v.tonnage or None
+              months = v.ownedMonths or 1
+              if months < 1:
+                  months = 1
+              vehicles.append(GoodsCarriageVehicle(
+                  is_heavy_goods_vehicle=is_heavy,
+                  gross_vehicle_weight_tons=tonnage if is_heavy else None,
+                  months_owned=months,
+                  income_declared=v.presumptiveIncome or None,
+                  reg_number=v.vehicleNumber or "",
+                  owned_leased_hired_flag=(
+                      v.ownedLeasedHiredFlag
+                      if getattr(v, "ownedLeasedHiredFlag", None)
+                      else ("HIRED" if getattr(v, "leasedOrHired", False) else "OWN")
+                  ),
+                  tonnage_capacity=tonnage,
+              ))
         goods_44ae = PresumptiveGoodsCarriage44AE(vehicles=vehicles)
-        # 44AE requires a business code in Schedule BP (CBDT Sl 137). The
-        # natureCode on the Presumptive44AE row carries the goods-carriage
-        # business code (e.g. 06001). Setting business_code for 44AD-only
-        # would trip Sl 12, so only the 44AE branch sets it here.
-        return scheme, None, None, goods_44ae, code, None
 
-    raise DraftMappingError(
-        f"Unsupported presumptive business row type: {type(first).__name__}. "
-        "Expected Presumptive44AD, Presumptive44ADA, or Presumptive44AE."
+    first_scheme = businesses[0].scheme
+    scheme = PresumptiveScheme(first_scheme)
+    business_code = next(
+        (row.natureCode for row in [*ad_rows, *ae_rows] if row.natureCode), None
     )
+    profession_code = next(
+        (row.natureCode for row in ada_rows if row.natureCode), None
+    )
+    return scheme, biz_44ad, prof_44ada, goods_44ae, business_code, profession_code
 
 
 # ---------------------------------------------------------------------------
@@ -274,19 +292,61 @@ def draft_to_itr4_input(
     # Shared heads — one implementation, reused (audit Finding 14 fix).
     salary_input, section_17_1, gross_salary = _map_salary(draft.employers)
     hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
+    loan_details_24b_list = _map_24b_loans(draft.houseProperties)
     os_input, total_interest, total_dividend, family_pension, total_winnings = (
         _map_other_sources(draft)
     )
-    ded_input, structured_80g, _schedule_80c_entries = _map_deductions(draft, tax_regime)
+    ded_input, structured_80g, schedule_80c_entries = _map_deductions(draft, tax_regime)
+    from app.schemas.itr1 import Schedule80CCCEntry, Schedule80G
+    via = draft.deductions.chapterVIA
+    schedule_80d = (
+        _map_80d_schedule(draft.deductions.section80D)
+        if tax_regime == TaxRegime.OLD
+        else None
+    )
+    schedule_80g = (
+        Schedule80G(
+            donations=ded_input.donations_80g or [],
+            total_eligible_amount=ded_input.amount_80g,
+        )
+        if ded_input.donations_80g
+        else None
+    )
+    schedule_80ggc = _map_80ggc(draft) if tax_regime == TaxRegime.OLD else None
+    schedule_80dd, schedule_80u = _map_disability_schedules(via)
+    if tax_regime == TaxRegime.NEW:
+        schedule_80dd = schedule_80u = None
+    schedule_80ccc_entries = [
+        Schedule80CCCEntry(
+            identifier_type=row.identifierType,
+            identifier_name=row.identifierName,
+            amount=row.amount,
+        )
+        for row in draft.deductions.pensionContribution80CCC
+    ] if tax_regime == TaxRegime.OLD else []
+    (
+        schedule_80e_entries,
+        loan_details_80ee_list,
+        loan_details_80eea_list,
+        loan_details_80eeb_list,
+    ) = _map_deduction_loans(draft)
+    if tax_regime == TaxRegime.NEW:
+        schedule_80e_entries = []
+        loan_details_80ee_list = []
+        loan_details_80eea_list = []
+        loan_details_80eeb_list = []
     cg_input = _map_capital_gains(draft)
 
     tds1, tds2, tds_salary, tds_interest, tds_other, claimed_tds, tds_issues = (
         _map_tds(draft.taxes.tds)
     )
-    tcs_entries, total_tcs = _map_tcs(draft.taxes.tcs)
-    sat_entries, advance_tax, sat_total, quarterly = _map_tax_payments(
+    tds3_entries, tds3_total = _map_tds3(draft.taxes.tds)
+    claimed_tds += tds3_total
+    tcs_entries, total_tcs, tcs_issues = _map_tcs(draft.taxes.tcs)
+    tax_payment_entries, advance_tax, sat_total, quarterly = _map_tax_payments(
         draft.taxes.challans
     )
+    hra_details = _map_hra_details(draft.employers) if tax_regime == TaxRegime.OLD else None
 
     # ITR-4-specific: presumptive business income + scheme.
     scheme, biz_44ad, prof_44ada, goods_44ae, business_code, profession_code = (
@@ -294,9 +354,45 @@ def draft_to_itr4_input(
     )
     # Schedule BP financial particulars (CBDT Sl 139 cross-consistency).
     schedule_bp_financial = _map_schedule_bp_financial(draft.businesses)
+    ae_salary_interest = sum(
+        (
+            business.salaryInterestFromFirm
+            for business in draft.businesses
+            if isinstance(business, Presumptive44AE)
+        ),
+        Decimal("0"),
+    )
+    if schedule_bp_financial is not None:
+        schedule_bp_financial.salary_to_partners = ae_salary_interest
+    first_business = draft.businesses[0] if draft.businesses else None
+    schedule_bp_business_natures = (
+        [
+            ITR4BusinessNature(
+                name=business.businessName,
+                code=business.natureCode,
+                description=business.description,
+                    scheme=PresumptiveScheme(business.scheme),
+            )
+            for business in draft.businesses
+            if business.businessName and business.natureCode
+        ]
+    )
+    schedule_bp_gstin_turnovers = (
+        [
+            ITR4GstinTurnover(gstin=row.gstin, turnover=row.turnover)
+            for business in draft.businesses
+            for row in business.gstinTurnovers
+            if row.gstin
+        ]
+        if first_business is not None else []
+    )
 
     itr4_input = ITR4Input(
         age_bracket=age_bracket,
+        assessee_type={
+            "H": AssesseeType.HUF,
+            "F": AssesseeType.FIRM,
+        }.get(draft.personal.assesseeStatus, AssesseeType.INDIVIDUAL),
         tax_regime=tax_regime,
         presumptive_scheme=scheme,
         business_income_44ad=biz_44ad,
@@ -306,6 +402,10 @@ def draft_to_itr4_input(
         house_property_income=hp_input,
         other_sources_income=os_input,
         deductions_chapter6a=ded_input,
+        nature_of_employment=(
+            draft.employers[0].natureOfEmployment or None
+            if draft.employers else None
+        ),
         capital_gains=cg_input,
         tds1_entries=tds1 or None,
         tds2_entries=tds2 or None,
@@ -319,12 +419,79 @@ def draft_to_itr4_input(
         filing_date=_to_date(draft.personal.dateOfBirth),  # placeholder; gateway sets filing_date
         due_date=None,
         house_property_count=max(1, len(draft.houseProperties)),
-        hra_details=None,
-        schedule_10_13a=None,
-        tax_payment_entries=sat_entries,
+        assessee_pan=draft.personal.pan or None,
+        assessee_name=draft.personal.name or None,
+        aadhaar_number=draft.personal.aadhaar or None,
+        assessee_email_primary=draft.personal.email or None,
+        assessee_phone_primary=draft.personal.mobile or None,
+        agriculture_income=draft.exemptIncome.grossAgriculturalReceipts,
+        exempt_income_breakdown={
+            row.subCategory: row.grossAmount
+            for row in draft.exemptIncome.otherExemptIncome
+            if row.grossAmount > 0
+        },
+        exempt_income_dropdowns=[
+            row.subCategory
+            for row in draft.exemptIncome.otherExemptIncome
+            if row.grossAmount > 0
+        ],
+        exempt_income_entries=_map_compact_exempt_income(draft),
+        total_exempt_income=sum(
+            (row.grossAmount for row in draft.exemptIncome.otherExemptIncome),
+            Decimal("0"),
+        ),
+        other_sources_dropdowns=(
+            ["Family Pension"]
+            if draft.otherSources.familyPension.grossAmount > 0
+            else []
+        ),
+        dividend_quarterly_breakdown=_map_dividend_quarterly_breakdown(draft),
+        schedule_80d=schedule_80d,
+        schedule_80g=schedule_80g,
+        schedule_80gga=None,
+        schedule_80ggc=schedule_80ggc,
+        schedule_80dd=schedule_80dd,
+        schedule_80u=schedule_80u,
+        schedule_80c_entries=schedule_80c_entries,
+        schedule_80ccc_entries=schedule_80ccc_entries,
+        schedule_80e_entries=schedule_80e_entries,
+        loan_details_80ee_list=loan_details_80ee_list,
+        loan_details_80eea_list=loan_details_80eea_list,
+        loan_details_80eeb_list=loan_details_80eeb_list,
+        property_stamp_duty_value_80eea=(
+            draft.deductions.loans.section80EEAStampDutyValue
+            if loan_details_80eea_list
+            else None
+        ),
+        loan_details_24b_list=loan_details_24b_list,
+        hra_details=hra_details,
+        schedule_10_13a=hra_details,
+        tax_payment_entries=tax_payment_entries,
+        tds3_entries=tds3_entries or None,
+        total_tds_claimed=claimed_tds,
+        total_tcs_claimed=total_tcs,
+        schedule_it_total_paid=advance_tax + sat_total,
+        schedule_tds1_total=tds_salary,
+        schedule_tds2_total_claimed=tds_other,
+        schedule_tds3_total_claimed=tds3_total,
+        schedule_tcs_total_claimed=total_tcs,
+        form_10ia_filed=(
+            via.section80DDForm10IA.filed == "Y"
+            or via.section80UForm10IA.filed == "Y"
+        ),
+        form_10ia_filed_80dd=via.section80DDForm10IA.filed == "Y",
+        form_10ia_filed_80u=via.section80UForm10IA.filed == "Y",
+        form_10ba_filed=bool(via.form10BAAckNum),
+        form_10ba_ack_number=via.form10BAAckNum or None,
+        pran_number=via.pranNumber or None,
+        full_value_of_consideration=(
+            cg_input.full_value_of_consideration if cg_input else None
+        ),
         business_code=business_code,
         profession_code=profession_code,
         schedule_bp_financial=schedule_bp_financial,
+        schedule_bp_business_natures=schedule_bp_business_natures,
+        schedule_bp_gstin_turnovers=schedule_bp_gstin_turnovers,
         filing_profile=None,  # Phase 3: constructed by filing_gateway_v2.
         property_profile=None,
         bank_accounts=[],
@@ -347,8 +514,15 @@ def draft_to_itr4_input(
         "quarterly_advance": quarterly,
         "structured_80g": structured_80g,
         "total_tcs": total_tcs,
-        "credit_validation_issues": tds_issues,
+        "credit_validation_issues": [*tds_issues, *tcs_issues],
         "presumptive_scheme": scheme.value,
+        "presumptive_schemes": [
+            value for value, model in (
+                ("44AD", biz_44ad),
+                ("44ADA", prof_44ada),
+                ("44AE", goods_44ae),
+            ) if model is not None
+        ],
         "business_code": business_code,
     }
     return itr4_input, breakdown

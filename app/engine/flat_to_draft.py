@@ -41,10 +41,13 @@ from app.schemas.return_draft import (
     InterestIncome,
     Investment80C,
     OtherSources,
+    PensionContribution80CCC,
     Policy80D,
     PresumptiveBusiness,
     PropertyType,
     ReturnDraft,
+    Schedule80GGAEntry,
+    Schedule80GGCEntry,
     TaxChallan,
     TaxChallanKind,
     TcsCredit,
@@ -71,7 +74,10 @@ _WINNING_TYPES = (
 )
 _PROPERTY_TYPES = ("SELF_OCCUPIED", "LET_OUT", "DEEMED_LET_OUT")
 _LOAN_SECTIONS = ("80E", "80EE", "80EEA", "80EEB")
-_FILING_SECTIONS = ("139(1)", "139(4)", "139(5)", "119(2)(b)")
+_FILING_SECTIONS = (
+    "139(1)", "139(4)", "142(1)", "148", "153C", "139(5)", "139(9)",
+    "119(2)(b)",
+)
 
 
 def _is_record(value: Any) -> bool:
@@ -371,6 +377,11 @@ def _business(item: JsonRecord, index: int) -> PresumptiveBusiness:
                     "tonnage": _money(v.get("tonnage")),
                     "ownedMonths": _integer(v.get("ownedMonths"), 0, 12),
                     "leasedOrHired": _bool(v.get("leasedOrHired")),
+                    "ownedLeasedHiredFlag": _enum(
+                        v.get("ownedLeasedHiredFlag"),
+                        ("OWN", "LEASE", "HIRED"),
+                        "HIRED" if _bool(v.get("leasedOrHired")) else "OWN",
+                    ),
                     "presumptiveIncome": _money(v.get("presumptiveIncome")),
                 }
                 for vi, v in enumerate(_records(item.get("vehicles")))
@@ -384,6 +395,7 @@ def _business(item: JsonRecord, index: int) -> PresumptiveBusiness:
         non_digital = _money(item.get("bizTurnover"))
     return PresumptiveBusiness(
         scheme="44AD", digitalReceipts=digital, nonDigitalReceipts=non_digital,
+        otherModeReceipts=_money(item.get("otherModeReceipts")),
         digitalPresumptiveIncome=_money(item.get("digitalPresumptiveIncome")),
         nonDigitalPresumptiveIncome=_money(item.get("nonDigitalPresumptiveIncome")), **common,
     )
@@ -504,6 +516,23 @@ def _investment_80c(item: JsonRecord, index: int) -> Investment80C:
     )
 
 
+def _pension_80ccc(item: JsonRecord, index: int) -> PensionContribution80CCC:
+    """Adapt one official/canonical 80CCC identifier row."""
+    return PensionContribution80CCC(
+        id=_item_id("80ccc", index, item),
+        identifierType=_enum(
+            item.get("identifierType", item.get("TypeofIdentifier")),
+            ("PRAN", "OTHPRAN"),
+            "OTHPRAN",
+        ),
+        identifierName=_text(
+            item.get("identifierName", item.get("NameofIdentifier")),
+            _text(item.get("policyNumber")),
+        ),
+        amount=_money(item.get("amount", item.get("Amount"))),
+    )
+
+
 def _policy_80d(item: JsonRecord, index: int) -> Policy80D:
     """Adapt one flat 80D policy row to the typed Policy80D model."""
     return Policy80D(
@@ -534,6 +563,34 @@ def _loan(item: JsonRecord, index: int) -> DeductionLoan:
     )
 
 
+def _schedule_80gga(item: JsonRecord, index: int) -> Schedule80GGAEntry:
+    return Schedule80GGAEntry(
+        id=_item_id("80gga", index, item),
+        relevantClause=_enum(item.get("relevantClause"), ("80GGA2a", "80GGA2b", "80GGA2c", "80GGA2d", "80GGA2e"), "80GGA2a"),
+        doneeName=_text(item.get("doneeName")),
+        doneePAN=_text(item.get("doneePAN")),
+        addressLine=_text(item.get("addressLine")),
+        city=_text(item.get("city")),
+        stateCode=_text(item.get("stateCode")),
+        pinCode=_text(item.get("pinCode")),
+        cashAmount=_money(item.get("cashAmount")),
+        otherModeAmount=_money(item.get("otherModeAmount")),
+    )
+
+
+def _schedule_80ggc(item: JsonRecord, index: int) -> Schedule80GGCEntry:
+    return Schedule80GGCEntry(
+        id=_item_id("80ggc", index, item),
+        cashAmount=_money(item.get("cashAmount")),
+        otherModeAmount=_money(item.get("otherModeAmount", item.get("amount"))),
+        contributionDate=_text(item.get("contributionDate")),
+        transactionRef=_text(item.get("transactionRef")),
+        ifscCode=_text(item.get("ifscCode")),
+        politicalPartyName=_text(item.get("politicalPartyName")),
+        politicalPartyPAN=_text(item.get("politicalPartyPAN")),
+    )
+
+
 def _tds(item: JsonRecord, index: int) -> TdsCredit:
     """Adapt one flat TDS row to the typed TdsCredit model."""
     section = _text(item.get("section"))
@@ -553,7 +610,14 @@ def _tds(item: JsonRecord, index: int) -> TdsCredit:
         financialYear=_text(item.get("financialYear")),
         verified26AS=_bool(item.get("verified26AS")),
         claimedInReturn=claimed,
+        schedule=_enum(item.get("schedule"), ("TDS1", "TDS2", "TDS3"), "TDS1" if section.upper() in {"192", "S192"} else "TDS2"),
+        tdsSectionCode=_text(item.get("tdsSectionCode")),
         deductedYr=("" if item.get("deductedYr") in (None, "") else (int(item.get("deductedYr")) or "")) if item.get("deductedYr") not in (None, "") else "",
+        nameOfTenant=_text(item.get("nameOfTenant")),
+        grsRcptToTaxDeduct=_money(item.get("grsRcptToTaxDeduct")),
+        tdsClaimed=_money(item.get("tdsClaimed")) or (deducted if claimed else Decimal("0")),
+        panOfTenant=_text(item.get("panOfTenant")),
+        aadhaarOfTenant=_text(item.get("aadhaarOfTenant")),
     )
 
 
@@ -659,6 +723,7 @@ def flat_to_draft(payload: Any) -> ReturnDraft:
         aadhaar=_text(source.get("aadhaar")),
         email=_text(source.get("email")),
         mobile=_text(source.get("mobile")),
+        mobileCountryCode=_text(source.get("mobileCountryCode"), "91") or "91",
         secondaryEmail=_text(source.get("secondaryEmail")),
         secondaryMobile=_text(source.get("secondaryMobile")),
         secondaryMobileCountryCode=_text(source.get("secondaryMobileCountryCode")),
@@ -780,6 +845,13 @@ def flat_to_draft(payload: Any) -> ReturnDraft:
 
     draft.deductions = type(draft.deductions)(
         section80C=[_investment_80c(row, i) for i, row in enumerate(investment_rows)],
+        pensionContribution80CCC=[
+            _pension_80ccc(row, i)
+            for i, row in enumerate(
+                _records(source.get("pensionContribution80CCC"))
+                or _records(via.get("pensionContribution80CCC"))
+            )
+        ],
         section80D=type(draft.deductions.section80D)(
             selfSeniorCitizen=_enum(s80d.get("selfSeniorCitizen"), ("Y", "N", "S"), "N") if isinstance(s80d, dict) else "N",
             parentsSeniorCitizen=_enum(s80d.get("parentsSeniorCitizen"), ("Y", "N", "P"), "N") if isinstance(s80d, dict) else "N",
@@ -813,13 +885,37 @@ def flat_to_draft(payload: Any) -> ReturnDraft:
             "section80EEAStampDutyValue": _money(loan_root.get("section80EEA", {}).get("stampDutyValue")) if _is_record(loan_root.get("section80EEA")) else Decimal("0"),
             "loans": [_loan(row, i) for i, row in enumerate(loan_items)],
         },
+        schedule80GGA=[
+            _schedule_80gga(row, i)
+            for i, row in enumerate(_records(source.get("schedule80GGA")))
+        ],
+        schedule80GGC=[
+            _schedule_80ggc(row, i)
+            for i, row in enumerate(_records(source.get("schedule80GGC")))
+        ],
         chapterVIA=type(draft.deductions.chapterVIA)(
             section80C=_first_money("section80C", "s80C_total", source=via) or _money(source.get("s80C_total")),
+            section80CCC=_first_money("section80CCC", "s80CCC", source=via) or _money(source.get("s80CCC")),
+            pensionContribution80CCC=sum(
+                (
+                    row.amount
+                    for row in [
+                        _pension_80ccc(item, i)
+                        for i, item in enumerate(
+                            _records(source.get("pensionContribution80CCC"))
+                            or _records(via.get("pensionContribution80CCC"))
+                        )
+                    ]
+                ),
+                Decimal("0"),
+            ),
             section80CCDEmployeeOrSE=_first_money("section80CCDEmployeeOrSE", "s80CCD1", source=via) or _money(source.get("s80CCD1")),
             section80CCD1B=_first_money("section80CCD1B", source=via) or _money(source.get("s80CCD1B")),
             section80CCDEmployer=_first_money("section80CCDEmployer", "s80CCD2", source=via) or _money(source.get("s80CCD2")),
             section80D=_money(via.get("section80D")) if isinstance(via, dict) else _money(source.get("s80D")),
             section80G=_money(via.get("section80G")) if isinstance(via, dict) else _money(source.get("s80G")),
+            section80DD=_money(via.get("section80DD")) if isinstance(via, dict) else _money(source.get("s80DD")),
+            section80DDB=_money(via.get("section80DDB")) if isinstance(via, dict) else _money(source.get("s80DDB")),
             section80TTA=_first_money("section80TTA", source=via) or _money(source.get("s80TTA")),
             section80TTB=_first_money("section80TTB", source=via) or _money(source.get("s80TTB")),
             section80E=_money(via.get("section80E")) if isinstance(via, dict) else Decimal("0"),

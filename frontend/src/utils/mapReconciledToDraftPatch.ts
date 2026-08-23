@@ -60,7 +60,7 @@ function business(entries: ReconciledEntry[]): Presumptive44AD | Presumptive44AD
   const professional = entries.every((entry) => (entry.section || '').replace(/\s/g, '').toUpperCase() === '194J');
   const turnover = entries.reduce((sum, entry) => sum + (entry.final_amount || 0), 0);
   const common = { id: `recon-business-${professional ? '44ada' : '44ad'}`, businessName: entries[0]?.source || 'Imported business', natureCode: '', description: 'Imported from reconciled portal data', declaredIncome: Math.round(turnover * (professional ? 0.5 : 0.06)), gstinTurnovers: [], financialParticulars: createEmptyFinancialParticulars() };
-  return professional ? { ...common, scheme: '44ADA', grossReceipts: turnover, digitalReceipts: turnover, nonDigitalReceipts: 0 } : { ...common, scheme: '44AD', digitalReceipts: turnover, nonDigitalReceipts: 0, digitalPresumptiveIncome: Math.round(turnover * 0.06), nonDigitalPresumptiveIncome: 0 };
+  return professional ? { ...common, scheme: '44ADA', grossReceipts: turnover, digitalReceipts: turnover, nonDigitalReceipts: 0, otherModeReceipts: 0 } : { ...common, scheme: '44AD', digitalReceipts: turnover, nonDigitalReceipts: 0, otherModeReceipts: 0, digitalPresumptiveIncome: Math.round(turnover * 0.06), nonDigitalPresumptiveIncome: 0 };
 }
 
 /** Maps reconciled AIS/TIS/26AS results directly into canonical draft fields. */

@@ -150,6 +150,11 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
     ded_sched = schedules.get("deductions") if isinstance(schedules, dict) else None
     if ded_sched and hasattr(ded_sched, "breakdown") and ded_sched.breakdown:
         breakdown_sum = sum(ded_sched.breakdown.values(), _z)
+        if "80C+80CCC+80CCD(1)" in ded_sched.breakdown:
+            breakdown_sum -= (
+                ded_sched.breakdown.get("80CCC", _z)
+                + ded_sched.breakdown.get("80CCD(1)", _z)
+            )
         if not _eq(ded_total, breakdown_sum, Decimal("1")):
             results.append(_make(
                 "ITR1-R017", False,
@@ -369,25 +374,34 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
             else "house_property_income"
         )
 
-        # Rule 46: NAV = rent - municipal taxes (for let-out / deemed let-out)
+        # Rule 46: Balance ALV = GAV - unrealized rent - municipal taxes.
         if hp_input.property_type != PropertyType.SELF_OCCUPIED:
-            if hasattr(hp_sched, "net_annual_value") and hasattr(hp_sched, "gross_annual_value") and hasattr(hp_sched, "municipal_taxes"):
-                expected_nav = max(_z, hp_sched.gross_annual_value - hp_sched.municipal_taxes)
+            if all(hasattr(hp_sched, field) for field in (
+                "net_annual_value", "gross_annual_value",
+                "rent_not_realized", "municipal_taxes",
+            )):
+                expected_nav = max(
+                    _z,
+                    hp_sched.gross_annual_value
+                    - hp_sched.rent_not_realized
+                    - hp_sched.municipal_taxes,
+                )
                 if not _eq(hp_sched.net_annual_value, expected_nav):
                     results.append(_make(
                         "ITR1-R046", False,
-                        f"Net Annual Value mismatch (property {idx + 1}): "
+                        f"Balance annual value mismatch (property {idx + 1}): "
                         f"computed={hp_sched.net_annual_value}, "
                         f"expected GAV({hp_sched.gross_annual_value}) - "
+                        f"Rent not realized({hp_sched.rent_not_realized}) - "
                         f"Municipal Taxes({hp_sched.municipal_taxes}) = {expected_nav}",
                         field_scope,
                     ))
 
-        # Rule 47: HP income chargeable = NAV - 30% std ded - interest + arrears
+        # Rule 47: HP income = owned AV - 30% deduction - interest + arrears.
         if hp_input.property_type != PropertyType.SELF_OCCUPIED:
-            if all(hasattr(hp_sched, a) for a in ["net_annual_value", "standard_deduction_30pct", "interest_on_loan", "arrears_unrealised_rent", "income_chargeable"]):
+            if all(hasattr(hp_sched, a) for a in ["annual_value_owned", "standard_deduction_30pct", "interest_on_loan", "arrears_unrealised_rent", "income_chargeable"]):
                 expected_hp_income = (
-                    hp_sched.net_annual_value
+                    hp_sched.annual_value_owned
                     - hp_sched.standard_deduction_30pct
                     - hp_sched.interest_on_loan
                     + (hp_sched.arrears_unrealised_rent * Decimal("0.7"))
@@ -397,7 +411,7 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
                         "ITR1-R047", False,
                         f"House Property income chargeable mismatch (property {idx + 1}): "
                         f"computed={hp_sched.income_chargeable}, expected "
-                        f"NAV({hp_sched.net_annual_value}) - "
+                        f"owned annual value({hp_sched.annual_value_owned}) - "
                         f"30%({hp_sched.standard_deduction_30pct}) - "
                         f"Interest({hp_sched.interest_on_loan}) + "
                         f"Arrears({hp_sched.arrears_unrealised_rent}) = "
@@ -405,16 +419,17 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
                         field_scope,
                     ))
 
-        # Rule 43: HP standard deduction = 30% of Annual Value
+        # Rule 43: HP standard deduction = 30% of assessee-owned annual value.
         if hp_input.property_type != PropertyType.SELF_OCCUPIED:
-            if hasattr(hp_sched, "net_annual_value") and hasattr(hp_sched, "standard_deduction_30pct"):
-                expected_30 = hp_sched.net_annual_value * Decimal("0.3")
+            if hasattr(hp_sched, "annual_value_owned") and hasattr(hp_sched, "standard_deduction_30pct"):
+                expected_30 = hp_sched.annual_value_owned * Decimal("0.3")
                 if not _eq(hp_sched.standard_deduction_30pct, expected_30, Decimal("1")):
                     results.append(_make(
                         "ITR1-R043", False,
                         f"HP 30% standard deduction mismatch (property {idx + 1}): "
                         f"computed={hp_sched.standard_deduction_30pct}, "
-                        f"expected 30% of NAV({hp_sched.net_annual_value}) = {expected_30}",
+                        f"expected 30% of owned annual value"
+                        f"({hp_sched.annual_value_owned}) = {expected_30}",
                         field_scope,
                     ))
 
@@ -591,7 +606,12 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
         if ch6a.amount_80d_self_family > _z or ch6a.amount_80d_parents > _z:
             if inp.schedule_80d:
                 sd = inp.schedule_80d
-                d_via_total = ch6a.amount_80d_self_family + ch6a.amount_80d_parents
+                d_via_total = (
+                    ch6a.amount_80d_self_family
+                    + ch6a.amount_80d_parents
+                    + ch6a.amount_80d_preventive_self
+                    + ch6a.amount_80d_preventive_parents
+                )
                 # Schedule total = premiums + preventive checkup (but limited by caps)
                 # The engine-computed total is in the breakdown
                 eng_80d = ded_breakdown.get("80D", _z)
@@ -697,7 +717,12 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
             ("80CCD1B", ch6a.amount_80ccd1b, "deductions_chapter6a.amount_80ccd1b"),
             ("80CCD2", ch6a.amount_80ccd2, "deductions_chapter6a.amount_80ccd2"),
             ("80CCH", ch6a.amount_80cch, "deductions_chapter6a.amount_80cch"),
-            ("80D", ch6a.amount_80d_self_family + ch6a.amount_80d_parents, "deductions_chapter6a"),
+            ("80D", (
+                ch6a.amount_80d_self_family
+                + ch6a.amount_80d_parents
+                + ch6a.amount_80d_preventive_self
+                + ch6a.amount_80d_preventive_parents
+            ), "deductions_chapter6a"),
             ("80DD", ch6a.amount_80dd, "deductions_chapter6a.amount_80dd"),
             ("80DDB", ch6a.amount_80ddb, "deductions_chapter6a.amount_80ddb"),
             ("80E", ch6a.amount_80e, "deductions_chapter6a.amount_80e"),

@@ -331,8 +331,12 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # SECTION: ITR-4 Eligibility
     # ═══════════════════════════════════════════════════════════════════════
 
-    # Rule 140: No presumptive scheme selected
-    if inp.presumptive_scheme == PresumptiveScheme.NONE:
+    # Rule 140: No presumptive income block disclosed
+    if not any((
+        inp.business_income_44ad,
+        inp.professional_income_44ada,
+        inp.goods_carriage_44ae,
+    )):
         results.append(_make(
             "ITR4-R140", False,
             "ITR-4 requires presumptive income under 44AD, 44ADA, or 44AE to be disclosed",
@@ -349,15 +353,15 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
 
 
     # Rule 139: Gross receipts mentioned but financial particulars not filled (informational)
-    if inp.presumptive_scheme != PresumptiveScheme.NONE:
-        if inp.presumptive_scheme == PresumptiveScheme.S44AD and inp.business_income_44ad:
+    if any((inp.business_income_44ad, inp.professional_income_44ada, inp.goods_carriage_44ae)):
+        if inp.business_income_44ad:
             if inp.business_income_44ad.total_turnover > z:
                 results.append(_info(
                     "ITR4-R139a",
                     "Gross receipts disclosed under 44AD. Ensure corresponding financial "
                     "particulars (Schedule BP) are properly filled in the ITR utility.",
                     "business_income_44ad"))
-        if inp.presumptive_scheme == PresumptiveScheme.S44ADA and inp.professional_income_44ada:
+        if inp.professional_income_44ada:
             if inp.professional_income_44ada.gross_receipts > z:
                 results.append(_info(
                     "ITR4-R139b",
@@ -397,7 +401,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             expected="<= 30000000", actual=str(inp.business_income_44ad.total_turnover)))
 
     # Rule 10: 44AD not for commission/brokerage agents (informational)
-    if inp.presumptive_scheme == PresumptiveScheme.S44AD:
+    if inp.business_income_44ad:
         results.append(_info(
             "ITR4-R010",
             "44AD not available for commission agents, brokerage, or insurance agents. "
@@ -417,9 +421,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # for each). This rule only fires when a business code is present but NO
     # presumptive scheme is active — i.e. the taxpayer picked a 44AD-range
     # code without opting into 44AD. 44ADA/44AE have their own code checks.
-    if inp.business_code and inp.presumptive_scheme not in (
-        PresumptiveScheme.S44AD, PresumptiveScheme.S44ADA, PresumptiveScheme.S44AE,
-    ):
+    if inp.business_code and not (inp.business_income_44ad or inp.goods_carriage_44ae):
         results.append(_make(
             "ITR4-R012", False,
             f"Business code '{inp.business_code}' for 44AD is selected but 44AD scheme "
@@ -439,17 +441,21 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                     "business_income_44ad",
                     expected="Cash <= 5% of turnover", actual=f"Cash ratio {cash_ratio}"))
 
-    # Rule 239: 44AD turnover split check — digital + cash == total
+    # Rule 239: 44AD turnover split check — bank + cash + other mode == total
     if inp.business_income_44ad:
         ad = inp.business_income_44ad
-        if ad.digital_turnover + ad.cash_turnover != ad.total_turnover:
+        split_turnover = (
+            ad.digital_turnover + ad.cash_turnover + ad.other_mode_turnover
+        )
+        if split_turnover != ad.total_turnover:
             results.append(_make(
                 "ITR4-R239", False,
                 f"44AD turnover split mismatch: digital ({ad.digital_turnover}) + "
-                f"cash ({ad.cash_turnover}) != total ({ad.total_turnover})",
+                f"cash ({ad.cash_turnover}) + other mode ({ad.other_mode_turnover}) "
+                f"!= total ({ad.total_turnover})",
                 "business_income_44ad",
                 expected=str(ad.total_turnover),
-                actual=str(ad.digital_turnover + ad.cash_turnover)))
+                actual=str(split_turnover)))
 
     # ═══════════════════════════════════════════════════════════════════════
     # SECTION: 44ADA — Presumptive Professional Income
@@ -474,7 +480,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 expected=f"<= {ada.gross_receipts}", actual=str(ada.income_declared)))
 
     # Rule 15: 44ADA not available for business income (informational)
-    if inp.presumptive_scheme == PresumptiveScheme.S44ADA:
+    if inp.professional_income_44ada:
         results.append(_info(
             "ITR4-R015",
             "44ADA is only for specified professions (legal, medical, engineering, "
@@ -491,7 +497,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "under 44ADA (CBDT Sl 16).",
                 "profession_code"))
     # Rule 17: Profession code selected → must declare 44ADA income — HARD
-    if inp.profession_code and inp.presumptive_scheme != PresumptiveScheme.S44ADA:
+    if inp.profession_code and not inp.professional_income_44ada:
         results.append(_make(
             "ITR4-R017b", False,
             f"Profession code '{inp.profession_code}' for 44ADA is selected but 44ADA "
@@ -499,7 +505,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             "profession_code"))
 
     # Rule 212: HUF not eligible for 44ADA — HARD
-    if is_huf and inp.presumptive_scheme == PresumptiveScheme.S44ADA:
+    if is_huf and inp.professional_income_44ada:
         results.append(_make(
             "ITR4-R212", False,
             "HUF is not eligible for Section 44ADA presumptive scheme (CBDT Sl 212). "
@@ -522,14 +528,18 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # Rule 240: 44ADA gross receipts split check
     if inp.professional_income_44ada:
         ada = inp.professional_income_44ada
-        if ada.digital_receipts + ada.cash_receipts != ada.gross_receipts:
+        split_receipts = (
+            ada.digital_receipts + ada.cash_receipts + ada.other_mode_receipts
+        )
+        if split_receipts != ada.gross_receipts:
             results.append(_make(
                 "ITR4-R240", False,
                 f"44ADA receipts split mismatch: digital ({ada.digital_receipts}) + "
-                f"cash ({ada.cash_receipts}) != total ({ada.gross_receipts})",
+                f"cash ({ada.cash_receipts}) + other mode ({ada.other_mode_receipts}) "
+                f"!= total ({ada.gross_receipts})",
                 "professional_income_44ada",
                 expected=str(ada.gross_receipts),
-                actual=str(ada.digital_receipts + ada.cash_receipts)))
+                actual=str(split_receipts)))
 
     # ═══════════════════════════════════════════════════════════════════════
     # SECTION: 44AE — Presumptive Goods Carriage Income
@@ -544,7 +554,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
 
     # Rule 135: Presumptive income field (E5) > 0 but 44AE schedule not filed
     # (ITR-4 always has presumptive; check that 44AE data exists when scheme is 44AE)
-    if inp.presumptive_scheme == PresumptiveScheme.S44AE:
+    if inp.goods_carriage_44ae:
         ae = inp.goods_carriage_44ae
         if ae and len(ae.vehicles) == 0:
             results.append(_make(
@@ -561,13 +571,6 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "under 44AE (CBDT Sl 137).",
                 "business_code"))
     # Rule 138: Business code selected → must declare 44AE income — HARD
-    if inp.business_code and inp.presumptive_scheme not in (PresumptiveScheme.S44AE, PresumptiveScheme.S44AD):
-        if inp.presumptive_scheme != PresumptiveScheme.S44AE:
-            results.append(_make(
-                "ITR4-R138a", False,
-                f"Business code '{inp.business_code}' for 44AE is selected but 44AE scheme "
-                f"is not active (CBDT Sl 138).",
-                "business_code"))
 
     # Rule 141: Per-vehicle months owned > 12; total months across vehicles > 120
     if inp.goods_carriage_44ae:
@@ -817,7 +820,13 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                     expected="0 for pensioners", actual=str(ch6a.amount_80ccd2)))
 
         # Rule 168: 80D self/family non-senior <= Rs 25,000
-        if ch6a.amount_80d_self_family > Decimal("25000") and not is_senior:
+        self_is_senior = (
+            inp.schedule_80d.has_self_senior if inp.schedule_80d else is_senior
+        )
+        parents_are_senior = (
+            inp.schedule_80d.has_parents_senior if inp.schedule_80d else False
+        )
+        if ch6a.amount_80d_self_family > Decimal("25000") and not self_is_senior:
             results.append(_make(
                 "ITR4-R168", False,
                 f"80D Self/Family ({ch6a.amount_80d_self_family}) exceeds Rs 25,000 "
@@ -853,7 +862,10 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 expected="<= 50000", actual=str(ch6a.amount_80d_self_family)))
 
         # Rule 173: 80D parents non-senior <= Rs 25,000
-        if ch6a.amount_80d_parents > Decimal("25000"):
+        if (
+            ch6a.amount_80d_parents > Decimal("25000")
+            and not parents_are_senior
+        ):
             results.append(_make(
                 "ITR4-R173", False,
                 f"80D Parents ({ch6a.amount_80d_parents}) exceeds applicable limit. "
@@ -872,7 +884,12 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 expected="<= 50000", actual=str(ch6a.amount_80d_parents)))
 
         # Rule 177: 80D combined total <= Rs 1,00,000
-        d80_combined = ch6a.amount_80d_self_family + ch6a.amount_80d_parents
+        d80_combined = (
+            ch6a.amount_80d_self_family
+            + ch6a.amount_80d_preventive_self
+            + ch6a.amount_80d_parents
+            + ch6a.amount_80d_preventive_parents
+        )
         if d80_combined > Decimal("100000"):
             results.append(_make(
                 "ITR4-R177", False,
@@ -893,10 +910,17 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             else:
                 # Rule 179b: 80D VIA total must match Schedule 80D total (match ITR-1 R138)
                 sd = inp.schedule_80d
-                d_total = ch6a.amount_80d_self_family + ch6a.amount_80d_parents
+                d_total = (
+                    ch6a.amount_80d_self_family
+                    + ch6a.amount_80d_parents
+                    + ch6a.amount_80d_preventive_self
+                    + ch6a.amount_80d_preventive_parents
+                )
                 sch_total = (sd.premium_1a_non_senior + sd.premium_1b_senior
                              + sd.premium_2a_parents_non_senior + sd.premium_2b_parents_senior
-                             + sd.preventive_checkup_self + sd.preventive_checkup_parents)
+                             + sd.preventive_checkup_self + sd.preventive_checkup_parents
+                             + sd.medical_expense_self_senior
+                             + sd.medical_expense_parents_senior)
                 if d_total != sch_total:
                     results.append(_make(
                         "ITR4-R179b", False,
@@ -1037,7 +1061,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                     f"(dependent with disability) or Rs 1,25,000 (dependent with severe "
                     f"disability). Specify disability_type in Schedule 80DD.",
                     "deductions_chapter6a.amount_80dd"))
-            if not inp.form_10ia_filed:
+            if ch6a.amount_80dd > z and not inp.form_10ia_filed:
                 results.append(_make(
                     "ITR4-R287b", False,
                     "80DD claimed but Form 10-IA (disability certificate) not filed. "
@@ -1311,7 +1335,9 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                         "salary_income.hra_exempt_amount",
                     ))
                 rent_factor = hd.rent_paid - (hd.salary_for_hra * Decimal("0.10"))
-                salary_factor = hd.salary_for_hra * (Decimal("0.40") if hd.is_metro_city else Decimal("0.50"))
+                salary_factor = hd.salary_for_hra * (
+                    Decimal("0.50") if hd.is_metro_city else Decimal("0.40")
+                )
                 max_hra = min(hd.actual_hra_received, max(rent_factor, z), salary_factor)
                 if sal.hra_exempt_amount > max_hra:
                     results.append(_make(
@@ -1741,16 +1767,17 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # ═══════════════════════════════════════════════════════════════════════════
 
     # Sl 5: 44AD income >= 6% of digital turnover (individual rate check)
-    if inp.presumptive_scheme == PresumptiveScheme.S44AD and inp.business_income_44ad:
+    if inp.business_income_44ad:
         ad = inp.business_income_44ad
         if ad.income_declared and ad.income_declared > z:
-            min_digital = ad.digital_turnover * Decimal("0.06")
-            if ad.digital_turnover > z and ad.income_declared < min_digital:
+            digital_and_other = ad.digital_turnover + ad.other_mode_turnover
+            min_digital = digital_and_other * Decimal("0.06")
+            if digital_and_other > z and ad.income_declared < min_digital:
                 results.append(_make("ITR4-R005a", False,
                     f"44AD: income declared (Rs {ad.income_declared}) < 6% of digital turnover "
                     f"(Rs {min_digital})", "business_income_44ad.income_declared"))
     # Sl 6: 44AD income >= 8% of cash turnover (individual rate check)
-    if inp.presumptive_scheme == PresumptiveScheme.S44AD and inp.business_income_44ad:
+    if inp.business_income_44ad:
         ad = inp.business_income_44ad
         if ad.income_declared and ad.income_declared > z:
             min_cash = ad.cash_turnover * Decimal("0.08")
@@ -1764,11 +1791,11 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # ═══════════════════════════════════════════════════════════════════════════
 
     # Sl 12: business code selected → must declare 44AD income
-    if inp.business_code and inp.presumptive_scheme != PresumptiveScheme.S44AD:
+    if inp.business_code and not (inp.business_income_44ad or inp.goods_carriage_44ae):
         results.append(_info("ITR4-R012a",
             "Business code for 44AD selected but 44AD scheme not active. Verify.", "business_code"))
     # Sl 17: profession code selected → must declare 44ADA income
-    if inp.profession_code and inp.presumptive_scheme != PresumptiveScheme.S44ADA:
+    if inp.profession_code and not inp.professional_income_44ada:
         results.append(_info("ITR4-R017a",
             "Profession code for 44ADA selected but 44ADA scheme not active. Verify.", "profession_code"))
 
@@ -1776,7 +1803,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # SUB-SECTION: 44AE Firm Partner Salary/Interest (CBDT Sl 97)
     # ═══════════════════════════════════════════════════════════════════════════
 
-    if inp.presumptive_scheme == PresumptiveScheme.S44AE and inp.goods_carriage_44ae \
+    if inp.goods_carriage_44ae \
             and is_firm and inp.schedule_bp_financial:
         bpf = inp.schedule_bp_financial
         if bpf.salary_to_partners > z or bpf.interest_to_partners > z:
@@ -1822,9 +1849,16 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         sd = inp.schedule_80d
         section_total = (sd.premium_1a_non_senior + sd.premium_1b_senior
                          + sd.premium_2a_parents_non_senior + sd.premium_2b_parents_senior
-                         + sd.preventive_checkup_self + sd.preventive_checkup_parents)
+                         + sd.preventive_checkup_self + sd.preventive_checkup_parents
+                         + sd.medical_expense_self_senior
+                         + sd.medical_expense_parents_senior)
         if ch6a:
-            d80_total = ch6a.amount_80d_self_family + ch6a.amount_80d_parents
+            d80_total = (
+                ch6a.amount_80d_self_family
+                + ch6a.amount_80d_parents
+                + ch6a.amount_80d_preventive_self
+                + ch6a.amount_80d_preventive_parents
+            )
             if d80_total > z and d80_total != section_total:
                 results.append(_make("ITR4-R178", False,
                     f"80D Sl 3 (Rs {d80_total}) ≠ 1a+1b+2a+2b+PHC (Rs {section_total})",
@@ -1988,12 +2022,9 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         for d in inp.schedule_80g.donations:
             cat = d.donation_category or "A"
             cats[cat] = cats.get(cat, z) + (d.total_donation or z)
-        if inp.schedule_80g.total_eligible_amount and inp.schedule_80g.total_eligible_amount > z:
-            e_sum = sum(v for v in cats.values())
-            if abs(inp.schedule_80g.total_eligible_amount - e_sum) > Decimal("1"):
-                results.append(_make("ITR4-R103", False,
-                    f"80G Table E total (Rs {inp.schedule_80g.total_eligible_amount}) "
-                    f"≠ sum A+B+C+D (Rs {e_sum})", "schedule_80g.total_eligible_amount"))
+        # ``total_eligible_amount`` is the post-percentage/post-limit claim,
+        # not the gross sum of category tables A-D. The dedicated 80G
+        # calculator and builder cross-foot that eligible total.
 
     # NOTE: 80G per-PAN cash aggregation (R108) and per-entry cash cap (R408)
     # are enforced in the main 80G/80GGC section above. No duplicate here.
@@ -2162,7 +2193,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "Schedule TDS2 col 6 total ≠ sum of claims per row", "tds2_entries"))
     if inp.schedule_tds3_total_claimed and inp.schedule_tds3_total_claimed > z:
         tds3_claimed_sum = sum(
-            (getattr(e, 'tds_claimed_this_year', None) or z)
+            (getattr(e, 'tds_claimed', None) or z)
             for e in (inp.tds3_entries or [])
         )
         if abs(inp.schedule_tds3_total_claimed - tds3_claimed_sum) > Decimal("1"):
@@ -2268,10 +2299,9 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
 
     # Sl 139: Gross receipts in BP but no financial particulars — HARD
     has_turnover = (
-        (inp.presumptive_scheme == PresumptiveScheme.S44AD
-         and inp.business_income_44ad and inp.business_income_44ad.total_turnover > z)
-        or (inp.presumptive_scheme == PresumptiveScheme.S44ADA
-            and inp.professional_income_44ada and inp.professional_income_44ada.gross_receipts > z)
+        (inp.business_income_44ad and inp.business_income_44ad.total_turnover > z)
+        or (inp.professional_income_44ada
+            and inp.professional_income_44ada.gross_receipts > z)
     )
     if has_turnover and not inp.schedule_bp_financial:
         results.append(_make("ITR4-R139", False,
@@ -2519,28 +2549,51 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
 
     # R270: 80EE/80EEA must exhaust 24(b) first
     if ch6a and (ch6a.amount_80ee > z or ch6a.amount_80eea > z):
-        if hp and hp.home_loan_interest_paid <= z:
-            results.append(_make("ITR4-R270", False,
-                "80EE/80EEA claimed but no 24(b) home loan interest. 24(b) must be "
-                "claimed first.", "deductions_chapter6a"))
-
+        required_24b = (
+            Decimal("200000")
+            if hp and hp.property_type == PropertyType.SELF_OCCUPIED
+            else (hp.home_loan_interest_paid if hp else z)
+        )
+        if not hp or hp.home_loan_interest_paid <= z \
+                or hp.home_loan_interest_paid < required_24b:
+            results.append(_make(
+                "ITR4-R270", False,
+                "80EE/80EEA claimed before exhausting the applicable "
+                f"Section 24(b) limit of Rs {required_24b}.",
+                "deductions_chapter6a",
+                expected=f"24(b) interest >= {required_24b}",
+                actual=str(hp.home_loan_interest_paid if hp else z)))
     # R271-R272: 80EE/80EEA loan ⊆ 24(b) loan list
-    if inp.loan_details_80ee and inp.loan_details_24b_list:
-        found = any(
-            ld.lender_name == getattr(inp.loan_details_80ee, 'lender_name', '')
-            for ld in inp.loan_details_24b_list
-        )
-        if not found:
-            results.append(_make("ITR4-R271", False,
-                "80EE loan not found in Schedule 24(b) loan list", "loan_details_80ee"))
-    if inp.loan_details_80eea and inp.loan_details_24b_list:
-        found = any(
-            ld.lender_name == getattr(inp.loan_details_80eea, 'lender_name', '')
-            for ld in inp.loan_details_24b_list
-        )
-        if not found:
-            results.append(_make("ITR4-R272", False,
-                "80EEA loan not found in Schedule 24(b) loan list", "loan_details_80eea"))
+    for section, deduction_rows, rule in (
+        (
+            "80EE",
+            inp.loan_details_80ee_list
+            or ([inp.loan_details_80ee] if inp.loan_details_80ee else []),
+            "ITR4-R271",
+        ),
+        (
+            "80EEA",
+            inp.loan_details_80eea_list
+            or ([inp.loan_details_80eea] if inp.loan_details_80eea else []),
+            "ITR4-R272",
+        ),
+    ):
+        for row in deduction_rows:
+            lender_name = getattr(row, "lender_name", "")
+            account_number = getattr(row, "account_or_reference_number", None)
+            found = any(
+                loan.lender_name == lender_name
+                and (
+                    account_number is None
+                    or loan.account_or_reference_number == account_number
+                )
+                for loan in inp.loan_details_24b_list
+            )
+            if inp.loan_details_24b_list and not found:
+                results.append(_make(
+                    rule, False,
+                    f"{section} loan not found in Schedule 24(b) loan list",
+                    f"loan_details_{section.lower()}_list"))
 
     # R273-R275, R277, R280: Bank/schedule details required when deduction claimed
     if ch6a and ch6a.amount_80c > z and not inp.schedule_80c_entries:
@@ -2911,13 +2964,25 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "Co-owned: other co-owner share must be > 0 and < 100%",
                 "other_co_owner_percentage"))
 
-    # R347: Co-owned AV = share * total AV
-    if inp.is_property_co_owned and hp and inp.co_ownership_details:
-        pct = inp.co_ownership_details.ownership_percentage / Decimal("100")
-        if hp.annual_rent_received > z and pct > z:
-            results.append(_info("ITR4-R347",
-                f"Co-owned: your AV share should be {pct * 100}% of total annual value. "
-                f"Verify.", "house_property_income"))
+    # Typed property profile is authoritative for the current ITR-4 path.
+    profile = inp.property_profile
+    if profile and hp:
+        if hp.ownership_share_percentage != profile.assessee_share_percentage:
+            results.append(_make(
+                "ITR4-R346", False,
+                f"Calculation ownership share ({hp.ownership_share_percentage}%) "
+                f"does not match the filing profile "
+                f"({profile.assessee_share_percentage}%).",
+                "property_profile.assessee_share_percentage",
+            ))
+        if inp.assessee_pan and any(
+            row.pan == inp.assessee_pan for row in profile.co_owners
+        ):
+            results.append(_make(
+                "ITR4-R351", False,
+                "Co-owner PAN cannot equal the assessee PAN.",
+                "property_profile.co_owners",
+            ))
     results.append(_info("ITR4-R349",
         "HP: Sl 1d Total = 1b+1c (gross rent + arrears). Portal-level.",
         "house_property_income"))
@@ -2947,13 +3012,13 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if ch6a and ch6a.amount_80ccc > z:
         if not inp.schedule_80ccc_entries:
             results.append(_make("ITR4-R409", False,
-                "80CCC claimed but no per-row details provided. Insurer name, "
-                "policy number required.", "deductions_chapter6a.amount_80ccc"))
+                "80CCC claimed but no per-row details provided. Identifier type "
+                "and name required.", "deductions_chapter6a.amount_80ccc"))
         else:
             for i, e in enumerate(inp.schedule_80ccc_entries):
-                if e.amount > z and (not e.insurer_name or not e.policy_number):
+                if e.amount > z and (not e.identifier_type or not e.identifier_name):
                     results.append(_make("ITR4-R409b", False,
-                        f"80CCC row {i+1}: amount Rs {e.amount} but insurer/policy missing",
+                        f"80CCC row {i+1}: amount Rs {e.amount} but identifier details missing",
                         f"schedule_80ccc_entries[{i}]"))
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -3905,7 +3970,10 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R301: Loan sanction date 80EE between 1.4.16 and 31.3.17
         _loans_ee = inp.loan_details_80ee_list or ([inp.loan_details_80ee] if inp.loan_details_80ee else [])
         for _loan in _loans_ee:
-            _sanction = getattr(_loan, 'sanction_date', None)
+            _sanction = (
+                getattr(_loan, 'loan_date', None)
+                or getattr(_loan, 'sanction_date', None)
+            )
             if _sanction:
                 if not (date(2016, 4, 1) <= _sanction <= date(2017, 3, 31)):
                     results.append(_make(
@@ -3916,7 +3984,11 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                         expected="01-04-2016 to 31-03-2017",
                         actual=str(_sanction)))
             # R276: 80EE max loan ₹35L
-            _loan_amt = getattr(_loan, 'loan_amount', z) or z
+            _loan_amt = (
+                getattr(_loan, 'total_loan_amount', None)
+                or getattr(_loan, 'loan_amount', z)
+                or z
+            )
             if _loan_amt > Decimal("3500000"):
                 results.append(_make(
                     "ITR4-R276", False,
@@ -3935,7 +4007,10 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 actual="None"))
         _loans_eea = inp.loan_details_80eea_list or ([inp.loan_details_80eea] if inp.loan_details_80eea else [])
         for _loan in _loans_eea:
-            _sanction = getattr(_loan, 'sanction_date', None)
+            _sanction = (
+                getattr(_loan, 'loan_date', None)
+                or getattr(_loan, 'sanction_date', None)
+            )
             if _sanction:
                 # R279: 80EEA sanction date between 1.4.19 and 31.3.22
                 if not (date(2019, 4, 1) <= _sanction <= date(2022, 3, 31)):
@@ -3947,7 +4022,11 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                         expected="01-04-2019 to 31-03-2022",
                         actual=str(_sanction)))
             # R278: 80EEA stamp value ≤ ₹45L
-            _stamp_val = getattr(_loan, 'stamp_duty_value', z) or z
+            _stamp_val = (
+                inp.property_stamp_duty_value_80eea
+                or getattr(_loan, 'stamp_duty_value', z)
+                or z
+            )
             if _stamp_val and _stamp_val > Decimal("4500000"):
                 results.append(_make(
                     "ITR4-R278", False,
@@ -3967,7 +4046,10 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 actual="None"))
         _loans_eeb = inp.loan_details_80eeb_list or ([inp.loan_details_80eeb] if inp.loan_details_80eeb else [])
         for _loan in _loans_eeb:
-            _sanction = getattr(_loan, 'sanction_date', None)
+            _sanction = (
+                getattr(_loan, 'loan_date', None)
+                or getattr(_loan, 'sanction_date', None)
+            )
             if _sanction:
                 # R281: 80EEB sanction date between 1.4.19 and 31.3.23
                 if not (date(2019, 4, 1) <= _sanction <= date(2023, 3, 31)):
@@ -4030,7 +4112,10 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 expected=str(ch6a.amount_80eeb),
                 actual=str(_row_sum)))
     if hp and hp.home_loan_interest_paid > z and inp.loan_details_24b_list:
-        _row_sum = sum((getattr(e, 'interest_paid', z) or z) for e in inp.loan_details_24b_list)
+        _row_sum = sum(
+            e.interest_paid_self_occupied + e.interest_paid_let_out
+            for e in inp.loan_details_24b_list
+        )
         if abs(_row_sum - hp.home_loan_interest_paid) > Decimal("1"):
             results.append(_make(
                 "ITR4-R295", False,
@@ -4050,37 +4135,9 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 expected="0",
                 actual=str(hp.home_loan_interest_paid)))
     # R303-304: Co-owned property rules
-    if inp.is_property_co_owned:
-        # R404: If not co-owned, assessee share = 100%
-        # R405: If co-owned, other co-owner share > 0 and < 100%
-        if inp.other_co_owner_percentage <= 0 or inp.other_co_owner_percentage >= 100:
-            results.append(_make(
-                "ITR4-R405", False,
-                f"Co-owned property: other co-owner share ({inp.other_co_owner_percentage}%) "
-                f"must be > 0 and < 100.",
-                "other_co_owner_percentage",
-                expected="0 < x < 100",
-                actual=str(inp.other_co_owner_percentage)))
-        # R406: Assessee share < 100% if co-owned
-        _assessee_share = 100 - inp.other_co_owner_percentage
-        if _assessee_share >= 100:
-            results.append(_make(
-                "ITR4-R406", False,
-                f"Co-owned property: assessee share ({_assessee_share}%) must be "
-                f"< 100.",
-                "other_co_owner_percentage",
-                expected="< 100%",
-                actual=str(_assessee_share)))
-    else:
-        # R404: If not co-owned, assessee share = 100%
-        if inp.other_co_owner_percentage > 0:
-            results.append(_make(
-                "ITR4-R404", False,
-                f"Property not co-owned but other co-owner share is "
-                f"{inp.other_co_owner_percentage}%. Should be 0.",
-                "other_co_owner_percentage",
-                expected="0 (not co-owned)",
-                actual=str(inp.other_co_owner_percentage)))
+    # R303-R304/R404-R406 are structurally enforced by PropertyFilingProfile
+    # for the production path. Legacy scalar checks above remain for callers
+    # that still populate the deprecated co-ownership fields.
     # R306-309: 80G cash donation ≤ ₹2,000 per donee PAN
     if is_old and inp.schedule_80g:
         _cash_by_pan: dict[str, Decimal] = {}
@@ -4175,26 +4232,28 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # R397: 234-I fee ₹5,000 if filed after 31/12 and TI > ₹5L (139(5))
     # (implemented in interest.py compute_234i — informational here)
     # R400-401: Assessee PAN ≠ co-owner PAN (if co-owned)
-    if inp.is_property_co_owned and inp.co_ownership_details and inp.assessee_pan:
-        _co_pan = getattr(inp.co_ownership_details, 'co_owner_pan', '') or ''
-        if _co_pan and _co_pan == inp.assessee_pan:
+    if inp.property_profile and inp.assessee_pan:
+        for _co_owner in inp.property_profile.co_owners:
+            _co_pan = _co_owner.pan or ""
+            if not _co_pan or _co_pan != inp.assessee_pan:
+                continue
             results.append(_make(
                 "ITR4-R400", False,
                 f"Co-owner PAN ({_co_pan}) is same as assessee PAN. "
                 f"Co-owned property PANs cannot be same.",
-                "co_ownership_details.co_owner_pan",
+                "property_profile.co_owners",
                 expected=f"!= {inp.assessee_pan}",
                 actual=_co_pan))
     # R408: Rent unrealized ≤ gross rent
     if hp and hp.property_type != PropertyType.SELF_OCCUPIED:
         _gross_rent = getattr(hp, 'annual_rent_received', z) or z
-        _unrealized = getattr(hp, 'arrears_unrealised_rent_received', z) or z
+        _unrealized = getattr(hp, 'rent_not_realized', z) or z
         if _unrealized > _gross_rent:
             results.append(_make(
                 "ITR4-R408", False,
                 f"Unrealized rent (Rs {_unrealized}) exceeds gross rent "
                 f"(Rs {_gross_rent}). Not allowed.",
-                "house_property_income.arrears_unrealised_rent_received",
+                "house_property_income.rent_not_realized",
                 expected=f"<= {_gross_rent}",
                 actual=str(_unrealized)))
     # R410: Secondary address mandatory (informational — checked at JSON build time)
@@ -4244,7 +4303,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "other_sources_income.family_pension_received"))
     # R262: New regime standard deduction ₹75,000 (informational — verified in calc)
     # R264: HUF not eligible for 44ADA
-    if is_huf and inp.presumptive_scheme == PresumptiveScheme.S44ADA:
+    if is_huf and inp.professional_income_44ada:
         results.append(_make(
             "ITR4-R264", False,
             "HUF is not eligible to claim presumptive income u/s 44ADA. "
@@ -4366,13 +4425,13 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 expected=str(ch6a.amount_80ccc),
                 actual=str(_row_sum)))
     # R347: Co-owned annual value = own share × annual value (informational)
-    if inp.is_property_co_owned and hp and inp.co_ownership_details:
-        _own_pct = getattr(inp.co_ownership_details, 'ownership_percentage', Decimal("100")) or Decimal("100")
+    if inp.property_profile and inp.property_profile.is_co_owned and hp:
+        _own_pct = inp.property_profile.assessee_share_percentage
         results.append(_info("ITR4-R347",
             f"Co-owned property: assessee share {_own_pct}%. Annual value of "
             f"property should be own percentage × total annual value. "
             f"Verified post-computation.",
-            "co_ownership_details.ownership_percentage"))
+            "property_profile.assessee_share_percentage"))
     # R349-350: HP schedule total = sum of components
     if hp and hp.property_type != PropertyType.SELF_OCCUPIED:
         # R349: Sl.no 1d Total = 1b + 1c (municipal_tax + rented)
@@ -4381,13 +4440,13 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # R352: Gross rent = 0 but rent-not-realizable > 0
     if hp and hp.property_type != PropertyType.SELF_OCCUPIED:
         _gross_rent = getattr(hp, 'annual_rent_received', z) or z
-        _unrealized = getattr(hp, 'arrears_unrealised_rent_received', z) or z
+        _unrealized = getattr(hp, 'rent_not_realized', z) or z
         if _gross_rent == z and _unrealized > z:
             results.append(_make(
                 "ITR4-R352", False,
                 f"Gross rent received is zero but unrealized rent (Rs {_unrealized}) "
                 f"is more than 0. Inconsistent.",
-                "house_property_income.arrears_unrealised_rent_received",
+                "house_property_income.rent_not_realized",
                 expected="0 when gross rent is 0",
                 actual=str(_unrealized)))
     # R358 (covered in 10IEA chain)
@@ -4455,7 +4514,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 expected="80CCD > 0",
                 actual="0"))
     # R216: HUF not eligible for 44ADA (duplicate of R264 — explicit check)
-    if is_huf and inp.presumptive_scheme == PresumptiveScheme.S44ADA:
+    if is_huf and inp.professional_income_44ada:
         results.append(_make(
             "ITR4-R216", False,
             "HUF is not eligible to claim presumptive income u/s 44ADA. "

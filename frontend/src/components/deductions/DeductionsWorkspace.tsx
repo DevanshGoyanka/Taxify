@@ -4,7 +4,7 @@
 // Chapter VI-A section, gated per ITR form. New regime restricts to 80CCD(2).
 
 import React, { useMemo, useState } from 'react';
-import type { ChapterVIA, BusinessDeductions, Donation80G, Investment80C, Schedule80GGAEntry, Schedule80GGCEntry, Section80D, Section80GGAClause } from '../../domain/returns/types';
+import type { ChapterVIA, BusinessDeductions, Donation80G, Investment80C, PensionContribution80CCC, Schedule80GGAEntry, Schedule80GGCEntry, Section80D, Section80GGAClause } from '../../domain/returns/types';
 import type { DeductionLoanManagerData } from '../../domain/returns';
 import type { ItrForm } from '../../domain/eligibility';
 import { Section80CManager } from '../Section80CManager';
@@ -24,11 +24,13 @@ interface DeductionsWorkspaceProps {
   form: ItrForm;
   regime: 'old' | 'new';
   section80C: Investment80C[];
+  pensionContribution80CCC: PensionContribution80CCC[];
   section80D: Section80D;
   section80G: Donation80G[];
   loans: DeductionLoanManagerData;
   chapterVIA: ChapterVIA;
   onChangeChapterVIA: (next: ChapterVIA) => void;
+  onChangePensionContribution80CCC: (entries: PensionContribution80CCC[]) => void;
   schedule80GGA: Schedule80GGAEntry[];
   schedule80GGC: Schedule80GGCEntry[];
   onChangeSchedule80GGA: (entries: Schedule80GGAEntry[]) => void;
@@ -36,17 +38,6 @@ interface DeductionsWorkspaceProps {
   managers: SubManagers;
   totalDeductions?: number;
   deductionBreakdown?: Record<string, number> | null;
-}
-
-type FieldType = 'number' | 'text';
-interface FieldConfig {
-  key: keyof ChapterVIA | keyof BusinessDeductions;
-  label: string;
-  type: FieldType;
-  max?: number;
-  maxLength?: number;
-  placeholder?: string;
-  hint?: string;
 }
 
 const MAX_MONEY = 99_999_999_999_999;
@@ -93,8 +84,8 @@ function Collapsible({ title, subtitle, defaultOpen, summary, badge, children }:
 function NumberField({ label, value, onChange, disabled, hint, placeholder }: { label: string; value: number; onChange: (value: number) => void; disabled?: boolean; hint?: string; placeholder?: string }): React.JSX.Element {
   return <div><label style={styles.label}>{label}</label><input style={styles.input} type="number" value={value || ''} disabled={disabled} min={0} max={MAX_MONEY} placeholder={placeholder ?? '0'} onChange={(event) => onChange(money(Number(event.target.value)))} />{hint && <div style={styles.hint}>{hint}</div>}</div>;
 }
-function TextField({ label, value, onChange, disabled, maxLength, placeholder, hint }: { label: string; value: string; onChange: (value: string) => void; disabled?: boolean; maxLength?: number; placeholder?: string; hint?: string }): React.JSX.Element {
-  return <div><label style={styles.label}>{label}</label><input style={styles.input} type="text" value={value} disabled={disabled} maxLength={maxLength} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />{hint && <div style={styles.hint}>{hint}</div>}</div>;
+function TextField({ label, value, onChange, disabled, maxLength, placeholder, hint, type = 'text', required, pattern }: { label: string; value: string; onChange: (value: string) => void; disabled?: boolean; maxLength?: number; placeholder?: string; hint?: string; type?: React.HTMLInputTypeAttribute; required?: boolean; pattern?: string }): React.JSX.Element {
+  return <div><label style={styles.label}>{label}{required ? ' *' : ''}</label><input style={styles.input} type={type} value={value} disabled={disabled} required={required} pattern={pattern} maxLength={maxLength} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />{hint && <div style={styles.hint}>{hint}</div>}</div>;
 }
 function SelectField<T extends string>({ label, value, onChange, disabled, options, hint }: { label: string; value: T; onChange: (value: T) => void; disabled?: boolean; options: readonly { value: T; label: string }[]; hint?: string }): React.JSX.Element {
   return <div><label style={styles.label}>{label}</label><select style={styles.input} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value as T)}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>{hint && <div style={styles.hint}>{hint}</div>}</div>;
@@ -117,8 +108,11 @@ function dependentOptions(form: ItrForm) {
 
 const GGA_CLAUSE_OPTIONS: ReadonlyArray<{ value: Section80GGAClause; label: string }> = [
   { value: '80GGA2a', label: '80GGA(2)(a) — scientific research association' },
-  { value: '80GGA2b', label: '80GGA(2)(b) — university/college research' },
-  { value: '80GGA2c', label: '80GGA(2)(c) — national laboratory' },
+  { value: '80GGA2aa', label: '80GGA(2)(aa) — social science/statistical research' },
+  { value: '80GGA2b', label: '80GGA(2)(b) — rural development association' },
+  { value: '80GGA2bb', label: '80GGA(2)(bb) — approved eligible project' },
+  { value: '80GGA2c', label: '80GGA(2)(c) — conservation/afforestation' },
+  { value: '80GGA2cc', label: '80GGA(2)(cc) — notified afforestation fund' },
   { value: '80GGA2d', label: '80GGA(2)(d) — rural development fund' },
   { value: '80GGA2e', label: '80GGA(2)(e) — urban poverty eradication fund' },
 ];
@@ -134,6 +128,30 @@ function empty80GGAEntry(): Schedule80GGAEntry {
 }
 function empty80GGCEntry(): Schedule80GGCEntry {
   return { id: nextRowId('80ggc'), cashAmount: 0, otherModeAmount: 0, contributionDate: '', transactionRef: '', ifscCode: '', politicalPartyName: '', politicalPartyPAN: '' };
+}
+
+function empty80CCCEntry(): PensionContribution80CCC {
+  return { id: nextRowId('80ccc'), identifierType: 'OTHPRAN', identifierName: '', amount: 0 };
+}
+
+function Schedule80CCCEditor({ entries, onChange }: { entries: PensionContribution80CCC[]; onChange: (entries: PensionContribution80CCC[]) => void }): React.JSX.Element {
+  const update = (id: string, patch: Partial<PensionContribution80CCC>): void => onChange(entries.map((entry) => entry.id === id ? { ...entry, ...patch } : entry));
+  const remove = (id: string): void => onChange(entries.filter((entry) => entry.id !== id));
+  return <div style={{ marginTop: 16 }}>
+    <h4 style={{ ...styles.panelTitle, marginBottom: 10 }}>Section 80CCC pension contributions</h4>
+    {entries.map((entry, index) => <div key={entry.id} style={{ marginBottom: 12, padding: 12, border: '1px solid var(--border)', borderRadius: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+        <strong style={{ fontSize: 12 }}>Contribution #{index + 1}</strong>
+        <button type="button" onClick={() => remove(entry.id)} style={{ border: '1px solid var(--border)', background: 'white', padding: '2px 8px', fontSize: 11, borderRadius: 4, cursor: 'pointer' }}>Remove</button>
+      </div>
+      <div style={styles.grid}>
+        <SelectField label="Identifier type" value={entry.identifierType} options={[{ value: 'PRAN', label: 'PRAN' }, { value: 'OTHPRAN', label: 'Other policy / identifier' }]} onChange={(value) => update(entry.id, { identifierType: value })} />
+        <TextField label="Identifier / policy number" value={entry.identifierName} maxLength={125} placeholder="Policy number or PRAN" onChange={(value) => update(entry.id, { identifierName: value })} />
+        <NumberField label="Contribution amount (₹)" value={entry.amount} onChange={(value) => update(entry.id, { amount: value })} />
+      </div>
+    </div>)}
+    <button type="button" onClick={() => onChange([...entries, empty80CCCEntry()])} style={{ border: '1px solid var(--border)', background: 'var(--bg)', padding: '6px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer' }}>+ Add pension contribution</button>
+  </div>;
 }
 
 function Schedule80GGAEditor({ entries, onChange }: { entries: Schedule80GGAEntry[]; onChange: (entries: Schedule80GGAEntry[]) => void }): React.JSX.Element {
@@ -181,13 +199,13 @@ function Schedule80GGCEditor({ entries, onChange }: { entries: Schedule80GGCEntr
           <button type="button" onClick={() => remove(entry.id)} style={{ border: '1px solid var(--border)', background: 'white', padding: '2px 8px', fontSize: 11, borderRadius: 4, cursor: 'pointer' }}>Remove</button>
         </div>
         <div style={styles.grid}>
-          <TextField label="Political party name" value={entry.politicalPartyName} maxLength={125} placeholder="Registered political party" onChange={(value) => update(entry.id, { politicalPartyName: value })} />
-          <TextField label="Political party PAN" value={entry.politicalPartyPAN} maxLength={10} placeholder="ABCDE1234F" onChange={(value) => update(entry.id, { politicalPartyPAN: value.toUpperCase() })} />
+          <TextField label="Political party name" value={entry.politicalPartyName} maxLength={125} placeholder="Registered political party" required onChange={(value) => update(entry.id, { politicalPartyName: value })} />
+          <TextField label="Political party PAN" value={entry.politicalPartyPAN} maxLength={10} pattern="[A-Z]{5}[0-9]{4}[A-Z]" placeholder="ABCDE1234F" required onChange={(value) => update(entry.id, { politicalPartyPAN: value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) })} />
           <NumberField label="Cash contribution (₹)" value={entry.cashAmount} hint="Cash not allowed for 80GGC — keep 0" onChange={(value) => update(entry.id, { cashAmount: value })} />
           <NumberField label="Non-cash contribution (₹)" value={entry.otherModeAmount} onChange={(value) => update(entry.id, { otherModeAmount: value })} />
-          <TextField label="Contribution date" value={entry.contributionDate} placeholder="YYYY-MM-DD" onChange={(value) => update(entry.id, { contributionDate: value })} />
-          <TextField label="Transaction reference" value={entry.transactionRef} maxLength={50} placeholder="Cheque / UTR no." onChange={(value) => update(entry.id, { transactionRef: value })} />
-          <TextField label="IFSC code" value={entry.ifscCode} maxLength={11} placeholder="AAAA0XXXXXX" onChange={(value) => update(entry.id, { ifscCode: value.toUpperCase() })} />
+          <TextField label="Contribution date" value={entry.contributionDate} type="date" required onChange={(value) => update(entry.id, { contributionDate: value })} />
+          <TextField label="Transaction reference" value={entry.transactionRef} maxLength={50} placeholder="Cheque / UTR no." required onChange={(value) => update(entry.id, { transactionRef: value })} />
+          <TextField label="IFSC code" value={entry.ifscCode} maxLength={11} pattern="[A-Z]{4}0[A-Z0-9]{6}" placeholder="AAAA0XXXXXX" required onChange={(value) => update(entry.id, { ifscCode: value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11) })} />
         </div>
       </div>
     ))}
@@ -196,7 +214,7 @@ function Schedule80GGCEditor({ entries, onChange }: { entries: Schedule80GGCEntr
   </div>;
 }
 
-export default function DeductionsWorkspace({ form, regime, section80C, section80D, section80G, loans, chapterVIA, onChangeChapterVIA, schedule80GGA, schedule80GGC, onChangeSchedule80GGA, onChangeSchedule80GGC, managers, totalDeductions, deductionBreakdown }: DeductionsWorkspaceProps): React.JSX.Element {
+export default function DeductionsWorkspace({ form, regime, section80C, pensionContribution80CCC, section80D, section80G, loans, chapterVIA, onChangeChapterVIA, onChangePensionContribution80CCC, schedule80GGA, schedule80GGC, onChangeSchedule80GGA, onChangeSchedule80GGC, managers, totalDeductions, deductionBreakdown }: DeductionsWorkspaceProps): React.JSX.Element {
   const caps = FORM_CAPS[form];
   const isNew = regime === 'new';
   // ITR-2/3 Schedule80DD/80U also collect Form10IAFilingDate and FormAckNum11A; ITR-1/4 only Form10IAAckNum.
@@ -208,7 +226,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, section8
   // Sum of scalar Chapter VI-A fields the user entered (display only; backend owns statutory caps).
   const viaTotal = useMemo(() => {
     const v = chapterVIA;
-    return money(v.section80CCC) + money(v.pensionContribution80CCC) + money(v.section80CCDEmployeeOrSE) + money(v.section80CCD1B) + money(v.section80CCDEmployer)
+    return money(v.section80CCC) + money(v.section80CCDEmployeeOrSE) + money(v.section80CCD1B) + money(v.section80CCDEmployer)
       + money(v.section80D) + money(v.section80DD) + money(v.section80DDB) + money(v.section80E) + money(v.section80EE) + money(v.section80EEA) + money(v.section80EEB)
       + money(v.section80G) + money(v.section80GG) + money(v.section80GGA) + money(v.section80GGC) + money(v.section80U) + money(v.section80QQB) + money(v.section80RRB)
       + money(v.section80TTA) + money(v.section80TTB) + money(v.anyOtherSection80CCH)
@@ -234,10 +252,15 @@ export default function DeductionsWorkspace({ form, regime, section80C, section8
   return <div>
     <div style={{ marginBottom: 16 }}><h3 style={styles.title}>Deductions under Chapter VI-A (Schedule VIA)</h3><div style={styles.subtitle}>AY 2026-27 · {form} · backend applies statutory ceilings; enter gross eligible amounts</div></div>
 
-    <Collapsible title="Section 80C / 80CCC / 80CCD — savings & pension" subtitle="PF, PPF, ELSS, LIC, NSC, NPS; aggregate ceiling ₹1.5L under 80CCE" defaultOpen summary={inr(chapterVIA.section80C + chapterVIA.section80CCC + chapterVIA.pensionContribution80CCC + chapterVIA.section80CCDEmployeeOrSE + chapterVIA.section80CCD1B)} badge={<span style={{ ...styles.badge, background: 'var(--success)' }}>80CCE ₹1.5L</span>}>
+    <Collapsible title="Section 80C / 80CCC / 80CCD — savings & pension" subtitle="PF, PPF, ELSS, LIC, NSC, NPS; aggregate ceiling ₹1.5L under 80CCE" defaultOpen summary={inr(chapterVIA.section80C + chapterVIA.section80CCC + chapterVIA.section80CCDEmployeeOrSE + chapterVIA.section80CCD1B)} badge={<span style={{ ...styles.badge, background: 'var(--success)' }}>80CCE ₹1.5L</span>}>
       <Section80CManager data={{ investments: section80C }} onChange={managers.section80C} backendEligible={eligible('80C')} />
+      <Schedule80CCCEditor entries={pensionContribution80CCC} onChange={(entries) => {
+        const total = entries.reduce((sum, entry) => sum + money(entry.amount), 0);
+        onChangePensionContribution80CCC(entries);
+        patch({ section80CCC: total, pensionContribution80CCC: total });
+      }} />
       <div style={{ ...styles.grid, marginTop: 16 }}>
-        <NumberField label="80CCC — pension fund contribution (₹)" value={chapterVIA.section80CCC} hint="Annuity plan of insurer u/s 80CCC; part of 80CCE ₹1.5L pool" onChange={(value) => patch({ section80CCC: value })} />
+        <NumberField label="80CCC total from detail rows (₹)" value={chapterVIA.section80CCC} hint="Auto-derived from required identifier rows; part of the 80CCE ₹1.5L pool" disabled onChange={() => undefined} />
         <NumberField label="80CCD(1) — self NPS contribution (₹)" value={chapterVIA.section80CCDEmployeeOrSE} hint="Employee/Self-employed; 10% of salary / 20% of gross income" onChange={(value) => patch({ section80CCDEmployeeOrSE: value })} />
         <NumberField label="80CCD(1B) — additional NPS (₹)" value={chapterVIA.section80CCD1B} hint="Max ₹50,000 over and above 80CCE ceiling" onChange={(value) => patch({ section80CCD1B: value })} />
         <NumberField label="80CCD(2) — employer NPS (₹)" value={chapterVIA.section80CCDEmployer} hint="10% non-govt / 14% govt; excluded from 80CCE ceiling" onChange={(value) => patch({ section80CCDEmployer: value })} />

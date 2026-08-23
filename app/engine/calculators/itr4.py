@@ -164,10 +164,14 @@ def _check_itr4_eligibility(input_data: ITR4Input) -> list[str]:
             "house properties. ITR-4 allows at most 1. File ITR-3."
         )
 
-    # GAP-1 FIX: ITR-4 requires a presumptive scheme (44AD/44ADA/44AE).
+    # ITR-4 requires at least one presumptive income block (CBDT Rule 140).
     # CBDT Rule 140: filing ITR-4 without 44AD/44ADA/44AE income is a
     # Category A defect. PresumptiveScheme.NONE is not a valid ITR-4 election.
-    if input_data.presumptive_scheme == PresumptiveScheme.NONE:
+    if not any((
+        input_data.business_income_44ad,
+        input_data.professional_income_44ada,
+        input_data.goods_carriage_44ae,
+    )):
         errors.append(
             "Ineligible for ITR-4: No presumptive scheme selected. "
             "ITR-4 (Sugam) requires income under Section 44AD, 44ADA, or 44AE. "
@@ -175,7 +179,7 @@ def _check_itr4_eligibility(input_data: ITR4Input) -> list[str]:
             "file ITR-1 or ITR-2 as applicable."
         )
 
-    # GAP-1 FIX: The selected scheme must have its corresponding sub-model populated.
+    # The legacy primary-scheme field must still point at a populated block.
     if input_data.presumptive_scheme == PresumptiveScheme.S44AD and not input_data.business_income_44ad:
         errors.append(
             "Ineligible for ITR-4: Presumptive scheme '44AD' selected but "
@@ -232,11 +236,14 @@ def compute(input_data: ITR4Input) -> ITR4Result:
                     f"Tax audit u/s 44AB required — file ITR-3/ITR-5."
                 )
         # Cross-field consistency: digital + cash must equal total
-        _turnover_sum = biz.digital_turnover + biz.cash_turnover
+        _turnover_sum = (
+            biz.digital_turnover + biz.cash_turnover + biz.other_mode_turnover
+        )
         if abs(_turnover_sum - biz.total_turnover) > Decimal("1"):
             result.errors.append(
                 f"44AD: digital_turnover (Rs {biz.digital_turnover}) + "
-                f"cash_turnover (Rs {biz.cash_turnover}) = Rs {_turnover_sum} "
+                f"cash_turnover (Rs {biz.cash_turnover}) + other_mode_turnover "
+                f"(Rs {biz.other_mode_turnover}) = Rs {_turnover_sum} "
                 f"does not match total_turnover (Rs {biz.total_turnover})."
             )
 
@@ -256,11 +263,14 @@ def compute(input_data: ITR4Input) -> ITR4Result:
                     f"Tax audit u/s 44AB required — file ITR-3/ITR-5."
                 )
         # Cross-field consistency: digital + cash must equal gross
-        _receipts_sum = prof.digital_receipts + prof.cash_receipts
+        _receipts_sum = (
+            prof.digital_receipts + prof.cash_receipts + prof.other_mode_receipts
+        )
         if abs(_receipts_sum - prof.gross_receipts) > Decimal("1"):
             result.errors.append(
                 f"44ADA: digital_receipts (Rs {prof.digital_receipts}) + "
-                f"cash_receipts (Rs {prof.cash_receipts}) = Rs "
+                f"cash_receipts (Rs {prof.cash_receipts}) + other_mode_receipts "
+                f"(Rs {prof.other_mode_receipts}) = Rs "
                 f"{_receipts_sum} does not match gross_receipts "
                 f"(Rs {prof.gross_receipts})."
             )
@@ -345,7 +355,14 @@ def compute(input_data: ITR4Input) -> ITR4Result:
     result.relief_89 = input_data.relief_89
 
     # ── 3. House Property ────────────────────────────────────────────────────
-    hp = compute_hp(input_data.house_property_income, regime)
+    hp = compute_hp(
+        input_data.house_property_income,
+        regime,
+        (
+            input_data.house_property_income.ownership_share_percentage
+            if input_data.house_property_income is not None else Decimal("100")
+        ),
+    )
     result.schedules["hp"] = hp
     hp_setoff = apply_inter_head_loss_limit(hp, regime)
     result.house_property_income = hp_setoff.allowed_income
@@ -483,9 +500,9 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         loan_rows_80ee=getattr(input_data, "loan_details_80ee_list", None),
         loan_rows_80eea=getattr(input_data, "loan_details_80eea_list", None),
         loan_rows_80eeb=getattr(input_data, "loan_details_80eeb_list", None),
-        schedule_80dd=getattr(ded_input, "schedule_80dd", None) if ded_input else None,
-        schedule_80u=getattr(ded_input, "schedule_80u", None) if ded_input else None,
-        schedule_80d=getattr(ded_input, "schedule_80d", None) if ded_input else None,
+        schedule_80dd=input_data.schedule_80dd,
+        schedule_80u=input_data.schedule_80u,
+        schedule_80d=input_data.schedule_80d,
     )
     result.schedules["deductions"] = ded
     result.deductions_total = ded.total
@@ -584,8 +601,10 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         result.interest_234b = compute_234b(advance_tax_assessed,
             input_data.advance_tax_paid, filing_date, ay_start,
             self_assessment_payments=_sat_payments)
-        is_presumptive = input_data.presumptive_scheme in (
-            PresumptiveScheme.S44AD, PresumptiveScheme.S44ADA)
+        is_presumptive = bool(
+            input_data.business_income_44ad
+            or input_data.professional_income_44ada
+        )
         if (input_data.advance_tax_q1 is not None or input_data.advance_tax_q2 is not None
                 or input_data.advance_tax_q3 is not None or input_data.advance_tax_q4 is not None):
             quarterly = [

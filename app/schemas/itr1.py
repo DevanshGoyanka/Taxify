@@ -284,8 +284,28 @@ class HousePropertyIncome(BaseModel):
         default=Decimal("0"),
         ge=0,
         description=(
-            "Gross annual rent received or receivable during the year "
-            "(Section 23(1)(a)). Must be 0 if property_type is S."
+            "Annual lettable value reported in Schedule HP. Canonical drafts "
+            "map HouseProperty.annualLettingValue here; annualRent is accepted "
+            "only as a legacy fallback. Must be 0 if property_type is S."
+        ),
+    )
+    rent_not_realized: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Rent which could not be realised during the year. This is "
+            "deducted, together with municipal taxes, from annual lettable "
+            "value before applying the assessee's ownership share."
+        ),
+    )
+    ownership_share_percentage: Decimal = Field(
+        default=Decimal("100"),
+        gt=0,
+        le=100,
+        description=(
+            "Assessee's ownership share in the property. Gross annual value "
+            "inputs remain whole-property amounts; the calculator applies "
+            "this percentage after unrealized rent and municipal taxes."
         ),
     )
     municipal_taxes_paid: Decimal = Field(
@@ -317,6 +337,25 @@ class HousePropertyIncome(BaseModel):
             "amount back to house property income."
         ),
     )
+
+
+class OtherSourceDetail(BaseModel):
+    """One official compact-form ``OthersIncDtlsOthSrc`` source row."""
+
+    nature: Literal[
+        "SAV", "IFD", "TAX", "FAP", "DIV",
+        "10(11)(iP)", "10(11)(iiP)", "10(12)(iP)", "10(12)(iiP)", "OTH",
+    ]
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    other_description: Optional[str] = Field(default=None, min_length=1, max_length=125)
+
+    @model_validator(mode="after")
+    def validate_other_description(self) -> "OtherSourceDetail":
+        if self.nature == "OTH" and not self.other_description:
+            raise ValueError("Other-source nature OTH requires a description")
+        if self.nature != "OTH" and self.other_description:
+            raise ValueError("Other-source description is allowed only for nature OTH")
+        return self
 
 
 class OtherSourcesIncome(BaseModel):
@@ -384,6 +423,13 @@ class OtherSourcesIncome(BaseModel):
         default=Decimal("0"),
         ge=0,
         description="Any other income chargeable under other sources.",
+    )
+    source_details: list[OtherSourceDetail] = Field(
+        default_factory=list,
+        description=(
+            "Canonical rows for the official compact-form other-source table. "
+            "Calculator aggregates remain available in the scalar fields."
+        ),
     )
 
 
@@ -820,6 +866,23 @@ class CapitalGainsIncome(BaseModel):
         return self
 
 
+class CompactExemptIncomeEntry(BaseModel):
+    """One ITR-1/ITR-4 exempt-income row in the official compact schema."""
+
+    category: Literal["AGRI", "GOVC", "ISI", "SSRA", "SRSC", "SRST", "SRPC", "OTH"]
+    sub_category: Literal[
+        "10(1)", "10(30)", "10(31)", "10(10BB)", "10(10BC)", "10(17A)",
+        "10(12AB)", "10(15)", "10(23FBB)", "10(23FD)", "10(35)", "10(35A)",
+        "10(12C)", "10(18)", "10(19)", "10(23AA)", "DMD", "10(32)", "10(43)",
+        "10(19A)", "10(26)", "10(26AAA)", "10(10D)", "10(11)", "10(11A)",
+        "10(12)", "10(12A)", "10(12AA)", "10(12B)", "10(12BA)", "10(13)",
+        "10(25)", "10(44)", "10(2)", "10(16)", "Incmexmptcircular",
+        "Incmexmptnotification", "Receiptnotincme",
+    ]
+    description: Optional[str] = Field(default=None, min_length=1, max_length=125)
+    amount: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
+
+
 # ---------------------------------------------------------------------------
 # Top-level ITR-1 input model
 # ---------------------------------------------------------------------------
@@ -946,6 +1009,7 @@ class ITR1Input(BaseModel):
     form_10e_filed: bool = False
     form_10ia_filed: bool = False
     form_10ba_filed: bool = False
+    form_10ba_ack_number: Optional[str] = Field(default=None, max_length=15)
     pran_number: Optional[str] = Field(default=None, max_length=12)
     disease_category: Optional[str] = Field(
         default=None,
@@ -962,6 +1026,7 @@ class ITR1Input(BaseModel):
     representative_phone: Optional[str] = None
     exempt_income_breakdown: dict[str, Decimal] = Field(default_factory=dict)
     exempt_income_dropdowns: list[str] = Field(default_factory=list)
+    exempt_income_entries: List[CompactExemptIncomeEntry] = Field(default_factory=list)
     total_exempt_income: Optional[Decimal] = Field(default=None, ge=0)
     other_sources_dropdowns: list[str] = Field(default_factory=list)
     other_sources_total: Optional[Decimal] = Field(default=None, ge=0)
@@ -1157,8 +1222,35 @@ class PostalAddress(BaseModel):
     zip_code: str = Field(default="", max_length=8)
 
 
+class PropertyCoOwner(BaseModel):
+    """One co-owner row in an official house-property schedule."""
+
+    serial_number: int = Field(ge=1, le=99999999999999)
+    name: str = Field(min_length=1, max_length=125)
+    pan: Optional[str] = Field(
+        default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$"
+    )
+    aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    share_percentage: Optional[Decimal] = Field(default=None, ge=0, le=100)
+
+
+class PropertyTenant(BaseModel):
+    """One tenant row in an official house-property schedule."""
+
+    serial_number: int = Field(ge=1, le=99999999999999)
+    name: str = Field(min_length=1, max_length=125)
+    pan: Optional[str] = Field(
+        default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$"
+    )
+    aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    pan_or_tan: Optional[str] = Field(
+        default=None,
+        pattern=r"^([A-Z]{4}[0-9]{5}[A-Z]|[A-Z]{5}[0-9]{4}[A-Z])$",
+    )
+
+
 class PropertyFilingProfile(BaseModel):
-    """Official address and ownership identity for the single ITR-1 property."""
+    """Official address, ownership, co-owner, and tenant property details."""
 
     address_detail: str = Field(min_length=1, max_length=50)
     city_or_town_or_district: str = Field(min_length=1, max_length=50)
@@ -1166,6 +1258,12 @@ class PropertyFilingProfile(BaseModel):
     country_code: str = Field(default="91", min_length=1, max_length=4)
     pin_code: Optional[str] = Field(default=None, pattern=r"^[1-9][0-9]{5}$")
     zip_code: Optional[str] = Field(default=None, min_length=1, max_length=8)
+    property_owner: Literal["SE", "MI", "SP", "OT"] = "SE"
+    property_owner_other: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    is_co_owned: bool = False
+    assessee_share_percentage: Decimal = Field(default=Decimal("100"), ge=0, le=100)
+    co_owners: List[PropertyCoOwner] = Field(default_factory=list)
+    tenants: List[PropertyTenant] = Field(default_factory=list)
 
     @field_validator("country_code")
     @classmethod
@@ -1174,6 +1272,61 @@ class PropertyFilingProfile(BaseModel):
         if value not in OFFICIAL_COUNTRY_CODES:
             raise ValueError("country_code must be an official ITD country code")
         return value
+
+    @model_validator(mode="after")
+    def validate_ownership(self) -> "PropertyFilingProfile":
+        """Enforce conditional ownership fields before official serialization."""
+        if self.property_owner == "OT" and not self.property_owner_other:
+            raise ValueError("property_owner_other is required when property_owner is OT")
+        if self.property_owner != "OT" and self.property_owner_other:
+            raise ValueError("property_owner_other is only allowed for property_owner OT")
+        if self.is_co_owned:
+            if not self.co_owners:
+                raise ValueError("co_owners is required when property is co-owned")
+            if self.assessee_share_percentage >= 100:
+                raise ValueError(
+                    "assessee_share_percentage must be below 100 for co-owned property"
+                )
+            for row in self.co_owners:
+                if row.share_percentage is None:
+                    raise ValueError(
+                        "each co-owner share_percentage is required for co-owned property"
+                    )
+                if row.share_percentage <= 0 or row.share_percentage >= 100:
+                    raise ValueError(
+                        "each co-owner share_percentage must be above 0 and below 100"
+                    )
+            total_share = self.assessee_share_percentage + sum(
+                (row.share_percentage or Decimal("0") for row in self.co_owners),
+                Decimal("0"),
+            )
+            if total_share != Decimal("100"):
+                raise ValueError(
+                    "assessee and co-owner property shares must total 100"
+                )
+        elif self.assessee_share_percentage != Decimal("100") or self.co_owners:
+            raise ValueError(
+                "sole-owned property must have 100 percent assessee share and no co-owners"
+            )
+        for label, values in (
+            ("co-owner PAN", [row.pan for row in self.co_owners if row.pan]),
+            (
+                "co-owner Aadhaar",
+                [row.aadhaar for row in self.co_owners if row.aadhaar],
+            ),
+            ("tenant PAN", [row.pan for row in self.tenants if row.pan]),
+            (
+                "tenant Aadhaar",
+                [row.aadhaar for row in self.tenants if row.aadhaar],
+            ),
+            (
+                "tenant PAN/TAN",
+                [row.pan_or_tan for row in self.tenants if row.pan_or_tan],
+            ),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"{label} must be unique within a property")
+        return self
 
 
 class FilingAddress(PostalAddress):
@@ -1216,7 +1369,27 @@ class SeventhProvisoDetails(BaseModel):
     electricity_expenditure_flag: bool = False
     electricity_expenditure_amount: Decimal = Field(default=Decimal("0"), ge=0)
     other_clause_iv_flag: bool = False
-    other_clause_iv_detail: str = Field(default="", max_length=200)
+    clause_iv_details: List["SeventhProvisoClauseDetail"] = Field(default_factory=list)
+
+
+class SeventhProvisoClauseDetail(BaseModel):
+    """One clause-(iv) seventh-proviso detail row."""
+
+    nature: Literal["1", "2"]
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class AssesseeRepresentativeProfile(BaseModel):
+    """Contact details emitted under FilingStatus.AssesseeRep."""
+
+    name: str = Field(min_length=1, max_length=125)
+    email: str = Field(
+        min_length=3,
+        max_length=125,
+        pattern=r"^([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+$",
+    )
+    mobile_country_code: int = Field(ge=1, le=99999)
+    mobile_no: str = Field(pattern=r"^[1-9][0-9]{4,9}$")
 
 
 class ITR1FilingProfile(BaseModel):
@@ -1241,7 +1414,7 @@ class ITR1FilingProfile(BaseModel):
     alternate_address: Optional[PostalAddress] = None
     father_name: str = Field(min_length=1, max_length=125)
     verification_place: str = Field(min_length=1, max_length=50)
-    verification_capacity: Literal["S"] = "S"
+    verification_capacity: Literal["S", "R"] = "S"
     # CBDT FilingStatus.ReturnFileSec enum (min=11, max=20). Widened from
     # Literal[11, 12] to the full schema enum so revised (17), belated (12),
     # defective (13), notice (14/16/18/20) filings are all representable.
@@ -1252,6 +1425,9 @@ class ITR1FilingProfile(BaseModel):
     return_type: Literal["O", "R"] = "O"
     original_acknowledgement_no: Optional[str] = Field(default=None, max_length=15)
     original_return_date: Optional[date] = None
+    notice_number: Optional[str] = Field(default=None, max_length=100)
+    notice_date: Optional[date] = None
+    assessee_representative: Optional[AssesseeRepresentativeProfile] = None
     # New-regime opt-out (FilingStatus.OptOutNewTaxRegime).  CBDT requires
     # this key always; ITR-1 filers in the new regime emit "N".
     opt_out_new_tax_regime: bool = False
@@ -1281,6 +1457,18 @@ class ITR1FilingProfile(BaseModel):
             raise ValueError(
                 "form_10iea_date is required when form_10iea_acknowledgement is provided"
             )
+        if self.return_file_section == 17:
+            if self.original_acknowledgement_no is None or self.original_return_date is None:
+                raise ValueError(
+                    "Revised return requires original acknowledgement number and filing date"
+                )
+        if self.return_file_section in {13, 14, 16, 18}:
+            if self.notice_number is None or self.notice_date is None:
+                raise ValueError("Notice return requires notice number and notice date")
+        if self.verification_capacity == "R" and self.assessee_representative is None:
+            raise ValueError("Representative verification requires assessee representative details")
+        if self.seventh_proviso.other_clause_iv_flag and not self.seventh_proviso.clause_iv_details:
+            raise ValueError("Other seventh-proviso declaration requires clause detail rows")
         return self
 
 
@@ -1289,7 +1477,11 @@ class TaxReturnPreparer(BaseModel):
 
     identification_number: str = Field(pattern=r"^(T[0-9]{9}|[0-9]{6})$")
     name: str = Field(min_length=1, max_length=125)
-    reimbursement_from_government: Decimal = Field(default=Decimal("0"), ge=0)
+    reimbursement_from_government: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        le=Decimal("99999999999999"),
+    )
 
 
 class TDS3Entry(BaseModel):
@@ -1306,6 +1498,9 @@ class TDS3Entry(BaseModel):
     tds_claimed: Decimal = Field(default=Decimal("0"), ge=0)
     tds_section: str = Field(...)
     deducted_yr: str = Field(default="2025", pattern=r"^20[0-9]{2}$")
+    brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
+    head_of_income: Literal["HP", "BP", "OS", "EI"] = "OS"
+    tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
 
     @model_validator(mode="after")
     def validate_claimed_does_not_exceed_deducted(self) -> "TDS3Entry":
@@ -1336,6 +1531,8 @@ class Schedule80D(BaseModel):
     premium_2b_parents_senior: Decimal = Field(default=Decimal("0"), ge=0)
     preventive_checkup_self: Decimal = Field(default=Decimal("0"), ge=0)
     preventive_checkup_parents: Decimal = Field(default=Decimal("0"), ge=0)
+    medical_expense_self_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    medical_expense_parents_senior: Decimal = Field(default=Decimal("0"), ge=0)
     policies: List[InsurancePolicy] = Field(default_factory=list)
 
 
@@ -1412,9 +1609,15 @@ class Schedule80GGA(BaseModel):
 class PoliticalContribution(BaseModel):
     """Complete official contribution row for Schedule 80GGC."""
 
-    amount: Decimal = Field(default=Decimal("0"), ge=0)
-    cash_amount: Decimal = Field(default=Decimal("0"), ge=0)
-    other_mode_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    amount: Decimal = Field(
+        default=Decimal("0"), ge=0, le=Decimal("99999999999999")
+    )
+    cash_amount: Decimal = Field(
+        default=Decimal("0"), ge=0, le=Decimal("99999999999999")
+    )
+    other_mode_amount: Decimal = Field(
+        default=Decimal("0"), ge=0, le=Decimal("99999999999999")
+    )
     contribution_date: Optional[date] = None
     contribution_mode: str = "non_cash"
     transaction_ref: Optional[str] = Field(default=None, max_length=50)
@@ -1539,10 +1742,10 @@ class Schedule80CEntry(BaseModel):
 
 
 class Schedule80CCCEntry(BaseModel):
-    """Per-row entry for Schedule 80CCC."""
+    """Official PensionContribution80CCC detail row."""
     amount: Decimal = Field(default=Decimal("0"), ge=0)
-    insurer_name: Optional[str] = Field(default=None, max_length=125)
-    policy_number: Optional[str] = Field(default=None, max_length=50)
+    identifier_type: Literal["PRAN", "OTHPRAN"] = "OTHPRAN"
+    identifier_name: str = Field(min_length=1, max_length=125)
 
 
 class EducationLoanLenderType(str, Enum):
@@ -1619,6 +1822,16 @@ class HRADetails(BaseModel):
     dearness_allowance: Decimal = Field(default=Decimal("0"), ge=0)
     is_metro_city: bool = False
 
+    @property
+    def exempt_amount_claimed(self) -> Decimal:
+        """Return the statutory least-of-three exemption represented by this row."""
+        salary = self.salary_for_hra + self.dearness_allowance
+        return min(
+            self.actual_hra_received,
+            max(Decimal("0"), self.rent_paid - salary * Decimal("0.1")),
+            salary * (Decimal("0.5") if self.is_metro_city else Decimal("0.4")),
+        )
+
 
 class CoOwnershipDetails(BaseModel):
     """Co-ownership details for house property."""
@@ -1635,12 +1848,15 @@ class RepresentativeDetails(BaseModel):
 
 class LoanDetail(LoanDetails):
     """Per-property loan detail entry."""
+    property_sequence_no: int = Field(default=1, ge=1, le=2)
+    loan_taken_from: EducationLoanLenderType = EducationLoanLenderType.BANK
     account_or_reference_number: Optional[str] = Field(
         default=None,
         min_length=1,
         max_length=20,
         pattern=r"^[a-zA-Z0-9][a-zA-Z0-9/-]*$",
     )
+    outstanding_loan_amount: Decimal = Field(default=Decimal("0"), ge=0)
     interest_paid_self_occupied: Decimal = Field(default=Decimal("0"), ge=0)
     interest_paid_let_out: Decimal = Field(default=Decimal("0"), ge=0)
 
@@ -1662,6 +1878,7 @@ class BankAccountType(str, Enum):
     OVERDRAFT = "overdraft"
     NRO = "nro"
     NRE = "nre"
+    OTHER = "other"
 
     @property
     def itd_code(self) -> str:
@@ -1673,6 +1890,7 @@ class BankAccountType(str, Enum):
             BankAccountType.OVERDRAFT: "OD",
             BankAccountType.NRO: "NRO",
             BankAccountType.NRE: "OTH",
+            BankAccountType.OTHER: "OTH",
         }[self]
 
 
@@ -1733,6 +1951,10 @@ class TDS2Entry(BaseModel):
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
     tds_claimed_this_year: Decimal = Field(default=Decimal("0"), ge=0)
     financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
+    head_of_income: Optional[str] = Field(default=None)
+    deducted_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}$")
+    brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class TCSEntry(BaseModel):

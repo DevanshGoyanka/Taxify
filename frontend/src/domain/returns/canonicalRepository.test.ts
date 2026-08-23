@@ -5,6 +5,7 @@ import {
   CanonicalReturnRepository,
   assertCanonicalDraft,
   enforceAssessmentYear,
+  normalizeLoadedDraft,
   stripCompatibility,
 } from './canonicalRepository';
 
@@ -66,6 +67,14 @@ describe('enforceAssessmentYear', () => {
   it('throws when the draft year disagrees with the requested year', () => {
     const draft = createEmptyReturnDraft('2025-26', 'ITR-1', 'new');
     expect(() => enforceAssessmentYear(draft, '2026-27')).toThrow();
+  });
+});
+
+describe('normalizeLoadedDraft', () => {
+  it('backfills 80CCC detail rows for drafts saved before the field existed', () => {
+    const draft = createEmptyReturnDraft('2026-27', 'ITR-1', 'old');
+    delete (draft.deductions as Partial<typeof draft.deductions>).pensionContribution80CCC;
+    expect(normalizeLoadedDraft(draft).deductions.pensionContribution80CCC).toEqual([]);
   });
 });
 

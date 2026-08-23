@@ -17,7 +17,7 @@ from app.schemas.itr1 import (
     Chapter6ADeductions, CapitalGainsIncome, Donation80G,
     TDS1Entry, TDS2Entry, TCSEntry,
     Schedule80D, Schedule80G, Schedule80GGA, Schedule80GGC,
-    HRADetails, LoanDetails,
+    HRADetails, ITR1Schedule80EEALoanEntry, LoanDetail, LoanDetails,
 )
 from app.schemas.itr4 import (
     ITR4Input, PresumptiveScheme,
@@ -78,6 +78,55 @@ def _base_input(**overrides) -> ITR4Input:
     )
     defaults.update(overrides)
     return ITR4Input(**defaults)
+
+
+def test_R270_80eea_requires_exhausted_section_24b_limit():
+    """80EEA is available only after the self-occupied 24(b) cap is used."""
+    deduction_row = ITR1Schedule80EEALoanEntry(
+        loan_taken_from="B",
+        lender_name="Example Bank",
+        account_or_reference_number="HOME123",
+        loan_date=date(2020, 4, 1),
+        total_loan_amount=Decimal("3000000"),
+        outstanding_loan_amount=Decimal("2500000"),
+        interest_paid=Decimal("50000"),
+    )
+    body = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80eea=Decimal("50000"),
+        ),
+        loan_details_80eea_list=[deduction_row],
+        property_stamp_duty_value_80eea=Decimal("4000000"),
+        loan_details_24b_list=[LoanDetail(
+            lender_name="Example Bank",
+            account_or_reference_number="HOME123",
+            loan_amount=Decimal("3000000"),
+            outstanding_loan_amount=Decimal("2500000"),
+            sanction_date=date(2020, 4, 1),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+    )
+    assert failed(validate_itr4_input(body), "ITR4-R270")
+
+    exhausted = body.model_copy(update={
+        "house_property_income": HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("200000"),
+        ),
+        "loan_details_24b_list": [LoanDetail(
+            lender_name="Example Bank",
+            account_or_reference_number="HOME123",
+            loan_amount=Decimal("3000000"),
+            outstanding_loan_amount=Decimal("2500000"),
+            sanction_date=date(2020, 4, 1),
+            interest_paid_self_occupied=Decimal("200000"),
+        )],
+    })
+    assert not failed(validate_itr4_input(exhausted), "ITR4-R270")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1221,13 +1270,44 @@ def test_R314_hra_exceeds_permissible_limit():
             actual_hra_received=Decimal("80000"),
             rent_paid=Decimal("60000"),
             salary_for_hra=Decimal("500000"),
-            is_metro_city=True,  # 40% of 5L = 200000; rent-10% = 60000-50000=10000; min=10000
+            is_metro_city=True,  # 50% of 5L = 250000; rent-10% = 60000-50000=10000; min=10000
         ),
         nature_of_employment="Private",
     )
     results = validate_itr4_input(inp)
-    # HRA limit = min(80000, 10000, 200000) = 10000, claimed 50000 > 10000
+    # HRA limit = min(80000, 10000, 250000) = 10000, claimed 50000 > 10000
     assert failed(results, "ITR4-R314")
+
+
+def test_R314_uses_50_percent_for_metro_and_40_percent_for_non_metro():
+    common = dict(
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("600000"),
+            hra_exempt_amount=Decimal("45000"),
+        ),
+        nature_of_employment="Private",
+    )
+    metro = _base_input(
+        **common,
+        hra_details=HRADetails(
+            actual_hra_received=Decimal("100000"),
+            rent_paid=Decimal("200000"),
+            salary_for_hra=Decimal("100000"),
+            is_metro_city=True,
+        ),
+    )
+    non_metro = _base_input(
+        **common,
+        hra_details=HRADetails(
+            actual_hra_received=Decimal("100000"),
+            rent_paid=Decimal("200000"),
+            salary_for_hra=Decimal("100000"),
+            is_metro_city=False,
+        ),
+    )
+
+    assert not failed(validate_itr4_input(metro), "ITR4-R314")
+    assert failed(validate_itr4_input(non_metro), "ITR4-R314")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

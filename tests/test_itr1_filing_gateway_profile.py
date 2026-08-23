@@ -101,7 +101,7 @@ def test_flat_mapper_rejects_unsupported_itr1_representative_verification() -> N
     payload = _payload()
     payload["verification"] = {"capacity": "REPRESENTATIVE", "place": "Delhi", "declarationAccepted": True}
 
-    with pytest.raises(ValueError, match="Representative verification"):
+    with pytest.raises(ValueError, match="representative details are incomplete"):
         _build_itr1_input_from_flat(payload)
 
 
@@ -414,8 +414,12 @@ def test_flat_mapper_maps_hra_details_to_schedule_ea10_13a() -> None:
     assert hra["Placeofwork"] == "1"
     assert hra["ActlHRARecv"] == 100000
     assert hra["ActlRentPaid"] == 120000
+    assert hra["DtlsSalUsSec171"] == 650000
     assert hra["BasicSalary"] == 600000
     assert hra["DearnessAllwnc"] == 50000
+    assert hra["ActlRentPaid10Per"] == 55000
+    assert hra["Sal40Or50Per"] == 325000
+    assert hra["EligbleExmpAllwncUs13A"] == 55000
 
 
 def test_cross_field_rejects_donee_pan_equal_to_taxpayer_pan() -> None:

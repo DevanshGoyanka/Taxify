@@ -148,6 +148,54 @@ def test_itr1_old_regime_high_income():
     # With no credits, balance_payable is the 288B-rounded aggregate: 242740.
     assert res.balance_payable == Decimal("242740")
 
+
+def test_itr1_co_owned_property_applies_share_after_rent_and_taxes():
+    """Owned annual value is share-adjusted, but claimed 24(b) interest is not."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("300000"),
+            rent_not_realized=Decimal("20000"),
+            municipal_taxes_paid=Decimal("10000"),
+            ownership_share_percentage=Decimal("60.25"),
+            home_loan_interest_paid=Decimal("50000"),
+            arrears_unrealised_rent_received=Decimal("30000"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+
+    result = compute_itr1(itr_input)
+    hp = result.hp_results[0]
+
+    assert hp.net_annual_value == Decimal("270000")
+    assert hp.annual_value_owned == Decimal("162675")
+    assert hp.standard_deduction_30pct == Decimal("48802.5")
+    assert hp.interest_on_loan == Decimal("50000")
+    assert hp.income_chargeable == Decimal("84872.5")
+
+
+def test_itr1_self_occupied_interest_is_not_scaled_by_ownership_share():
+    """Section 24(b) is the assessee's claim, not a whole-property amount."""
+    result = compute_itr1(ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            ownership_share_percentage=Decimal("40"),
+            home_loan_interest_paid=Decimal("100000"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    ))
+
+    assert result.hp_results[0].interest_on_loan == Decimal("100000")
+    assert result.house_property_income == Decimal("-100000")
+
 def test_itr1_new_regime_high_income():
     """Scenario 4: New regime, below 60, high income (15.28L taxable)."""
     itr_input = ITR1Input(

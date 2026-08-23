@@ -235,7 +235,14 @@ def compute(input_data: ITR1Input) -> ITR1Result:
             "Ineligible for ITR-1: more than two house properties supplied. File ITR-2."
         )
         return result
-    hp_results = [compute_hp(hp_input, regime) for hp_input in hp_inputs]
+    hp_results = [
+        compute_hp(
+            hp_input,
+            regime,
+            hp_input.ownership_share_percentage,
+        )
+        for hp_input in hp_inputs
+    ]
     # Aggregate intra-head income BEFORE applying the inter-head loss limit
     # (Section 24(b) self-occupied interest cap and Section 71B set-off).
     hp_income_before_setoff = sum((hp.income_chargeable for hp in hp_results), Decimal("0"))

@@ -1,4 +1,5 @@
 import type { ReturnDraftPatch } from '../domain/returns/draftPatch';
+import type { FilingSection } from '../domain/returns/types';
 import { createReconciliationEvidence } from '../domain/returns/evidence';
 import { normalizeEmployerCategory, normalizeStateCode } from '../domain/returns/cbdtEnums';
 import type { ITR4ScheduleBPData } from '../components/business/ITR4ScheduleBPManager';
@@ -19,16 +20,17 @@ function id(prefix: string, ...parts: unknown[]): string {
   return `${prefix}-${(hash >>> 0).toString(36)}`;
 }
 
-function filingSection(code: number | string | undefined): '139(1)' | '139(4)' | '139(5)' | '119(2)(b)' | undefined {
+function filingSection(code: number | string | undefined): FilingSection | undefined {
   const normalized = String(code ?? '').trim();
-  const mapping: Record<string, '139(1)' | '139(4)' | '139(5)' | '119(2)(b)'> = {
+  const mapping: Partial<Record<string, FilingSection>> = {
     '11': '139(1)',
     '12': '139(4)',
-    '13': '139(5)',
-    '139(1)': '139(1)',
-    '139(4)': '139(4)',
-    '139(5)': '139(5)',
-    '119(2)(b)': '119(2)(b)',
+    '13': '142(1)',
+    '14': '148',
+    '16': '153C',
+    '17': '139(5)',
+    '18': '139(9)',
+    '20': '119(2)(b)',
   };
   return mapping[normalized];
 }
@@ -85,6 +87,7 @@ function mapPrefillBusinesses(prefill: PrefillExtraction): ReturnDraftPatch['bus
       description: first.description || '',
       digitalReceipts: 0,
       nonDigitalReceipts: 0,
+      otherModeReceipts: 0,
       digitalPresumptiveIncome: 0,
       nonDigitalPresumptiveIncome: 0,
       declaredIncome: 0,
@@ -105,6 +108,7 @@ function mapPrefillBusinesses(prefill: PrefillExtraction): ReturnDraftPatch['bus
       grossReceipts: pi.gross_receipt_44ada || 0,
       digitalReceipts: 0,
       nonDigitalReceipts: 0,
+      otherModeReceipts: 0,
       declaredIncome: pi.declared_income_44ada || 0,
       gstinTurnovers: adRows.length === 0 ? gstinTurnovers : gstinTurnovers,
     });
@@ -122,6 +126,7 @@ function mapPrefillBusinesses(prefill: PrefillExtraction): ReturnDraftPatch['bus
       tonnage: v.tonnage || 0,
       ownedMonths: v.holding_period || 1,
       leasedOrHired: v.owned_leased_hired !== 'OWN',
+      ownedLeasedHiredFlag: (v.owned_leased_hired || 'OWN') as 'OWN' | 'LEASE' | 'HIRED',
       presumptiveIncome: 0,
     }));
     draftBusinesses.push({
@@ -132,6 +137,7 @@ function mapPrefillBusinesses(prefill: PrefillExtraction): ReturnDraftPatch['bus
       description: first?.description || '',
       vehicles,
       declaredIncome: 0,
+      salaryInterestFromFirm: 0,
       gstinTurnovers: gstinTurnovers,
     });
   }

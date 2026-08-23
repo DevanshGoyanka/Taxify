@@ -1,5 +1,6 @@
 import type { PersonalInfo, ReturnDraft } from './types';
 import { itrV2 } from '../../api/itrV2';
+import { createEmptyReturnDraft } from './factory';
 
 /** Persistence boundary for the canonical income-tax return draft. */
 export interface ReturnRepository {
@@ -48,12 +49,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function createEmptyPersonalInfo(): PersonalInfo {
   return {
     name: '', firstName: '', middleName: '', surnameOrOrgName: '', fatherName: '',
-    pan: '', aadhaar: '', email: '', mobile: '',
+    pan: '', aadhaar: '', email: '', mobile: '', mobileCountryCode: '91',
     secondaryEmail: '', secondaryMobile: '', secondaryMobileCountryCode: '',
     dateOfBirth: null,
     flatNo: '', residenceName: '', roadOrStreet: '', localityOrArea: '',
     city: '', stateCode: '', countryCode: '91', pinCode: '', zipCode: '',
-    employerCategory: '',
+    employerCategory: '', age: 30, assesseeStatus: 'I',
+    landlineStdCode: '0', landlinePhoneNo: '0',
+    secondaryAddressDifferent: false, alternateAddress: null,
   };
 }
 
@@ -92,13 +95,41 @@ export function enforceAssessmentYear(draft: ReturnDraft, assessmentYear: string
   return { ...draft, assessmentYear };
 }
 
+/** Backfills additive canonical fields for drafts saved before their rollout. */
+export function normalizeLoadedDraft(draft: ReturnDraft): ReturnDraft {
+  const defaults = createEmptyReturnDraft(
+    draft.assessmentYear,
+    draft.form,
+    draft.regime,
+  );
+  return {
+    ...draft,
+    personal: { ...defaults.personal, ...draft.personal },
+    filing: {
+      ...defaults.filing,
+      ...draft.filing,
+      seventhProviso: {
+        ...defaults.filing.seventhProviso,
+        ...draft.filing.seventhProviso,
+        clauseIVDetails: draft.filing.seventhProviso?.clauseIVDetails ?? [],
+      },
+    },
+    verification: { ...defaults.verification, ...draft.verification },
+    taxReturnPreparer: { ...defaults.taxReturnPreparer, ...draft.taxReturnPreparer },
+    deductions: {
+      ...draft.deductions,
+      pensionContribution80CCC: draft.deductions.pensionContribution80CCC ?? [],
+    },
+  };
+}
+
 /** Canonical repository backed by direct typed `/v2` JSON endpoints. */
 export class CanonicalReturnRepository implements ReturnRepository {
   /** Loads a typed canonical draft and verifies its assessment year. */
   public async get(clientId: string | number, assessmentYear: string): Promise<ReturnDraft> {
     const response: unknown = await itrV2.get(clientId, assessmentYear);
     assertCanonicalDraft(response);
-    return enforceAssessmentYear(structuredClone(response), assessmentYear);
+    return normalizeLoadedDraft(enforceAssessmentYear(structuredClone(response), assessmentYear));
   }
 
   /** Saves a compatibility-free typed draft and validates the typed response. */
@@ -109,7 +140,7 @@ export class CanonicalReturnRepository implements ReturnRepository {
     const payload = stripCompatibility(enforceAssessmentYear(draft, draft.assessmentYear));
     const response: unknown = await itrV2.put(clientId, payload.assessmentYear, payload);
     assertCanonicalDraft(response);
-    return enforceAssessmentYear(structuredClone(response), payload.assessmentYear);
+    return normalizeLoadedDraft(enforceAssessmentYear(structuredClone(response), payload.assessmentYear));
   }
 }
 

@@ -11,9 +11,9 @@ Total income must not exceed ₹50 lakh. The assessee may also have salary,
 house property, and other sources income — those are covered by the shared
 models imported from itr1.py.
 
-Only ONE presumptive scheme can be active per return. The active scheme is
-indicated by the `presumptive_scheme` enum in ITR4Input; the corresponding
-sub-model must be populated, the others must be None.
+One or more presumptive schemes can be active per return. The legacy
+`presumptive_scheme` enum is retained as a primary-scheme compatibility field;
+the populated 44AD, 44ADA, and 44AE sub-models are authoritative.
 
 Capital gains under Section 112A (LTCG on listed equity/equity MF) are permitted
 up to ₹1.25 lakh (CBDT notification effective AY 2025-26 onwards). No other capital
@@ -37,6 +37,7 @@ from app.schemas.itr1 import (
     AssesseeType,
     CapitalGainsIncome,
     Chapter6ADeductions,
+    CompactExemptIncomeEntry,
     HousePropertyIncome,
     OtherSourcesIncome,
     SalaryIncome,
@@ -45,8 +46,10 @@ from app.schemas.itr1 import (
     Schedule80D, Schedule80G, Schedule80GGA, Schedule80GGC,
     Schedule80DD, Schedule80U,
     Schedule80CEntry, Schedule80CCCEntry, Schedule80EEntry,
-    Schedule80EELoanEntry, Schedule80EEALoanEntry, Schedule80EEBLoanEntry,
+    ITR1Schedule80EELoanEntry, ITR1Schedule80EEALoanEntry, ITR1Schedule80EEBLoanEntry,
     HRADetails, CoOwnershipDetails, RepresentativeDetails,
+    PropertyFilingProfile,
+    AssesseeRepresentativeProfile,
     LoanDetails, LoanDetail, SecondaryAddress,
     Donation80G, InsurancePolicy,
     TaxPaymentDetail,
@@ -62,9 +65,8 @@ class PresumptiveScheme(str, Enum):
     """
     Indicates which presumptive taxation scheme the assessee has opted for.
 
-    Only one scheme can be active per ITR-4 return. NONE is used when the
-    assessee has no presumptive business/professional income (not a typical
-    ITR-4 scenario, but guarded for completeness).
+    The enum records a primary scheme for backward compatibility. ITR-4 may
+    contain more than one populated presumptive sub-model.
     """
 
     NONE = "none"
@@ -129,6 +131,9 @@ class PresumptiveBusinessIncome44AD(BaseModel):
             "total_turnover."
         ),
     )
+    other_mode_turnover: Decimal = Field(default=Decimal("0"), ge=0)
+    income_at_six_percent: Optional[Decimal] = Field(default=None, ge=0)
+    income_at_eight_percent: Optional[Decimal] = Field(default=None, ge=0)
     income_declared: Optional[Decimal] = Field(
         default=None,
         ge=0,
@@ -199,6 +204,7 @@ class PresumptiveProfessionalIncome44ADA(BaseModel):
             "digital_receipts + cash_receipts == gross_receipts."
         ),
     )
+    other_mode_receipts: Decimal = Field(default=Decimal("0"), ge=0)
     income_declared: Optional[Decimal] = Field(
         default=None,
         ge=0,
@@ -361,6 +367,24 @@ class ScheduleBPFinancial(BaseModel):
     interest_to_partners: Decimal = Field(default=Decimal("0"), ge=0, description="Interest paid to partners (44AE firms)")
 
 
+class ITR4BusinessNature(BaseModel):
+    """One exact Schedule BP nature-of-business/profession row."""
+
+    name: str = Field(min_length=1, max_length=75)
+    code: str = Field(min_length=5, max_length=7)
+    description: str = Field(default="", max_length=75)
+    scheme: PresumptiveScheme = Field(
+        description="Schedule BP block this nature row belongs to."
+    )
+
+
+class ITR4GstinTurnover(BaseModel):
+    """One exact Schedule BP GSTIN turnover row."""
+
+    gstin: str = Field(pattern=r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$")
+    turnover: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 # ---------------------------------------------------------------------------
 # ITR-4-specific filing profile, address, bank, property, TRP types
 # ---------------------------------------------------------------------------
@@ -401,14 +425,8 @@ class ITR4FilingAddress(ITR4PostalAddress):
     landline_phone_no: str = Field(default="0", max_length=12)
 
 
-class ITR4PropertyProfile(BaseModel):
-    """Address profile for the single ITR-4 house property."""
-    address_detail: str = Field(min_length=1, max_length=50)
-    city_or_town_or_district: str = Field(min_length=1, max_length=50)
-    state_code: str = Field(min_length=1, max_length=2)
-    country_code: str = Field(default="91", max_length=5)
-    pin_code: Optional[str] = Field(default=None, max_length=6)
-    zip_code: Optional[str] = Field(default=None, max_length=10)
+class ITR4PropertyProfile(PropertyFilingProfile):
+    """Complete official profile for the single ITR-4 house property."""
 
 
 class ITR4BankAccount(BaseModel):
@@ -416,7 +434,10 @@ class ITR4BankAccount(BaseModel):
     account_number: str = Field(min_length=1, max_length=20)
     ifsc_code: str = Field(min_length=11, max_length=11)
     bank_name: str = Field(min_length=1, max_length=125)
-    account_type: str = Field(min_length=1, max_length=20)
+    account_type: Literal[
+        "savings", "current", "cash_credit", "overdraft", "nro", "nre", "other",
+        "SB", "CA", "CC", "OD", "NRO", "OTH",
+    ]
     is_primary: bool = False
 
 
@@ -424,17 +445,28 @@ class ITR4TaxReturnPreparer(BaseModel):
     """ITR-4 Tax Return Preparer details, when a TRP prepares the return."""
     identification_number: str = Field(pattern=r"^(T[0-9]{9}|[0-9]{6})$")
     name: str = Field(min_length=1, max_length=125)
-    reimbursement_from_government: Decimal = Field(default=Decimal("0"), ge=0)
+    reimbursement_from_government: Decimal = Field(
+        default=Decimal("0"), ge=0, le=Decimal("99999999999999")
+    )
 
 
 class ITR4SeventhProvisoDetails(BaseModel):
     """Seventh-proviso to Section 139(1) declarations for ITR-4 FilingStatus."""
+    deposit_exceeds_one_crore_flag: bool = False
+    deposit_amount: Decimal = Field(default=Decimal("0"), ge=0)
     foreign_travel_flag: bool = False
     foreign_travel_amount: Decimal = Field(default=Decimal("0"), ge=0)
     electricity_expenditure_flag: bool = False
     electricity_expenditure_amount: Decimal = Field(default=Decimal("0"), ge=0)
     other_clause_iv_flag: bool = False
-    other_clause_iv_detail: str = Field(default="", max_length=125)
+    clause_iv_details: List["ITR4SeventhProvisoClauseDetail"] = Field(default_factory=list)
+
+
+class ITR4SeventhProvisoClauseDetail(BaseModel):
+    """One ITR-4 clause-(iv) seventh-proviso detail row."""
+
+    nature: Literal["1", "2", "3", "4"]
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class ITR4FilingProfile(BaseModel):
@@ -459,8 +491,13 @@ class ITR4FilingProfile(BaseModel):
     alternate_address: Optional[ITR4PostalAddress] = None
     father_name: str = Field(min_length=1, max_length=125)
     verification_place: str = Field(min_length=1, max_length=50)
-    verification_capacity: Literal["S"] = "S"
+    verification_capacity: Literal["S", "R", "K", "P"] = "S"
     return_file_section: Literal[11, 12, 13, 14, 16, 17, 18, 20] = 11
+    receipt_number: Optional[str] = Field(default=None, pattern=r"^[0-9]{15}$")
+    original_return_date: Optional[date] = None
+    notice_number: Optional[str] = Field(default=None, max_length=100)
+    notice_date: Optional[date] = None
+    assessee_representative: Optional[AssesseeRepresentativeProfile] = None
     seventh_proviso: ITR4SeventhProvisoDetails = Field(default_factory=ITR4SeventhProvisoDetails)
     # Form 10-IEA cascade (ITR-4 uses this, not OptOutNewTaxRegime).
     form_10iea_earlier_ay_old_regime: str = Field(default="NA", pattern=r"^(NA|Y|N)$")
@@ -476,6 +513,39 @@ class ITR4FilingProfile(BaseModel):
     f10iea_date_curr_ay_old_tax: str = Field(default="", max_length=10)
     f10iea_ack_no_curr_ay_old_tax: int = Field(default=0, ge=0)
 
+    @model_validator(mode="after")
+    def validate_conditional_filing_fields(self) -> "ITR4FilingProfile":
+        """Enforce conditional filing, representative, and proviso details."""
+        if self.return_file_section == 17:
+            if self.receipt_number is None or self.original_return_date is None:
+                raise ValueError(
+                    "Revised return requires receipt number and original return date"
+                )
+        if self.return_file_section in {13, 14, 16, 18}:
+            if self.notice_number is None or self.notice_date is None:
+                raise ValueError("Notice return requires notice number and notice date")
+        if self.verification_capacity == "R" and self.assessee_representative is None:
+            raise ValueError("Representative verification requires assessee representative details")
+        if self.seventh_proviso.other_clause_iv_flag and not self.seventh_proviso.clause_iv_details:
+            raise ValueError("Other seventh-proviso declaration requires clause detail rows")
+        if (
+            self.seventh_proviso.deposit_exceeds_one_crore_flag
+            and self.seventh_proviso.deposit_amount <= Decimal("10000000")
+        ):
+            raise ValueError("Current-account deposit amount must exceed one crore")
+        if (
+            self.seventh_proviso.foreign_travel_flag
+            and self.seventh_proviso.foreign_travel_amount <= Decimal("200000")
+        ):
+            raise ValueError("Foreign-travel expenditure must exceed two lakh")
+        if (
+            self.seventh_proviso.electricity_expenditure_flag
+            and self.seventh_proviso.electricity_expenditure_amount
+            <= Decimal("100000")
+        ):
+            raise ValueError("Electricity expenditure must exceed one lakh")
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Top-level ITR-4 input model
@@ -486,15 +556,13 @@ class ITR4Input(BaseModel):
     """
     Top-level input model for computing an ITR-4 (Sugam) return.
 
-    Combines assessee meta-information (age bracket, regime), the active
-    presumptive scheme with its specific income data, and the shared income /
+    Combines assessee meta-information (age bracket, regime), all applicable
+    presumptive income data, and the shared income /
     deduction models from ITR-1 (salary, house property, other sources,
     Chapter VI-A deductions).
 
-    Exactly one of {business_income_44ad, professional_income_44ada,
-    goods_carriage_44ae} must be non-None when presumptive_scheme is not NONE.
-    The computation engine must enforce this constraint; the schema does not,
-    to keep validation simple and error messages explicit.
+    At least one of {business_income_44ad, professional_income_44ada,
+    goods_carriage_44ae} must be non-None. Multiple models may coexist.
 
     Relevant IT Act parts: Sections 44AD, 44ADA, 44AE, and the parts shared
     with ITR-1 (Sections 15–24, Chapter VI-A).
@@ -526,33 +594,29 @@ class ITR4Input(BaseModel):
     )
     presumptive_scheme: PresumptiveScheme = Field(
         description=(
-            "Which presumptive scheme the assessee has opted for. "
-            "Determines which of the three presumptive sub-models is active "
-            "and which statutory rates apply."
+            "Primary presumptive scheme retained for compatibility. Populated "
+            "sub-models determine all active schemes."
         ),
     )
 
-    # --- Presumptive income sub-models (at most one must be non-None) ---
+    # --- Presumptive income sub-models (one or more may be populated) ---
 
     business_income_44ad: Optional[PresumptiveBusinessIncome44AD] = Field(
         default=None,
         description=(
-            "Populate when presumptive_scheme == '44AD'. "
-            "Must be None for all other schemes."
+            "Populate when income under Section 44AD is disclosed."
         ),
     )
     professional_income_44ada: Optional[PresumptiveProfessionalIncome44ADA] = Field(
         default=None,
         description=(
-            "Populate when presumptive_scheme == '44ADA'. "
-            "Must be None for all other schemes."
+            "Populate when income under Section 44ADA is disclosed."
         ),
     )
     goods_carriage_44ae: Optional[PresumptiveGoodsCarriage44AE] = Field(
         default=None,
         description=(
-            "Populate when presumptive_scheme == '44AE'. "
-            "Must be None for all other schemes."
+            "Populate when income under Section 44AE is disclosed."
         ),
     )
 
@@ -626,6 +690,7 @@ class ITR4Input(BaseModel):
     agriculture_income: Decimal = Field(default=Decimal("0"), ge=0, description="Agricultural income shown as exempt")
     exempt_income_breakdown: dict[str, Decimal] = Field(default_factory=dict, description="Breakdown of exempt income by category")
     exempt_income_dropdowns: list[str] = Field(default_factory=list, description="Selected exempt income dropdown categories for uniqueness check")
+    exempt_income_entries: List[CompactExemptIncomeEntry] = Field(default_factory=list, description="Official compact-form exempt-income detail rows")
     schedule_80d: Optional[Schedule80D] = Field(default=None, description="Schedule 80D health insurance details")
     schedule_80g: Optional[Schedule80G] = Field(default=None, description="Schedule 80G donation details")
     schedule_80gga: Optional[Schedule80GGA] = Field(default=None, description="Schedule 80GGA scientific research donations")
@@ -635,9 +700,13 @@ class ITR4Input(BaseModel):
     schedule_80c_entries: List[Schedule80CEntry] = Field(default_factory=list, description="Per-row entries for Schedule 80C (CBDT Sl 273, 290)")
     schedule_80ccc_entries: List[Schedule80CCCEntry] = Field(default_factory=list, description="Per-row entries for Schedule 80CCC (CBDT Sl 366, 409)")
     schedule_80e_entries: List[Schedule80EEntry] = Field(default_factory=list, description="Per-row entries for Schedule 80E (CBDT Sl 274, 291)")
-    loan_details_80ee_list: List[Schedule80EELoanEntry] = Field(default_factory=list, description="Per-loan entries for Schedule 80EE (CBDT Sl 292, 298)")
-    loan_details_80eea_list: List[Schedule80EEALoanEntry] = Field(default_factory=list, description="Per-loan entries for Schedule 80EEA (CBDT Sl 293, 299)")
-    loan_details_80eeb_list: List[Schedule80EEBLoanEntry] = Field(default_factory=list, description="Per-loan entries for Schedule 80EEB (CBDT Sl 294, 300)")
+    loan_details_80ee_list: List[ITR1Schedule80EELoanEntry] = Field(default_factory=list, description="Per-loan entries for Schedule 80EE (CBDT Sl 292, 298)")
+    loan_details_80eea_list: List[ITR1Schedule80EEALoanEntry] = Field(default_factory=list, description="Per-loan entries for Schedule 80EEA (CBDT Sl 293, 299)")
+    loan_details_80eeb_list: List[ITR1Schedule80EEBLoanEntry] = Field(default_factory=list, description="Per-loan entries for Schedule 80EEB (CBDT Sl 294, 300)")
+    property_stamp_duty_value_80eea: Optional[Decimal] = Field(
+        default=None, ge=0, le=4_500_000,
+        description="Property stamp-duty value required by Schedule 80EEA",
+    )
     loan_details_24b_list: List[LoanDetail] = Field(default_factory=list, description="Per-loan entries for Schedule 24(b) (CBDT Sl 269, 295)")
     tax_payment_entries: List[TaxPaymentDetail] = Field(default_factory=list, description="Per-installment entries for Schedule IT")
     hra_details: Optional[HRADetails] = Field(default=None, description="HRA computation breakdown")
@@ -650,6 +719,7 @@ class ITR4Input(BaseModel):
     form_10ia_filed_80dd: bool = Field(default=False, description="Whether separate Form 10-IA filed for 80DD (CBDT Sl 287)")
     form_10ia_filed_80u: bool = Field(default=False, description="Whether separate Form 10-IA filed for 80U (CBDT Sl 287)")
     form_10ba_filed: bool = Field(default=False, description="Whether Form 10BA (80GG declaration) has been filed")
+    form_10ba_ack_number: Optional[str] = Field(default=None, max_length=15, description="Form 10BA acknowledgement number")
     pran_number: Optional[str] = Field(default=None, max_length=12, description="PRAN number for NPS contributions")
     nature_of_employment: Optional[str] = Field(default=None, description="Nature of employment: Central/State Govt, PSU, Private, Pensioner, etc.")
     # --- Loan details (single records, backward compat) ---
@@ -706,6 +776,8 @@ class ITR4Input(BaseModel):
     has_salary_income: bool = Field(default=True, description="Whether taxpayer has salary income")
     # --- Schedule BP Financial ---
     schedule_bp_financial: Optional[ScheduleBPFinancial] = Field(default=None, description="Schedule BP financial particulars for cross-consistency")
+    schedule_bp_business_natures: List[ITR4BusinessNature] = Field(default_factory=list)
+    schedule_bp_gstin_turnovers: List[ITR4GstinTurnover] = Field(default_factory=list)
     # --- Business/Professional code dropdowns ---
     business_code: Optional[str] = Field(default=None, description="Business code for 44AD/44AE")
     profession_code: Optional[str] = Field(default=None, description="Profession code for 44ADA")

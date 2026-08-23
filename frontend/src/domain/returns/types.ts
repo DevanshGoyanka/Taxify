@@ -38,11 +38,11 @@ export interface HouseProperty extends Identified {
 }
 export interface BusinessIdentity { businessName: string; natureCode: string; description: string; }
 export interface GstinTurnoverRow extends Identified { gstin: string; turnover: Money; }
-export interface FinancialParticulars { cashBalance: Money; bankBalance: Money; inventory: Money; sundryDebtors: Money; sundryCreditors: Money; otherAssets: Money; totalAssets: Money; securedLoans: Money; unsecuredLoans: Money; advances: Money; otherLiabilities: Money; totalLiabilities: Money; grossProfit: Money; expenses: Money; netProfit: Money; }
-export interface Presumptive44AD extends Identified, BusinessIdentity { scheme: '44AD'; digitalReceipts: Money; nonDigitalReceipts: Money; digitalPresumptiveIncome: Money; nonDigitalPresumptiveIncome: Money; declaredIncome: Money; gstinTurnovers: GstinTurnoverRow[]; financialParticulars: FinancialParticulars; }
-export interface Presumptive44ADA extends Identified, BusinessIdentity { scheme: '44ADA'; grossReceipts: Money; digitalReceipts: Money; nonDigitalReceipts: Money; declaredIncome: Money; gstinTurnovers: GstinTurnoverRow[]; financialParticulars: FinancialParticulars; }
-export interface VehicleRecord extends Identified { vehicleNumber: string; vehicleType: 'HEAVY' | 'OTHER'; tonnage: number; ownedMonths: number; leasedOrHired: boolean; presumptiveIncome: Money; }
-export interface Presumptive44AE extends Identified, BusinessIdentity { scheme: '44AE'; vehicles: VehicleRecord[]; declaredIncome: Money; gstinTurnovers: GstinTurnoverRow[]; financialParticulars: FinancialParticulars; }
+export interface FinancialParticulars { partnerMemberOwnCapital: Money; cashBalance: Money; bankBalance: Money; inventory: Money; sundryDebtors: Money; sundryCreditors: Money; fixedAssets: Money; investments: Money; loansAndAdvances: Money; otherAssets: Money; totalAssets: Money; securedLoans: Money; unsecuredLoans: Money; advances: Money; otherLiabilities: Money; totalLiabilities: Money; grossProfit: Money; expenses: Money; netProfit: Money; }
+export interface Presumptive44AD extends Identified, BusinessIdentity { scheme: '44AD'; digitalReceipts: Money; nonDigitalReceipts: Money; otherModeReceipts: Money; digitalPresumptiveIncome: Money; nonDigitalPresumptiveIncome: Money; declaredIncome: Money; gstinTurnovers: GstinTurnoverRow[]; financialParticulars: FinancialParticulars; }
+export interface Presumptive44ADA extends Identified, BusinessIdentity { scheme: '44ADA'; grossReceipts: Money; digitalReceipts: Money; nonDigitalReceipts: Money; otherModeReceipts: Money; declaredIncome: Money; gstinTurnovers: GstinTurnoverRow[]; financialParticulars: FinancialParticulars; }
+export interface VehicleRecord extends Identified { vehicleNumber: string; vehicleType: 'HEAVY' | 'OTHER'; tonnage: number; ownedMonths: number; leasedOrHired: boolean; ownedLeasedHiredFlag: 'OWN' | 'LEASE' | 'HIRED'; presumptiveIncome: Money; }
+export interface Presumptive44AE extends Identified, BusinessIdentity { scheme: '44AE'; vehicles: VehicleRecord[]; declaredIncome: Money; salaryInterestFromFirm: Money; gstinTurnovers: GstinTurnoverRow[]; financialParticulars: FinancialParticulars; }
 export type PresumptiveBusiness = Presumptive44AD | Presumptive44ADA | Presumptive44AE;
 
 export type InterestKind = 'SAVINGS_BANK' | 'TERM_DEPOSIT' | 'IT_REFUND' | 'POST_OFFICE' | 'NSC' | 'SCSS' | 'OTHER' | 'BONDS' | 'SECURITIES' | 'PF_10_11_FIRST' | 'PF_10_11_SECOND' | 'PF_10_12_FIRST' | 'PF_10_12_SECOND';
@@ -68,6 +68,7 @@ export interface UnexplainedIncomeDetails { cashCreditsUs68: Money; unexplainedI
 export interface OtherSourcesDeductions { expenses: Money; interestExpenseUs57: Money; interestExpenseEligibleUs57: Money; familyPensionDeductionUs57iia: Money; depreciation: Money; totalDeductions: Money; amountNotDeductibleUs58: Money; profitChargeableUs59: Money; }
 
 export interface Investment80C extends Identified { investmentType: string; identificationNo: string; accountOrPolicyNo: string; amount: Money; dateOfInvestment: string; institutionName: string; institutionPAN: string; }
+export interface PensionContribution80CCC extends Identified { identifierType: 'PRAN' | 'OTHPRAN'; identifierName: string; amount: Money; }
 export interface Policy80D extends Identified { insurerName: string; policyNo: string; premiumAmount: Money; policyType: 'INDIVIDUAL' | 'FAMILY_FLOATER' | 'GROUP' | 'OTHER'; dateOfCommencement: string; }
 export interface Category80D { policies: Policy80D[]; preventiveCheckup: Money; medicalExpense: Money; }
 export interface Section80D { selfSeniorCitizen: 'Y' | 'N' | 'S'; parentsSeniorCitizen: 'Y' | 'N' | 'P'; selfFamily: Category80D; selfFamilySenior: Category80D; parents: Category80D; parentsSenior: Category80D; }
@@ -76,7 +77,9 @@ export interface DeductionLoan extends Identified { section: '80E' | '80EE' | '8
 export interface LoanDeductions { loans: DeductionLoan[]; section80EEAStampDutyValue: Money; }
 
 /** Official clauses under which a Section 80GGA deduction is claimed. */
-export type Section80GGAClause = '80GGA2a' | '80GGA2b' | '80GGA2c' | '80GGA2d' | '80GGA2e';
+export type Section80GGAClause =
+  | '80GGA2a' | '80GGA2aa' | '80GGA2b' | '80GGA2bb'
+  | '80GGA2c' | '80GGA2cc' | '80GGA2d' | '80GGA2e';
 
 /** Canonical donation row for Schedule 80GGA (scientific research / rural development). */
 export interface Schedule80GGAEntry extends Identified {
@@ -315,7 +318,35 @@ export const EMPTY_TAX_CHALLAN: Omit<TaxChallan, 'id'> = {
 };
 
 export interface BankAccount extends Identified { bankName: string; accountNumber: string; ifscCode: string; accountType: 'SB' | 'CA' | 'CC' | 'OD' | 'NRO' | 'OTH'; useForRefund: boolean; }
-export interface FilingStatus { filingSection: '139(1)' | '139(4)' | '139(5)' | '119(2)(b)'; returnType: 'ORIGINAL' | 'REVISED'; originalAcknowledgementNumber: string; originalFilingDate: string | null; noticeNumber: string; }
+export type FilingSection = '139(1)' | '139(4)' | '142(1)' | '148' | '153C' | '139(5)' | '139(9)' | '119(2)(b)';
+export interface SeventhProvisoClause extends Identified { nature: '1' | '2' | '3' | '4'; amount: Money; }
+export interface SeventhProviso {
+  depositExceedsOneCrore: boolean; depositAmount: Money;
+  foreignTravel: boolean; foreignTravelAmount: Money;
+  electricityExpenditure: boolean; electricityExpenditureAmount: Money;
+  otherClauseIV: boolean; clauseIVDetails: SeventhProvisoClause[];
+}
+export interface RepresentativeAssessee { name: string; email: string; mobileCountryCode: string; mobile: string; }
+export interface AlternateAddress {
+  residenceNo: string; residenceName: string; roadOrStreet: string; localityOrArea: string;
+  cityOrTownOrDistrict: string; stateCode: StateCode | ''; countryCode: string; pinCode: string; zipCode: string;
+}
+export interface FilingStatus {
+  filingSection: FilingSection; returnType: 'ORIGINAL' | 'REVISED';
+  originalAcknowledgementNumber: string; originalFilingDate: string | null;
+  noticeNumber: string; noticeDate: string | null;
+  representative: RepresentativeAssessee | null;
+  form10IEAAcknowledgement: string; form10IEADate: string | null;
+  form10IEAEarlierAYOldRegime: 'Y' | 'N' | 'NA';
+  form10IEAAssessmentYear: '' | '2024-25' | '2025-26';
+  form10IEAEarlierAYAckOldRegime: string;
+  form10IEAEarlierAYNewRegime: 'Y' | 'N';
+  form10IEANewRegimeAssessmentYear: '' | '2025-26';
+  form10IEAEarlierAYAckNewRegime: string;
+  form10IEACurrentAYNewRegime: boolean; form10IEACurrentAYNewRegimeDate: string | null; form10IEACurrentAYNewRegimeAck: string;
+  form10IEACurrentAYOldRegime: boolean; form10IEACurrentAYOldRegimeDate: string | null; form10IEACurrentAYOldRegimeAck: string;
+  seventhProviso: SeventhProviso;
+}
 export type ExemptIncomeCategory = 'AGRI' | 'GOVC' | 'ISI' | 'SSRA' | 'SRSC' | 'SRST' | 'SRPC' | 'OTH' | 'OTHN';
 export type ExemptIncomeSubCategory = '10(1)' | '10(2)' | '10(2A)' | '10(4)(i)' | '10(4)(ii)' | '10(4B)' | '10(4C)' | '10(4E)' | '10(4F)' | '10(4G)' | '10(4H)' | '10(6B)' | '10(6BB)' | '10(6D)' | '10(8)' | '10(8A)' | '10(8B)' | '10(9)' | '10(10BB)' | '10(10BC)' | '10(10D)' | '10(11)' | '10(11A)' | '10(12)' | '10(12A)' | '10(12AA)' | '10(12AB)' | '10(12B)' | '10(12BA)' | '10(12C)' | '10(13)' | '10(15)' | '10(16)' | '10(17A)' | '10(18)' | '10(19)' | '10(19A)' | '10(23AA)' | '10(23FBB)' | '10(23FBC)' | '10(23FD)' | '10(23FF)' | '10(25)' | '10(26)' | '10(26AAA)' | '10(30)' | '10(31)' | '10(32)' | '10(33)' | '10(35)' | '10(35A)' | '10(36)' | '10(37)' | '10(37A)' | '10(43)' | '10(44)' | 'DMD' | 'Incmexmptcircular' | 'Incmexmptnotification' | 'Receiptnotincme' | 'Anyother1' | 'Anyother2' | 'Anyother3' | 'Anyother4';
 export interface ExemptIncomeEntry extends Identified { category: ExemptIncomeCategory; subCategory: ExemptIncomeSubCategory; description: string; grossAmount: Money; }
@@ -354,7 +385,7 @@ export interface ReconciliationDiscrepancy extends Identified {
   difference: Money; status: ReconciliationDiscrepancyStatus;
 }
 export interface ReconciliationState { evidence: ReconciliationEvidence[]; discrepancies: ReconciliationDiscrepancy[]; }
-export interface Verification { capacity: 'SELF' | 'REPRESENTATIVE'; place: string; date: string | null; declarationAccepted: boolean; }
+export interface Verification { capacity: 'SELF' | 'REPRESENTATIVE' | 'KARTA' | 'PARTNER'; place: string; date: string | null; declarationAccepted: boolean; }
 export interface LegacyCompatibilityEnvelope { source: 'legacy-flat-v1'; unknownFields: Readonly<Record<string, unknown>>; }
 export interface PersonalInfo {
   name: string;
@@ -366,6 +397,7 @@ export interface PersonalInfo {
   aadhaar: string;
   email: string;
   mobile: string;
+  mobileCountryCode: string;
   secondaryEmail: string;
   secondaryMobile: string;
   secondaryMobileCountryCode: string;
@@ -381,6 +413,12 @@ export interface PersonalInfo {
   zipCode: string;
   /** Mandatory CBDT PersonalInfo category, independent of employer row count. */
   employerCategory: EmployerCategory | '';
+  age: number;
+  assesseeStatus: 'I' | 'H' | 'F';
+  landlineStdCode: string;
+  landlinePhoneNo: string;
+  secondaryAddressDifferent: boolean;
+  alternateAddress: AlternateAddress | null;
   /** Questionnaire inputs surfaced as canonical draft fields for the
    *  eligibility engine (formerly read from the flat blob). */
   residentialStatus?: 'ROR' | 'RNOR' | 'NR';
@@ -704,7 +742,7 @@ export interface ReturnDraft {
     deductions: OtherSourcesDeductions;
   };
   exemptIncome: ExemptIncomeSchedule;
-  deductions: { section80C: Investment80C[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions; chapterVIA: ChapterVIA; schedule80GGA: Schedule80GGAEntry[]; schedule80GGC: Schedule80GGCEntry[] };
+  deductions: { section80C: Investment80C[]; pensionContribution80CCC: PensionContribution80CCC[]; section80D: Section80D; section80G: Donation80G[]; loans: LoanDeductions; chapterVIA: ChapterVIA; schedule80GGA: Schedule80GGAEntry[]; schedule80GGC: Schedule80GGCEntry[] };
   taxes: { tds: TdsCredit[]; tcs: TcsCredit[]; challans: TaxChallan[] }; bankAccounts: BankAccount[];
   /** Brought-forward loss inputs from previous assessment years (Schedule CYLA). */
   lossesBroughtForward: BroughtForwardLosses;

@@ -72,10 +72,11 @@ def export_itd_json_file(
 
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
-    filename = (
-        f"{_safe_component(client.pan or f'client-{client_id}')}_"
-        f"{_safe_component(ay)}_{_safe_component(itr_type.upper())}.json"
-    )
+    # CBDT-prescribed naming convention: {form}_{pan}_AY{year}.json
+    # e.g. ITR-1_ABCDE1234F_AY2026-27.json (matches the reference repo).
+    form = itr_type.strip().upper()
+    pan = _safe_component(client.pan or f"client-{client_id}")
+    filename = f"{form}_{pan}_AY{ay}.json"
     final_path = destination / filename
     partial_path = destination / f"{filename}.partial"
     partial_path.write_text(serialize_itd_json(official_json), encoding="utf-8")

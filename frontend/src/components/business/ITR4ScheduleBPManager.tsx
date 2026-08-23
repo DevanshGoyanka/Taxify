@@ -172,11 +172,16 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
   if (input?.PersumptiveInc44AE || normalizedVehicles.length > 0) {
     const salary = input?.PersumptiveInc44AE?.SalInterestByFirm ?? 0;
     const vehicleIncome = sum(normalizedVehicles.map((row) => row.PresumptiveIncome));
+    const businessIncome = sum([
+      result.PersumptiveInc44AD?.TotPersumptiveInc44AD,
+      result.PersumptiveInc44ADA?.TotPersumptiveInc44ADA,
+      Math.max(0, vehicleIncome - salary),
+    ]);
     result.PersumptiveInc44AE = {
       SalInterestByFirm: salary,
       TotPersumInc44AE: vehicleIncome,
-      TotalPersumptiveInc: sum([vehicleIncome, salary]),
-      IncChargeableUnderBus: vehicleIncome,
+      TotalPersumptiveInc: Math.max(0, vehicleIncome - salary),
+      IncChargeableUnderBus: businessIncome,
     };
   }
   result.TotalTurnoverGrsRcptGSTIN = sum((result.TurnoverGrsRcptForGSTIN ?? []).map((row) => row.AmtTurnGrossRcptGSTIN));

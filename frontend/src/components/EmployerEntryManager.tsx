@@ -78,6 +78,11 @@ interface TDSEntry {
 
 interface BackendResult {
   grossSalary?: number;
+  salary171?: number;
+  salary172?: number;
+  salary173?: number;
+  salaryBeforeSection16?: number;
+  netSalary?: number;
   incomeFromSal?: number;
   hraExempt?: number;
   ltaExempt?: number;
@@ -578,7 +583,8 @@ export function EmployerEntryManager({
 
   const hasBackendResult = backendResult !== null && backendResult !== undefined;
   const finalGross = money(backendResult?.grossSalary);
-  const finalExemptions = money(backendResult?.totalSection10Exempt) + money(backendResult?.totalSection16Deductions);
+  const section10Exemptions = money(backendResult?.totalSection10Exempt);
+  const section16Deductions = money(backendResult?.totalSection16Deductions);
 
   const totalSalaryTDS = tdsEntries
     .filter((e) => (e.section === '192' || e.section === '192A') && e.claimedInReturn !== false)
@@ -634,8 +640,16 @@ export function EmployerEntryManager({
               <strong style={{ fontSize: 22 }}>{hasBackendResult ? `₹${formatINR(finalGross)}` : '—'}</strong>
             </div>
             <div>
-              <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 4 }}>SECTION 10 + 16</div>
-              <strong style={{ fontSize: 22, color: '#86efac' }}>{hasBackendResult ? `₹${formatINR(finalExemptions)}` : '—'}</strong>
+              <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 4 }}>SECTION 10 EXEMPT</div>
+              <strong style={{ fontSize: 22, color: '#86efac' }}>{hasBackendResult ? `₹${formatINR(section10Exemptions)}` : '—'}</strong>
+            </div>
+            <div>
+              <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 4 }}>NET SALARY</div>
+              <strong style={{ fontSize: 22 }}>{hasBackendResult ? `₹${formatINR(backendResult?.netSalary ?? backendResult?.salaryBeforeSection16)}` : '—'}</strong>
+            </div>
+            <div>
+              <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 4 }}>SECTION 16 DEDUCTIONS</div>
+              <strong style={{ fontSize: 22, color: '#86efac' }}>{hasBackendResult ? `₹${formatINR(section16Deductions)}` : '—'}</strong>
             </div>
             <div>
               <div style={{ opacity: 0.7, fontSize: 11, marginBottom: 4 }}>NET TAXABLE SALARY</div>
@@ -644,7 +658,7 @@ export function EmployerEntryManager({
           </div>
           <div style={{ marginTop: 14, opacity: 0.65, fontSize: 11 }}>
             {hasBackendResult
-              ? 'Values are from the tax engine computation.'
+              ? `Section 17 breakup: salary ₹${formatINR(backendResult?.salary171)}, perquisites ₹${formatINR(backendResult?.salary172)}, profits in lieu ₹${formatINR(backendResult?.salary173)}. Values are from the tax engine computation.`
               : 'Run computation to view the tax-engine result.'}
           </div>
         </div>

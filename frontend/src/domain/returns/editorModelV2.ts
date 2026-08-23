@@ -252,7 +252,25 @@ export function updateDeductionLoans(model: ReturnEditorModelV2, loans: LoanDedu
 
 /** Updates deduction loans from manager values. */
 export function updateDeductionLoansFromManager(model: ReturnEditorModelV2, data: DeductionLoanManagerData): ReturnEditorModelV2 {
-  return updateDeductionLoans(model, deductionLoansFromManager(data, model.draft.deductions.loans));
+  const loans = deductionLoansFromManager(data, model.draft.deductions.loans);
+  const total = (section: DeductionLoan['section']): number => loans.loans
+    .filter((loan) => loan.section === section)
+    .reduce((sum, loan) => sum + finiteMoney(loan.interestAmount), 0);
+  return withDraft(model, {
+    ...model.draft,
+    deductions: {
+      ...model.draft.deductions,
+      loans,
+      chapterVIA: {
+        ...model.draft.deductions.chapterVIA,
+        section80E: total('80E'),
+        section80EE: total('80EE'),
+        section80EEA: total('80EEA'),
+        section80EEAStampDutyValue: loans.section80EEAStampDutyValue,
+        section80EEB: total('80EEB'),
+      },
+    },
+  });
 }
 
 /** Replaces Chapter VI-A details immutably. */
@@ -282,12 +300,35 @@ export function updateCapitalGainsSchedule(model: ReturnEditorModelV2, schedule:
 
 /** Replaces Schedule 80GGA rows immutably. */
 export function updateSchedule80GGA(model: ReturnEditorModelV2, entries: readonly Schedule80GGAEntry[]): ReturnEditorModelV2 {
-  return withDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, schedule80GGA: cloneArray(entries) } });
+  const schedule80GGA = cloneArray(entries);
+  const section80GGA = schedule80GGA.reduce((sum, entry) => sum + finiteMoney(entry.otherModeAmount), 0);
+  return withDraft(model, {
+    ...model.draft,
+    deductions: {
+      ...model.draft.deductions,
+      schedule80GGA,
+      chapterVIA: { ...model.draft.deductions.chapterVIA, section80GGA },
+    },
+  });
+}
+
+/** Replaces official Section 80CCC identifier rows immutably. */
+export function updatePensionContribution80CCC(model: ReturnEditorModelV2, entries: readonly import('./types').PensionContribution80CCC[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, pensionContribution80CCC: cloneArray(entries) } });
 }
 
 /** Replaces Schedule 80GGC rows immutably. */
 export function updateSchedule80GGC(model: ReturnEditorModelV2, entries: readonly Schedule80GGCEntry[]): ReturnEditorModelV2 {
-  return withDraft(model, { ...model.draft, deductions: { ...model.draft.deductions, schedule80GGC: cloneArray(entries) } });
+  const schedule80GGC = cloneArray(entries);
+  const section80GGC = schedule80GGC.reduce((sum, entry) => sum + finiteMoney(entry.otherModeAmount), 0);
+  return withDraft(model, {
+    ...model.draft,
+    deductions: {
+      ...model.draft.deductions,
+      schedule80GGC,
+      chapterVIA: { ...model.draft.deductions.chapterVIA, section80GGC },
+    },
+  });
 }
 
 /** Replaces Tax Return Preparer details immutably. */
@@ -303,6 +344,21 @@ export function updateTdsCredits(model: ReturnEditorModelV2, entries: readonly T
 /** Updates canonical TDS credits from manager values. */
 export function updateTdsFromManager(model: ReturnEditorModelV2, entries: readonly TdsManagerEntry[]): ReturnEditorModelV2 {
   return updateTdsCredits(model, tdsFromManager(entries, model.draft.taxes.tds));
+}
+
+/** Updates the combined tax-credit editor, partitioning TDS and TCS rows into
+ *  their distinct canonical schedules. */
+export function updateTaxCreditsFromManager(model: ReturnEditorModelV2, entries: readonly TdsManagerEntry[]): ReturnEditorModelV2 {
+  const tdsEntries = entries.filter((entry) => !String(entry.section ?? '').startsWith('206C'));
+  const tcsEntries = entries.filter((entry) => String(entry.section ?? '').startsWith('206C'));
+  return withDraft(model, {
+    ...model.draft,
+    taxes: {
+      ...model.draft.taxes,
+      tds: tdsFromManager(tdsEntries, model.draft.taxes.tds),
+      tcs: tcsFromManager(tcsEntries, model.draft.taxes.tcs),
+    },
+  });
 }
 
 /** Replaces canonical TCS credits immutably. */
@@ -481,6 +537,52 @@ export function tdsToManager(entries: readonly TdsCredit[]): TdsManagerEntry[] {
     tcsAmtCollOwnHand: entry.tcsAmtCollOwnHand, tcsAmtCollSpouseOrOthrHand: entry.tcsAmtCollSpouseOrOthrHand,
     tcsClaimedAmtCollOwnHand: entry.tcsClaimedAmtCollOwnHand, tcsClaimedAmtCollSpouseOrOthrHand: entry.tcsClaimedAmtCollSpouseOrOthrHand,
   }));
+}
+
+/** Projects canonical TCS entries into the shared tax-credit editor shape. */
+export function tcsToManager(entries: readonly TcsCredit[]): TdsManagerEntry[] {
+  return entries.map((entry) => ({
+    id: entry.id,
+    section: '206C',
+    deductorName: entry.collectorName,
+    deductorTAN: entry.collectorTAN,
+    incomeAmount: entry.grossAmount,
+    tdsDeducted: entry.taxCollected,
+    claimedInReturn: entry.claimedInReturn,
+    deductedYr: entry.deductedYr,
+    broughtFwdTDSAmt: entry.broughtFwdTDSAmt,
+    tcsCreditOwner: entry.tcsCreditOwner,
+    panOfSpouseOrOthrPrsn: entry.panOfSpouseOrOthrPrsn,
+    tcsAmtCollOwnHand: entry.tcsAmtCollOwnHand,
+    tcsAmtCollSpouseOrOthrHand: entry.tcsAmtCollSpouseOrOthrHand,
+    tcsClaimedAmtCollOwnHand: entry.tcsClaimedAmtCollOwnHand,
+    tcsClaimedAmtCollSpouseOrOthrHand: entry.tcsClaimedAmtCollSpouseOrOthrHand,
+  }));
+}
+
+/** Converts shared tax-credit editor rows into canonical Schedule TCS rows. */
+export function tcsFromManager(entries: readonly TdsManagerEntry[], previous: readonly TcsCredit[] = []): TcsCredit[] {
+  return mergeById(previous, entries as readonly (TdsManagerEntry & { id: string })[], (entry, prior, index) => {
+    const collected = finiteMoney(entry.tdsDeducted ?? entry.taxDeducted ?? prior?.taxCollected);
+    return {
+      ...prior,
+      id: deterministicId('tcs', entry, index),
+      collectorName: optionalText(entry.deductorName ?? prior?.collectorName),
+      collectorTAN: optionalText(entry.deductorTAN ?? prior?.collectorTAN),
+      grossAmount: finiteMoney(entry.incomeAmount ?? entry.grossAmount ?? prior?.grossAmount),
+      taxCollected: collected,
+      claimedInReturn: entry.claimedInReturn ?? prior?.claimedInReturn ?? true,
+      tcsCreditOwner: entry.tcsCreditOwner ?? prior?.tcsCreditOwner ?? '1',
+      panOfSpouseOrOthrPrsn: optionalText(entry.panOfSpouseOrOthrPrsn ?? prior?.panOfSpouseOrOthrPrsn),
+      deductedYr: entry.deductedYr !== undefined && entry.deductedYr !== '' ? entry.deductedYr : (prior?.deductedYr ?? ''),
+      broughtFwdTDSAmt: finiteMoney(entry.broughtFwdTDSAmt ?? prior?.broughtFwdTDSAmt),
+      tcsAmtCollOwnHand: finiteMoney(entry.tcsAmtCollOwnHand ?? prior?.tcsAmtCollOwnHand ?? collected),
+      tcsAmtCollSpouseOrOthrHand: finiteMoney(entry.tcsAmtCollSpouseOrOthrHand ?? prior?.tcsAmtCollSpouseOrOthrHand),
+      tcsClaimedAmtCollOwnHand: finiteMoney(entry.tcsClaimedAmtCollOwnHand ?? prior?.tcsClaimedAmtCollOwnHand ?? collected),
+      tcsClaimedAmtCollSpouseOrOthrHand: finiteMoney(entry.tcsClaimedAmtCollSpouseOrOthrHand ?? prior?.tcsClaimedAmtCollSpouseOrOthrHand),
+      claimedPANOfSpouseOrOthrPrsn: prior?.claimedPANOfSpouseOrOthrPrsn ?? '',
+    };
+  });
 }
 
 /** Merges TDS editor values by ID, including UI-only PAN and certificate fields.

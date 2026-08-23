@@ -18,10 +18,12 @@ from app.schemas.itr1 import (
     BankAccount,
     CapitalGainsIncome,
     Chapter6ADeductions,
+    CompactExemptIncomeEntry,
     DependentRelationship,
     DisabilityCategory,
     DisabilitySeverity,
     Donation80G,
+    Donation80GCategory,
     Donation80GGA,
     DonationAddress,
     EducationLoanLenderType,
@@ -29,13 +31,18 @@ from app.schemas.itr1 import (
     HousePropertyIncome,
     ITR1FilingProfile,
     ITR1Input,
+    LoanDetail,
     OtherSourcesIncome,
     PoliticalContribution,
     PostalAddress,
+    PropertyCoOwner,
     PropertyFilingProfile,
+    PropertyTenant,
     PropertyType,
     SalaryIncome,
     Schedule80CEntry,
+    Schedule80CCCEntry,
+    Schedule80D,
     Schedule80DD,
     Schedule80EEntry,
     Schedule80GGA,
@@ -50,7 +57,9 @@ from app.schemas.itr1 import (
     SpecifiedDisease80DDB,
     TDS1Entry,
     TDS2Entry,
+    TDS3Entry,
     TCSEntry,
+    TaxReturnPreparer,
     TaxPaymentDetail,
     TaxRegime,
 )
@@ -195,6 +204,23 @@ def test_builder_emits_zero_cost_canonical_112a_schedule() -> None:
     assert schedule["LongCap112A"] == 100000
 
 
+def test_builder_projects_simplified_112a_aggregate_evidence() -> None:
+    """Compact-form sale and cost evidence must reach the official schedule."""
+    body = _input().model_copy(update={
+        "capital_gains": CapitalGainsIncome(
+            ltcg_112a=Decimal("20000"),
+            full_value_of_consideration=Decimal("120000"),
+            cost_of_acquisition=Decimal("100000"),
+        ),
+    })
+
+    assert _build(body)["ITR"]["ITR1"]["LTCG112A"] == {
+        "TotSaleCnsdrn": 120000,
+        "TotCstAcqisn": 100000,
+        "LongCap112A": 20000,
+    }
+
+
 def test_detailed_document_matches_official_ay_2026_27_schema() -> None:
     """A generated detailed return must satisfy the official Draft-4 schema."""
     schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8-sig"))
@@ -282,6 +308,45 @@ def test_builder_cross_foots_fractional_property_rounding() -> None:
     assert rent_details["AnnualOfPropOwned"] - rent_details["TotalDeduct"] == 4
 
 
+def test_builder_cross_foots_fractional_co_owned_rounding() -> None:
+    """Rounded CBDT integers remain internally consistent for fractional shares."""
+    profile = PropertyFilingProfile(
+        address_detail="Flat 12A, MG Road",
+        city_or_town_or_district="Delhi",
+        state_code="07",
+        country_code="91",
+        pin_code="110001",
+        is_co_owned=True,
+        assessee_share_percentage=Decimal("50"),
+        co_owners=[PropertyCoOwner(
+            serial_number=1,
+            name="Priya Sharma",
+            share_percentage=Decimal("50"),
+        )],
+    )
+    body = _input().model_copy(update={
+        "house_property_income": HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("5"),
+            ownership_share_percentage=Decimal("50"),
+        ),
+        "property_profile": profile,
+        "property_profiles": [profile],
+    })
+    rent_details = _build(body)["ITR"]["ITR1"]["ITR1_IncomeDeductions"][
+        "PropertyDetails"
+    ][0]["Rentdetails"]
+
+    assert rent_details["BalanceALV"] == 5
+    assert rent_details["AnnualOfPropOwned"] == 3
+    assert rent_details["ThirtyPercentOfBalance"] == 1
+    assert rent_details["IncomeOfHP"] == 2
+    assert (
+        rent_details["AnnualOfPropOwned"] - rent_details["TotalDeduct"]
+        == rent_details["IncomeOfHP"]
+    )
+
+
 def test_property_profile_rejects_non_official_country_code() -> None:
     """Property country code must belong to the official ITD enumeration."""
     with pytest.raises(ValidationError, match="official ITD country code"):
@@ -331,12 +396,10 @@ def test_property_row_preserves_raw_loss_before_inter_head_setoff(
     assert income["TotalIncomeChargeableUnHP"] == expected_top_level
 
 
-def test_builder_rejects_missing_or_unsupported_property_details() -> None:
-    """Property JSON must not fabricate address, co-owner, or loan identities."""
+def test_builder_rejects_missing_property_or_loan_details() -> None:
+    """Property JSON must not fabricate address or loan identities."""
     with pytest.raises(ValueError, match="property_profile"):
         _build(_input().model_copy(update={"property_profile": None}))
-    with pytest.raises(ValueError, match="Co-owned"):
-        _build(_input().model_copy(update={"is_property_co_owned": True}))
     body = _input().model_copy(update={
         "house_property_income": HousePropertyIncome(
             property_type=PropertyType.SELF_OCCUPIED,
@@ -345,6 +408,135 @@ def test_builder_rejects_missing_or_unsupported_property_details() -> None:
     })
     with pytest.raises(ValueError, match=r"24\(b\)"):
         _build(body)
+
+
+def test_builder_emits_complete_co_owner_and_tenant_rows() -> None:
+    """Every optional ownership and tenant identity uses exact CBDT keys."""
+    profile = PropertyFilingProfile(
+        address_detail="Flat 12A, MG Road",
+        city_or_town_or_district="Delhi",
+        state_code="07",
+        country_code="91",
+        pin_code="110001",
+        property_owner="OT",
+        property_owner_other="Beneficial owner",
+        is_co_owned=True,
+        assessee_share_percentage=Decimal("60.25"),
+        co_owners=[PropertyCoOwner(
+            serial_number=1,
+            name="Priya Sharma",
+            pan="PQRSX1234Y",
+            aadhaar="123456789012",
+            share_percentage=Decimal("39.75"),
+        )],
+        tenants=[
+            PropertyTenant(
+                serial_number=1,
+                name="Tenant One",
+                pan="LMNOP1234Q",
+                aadhaar="234567890123",
+                pan_or_tan="DELA12345B",
+            ),
+            PropertyTenant(serial_number=2, name="Tenant Two"),
+        ],
+    )
+    body = _input().model_copy(update={
+        "house_property_income": HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            ownership_share_percentage=Decimal("60.25"),
+        ),
+        "property_profile": profile,
+        "property_profiles": [profile],
+    })
+
+    prop = _build(body)["ITR"]["ITR1"]["ITR1_IncomeDeductions"][
+        "PropertyDetails"
+    ][0]
+    assert prop["PropertyOwner"] == "OT"
+    assert prop["PropertyOwnerOther"] == "Beneficial owner"
+    assert prop["PropCoOwnedFlg"] == "YES"
+    assert prop["AsseseeShareProperty"] == 60.25
+    assert prop["CoOwners"] == [{
+        "CoOwnersSNo": 1,
+        "NameCoOwner": "Priya Sharma",
+        "PAN_CoOwner": "PQRSX1234Y",
+        "Aadhaar_CoOwner": "123456789012",
+        "PercentShareProperty": 39.75,
+    }]
+    assert prop["TenantDetails"] == [
+        {
+            "TenantSNo": 1,
+            "NameofTenant": "Tenant One",
+            "PANofTenant": "LMNOP1234Q",
+            "AadhaarofTenant": "234567890123",
+            "PANTANofTenant": "DELA12345B",
+        },
+        {"TenantSNo": 2, "NameofTenant": "Tenant Two"},
+    ]
+    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8-sig"))
+    assert list(Draft4Validator(schema).iter_errors(_build(body))) == []
+
+
+def test_builder_rejects_ownership_share_changed_after_compute() -> None:
+    """The JSON profile cannot claim a share different from calculation input."""
+    profile = PropertyFilingProfile(
+        address_detail="Flat 12A, MG Road",
+        city_or_town_or_district="Delhi",
+        state_code="07",
+        country_code="91",
+        pin_code="110001",
+        is_co_owned=True,
+        assessee_share_percentage=Decimal("60"),
+        co_owners=[PropertyCoOwner(
+            serial_number=1,
+            name="Priya Sharma",
+            share_percentage=Decimal("40"),
+        )],
+    )
+    body = _input().model_copy(update={
+        "property_profile": profile,
+        "property_profiles": [profile],
+    })
+
+    with pytest.raises(ValueError, match="ownership share"):
+        _build(body)
+
+
+def test_builder_emits_section_24b_loan_details() -> None:
+    """Complete typed 24(b) evidence is serialized and cross-footed."""
+    hp = HousePropertyIncome(
+        property_type=PropertyType.SELF_OCCUPIED,
+        home_loan_interest_paid=Decimal("200000"),
+    )
+    body = _input().model_copy(update={
+        "house_property_income": hp,
+        "house_properties": [hp],
+        "loan_details_24b_list": [LoanDetail(
+            loan_taken_from="I",
+            lender_name="Housing Finance Ltd",
+            account_or_reference_number="HOME-123",
+            loan_amount=Decimal("3000000"),
+            outstanding_loan_amount=Decimal("2400000"),
+            sanction_date=date(2020, 4, 1),
+            interest_paid_self_occupied=Decimal("200000"),
+        )],
+    })
+
+    rent = _build(body)["ITR"]["ITR1"]["ITR1_IncomeDeductions"][
+        "PropertyDetails"
+    ][0]["Rentdetails"]
+    assert rent["Section24B"] == {
+        "Section24BDtls": [{
+            "LoanTknFrom": "I",
+            "BankOrInstnName": "Housing Finance Ltd",
+            "LoanAccNoOfBankOrInstnRefNo": "HOME-123",
+            "DateofLoan": "2020-04-01",
+            "TotalLoanAmt": 3000000,
+            "LoanOutstndngAmt": 2400000,
+            "InterestUs24B": 200000,
+        }],
+        "TotalInterestUs24B": 200000,
+    }
 
 
 def test_builder_preserves_filing_profile_without_placeholders() -> None:
@@ -409,23 +601,46 @@ def test_builder_rejects_missing_filing_profile() -> None:
 
 
 def test_builder_maps_alternate_address() -> None:
-    """A supplied alternate address must be preserved in PersonalInfo."""
+    """All optional contact and alternate-address fields must be preserved."""
     profile = _input().filing_profile
     assert profile is not None
     alternate = PostalAddress(
         residence_no="9",
+        residence_name="Heritage House",
+        road_or_street="Camp Road",
         locality_or_area="Camp Area",
         city_or_town_or_district="Pune",
         state_code="27",
         country_code="91",
         pin_code="411001",
+        zip_code="",
     )
     body = _input().model_copy(update={
-        "filing_profile": profile.model_copy(update={"alternate_address": alternate})
+        "filing_profile": profile.model_copy(update={
+            "primary_address": profile.primary_address.model_copy(update={
+                "secondary_mobile_country_code": 971,
+                "secondary_mobile_no": "501234567",
+                "secondary_email": "asha.secondary@example.com",
+            }),
+            "alternate_address": alternate,
+        })
     })
     personal = _build(body)["ITR"]["ITR1"]["PersonalInfo"]
     assert personal["SecondaryAdd"] == "Y"
-    assert personal["AlternateAddress"]["CityOrTownOrDistrict"] == "Pune"
+    assert personal["Address"]["CountryCodeMobileNoSec"] == 971
+    assert personal["Address"]["MobileNoSec"] == 501234567
+    assert personal["Address"]["EmailAddressSec"] == "asha.secondary@example.com"
+    assert personal["AlternateAddress"] == {
+        "ResidenceNo": "9",
+        "ResidenceName": "Heritage House",
+        "RoadOrStreet": "Camp Road",
+        "LocalityOrArea": "Camp Area",
+        "CityOrTownOrDistrict": "Pune",
+        "StateCode": "27",
+        "CountryCode": "91",
+        "PinCode": 411001,
+        "ZipCode": "",
+    }
     assert "MobileNo" not in personal["AlternateAddress"]
 
 
@@ -441,7 +656,7 @@ def test_filing_profile_rejects_non_self_and_unsupported_sections() -> None:
     with pytest.raises(ValidationError):
         ITR1FilingProfile(**{
             **profile.model_dump(),
-            "return_file_section": 17,
+            "return_file_section": 15,
         })
 
 
@@ -543,6 +758,7 @@ def test_builder_maps_real_tax_credit_and_challan_rows() -> None:
             gross_amount=Decimal("100000"),
             tcs_collected=Decimal("1000"),
             tcs_credit_claimed=Decimal("1000"),
+            financial_year="2023-24",
         )],
         "advance_tax_paid": Decimal("5000"),
         "tax_payment_entries": [TaxPaymentDetail(
@@ -554,19 +770,117 @@ def test_builder_maps_real_tax_credit_and_challan_rows() -> None:
         )],
     })
 
-    itr1 = _build(body)["ITR"]["ITR1"]
+    document = _build(body)
+    itr1 = document["ITR"]["ITR1"]
 
-    assert itr1["TDSonSalaries"]["TDSonSalary"][0][
-        "EmployerOrDeductorOrCollectDetl"
-    ]["TAN"] == "DELA00001A"
-    assert itr1["TDSonOthThanSals"]["TDSonOthThanSal"][0]["TDSSection"] == "94A"
-    assert itr1["ScheduleTCS"]["TCS"][0]["TotalTCS"] == 1000
+    assert itr1["TDSonSalaries"] == {
+        "TDSonSalary": [{
+            "EmployerOrDeductorOrCollectDetl": {
+                "TAN": "DELA00001A",
+                "EmployerOrDeductorOrCollecterName": "Example Employer",
+            },
+            "IncChrgSal": 500000,
+            "TotalTDSSal": 25000,
+        }],
+        "TotalTDSonSalaries": 25000,
+    }
+    assert itr1["TDSonOthThanSals"] == {
+        "TDSonOthThanSal": [{
+            "EmployerOrDeductorOrCollectDetl": {
+                "TAN": "MUMA00001A",
+                "EmployerOrDeductorOrCollecterName": "Example Bank",
+            },
+            "TDSSection": "94A",
+            "AmtForTaxDeduct": 20000,
+            "DeductedYr": "2025",
+            "TotTDSOnAmtPaid": 2000,
+            "ClaimOutOfTotTDSOnAmtPaid": 2000,
+        }],
+        "TotalTDSonOthThanSals": 2000,
+    }
+    assert itr1["ScheduleTCS"] == {
+        "TCS": [{
+            "EmployerOrDeductorOrCollectDetl": {
+                "TAN": "BLRA00001A",
+                "EmployerOrDeductorOrCollecterName": "Example Collector",
+            },
+            "AmtTaxCollected": 100000,
+            "CollectedYr": "2023",
+            "TotalTCS": 1000,
+            "AmtTCSClaimedThisYear": 1000,
+        }],
+        "TotalSchTCS": 1000,
+    }
     assert itr1["TaxPayments"]["TaxPayment"][0] == {
         "BSRCode": "1234ABC",
         "DateDep": "2025-06-15",
         "SrlNoOfChaln": 1,
         "Amt": 5000,
     }
+    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8-sig"))
+    assert list(Draft4Validator(schema).iter_errors(document)) == []
+
+
+def test_builder_preserves_compact_form_optional_schedule_fields() -> None:
+    """Compact exempt income, declarations, 80CCH, and TDS years serialize exactly."""
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80cch=Decimal("12000"),
+        ),
+        "pran_number": "123456789012",
+        "form_10ba_ack_number": "123456789012345",
+        "exempt_income_entries": [CompactExemptIncomeEntry(
+            category="OTH",
+            sub_category="10(16)",
+            description="Scholarship",
+            amount=Decimal("25000"),
+        )],
+        "tds2_entries": [TDS2Entry(
+            deductor_tan="MUMA00001A",
+            deductor_name="Example Bank",
+            tds_section="194A",
+            gross_amount=Decimal("20000"),
+            tds_deducted=Decimal("2000"),
+            tds_claimed_this_year=Decimal("1500"),
+            deducted_year="2024",
+        )],
+        "tds3_entries": [TDS3Entry(
+            tenant_pan="ABCDE1234F",
+            tenant_name="Tenant",
+            gross_receipt=Decimal("100000"),
+            deducted_yr="2024",
+            tds_deducted=Decimal("5000"),
+            tds_claimed=Decimal("4000"),
+            tds_section="194IB",
+        )],
+    })
+
+    document = _build(body)
+    itr1 = document["ITR"]["ITR1"]
+    chapter = itr1["ITR1_IncomeDeductions"]["UsrDeductUndChapVIA"]
+    assert chapter["AnyOthSec80CCH"] == 12000
+    assert chapter["PRANDtls"] == [{"PRANNum": "123456789012"}]
+    assert chapter["Form10BAAckNum"] == "123456789012345"
+    exempt = itr1["ITR1_IncomeDeductions"]["ExemptIncAgriOthUs10"]
+    assert {
+        "Category": "OTH",
+        "SubCategory": "10(16)",
+        "Description": "Scholarship",
+        "OthAmount": 25000,
+    } in exempt["ExemptIncAgriOthUs10Dtls"]
+    assert exempt["ExemptIncAgriOthUs10Total"] == 30000
+    assert itr1["TDSonOthThanSals"]["TDSonOthThanSal"][0]["DeductedYr"] == "2024"
+    assert itr1["ScheduleTDS3Dtls"]["TDS3Details"][0] == {
+        "PANofTenant": "ABCDE1234F",
+        "NameOfTenant": "Tenant",
+        "GrsRcptToTaxDeduct": 100000,
+        "DeductedYr": "2024",
+        "TDSDeducted": 5000,
+        "TDSClaimed": 4000,
+        "TDSSection": "4-IB",
+    }
+    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8-sig"))
+    assert list(Draft4Validator(schema).iter_errors(document)) == []
 
 
 def test_80c_family_components_do_not_double_report() -> None:
@@ -593,6 +907,52 @@ def test_80c_family_components_do_not_double_report() -> None:
     assert deductions["TotalChapVIADeductions"] == 100000
 
 
+def test_builder_emits_official_80ccc_identifier_rows() -> None:
+    """80CCC must retain the official identifier type, name, and amount."""
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(amount_80ccc=Decimal("25000")),
+        "schedule_80ccc_entries": [Schedule80CCCEntry(
+            identifier_type="PRAN",
+            identifier_name="PRAN-123456",
+            amount=Decimal("25000"),
+        )],
+    })
+
+    chapter = _build(body)["ITR"]["ITR1"]["ITR1_IncomeDeductions"][
+        "UsrDeductUndChapVIA"
+    ]
+    assert chapter["PensionContribution80CCC"] == [{
+        "TypeofIdentifier": "PRAN",
+        "NameofIdentifier": "PRAN-123456",
+        "Amount": 25000,
+    }]
+
+
+def test_builder_emits_senior_80d_medical_expenses() -> None:
+    """Non-insured senior medical expenditure must reach its official fields."""
+    schedule_80d = Schedule80D(
+        has_self_senior=True,
+        has_parents_senior=True,
+        medical_expense_self_senior=Decimal("30000"),
+        medical_expense_parents_senior=Decimal("40000"),
+    )
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "age_bracket": AgeBracket.SIXTY_TO_80,
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80d_self_family=Decimal("30000"),
+            amount_80d_parents=Decimal("40000"),
+            has_parents_senior=True,
+        ),
+        "schedule_80d": schedule_80d,
+    })
+
+    schedule = _build(body)["ITR"]["ITR1"]["Schedule80D"][
+        "Sec80DSelfFamSrCtznHealth"
+    ]
+    assert schedule["MedicalExpSlfFamSrCtzn"] == 30000
+    assert schedule["MedicalExpParentsSrCtzn"] == 40000
+
+
 def test_builder_maps_all_real_bank_accounts() -> None:
     """Refund details must preserve every bank and exactly one primary account."""
     body = _input().model_copy(update={
@@ -609,6 +969,13 @@ def test_builder_maps_all_real_bank_accounts() -> None:
                 ifsc_code="HDFC0005678",
                 bank_name="HDFC Bank",
                 account_type="current",
+                is_primary=False,
+            ),
+            BankAccount(
+                account_number="OTHER123",
+                ifsc_code="ICIC0009012",
+                bank_name="ICICI Bank",
+                account_type="other",
                 is_primary=False,
             ),
         ]
@@ -630,6 +997,13 @@ def test_builder_maps_all_real_bank_accounts() -> None:
             "BankName": "HDFC Bank",
             "BankAccountNo": "CURRENT123",
             "AccountType": "CA",
+            "UseForRefund": "false",
+        },
+        {
+            "IFSCCode": "ICIC0009012",
+            "BankName": "ICICI Bank",
+            "BankAccountNo": "OTHER123",
+            "AccountType": "OTH",
             "UseForRefund": "false",
         },
     ]
@@ -670,6 +1044,45 @@ def test_builder_omits_zero_unsupported_schedules() -> None:
         "TaxReturnPreparer",
     ):
         assert key not in itr1
+
+
+def test_builder_maps_tax_return_preparer_exactly() -> None:
+    """Both official TRP identifier formats and reimbursement must serialize."""
+    body = _input().model_copy(update={
+        "tax_return_preparer": TaxReturnPreparer(
+            identification_number="123456",
+            name="Registered Tax Preparer",
+            reimbursement_from_government=Decimal("750"),
+        ),
+    })
+    document = _build(body)
+    assert document["ITR"]["ITR1"]["TaxReturnPreparer"] == {
+        "IdentificationNoOfTRP": "123456",
+        "NameOfTRP": "Registered Tax Preparer",
+        "ReImbFrmGov": 750,
+    }
+    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8-sig"))
+    assert list(Draft4Validator(schema).iter_errors(document)) == []
+
+
+@pytest.mark.parametrize("identifier", ["X123456789", "T123", "12345", "1234567"])
+def test_tax_return_preparer_rejects_invalid_identifier(identifier: str) -> None:
+    """TRP identifiers must match the exact CBDT ten- or six-character forms."""
+    with pytest.raises(ValidationError):
+        TaxReturnPreparer(
+            identification_number=identifier,
+            name="Registered Tax Preparer",
+        )
+
+
+def test_tax_return_preparer_rejects_schema_amount_overflow() -> None:
+    """TRP reimbursement cannot exceed the official 14-digit integer maximum."""
+    with pytest.raises(ValidationError):
+        TaxReturnPreparer(
+            identification_number="T123456789",
+            name="Registered Tax Preparer",
+            reimbursement_from_government=Decimal("100000000000000"),
+        )
 
 
 def test_builder_allocates_capped_80c_rows_to_allowed_total() -> None:
@@ -764,6 +1177,7 @@ def test_builder_emits_complete_schedule_80u() -> None:
         disability_type=DisabilitySeverity.NORMAL,
         disability_category=DisabilityCategory.OTHER,
         deduction_amount=Decimal("75000"),
+        form_10ia_ack_number="ACK80U123",
         udid_number="UDID80U123",
     )
     body = _input().model_copy(update={
@@ -779,6 +1193,7 @@ def test_builder_emits_complete_schedule_80u() -> None:
         "NatureOfDisability": "1",
         "TypeOfDisability": "2",
         "DeductionAmount": 75000,
+        "Form10IAAckNum": "ACK80U123",
         "UDIDNum": "UDID80U123",
     }
     assert itr1["ITR1_IncomeDeductions"]["DeductUndChapVIA"]["Section80U"] == 75000
@@ -1145,6 +1560,71 @@ def test_builder_maps_complete_schedule_80g_and_user_eligible_amounts() -> None:
     assert chapter["DeductUndChapVIA"]["Section80G"] == 10000
 
 
+def test_builder_maps_all_four_schedule_80g_categories() -> None:
+    """Every official 80G category must emit its complete row and totals."""
+    categories = [
+        Donation80GCategory.HUNDRED_WITHOUT_LIMIT,
+        Donation80GCategory.FIFTY_WITHOUT_LIMIT,
+        Donation80GCategory.HUNDRED_WITH_LIMIT,
+        Donation80GCategory.FIFTY_WITH_LIMIT,
+    ]
+    donations = [
+        Donation80G(
+            category=category,
+            cash_amount=Decimal("1000"),
+            non_cash_amount=Decimal("9000"),
+            donee_name=f"Approved Trust {index}",
+            donee_pan=pan,
+            approval_reference_number=f"ARN-80G-{index}",
+            address=DonationAddress(
+                address_line=f"{index} Charity Road",
+                city_or_district="Delhi",
+                state_code="07",
+                pin_code=110001 + index,
+            ),
+            ifsc_code="SBIN0000001",
+            transaction_ref=f"UTR-80G-{index}",
+        )
+        for index, (category, pan) in enumerate(
+            zip(
+                categories,
+                ("AAATA1234A", "AAATB1234B", "AAATC1234C", "AAATD1234D"),
+            ),
+            start=1,
+        )
+    ]
+    body = _input(amount_80c="0", amount_80d="0").model_copy(update={
+        "deductions_chapter6a": Chapter6ADeductions(
+            amount_80g=Decimal("30000"),
+            donations_80g=donations,
+        ),
+    })
+
+    document = _build(body)
+    schedule = document["ITR"]["ITR1"]["Schedule80G"]
+    specs = {
+        "Don100Percent": ("TotEligibleDon100Percent", 10000),
+        "Don50PercentNoApprReqd": ("TotEligibleDon50Percent", 5000),
+        "Don100PercentApprReqd": ("TotEligibleDon100PercentApprReqd", 10000),
+        "Don50PercentApprReqd": ("TotEligibleDon50PercentApprReqd", 5000),
+    }
+    for key, (eligible_key, eligible_amount) in specs.items():
+        category = schedule[key]
+        row = category["DoneeWithPan"][0]
+        assert row["DonationAmtCash"] == 1000
+        assert row["DonationAmtOtherMode"] == 9000
+        assert row["DonationAmt"] == 10000
+        assert row["EligibleDonationAmt"] == eligible_amount
+        assert row["AddressDetail"]["PinCode"] >= 110002
+        assert category[eligible_key] == eligible_amount
+    assert schedule["TotalDonationsUs80GCash"] == 4000
+    assert schedule["TotalDonationsUs80GOtherMode"] == 36000
+    assert schedule["TotalDonationsUs80G"] == 40000
+    assert schedule["TotalEligibleDonationsUs80G"] == 30000
+    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8-sig"))
+    assert list(Draft4Validator(schema).iter_errors(document)) == []
+
+
 def test_builder_rejects_incomplete_schedule_80g_identity() -> None:
     """Official Schedule 80G generation must not invent donee details."""
     donation = Donation80G(
@@ -1190,11 +1670,16 @@ def test_builder_maps_complete_schedule_80ggc() -> None:
         "PoliticalPartyName": "National Reform Party",
         "PoliticalPartyPAN": "ABCDE1234F",
     }]
+    assert schedule["TotalDonationAmtCash80GGC"] == 2000
+    assert schedule["TotalDonationAmtOtherMode80GGC"] == 10000
     assert schedule["TotalDonationsUs80GGC"] == 12000
     assert schedule["TotalEligibleDonationAmt80GGC"] == 9000
     chapter = itr1["ITR1_IncomeDeductions"]
     assert chapter["UsrDeductUndChapVIA"]["Section80GGC"] == 9000
     assert chapter["DeductUndChapVIA"]["Section80GGC"] == 9000
+    document = _build(body)
+    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8-sig"))
+    assert list(Draft4Validator(schema).iter_errors(document)) == []
 
 
 def test_builder_rejects_80ggc_party_pan_equal_to_assessee_pan() -> None:
@@ -1226,6 +1711,13 @@ def test_builder_rejects_scalar_only_schedule_80ggc() -> None:
     })
     with pytest.raises(ValueError, match="Schedule 80GGC contribution rows"):
         _build(body)
+
+
+@pytest.mark.parametrize("field", ["amount", "cash_amount", "other_mode_amount"])
+def test_80ggc_rejects_schema_amount_overflow(field: str) -> None:
+    """Every official 80GGC amount source respects the schema's maximum."""
+    with pytest.raises(ValidationError):
+        PoliticalContribution(**{field: Decimal("100000000000000")})
 
 
 def test_builder_maps_complete_schedule_80gga() -> None:

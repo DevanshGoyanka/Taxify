@@ -61,16 +61,37 @@ from app.schemas.itr1 import (
     BankAccountType,
     CapitalGainsIncome,
     Chapter6ADeductions,
+    DependentRelationship,
+    DisabilityCategory,
+    DisabilitySeverity,
+    Donation80GGA,
     Donation80G as ITR1Donation80G,
     Donation80GCategory,
     DonationAddress,
     HousePropertyIncome,
+    HRADetails,
+    InsurancePolicy,
+    ITR1Schedule80EEALoanEntry,
+    ITR1Schedule80EEBLoanEntry,
+    ITR1Schedule80EELoanEntry,
     ITR1Input,
+    LoanDetail,
     OtherSourcesIncome,
+    OtherSourceDetail,
     PropertyType,
     SalaryIncome,
+    Schedule80CCCEntry,
+    Schedule80D,
+    Schedule80DD,
+    Schedule80EEntry,
+    Schedule80G,
+    Schedule80GGA,
+    Schedule80GGC,
+    Schedule80U,
+    PoliticalContribution,
     TDS1Entry,
     TDS2Entry,
+    TDS3Entry,
     TCSEntry,
     TaxPaymentDetail,
     TaxRegime,
@@ -206,13 +227,15 @@ def _map_house_property(prop: HouseProperty) -> HousePropertyIncome:
         loan_interest = sum((hl.interestUs24B for hl in prop.homeLoans), Decimal("0"))
     return HousePropertyIncome(
         property_type=property_type,
-        annual_rent_received=prop.annualRent if prop.annualRent > 0 else (
-            prop.annualLettingValue if prop.annualLettingValue > 0 else prop.maxRent
+        annual_rent_received=prop.annualLettingValue if prop.annualLettingValue > 0 else (
+            prop.annualRent if prop.annualRent > 0 else prop.maxRent
+        ),
+        rent_not_realized=prop.unrealizedRent,
+        ownership_share_percentage=(
+            prop.ownershipShare if prop.isCoOwned else Decimal("100")
         ),
         municipal_taxes_paid=prop.municipalTaxesPaid,
         home_loan_interest_paid=loan_interest,
-        municipal_value=prop.municipalRateableValue,
-        fair_rent=prop.fairRentValue,
         arrears_unrealised_rent_received=prop.arrearsOfRent,
     )
 
@@ -228,11 +251,61 @@ def _map_house_properties(
     return mapped[0], mapped
 
 
+def _map_24b_loans(properties: list[HouseProperty]) -> list[LoanDetail]:
+    """Map canonical home-loan evidence to official Schedule 24(b) rows."""
+    rows: list[LoanDetail] = []
+    for property_sequence_no, prop in enumerate(properties, start=1):
+        property_type = _HP_TYPE_MAP.get(prop.propertyType, PropertyType.LET_OUT)
+        for loan in prop.homeLoans:
+            rows.append(LoanDetail(
+                property_sequence_no=property_sequence_no,
+                loan_taken_from=loan.lenderType,
+                lender_name=loan.lenderName,
+                loan_amount=loan.totalLoanAmount,
+                sanction_date=_to_date(loan.dateOfLoan),
+                account_or_reference_number=loan.loanAccountNo,
+                outstanding_loan_amount=loan.loanOutstandingAmount,
+                interest_paid_self_occupied=(
+                    loan.interestUs24B
+                    if property_type == PropertyType.SELF_OCCUPIED
+                    else Decimal("0")
+                ),
+                interest_paid_let_out=(
+                    loan.interestUs24B
+                    if property_type != PropertyType.SELF_OCCUPIED
+                    else Decimal("0")
+                ),
+            ))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Other Sources
 # ---------------------------------------------------------------------------
 
+_INTEREST_NATURES = {
+    "SAVINGS_BANK": "SAV",
+    "TERM_DEPOSIT": "IFD",
+    "POST_OFFICE": "IFD",
+    "SCSS": "IFD",
+    "IT_REFUND": "TAX",
+    "PF_10_11_FIRST": "10(11)(iP)",
+    "PF_10_11_SECOND": "10(11)(iiP)",
+    "PF_10_12_FIRST": "10(12)(iP)",
+    "PF_10_12_SECOND": "10(12)(iiP)",
+    "NSC": "OTH",
+    "BONDS": "OTH",
+    "SECURITIES": "OTH",
+    "OTHER": "OTH",
+}
 _SAVINGS_KINDS = {"SAVINGS_BANK", "POST_OFFICE"}
+
+_OTHER_INTEREST_DESCRIPTIONS = {
+    "NSC": "NSC accrued interest",
+    "BONDS": "Interest on bonds or debentures",
+    "SECURITIES": "Interest on securities",
+    "OTHER": "Other interest income",
+}
 
 
 def _map_other_sources(draft: ReturnDraft) -> tuple[OtherSourcesIncome, Decimal, Decimal, Decimal, Decimal]:
@@ -243,14 +316,28 @@ def _map_other_sources(draft: ReturnDraft) -> tuple[OtherSourcesIncome, Decimal,
     """
     interest: list[InterestIncome] = draft.otherSources.interest
     interest_sb = sum(
-        (i.grossAmount for i in interest if i.kind in _SAVINGS_KINDS),
+        (i.grossAmount for i in interest if i.kind == "SAVINGS_BANK"),
         Decimal("0"),
     )
     interest_fd = sum(
-        (i.grossAmount for i in interest if i.kind not in _SAVINGS_KINDS),
+        (
+            i.grossAmount for i in interest
+            if i.kind in {"TERM_DEPOSIT", "POST_OFFICE", "SCSS"}
+        ),
         Decimal("0"),
     )
-    total_interest = interest_sb + interest_fd
+    interest_on_it_refund = sum(
+        (i.grossAmount for i in interest if i.kind == "IT_REFUND"),
+        Decimal("0"),
+    )
+    other_interest = sum(
+        (
+            i.grossAmount for i in interest
+            if _INTEREST_NATURES.get(i.kind) not in {"SAV", "IFD", "TAX"}
+        ),
+        Decimal("0"),
+    )
+    total_interest = sum((i.grossAmount for i in interest), Decimal("0"))
 
     total_dividend = sum(
         (d.grossAmount for d in draft.otherSources.dividends),
@@ -273,17 +360,54 @@ def _map_other_sources(draft: ReturnDraft) -> tuple[OtherSourcesIncome, Decimal,
 
     # ITR-1 does not permit lottery/gaming/VDA income — reject early so the
     # caller can raise a clear 422 (mirrors the flat mapper's guard).
-    if total_winnings > 0 and draft.form in {"ITR-1", "ITR-4"}:
+    if (total_winnings > 0 or draft.otherSources.gifts) and draft.form in {"ITR-1", "ITR-4"}:
         raise DraftMappingError(
-            "Lottery, gaming, or horse-race winnings are outside ITR-1/ITR-4; "
+            "Lottery, gaming, horse-race winnings, and taxable gifts are outside ITR-1/ITR-4; "
             "use ITR-2/ITR-3."
         )
+
+    detail_amounts: dict[str, Decimal] = {}
+    other_descriptions: list[str] = []
+
+    def add_detail(nature: str, amount: Decimal, description: str = "") -> None:
+        if amount <= 0:
+            return
+        detail_amounts[nature] = detail_amounts.get(nature, Decimal("0")) + amount
+        if nature == "OTH" and description and description not in other_descriptions:
+            other_descriptions.append(description)
+
+    for row in interest:
+        nature = _INTEREST_NATURES.get(row.kind, "OTH")
+        description = row.remarks or _OTHER_INTEREST_DESCRIPTIONS.get(row.kind, "")
+        add_detail(nature, row.grossAmount, description)
+    add_detail("FAP", family_pension)
+    add_detail("DIV", total_dividend)
+    for row in draft.otherSources.otherIncome:
+        add_detail("OTH", row.amount, row.description or row.nature.replace("_", " ").title())
+
+    source_details = [
+        OtherSourceDetail(
+            nature=nature,
+            amount=amount,
+            other_description=(
+                "; ".join(other_descriptions)[:125] or "Other income"
+                if nature == "OTH" else None
+            ),
+        )
+        for nature, amount in detail_amounts.items()
+    ]
 
     os_input = OtherSourcesIncome(
         savings_bank_interest=interest_sb,
         fixed_deposit_interest=interest_fd,
         family_pension_received=family_pension,
         dividend_income=total_dividend,
+        interest_on_it_refund=interest_on_it_refund,
+        other_income=(
+            other_interest
+            + sum((row.amount for row in draft.otherSources.otherIncome), Decimal("0"))
+        ),
+        source_details=source_details,
     )
     return os_input, total_interest, total_dividend, family_pension, total_winnings
 
@@ -356,13 +480,190 @@ def _map_donations(donations: list[Donation80G]) -> tuple[list[ITR1Donation80G],
             address=address,
             transaction_ref=row.transactionRefNum or None,
             ifsc_code=row.ifscCode or None,
+            total_donation=row.donationAmtCash + row.donationAmtOtherMode,
         ))
     total = sum((d.cash_amount + d.non_cash_amount for d in mapped), Decimal("0"))
     return mapped, total
 
 
-def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6ADeductions, Decimal]:
-    """Map canonical deductions → ``Chapter6ADeductions`` + total 80G."""
+def _map_80d_schedule(section: Section80D) -> Schedule80D:
+    """Preserve policy-level 80D evidence with its official bucket code."""
+    self_is_senior = section.selfSeniorCitizen in {"Y", "S"}
+    parents_are_senior = section.parentsSeniorCitizen in {"Y", "P"}
+    buckets = (
+        ("1b" if self_is_senior else "1a", getattr(section, "selfFamilySenior" if self_is_senior else "selfFamily")),
+        ("2b" if parents_are_senior else "2a", getattr(section, "parentsSenior" if parents_are_senior else "parents")),
+    )
+    policies = [
+        InsurancePolicy(
+            section=code,
+            premium_paid=policy.premiumAmount,
+            insurer_name=policy.insurerName or None,
+            policy_number=policy.policyNo or None,
+        )
+        for code, category in buckets
+        for policy in category.policies
+        if policy.premiumAmount > 0
+    ]
+    return Schedule80D(
+        has_self_senior=self_is_senior,
+        has_parents_senior=parents_are_senior,
+        not_claiming_self=section.selfSeniorCitizen == "S",
+        not_claiming_parents=section.parentsSeniorCitizen == "P",
+        premium_1a_non_senior=(
+            sum((p.premiumAmount for p in section.selfFamily.policies), Decimal("0"))
+            if not self_is_senior else Decimal("0")
+        ),
+        premium_1b_senior=(
+            sum((p.premiumAmount for p in section.selfFamilySenior.policies), Decimal("0"))
+            if self_is_senior else Decimal("0")
+        ),
+        premium_2a_parents_non_senior=(
+            sum((p.premiumAmount for p in section.parents.policies), Decimal("0"))
+            if not parents_are_senior else Decimal("0")
+        ),
+        premium_2b_parents_senior=(
+            sum((p.premiumAmount for p in section.parentsSenior.policies), Decimal("0"))
+            if parents_are_senior else Decimal("0")
+        ),
+        preventive_checkup_self=getattr(section, "selfFamilySenior" if self_is_senior else "selfFamily").preventiveCheckup,
+        preventive_checkup_parents=getattr(section, "parentsSenior" if parents_are_senior else "parents").preventiveCheckup,
+        medical_expense_self_senior=(
+            section.selfFamilySenior.medicalExpense if self_is_senior else Decimal("0")
+        ),
+        medical_expense_parents_senior=(
+            section.parentsSenior.medicalExpense if parents_are_senior else Decimal("0")
+        ),
+        policies=policies,
+    )
+
+
+def _map_80gga(draft: ReturnDraft) -> Schedule80GGA | None:
+    rows = [
+        Donation80GGA(
+            relevant_clause=row.relevantClause,
+            donee_name=row.doneeName,
+            donee_pan=row.doneePAN,
+            address=DonationAddress(
+                address_line=row.addressLine,
+                city_or_district=row.city,
+                state_code=row.stateCode,
+                pin_code=int(row.pinCode or 0),
+            ),
+            cash_amount=row.cashAmount,
+            other_mode_amount=row.otherModeAmount,
+        )
+        for row in draft.deductions.schedule80GGA
+    ]
+    return Schedule80GGA(donations=rows) if rows else None
+
+
+def _map_80ggc(draft: ReturnDraft) -> Schedule80GGC | None:
+    rows = [
+        PoliticalContribution(
+            cash_amount=row.cashAmount,
+            other_mode_amount=row.otherModeAmount,
+            contribution_date=_to_date(row.contributionDate),
+            transaction_ref=row.transactionRef or None,
+            ifsc_code=row.ifscCode or None,
+            political_party_name=row.politicalPartyName or None,
+            political_party_pan=row.politicalPartyPAN or None,
+        )
+        for row in draft.deductions.schedule80GGC
+    ]
+    return Schedule80GGC(contributions=rows) if rows else None
+
+
+_DISABILITY_TYPE_MAP = {
+    "1": DisabilityCategory.AUTISM_CEREBRAL_PALSY_OR_MULTIPLE,
+    "2": DisabilityCategory.OTHER,
+}
+_DISABILITY_SEVERITY_MAP = {
+    "1": DisabilitySeverity.NORMAL,
+    "2": DisabilitySeverity.SEVERE,
+}
+_DEPENDENT_MAP = {
+    "1": DependentRelationship.SPOUSE,
+    "2": DependentRelationship.SON,
+    "3": DependentRelationship.DAUGHTER,
+    "4": DependentRelationship.FATHER,
+    "5": DependentRelationship.MOTHER,
+    "6": DependentRelationship.BROTHER,
+    "7": DependentRelationship.SISTER,
+    "8": DependentRelationship.MEMBER_OF_HUF,
+}
+
+
+def _map_disability_schedules(via: ChapterVIA) -> tuple[Schedule80DD | None, Schedule80U | None]:
+    schedule_80dd = None
+    if via.section80DD > 0:
+        schedule_80dd = Schedule80DD(
+            disability_type=_DISABILITY_SEVERITY_MAP.get(via.section80DDNatureOfDisability, DisabilitySeverity.NORMAL),
+            disability_category=_DISABILITY_TYPE_MAP.get(via.section80DDTypeOfDisability, DisabilityCategory.OTHER),
+            deduction_amount=via.section80DD,
+            dependent_relationship=_DEPENDENT_MAP.get(via.section80DDDependentType),
+            dependent_pan=via.section80DDDependentPAN or None,
+            dependent_aadhaar=via.section80DDDependentAadhaar or None,
+            form_10ia_ack_number=via.section80DDForm10IA.acknowledgementNumber or None,
+            udid_number=via.section80DDUDIDNumber or None,
+        )
+    schedule_80u = None
+    if via.section80U > 0:
+        schedule_80u = Schedule80U(
+            disability_type=_DISABILITY_SEVERITY_MAP.get(via.section80UNatureOfDisability, DisabilitySeverity.NORMAL),
+            disability_category=_DISABILITY_TYPE_MAP.get(via.section80UTypeOfDisability, DisabilityCategory.OTHER),
+            deduction_amount=via.section80U,
+            form_10ia_ack_number=via.section80UForm10IA.acknowledgementNumber or None,
+            udid_number=via.section80UUDIDNumber or None,
+        )
+    return schedule_80dd, schedule_80u
+
+
+def _map_deduction_loans(draft: ReturnDraft) -> tuple[list, list, list, list]:
+    rows: dict[str, list] = {"80E": [], "80EE": [], "80EEA": [], "80EEB": []}
+    classes = {
+        "80E": Schedule80EEntry,
+        "80EE": ITR1Schedule80EELoanEntry,
+        "80EEA": ITR1Schedule80EEALoanEntry,
+        "80EEB": ITR1Schedule80EEBLoanEntry,
+    }
+    for loan in draft.deductions.loans.loans:
+        payload = dict(
+            loan_taken_from=loan.loanTakenFrom,
+            lender_name=loan.lenderName,
+            account_or_reference_number=loan.loanAccountNo,
+            loan_date=_to_date(loan.dateOfLoan),
+            total_loan_amount=loan.totalLoanAmount,
+            outstanding_loan_amount=loan.outstandingAmount,
+            interest_paid=loan.interestAmount,
+        )
+        if loan.section == "80EEB":
+            payload["vehicle_registration_number"] = loan.vehicleRegNo
+        rows[loan.section].append(classes[loan.section](**payload))
+    return rows["80E"], rows["80EE"], rows["80EEA"], rows["80EEB"]
+
+
+def _map_hra_details(employers: list[Employer]) -> HRADetails | None:
+    relevant = [e for e in employers if e.hra > 0 or e.rentPaid > 0]
+    if not relevant:
+        return None
+    if len({e.isMetroCity for e in relevant}) > 1:
+        raise DraftMappingError(
+            "A single CBDT Schedule 10(13A) cannot represent mixed metro and "
+            "non-metro HRA evidence; split the return data into one consistent "
+            "place-of-work classification."
+        )
+    return HRADetails(
+        actual_hra_received=sum((e.hra for e in relevant), Decimal("0")),
+        rent_paid=sum((e.rentPaid for e in relevant), Decimal("0")),
+        salary_for_hra=sum((e.basic for e in relevant), Decimal("0")),
+        dearness_allowance=sum((e.da for e in relevant), Decimal("0")),
+        is_metro_city=all(e.isMetroCity for e in relevant),
+    )
+
+
+def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6ADeductions, Decimal, list]:
+    """Map canonical deductions → compute input, total 80G, and Schedule 80C."""
     total_80c = _map_80c(draft.deductions.section80C)
     schedule_80c_entries = _map_80c_entries(draft.deductions.section80C)
     self_80d, parents_80d, prev_self, prev_parents, parents_senior = _map_80d(
@@ -391,25 +692,78 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
         donations = None
         structured_80g = Decimal("0")
         amount_80e = amount_80g = Decimal("0")
+        amount_80ccc = amount_80ccd1 = Decimal("0")
+        amount_80dd = amount_80ddb = amount_80u = Decimal("0")
+        amount_80ee = amount_80eea = amount_80eeb = Decimal("0")
+        amount_80gg = amount_80gga = amount_80ggc = Decimal("0")
+        details_80ddb = None
     else:
-        amount_80e = via.section80E
-        amount_80g = structured_80g if donations else via.section80G
+        loan_interest = {
+            section: sum(
+                (
+                    loan.interestAmount
+                    for loan in draft.deductions.loans.loans
+                    if loan.section == section
+                ),
+                Decimal("0"),
+            )
+            for section in ("80E", "80EE", "80EEA", "80EEB")
+        }
+        amount_80e = via.section80E or loan_interest["80E"]
+        amount_80g = (
+            via.section80G
+            if via.section80G > 0
+            else structured_80g
+        )
+        amount_80ccc = via.section80CCC
+        amount_80ccd1 = via.section80CCDEmployeeOrSE
+        amount_80dd = via.section80DD
+        amount_80ddb = via.section80DDB
+        amount_80u = via.section80U
+        amount_80ee = via.section80EE or loan_interest["80EE"]
+        amount_80eea = via.section80EEA or loan_interest["80EEA"]
+        amount_80eeb = via.section80EEB or loan_interest["80EEB"]
+        amount_80gg = via.section80GG
+        amount_80gga = via.section80GGA or sum(
+            (row.otherModeAmount for row in draft.deductions.schedule80GGA),
+            Decimal("0"),
+        )
+        amount_80ggc = via.section80GGC or sum(
+            (row.otherModeAmount for row in draft.deductions.schedule80GGC),
+            Decimal("0"),
+        )
+        details_80ddb = None
+        if via.section80DDB > 0 and via.section80DDBUserType and via.section80DDBNameOfSpecDisease:
+            from app.schemas.itr1 import Section80DDBDetails
+            details_80ddb = Section80DDBDetails(
+                user_type=via.section80DDBUserType,
+                disease=via.section80DDBNameOfSpecDisease,
+            )
 
     ded_input = Chapter6ADeductions(
         amount_80c=total_80c,
+        amount_80ccc=amount_80ccc,
+        amount_80ccd1=amount_80ccd1,
         amount_80ccd1b=Decimal("0") if tax_regime == TaxRegime.NEW else via.section80CCD1B,
         amount_80ccd2=via.section80CCDEmployer,
+        amount_80cch=via.anyOtherSection80CCH,
         amount_80d_self_family=self_80d,
         amount_80d_parents=parents_80d,
         amount_80d_preventive_self=prev_self,
         amount_80d_preventive_parents=prev_parents,
         has_parents_senior=parents_senior,
         amount_80e=amount_80e,
-        amount_80tta=(
-            min(interest_sb, Decimal("10000"))
-            if tax_regime == TaxRegime.OLD
-            else Decimal("0")
-        ),
+        amount_80dd=amount_80dd,
+        amount_80ddb=amount_80ddb,
+        details_80ddb=details_80ddb,
+        amount_80u=amount_80u,
+        amount_80ee=amount_80ee,
+        amount_80eea=amount_80eea,
+        amount_80eeb=amount_80eeb,
+        amount_80gg=amount_80gg,
+        amount_80gga=amount_80gga,
+        amount_80ggc=amount_80ggc,
+        amount_80tta=Decimal("0") if tax_regime == TaxRegime.NEW else via.section80TTA,
         amount_80ttb=Decimal("0") if tax_regime == TaxRegime.NEW else via.section80TTB,
         amount_80g=amount_80g,
         donations_80g=donations or None,
@@ -443,8 +797,30 @@ def _map_capital_gains(draft: ReturnDraft) -> CapitalGainsIncome | None:
         cost = Decimal(str(simplified.get("totalCostAcquisition", 0) or 0))
         ltcg_112a = max(Decimal("0"), sale - cost)
     else:
+        sale = Decimal("0")
+        cost = Decimal("0")
         ltcg_112a = Decimal("0")
-    return CapitalGainsIncome(ltcg_112a=ltcg_112a)
+    return CapitalGainsIncome(
+        ltcg_112a=ltcg_112a,
+        full_value_of_consideration=sale,
+        cost_of_acquisition=cost,
+    )
+
+
+def _map_compact_exempt_income(draft: ReturnDraft) -> list[Any]:
+    """Map canonical exempt-income rows to the shared compact-form model."""
+    from app.schemas.itr1 import CompactExemptIncomeEntry
+
+    return [
+        CompactExemptIncomeEntry(
+            category=row.category,
+            sub_category=row.subCategory,
+            description=row.description or None,
+            amount=row.grossAmount,
+        )
+        for row in draft.exemptIncome.otherExemptIncome
+        if row.grossAmount > 0
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +850,8 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
     issues: list[dict] = []
     for row in tds_rows:
         if row.claimedInReturn is False:
+            continue
+        if row.schedule == "TDS3":
             continue
         tax = row.taxDeducted
         gross = row.grossAmount
@@ -517,6 +895,17 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
                 tds_section=section or "194A",
                 gross_amount=gross,
                 tds_deducted=tax,
+                tds_claimed_this_year=row.claimOutOfTotTDSOnAmtPaid or tax,
+                financial_year=row.financialYear or (
+                    f"{row.deductedYr}-{str(int(row.deductedYr) + 1)[-2:]}"
+                    if row.deductedYr else None
+                ),
+                deducted_year=str(row.deductedYr) if row.deductedYr else None,
+                head_of_income=(
+                    row.headOfIncome if row.headOfIncome != "NA" else "OS"
+                ),
+                brought_forward_tds=row.broughtFwdTDSAmt,
+                tds_credit_carried_forward=row.amtCarriedFwd,
             ))
             tds_other_total += tax
     tds_interest = sum(
@@ -526,24 +915,66 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
     return tds1, tds2, tds_salary, tds_interest, tds_other_total, claimed_total, issues
 
 
-def _map_tcs(tcs_rows: list[TcsCredit]) -> tuple[list[TCSEntry], Decimal]:
+def _map_tds3(tds_rows: list[TdsCredit]) -> tuple[list[TDS3Entry], Decimal]:
+    mapped: list[TDS3Entry] = []
+    total = Decimal("0")
+    for row in tds_rows:
+        if row.claimedInReturn is False or row.schedule != "TDS3":
+            continue
+        claimed = row.tdsClaimed or row.taxDeducted
+        mapped.append(TDS3Entry(
+            tenant_pan=row.panOfTenant,
+            tenant_name=row.nameOfTenant,
+            tenant_aadhaar=row.aadhaarOfTenant or None,
+            gross_receipt=row.grsRcptToTaxDeduct or row.grossAmount,
+            tds_deducted=row.taxDeducted,
+            tds_claimed=claimed,
+            tds_section=row.tdsSectionCode or row.section,
+            deducted_yr=str(row.deductedYr or "2025"),
+            brought_forward_tds=row.broughtFwdTDSAmt,
+            head_of_income=(
+                row.headOfIncome
+                if row.headOfIncome in {"HP", "BP", "OS", "EI"}
+                else "OS"
+            ),
+            tds_credit_carried_forward=row.amtCarriedFwd,
+        ))
+        total += claimed
+    return mapped, total
+
+
+def _map_tcs(tcs_rows: list[TcsCredit]) -> tuple[list[TCSEntry], Decimal, list[dict]]:
     mapped: list[TCSEntry] = []
     total = Decimal("0")
+    issues: list[dict] = []
     for row in tcs_rows:
         if row.claimedInReturn is False:
             continue
         collected = row.taxCollected
         gross = row.grossAmount
+        tan = (row.collectorTAN or "").strip().upper()
         if collected > 0 or gross > 0:
+            if not _TAN_PATTERN.fullmatch(tan):
+                issues.append({
+                    "creditType": "TCS",
+                    "section": "206C",
+                    "code": "INVALID_TAN_FORMAT",
+                    "field": "collectorTAN",
+                    "enteredValue": tan,
+                })
+                continue
+            claimed = row.tcsClaimedAmtCollOwnHand or collected
             mapped.append(TCSEntry(
-                collector_tan=(row.collectorTAN or "").strip(),
+                collector_tan=tan,
                 collector_name=row.collectorName or None,
-                tcs_section=(row.tcsCreditOwner or "206C"),
+                tcs_section="206C",
                 gross_amount=gross,
                 tcs_collected=collected,
+                tcs_credit_claimed=claimed,
+                financial_year=(f"{row.deductedYr}-{str(int(row.deductedYr) + 1)[-2:]}" if row.deductedYr else None),
             ))
-            total += collected
-    return mapped, total
+            total += claimed
+    return mapped, total, issues
 
 
 def _map_tax_payments(challans: list[TaxChallan]) -> tuple[list[TaxPaymentDetail], Decimal, Decimal, list[Decimal]]:
@@ -551,7 +982,7 @@ def _map_tax_payments(challans: list[TaxChallan]) -> tuple[list[TaxPaymentDetail
 
     Returns ``(sat_entries, advance_total, sat_total, quarterly_advance)``.
     """
-    sat_entries: list[TaxPaymentDetail] = []
+    payment_entries: list[TaxPaymentDetail] = []
     advance_total = Decimal("0")
     sat_total = Decimal("0")
     quarterly = [Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")]
@@ -574,6 +1005,13 @@ def _map_tax_payments(challans: list[TaxChallan]) -> tuple[list[TaxPaymentDetail
                         bucket = idx
                         break
             quarterly[bucket] += amount
+            payment_entries.append(TaxPaymentDetail(
+                amount=amount,
+                payment_type="advance",
+                payment_date=deposit_date,
+                bsr_code=(row.bsrCode or "").strip(),
+                challan_serial_number=str(row.challanSerialNo or "").strip(),
+            ))
         elif row.kind == "SELF_ASSESSMENT":
             # A SAT row dated on/before FY-end is reclassified as advance tax
             # (mirrors the flat mapper's RECLASSIFIED_AS_ADVANCE_TAX logic).
@@ -587,14 +1025,14 @@ def _map_tax_payments(challans: list[TaxChallan]) -> tuple[list[TaxPaymentDetail
                 quarterly[bucket] += amount
             else:
                 sat_total += amount
-                sat_entries.append(TaxPaymentDetail(
+                payment_entries.append(TaxPaymentDetail(
                     amount=amount,
                     payment_type="self_assessment",
                     payment_date=deposit_date,
                     bsr_code=(row.bsrCode or "").strip(),
                     challan_serial_number=str(row.challanSerialNo or "").strip(),
                 ))
-    return sat_entries, advance_total, sat_total, quarterly
+    return payment_entries, advance_total, sat_total, quarterly
 
 
 _BANK_TYPE_MAP = {
@@ -603,7 +1041,7 @@ _BANK_TYPE_MAP = {
     "CC": BankAccountType("cash_credit"),
     "OD": BankAccountType("overdraft"),
     "NRO": BankAccountType("nro"),
-    "OTH": BankAccountType("savings"),  # default unknown → savings
+    "OTH": BankAccountType("other"),
 }
 
 
@@ -670,14 +1108,56 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
 
     salary_input, section_17_1, gross_salary = _map_salary(draft.employers)
     hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
+    loan_details_24b_list = _map_24b_loans(draft.houseProperties)
     os_input, total_interest, total_dividend, family_pension, total_winnings = _map_other_sources(draft)
     ded_input, structured_80g, schedule_80c_entries = _map_deductions(draft, tax_regime)
+    via = draft.deductions.chapterVIA
+    schedule_80d = (
+        _map_80d_schedule(draft.deductions.section80D)
+        if tax_regime == TaxRegime.OLD
+        else None
+    )
+    schedule_80g = (
+        Schedule80G(
+            donations=ded_input.donations_80g or [],
+            total_eligible_amount=ded_input.amount_80g,
+        )
+        if ded_input.donations_80g
+        else None
+    )
+    schedule_80gga = _map_80gga(draft) if tax_regime == TaxRegime.OLD else None
+    schedule_80ggc = _map_80ggc(draft) if tax_regime == TaxRegime.OLD else None
+    schedule_80dd, schedule_80u = _map_disability_schedules(via)
+    if tax_regime == TaxRegime.NEW:
+        schedule_80dd = schedule_80u = None
+    schedule_80ccc_entries = [
+        Schedule80CCCEntry(
+            identifier_type=row.identifierType,
+            identifier_name=row.identifierName,
+            amount=row.amount,
+        )
+        for row in draft.deductions.pensionContribution80CCC
+    ] if tax_regime == TaxRegime.OLD else []
+    (
+        schedule_80e_entries,
+        loan_details_80ee_list,
+        loan_details_80eea_list,
+        loan_details_80eeb_list,
+    ) = _map_deduction_loans(draft)
+    if tax_regime == TaxRegime.NEW:
+        schedule_80e_entries = []
+        loan_details_80ee_list = []
+        loan_details_80eea_list = []
+        loan_details_80eeb_list = []
     cg_input = _map_capital_gains(draft)
 
     tds1, tds2, tds_salary, tds_interest, tds_other, claimed_tds, tds_issues = _map_tds(draft.taxes.tds)
-    tcs_entries, total_tcs = _map_tcs(draft.taxes.tcs)
-    sat_entries, advance_tax, sat_total, quarterly = _map_tax_payments(draft.taxes.challans)
+    tds3_entries, tds3_total = _map_tds3(draft.taxes.tds)
+    claimed_tds += tds3_total
+    tcs_entries, total_tcs, tcs_issues = _map_tcs(draft.taxes.tcs)
+    tax_payment_entries, advance_tax, sat_total, quarterly = _map_tax_payments(draft.taxes.challans)
     bank_accounts = _map_bank_accounts(draft.bankAccounts)
+    hra_details = _map_hra_details(draft.employers) if tax_regime == TaxRegime.OLD else None
 
     itr1_input = ITR1Input(
         age_bracket=age_bracket,
@@ -710,8 +1190,12 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         filing_section=draft.filing.filingSection,
         original_filing_section=None,
         form_10e_filed=False,
-        form_10ia_filed=False,
-        form_10ba_filed=False,
+        form_10ia_filed=(
+            via.section80DDForm10IA.filed == "Y"
+            or via.section80UForm10IA.filed == "Y"
+        ),
+        form_10ba_filed=bool(via.form10BAAckNum),
+        form_10ba_ack_number=via.form10BAAckNum or None,
         pran_number=draft.deductions.chapterVIA.pranNumber or None,
         disease_category=None,
         agniveer_date_of_joining=None,
@@ -721,31 +1205,53 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         assessee_phone_primary=draft.personal.mobile or None,
         representative_email=None,
         representative_phone=None,
-        exempt_income_breakdown={},
-        exempt_income_dropdowns=[],
-        total_exempt_income=None,
-        other_sources_dropdowns=[],
+        exempt_income_breakdown={
+            row.subCategory: row.grossAmount
+            for row in draft.exemptIncome.otherExemptIncome
+            if row.grossAmount > 0
+        },
+        exempt_income_dropdowns=[
+            row.subCategory
+            for row in draft.exemptIncome.otherExemptIncome
+            if row.grossAmount > 0
+        ],
+        exempt_income_entries=_map_compact_exempt_income(draft),
+        total_exempt_income=sum(
+            (row.grossAmount for row in draft.exemptIncome.otherExemptIncome),
+            Decimal("0"),
+        ),
+        other_sources_dropdowns=(
+            ["Family Pension"]
+            if draft.otherSources.familyPension.grossAmount > 0
+            else []
+        ),
         other_sources_total=None,
         dividend_quarterly_breakdown=_map_dividend_quarterly_breakdown(draft),
-        full_value_of_consideration=None,
-        schedule_80d=None,
-        schedule_80g=None,
-        schedule_80gga=None,
-        schedule_80ggc=None,
-        schedule_80dd=None,
-        schedule_80u=None,
+        full_value_of_consideration=(
+            cg_input.full_value_of_consideration if cg_input else None
+        ),
+        schedule_80d=schedule_80d,
+        schedule_80g=schedule_80g,
+        schedule_80gga=schedule_80gga,
+        schedule_80ggc=schedule_80ggc,
+        schedule_80dd=schedule_80dd,
+        schedule_80u=schedule_80u,
         schedule_80c_entries=schedule_80c_entries,
-        schedule_80ccc_entries=[],
-        schedule_80e_entries=[],
-        loan_details_80ee_list=[],
-        loan_details_80eea_list=[],
-        loan_details_80eeb_list=[],
-        property_stamp_duty_value_80eea=None,
-        loan_details_24b_list=[],
-        tax_payment_entries=sat_entries,
+        schedule_80ccc_entries=schedule_80ccc_entries,
+        schedule_80e_entries=schedule_80e_entries,
+        loan_details_80ee_list=loan_details_80ee_list,
+        loan_details_80eea_list=loan_details_80eea_list,
+        loan_details_80eeb_list=loan_details_80eeb_list,
+        property_stamp_duty_value_80eea=(
+            draft.deductions.loans.section80EEAStampDutyValue
+            if loan_details_80eea_list
+            else None
+        ),
+        loan_details_24b_list=loan_details_24b_list,
+        tax_payment_entries=tax_payment_entries,
         bank_accounts=bank_accounts,
-        hra_details=None,
-        schedule_10_13a=None,
+        hra_details=hra_details,
+        schedule_10_13a=hra_details,
         loan_details_80ee=None,
         loan_details_80eea=None,
         loan_details_80eeb=None,
@@ -754,14 +1260,14 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         co_ownership_details=None,
         representative_details=None,
         secondary_address=None,
-        tds3_entries=None,
+        tds3_entries=tds3_entries or None,
         total_taxes_paid=None,
         total_tds_claimed=claimed_tds,
         total_tcs_claimed=total_tcs,
         schedule_it_total_paid=None,
         schedule_tds1_total=tds_salary,
         schedule_tds2_total_claimed=tds_other,
-        schedule_tds3_total_claimed=None,
+        schedule_tds3_total_claimed=tds3_total,
         schedule_tcs_total_claimed=total_tcs,
         filing_profile=None,  # Phase 2: constructed by filing_gateway_v2.
         property_profile=None,
@@ -785,6 +1291,6 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         "quarterly_advance": quarterly,
         "structured_80g": structured_80g,
         "total_tcs": total_tcs,
-        "credit_validation_issues": tds_issues,
+        "credit_validation_issues": [*tds_issues, *tcs_issues],
     }
     return itr1_input, breakdown

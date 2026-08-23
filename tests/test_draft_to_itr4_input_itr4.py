@@ -18,6 +18,7 @@ from app.engine.draft_to_itr4_input import DraftMappingError, draft_to_itr4_inpu
 from app.schemas.itr1 import AgeBracket, TaxRegime
 from app.schemas.itr4 import PresumptiveScheme
 from app.schemas.return_draft import (
+    DividendIncome,
     Employer,
     HouseProperty,
     InterestIncome,
@@ -78,6 +79,8 @@ def test_44ad_draft_without_declared_income_keeps_none():
     assert typed.business_income_44ad is not None
     assert typed.business_income_44ad.income_declared is None
     assert typed.business_income_44ad.total_turnover == Decimal("2000000")
+    assert typed.business_income_44ad.income_at_six_percent is None
+    assert typed.business_income_44ad.income_at_eight_percent is None
 
 
 # ── 44ADA ────────────────────────────────────────────────────────────────────
@@ -124,7 +127,7 @@ def test_44ae_draft_maps_goods_carriage_vehicles():
         id="b1", businessName="Transport Co", natureCode="06051",
         vehicles=[
             {"vehicleType": "HEAVY", "tonnage": Decimal("16"), "ownedMonths": 12, "vehicleNumber": "KA01"},
-            {"vehicleType": "OTHER", "ownedMonths": 6, "vehicleNumber": "KA02"},
+            {"vehicleType": "OTHER", "tonnage": Decimal("8"), "ownedMonths": 6, "vehicleNumber": "KA02"},
         ],
     )]
     typed, breakdown = draft_to_itr4_input(draft)
@@ -138,6 +141,7 @@ def test_44ae_draft_maps_goods_carriage_vehicles():
     light = typed.goods_carriage_44ae.vehicles[1]
     assert light.is_heavy_goods_vehicle is False
     assert light.gross_vehicle_weight_tons is None
+    assert light.tonnage_capacity == Decimal("8")
     assert light.months_owned == 6
     assert breakdown["presumptive_scheme"] == "44AE"
 
@@ -199,6 +203,28 @@ def test_combined_salary_hp_os_tds_draft():
     assert breakdown["claimed_tds"] == Decimal("40000")
 
 
+def test_dividend_periods_map_to_itr4_input() -> None:
+    draft = _basic_itr4_draft()
+    draft.businesses = [Presumptive44AD(
+        id="b1", digitalReceipts=Decimal("1000000"),
+    )]
+    draft.otherSources.dividends = [DividendIncome(
+        id="d1", grossAmount=Decimal("15000"),
+        q1=Decimal("1000"), q2=Decimal("2000"), q3=Decimal("3000"),
+        q4=Decimal("4000"), q5=Decimal("5000"),
+    )]
+
+    typed, _ = draft_to_itr4_input(draft)
+
+    assert typed.dividend_quarterly_breakdown == {
+        "Q1": Decimal("1000"),
+        "Q2": Decimal("2000"),
+        "Q3": Decimal("3000"),
+        "Q4": Decimal("4000"),
+        "Q5": Decimal("5000"),
+    }
+
+
 # ── Regime ───────────────────────────────────────────────────────────────────
 
 def test_regime_mapped_from_draft():
@@ -229,10 +255,46 @@ def test_lottery_winnings_rejected_for_itr4():
 
 # ── Empty draft ─────────────────────────────────────────────────────────────
 
-def test_empty_businesses_defaults_to_44ad_zero():
-    """A draft with no businesses defaults to 44AD with zero turnover."""
+def test_empty_businesses_map_to_no_presumptive_income():
+    """A draft with no businesses remains invalid instead of fabricating 44AD."""
     draft = _basic_itr4_draft()
     typed, _ = draft_to_itr4_input(draft)
-    assert typed.presumptive_scheme == PresumptiveScheme.S44AD
+    assert typed.presumptive_scheme == PresumptiveScheme.NONE
+    assert typed.business_income_44ad is None
+    assert typed.professional_income_44ada is None
+    assert typed.goods_carriage_44ae is None
+
+
+def test_mixed_presumptive_schemes_map_all_active_blocks():
+    """44AD, 44ADA, and 44AE rows coexist in one official ITR-4."""
+    draft = _basic_itr4_draft()
+    draft.businesses = [
+        Presumptive44AD(
+            id="ad", businessName="Trading", natureCode="01001",
+            digitalReceipts=Decimal("1000000"),
+            digitalPresumptiveIncome=Decimal("60000"),
+            declaredIncome=Decimal("60000"),
+        ),
+        Presumptive44ADA(
+            id="ada", businessName="Consulting", natureCode="14001",
+            grossReceipts=Decimal("400000"),
+            digitalReceipts=Decimal("400000"),
+            declaredIncome=Decimal("200000"),
+        ),
+        Presumptive44AE(
+            id="ae", businessName="Transport", natureCode="08001",
+            vehicles=[{
+                "vehicleType": "OTHER", "ownedMonths": 2,
+                "vehicleNumber": "DL01AB1234",
+                "presumptiveIncome": Decimal("15000"),
+            }],
+        ),
+    ]
+    typed, breakdown = draft_to_itr4_input(draft)
     assert typed.business_income_44ad is not None
-    assert typed.business_income_44ad.total_turnover == Decimal("0")
+    assert typed.professional_income_44ada is not None
+    assert typed.goods_carriage_44ae is not None
+    assert breakdown["presumptive_schemes"] == ["44AD", "44ADA", "44AE"]
+    assert [row.scheme.value for row in typed.schedule_bp_business_natures] == [
+        "44AD", "44ADA", "44AE",
+    ]

@@ -25,15 +25,27 @@ from app.engine.filing_gateway_v2 import (
 )
 from app.engine.itd.itr4_schema import validate_itr4_json
 from app.schemas.return_draft import (
+    GstinTurnoverRow,
+    AlternateAddress,
     BankAccount,
+    CoOwner,
+    DividendIncome,
     Employer,
+    Policy80D,
+    DeductionLoan,
     FinancialParticulars,
+    HomeLoan,
     HouseProperty,
+    InterestIncome,
+    OtherIncomeEntry,
     Presumptive44AD,
     Presumptive44ADA,
     Presumptive44AE,
     ReconciliationDiscrepancy,
     ReturnDraft,
+    RepresentativeAssessee,
+    SeventhProvisoClause,
+    TenantDetail,
     create_empty_draft,
 )
 
@@ -164,10 +176,461 @@ def test_generate_cbdt_json_itr4_44ad_passes_schema():
     assert official_json.get("ITR4", {}).get("FormName") or "ITR-4" in str(official_json)
 
 
+def test_itr4_emits_exact_refund_verification_and_creation_metadata() -> None:
+    """Filing identity, bank data, and system metadata reach exact JSON paths."""
+    draft = _filing_ready_itr4("44AD")
+    official, summary = generate_cbdt_json(draft)
+    itr4 = official["ITR"]["ITR4"]
+
+    assert itr4["Refund"] == {
+        "RefundDue": round(summary["refundDue"] / 10) * 10,
+        "BankAccountDtls": {
+            "AddtnlBankDetails": [{
+                "IFSCCode": "SBIN0001234",
+                "BankName": "SBI",
+                "BankAccountNo": "1234567890",
+                "AccountType": "SB",
+                "UseForRefund": "true",
+            }],
+        },
+    }
+    assert itr4["Verification"] == {
+        "Declaration": {
+            "AssesseeVerName": "Rahul Sharma",
+            "FatherName": "Mohan Sharma",
+            "AssesseeVerPAN": "ABCDE1234F",
+        },
+        "Capacity": "S",
+        "Place": "Delhi",
+    }
+    assert itr4["CreationInfo"]["SWVersionNo"] == "1.0"
+    assert itr4["CreationInfo"]["SWCreatedBy"].startswith("SW")
+    assert itr4["CreationInfo"]["JSONCreatedBy"] == itr4["CreationInfo"]["SWCreatedBy"]
+    assert len(itr4["CreationInfo"]["JSONCreationDate"]) == 10
+    assert itr4["CreationInfo"]["IntermediaryCity"] == "Delhi"
+    assert itr4["CreationInfo"]["Digest"] == "-" or len(itr4["CreationInfo"]["Digest"]) == 44
+
+
+def test_generate_cbdt_json_itr4_rejects_malformed_bank_rows() -> None:
+    """Malformed canonical bank rows must be reported, never silently dropped."""
+    draft = _filing_ready_itr4("44AD")
+    draft.bankAccounts[0].bankName = ""
+    draft.bankAccounts[0].accountNumber = "INVALID"
+    draft.bankAccounts[0].ifscCode = "BAD"
+
+    with pytest.raises(FilingGatewayV2Error) as caught:
+        generate_cbdt_json(draft)
+
+    assert caught.value.message == "ITR-4 bank account details are invalid."
+    assert any("bankAccounts[0].bankName" in error for error in caught.value.errors)
+    assert any("bankAccounts[0].accountNumber" in error for error in caught.value.errors)
+    assert any("bankAccounts[0].ifscCode" in error for error in caught.value.errors)
+
+
+def test_generate_cbdt_json_itr4_requires_one_unique_refund_account() -> None:
+    """The gateway enforces one refund choice and rejects duplicate rows."""
+    draft = _filing_ready_itr4("44AD")
+    draft.bankAccounts.append(draft.bankAccounts[0].model_copy(update={"id": "b2"}))
+
+    with pytest.raises(FilingGatewayV2Error) as caught:
+        generate_cbdt_json(draft)
+
+    assert any("exactly one account" in error for error in caught.value.errors)
+    assert any("duplicates another bank account" in error for error in caught.value.errors)
+
+
+def test_generate_cbdt_json_itr4_preserves_other_bank_account_type() -> None:
+    """The canonical OTH bank type must serialize as the official OTH code."""
+    draft = _filing_ready_itr4("44AD")
+    draft.bankAccounts[0].accountType = "OTH"
+
+    official, _ = generate_cbdt_json(draft)
+
+    bank = official["ITR"]["ITR4"]["Refund"]["BankAccountDtls"][
+        "AddtnlBankDetails"
+    ][0]
+    assert bank["AccountType"] == "OTH"
+
+
+def test_generate_itr4_schedule_bp_preserves_exact_canonical_fields() -> None:
+    """Schedule BP values are not replaced by fabricated builder defaults."""
+    draft = _filing_ready_itr4("44AD")
+    business = draft.businesses[0]
+    business.businessName = "Sharma Stores"
+    business.description = "Retail trade"
+    business.otherModeReceipts = Decimal("250000")
+    business.digitalPresumptiveIncome = Decimal("315000")
+    business.nonDigitalPresumptiveIncome = Decimal("80000")
+    business.declaredIncome = Decimal("395000")
+    business.gstinTurnovers = [
+        GstinTurnoverRow(
+            id="gst-1",
+            gstin="07ABCDE1234F1Z5",
+            turnover=Decimal("6250000"),
+        )
+    ]
+    business.financialParticulars.partnerMemberOwnCapital = Decimal("100000")
+    business.financialParticulars.fixedAssets = Decimal("50000")
+    business.financialParticulars.investments = Decimal("25000")
+    business.financialParticulars.loansAndAdvances = Decimal("5000")
+    business.financialParticulars.otherAssets = Decimal("10000")
+    business.financialParticulars.totalAssets = Decimal("520000")
+
+    official, _ = generate_cbdt_json(draft)
+    validate_itr4_json(official)
+    bp = official["ITR"]["ITR4"]["ScheduleBP"]
+    assert bp["NatOfBus44AD"][0] == {
+        "NameOfBusiness": "Sharma Stores",
+        "CodeAD": "01001",
+        "Description": "Retail trade",
+    }
+    assert bp["PersumptiveInc44AD"]["GrsTrnOverAnyOthMode"] == 250000
+    assert bp["PersumptiveInc44AD"]["PersumptiveInc44AD6Per"] == 315000
+    assert bp["PersumptiveInc44AD"]["PersumptiveInc44AD8Per"] == 80000
+    assert bp["TurnoverGrsRcptForGSTIN"][0] == {
+        "GSTINNo": "07ABCDE1234F1Z5",
+        "AmtTurnGrossRcptGSTIN": 6250000,
+    }
+    assert bp["TotalTurnoverGrsRcptGSTIN"] == 6250000
+    assert bp["FinanclPartclrOfBusiness"]["PartnerMemberOwnCapital"] == 100000
+    assert bp["FinanclPartclrOfBusiness"]["FixedAssets"] == 50000
+
+
+def test_generate_itr4_schedule_bp_supports_all_three_schemes() -> None:
+    """Official Schedule BP emits concurrent 44AD, 44ADA, and 44AE blocks."""
+    draft = _filing_ready_itr4("44AD")
+    draft.businesses[0].businessName = "Trading"
+    draft.businesses[0].digitalPresumptiveIncome = Decimal("300000")
+    draft.businesses[0].nonDigitalPresumptiveIncome = Decimal("80000")
+    draft.businesses[0].declaredIncome = Decimal("380000")
+    draft.businesses.extend([
+        Presumptive44ADA(
+            id="ada", businessName="Consulting", natureCode="14001",
+            grossReceipts=Decimal("400000"),
+            digitalReceipts=Decimal("400000"),
+            declaredIncome=Decimal("200000"),
+            financialParticulars=_financial_particulars(),
+        ),
+        Presumptive44AE(
+            id="ae", businessName="Transport", natureCode="08001",
+            vehicles=[{
+                "vehicleType": "OTHER", "ownedMonths": 2,
+                "vehicleNumber": "DL01AB1234",
+                "presumptiveIncome": Decimal("15000"),
+            }],
+            declaredIncome=Decimal("15000"),
+            financialParticulars=_financial_particulars(),
+        ),
+    ])
+
+    official, summary = generate_cbdt_json(draft)
+    validate_itr4_json(official)
+    bp = official["ITR"]["ITR4"]["ScheduleBP"]
+    assert bp["NatOfBus44AD"][0]["NameOfBusiness"] == "Trading"
+    assert bp["NatOfBus44ADA"][0]["NameOfBusiness"] == "Consulting"
+    assert bp["NatOfBus44AE"][0]["NameOfBusiness"] == "Transport"
+    assert bp["PersumptiveInc44AD"]["TotPersumptiveInc44AD"] == 380000
+    assert bp["PersumptiveInc44ADA"]["TotPersumptiveInc44ADA"] == 200000
+    assert bp["PersumptiveInc44AE"]["TotalPersumptiveInc"] == 15000
+    assert bp["PersumptiveInc44AE"]["IncChargeableUnderBus"] == 595000
+    assert summary["grossTotalIncome"] == 595000
+
+
+def test_generate_itr4_emits_full_filing_status_and_trp() -> None:
+    """ITR-4 emits exact conditional profile keys and integer acknowledgements."""
+    draft = _filing_ready_itr4("44AD")
+    draft.personal.assesseeStatus = "H"
+    draft.personal.mobileCountryCode = "91"
+    draft.personal.landlineStdCode = "11"
+    draft.personal.landlinePhoneNo = "23456789"
+    draft.personal.secondaryAddressDifferent = True
+    draft.personal.alternateAddress = AlternateAddress(
+        residenceNo="44",
+        localityOrArea="South",
+        cityOrTownOrDistrict="Delhi",
+        stateCode="07",
+        countryCode="91",
+        pinCode="110002",
+    )
+    draft.filing.form10IEAEarlierAYOldRegime = "Y"
+    draft.filing.form10IEAAssessmentYear = "2025-26"
+    draft.filing.form10IEAEarlierAYAckOldRegime = "123456789012345"
+    draft.filing.seventhProviso.depositExceedsOneCrore = True
+    draft.filing.seventhProviso.depositAmount = Decimal("10000001")
+    draft.filing.seventhProviso.otherClauseIV = True
+    draft.filing.seventhProviso.clauseIVDetails = [
+        SeventhProvisoClause(id="sp-1", nature="3", amount=Decimal("50000"))
+    ]
+    draft.verification.capacity = "REPRESENTATIVE"
+    draft.filing.representative = RepresentativeAssessee(
+        name="Priya Sharma",
+        email="priya@example.com",
+        mobileCountryCode="91",
+        mobile="9876500000",
+    )
+    draft.taxReturnPreparer.used = True
+    draft.taxReturnPreparer.identificationNumber = "T123456789"
+    draft.taxReturnPreparer.name = "Tax Preparer"
+
+    official, _ = generate_cbdt_json(draft)
+    itr4 = official["ITR"]["ITR4"]
+    assert itr4["PersonalInfo"]["Status"] == "H"
+    assert itr4["PersonalInfo"]["Address"]["Phone"] == {
+        "STDcode": 11,
+        "PhoneNo": "23456789",
+    }
+    assert itr4["PersonalInfo"]["AlternateAddress"]["PinCode"] == 110002
+    assert itr4["FilingStatus"]["Form10IEAEarlierAYAckOldRegime"] == 123456789012345
+    assert itr4["FilingStatus"]["AmtSeventhProvisio139i"] == 10000001
+    assert itr4["FilingStatus"]["clauseiv7provisio139iDtls"][0][
+        "clauseiv7provisio139iNature"
+    ] == "3"
+    assert itr4["FilingStatus"]["AssesseeRep"]["RepName"] == "Priya Sharma"
+    assert itr4["Verification"]["Capacity"] == "R"
+    assert itr4["TaxReturnPreparer"]["IdentificationNoOfTRP"] == "T123456789"
+
+
+def test_generate_cbdt_json_itr4_emits_80eea_stamp_duty_value():
+    """ITR-4 Schedule 80EEA carries its required property stamp-duty value."""
+    draft = _filing_ready_itr4("44AD")
+    draft.regime = "old"
+    draft.deductions.chapterVIA.section80EEA = Decimal("50000")
+    draft.deductions.loans.section80EEAStampDutyValue = Decimal("4000000")
+    draft.houseProperties = [HouseProperty(
+        id="hp-1",
+        propertyType="SELF_OCCUPIED",
+        address="12A Central",
+        city="Delhi",
+        state="07",
+        pinCode="110001",
+        interestOnLoan=Decimal("200000"),
+        homeLoans=[HomeLoan(
+            lenderType="B",
+            lenderName="Example Bank",
+            loanAccountNo="HOME123",
+            dateOfLoan="2022-01-01",
+            totalLoanAmount=Decimal("3000000"),
+            loanOutstandingAmount=Decimal("2500000"),
+            interestUs24B=Decimal("200000"),
+        )],
+    )]
+    draft.deductions.loans.loans = [DeductionLoan(
+        id="loan-1",
+        section="80EEA",
+        loanTakenFrom="B",
+        lenderName="Example Bank",
+        loanAccountNo="HOME123",
+        dateOfLoan="2022-01-01",
+        totalLoanAmount=Decimal("3000000"),
+        outstandingAmount=Decimal("2500000"),
+        interestAmount=Decimal("50000"),
+    )]
+
+    official_json, summary = generate_cbdt_json(draft)
+    validate_itr4_json(official_json)
+    assert official_json["ITR"]["ITR4"]["Schedule80EEA"]["PropStmpDtyVal"] == 4000000
+
+
+def test_itr4_emits_family_pension_deduction_57iia() -> None:
+    draft = _filing_ready_itr4("44AD")
+    draft.regime = "old"
+    draft.otherSources.familyPension.grossAmount = Decimal("45000")
+
+    official_json, _ = generate_cbdt_json(draft)
+    validate_itr4_json(official_json)
+    income = official_json["ITR"]["ITR4"]["IncomeDeductions"]
+    assert income["DeductionUs57iia"] == 15000
+    assert income["IncomeOthSrc"] == 30000
+
+
+def test_itr4_schedule_80d_aggregates_include_checkups_and_medical_expense() -> None:
+    draft = _filing_ready_itr4("44AD")
+    draft.regime = "old"
+    schedule = draft.deductions.section80D
+    schedule.selfSeniorCitizen = "N"
+    schedule.parentsSeniorCitizen = "Y"
+    schedule.selfFamily.policies = [Policy80D(
+        id="self-policy",
+        insurerName="Self Insurer",
+        policyNo="SELF123",
+        premiumAmount=Decimal("20000"),
+    )]
+    schedule.selfFamily.preventiveCheckup = Decimal("5000")
+    schedule.parentsSenior.policies = [Policy80D(
+        id="parent-policy",
+        insurerName="Parent Insurer",
+        policyNo="PARENT123",
+        premiumAmount=Decimal("30000"),
+    )]
+    schedule.parentsSenior.preventiveCheckup = Decimal("5000")
+    schedule.parentsSenior.medicalExpense = Decimal("10000")
+
+    official_json, _ = generate_cbdt_json(draft)
+    validate_itr4_json(official_json)
+    schedule_json = official_json["ITR"]["ITR4"]["Schedule80D"][
+        "Sec80DSelfFamSrCtznHealth"
+    ]
+    assert schedule_json["SelfAndFamily"] == 25000
+    assert schedule_json["HealthInsPremSlfFam"] == 20000
+    assert schedule_json["ParentsSeniorCitizen"] == 40000
+    assert schedule_json["HlthInsPremParentsSrCtzn"] == 30000
+    assert schedule_json["MedicalExpParentsSrCtzn"] == 10000
+    assert schedule_json["EligibleAmountOfDedn"] == 65000
+    income = official_json["ITR"]["ITR4"]["IncomeDeductions"]
+    assert income["UsrDeductUndChapVIA"]["Section80D"] == 70000
+    assert income["DeductUndChapVIA"]["Section80D"] == 65000
+
+
+@pytest.mark.parametrize(
+    ("flag", "amount_field", "threshold"),
+    [
+        ("depositExceedsOneCrore", "depositAmount", Decimal("10000000")),
+        ("foreignTravel", "foreignTravelAmount", Decimal("200000")),
+        (
+            "electricityExpenditure",
+            "electricityExpenditureAmount",
+            Decimal("100000"),
+        ),
+    ],
+)
+def test_itr4_seventh_proviso_flags_require_amounts_above_threshold(
+    flag: str,
+    amount_field: str,
+    threshold: Decimal,
+) -> None:
+    draft = _filing_ready_itr4("44AD")
+    setattr(draft.filing.seventhProviso, flag, True)
+    setattr(draft.filing.seventhProviso, amount_field, threshold)
+
+    with pytest.raises(FilingGatewayV2Error):
+        generate_cbdt_json(draft)
+
+
+def test_generate_cbdt_json_itr4_emits_property_ownership_and_tenants():
+    """ITR-4 emits the complete canonical co-owner and tenant rows."""
+    draft = _filing_ready_itr4("44AD")
+    draft.houseProperties = [HouseProperty(
+        id="hp-1",
+        propertyType="DEEMED_LET_OUT",
+        address="18 Market Road",
+        city="Delhi",
+        state="07",
+        pinCode="110001",
+        propertyOwnerType="SP",
+        isCoOwned=True,
+        ownershipType="JOINT",
+        ownershipShare=Decimal("55.5"),
+        coOwners=[CoOwner(
+            coOwnerSNo=3,
+            name="Priya Sharma",
+            pan="PQRSX1234Y",
+            aadhaar="123456789012",
+            share=Decimal("44.5"),
+        )],
+        tenantDetails=[TenantDetail(
+            tenantSNo=4,
+            name="Tenant One",
+            pan="LMNOP1234Q",
+            aadhaar="234567890123",
+            panOrTan="DELA12345B",
+        )],
+        annualRent=Decimal("240000"),
+        unrealizedRent=Decimal("12000"),
+        municipalTaxesPaid=Decimal("12000"),
+    )]
+
+    official_json, summary = generate_cbdt_json(draft)
+    validate_itr4_json(official_json)
+    prop = official_json["ITR"]["ITR4"]["IncomeDeductions"]["PropertyDetails"][0]
+    assert prop["PropertyOwner"] == "SP"
+    assert prop["PropCoOwnedFlg"] == "YES"
+    assert prop["AsseseeShareProperty"] == 55.5
+    assert prop["CoOwners"] == [{
+        "CoOwnersSNo": 1,
+        "NameCoOwner": "Priya Sharma",
+        "PAN_CoOwner": "PQRSX1234Y",
+        "Aadhaar_CoOwner": "123456789012",
+        "PercentShareProperty": 44.5,
+    }]
+    assert prop["TenantDetails"] == [{
+        "TenantSNo": 1,
+        "NameofTenant": "Tenant One",
+        "PANofTenant": "LMNOP1234Q",
+        "AadhaarofTenant": "234567890123",
+        "PANTANofTenant": "DELA12345B",
+    }]
+    assert prop["Rentdetails"] == {
+        "AnnualLetableValue": 240000,
+        "RentNotRealized": 12000,
+        "LocalTaxes": 12000,
+        "TotalUnrealizedAndTax": 24000,
+        "BalanceALV": 216000,
+        "AnnualOfPropOwned": 119880,
+        "ThirtyPercentOfBalance": 35964,
+        "IntOnBorwCap": 0,
+        "TotalDeduct": 35964,
+        "IncomeOfHP": 83916,
+    }
+    assert summary["housePropertyDetails"][0]["annualOfPropOwned"] == 119880
+    assert summary["housePropertyDetails"][0]["incomeOfHP"] == 83916
+
+
+def test_generate_cbdt_json_itr4_emits_dividend_date_range() -> None:
+    """ITR-4 must retain all five editable dividend receipt periods."""
+    draft = _filing_ready_itr4("44AD")
+    draft.otherSources.dividends = [DividendIncome(
+        id="div-1", grossAmount=Decimal("15000"),
+        q1=Decimal("1000"), q2=Decimal("2000"), q3=Decimal("3000"),
+        q4=Decimal("4000"), q5=Decimal("5000"),
+    )]
+
+    official_json, _ = generate_cbdt_json(draft)
+    validate_itr4_json(official_json)
+    rows = official_json["ITR"]["ITR4"]["IncomeDeductions"]["OthersInc"][
+        "OthersIncDtlsOthSrc"
+    ]
+    dividend = next(row for row in rows if row["OthSrcNatureDesc"] == "DIV")
+    assert dividend["OthSrcOthAmount"] == 15000
+    assert dividend["DividendInc"]["DateRange"] == {
+        "Upto15Of6": 1000,
+        "Upto15Of9": 2000,
+        "Up16Of9To15Of12": 3000,
+        "Up16Of12To15Of3": 4000,
+        "Up16Of3To31Of3": 5000,
+    }
+
+
+def test_generate_cbdt_json_itr4_emits_exact_compact_other_source_rows() -> None:
+    draft = _filing_ready_itr4("44AD")
+    draft.otherSources.interest = [
+        InterestIncome(id="tax", kind="IT_REFUND", grossAmount=Decimal("300")),
+        InterestIncome(id="pf", kind="PF_10_12_SECOND", grossAmount=Decimal("400")),
+    ]
+    draft.otherSources.otherIncome = [OtherIncomeEntry(
+        id="other", nature="OTHER",
+        description="Consulting honorarium", amount=Decimal("600"),
+    )]
+
+    official_json, _ = generate_cbdt_json(draft)
+    validate_itr4_json(official_json)
+    rows = official_json["ITR"]["ITR4"]["IncomeDeductions"]["OthersInc"][
+        "OthersIncDtlsOthSrc"
+    ]
+    assert rows == [
+        {"OthSrcNatureDesc": "TAX", "OthSrcOthAmount": 300},
+        {"OthSrcNatureDesc": "10(12)(iiP)", "OthSrcOthAmount": 400},
+        {
+            "OthSrcNatureDesc": "OTH",
+            "OthSrcOthAmount": 600,
+            "OthSrcOthNatOfInc": "Consulting honorarium",
+        },
+    ]
+
+
 def test_generate_cbdt_json_itr4_44ada_passes_schema():
     """ITR-4 44ADA CBDT JSON validates against the official schema."""
     draft = _filing_ready_itr4("44ADA")
-    official_json, _ = generate_cbdt_json(draft)
+    official_json, summary = generate_cbdt_json(draft)
     validate_itr4_json(official_json)
 
 

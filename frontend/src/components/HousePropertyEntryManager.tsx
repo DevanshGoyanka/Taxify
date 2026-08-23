@@ -9,7 +9,24 @@ const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', bo
 const gridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 16 };
 const labelStyle: React.CSSProperties = { display: 'block', marginBottom: 5, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' };
 
-interface TaxSummary { hpIncome?: number; totalIncChargeHP?: number; }
+interface HousePropertyComputed {
+  annualLettableValue: number;
+  rentNotRealized: number;
+  localTaxes: number;
+  totalUnrealizedAndTax: number;
+  balanceALV: number;
+  annualOfPropOwned: number;
+  thirtyPercentOfBalance: number;
+  interestOnBorrowedCapital: number;
+  totalDeduction: number;
+  arrearsUnrealizedRentReceived: number;
+  incomeOfHP: number;
+}
+interface TaxSummary {
+  hpIncome?: number;
+  totalIncChargeHP?: number;
+  housePropertyDetails?: HousePropertyComputed[];
+}
 interface Props { entries: HouseProperty[]; passThroughIncome: number; onChange: (entries: HouseProperty[], passThroughIncome: number) => void; itrForm: string; taxResult?: TaxSummary | null; }
 interface FieldProps extends React.InputHTMLAttributes<HTMLInputElement> { label: string; value: string | number; onValue: (value: string | number) => void; }
 
@@ -50,6 +67,7 @@ export function HousePropertyEntryManager({ entries, passThroughIncome, onChange
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}><h3 style={{ fontSize: 14, color: 'var(--text-secondary)' }}>House Property Entries ({entries.length}/{Number.isFinite(maxProperties) ? maxProperties : '∞'})</h3><button type="button" onClick={addProperty} disabled={entries.length >= maxProperties} style={{ padding: '6px 12px', background: 'var(--gold)', color: '#fff', border: 0, borderRadius: 6 }}>+ Add Property</button></div>
     {entries.length === 0 && <div style={{ padding: 24, textAlign: 'center', background: 'var(--bg)', color: 'var(--text-muted)' }}>No house property entries.</div>}
     {entries.map((entry, index) => {
+      const computed = taxResult?.housePropertyDetails?.[index];
       return <div key={entry.id} style={{ padding: 16, marginBottom: 24, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14 }}><strong style={{ fontSize: 13 }}>House Property — HPSNo {entry.propertySequenceNo}</strong><button type="button" onClick={() => commit(entries.filter((_, i) => i !== index))} style={{ background: 'var(--danger)', color: '#fff', border: 0, borderRadius: 4, padding: '4px 8px' }}>Remove</button></div>
         <Section title="Property details"><div style={gridStyle}>
@@ -65,9 +83,9 @@ export function HousePropertyEntryManager({ entries, passThroughIncome, onChange
           <Select label="Property owner type *" value={entry.propertyOwnerType} required onChange={(value) => patch(index, { propertyOwnerType: value as HouseProperty['propertyOwnerType'], propertyOwnerOther: value === 'OT' ? entry.propertyOwnerOther : '' })} options={[['SE','Self'],['MI','Minor'],['SP','Self and spouse'],['OT','Other']]} />
           {entry.propertyOwnerType === 'OT' && <Field label="Other owner description *" type="text" value={entry.propertyOwnerOther} required maxLength={50} onValue={(value) => patch(index, { propertyOwnerOther: String(value) })} />}
           <Select label="Is property co-owned? *" value={entry.isCoOwned ? 'Y' : 'N'} required onChange={(value) => patch(index, { isCoOwned: value === 'Y', ownershipType: value === 'Y' ? 'JOINT' : 'SOLE', isPropertyInJointOwnership: value === 'Y', ownershipShare: value === 'Y' ? entry.ownershipShare : 100, coOwners: value === 'Y' ? entry.coOwners : [] })} options={[['N','No'],['Y','Yes']]} />
-          {(isItr2 || entry.isCoOwned) && <Field label={`Your ownership share %${isItr2 ? " *" : ""}`} value={entry.ownershipShare} required={isItr2} readOnly={!entry.isCoOwned} min={0} max={100} step="0.01" onValue={(value) => patch(index, { ownershipShare: Number(value) })} />}
+          {(isItr2 || entry.isCoOwned) && <Field label="Your ownership share % *" value={entry.ownershipShare} required readOnly={!entry.isCoOwned} min={entry.isCoOwned ? 0.01 : 100} max={entry.isCoOwned ? 99.99 : 100} step="0.01" onValue={(value) => patch(index, { ownershipShare: Number(value) })} />}
         </div>
-        {entry.isCoOwned && <Rows title="Co-owner details" add={() => patch(index, { coOwners: [...entry.coOwners, { coOwnerSNo: entry.coOwners.length + 1, name: '', pan: '', aadhaar: '', share: 0 }] })}>{entry.coOwners.map((owner, row) => <div key={row} style={gridStyle}><Field label={`Serial ${row + 1} — Name *`} type="text" value={owner.name} required maxLength={125} onValue={(value) => patchNested(index, 'coOwners', row, { name: String(value) })} /><Field label="PAN" type="text" value={owner.pan} pattern={PAN_PATTERN} maxLength={10} onValue={(value) => patchNested(index, 'coOwners', row, { pan: String(value).toUpperCase() })} /><Field label="Aadhaar" type="text" value={owner.aadhaar} inputMode="numeric" pattern="[0-9]{12}" maxLength={12} onValue={(value) => patchNested(index, 'coOwners', row, { aadhaar: String(value) })} /><Field label="Share %" value={owner.share} min={0} max={100} step="0.01" onValue={(value) => patchNested(index, 'coOwners', row, { share: Number(value) })} /><Remove onClick={() => removeNested(index, 'coOwners', row)} /></div>)}</Rows>}
+        {entry.isCoOwned && <Rows title="Co-owner details" add={() => patch(index, { coOwners: [...entry.coOwners, { coOwnerSNo: entry.coOwners.length + 1, name: '', pan: '', aadhaar: '', share: 0 }] })}>{entry.coOwners.map((owner, row) => <div key={row} style={gridStyle}><Field label={`Serial ${row + 1} — Name *`} type="text" value={owner.name} required maxLength={125} onValue={(value) => patchNested(index, 'coOwners', row, { name: String(value) })} /><Field label="PAN" type="text" value={owner.pan} pattern={PAN_PATTERN} maxLength={10} onValue={(value) => patchNested(index, 'coOwners', row, { pan: String(value).toUpperCase() })} /><Field label="Aadhaar" type="text" value={owner.aadhaar} inputMode="numeric" pattern="[0-9]{12}" maxLength={12} onValue={(value) => patchNested(index, 'coOwners', row, { aadhaar: String(value) })} /><Field label="Share % *" value={owner.share} required min={0.01} max={99.99} step="0.01" onValue={(value) => patchNested(index, 'coOwners', row, { share: Number(value) })} /><Remove onClick={() => removeNested(index, 'coOwners', row)} /></div>)}</Rows>}
         </Section>
         {(isItr2 || entry.propertyType !== 'SELF_OCCUPIED') && <Section title="Rent details"><div style={gridStyle}>
           <Money label="Annual Lettable Value *" required value={entry.annualLettingValue} onValue={(value) => patch(index, { annualLettingValue: Number(value) })} />
@@ -77,7 +95,14 @@ export function HousePropertyEntryManager({ entries, passThroughIncome, onChange
         </div></Section>}
         <Rows title="Tenant details (optional)" add={() => patch(index, { tenantDetails: [...entry.tenantDetails, { tenantSNo: entry.tenantDetails.length + 1, name: '', pan: '', aadhaar: '', panOrTan: '' }] })}>{entry.tenantDetails.map((tenant: TenantDetail, row) => <div key={row} style={gridStyle}><Field label={`Serial ${row + 1} — Name *`} type="text" value={tenant.name} required maxLength={125} onValue={(value) => patchNested(index, 'tenantDetails', row, { name: String(value) })} /><Field label="PAN" type="text" value={tenant.pan} pattern={PAN_PATTERN} maxLength={10} onValue={(value) => patchNested(index, 'tenantDetails', row, { pan: String(value).toUpperCase() })} /><Field label="Aadhaar" type="text" value={tenant.aadhaar} pattern="[0-9]{12}" inputMode="numeric" maxLength={12} onValue={(value) => patchNested(index, 'tenantDetails', row, { aadhaar: String(value) })} /><Field label="PAN / TAN" type="text" value={tenant.panOrTan} pattern={PAN_TAN_PATTERN} maxLength={10} onValue={(value) => patchNested(index, 'tenantDetails', row, { panOrTan: String(value).toUpperCase() })} /><Remove onClick={() => removeNested(index, 'tenantDetails', row)} /></div>)}</Rows>
         <Section title="Section 24(b) home loans"><Rows title="Loan details" add={() => patch(index, { homeLoans: [...entry.homeLoans, { lenderType: 'B', lenderName: '', lenderPAN: '', loanAccountNo: '', dateOfLoan: '', totalLoanAmount: 0, loanOutstandingAmount: 0, interestUs24B: 0, constructionCompletionDate: '', completedWithin5Years: false, preConstructionInterest: 0 }] })}>{entry.homeLoans.map((loan: HomeLoan, row) => <div key={row} style={gridStyle}><Select label="Lender source *" value={loan.lenderType} required onChange={(value) => patchNested(index, 'homeLoans', row, { lenderType: value as HomeLoan['lenderType'] })} options={[['B','Bank'],['I','Institution']]} /><Field label="Lender name *" type="text" value={loan.lenderName} required maxLength={125} onValue={(value) => patchNested(index, 'homeLoans', row, { lenderName: String(value) })} /><Field label="Account / reference *" type="text" value={loan.loanAccountNo} required maxLength={20} pattern="[A-Za-z0-9 /-]+" onValue={(value) => patchNested(index, 'homeLoans', row, { loanAccountNo: String(value) })} /><Field label="Date of loan *" type="date" value={loan.dateOfLoan} required onValue={(value) => patchNested(index, 'homeLoans', row, { dateOfLoan: String(value) })} /><Money label="Total loan amount *" required value={loan.totalLoanAmount} onValue={(value) => patchNested(index, 'homeLoans', row, { totalLoanAmount: Number(value) })} /><Money label="Outstanding amount *" required value={loan.loanOutstandingAmount} onValue={(value) => patchNested(index, 'homeLoans', row, { loanOutstandingAmount: Number(value) })} /><Money label="Interest u/s 24(b) *" required value={loan.interestUs24B} onValue={(value) => patchNested(index, 'homeLoans', row, { interestUs24B: Number(value) })} /><Remove onClick={() => removeNested(index, 'homeLoans', row)} /></div>)}</Rows></Section>
-        <Section title="Computed Schedule HP result"><div style={gridStyle}><Readout label="Income chargeable under house property (tax engine)" value={hasBackendResult ? totalIncome : null} /></div><p style={{ margin: '0 0 16px', fontSize: 11, color: 'var(--text-muted)' }}>{hasBackendResult ? 'The tax engine computes this amount across all house-property entries.' : 'Run computation to view the tax-engine result.'}</p></Section>
+        <Section title="Computed Schedule HP result"><div style={gridStyle}>
+          <Readout label="Total unrealized rent and local taxes" value={computed?.totalUnrealizedAndTax ?? null} />
+          <Readout label="Balance annual letting value" value={computed?.balanceALV ?? null} />
+          <Readout label="Annual value of your owned share" value={computed?.annualOfPropOwned ?? null} />
+          <Readout label="30% deduction u/s 24(a)" value={computed?.thirtyPercentOfBalance ?? null} />
+          <Readout label="Total deduction" value={computed?.totalDeduction ?? null} />
+          <Readout label="Income from this house property" value={computed?.incomeOfHP ?? null} />
+        </div><p style={{ margin: '0 0 16px', fontSize: 11, color: 'var(--text-muted)' }}>{hasBackendResult ? 'Read-only values calculated by the tax engine for this property.' : 'Run computation to view the tax-engine result.'}</p></Section>
       </div>;
     })}
     {supportsPassThrough && <Section title="Schedule HP pass-through income"><div style={gridStyle}><Field label="Pass-through income" value={passThroughIncome} type="number" min={isItr2 ? -MONEY_MAX : undefined} max={MONEY_MAX} step="1" onValue={(value) => updatePassThroughIncome(Number(value))} /></div></Section>}
