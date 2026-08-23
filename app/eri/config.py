@@ -33,6 +33,19 @@ Mode = Literal["type2", "type3"]
 Environment = Literal["uat", "production"]
 
 
+class ERIConfigurationError(RuntimeError):
+    """Raised when ERI credentials are unavailable for JSON generation.
+
+    The ITR JSON's ``CreationInfo`` (``SWCreatedBy``, ``JSONCreatedBy``)
+    and the ``Digest`` MUST always flow from the selected ERI credential
+    bundle for the active ``(ERI_MODE, ERI_ENV)`` pair. There is no
+    non-ERI source for these identity fields. If the resolver cannot
+    supply them, JSON generation must fail loudly rather than stamp a
+    hardcoded placeholder identity — a placeholder would produce a JSON
+    whose CreationInfo does not match the ERI type that generated it.
+    """
+
+
 @dataclass(frozen=True)
 class ERICredentials:
     """A resolved ERI credential bundle for one (mode, environment) pair.

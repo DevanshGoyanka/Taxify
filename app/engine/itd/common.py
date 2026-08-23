@@ -78,28 +78,34 @@ def _compute_digest(data: dict) -> str:
     ``(ERI_MODE, ERI_ENV)`` pair. This guarantees the Digest is computed
     with the same environment's secret that matches the ``SWCreatedBy``
     stamped in ``CreationInfo``.
+
+    Raises:
+        ERIConfigurationError: If the active ERI credential bundle cannot
+            be resolved or the digest secret is absent. The Digest must
+            ALWAYS flow from the selected ERI credentials — a placeholder
+            Digest would produce a JSON whose CreationInfo identity does
+            not match the ERI type used to generate it, so generation
+            fails loudly instead of emitting a half-credentialed JSON.
     """
     import re
-    from app.eri.config import get_eri_credentials
+    from app.eri.config import ERIConfigurationError, get_eri_credentials
 
-    # Resolve the (mode, environment)-scoped secret key + iterations. If
-    # the resolver is misconfigured (e.g. ERI_SW_ID_<MODE>_<ENV> unset in
-    # a dev environment without .env), degrade to the schema-legal
-    # placeholder "-" rather than crashing JSON generation.
     try:
         creds = get_eri_credentials()
-        secret_key = creds.digest_secret_key or ""
-        iterations = int(creds.digest_iterations or 1)
-    except Exception:
-        secret_key = ""
-        iterations = 1
-
+    except ERIConfigurationError:
+        raise
+    except Exception as exc:
+        raise ERIConfigurationError(
+            f"Could not resolve ERI credentials for Digest computation: {exc}"
+        ) from exc
+    secret_key = creds.digest_secret_key
     if not secret_key:
-        # Fallback: emit the schema-legal placeholder "-" for dev/testing.
-        # The official Digest pattern is ``-|.{44}`` — a 64-char hex digest
-        # would fail validation, so we return the placeholder instead of
-        # masking the misconfiguration with an invalid value.
-        return "-"
+        raise ERIConfigurationError(
+            f"ERI_DIGEST_SECRET_KEY_{creds.mode.upper()}_{creds.environment.upper()} "
+            "is not set. The Digest must be computed with the secret for the "
+            "selected ERI type; a placeholder Digest is not permitted."
+        )
+    iterations = int(creds.digest_iterations or 1)
 
     placeholder = "-"
     digest_regex = r'"Digest"\s*:\s*"[^"]*"'
@@ -157,16 +163,30 @@ def _resolve_sw_id() -> str:
 
     Reads via :func:`app.eri.config.get_eri_credentials` so the SW_ID
     stamped in CreationInfo matches the environment whose digest secret
-    was used to compute the Digest. Falls back to a dev placeholder if
-    the resolver is unavailable (e.g. during standalone unit tests that
-    don't load .env).
+    was used to compute the Digest.
+
+    Raises:
+        ERIConfigurationError: If the active ERI credential bundle cannot
+            be resolved. The ``SWCreatedBy`` MUST always flow from the
+            selected ERI credentials — there is no non-ERI source for
+            this identity, so generation fails loudly instead of stamping
+            a hardcoded placeholder SW_ID.
     """
+    from app.eri.config import ERIConfigurationError, get_eri_credentials
     try:
-        from app.eri.config import get_eri_credentials
         creds = get_eri_credentials()
-        return creds.sw_id or "SW00000001"
-    except Exception:
-        return "SW00000001"
+    except ERIConfigurationError:
+        raise
+    except Exception as exc:
+        raise ERIConfigurationError(
+            f"Could not resolve ERI credentials for SWCreatedBy: {exc}"
+        ) from exc
+    if not creds.sw_id:
+        raise ERIConfigurationError(
+            f"ERI_SW_ID_{creds.mode.upper()}_{creds.environment.upper()} is not set. "
+            "CreationInfo.SWCreatedBy must flow from the selected ERI credentials."
+        )
+    return creds.sw_id
 
 
 # ---------------------------------------------------------------------------

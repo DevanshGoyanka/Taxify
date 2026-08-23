@@ -253,6 +253,35 @@ encoded the old buggy expectation
 `test_tax_summary_computes_canonical_restricted_112a_rows`) were updated to
 the correct statutory semantics.
 
+### Resolved: CreationInfo must always flow from the selected ERI credentials
+
+The ITR JSON's `CreationInfo` (`SWCreatedBy` / `JSONCreatedBy`) and the
+`Digest` MUST always flow from the selected ERI credential bundle for the
+active `(ERI_MODE, ERI_ENV)` pair — there is no non-ERI source for these
+identity fields. The JSON builders (`app/engine/itd/itr1..4.py`) all source
+`CreationInfo` and the `Digest` via `app/engine/itd/common.py`'s
+`_creation_info()` / `_resolve_sw_id()` / `_compute_digest()`, which call
+`app.eri.config.get_eri_credentials()`. The `SWCreatedBy` and the Digest
+secret are read from the SAME `(mode, environment)` suffix, so the identity
+stamped in `CreationInfo` always matches the credentials used to compute the
+`Digest`.
+
+Two silent-fallback paths that violated this invariant were removed:
+- `_resolve_sw_id()` previously caught resolver exceptions and returned a
+  hardcoded placeholder `"SW00000001"`, producing a JSON whose
+  `SWCreatedBy` did not match the selected ERI type.
+- `_compute_digest()` previously returned the schema-legal placeholder `"-"`
+
+Both now raise `ERIConfigurationError` so generation fails loudly instead of
+emitting a half-credentialed JSON. A new `ERIConfigurationError` exception
+(`app/eri/config.py`) surfaces resolver failures as one consistent type, and
+9 regression tests (`tests/test_eri_creation_info_invariant.py`) lock the
+invariant: no placeholder SW_ID, no placeholder Digest, and the SW_ID and
+Digest secret always come from the same credential bundle. The audit
+generator now `load_dotenv()`s before any builder import, so the real
+Type-3 UAT credentials (`SW20014122` + 44-char Digest) flow into every
+generated JSON.
+
 ## Validation evidence
 
 - Exhaustive field matrices: ITR-1 **424 Present / 149 Derived-System**;
@@ -270,7 +299,7 @@ the correct statutory semantics.
 - Audit generator: every variant passed the official JSON schema gate;
   ITR-1 measured **421/421**, ITR-4 measured **408/408**. Zero missing,
   zero empty.
-- Maintained backend `tests/`: **1282 passed, 0 failed**. The ERI Type-2
+- Maintained backend `tests/`: **1291 passed, 0 failed**. The ERI Type-2
   router tests were updated to align with the Dual-Mode ERI Integration
   Plan (Phase 1 — Type-2 modules moved to `app/eri/type2/`, mode guard
   returns 503 in Type-3 mode); the additive `init_db` migration now guards

@@ -13,6 +13,14 @@ Run: python audit_itr_coverage.py
 """
 from __future__ import annotations
 
+# Load .env BEFORE any app import that reads os.environ. The ITR JSON's
+# CreationInfo (SWCreatedBy/JSONCreatedBy) and Digest MUST flow from the
+# selected ERI credential bundle for the active (ERI_MODE, ERI_ENV) pair;
+# without .env the resolver cannot supply them and generation must fail
+# loudly (no placeholder identity is permitted).
+from dotenv import load_dotenv
+load_dotenv()
+
 import csv
 import json
 from decimal import Decimal
