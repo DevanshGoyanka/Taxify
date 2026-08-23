@@ -132,6 +132,13 @@ class BrowserManager:
     _instance = None
     _playwright = None
     _browser = None
+    # Tracks the headless state of the currently-running singleton browser
+    # so a later get_context(interactive=True) reuses a visible browser, or
+    # relaunches as visible when the singleton was launched headless by a
+    # prior headless job (e.g. a background import worker). Without this,
+    # an interactive ack-download call would reuse a headless browser and
+    # the operator would see no window even though interactive=True.
+    _headless = True
 
     def __new__(cls):
         if cls._instance is None:
@@ -206,10 +213,32 @@ class BrowserManager:
 
     async def _ensure_browser(self, log_callback=None, interactive=True):
         await self.initialize(log_callback)
-        if self._browser is None or not self._browser.is_connected():
-            headless = not interactive
+        headless = not interactive
+        # Relaunch when the singleton is missing/disconnected OR when the
+        # caller needs a different visibility mode than the running browser.
+        # An interactive (visible) ack/e-verify flow must not silently reuse
+        # a headless browser that a background import worker launched.
+        needs_relaunch = (
+            self._browser is None
+            or not self._browser.is_connected()
+            or self._headless != headless
+        )
+        if needs_relaunch:
+            if self._browser is not None and self._headless != headless:
+                if log_callback:
+                    log_callback(
+                        f"[Browser] Switching from "
+                        f"{'headless' if self._headless else 'visible'} "
+                        f"to {'headless' if headless else 'visible'} mode."
+                    )
+                try:
+                    await self._browser.close()
+                except Exception:
+                    pass
+                self._browser = None
             try:
                 self._browser = await self._launch(headless, log_callback)
+                self._headless = headless
                 if log_callback:
                     log_callback(f"[Browser] Launched via {getattr(self, '_channel', 'chromium')}")
             except Exception as e:
@@ -231,6 +260,7 @@ class BrowserManager:
                     self._set_browsers_env()
                     await self.initialize(log_callback)
                     self._browser = await self._launch(headless, log_callback)
+                    self._headless = headless
                 else:
                     if log_callback:
                         log_callback(f"[Error] Failed to launch browser: {e}")
