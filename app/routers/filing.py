@@ -16,6 +16,10 @@ from app.db.database import get_db
 from app.db.models import FilingJob, FilingRecord, User
 from app.engine.filing_orchestrator import FilingOrchestratorError, produce_itd_json
 from app.eri.config import get_eri_credentials
+from app.eri.type3.ack_downloader import (
+    AcknowledgementDownloadError,
+    download_acknowledgement as download_acknowledgement_pdf,
+)
 from app.eri.type3.json_exporter import (
     Type3JsonExportError,
     export_itd_json_file,
@@ -24,6 +28,7 @@ from app.eri.type3.json_exporter import (
 from app.filing_automation.uploader import job_is_awaiting_otp, provide_job_otp
 from app.filing_automation.worker import enqueue_filing_job, get_filing_job_dict
 from app.routers.clients import resolve_owned_client
+from app.services.audit_service import log_filing_action
 from app.services.filing_record_service import upsert_filing_record
 
 router = APIRouter(prefix="/api/v1/filing", tags=["filing"])
@@ -94,8 +99,18 @@ def generate_itd_json(
             db=db,
         )
     except FilingOrchestratorError as exc:
+        log_filing_action(
+            db=db, user=current_user, client=client, assessment_year=ay,
+            itr_type=form, action="generate", outcome="error",
+            message=str(exc)[:200],
+        )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     body = official["ITR"][form.replace("-", "")]
+    log_filing_action(
+        db=db, user=current_user, client=client, assessment_year=ay,
+        itr_type=form, action="generate", outcome="ok",
+        message="CBDT JSON generated and digested.",
+    )
     return {
         "json": official,
         "digest": body["CreationInfo"]["Digest"],
@@ -164,6 +179,11 @@ def submit_via_portal(
             output_dir=_filing_dir(client.id, ay),
         )
     except (Type3JsonExportError, FilingOrchestratorError) as exc:
+        log_filing_action(
+            db=db, user=current_user, client=client, assessment_year=ay,
+            itr_type=form, action="submit", outcome="error",
+            message=str(exc)[:200],
+        )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     filing = upsert_filing_record(
@@ -193,6 +213,11 @@ def submit_via_portal(
     db.commit()
     db.refresh(job)
     enqueue_filing_job(job.id)
+    log_filing_action(
+        db=db, user=current_user, client=client, assessment_year=ay,
+        itr_type=form, action="submit", outcome="ok",
+        message=f"Queued filing job {job.id} ({request.verification_mode}).",
+    )
     return {
         "job_id": job.id,
         "filing_id": filing.id,
@@ -296,6 +321,96 @@ def get_acknowledgement(
         raise HTTPException(status_code=404, detail="Acknowledgement file is missing.")
     return FileResponse(
         path,
+        filename=f"{form}_{ay}_Acknowledgement.pdf",
+        media_type="application/pdf",
+    )
+
+
+@router.post("/{client_id}/{ay}/{itr_type}/acknowledgement/fetch")
+async def fetch_acknowledgement(
+    client_id: str,
+    ay: str,
+    itr_type: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Download the acknowledgement PDF from the ITD portal on demand.
+
+    Uses the STANDALONE Type-3 acknowledgement downloader
+    (``app.eri.type3.ack_downloader``) — independent of the working
+    portal uploader — to log in as the taxpayer, navigate to View Filed
+    Returns, and download the ITR-V PDF for the return's acknowledgement
+    number. The saved path is persisted on the ``FilingRecord`` so the
+    existing ``GET .../acknowledgement`` endpoint serves it on subsequent
+    requests without a re-download.
+    """
+    client = resolve_owned_client(client_id, current_user.id, db)
+    form = _normalize_form(itr_type)
+    record = (
+        db.query(FilingRecord)
+        .filter(
+            FilingRecord.client_id == client.id,
+            FilingRecord.assessment_year == ay,
+            FilingRecord.itr_type == form,
+        )
+        .first()
+    )
+    if record is None or not record.acknowledgement_number:
+        raise HTTPException(
+            status_code=404,
+            detail="No acknowledgement number is recorded for this filing.",
+        )
+    if not client.pan:
+        raise HTTPException(
+            status_code=400,
+            detail="Client does not have a PAN recorded.",
+        )
+    if not client.portal_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Client does not have an ITD portal password.",
+        )
+
+    output_dir = _filing_dir(client.id, ay)
+    try:
+        result = await download_acknowledgement_pdf(
+            pan=client.pan,
+            portal_password_cipher=client.portal_password,
+            acknowledgement_number=record.acknowledgement_number,
+            output_dir=output_dir,
+        )
+    except AcknowledgementDownloadError as exc:
+        log_filing_action(
+            db=db, user=current_user, client=client, assessment_year=ay,
+            itr_type=form, action="ack", outcome="error",
+            message=str(exc)[:200],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if not result.success or not result.acknowledgement_path:
+        log_filing_action(
+            db=db, user=current_user, client=client, assessment_year=ay,
+            itr_type=form, action="ack", outcome="error",
+            message=(result.error or "Acknowledgement download failed.")[:200],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=result.error or "Acknowledgement download failed.",
+        )
+
+    record.acknowledgement_path = result.acknowledgement_path
+    record.status = "acknowledged"
+    db.commit()
+
+    log_filing_action(
+        db=db, user=current_user, client=client, assessment_year=ay,
+        itr_type=form, action="ack", outcome="ok",
+        message="Acknowledgement PDF downloaded from portal.",
+    )
+    return FileResponse(
+        result.acknowledgement_path,
         filename=f"{form}_{ay}_Acknowledgement.pdf",
         media_type="application/pdf",
     )

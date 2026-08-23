@@ -12,6 +12,7 @@ Tables:
   - FilingJob        : independent Type-3 portal-upload worker job.
   - ImportedDocument : an imported source document (AIS/TIS/26AS/Prefill/
                        Form 16/filed return) with raw + parsed content.
+  - AuditLog         : tamper-evident audit trail of every filing action.
 """
 
 import datetime
@@ -388,4 +389,40 @@ class ImportedDocument(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+
+class AuditLog(Base):
+    """Tamper-evident audit trail of every filing action.
+
+    Per the Dual-Mode ERI Integration Plan §7.5 and §10.1, every filing
+    action (generate, validate, upload, everify, ack) is audit-logged
+    with ``{user_id, client_id, ay, mode, environment, action, outcome,
+    itd_code}``. No payload or PII is ever stored in the log — only the
+    action descriptor and a high-level outcome (``ok`` / ``error``) plus,
+    optionally, an ITD response code for API-driven flows (Type-2).
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("user.id"), nullable=False, index=True
+    )
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey("client.id"), nullable=False, index=True
+    )
+    assessment_year: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    itr_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    mode: Mapped[str] = mapped_column(String(10), nullable=False)
+    environment: Mapped[str] = mapped_column(String(10), nullable=False)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    itd_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
     )

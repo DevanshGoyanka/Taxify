@@ -23,6 +23,7 @@ from app.automation.privacy import sanitize_automation_text
 from app.automation.timing import AutomationTimeline
 from app.db.database import SessionLocal
 from app.db.models import Client, FilingJob, FilingRecord
+from app.services.audit_service import log_filing_action_by_id
 from app.filing_automation.uploader import (
     PortalUploadState,
     PortalUploader,
@@ -220,6 +221,16 @@ async def _run_filing_job(job_id: int) -> None:
                 completed_at=datetime.datetime.utcnow(),
                 progress_pct=0,
             )
+            log_filing_action_by_id(
+                db=db,
+                user_id=job.user_id,
+                client_id=job.client_id,
+                assessment_year=assessment_year,
+                itr_type=itr_type,
+                action="upload",
+                outcome="error",
+                message=(outcome.reason or "Portal upload failed.")[:200],
+            )
             return
 
         filing_status = "verified" if outcome.everify_status == "verified" else "submitted"
@@ -241,6 +252,27 @@ async def _run_filing_job(job_id: int) -> None:
             completed_at=datetime.datetime.utcnow(),
             progress_pct=100,
         )
+        log_filing_action_by_id(
+            db=db,
+            user_id=job.user_id,
+            client_id=job.client_id,
+            assessment_year=assessment_year,
+            itr_type=itr_type,
+            action="upload",
+            outcome="ok",
+            message=f"Submitted; ARN {outcome.acknowledgement_number or 'pending'}.",
+        )
+        if outcome.everify_status == "verified":
+            log_filing_action_by_id(
+                db=db,
+                user_id=job.user_id,
+                client_id=job.client_id,
+                assessment_year=assessment_year,
+                itr_type=itr_type,
+                action="everify",
+                outcome="ok",
+                message=f"e-Verified via {verification_mode}.",
+            )
     except Exception as exc:
         friendly = _friendly_error(str(exc)) or type(exc).__name__
         _update_filing(filing_id, status="failed", error_message=friendly)
@@ -252,6 +284,16 @@ async def _run_filing_job(job_id: int) -> None:
             error_message=friendly,
             completed_at=datetime.datetime.utcnow(),
             progress_pct=0,
+        )
+        log_filing_action_by_id(
+            db=db,
+            user_id=job.user_id,
+            client_id=job.client_id,
+            assessment_year=assessment_year,
+            itr_type=itr_type,
+            action="upload",
+            outcome="error",
+            message=friendly[:200],
         )
     finally:
         if page is not None and not page.is_closed():

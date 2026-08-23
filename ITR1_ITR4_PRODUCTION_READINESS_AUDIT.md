@@ -297,6 +297,44 @@ Digest value set to `"-"`, then Base64-encoded — verified byte-identical
 to `API_Testing/digest_generator.py` across both Type-2 UAT (1344) and
 Type-3 UAT (1038) credentials.
 
+### Completed: standalone acknowledgement downloader, audit log, UAT sanity pack
+
+Three remaining ERI-plan gaps were closed, making the implementation fully
+compliant with the letter of the Dual-Mode ERI Integration Plan (Phases
+1–4 of the roadmap, excluding the operational Phase 4 ITD SW_ID enablement
+and next-season Phase 6 Type-2 work):
+
+- **§A7 — Standalone acknowledgement downloader**
+  (`app/eri/type3/ack_downloader.py`): a Playwright downloader that logs in
+  as the taxpayer, navigates to View Filed Returns, locates the row for a
+  given ARN, and downloads the ITR-V PDF — independent of (and without
+  touching) the working portal uploader in `app/filing_automation/uploader.py`.
+  It reuses only the proven `app/automation/*` primitives
+  (browser/auth/navigation/timing). Exposed via the new
+  `POST /api/v1/filing/{client_id}/{ay}/{itr_type}/acknowledgement/fetch`
+  endpoint, which persists the downloaded path on `FilingRecord` so the
+  existing `GET .../acknowledgement` endpoint serves it subsequently.
+- **§7.5 / §10.1 — Filing-action audit log**: a new `AuditLog` table +
+  `app/services/audit_service.py` (`log_filing_action` /
+  `log_filing_action_by_id`). Every filing action (generate, submit,
+  upload, everify, ack) is audit-logged with
+  `{user_id, client_id, ay, mode, environment, action, outcome, itd_code}`.
+  No payload or PII is ever stored — only the action descriptor, a
+  high-level outcome (`ok`/`error`), an optional ITD code, and a short
+  non-PII status string (capped at 1000 chars as a hard PII guard). Audit
+  writes are best-effort and never break the filing flow they log. The
+  worker (`app/filing_automation/worker.py`) logs upload/everify outcomes
+  via the id-keyed helper.
+- **§A11 — UAT sanity pack** (`scripts/type3_uat_sanity.py`): generates
+  CBDT-compliant ITR-1 (×2 variants) and ITR-4 (×3 variants) JSONs using
+  the active Type-3 UAT credentials, each carrying the real `SW20014122`
+  SW_ID + a real 44-char Digest that round-trips. Writes a manifest
+  (`sanity_manifest.json`) ready to email to `erihelp@incometax.gov.in`
+  for the ITD UAT sanity check (SOP §3-4, Phase 4).
+- **Appendix — dead-code removal**: deleted
+  `app/services/submission_service.py` (confirmed unreferenced by any live
+  code), per the plan's appendix "DELETE" directive.
+
 ## Validation evidence
 
 - Exhaustive field matrices: ITR-1 **424 Present / 149 Derived-System**;
@@ -314,7 +352,7 @@ Type-3 UAT (1038) credentials.
 - Audit generator: every variant passed the official JSON schema gate;
   ITR-1 measured **421/421**, ITR-4 measured **408/408**. Zero missing,
   zero empty.
-- Maintained backend `tests/`: **1294 passed, 0 failed**. The ERI Type-2
+- Maintained backend `tests/`: **1300 passed, 0 failed**. The ERI Type-2
   router tests were updated to align with the Dual-Mode ERI Integration
   Plan (Phase 1 — Type-2 modules moved to `app/eri/type2/`, mode guard
   returns 503 in Type-3 mode); the additive `init_db` migration now guards
