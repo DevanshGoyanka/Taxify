@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { NATURE_CODES_44AD, NATURE_CODES_44ADA, NATURE_CODES_44AE, type OfficialCodeOption } from './ITR4ScheduleBPData';
 
 const MONEY_MAX = 99_999_999_999_999;
@@ -274,22 +274,19 @@ export default function ITR4ScheduleBPManager({ data, onChange, priorYearData }:
   const current = derive(data);
   const prior = priorYearData ? derive(priorYearData) : null;
   const lastNormalized = useRef<string>('');
-  // "Declare higher" override flags for the 6%/8% presumptive fields.
-  // Persisted on the data object as _override6Per/_override8Per (prefixed so
-  // they never leak into the official CBDT JSON, which serializes only the
-  // official ScheduleBP keys). Off = auto-compute the statutory minimum
-  // (read-only); On = let the taxpayer declare a higher income (>= minimum).
-  const [override6, setOverride6] = useState<boolean>(Boolean((current.PersumptiveInc44AD as never as { _override6Per?: boolean } | undefined)?._override6Per));
-  const [override8, setOverride8] = useState<boolean>(Boolean((current.PersumptiveInc44AD as never as { _override8Per?: boolean } | undefined)?._override8Per));
+  // "Declare higher" override flags — read directly from the derived data
+  // (single source of truth, persisted on the business row as
+  // declareHigher6Per/declareHigher8Per and round-tripped through the
+  // scheduleBpAdapter). No useState: the flag survives the parent's
+  // businesses<->schedule round-trip so derive() no longer re-clamps the
+  // user's typed value back to the statutory minimum on every keystroke.
+  const override6 = Boolean((current.PersumptiveInc44AD as never as { _override6Per?: boolean } | undefined)?._override6Per);
+  const override8 = Boolean((current.PersumptiveInc44AD as never as { _override8Per?: boolean } | undefined)?._override8Per);
   const toggleOverride6 = (): void => {
-    const next = !override6;
-    setOverride6(next);
-    emit({ PersumptiveInc44AD: { ...((current.PersumptiveInc44AD as object | undefined) ?? {}), _override6Per: next } as never } as Partial<ITR4ScheduleBPData>);
+    emit({ PersumptiveInc44AD: { ...((current.PersumptiveInc44AD as object | undefined) ?? {}), _override6Per: !override6 } as never } as Partial<ITR4ScheduleBPData>);
   };
   const toggleOverride8 = (): void => {
-    const next = !override8;
-    setOverride8(next);
-    emit({ PersumptiveInc44AD: { ...((current.PersumptiveInc44AD as object | undefined) ?? {}), _override8Per: next } as never } as Partial<ITR4ScheduleBPData>);
+    emit({ PersumptiveInc44AD: { ...((current.PersumptiveInc44AD as object | undefined) ?? {}), _override8Per: !override8 } as never } as Partial<ITR4ScheduleBPData>);
   };
   useEffect(() => {
     const incoming = JSON.stringify(data ?? {});
