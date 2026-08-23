@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
-from app.automation.job_worker import _get_job_dict, enqueue_job, _download_dir
+from app.automation.job_worker import _get_job_dict, enqueue_job, _download_dir, client_folder_name
 from app.automation.privacy import install_automation_privacy_filter
 from app.automation.years import TaxYearContext
 from app.db.database import get_db
@@ -114,7 +114,7 @@ def start_automation_import(
         "status": "queued",
         "assessment_year": assessment_year,
         "fiscal_year": fiscal_year,
-        "download_dir": _download_dir(client.id, fiscal_year),
+        "download_dir": _download_dir(client, fiscal_year),
         "message": "Automation job created and queued. Poll GET /automation/jobs/{job_id} for progress.",
     }
 

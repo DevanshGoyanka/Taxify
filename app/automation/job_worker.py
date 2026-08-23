@@ -50,7 +50,7 @@ from app.automation.privacy import (
 from app.automation.timing import AutomationTimeline
 from app.automation.years import TaxYearContext
 from app.db.database import SessionLocal
-from app.db.models import AutomationJob
+from app.db.models import AutomationJob, Client
 from app.schemas.security.portal_crypto import decrypt_portal_password
 
 # PDF extractors (ais_extractor integration)
@@ -139,10 +139,58 @@ def _derive_fiscal_year(assessment_year: str) -> str:
     return TaxYearContext.from_assessment_year(assessment_year).fiscal_year
 
 
-def _download_dir(client_id: int, fiscal_year: str) -> str:
-    """Absolute path to the download directory for this job."""
+def _sanitize_name_segment(text: str, max_len: int = 80) -> str:
+    """Sanitize an assessee name into a filesystem-safe folder segment.
+
+    Keeps alphanumerics, spaces, and a few safe punctuation marks;
+    collapses repeated whitespace; trims; caps the length so very long
+    names cannot exceed the OS path limit. Accented and non-Latin letters
+    are folded to ASCII via NFKD so the folder name is portable across
+    filesystems (including Windows where accented folder names can cause
+    encoding headaches with Playwright/Chromium).
+    """
+    import unicodedata
+
+    if not text:
+        return ""
+    folded = unicodedata.normalize("NFKD", text)
+    ascii_text = folded.encode("ascii", "ignore").decode("ascii")
+    safe_chars = []
+    for ch in ascii_text:
+        if ch.isalnum() or ch in (" ", "_", "-", ".", "'"):
+            safe_chars.append(ch)
+    cleaned = "".join(safe_chars)
+    cleaned = " ".join(cleaned.split())  # collapse repeated whitespace
+    return cleaned[:max_len].strip(" .")
+
+
+def client_folder_name(pan: str, name: str) -> str:
+    """Return the portal-automation folder segment for a client.
+
+    Convention: ``{PAN}_{FullName}`` (e.g. ``ABCDE1234F_Rahul Sharma``).
+    The PAN is always present and unique, so it disambiguates clients who
+    share a name; the full name makes the folder human-readable on disk
+    and in the operator's file browser.
+    """
+    safe_pan = (pan or "").strip().upper()
+    safe_name = _sanitize_name_segment(name or "")
+    if not safe_name:
+        return safe_pan or "UNKNOWN"
+    return f"{safe_pan}_{safe_name}" if safe_pan else safe_name
+
+
+def _download_dir(client: Client, fiscal_year: str) -> str:
+    """Absolute path to the download directory for this job.
+
+    Convention: ``downloads/{PAN}_{FullName}/{fiscal_year}/`` — the folder
+    is keyed by the assessee's PAN + full name (not the client serial no)
+    so every portal artefact for the assessee sits under one folder, with
+    one sub-folder per assessment year. This matches the filing JSON, AIS,
+    26AS, TIS, Prefill, and acknowledgement all living together per AY.
+    """
     dirname = os.path.join(
-        _PROJECT_ROOT, "downloads", str(client_id), fiscal_year
+        _PROJECT_ROOT, "downloads", client_folder_name(client.pan, client.name),
+        fiscal_year,
     )
     os.makedirs(dirname, exist_ok=True)
     return dirname
@@ -312,7 +360,7 @@ async def _run_job(job_id: int) -> None:
             )
             return
 
-        dldir = _download_dir(client_id, fiscal_year)
+        dldir = _download_dir(client, fiscal_year)
         logger.info(
             "Job %d: Client %d (%s), FY=%s, download dir=%s",
             job_id, client_id, pan, fiscal_year, dldir,

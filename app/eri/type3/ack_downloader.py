@@ -284,7 +284,10 @@ async def download_acknowledgement(
 
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
-        final_path = destination / "ITR-Acknowledgement.pdf"
+        # Filename includes the assessment year so multiple AYs' receipts
+        # in the same imports folder cannot overwrite each other.
+        safe_ay = assessment_year.replace("-", "_")
+        final_path = destination / f"ITR-Acknowledgement-AY-{safe_ay}.pdf"
 
         _emit("[ACK] Downloading the acknowledgement PDF.")
         remaining_for_download = max(1, _remaining())

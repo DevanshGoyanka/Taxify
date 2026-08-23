@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.automation.years import TaxYearContext
 from app.db.database import get_db
-from app.db.models import FilingJob, FilingRecord, User
+from app.db.models import Client, FilingJob, FilingRecord, User
 from app.engine.filing_orchestrator import FilingOrchestratorError, produce_itd_json
 from app.eri.config import get_eri_credentials
 from app.eri.type3.ack_downloader import (
@@ -30,6 +30,7 @@ from app.filing_automation.worker import enqueue_filing_job, get_filing_job_dict
 from app.routers.clients import resolve_owned_client
 from app.services.audit_service import log_filing_action
 from app.services.filing_record_service import upsert_filing_record
+from app.automation.job_worker import client_folder_name
 
 router = APIRouter(prefix="/api/v1/filing", tags=["filing"])
 
@@ -60,22 +61,29 @@ def _normalize_form(itr_type: str) -> str:
     return value
 
 
-def _filing_dir(client_id: int, ay: str) -> Path:
+def _filing_dir(client: Client, ay: str) -> Path:
+    """Filing JSON + acknowledgement sub-folder for a client+AY.
+
+    Uses the shared ``{PAN}_{FullName}`` folder convention (see
+    :func:`app.automation.job_worker.client_folder_name`) so the filing
+    artefacts sit under the same client folder as the AIS/26AS/TIS imports,
+    with one sub-folder per assessment year.
+    """
     year = TaxYearContext.from_assessment_year(ay)
-    return _PROJECT_ROOT / "downloads" / str(client_id) / year.fiscal_year / "filing"
+    return _PROJECT_ROOT / "downloads" / client_folder_name(client.pan, client.name) / year.fiscal_year / "filing"
 
 
-def _imports_dir(client_id: int, ay: str) -> Path:
+def _imports_dir(client: Client, ay: str) -> Path:
     """Return the AY imports folder shared with AIS/26AS/TIS/Prefill.
 
     All portal-downloaded source documents for a client+AY live under
-    ``downloads/{client_id}/{fiscal_year}/`` (see
+    ``downloads/{PAN}_{FullName}/{fiscal_year}/`` (see
     :func:`app.automation.job_worker._download_dir`). The acknowledgement
     PDF is saved in the SAME folder so every portal artefact for the AY
     sits together, rather than being isolated under a ``filing/`` sub-dir.
     """
     year = TaxYearContext.from_assessment_year(ay)
-    return _PROJECT_ROOT / "downloads" / str(client_id) / year.fiscal_year
+    return _PROJECT_ROOT / "downloads" / client_folder_name(client.pan, client.name) / year.fiscal_year
 
 
 def _draft(db: Session, client_id: int, ay: str, form: str) -> dict:
@@ -151,7 +159,7 @@ def download_itd_json(
             flat_draft=None,
             user=current_user,
             db=db,
-            output_dir=_filing_dir(client.id, ay),
+            output_dir=_filing_dir(client, ay),
         )
     except (Type3JsonExportError, FilingOrchestratorError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -189,7 +197,7 @@ def submit_via_portal(
             flat_draft=None,
             user=current_user,
             db=db,
-            output_dir=_filing_dir(client.id, ay),
+            output_dir=_filing_dir(client, ay),
         )
     except (Type3JsonExportError, FilingOrchestratorError) as exc:
         log_filing_action(
@@ -369,7 +377,7 @@ async def fetch_acknowledgement(
             detail="Client does not have an ITD portal password.",
         )
 
-    output_dir = _imports_dir(client.id, ay)
+    output_dir = _imports_dir(client, ay)
     try:
         result = await download_acknowledgement_pdf(
             pan=client.pan,
