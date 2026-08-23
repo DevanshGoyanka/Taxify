@@ -33,6 +33,40 @@ def test_compute_v2_returns_compatible_headline_keys() -> None:
     assert "issues" in summary
 
 
+def test_compute_v2_surfaces_per_row_capital_gains_for_simplified_112a() -> None:
+    """Simplified-112A compute carries per-row transactions + bottom totals.
+
+    Regression for the real-client capital-gains display bug: the v2
+    summary must surface a non-zero per-row ``transactions`` entry (with
+    ``gain``/``actual_cost``/``transfer_expenses``) and the bottom
+    ``totalLTCG``/``totalCapitalGains`` keys so the frontend
+    CapitalGainsEntryManager readouts do not show ₹0 even though the
+    engine's capitalGains112A is correct.
+    """
+    draft = create_empty_draft("2026-27", "ITR-1", "new")
+    draft.employers = [Employer(id="e1", basic=Decimal("800000"))]
+    draft.capitalGainsSchedule = {  # type: ignore[assignment]
+        "simplified112A": {
+            "totalSaleConsideration": Decimal("41871"),
+            "totalCostAcquisition": Decimal("20586"),
+        }
+    }
+    summary = compute_tax_summary_v2(draft)
+    cg = summary["capitalGainsSummary"]
+    assert cg["status"] == "VALID"
+    assert cg["transactionCount"] == 1
+    tx = cg["transactions"][0]
+    assert tx["sale_value"] == 41871.0
+    assert tx["actual_cost"] == 20586.0
+    assert tx["gain"] == 21285.0  # 41871 - 20586
+    # The engine's authoritative aggregate must match the per-row gain.
+    assert summary["breakdown"]["income"]["capitalGains112A"] == 21285.0
+    # Bottom-of-schedule totals the frontend reads directly.
+    assert summary["totalLTCG"] == 21285.0
+    assert summary["totalCapitalGains"] == 21285.0
+    assert summary["totalSTCG"] == 0.0  # STCG equity is not reportable on ITR-4
+
+
 def test_compute_v2_rejects_non_itr1_form_with_422() -> None:
     """Unsupported canonical forms fail at the v2 boundary with 422."""
     draft = ReturnDraft(assessmentYear="2026-27", form="ITR-2")

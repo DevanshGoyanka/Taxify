@@ -91,9 +91,86 @@ def _decimal_float(value: Decimal | int | float) -> float:
     return float(value)
 
 
+def _capital_gains_summary(
+    result: ITR1Result,
+    draft: ReturnDraft,
+) -> dict[str, Any]:
+    """Build the per-row capital-gains summary the frontend overlays.
+
+    The v2 compute math is authoritative and produces a non-zero aggregate
+    ``result.capital_gains_112a`` (the net 112A gain). But the frontend's
+    ``CapitalGainsEntryManager`` reads per-row computed values from
+    ``summary.capitalGainsSummary.transactions[i]`` (fields ``actual_cost``,
+    ``transfer_expenses``, ``gain``) and the bottom Schedule CG totals from
+    ``totalSTCG`` / ``totalLTCG`` / ``totalCapitalGains``. Without these
+    keys every per-row readout shows ₹0 even though the tax is correct.
+
+    For the simplified-112A path (ITR-1/ITR-4), the draft carries one
+    aggregate ``simplified112A`` block (sale consideration + cost). We
+    synthesize a single per-row ``transactions`` entry from that aggregate
+    so the frontend readout is non-zero and reconciles to the engine's
+    ``capital_gains_112a``. Per-scrip detail (ITR-2/3) is handled by the
+    per-scrip path elsewhere; this summary is the ITR-1/4 simplified view.
+    """
+    sched = (draft.capitalGainsSchedule or {}) if draft.capitalGainsSchedule else {}
+    simplified = sched.get("simplified112A") or {}
+    sale = Decimal(str(simplified.get("totalSaleConsideration", 0) or 0)) if simplified else Decimal("0")
+    cost = Decimal(str(simplified.get("totalCostAcquisition", 0) or 0)) if simplified else Decimal("0")
+    # The engine's authoritative net 112A gain (already exemption-adjusted
+    # where applicable). For the simplified path this equals max(0, sale-cost).
+    ltcg_112a = Decimal(str(result.capital_gains_112a or 0))
+    # STCG equity is NOT reportable under ITR-1/ITR-4 (only restricted 112A
+    # LTCG is). The bottom total is therefore 0 by design; the frontend
+    # badges the individual STCG rows as "not reportable under this form".
+    stcg_total = Decimal("0")
+    ltcg_total = ltcg_112a
+    total_capital_gains = ltcg_112a
+    transactions: list[dict[str, Any]] = []
+    if simplified and (sale > 0 or cost > 0):
+        # Single aggregate row mirrors Section112ATransactionResult.to_dict()
+        # field names so the frontend overlay (ct.actual_cost / ct.gain /
+        # ct.transfer_expenses) lights up the readouts correctly.
+        gain = max(Decimal("0"), sale - cost)
+        transactions.append({
+            "row": 1,
+            "asset_type": "EQUITY_ORIENTED_MUTUAL_FUND",
+            "holding_period_days": 0,
+            "holding_period_months": 13,
+            "sale_value": _decimal_float(sale),
+            "actual_cost": _decimal_float(cost),
+            "deemed_cost": _decimal_float(cost),
+            "transfer_expenses": 0.0,
+            "gain": _decimal_float(gain),
+            "grandfathering_applied": False,
+        })
+    return {
+        "status": "VALID" if transactions else ("EMPTY" if not simplified else "EVIDENCE_ONLY"),
+        "gross112AGain": _decimal_float(ltcg_112a),
+        "fullValueOfConsideration": _decimal_float(sale),
+        "costOfAcquisition": _decimal_float(cost),
+        "transferExpenses": 0.0,
+        "transactionCount": len(transactions),
+        "evidenceCount": 0,
+        "evidencePurchaseTotal": 0.0,
+        "evidenceSaleTotal": 0.0,
+        "evidenceCompatibility": "SIMPLIFIED_112A",
+        "transactions": transactions,
+        "issues": [],
+        "eligibility": {"ITR-1": True, "ITR-4": True},
+        # Bottom-of-schedule totals the frontend reads directly.
+        "totalSTCG": _decimal_float(stcg_total),
+        "totalLTCG": _decimal_float(ltcg_total),
+        "totalCapitalGains": _decimal_float(total_capital_gains),
+        "vdaIncome": 0.0,
+        "lossRemaining": 0.0,
+        "totalLossSetOff": 0.0,
+    }
+
+
 def _summary_from_result(
     result: ITR1Result,
     breakdown: dict[str, Any],
+    draft: ReturnDraft,
 ) -> dict[str, Any]:
     """Build the v2 response while preserving legacy headline aliases."""
     deductions = result.schedules.get("deductions") if result.schedules else None
@@ -134,6 +211,7 @@ def _summary_from_result(
         }
         for index, row in enumerate(hp_rows, start=1)
     ]
+    capital_gains_summary = _capital_gains_summary(result, draft)
     return {
         "gti": _decimal_float(result.gross_total_income),
         "grossTotalIncome": _decimal_float(result.gross_total_income),
@@ -186,6 +264,19 @@ def _summary_from_result(
         "calculationStatus": "CALCULATED_WITH_CREDIT_ISSUES" if issues else "CALCULATED",
         "computedByFormEngine": "ITR-1",
         "filingComputationStatus": "FORM_COMPUTATION",
+        # Per-row capital-gains summary + bottom totals so the frontend's
+        # CapitalGainsEntryManager readouts (gain/actual_cost/balance and
+        # totalSTCG/totalLTCG/totalCapitalGains) are non-zero. Without this
+        # every per-scrip readout shows ₹0 even though the engine math is
+        # correct (capitalGains112A above carries the real aggregate).
+        "capitalGainsSummary": _capital_gains_summary(result, draft),
+        "capitalGainsStatus": "SIMPLIFIED_112A",
+        "capitalGainsIssues": [],
+        "capitalGainsEligibility": {"ITR-1": True, "ITR-4": True},
+        "totalSTCG": _capital_gains_summary(result, draft).get("totalSTCG", 0.0),
+        "totalLTCG": _capital_gains_summary(result, draft).get("totalLTCG", 0.0),
+        "totalCapitalGains": _capital_gains_summary(result, draft).get("totalCapitalGains", 0.0),
+        "vdaIncome": 0.0,
     }
 
 
@@ -256,7 +347,7 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
         typed_input=typed_input,
         computation=result,
         breakdown=breakdown,
-        summary=_summary_from_result(result, breakdown),
+        summary=_summary_from_result(result, breakdown, draft),
     )
 
 
@@ -987,7 +1078,7 @@ def compute_canonical_itr4(draft: ReturnDraft) -> ITR4PipelineResult:
         typed_input=typed_input,
         computation=result,
         breakdown=breakdown,
-        summary=_summary_from_result(result, breakdown),
+        summary=_summary_from_result(result, breakdown, draft),
     )
 
 
