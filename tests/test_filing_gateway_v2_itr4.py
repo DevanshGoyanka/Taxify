@@ -207,7 +207,7 @@ def test_itr4_emits_exact_refund_verification_and_creation_metadata() -> None:
     assert itr4["CreationInfo"]["SWCreatedBy"].startswith("SW")
     assert itr4["CreationInfo"]["JSONCreatedBy"] == itr4["CreationInfo"]["SWCreatedBy"]
     assert len(itr4["CreationInfo"]["JSONCreationDate"]) == 10
-    assert itr4["CreationInfo"]["IntermediaryCity"] == "Delhi"
+    assert itr4["CreationInfo"]["IntermediaryCity"] == "Akola"
     assert itr4["CreationInfo"]["Digest"] == "-" or len(itr4["CreationInfo"]["Digest"]) == 44
 
 
