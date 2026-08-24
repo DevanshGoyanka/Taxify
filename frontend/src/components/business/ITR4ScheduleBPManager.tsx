@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { NATURE_CODES_44AD, NATURE_CODES_44ADA, NATURE_CODES_44AE, type OfficialCodeOption } from './ITR4ScheduleBPData';
 
 const MONEY_MAX = 99_999_999_999_999;
@@ -158,28 +158,8 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
     FinanclPartclrOfBusiness: { ...(input?.FinanclPartclrOfBusiness ?? {}) },
   };
   if (input?.PersumptiveInc44AD) {
-    const p = { ...input.PersumptiveInc44AD } as PersumptiveInc44AD & { _override6Per?: boolean; _override8Per?: boolean };
+    const p = { ...input.PersumptiveInc44AD };
     p.GrsTotalTrnOver = sum([p.GrsTrnOverBank, p.GrsTotalTrnOverInCash, p.GrsTrnOverAnyOthMode]);
-    // Section 44AD statutory split: 6% applies ONLY to turnover received
-    // through banking/digital modes; the balance (cash + any other non-
-    // banking mode) attracts 8%. "Any other mode" is a non-banking receipt
-    // so it goes in the 8% bucket, NOT 6%.
-    const sixBase = p.GrsTrnOverBank ?? 0;
-    const eightBase = sum([p.GrsTotalTrnOverInCash, p.GrsTrnOverAnyOthMode]);
-    // Half-up rounding to the nearest rupee matches the statutory CBDT
-    // convention (app/engine/itd/common._to_rupees) so the frontend preview
-    // reconciles exactly with the generated JSON.
-    const statutorySix = Math.round(sixBase * 0.06);
-    const statutoryEight = Math.round(eightBase * 0.08);
-    // The taxpayer may offer MORE than the presumptive minimum (Section 44AD
-    // lets the assessee declare higher income). When the override flag is
-    // off, the field auto-computes to the statutory minimum and is read-only.
-    // When on, the user-entered value is preserved (clamped to >= minimum so
-    // it can never fall below the statutory floor).
-    if (!p._override6Per) p.PersumptiveInc44AD6Per = statutorySix;
-    else p.PersumptiveInc44AD6Per = Math.max(statutorySix, p.PersumptiveInc44AD6Per ?? 0);
-    if (!p._override8Per) p.PersumptiveInc44AD8Per = statutoryEight;
-    else p.PersumptiveInc44AD8Per = Math.max(statutoryEight, p.PersumptiveInc44AD8Per ?? 0);
     p.TotPersumptiveInc44AD = sum([p.PersumptiveInc44AD6Per, p.PersumptiveInc44AD8Per]);
     result.PersumptiveInc44AD = p;
   }
@@ -212,10 +192,9 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
   return result;
 };
 
-function Field({ label, value, onChange, max = MONEY_MAX, min = 0, readOnly = false, priorValue, overrideFlag, onToggleOverride }: { label: string; value?: number; onChange?: (value: number) => void; max?: number; min?: number; readOnly?: boolean; priorValue?: number; overrideFlag?: boolean; onToggleOverride?: () => void; }): React.JSX.Element {
+function Field({ label, value, onChange, max = MONEY_MAX, min = 0, readOnly = false, priorValue }: { label: string; value?: number; onChange?: (value: number) => void; max?: number; min?: number; readOnly?: boolean; priorValue?: number }): React.JSX.Element {
   return <label>
-    <span style={styles.label}>{label}{onToggleOverride && <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--text-muted)' }}>[{overrideFlag ? 'declared higher' : 'auto: statutory minimum'}]</span>}</span>
-    {onToggleOverride && <label style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2, fontSize: 10, color: 'var(--text-muted)' }}><input type="checkbox" checked={Boolean(overrideFlag)} onChange={onToggleOverride} style={{ margin: 0 }} />Declare higher than minimum</label>}
+    <span style={styles.label}>{label}</span>
     {priorValue !== undefined && priorValue !== 0 && <>
       <span style={styles.priorLabel}>Last year filed</span>
       <span style={styles.priorValue}>{formatRupee(priorValue)}</span>
@@ -258,23 +237,6 @@ export default function ITR4ScheduleBPManager({ data, onChange, priorYearData }:
   const current = derive(data);
   const prior = priorYearData ? derive(priorYearData) : null;
   const lastNormalized = useRef<string>('');
-  // "Declare higher" override flags for the 6%/8% presumptive fields.
-  // Persisted on the data object as _override6Per/_override8Per (prefixed so
-  // they never leak into the official CBDT JSON, which serializes only the
-  // official ScheduleBP keys). Off = auto-compute the statutory minimum
-  // (read-only); On = let the taxpayer declare a higher income (>= minimum).
-  const [override6, setOverride6] = useState<boolean>(Boolean((current.PersumptiveInc44AD as never as { _override6Per?: boolean } | undefined)?._override6Per));
-  const [override8, setOverride8] = useState<boolean>(Boolean((current.PersumptiveInc44AD as never as { _override8Per?: boolean } | undefined)?._override8Per));
-  const toggleOverride6 = (): void => {
-    const next = !override6;
-    setOverride6(next);
-    emit({ PersumptiveInc44AD: { ...((current.PersumptiveInc44AD as object | undefined) ?? {}), _override6Per: next } as never } as Partial<ITR4ScheduleBPData>);
-  };
-  const toggleOverride8 = (): void => {
-    const next = !override8;
-    setOverride8(next);
-    emit({ PersumptiveInc44AD: { ...((current.PersumptiveInc44AD as object | undefined) ?? {}), _override8Per: next } as never } as Partial<ITR4ScheduleBPData>);
-  };
   useEffect(() => {
     const incoming = JSON.stringify(data ?? {});
     const normalized = JSON.stringify(current);
@@ -322,8 +284,8 @@ export default function ITR4ScheduleBPManager({ data, onChange, priorYearData }:
         <Field label="Turnover in cash" value={ad.GrsTotalTrnOverInCash} max={AD_MAX} priorValue={priorAd?.GrsTotalTrnOverInCash} onChange={(v) => updateObject('PersumptiveInc44AD', { GrsTotalTrnOverInCash: v })} />
         <Field label="Turnover through any other mode" value={ad.GrsTrnOverAnyOthMode} max={AD_MAX} priorValue={priorAd?.GrsTrnOverAnyOthMode} onChange={(v) => updateObject('PersumptiveInc44AD', { GrsTrnOverAnyOthMode: v })} />
         <Field label="Gross total turnover" value={ad.GrsTotalTrnOver} max={AD_MAX} priorValue={priorAd?.GrsTotalTrnOver} readOnly />
-        <Field label="Presumptive income @ 6%" value={ad.PersumptiveInc44AD6Per} max={AD_MAX} priorValue={priorAd?.PersumptiveInc44AD6Per} readOnly={!override6} onChange={(v) => updateObject('PersumptiveInc44AD', { PersumptiveInc44AD6Per: v } as Record<string, number>)} overrideFlag={override6} onToggleOverride={toggleOverride6} />
-        <Field label="Presumptive income @ 8%" value={ad.PersumptiveInc44AD8Per} max={AD_MAX} priorValue={priorAd?.PersumptiveInc44AD8Per} readOnly={!override8} onChange={(v) => updateObject('PersumptiveInc44AD', { PersumptiveInc44AD8Per: v } as Record<string, number>)} overrideFlag={override8} onToggleOverride={toggleOverride8} />
+        <Field label="Presumptive income @ 6%" value={ad.PersumptiveInc44AD6Per} max={AD_MAX} priorValue={priorAd?.PersumptiveInc44AD6Per} onChange={(v) => updateObject('PersumptiveInc44AD', { PersumptiveInc44AD6Per: v })} />
+        <Field label="Presumptive income @ 8%" value={ad.PersumptiveInc44AD8Per} max={AD_MAX} priorValue={priorAd?.PersumptiveInc44AD8Per} onChange={(v) => updateObject('PersumptiveInc44AD', { PersumptiveInc44AD8Per: v })} />
         <Field label="Total presumptive income u/s 44AD" value={ad.TotPersumptiveInc44AD} max={AD_MAX} priorValue={priorAd?.TotPersumptiveInc44AD} readOnly />
       </div>
     </div>} />

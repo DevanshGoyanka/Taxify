@@ -24,19 +24,11 @@ class PresumptiveResult:
 
 
 def _compute_44ad(ad: PresumptiveBusinessIncome44AD) -> tuple[Decimal, bool]:
-    """44AD: 6% on banking/digital turnover, 8% on cash + any other mode.
-
-    Section 44AD(1) prescribes 6% of "total turnover received by account
-    payee cheque / bank draft / RTGS / NEFT / electronic" and 8% of the
-    balance. "Any other mode" is a non-banking receipt, so it attracts the
-    higher 8% rate (NOT 6%). This matches the official ITR-4 Schedule BP
-    field mapping: GrsTrnOverBank -> 6%, GrsTotalTrnOverInCash +
-    GrsTrnOverAnyOthMode -> 8%.
-    """
-    minimum_six = ad.digital_turnover * PRESUMPTIVE_44AD_DIGITAL
-    minimum_eight = (
-        ad.cash_turnover + ad.other_mode_turnover
-    ) * PRESUMPTIVE_44AD_CASH
+    """44AD: 6% digital, 8% cash, or higher if declared."""
+    minimum_six = (
+        ad.digital_turnover + ad.other_mode_turnover
+    ) * PRESUMPTIVE_44AD_DIGITAL
+    minimum_eight = ad.cash_turnover * PRESUMPTIVE_44AD_CASH
     six_percent_income = max(
         minimum_six,
         ad.income_at_six_percent or Decimal("0"),
