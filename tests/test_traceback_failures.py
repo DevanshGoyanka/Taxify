@@ -77,8 +77,8 @@ def run_test_for_client(client: dict) -> dict:
         
         # Run the test script
         process = subprocess.run(
-            [sys.executable, "test_download.py"],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
+            [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_download.py")],
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             capture_output=True,
             text=True,
             timeout=300  # 5 minute timeout per client

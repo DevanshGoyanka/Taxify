@@ -27,6 +27,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+# Audit inputs/outputs live under Docs/, anchored to the repo root so the
+# script works regardless of the invocation directory.
+DOCS_DIR = Path(__file__).resolve().parent / "Docs"
+
 from app.engine.filing_gateway_v2 import generate_cbdt_json, FilingGatewayV2Error
 from app.schemas.return_draft import (
     AlternateAddress,
@@ -64,7 +68,7 @@ from app.schemas.return_draft import (
 
 def _load_required_fields(form: str) -> list[str]:
     """Load the REQUIRED leaf field paths from the extracted inventory CSV."""
-    csv_path = Path(f"audit_{form.lower().replace('-', '')}_schema_fields.csv")
+    csv_path = DOCS_DIR / f"audit_{form.lower().replace('-', '')}_schema_fields.csv"
     fields: list[str] = []
     with csv_path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -73,7 +77,7 @@ def _load_required_fields(form: str) -> list[str]:
                 fields.append(row["path"])
     return fields
     """Load the REQUIRED leaf field paths from the extracted inventory CSV."""
-    csv_path = Path(f"audit_{form.lower().replace('-', '')}_schema_fields.csv")
+    csv_path = DOCS_DIR / f"audit_{form.lower().replace('-', '')}_schema_fields.csv"
     fields: list[str] = []
     with csv_path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -767,7 +771,7 @@ def audit(form: str, draft: ReturnDraft) -> None:
     # Persist full missing/empty/present lists to CSV for the report.
     slug = form.lower().replace("-", "")
     for label, rows in (("missing", missing), ("empty", empty), ("present", present)):
-        out = Path(f"audit_{slug}_{label}.csv")
+        out = DOCS_DIR / f"audit_{slug}_{label}.csv"
         with out.open("w", encoding="utf-8") as f:
             f.write("path\n")
             for p in rows:
@@ -851,7 +855,7 @@ def audit_with_variants(form: str, drafts: list[ReturnDraft]) -> None:
     print(f"  EMPTY   : {len(empty)}")
     slug = form.lower().replace("-", "")
     for label, rows in (("missing", missing), ("empty", empty), ("present", present)):
-        out = Path(f"audit_{slug}_{label}.csv")
+        out = DOCS_DIR / f"audit_{slug}_{label}.csv"
         with out.open("w", encoding="utf-8") as f:
             f.write("path\n")
             for p in rows:

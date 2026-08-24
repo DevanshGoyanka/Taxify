@@ -1652,7 +1652,7 @@ GET /me     → UserResponse(id, email)
 
 ## 10. CBDT Schema Validation
 
-**File:** `validate_schemas.py` (root level)
+**File:** `tests/validate_schemas.py`
 
 This standalone script validates all four ITR forms against the official CBDT JSON schemas.
 
@@ -1829,4 +1829,4 @@ app/main.py
 
 > **End of Architecture Reference.**  
 > Generated from the Taxify codebase as of 2026-07-21.  
-> For questions, refer to the source files in `app/`, `tests/`, and `validate_schemas.py`.
+> For questions, refer to the source files in `app/` and `tests/`.

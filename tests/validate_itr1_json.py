@@ -12,7 +12,7 @@ from pathlib import Path
 import jsonschema
 from jsonschema import Draft4Validator
 
-REPO = Path(__file__).resolve().parent
+REPO = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = REPO / "Reference Docs by CBDT & ITD" / "Official JSON Schema" / "ITR-1_2026_Main_V1.1 (2).json"
 
 

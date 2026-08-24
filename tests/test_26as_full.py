@@ -16,7 +16,7 @@ from pathlib import Path
 from datetime import datetime
 
 # -- project root --------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
@@ -28,7 +28,7 @@ except ImportError as e:
 # -- paths ---------------------------------------------------------------------
 E_FILE_DIR  = Path(r"C:\Users\Devansh\Desktop\E-FILE_karo")
 TEMP_DIR    = E_FILE_DIR / "temp_26as"
-REPORT_DIR  = PROJECT_ROOT          # report lands next to this script
+REPORT_DIR  = PROJECT_ROOT          # report lands in the repo root
 
 # -- helpers -------------------------------------------------------------------
 

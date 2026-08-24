@@ -120,19 +120,27 @@ A full-stack application for computing, managing, and filing Indian ITR-1 throug
 │   ├── test_amt.py                 # AMT computation tests
 │   ├── test_bfla.py                # Brought-forward loss tests
 │   ├── test_cyla.py                # Current-year loss tests
+│   ├── test_itr1_e2e.py            # ITR-1 end-to-end filing run (live ERI)
+│   ├── test_itr4_e2e.py            # ITR-4 end-to-end filing run (live ERI)
+│   ├── validate_schemas.py         # Validate builder output against official CBDT schemas
+│   ├── validate_itr1_json.py       # Standalone ITR-1 JSON schema validation
+│   ├── verify_matrix_coverage.py   # Sync field matrix CSVs with the official schemas
+│   ├── check_schema_compliance.py  # Quick ITR-1/ITR-4 builder compliance check
+│   ├── extract_schema_inventory.py # Field inventory extractor (used by verify_matrix_coverage)
 │   └── __init__.py
 ├── API_Testing/                    # ERI API testing scripts, DSC signing tools, keystores
-├── Docs/
-│   └── ec2-proxy-decision.md       # EC2 proxy architecture decision for ITD connectivity
+├── Docs/                           # All project documentation + audit CSV/TXT artifacts
+│   ├── ec2-proxy-decision.md       # EC2 proxy architecture decision for ITD connectivity
+│   ├── ARCHITECTURE.md             # Full architecture reference (1,800+ lines)
+│   ├── frontend_integration_audit.md  # Complete field-level pipeline map (1,300+ lines)
+│   ├── REMAINING_ITEMS_TO_IMPLEMENT.md # CBDT rule gaps per ITR form
+│   ├── itr_schedule_audit.md       # ITR schedule implementation audit
+│   └── audit_itr*.csv              # Generated schema-coverage audit output
 ├── .env                            # SECRET_KEY, FRONTEND_URL, ERI_* credentials (not committed)
 ├── .gitignore
+├── conftest.py                     # Loads .env before any test imports app code
+├── pytest.ini
 ├── requirements.txt
-├── NEXT_STEPS.md                   # Phase 4–5 remaining work + frontend integration checklist
-├── ARCHITECTURE.md                 # Full architecture reference (1,800+ lines)
-├── frontend_integration_audit.md   # Complete field-level pipeline map (1,300+ lines)
-├── REMAINING_ITEMS_TO_IMPLEMENT.md # CBDT rule gaps per ITR form
-├── itr_schedule_audit.md           # ITR schedule implementation audit
-├── CBDT_Implementation_Audit_Report_AY2026-27*.md  # CBDT compliance audit reports
 └── README.md
 ```
 
@@ -434,12 +442,13 @@ Test files cover: auth flow, ITR-1/ITR-4 calculator engines, Pydantic schema val
 
 ## Key Docs
 
+All project documentation lives under `Docs/`.
+
 | Doc | Purpose |
 |---|---|
-| `ARCHITECTURE.md` | Full architecture reference — 1,800+ lines covering every schedule, calculator, and ITD builder |
-| `frontend_integration_audit.md` | Complete field-level pipeline map frontend → API → calculator → ITD JSON |
-| `NEXT_STEPS.md` | Phase 4 (frontend) and Phase 5 (tests, production hardening) remaining work |
-| `REMAINING_ITEMS_TO_IMPLEMENT.md` | CBDT rule gaps per ITR form (validation rules, schedules, field-level gaps) |
-| `itr_schedule_audit.md` | ITR schedule implementation audit |
-| `CBDT_Implementation_Audit_Report_AY2026-27*.md` | CBDT compliance audit reports |
+| `Docs/ARCHITECTURE.md` | Full architecture reference — 1,800+ lines covering every schedule, calculator, and ITD builder |
+| `Docs/frontend_integration_audit.md` | Complete field-level pipeline map frontend → API → calculator → ITD JSON |
+| `Docs/REMAINING_ITEMS_TO_IMPLEMENT.md` | CBDT rule gaps per ITR form (validation rules, schedules, field-level gaps) |
+| `Docs/itr_schedule_audit.md` | ITR schedule implementation audit |
+| `Docs/CBDT_FRONTEND_*.md` | CBDT ↔ frontend field audits for AY 2026-27 |
 | `Docs/ec2-proxy-decision.md` | EC2 proxy architecture for ITD connectivity |

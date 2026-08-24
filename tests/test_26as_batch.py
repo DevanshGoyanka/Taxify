@@ -12,7 +12,7 @@ from datetime import datetime
 import glob
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from app.automation.as26_converter import _parse, PART_META, STATUS_FULL
@@ -223,7 +223,7 @@ def generate_report(test_result: TestResult, output_dir: str):
 def main():
     # Configuration
     search_dir = r"C:\Users\Devansh\Desktop\E-FILE_karo"
-    output_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
     # Allow command line override
     if len(sys.argv) > 1:
@@ -245,8 +245,8 @@ def main():
         alternatives = [
             r"C:\Users\Devansh\Downloads",
             r"C:\Users\Devansh\Desktop",
-            os.path.join(os.path.dirname(__file__), "downloads"),
-            os.path.dirname(__file__)
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "downloads"),
+            os.path.dirname(os.path.dirname(__file__))
         ]
         
         found_dir = None

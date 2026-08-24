@@ -1,5 +1,13 @@
 import re
 import asyncio
+import os
+import sys
+
+# Make ``import app...`` work when this is run directly from tests/.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 from playwright.async_api import Page, BrowserContext
 from automation.downloader import update_browser_status
 

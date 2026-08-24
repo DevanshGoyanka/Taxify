@@ -8,7 +8,10 @@ the frontend type definitions enforce the same allowed values.
 import json
 from pathlib import Path
 
-ROOT = Path("Reference Docs by CBDT & ITD/Official JSON Schema")
+_REPO_ROOT = Path(__file__).resolve().parent
+ROOT = _REPO_ROOT / "Reference Docs by CBDT & ITD" / "Official JSON Schema"
+# Audit CSVs live under Docs/ alongside the rest of the schema audit output.
+DOCS_DIR = _REPO_ROOT / "Docs"
 
 
 def walk(node, path, schema, out, seen):
@@ -78,7 +81,7 @@ def main():
                         ("ITR-4", "ITR-4_2026_Main_V1.1 (2).json")):
         rows = extract(fname)
         slug = form.lower().replace("-", "")
-        out = Path(f"audit_{slug}_enums_cappings.csv")
+        out = DOCS_DIR / f"audit_{slug}_enums_cappings.csv"
         with out.open("w", encoding="utf-8") as f:
             f.write("path,type,enum,minimum,maximum\n")
             for r in rows:

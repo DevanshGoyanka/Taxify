@@ -11,7 +11,7 @@ items, not only scalar leaves.  This extractor therefore:
 
 Run from the repository root:
 
-    python extract_schema_inventory.py
+    python tests/extract_schema_inventory.py
 """
 from __future__ import annotations
 
@@ -21,8 +21,10 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterable
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "Reference Docs by CBDT & ITD" / "Official JSON Schema"
+# Extracted inventories live under Docs/ with the rest of the audit output.
+DOCS_DIR = ROOT / "Docs"
 
 SCHEMAS = {
     "ITR-1": "ITR-1_2026_Main_V1.1 (2).json",
@@ -265,7 +267,7 @@ def extract(form: str, schema_name: str) -> list[dict[str, str]]:
 def main() -> None:
     for form, filename in SCHEMAS.items():
         rows = extract(form, filename)
-        output_path = ROOT / f"audit_{form.lower().replace('-', '')}_schema_fields.csv"
+        output_path = DOCS_DIR / f"audit_{form.lower().replace('-', '')}_schema_fields.csv"
         with output_path.open("w", encoding="utf-8", newline="") as output:
             writer = csv.DictWriter(
                 output,

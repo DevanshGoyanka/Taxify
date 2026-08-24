@@ -205,8 +205,8 @@ def generate_summary_report(results, output_dir):
     print(f"\nSummary report saved to: {report_path}")
 
 def main():
-    test_script_path = r"C:\Users\Devansh\Desktop\Taxify\test_download.py"
-    output_dir = os.path.dirname(os.path.abspath(__file__))
+    test_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_download.py")
+    output_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
     print("Direct Bulk Test Script")
     print("=" * 50)

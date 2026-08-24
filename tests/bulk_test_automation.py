@@ -317,8 +317,8 @@ def generate_bulk_report(results: list[dict], output_dir: str):
 def main():
     # Configuration
     excel_path = r"C:\Users\Devansh\Desktop\Tally.xlsx"
-    test_script_path = r"C:\Users\Devansh\Desktop\Taxify\test_download.py"
-    output_dir = os.path.dirname(os.path.abspath(__file__))
+    test_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_download.py")
+    output_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
     print("Bulk Automation Test Script")
     print("=" * 50)

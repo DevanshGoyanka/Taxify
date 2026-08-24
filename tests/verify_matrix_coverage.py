@@ -6,8 +6,8 @@ evidence remain human-reviewed and are never inferred by this script.
 
 Usage:
 
-    python verify_matrix_coverage.py
-    python verify_matrix_coverage.py --sync-schema
+    python tests/verify_matrix_coverage.py
+    python tests/verify_matrix_coverage.py --sync-schema
 """
 from __future__ import annotations
 
@@ -19,10 +19,10 @@ from typing import Iterable
 
 from extract_schema_inventory import SCHEMAS, extract
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 MATRIX_FILES = (
-    ROOT / "CBDT_FRONTEND_FIELD_MATRIX_AY2026_27.csv",
-    ROOT / "CBDT_FRONTEND_FIELD_TO_TAB_IMPLEMENTATION_ROUTING_AY2026_27.csv",
+    ROOT / "Docs" / "CBDT_FRONTEND_FIELD_MATRIX_AY2026_27.csv",
+    ROOT / "Docs" / "CBDT_FRONTEND_FIELD_TO_TAB_IMPLEMENTATION_ROUTING_AY2026_27.csv",
 )
 SCHEMA_COLUMNS = (
     "required_in_parent",
