@@ -324,8 +324,467 @@ covering both names.
 
 ---
 
-## Phase 2 — §6 Box setup
+## Phase 2 — §6 Box setup — ✅ COMPLETE (service starts in §7)
 
-_(not started — awaiting go-ahead)_
+> **Method note:** inline heredocs through PowerShell→ssh proved fragile — a `§` character and
+> later `\$` escaping both corrupted the remote quoting. **All remote work is done by writing a
+> script locally with LF endings, `scp`-ing it, and executing it.** Reproducible and auditable.
+
+### 2026-08-24 — Repo branch trap caught before deploying
+
+```
+git ls-remote --symref https://github.com/DevanshGoyanka/Taxify HEAD
+```
+```
+ref: refs/heads/master   HEAD          <-- default branch is master
+refs/heads/main    86ff96b             <-- the real app + guard fix
+refs/heads/master  7bea0ce             <-- stale "push automation" line of work
+```
+Result: ⚠️ roadmap §6.4's plain `git clone` would have silently deployed **master**.
+**All clones use `-b main`.**
+
+### 2026-08-24 — §6.1/6.2 Base packages + Node 20
+
+First attempt failed: a `§` character in the inline script corrupted bash quoting
+(`syntax error near unexpected token '('`). Re-run via scp'd script file.
+```
+python3.10 --version -> Python 3.10.12
+git                  -> 2.34.1
+nginx                -> 1.18.0 (Ubuntu)
+node / npm           -> v20.20.2 / 10.8.2
+sqlite3              -> 3.37.2
+```
+Result: ✅ Python 3.10 matches the operator's working interpreter.
+
+### 2026-08-24 — §6.3 Swap (mandatory)
+
+```
+sudo fallocate -l 2G /swapfile; mkswap; swapon; + /etc/fstab entry
+```
+```
+Mem:   914Mi total
+Swap:  2.0Gi total, 0B used
+```
+Result: ✅ persistent across reboot via fstab.
+
+### 2026-08-24 — §6.4/6.5 Code + venv
+
+```
+git clone -b main https://github.com/DevanshGoyanka/Taxify /opt/taxify
+python3.10 -m venv .venv && pip install -r requirements.txt
+pip install email-validator httpx urllib3 pytest-asyncio   # under-declared in requirements.txt
+```
+```
+branch: main   head: 86ff96b
+guard check: 'OK: stale guard absent'
+import check: all core imports OK (fastapi, uvicorn, playwright, fitz, pikepdf,
+              email_validator, httpx, jsonschema, sqlalchemy)
+```
+Result: ✅ the §2.1 guard removal is live on the box.
+
+### 2026-08-24 — §6.6 Playwright + Chrome (Chrome only, not Chromium)
+
+```
+sudo ./.venv/bin/playwright install --with-deps chrome
+```
+```
+/usr/bin/google-chrome
+Google Chrome 151.0.7922.173
+/opt/taxify/.playwright -> 5.0M   (ffmpeg only; bundled Chromium correctly skipped)
+disk: 6.4G used / 16G  (42%)
+```
+Result: ✅ ~450 MB saved by not installing the unused bundled Chromium.
+
+### 2026-08-24 — §6.7 Frontend build — FAILED, then fixed
+
+```
+npm run build   ->  tsc -b failed
+```
+```
+14 errors, all TS2322, all in src/components/business/ITR4ScheduleBPManager.tsx (lines 228-229)
+Type 'string | number | undefined' is not assignable to type 'number | undefined'
+```
+Root cause: `derive()` typed the coerced record as `number | string | undefined` while `sum()`
+takes `Array<number | undefined>`. Runtime was already correct (toNum coerces everything);
+only the annotation was wrong. Pre-existing, introduced with c98d763 / 2857b46.
+
+Operator chose **Option 1 — fix the type**. Commit `c6e6ac5`: build the coerced values into a
+separate `Record<string, number | undefined>` instead of overwriting in place.
+
+Re-run after pull:
+```
+TSC PASSED
+dist/assets/index-BYIpKCAg.js   989.59 kB | gzip: 247.68 kB
+built in 4.71s, dist/ = 1.1M
+API URL baked into dist/assets/axiosInstance-C6dy_tRd.js  ✅
+```
+Result: ✅ built with `VITE_API_BASE_URL=https://itrbharo.duckdns.org`.
+
+### 2026-08-24 — §6.13 SQLite WAL (commit `9ac67f7`)
+
+Verified locally before pushing:
+```
+PRAGMA journal_mode -> wal ; busy_timeout -> 5000 ; synchronous -> 1 (NORMAL)
+```
+Result: ✅ prevents `database is locked` between the automation worker and the API.
+
+### 2026-08-24 — §6.8 systemd unit
+
+```
+/etc/systemd/system/taxify.service  (installed, enabled)
+/etc/taxify/taxify.env              (created, 600, root:root, EMPTY until section 7)
+/opt/taxify/.env -> symlink to the above
+```
+Unit carries the 1 GB survival tuning: `MemoryMax=750M`, `MemoryHigh=650M`,
+`KillMode=control-group`, `OOMPolicy=continue`, `--workers 1` (browser.py singleton),
+and `xvfb-run` for the visible-Chrome path (§2.2).
+Result: ✅ enabled. **Deliberately not started** — no secrets yet.
+
+### 2026-08-24 — §6.9 nginx
+
+```
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+http://127.0.0.1/           -> 200
+http://itrbharo.duckdns.org/ -> 200
+```
+Result: ✅ frontend serving. Default site unlinked. gzip + immutable asset caching applied.
+
+### 2026-08-24 — §6.11 cron
+
+```
+0 3 * * *    find /opt/taxify/downloads -type f -mtime +30 -delete
+*/30 * * * * pkill -f "chrome.*--headless" --older-than 7200 || true
+```
+Result: ✅ EBS creep guard (§4.5) + leaked-Chrome reaper.
+
+### 2026-08-24 — §6.10 Let's Encrypt TLS
+
+```
+sudo certbot --nginx -d itrbharo.duckdns.org -d www.itrbharo.duckdns.org --redirect
+```
+```
+Certificate Name: itrbharo.duckdns.org
+Domains:          itrbharo.duckdns.org www.itrbharo.duckdns.org
+Expiry:           2026-11-22 (89 days)
+certbot.timer:    active, next run in 14h
+certbot renew --dry-run: all simulated renewals succeeded
+```
+Result: ✅ HTTPS live, auto-renew proven by dry-run.
+
+### 2026-08-24 — §6 external verification (from operator machine)
+
+```
+https://itrbharo.duckdns.org/       status=200  ssl_verify_result=0
+https://www.itrbharo.duckdns.org/   status=200
+http://itrbharo.duckdns.org/        301 -> https://itrbharo.duckdns.org/ -> 200
+/assets/*.js                        Content-Encoding: gzip
+                                    Cache-Control: public, immutable, max-age=31536000
+POST /auth/login                    502   <- EXPECTED, app not started until section 7
+TLS subject CN=itrbharo.duckdns.org  issuer CN=YR1, O=Let's Encrypt  expires 2026-11-22
+```
+
+### §6 verdict
+
+| Check | Result |
+|---|---|
+| Packages + Node installed | ✅ |
+| 2 GB swap, persistent | ✅ |
+| Correct branch (`main`) deployed | ✅ |
+| venv + all imports | ✅ |
+| Chrome installed, Chromium skipped | ✅ |
+| Frontend built (after type fix) | ✅ |
+| systemd unit enabled w/ memory caps | ✅ (not started) |
+| nginx serving over HTTPS | ✅ |
+| HTTP→HTTPS redirect | ✅ 301 |
+| gzip + immutable caching | ✅ |
+| TLS auto-renew | ✅ dry-run passed |
+| **AWS resources added in §6** | **none — $0 unchanged** |
+
+**§6 COMPLETE — halted for operator confirmation before §7 (env/secrets).**
+
+---
+
+## Phase 3 — §7 Env vars and secrets — ✅ COMPLETE
+
+Operator decisions: transfer the local `.env` (option B), copy `app.db` to keep users, reuse
+`SECRET_KEY`/`PORTAL_ENCRYPTION_KEY` unrotated, run **Type-3 UAT**.
+
+### 2026-08-24 — ERI mode decision
+
+Investigated which `(ERI_MODE, ERI_ENV)` pair is actually usable:
+```
+local .env: ERI_MODE=type3  ERI_ENV=uat  ERI_DSC_SIGNING_MODE=token  ERI_INTERMEDIARY_CITY=Akola
+
+ERI_SW_ID_TYPE3_PRODUCTION            = (EMPTY)
+ERI_DIGEST_SECRET_KEY_TYPE3_PRODUCTION= (EMPTY)
+ERI_USER_ID_TYPE3_PRODUCTION          = (EMPTY)
+```
+`.env` labels that block *"Type-3 Production (to be filled before the filing season)"* — it was
+never populated. `ERI_ENV=production` would raise `ValueError` at `config.py:151` (missing
+SW_ID) before the app finished booting.
+
+**Decision: deploy Type-3 UAT. Production keys left EMPTY, to be filled when ITD issues them.**
+Flipping later is `ERI_ENV=production` + three values + `systemctl restart taxify`.
+
+### 2026-08-24 — Env file prepared locally
+
+CRLF stripped (systemd `EnvironmentFile` would otherwise embed a trailing `\r` in every value).
+URLs pointed at the deployed domain:
+```
+FRONTEND_URL=https://itrbharo.duckdns.org
+CORS_ALLOWED_ORIGINS=https://itrbharo.duckdns.org,https://www.itrbharo.duckdns.org
+39 keys total, 0 CR characters
+```
+
+### 2026-08-24 — app.db copy — first attempt FAILED
+
+```
+sqlite3 PRAGMA wal_checkpoint(TRUNCATE) / journal_mode=DELETE
+-> sqlite3.OperationalError: database is locked
+```
+Cause: the operator's local dev server (PID 23924, port 8000) still holds `app.db` open.
+Resolved with SQLite's **online backup API** (`Connection.backup()`), which snapshots a live
+database without an exclusive lock:
+```
+users in copy : 3
+    id=1  csiddhesh3011@gmail.com
+    id=3  siddhesh@yugansh.com
+    id=2  test@example.com
+integrity     : ok
+tables        : 9
+size          : 917504 bytes
+```
+
+### 2026-08-24 — Install on box
+
+```
+sudo install -m 600 -o root -g root /tmp/taxify.env /etc/taxify/taxify.env
+install -m 644 -o ubuntu -g ubuntu  /tmp/app.db     /opt/taxify/app.db
+```
+```
+keys: 39
+ERI_MODE=type3 / ERI_ENV=uat / city=Akola / DSC=token
+production TYPE3 keys: all empty (deliberate)
+users on box: 3
+```
+
+### 2026-08-24 — Service start FAILED, then fixed
+
+```
+PermissionError: [Errno 13] Permission denied: '/opt/taxify/.env'
+  at app/main.py:19 -> load_dotenv()
+```
+Root cause: **two** independent readers of the environment.
+1. systemd reads `EnvironmentFile=` as **root**, then drops to `User=ubuntu` — worked.
+2. `app/main.py:19` *also* calls `load_dotenv()`, opening the `/opt/taxify/.env` symlink as
+   **ubuntu** — blocked by `600 root:root`.
+
+Operator chose **Option 1** — standard service-credential ownership:
+```
+sudo chown root:ubuntu /etc/taxify/taxify.env
+sudo chmod 640        /etc/taxify/taxify.env
+```
+
+### 2026-08-24 — Secrets permission audit
+
+```
+/etc/taxify/taxify.env   mode=640  root:ubuntu    other users: BLOCKED
+/opt/taxify/.env.backup  mode=640  ubuntu:ubuntu  other users: BLOCKED
+/opt/taxify             mode=755  ubuntu:ubuntu
+```
+Note: `app/security/env_backup.py` writes `.env.backup` on every start — it creates the file
+with safe `640` permissions of its own accord. Verified with an actual `sudo -u nobody cat`
+rather than trusting the mode bits.
+
+### 2026-08-24 — Service running
+
+```
+Active: active (running)   Main PID 16796 (xvfb-run)
+Memory: 129.2M (high: 650.0M  max: 750.0M  available: 520.7M)
+INFO: .env backed up to /opt/taxify/.env.backup
+[OK] Database tables created and additive migrations applied.
+INFO: Background worker task created / Job worker loop started.
+INFO: Application startup complete.
+INFO: Uvicorn running on http://127.0.0.1:8000
+GET 127.0.0.1:8000/docs -> 200
+```
+
+### 2026-08-24 — End-to-end chain verification (public HTTPS)
+
+```
+POST /auth/login  wrong password on real user  -> 401  (app reached SQLite, rejected creds)
+POST /auth/login  malformed body               -> 422  (FastAPI validation alive)
+GET  /                                         -> 200  (static frontend)
+OPTIONS /auth/login  Origin: itrbharo...       -> 200
+    access-control-allow-origin: https://itrbharo.duckdns.org
+    access-control-allow-credentials: true
+```
+Result: ✅ HTTPS → nginx → uvicorn → SQLite proven end to end.
+
+### §7 verdict
+
+| Check | Result |
+|---|---|
+| 39 keys installed, LF endings | ✅ |
+| Mode = Type-3 UAT, production keys empty | ✅ |
+| `app.db` copied, 3 users, integrity ok | ✅ |
+| Secrets not world-readable (verified by test, not assumption) | ✅ |
+| Service active, worker running | ✅ |
+| Memory 129 M against a 750 M cap | ✅ |
+| CORS allows the deployed origin | ✅ |
+| **AWS resources added in §7** | **none — $0 unchanged** |
+
+**§7 COMPLETE — halted for operator confirmation before §8.**
+
+---
+
+## Phase 4 — §8 Verification — ✅ COMPLETE (3 issues found, 2 fixed)
+
+### 2026-08-24 — §8.1/8.2/8.5/8.6/8.7 pre-reboot
+
+```
+taxify: active   nginx: active   (both enabled at boot)
+127.0.0.1:8000/docs -> 200
+Mem 258Mi/914Mi   Swap 54Mi used of 2.0Gi
+cgroup MemoryCurrent=142MB  MemoryMax=750MB
+disk 6.7G/16G (44%)
+
+Playwright: chrome 151.0.7922.173 launched, page rendered -> OK
+ERI:  type3/uat  sw_id=SW20014122  digest secret set  iterations=1038
+      assert_credentials_at_startup(): PASS
+```
+
+### 2026-08-24 — §8.4 REBOOT SURVIVAL TEST
+
+```
+sudo systemctl reboot        # SSH back after ~45s
+booted at 2026-08-24 16:46:23 (fresh boot confirmed)
+
+taxify: active      <- no manual start
+nginx : active      <- no manual start
+swap  : /swapfile 2G re-mounted from fstab
+API   : 127.0.0.1:8000/docs -> 200
+SQLite: journal_mode=wal preserved
+certbot.timer: active
+crontab: both jobs survived
+Elastic IP 43.205.225.117 still attached to i-06fa754bdb98c95af
+CpuCredits still 'standard'
+```
+Result: ✅ full unattended recovery.
+
+### 2026-08-24 — §8.3 verified by REAL operator usage
+
+nginx access log showed live traffic from `106.221.215.87`: registration
+(`siddheshchaudhari52@gmail.com`, user id 4), `POST /auth/login -> 200`, client browsing,
+and an import job triggered. Better evidence than a synthetic check.
+
+### ISSUE 1 — nginx routed most API calls to index.html (introduced by this deployment)
+
+The roadmap's location regex `^/(auth|clients|eri|filing|automation|integration|health)` was
+guesswork. Authoritative list from the running app's `/openapi.json` — **18 top-level segments**:
+```
+api auth automation business-income capital-gains clients dashboard health
+integration itr1 itr2 itr3 itr4 me pan returns tax-summary v2
+```
+* 13 segments were NOT proxied -> returned `index.html` (542 bytes) instead of JSON.
+  Observed live: `/v2/clients/... -> 200 542` and `/dashboard/stats -> 200 542`.
+* `eri` was in the regex but is not an API segment at all.
+* `filing` IS an SPA route -> the operator's deep link `/filing/<id>/2026-27` returned **404**.
+
+Complication: `/clients` and `/dashboard` are **both** SPA routes and API routes, so path
+matching cannot separate them.
+
+**Fix:** dispatch on the `Accept` header — browser navigations (`text/html`) get `index.html`,
+everything else proxies to uvicorn.
+```nginx
+location / { try_files $uri @dispatch; }
+location @dispatch {
+    if ($http_accept ~* "text/html") { rewrite ^ /index.html last; }
+    proxy_pass http://127.0.0.1:8000;
+}
+```
+TLS re-applied afterwards with `certbot install --cert-name ... --nginx --redirect`
+(replacing the site file discards certbot's server block).
+
+Verification — API side, no 542-byte responses remain:
+```
+/health                      -> 200 15    (real JSON)
+/dashboard/stats             -> 401 62    (was 200 542)
+/clients?assessmentYear=...  -> 401 62
+/me /returns /automation/... -> 401 62
+/v2/clients /pan /itr1 ...   -> 404 22    (API's own 404, not HTML)
+```
+Verification — SPA side, all 200 542 (index.html):
+```
+/  /login  /register  /dashboard  /clients  /filing
+/filing/af19a74f-.../2026-27   -> 200      (was 404)
+/advanced-tax  /some-unknown-deep-link
+```
+
+### ISSUE 2 — automation jobs failed on a root-owned home dir (introduced by this deployment)
+
+```
+job 36 | failed | DOWNLOAD_ALL
+PermissionError: [Errno 13] Permission denied: '/home/ubuntu/.local/share/AayDocCapio'
+  browser.py:61 -> os.makedirs(path)
+```
+```
+/home/ubuntu              ubuntu:ubuntu
+/home/ubuntu/.local       root:root   <- created 16:09
+/home/ubuntu/.local/share root:root
+```
+Cause: `sudo -E ./.venv/bin/playwright install` in §6.6 preserved `HOME=/home/ubuntu` while
+running as root, so Playwright created those directories owned by root.
+
+**Fix:** `sudo chown -R ubuntu:ubuntu /home/ubuntu/.local`
+
+Verified through the app's own code path (not a synthetic test):
+```
+_playwright_browsers_dir() -> /home/ubuntu/.local/share/AayDocCapio/browsers   (no error)
+browser_manager.get_context() -> page rendered "worker-path-ok"
+```
+
+> Related finding: `browser.py:150` **overwrites** `PLAYWRIGHT_BROWSERS_PATH` with its own
+> `~/.local/share/AayDocCapio` path, so the systemd `Environment=` setting is silently ignored
+> and roadmap §4.5's "pin the browsers path" guard does not actually work. Harmless here —
+> `channel="chrome"` uses system Chrome at `/usr/bin/google-chrome` — but the roadmap claim
+> is wrong.
+
+### ISSUE 3 — job 35 failure is operator data, not infrastructure
+
+```
+35 | failed | DOWNLOAD_ALL | Client is missing PAN or ITD portal password.
+```
+Expected behaviour. That client has no `portal_password` set. Not a deployment defect.
+
+### 2026-08-24 — §8.8 Free tier position
+
+```
+instances account-wide : i-06fa754bdb98c95af  t3.micro  running   (exactly 1)
+CpuCredits             : standard
+EBS volumes            : vol-0ed5c1f4e9dd78914  16 GiB gp3        (of 30 GB)
+public IPv4            : 1                                        (of 750 hrs/mo)
+snapshots              : none
+budget                 : taxify-zero  $1
+all-region stray sweep : clean
+```
+
+### §8 verdict
+
+| # | Check | Result |
+|---|---|---|
+| 8.1 | taxify + nginx active | ✅ |
+| 8.2 | local API 200 | ✅ |
+| 8.3 | app loads, login works | ✅ (real operator usage) |
+| 8.4 | survives reboot unattended | ✅ |
+| 8.5 | swap in use, memory healthy | ✅ |
+| 8.6 | Playwright/Chrome launches | ✅ (after Issue 2 fix) |
+| 8.7 | ERI credentials resolve (Type-3 **UAT**) | ✅ |
+| 8.8 | free tier all within limits | ✅ |
+| — | API routes return JSON | ✅ (after Issue 1 fix) |
+| — | SPA deep links return HTML | ✅ (after Issue 1 fix) |
+| — | **Monthly cost** | **$0.00** |
+
+**§1–9 COMPLETE AND VERIFIED.** `docs/runbook.md` written. CI/CD (§10) not started, as instructed.
 
 ---

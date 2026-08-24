@@ -1,0 +1,110 @@
+name: ci
+
+# Roadmap §10.6 — build + lint only for now.
+#
+# The pytest suite is NOT green: a measured baseline at af6cfc5 was 177 failures
+# and 13 collection errors, predating the deployment work. Gating merges on it
+# today would produce a check that is red on day one, which gets bypassed within
+# a week. Ratchet up instead: fix suites, then add them here.
+#
+# Next step is to add a curated green subset:
+#   pytest tests/test_itr1_calculator.py tests/test_itr4_calculator.py \
+#          tests/test_itr1_schemas.py tests/test_itr4_schemas.py
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: frontend build + typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck + build
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: https://itrbharo.duckdns.org
+        run: npm run build          # tsc -b && vite build
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+        continue-on-error: true      # advisory until the existing lint debt is cleared
+
+  backend:
+    name: backend imports + dependency completeness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Install declared dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile every module
+        run: python -m compileall -q app ais_extractor scripts
+
+      # This is the check that would have caught the nine undeclared packages
+      # that broke portal automation in production. Most imports here are lazy
+      # (inside functions), so nothing fails at startup - only when a user hits
+      # the feature. Fail the build instead.
+      - name: Every third-party import must be declared in requirements.txt
+        run: |
+          python - <<'PY'
+          import ast, pathlib, sys
+
+          mods = set()
+          for root in (pathlib.Path("app"), pathlib.Path("ais_extractor")):
+              for f in root.rglob("*.py"):
+                  try:
+                      tree = ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
+                  except SyntaxError:
+                      continue
+                  for n in ast.walk(tree):
+                      if isinstance(n, ast.Import):
+                          for a in n.names:
+                              mods.add(a.name.split(".")[0])
+                      elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                          mods.add(n.module.split(".")[0])
+
+          local = {"app", "ais_extractor", "tests", "scripts",
+                   "extractor", "as26_extractor", "tis_extractor", "config"}
+          # Windows-only, guarded by try/except in app/eri/envelope.py
+          platform_only = {"win32crypt"}
+
+          missing = []
+          for m in sorted(mods - set(sys.stdlib_module_names) - local - platform_only):
+              if m.startswith("_"):
+                  continue
+              try:
+                  __import__(m)
+              except Exception:
+                  missing.append(m)
+
+          if missing:
+              print("UNDECLARED DEPENDENCIES:", ", ".join(missing))
+              print("Add them to requirements.txt.")
+              sys.exit(1)
+          print("all third-party imports are declared")
+          PY

@@ -24,8 +24,14 @@ Roadmap ledger: `Docs/AWS_FREE_TIER_DEPLOYMENT.md` §3
 | 4 | `vol-0ed5c1f4e9dd78914` | EBS **16 GiB gp3**, 3000 IOPS | ap-south-1c | §3.2 | 30 GB, 12 mo | 16 GB | 2026-08-24 |
 | 5 | `eipalloc-03d23487a47ffde51` → **`43.205.225.117`** | Elastic IP (attached) | ap-south-1 | §3.3 | 750 hrs/mo, 12 mo | 744 hrs | 2026-08-24 |
 | 6 | `taxify-zero` | AWS Budget, $1 / monthly | global | §4.8 | 2 budgets free | 1 | 2026-08-24 |
+| 7 | `taxify-ssm` | IAM role + `AmazonSSMManagedInstanceCore` | global | §10.3 | Always free | 1 | 2026-08-24 |
+| 8 | `taxify-ssm` | IAM instance profile (attached to #3) | global | §10.3 | Always free | 1 | 2026-08-24 |
 
-**Count: 6 — all inside the §3 ledger. Projected monthly cost: $0.00**
+**Count: 8 — all inside the ledger. Projected monthly cost: $0.00**
+
+Resources 7–8 were added to replace SSH after the operator's CGNAT ISP made a `/32` port-22
+rule unworkable. Both are always-free IAM objects and were already specified by roadmap §10.3.
+**Port 22 is now closed to the internet** — access is outbound-only via SSM.
 
 ### Key details
 
@@ -53,10 +59,13 @@ The DuckDNS token is **not** stored on the box or in this repo.
 
 | Port | Source | Purpose |
 |---|---|---|
-| 22 | `106.221.215.87/32` | SSH — **your IP only** (dynamic; re-authorise when it rotates) |
+| 22 | **removed** | SSH closed to the internet — replaced by SSM (outbound only) |
 | 80 | `0.0.0.0/0` | nginx HTTP + Let's Encrypt HTTP-01 challenge |
 | 443 | `0.0.0.0/0` | nginx HTTPS |
 | 8000 | *not exposed* | uvicorn stays on localhost behind nginx |
+
+`sshd` still runs and the key pair still exists; only the ingress rule was revoked. Re-open
+temporarily via `authorize-security-group-ingress` if SSM is ever unavailable — see the runbook.
 
 ---
 
