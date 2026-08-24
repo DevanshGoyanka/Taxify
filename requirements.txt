@@ -1,14 +1,45 @@
+# --- Web framework ---
 fastapi>=0.109.0
 uvicorn>=0.27.0
 pydantic>=2.0.0
+email-validator>=2.0.0          # pydantic EmailStr (app/schemas/auth.py)
 python-multipart>=0.0.6
-pytest>=8.0.0
-jsonschema>=4.0.0
-playwright>=1.40.0
+
+# --- Auth / crypto ---
 cryptography>=41.0.0
-sqlalchemy
-python-dotenv
 bcrypt>=4.0.0
 python-jose[cryptography]
+
+# --- Database ---
+sqlalchemy
+python-dotenv
+
+# --- HTTP clients ---
+httpx>=0.27.0                   # app/eri/type2/client.py, add_client.py, envelope.py
+requests>=2.31.0                # app/eri/type2/acknowledgement.py, everify.py, prefill.py
+
+# --- Portal automation ---
+playwright>=1.40.0
+
+# --- PDF: reading (AIS / TIS / 26AS extraction) ---
 PyMuPDF>=1.24.0
 pikepdf>=9.0.0
+pdfplumber>=0.11.0              # ais_pdfplumber.py, tis_pdfplumber.py, as26_extractor.py
+
+# --- PDF: writing ---
+reportlab>=4.0.0                # app/routers/client_itr.py, client_itr_v2.py
+
+# --- Excel ---
+openpyxl>=3.1.0                 # app/vault.py client import/export
+xlsxwriter>=3.2.0               # app/automation/*_converter.py, ais_structure_report.py
+
+# --- Schema validation ---
+jsonschema>=4.0.0
+
+# --- Tests ---
+pytest>=8.0.0
+pytest-asyncio>=0.23.0          # pytest.ini sets asyncio_mode=auto
+urllib3>=2.0.0                  # tests/test_prefill.py, test_everify.py, ...
+
+# --- Windows only: DSC USB-token signing (app/eri/envelope.py, guarded by try/except) ---
+# pywin32 ; sys_platform == "win32"
