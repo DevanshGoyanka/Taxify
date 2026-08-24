@@ -1014,7 +1014,7 @@ def build_itr3_json(
     pin_code: Optional[str] = None,
     assessee_status: str = "I",
     father_name: str = "",
-    ver_place: str = "Delhi",
+    ver_place: Optional[str] = None,
     tds1_entries: Optional[list[dict]] = None,
     tds2_entries: Optional[list[dict]] = None,
 ) -> dict:

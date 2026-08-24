@@ -8,6 +8,7 @@ itr4.py, etc.
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
@@ -121,13 +122,27 @@ def _resolve_sw_id() -> str:
 # CreationInfo, Form_ITRx, Verification — identical across all forms
 # ---------------------------------------------------------------------------
 
+def _resolve_intermediary_city() -> str:
+    """Resolve the intermediary city stamped in CreationInfo.IntermediaryCity.
+
+    Reads ``ERI_INTERMEDIARY_CITY`` from the environment (set in .env). This
+    is a single unsuffixed variable because the intermediary (the e-filing
+    return preparer) is the same entity across all four (mode, environment)
+    credential sets — Type-2 UAT/Production and Type-3 UAT/Production — so
+    the city does not vary per credential bundle. Defaults to "Akola" when
+    unset so generation never fails on this field.
+    """
+    raw = (os.getenv("ERI_INTERMEDIARY_CITY") or "").strip()
+    return raw or "Akola"
+
+
 def _creation_info() -> dict:
     return {
         "SWVersionNo": _SW_VERSION,
         "SWCreatedBy": _resolve_sw_id(),
         "JSONCreatedBy": _resolve_sw_id(),
         "JSONCreationDate": _today(),
-        "IntermediaryCity": "Delhi",
+        "IntermediaryCity": _resolve_intermediary_city(),
         "Digest": "-",   # placeholder, replaced by _compute_digest at builder end
     }
 
@@ -146,7 +161,7 @@ def _verification(
     assessee_name: str,
     father_name: str,
     pan: str,
-    place: str = "Delhi",
+    place: Optional[str] = None,
     capacity: str = "S",
 ) -> dict:
     return {
@@ -156,7 +171,10 @@ def _verification(
             "AssesseeVerPAN": _str_or(pan, "AAAAA0000A"),
         },
         "Capacity": capacity,
-        "Place": _str_or(place, "Delhi"),
+        # The assessee's verification place defaults to the intermediary
+        # city (ERI_INTERMEDIARY_CITY) so even test paths that omit `place`
+        # stamp Akola (not the old hardcoded Delhi).
+        "Place": _str_or(place, _resolve_intermediary_city()),
     }
 
 

@@ -1827,7 +1827,7 @@ def build_itr4_json(
     assesee_status: str = "I",
     itr4_return_file_sec: int = 11,
     father_name: str = "",
-    ver_place: str = "Delhi",
+    ver_place: Optional[str] = None,
     bank_name: str = "BankName",
     account_no: str = "0000000001",
     ifsc: str = "SBIN0000001",

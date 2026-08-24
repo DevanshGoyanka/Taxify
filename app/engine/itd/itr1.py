@@ -1549,7 +1549,7 @@ def build_itr1_json(
     opt_out_new_regime: str = "N",
     return_file_sec: int = 11,
     father_name: str = "",
-    ver_place: str = "Delhi",
+    ver_place: Optional[str] = None,
     bank_name: Optional[str] = None,
     account_no: Optional[str] = None,
     ifsc: Optional[str] = None,
