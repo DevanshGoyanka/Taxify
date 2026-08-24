@@ -143,9 +143,27 @@ const toAmount = (value: string, maximum: number = MONEY_MAX, minimum = 0): numb
   return Math.min(maximum, Math.max(minimum, parsed));
 };
 
-const amount = (value: number | undefined): string => value ? String(value) : '';
+const toNum = (value: number | string | undefined | null): number => {
+  // Coerce every value to a finite number. A numeric string (e.g. "215420"
+  // arriving from a backend/prior-year load) would otherwise trigger JS
+  // string concatenation inside reduce (0 + "215420" = "0215420"),
+  // inflating the turnover 10x each derive step and cascading into the
+  // 6%/8%/total fields as thousands-of-zeros garbage. This does NOT
+  // auto-compute anything -- the 6%/8% values remain operator-entered.
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (value == null) return 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+const amount = (value: number | string | undefined): string => {
+  // Coerce to a number before stringifying so a persisted garbage string
+  // (e.g. "0000...024610" from a prior string-concat bug) never renders
+  // literally in the numeric input -- it self-heals to the clean integer.
+  const n = toNum(value);
+  return n ? String(n) : '';
+};
 const formatRupee = (value: number | undefined): string => value ? `₹${Number(value).toLocaleString('en-IN')} (last year)` : '';
-const sum = (values: Array<number | undefined>): number => Math.min(MONEY_MAX, values.reduce<number>((total, value) => total + (value ?? 0), 0));
+const sum = (values: Array<number | undefined>): number => Math.min(MONEY_MAX, values.reduce<number>((total, value) => total + toNum(value), 0));
 
 const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
   const result: ITR4ScheduleBPData = {
