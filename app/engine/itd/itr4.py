@@ -766,15 +766,15 @@ def _schedule_bp(
             "PersumptiveInc44AD6Per": _to_rupees(
                 business_44ad.income_at_six_percent
                 if business_44ad.income_at_six_percent is not None
-                else (
-                    business_44ad.digital_turnover
-                    + business_44ad.other_mode_turnover
-                ) * Decimal("0.06")
+                else business_44ad.digital_turnover * Decimal("0.06")
             ),
             "PersumptiveInc44AD8Per": _to_rupees(
                 business_44ad.income_at_eight_percent
                 if business_44ad.income_at_eight_percent is not None
-                else business_44ad.cash_turnover * Decimal("0.08")
+                else (
+                    business_44ad.cash_turnover
+                    + business_44ad.other_mode_turnover
+                ) * Decimal("0.08")
             ),
             "TotPersumptiveInc44AD": _to_rupees(income_44ad),
         }

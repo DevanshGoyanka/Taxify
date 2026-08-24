@@ -24,18 +24,35 @@ class PresumptiveResult:
 
 
 def _compute_44ad(ad: PresumptiveBusinessIncome44AD) -> tuple[Decimal, bool]:
-    """44AD: 6% digital, 8% cash, or higher if declared."""
-    minimum_six = (
-        ad.digital_turnover + ad.other_mode_turnover
-    ) * PRESUMPTIVE_44AD_DIGITAL
-    minimum_eight = ad.cash_turnover * PRESUMPTIVE_44AD_CASH
-    six_percent_income = max(
-        minimum_six,
-        ad.income_at_six_percent or Decimal("0"),
+    """44AD: 6% on banking/digital turnover, 8% on cash + any other mode.
+
+    Section 44AD(1) prescribes 6% of turnover received through account
+    payee cheque / bank draft / RTGS / NEFT / electronic modes, and 8% of
+    the balance. "Any other mode" is a non-banking receipt, so it goes in
+    the 8% bucket (NOT 6%).
+
+    The 6%/8% values are entered manually by the operator in the Schedule
+    BP editor (PersumptiveInc44AD6Per / PersumptiveInc44AD8Per); those
+    entered values are respected as-typed -- no statutory-max() override --
+    so the operator's computed figures flow straight through. When the
+    operator has NOT entered a value (None / 0), the statutory minimum is
+    computed from the turnover split so the tax is never understated.
+    """
+    statutory_six = ad.digital_turnover * PRESUMPTIVE_44AD_DIGITAL
+    statutory_eight = (
+        ad.cash_turnover + ad.other_mode_turnover
+    ) * PRESUMPTIVE_44AD_CASH
+    six_percent_income = (
+        ad.income_at_six_percent
+        if ad.income_at_six_percent is not None
+        and ad.income_at_six_percent > 0
+        else statutory_six
     )
-    eight_percent_income = max(
-        minimum_eight,
-        ad.income_at_eight_percent or Decimal("0"),
+    eight_percent_income = (
+        ad.income_at_eight_percent
+        if ad.income_at_eight_percent is not None
+        and ad.income_at_eight_percent > 0
+        else statutory_eight
     )
     statutory = six_percent_income + eight_percent_income
     declared = ad.income_declared
