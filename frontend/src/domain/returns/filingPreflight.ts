@@ -30,6 +30,37 @@ export function validateCbdtFrontendFields(draft: ReturnDraft): string[] {
     errors.push('Personal information: select a valid employer category.');
   }
 
+  // These are hard requirements of the official CBDT schema, enforced server-side
+  // by _required() in filing_gateway_v2._filing_profile(). Without them here,
+  // pre-flight reported "validation passed" and the operator only discovered the
+  // problem as an opaque 422 at generate/submit time.
+  //
+  // FatherName is required by Verification.Declaration in the official ITR-1
+  // schema (required: AssesseeVerName, FatherName, AssesseeVerPAN) even though it
+  // is not part of PersonalInfo. It is captured on the Personal Information tab.
+  if (!draft.personal.fatherName.trim()) {
+    errors.push("Personal information: enter the assessee's father's name (required on the CBDT verification declaration).");
+  }
+  if (!(draft.personal.surnameOrOrgName.trim() || draft.personal.name.trim())) {
+    errors.push('Personal information: enter the surname or last name.');
+  }
+  if (!draft.personal.pan.trim()) {
+    errors.push('Personal information: enter the PAN.');
+  }
+
+  // Enforced server-side by the ITR1Input validator (app/schemas/itr1.py). A
+  // revised return must identify the original it replaces; without both fields
+  // the CBDT profile is rejected. The draft defaults to ORIGINAL, so this only
+  // fires when the return type was deliberately switched.
+  if (draft.filing.returnType === 'REVISED') {
+    if (!draft.filing.originalAcknowledgementNumber.trim()) {
+      errors.push('Filing: a revised return needs the original acknowledgement number (or switch the return type back to Original).');
+    }
+    if (!draft.filing.originalFilingDate?.trim()) {
+      errors.push('Filing: a revised return needs the original filing date (or switch the return type back to Original).');
+    }
+  }
+
   const expectedState = draft.personal.countryCode === '91' ? normalizeStateCode(draft.personal.stateCode) : draft.personal.stateCode === '99' ? '99' : '';
   if (!expectedState) {
     errors.push('Personal information: select a valid CBDT state code (use 99 for an address outside India).');

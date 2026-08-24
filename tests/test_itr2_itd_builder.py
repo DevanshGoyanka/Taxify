@@ -21,7 +21,7 @@ from app.schemas.itr2 import (
     VDATransaction,
 )
 
-_SCHEMA = Path("Reference Docs by CBDT & ITD/Official JSON Schema/ITR-2_2026_Main_V1.1 (2).json")
+_SCHEMA = Path(__file__).resolve().parents[1] / "frontend" / "ITD OFFICAL REFERENCE DOCS" / "AY 2026-27 Offical Schema JSON" / "ITR-2_2026_Main_V1.1 (1).json"
 
 
 def _profile() -> ITR2FilingProfile:

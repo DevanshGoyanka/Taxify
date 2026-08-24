@@ -11,9 +11,10 @@ from jsonschema import Draft4Validator
 from jsonschema.exceptions import SchemaError
 
 _SCHEMA_RELATIVE_PATH = (
-    Path("Reference Docs by CBDT & ITD")
-    / "Official JSON Schema"
-    / "ITR-1_2026_Main_V1.1 (2).json"
+    Path("frontend")
+    / "ITD OFFICAL REFERENCE DOCS"
+    / "AY 2026-27 Offical Schema JSON"
+    / "ITR-1_2026_Main_V1.1 (1).json"
 )
 
 

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent
-ROOT = _REPO_ROOT / "Reference Docs by CBDT & ITD" / "Official JSON Schema"
+ROOT = _REPO_ROOT / "frontend" / "ITD OFFICAL REFERENCE DOCS" / "AY 2026-27 Offical Schema JSON"
 # Audit CSVs live under Docs/ alongside the rest of the schema audit output.
 DOCS_DIR = _REPO_ROOT / "Docs"
 
@@ -77,8 +77,8 @@ def extract(name):
 
 
 def main():
-    for form, fname in (("ITR-1", "ITR-1_2026_Main_V1.1 (2).json"),
-                        ("ITR-4", "ITR-4_2026_Main_V1.1 (2).json")):
+    for form, fname in (("ITR-1", "ITR-1_2026_Main_V1.1 (1).json"),
+                        ("ITR-4", "ITR-4_2026_Main_V1.1 (1).json")):
         rows = extract(fname)
         slug = form.lower().replace("-", "")
         out = DOCS_DIR / f"audit_{slug}_enums_cappings.csv"

@@ -13,6 +13,20 @@ from app.routers.integration import _map_legacy_26as
 
 CORPUS = Path(__file__).resolve().parents[1] / "ais_extractor" / "test_output_26as"
 
+# The corpus is generated output, not source: ais_extractor/test_26as_all.py writes
+# it by running the extractor over real 26AS PDFs. It is deliberately absent from
+# git because those files contain taxpayer PII. On a machine that has never
+# generated it, every test here has nothing to assert against and the suite should
+# report "skipped", not "failed". Where the corpus IS present the size guard below
+# still fires, which is the check it exists for.
+pytestmark = pytest.mark.skipif(
+    not CORPUS.is_dir(),
+    reason=(
+        f"26AS corpus not generated at {CORPUS}. "
+        "Run ais_extractor/test_26as_all.py against real 26AS PDFs to create it."
+    ),
+)
+
 
 def _fixtures() -> list[Path]:
     """Return every real 26AS JSON fixture in deterministic order."""

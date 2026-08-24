@@ -76,6 +76,28 @@ def _pan_from_path(pdf: Path) -> str:
     return pdf.name.split("-AIS-", 1)[0]
 
 
+def _skip_if_encrypted(pdf: Path) -> None:
+    """Skip PDFs the portal delivered encrypted and that were never decrypted.
+
+    AIS PDFs download from the ITD portal password-protected; the import
+    pipeline decrypts them before extraction. A run that fails at the decrypt
+    step (a wrong stored portal password, say) leaves the raw encrypted file
+    behind. Feeding that to the extractor raises PDFPasswordIncorrect, which
+    says nothing about extraction correctness — it is simply not a valid input.
+    Skip it visibly rather than fail, so a real extraction regression stays
+    distinguishable from a stale download artefact.
+    """
+    try:
+        import pikepdf
+    except ImportError:  # pragma: no cover - pikepdf is in requirements.txt
+        return
+    try:
+        with pikepdf.open(pdf):
+            return
+    except pikepdf.PasswordError:
+        pytest.skip(f"{pdf} is still encrypted — decrypt step never ran for this download")
+
+
 def _extract(pdf: Path) -> dict[str, Any]:
     return json.loads(extract_ais_json(str(pdf)))
 
@@ -366,6 +388,7 @@ def assert_summary_cross_foot(ais: dict[str, Any]) -> None:
 @pytest.mark.parametrize("pdf", PDFS, ids=PDF_IDS)
 def test_ais_corpus_end_to_end(pdf: Path) -> None:
     """Extract one AIS PDF and validate every entry in detail."""
+    _skip_if_encrypted(pdf)
     pan = _pan_from_path(pdf)
     ais = _extract(pdf)
 

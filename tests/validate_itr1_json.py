@@ -13,7 +13,7 @@ import jsonschema
 from jsonschema import Draft4Validator
 
 REPO = Path(__file__).resolve().parents[1]
-SCHEMA_PATH = REPO / "Reference Docs by CBDT & ITD" / "Official JSON Schema" / "ITR-1_2026_Main_V1.1 (2).json"
+SCHEMA_PATH = REPO / "frontend" / "ITD OFFICAL REFERENCE DOCS" / "AY 2026-27 Offical Schema JSON" / "ITR-1_2026_Main_V1.1 (1).json"
 
 
 def load_schema() -> dict:

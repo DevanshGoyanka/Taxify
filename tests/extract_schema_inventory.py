@@ -22,13 +22,13 @@ from pathlib import Path
 from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_ROOT = ROOT / "Reference Docs by CBDT & ITD" / "Official JSON Schema"
+SCHEMA_ROOT = ROOT / "frontend" / "ITD OFFICAL REFERENCE DOCS" / "AY 2026-27 Offical Schema JSON"
 # Extracted inventories live under Docs/ with the rest of the audit output.
 DOCS_DIR = ROOT / "Docs"
 
 SCHEMAS = {
-    "ITR-1": "ITR-1_2026_Main_V1.1 (2).json",
-    "ITR-4": "ITR-4_2026_Main_V1.1 (2).json",
+    "ITR-1": "ITR-1_2026_Main_V1.1 (1).json",
+    "ITR-4": "ITR-4_2026_Main_V1.1 (1).json",
 }
 
 CONSTRAINT_KEYS = (

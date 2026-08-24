@@ -352,12 +352,21 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
 
 
 def _required(value: str | None, field: str) -> str:
-    """Return stripped required text or raise an actionable filing error."""
+    """Return stripped required text or raise an actionable filing error.
+
+    ``field`` may be either a bare personal-info key (``"fatherName"``) or an
+    already-qualified draft path (``"verification.place"``). Only the bare form
+    is prefixed. Blindly prefixing every field produced messages such as
+    ``personal.verification.place`` and ``personal.filing.representative.name``,
+    which point at a tab the field does not live on — the operator then cannot
+    find the field the error is complaining about.
+    """
     cleaned = (value or "").strip()
     if not cleaned:
+        path = field if "." in field else f"personal.{field}"
         raise FilingGatewayV2Error(
             "ITR-1 filing profile is incomplete.",
-            [f"personal.{field} is required for official CBDT JSON."],
+            [f"{path} is required for official CBDT JSON."],
         )
     return cleaned
 

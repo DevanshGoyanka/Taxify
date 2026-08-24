@@ -1,15 +1,18 @@
 name: ci
 
-# Roadmap §10.6 — build + lint only for now.
+# Roadmap §10.6 — the ratchet has been raised.
 #
-# The pytest suite is NOT green: a measured baseline at af6cfc5 was 177 failures
-# and 13 collection errors, predating the deployment work. Gating merges on it
-# today would produce a check that is red on day one, which gets bypassed within
-# a week. Ratchet up instead: fix suites, then add them here.
+# The suite used to sit at 177 failures, which is why this workflow originally
+# ran build and lint only. Almost all of that turned out to be two defects
+# rather than accumulated debt: the CBDT schema loaders pointed at a path that
+# does not exist, and nine third-party imports were never declared in
+# requirements.txt. With both fixed the suite is 961 passed / 0 failed, so
+# tests now gate merges.
 #
-# Next step is to add a curated green subset:
-#   pytest tests/test_itr1_calculator.py tests/test_itr4_calculator.py \
-#          tests/test_itr1_schemas.py tests/test_itr4_schemas.py
+# The --ignore list is the set of files that still fail at COLLECTION. They are
+# old manual ERI scripts that import modules which no longer exist
+# (app.eri.login, automation) plus one UTF-16 file containing no real test.
+# They are not tests; delete or repair them and shorten this list.
 
 on:
   pull_request:
@@ -108,3 +111,20 @@ jobs:
               sys.exit(1)
           print("all third-party imports are declared")
           PY
+
+      - name: Tests
+        run: |
+          pytest -q \
+            --ignore=tests/test_itr1_e2e.py \
+            --ignore=tests/test_itr4_e2e.py \
+            --ignore=tests/test_simple.py \
+            --ignore=tests/test_acknowledgement.py \
+            --ignore=tests/test_add_client.py \
+            --ignore=tests/test_everify.py \
+            --ignore=tests/test_goypt2026a.py \
+            --ignore=tests/test_prefill.py \
+            --ignore=tests/test_proxy.py \
+            --ignore=tests/test_download_temp.py \
+            --ignore=tests/test_26as_batch.py \
+            --ignore=ais_extractor
+        # e2e suites are excluded because they place live ERI calls against ITD.
