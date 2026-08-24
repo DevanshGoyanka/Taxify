@@ -455,7 +455,7 @@ def _income_deductions_itr4(
         "GrossSalary": _to_rupees(gross_salary),
         "PerquisitesValue": _to_rupees(perquisites_value),
         "ProfitsInSalary": _to_rupees(profits_in_lieu),
-        "Salary": _to_rupees(net_salary + ded_us16),
+        "Salary": _to_rupees(max(Decimal("0"), gross_salary - perquisites_value - profits_in_lieu)),
         "AllwncExemptUs10": {
             "AllwncExemptUs10Dtls": allowance_rows or [],
             "TotalAllwncExemptUs10": _to_rupees(Decimal(total_allwnc_exmp)),

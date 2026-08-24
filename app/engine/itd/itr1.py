@@ -507,9 +507,16 @@ def _income_deductions_itr1(
     pran_number: Optional[str] = None,
     form_10ba_ack_number: Optional[str] = None,
 ) -> dict:
+    # CBDT validation rule #59: GrossSalary = Salary (17(1)) + PerquisitesValue
+    # (17(2)) + ProfitsInSalary (17(3)). "Salary" is the salary as per section
+    # 17(1) -- the 17(1) portion of gross salary, NOT net_salary + deductions.
+    # The previous "net_salary + ded_us16" computation produced a figure larger
+    # than gross_salary (e.g. 675000 for a 600000 gross), violating rule #59
+    # and triggering a cross-field mismatch on the e-filing portal.
+    salary_17_1 = max(Decimal("0"), gross_salary - perquisites_value - profits_in_lieu)
     return {
         "GrossSalary": _to_rupees(gross_salary),
-        "Salary": _to_rupees(net_salary + ded_us16),
+        "Salary": _to_rupees(salary_17_1),
         "PerquisitesValue": _to_rupees(perquisites_value),
         "ProfitsInSalary": _to_rupees(profits_in_lieu),
         "AllwncExemptUs10": {
