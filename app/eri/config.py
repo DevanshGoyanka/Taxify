@@ -183,8 +183,14 @@ def assert_credentials_at_startup() -> None:
     """Startup guard: validate the active credential bundle is sane.
 
     Call once from ``app/main.py`` lifespan. Raises ``RuntimeError`` if a
-    production deployment is misconfigured (mock DSC, missing AWS host for
-    Type-2, missing digest secret in production).
+    production deployment is misconfigured (mock DSC, missing digest secret
+    in production).
+
+    Note: this previously also required ``ERI_AWS_SSH_HOST_TYPE2_PRODUCTION``
+    for Type-2 production, because egress had to leave from an IP that ITD had
+    whitelisted, via an SSH jump host. That whitelisting requirement no longer
+    applies — ERI endpoints accept the deployment IP directly — so the check
+    was removed rather than left demanding a jump host that is never used.
     """
     creds = get_eri_credentials()
 
@@ -193,11 +199,6 @@ def assert_credentials_at_startup() -> None:
             if creds.dsc_signing_mode == "mock":
                 raise RuntimeError(
                     "ERI_DSC_SIGNING_MODE=mock is forbidden in Type-2 production."
-                )
-            if not creds.aws_ssh_host:
-                raise RuntimeError(
-                    "ERI_AWS_SSH_HOST_TYPE2_PRODUCTION is required for Type-2 "
-                    "production (whitelisted-IP egress)."
                 )
         if not creds.digest_secret_key:
             raise RuntimeError(
