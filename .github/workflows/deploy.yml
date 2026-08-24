@@ -32,6 +32,12 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # MUST be set explicitly. paths-filter defaults `base` to the repository
+          # DEFAULT branch, which for this repo is `master` — a stale, wildly
+          # divergent line of work. Comparing against it marks every file as
+          # changed, so the filter never skips and the npm build always runs.
+          # github.event.before is the commit this push moved from.
+          base: ${{ github.event.before }}
           filters: |
             frontend:
               - 'frontend/**'
