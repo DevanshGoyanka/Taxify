@@ -48,11 +48,12 @@ export function validateCbdtFrontendFields(draft: ReturnDraft): string[] {
     errors.push('Personal information: enter the PAN.');
   }
 
-  // Enforced server-side by the ITR1Input validator (app/schemas/itr1.py). A
-  // revised return must identify the original it replaces; without both fields
-  // the CBDT profile is rejected. The draft defaults to ORIGINAL, so this only
-  // fires when the return type was deliberately switched.
-  if (draft.filing.returnType === 'REVISED') {
+  // Enforced server-side by the ITR1Input validator (app/schemas/itr1.py), which
+  // keys on ReturnFileSec == 17. Section 139(5) IS the revised-return section, so
+  // selecting it makes the return revised regardless of the returnType field —
+  // checking returnType alone missed exactly that case and let the operator reach
+  // an unactionable 422.
+  if (draft.filing.returnType === 'REVISED' || draft.filing.filingSection === '139(5)') {
     if (!draft.filing.originalAcknowledgementNumber.trim()) {
       errors.push('Filing: a revised return needs the original acknowledgement number (or switch the return type back to Original).');
     }

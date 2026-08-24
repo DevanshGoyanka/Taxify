@@ -406,6 +406,15 @@ def _filing_profile(draft: ReturnDraft) -> ITR1FilingProfile:
                 "153C, 139(5), 139(9), 119(2)(b)."
             ],
         )
+    # ReturnFileSec 17 IS "revised return u/s 139(5)", so the section alone makes
+    # a return revised. Deriving "revised" from filing.returnType instead left the
+    # two disagreeing: a draft with filingSection 139(5) and returnType ORIGINAL
+    # produced ReturnFileSec=17 while the original-acknowledgement fields were
+    # dropped, and ITR1FilingProfile then rejected it with "Revised return
+    # requires original acknowledgement number and filing date" — a message the
+    # operator could not act on, because entering the number changed nothing.
+    is_revised = draft.filing.returnType == "REVISED" or return_section == 17
+
     if not draft.verification.declarationAccepted:
         raise FilingGatewayV2Error(
             "Verification declaration must be accepted for official ITR-1 JSON.",
@@ -498,10 +507,10 @@ def _filing_profile(draft: ReturnDraft) -> ITR1FilingProfile:
                 "R" if draft.verification.capacity == "REPRESENTATIVE" else "S"
             ),
             return_file_section=return_section,
-            return_type="R" if draft.filing.returnType == "REVISED" else "O",
+            return_type="R" if is_revised else "O",
             original_acknowledgement_no=(
                 draft.filing.originalAcknowledgementNumber.strip() or None
-                if draft.filing.returnType == "REVISED" else None
+                if is_revised else None
             ),
             original_return_date=_to_date(draft.filing.originalFilingDate),
             notice_number=draft.filing.noticeNumber.strip() or None,
@@ -1186,6 +1195,24 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
         FilingGatewayV2Error: If profile construction, generation, or official
             schema validation fails.
     """
+    # Log the discriminators that actually decide whether generation succeeds.
+    # Without this a 422 gives no way to tell a genuine data gap from a code
+    # defect: the filingSection / returnType mismatch that blocked three clients
+    # was invisible because nothing recorded which section the draft carried.
+    filing = draft.filing
+    logger.info(
+        "CBDT generation requested: form=%s pan=%s section=%s returnType=%s "
+        "origAck=%s origDate=%s declarationAccepted=%s regime=%s",
+        draft.form,
+        (draft.personal.pan or "").upper() or "<missing>",
+        filing.filingSection,
+        filing.returnType,
+        "set" if (filing.originalAcknowledgementNumber or "").strip() else "empty",
+        "set" if filing.originalFilingDate else "empty",
+        draft.verification.declarationAccepted,
+        draft.regime,
+    )
+
     if draft.form == "ITR-1":
         return _generate_cbdt_json_itr1(draft)
     if draft.form == "ITR-4":

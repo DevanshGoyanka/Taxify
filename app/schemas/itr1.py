@@ -1459,8 +1459,21 @@ class ITR1FilingProfile(BaseModel):
             )
         if self.return_file_section == 17:
             if self.original_acknowledgement_no is None or self.original_return_date is None:
+                # Name the trigger and both ways out. The bare wording gave no
+                # hint that the filing SECTION is what makes a return revised,
+                # so an operator who had picked 139(5) by mistake had no way to
+                # tell whether to supply the acknowledgement or change section.
+                missing = []
+                if self.original_acknowledgement_no is None:
+                    missing.append("original acknowledgement number")
+                if self.original_return_date is None:
+                    missing.append("original filing date")
                 raise ValueError(
-                    "Revised return requires original acknowledgement number and filing date"
+                    "Revised return requires original acknowledgement number and filing date. "
+                    f"Filing section 139(5) marks this return as revised, and the "
+                    f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing. "
+                    "Enter the details of the original return, or change the filing "
+                    "section to 139(1) if this is not a revised return."
                 )
         if self.return_file_section in {13, 14, 16, 18}:
             if self.notice_number is None or self.notice_date is None:
