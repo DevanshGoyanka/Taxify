@@ -143,25 +143,9 @@ const toAmount = (value: string, maximum: number = MONEY_MAX, minimum = 0): numb
   return Math.min(maximum, Math.max(minimum, parsed));
 };
 
-const toNum = (value: number | string | undefined | null): number => {
-  // Coerce every value to a finite number. A numeric string (e.g. "215420"
-  // arriving from a backend/prior-year load) would otherwise trigger JS
-  // string concatenation inside reduce (0 + "215420" = "0215420"),
-  // inflating the turnover 10x and cascading into the presumptive income.
-  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-  if (value == null) return 0;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-const sum = (values: Array<number | undefined>): number => Math.min(MONEY_MAX, values.reduce<number>((total, value) => total + toNum(value), 0));
-const amount = (value: number | string | undefined): string => {
-  // Coerce to a number before stringifying so a persisted garbage string
-  // (e.g. "0000...215420" from a prior string-concat bug) never renders
-  // literally in the numeric input. NaN/undefined -> ''.
-  const n = toNum(value);
-  return n ? String(n) : '';
-};
+const amount = (value: number | undefined): string => value ? String(value) : '';
 const formatRupee = (value: number | undefined): string => value ? `₹${Number(value).toLocaleString('en-IN')} (last year)` : '';
+const sum = (values: Array<number | undefined>): number => Math.min(MONEY_MAX, values.reduce<number>((total, value) => total + (value ?? 0), 0));
 
 const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
   const result: ITR4ScheduleBPData = {
@@ -180,7 +164,7 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
     // through banking/digital modes; the balance (cash + any other non-
     // banking mode) attracts 8%. "Any other mode" is a non-banking receipt
     // so it goes in the 8% bucket, NOT 6%.
-    const sixBase = toNum(p.GrsTrnOverBank);
+    const sixBase = p.GrsTrnOverBank ?? 0;
     const eightBase = sum([p.GrsTotalTrnOverInCash, p.GrsTrnOverAnyOthMode]);
     // Half-up rounding to the nearest rupee matches the statutory CBDT
     // convention (app/engine/itd/common._to_rupees) so the frontend preview
@@ -193,9 +177,9 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
     // When on, the user-entered value is preserved (clamped to >= minimum so
     // it can never fall below the statutory floor).
     if (!p._override6Per) p.PersumptiveInc44AD6Per = statutorySix;
-    else p.PersumptiveInc44AD6Per = Math.max(statutorySix, toNum(p.PersumptiveInc44AD6Per));
+    else p.PersumptiveInc44AD6Per = Math.max(statutorySix, p.PersumptiveInc44AD6Per ?? 0);
     if (!p._override8Per) p.PersumptiveInc44AD8Per = statutoryEight;
-    else p.PersumptiveInc44AD8Per = Math.max(statutoryEight, toNum(p.PersumptiveInc44AD8Per));
+    else p.PersumptiveInc44AD8Per = Math.max(statutoryEight, p.PersumptiveInc44AD8Per ?? 0);
     p.TotPersumptiveInc44AD = sum([p.PersumptiveInc44AD6Per, p.PersumptiveInc44AD8Per]);
     result.PersumptiveInc44AD = p;
   }
