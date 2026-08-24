@@ -177,19 +177,36 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
   };
   if (input?.PersumptiveInc44AD) {
     const p = { ...input.PersumptiveInc44AD };
+    // Coerce every money field to a clean number so a persisted garbage
+    // string (0000...024610 from a prior string-concat bug) is purged from
+    // the data object itself -- not just the rendered input. Without this
+    // the useEffect's JSON.stringify(current) re-serializes the giant
+    // strings on every keystroke, lagging the editor.
+    p.GrsTrnOverBank = toNum(p.GrsTrnOverBank);
+    p.GrsTotalTrnOverInCash = toNum(p.GrsTotalTrnOverInCash);
+    p.GrsTrnOverAnyOthMode = toNum(p.GrsTrnOverAnyOthMode);
+    p.PersumptiveInc44AD6Per = toNum(p.PersumptiveInc44AD6Per);
+    p.PersumptiveInc44AD8Per = toNum(p.PersumptiveInc44AD8Per);
     p.GrsTotalTrnOver = sum([p.GrsTrnOverBank, p.GrsTotalTrnOverInCash, p.GrsTrnOverAnyOthMode]);
     p.TotPersumptiveInc44AD = sum([p.PersumptiveInc44AD6Per, p.PersumptiveInc44AD8Per]);
     result.PersumptiveInc44AD = p;
   }
   if (input?.PersumptiveInc44ADA) {
     const p = { ...input.PersumptiveInc44ADA };
+    p.GrsTrnOverBank44ADA = toNum(p.GrsTrnOverBank44ADA);
+    p.GrsTotalTrnOverInCash44ADA = toNum(p.GrsTotalTrnOverInCash44ADA);
+    p.GrsTrnOverAnyOthMode44ADA = toNum(p.GrsTrnOverAnyOthMode44ADA);
     p.GrsReceipt = sum([p.GrsTrnOverBank44ADA, p.GrsTotalTrnOverInCash44ADA, p.GrsTrnOverAnyOthMode44ADA]);
     result.PersumptiveInc44ADA = p;
   }
   const normalizedVehicles = result.GoodsDtlsUs44AE ?? [];
   if (input?.PersumptiveInc44AE || normalizedVehicles.length > 0) {
-    const salary = input?.PersumptiveInc44AE?.SalInterestByFirm ?? 0;
-    const vehicleIncome = sum(normalizedVehicles.map((row) => row.PresumptiveIncome));
+    const salary = toNum(input?.PersumptiveInc44AE?.SalInterestByFirm);
+    // Coerce each vehicle's PresumptiveIncome so a persisted garbage string
+    // does not survive into the 44AE totals or the JSON.stringify feedback.
+    const cleanedVehicles = normalizedVehicles.map((row) => ({ ...row, PresumptiveIncome: toNum(row.PresumptiveIncome) }));
+    result.GoodsDtlsUs44AE = cleanedVehicles;
+    const vehicleIncome = sum(cleanedVehicles.map((row) => row.PresumptiveIncome));
     const businessIncome = sum([
       result.PersumptiveInc44AD?.TotPersumptiveInc44AD,
       result.PersumptiveInc44ADA?.TotPersumptiveInc44ADA,
@@ -202,11 +219,15 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
       IncChargeableUnderBus: businessIncome,
     };
   }
+  // Coerce GSTIN turnover rows so garbage strings never linger there either.
+  result.TurnoverGrsRcptForGSTIN = (result.TurnoverGrsRcptForGSTIN ?? []).map((row) => ({ ...row, AmtTurnGrossRcptGSTIN: toNum(row.AmtTurnGrossRcptGSTIN) }));
   result.TotalTurnoverGrsRcptGSTIN = sum((result.TurnoverGrsRcptForGSTIN ?? []).map((row) => row.AmtTurnGrossRcptGSTIN));
-  const f = result.FinanclPartclrOfBusiness ?? {};
+  const f = { ...result.FinanclPartclrOfBusiness ?? {} } as Record<string, number | string | undefined>;
+  // Coerce every financial-particulars money field to a clean number.
+  for (const key of Object.keys(f)) f[key] = toNum(f[key]);
   f.TotCapLiabilities = sum([f.PartnerMemberOwnCapital, f.SecuredLoans, f.UnSecuredLoans, f.Advances, f.SundryCreditors, f.OthrCurrLiab]);
   f.TotalAssets = sum([f.FixedAssets, f.Investments, f.Inventories, f.SundryDebtors, f.BalWithBanks, f.CashInHand, f.LoansAndAdvances, f.OtherAssets]);
-  result.FinanclPartclrOfBusiness = f;
+  result.FinanclPartclrOfBusiness = f as unknown as FinanclPartclrOfBusiness;
   return result;
 };
 
