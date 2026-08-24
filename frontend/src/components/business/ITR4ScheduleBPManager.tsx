@@ -222,9 +222,12 @@ const derive = (input?: ITR4ScheduleBPData | null): ITR4ScheduleBPData => {
   // Coerce GSTIN turnover rows so garbage strings never linger there either.
   result.TurnoverGrsRcptForGSTIN = (result.TurnoverGrsRcptForGSTIN ?? []).map((row) => ({ ...row, AmtTurnGrossRcptGSTIN: toNum(row.AmtTurnGrossRcptGSTIN) }));
   result.TotalTurnoverGrsRcptGSTIN = sum((result.TurnoverGrsRcptForGSTIN ?? []).map((row) => row.AmtTurnGrossRcptGSTIN));
-  const f = { ...result.FinanclPartclrOfBusiness ?? {} } as Record<string, number | string | undefined>;
-  // Coerce every financial-particulars money field to a clean number.
-  for (const key of Object.keys(f)) f[key] = toNum(f[key]);
+  const raw = { ...result.FinanclPartclrOfBusiness ?? {} } as Record<string, number | string | undefined>;
+  // Coerce every financial-particulars money field to a clean number. Building a
+  // separate numeric record (rather than overwriting in place) lets the type say
+  // what the coercion actually guarantees, so the sum() calls below typecheck.
+  const f: Record<string, number | undefined> = {};
+  for (const key of Object.keys(raw)) f[key] = toNum(raw[key]);
   f.TotCapLiabilities = sum([f.PartnerMemberOwnCapital, f.SecuredLoans, f.UnSecuredLoans, f.Advances, f.SundryCreditors, f.OthrCurrLiab]);
   f.TotalAssets = sum([f.FixedAssets, f.Investments, f.Inventories, f.SundryDebtors, f.BalWithBanks, f.CashInHand, f.LoansAndAdvances, f.OtherAssets]);
   result.FinanclPartclrOfBusiness = f as unknown as FinanclPartclrOfBusiness;
