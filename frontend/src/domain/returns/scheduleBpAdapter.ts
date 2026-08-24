@@ -21,13 +21,6 @@ export function scheduleBpFromBusinesses(businesses: ReturnDraft['businesses']):
       PersumptiveInc44AD6Per: ad.reduce((sum, row) => sum + row.digitalPresumptiveIncome, 0),
       PersumptiveInc44AD8Per: ad.reduce((sum, row) => sum + row.nonDigitalPresumptiveIncome, 0),
       TotPersumptiveInc44AD: adIncome,
-      // Round-trip the "declare higher than minimum" override flags so the
-      // ITR4ScheduleBPManager's editable-override state survives the adapter
-      // round-trip (businesses -> schedule -> businesses). Without this the
-      // flags would be stripped and derive() would re-clamp the user's typed
-      // value back to the statutory minimum on every keystroke.
-      _override6Per: ad.some((row) => row.declareHigher6Per),
-      _override8Per: ad.some((row) => row.declareHigher8Per),
     } : undefined,
     NatOfBus44ADA: ada.map((row) => ({ NameOfBusiness: row.businessName, CodeADA: row.natureCode, Description: row.description })),
     PersumptiveInc44ADA: ada.length ? {
@@ -93,10 +86,6 @@ export function businessesFromScheduleBp(data: ITR4ScheduleBPData): ReturnDraft[
       digitalPresumptiveIncome: index === 0 ? values?.PersumptiveInc44AD6Per ?? 0 : 0,
       nonDigitalPresumptiveIncome: index === 0 ? values?.PersumptiveInc44AD8Per ?? 0 : 0,
       declaredIncome: index === 0 ? values?.TotPersumptiveInc44AD ?? 0 : 0,
-      // Preserve the override flags (local-only, never serialized to the
-      // official CBDT JSON because the JSON builder reads only official keys).
-      declareHigher6Per: index === 0 ? Boolean((values as { _override6Per?: boolean } | undefined)?._override6Per) : false,
-      declareHigher8Per: index === 0 ? Boolean((values as { _override8Per?: boolean } | undefined)?._override8Per) : false,
       gstinTurnovers: index === 0 ? gstinTurnovers : [], financialParticulars,
     });
   });
