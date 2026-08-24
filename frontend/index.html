@@ -1,13 +1,122 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-IN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+
+    <!-- Primary -->
+    <title>ITR Bharo — Income Tax Return Filing for AY 2026-27</title>
+    <meta
+      name="description"
+      content="ITR Bharo is a web application for computing and filing Indian income tax returns. Supports ITR-1 to ITR-4 for AY 2026-27, with AIS, TIS and Form 26AS import, reconciliation, and CBDT-compliant JSON generation."
+    />
+    <link rel="canonical" href="https://itrbharo.duckdns.org/" />
+    <meta name="robots" content="index, follow" />
+    <meta name="googlebot" content="index, follow" />
+    <meta name="application-name" content="ITR Bharo" />
+    <meta name="theme-color" content="#0f172a" />
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/og-image.png" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ITR Bharo" />
+    <meta property="og:title" content="ITR Bharo — Income Tax Return Filing for AY 2026-27" />
+    <meta
+      property="og:description"
+      content="Compute and file Indian income tax returns ITR-1 to ITR-4 for AY 2026-27, with AIS, TIS and Form 26AS import and reconciliation."
+    />
+    <meta property="og:url" content="https://itrbharo.duckdns.org/" />
+    <meta property="og:image" content="https://itrbharo.duckdns.org/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="ITR Bharo — income tax return filing for assessment year 2026-27" />
+    <meta property="og:locale" content="en_IN" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="ITR Bharo — Income Tax Return Filing for AY 2026-27" />
+    <meta
+      name="twitter:description"
+      content="Compute and file Indian income tax returns ITR-1 to ITR-4 for AY 2026-27, with AIS, TIS and Form 26AS import and reconciliation."
+    />
+    <meta name="twitter:image" content="https://itrbharo.duckdns.org/og-image.png" />
+    <meta name="twitter:image:alt" content="ITR Bharo — income tax return filing for assessment year 2026-27" />
+
+    <!-- Structured data. Only claims that are supported by what the site
+         actually does: it is a website, published under a brand name, and it
+         is a finance web application. No ratings, prices, reviews, addresses
+         or people are asserted, because none of those exist on the site. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://itrbharo.duckdns.org/#website",
+            "url": "https://itrbharo.duckdns.org/",
+            "name": "ITR Bharo",
+            "description": "Web application for computing and filing Indian income tax returns ITR-1 to ITR-4.",
+            "inLanguage": "en-IN",
+            "publisher": { "@id": "https://itrbharo.duckdns.org/#organization" }
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://itrbharo.duckdns.org/#organization",
+            "name": "ITR Bharo",
+            "url": "https://itrbharo.duckdns.org/",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "https://itrbharo.duckdns.org/og-image.png",
+              "width": 1200,
+              "height": 630
+            }
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "https://itrbharo.duckdns.org/#webapp",
+            "name": "ITR Bharo",
+            "url": "https://itrbharo.duckdns.org/",
+            "applicationCategory": "FinanceApplication",
+            "operatingSystem": "Any (web browser)",
+            "browserRequirements": "Requires JavaScript",
+            "inLanguage": "en-IN",
+            "description": "Computes and files Indian income tax returns ITR-1 to ITR-4 for assessment year 2026-27, including AIS, TIS and Form 26AS import and reconciliation.",
+            "publisher": { "@id": "https://itrbharo.duckdns.org/#organization" }
+          }
+        ]
+      }
+    </script>
+
+    <script type="module" crossorigin src="/src/main.tsx"></script>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Crawlers and users without JavaScript would otherwise receive an empty
+         document. This states the brand and purpose in real HTML. It is hidden
+         the moment the app mounts, so it never affects the live UI. -->
+    <noscript>
+      <main>
+        <h1>ITR Bharo — Income Tax Return Filing</h1>
+        <p>
+          ITR Bharo is a web application for computing and filing Indian income tax
+          returns. It supports ITR-1, ITR-2, ITR-3 and ITR-4 for assessment year
+          2026-27.
+        </p>
+        <h2>What ITR Bharo does</h2>
+        <ul>
+          <li>Computes tax under the Finance Act 2025 rules for AY 2026-27</li>
+          <li>Imports AIS, TIS and Form 26AS and reconciles them against the return</li>
+          <li>Generates CBDT-compliant ITR JSON for filing</li>
+          <li>Manages multiple clients and their returns across assessment years</li>
+        </ul>
+        <p>
+          This application requires JavaScript. Please enable JavaScript to sign in
+          at <a href="https://itrbharo.duckdns.org/login">itrbharo.duckdns.org/login</a>.
+        </p>
+      </main>
+    </noscript>
   </body>
 </html>

@@ -1,0 +1,39 @@
+# https://itrbharo.duckdns.org/robots.txt
+
+User-agent: *
+Allow: /$
+Allow: /login
+Allow: /register
+Allow: /assets/
+Allow: /favicon.svg
+Allow: /og-image.png
+
+# Authenticated application areas. These require a login, so a crawler only
+# ever receives a redirect to the sign-in page. Excluding them keeps crawl
+# budget on the pages that can actually be indexed.
+Disallow: /dashboard
+Disallow: /clients
+Disallow: /filing
+Disallow: /advanced-tax
+
+# API surface. Not user-facing content, and some of it returns taxpayer data
+# to an authenticated caller.
+Disallow: /auth/
+Disallow: /api/
+Disallow: /v2/
+Disallow: /automation/
+Disallow: /integration/
+Disallow: /returns
+Disallow: /tax-summary
+Disallow: /business-income
+Disallow: /capital-gains
+Disallow: /itr1
+Disallow: /itr2
+Disallow: /itr3
+Disallow: /itr4
+Disallow: /pan
+Disallow: /me
+Disallow: /docs
+Disallow: /openapi.json
+
+Sitemap: https://itrbharo.duckdns.org/sitemap.xml
