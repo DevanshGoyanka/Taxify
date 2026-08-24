@@ -299,6 +299,40 @@ and the routing is broken.
 
 ---
 
+## Google Search Console verification — do not delete
+
+`https://itrbharo.duckdns.org/googleb4679a5f656c872a.html` must keep returning **200** or the
+Search Console property silently loses verification.
+
+```
+file    : /var/www/verification/googleb4679a5f656c872a.html   (root:root, 644)
+nginx   : location = /googleb4679a5f656c872a.html  ->  root /var/www/verification
+in git  : NO - ignored via google*.html in .gitignore
+```
+
+**It lives outside `frontend/dist` on purpose.** `deploy.sh` replaces `dist/` wholesale on every
+release, so a copy placed there would be destroyed by the next deploy and un-verify the
+property. Serving it from `/var/www/verification` means deploys cannot touch it — verified by
+running a full deploy and re-checking.
+
+Check it after any nginx change:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://itrbharo.duckdns.org/googleb4679a5f656c872a.html
+```
+
+If it ever 404s, recreate it (the token is the filename itself):
+
+```bash
+sudo mkdir -p /var/www/verification
+printf '\ngoogle-site-verification: googleb4679a5f656c872a.html\n' | \
+  sudo tee /var/www/verification/googleb4679a5f656c872a.html
+sudo chmod 644 /var/www/verification/googleb4679a5f656c872a.html
+```
+
+Adding a second search engine later (Bing, Yandex) follows the same pattern — drop the token
+file in that directory and add a matching `location =` block.
+
 ## Health checks
 
 ```bash

@@ -39,6 +39,15 @@ ENV/
 *.sqlite3-wal
 *.sqlite3-shm
 
+# Search-engine site-verification tokens.
+# These are per-property secrets: anyone holding one can claim the site in
+# Search Console. The live copy is served from /var/www/verification on the
+# host, deliberately outside frontend/dist so deploy.sh cannot wipe it.
+google*.html
+googleb4679a5f656c872a.html
+BingSiteAuth.xml
+yandex_*.html
+
 # Secrets / credentials
 *.pem
 *.pfx
