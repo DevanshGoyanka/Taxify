@@ -785,6 +785,123 @@ all-region stray sweep : clean
 | — | SPA deep links return HTML | ✅ (after Issue 1 fix) |
 | — | **Monthly cost** | **$0.00** |
 
-**§1–9 COMPLETE AND VERIFIED.** `docs/runbook.md` written. CI/CD (§10) not started, as instructed.
+**§1–9 COMPLETE AND VERIFIED.** `docs/runbook.md` written.
+
+---
+
+## Phase 5 — post-verification incidents
+
+### 2026-08-24 — SSH lost to CGNAT; replaced with SSM
+
+`ssh: connect to host 43.205.225.117 port 22: Connection timed out`
+
+Diagnosis — the operator's public IP had rotated again, and sampling revealed **Carrier-Grade
+NAT**: four probes one second apart returned **two different addresses**.
+```
+sample 1 : checkip=42.104.221.14   ipify=42.104.220.7     <- two IPs, same second
+sample 2 : checkip=42.104.220.7    ipify=42.104.220.7
+```
+Same-day history: `106.192.216.31` -> `106.221.215.87` -> `42.104.220.7`.
+Re-authorising the observed `/32` did **not** restore access, because the SSH connection left
+through a different pool address. A `/32` rule is structurally unworkable under CGNAT.
+
+> The Elastic IP `43.205.225.117` never changed. It is the **server's** address; the firewall
+> rule filters on the **client's**. The site stayed up for everyone throughout.
+
+**Fix (operator chose SSM):** created IAM role + instance profile `taxify-ssm`, attached to the
+running instance with no reboot. Agent registered `Online` (v3.3.4793.0) after ~3 min.
+**Port 22 ingress then revoked entirely.** Verified command execution still works with 22 closed.
+
+### 2026-08-24 — portal automation: `No module named 'pdfplumber'`
+
+```
+job 39 | completed (with errors)
+  26AS extraction failed: No module named 'pdfplumber'
+  AIS  extraction failed: ModuleNotFoundError: No module named 'pdfplumber'
+  TIS  extraction failed: ModuleNotFoundError: No module named 'pdfplumber'
+```
+
+Rather than fix one import and hit the next, an AST walk over `app/` and `ais_extractor/`
+audited every third-party import against the installed set. **Nine** were undeclared:
+`pdfplumber`, `requests`, `xlsxwriter`, `openpyxl`, `reportlab`, `httpx`, `email-validator`,
+`pytest-asyncio`, `urllib3`.
+
+All are **lazy imports inside functions**, so the app starts cleanly and only fails when a user
+exercises the feature — which is why a fresh install looked healthy.
+
+Fixed in `a856e48`; verified on the box:
+```
+pdfplumber 0.11.10 ; ais_pdfplumber / tis_pdfplumber / as26_extractor all import
+```
+`win32crypt` is correctly absent — Windows-only DSC signing, guarded by try/except.
+
+Also noted: job 38 failed with `Invalid Password` (client's stored ITD portal password),
+job 35 with `missing PAN or portal password`. Both are operator data, not infrastructure.
+
+### 2026-08-24 — nginx Accept-dispatch was too broad
+
+The §8 fix made *all* routing depend on the `Accept` header, so any non-browser client
+(`curl`, health checks, monitoring) got proxied to the API and 404'd on `/` and `/login`.
+Browsers were unaffected.
+
+Replaced with a deterministic config driven by the app's own `/openapi.json`:
+* exact SPA locations for `/`, `/login`, `/register`, `/dashboard`, `/advanced-tax`, `/filing`
+* explicit API prefixes for the 16 non-colliding segments, plus `/clients/` and `/dashboard/`
+* Accept-dispatch retained for **`/clients` only** — the single genuine collision, being both
+  an SPA page and a `GET`/`POST` API route
+
+Verified in all three modes: plain curl SPA routes 200, browser navigation 200, API routes
+return real API responses with no 542-byte `index.html` leaking through.
+
+---
+
+## Phase 6 — §10 CI/CD
+
+### 2026-08-24 — AWS side
+
+```
+aws iam create-open-id-connect-provider  token.actions.githubusercontent.com
+aws iam create-role                      taxify-gha-deploy
+aws iam put-role-policy                  taxify-ssm-deploy  (inline, least privilege)
+```
+The inline policy permits only `ssm:SendCommand` against
+`instance/i-06fa754bdb98c95af` + the `AWS-RunShellScript` document, plus read-only
+`GetCommandInvocation`. No long-lived AWS keys exist in the repository.
+
+### 2026-08-24 — `/opt/taxify/deploy.sh`
+
+Pull, conditional `pip install` (only when `requirements.txt` changed), atomic frontend swap
+from a GitHub Release asset, restart, health check, and rollback of the previous bundle if the
+service fails to start. Dry run:
+```
+=== deploy start 2026-08-24T17:46:45+00:00 ===
+code: a856e48 -> a856e48
+requirements.txt unchanged - skipping pip
+health: /docs -> 200
+=== deploy OK: a856e48 ===
+```
+
+### 2026-08-24 — first pipeline run FAILED at OIDC
+
+Run `32758799410` on `fe7239f`:
+```
+changes         success
+build-frontend  success   (Release asset published)
+deploy          FAILURE   at aws-actions/configure-aws-credentials@v4
+```
+GitHub's job log needs auth, so the cause came from CloudTrail:
+```
+errorCode    : AccessDenied
+errorMessage : Not authorized to perform sts:AssumeRoleWithWebIdentity
+sub actually sent:
+  repo:DevanshGoyanka@102995309/Taxify@1303961107:ref:refs/heads/main
+sub my trust policy expected:
+  repo:DevanshGoyanka/Taxify:ref:refs/heads/main
+```
+GitHub issues the **immutable subject claim**, embedding the numeric owner ID (`102995309`) and
+repo ID (`1303961107`). Everything else was fine — provider found, role found, token valid.
+
+**Fix:** trust policy now accepts both forms via a `StringLike` array. No wildcards; both
+entries exact; still pinned to this repo and `main` only.
 
 ---

@@ -26,12 +26,30 @@ Roadmap ledger: `Docs/AWS_FREE_TIER_DEPLOYMENT.md` §3
 | 6 | `taxify-zero` | AWS Budget, $1 / monthly | global | §4.8 | 2 budgets free | 1 | 2026-08-24 |
 | 7 | `taxify-ssm` | IAM role + `AmazonSSMManagedInstanceCore` | global | §10.3 | Always free | 1 | 2026-08-24 |
 | 8 | `taxify-ssm` | IAM instance profile (attached to #3) | global | §10.3 | Always free | 1 | 2026-08-24 |
+| 9 | `token.actions.githubusercontent.com` | IAM OIDC identity provider | global | §10.2 | Always free | 1 | 2026-08-24 |
+| 10 | `taxify-gha-deploy` | IAM role for GitHub Actions (inline policy `taxify-ssm-deploy`) | global | §10.2 | Always free | 1 | 2026-08-24 |
 
-**Count: 8 — all inside the ledger. Projected monthly cost: $0.00**
+**Count: 10 — all inside the ledger. Projected monthly cost: $0.00**
 
 Resources 7–8 were added to replace SSH after the operator's CGNAT ISP made a `/32` port-22
 rule unworkable. Both are always-free IAM objects and were already specified by roadmap §10.3.
 **Port 22 is now closed to the internet** — access is outbound-only via SSM.
+
+Resources 9–10 implement §10 CI/CD. No long-lived AWS keys exist anywhere: GitHub Actions
+assumes `taxify-gha-deploy` through OIDC, and that role can only `ssm:SendCommand` the
+`AWS-RunShellScript` document against instance `i-06fa754bdb98c95af` — nothing else.
+
+**Trust policy note.** GitHub issues the **immutable** subject claim, embedding numeric owner
+and repo IDs:
+
+```
+repo:DevanshGoyanka@102995309/Taxify@1303961107:ref:refs/heads/main
+```
+
+not the documented `repo:OWNER/REPO:ref:refs/heads/main`. The first deploy failed with
+`AccessDenied — Not authorized to perform sts:AssumeRoleWithWebIdentity` until the trust policy
+accepted both forms. The numeric form is the stronger of the two: it survives a rename and
+prevents anyone who later claims a released username from impersonating the repo.
 
 ### Key details
 
