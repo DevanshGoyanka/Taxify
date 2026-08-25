@@ -561,6 +561,44 @@ def _page_is_closed(page: Any) -> bool:
         return False
 
 
+_LOGOUT_PROMPT_RE = re.compile(
+    r"sure you want to log\s*out|want to log\s*out\?|confirm log\s*out|"
+    r"you are being logged\s*out|logging you out",
+    re.I,
+)
+# The logout dialog's negative button is not always labelled exactly "No".
+_STAY_BUTTON_RE = re.compile(r"^\s*(no|no,?\s*stay\b.*|cancel|stay\b.*|dismiss)\s*$", re.I)
+
+
+async def _logout_prompt_visible(page: Any) -> bool:
+    """Return whether a logout confirmation is currently on screen."""
+    try:
+        prompt = page.get_by_text(_LOGOUT_PROMPT_RE).first
+        return bool(await prompt.is_visible(timeout=400))
+    except Exception:
+        return False
+
+
+async def _click_stay_signed_in(page: Any, log: Optional[LogCallback]) -> bool:
+    """Click the logout dialog's negative button, if one can be found."""
+    try:
+        stay = page.get_by_role("button", name=_STAY_BUTTON_RE).first
+        if await stay.is_visible(timeout=300):
+            name = ""
+            try:
+                name = (await stay.inner_text(timeout=200)).strip()
+            except Exception:
+                pass
+            await stay.click(force=True)
+            await asyncio.sleep(0.4)
+            if log:
+                log(f"[MODAL] Logout confirmation dismissed via {name or 'negative'} button.")
+            return True
+    except Exception:
+        pass
+    return False
+
+
 async def dismiss_portal_modals(
     page: Any,
     *,
@@ -579,24 +617,42 @@ async def dismiss_portal_modals(
     3. ``#continueBtnNav`` / ``#confirmBtnFooter`` / ``#efNotificationPopUp_continue``
        — generic notification continue buttons; click them to proceed.
 
+    Category 3 is only ever reached when no logout confirmation is on
+    screen.  ``#confirmBtnFooter`` is a shared confirmation button, and on
+    the logout dialog it is the *Yes* — so whenever category 1 saw a logout
+    prompt but could not find its negative button, falling through to
+    category 3 ended the session.  That is the one outcome this helper must
+    never produce, and because nothing here was logged it was invisible.
+
     This helper loops up to ``max_rounds`` times because multiple modals can
     stack. Each round re-checks all three categories. It never raises — a
     failure to dismiss is best-effort.
     """
-    for _ in range(max_rounds):
-        # 1. "Sure you want to Logout?" → click No
-        try:
-            logout_text = page.get_by_text(
-                re.compile(r"sure you want to Logout", re.I)
-            ).first
-            if await logout_text.is_visible(timeout=400):
-                no_btn = page.get_by_role("button", name=re.compile(r"^no$", re.I)).first
-                if await no_btn.is_visible(timeout=300):
-                    await no_btn.click(force=True)
-                    await asyncio.sleep(0.4)
-                    continue
-        except Exception:
-            pass
+    # Once a logout prompt has been seen, the generic confirm buttons stay
+    # off-limits for the rest of this call: on the logout dialog they are the
+    # *Yes*, and a dialog that is animating out can still report itself
+    # visible after its prompt text has gone.
+    saw_logout_prompt = False
+    for round_index in range(max_rounds):
+        # 1. "Sure you want to Logout?" → click No, never Yes.
+        if await _logout_prompt_visible(page):
+            saw_logout_prompt = True
+            if await _click_stay_signed_in(page, log):
+                continue
+            # No negative button. Every selector in category 3 doubles as
+            # this dialog's confirm button, so stop rather than risk it.
+            if log:
+                log(
+                    "[MODAL] Logout confirmation is on screen and no 'No' button "
+                    "was found; pressing Escape and leaving the remaining modals "
+                    "alone so the session is not confirmed away."
+                )
+            try:
+                await page.keyboard.press("Escape")
+                await asyncio.sleep(0.2)
+            except Exception:
+                pass
+            return
 
         # 2. #securityReasonPopup
         try:
@@ -611,14 +667,32 @@ async def dismiss_portal_modals(
                     text = await security.inner_text(timeout=200)
                 except Exception:
                     pass
-                if re.search(r"logout", text or "", re.I):
+                # "logged out" and "logging out" have to match too — the
+                # popup rarely uses the bare noun.
+                if re.search(r"log(?:g(?:ed|ing))?\s*out", text or "", re.I):
+                    saw_logout_prompt = True
                     no_btn = security.get_by_role(
-                        "button", name=re.compile(r"^no$", re.I)
+                        "button", name=_STAY_BUTTON_RE
                     ).first
                     if await no_btn.is_visible(timeout=300):
                         await no_btn.click(force=True)
                         await asyncio.sleep(0.3)
+                        if log:
+                            log("[MODAL] Security popup mentioned logout; answered No.")
                         continue
+                    # Same hazard as category 1: do not fall through to the
+                    # generic confirm buttons while a logout prompt is up.
+                    if log:
+                        log(
+                            "[MODAL] Security popup mentions logout but has no 'No' "
+                            "button; pressing Escape and stopping."
+                        )
+                    try:
+                        await page.keyboard.press("Escape")
+                        await asyncio.sleep(0.2)
+                    except Exception:
+                        pass
+                    return
                 else:
                     btn = security.get_by_role(
                         "button",
@@ -627,6 +701,8 @@ async def dismiss_portal_modals(
                     if await btn.is_visible(timeout=500):
                         await btn.click(force=True)
                         await asyncio.sleep(0.3)
+                        if log:
+                            log("[MODAL] Security popup acknowledged.")
                         continue
                     else:
                         try:
@@ -638,7 +714,15 @@ async def dismiss_portal_modals(
         except Exception:
             pass
 
-        # 3. Generic notification continue buttons
+        # 3. Generic notification continue buttons. Skipped entirely once a
+        # logout confirmation has appeared — see the note in the docstring.
+        if saw_logout_prompt:
+            if log:
+                log(
+                    "[MODAL] A logout prompt was seen in this pass; leaving the "
+                    "generic confirm buttons alone."
+                )
+            return
         try:
             confirm = page.locator(
                 "#continueBtnNav, #confirmBtnFooter, #efNotificationPopUp_continue"
@@ -646,6 +730,8 @@ async def dismiss_portal_modals(
             if await confirm.is_visible(timeout=250):
                 await confirm.click(force=True)
                 await asyncio.sleep(0.25)
+                if log:
+                    log(f"[MODAL] Notification continue button clicked (round {round_index + 1}).")
                 continue
         except Exception:
             pass

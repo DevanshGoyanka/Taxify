@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import inspect
+import json
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -22,6 +24,218 @@ LogCallback = Callable[[str], None]
 OtpCallback = Callable[[str], str | Awaitable[str]]
 
 _otp_waiters: dict[int, asyncio.Future[str]] = {}
+
+# CBDT FilingStatus.ReturnFileSec code -> the section the portal's "Filing Type"
+# dropdown labels its option with.  The portal gates its ITR list on this: after
+# the 139(1) due date it simply stops offering the forms whose due date has gone
+# (ITR-1/ITR-2 from 1 August), so filing a belated return under 139(1) leaves the
+# wizard stuck on a form list that does not contain the form being filed.
+_RETURN_FILE_SEC_TO_SECTION = {
+    11: "139(1)",
+    12: "139(4)",
+    13: "142(1)",
+    14: "148",
+    16: "153C",
+    17: "139(5)",
+    18: "139(9)",
+    20: "119(2)(b)",
+}
+
+
+# Every step of the offline upload flow lives on this route. Any control that
+# navigates off it has taken the wizard somewhere the upload cannot happen.
+_FILE_ITR_ROUTE = "fileincometaxreturn"
+
+# Wording the ITD upload page uses when it refuses an attached JSON. Matched
+# against rendered text because the block carries no error role or class.
+_PORTAL_ERROR_SCAN_JS = """() => {
+    const shown = (el) => {
+        const cs = getComputedStyle(el);
+        if (cs.visibility === 'hidden' || cs.display === 'none') return false;
+        if (!el.offsetParent && cs.position !== 'fixed') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
+    const phrases = [
+        'please correct the below mentioned error',
+        'error description',
+        'invalid software provider',
+        'does not have access to upload',
+        'in the uploaded json',
+    ];
+    const body = document.body ? document.body.innerText : '';
+    const hit = phrases.find(p => body.toLowerCase().includes(p));
+    if (!hit) return null;
+    // Report the tightest visible block containing the wording, so the reason
+    // is the portal's own sentence rather than the whole page.
+    let best = null;
+    document.querySelectorAll('div,section,p,li,span,mat-card').forEach(el => {
+        if (!shown(el)) return;
+        const t = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+        if (!t || !t.toLowerCase().includes(hit)) return;
+        if (best === null || t.length < best.length) best = t;
+    });
+    return best || body.replace(/\\s+/g, ' ').trim().slice(0, 500);
+}"""
+
+# The production portal rejects a UAT software-provider identity outright.
+_SW_PROVIDER_ERROR_RE = re.compile(
+    r"software provider|swproviderid|does not have access to upload", re.I
+)
+
+
+def _eri_environment_hint() -> str:
+    """Explain a SWProviderID rejection in terms of the active ERI bundle.
+
+    This is the not-yet-enabled state, not a malformed identity: the portal
+    refuses a software provider it has not authorised to file. Phase 4 of the
+    ERI integration plan is what clears it.
+    """
+    try:
+        from app.eri.config import get_eri_credentials
+
+        creds = get_eri_credentials()
+        active = f"{creds.sw_id} ({creds.mode}/{creds.environment})"
+    except Exception:
+        active = "the active ERI bundle"
+    return (
+        f" The return was stamped with {active}. The portal rejects a software "
+        "provider it has not enabled for filing, so this usually means the "
+        "SW_ID is not yet authorised rather than that the JSON is wrong. "
+        "Complete Phase 4 of Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md — run "
+        "scripts/type3_uat_sanity.py and email the pack to "
+        "erihelp@incometax.gov.in — and await ITD SW_ID enablement."
+    )
+
+
+class PortalSessionLost(RuntimeError):
+    """Raised when the portal session ends part-way through the wizard."""
+
+
+async def _log_step_state(page: Any, step: str, log: Optional[LogCallback]) -> None:
+    """Log the URL and the headings the portal is showing at a wizard step.
+
+    One line per step, so a stalled run shows which page each click landed on
+    without needing a live reproduction.
+    """
+    url = str(getattr(page, "url", "") or "?")
+    try:
+        headings = await page.evaluate(
+            """() => Array.from(document.querySelectorAll('h1,h2,h3,h4,mat-card-title,.page-title'))
+                    .filter(el => el.offsetParent !== null)
+                    .map(el => (el.innerText || '').replace(/\\s+/g, ' ').trim())
+                    .filter(Boolean).slice(0, 5)"""
+        )
+    except Exception:
+        headings = []
+    _emit(log, f"[ITR UPLOAD] Step state {step}: url={url} headings={headings}")
+
+
+async def _assert_on_file_itr_route(
+    page: Any, step: str, log: Optional[LogCallback]
+) -> None:
+    """Fail as soon as a click navigates the wizard off the File ITR page."""
+    url = str(getattr(page, "url", "") or "")
+    if _FILE_ITR_ROUTE in url.lower():
+        return
+    _emit(log, f"[ITR UPLOAD] Left the File ITR wizard while {step}: url={url!r}")
+    await _log_page_controls(page, log)
+    raise RuntimeError(
+        f"The wizard navigated away from the File ITR page while {step} — it is "
+        f"now at {url!r}. The offline upload step only exists on the File ITR "
+        "route, so no control that leaves it may be clicked."
+    )
+
+
+async def _assert_session(page: Any, step: str, log: Optional[LogCallback]) -> None:
+    """Fail at the step that lost the session rather than several steps later.
+
+    Without this, a logout during the wizard surfaced as whatever control was
+    missing next — "file input not found" for a session that had actually
+    ended while the Assessment Year was being chosen.
+    """
+    if not await session_expired(page):
+        return
+    url = str(getattr(page, "url", ""))
+    _emit(log, f"[ITR UPLOAD] Session lost while {step} (url={url}).")
+    raise PortalSessionLost(f"The ITD portal session ended while {step}.")
+
+
+def _filing_section_pattern(filing_section: str) -> str:
+    """Return a loose regex matching a section in the portal's option labels.
+
+    Portal labels carry surrounding wording ("139(1) - Original Return") and
+    inconsistent spacing around the bracket, so only the digits and brackets
+    are anchored.
+    """
+    return r"\s*".join(re.escape(part) for part in re.findall(r"\w+|\(|\)", filing_section))
+
+
+def _log_json_identity(path: Path, log: Optional[LogCallback]) -> None:
+    """Record which artifact is being uploaded, and whose return it is.
+
+    The run only ever logged that a file was attached, never which one, so
+    confirming the portal received the return that was just generated — rather
+    than a stale file left in the downloads directory — meant inspecting the
+    filesystem by hand.
+    """
+    try:
+        stat = path.stat()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _emit(log, f"[ITR UPLOAD] Could not inspect {path}: {exc}")
+        return
+    forms = payload.get("ITR")
+    form_name, pan, ay, section = "?", "?", "?", "?"
+    if isinstance(forms, dict):
+        for key, body in forms.items():
+            if not isinstance(body, dict):
+                continue
+            form_name = key
+            header = body.get(f"Form_{key}")
+            if isinstance(header, dict):
+                ay = header.get("AssessmentYear", "?")
+            filing_status = body.get("FilingStatus")
+            if isinstance(filing_status, dict):
+                section = filing_status.get("ReturnFileSec", "?")
+            personal = body.get("PersonalInfo")
+            if isinstance(personal, dict):
+                pan = personal.get("PAN", "?")
+            break
+    _emit(
+        log,
+        f"[ITR UPLOAD] Uploading {path.name} ({stat.st_size} bytes, modified "
+        f"{datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec='seconds')}) "
+        f"from {path.parent}",
+    )
+    _emit(
+        log,
+        f"[ITR UPLOAD] Artifact contents: form={form_name} pan={pan} "
+        f"assessmentYear={ay} ReturnFileSec={section}",
+    )
+
+
+def _filing_section_from_json(path: Path) -> Optional[str]:
+    """Read the filing section out of the CBDT JSON that is being uploaded.
+
+    The generated JSON is the single source of truth for what is being filed,
+    so the portal's Filing Type is taken from it rather than from a separate
+    argument that could drift out of step with the artifact.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    forms = payload.get("ITR")
+    if not isinstance(forms, dict):
+        return None
+    for form_body in forms.values():
+        if not isinstance(form_body, dict):
+            continue
+        filing_status = form_body.get("FilingStatus")
+        if isinstance(filing_status, dict):
+            return _RETURN_FILE_SEC_TO_SECTION.get(filing_status.get("ReturnFileSec"))
+    return None
 
 
 async def wait_for_job_otp(job_id: int, prompt: str, timeout_seconds: int = 300) -> str:
@@ -135,17 +349,34 @@ class PortalUploader:
                     PortalUploadState.SESSION_EXPIRED,
                     "The ITD portal session has expired.",
                 )
-            _emit(log, "[ITR UPLOAD] Opening File Income Tax Return.")
+            _log_json_identity(path, log)
+            filing_section = _filing_section_from_json(path)
+            if filing_section is None:
+                return self._failure(
+                    PortalUploadState.PERMANENT_FAILURE,
+                    "The generated filing JSON does not carry a recognised "
+                    "FilingStatus.ReturnFileSec, so the portal's Filing Type "
+                    "cannot be selected.",
+                )
+            _emit(
+                log,
+                f"[ITR UPLOAD] Opening File Income Tax Return "
+                f"(filing section {filing_section} from the JSON).",
+            )
             await self.goto_file_itr_page(
                 page,
                 assessment_year=assessment_year,
                 itr_type=itr_type,
+                filing_section=filing_section,
                 deadline=deadline,
                 log=log,
             )
             await self._upload_file(page, path, deadline)
             portal_error = await self._visible_portal_error(page)
             if portal_error:
+                _emit(log, f"[ITR UPLOAD] Portal rejected the uploaded JSON: {portal_error}")
+                if _SW_PROVIDER_ERROR_RE.search(portal_error):
+                    portal_error += _eri_environment_hint()
                 return self._failure(
                     PortalUploadState.VALIDATION_FAILED,
                     portal_error,
@@ -155,6 +386,9 @@ class PortalUploader:
             await self._submit_and_confirm(page, deadline)
             portal_error = await self._visible_portal_error(page)
             if portal_error:
+                _emit(log, f"[ITR UPLOAD] Portal rejected the submission: {portal_error}")
+                if _SW_PROVIDER_ERROR_RE.search(portal_error):
+                    portal_error += _eri_environment_hint()
                 return self._failure(
                     PortalUploadState.VALIDATION_FAILED,
                     portal_error,
@@ -190,7 +424,7 @@ class PortalUploader:
                 everify_status=everify,
                 acknowledgement_path=acknowledgement_path,
             )
-        except DisabledRouteError as exc:
+        except (DisabledRouteError, PortalSessionLost) as exc:
             _emit(
                 log,
                 f"[ITR UPLOAD] Session restricted: {exc}",
@@ -216,6 +450,7 @@ class PortalUploader:
         *,
         assessment_year: str,
         itr_type: str,
+        filing_section: str = "139(1)",
         deadline: MonotonicDeadline,
         log: Optional[LogCallback] = None,
     ) -> None:
@@ -259,6 +494,7 @@ class PortalUploader:
         # appeared during navigation.
         await _asyncio.sleep(2.0)
         await dismiss_portal_modals(page, log=log)
+        await _assert_session(page, "opening the File ITR page", log)
 
         # Step 4: Verify we're on the File ITR page by checking for the
         # Assessment Year mat-select control.
@@ -297,14 +533,23 @@ class PortalUploader:
 
         _emit(log, "[ITR UPLOAD] On File ITR page; selecting Assessment Year.")
         # AY is dropdown #0. Use the mat-select pattern directly.
-        await _select_mat_option(page, assessment_year, index=0, log=log)
+        selected_ay = await _select_mat_option(page, assessment_year, index=0, log=log)
+        _emit(
+            log,
+            f"[ITR UPLOAD] Assessment Year {assessment_year}: "
+            f"{'selected' if selected_ay else 'NOT SELECTED'}.",
+        )
         await dismiss_portal_modals(page, log=log)
+        await _assert_session(page, "selecting the Assessment Year", log)
+        await _log_step_state(page, "after the Assessment Year", log)
+        await _assert_on_file_itr_route(page, "selecting the Assessment Year", log)
         await _asyncio.sleep(1.0)  # NRITAX: waitForTimeout(1000)
 
         # Select "Offline" mode FIRST (before Continue) — NRITAX pattern.
         _emit(log, "[ITR UPLOAD] Selecting Offline mode.")
         await _click_text_option(page, re.compile(r"offline", re.I))
         await dismiss_portal_modals(page, log=log)
+        await _assert_session(page, "selecting Offline mode", log)
         await _asyncio.sleep(0.4)  # NRITAX: waitForTimeout(400)
 
         # Now click Continue — it should be enabled after Offline is selected.
@@ -314,14 +559,37 @@ class PortalUploader:
             re.compile(r"continue|proceed|let'?s get started|next", re.I),
             "button",
             4_000,
+            log=log,
+            step="Continue after Offline mode",
         )
         await dismiss_portal_modals(page, log=log)
+        await _assert_session(page, "continuing past the Offline mode step", log)
+        await _log_step_state(page, "after Offline mode", log)
+        await _assert_on_file_itr_route(page, "continuing past Offline mode", log)
         await _asyncio.sleep(0.5)  # NRITAX: waitForTimeout(500)
 
-        # Select Filing Type: "139(1)" from the Filing Type dropdown (#1).
+        # Select the Filing Type from the Filing Type dropdown (#1).  This was
+        # hardcoded to 139(1), which both mis-stated the section a belated or
+        # revised return was filed under and stalled the wizard: the portal
+        # narrows the ITR list to the forms still filable under the chosen
+        # section, so a 139(1) selection after 31 July offered only ITR-3/ITR-4
+        # and the ITR-1 selection a few steps later could never succeed.
         # The portal auto-detects Individual taxpayer — we never select it.
-        _emit(log, "[ITR UPLOAD] Selecting Filing Type: 139(1).")
-        await _select_mat_option(page, r"139\s*\(1\)", index=1, log=log)
+        _emit(log, f"[ITR UPLOAD] Selecting Filing Type: {filing_section}.")
+        selected_section = await _select_mat_option(
+            page, _filing_section_pattern(filing_section), index=1, log=log
+        )
+        if not selected_section:
+            # A lost session presents as every control being absent, so rule
+            # that out before blaming the dropdown's contents.
+            await _assert_session(page, "selecting the Filing Type", log)
+            await _log_page_controls(page, log)
+            raise RuntimeError(
+                f"Could not select filing section {filing_section!r} in the portal's "
+                "Filing Type dropdown — see the option list logged above for what the "
+                "portal offered."
+            )
+        _emit(log, f"[ITR UPLOAD] Filing Type {filing_section}: selected.")
         await dismiss_portal_modals(page, log=log)
         await _asyncio.sleep(0.4)
 
@@ -331,6 +599,8 @@ class PortalUploader:
             re.compile(r"continue|proceed|next", re.I),
             "button",
             3_000,
+            log=log,
+            step="Continue after Filing Type",
         )
         await dismiss_portal_modals(page, log=log)
         await _asyncio.sleep(0.4)
@@ -343,10 +613,24 @@ class PortalUploader:
             False,
         )
         await dismiss_portal_modals(page, log=log)
+        await _assert_session(page, "answering the 44AB audit question", log)
 
         # Select ITR form type from the ITR Form dropdown (#2).
         _emit(log, f"[ITR UPLOAD] Selecting ITR form type: {itr_type}.")
-        await _select_mat_option(page, itr_type, index=2, log=log)
+        selected_form = await _select_mat_option(page, itr_type, index=2, log=log)
+        if not selected_form:
+            # Continuing past this leaves the wizard on a step whose Continue
+            # button stays disabled, and the run then fails ten steps later
+            # reporting a missing file input — which describes a symptom far
+            # from the cause. Stop where the problem actually is.
+            await _assert_session(page, "selecting the ITR form type", log)
+            await _log_page_controls(page, log)
+            raise RuntimeError(
+                f"Could not select ITR form type {itr_type!r} in the portal's ITR Form "
+                "dropdown — see the option list logged above for what the portal offered. "
+                "If the form is genuinely absent, the portal is not accepting it for this "
+                "assessment year and filing mode."
+            )
         await dismiss_portal_modals(page, log=log)
         await _asyncio.sleep(0.4)
 
@@ -356,6 +640,8 @@ class PortalUploader:
             re.compile(r"continue|proceed|next|start", re.I),
             "button",
             4_000,
+            log=log,
+            step="Continue after ITR form type",
         )
         await dismiss_portal_modals(page, log=log)
         await _asyncio.sleep(0.4)
@@ -375,46 +661,43 @@ class PortalUploader:
             re.compile(r"continue|proceed|next|ok|submit", re.I),
             "button",
             4_000,
+            log=log,
+            step="Continue after PEP question",
         )
         await dismiss_portal_modals(page, log=log)
         await _asyncio.sleep(0.4)
 
-        # NRITAX pattern: click "Download pre-fill" / "Prefill" button
-        # then "Download pre-fill" link, then "Offline/JSON submission/Upload JSON"
-        _emit(log, "[ITR UPLOAD] Clicking Download Pre-fill / Prefill button.")
-        await _click_if_visible(
-            page,
-            re.compile(
-                r"download pre-?fill|download prefill|pre-?fill(ed)? (data|json)|get pre-?fill|prefill and",
-                re.I,
-            ),
-            "button",
-            6_000,
-        )
-        await dismiss_portal_modals(page, log=log)
-        await _asyncio.sleep(0.4)
+        # The portal's "Download Pre-filled Data" control is NOT part of the
+        # offline upload flow. Clicking it leaves the wizard for
+        # #/dashboard/downloadPreFilledData — a standalone page that asks for
+        # the assessment year again and never renders a file input — and the
+        # run then failed reporting an absent upload control while sitting on
+        # a completely different page. We generate the CBDT JSON ourselves, so
+        # the portal's prefill is never needed and must not be clicked.
+        await _log_step_state(page, "before reaching the upload step", log)
+        await _assert_on_file_itr_route(page, "completing the wizard questions", log)
 
-        _emit(log, "[ITR UPLOAD] Clicking Download Pre-fill link.")
-        await _click_if_visible(
-            page,
-            re.compile(r"download pre-?fill|download prefill|pre-?fill(ed)? (data|json)", re.I),
-            "link",
-            4_000,
-        )
-        await dismiss_portal_modals(page, log=log)
-        await _asyncio.sleep(0.4)
-
-        # Click "Offline / JSON submission / Upload JSON" to reach the
-        # file upload step.
-        _emit(log, "[ITR UPLOAD] Clicking Offline/JSON submission/Upload JSON.")
-        await _click_if_visible(
+        # "Offline / JSON submission / Upload JSON" reaches the upload panel on
+        # portal variants that gate it behind a link. It is safe to miss: when
+        # the panel is already rendered the file input is simply present.
+        clicked_offline = await _click_if_visible(
             page,
             re.compile(r"offline|json submission|upload json", re.I),
             "link",
             3_000,
+            log=log,
+            step="Offline/JSON submission/Upload JSON link",
+        )
+        _emit(
+            log,
+            f"[ITR UPLOAD] Offline/JSON submission/Upload JSON link: "
+            f"{'clicked' if clicked_offline else 'not present (upload panel may already be rendered)'}.",
         )
         await dismiss_portal_modals(page, log=log)
+        await _assert_session(page, "reaching the upload step", log)
         await _asyncio.sleep(1.0)
+        await _log_step_state(page, "at the upload step", log)
+        await _assert_on_file_itr_route(page, "reaching the upload step", log)
 
     async def _upload_file(
         self,
@@ -426,27 +709,50 @@ class PortalUploader:
         # Wait for the file input to appear — the portal may need a moment
         # to render the upload panel after the wizard completes.
         import asyncio as _asyncio
-        locator = page.locator("input[type='file']").first
-        # Try to find the file input with a generous timeout (up to 10s)
-        # but don't hang forever.
-        file_input_found = False
+        locator = page.locator("input[type='file']")
+        # Wait for ATTACHED, not visible. The portal renders a styled button
+        # over an input that is display:none / opacity:0, as most Angular file
+        # pickers do, so is_visible() is False for the whole wait and the upload
+        # was abandoned even though the input was present. set_input_files()
+        # works on a hidden input — that is the supported Playwright pattern —
+        # so presence in the DOM is the correct precondition.
+        file_input_count = 0
         for _ in range(20):  # 20 × 500ms = 10s max
             try:
-                if await locator.is_visible(timeout=500):
-                    file_input_found = True
+                file_input_count = await locator.count()
+                if file_input_count:
                     break
             except Exception:
                 pass
             await dismiss_portal_modals(page)
             await _asyncio.sleep(0.5)
-        if not file_input_found:
-            raise RuntimeError("ITR JSON file input was not found.")
+        if not file_input_count:
+            # Record what the page actually was, so the next failure does not
+            # need a live reproduction to diagnose.
+            try:
+                current_url = str(getattr(page, "url", "") or "")
+                frame_count = len(getattr(page, "frames", ()) or ())
+            except Exception:
+                current_url, frame_count = "<unavailable>", -1
+            await _log_page_controls(page)
+            raise RuntimeError(
+                "ITR JSON file input was not found. "
+                f"url={current_url!r} frames={frame_count} "
+                "(no input[type=file] attached to the DOM after 10s). "
+                "The wizard is still on the File ITR page — see the page-control "
+                "listing above for the controls the portal actually rendered."
+            )
+        locator = locator.first
         await locator.set_input_files(
             str(json_path.resolve()),
             timeout=max(1, min(10_000, deadline.remaining_ms)),
         )
         await _click_optional(page, ("Upload", "Proceed", "Continue"), deadline)
         await dismiss_portal_modals(page)
+        # The portal validates the attachment server-side. Checking for its
+        # rejection banner immediately after the click reads the page before
+        # the verdict has rendered, so a refused upload looks accepted.
+        await _asyncio.sleep(2.0)
 
     async def _submit_and_confirm(
         self,
@@ -619,6 +925,23 @@ class PortalUploader:
         return str(final_path)
 
     async def _visible_portal_error(self, page: Any) -> Optional[str]:
+        """Return the portal's visible rejection text, if it is showing one.
+
+        The upload page renders its rejection as a plain block — not as
+        ``[role=alert]``, ``.alert-danger``, ``.error-message`` or
+        ``mat-error`` — so the selector scan below found nothing for a return
+        the portal had openly refused. The run then logged "Local artifact
+        accepted", went on to submit, and died with "Final ITR submit action
+        was not found", which says nothing about the actual rejection. Scan
+        the rendered text for the portal's own error wording first.
+        """
+        try:
+            phrase_hit = await page.evaluate(_PORTAL_ERROR_SCAN_JS)
+        except Exception:
+            phrase_hit = None
+        if phrase_hit:
+            return str(phrase_hit)[:500]
+
         selectors = (
             ("[role='alert']", True),
             (".alert-danger", False),
@@ -879,7 +1202,9 @@ async def _select_mat_option(
             _emit(log, f"[ITR UPLOAD] Found {count} mat-select(s); selecting index {index}.")
             if count > index:
                 mat_select = all_selects.nth(index)
-                _emit(log, f"[ITR UPLOAD] Selected mat-select at index {index}.")
+                # "Located", not "selected" — nothing has been chosen yet. The
+                # old wording made a failure to find the option read as success.
+                _emit(log, f"[ITR UPLOAD] Located mat-select at index {index}.")
         except Exception:
             pass
 
@@ -980,6 +1305,25 @@ async def _select_mat_option(
         except Exception:
             pass
 
+        # The requested option is not in this dropdown. Record what the portal
+        # did offer before closing it: the caller only knows "not selected",
+        # and without the actual option list the difference between a changed
+        # label and a form the portal is not accepting for this assessment year
+        # cannot be told apart without watching a live run.
+        try:
+            available = await page.evaluate(
+                """() => Array.from(document.querySelectorAll('mat-option'))
+                        .map(o => (o.innerText || '').replace(/\\s+/g, ' ').trim())
+                        .filter(Boolean).slice(0, 20)"""
+            )
+            _emit(
+                log,
+                f"[ITR UPLOAD] Option {option_pattern!r} NOT among the "
+                f"{len(available)} option(s) offered: {available}",
+            )
+        except Exception:
+            _emit(log, f"[ITR UPLOAD] Option {option_pattern!r} not found; option list unavailable.")
+
         # Close the dropdown if we didn't find the option
         try:
             await page.keyboard.press("Escape")
@@ -1075,21 +1419,129 @@ async def _click_text_option(
     return False
 
 
+async def _log_page_controls(page: Any, log: Any = None) -> None:
+    """Record every actionable control currently on the page.
+
+    When the wizard stalls, the only thing worth knowing is what the portal is
+    actually showing. Without this the failure reports an absent file input and
+    nothing about the page that was rendered instead, so identifying the real
+    control means reproducing the run interactively against a live ITD session.
+    """
+    try:
+        report = await page.evaluate(
+            """() => {
+                // Angular keeps every dialog template in the DOM, so checking an
+                // element's own display/visibility reports dozens of off-screen
+                // controls as visible. offsetParent plus a non-zero box is what
+                // actually distinguishes rendered from parked.
+                const shown = (el) => {
+                    const cs = getComputedStyle(el);
+                    if (cs.visibility === 'hidden' || cs.display === 'none') return false;
+                    if (!el.offsetParent && cs.position !== 'fixed') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                const label = (el) =>
+                    (el.innerText || el.value || el.getAttribute('aria-label') || '')
+                        .replace(/\\s+/g, ' ').trim().slice(0, 70);
+
+                const controls = [];
+                document.querySelectorAll('button, a').forEach(el => {
+                    if (!shown(el)) return;
+                    const text = label(el);
+                    if (!text) return;
+                    controls.push({
+                        kind: el.tagName.toLowerCase(),
+                        text,
+                        disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
+                    });
+                });
+
+                const inputs = [];
+                document.querySelectorAll('input, mat-select, select').forEach(el => {
+                    inputs.push({
+                        kind: el.tagName.toLowerCase() +
+                              (el.type ? '[' + el.type + ']' : ''),
+                        text: (el.name || el.id || el.getAttribute('formcontrolname') || '').slice(0, 60),
+                        shown: shown(el),
+                    });
+                });
+
+                // Which step is the wizard actually displaying?
+                const headings = [];
+                document.querySelectorAll('h1,h2,h3,h4,mat-card-title,.page-title').forEach(el => {
+                    if (shown(el)) { const t = label(el); if (t) headings.push(t); }
+                });
+
+                const dialogs = [];
+                document.querySelectorAll('mat-dialog-container,[role=dialog],.modal.show')
+                    .forEach(el => { if (shown(el)) dialogs.push(label(el).slice(0, 140)); });
+
+                return { controls: controls.slice(0, 25), inputs: inputs.slice(0, 25),
+                         headings: headings.slice(0, 8), dialogs: dialogs.slice(0, 5) };
+            }"""
+        )
+    except Exception as exc:  # pragma: no cover - diagnostic path only
+        _emit(log, f"[ITR UPLOAD] Could not enumerate page controls: {exc}")
+        return
+
+    _emit(log, f"[ITR UPLOAD] Page state at {getattr(page, 'url', '?')}")
+
+    for dialog in report.get("dialogs") or []:
+        _emit(log, f"[ITR UPLOAD]   BLOCKING DIALOG: {dialog!r}")
+
+    headings = report.get("headings") or []
+    _emit(log, f"[ITR UPLOAD]   headings: {headings if headings else '(none visible)'}")
+
+    controls = report.get("controls") or []
+    if not controls:
+        _emit(log, "[ITR UPLOAD]   (no visible buttons or links)")
+    for item in controls:
+        state = ",disabled" if item.get("disabled") else ""
+        _emit(log, f"[ITR UPLOAD]   {item.get('kind')}: {item.get('text')!r}{state and ' [' + state.lstrip(',') + ']'}")
+
+    file_inputs = [i for i in (report.get("inputs") or []) if "file" in (i.get("kind") or "")]
+    _emit(
+        log,
+        f"[ITR UPLOAD]   file inputs in DOM: {len(file_inputs)}"
+        + (f" -> {file_inputs}" if file_inputs else ""),
+    )
+
+
 async def _click_if_visible(
     page: Any,
     name: "re.Pattern[str]",
     role: str,
     timeout: int,
+    log: Optional[LogCallback] = None,
+    step: Optional[str] = None,
 ) -> bool:
     """Click the first visible element with ``role`` matching ``name``.
 
     Direct port of NRITAX's ``clickIfVisible``. Uses 100ms click timeout
     to match NRITAX's ``.catch(() => undefined)`` — never hangs on
     disabled buttons.
+
+    When ``log`` and ``step`` are given, the text of the element that actually
+    matched is recorded along with the URL before and after the click. A
+    pattern loose enough to advance several portal variants is also loose
+    enough to hit the wrong control, and the label is the only way to tell
+    which one it caught.
     """
     import asyncio as _asyncio
 
     el = page.get_by_role(role, name=name).first
+    if log is not None and step:
+        matched = ""
+        try:
+            matched = (await el.inner_text(timeout=200)).replace("\n", " ").strip()[:70]
+        except Exception:
+            pass
+        url_before = str(getattr(page, "url", "") or "?")
+        _emit(
+            log,
+            f"[ITR UPLOAD] {step}: matched {role} {matched!r} at url={url_before}",
+        )
     try:
         # NRITAX: if (await el.isVisible({ timeout }).catch(() => false))
         visible = False
@@ -1110,6 +1562,12 @@ async def _click_if_visible(
                 except Exception:
                     return False
             await _asyncio.sleep(0.5)  # NRITAX: waitForTimeout(500)
+            if log is not None and step:
+                _emit(
+                    log,
+                    f"[ITR UPLOAD] {step}: clicked; url is now "
+                    f"{str(getattr(page, 'url', '') or '?')}",
+                )
             return True
     except Exception:
         pass
