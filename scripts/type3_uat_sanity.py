@@ -45,7 +45,23 @@ load_dotenv(ROOT / ".env", override=True)
 
 from app.eri.config import get_eri_credentials
 from app.eri.digest import compute_digest
+from app.engine.common.due_dates import applicable_filing_section
 from app.engine.filing_gateway_v2 import FilingGatewayV2Error, generate_cbdt_json
+
+
+def _apply_current_filing_section(draft: Any) -> Any:
+    """Stamp the filing section that actually applies on the day of generation.
+
+    The fixtures are pinned to 139(1), which stops being valid once the form's
+    due date passes — ITR-1's went on 31 July while ITR-4 runs to 31 August, so
+    a pack built in between generated ITR-4 and rejected ITR-1. The pack is
+    meant to be the exact artefact the portal would receive, and a return filed
+    today after the due date is belated under 139(4), so derive it rather than
+    hardcode it.
+    """
+    section = applicable_filing_section(draft.form, draft.assessmentYear or "2026-27")
+    draft.filing.filingSection = section
+    return draft
 
 
 def _now_iso() -> str:
@@ -63,9 +79,13 @@ def _form_variants(form: str) -> list[tuple[str, Any]]:
     from audit_itr_coverage import build_full_itr1_draft, build_full_itr4_draft
 
     if form == "ITR-1":
+        # build_full_itr1_draft branches on "80EE" (see audit_itr_coverage.py:247);
+        # "80EEB" matched no branch and silently produced a second copy of the
+        # 80EEA draft, so the pack shipped one file twice and lost the senior-
+        # citizen 80D arrays that the 80EE variant is there to exercise.
         return [
             ("default_80EEA", build_full_itr1_draft(loan_variant="80EEA")),
-            ("default_80EEB", build_full_itr1_draft(loan_variant="80EEB")),
+            ("senior_80EE", build_full_itr1_draft(loan_variant="80EE")),
         ]
     if form == "ITR-4":
         return [
@@ -136,7 +156,11 @@ def generate_sanity_pack(
             continue
 
         for label, draft in variants:
-            variant_entry: dict[str, Any] = {"label": label}
+            draft = _apply_current_filing_section(draft)
+            variant_entry: dict[str, Any] = {
+                "label": label,
+                "filing_section": draft.filing.filingSection,
+            }
             try:
                 official, _summary = generate_cbdt_json(draft)
             except FilingGatewayV2Error as exc:
