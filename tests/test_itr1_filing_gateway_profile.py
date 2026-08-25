@@ -90,7 +90,7 @@ def test_flat_mapper_builds_real_filing_profile_and_schema_valid_json() -> None:
 def test_flat_mapper_rejects_missing_verification_declaration() -> None:
     """Official JSON mapping must reject an unaccepted declaration."""
     payload = _payload()
-    payload["verification"] = {"capacity": "SELF", "place": "Delhi", "declarationAccepted": False}
+    payload["verification"] = {"capacity": "SELF", "place": "Delhi", "date": "2026-07-31", "declarationAccepted": False}
 
     with pytest.raises(ValueError, match="Verification declaration"):
         _build_itr1_input_from_flat(payload)
@@ -99,7 +99,7 @@ def test_flat_mapper_rejects_missing_verification_declaration() -> None:
 def test_flat_mapper_rejects_unsupported_itr1_representative_verification() -> None:
     """Representative ITR-1 generation must block rather than fabricate Capacity."""
     payload = _payload()
-    payload["verification"] = {"capacity": "REPRESENTATIVE", "place": "Delhi", "declarationAccepted": True}
+    payload["verification"] = {"capacity": "REPRESENTATIVE", "place": "Delhi", "date": "2026-07-31", "declarationAccepted": True}
 
     with pytest.raises(ValueError, match="representative details are incomplete"):
         _build_itr1_input_from_flat(payload)

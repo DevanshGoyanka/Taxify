@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from app.engine.calculators.itr1 import ITR1Result, compute as compute_itr1
 from app.engine.calculators.itr4 import ITR4Result, compute as compute_itr4
+from app.engine.common.due_dates import filing_section_due_date_error
 from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input
 from app.engine.draft_to_itr4_input import draft_to_itr4_input
 from app.engine.itd.itr1 import build_itr1_json
@@ -74,6 +75,35 @@ def _to_date(value: str | None) -> datetime.date | None:
     if not value:
         return None
     return datetime.date.fromisoformat(value)
+
+
+def _reject_section_after_due_date(draft: ReturnDraft) -> None:
+    """Block a return filed under 139(1) once its due date has gone.
+
+    The date judged against is the one the return declares it is filed on —
+    ``verification.date``, the value that becomes the CBDT ``Verification.Date``
+    — falling back to today when the return does not declare one.
+    """
+    try:
+        filing_on = _to_date(draft.verification.date)
+    except ValueError:
+        filing_on = None
+    message = filing_section_due_date_error(
+        draft.filing.filingSection,
+        draft.form,
+        draft.assessmentYear or "2026-27",
+        filing_on,
+    )
+    if not message:
+        return
+    logger.info(
+        "Filing section rejected against due date: form=%s ay=%s section=%s filedOn=%s",
+        draft.form, draft.assessmentYear, draft.filing.filingSection, filing_on,
+    )
+    raise FilingGatewayV2Error(
+        "The filing section is no longer available — the due date has passed.",
+        [message],
+    )
 
 
 @dataclass(frozen=True)
@@ -406,6 +436,7 @@ def _filing_profile(draft: ReturnDraft) -> ITR1FilingProfile:
                 "153C, 139(5), 139(9), 119(2)(b)."
             ],
         )
+    _reject_section_after_due_date(draft)
     # ReturnFileSec 17 IS "revised return u/s 139(5)", so the section alone makes
     # a return revised. Deriving "revised" from filing.returnType instead left the
     # two disagreeing: a draft with filingSection 139(5) and returnType ORIGINAL
@@ -670,6 +701,7 @@ def _itr4_filing_profile(draft: ReturnDraft) -> ITR4FilingProfile:
             "139(4), 142(1), 148, 153C, 139(5), 139(9), 119(2)(b).",
             [f"filingSection {filing.filingSection!r} is not supported."],
         )
+    _reject_section_after_due_date(draft)
 
     mobile_cc_raw = (personal.mobileCountryCode or "91").strip() or "91"
     if not mobile_cc_raw.isdigit():

@@ -49,6 +49,9 @@ def _filing_ready_draft() -> ReturnDraft:
     draft.personal.pinCode = "110001"
     draft.personal.employerCategory = "OTH"
     draft.verification.place = "Delhi"
+    # A return filed under 139(1) declares a filing date on or before the due
+    # date; without one the fixture is judged against the day the suite runs.
+    draft.verification.date = "2026-07-31"
     draft.verification.declarationAccepted = True
     draft.employers = [Employer(id="e1", basic=Decimal("800000"))]
     draft.bankAccounts = [BankAccount(

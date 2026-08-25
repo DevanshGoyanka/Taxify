@@ -3,6 +3,7 @@ import {
   normalizeEmploymentNature,
   normalizeStateCode,
 } from './cbdtEnums';
+import { filingSectionDueDateError, todayIso } from './dueDates';
 import type { ReturnDraft } from './types';
 import { isValidTan } from '../../utils/taxIdentifiers';
 
@@ -53,6 +54,19 @@ export function validateCbdtFrontendFields(draft: ReturnDraft): string[] {
   // selecting it makes the return revised regardless of the returnType field —
   // checking returnType alone missed exactly that case and let the operator reach
   // an unactionable 422.
+  // Judged against the date the return declares it is filed on — the same
+  // value the backend gateway uses, so pre-flight and generation cannot
+  // disagree about whether 139(1) is still available.
+  const dueDateError = filingSectionDueDateError(
+    draft.filing.filingSection,
+    draft.form,
+    draft.assessmentYear || '2026-27',
+    draft.verification.date || todayIso(),
+  );
+  if (dueDateError) {
+    errors.push(dueDateError);
+  }
+
   if (draft.filing.returnType === 'REVISED' || draft.filing.filingSection === '139(5)') {
     if (!draft.filing.originalAcknowledgementNumber.trim()) {
       errors.push('Filing: a revised return needs the original acknowledgement number (or switch the return type back to Original).');

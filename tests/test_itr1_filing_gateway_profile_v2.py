@@ -56,6 +56,9 @@ def _canonical_itr1_draft() -> ReturnDraft:
     draft.filing.filingSection = "139(1)"
     draft.verification.capacity = "SELF"
     draft.verification.place = "Delhi"
+    # A return filed under 139(1) declares a filing date on or before the due
+    # date; without one the fixture is judged against the day the suite runs.
+    draft.verification.date = "2026-07-31"
     draft.verification.declarationAccepted = True
     draft.bankAccounts = [BankAccount(
         id="b1", bankName="State Bank of India",

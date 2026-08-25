@@ -44,7 +44,9 @@ BASE_PAYLOAD: dict[str, Any] = {
     "mobile": "9876543210",
     "email": "rahul@example.com",
     "filingSection": "139(1)",
-    "verification": {"place": "Mumbai", "declarationAccepted": True, "capacity": "SELF"},
+    # A return filed under 139(1) declares a filing date on or before the due
+    # date; without one the fixture is judged against the day the suite runs.
+    "verification": {"place": "Mumbai", "date": "2026-07-31", "declarationAccepted": True, "capacity": "SELF"},
     "employerEntries": [{"basic": 800000, "da": 0, "hra": 0, "bonus": 0, "perquisites": 0, "profitsInLieu": 0, "allowances": 0, "tdsS192": 50000}],
     "bankAccountData": {"accounts": [
         {

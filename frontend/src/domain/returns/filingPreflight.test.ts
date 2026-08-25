@@ -16,7 +16,15 @@ const createPreflightDraft = (
     accountType: 'SB',
     useForRefund: true,
   }];
+  // Required by the CBDT verification declaration, so every draft that is
+  // meant to reach filing has to carry them.
+  draft.personal.fatherName = 'Mohan Sharma';
+  draft.personal.surnameOrOrgName = 'Sharma';
+  draft.personal.pan = 'ABCDE1234F';
   draft.verification.place = 'Delhi';
+  // A return filed under 139(1) declares a filing date on or before the due
+  // date; without one the fixture is judged against the day the suite runs.
+  draft.verification.date = '2026-07-31';
   draft.verification.declarationAccepted = true;
   return draft;
 };

@@ -9,6 +9,7 @@ import {
   type EmployerCategory,
   type StateCode,
 } from '../domain/returns/cbdtEnums';
+import { getDueDate, isDueDatePassed, todayIso } from '../domain/returns/dueDates';
 
 export type SupportedItrForm = 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4';
 
@@ -53,8 +54,6 @@ const PAN_PATTERN = '[A-Z]{5}[0-9]{4}[A-Z]';
 const PIN_PATTERN = '[1-9][0-9]{5}';
 
 function bool(value: unknown): boolean { return value === true; }
-function todayIso(): string { return new Date().toISOString().slice(0, 10); }
-function dueDate(form: SupportedItrForm): string { return form === 'ITR-1' || form === 'ITR-2' ? '2026-07-31' : '2026-08-31'; }
 function blankAddress(): AddressData { return { residenceNo: '', residenceName: '', roadOrStreet: '', localityOrArea: '', city: '', stateCode: '', countryCode: '91', pinCode: '', zipCode: '' }; }
 
 function Field({ label, value, onChange, type = 'text', required = false, pattern, maxLength, min, max, inputMode, help, disabled = false }: { label: string; value: string | number | undefined | null; onChange: (value: string) => void; type?: React.HTMLInputTypeAttribute; required?: boolean; pattern?: string; maxLength?: number; min?: number | string; max?: number | string; inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode']; help?: string; disabled?: boolean }): React.JSX.Element {
@@ -91,7 +90,11 @@ function CheckField({ label, checked, onChange }: { label: string; checked: bool
  */
 export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onRegimeChange }: PersonalInfoTabProps): React.JSX.Element {
   const { personal, filing, verification, taxReturnPreparer } = draft;
-  const filingDueDate = dueDate(itrForm);
+  const assessmentYear = draft.assessmentYear || '2026-27';
+  const filingDueDate = getDueDate(itrForm, assessmentYear);
+  // Once the 139(1) due date has gone, an unfiled return is belated under
+  // 139(4) and a filed one can only be corrected as revised under 139(5).
+  const dueDatePassed = isDueDatePassed(itrForm, assessmentYear, verification.date || todayIso());
   const age = useMemo(() => calculateAgeFromDob(personal.dateOfBirth, draft.assessmentYear || '2026-27'), [personal.dateOfBirth, draft.assessmentYear]);
   const primaryAddress: AddressData = {
     residenceNo: personal.flatNo, residenceName: personal.residenceName, roadOrStreet: personal.roadOrStreet,
@@ -198,8 +201,9 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       {personal.secondaryAddressDifferent && <div style={{ marginTop: 16 }}>{renderAddress(alternateAddress, updateAlternateAddress, 'Alternate')}</div>}
     </div>
     <div style={CARD_STYLE}><h4 style={{ marginTop: 0, fontSize: 14 }}>Filing status</h4><div style={GRID_STYLE}>
-      <SelectField label="Return filed under section" value={filing.filingSection} onChange={(value) => updateFiling({ filingSection: value as Filing['filingSection'], returnType: value === '139(5)' ? 'REVISED' : 'ORIGINAL' })} required><option value="139(1)">139(1) — On or before due date</option><option value="139(4)">139(4) — Belated return</option><option value="142(1)">142(1) — Notice</option><option value="148">148 — Reassessment notice</option><option value="153C">153C — Notice</option><option value="139(5)">139(5) — Revised return</option><option value="139(9)">139(9) — Defective return</option><option value="119(2)(b)">119(2)(b) — Condonation of delay</option></SelectField>
+      <SelectField label="Return filed under section" value={filing.filingSection} onChange={(value) => updateFiling({ filingSection: value as Filing['filingSection'], returnType: value === '139(5)' ? 'REVISED' : 'ORIGINAL' })} required><option value="139(1)" disabled={dueDatePassed}>139(1) — On or before due date{dueDatePassed ? ' (due date passed)' : ''}</option><option value="139(4)">139(4) — Belated return</option><option value="142(1)">142(1) — Notice</option><option value="148">148 — Reassessment notice</option><option value="153C">153C — Notice</option><option value="139(5)">139(5) — Revised return</option><option value="139(9)">139(9) — Defective return</option><option value="119(2)(b)">119(2)(b) — Condonation of delay</option></SelectField>
       <Field label="ITR Filing Due Date" value={filingDueDate} onChange={() => undefined} type="date" disabled />
+      {dueDatePassed && filing.filingSection === '139(1)' && <div style={{ gridColumn: '1 / -1', padding: '8px 10px', borderRadius: 6, border: '1px solid #f0c36d', background: '#fdf6e3', fontSize: 12, color: '#7a5b00' }}>The {itrForm} due date for AY {assessmentYear} ({filingDueDate}) has passed, so this return cannot be filed under 139(1). Choose 139(4) if it has not been filed yet, or 139(5) with the original acknowledgement details if it has. Filing and validation are blocked until this is changed.</div>}
       {filing.filingSection === '139(5)' && <Field label="Original Acknowledgement Number" value={filing.originalAcknowledgementNumber} onChange={(value) => updateFiling({ originalAcknowledgementNumber: value.replace(/\D/g, '').slice(0, 15) })} required pattern="[0-9]{15}" maxLength={15} inputMode="numeric" />}
       {filing.filingSection === '139(5)' && <Field label="Original Return Filing Date" value={filing.originalFilingDate || ''} onChange={(value) => updateFiling({ originalFilingDate: value || null })} type="date" required />}
       {['142(1)', '148', '153C', '139(9)'].includes(filing.filingSection) && <Field label="Notice / Order Number" value={filing.noticeNumber} onChange={(value) => updateFiling({ noticeNumber: value })} required maxLength={100} />}
