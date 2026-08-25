@@ -179,6 +179,78 @@ def get_eri_credentials() -> ERICredentials:
     return creds
 
 
+def get_eri_base_url() -> str:
+    """Resolve the ITD gateway base URL for the active (mode, environment).
+
+    Every Type-2 module used to capture ``os.getenv("ERI_BASE_URL", <UAT
+    default>)`` into a module constant at import time. ``ERI_BASE_URL`` is not
+    a variable this project sets — the env-scoped ``ERI_BASE_URL_TYPE2_UAT`` /
+    ``ERI_BASE_URL_TYPE2_PRODUCTION`` pair is — so every call silently went to
+    the hardcoded UAT default, and switching ``ERI_ENV`` to production would
+    have kept sending live requests to UAT without a word.
+
+    Resolution order: the env-scoped value for the active pair, then the
+    unsuffixed ``ERI_BASE_URL`` as a legacy escape hatch, then an error. There
+    is deliberately no default — a wrong gateway must fail, not be guessed.
+
+    Raises:
+        ERIConfigurationError: If no base URL is configured for the active pair.
+    """
+    creds = get_eri_credentials()
+    if creds.base_url:
+        return creds.base_url
+    legacy = _read_env("ERI_BASE_URL")
+    if legacy:
+        return legacy
+    suffix = f"{creds.mode.upper()}_{_env_suffix(creds.environment)}"
+    raise ERIConfigurationError(
+        f"ERI_BASE_URL_{suffix} is not set. The ITD gateway URL must be "
+        f"configured for the active ERI pair ({creds.mode}/{creds.environment}); "
+        "it is never defaulted, because a wrong gateway would send live "
+        "requests to the wrong environment."
+    )
+
+
+def get_eri_user_id() -> Optional[str]:
+    """Resolve the ERI User ID for the active (mode, environment).
+
+    Same defect as the base URL: the Type-2 modules read an unsuffixed
+    ``ERI_USER_ID`` that this project does not set, so the configured
+    ``ERI_USER_ID_TYPE2_UAT`` was never read by anything and every Type-2 call
+    failed with "ERI_USER_ID environment variable not set" while the value sat
+    in ``.env``.
+
+    Returns None rather than raising so the callers' own guards keep their
+    existing exception types and control flow.
+    """
+    try:
+        user_id = get_eri_credentials().eri_user_id
+    except Exception:
+        user_id = None
+    return user_id or _read_env("ERI_USER_ID")
+
+
+def get_eri_password() -> Optional[str]:
+    """Resolve the ERI password for the active (mode, environment)."""
+    try:
+        password = get_eri_credentials().eri_password
+    except Exception:
+        password = None
+    return password or _read_env("ERI_PASSWORD")
+
+
+def get_eri_symmetric_key() -> Optional[str]:
+    """Resolve the symmetric key used to encrypt the ERI password.
+
+    ``ERI_SYMMETRIC_KEY`` is global rather than env-scoped. There is
+    deliberately no default: ``login.py`` used to fall back to a hardcoded
+    placeholder key, which encrypts the password into something the gateway
+    cannot decrypt and reports as an ordinary auth failure — a placeholder
+    that produces a wrong answer is worse than no value at all.
+    """
+    return _read_env("ERI_SYMMETRIC_KEY")
+
+
 def assert_credentials_at_startup() -> None:
     """Startup guard: validate the active credential bundle is sane.
 

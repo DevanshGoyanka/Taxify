@@ -10,7 +10,16 @@ from app.eri.envelope import (
 )
 from app.eri.exceptions import ERIApiError
 
-ERI_BASE_URL = os.getenv("ERI_BASE_URL", "https://uatocpservices.incometax.gov.in/v1")
+# Resolved per call from the active (ERI_MODE, ERI_ENV) pair. It used to be
+# a module constant captured at import time from an unsuffixed ERI_BASE_URL
+# that this project never sets, so every request silently went to the
+# hardcoded UAT default regardless of ERI_ENV.
+from app.eri.config import (
+    get_eri_base_url,
+    get_eri_password,
+    get_eri_symmetric_key,
+    get_eri_user_id,
+)
 
 def get_ist_timestamp() -> str:
     ist_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
@@ -22,7 +31,7 @@ def addClient(pan: str, dateOfBirth: str, otpSourceFlag: str, auth_token: str) -
     
     Cites: Docs/API_AddClientFlow_v1.1.pdf Section 4 (addClient API Details).
     """
-    eri_user_id = os.getenv("ERI_USER_ID")
+    eri_user_id = get_eri_user_id()
     if not eri_user_id:
         raise ValueError("ERI_USER_ID is not configured in the environment.")
         
@@ -36,7 +45,7 @@ def addClient(pan: str, dateOfBirth: str, otpSourceFlag: str, auth_token: str) -
     
     envelope = build_request_envelope(payload, eri_user_id)
     headers = eri_headers(auth_token)
-    url = f"{ERI_BASE_URL.rstrip('/')}/addClient"
+    url = f"{get_eri_base_url().rstrip('/')}/addClient"
     
     with httpx.Client(timeout=30.0, verify=False) as client:
         response = client.post(url, json=envelope, headers=headers)
@@ -50,7 +59,7 @@ def validateClientOtp(pan: str, transactionId: str, otpSourceFlag: str, otp: str
     
     Cites: Docs/API_AddClientFlow_v1.1.pdf Section 5 (validateClientOtp API Details).
     """
-    eri_user_id = os.getenv("ERI_USER_ID")
+    eri_user_id = get_eri_user_id()
     if not eri_user_id:
         raise ValueError("ERI_USER_ID is not configured in the environment.")
         
@@ -66,7 +75,7 @@ def validateClientOtp(pan: str, transactionId: str, otpSourceFlag: str, otp: str
     
     envelope = build_request_envelope(payload, eri_user_id)
     headers = eri_headers(auth_token)
-    url = f"{ERI_BASE_URL.rstrip('/')}/validateClientOtp"
+    url = f"{get_eri_base_url().rstrip('/')}/validateClientOtp"
     
     with httpx.Client(timeout=30.0, verify=False) as client:
         response = client.post(url, json=envelope, headers=headers)
@@ -88,7 +97,7 @@ def addRegisterClient(
     
     Cites: Docs/API_AddClientFlow_v1.1.pdf Section 6 (AddRegisterClient API Details).
     """
-    eri_user_id = os.getenv("ERI_USER_ID")
+    eri_user_id = get_eri_user_id()
     if not eri_user_id:
         raise ValueError("ERI_USER_ID is not configured in the environment.")
         
@@ -127,7 +136,7 @@ def addRegisterClient(
     
     envelope = build_request_envelope(payload, eri_user_id)
     headers = eri_headers(auth_token)
-    url = f"{ERI_BASE_URL.rstrip('/')}/registerClient"
+    url = f"{get_eri_base_url().rstrip('/')}/registerClient"
     
     with httpx.Client(timeout=30.0, verify=False) as client:
         response = client.post(url, json=envelope, headers=headers)
@@ -141,7 +150,7 @@ def validateRegOtp(pan: str, smsTransactionId: str, emailTransactionId: str, mob
     
     Cites: Docs/API_AddClientFlow_v1.1.pdf Section 7 (ValidateRegOtp API Details).
     """
-    eri_user_id = os.getenv("ERI_USER_ID")
+    eri_user_id = get_eri_user_id()
     if not eri_user_id:
         raise ValueError("ERI_USER_ID is not configured in the environment.")
         
@@ -158,7 +167,7 @@ def validateRegOtp(pan: str, smsTransactionId: str, emailTransactionId: str, mob
     
     envelope = build_request_envelope(payload, eri_user_id)
     headers = eri_headers(auth_token)
-    url = f"{ERI_BASE_URL.rstrip('/')}/validateRegOtp"
+    url = f"{get_eri_base_url().rstrip('/')}/validateRegOtp"
     
     with httpx.Client(timeout=30.0, verify=False) as client:
         response = client.post(url, json=envelope, headers=headers)

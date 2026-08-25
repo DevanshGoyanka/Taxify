@@ -6,7 +6,16 @@ from datetime import datetime, timedelta
 from app.eri.envelope import build_request_envelope, parse_response_envelope, eri_headers
 from app.eri.exceptions import ERIApiError
 
-ERI_BASE_URL = os.getenv("ERI_BASE_URL", "https://uatocpservices.incometax.gov.in/v1")
+# Resolved per call from the active (ERI_MODE, ERI_ENV) pair. It used to be
+# a module constant captured at import time from an unsuffixed ERI_BASE_URL
+# that this project never sets, so every request silently went to the
+# hardcoded UAT default regardless of ERI_ENV.
+from app.eri.config import (
+    get_eri_base_url,
+    get_eri_password,
+    get_eri_symmetric_key,
+    get_eri_user_id,
+)
 
 def get_ist_timestamp() -> str:
     ist_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
@@ -17,7 +26,7 @@ def get_acknowledgement(pan: str, ack_number: str, auth_token: str) -> bytes:
     Retrieves the acknowledgement PDF for a submitted ITR.
     Cites: Docs/API_AcknowledgementFlow.pdf Section 4
     """
-    eri_user_id = os.getenv("ERI_USER_ID")
+    eri_user_id = get_eri_user_id()
     if not eri_user_id:
         raise ValueError("ERI_USER_ID environment variable not set")
         
@@ -32,7 +41,7 @@ def get_acknowledgement(pan: str, ack_number: str, auth_token: str) -> bytes:
     headers = eri_headers(auth_token)
     
     response = requests.post(
-        f"{ERI_BASE_URL.rstrip('/')}/getAcknowledgement",
+        f"{get_eri_base_url().rstrip('/')}/getAcknowledgement",
         json=envelope,
         headers=headers,
         verify=False,

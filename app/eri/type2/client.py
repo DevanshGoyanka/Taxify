@@ -13,7 +13,11 @@ from app.eri.envelope import (
 from app.eri.exceptions import ERIApiError
 
 # ERI base URL defaulting to UAT gateway
-ERI_BASE_URL = os.getenv("ERI_BASE_URL", "https://uatocpservices.incometax.gov.in/v1")
+# Resolved per call from the active (ERI_MODE, ERI_ENV) pair. It used to be
+# a module constant captured at import time from an unsuffixed ERI_BASE_URL
+# that this project never sets, so every request silently went to the
+# hardcoded UAT default regardless of ERI_ENV.
+from app.eri.config import get_eri_base_url
 
 
 def get_eri_mode() -> str:
@@ -30,7 +34,7 @@ def eri_post(url_path: str, payload: dict, eri_user_id: str, auth_token: Optiona
     envelope = build_request_envelope(payload, eri_user_id)
             
     # 2. Make the actual HTTP call to the ITD UAT gateway
-    url = f"{ERI_BASE_URL.rstrip('/')}/{url_path.lstrip('/')}"
+    url = f"{get_eri_base_url().rstrip('/')}/{url_path.lstrip('/')}"
     headers = eri_headers(auth_token)
     
     # Also support client-id/client-secret / Authorization headers just in case gateway expects them

@@ -12,7 +12,16 @@ from app.eri.envelope import (
 )
 from app.eri.exceptions import ERIApiError
 
-ERI_BASE_URL = os.getenv("ERI_BASE_URL", "https://uatocpservices.incometax.gov.in/v1")
+# Resolved per call from the active (ERI_MODE, ERI_ENV) pair. It used to be
+# a module constant captured at import time from an unsuffixed ERI_BASE_URL
+# that this project never sets, so every request silently went to the
+# hardcoded UAT default regardless of ERI_ENV.
+from app.eri.config import (
+    get_eri_base_url,
+    get_eri_password,
+    get_eri_symmetric_key,
+    get_eri_user_id,
+)
 
 
 def eri_login() -> Dict[str, Any]:
@@ -20,13 +29,25 @@ def eri_login() -> Dict[str, Any]:
     
     Cites: Docs/API_Login_v1.1.pdf Section 4.3 (Login API Request) and Section 4.5 (Response)
     """
-    eri_user_id = os.getenv("ERI_USER_ID")
-    password = os.getenv("ERI_PASSWORD")
-    symmetric_key = os.getenv("ERI_SYMMETRIC_KEY", "Xuslp8BPWDe0QCF+rLCGZA==")
+    eri_user_id = get_eri_user_id()
+    password = get_eri_password()
+    symmetric_key = get_eri_symmetric_key()
     
     if not eri_user_id or not password:
-        raise ValueError("ERI_USER_ID and ERI_PASSWORD must be configured in environment variables.")
-        
+        raise ValueError(
+            "ERI_USER_ID_<MODE>_<ENV> and ERI_PASSWORD_<MODE>_<ENV> must be "
+            "configured in .env for the active ERI mode/environment."
+        )
+    if not symmetric_key:
+        # Previously defaulted to a hardcoded placeholder key. That encrypts
+        # the password into something the gateway cannot decrypt, and the
+        # gateway reports it as an ordinary authentication failure — so the
+        # missing key looked like wrong credentials.
+        raise ValueError(
+            "ERI_SYMMETRIC_KEY is not set in .env. It is required to encrypt "
+            "the ERI password for login; there is no safe default."
+        )
+
     # ITD API might strictly validate timestamp against IST instead of UTC
     ist_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
     timestamp = ist_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -41,7 +62,7 @@ def eri_login() -> Dict[str, Any]:
     
     envelope = build_request_envelope(payload, eri_user_id)
     headers = eri_headers()
-    url = f"{ERI_BASE_URL.rstrip('/')}/login"
+    url = f"{get_eri_base_url().rstrip('/')}/login"
     
     import time
     print(f"DEBUG [LOGIN] URL: {url}")
@@ -75,7 +96,7 @@ def eri_logout(auth_token: str) -> None:
     
     Cites: Docs/API_Login_v1.1.pdf Section 4.10.3 (Logout Request/Response)
     """
-    eri_user_id = os.getenv("ERI_USER_ID")
+    eri_user_id = get_eri_user_id()
     if not eri_user_id:
         raise ValueError("ERI_USER_ID is not configured in the environment.")
         
@@ -87,7 +108,7 @@ def eri_logout(auth_token: str) -> None:
     
     envelope = build_request_envelope(payload, eri_user_id)
     headers = eri_headers(auth_token)
-    url = f"{ERI_BASE_URL.rstrip('/')}/auth/logout"
+    url = f"{get_eri_base_url().rstrip('/')}/auth/logout"
     
     with httpx.Client(timeout=120.0, verify=False) as client:
         response = client.post(url, json=envelope, headers=headers)
