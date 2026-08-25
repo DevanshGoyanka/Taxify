@@ -172,6 +172,7 @@ def generate_client_cbdt_json(
     client = resolve_owned_client(client_id, current_user.id, db)
 
     from app.engine.filing_gateway_v2 import FilingGatewayV2Error, generate_cbdt_json
+    from app.eri.type3.json_exporter import serialize_itd_json
     from app.schemas.return_draft import ReturnDraft
     from app.engine.flat_to_draft import flat_to_draft
 
@@ -236,7 +237,9 @@ def generate_client_cbdt_json(
         ) from exc
 
     form_file_prefix = draft.form.replace("-", "") if draft.form else "ITR1"
-    content = _json.dumps(official_json, indent=2, default=str)
+    # Minified, never indented — see the note in client_itr_v2.py: indentation
+    # is rejected by the ERI sanity check and invalidates the file's own Digest.
+    content = serialize_itd_json(official_json)
 
     return Response(
         content=content,

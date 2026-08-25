@@ -53,6 +53,45 @@ def get_default_filing_date() -> date:
     return date.today()
 
 
+def resolve_filing_dates(
+    itr_form: str,
+    assessment_year: str = "2026-27",
+    verification_date: Optional[str] = None,
+) -> tuple[Optional[date], Optional[date]]:
+    """Return the ``(filing_date, due_date)`` pair the calculators need.
+
+    The interest and late-fee block in every calculator is guarded by
+    ``if filing_date and due_date:``. Without both, sections 234A/B/C and the
+    section 234F late-filing fee are skipped in full — so a belated return
+    carries the right ``ReturnFileSec`` but a zero fee, which understates the
+    liability rather than merely omitting a field.
+
+    ``verification_date`` is the date the return declares it is filed on (the
+    canonical draft's ``verification.date``). It is the only date the return
+    itself claims, so it is what the fee must be judged against; when the draft
+    has not set one yet, the return is being prepared now, so today applies.
+
+    Args:
+        itr_form: One of ``ITR-1``, ``ITR-2``, ``ITR-3``, ``ITR-4``.
+        assessment_year: Assessment year string like ``"2026-27"``.
+        verification_date: ISO date string from the draft, or None.
+
+    Returns:
+        ``(filing_date, due_date)``. ``due_date`` is None for an unknown form,
+        which leaves the calculators in their existing neutral state instead of
+        charging a fee against a due date nobody knows.
+    """
+    filing_date: Optional[date] = None
+    if verification_date:
+        try:
+            filing_date = date.fromisoformat(str(verification_date).strip()[:10])
+        except ValueError:
+            filing_date = None
+    if filing_date is None:
+        filing_date = date.today()
+    return filing_date, get_due_date(itr_form, assessment_year)
+
+
 def is_due_date_passed(
     itr_form: str,
     assessment_year: str = "2026-27",
@@ -103,11 +142,22 @@ def filing_section_due_date_error(
 ) -> Optional[str]:
     """Return an actionable message when the section contradicts the due date.
 
-    Only 139(1) can contradict it: it means "on or before the due date", so
-    once that date has gone the return is either belated or revised.  The
-    portal enforces the same rule, and it does so by dropping the form from
-    its ITR list rather than by reporting an error — which is why this has
-    to be caught before the return reaches the portal.
+    Two sections can contradict it, in opposite directions:
+
+    * 139(1) means "on or before the due date", so once that date has gone the
+      return is either belated or revised.  The portal enforces this by dropping
+      the form from its ITR list rather than by reporting an error, which is why
+      it has to be caught before the return reaches the portal.
+    * 139(4) means "after the due date".  A return filed on or before the due
+      date is simply not belated, and declaring it so understates nothing but
+      misstates the return — the portal rejects the combination.
+
+    139(5) is deliberately not checked: a revised return may be filed either
+    side of the due date, so its date carries no contradiction.
+
+    The two directions matter independently because the due dates differ by
+    form — ITR-1/ITR-2 fall on 31 July while ITR-3/ITR-4 run to 31 August — so
+    in August an ITR-1 must be belated on exactly the day an ITR-4 must not be.
 
     ``on_date`` is the date the return declares it is being filed on — the
     same value that goes into the CBDT ``Verification.Date`` — falling back
@@ -115,15 +165,26 @@ def filing_section_due_date_error(
     against any other date would compare it to a date the return does not
     claim.
     """
-    if filing_section != ON_TIME_SECTION:
-        return None
     due = get_due_date(itr_form, assessment_year)
-    if due is None or not is_due_date_passed(itr_form, assessment_year, on_date):
+    if due is None:
         return None
-    return (
-        f"Filing section 139(1) means the return is filed on or before the due date, "
-        f"but the {itr_form} due date for AY {assessment_year} was {due.isoformat()} "
-        f"and it has passed. Use 139(4) (belated) if this return has not been filed "
-        f"yet, or 139(5) (revised) with the original acknowledgement number and "
-        f"filing date if it has."
-    )
+    passed = is_due_date_passed(itr_form, assessment_year, on_date)
+
+    if filing_section == ON_TIME_SECTION and passed:
+        return (
+            f"Filing section 139(1) means the return is filed on or before the due date, "
+            f"but the {itr_form} due date for AY {assessment_year} was {due.isoformat()} "
+            f"and it has passed. Use 139(4) (belated) if this return has not been filed "
+            f"yet, or 139(5) (revised) with the original acknowledgement number and "
+            f"filing date if it has."
+        )
+    if filing_section == BELATED_SECTION and not passed:
+        filed_on = (on_date or date.today()).isoformat()
+        return (
+            f"Filing section 139(4) means the return is filed after the due date, but "
+            f"the {itr_form} due date for AY {assessment_year} is {due.isoformat()} and "
+            f"it has not passed — this return is dated {filed_on}. Use 139(1) while the "
+            f"return is still on time, or 139(5) if you are revising a return that was "
+            f"already filed."
+        )
+    return None

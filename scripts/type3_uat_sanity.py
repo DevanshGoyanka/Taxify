@@ -44,7 +44,8 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env", override=True)
 
 from app.eri.config import get_eri_credentials
-from app.eri.digest import compute_digest
+from app.eri.digest import verify_delivered_text
+from app.eri.type3.json_exporter import serialize_itd_json
 from app.engine.common.due_dates import applicable_filing_section
 from app.engine.filing_gateway_v2 import FilingGatewayV2Error, generate_cbdt_json
 
@@ -109,13 +110,17 @@ def _summarize_json(form: str, official: dict) -> dict[str, Any]:
     }
 
 
-def _digest_round_trips(form: str, official: dict) -> bool:
-    """Verify the stamped Digest recomputes over the full document."""
+def _digest_verifies_on_disk(path: Path) -> bool:
+    """Verify the written file's own bytes hash to the Digest inside it.
+
+    This used to recompute the digest from the in-memory dict, which always
+    passed and told us nothing about the file we actually emailed. The file was
+    being written with ``indent=2``, so its bytes did NOT hash to its own
+    Digest, and the extra whitespace is exactly what the ERI Helpdesk flags.
+    Checking the delivered text is the only check that would have caught it.
+    """
     try:
-        form_key = form.replace("-", "")
-        stamped = official["ITR"][form_key]["CreationInfo"]["Digest"]
-        recomputed = compute_digest(official)
-        return recomputed == stamped
+        return verify_delivered_text(path.read_text(encoding="utf-8"))
     except Exception:
         return False
 
@@ -141,6 +146,10 @@ def generate_sanity_pack(
             "All JSONs are synthetic maximally-populated drafts — no taxpayer PII.",
             "Each JSON carries the real Type-3 UAT SW_ID + a real 44-char HMAC-SHA256",
             "Digest computed by app/eri/digest.py over the complete ITR document.",
+            "Every file is minified: no indentation and no spaces outside string",
+            "values, per SOP §5.6.",
+            "digest_verifies_on_disk was checked by re-reading each written file and",
+            "recomputing its Digest from its own bytes (SOP §5.3 as ITD runs it).",
             "Ready to submit to erihelp@incometax.gov.in for the ITD UAT sanity check.",
         ],
     }
@@ -171,13 +180,16 @@ def generate_sanity_pack(
 
             fname = f"{form}_{label}_AY{draft.assessmentYear}.json"
             fpath = output_dir / fname
-            fpath.write_text(
-                json.dumps(official, indent=2, default=str), encoding="utf-8"
-            )
+            # Minified, never indented. SOP §5.6: "Remove all extra spaces in
+            # the JSON that are not part of variable values." Writing this with
+            # indent=2 both trips the sanity check and breaks the file's own
+            # Digest, which is computed over the minified form.
+            fpath.write_text(serialize_itd_json(official), encoding="utf-8")
             variant_entry["status"] = "generated"
             variant_entry["file"] = fname
             variant_entry.update(_summarize_json(form, official))
-            variant_entry["digest_round_trips"] = _digest_round_trips(form, official)
+            variant_entry["digest_verifies_on_disk"] = _digest_verifies_on_disk(fpath)
+            variant_entry["bytes"] = fpath.stat().st_size
             form_entry["variants"].append(variant_entry)
 
         form_entry["status"] = (
@@ -226,10 +238,10 @@ def main() -> int:
             continue
         for v in form_entry["variants"]:
             if v["status"] == "generated":
+                ok = "OK" if v["digest_verifies_on_disk"] else "FAILS"
                 print(
-                    f"    [{v['label']}] {v['file']}  "
-                    f"digest={v['digest'][:24]}...  "
-                    f"round_trips={v['digest_round_trips']}"
+                    f"    [{v['label']}] {v['file']}  {v['bytes']} bytes  "
+                    f"digest={v['digest'][:24]}...  on-disk check={ok}"
                 )
             else:
                 print(f"    [{v['label']}] {v['status']}  errors={v.get('errors')}")
@@ -238,11 +250,19 @@ def main() -> int:
         "[sanity] Email the JSONs + manifest to erihelp@incometax.gov.in "
         "for the ITD UAT sanity check."
     )
-    # Non-zero exit if any form failed, so CI / the operator notices.
+    # Non-zero exit if any form failed OR any written file does not hash to its
+    # own Digest, so a bad pack is never emailed to the helpdesk unnoticed.
     all_ok = all(
-        f["status"] in ("generated", "pending") and f["status"] != "partial"
+        f["status"] in ("generated", "pending")
+        and all(
+            v.get("digest_verifies_on_disk") is True
+            for v in f.get("variants", [])
+            if v.get("status") == "generated"
+        )
         for f in manifest["forms"]
     )
+    if not all_ok:
+        print("\n[sanity] FAILED — do not send this pack. See the statuses above.")
     return 0 if all_ok else 1
 
 

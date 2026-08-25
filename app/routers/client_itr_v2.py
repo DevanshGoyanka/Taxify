@@ -268,6 +268,7 @@ def generate_client_cbdt_json_v2(
             },
         )
     from app.engine.filing_gateway_v2 import FilingGatewayV2Error, generate_cbdt_json
+    from app.eri.type3.json_exporter import serialize_itd_json
 
     try:
         official_json, _summary = generate_cbdt_json(draft)
@@ -282,7 +283,12 @@ def generate_client_cbdt_json_v2(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"message": exc.message, "errors": exc.errors},
         ) from exc
-    content = json.dumps(official_json, indent=2, default=str)
+    # Minified, never indented. The ERI Helpdesk rejects JSONs carrying
+    # "unnecessary spaces, formatting, or indentation-related whitespace", and
+    # an indented file also breaks its own Digest: the Digest is computed over
+    # the canonical minified form, so pretty-printing here would hand the
+    # portal bytes that no longer hash to the Digest inside them.
+    content = serialize_itd_json(official_json)
     return Response(
         content=content,
         media_type="application/json",

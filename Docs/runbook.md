@@ -11,7 +11,7 @@ Full history: `docs/deployment-log.md` · Resources: `docs/resource-inventory.md
 | **AWS account** | `938509046486` · CLI profile **`myuser`** |
 | **App root** | `/opt/taxify` (branch `main`) |
 | **Runs as** | `ubuntu` |
-| **ERI mode** | Type-3 **UAT** (`SW20014122`) |
+| **ERI mode** | Type-3 **UAT** (`SW20014243`) |
 
 ---
 

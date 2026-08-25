@@ -32,6 +32,7 @@ import datetime
 from decimal import Decimal
 from typing import Any, Optional
 
+from app.engine.common.due_dates import resolve_filing_dates
 from app.schemas.itr1 import AgeBracket, AssesseeType, TaxRegime
 from app.schemas.itr4 import (
     GoodsCarriageVehicle,
@@ -386,6 +387,13 @@ def draft_to_itr4_input(
         ]
         if first_business is not None else []
     )
+    # See the note in draft_to_itr1_input: both dates are required or the
+    # calculator skips 234A/B/C and the 234F late fee entirely.
+    filing_date, due_date = resolve_filing_dates(
+        draft.form or "ITR-4",
+        draft.assessmentYear or "2026-27",
+        draft.verification.date,
+    )
 
     itr4_input = ITR4Input(
         age_bracket=age_bracket,
@@ -416,8 +424,12 @@ def draft_to_itr4_input(
         advance_tax_q2=quarterly[1] or None,
         advance_tax_q3=quarterly[2] or None,
         advance_tax_q4=quarterly[3] or None,
-        filing_date=_to_date(draft.personal.dateOfBirth),  # placeholder; gateway sets filing_date
-        due_date=None,
+        # This used to pass the taxpayer's DATE OF BIRTH as the filing date,
+        # with a comment claiming the gateway would replace it. No caller ever
+        # did, so every ITR-4 was judged as filed decades before its due date:
+        # never late, no 234A interest, no 234F fee.
+        filing_date=filing_date,
+        due_date=due_date,
         house_property_count=max(1, len(draft.houseProperties)),
         assessee_pan=draft.personal.pan or None,
         assessee_name=draft.personal.name or None,

@@ -54,7 +54,9 @@ __all__ = [
     "ERIDigestError",
     "canonicial_digest_payload",
     "compute_digest",
+    "digest_of_delivered_text",
     "serialize_for_upload",
+    "verify_delivered_text",
 ]
 
 
@@ -176,11 +178,77 @@ def compute_digest(itr_json: dict[str, Any]) -> str:
     payload_text = canonicial_digest_payload(itr_json)
 
     # Step 5: iterated HMAC-SHA256 over the UTF-8 bytes, then Base64.
+    return _hmac_loop(payload_text, secret_key, iterations)
+
+
+def _hmac_loop(payload_text: str, secret_key: str, iterations: int) -> str:
+    """Run SOP §5.3 Step 5: iterated HMAC-SHA256, then Base64-encode.
+
+    The secret key seeds every round; each round hashes the previous round's
+    raw digest bytes (the first round hashes the payload text).
+    """
     key_bytes = secret_key.encode("utf-8")
     digest_bytes = payload_text.encode("utf-8")
     for _ in range(iterations):
         digest_bytes = hmac.new(key_bytes, digest_bytes, hashlib.sha256).digest()
     return base64.b64encode(digest_bytes).decode("utf-8")
+
+
+def digest_of_delivered_text(json_text: str) -> str:
+    """Recompute the Digest from a finished JSON file's own text.
+
+    :func:`compute_digest` hashes a dict we still control. This hashes the
+    bytes we actually hand over, following SOP §5.3 exactly as the ITD side
+    would: minify the delivered text (key order preserved as written), swap
+    the ``Digest`` value for ``"-"``, then run the iterated HMAC.
+
+    Use it to prove a written ``.json`` file verifies. If the file was saved
+    with indentation, minifying it here reproduces the ITD-side string, which
+    will NOT match a Digest computed over the sorted-key canonical form — so
+    this catches formatting drift between generation and export, which is the
+    exact failure the ERI Helpdesk reports as a whitespace/formatting problem.
+
+    Args:
+        json_text: The complete text of a generated ITR JSON file.
+
+    Returns:
+        The 44-character Base64 Digest implied by that text.
+
+    Raises:
+        ERIDigestError: If the ERI credentials or digest secret are unavailable.
+        ValueError: If ``json_text`` is not valid JSON.
+    """
+    creds = _resolve_creds()
+    secret_key = creds.digest_secret_key
+    if not secret_key:
+        raise ERIDigestError(
+            f"ERI_DIGEST_SECRET_KEY_{creds.mode.upper()}_"
+            f"{creds.environment.upper()} is not set; the delivered JSON's "
+            "Digest cannot be verified."
+        )
+    # SOP Step 2: minify. json.loads preserves member order, so this is the
+    # delivered file's own ordering, not our canonical sorted ordering.
+    minified = json.dumps(
+        json.loads(json_text), ensure_ascii=False, separators=(",", ":")
+    )
+    # SOP Step 3: placeholder the Digest.
+    payload_text = _DIGEST_FIELD_RE.sub(f'"Digest":"{_PLACEHOLDER}"', minified)
+    return _hmac_loop(payload_text, secret_key, int(creds.digest_iterations or 1))
+
+
+def verify_delivered_text(json_text: str) -> bool:
+    """Return True if the Digest inside ``json_text`` matches its own bytes.
+
+    This is the check to run on a file before emailing it to
+    ``erihelp@incometax.gov.in`` or uploading it to the portal.
+    """
+    match = re.search(r'"Digest"\s*:\s*"([^"]*)"', json_text)
+    if not match:
+        return False
+    stamped = match.group(1)
+    if stamped == _PLACEHOLDER or len(stamped) != 44:
+        return False
+    return stamped == digest_of_delivered_text(json_text)
 
 
 def serialize_for_upload(itr_json: dict[str, Any], digest: str | None = None) -> str:

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import SavedReturn, User
+from app.eri.type3.json_exporter import serialize_itd_json
 from app.engine.calculators.itr1 import compute as compute_itr1
 from app.engine.calculators.itr2 import compute as compute_itr2
 from app.engine.calculators.itr3 import compute as compute_itr3
@@ -377,7 +378,7 @@ def itr1_compute_json(
         )
 
     return Response(
-        content=json.dumps(itd_json, indent=2, default=str),
+        content=serialize_itd_json(itd_json),
         media_type="application/json",
         headers={"Content-Disposition": "attachment; filename=ITR-1.json"},
     )
@@ -433,7 +434,7 @@ def itr2_compute_json(
         )
 
     return Response(
-        content=json.dumps(itd_json, indent=2, default=str),
+        content=serialize_itd_json(itd_json),
         media_type="application/json",
         headers={"Content-Disposition": "attachment; filename=ITR-2.json"},
     )
@@ -461,7 +462,7 @@ def itr3_compute_json(
         )
 
     return Response(
-        content=json.dumps(itd_json, indent=2, default=str),
+        content=serialize_itd_json(itd_json),
         media_type="application/json",
         headers={"Content-Disposition": "attachment; filename=ITR-3.json"},
     )
@@ -533,7 +534,7 @@ def itr4_compute_json(
         )
 
     return Response(
-        content=json.dumps(itd_json, indent=2, default=str),
+        content=serialize_itd_json(itd_json),
         media_type="application/json",
         headers={"Content-Disposition": "attachment; filename=ITR-4.json"},
     )

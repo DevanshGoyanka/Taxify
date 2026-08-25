@@ -33,6 +33,7 @@ import datetime
 from decimal import Decimal
 from typing import Any
 
+from app.engine.common.due_dates import resolve_filing_dates
 from app.schemas.return_draft import (
     BankAccount as DraftBankAccount,
     ChapterVIA,
@@ -1158,8 +1159,18 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
     tax_payment_entries, advance_tax, sat_total, quarterly = _map_tax_payments(draft.taxes.challans)
     bank_accounts = _map_bank_accounts(draft.bankAccounts)
     hra_details = _map_hra_details(draft.employers) if tax_regime == TaxRegime.OLD else None
+    # Without these two the calculator skips 234A/B/C and the 234F late fee
+    # outright, so a belated return was generated with the right 139(4) section
+    # but a zero late-filing fee.
+    filing_date, due_date = resolve_filing_dates(
+        draft.form or "ITR-1",
+        draft.assessmentYear or "2026-27",
+        draft.verification.date,
+    )
 
     itr1_input = ITR1Input(
+        filing_date=filing_date,
+        due_date=due_date,
         age_bracket=age_bracket,
         tax_regime=tax_regime,
         salary_income=salary_input,

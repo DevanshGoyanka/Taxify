@@ -74,7 +74,7 @@ def test_compute_digest_uses_eri_secret_and_iterations() -> None:
     fake = ERICredentials(
         mode="type3", environment="uat",
         sw_id="SW3TEST0001",
-        digest_secret_key="d96d4ce17e20a6ba",
+        digest_secret_key="0123456789abcdef",
         digest_iterations=1038,
     )
     data = {"CreationInfo": {"Digest": "-"}, "ITR1": {}}
@@ -109,7 +109,7 @@ def test_creation_info_sw_id_matches_eri_bundle() -> None:
     fake = ERICredentials(
         mode="type2", environment="uat",
         sw_id="SW20014242",
-        digest_secret_key="4448ffc0cec1a25d",
+        digest_secret_key="fedcba9876543210",
         digest_iterations=1344,
     )
     with patch("app.eri.config.get_eri_credentials", return_value=fake):
@@ -125,7 +125,7 @@ def test_creation_info_has_no_hardcoded_placeholder_sw_id() -> None:
     fake = ERICredentials(
         mode="type3", environment="uat",
         sw_id="SW20014122",
-        digest_secret_key="d96d4ce17e20a6ba",
+        digest_secret_key="0123456789abcdef",
         digest_iterations=1038,
     )
     with patch("app.eri.config.get_eri_credentials", return_value=fake):
@@ -141,7 +141,7 @@ def test_sw_id_and_digest_secret_come_from_same_bundle() -> None:
     fake = ERICredentials(
         mode="type3", environment="uat",
         sw_id="SW20014122",
-        digest_secret_key="d96d4ce17e20a6ba",
+        digest_secret_key="0123456789abcdef",
         digest_iterations=1038,
     )
     captured: list[ERICredentials] = []
@@ -186,7 +186,7 @@ def test_digest_computed_over_complete_document_matching_reference() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "API_Testing"))
     from digest_generator import generate_digest as reference_digest  # type: ignore
 
-    secret = "d96d4ce17e20a6ba"
+    secret = "0123456789abcdef"
     iterations = 1038
     fake = ERICredentials(
         mode="type3", environment="uat",
@@ -231,7 +231,7 @@ def test_serialize_for_upload_round_trips_digest() -> None:
     fake = ERICredentials(
         mode="type3", environment="uat",
         sw_id="SW20014122",
-        digest_secret_key="d96d4ce17e20a6ba",
+        digest_secret_key="0123456789abcdef",
         digest_iterations=1038,
     )
     doc = {

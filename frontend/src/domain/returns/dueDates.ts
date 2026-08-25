@@ -45,10 +45,15 @@ export function applicableFilingSection(
 
 /**
  * Returns an actionable message when the chosen section contradicts the due
- * date, or null when it does not. Only 139(1) can contradict it — it means
- * "on or before the due date", so once that date has gone the return is
- * either belated or revised. The notice-driven sections and 119(2)(b) are
- * triggered by a departmental action, not by the calendar.
+ * date, or null when it does not. Two sections can contradict it, in opposite
+ * directions: 139(1) means "on or before the due date", and 139(4) means
+ * "after" it. 139(5) is not checked — a revised return may be filed either
+ * side of the due date. The notice-driven sections and 119(2)(b) are triggered
+ * by a departmental action, not by the calendar.
+ *
+ * Both directions matter because the due dates differ by form: ITR-1/ITR-2 fall
+ * on 31 July while ITR-3/ITR-4 run to 31 August, so through August an ITR-1 must
+ * be belated on exactly the day an ITR-4 must not be.
  *
  * The ITD portal enforces the same rule by quietly dropping the form from its
  * ITR list rather than reporting an error, so catching it here is what turns
@@ -60,7 +65,13 @@ export function filingSectionDueDateError(
   assessmentYear = '2026-27',
   onDate: string = todayIso(),
 ): string | null {
-  if (filingSection !== ON_TIME_SECTION) return null;
-  if (!isDueDatePassed(form, assessmentYear, onDate)) return null;
-  return `Filing: section 139(1) means the return is filed on or before the due date, but the ${form} due date for AY ${assessmentYear} was ${getDueDate(form, assessmentYear)} and it has passed. Use 139(4) (belated) if this return has not been filed yet, or 139(5) (revised) with the original acknowledgement number and filing date if it has.`;
+  const due = getDueDate(form, assessmentYear);
+  const passed = isDueDatePassed(form, assessmentYear, onDate);
+  if (filingSection === ON_TIME_SECTION && passed) {
+    return `Filing: section 139(1) means the return is filed on or before the due date, but the ${form} due date for AY ${assessmentYear} was ${due} and it has passed. Use 139(4) (belated) if this return has not been filed yet, or 139(5) (revised) with the original acknowledgement number and filing date if it has.`;
+  }
+  if (filingSection === BELATED_SECTION && !passed) {
+    return `Filing: section 139(4) means the return is filed after the due date, but the ${form} due date for AY ${assessmentYear} is ${due} and it has not passed — this return is dated ${onDate}. Use 139(1) while the return is still on time, or 139(5) if you are revising a return that was already filed.`;
+  }
+  return null;
 }

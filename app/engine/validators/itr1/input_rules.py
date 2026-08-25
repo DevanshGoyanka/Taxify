@@ -1860,16 +1860,24 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     "tax_regime",
                 ))
 
-    # Rule 190: Late filing regime block
-    if inp.filing_section:
+    # Rule 190: "Option to withdraw from New Tax Regime is not available after
+    # due date of filing of return as mentioned u/s 139(1)."
+    #
+    # Withdrawing means opting OUT of the new regime into the old one, which is
+    # why this is gated on is_old exactly like R151 and R189. The new regime is
+    # the default u/s 115BAC(1A) — a belated return that simply stays on it is
+    # not withdrawing from anything, so it must not be blocked here.
+    if is_old and inp.filing_section:
         if inp.filing_section != "139(1)":
             if inp.filing_date and inp.due_date:
                 if inp.filing_date > inp.due_date:
                     results.append(_make(
                         "ITR1-R190", False,
-                        f"Option to change tax regime not available for belated/revised returns "
-                        f"(filing section: {inp.filing_section}, date: {inp.filing_date})",
-                        "filing_section",
+                        f"Option to withdraw from the New Tax Regime is not available "
+                        f"after the due date u/s 139(1) (filing section: "
+                        f"{inp.filing_section}, date: {inp.filing_date}, due: "
+                        f"{inp.due_date}).",
+                        "tax_regime / filing_section",
                     ))
 
     # ========================================================================
