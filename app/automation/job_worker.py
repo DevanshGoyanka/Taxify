@@ -19,6 +19,7 @@ import datetime
 import json
 import logging
 import os
+from pathlib import Path
 import traceback
 from typing import Optional
 
@@ -28,10 +29,28 @@ from app.automation.auth import login_itd, logout_itd
 from app.automation.browser import browser_manager
 from app.automation.downloader_26as import download_26as
 from app.automation.downloader_ais_tis import run_request_ais, run_download_ais_tis
+from app.automation.downloader_prefill import PrefillState, download_prefill
+from app.automation.downloader_filed_return import (
+    FiledReturnDownloadState,
+    download_filed_return_json,
+)
 from app.automation.errors import _friendly_error
+from app.automation.filed_returns_inventory import (
+    InventoryState,
+    capture_filed_return_inventory,
+)
+from app.automation.filing_advisory import generate_filing_advisory
+from app.automation.filing_mode_classifier import classify_filing_mode
+from app.automation.navigation import resolve_itd_anchor
 from app.automation.pdf_unlocker import unlock_pdf, verify_pdf_decryptable
+from app.automation.privacy import (
+    install_automation_privacy_filter,
+    sanitize_automation_text,
+)
+from app.automation.timing import AutomationTimeline
+from app.automation.years import TaxYearContext
 from app.db.database import SessionLocal
-from app.db.models import AutomationJob
+from app.db.models import AutomationJob, Client
 from app.schemas.security.portal_crypto import decrypt_portal_password
 
 # PDF extractors (ais_extractor integration)
@@ -39,8 +58,11 @@ from ais_extractor.as26_extractor import extract_26as as _extract_26as
 from ais_extractor.extractor import extract_ais as _extract_ais, ais_to_frontend_json as _ais_to_frontend
 from ais_extractor.tis_extractor import extract_tis as _extract_tis, tis_to_frontend_json as _tis_to_frontend
 from ais_extractor.reconciliation import reconcile as _reconcile_data
+from app.engine.importers.prefill_parser import parse_prefill_file as _parse_prefill_file, prefill_extraction_to_dict as _prefill_to_dict
+from app.engine.importers.filed_return_parser import parse_filed_return_file as _parse_filed_return_file, filed_return_extraction_to_dict as _filed_return_to_dict
 
 logger = logging.getLogger("taxify.automation.worker")
+install_automation_privacy_filter(logger)
 
 # ---------------------------------------------------------------------------
 # Queue + worker state
@@ -61,11 +83,14 @@ _PROJECT_ROOT = os.path.dirname(
 # Each automation step is mapped to a user-friendly progress indicator.
 # The frontend StatusBox uses current_step and progress_pct for display.
 _STEP_PROGRESS: dict[str, dict] = {
-    "login":          {"pct": 5,  "label": "Signing into ITD portal",       "icon": "\U0001f510"},
-    "download_26as":  {"pct": 10, "label": "Downloading Form 26AS",         "icon": "\U0001f4c4"},
-    "request_ais":    {"pct": 30, "label": "Requesting AIS generation",      "icon": "\U0001f4cb"},
-    "download_tis":   {"pct": 55, "label": "Downloading TIS statement",     "icon": "\U0001f4e5"},
-    "poll_ais":       {"pct": 65, "label": "Waiting for AIS to generate",    "icon": "\u23f3"},
+    "login":             {"pct": 5,  "label": "Signing into ITD portal",       "icon": "\U0001f510"},
+    "download_26as":     {"pct": 10, "label": "Downloading Form 26AS",         "icon": "\U0001f4c4"},
+    "request_ais":       {"pct": 30, "label": "Requesting AIS generation",     "icon": "\U0001f4cb"},
+    "download_tis":      {"pct": 55, "label": "Downloading TIS statement",      "icon": "\U0001f4e5"},
+    "poll_ais":          {"pct": 65, "label": "Waiting for AIS to generate",     "icon": "\u23f3"},
+    "download_prefill":  {"pct": 80, "label": "Downloading ITD Prefill JSON",   "icon": "\U0001f4e5"},
+    "filed_return_inventory": {"pct": 83, "label": "Reading filed-return inventory", "icon": "\U0001f4cb"},
+    "filed_return_download": {"pct": 84, "label": "Downloading prior-year reference JSON", "icon": "\U0001f4e5"},
     "unlock":         {"pct": 85, "label": "Decrypting PDFs",               "icon": "\U0001f513"},
     "extract":        {"pct": 88, "label": "Extracting PDF data",           "icon": "\U0001f4ca"},
     "logout":         {"pct": 95, "label": "Signing out",                   "icon": "\U0001f6aa"},
@@ -78,6 +103,10 @@ _STATUS_CLEAN_MAP: dict[str, str] = {
     "Launching browser":        "Launching secure browser\u2026",
     "Logging into ITD portal":  "Signing into ITD portal\u2026",
     "Login successful":         "Signed in successfully",
+    "Downloading Prefill":      "Downloading current-year Prefill JSON\u2026",
+    "Prefill downloaded":       "Current-year Prefill JSON ready",
+    "Reading filed returns":    "Reading filed-return inventory\u2026",
+    "Filed returns captured":   "Filed-return inventory ready",
     "Downloading Form 26AS":    "Fetching Form 26AS\u2026",
     "26AS downloaded":          "Form 26AS ready",
     "Requesting AIS":           "Requesting AIS generation\u2026",
@@ -106,23 +135,62 @@ def _progress_for_step(step: str | None) -> dict:
 
 
 def _derive_fiscal_year(assessment_year: str) -> str:
-    """Convert assessment year to financial year.
+    """Convert a validated assessment year to its financial year."""
+    return TaxYearContext.from_assessment_year(assessment_year).fiscal_year
 
-    "2025-26" -> "2024-25",  "2026-27" -> "2025-26"
+
+def _sanitize_name_segment(text: str, max_len: int = 80) -> str:
+    """Sanitize an assessee name into a filesystem-safe folder segment.
+
+    Keeps alphanumerics, spaces, and a few safe punctuation marks;
+    collapses repeated whitespace; trims; caps the length so very long
+    names cannot exceed the OS path limit. Accented and non-Latin letters
+    are folded to ASCII via NFKD so the folder name is portable across
+    filesystems (including Windows where accented folder names can cause
+    encoding headaches with Playwright/Chromium).
     """
-    parts = assessment_year.split("-")
-    if len(parts) == 2:
-        try:
-            return f"{int(parts[0]) - 1}-{str(int(parts[1]) - 1).zfill(2)}"
-        except (ValueError, TypeError):
-            pass
-    return assessment_year
+    import unicodedata
+
+    if not text:
+        return ""
+    folded = unicodedata.normalize("NFKD", text)
+    ascii_text = folded.encode("ascii", "ignore").decode("ascii")
+    safe_chars = []
+    for ch in ascii_text:
+        if ch.isalnum() or ch in (" ", "_", "-", ".", "'"):
+            safe_chars.append(ch)
+    cleaned = "".join(safe_chars)
+    cleaned = " ".join(cleaned.split())  # collapse repeated whitespace
+    return cleaned[:max_len].strip(" .")
 
 
-def _download_dir(client_id: int, fiscal_year: str) -> str:
-    """Absolute path to the download directory for this job."""
+def client_folder_name(pan: str, name: str) -> str:
+    """Return the portal-automation folder segment for a client.
+
+    Convention: ``{PAN}_{FullName}`` (e.g. ``ABCDE1234F_Rahul Sharma``).
+    The PAN is always present and unique, so it disambiguates clients who
+    share a name; the full name makes the folder human-readable on disk
+    and in the operator's file browser.
+    """
+    safe_pan = (pan or "").strip().upper()
+    safe_name = _sanitize_name_segment(name or "")
+    if not safe_name:
+        return safe_pan or "UNKNOWN"
+    return f"{safe_pan}_{safe_name}" if safe_pan else safe_name
+
+
+def _download_dir(client: Client, fiscal_year: str) -> str:
+    """Absolute path to the download directory for this job.
+
+    Convention: ``downloads/{PAN}_{FullName}/{fiscal_year}/`` — the folder
+    is keyed by the assessee's PAN + full name (not the client serial no)
+    so every portal artefact for the assessee sits under one folder, with
+    one sub-folder per assessment year. This matches the filing JSON, AIS,
+    26AS, TIS, Prefill, and acknowledgement all living together per AY.
+    """
     dirname = os.path.join(
-        _PROJECT_ROOT, "downloads", str(client_id), fiscal_year
+        _PROJECT_ROOT, "downloads", client_folder_name(client.pan, client.name),
+        fiscal_year,
     )
     os.makedirs(dirname, exist_ok=True)
     return dirname
@@ -166,6 +234,7 @@ def _get_job_dict(job_id: int) -> Optional[dict]:
             "user_id": job.user_id,
             "job_type": job.job_type,
             "status": job.status,
+            "assessment_year": job.assessment_year,
             "fiscal_year": job.fiscal_year,
             "steps_completed": _safe_json(job.steps_completed, []),
             "current_step": job.current_step,
@@ -177,6 +246,7 @@ def _get_job_dict(job_id: int) -> Optional[dict]:
             # Raw server fields (available for debugging)
             "raw_status_message": job.status_message,
             "files_downloaded": _safe_json(job.files_downloaded, {}),
+            "artifact_outcomes": _safe_json(job.artifact_outcomes, {}),
             "parsed_results": _safe_json(job.parsed_results, {}),
             "ais_ref_id": job.ais_ref_id,
             "error_message": job.error_message,
@@ -221,7 +291,13 @@ async def _run_job(job_id: int) -> None:
             logger.error("Job %d: Not found in database -- aborting.", job_id)
             return
         client_id = job.client_id
+        job_type = job.job_type
         fiscal_year = job.fiscal_year
+        assessment_year = job.assessment_year
+        if not assessment_year:
+            assessment_year = TaxYearContext.from_financial_year(
+                fiscal_year
+            ).assessment_year
 
         from app.db.models import Client
 
@@ -252,13 +328,12 @@ async def _run_job(job_id: int) -> None:
         logger.info(
             "Job %d: Client %d DOB format info — "
             "value_available=%s, hyphen_count=%d, seg_lengths=%s, "
-            "raw_first_char=%s, pan_first_3=%s",
+            "pan_available=%s",
             job_id, client_id,
             bool(dob_stripped),
             dob_stripped.count("-"),
             "-".join(dob_seg_lengths) if dob_seg_lengths else "empty",
-            dob_stripped[:1] if dob_stripped else "empty",
-            pan[:3] if pan else "empty",
+            bool(pan),
         )
         try:
             portal_pw = decrypt_portal_password(encrypted_pw) if encrypted_pw else ""
@@ -285,7 +360,7 @@ async def _run_job(job_id: int) -> None:
             )
             return
 
-        dldir = _download_dir(client_id, fiscal_year)
+        dldir = _download_dir(client, fiscal_year)
         logger.info(
             "Job %d: Client %d (%s), FY=%s, download dir=%s",
             job_id, client_id, pan, fiscal_year, dldir,
@@ -297,11 +372,16 @@ async def _run_job(job_id: int) -> None:
     log_lines: list[str] = []
 
     def log(msg: str) -> None:
-        log_lines.append(msg)
-        short = msg[:500] if len(msg) > 500 else msg
+        safe_msg = sanitize_automation_text(msg)
+        log_lines.append(safe_msg)
+        short = safe_msg[:500] if len(safe_msg) > 500 else safe_msg
         _update_job(job_id, status_message=short)
-        # Also emit to server console for real-time diagnostics
-        logger.debug("Job %d: %s", job_id, msg)
+        # Timing events are intentionally visible at INFO for live Phase 0
+        # verification; ordinary detailed portal logs remain DEBUG-level.
+        if safe_msg.startswith(("[Timing]", "[NAV]", "[PREFILL]", "[26AS]", "[FILED RETURNS]", "[CLASSIFICATION]")):
+            logger.info("Job %d: %s", job_id, safe_msg)
+        else:
+            logger.debug("Job %d: %s", job_id, safe_msg)
 
     _update_job(
         job_id,
@@ -315,16 +395,28 @@ async def _run_job(job_id: int) -> None:
     )
     logger.info("Job %d: Marked as running, attempt %d.", job_id, job.attempt_count + 1)
 
+    timeline = AutomationTimeline(log)
     page = None
     context = None
-    files: dict[str, Optional[str]] = {"26as": None, "ais": None, "tis": None}
+    files: dict[str, Optional[str]] = {
+        "prefill": None,
+        "26as": None,
+        "ais": None,
+        "tis": None,
+    }
+    artifact_outcomes: dict[str, dict] = {}
+    required_artifact_failures: list[str] = []
     steps: list[str] = []
 
     try:
         # Step 1: Browser + Login
         _update_job(job_id, current_step="login", status_message="Launching browser...", progress_pct=5)
         log("[Worker] Getting browser context...")
-        context = await browser_manager.get_context(log_callback=log, interactive=False)
+        context = await browser_manager.get_context(
+            log_callback=log,
+            interactive=False,
+            timeline=timeline,
+        )
         log("[Worker] Browser context ready. Logging into ITD portal...")
 
         _update_job(job_id, status_message="Logging into ITD portal...", progress_pct=7)
@@ -333,6 +425,7 @@ async def _run_job(job_id: int) -> None:
             password=portal_pw,
             log_callback=log,
             context=context,
+            timeline=timeline,
         )
         steps.append("login")
         _update_job(job_id, steps_completed=json.dumps(steps), progress_pct=9)
@@ -343,17 +436,20 @@ async def _run_job(job_id: int) -> None:
             job_id,
             current_step="download_26as",
             status_message="Downloading Form 26AS...",
-            progress_pct=10,
+            progress_pct=20,
         )
+        timeline.mark("26AS navigation started")
         log("[Worker] Starting 26AS download...")
         ok, reason, txt_path = await download_26as(
             page=page,
-            assessment_year=fiscal_year,
+            assessment_year=assessment_year,
             download_dir=dldir,
             log_callback=log,
             pan=pan,
             dob=dob,
         )
+        timeline.mark("26AS download completed")
+        page = await resolve_itd_anchor(page)
 
         if ok:
             pan_prefix = f"{pan}-" if pan else ""
@@ -364,12 +460,18 @@ async def _run_job(job_id: int) -> None:
                 files["26as"] = pdf26
                 if unlock_result.get("unlocked"):
                     log(f"[Worker] 26AS PDF unlocked: {pdf26}")
+                elif unlock_result.get("reason") == "not-encrypted":
+                    log(f"[Worker] 26AS PDF is already readable; unlock not required: {pdf26}")
                 else:
                     log(
                         f"[Worker] 26AS PDF saved but unlock failed: "
                         f"{unlock_result.get('reason', 'unknown')}"
                     )
+            else:
+                ok = False
+                reason = "26AS portal flow returned without saving the expected PDF"
 
+        if ok and files["26as"]:
             steps.append("26as_downloaded")
             _update_job(job_id, steps_completed=json.dumps(steps), progress_pct=27)
             _update_job(
@@ -379,7 +481,10 @@ async def _run_job(job_id: int) -> None:
                 progress_pct=28,
             )
         else:
-            log(f"[Worker] 26AS download failed: {reason}")
+            failure_reason = reason or "26AS download failed"
+            log(f"[Worker] 26AS download failed: {failure_reason}")
+            if job_type in {"DOWNLOAD_ALL", "DOWNLOAD_26AS"}:
+                required_artifact_failures.append(f"26AS: {failure_reason}")
 
         # Step 3: Request AIS + Download TIS (Phase 1)
         _update_job(
@@ -388,6 +493,7 @@ async def _run_job(job_id: int) -> None:
             status_message="Requesting AIS + downloading TIS...",
             progress_pct=30,
         )
+        timeline.mark("AIS portal navigation started")
         log("[Worker] Starting AIS request + TIS download...")
 
         ais_outcome = await run_request_ais(
@@ -398,6 +504,8 @@ async def _run_job(job_id: int) -> None:
             pan=pan,
             dob=dob,
         )
+        timeline.mark("AIS and TIS request phase completed")
+        page = await resolve_itd_anchor(page)
 
         pan_prefix = f"{pan}-" if pan else ""
         fy_str = fiscal_year.replace("-", "_")
@@ -436,6 +544,7 @@ async def _run_job(job_id: int) -> None:
                 dl_tis=False,
                 ais_ref_id=ref_id,
             )
+            page = await resolve_itd_anchor(page)
 
             ais_outcome2 = dl_result.get("ais", {})
             ais_status2 = ais_outcome2.get("status", "failed")
@@ -457,7 +566,155 @@ async def _run_job(job_id: int) -> None:
                 files["tis"] = tis_path
             steps.append("tis_downloaded")
 
-        # Step 4: Unlock remaining PDFs
+        # Step 4: Download current-year Prefill JSON without importing it.
+        # Keep this optional, route-mutating operation after the proven
+        # dashboard -> 26AS -> AIS/TIS sequence so a Prefill failure cannot
+        # contaminate required artifact downloads.
+        _update_job(
+            job_id,
+            current_step="download_prefill",
+            status_message="Downloading Prefill JSON...",
+            progress_pct=80,
+        )
+        timeline.mark("Prefill navigation started")
+        log("[Worker] Starting current-year Prefill JSON download...")
+        prefill_outcome = await download_prefill(
+            page=page,
+            pan=pan,
+            download_dir=dldir,
+            assessment_year=assessment_year,
+            log=log,
+        )
+        timeline.mark("Prefill download completed")
+        page = await resolve_itd_anchor(page)
+        artifact_outcomes["prefill"] = prefill_outcome.to_dict()
+        if prefill_outcome.state is PrefillState.DOWNLOADED and prefill_outcome.path:
+            files["prefill"] = prefill_outcome.path
+            steps.append("prefill_downloaded")
+            prefill_status = "Prefill downloaded"
+            log("[Worker] Current-year Prefill JSON downloaded and validated.")
+        else:
+            prefill_status = f"Prefill: {prefill_outcome.state.value}"
+            log(
+                "[Worker] Current-year Prefill outcome: "
+                f"{prefill_outcome.state.value} — {prefill_outcome.reason}"
+            )
+        _update_job(
+            job_id,
+            steps_completed=json.dumps(steps),
+            files_downloaded=json.dumps(files),
+            artifact_outcomes=json.dumps(artifact_outcomes),
+            status_message=prefill_status,
+            progress_pct=82,
+        )
+
+        # Step 4.1: Capture filed-return inventory metadata only. This optional,
+        # nonfatal observation performs no row selection and no download/import.
+        _update_job(
+            job_id,
+            current_step="filed_return_inventory",
+            status_message="Reading filed returns...",
+            progress_pct=83,
+        )
+        log("[Worker] Starting filed-return inventory capture...")
+        inventory_outcome = await capture_filed_return_inventory(
+            page=page,
+            log=log,
+        )
+        page = await resolve_itd_anchor(page)
+        artifact_outcomes["filed_return_inventory"] = inventory_outcome.to_dict()
+        classification = classify_filing_mode(inventory_outcome, assessment_year)
+        artifact_outcomes["filing_mode_classification"] = classification.to_dict()
+        if inventory_outcome.state in {InventoryState.CAPTURED, InventoryState.NO_RETURNS}:
+            steps.append("filed_return_inventory_captured")
+            steps.append("filing_mode_classified")
+        log(
+            "[Worker] Filed-return inventory outcome: "
+            f"{inventory_outcome.state.value}; records={len(inventory_outcome.records)}"
+        )
+        log(
+            "[CLASSIFICATION] Filing-mode classification completed; "
+            f"state={classification.state.value}; "
+            f"context={classification.filing_context.value}; "
+            f"current_returns={classification.current_return_count}; "
+            f"review_required={classification.review_required}."
+        )
+
+        # Step 4.2: Generate filing advisory and optionally download prior-year
+        # filed-return JSON as a read-only reference. This does not import,
+        # reconcile, or compute from the downloaded artifact.
+        advisory = generate_filing_advisory(classification, inventory_outcome)
+        artifact_outcomes["filing_advisory"] = advisory.to_dict()
+        logger.info(
+            "Job %d: Advisory — already_filed=%s, is_revised=%s, filing_section=%s, "
+            "requires_confirmation=%s, download_ay=%s",
+            job_id,
+            advisory.current_ay_already_filed,
+            advisory.current_ay_is_revised,
+            advisory.current_ay_filing_section,
+            advisory.requires_user_confirmation_for_revision,
+            advisory.download_assessment_year,
+        )
+        if advisory.already_filed_advisory:
+            log(f"[ADVISORY] {advisory.already_filed_advisory_message}")
+        prior_ref_ay = advisory.download_assessment_year
+        # ──────────────────────────────────────────────────────────────
+        # TEMPORARILY DISABLED (Phase 2 testing) — FILED-RETURN NOT WIRED
+        #
+        # The filed-return JSON download is deliberately left commented out
+        # and is NOT wired anywhere in the implementation.  It is kept as a
+        # reference block only (per project decision).  Do not reactivate.
+        # See FILED_RETURN_REACTIVATION_GUIDE.md for the historical context.
+        #
+        # Reactivation checklist (NOT applied — kept for reference only):
+        # 1. Uncomment the download block below (lines marked REACTIVATE).
+        # 2. Uncomment the filed-return parsing block in Step 4.6.1.
+        # 3. Uncomment the filed_return attachment in the reconciled output.
+        # 4. Uncomment the filed-return merge in ITRComputationPage.tsx.
+        # 5. Uncomment the advisory error toast + banner in
+        #    ITRComputationPage.tsx.
+        # 6. Uncomment the mapFiledReturnToFormData import in
+        #    ITRComputationPage.tsx.
+        # ──────────────────────────────────────────────────────────────
+        if prior_ref_ay and advisory.download_row_identity:
+            # REACTIVATE: _update_job(
+            # REACTIVATE:     job_id,
+            # REACTIVATE:     current_step="filed_return_download",
+            # REACTIVATE:     status_message="Downloading prior-year reference JSON...",
+            # REACTIVATE:     progress_pct=84,
+            # REACTIVATE: )
+            # REACTIVATE: log(f"[FILED RETURN DL] Downloading prior-year reference JSON for AY {prior_ref_ay}.")
+            # REACTIVATE: prior_dl = await download_filed_return_json(
+            # REACTIVATE:     page=page,
+            # REACTIVATE:     assessment_year=prior_ref_ay,
+            # REACTIVATE:     target_row_identity=advisory.download_row_identity,
+            # REACTIVATE:     download_dir=dldir,
+            # REACTIVATE:     timeout_ms=60_000,
+            # REACTIVATE:     log=log,
+            # REACTIVATE: )
+            # REACTIVATE: page = await resolve_itd_anchor(page)
+            # REACTIVATE: artifact_outcomes["prior_year_return"] = prior_dl.to_dict()
+            # REACTIVATE: if prior_dl.state is FiledReturnDownloadState.DOWNLOADED:
+            # REACTIVATE:     files["prior_year_return"] = prior_dl.path
+            # REACTIVATE:     steps.append("prior_year_return_downloaded")
+            # REACTIVATE:     log(f"[FILED RETURN DL] Prior-year reference JSON saved for AY {prior_ref_ay}.")
+            # REACTIVATE: else:
+            # REACTIVATE:     log(f"[FILED RETURN DL] Prior-year reference download: {prior_dl.state.value}")
+            log(f"[FILED RETURN DL] SKIPPED (filed-return not wired) — prior_ref_ay={prior_ref_ay}")
+        else:
+            log("[ADVISORY] No prior-year reference download targeted.")
+        steps.append("filing_advisory_generated")
+
+        _update_job(
+            job_id,
+            steps_completed=json.dumps(steps),
+            files_downloaded=json.dumps(files),
+            artifact_outcomes=json.dumps(artifact_outcomes),
+            status_message="Filed returns captured",
+            progress_pct=85,
+        )
+
+        # Step 5: Unlock remaining PDFs
         _update_job(job_id, current_step="unlock", status_message="Decrypting PDFs...", progress_pct=85)
         for label, path in [("AIS", files["ais"]), ("TIS", files["tis"])]:
             if path and os.path.exists(path):
@@ -466,12 +723,20 @@ async def _run_job(job_id: int) -> None:
                     job_id, label, path, os.path.getsize(path), bool(pan), bool(dob),
                 )
                 unlock_result = unlock_pdf(path, pan=pan, dob=dob, log=log)
+                unlock_reason = unlock_result.get("reason")
                 if unlock_result.get("unlocked"):
                     log(f"[Worker] {label} PDF unlocked: {path}")
+                elif unlock_reason == "not-encrypted":
+                    log(f"[Worker] {label} PDF is already readable; unlock not required: {path}")
+                    logger.info(
+                        "Job %d: %s PDF already readable — unlock not required.",
+                        job_id,
+                        label,
+                    )
                 else:
                     log(
                         f"[Worker] {label} PDF unlock FAILED: "
-                        f"reason={unlock_result.get('reason', 'unknown')}, "
+                        f"reason={unlock_reason or 'unknown'}, "
                         f"last_error={unlock_result.get('last_error', 'N/A')}"
                     )
                     logger.error(
@@ -642,8 +907,181 @@ async def _run_job(job_id: int) -> None:
             job_id, list(parsed.keys()), len(extract_errors),
             extract_errors if extract_errors else "none",
         )
+        # Step 4.6: Parse the Prefill JSON (form-agnostic extraction)
+        # The Prefill JSON is the CBDT's own pre-filled data — it carries
+        # salary break-up, deductions, bank accounts, employer TDS, and
+        # personal info that AIS/TIS/26AS don't have.  Extract it so the
+        # frontend can merge it with the reconciled data.
+        path_prefill = files.get("prefill")
+        if path_prefill and os.path.exists(path_prefill):
+            try:
+                prefill_extracted = _parse_prefill_file(
+                    path_prefill,
+                    assessment_year=assessment_year,
+                )
+                parsed["prefill"] = _prefill_to_dict(prefill_extracted)
+                log(
+                    f"[Worker] Prefill parsed: "
+                    f"employers={len(prefill_extracted.employer_entries)}, "
+                    f"bank_accounts={len(prefill_extracted.bank_accounts)}, "
+                    f"tds_salary={len(prefill_extracted.tds_salary_entries)}, "
+                    f"tds_other={len(prefill_extracted.tds_other_entries)}, "
+                    f"deductions_total={prefill_extracted.deductions.total_chap_via_deductions}"
+                )
+                logger.info(
+                    "Job %d: Prefill extraction OK — employers=%d, banks=%d, "
+                    "tds_sal=%d, tds_oth=%d, deductions=%d",
+                    job_id,
+                    len(prefill_extracted.employer_entries),
+                    len(prefill_extracted.bank_accounts),
+                    len(prefill_extracted.tds_salary_entries),
+                    len(prefill_extracted.tds_other_entries),
+                    prefill_extracted.deductions.total_chap_via_deductions,
+                )
+                # Diagnostic: log the top-level keys so we can verify the
+                # parser is reading the real ITD structure correctly.
+                try:
+                    raw_payload = json.loads(
+                        Path(path_prefill).read_text(encoding="utf-8-sig")
+                    )
+                    if isinstance(raw_payload, dict):
+                        logger.info(
+                            "Job %d: Prefill raw top-level keys: %s",
+                            job_id, sorted(raw_payload.keys()),
+                        )
+                except Exception as diag_exc:
+                    logger.warning(
+                        "Job %d: Prefill diagnostic failed: %s",
+                        job_id, diag_exc,
+                    )
+            except Exception as e:
+                err = f"Prefill extraction failed: {type(e).__name__}: {e}"
+                extract_errors.append(err)
+                log(f"[Worker] {err}")
+                logger.exception("Job %d: Prefill extraction error", job_id)
+        else:
+            # Prefill download is optional — the job may not have downloaded it.
+            logger.info("Job %d: Prefill file not found at %s — skipping", job_id, path_prefill)
 
-        # Step 4.6: Reconcile data across all three documents
+        # Step 4.6.1: Parse the last filed ITR JSON (form-agnostic extraction)
+        # The filed-return JSON is the CBDT's official ITR JSON for the
+        # previous year (or, for revision, the current year).  It carries
+        # personal info, bank accounts, employer details, TDS, deductions,
+        # and carry-forward losses useful for the current-year return.
+        #
+        # IMPORTANT: If the current-AY return is already filed, the filed-
+        # return JSON is the current-AY return (downloaded for revision).
+        # In that case, the advisory has already flagged
+        # ``requires_user_confirmation_for_revision=True`` and the data is
+        # only populated after the user explicitly confirms a revised-
+        # return flow.  For a prior-AY return (normal filing), no user
+        # confirmation is needed.
+        #
+        # ──────────────────────────────────────────────────────────────
+        # TEMPORARILY DISABLED (Phase 2 testing)
+        #
+        # The filed-return parsing is commented out so the portal
+        # automation import doesn't surface the "already filed" blocking
+        # error during testing.  See FILED_RETURN_REACTIVATION_GUIDE.md
+        # for detailed instructions on reactivating this block.
+        #
+        # REACTIVATE: path_filed = files.get("prior_year_return")
+        # REACTIVATE: if path_filed and os.path.exists(path_filed):
+        # REACTIVATE:     try:
+        # REACTIVATE:         filed_extracted = _parse_filed_return_file(path_filed)
+        # REACTIVATE:         parsed["filed_return"] = _filed_return_to_dict(filed_extracted)
+        # REACTIVATE:         log(
+        # REACTIVATE:             f"[Worker] Filed return parsed: "
+        # REACTIVATE:             f"form={filed_extracted.form_name}, "
+        # REACTIVATE:             f"employers={len(filed_extracted.employer_entries)}, "
+        # REACTIVATE:             f"banks={len(filed_extracted.bank_accounts)}, "
+        # REACTIVATE:             f"tds_sal={len(filed_extracted.tds_salary_entries)}, "
+        # REACTIVATE:             f"tds_oth={len(filed_extracted.tds_other_entries)}, "
+        # REACTIVATE:             f"losses={len(filed_extracted.carry_forward_losses)}"
+        # REACTIVATE:         )
+        # REACTIVATE:         logger.info(
+        # REACTIVATE:             "Job %d: Filed-return extraction OK — form=%s, employers=%d, "
+        # REACTIVATE:             "banks=%d, tds_sal=%d, tds_oth=%d, losses=%d",
+        # REACTIVATE:             job_id,
+        # REACTIVATE:             filed_extracted.form_name,
+        # REACTIVATE:             len(filed_extracted.employer_entries),
+        # REACTIVATE:             len(filed_extracted.bank_accounts),
+        # REACTIVATE:             len(filed_extracted.tds_salary_entries),
+        # REACTIVATE:             len(filed_extracted.tds_other_entries),
+        # REACTIVATE:             len(filed_extracted.carry_forward_losses),
+        # REACTIVATE:         )
+        # REACTIVATE:     except Exception as e:
+        # REACTIVATE:         err = f"Filed-return extraction failed: {type(e).__name__}: {e}"
+        # REACTIVATE:         extract_errors.append(err)
+        # REACTIVATE:         log(f"[Worker] {err}")
+        # REACTIVATE:         logger.exception("Job %d: Filed-return extraction error", job_id)
+        # REACTIVATE: else:
+        # REACTIVATE:     logger.info("Job %d: Filed-return file not found at %s — skipping", job_id, path_filed)
+        log("[Worker] Filed-return parsing SKIPPED (Phase 2 testing).")
+
+        # Step 4.6.2: Persist every parsed document to ``imported_document``
+        # (remediation P1/P2).  This unifies the automation and manual paths
+        # on one dedup key (client × AY × document_type) so a manual
+        # re-upload replaces the automation's row in place, and a server-
+        # side re-reconcile can reload 26AS instead of silently losing TDS
+        # credits (P6).  See IMPORTS_AND_RECONCILIATION_END_TO_END.md §5.3.
+        try:
+            from app.db.imported_document_service import (
+                upsert_imported_document as _upsert_doc,
+                encode_bytes as _enc_bytes,
+                SOURCE_AUTOMATION,
+            )
+            from app.db.database import SessionLocal as _PersistSession
+            persist_db = _PersistSession()
+            try:
+                doc_map = {
+                    "ais": parsed.get("ais"),
+                    "tis": parsed.get("tis"),
+                    "26as": parsed.get("26as"),
+                    "prefill": parsed.get("prefill"),
+                }
+                persisted_types: list[str] = []
+                for doc_type, parsed_dict in doc_map.items():
+                    if not parsed_dict:
+                        continue
+                    # Read the raw file bytes back for storage; fall back to
+                    # the parsed JSON if the file isn't on disk.
+                    file_path = files.get(
+                        {"ais": "ais", "tis": "tis", "26as": "26as", "prefill": "prefill"}[doc_type]
+                    )
+                    raw_str: str = ""
+                    if file_path and os.path.exists(file_path):
+                        with open(file_path, "rb") as f:
+                            raw_bytes = f.read()
+                        raw_str = _enc_bytes(raw_bytes)
+                    parsed_str = json.dumps(parsed_dict, ensure_ascii=False, default=str)
+                    _upsert_doc(
+                        db=persist_db,
+                        client_id=client_id,
+                        user_id=job.user_id,
+                        assessment_year=assessment_year,
+                        document_type=doc_type,
+                        source=SOURCE_AUTOMATION,
+                        raw_content=raw_str,
+                        parsed_content=parsed_str,
+                    )
+                    persisted_types.append(doc_type)
+                persist_db.commit()
+                log(f"[Worker] Persisted documents to imported_document: {persisted_types}")
+                logger.info(
+                    "Job %d: persisted documents to imported_document — types=%s",
+                    job_id, persisted_types,
+                )
+            finally:
+                persist_db.close()
+        except Exception as persist_exc:
+            # Persistence is best-effort — the job's reconciled blob is still
+            # stored on AutomationJob.parsed_results, so a persistence failure
+            # must not fail the whole job.
+            log(f"[Worker] imported_document persistence FAILED (non-fatal): {persist_exc}")
+            logger.exception("Job %d: imported_document persistence error", job_id)
+
+        # Step 4.7: Reconcile data across all three documents
         _update_job(job_id, current_step="extract", status_message="Reconciling data...", progress_pct=92)
         log("[Worker] Starting reconciliation across 26AS, AIS, and TIS...")
 
@@ -652,7 +1090,31 @@ async def _run_job(job_id: int) -> None:
                 ais_data=parsed.get("ais", {}),
                 tis_data=parsed.get("tis", {}),
                 as26_data=parsed.get("26as", {}),
+                prefill_data=parsed.get("prefill"),
             )
+            # Attach the form-agnostic Prefill extraction to the reconciled
+            # output so the frontend can merge Prefill-provided fields
+            # (salary break-up, deductions, bank accounts, employer TDS,
+            # personal info) with the reconciled income/TDS data.
+            if "prefill" in parsed:
+                reconciled["prefill"] = parsed["prefill"]
+            # ──────────────────────────────────────────────────────────────
+            # TEMPORARILY DISABLED (Phase 2 testing)
+            #
+            # The filed_return attachment is commented out so the portal
+            # automation import doesn't surface the "already filed"
+            # blocking error during testing.  See
+            # FILED_RETURN_REACTIVATION_GUIDE.md for reactivation.
+            #
+            # REACTIVATE: if "filed_return" in parsed:
+            # REACTIVATE:     reconciled["filed_return"] = parsed["filed_return"]
+            # Surface the filing advisory flags so the frontend can show
+            # whether the current-AY return is already filed (and whether
+            # it was a revised return) before populating any filed-ITR data.
+            if "filing_advisory" in artifact_outcomes:
+                reconciled["filing_advisory"] = artifact_outcomes["filing_advisory"]
+            if "filing_mode_classification" in artifact_outcomes:
+                reconciled["filing_mode_classification"] = artifact_outcomes["filing_mode_classification"]
             # Preserve extraction errors in reconciled output
             if extract_errors:
                 reconciled["_extraction_errors"] = extract_errors
@@ -687,10 +1149,16 @@ async def _run_job(job_id: int) -> None:
         _update_job(job_id, current_step="logout", status_message="Logging out...", progress_pct=95)
         if page:
             try:
-                await logout_itd(page, log)
+                await logout_itd(page, log, timeline=timeline)
             except Exception as e:
                 log(f"[Worker] Logout error (non-fatal): {e}")
         steps.append("logout")
+
+        if required_artifact_failures:
+            raise RuntimeError(
+                "Required artifact download failed: "
+                + "; ".join(required_artifact_failures)
+            )
 
         # Success
         _update_job(
@@ -700,6 +1168,7 @@ async def _run_job(job_id: int) -> None:
             status_message="All downloads complete",
             steps_completed=json.dumps(steps),
             files_downloaded=json.dumps(files),
+            artifact_outcomes=json.dumps(artifact_outcomes),
             completed_at=datetime.datetime.utcnow(),
             progress_pct=100,
         )
@@ -713,11 +1182,15 @@ async def _run_job(job_id: int) -> None:
         if not friendly or not friendly.strip():
             raw_msg = str(exc).split("\n")[0].strip()
             friendly = raw_msg[:200] if raw_msg else type(exc).__name__
-        log(f"[Worker] Exception: {exc}")
-        log(f"[Worker] Traceback:\n{tb}")
+        safe_tb = sanitize_automation_text(tb)
+        safe_exc = sanitize_automation_text(exc)
+        log(f"[Worker] Exception: {safe_exc}")
+        log(f"[Worker] Traceback:\n{safe_tb}")
         logger.error(
             "Job %d: FAILED -- %s\n%s",
-            job_id, friendly, tb,
+            job_id,
+            friendly,
+            safe_tb,
         )
 
         _update_job(
@@ -725,9 +1198,10 @@ async def _run_job(job_id: int) -> None:
             status="failed",
             current_step=None,
             status_message=f"Failed: {friendly}",
-            error_message=f"{friendly}\n\n--- Full traceback ---\n{tb}",
+            error_message=f"{friendly}\n\n--- Full traceback ---\n{safe_tb}",
             steps_completed=json.dumps(steps),
             files_downloaded=json.dumps(files),
+            artifact_outcomes=json.dumps(artifact_outcomes),
             completed_at=datetime.datetime.utcnow(),
             progress_pct=0,
         )

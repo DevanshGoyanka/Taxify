@@ -13,7 +13,10 @@ from app.schemas.itr1 import (
     ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
     Chapter6ADeductions, CapitalGainsIncome, Donation80G,
     AgeBracket, TaxRegime, PropertyType, TDS1Entry, TDS2Entry, TCSEntry,
-    BankAccount, Schedule80D,
+    BankAccount, Schedule80D, Section80DDBDetails, Section80DDBUserType,
+    SpecifiedDisease80DDB, Schedule80CEntry, Schedule80EEntry, Schedule80DD,
+    Schedule80U, DisabilitySeverity, DependentRelationship,
+    EducationLoanLenderType,
 )
 from app.engine.validators.itr1.input_rules import validate_itr1_input
 from app.engine.validators.base import Severity
@@ -33,6 +36,124 @@ def get_result(results, rule_id: str):
         if r.rule_id == rule_id:
             return r
     return None
+
+
+def test_R145_dividend_breakup_includes_fifth_period():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+        ),
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("500")),
+        deductions_chapter6a=Chapter6ADeductions(),
+        dividend_quarterly_breakdown={
+            "Q1": Decimal("0"),
+            "Q2": Decimal("0"),
+            "Q3": Decimal("0"),
+            "Q4": Decimal("0"),
+            "Q5": Decimal("500"),
+        },
+    )
+
+    results = validate_itr1_input(inp)
+
+    assert not failed(results, "ITR1-R145")
+
+
+def test_R145_zero_breakup_fails_when_dividend_is_declared():
+    """When a quarterly breakup IS provided with non-zero values that do NOT
+    total the dividend income, R145 fails as Category A."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+        ),
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("500")),
+        deductions_chapter6a=Chapter6ADeductions(),
+        dividend_quarterly_breakdown={
+            "Q1": Decimal("100"),
+            "Q2": Decimal("100"),
+            "Q3": Decimal("100"),
+            "Q4": Decimal("100"),
+            "Q5": Decimal("0"),   # total 400 ≠ 500
+        },
+    )
+
+    results = validate_itr1_input(inp)
+
+    assert failed(results, "ITR1-R145")
+
+
+def test_R145_no_breakup_is_warning_not_block():
+    """When dividend income is declared but no quarterly breakup is provided,
+    R145 emits a Category B (non-blocking) warning instead of a Category A block.
+
+    The CBDT rule text is an equality check between dividend income and the
+    breakup sum — it only applies when a breakup IS present.  AIS / TIS /
+    Prefill do not expose per-receipt dates, so a breakup cannot always be
+    derived from source documents.
+    """
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+        ),
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("130")),
+        deductions_chapter6a=Chapter6ADeductions(),
+        # dividend_quarterly_breakdown intentionally omitted / empty
+    )
+
+    results = validate_itr1_input(inp)
+
+    # Should NOT be a blocking Category A failure
+    assert not failed(results, "ITR1-R145")
+
+    # Should be a Category B warning (passed=True, severity=B)
+    r145 = get_result(results, "ITR1-R145")
+    assert r145 is not None
+    assert r145.passed is True
+    assert r145.severity == Severity.B
+
+
+def test_R145_all_zero_breakup_is_warning_not_block():
+    """When dividend income is declared and the breakup object exists but all
+    five periods are zero (the AIS/TIS/Prefill case where no per-receipt dates
+    are available), R145 emits a Category B warning, not a Category A block.
+    """
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+        ),
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("130")),
+        deductions_chapter6a=Chapter6ADeductions(),
+        dividend_quarterly_breakdown={
+            "Q1": Decimal("0"),
+            "Q2": Decimal("0"),
+            "Q3": Decimal("0"),
+            "Q4": Decimal("0"),
+            "Q5": Decimal("0"),
+        },
+    )
+
+    results = validate_itr1_input(inp)
+
+    # Should NOT be a blocking Category A failure
+    assert not failed(results, "ITR1-R145")
+
+    # Should be a Category B warning (passed=True, severity=B)
+    r145 = get_result(results, "ITR1-R145")
+    assert r145 is not None
+    assert r145.passed is True
+    assert r145.severity == Severity.B
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -248,6 +369,49 @@ def test_R005_80ddb_exceeds_100k():
     )
     results = validate_itr1_input(inp)
     assert failed(results, "ITR1-R005d")
+
+
+def test_R007_80ddb_cap_uses_net_reimbursed_claim() -> None:
+    """Gross expenditure above the cap is valid when reimbursement lowers the net claim."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80ddb=Decimal("80000"),
+            details_80ddb=Section80DDBDetails(
+                user_type=Section80DDBUserType.SELF_OR_DEPENDENT,
+                disease=SpecifiedDisease80DDB.MALIGNANT_CANCERS,
+                reimbursement_amount=Decimal("50000"),
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R007")
+    assert not failed(results, "ITR1-R006")
+
+
+def test_R005_80ddb_cap_uses_beneficiary_category() -> None:
+    """A senior dependent receives the senior cap even for a non-senior assessee."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80ddb=Decimal("90000"),
+            details_80ddb=Section80DDBDetails(
+                user_type=Section80DDBUserType.SELF_OR_DEPENDENT_SENIOR,
+                disease=SpecifiedDisease80DDB.PARKINSONS_DISEASE,
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R007")
+    assert not failed(results, "ITR1-R005d")
 
 
 def test_R155_new_regime_80ddb_not_allowed():
@@ -1349,3 +1513,221 @@ def test_B009_80eea_no_hp_incomes():
     results = validate_itr1_input(inp)
     has_warn = any(r.rule_id == "ITR1-B009" and r.passed for r in results)
     assert has_warn
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Audit-driven hardening — Schedule 80C, 80E, 80DD/80U severity, R119 collision
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_80c_claim_without_schedule_rows_blocked():
+    """A positive 80C claim must produce a blocking error when no schedule rows are given."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80c=Decimal("100000")),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-80C-DETAILS")
+
+
+def test_80c_claim_with_matching_rows_passes_consistency():
+    """A positive 80C claim with matching schedule rows must not fail consistency rules."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80c=Decimal("100000")),
+        schedule_80c_entries=[
+            Schedule80CEntry(amount=Decimal("60000"), payment_type="PPF", identifier_number="PPF-1"),
+            Schedule80CEntry(amount=Decimal("40000"), payment_type="ELSS", identifier_number="ELSS-1"),
+        ],
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-80C-DETAILS")
+    assert not failed(results, "ITR1-R241")
+    assert not failed(results, "ITR1-R224")
+    assert not failed(results, "ITR1-R224b")
+
+
+def test_80dd_severity_amount_mismatch_severe_amount_with_normal_blocked():
+    """A Rs 1,25,000 80DD claim with NORMAL disability schedule must fail R203b."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("125000")),
+        schedule_80dd=Schedule80DD(
+            disability_type=DisabilitySeverity.NORMAL,
+            deduction_amount=Decimal("125000"),
+            dependent_relationship=DependentRelationship.SPOUSE,
+        ),
+        form_10ia_filed=True,
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R203b")
+
+
+def test_80dd_severity_amount_mismatch_normal_amount_with_severe_blocked():
+    """A Rs 75,000 80DD claim with SEVERE disability schedule must fail R203b."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("75000")),
+        schedule_80dd=Schedule80DD(
+            disability_type=DisabilitySeverity.SEVERE,
+            deduction_amount=Decimal("75000"),
+            dependent_relationship=DependentRelationship.SPOUSE,
+        ),
+        form_10ia_filed=True,
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R203b")
+
+
+def test_80dd_claim_without_schedule_blocked():
+    """A positive 80DD claim without a Schedule 80DD must fail R206."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("75000")),
+        form_10ia_filed=True,
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R206")
+
+
+def test_80dd_claim_without_dependent_relationship_blocked():
+    """A positive 80DD claim with a schedule missing dependent_relationship must fail R206b."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("75000")),
+        schedule_80dd=Schedule80DD(
+            disability_type=DisabilitySeverity.NORMAL,
+            deduction_amount=Decimal("75000"),
+        ),
+        form_10ia_filed=True,
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R206b")
+
+
+def test_80u_severity_amount_mismatch_blocked():
+    """A Rs 1,25,000 80U claim with NORMAL disability schedule must fail R200b."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("125000")),
+        schedule_80u=Schedule80U(
+            disability_type=DisabilitySeverity.NORMAL,
+            deduction_amount=Decimal("125000"),
+        ),
+        form_10ia_filed=True,
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R200b")
+
+
+def test_80u_claim_without_schedule_blocked():
+    """A positive 80U claim without a Schedule 80U must fail R207."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("75000")),
+        form_10ia_filed=True,
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R207")
+
+
+def test_80dd_nested_schedule_resolved_by_canonical_accessor():
+    """A nested Schedule 80DD under deductions_chapter6a must be seen by the validator."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80dd=Decimal("75000"),
+            schedule_80dd=Schedule80DD(
+                disability_type=DisabilitySeverity.NORMAL,
+                deduction_amount=Decimal("75000"),
+                dependent_relationship=DependentRelationship.SPOUSE,
+            ),
+        ),
+        form_10ia_filed=True,
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R206")
+    assert not failed(results, "ITR1-R203b")
+
+
+def test_80dd_conflicting_schedules_blocked():
+    """Conflicting top-level and nested Schedule 80DD must be reported as a failure."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80dd=Decimal("75000"),
+            schedule_80dd=Schedule80DD(
+                disability_type=DisabilitySeverity.SEVERE,
+                deduction_amount=Decimal("125000"),
+                dependent_relationship=DependentRelationship.SPOUSE,
+            ),
+        ),
+        schedule_80dd=Schedule80DD(
+            disability_type=DisabilitySeverity.NORMAL,
+            deduction_amount=Decimal("75000"),
+            dependent_relationship=DependentRelationship.SPOUSE,
+        ),
+        form_10ia_filed=True,
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R205")
+
+
+def test_r119_collision_resolved_80gg_hra_exclusion_uses_unique_id():
+    """The 80GG/HRA mutual exclusion must use ITR1-R119b, not collide with 80CCD(2)."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("600000"),
+            hra_exempt_amount=Decimal("60000"),
+            basic_salary=Decimal("400000"),
+            hra_received=Decimal("120000"),
+            rent_paid=Decimal("200000"),
+        ),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80gg=Decimal("30000")),
+        form_10ba_filed=True,
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R119b")

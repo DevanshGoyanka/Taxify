@@ -51,6 +51,38 @@ OLD_REGIME_STANDARD_DEDUCTION: Final[Decimal] = Decimal("50000")    # Sec 16(ia)
 NEW_REGIME_STANDARD_DEDUCTION: Final[Decimal] = Decimal("75000")    # Sec 16(ia) - Finance Act 2024
 
 # =============================================================================
+# SECTION 10 EXEMPTION CEILINGS (Salary)
+# =============================================================================
+
+# Sec 10(10) — Gratuity: non-govt capped at Rs 20 lakh (FA 2018).
+GRATUITY_EXEMPTION_LIMIT: Final[Decimal] = Decimal("2000000")
+
+# Sec 10(10AA) — Leave encashment on retirement: non-govt capped at Rs 25 lakh (FA 2023).
+LEAVE_ENCASHMENT_EXEMPTION_LIMIT: Final[Decimal] = Decimal("2500000")
+
+# Sec 10(10C) — VRS / retrenchment compensation: capped at Rs 5 lakh.
+VRS_COMPENSATION_EXEMPTION_LIMIT: Final[Decimal] = Decimal("500000")
+
+# Sec 10(14)(i) — Transport allowance for disabled: Rs 1,600/month = Rs 19,200/year.
+TRANSPORT_ALLOWANCE_DISABLED_LIMIT: Final[Decimal] = Decimal("19200")
+
+# Sec 10(14) — Children Education Allowance: Rs 100/month per child (max 2) = Rs 1,200/year.
+CHILDREN_EDUCATION_ALLOWANCE_LIMIT: Final[Decimal] = Decimal("1200")
+CHILDREN_EDUCATION_ALLOWANCE_PER_CHILD: Final[Decimal] = Decimal("100")
+CHILDREN_EDUCATION_MAX_CHILDREN: Final[int] = 2
+
+# Sec 10(14) — Hostel Expenditure Allowance: Rs 300/month per child (max 2) = Rs 3,600/year.
+HOSTEL_ALLOWANCE_LIMIT: Final[Decimal] = Decimal("3600")
+HOSTEL_ALLOWANCE_PER_CHILD: Final[Decimal] = Decimal("300")
+
+# Sec 10(10A) — Commuted pension: 1/3rd non-commuted portion for non-govt.
+COMMUTED_PENSION_NON_GOV_T_PCT: Final[Decimal] = Decimal("1") / Decimal("3")
+
+# Sec 10(5) — LTA exemption: two journeys per block of four calendar years.
+# No per-journey statutory cap; the exemption is the actual fare cost (economy air / AC rail).
+# The cap is structural (block-year carry-forward), not a rupee ceiling.
+
+# =============================================================================
 # REBATE u/s 87A
 # =============================================================================
 
@@ -107,10 +139,12 @@ SURCHARGE_SLABS_NEW_REGIME: Final[list] = [
 # Presumptive rate depends on payment mode
 PRESUMPTIVE_44AD_DIGITAL: Final[Decimal] = Decimal("0.06")        # 6% of gross receipts (digital)
 PRESUMPTIVE_44AD_CASH: Final[Decimal] = Decimal("0.08")           # 8% of gross receipts (cash)
+SEC_44AD_TURNOVER_LIMIT: Final[Decimal] = Decimal("30000000")     # Rs 3 crore (Section 44AD threshold, FA 2024)
 
-# Section 44ADA - Professionals (gross receipts up to Rs 50 Lakh)
+# Section 44ADA - Professionals (gross receipts up to Rs 75 Lakh)
 # Flat 50% of gross receipts as presumptive income
 PRESUMPTIVE_44ADA_RATE: Final[Decimal] = Decimal("0.50")          # 50% of professional gross
+SEC_44ADA_RECEIPTS_LIMIT: Final[Decimal] = Decimal("7500000")     # Rs 75 lakh (Section 44ADA threshold)
 
 # Section 44AE - Goods carriage (per vehicle)
 # Presumptive income per vehicle per year (monthly x 12)

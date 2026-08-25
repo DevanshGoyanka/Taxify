@@ -24,11 +24,37 @@ class PresumptiveResult:
 
 
 def _compute_44ad(ad: PresumptiveBusinessIncome44AD) -> tuple[Decimal, bool]:
-    """44AD: 6% digital, 8% cash, or higher if declared."""
-    statutory = (
-        ad.digital_turnover * PRESUMPTIVE_44AD_DIGITAL
-        + ad.cash_turnover * PRESUMPTIVE_44AD_CASH
+    """44AD: 6% on banking/digital turnover, 8% on cash + any other mode.
+
+    Section 44AD(1) prescribes 6% of turnover received through account
+    payee cheque / bank draft / RTGS / NEFT / electronic modes, and 8% of
+    the balance. "Any other mode" is a non-banking receipt, so it goes in
+    the 8% bucket (NOT 6%).
+
+    The 6%/8% values are entered manually by the operator in the Schedule
+    BP editor (PersumptiveInc44AD6Per / PersumptiveInc44AD8Per); those
+    entered values are respected as-typed -- no statutory-max() override --
+    so the operator's computed figures flow straight through. When the
+    operator has NOT entered a value (None / 0), the statutory minimum is
+    computed from the turnover split so the tax is never understated.
+    """
+    statutory_six = ad.digital_turnover * PRESUMPTIVE_44AD_DIGITAL
+    statutory_eight = (
+        ad.cash_turnover + ad.other_mode_turnover
+    ) * PRESUMPTIVE_44AD_CASH
+    six_percent_income = (
+        ad.income_at_six_percent
+        if ad.income_at_six_percent is not None
+        and ad.income_at_six_percent > 0
+        else statutory_six
     )
+    eight_percent_income = (
+        ad.income_at_eight_percent
+        if ad.income_at_eight_percent is not None
+        and ad.income_at_eight_percent > 0
+        else statutory_eight
+    )
+    statutory = six_percent_income + eight_percent_income
     declared = ad.income_declared
     if declared is not None and declared > statutory:
         return declared, True
@@ -64,26 +90,42 @@ def _compute_44ae(ae: PresumptiveGoodsCarriage44AE) -> tuple[Decimal, bool]:
 
 
 def compute(input_data: ITR4Input) -> PresumptiveResult:
-    if input_data.presumptive_scheme == PresumptiveScheme.NONE:
-        return PresumptiveResult()
+    """Compute presumptive income under 44AD / 44ADA / 44AE.
 
-    scheme = input_data.presumptive_scheme.value
+    Per CBDT Rule 140, ITR-4 must disclose income under at least one of
+    Section 44AD, 44ADA, or 44AE. More than one section may apply.
+
+    Args:
+        input_data: The ITR-4 input model with a populated presumptive scheme.
+
+    Returns:
+        PresumptiveResult with 44AD/44ADA/44AE income breakdown.
+    """
+    active = [
+        label for label, model in (
+            ("44AD", input_data.business_income_44ad),
+            ("44ADA", input_data.professional_income_44ada),
+            ("44AE", input_data.goods_carriage_44ae),
+        ) if model is not None
+    ]
+    if not active:
+        return PresumptiveResult(scheme="INVALID")
+
+    scheme = "+".join(active)
     inc_44ad = Decimal("0")
     inc_44ada = Decimal("0")
     inc_44ae = Decimal("0")
     declared_higher = False
 
-    if input_data.presumptive_scheme in (PresumptiveScheme.S44AD,):
-        ad = input_data.business_income_44ad
-        if ad:
-            inc_44ad, dh = _compute_44ad(ad)
-            declared_higher = declared_higher or dh
+    ad = input_data.business_income_44ad
+    if ad:
+        inc_44ad, dh = _compute_44ad(ad)
+        declared_higher = declared_higher or dh
 
-    if input_data.presumptive_scheme in (PresumptiveScheme.S44ADA,):
-        ada = input_data.professional_income_44ada
-        if ada:
-            inc_44ada, dh = _compute_44ada(ada)
-            declared_higher = declared_higher or dh
+    ada = input_data.professional_income_44ada
+    if ada:
+        inc_44ada, dh = _compute_44ada(ada)
+        declared_higher = declared_higher or dh
 
     if input_data.goods_carriage_44ae:
         ae = input_data.goods_carriage_44ae

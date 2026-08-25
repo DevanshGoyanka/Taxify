@@ -1,29 +1,365 @@
-﻿"""ITR-2 input validation rules (stub)."""
+﻿"""ITR-2 pre-computation validation rules.
 
-from dataclasses import dataclass, field
-from typing import List, Any
+The rules in this module validate facts that must be internally consistent before
+an ITR-2 computation is attempted.  They intentionally validate only fields
+represented by :class:`app.schemas.itr2.ITR2Input`.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import date
+from decimal import Decimal
+from typing import Any
+
+from app.engine.validators.base import Severity, ValidationResult
+from app.schemas.itr2 import CGAssetType, ITR2Input, ResidentialStatus
+
+_ZERO = Decimal("0")
+_AY_PATTERN = re.compile(r"^(\d{4})-(\d{2})$")
+_ALLOWED_LOSS_HEADS = {
+    "HP": 8,
+    "STCG": 8,
+    "LTCG": 8,
+    "NONSPECULATIVE": 8,
+    "SPECULATIVE": 4,
+}
 
 
-@dataclass
-class InputRuleResult:
-    rule_id: str = ""
-    passed: bool = True
-    message: str = ""
-    field: str = ""
+def _result(
+    rule_id: str,
+    passed: bool,
+    message: str,
+    field_path: str,
+    expected: Any = None,
+    actual: Any = None,
+    severity: Severity = Severity.A,
+) -> ValidationResult:
+    """Build a validation result with the ITR-2 conventions."""
+    return ValidationResult(
+        rule_id=rule_id,
+        severity=severity,
+        passed=passed,
+        message=message,
+        field_path=field_path,
+        expected=expected,
+        actual=actual,
+    )
 
 
-@dataclass
-class ValidationReport:
-    rules: List[InputRuleResult] = field(default_factory=list)
-    blocking_errors: List[InputRuleResult] = field(default_factory=list)
-
-    @property
-    def can_upload(self) -> bool:
-        return len(self.blocking_errors) == 0
-
-    def to_dict(self) -> dict:
-        return {"rules": len(self.rules), "blocking_errors": len(self.blocking_errors)}
+def _current_assessment_year(inp: ITR2Input) -> int:
+    """Return the first year of the assessment year applicable to the input."""
+    reference = inp.due_date or inp.filing_date
+    return reference.year if reference is not None else 2026
 
 
-def run_input_validation(input_data: Any) -> ValidationReport:
-    return ValidationReport()
+def _parse_assessment_year(value: str) -> int | None:
+    """Parse and validate an assessment-year label, returning its first year."""
+    match = _AY_PATTERN.fullmatch(value.strip())
+    if match is None:
+        return None
+    first = int(match.group(1))
+    second = int(match.group(2))
+    return first if second == (first + 1) % 100 else None
+
+
+def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
+    """Validate all supported ITR-2 input-level rules.
+
+    Args:
+        inp: Fully parsed ITR-2 input model.
+
+    Returns:
+        A list containing only actionable failures or warnings.  An empty list
+        means that all represented pre-computation invariants passed.
+    """
+    results: list[ValidationResult] = []
+
+    # The schema has no assessee type or business-income field. Its shape itself
+    # restricts this form to an individual/HUF without current PGBP income.
+    if inp.filing_date is not None and inp.due_date is not None and inp.filing_date < date(2000, 1, 1):
+        results.append(_result(
+            "ITR2-IN-DATE-001", False, "Filing date is outside the supported filing period.",
+            "filing_date", ">= 2000-01-01", str(inp.filing_date),
+        ))
+    if inp.due_date is not None and inp.filing_date is not None:
+        # Filing after due date is legal; it drives interest and fee, so no error.
+        if inp.due_date.year > inp.filing_date.year + 1:
+            results.append(_result(
+                "ITR2-IN-DATE-002", False,
+                "Due date cannot be more than one year after the filing date.",
+                "due_date", f"<= {inp.filing_date.year + 1}-12-31", str(inp.due_date),
+            ))
+
+    for index, tx in enumerate(inp.cg_transactions or []):
+        path = f"cg_transactions[{index}]"
+        if tx.date_of_acquisition is None or tx.date_of_transfer is None:
+            results.append(_result(
+                "ITR2-IN-CG-001", False,
+                "Capital-gain transactions require acquisition and transfer dates.",
+                path, "both dates present", None,
+            ))
+        elif tx.date_of_transfer <= tx.date_of_acquisition:
+            results.append(_result(
+                "ITR2-IN-CG-002", False,
+                "Transfer date must be later than acquisition date.",
+                f"{path}.date_of_transfer", f"> {tx.date_of_acquisition}", str(tx.date_of_transfer),
+            ))
+        if tx.full_consideration <= _ZERO:
+            results.append(_result(
+                "ITR2-IN-CG-003", False,
+                "A reported transfer must have positive full consideration.",
+                f"{path}.full_consideration", "> 0", str(tx.full_consideration),
+            ))
+        total_exemptions = (
+            tx.deduction_us54 + tx.deduction_us54b + tx.deduction_us54ec + tx.deduction_us54f
+        )
+        gross_gain = max(
+            _ZERO,
+            tx.full_consideration
+            - max(tx.cost_of_acquisition, tx.indexed_cost)
+            - tx.expenditure_on_transfer,
+        )
+        if total_exemptions > gross_gain:
+            results.append(_result(
+                "ITR2-IN-CG-004", False,
+                "Capital-gain exemptions cannot exceed the gain before exemption.",
+                path, f"<= {gross_gain}", str(total_exemptions),
+            ))
+        if tx.asset_type in {CGAssetType.LISTED_EQUITY_111A, CGAssetType.LISTED_EQUITY_112A}:
+            stt_paid = bool(tx.is_stt_paid_on_transfer) and (
+                tx.asset_type == CGAssetType.LISTED_EQUITY_111A or bool(tx.is_stt_paid_on_acquisition)
+            )
+            if not stt_paid:
+                results.append(_result(
+                    "ITR2-IN-CG-005", False,
+                    "Sections 111A/112A require applicable securities transaction tax to have been paid.",
+                    f"{path}.is_stt_paid_on_transfer", True, stt_paid,
+                ))
+        if (
+            tx.asset_type == CGAssetType.LISTED_EQUITY_112A
+            and tx.date_of_acquisition is not None
+            and tx.date_of_acquisition <= date(2018, 1, 31)
+            and tx.fair_market_value_jan2018 is None
+        ):
+            results.append(_result(
+                "ITR2-IN-CG-006", False,
+                "Pre-1 February 2018 section 112A assets require 31 January 2018 FMV.",
+                f"{path}.fair_market_value_jan2018", "non-null", None,
+            ))
+
+    for index, scrip in enumerate(inp.cg_112a_scrips or []):
+        path = f"cg_112a_scrips[{index}]"
+        if not scrip.isin_code and not (scrip.share_unit_name or "").strip():
+            results.append(_result(
+                "ITR2-IN-112A-001", False,
+                "Schedule 112A requires either an ISIN or a share/unit name.",
+                path, "ISIN or name", None,
+            ))
+        if scrip.num_shares_units is None or scrip.num_shares_units <= _ZERO:
+            results.append(_result(
+                "ITR2-IN-112A-002", False,
+                "Schedule 112A requires a positive number of shares/units.",
+                f"{path}.num_shares_units", "> 0", str(scrip.num_shares_units),
+            ))
+        if scrip.sale_price_per_share is None or scrip.sale_price_per_share <= _ZERO:
+            results.append(_result(
+                "ITR2-IN-112A-003", False,
+                "Schedule 112A requires a positive sale price per share/unit.",
+                f"{path}.sale_price_per_share", "> 0", str(scrip.sale_price_per_share),
+            ))
+        if scrip.num_shares_units is not None and scrip.sale_price_per_share is not None:
+            expected_sale = scrip.num_shares_units * scrip.sale_price_per_share
+            if abs(scrip.total_sale_value - expected_sale) > Decimal("1"):
+                results.append(_result(
+                    "ITR2-IN-112A-004", False,
+                    "Total sale value does not reconcile with quantity and unit sale price.",
+                    f"{path}.total_sale_value", str(expected_sale), str(scrip.total_sale_value),
+                ))
+        if scrip.is_before_31jan2018 and (scrip.fmv_per_share is None or scrip.fmv_per_share <= _ZERO):
+            results.append(_result(
+                "ITR2-IN-112A-005", False,
+                "Grandfathered section 112A holdings require a positive FMV per share.",
+                f"{path}.fmv_per_share", "> 0", str(scrip.fmv_per_share),
+            ))
+        supplied_deductions = scrip.total_deductions
+        expected_deductions = scrip.cost_acq_without_index + scrip.expenditure_on_transfer
+        if supplied_deductions > _ZERO and abs(supplied_deductions - expected_deductions) > Decimal("1"):
+            results.append(_result(
+                "ITR2-IN-112A-006", False,
+                "Schedule 112A total deductions must equal cost plus transfer expenditure.",
+                f"{path}.total_deductions", str(expected_deductions), str(supplied_deductions),
+            ))
+        supplied_balance = scrip.balance
+        expected_balance = scrip.total_sale_value - expected_deductions
+        if supplied_balance is not None and abs(supplied_balance - expected_balance) > Decimal("1"):
+            results.append(_result(
+                "ITR2-IN-112A-007", False,
+                "Schedule 112A balance must equal sale value less total deductions.",
+                f"{path}.balance", str(expected_balance), str(supplied_balance),
+            ))
+
+    for index, tx in enumerate(inp.vda_transactions or []):
+        path = f"vda_transactions[{index}]"
+        if tx.date_of_transfer <= tx.date_of_acquisition:
+            results.append(_result(
+                "ITR2-IN-VDA-001", False, "VDA transfer date must follow acquisition date.",
+                f"{path}.date_of_transfer", f"> {tx.date_of_acquisition}", str(tx.date_of_transfer),
+            ))
+        if tx.consideration_received <= _ZERO:
+            results.append(_result(
+                "ITR2-IN-VDA-002", False, "A reported VDA transfer requires positive consideration.",
+                f"{path}.consideration_received", "> 0", str(tx.consideration_received),
+            ))
+        expected_income = max(_ZERO, tx.consideration_received - tx.acquisition_cost)
+        if tx.income_from_vda is not None and tx.income_from_vda != expected_income:
+            results.append(_result(
+                "ITR2-IN-VDA-003", False,
+                "VDA income must equal consideration less acquisition cost; VDA loss is not allowable.",
+                f"{path}.income_from_vda", str(expected_income), str(tx.income_from_vda),
+            ))
+
+    current_ay = _current_assessment_year(inp)
+    for index, loss in enumerate(inp.bf_losses or []):
+        path = f"bf_losses[{index}]"
+        head = loss.head.value if hasattr(loss.head, "value") else str(loss.head)
+        head = head.strip().upper().replace("_", "")
+        if head not in _ALLOWED_LOSS_HEADS:
+            results.append(_result(
+                "ITR2-IN-BFL-001", False,
+                "Unsupported brought-forward loss category for ITR-2.",
+                f"{path}.head", sorted(_ALLOWED_LOSS_HEADS), loss.head,
+            ))
+            continue
+        loss_ay = _parse_assessment_year(loss.assessment_year)
+        if loss_ay is None or loss_ay >= current_ay:
+            results.append(_result(
+                "ITR2-IN-BFL-002", False,
+                "Loss assessment year must be a valid year preceding the current assessment year.",
+                f"{path}.assessment_year", f"before {current_ay}-{str(current_ay + 1)[-2:]}", loss.assessment_year,
+            ))
+        elif current_ay - loss_ay > _ALLOWED_LOSS_HEADS[head]:
+            results.append(_result(
+                "ITR2-IN-BFL-003", False,
+                "Brought-forward loss has expired for its statutory category.",
+                f"{path}.assessment_year", f"not older than {_ALLOWED_LOSS_HEADS[head]} AYs", loss.assessment_year,
+            ))
+        if loss.brought_forward > loss.original_loss:
+            results.append(_result(
+                "ITR2-IN-BFL-004", False,
+                "Brought-forward amount cannot exceed the original loss.",
+                f"{path}.brought_forward", f"<= {loss.original_loss}", str(loss.brought_forward),
+            ))
+
+    fsi_by_country: dict[str, tuple[Decimal, Decimal]] = {}
+    for index, fsi in enumerate(inp.fsi_entries or []):
+        path = f"fsi_entries[{index}]"
+        expected_total = fsi.salary_income + fsi.hp_income + fsi.cg_income + fsi.os_income
+        if fsi.total_income != expected_total:
+            results.append(_result(
+                "ITR2-IN-FSI-001", False,
+                "FSI total income must equal the sum of its income heads.",
+                f"{path}.total_income", str(expected_total), str(fsi.total_income),
+            ))
+        income, tax = fsi_by_country.get(fsi.country_code.upper(), (_ZERO, _ZERO))
+        fsi_by_country[fsi.country_code.upper()] = (income + fsi.total_income, tax + fsi.tax_paid_outside_india)
+    if inp.fsi_entries and inp.residential_status == ResidentialStatus.NRI:
+        results.append(_result(
+            "ITR2-IN-FSI-002", True,
+            "Foreign-source income is present for a non-resident; verify Indian taxability.",
+            "fsi_entries", severity=Severity.D,
+        ))
+
+    tr_by_country: dict[str, tuple[Decimal, Decimal]] = {}
+    for index, tr in enumerate(inp.tr1_entries or []):
+        path = f"tr1_entries[{index}]"
+        if tr.relief_claimed > min(tr.tax_paid_outside_india, tr.indian_tax_payable):
+            results.append(_result(
+                "ITR2-IN-TR1-001", False,
+                "Foreign-tax relief cannot exceed foreign tax paid or Indian tax payable.",
+                f"{path}.relief_claimed",
+                f"<= {min(tr.tax_paid_outside_india, tr.indian_tax_payable)}", str(tr.relief_claimed),
+            ))
+        income, tax = tr_by_country.get(tr.country_code.upper(), (_ZERO, _ZERO))
+        tr_by_country[tr.country_code.upper()] = (
+            income + tr.income_included_in_this_return,
+            tax + tr.tax_paid_outside_india,
+        )
+    for country in sorted(set(fsi_by_country) | set(tr_by_country)):
+        if fsi_by_country.get(country, (_ZERO, _ZERO)) != tr_by_country.get(country, (_ZERO, _ZERO)):
+            results.append(_result(
+                "ITR2-IN-TR1-002", False,
+                f"FSI and TR1 income/tax totals do not reconcile for country {country}.",
+                "tr1_entries", str(fsi_by_country.get(country, (_ZERO, _ZERO))),
+                str(tr_by_country.get(country, (_ZERO, _ZERO))),
+            ))
+
+    if inp.amt_input is not None:
+        amt = inp.amt_input
+        expected_amt = amt.adjusted_total_income * amt.amt_rate_pct / Decimal("100")
+        if abs(amt.amt_tax - expected_amt) > Decimal("1"):
+            results.append(_result(
+                "ITR2-IN-AMT-001", False,
+                "AMT tax must equal adjusted total income multiplied by the AMT rate.",
+                "amt_input.amt_tax", str(expected_amt), str(amt.amt_tax),
+            ))
+        if amt.amt_credit_utilised > amt.amt_credit_brought_forward:
+            results.append(_result(
+                "ITR2-IN-AMT-002", False,
+                "AMT credit utilised cannot exceed credit brought forward.",
+                "amt_input.amt_credit_utilised", f"<= {amt.amt_credit_brought_forward}",
+                str(amt.amt_credit_utilised),
+            ))
+
+    for index, entry in enumerate(inp.tds2_entries or []):
+        if entry.tds_claimed_this_year > entry.tds_deducted:
+            results.append(_result(
+                "ITR2-IN-TDS-001", False,
+                "TDS claimed this year cannot exceed TDS deducted.",
+                f"tds2_entries[{index}].tds_claimed_this_year",
+                f"<= {entry.tds_deducted}", str(entry.tds_claimed_this_year),
+            ))
+    for index, entry in enumerate(inp.tcs_entries or []):
+        if entry.tcs_credit_claimed > entry.tcs_collected:
+            results.append(_result(
+                "ITR2-IN-TCS-001", False,
+                "TCS credit claimed cannot exceed TCS collected.",
+                f"tcs_entries[{index}].tcs_credit_claimed",
+                f"<= {entry.tcs_collected}", str(entry.tcs_credit_claimed),
+            ))
+
+    # Filing-evidence count checks
+    if inp.employer_filing_details and len(inp.employer_filing_details) != len(inp.tds1_entries):
+        results.append(_result(
+            "ITR2-IN-FE-001", False,
+            "employer_filing_details count must match tds1_entries count.",
+            "employer_filing_details",
+            f"len == {len(inp.tds1_entries)}",
+            f"len == {len(inp.employer_filing_details)}",
+        ))
+    property_count = int(inp.house_property_income is not None) + len(inp.house_properties)
+    if inp.property_filing_details and len(inp.property_filing_details) != property_count:
+        results.append(_result(
+            "ITR2-IN-FE-002", False,
+            "property_filing_details count must match house property count.",
+            "property_filing_details",
+            f"len == {property_count}",
+            f"len == {len(inp.property_filing_details)}",
+        ))
+    if inp.tds3_filing_details and len(inp.tds3_filing_details) != len(inp.tds3_entries):
+        results.append(_result(
+            "ITR2-IN-FE-003", False,
+            "tds3_filing_details count must match tds3_entries count.",
+            "tds3_filing_details",
+            f"len == {len(inp.tds3_entries)}",
+            f"len == {len(inp.tds3_filing_details)}",
+        ))
+
+    return results
+
+
+def run_input_validation(inp: ITR2Input) -> "ValidationReport":
+    """Run ITR-2 pre-computation validation and return a standard report."""
+    from app.engine.validators.base import ValidationReport
+
+    return ValidationReport(form_type="ITR2", results=validate_itr2_input(inp))

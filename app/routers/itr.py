@@ -26,6 +26,7 @@ from app.engine.calculators.itr2 import compute as compute_itr2
 from app.engine.calculators.itr3 import compute as compute_itr3
 from app.engine.calculators.itr4 import compute as compute_itr4
 from app.engine.validators.itr1 import run_input_validation as itr1_input_val, run_calc_validation as itr1_calc_val
+from app.engine.validators.itr2 import run_input_validation as itr2_input_val, run_calc_validation as itr2_calc_val
 from app.engine.validators.itr4 import run_input_validation as itr4_input_val, run_calc_validation as itr4_calc_val
 from app.schemas.itr1 import ITR1Input
 from app.schemas.itr2 import ITR2Input
@@ -88,8 +89,20 @@ def itr1_compute(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    if result.errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITR-1 calculation rejected", "errors": result.errors},
+        )
+
     # Run calculation validation post-computation
     calc_report = itr1_calc_val(body, result)
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
     response = _build_itr1_response(result)
     response.validation = calc_report.to_dict()
     return response
@@ -106,11 +119,29 @@ def itr2_compute(
     Raises HTTP 422 if the input is invalid (Pydantic validation).
     Does NOT persist anything to the database.
     """
+    input_report = itr2_input_val(body)
+    if not input_report.can_upload:
+        errors_detail = [r.to_dict() for r in input_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A input validation failed", "errors": errors_detail},
+        )
+
     try:
         result = compute_itr2(body)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    return ITR2ComputeResponse.model_validate(asdict(result))
+
+    calc_report = itr2_calc_val(body, result)
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
+    response = ITR2ComputeResponse.model_validate(asdict(result))
+    response.validation = calc_report.to_dict()
+    return response
 
 
 @router.post("/itr4/compute", response_model=ITR4ComputeResponse)
@@ -143,6 +174,12 @@ def itr4_compute(
 
     # Run calculation validation post-computation
     calc_report = itr4_calc_val(body, result)
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
     response = _build_itr4_response(result)
     response.validation = calc_report.to_dict()
     return response
@@ -296,9 +333,8 @@ def itr1_compute_json(
 ) -> Response:
     """Compute ITR-1 and return CBDT ITD-compliant JSON."""
     from app.engine.itd.itr1 import build_itr1_json
-    from dataclasses import replace
 
-    # Run validation (non-blocking — report in response if needed)
+    # Run blocking input validation before computation.
     input_report = itr1_input_val(body)
     if not input_report.can_upload:
         errors_detail = [r.to_dict() for r in input_report.blocking_errors]
@@ -312,11 +348,28 @@ def itr1_compute_json(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    if result.errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITR-1 calculation rejected", "errors": result.errors},
+        )
+
     # Run calculation validation post-computation
     calc_report = itr1_calc_val(body, result)
-    
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
+
     try:
-        itd_json = build_itr1_json(result); itd_json["_validation"] = calc_report.to_dict()
+        itd_json = build_itr1_json(result, body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITD JSON input is incomplete", "error": str(exc)},
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -335,20 +388,48 @@ def itr2_compute_json(
     body: ITR2Input,
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    """Compute ITR-2 and return CBDT ITD-compliant JSON."""
+    """Compute, validate, and return CBDT ITD-compliant ITR-2 JSON."""
     from app.engine.itd.itr2 import build_itr2_json
+    from app.engine.itd.itr2_schema import ITR2SchemaValidationError, validate_itr2_json
+
+    input_report = itr2_input_val(body)
+    if not input_report.can_upload:
+        errors_detail = [r.to_dict() for r in input_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A input validation failed", "errors": errors_detail},
+        )
 
     try:
         result = compute_itr2(body)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    calc_report = itr2_calc_val(body, result)
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
+
     try:
-        itd_json = build_itr2_json(result)
-    except Exception as exc:
+        itd_json = build_itr2_json(result, body)
+        validate_itr2_json(itd_json)
+    except ITR2SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Official ITR-2 schema validation failed", "errors": exc.errors},
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITD JSON input is incomplete", "error": str(exc)},
+        )
+    except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"ITD JSON generation failed: {exc}",
+            detail=f"Official ITR-2 schema is unavailable: {exc}",
         )
 
     return Response(
@@ -393,6 +474,7 @@ def itr4_compute_json(
 ) -> Response:
     """Compute ITR-4 and return CBDT ITD-compliant JSON."""
     from app.engine.itd.itr4 import build_itr4_json
+    from app.engine.itd.itr4_schema import ITR4SchemaValidationError, validate_itr4_json
 
     # Run validation
     input_report = itr4_input_val(body)
@@ -408,12 +490,46 @@ def itr4_compute_json(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    if result.errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITR-4 calculation rejected", "errors": result.errors},
+        )
+
+    # Run calculation validation post-computation
+    calc_report = itr4_calc_val(body, result)
+    if not calc_report.can_upload:
+        errors_detail = [r.to_dict() for r in calc_report.blocking_errors]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "CBDT Category A calculation validation failed", "errors": errors_detail},
+        )
+
     try:
-        itd_json = build_itr4_json(result)
+        itd_json = build_itr4_json(result, body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "ITD JSON input is incomplete", "error": str(exc)},
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"ITD JSON generation failed: {exc}",
+        )
+
+    # Validate against the official CBDT schema — hard fail on any violation.
+    try:
+        validate_itr4_json(itd_json)
+    except ITR4SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Official ITR-4 schema validation failed", "errors": exc.errors},
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Official ITR-4 schema is unavailable: {exc}",
         )
 
     return Response(

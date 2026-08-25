@@ -79,9 +79,47 @@ export interface ITR4Result extends ITR1Result {
   pgbp_income: string;
 }
 
+export interface ITR2Result {
+  salary_income: string;
+  house_property_income: string;
+  capital_gains_income: string;
+  other_sources_income: string;
+  vda_income: string;
+  clubbing_income: string;
+  gti_before_loss_setoff: string;
+  cyla_total_set_off: string;
+  bfla_total_set_off: string;
+  gti_after_loss_setoff: string;
+  gross_total_income: string;
+  net_agricultural_income: string;
+  deductions_total: string;
+  taxable_income: string;
+  aggregate_income: string;
+  slab_tax: string;
+  special_rate_tax: string;
+  amt_tax: string;
+  total_tax_before_relief: string;
+  tax_before_rebate: string;
+  rebate_87a: string;
+  tax_after_rebate: string;
+  surcharge: string;
+  health_education_cess: string;
+  gross_tax_liability: string;
+  relief_89: string;
+  relief_90_91: string;
+  net_tax_liability: string;
+  total_tds: string;
+  total_tcs: string;
+  total_taxes_paid: string;
+  balance_payable: string;
+  refund_due: string;
+  hp_loss_disallowed: string;
+  validation?: Record<string, unknown>;
+}
+
 export interface ReturnSummary {
   id: number;
-  itr_type: 'ITR1' | 'ITR4';
+  itr_type: 'ITR1' | 'ITR2' | 'ITR4';
   created_at: string;
 }
 
@@ -113,11 +151,29 @@ export const itrComputeApi = {
   },
 
   /**
+   * Compute ITR-2 tax breakdown. Does NOT save to database.
+   * Returns all income heads, capital gains, loss set-off, special rates,
+   * AMT, rebate, surcharge, cess, interest, and tax credits.
+   */
+  computeItr2: async (input: Record<string, unknown>): Promise<ITR2Result> => {
+    const { data } = await axiosInstance.post('/itr2/compute', input);
+    return data as ITR2Result;
+  },
+
+  /**
+   * Compute ITR-2 and return CBDT ITD-compliant JSON for download.
+   */
+  computeItr2Json: async (input: Record<string, unknown>): Promise<Blob> => {
+    const res = await axiosInstance.post('/itr2/compute-json', input, { responseType: 'blob' });
+    return res.data as Blob;
+  },
+
+  /**
    * Save a tax computation result linked to the current user.
    * Returns the id of the newly created record.
    */
   saveReturn: async (
-    itrType: 'ITR1' | 'ITR4',
+    itrType: 'ITR1' | 'ITR2' | 'ITR4',
     inputData: Record<string, unknown>,
     computedResult: Record<string, unknown>
   ): Promise<{ id: number }> => {

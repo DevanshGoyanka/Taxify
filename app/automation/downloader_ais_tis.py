@@ -3,6 +3,12 @@ import re
 import asyncio
 from playwright.async_api import Page
 from app.automation.downloader import update_browser_status, make_step_logger
+from app.automation.navigation import (
+    PortalHandle,
+    open_hamburger,
+    race_portal_navigation,
+    wait_for_overlay_clearance,
+)
 from app.automation.pdf_unlocker import unlock_pdf
 
 
@@ -53,7 +59,11 @@ def _unlock_and_warn(file_path, pan, dob, log, label="PDF", status_cb=None):
             status_cb(f"✅ {label} downloaded & unlocked")
     else:
         reason = result.get("reason", "unknown")
-        if reason == "no-password-matched":
+        if reason == "not-encrypted":
+            log(f"[PDF Unlock] {label} is already readable; unlock not required.")
+            if status_cb:
+                status_cb(f"✅ {label} downloaded & readable")
+        elif reason == "no-password-matched":
             log(
                 f"[Warning] {label} unlock failed — no password candidate matched "
                 f"{os.path.basename(file_path)}. "
@@ -84,65 +94,7 @@ async def _wait_for_download(page: Page, timeout: int = 120000):
 
 # ── Navigation ────────────────────────────────────────────────────────────────
 
-async def _open_hamburger(itd_page: Page, log):
-    """
-    The ITD dashboard collapses the nav into a hamburger (☰ = #hamburgerOpen).
-    a#AIS exists in the DOM but is only clickable once the hamburger panel is
-    open. The page may also be scrolled down, hiding the nav bar — scroll to
-    top first so the hamburger/nav is in view.
-    """
-    step = make_step_logger(log, "NAV")
-    # Scroll everything to top — window AND any scrollable containers.
-    try:
-        step("Scrolling page to top", itd_page)
-        await itd_page.evaluate("""() => {
-            window.scrollTo(0, 0);
-            document.documentElement.scrollTop = 0;
-            document.body.scrollTop = 0;
-            document.querySelectorAll('*').forEach(el => {
-                if (el.scrollTop > 0) el.scrollTop = 0;
-            });
-        }""")
-        await asyncio.sleep(0.5)
-    except Exception as e:
-        step(f"Scroll failed: {e}")
-
-    for sel in (
-        "#hamburgerOpen",
-        "button[aria-label*='main menu' i]",
-        "button[aria-label*='menu' i]",
-        "[role='button'][aria-label*='menu' i]",
-        ".hamburger",
-    ):
-        try:
-            btn = itd_page.locator(sel).first
-            cnt = await btn.count()
-            step(f"Probing hamburger selector '{sel}' — count={cnt}")
-            if cnt == 0:
-                continue
-            try:
-                await btn.scroll_into_view_if_needed(timeout=2000)
-            except Exception:
-                pass
-            vis = await btn.is_visible(timeout=500)
-            step(f"  '{sel}' visible={vis}")
-            if vis:
-                step(f"Clicking hamburger '{sel}'")
-                try:
-                    await btn.click(timeout=3000)
-                except Exception:
-                    await btn.click(force=True, timeout=3000)
-                await asyncio.sleep(1)
-                step("Hamburger clicked")
-                return
-        except Exception as e:
-            step(f"  selector '{sel}' error: {e}")
-            continue
-
-    step("No hamburger button matched — nav may already be expanded")
-
-
-async def _open_ais_portal(itd_page: Page, log, status_cb=None) -> Page:
+async def _open_ais_portal(itd_page: Page, log, status_cb=None) -> PortalHandle:
     """
     From the ITD dashboard, click the AIS nav link to open the Compliance Portal.
     Mirrors the competitor: open hamburger, click a#AIS, dismiss any "Yes"
@@ -154,16 +106,11 @@ async def _open_ais_portal(itd_page: Page, log, status_cb=None) -> Page:
     step("Starting Compliance Portal open", itd_page, status="Opening Compliance Portal…")
     await update_browser_status(itd_page, "AIS: Opening Compliance Portal...")
 
-    # Wait for any loading overlay to clear FIRST — overlay makes a#AIS invisible to Playwright.
-    try:
-        step("Waiting for loader overlay to clear…")
-        await itd_page.locator(".customLoaderBackdrop").wait_for(state="hidden", timeout=30000)
-        step("Loader overlay gone")
-    except Exception:
-        step("No loader overlay detected (or already gone)")
-
+    await wait_for_overlay_clearance(
+        itd_page, timeout_ms=30000, selectors=(".customLoaderBackdrop",)
+    )
     step("Opening hamburger / nav menu")
-    await _open_hamburger(itd_page, log)
+    await open_hamburger(itd_page, timeout_ms=5000, log=log)
 
     ais_link = itd_page.locator("a#AIS").first
     step("Waiting for a#AIS to be visible", status="Finding AIS menu…")
@@ -174,50 +121,37 @@ async def _open_ais_portal(itd_page: Page, log, status_cb=None) -> Page:
         step("a#AIS NOT visible after 30s — raising")
         raise Exception("AIS nav link not found on ITD dashboard.")
 
-    # Set up the new-tab listener BEFORE clicking.
-    step("Arming new-tab listener")
-    new_page_task = asyncio.ensure_future(
-        itd_page.context.wait_for_event("page", timeout=30000))
+    async def _trigger_ais() -> None:
+        try:
+            await ais_link.click(timeout=20000)
+            step("a#AIS click sent")
+        except Exception as click_error:
+            step(f"normal click failed ({click_error}) — trying force click")
+            await ais_link.click(force=True, timeout=20000)
 
-    step("Clicking a#AIS", status="Opening AIS portal…")
-    try:
-        await ais_link.click(timeout=20000)
-        step("a#AIS click sent")
-    except Exception as e:
-        step(f"normal click failed ({e}) — trying force click")
-        await ais_link.click(force=True, timeout=20000)
-
-    # Optional "Yes" confirmation dialog before the portal opens.
-    try:
-        yes = itd_page.get_by_role("button", name=re.compile(r"^yes$", re.I)).first
-        if await yes.is_visible(timeout=1000):
-            step("'Yes' confirmation dialog detected — confirming")
+    async def _confirm_ais() -> None:
+        try:
+            yes = itd_page.get_by_role(
+                "button", name=re.compile(r"^yes$", re.I)
+            ).first
+            await yes.wait_for(state="visible", timeout=4000)
             try:
                 await yes.click(timeout=10000)
             except Exception:
                 await yes.click(force=True, timeout=10000)
-        else:
-            step("No 'Yes' confirmation dialog")
-    except Exception:
-        step("No 'Yes' confirmation dialog")
-
-    # Race: new tab opens, OR same tab navigates to the Insight portal.
-    portal = None
-    step("Waiting for portal (new tab OR same-tab URL change)")
-    try:
-        portal = await new_page_task
-        step("Portal opened in a NEW tab", portal)
-    except Exception:
-        new_page_task.cancel()
-        step("No new tab — checking same-tab navigation to insight.gov.in")
-        try:
-            await itd_page.wait_for_url(re.compile(r"ais\.insight\.gov\.in", re.I),
-                                        timeout=30000)
-            portal = itd_page
-            step("Portal opened in SAME tab", portal)
+            step("'Yes' confirmation dialog confirmed")
         except Exception:
-            portal = itd_page
-            step("Portal did NOT open — still on original page", portal)
+            return
+
+    step("Racing new-tab and same-tab Compliance Portal navigation")
+    handle = await race_portal_navigation(
+        origin_page=itd_page,
+        trigger=_trigger_ais,
+        portal_url=re.compile(r"ais\.insight\.gov\.in", re.I),
+        timeout_ms=30000,
+        confirm=_confirm_ais,
+    )
+    portal = handle.target_page
 
     try:
         await portal.wait_for_load_state("domcontentloaded", timeout=30000)
@@ -227,7 +161,7 @@ async def _open_ais_portal(itd_page: Page, log, status_cb=None) -> Page:
     step("Compliance Portal ready", portal, status="AIS portal ready")
     await asyncio.sleep(3)  # Angular SPA hydration
     await update_browser_status(portal, "AIS: Compliance Portal ready")
-    return portal
+    return handle
 
 
 async def _navigate_to_ais_tab(portal: Page, log, status_cb=None):
@@ -858,9 +792,10 @@ async def run_request_ais(itd_page: Page, fiscal_year: str, download_dir: str,
         log(f"[AIS] Skipping — AIS not available before FY 2021-22.")
         return {"status": "skipped"}
 
-    portal = None
+    handle = None
     try:
-        portal = await _open_ais_portal(itd_page, log, status_cb=status_callback)
+        handle = await _open_ais_portal(itd_page, log, status_cb=status_callback)
+        portal = handle.target_page
         await _navigate_to_ais_tab(portal, log, status_cb=status_callback)
         await _select_fy(portal, fiscal_year, log, status_cb=status_callback)
 
@@ -881,7 +816,6 @@ async def run_request_ais(itd_page: Page, fiscal_year: str, download_dir: str,
         # Final combined status
         _status(combined_status_label(ais_outcome, tis_outcome))
 
-        await portal.close()
         # Keep backward-compat keys app.py uses, and add tis_outcome
         ais_outcome["tis"] = tis_outcome
         return ais_outcome
@@ -890,10 +824,13 @@ async def run_request_ais(itd_page: Page, fiscal_year: str, download_dir: str,
         reason_str = str(e).split('\n')[0].strip()
         if len(reason_str) > 80:
             reason_str = reason_str[:77] + "..."
-        if portal:
-            try: await portal.close()
-            except Exception: pass
         return _outcome("failed", reason=reason_str or "Unexpected error")
+    finally:
+        if handle is not None:
+            try:
+                await handle.cleanup()
+            except Exception as cleanup_error:
+                log(f"[AIS] Could not restore ITD anchor: {cleanup_error}")
 
 
 
@@ -911,11 +848,12 @@ async def run_download_ais_tis(itd_page: Page, fiscal_year: str, download_dir: s
         log(f"[AIS/TIS] Skipping — not available before FY 2021-22.")
         return {"ais": _outcome("skipped"), "tis": None}
 
-    portal = None
+    handle = None
     ais_outcome = None
     tis_outcome = None
     try:
-        portal = await _open_ais_portal(itd_page, log, status_cb=status_callback)
+        handle = await _open_ais_portal(itd_page, log, status_cb=status_callback)
+        portal = handle.target_page
         await _navigate_to_ais_tab(portal, log, status_cb=status_callback)
         await _select_fy(portal, fiscal_year, log, status_cb=status_callback)
 
@@ -935,11 +873,13 @@ async def run_download_ais_tis(itd_page: Page, fiscal_year: str, download_dir: s
         if status_callback:
             status_callback(combined_status_label(ais_outcome, tis_outcome))
 
-        await portal.close()
         return {"ais": ais_outcome, "tis": tis_outcome}
     except Exception as e:
         log(f"[AIS/TIS] Download phase failed: {e}")
-        if portal:
-            try: await portal.close()
-            except Exception: pass
         return {"ais": ais_outcome or _outcome("failed"), "tis": tis_outcome}
+    finally:
+        if handle is not None:
+            try:
+                await handle.cleanup()
+            except Exception as cleanup_error:
+                log(f"[AIS/TIS] Could not restore ITD anchor: {cleanup_error}")

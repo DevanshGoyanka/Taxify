@@ -53,6 +53,8 @@ from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import get_current_user
 from app.automation.job_worker import start_worker, stop_worker
+from app.filing_automation.worker import start_filing_worker, stop_filing_worker
+from app.automation.privacy import install_uvicorn_access_privacy_filter
 from app.db.init_db import create_tables
 from app.db.models import User
 
@@ -61,13 +63,20 @@ from app.routers import (
     itr as itr_router,
     clients as clients_router,
     client_itr as client_itr_router,
+    client_itr_v2 as client_itr_v2_router,
     integration as integration_router,
     pan as pan_router,
     tax as tax_router,
+    tax_v2 as tax_v2_router,
     dashboard as dashboard_router,
     automation as automation_router,
+    filing as filing_router,
 )
 from app.schemas.auth import UserResponse
+
+# Uvicorn access records contain raw request targets, including client UUIDs.
+# Apply the same privacy boundary used by automation application loggers.
+install_uvicorn_access_privacy_filter(logging.getLogger("uvicorn.access"))
 
 
 # ---------------------------------------------------------------------------
@@ -77,9 +86,23 @@ from app.schemas.auth import UserResponse
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: create tables + launch background worker.  Shutdown: stop worker."""
+    # Back up .env BEFORE any other code reads or modifies it, so a recent
+    # copy of all secrets is always available on disk if the live file is
+    # accidentally changed or corrupted.
+    from app.security.env_backup import backup_env
+    backup_env()
+
+    # Validate the active ERI credential bundle (mode/env) is sane before
+    # serving traffic. Fails fast on production misconfiguration (mock DSC,
+    # missing AWS host for Type-2, missing digest secret).
+    from app.eri.config import assert_credentials_at_startup
+    assert_credentials_at_startup()
+
     create_tables()
     start_worker()
+    start_filing_worker()
     yield
+    await stop_filing_worker()
     await stop_worker()
 
 
@@ -164,8 +187,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-from app.routers import eri as eri_router
-
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
@@ -174,12 +195,14 @@ app.include_router(auth_router.router)
 app.include_router(itr_router.router)
 app.include_router(clients_router.router)
 app.include_router(client_itr_router.router)
+app.include_router(client_itr_v2_router.router)
 app.include_router(integration_router.router)
 app.include_router(pan_router.router)
 app.include_router(tax_router.router)
+app.include_router(tax_v2_router.router)
 app.include_router(dashboard_router.router)
-app.include_router(eri_router.router)
 app.include_router(automation_router.router)
+app.include_router(filing_router.router)
 
 # ---------------------------------------------------------------------------
 # Standalone endpoints

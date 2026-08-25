@@ -20,15 +20,91 @@ Disqualifiers (must use ITR-2 or ITR-3 instead):
 
 from decimal import Decimal
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import date
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.schemas.capital_gains import Section112ATransaction
+
+
+OFFICIAL_COUNTRY_CODES = frozenset(
+    "93 1001 355 213 684 376 244 1264 1010 1268 54 374 297 61 43 994 1242 "
+    "973 880 1246 375 32 501 229 1441 975 591 1002 387 267 1003 55 1014 673 "
+    "359 226 257 238 855 237 1 1345 236 235 56 86 9 672 57 270 242 243 682 "
+    "506 225 385 53 1015 357 420 45 253 1767 1809 593 20 503 240 291 372 "
+    "251 500 298 679 358 33 594 689 1004 241 220 995 49 233 350 30 299 1473 "
+    "590 1671 502 1481 224 245 592 509 1005 6 504 852 36 354 91 62 98 964 "
+    "353 1624 972 5 1876 81 1534 962 7 254 686 850 82 965 996 856 371 961 "
+    "266 231 218 423 370 352 853 389 261 265 60 960 223 356 692 596 222 230 "
+    "269 52 691 373 377 976 382 1664 212 258 95 264 674 977 31 687 64 505 "
+    "227 234 683 15 1670 47 968 92 680 970 507 675 595 51 63 1011 48 14 "
+    "1787 974 262 40 8 250 1006 290 1869 1758 1007 508 1784 685 378 239 966 "
+    "221 381 248 232 65 1721 421 386 677 252 28 1008 211 35 94 249 597 1012 "
+    "268 46 41 963 886 992 255 66 670 228 690 676 1868 216 90 993 1649 688 "
+    "256 380 971 44 2 1009 598 998 678 58 84 1284 1340 681 1013 967 260 263 "
+    "9999".split()
+)
 
 
 # ---------------------------------------------------------------------------
 # Enumerations
 # ---------------------------------------------------------------------------
+
+
+class DisabilitySeverity(str, Enum):
+    """Statutory disability severity used by Sections 80DD and 80U."""
+
+    NORMAL = "normal"
+    SEVERE = "severe"
+
+    @property
+    def itd_code(self) -> str:
+        """Return the official ITD nature-of-disability code."""
+        return "2" if self is DisabilitySeverity.SEVERE else "1"
+
+
+class DisabilityCategory(str, Enum):
+    """Official category of disability for Sections 80DD and 80U."""
+
+    AUTISM_CEREBRAL_PALSY_OR_MULTIPLE = "specified"
+    OTHER = "other"
+
+    @property
+    def itd_code(self) -> str:
+        """Return the official ITD type-of-disability code."""
+        return (
+            "1"
+            if self is DisabilityCategory.AUTISM_CEREBRAL_PALSY_OR_MULTIPLE
+            else "2"
+        )
+
+
+class DependentRelationship(str, Enum):
+    """Eligible dependent relationships for Section 80DD."""
+
+    SPOUSE = "spouse"
+    SON = "son"
+    DAUGHTER = "daughter"
+    FATHER = "father"
+    MOTHER = "mother"
+    BROTHER = "brother"
+    SISTER = "sister"
+    MEMBER_OF_HUF = "member_of_huf"
+
+    @property
+    def itd_code(self) -> str:
+        """Return the explicit official ITD dependent-type code."""
+        return {
+            "spouse": "1",
+            "son": "2",
+            "daughter": "3",
+            "father": "4",
+            "mother": "5",
+            "brother": "6",
+            "sister": "7",
+            "member_of_huf": "8",
+        }[self.value]
 
 
 class AgeBracket(str, Enum):
@@ -152,6 +228,18 @@ class SalaryIncome(BaseModel):
         default=False,
         description="True if the employee is a Government employee (Central/State/PSU). Required for entertainment allowance deduction u/s 16(ii).",
     )
+    gratuity_received: Decimal = Field(default=Decimal("0"), ge=0)
+    commuted_pension_received: Decimal = Field(default=Decimal("0"), ge=0)
+    leave_encashment_received: Decimal = Field(default=Decimal("0"), ge=0)
+    vrs_compensation: Decimal = Field(default=Decimal("0"), ge=0)
+    retrenchment_compensation: Decimal = Field(default=Decimal("0"), ge=0)
+    transport_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    lta_amount_received: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_6_embassy_exempt: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_7_foreign_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_10cc_perquisite_tax: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_14i_prescribed_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    sec10_14ii_personal_allowance: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 
@@ -196,8 +284,28 @@ class HousePropertyIncome(BaseModel):
         default=Decimal("0"),
         ge=0,
         description=(
-            "Gross annual rent received or receivable during the year "
-            "(Section 23(1)(a)). Must be 0 if property_type is S."
+            "Annual lettable value reported in Schedule HP. Canonical drafts "
+            "map HouseProperty.annualLettingValue here; annualRent is accepted "
+            "only as a legacy fallback. Must be 0 if property_type is S."
+        ),
+    )
+    rent_not_realized: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Rent which could not be realised during the year. This is "
+            "deducted, together with municipal taxes, from annual lettable "
+            "value before applying the assessee's ownership share."
+        ),
+    )
+    ownership_share_percentage: Decimal = Field(
+        default=Decimal("100"),
+        gt=0,
+        le=100,
+        description=(
+            "Assessee's ownership share in the property. Gross annual value "
+            "inputs remain whole-property amounts; the calculator applies "
+            "this percentage after unrealized rent and municipal taxes."
         ),
     )
     municipal_taxes_paid: Decimal = Field(
@@ -229,6 +337,25 @@ class HousePropertyIncome(BaseModel):
             "amount back to house property income."
         ),
     )
+
+
+class OtherSourceDetail(BaseModel):
+    """One official compact-form ``OthersIncDtlsOthSrc`` source row."""
+
+    nature: Literal[
+        "SAV", "IFD", "TAX", "FAP", "DIV",
+        "10(11)(iP)", "10(11)(iiP)", "10(12)(iP)", "10(12)(iiP)", "OTH",
+    ]
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    other_description: Optional[str] = Field(default=None, min_length=1, max_length=125)
+
+    @model_validator(mode="after")
+    def validate_other_description(self) -> "OtherSourceDetail":
+        if self.nature == "OTH" and not self.other_description:
+            raise ValueError("Other-source nature OTH requires a description")
+        if self.nature != "OTH" and self.other_description:
+            raise ValueError("Other-source description is allowed only for nature OTH")
+        return self
 
 
 class OtherSourcesIncome(BaseModel):
@@ -275,6 +402,69 @@ class OtherSourcesIncome(BaseModel):
         ge=0,
         description="Dividend income taxable under other sources.",
     )
+    interest_on_it_refund: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Interest received on an income-tax refund.",
+    )
+    income_56_2_x: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Income u/s 56(2)(x) — inadequacy of consideration for "
+        "property/money received without consideration.",
+    )
+    income_56_2_vib: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Income u/s 56(2)(vib) — consideration for transfer of "
+        "immovable property less than stamp duty value.",
+    )
+    other_income: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Any other income chargeable under other sources.",
+    )
+    source_details: list[OtherSourceDetail] = Field(
+        default_factory=list,
+        description=(
+            "Canonical rows for the official compact-form other-source table. "
+            "Calculator aggregates remain available in the scalar fields."
+        ),
+    )
+
+
+class DonationAddress(BaseModel):
+    """Official Indian address for a donation recipient."""
+
+    address_line: str = Field(min_length=1, max_length=200)
+    city_or_district: str = Field(min_length=1, max_length=50)
+    state_code: str = Field(pattern=r"^(0[1-9]|[12][0-9]|3[0-7])$")
+    pin_code: int = Field(ge=100000, le=999999)
+
+
+class Donation80GCategory(str, Enum):
+    """Canonical Section 80G category and official frontend wire value."""
+
+    HUNDRED_WITHOUT_LIMIT = "100_NO_APPROVAL"
+    FIFTY_WITHOUT_LIMIT = "50_NO_APPROVAL"
+    HUNDRED_WITH_LIMIT = "100_APPROVAL_REQD"
+    FIFTY_WITH_LIMIT = "50_APPROVAL_REQD"
+
+    @property
+    def qualifying_percentage(self) -> str:
+        """Return the statutory qualifying percentage label."""
+        return "100%" if self in {
+            Donation80GCategory.HUNDRED_WITHOUT_LIMIT,
+            Donation80GCategory.HUNDRED_WITH_LIMIT,
+        } else "50%"
+
+    @property
+    def has_qualifying_limit(self) -> bool:
+        """Return whether the category uses the shared adjusted-GTI limit."""
+        return self in {
+            Donation80GCategory.HUNDRED_WITH_LIMIT,
+            Donation80GCategory.FIFTY_WITH_LIMIT,
+        }
 
 
 class Donation80G(BaseModel):
@@ -283,8 +473,91 @@ class Donation80G(BaseModel):
     """
     cash_amount: Decimal = Field(default=Decimal("0"), ge=0, description="Amount donated in cash.")
     non_cash_amount: Decimal = Field(default=Decimal("0"), ge=0, description="Amount donated via bank/cheque/digital modes.")
-    qualifying_percentage: str = Field(default="100%", description="Percentage of deduction allowed: '50%' or '100%'.")
-    limit_on_deduction: str = Field(default="without limit", description="Whether subject to 10% adjusted GTI limit: 'with limit' or 'without limit'.")
+    category: Optional[Donation80GCategory] = None
+    qualifying_percentage: Literal["50%", "100%"] = Field(
+        default="100%",
+        description="Legacy percentage; use category.",
+    )
+    limit_on_deduction: Literal["with limit", "without limit"] = Field(
+        default="without limit",
+        description="Legacy limit label; use category.",
+    )
+    donee_name: Optional[str] = Field(default=None, min_length=1, max_length=125)
+    donee_pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    approval_reference_number: Optional[str] = Field(default=None, max_length=25)
+    address: Optional[DonationAddress] = None
+    donation_category: str = "A"
+    ifsc_code: Optional[str] = Field(
+        default=None,
+        max_length=11,
+        pattern=r"^[A-Z]{4}0[A-Z0-9]{6}$",
+    )
+    transaction_ref: Optional[str] = Field(default=None, max_length=50)
+    total_donation: Optional[Decimal] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_category_representations(self) -> "Donation80G":
+        """Reject conflicting canonical and legacy category representations."""
+        if self.category is None:
+            return self
+        expected_code = {
+            Donation80GCategory.HUNDRED_WITHOUT_LIMIT: "A",
+            Donation80GCategory.FIFTY_WITHOUT_LIMIT: "B",
+            Donation80GCategory.HUNDRED_WITH_LIMIT: "C",
+            Donation80GCategory.FIFTY_WITH_LIMIT: "D",
+        }[self.category]
+        legacy_is_default = (
+            self.qualifying_percentage == "100%"
+            and self.limit_on_deduction == "without limit"
+            and self.donation_category == "A"
+        )
+        if not legacy_is_default and (
+            self.qualifying_percentage != self.category.qualifying_percentage
+            or (self.limit_on_deduction == "with limit")
+            != self.category.has_qualifying_limit
+            or self.donation_category != expected_code
+        ):
+            raise ValueError("Conflicting Section 80G category representations")
+        self.qualifying_percentage = self.category.qualifying_percentage
+        self.limit_on_deduction = (
+            "with limit" if self.category.has_qualifying_limit else "without limit"
+        )
+        self.donation_category = expected_code
+        return self
+
+
+class Section80DDBUserType(str, Enum):
+    """Official beneficiary category for Section 80DDB."""
+
+    SELF_OR_DEPENDENT = "1"
+    SELF_OR_DEPENDENT_SENIOR = "2"
+
+
+class SpecifiedDisease80DDB(str, Enum):
+    """Official Rule 11DD specified-disease codes for Section 80DDB."""
+
+    DEMENTIA = "a"
+    DYSTONIA_MUSCULORUM_DEFORMANS = "b"
+    MOTOR_NEURON_DISEASE = "c"
+    ATAXIA = "d"
+    CHOREA = "e"
+    HEMIBALLISMUS = "f"
+    APHASIA = "g"
+    PARKINSONS_DISEASE = "h"
+    MALIGNANT_CANCERS = "i"
+    AIDS = "j"
+    CHRONIC_RENAL_FAILURE = "k"
+    HEMATOLOGICAL_DISORDERS = "l"
+    HEMOPHILIA = "m"
+    THALASSAEMIA = "n"
+
+
+class Section80DDBDetails(BaseModel):
+    """Beneficiary, disease, and reimbursement details for Section 80DDB."""
+
+    user_type: Section80DDBUserType
+    disease: SpecifiedDisease80DDB
+    reimbursement_amount: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class Chapter6ADeductions(BaseModel):
@@ -422,7 +695,11 @@ class Chapter6ADeductions(BaseModel):
     amount_80ddb: Decimal = Field(
         default=Decimal("0"),
         ge=0,
-        description="Medical treatment of specified diseases (Section 80DDB).",
+        description="Gross medical-treatment expenditure for a specified disease (Section 80DDB).",
+    )
+    details_80ddb: Optional[Section80DDBDetails] = Field(
+        default=None,
+        description="Official beneficiary category, disease code, and reimbursement details.",
     )
     amount_80u: Decimal = Field(
         default=Decimal("0"),
@@ -556,6 +833,54 @@ class CapitalGainsIncome(BaseModel):
             "gain reported in Schedule 112A of the ITR-1 form."
         ),
     )
+    full_value_of_consideration: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Aggregate sale consideration for Section 112A assets.",
+    )
+    transactions: Optional[List[Section112ATransaction]] = Field(
+        default=None,
+        description="Canonical transaction evidence for restricted Section 112A computation.",
+    )
+
+    @model_validator(mode="after")
+    def derive_canonical_transaction_totals(self) -> "CapitalGainsIncome":
+        """Validate canonical rows and project their aggregate into form fields."""
+        if not self.transactions:
+            return self
+        from app.engine.schedules.restricted_112a import compute_restricted_112a
+
+        raw_rows = [transaction.model_dump(mode="json") for transaction in self.transactions]
+        portfolio = compute_restricted_112a(raw_rows)
+        if portfolio.evidence_count:
+            raise ValueError(
+                "Imported capital-gains evidence must be matched and completed "
+                "before generating an ITR-1/ITR-4 filing artifact"
+            )
+        if not portfolio.is_valid:
+            codes = ", ".join(issue.code.value for issue in portfolio.issues)
+            raise ValueError(f"Restricted Section 112A transactions are not eligible: {codes}")
+        self.ltcg_112a = portfolio.gross_gain
+        self.cost_of_acquisition = portfolio.cost_of_acquisition
+        self.full_value_of_consideration = portfolio.full_value_of_consideration
+        return self
+
+
+class CompactExemptIncomeEntry(BaseModel):
+    """One ITR-1/ITR-4 exempt-income row in the official compact schema."""
+
+    category: Literal["AGRI", "GOVC", "ISI", "SSRA", "SRSC", "SRST", "SRPC", "OTH"]
+    sub_category: Literal[
+        "10(1)", "10(30)", "10(31)", "10(10BB)", "10(10BC)", "10(17A)",
+        "10(12AB)", "10(15)", "10(23FBB)", "10(23FD)", "10(35)", "10(35A)",
+        "10(12C)", "10(18)", "10(19)", "10(23AA)", "DMD", "10(32)", "10(43)",
+        "10(19A)", "10(26)", "10(26AAA)", "10(10D)", "10(11)", "10(11A)",
+        "10(12)", "10(12A)", "10(12AA)", "10(12B)", "10(12BA)", "10(13)",
+        "10(25)", "10(44)", "10(2)", "10(16)", "Incmexmptcircular",
+        "Incmexmptnotification", "Receiptnotincme",
+    ]
+    description: Optional[str] = Field(default=None, min_length=1, max_length=125)
+    amount: Decimal = Field(default=Decimal("0"), ge=0, le=99999999999999)
 
 
 # ---------------------------------------------------------------------------
@@ -594,9 +919,15 @@ class ITR1Input(BaseModel):
         description="Details of salary and allowances received during the year.",
     )
     house_property_income: HousePropertyIncome = Field(
+        description="Primary house-property details retained for backward-compatible ITR-1 callers.",
+    )
+    house_properties: List[HousePropertyIncome] = Field(
+        default_factory=list,
+        max_length=2,
         description=(
-            "Details of the single house property owned by the assessee. "
-            "ITR-1 does not permit more than one property."
+            "Official AY 2026-27 ITR-1 PropertyDetails rows. The CBDT V1.1 "
+            "schema permits at most two properties. When supplied, these rows "
+            "replace the backward-compatible house_property_income field."
         ),
     )
     other_sources_income: OtherSourcesIncome = Field(
@@ -619,6 +950,18 @@ class ITR1Input(BaseModel):
             "2024). Omit or set to None if the assessee has no capital gains. "
             "The computation engine must reject this input if ltcg_112a "
             "exceeds ₹1,25,000, as such assessees must file ITR-2."
+        ),
+    )
+    cg_transactions: Optional[list] = Field(
+        default=None,
+        description=(
+            "Canonical capital-gain transaction rows (the same typed "
+            "CGTransaction shape used by ITR-2). When provided, the ITR-1 "
+            "calculator runs the standalone CG schedule and projects the "
+            "restricted-112A aggregate view, surfacing losses-forfeited and "
+            "other-CG-disallowed for form-eligibility guidance. This does "
+            "NOT widen ITR-1 eligibility — only restricted 112A LTCG within "
+            "₹1.25 lakh is reportable; any other CG forces ITR-2/3."
         ),
     )
     # --- TDS/TCS ---
@@ -647,7 +990,7 @@ class ITR1Input(BaseModel):
     is_director: bool = Field(default=False, description="True if assessee is a director in any company (disqualifies ITR-1).")
     has_foreign_assets: bool = Field(default=False, description="True if assessee holds foreign assets or has foreign income (disqualifies ITR-1).")
     has_unlisted_equity: bool = Field(default=False, description="True if assessee holds unlisted equity shares (disqualifies ITR-1).")
-    house_property_count: int = Field(default=1, ge=1, description="Number of house properties owned. ITR-1 allows at most 1.")
+    house_property_count: int = Field(default=1, ge=1, le=2, description="Number of house properties owned. Official AY 2026-27 ITR-1 permits at most 2.")
 
     # --- Quarterly advance tax ---
     advance_tax_q1: Optional[Decimal] = Field(default=None, ge=0, description="Advance tax paid by 15 June (Q1)")
@@ -659,6 +1002,202 @@ class ITR1Input(BaseModel):
     relief_89: Decimal = Field(default=Decimal("0"), ge=0, description="Relief under section 89 (arrears of salary) as computed by Form 10E")
     agriculture_income: Decimal = Field(default=Decimal("0"), ge=0, description="Agricultural income shown as exempt")
 
+    # --- Extended validation schedules and cross-foot totals ---
+    nature_of_employment: Optional[str] = None
+    filing_section: Optional[str] = None
+    original_filing_section: Optional[str] = None
+    form_10e_filed: bool = False
+    form_10ia_filed: bool = False
+    form_10ba_filed: bool = False
+    form_10ba_ack_number: Optional[str] = Field(default=None, max_length=15)
+    pran_number: Optional[str] = Field(default=None, max_length=12)
+    disease_category: Optional[str] = Field(
+        default=None,
+        max_length=125,
+        deprecated=True,
+        description="Deprecated: use deductions_chapter6a.details_80ddb.disease.",
+    )
+    agniveer_date_of_joining: Optional[date] = None
+    date_of_incorporation: Optional[date] = None
+    assessee_pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    assessee_email_primary: Optional[str] = None
+    assessee_phone_primary: Optional[str] = None
+    representative_email: Optional[str] = None
+    representative_phone: Optional[str] = None
+    exempt_income_breakdown: dict[str, Decimal] = Field(default_factory=dict)
+    exempt_income_dropdowns: list[str] = Field(default_factory=list)
+    exempt_income_entries: List[CompactExemptIncomeEntry] = Field(default_factory=list)
+    total_exempt_income: Optional[Decimal] = Field(default=None, ge=0)
+    other_sources_dropdowns: list[str] = Field(default_factory=list)
+    other_sources_total: Optional[Decimal] = Field(default=None, ge=0)
+    dividend_quarterly_breakdown: dict[str, Decimal] = Field(default_factory=dict)
+    full_value_of_consideration: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_80d: Optional["Schedule80D"] = None
+    schedule_80g: Optional["Schedule80G"] = None
+    schedule_80gga: Optional["Schedule80GGA"] = None
+    schedule_80ggc: Optional["Schedule80GGC"] = None
+    schedule_80dd: Optional["Schedule80DD"] = None
+    schedule_80u: Optional["Schedule80U"] = None
+    schedule_80c_entries: List["Schedule80CEntry"] = Field(default_factory=list)
+    schedule_80ccc_entries: List["Schedule80CCCEntry"] = Field(default_factory=list)
+    schedule_80e_entries: List["Schedule80EEntry"] = Field(default_factory=list)
+    loan_details_80ee_list: List["ITR1Schedule80EELoanEntry"] = Field(default_factory=list)
+    loan_details_80eea_list: List["ITR1Schedule80EEALoanEntry"] = Field(default_factory=list)
+    loan_details_80eeb_list: List["ITR1Schedule80EEBLoanEntry"] = Field(default_factory=list)
+    property_stamp_duty_value_80eea: Optional[Decimal] = Field(default=None, ge=0, le=4_500_000)
+    loan_details_24b_list: List["LoanDetail"] = Field(default_factory=list)
+    tax_payment_entries: List["TaxPaymentDetail"] = Field(default_factory=list)
+    bank_accounts: List["BankAccount"] = Field(default_factory=list)
+    hra_details: Optional["HRADetails"] = None
+    schedule_10_13a: Optional["HRADetails"] = None
+    loan_details_80ee: Optional["LoanDetails"] = None
+    loan_details_80eea: Optional["LoanDetails"] = None
+    loan_details_80eeb: Optional["LoanDetails"] = None
+    is_property_co_owned: bool = False
+    other_co_owner_percentage: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    co_ownership_details: Optional["CoOwnershipDetails"] = None
+    representative_details: Optional["RepresentativeDetails"] = None
+    secondary_address: Optional["SecondaryAddress"] = None
+    tds3_entries: Optional[List["TDS3Entry"]] = None
+    total_taxes_paid: Optional[Decimal] = Field(default=None, ge=0)
+    total_tds_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    total_tcs_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_it_total_paid: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_tds1_total: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_tds2_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_tds3_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    schedule_tcs_total_claimed: Optional[Decimal] = Field(default=None, ge=0)
+    filing_profile: Optional["ITR1FilingProfile"] = None
+    property_profile: Optional["PropertyFilingProfile"] = None
+    property_profiles: List["PropertyFilingProfile"] = Field(
+        default_factory=list,
+        max_length=2,
+        description=(
+            "Official AY 2026-27 ITR-1 PropertyDetails address/ownership "
+            "profiles, one per row in ``house_properties``. When supplied, "
+            "the i-th profile corresponds to the i-th house-property income "
+            "row. A single ``property_profile`` remains supported for "
+            "backward-compatible single-property callers."
+        ),
+    )
+    tax_return_preparer: Optional["TaxReturnPreparer"] = None
+
+    @model_validator(mode="after")
+    def reconcile_house_property_rows(self) -> "ITR1Input":
+        """Reconcile the single- and multi-property representations.
+
+        The CBDT AY 2026-27 ITR-1 schema permits at most two
+        ``PropertyDetails`` rows (V1.1 ``PropertyDetails.maxItems = 2``).
+        Callers may supply either the legacy single-property fields
+        (``house_property_income`` + ``property_profile``) or the typed
+        list fields (``house_properties`` + ``property_profiles``). This
+        validator normalises both directions so the computation engine
+        and the official-JSON builder only need to read ``house_properties``
+        and ``property_profiles``.
+        """
+        # 1. Ensure house_properties is populated for legacy callers.
+        if not self.house_properties:
+            self.house_properties = [self.house_property_income]
+        # 2. Enforce the official two-row cap.
+        if len(self.house_properties) > 2:
+            raise ValueError(
+                "ITR-1 supports at most two house properties; "
+                f"{len(self.house_properties)} rows were supplied."
+            )
+        # 3. Mirror house_property_income to the first row for any legacy
+        #    reader that still inspects the scalar field.
+        if self.house_property_income is not self.house_properties[0]:
+            self.house_property_income = self.house_properties[0]
+        # 4. Mirror property_profiles ↔ property_profile (single row).
+        if not self.property_profiles:
+            if self.property_profile is not None:
+                self.property_profiles = [self.property_profile]
+        else:
+            if len(self.property_profiles) > 2:
+                raise ValueError(
+                    "ITR-1 supports at most two property profiles; "
+                    f"{len(self.property_profiles)} rows were supplied."
+                )
+            if self.property_profile is None:
+                self.property_profile = self.property_profiles[0]
+            else:
+                # Keep the i-th profile authoritative for the i-th row.
+                if self.property_profile is not self.property_profiles[0]:
+                    self.property_profiles[0] = self.property_profile
+        # 5. Keep house_property_count in sync with the row count.
+        row_count = max(len(self.house_properties), len(self.property_profiles) or 1)
+        if row_count > 2:
+            raise ValueError(
+                "ITR-1 supports at most two house properties."
+            )
+        self.house_property_count = max(self.house_property_count, row_count)
+        return self
+
+    def reconciled_house_properties(self) -> list["HousePropertyIncome"]:
+        """Return the authoritative house-property input list.
+
+        The schema's ``model_validator`` keeps ``house_properties`` and the
+        legacy scalar ``house_property_income`` in sync at construction time.
+        However, ``model_copy(update={"house_property_income": X})`` mutates
+        the scalar without re-running the validator, leaving the list stale.
+        This helper detects that staleness and returns the authoritative list
+        so the calculator and ITD builder always read consistent inputs.
+        """
+        if self.house_properties and self.house_properties[0] is self.house_property_income:
+            return list(self.house_properties)
+        # Stale list (or single-property caller): the scalar is authoritative.
+        if self.house_property_income is not None:
+            return [self.house_property_income]
+        return list(self.house_properties)
+
+    def reconciled_property_profiles(self) -> list["PropertyFilingProfile"]:
+        """Return the authoritative property-profile list (mirrors the above).
+
+        If the scalar ``property_profile`` was explicitly cleared (e.g. via
+        ``model_copy(update={"property_profile": None})``) the list is stale
+        and we return an empty list so downstream builders raise the required
+        "property_profile is required" error.
+        """
+        if self.property_profile is None:
+            return []
+        if self.property_profiles and self.property_profiles[0] is self.property_profile:
+            return list(self.property_profiles)
+        return [self.property_profile]
+
+    def loan_schedule_rows(self, section: str) -> list["OfficialDeductionLoanEntry"]:
+        """Return canonical official loan rows and reject incomplete legacy copies."""
+        rows_by_section = {
+            "80EE": self.loan_details_80ee_list,
+            "80EEA": self.loan_details_80eea_list,
+            "80EEB": self.loan_details_80eeb_list,
+        }
+        legacy_by_section = {
+            "80EE": self.loan_details_80ee,
+            "80EEA": self.loan_details_80eea,
+            "80EEB": self.loan_details_80eeb,
+        }
+        if section not in rows_by_section:
+            raise ValueError(f"Unsupported deduction loan section: {section}")
+        if legacy_by_section[section] is not None:
+            raise ValueError(
+                f"Legacy {section} loan details are incomplete; provide official loan rows"
+            )
+        return list(rows_by_section[section])
+
+    def disability_schedule_80dd(self) -> Optional["Schedule80DD"]:
+        """Return the canonical 80DD schedule, rejecting conflicting copies."""
+        nested = self.deductions_chapter6a.schedule_80dd
+        if self.schedule_80dd is not None and nested is not None and self.schedule_80dd != nested:
+            raise ValueError("Conflicting Schedule 80DD details were provided")
+        return self.schedule_80dd or nested
+
+    def disability_schedule_80u(self) -> Optional["Schedule80U"]:
+        """Return the canonical 80U schedule, rejecting conflicting copies."""
+        nested = self.deductions_chapter6a.schedule_80u
+        if self.schedule_80u is not None and nested is not None and self.schedule_80u != nested:
+            raise ValueError("Conflicting Schedule 80U details were provided")
+        return self.schedule_80u or nested
+
 
 # ---------------------------------------------------------------------------
 # TDS / TCS entry models (shared across ITR forms)
@@ -669,99 +1208,752 @@ class ITR1Input(BaseModel):
 # Stub models referenced by ITR-4 / shared across ITR forms
 # ---------------------------------------------------------------------------
 
+class PostalAddress(BaseModel):
+    """Postal address fields shared by primary and alternate addresses."""
+
+    residence_no: str = Field(min_length=1, max_length=50)
+    residence_name: str = Field(default="", max_length=50)
+    road_or_street: str = Field(default="", max_length=50)
+    locality_or_area: str = Field(min_length=1, max_length=50)
+    city_or_town_or_district: str = Field(min_length=1, max_length=50)
+    state_code: str = Field(pattern=r"^(0[1-9]|[12][0-9]|3[0-7]|99)$")
+    country_code: str = Field(default="91", min_length=1, max_length=4)
+    pin_code: Optional[str] = Field(default=None, pattern=r"^[1-9][0-9]{5}$")
+    zip_code: str = Field(default="", max_length=8)
+
+
+class PropertyCoOwner(BaseModel):
+    """One co-owner row in an official house-property schedule."""
+
+    serial_number: int = Field(ge=1, le=99999999999999)
+    name: str = Field(min_length=1, max_length=125)
+    pan: Optional[str] = Field(
+        default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$"
+    )
+    aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    share_percentage: Optional[Decimal] = Field(default=None, ge=0, le=100)
+
+
+class PropertyTenant(BaseModel):
+    """One tenant row in an official house-property schedule."""
+
+    serial_number: int = Field(ge=1, le=99999999999999)
+    name: str = Field(min_length=1, max_length=125)
+    pan: Optional[str] = Field(
+        default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$"
+    )
+    aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    pan_or_tan: Optional[str] = Field(
+        default=None,
+        pattern=r"^([A-Z]{4}[0-9]{5}[A-Z]|[A-Z]{5}[0-9]{4}[A-Z])$",
+    )
+
+
+class PropertyFilingProfile(BaseModel):
+    """Official address, ownership, co-owner, and tenant property details."""
+
+    address_detail: str = Field(min_length=1, max_length=50)
+    city_or_town_or_district: str = Field(min_length=1, max_length=50)
+    state_code: str = Field(pattern=r"^(0[1-9]|[12][0-9]|3[0-7]|99)$")
+    country_code: str = Field(default="91", min_length=1, max_length=4)
+    pin_code: Optional[str] = Field(default=None, pattern=r"^[1-9][0-9]{5}$")
+    zip_code: Optional[str] = Field(default=None, min_length=1, max_length=8)
+    property_owner: Literal["SE", "MI", "SP", "OT"] = "SE"
+    property_owner_other: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    is_co_owned: bool = False
+    assessee_share_percentage: Decimal = Field(default=Decimal("100"), ge=0, le=100)
+    co_owners: List[PropertyCoOwner] = Field(default_factory=list)
+    tenants: List[PropertyTenant] = Field(default_factory=list)
+
+    @field_validator("country_code")
+    @classmethod
+    def validate_country_code(cls, value: str) -> str:
+        """Require an official AY 2026-27 ITD country code."""
+        if value not in OFFICIAL_COUNTRY_CODES:
+            raise ValueError("country_code must be an official ITD country code")
+        return value
+
+    @model_validator(mode="after")
+    def validate_ownership(self) -> "PropertyFilingProfile":
+        """Enforce conditional ownership fields before official serialization."""
+        if self.property_owner == "OT" and not self.property_owner_other:
+            raise ValueError("property_owner_other is required when property_owner is OT")
+        if self.property_owner != "OT" and self.property_owner_other:
+            raise ValueError("property_owner_other is only allowed for property_owner OT")
+        if self.is_co_owned:
+            if not self.co_owners:
+                raise ValueError("co_owners is required when property is co-owned")
+            if self.assessee_share_percentage >= 100:
+                raise ValueError(
+                    "assessee_share_percentage must be below 100 for co-owned property"
+                )
+            for row in self.co_owners:
+                if row.share_percentage is None:
+                    raise ValueError(
+                        "each co-owner share_percentage is required for co-owned property"
+                    )
+                if row.share_percentage <= 0 or row.share_percentage >= 100:
+                    raise ValueError(
+                        "each co-owner share_percentage must be above 0 and below 100"
+                    )
+            total_share = self.assessee_share_percentage + sum(
+                (row.share_percentage or Decimal("0") for row in self.co_owners),
+                Decimal("0"),
+            )
+            if total_share != Decimal("100"):
+                raise ValueError(
+                    "assessee and co-owner property shares must total 100"
+                )
+        elif self.assessee_share_percentage != Decimal("100") or self.co_owners:
+            raise ValueError(
+                "sole-owned property must have 100 percent assessee share and no co-owners"
+            )
+        for label, values in (
+            ("co-owner PAN", [row.pan for row in self.co_owners if row.pan]),
+            (
+                "co-owner Aadhaar",
+                [row.aadhaar for row in self.co_owners if row.aadhaar],
+            ),
+            ("tenant PAN", [row.pan for row in self.tenants if row.pan]),
+            (
+                "tenant Aadhaar",
+                [row.aadhaar for row in self.tenants if row.aadhaar],
+            ),
+            (
+                "tenant PAN/TAN",
+                [row.pan_or_tan for row in self.tenants if row.pan_or_tan],
+            ),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"{label} must be unique within a property")
+        return self
+
+
+class FilingAddress(PostalAddress):
+    """Primary filing address with mandatory taxpayer contact details.
+
+    The CBDT ITR-1 Address schema requires CountryCodeMobileNoSec and
+    MobileNoSec (always emitted, 0 when absent) and optionally
+    EmailAddressSec.  Every field emitted here is verified against the
+    official AY 2026-27 schema.
+    """
+
+    mobile_country_code: int = Field(default=91, ge=1, le=99999)
+    mobile_no: str = Field(pattern=r"^[1-9][0-9]{4,9}$")
+    email: str = Field(
+        min_length=3,
+        max_length=125,
+        pattern=r"^([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+$",
+    )
+    # Secondary mobile — emitted as 0 when absent (CBDT Address schema
+    # requires the keys CountryCodeMobileNoSec and MobileNoSec always).
+    secondary_mobile_country_code: int = Field(default=0, ge=0, le=99999)
+    secondary_mobile_no: Optional[str] = Field(
+        default=None,
+        pattern=r"^[1-9][0-9]{4,9}$",
+    )
+    # Secondary email — omitted from the JSON when blank (optional in the
+    # CBDT Address schema).
+    secondary_email: Optional[str] = Field(
+        default=None,
+        max_length=125,
+        pattern=r"^([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+$",
+    )
+
+
+class SeventhProvisoDetails(BaseModel):
+    """Seventh-proviso to section 139(1) declaration details for ITR-1."""
+
+    foreign_travel_flag: bool = False
+    foreign_travel_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    electricity_expenditure_flag: bool = False
+    electricity_expenditure_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    other_clause_iv_flag: bool = False
+    clause_iv_details: List["SeventhProvisoClauseDetail"] = Field(default_factory=list)
+
+
+class SeventhProvisoClauseDetail(BaseModel):
+    """One clause-(iv) seventh-proviso detail row."""
+
+    nature: Literal["1", "2"]
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class AssesseeRepresentativeProfile(BaseModel):
+    """Contact details emitted under FilingStatus.AssesseeRep."""
+
+    name: str = Field(min_length=1, max_length=125)
+    email: str = Field(
+        min_length=3,
+        max_length=125,
+        pattern=r"^([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+$",
+    )
+    mobile_country_code: int = Field(ge=1, le=99999)
+    mobile_no: str = Field(pattern=r"^[1-9][0-9]{4,9}$")
+
+
+class ITR1FilingProfile(BaseModel):
+    """Taxpayer identity, filing status, and verification for official JSON.
+
+    Every field here maps to a real CBDT ITR-1 PersonalInfo, FilingStatus,
+    or Verification destination.  No entered statutory field is silently
+    replaced with a default during JSON generation.
+    """
+
+    pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    first_name: str = Field(default="", max_length=25)
+    middle_name: str = Field(default="", max_length=25)
+    surname: str = Field(min_length=1, max_length=75)
+    date_of_birth: date
+    employer_category: str = Field(
+        default="OTH",
+        pattern=r"^(CGOV|SGOV|PSU|PE|PESG|PEPS|PEO|OTH|NA)$",
+    )
+    aadhaar_number: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    primary_address: FilingAddress
+    alternate_address: Optional[PostalAddress] = None
+    father_name: str = Field(min_length=1, max_length=125)
+    verification_place: str = Field(min_length=1, max_length=50)
+    verification_capacity: Literal["S", "R"] = "S"
+    # CBDT FilingStatus.ReturnFileSec enum (min=11, max=20). Widened from
+    # Literal[11, 12] to the full schema enum so revised (17), belated (12),
+    # defective (13), notice (14/16/18/20) filings are all representable.
+    return_file_section: Literal[11, 12, 13, 14, 16, 17, 18, 20] = 11
+    # Revised-return metadata (required by the CBDT schema only when
+    # return_file_section == 17).  Captured here so the builder can emit
+    # OriginalAckNo / OrigRetFileSec when the taxpayer files a revised return.
+    return_type: Literal["O", "R"] = "O"
+    original_acknowledgement_no: Optional[str] = Field(default=None, max_length=15)
+    original_return_date: Optional[date] = None
+    notice_number: Optional[str] = Field(default=None, max_length=100)
+    notice_date: Optional[date] = None
+    assessee_representative: Optional[AssesseeRepresentativeProfile] = None
+    # New-regime opt-out (FilingStatus.OptOutNewTaxRegime).  CBDT requires
+    # this key always; ITR-1 filers in the new regime emit "N".
+    opt_out_new_tax_regime: bool = False
+    # Seventh-proviso declarations (FilingStatus.SeventhProvisio139).
+    seventh_proviso: SeventhProvisoDetails = Field(default_factory=SeventhProvisoDetails)
+    # Form 10-IEA acknowledgement when the assessee opts out of the new
+    # regime via Form 10-IEA.  Empty string → emitted as "N" / omitted.
+    form_10iea_acknowledgement: str = Field(default="", max_length=25)
+    form_10iea_date: Optional[date] = None
+
+    @model_validator(mode="after")
+    def validate_opt_out_requires_form_10iea(self) -> "ITR1FilingProfile":
+        """Require Form 10-IEA acknowledgement when opting out of new regime.
+
+        For AY 2026-27, a taxpayer with business/profession income who opts
+        out of the new regime must have filed Form 10-IEA.  For ITR-1
+        (salary-only) filers, the opt-out itself is the declaration, but
+        if the acknowledgement number is provided it must be accompanied
+        by a valid date and vice versa.
+        """
+        if self.opt_out_new_tax_regime:
+            # Opt-out is allowed for ITR-1; Form 10-IEA is not strictly
+            # required for salary-only filers, but if provided must be
+            # consistent.
+            pass
+        if self.form_10iea_acknowledgement and not self.form_10iea_date:
+            raise ValueError(
+                "form_10iea_date is required when form_10iea_acknowledgement is provided"
+            )
+        if self.return_file_section == 17:
+            if self.original_acknowledgement_no is None or self.original_return_date is None:
+                # Name the trigger and both ways out. The bare wording gave no
+                # hint that the filing SECTION is what makes a return revised,
+                # so an operator who had picked 139(5) by mistake had no way to
+                # tell whether to supply the acknowledgement or change section.
+                missing = []
+                if self.original_acknowledgement_no is None:
+                    missing.append("original acknowledgement number")
+                if self.original_return_date is None:
+                    missing.append("original filing date")
+                raise ValueError(
+                    "Revised return requires original acknowledgement number and filing date. "
+                    f"Filing section 139(5) marks this return as revised, and the "
+                    f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing. "
+                    "Enter the details of the original return, or change the filing "
+                    "section to 139(1) if this is not a revised return."
+                )
+        if self.return_file_section in {13, 14, 16, 18}:
+            if self.notice_number is None or self.notice_date is None:
+                raise ValueError("Notice return requires notice number and notice date")
+        if self.verification_capacity == "R" and self.assessee_representative is None:
+            raise ValueError("Representative verification requires assessee representative details")
+        if self.seventh_proviso.other_clause_iv_flag and not self.seventh_proviso.clause_iv_details:
+            raise ValueError("Other seventh-proviso declaration requires clause detail rows")
+        return self
+
+
+class TaxReturnPreparer(BaseModel):
+    """Official tax return preparer details, when a TRP prepares the return."""
+
+    identification_number: str = Field(pattern=r"^(T[0-9]{9}|[0-9]{6})$")
+    name: str = Field(min_length=1, max_length=125)
+    reimbursement_from_government: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        le=Decimal("99999999999999"),
+    )
+
+
 class TDS3Entry(BaseModel):
-    """TDS on payment to non-residents - Schedule TDS3."""
-    deductor_tan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
-    deductor_name: Optional[str] = Field(default=None, max_length=125)
-    gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    """TDS on payment to non-residents - Schedule TDS3.
+
+    Mirrors the official ``TDS3Details`` object: tenant/buyer PAN, name,
+    gross receipt, deducted year, TDS deducted, TDS claimed, and section.
+    """
+    tenant_pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    tenant_name: str = Field(min_length=1, max_length=125)
+    tenant_aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    gross_receipt: Decimal = Field(default=Decimal("0"), ge=0)
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_claimed: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_section: str = Field(...)
+    deducted_yr: str = Field(default="2025", pattern=r"^20[0-9]{2}$")
+    brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
+    head_of_income: Literal["HP", "BP", "OS", "EI"] = "OS"
+    tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @model_validator(mode="after")
+    def validate_claimed_does_not_exceed_deducted(self) -> "TDS3Entry":
+        """Reject claimed credit that exceeds the deducted credit."""
+        if self.tds_claimed > self.tds_deducted:
+            raise ValueError("TDS3 claimed credit cannot exceed deducted credit")
+        return self
+
+
+class InsurancePolicy(BaseModel):
+    """Health-insurance policy detail used by Schedule 80D."""
+    section: str = "1a"
+    premium_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    insurer_name: Optional[str] = Field(default=None, max_length=125)
+    policy_number: Optional[str] = Field(default=None, max_length=50)
+    payment_mode_cash: bool = False
+
 
 class Schedule80D(BaseModel):
     """Schedule 80D health insurance details."""
-    pass
+    has_self_senior: bool = False
+    has_parents_senior: bool = False
+    not_claiming_self: bool = False
+    not_claiming_parents: bool = False
+    premium_1a_non_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    premium_1b_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    premium_2a_parents_non_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    premium_2b_parents_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    preventive_checkup_self: Decimal = Field(default=Decimal("0"), ge=0)
+    preventive_checkup_parents: Decimal = Field(default=Decimal("0"), ge=0)
+    medical_expense_self_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    medical_expense_parents_senior: Decimal = Field(default=Decimal("0"), ge=0)
+    policies: List[InsurancePolicy] = Field(default_factory=list)
+
 
 class Schedule80G(BaseModel):
     """Schedule 80G donation details."""
-    pass
+    donations: List[Donation80G] = Field(default_factory=list)
+    total_eligible_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class Section80GGAClause(str, Enum):
+    """Official clauses under which a Section 80GGA deduction is claimed."""
+
+    SCIENTIFIC_RESEARCH = "80GGA2a"
+    SOCIAL_OR_STATISTICAL_RESEARCH = "80GGA2aa"
+    RURAL_DEVELOPMENT = "80GGA2b"
+    ELIGIBLE_PROJECT = "80GGA2bb"
+    NATURAL_RESOURCES_OR_AFFORESTATION = "80GGA2c"
+    NOTIFIED_AFFORESTATION_FUND = "80GGA2cc"
+    NOTIFIED_RURAL_DEVELOPMENT_FUND = "80GGA2d"
+    URBAN_POVERTY_ERADICATION_FUND = "80GGA2e"
+
+
+class Donation80GGA(BaseModel):
+    """Complete official donation row for Schedule 80GGA."""
+
+    relevant_clause: Section80GGAClause
+    donee_name: str = Field(min_length=1, max_length=125)
+    address: DonationAddress
+    donee_pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    cash_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    other_mode_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
 
 class Schedule80GGA(BaseModel):
     """Schedule 80GGA scientific research donations."""
-    pass
+    donations: List[Donation80GGA] = Field(default_factory=list)
+    cash_donations: Decimal = Field(default=Decimal("0"), ge=0)
+    non_cash_donations: Decimal = Field(default=Decimal("0"), ge=0)
+    total_claimed: Decimal = Field(default=Decimal("0"), ge=0)
+    eligible_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    donee_pan_list: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_canonical_rows(self) -> "Schedule80GGA":
+        """Reject duplicate PANs and conflicting legacy aggregate copies."""
+        if not self.donations:
+            return self
+        pans = [donation.donee_pan for donation in self.donations]
+        if len(pans) != len(set(pans)):
+            raise ValueError("Schedule 80GGA donee PANs must be unique")
+        cash = sum((donation.cash_amount for donation in self.donations), Decimal("0"))
+        other = sum((donation.other_mode_amount for donation in self.donations), Decimal("0"))
+        legacy_present = (
+            self.cash_donations > 0
+            or self.non_cash_donations > 0
+            or self.total_claimed > 0
+            or self.eligible_amount > 0
+            or bool(self.donee_pan_list)
+        )
+        if legacy_present and (
+            self.cash_donations != cash
+            or self.non_cash_donations != other
+            or self.total_claimed != cash + other
+            or (self.donee_pan_list and self.donee_pan_list != pans)
+        ):
+            raise ValueError("Conflicting legacy and canonical Schedule 80GGA details")
+        self.cash_donations = cash
+        self.non_cash_donations = other
+        self.total_claimed = cash + other
+        self.donee_pan_list = pans
+        return self
+
+
+class PoliticalContribution(BaseModel):
+    """Complete official contribution row for Schedule 80GGC."""
+
+    amount: Decimal = Field(
+        default=Decimal("0"), ge=0, le=Decimal("99999999999999")
+    )
+    cash_amount: Decimal = Field(
+        default=Decimal("0"), ge=0, le=Decimal("99999999999999")
+    )
+    other_mode_amount: Decimal = Field(
+        default=Decimal("0"), ge=0, le=Decimal("99999999999999")
+    )
+    contribution_date: Optional[date] = None
+    contribution_mode: str = "non_cash"
+    transaction_ref: Optional[str] = Field(default=None, max_length=50)
+    ifsc_code: Optional[str] = Field(
+        default=None,
+        max_length=11,
+        pattern=r"^[A-Z]{4}0[A-Z0-9]{6}$",
+    )
+    political_party_name: Optional[str] = Field(default=None, min_length=1, max_length=125)
+    political_party_pan: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$",
+    )
+
+    @model_validator(mode="after")
+    def normalize_legacy_amount(self) -> "PoliticalContribution":
+        """Normalize the legacy amount field into the official other-mode amount."""
+        gross = self.cash_amount + self.other_mode_amount
+        if self.amount > 0:
+            if gross > 0 and self.amount != gross:
+                raise ValueError("Conflicting legacy and official 80GGC amounts")
+            if gross == 0:
+                self.other_mode_amount = self.amount
+                gross = self.amount
+        self.amount = gross
+        self.contribution_mode = "cash" if self.cash_amount > 0 and self.other_mode_amount == 0 else "non_cash"
+        return self
+
 
 class Schedule80GGC(BaseModel):
     """Schedule 80GGC political contributions."""
-    pass
+    total_claimed: Decimal = Field(default=Decimal("0"), ge=0)
+    non_cash_contributions: Decimal = Field(default=Decimal("0"), ge=0)
+    political_party_name: Optional[str] = Field(default=None, max_length=125)
+    political_party_pan: Optional[str] = None
+    contributions: List[PoliticalContribution] = Field(default_factory=list)
 
-class Schedule80DD(BaseModel):
-    """Schedule 80DD dependent disability details."""
-    disability_type: str = Field(default="normal")
+    @model_validator(mode="after")
+    def validate_canonical_rows(self) -> "Schedule80GGC":
+        """Reject conflicting aggregate and canonical contribution details."""
+        if not self.contributions:
+            return self
+        other = sum(
+            (contribution.other_mode_amount for contribution in self.contributions),
+            Decimal("0"),
+        )
+        gross = sum(
+            (
+                contribution.cash_amount + contribution.other_mode_amount
+                for contribution in self.contributions
+            ),
+            Decimal("0"),
+        )
+        numeric_legacy_present = (
+            self.total_claimed > 0 or self.non_cash_contributions > 0
+        )
+        if numeric_legacy_present and (
+            self.total_claimed != gross
+            or self.non_cash_contributions != other
+        ):
+            raise ValueError("Conflicting legacy and canonical Schedule 80GGC details")
+        if self.political_party_name is not None and any(
+            contribution.political_party_name != self.political_party_name
+            for contribution in self.contributions
+        ):
+            raise ValueError("Conflicting aggregate and row political party names")
+        if self.political_party_pan is not None and any(
+            contribution.political_party_pan != self.political_party_pan
+            for contribution in self.contributions
+        ):
+            raise ValueError("Conflicting aggregate and row political party PANs")
+        self.total_claimed = gross
+        self.non_cash_contributions = other
+        return self
 
-class Schedule80U(BaseModel):
-    """Schedule 80U self disability details."""
-    disability_type: str = Field(default="normal")
+
+class DisabilityScheduleBase(BaseModel):
+    """Shared official disability certificate fields for Sections 80DD and 80U."""
+
+    disability_type: DisabilitySeverity = DisabilitySeverity.NORMAL
+    disability_category: DisabilityCategory = DisabilityCategory.OTHER
+    deduction_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    form_10ia_ack_number: Optional[str] = Field(default=None, max_length=15)
+    udid_number: Optional[str] = Field(default=None, max_length=18)
+
+    @field_validator("disability_type", mode="before")
+    @classmethod
+    def normalize_legacy_severity(cls, value: object) -> object:
+        """Normalize known legacy ITR-4 labels to the canonical severity enum."""
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            aliases = {
+                "dependent with disability": DisabilitySeverity.NORMAL,
+                "dependent with severe disability": DisabilitySeverity.SEVERE,
+                "self with disability": DisabilitySeverity.NORMAL,
+                "self with severe disability": DisabilitySeverity.SEVERE,
+            }
+            return aliases.get(normalized, value)
+        return value
+
+
+class Schedule80DD(DisabilityScheduleBase):
+    """Official Section 80DD dependent-disability details."""
+
+    dependent_relationship: Optional[DependentRelationship] = None
+    dependent_pan: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$",
+    )
+    dependent_aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+
+
+class Schedule80U(DisabilityScheduleBase):
+    """Official Section 80U self-disability details."""
+
 
 class Schedule80CEntry(BaseModel):
     """Per-row entry for Schedule 80C."""
-    pass
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    payment_type: Optional[str] = None
+    identifier_number: Optional[str] = Field(default=None, max_length=50)
+
 
 class Schedule80CCCEntry(BaseModel):
-    """Per-row entry for Schedule 80CCC."""
-    pass
+    """Official PensionContribution80CCC detail row."""
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    identifier_type: Literal["PRAN", "OTHPRAN"] = "OTHPRAN"
+    identifier_name: str = Field(min_length=1, max_length=125)
 
-class Schedule80EEntry(BaseModel):
-    """Per-row entry for Schedule 80E."""
-    pass
 
-class Schedule80EELoanEntry(BaseModel):
-    """Per-loan entry for Schedule 80EE."""
-    pass
+class EducationLoanLenderType(str, Enum):
+    """Official lender category shared by deduction loan schedules."""
 
-class Schedule80EEALoanEntry(BaseModel):
-    """Per-loan entry for Schedule 80EEA."""
-    pass
+    BANK = "B"
+    INSTITUTION = "I"
 
-class Schedule80EEBLoanEntry(BaseModel):
-    """Per-loan entry for Schedule 80EEB."""
-    pass
+
+class OfficialDeductionLoanEntry(BaseModel):
+    """Common official lender and loan fields for interest deductions."""
+
+    loan_taken_from: EducationLoanLenderType
+    lender_name: str = Field(min_length=1, max_length=125)
+    account_or_reference_number: str = Field(
+        min_length=1,
+        max_length=20,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9/-]*$",
+    )
+    loan_date: date
+    total_loan_amount: Decimal = Field(ge=0)
+    outstanding_loan_amount: Decimal = Field(ge=0)
+    interest_paid: Decimal = Field(ge=0)
+
+
+class Schedule80EEntry(OfficialDeductionLoanEntry):
+    """Complete official loan row for Schedule 80E."""
+
+
+class LoanDetails(BaseModel):
+    """Common deduction-loan details."""
+    lender_name: Optional[str] = Field(default=None, max_length=125)
+    loan_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    sanction_date: Optional[date] = None
+    stamp_duty_value: Optional[Decimal] = Field(default=None, ge=0)
+
+
+class DeductionLoanEntry(LoanDetails):
+    """Per-loan deduction entry with interest paid."""
+    interest_paid: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class Schedule80EELoanEntry(DeductionLoanEntry):
+    """Legacy shared loan row retained for ITR-4 compatibility."""
+
+
+class Schedule80EEALoanEntry(DeductionLoanEntry):
+    """Legacy shared loan row retained for ITR-4 compatibility."""
+
+
+class Schedule80EEBLoanEntry(DeductionLoanEntry):
+    """Legacy shared loan row retained for ITR-4 compatibility."""
+
+
+class ITR1Schedule80EELoanEntry(OfficialDeductionLoanEntry):
+    """Complete official ITR-1 loan row for Schedule 80EE."""
+
+
+class ITR1Schedule80EEALoanEntry(OfficialDeductionLoanEntry):
+    """Complete official ITR-1 loan row for Schedule 80EEA."""
+
+
+class ITR1Schedule80EEBLoanEntry(OfficialDeductionLoanEntry):
+    """Complete official ITR-1 electric-vehicle loan row for Schedule 80EEB."""
+
+    vehicle_registration_number: str = Field(min_length=1, max_length=11)
+
 
 class HRADetails(BaseModel):
     """HRA computation breakdown."""
-    pass
+    actual_hra_received: Decimal = Field(default=Decimal("0"), ge=0)
+    rent_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    salary_for_hra: Decimal = Field(default=Decimal("0"), ge=0)
+    dearness_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    is_metro_city: bool = False
+
+    @property
+    def exempt_amount_claimed(self) -> Decimal:
+        """Return the statutory least-of-three exemption represented by this row."""
+        salary = self.salary_for_hra + self.dearness_allowance
+        return min(
+            self.actual_hra_received,
+            max(Decimal("0"), self.rent_paid - salary * Decimal("0.1")),
+            salary * (Decimal("0.5") if self.is_metro_city else Decimal("0.4")),
+        )
+
 
 class CoOwnershipDetails(BaseModel):
     """Co-ownership details for house property."""
-    pass
+    ownership_percentage: Decimal = Field(default=Decimal("100"), ge=0, le=100)
+    co_owner_pan: Optional[str] = None
+
 
 class RepresentativeDetails(BaseModel):
     """Representative assessee details."""
-    pass
+    capacity: Optional[str] = None
+    represented_person_name: Optional[str] = Field(default=None, max_length=125)
+    represented_person_pan: Optional[str] = None
 
-class LoanDetails(BaseModel):
-    """Loan details container."""
-    pass
 
-class LoanDetail(BaseModel):
-    """Per-loan detail entry."""
-    pass
+class LoanDetail(LoanDetails):
+    """Per-property loan detail entry."""
+    property_sequence_no: int = Field(default=1, ge=1, le=2)
+    loan_taken_from: EducationLoanLenderType = EducationLoanLenderType.BANK
+    account_or_reference_number: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=20,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9/-]*$",
+    )
+    outstanding_loan_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    interest_paid_self_occupied: Decimal = Field(default=Decimal("0"), ge=0)
+    interest_paid_let_out: Decimal = Field(default=Decimal("0"), ge=0)
+
 
 class SecondaryAddress(BaseModel):
     """Secondary address for representative filing."""
-    pass
+    address_line: Optional[str] = Field(default=None, max_length=250)
+    city: Optional[str] = Field(default=None, max_length=50)
+    state_code: Optional[str] = Field(default=None, max_length=2)
+    pin_code: Optional[str] = Field(default=None, max_length=10)
 
-class InsurancePolicy(BaseModel):
-    """Insurance policy detail."""
-    pass
+
+class BankAccountType(str, Enum):
+    """Supported bank account types and their official ITD codes."""
+
+    SAVINGS = "savings"
+    CURRENT = "current"
+    CASH_CREDIT = "cash_credit"
+    OVERDRAFT = "overdraft"
+    NRO = "nro"
+    NRE = "nre"
+    OTHER = "other"
+
+    @property
+    def itd_code(self) -> str:
+        """Return the corresponding AY 2026-27 ITD account code."""
+        return {
+            BankAccountType.SAVINGS: "SB",
+            BankAccountType.CURRENT: "CA",
+            BankAccountType.CASH_CREDIT: "CC",
+            BankAccountType.OVERDRAFT: "OD",
+            BankAccountType.NRO: "NRO",
+            BankAccountType.NRE: "OTH",
+            BankAccountType.OTHER: "OTH",
+        }[self]
+
+
+class BankAccount(BaseModel):
+    """Bank account disclosed for refund credit."""
+    account_number: str = Field(min_length=1, max_length=20)
+    ifsc_code: str = Field(min_length=11, max_length=11)
+    bank_name: Optional[str] = Field(default=None, min_length=1, max_length=125)
+    account_type: str
+    is_primary: bool = False
+
 
 class TaxPaymentDetail(BaseModel):
     """Per-installment entry for Schedule IT."""
-    pass
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    payment_type: str = "advance"
+    payment_date: Optional[date] = None
+    bsr_code: Optional[str] = Field(default=None, max_length=7)
+    challan_serial_number: Optional[str] = Field(default=None, max_length=5)
 
 
 class TDS1Entry(BaseModel):
+    """Salary TDS credit reported in Schedule TDS1.
+
+    Accepts the current canonical field names and maps legacy router/import
+    names before validation so salary tax credits cannot be silently dropped.
+    """
+
     employer_tan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
     employer_name: Optional[str] = Field(default=None, max_length=125)
     income_chargeable: Decimal = Field(default=Decimal("0"), ge=0)
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def map_legacy_salary_tds_fields(cls, value: object) -> object:
+        """Map legacy salary-TDS payload keys to canonical Schedule TDS1 keys."""
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        aliases = {
+            "deductor_tan": "employer_tan",
+            "deductor_name": "employer_name",
+            "total_amount_credited": "income_chargeable",
+            "tax_deducted": "tds_deducted",
+        }
+        for legacy_key, canonical_key in aliases.items():
+            if canonical_key not in payload and legacy_key in payload:
+                payload[canonical_key] = payload[legacy_key]
+        return payload
 
 
 class TDS2Entry(BaseModel):
@@ -770,6 +1962,12 @@ class TDS2Entry(BaseModel):
     tds_section: str = Field(...)
     gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_claimed_this_year: Decimal = Field(default=Decimal("0"), ge=0)
+    financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
+    head_of_income: Optional[str] = Field(default=None)
+    deducted_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}$")
+    brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class TCSEntry(BaseModel):
@@ -778,3 +1976,8 @@ class TCSEntry(BaseModel):
     tcs_section: str = Field(...)
     gross_amount: Decimal = Field(default=Decimal("0"), ge=0)
     tcs_collected: Decimal = Field(default=Decimal("0"), ge=0)
+    tcs_credit_claimed: Decimal = Field(default=Decimal("0"), ge=0)
+    financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
+
+
+ITR1Input.model_rebuild()

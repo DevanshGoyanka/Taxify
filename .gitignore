@@ -21,6 +21,7 @@ ENV/
 
 # Environment / secrets
 .env
+.env.backup
 .env.example
 *.env.local
 *.env.*.local
@@ -29,6 +30,23 @@ ENV/
 *.db
 *.sqlite
 *.sqlite3
+# SQLite WAL sidecars — created since journal_mode=WAL was enabled.
+# These hold committed-but-not-yet-checkpointed rows, i.e. real taxpayer data.
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Search-engine site-verification tokens.
+# These are per-property secrets: anyone holding one can claim the site in
+# Search Console. The live copy is served from /var/www/verification on the
+# host, deliberately outside frontend/dist so deploy.sh cannot wipe it.
+google*.html
+googleb4679a5f656c872a.html
+BingSiteAuth.xml
+yandex_*.html
 
 # Secrets / credentials
 *.pem
@@ -84,6 +102,12 @@ downloads/
 Docs/*.pdf
 Docs/*.txt
 Docs/*.zip
+# ...except the audit/reference reports relocated here from the repo root.
+!Docs/_itr3_phase4_out.txt
+!Docs/failed_clients_retry_report_*.txt
+!Docs/itr1_validation_extract.txt
+!Docs/itr4_catalog_output.txt
+!Docs/schema_field_inventory.txt
 
 # Test playground temp files
 uat-login-test/
@@ -113,4 +137,8 @@ TestAES.class
 *.json
 !frontend/**/*.json
 !Docs/PreFillSchemaJSON_V6.5/*.json
+!ITD OFFICAL REFERENCE DOCS/AY 2026-27 Offical Schema JSON/ITR-1_2026_Main_V1.1 (1).json
 !package.json
+
+.hypothesis/
+

@@ -8,9 +8,155 @@ migrations, no destructive operations.
 
 # Import models so that SQLAlchemy's metadata is populated before
 # create_all() is called.  The imports must come before Base is used.
+import uuid
+
 import app.db.models  # noqa: F401  — side-effect import registers the models
 
+from sqlalchemy import inspect, text
+
 from app.db.database import Base, engine
+
+
+def _apply_additive_sqlite_migrations() -> None:
+    """Add lifecycle columns required by existing SQLite installations.
+
+    This is a temporary additive migration bridge until Alembic is introduced.
+    It never drops or rewrites existing tables or return data.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "client" not in table_names:
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("client")}
+    with engine.begin() as connection:
+        if "public_id" not in columns:
+            connection.execute(text("ALTER TABLE client ADD COLUMN public_id VARCHAR(36)"))
+        if "archived_at" not in columns:
+            connection.execute(text("ALTER TABLE client ADD COLUMN archived_at DATETIME"))
+        if "first_name" not in columns:
+            connection.execute(text("ALTER TABLE client ADD COLUMN first_name VARCHAR(25) NOT NULL DEFAULT ''"))
+        if "middle_name" not in columns:
+            connection.execute(text("ALTER TABLE client ADD COLUMN middle_name VARCHAR(25) NOT NULL DEFAULT ''"))
+        if "surname" not in columns:
+            connection.execute(text("ALTER TABLE client ADD COLUMN surname VARCHAR(75) NOT NULL DEFAULT ''"))
+
+        # Backfill first_name/middle_name/surname from the legacy single
+        # ``name`` column for existing clients.  Split on whitespace: the
+        # first token is the first name, the last token is the surname, and
+        # everything in between is the middle name.  Clients with a single
+        # token get it placed in surname (the only mandatory name field).
+        # Guard: only run the backfill when the legacy ``name`` column
+        # actually exists (fresh DBs and minimal test fixtures don't have
+        # it; querying a non-existent column raises OperationalError).
+        if "name" in columns:
+            empty_name_clients = connection.execute(
+                text("SELECT id, name FROM client WHERE surname = ''")
+            ).fetchall()
+            for (client_id, full_name) in empty_name_clients:
+                parts = str(full_name or "").strip().split()
+                if not parts:
+                    first, middle, surname = "", "", ""
+                elif len(parts) == 1:
+                    first, middle, surname = "", "", parts[0]
+                else:
+                    first, middle, surname = parts[0], " ".join(parts[1:-1]), parts[-1]
+                connection.execute(
+                    text(
+                        "UPDATE client SET first_name = :first, middle_name = :middle, surname = :surname WHERE id = :cid"
+                    ),
+                    {"first": first, "middle": middle, "surname": surname, "cid": client_id},
+                )
+
+        missing_ids = connection.execute(
+            text("SELECT id FROM client WHERE public_id IS NULL OR public_id = ''")
+        ).fetchall()
+        for (client_id,) in missing_ids:
+            connection.execute(
+                text("UPDATE client SET public_id = :public_id WHERE id = :client_id"),
+                {"public_id": str(uuid.uuid4()), "client_id": client_id},
+            )
+
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_client_public_id "
+                "ON client (public_id)"
+            )
+        )
+        duplicate_pan_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM ("
+                "SELECT user_id, pan FROM client GROUP BY user_id, pan HAVING COUNT(*) > 1"
+                ")"
+            )
+        ).scalar_one()
+        if duplicate_pan_count == 0:
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_client_user_pan "
+                    "ON client (user_id, pan)"
+                )
+            )
+        else:
+            print(
+                "[WARN] Client PAN uniqueness index deferred: "
+                f"{duplicate_pan_count} duplicate user/PAN group(s) require reconciliation."
+            )
+
+        duplicate_year_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM ("
+                "SELECT client_id, year FROM client_itr "
+                "GROUP BY client_id, year HAVING COUNT(*) > 1"
+                ")"
+            )
+        ).scalar_one()
+        if duplicate_year_count == 0:
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_client_itr_client_year "
+                    "ON client_itr (client_id, year)"
+                )
+            )
+        else:
+            print(
+                "[WARN] Client/year uniqueness index deferred: "
+                f"{duplicate_year_count} duplicate client/year group(s) require reconciliation."
+            )
+
+        if "automation_job" in table_names:
+            automation_columns = {
+                column["name"]
+                for column in inspect(engine).get_columns("automation_job")
+            }
+            if "assessment_year" not in automation_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE automation_job "
+                        "ADD COLUMN assessment_year VARCHAR(10)"
+                    )
+                )
+            if "artifact_outcomes" not in automation_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE automation_job "
+                        "ADD COLUMN artifact_outcomes TEXT NOT NULL DEFAULT '{}'"
+                    )
+                )
+            connection.execute(
+                text(
+                    "UPDATE automation_job "
+                    "SET assessment_year = "
+                    "printf('%04d-%02d', "
+                    "CAST(substr(fiscal_year, 1, 4) AS INTEGER) + 1, "
+                    "CAST(substr(fiscal_year, 6, 2) AS INTEGER) + 1) "
+                    "WHERE assessment_year IS NULL "
+                    "AND fiscal_year GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'"
+                )
+            )
 
 
 def create_tables() -> None:
@@ -21,7 +167,8 @@ def create_tables() -> None:
     semantics internally via checkfirst=True (the default).
     """
     Base.metadata.create_all(bind=engine)
-    print("[OK] Database tables created (or already exist).")
+    _apply_additive_sqlite_migrations()
+    print("[OK] Database tables created and additive migrations applied.")
 
 
 if __name__ == "__main__":

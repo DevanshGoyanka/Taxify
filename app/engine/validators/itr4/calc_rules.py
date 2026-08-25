@@ -118,17 +118,17 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
             "gross_tax_liability",
             expected=str(expected_gross), actual=str(result.gross_tax_liability)))
 
-    # Rule 54: Net tax liability = Gross tax + Interest + Late fee - Tax credits
+    # Rule 54: Net tax liability is the pre-payment liability. Tax credits and
+    # challans are reconciled separately into balance payable / refund.
     expected_net = (result.gross_tax_liability + result.total_interest
-                    + result.late_fee_234f - result.total_taxes_paid)
-    expected_net_rounded = (expected_net // Decimal("10")) * Decimal("10")
-    if abs(result.net_tax_liability - expected_net_rounded) > Decimal("10"):
+                    + result.late_fee_234f + result.fees_234i - result.relief_89)
+    if abs(result.net_tax_liability - expected_net) > Decimal("10"):
         results.append(_make(
             "ITR4-R054", False,
             f"Net tax liability mismatch: {result.net_tax_liability} != "
-            f"{expected_net_rounded}",
+            f"{expected_net}",
             "net_tax_liability",
-            expected=str(expected_net_rounded), actual=str(result.net_tax_liability)))
+            expected=str(expected_net), actual=str(result.net_tax_liability)))
 
     # Rule 19: Chapter VI-A deductions cannot exceed GTI
     if result.deductions_total > result.gross_total_income:
@@ -265,34 +265,39 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     # ═══════════════════════════════════════════════════════════════════════
 
     # Rule 5: 44AD presumed income >= 6% digital + 8% cash
-    if inp.business_income_44ad and inp.presumptive_scheme == PresumptiveScheme.S44AD:
+    pres_sched = result.schedules.get("presumptive")
+    if inp.business_income_44ad:
         ad = inp.business_income_44ad
-        min_digital = ad.digital_turnover * Decimal("0.06")
+        min_digital = (
+            ad.digital_turnover + ad.other_mode_turnover
+        ) * Decimal("0.06")
         min_cash = ad.cash_turnover * Decimal("0.08")
         min_total = min_digital + min_cash
-        if result.presumptive_income < min_total:
+        actual_44ad = pres_sched.income_44ad if pres_sched else z
+        if actual_44ad < min_total:
             results.append(_make(
                 "ITR4-R005", False,
-                f"44AD presumptive income ({result.presumptive_income}) is below "
+                f"44AD presumptive income ({actual_44ad}) is below "
                 f"statutory minimum: 6% of digital ({min_digital}) + "
                 f"8% of cash ({min_cash}) = {min_total}",
                 "presumptive_income",
-                expected=f">= {min_total}", actual=str(result.presumptive_income)))
+                expected=f">= {min_total}", actual=str(actual_44ad)))
 
     # Rule 14: 44ADA >= 50% of gross professional receipts
-    if inp.professional_income_44ada and inp.presumptive_scheme == PresumptiveScheme.S44ADA:
+    if inp.professional_income_44ada:
         ada = inp.professional_income_44ada
         min_ada = ada.gross_receipts * Decimal("0.50")
-        if result.presumptive_income < min_ada:
+        actual_44ada = pres_sched.income_44ada if pres_sched else z
+        if actual_44ada < min_ada:
             results.append(_make(
                 "ITR4-R014", False,
-                f"44ADA presumptive income ({result.presumptive_income}) is below "
+                f"44ADA presumptive income ({actual_44ada}) is below "
                 f"50% of gross receipts ({min_ada})",
                 "presumptive_income",
-                expected=f">= {min_ada}", actual=str(result.presumptive_income)))
+                expected=f">= {min_ada}", actual=str(actual_44ada)))
 
     # Rule 136: 44AE per-vehicle minimum
-    if inp.goods_carriage_44ae and inp.presumptive_scheme == PresumptiveScheme.S44AE:
+    if inp.goods_carriage_44ae:
         ae = inp.goods_carriage_44ae
         expected_44ae = z
         for v in ae.vehicles:
@@ -301,13 +306,14 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                 expected_44ae += Decimal("1000") * wt * Decimal(v.months_owned)
             else:
                 expected_44ae += Decimal("7500") * Decimal(v.months_owned)
-        if result.presumptive_income < expected_44ae:
+        actual_44ae = pres_sched.income_44ae if pres_sched else z
+        if actual_44ae < expected_44ae:
             results.append(_make(
                 "ITR4-R136", False,
-                f"44AE presumptive income ({result.presumptive_income}) below "
+                f"44AE presumptive income ({actual_44ae}) below "
                 f"per-vehicle statutory minimum ({expected_44ae})",
                 "presumptive_income",
-                expected=f">= {expected_44ae}", actual=str(result.presumptive_income)))
+                expected=f">= {expected_44ae}", actual=str(actual_44ae)))
 
     # ═══════════════════════════════════════════════════════════════════════
     # SECTION: ITR-4 Eligibility
@@ -474,16 +480,16 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     # ═══════════════════════════════════════════════════════════════════════
 
     if hp and hp_sched:
-        # Rule 57: HP standard deduction = 30% of NAV (for let-out/deemed)
+        # Rule 57: HP standard deduction = 30% of assessee-owned annual value.
         if hp.property_type != PropertyType.SELF_OCCUPIED:
             expected_30 = hp_sched.standard_deduction_30pct
-            nav = hp_sched.net_annual_value
-            expected_30_alt = max(z, nav) * Decimal("0.30")
+            owned_value = hp_sched.annual_value_owned
+            expected_30_alt = max(z, owned_value) * Decimal("0.30")
             if abs(expected_30 - expected_30_alt) > Decimal("1"):
                 results.append(_make(
                     "ITR4-R057", False,
                     f"HP 30% standard deduction ({expected_30}) != "
-                    f"30% of NAV ({nav}) = {expected_30_alt}",
+                    f"30% of owned annual value ({owned_value}) = {expected_30_alt}",
                     "house_property_income",
                     expected=str(expected_30_alt), actual=str(expected_30)))
 
@@ -560,14 +566,19 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                     f"112A taxable income ({cg_sched.taxable_income}) exceeds "
                     f"gross 112A ({cg.ltcg_112a})",
                     "capital_gains.ltcg_112a"))
-            # Rule 264: LTCG 112A capital gains = GTI 112A component
-            if result.capital_gains_112a != cg_sched.taxable_income:
+            # Rule 264: LTCG 112A capital gains = GTI 112A component.
+            # ``result.capital_gains_112a`` holds the FULL pre-exemption
+            # net LTCG gain (it flows into GTI), so it must equal the
+            # schedule's ``net_income`` (pre-exemption), NOT
+            # ``taxable_income`` (post the Rs 1.25L special-rate exemption).
+            # The exemption reduces only the special-rate tax, not GTI.
+            if result.capital_gains_112a != cg_sched.net_income:
                 results.append(_make(
                     "ITR4-R264", False,
                     f"GTI capital gains 112A ({result.capital_gains_112a}) != "
-                    f"Schedule 112A taxable ({cg_sched.taxable_income})",
+                    f"Schedule 112A net income ({cg_sched.net_income})",
                     "capital_gains_112a",
-                    expected=str(cg_sched.taxable_income),
+                    expected=str(cg_sched.net_income),
                     actual=str(result.capital_gains_112a)))
 
     # ═══════════════════════════════════════════════════════════════════════

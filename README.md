@@ -1,6 +1,61 @@
-# Taxify — Indian Income Tax Filing Application
+<div align="center">
 
-A full-stack application for computing, managing, and filing Indian ITR-1 through ITR-4 tax returns. Built with FastAPI, SQLAlchemy, and React + TypeScript.
+# Taxify
+
+**Indian Income Tax Filing Platform — ITR-1 through ITR-4, AY 2026-27**
+
+Compute, manage, validate and file Indian income tax returns, with CBDT-compliant JSON
+generation, ITD portal automation, and e-Return Intermediary (ERI) integration.
+
+[![Python](https://img.shields.io/badge/python-3.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
+[![Playwright](https://img.shields.io/badge/Playwright-1.62-2EAD33?logo=playwright&logoColor=white)](https://playwright.dev/)
+[![AY](https://img.shields.io/badge/AY-2026--27-blue)](#tax-engine--ay-2026-27-finance-act-2025)
+[![License](https://img.shields.io/badge/license-Proprietary-red)](LICENSE)
+
+</div>
+
+---
+
+## Contents
+
+- [Live Application](#live-application)
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Deployment](#deployment)
+- [Project Structure](#project-structure)
+- [API Reference](#api-reference)
+- [Tax Engine — AY 2026-27](#tax-engine--ay-2026-27-finance-act-2025)
+- [Database Schema](#database-schema)
+- [Environment Variables](#environment-variables)
+- [Running Tests](#running-tests)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+
+---
+
+## Features
+
+- **Four ITR forms** — ITR-1, ITR-2, ITR-3 and ITR-4 computation engines built to the
+  Finance Act 2025 rules for AY 2026-27
+- **CBDT-compliant JSON** — generates and validates ITD-schema JSON, with the `Digest`
+  computed by iterative HMAC-SHA256 against the active ERI credential bundle
+- **ERI integration** — Type-2 (API gateway) and Type-3 (offline utility) modes, switchable
+  by environment variable with no secret editing
+- **Portal automation** — Playwright-driven download of AIS, TIS and Form 26AS from the ITD
+  portal, with PDF extraction and reconciliation
+- **Client management** — multi-client practice workflow with PAN analysis, ITR-form
+  classification, and per-assessment-year return storage
+- **Precise arithmetic** — every monetary value flows through `decimal.Decimal`; no floats
+- **Encrypted credential storage** — client ITD portal passwords encrypted at rest
+
+> **Assessment year:** the engine currently targets **AY 2026-27**. Slabs, surcharge,
+> rebate and deduction limits live in `app/engine/constants.py`.
 
 ---
 
@@ -18,6 +73,41 @@ A full-stack application for computing, managing, and filing Indian ITR-1 throug
 | Frontend | React + TypeScript + Vite (in `frontend/`) |
 | Browser Automation | Playwright (in `app/automation/`) |
 | ERI Integration | ITD e-Filing ERI API (in `app/eri/`, wired via `app/routers/eri.py`) |
+
+---
+
+## Deployment
+
+Deployed on a single AWS EC2 `t3.micro` in Mumbai, entirely within the AWS free tier
+(**$0/month**). nginx terminates TLS and serves the built frontend, proxying the API to
+uvicorn on localhost.
+
+```
+                    https://itrbharo.duckdns.org
+                              │
+                    ┌─────────▼──────────┐
+                    │  nginx :80/:443    │  TLS (Let's Encrypt) · gzip · static dist/
+                    └─────────┬──────────┘
+                              │ proxy (localhost only)
+                    ┌─────────▼──────────┐
+                    │  uvicorn :8000     │  FastAPI · systemd · --workers 1
+                    │  + Playwright      │  Chrome under xvfb
+                    └─────────┬──────────┘
+                              │
+                      SQLite (WAL mode)
+```
+
+| | |
+|---|---|
+| Compute | 1 × EC2 `t3.micro`, `CpuCredits=standard` |
+| Storage | 16 GiB gp3 (3,000 IOPS) + 2 GB swap |
+| Network | Elastic IP, no load balancer, no NAT gateway |
+| DNS | DuckDNS (Route 53 is not free tier) |
+| Access | AWS SSM — **port 22 closed to the internet** |
+| Cost | **$0.00/month** |
+
+Full roadmap: [`Docs/AWS_FREE_TIER_DEPLOYMENT.md`](Docs/AWS_FREE_TIER_DEPLOYMENT.md).
+Day-to-day operations: [`docs/runbook.md`](docs/runbook.md).
 
 ---
 
@@ -120,53 +210,45 @@ A full-stack application for computing, managing, and filing Indian ITR-1 throug
 │   ├── test_amt.py                 # AMT computation tests
 │   ├── test_bfla.py                # Brought-forward loss tests
 │   ├── test_cyla.py                # Current-year loss tests
+│   ├── test_itr1_e2e.py            # ITR-1 end-to-end filing run (live ERI)
+│   ├── test_itr4_e2e.py            # ITR-4 end-to-end filing run (live ERI)
+│   ├── validate_schemas.py         # Validate builder output against official CBDT schemas
+│   ├── validate_itr1_json.py       # Standalone ITR-1 JSON schema validation
+│   ├── verify_matrix_coverage.py   # Sync field matrix CSVs with the official schemas
+│   ├── check_schema_compliance.py  # Quick ITR-1/ITR-4 builder compliance check
+│   ├── extract_schema_inventory.py # Field inventory extractor (used by verify_matrix_coverage)
 │   └── __init__.py
 ├── API_Testing/                    # ERI API testing scripts, DSC signing tools, keystores
-├── Docs/
-│   └── ec2-proxy-decision.md       # EC2 proxy architecture decision for ITD connectivity
+├── Docs/                           # All project documentation + audit CSV/TXT artifacts
+│   ├── ec2-proxy-decision.md       # EC2 proxy architecture decision for ITD connectivity
+│   ├── ARCHITECTURE.md             # Full architecture reference (1,800+ lines)
+│   ├── frontend_integration_audit.md  # Complete field-level pipeline map (1,300+ lines)
+│   ├── REMAINING_ITEMS_TO_IMPLEMENT.md # CBDT rule gaps per ITR form
+│   ├── itr_schedule_audit.md       # ITR schedule implementation audit
+│   └── audit_itr*.csv              # Generated schema-coverage audit output
 ├── .env                            # SECRET_KEY, FRONTEND_URL, ERI_* credentials (not committed)
 ├── .gitignore
+├── conftest.py                     # Loads .env before any test imports app code
+├── pytest.ini
 ├── requirements.txt
-├── NEXT_STEPS.md                   # Phase 4–5 remaining work + frontend integration checklist
-├── ARCHITECTURE.md                 # Full architecture reference (1,800+ lines)
-├── frontend_integration_audit.md   # Complete field-level pipeline map (1,300+ lines)
-├── REMAINING_ITEMS_TO_IMPLEMENT.md # CBDT rule gaps per ITR form
-├── itr_schedule_audit.md           # ITR schedule implementation audit
-├── CBDT_Implementation_Audit_Report_AY2026-27*.md  # CBDT compliance audit reports
 └── README.md
 ```
 
 ---
 
-## Quick Start
+## Live Application
 
-### Backend
+### **https://itrbharo.duckdns.org**
 
-```bash
-# 1. Install dependencies
-python -m venv .venv
-.venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # macOS / Linux
-pip install -r requirements.txt
+| | |
+|---|---|
+| Status | Live |
+| Region | AWS `ap-south-1` (Mumbai) |
+| TLS | Let's Encrypt, auto-renewing |
+| ERI mode | Type-3 UAT |
 
-# 2. Configure environment
-# Copy .env values from an existing setup — there is no .env.example template
-# Required: SECRET_KEY (any 64-char random string)
-# Optional for ERI: ERI_CLIENT_ID, ERI_CLIENT_SECRET, ERI_USER_ID, ERI_PASSWORD, etc.
-
-# 3. Start the API (tables created automatically on first run)
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev          # starts at http://localhost:5173
-```
-
-Backend must be running on port 8000. `frontend/` is pre-configured to point to `http://localhost:8000`.
+Access is by account — contact a maintainer. Setting up a local development environment is
+covered in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
@@ -428,18 +510,70 @@ pytest tests/test_auth.py -v
 pytest tests/test_eri_routers.py -v
 ```
 
-Test files cover: auth flow, ITR-1/ITR-4 calculator engines, Pydantic schema validation, ERI routers, ERI envelope construction, integration routers, AMT, loss set-off (BFLA/CYLA).
+Coverage includes: auth flow, ITR-1/ITR-4 calculator engines, Pydantic schema validation, ERI
+routers, ERI envelope construction, integration routers, AMT, and loss set-off (BFLA/CYLA).
+
+> **The suite is not currently green.** A measured baseline is **177 failures and 13 collection
+> errors**, predating the deployment work. Treat a red run as the known state, not as something
+> your change caused — but do check your own area is not newly broken.
+
+`conftest.py` at the repo root loads `.env` before any test imports app code; ERI credential
+resolution fails without it.
 
 ---
 
-## Key Docs
+## Documentation
 
 | Doc | Purpose |
 |---|---|
-| `ARCHITECTURE.md` | Full architecture reference — 1,800+ lines covering every schedule, calculator, and ITD builder |
-| `frontend_integration_audit.md` | Complete field-level pipeline map frontend → API → calculator → ITD JSON |
-| `NEXT_STEPS.md` | Phase 4 (frontend) and Phase 5 (tests, production hardening) remaining work |
-| `REMAINING_ITEMS_TO_IMPLEMENT.md` | CBDT rule gaps per ITR form (validation rules, schedules, field-level gaps) |
-| `itr_schedule_audit.md` | ITR schedule implementation audit |
-| `CBDT_Implementation_Audit_Report_AY2026-27*.md` | CBDT compliance audit reports |
-| `Docs/ec2-proxy-decision.md` | EC2 proxy architecture for ITD connectivity |
+| [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md) | Full architecture reference — 1,800+ lines covering every schedule, calculator, and ITD builder |
+| [`Docs/frontend_integration_audit.md`](Docs/frontend_integration_audit.md) | Field-level pipeline map: frontend → API → calculator → ITD JSON |
+| [`Docs/REMAINING_ITEMS_TO_IMPLEMENT.md`](Docs/REMAINING_ITEMS_TO_IMPLEMENT.md) | CBDT rule gaps per ITR form |
+| [`Docs/itr_schedule_audit.md`](Docs/itr_schedule_audit.md) | ITR schedule implementation audit |
+| `Docs/CBDT_FRONTEND_*.md` | CBDT ↔ frontend field audits for AY 2026-27 |
+| [`Docs/ec2-proxy-decision.md`](Docs/ec2-proxy-decision.md) | Historical: EC2 proxy for ITD connectivity |
+
+### Operations
+
+| Doc | Purpose |
+|---|---|
+| [`Docs/AWS_FREE_TIER_DEPLOYMENT.md`](Docs/AWS_FREE_TIER_DEPLOYMENT.md) | The $0 AWS free-tier deployment roadmap |
+| [`docs/runbook.md`](docs/runbook.md) | **Day-to-day ops** — shell access, restart, redeploy, logs, gotchas |
+| [`docs/resource-inventory.md`](docs/resource-inventory.md) | Every AWS resource with its free-tier line item |
+| [`docs/deployment-log.md`](docs/deployment-log.md) | Full command-by-command deployment record |
+| [`docs/teardown.md`](docs/teardown.md) | Copy-paste teardown with real resource IDs |
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, code style, dependency rules, and the
+PR process.
+
+Two things that catch everyone:
+
+1. **Work on `main`.** GitHub's default branch for this repo is `master`, which is stale.
+2. **Declare every dependency.** Most Python imports here are lazy (inside functions), so a
+   missing package doesn't fail at startup — it fails in production when a user hits the
+   feature. Nine packages were missing this way.
+
+---
+
+## Security
+
+Taxify handles **real taxpayer PII** and **live ERI credentials**. Read
+[SECURITY.md](SECURITY.md) before contributing.
+
+Never commit `.env`, `app.db`, DSC certificates, keystores, or `*.pem` files. Report
+vulnerabilities privately — **do not** open a public issue.
+
+---
+
+## License
+
+**Proprietary — All Rights Reserved.** See [LICENSE](LICENSE).
+
+This software is confidential. No permission is granted to use, copy, modify, or distribute it
+without prior written permission. Third-party dependencies remain under their own licences, and
+CBDT/ITD schemas and reference documents are the property of the Income Tax Department,
+Government of India.

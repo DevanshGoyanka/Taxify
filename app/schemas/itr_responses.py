@@ -61,6 +61,7 @@ class ITR2ComputeResponse(_DecimalModel):
     gti_after_loss_setoff: Decimal
     gross_total_income: Decimal
     net_agricultural_income: Decimal
+    partial_integration_tax: Decimal
     deductions_total: Decimal
     taxable_income: Decimal
     aggregate_income: Decimal
@@ -76,13 +77,25 @@ class ITR2ComputeResponse(_DecimalModel):
     gross_tax_liability: Decimal
     relief_89: Decimal
     relief_90_91: Decimal
+    interest_234a: Decimal
+    interest_234b: Decimal
+    interest_234c: Decimal
+    late_fee_234f: Decimal
+    total_interest: Decimal
     net_tax_liability: Decimal
     total_tds: Decimal
     total_tcs: Decimal
+    total_advance_tax: Decimal
+    total_self_assessment_tax: Decimal
     total_taxes_paid: Decimal
     balance_payable: Decimal
     refund_due: Decimal
     hp_loss_disallowed: Decimal
+    cyla_remaining: Decimal
+    bfla_remaining: Decimal
+    errors: list[str]
+    warnings: list[str]
+    validation: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------

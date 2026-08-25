@@ -4,8 +4,16 @@ import toast from 'react-hot-toast';
 import { authApi } from '../api/auth';
 import { tokenManager } from '../api/tokenManager';
 import { Spinner } from '../components/ui/Spinner';
+import { useSeo } from '../hooks/useSeo';
 
 export default function LoginPage() {
+  useSeo({
+    title: 'Sign In',
+    description:
+      'Sign in to ITR Bharo to compute and file Indian income tax returns ITR-1 to ITR-4 for AY 2026-27.',
+    path: '/login',
+  });
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);

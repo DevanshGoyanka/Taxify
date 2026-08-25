@@ -1,0 +1,1530 @@
+
+######################## ITR-1 (64 definitions) ########################
+
+--- PersonalInfo: 8 fields; required=['AssesseeName', 'PAN', 'Address', 'SecondaryAdd', 'DOB', 'EmployerCategory'] ---
+   [opt] AadhaarCardNo                        ?              pattern=[0-9]{12}
+   [REQ] Address                              Address        
+   [opt] AlternateAddress                     AlternateAddress 
+   [REQ] AssesseeName                         AssesseeName   
+   [REQ] DOB                                  string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] EmployerCategory                     string         enum(9)
+   [REQ] PAN                                  ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [REQ] SecondaryAdd                         string         enum(2)
+
+--- FilingStatus: 16 fields; required=['ReturnFileSec', 'OptOutNewTaxRegime', 'AsseseeRepFlg', 'ItrFilingDueDate'] ---
+   [opt] AmtSeventhProvisio139ii              integer        max=99999999999999 min=200000
+   [opt] AmtSeventhProvisio139iii             integer        max=99999999999999 min=100000
+   [REQ] AsseseeRepFlg                        ?              enum(2)
+   [opt] AssesseeRep                          AssesseeRep    
+   [opt] IncrExpAggAmt1LkElctrctyPrYrFlg      ?              pattern=Y|N
+   [opt] IncrExpAggAmt2LkTrvFrgnCntryFlg      ?              pattern=Y|N
+   [REQ] ItrFilingDueDate                     ?              pattern=2026-07-31 maxLen=10 minLen=9
+   [opt] NoticeDateUnderSec                   string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] NoticeNo                             ?              maxLen=100
+   [REQ] OptOutNewTaxRegime                   ?              pattern=Y|N
+   [opt] OrigRetFiledDate                     string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] ReceiptNo                            string         pattern=[0-9]{15}
+   [REQ] ReturnFileSec                        integer        enum(8) max=20 min=11
+   [opt] SeventhProvisio139                   ?              pattern=Y|N
+   [opt] clauseiv7provisio139i                ?              pattern=Y|N
+   [opt] clauseiv7provisio139iDtls            array          
+
+--- Verification: 3 fields; required=['Declaration', 'Capacity', 'Place'] ---
+   [REQ] Capacity                             string         enum(2)
+   [REQ] Declaration                          object         
+   [REQ] Place                                ?              maxLen=50 minLen=1
+
+--- AssesseeName: 3 fields; required=['SurNameOrOrgName'] ---
+   [opt] FirstName                            ?              maxLen=25
+   [opt] MiddleName                           ?              maxLen=25
+   [REQ] SurNameOrOrgName                     ?              maxLen=75 minLen=1
+
+--- Address: 15 fields; required=['ResidenceNo', 'LocalityOrArea', 'CityOrTownOrDistrict', 'StateCode', 'CountryCode', 'CountryCodeMobile', 'MobileNo', 'EmailAddress'] ---
+   [REQ] CityOrTownOrDistrict                 ?              maxLen=50 minLen=1
+   [REQ] CountryCode                          CountryCode    
+   [REQ] CountryCodeMobile                    integer        pattern=[0-9]{1,5}
+   [opt] CountryCodeMobileNoSec               integer        pattern=[0-9]{1,5}
+   [REQ] EmailAddress                         ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [opt] EmailAddressSec                      ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [REQ] LocalityOrArea                       ?              maxLen=50 minLen=1
+   [REQ] MobileNo                             integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [opt] MobileNoSec                          integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [opt] PinCode                              integer        pattern=[1-9]{1}[0-9]{5}
+   [opt] ResidenceName                        ?              maxLen=50
+   [REQ] ResidenceNo                          ?              maxLen=50 minLen=1
+   [opt] RoadOrStreet                         ?              maxLen=50
+   [REQ] StateCode                            ?              enum(38)
+   [opt] ZipCode                              ?              maxLen=8
+
+--- AlternateAddress: 9 fields; required=['ResidenceNo', 'LocalityOrArea', 'CityOrTownOrDistrict', 'StateCode'] ---
+   [REQ] CityOrTownOrDistrict                 ?              maxLen=50 minLen=1
+   [opt] CountryCode                          CountryCode    
+   [REQ] LocalityOrArea                       ?              maxLen=50 minLen=1
+   [opt] PinCode                              integer        pattern=[1-9]{1}[0-9]{5} max=999999 min=100000
+   [opt] ResidenceName                        ?              maxLen=50
+   [REQ] ResidenceNo                          ?              maxLen=50 minLen=1
+   [opt] RoadOrStreet                         ?              maxLen=50
+   [REQ] StateCode                            StateCode      
+   [opt] ZipCode                              string         maxLen=8
+
+--- AssesseeRep: 4 fields; required=['RepName', 'RepEmailID', 'CountryCodeRepMobileNo', 'RepMobileNo'] ---
+   [REQ] CountryCodeRepMobileNo               integer        pattern=[0-9]{1,5}
+   [REQ] RepEmailID                           ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [REQ] RepMobileNo                          integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [REQ] RepName                              ?              maxLen=125 minLen=1
+
+--- Schedule80G: 8 fields; required=['TotalDonationsUs80GCash', 'TotalDonationsUs80GOtherMode', 'TotalDonationsUs80G', 'TotalEligibleDonationsUs80G'] ---
+   [opt] Don100Percent                        object         
+   [opt] Don100PercentApprReqd                object         
+   [opt] Don50PercentApprReqd                 object         
+   [opt] Don50PercentNoApprReqd               object         
+   [REQ] TotalDonationsUs80G                  integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GCash              integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GOtherMode         integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationsUs80G          integer        max=99999999999999 min=0
+
+--- Schedule80GGA: 5 fields; required=['TotalDonationAmtCash80GGA', 'TotalDonationAmtOtherMode80GGA', 'TotalDonationsUs80GGA', 'TotalEligibleDonationAmt80GGA'] ---
+   [opt] DonationDtlsSciRsrchRuralDev         array          
+   [REQ] TotalDonationAmtCash80GGA            integer        max=99999999999999 min=0
+   [REQ] TotalDonationAmtOtherMode80GGA       integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GGA                integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationAmt80GGA        integer        max=99999999999999 min=0
+
+--- Schedule80GGC: 5 fields; required=['TotalDonationAmtCash80GGC', 'TotalDonationAmtOtherMode80GGC', 'TotalDonationsUs80GGC', 'TotalEligibleDonationAmt80GGC'] ---
+   [opt] Schedule80GGCDetails                 array          
+   [REQ] TotalDonationAmtCash80GGC            integer        max=99999999999999 min=0
+   [REQ] TotalDonationAmtOtherMode80GGC       integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GGC                integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationAmt80GGC        integer        max=99999999999999 min=0
+
+--- Schedule80DD: 8 fields; required=['NatureOfDisability', 'TypeOfDisability', 'DeductionAmount', 'DependentType'] ---
+   [REQ] DeductionAmount                      integer        max=99999999999999 min=0
+   [opt] DependentAadhaar                     ?              pattern=[0-9]{12}
+   [opt] DependentPan                         ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [REQ] DependentType                        ?              enum(7)
+   [opt] Form10IAAckNum                       string         maxLen=15
+   [REQ] NatureOfDisability                   ?              enum(2)
+   [REQ] TypeOfDisability                     ?              enum(2)
+   [opt] UDIDNum                              string         maxLen=18
+
+--- Schedule80U: 5 fields; required=['NatureOfDisability', 'TypeOfDisability', 'DeductionAmount'] ---
+   [REQ] DeductionAmount                      integer        max=99999999999999 min=0
+   [opt] Form10IAAckNum                       string         maxLen=15
+   [REQ] NatureOfDisability                   ?              enum(2)
+   [REQ] TypeOfDisability                     ?              enum(2)
+   [opt] UDIDNum                              string         maxLen=18
+
+--- Schedule80D: 1 fields; required=['Sec80DSelfFamSrCtznHealth'] ---
+   [REQ] Sec80DSelfFamSrCtznHealth            object         
+
+--- Schedule80C: 2 fields; required=['Schedule80CDtls', 'TotalAmt'] ---
+   [REQ] Schedule80CDtls                      array          
+   [REQ] TotalAmt                             integer        max=99999999999999 min=0
+
+--- ScheduleTCS: 2 fields; required=['TotalSchTCS'] ---
+   [opt] TCS                                  array          
+   [REQ] TotalSchTCS                          integer        max=99999999999999 min=0
+
+--- TaxPayment: 4 fields; required=['BSRCode', 'DateDep', 'SrlNoOfChaln', 'Amt'] ---
+   [REQ] Amt                                  integer        max=99999999999999 min=0
+   [REQ] BSRCode                              ?              pattern=[0-9]{3}[0-9A-Z]{4}
+   [REQ] DateDep                              string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] SrlNoOfChaln                         integer        max=99999 min=0
+
+--- ScheduleEA10_13A: 9 fields; required=['Placeofwork', 'ActlHRARecv', 'ActlRentPaid', 'DtlsSalUsSec171', 'BasicSalary', 'ActlRentPaid10Per', 'Sal40Or50Per', 'EligbleExmpAllwncUs13A'] ---
+   [REQ] ActlHRARecv                          integer        max=99999999999999 min=0
+   [REQ] ActlRentPaid                         integer        max=99999999999999 min=0
+   [REQ] ActlRentPaid10Per                    integer        max=99999999999999 min=0
+   [REQ] BasicSalary                          integer        max=99999999999999 min=0
+   [opt] DearnessAllwnc                       integer        max=99999999999999 min=0
+   [REQ] DtlsSalUsSec171                      integer        max=99999999999999 min=0
+   [REQ] EligbleExmpAllwncUs13A               integer        max=99999999999999 min=0
+   [REQ] Placeofwork                          string         enum(2)
+   [REQ] Sal40Or50Per                         integer        max=99999999999999 min=0
+
+--- TaxReturnPreparer: 3 fields; required=['IdentificationNoOfTRP', 'NameOfTRP'] ---
+   [REQ] IdentificationNoOfTRP                ?              pattern=[T][0-9]{9}|[0-9]{6}
+   [REQ] NameOfTRP                            ?              maxLen=125 minLen=1
+   [opt] ReImbFrmGov                          integer        max=99999999999999 min=0
+
+--- LTCG112A: 3 fields; required=['TotSaleCnsdrn', 'TotCstAcqisn', 'LongCap112A'] ---
+   [REQ] LongCap112A                          integer        max=125000 min=0
+   [REQ] TotCstAcqisn                         integer        max=99999999999999 min=0
+   [REQ] TotSaleCnsdrn                        integer        max=99999999999999 min=0
+
+--- Schedule80E: 2 fields; required=['Schedule80EDtls', 'TotalInterest80E'] ---
+   [REQ] Schedule80EDtls                      array          
+   [REQ] TotalInterest80E                     integer        max=99999999999999 min=0
+
+--- Schedule80EE: 2 fields; required=['Schedule80EEDtls', 'TotalInterest80EE'] ---
+   [REQ] Schedule80EEDtls                     array          
+   [REQ] TotalInterest80EE                    integer        max=99999999999999 min=0
+
+--- Schedule80EEA: 3 fields; required=['PropStmpDtyVal', 'Schedule80EEADtls', 'TotalInterest80EEA'] ---
+   [REQ] PropStmpDtyVal                       integer        max=4500000 min=0
+   [REQ] Schedule80EEADtls                    array          
+   [REQ] TotalInterest80EEA                   integer        max=99999999999999 min=0
+
+--- Schedule80EEB: 2 fields; required=['Schedule80EEBDtls', 'TotalInterest80EEB'] ---
+   [REQ] Schedule80EEBDtls                    array          
+   [REQ] TotalInterest80EEB                   integer        max=99999999999999 min=0
+
+--- Refund: 2 fields; required=['RefundDue', 'BankAccountDtls'] ---
+   [REQ] BankAccountDtls                      BankAccountDtls 
+   [REQ] RefundDue                            integer        max=99999999999999 min=0
+
+--- TaxPaid: 2 fields; required=['TaxesPaid', 'BalTaxPayable'] ---
+   [REQ] BalTaxPayable                        integer        max=99999999999999 min=0
+   [REQ] TaxesPaid                            TaxesPaid      
+
+--- EmployerOrDeductorOrCollectDetl: 2 fields; required=['TAN', 'EmployerOrDeductorOrCollecterName'] ---
+   [REQ] EmployerOrDeductorOrCollecterName    ?              maxLen=125 minLen=1
+   [REQ] TAN                                  ?              pattern=HYD[A-Z][0-9]{5}[A-Z]|VPN[A-Z][0-9]{5}[A-Z]|BBN[A-Z][0-9]{5}[A-Z]|BPL[A-Z][0-9]{5}[A-Z]|JBP[A-Z][0-9]{5}[A-Z]|CHE[A-Z][0-9]{5}[A-Z]|CMB[A-Z][0-9]{5}[A-Z]|MRI[A-Z][0-9]{5}[A-Z]|DEL[A-Z][0-9]{5}[A-Z]|CAL[A-Z][0-9]{5}[A-Z]|MRT[A-Z][0-9]{5}[A-Z]|AHM[A-Z][0-9]{5}[A-Z]|BRD[A-Z][0-9]{5}[A-Z]|RKT[A-Z][0-9]{5}[A-Z]|SRT[A-Z][0-9]{5}[A-Z]|BLR[A-Z][0-9]{5}[A-Z]|AGR[A-Z][0-9]{5}[A-Z]|KNP[A-Z][0-9]{5}[A-Z]|CHN[A-Z][0-9]{5}[A-Z]|TVD[A-Z][0-9]{5}[A-Z]|ALD[A-Z][0-9]{5}[A-Z]|LKN[A-Z][0-9]{5}[A-Z]|MUM[A-Z][0-9]{5}[A-Z]|NGP[A-Z][0-9]{5}[A-Z]|AMR[A-Z][0-9]{5}[A-Z]|JLD[A-Z][0-9]{5}[A-Z]|PTL[A-Z][0-9]{5}[A-Z]|RTK[A-Z][0-9]{5}[A-Z]|KLP[A-Z][0-9]{5}[A-Z]|NSK[A-Z][0-9]{5}[A-Z]|PNE[A-Z][0-9]{5}[A-Z]|PTN[A-Z][0-9]{5}[A-Z]|RCH[A-Z][0-9]{5}[A-Z]|JDH[A-Z][0-9]{5}[A-Z]|JPR[A-Z][0-9]{5}[A-Z]|SHL[A-Z][0-9]{5}[A-Z]
+
+--- ITR1_IncomeDeductions: 22 fields; required=['GrossSalary', 'NetSalary', 'DeductionUs16', 'IncomeFromSal', 'IncomeOthSrc', 'GrossTotIncome', 'GrossTotIncomeIncLTCG112A', 'UsrDeductUndChapVIA', 'DeductUndChapVIA', 'TotalIncome'] ---
+   [opt] AllwncExemptUs10                     object         
+   [REQ] DeductUndChapVIA                     DeductUndChapVIAType 
+   [REQ] DeductionUs16                        integer        max=99999999999999 min=0
+   [opt] DeductionUs16ia                      integer        max=75000 min=0
+   [opt] DeductionUs57iia                     integer        max=25000 min=0
+   [opt] EntertainmentAlw16ii                 integer        max=5000 min=0
+   [opt] ExemptIncAgriOthUs10                 object         
+   [REQ] GrossSalary                          integer        max=99999999999999 min=0
+   [REQ] GrossTotIncome                       integer        max=99999999999999
+   [REQ] GrossTotIncomeIncLTCG112A            integer        max=99999999999999
+   [REQ] IncomeFromSal                        integer        max=99999999999999 min=0
+   [REQ] IncomeOthSrc                         integer        max=99999999999999 min=0
+   [REQ] NetSalary                            integer        max=99999999999999 min=0
+   [opt] OthersInc                            object         
+   [opt] PerquisitesValue                     integer        max=99999999999999 min=0
+   [opt] ProfessionalTaxUs16iii               integer        max=5000 min=0
+   [opt] ProfitsInSalary                      integer        max=99999999999999 min=0
+   [opt] PropertyDetails                      array          maxItems=2
+   [opt] Salary                               integer        max=99999999999999 min=0
+   [REQ] TotalIncome                          integer        max=5125000 min=0
+   [opt] TotalIncomeChargeableUnHP            integer        max=99999999999999
+   [REQ] UsrDeductUndChapVIA                  UsrDeductUndChapVIAType 
+
+######################## ITR-2 (205 definitions) ########################
+
+--- PersonalInfo: 8 fields; required=['AssesseeName', 'PAN', 'Address', 'SecondaryAdd', 'DOB', 'Status'] ---
+   [opt] AadhaarCardNo                        ?              pattern=[0-9]{12}
+   [REQ] Address                              Address        
+   [opt] AlternateAddress                     AlternateAddress 
+   [REQ] AssesseeName                         AssesseeName   
+   [REQ] DOB                                  string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] PAN                                  ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [REQ] SecondaryAdd                         string         enum(2)
+   [REQ] Status                               string         enum(2)
+
+--- FilingStatus: 32 fields; required=['ReturnFileSec', 'OptOutNewTaxRegime', 'SeventhProvisio139', 'ResidentialStatus', 'HeldUnlistedEqShrPrYrFlg', 'FiiFpiFlag', 'ItrFilingDueDate'] ---
+   [opt] AmtSeventhProvisio139i               integer        max=99999999999999 min=10000000
+   [opt] AmtSeventhProvisio139ii              integer        max=99999999999999 min=200000
+   [opt] AmtSeventhProvisio139iii             integer        max=99999999999999 min=100000
+   [opt] AsseseeRepFlg                        ?              enum(2)
+   [opt] AssesseeRep                          AssesseeRep    
+   [opt] BenefitUs115HFlg                     ?              enum(2)
+   [opt] CompDirectorPrvYr                    object         
+   [opt] CompDirectorPrvYrFlg                 ?              enum(2)
+   [opt] ConditionsResStatus                  ?              enum(9)
+   [opt] DepAmtAggAmtExcd1CrPrYrFlg           ?              pattern=Y|N
+   [REQ] FiiFpiFlag                           ?              enum(2)
+   [opt] HeldUnlistedEqShrPrYr                object         
+   [REQ] HeldUnlistedEqShrPrYrFlg             ?              enum(2)
+   [opt] IncrExpAggAmt1LkElctrctyPrYrFlg      ?              pattern=Y|N
+   [opt] IncrExpAggAmt2LkTrvFrgnCntryFlg      ?              pattern=Y|N
+   [REQ] ItrFilingDueDate                     ?              pattern=2026-07-31 maxLen=10 minLen=9
+   [opt] JurisdictionResPrevYr                object         
+   [opt] LEIDtls                              object         
+   [opt] NoticeDate                           string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] NoticeNo                             ?              maxLen=100
+   [REQ] OptOutNewTaxRegime                   ?              pattern=Y|N
+   [opt] OrigRetFiledDate                     string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] PortugeseCC5A                        ?              enum(2)
+   [opt] ReceiptNo                            string         pattern=[0-9]{15}
+   [REQ] ResidentialStatus                    ?              enum(3)
+   [REQ] ReturnFileSec                        integer        enum(9) max=20 min=11
+   [opt] SebiRegnNo                           ?              pattern=IN[a-zA-Z]{2}FP[0-9]{6}
+   [REQ] SeventhProvisio139                   ?              pattern=Y|N
+   [opt] TotalPrStayIndia4PrecYr              integer        max=1461 min=0
+   [opt] TotalPrStayIndiaPrevYr               integer        max=365 min=0
+   [opt] clauseiv7provisio139i                ?              pattern=Y|N
+   [opt] clauseiv7provisio139iDtls            array          
+
+--- Verification: 4 fields; required=['Declaration', 'Capacity'] ---
+   [REQ] Capacity                             string         enum(4)
+   [opt] Date                                 string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] Declaration                          object         
+   [opt] Place                                ?              maxLen=50 minLen=1
+
+--- AssesseeName: 3 fields; required=['SurNameOrOrgName'] ---
+   [opt] FirstName                            ?              maxLen=25
+   [opt] MiddleName                           ?              maxLen=25
+   [REQ] SurNameOrOrgName                     ?              maxLen=75 minLen=1
+
+--- Address: 16 fields; required=['ResidenceNo', 'LocalityOrArea', 'CityOrTownOrDistrict', 'StateCode', 'CountryCode', 'CountryCodeMobile', 'MobileNo', 'EmailAddress'] ---
+   [REQ] CityOrTownOrDistrict                 ?              maxLen=50 minLen=1
+   [REQ] CountryCode                          CountryCode    
+   [REQ] CountryCodeMobile                    integer        pattern=[0-9]{1,5}
+   [opt] CountryCodeMobileNoSec               integer        pattern=[0-9]{1,5}
+   [REQ] EmailAddress                         ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125 minLen=1
+   [opt] EmailAddressSec                      ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [REQ] LocalityOrArea                       ?              maxLen=50 minLen=1
+   [REQ] MobileNo                             integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [opt] MobileNoSec                          integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [opt] Phone                                object         
+   [opt] PinCode                              integer        pattern=[1-9]{1}[0-9]{5} max=999999 min=100000
+   [opt] ResidenceName                        ?              maxLen=50
+   [REQ] ResidenceNo                          ?              maxLen=50 minLen=1
+   [opt] RoadOrStreet                         ?              maxLen=50
+   [REQ] StateCode                            StateCode      
+   [opt] ZipCode                              ?              maxLen=8
+
+--- AlternateAddress: 9 fields; required=['ResidenceNo', 'LocalityOrArea', 'CityOrTownOrDistrict', 'StateCode'] ---
+   [REQ] CityOrTownOrDistrict                 ?              maxLen=50 minLen=1
+   [opt] CountryCode                          CountryCode    
+   [REQ] LocalityOrArea                       ?              maxLen=50 minLen=1
+   [opt] PinCode                              integer        pattern=[1-9]{1}[0-9]{5} max=999999 min=100000
+   [opt] ResidenceName                        ?              maxLen=50
+   [REQ] ResidenceNo                          ?              maxLen=50 minLen=1
+   [opt] RoadOrStreet                         ?              maxLen=50
+   [REQ] StateCode                            StateCode      
+   [opt] ZipCode                              string         maxLen=8
+
+--- AssesseeRep: 4 fields; required=['RepName', 'RepEmailID', 'CountryCodeRepMobileNo', 'RepMobileNo'] ---
+   [REQ] CountryCodeRepMobileNo               integer        pattern=[0-9]{1,5}
+   [REQ] RepEmailID                           ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [REQ] RepMobileNo                          integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [REQ] RepName                              ?              maxLen=125 minLen=1
+
+--- ScheduleS: 12 fields; required=['TotalGrossSalary', 'AllwncExtentExemptUs10', 'NetSalary', 'DeductionUS16', 'DeductionUnderSection16ia', 'EntertainmntalwncUs16ii', 'ProfessionalTaxUs16iii', 'TotIncUnderHeadSalaries'] ---
+   [opt] AllwncExemptUs10                     object         
+   [REQ] AllwncExtentExemptUs10               integer        max=99999999999999 min=0
+   [REQ] DeductionUS16                        integer        max=99999999999999 min=0
+   [REQ] DeductionUnderSection16ia            integer        max=75000 min=0
+   [REQ] EntertainmntalwncUs16ii              integer        max=5000 min=0
+   [opt] Increliefus89A                       integer        max=99999999999999 min=0
+   [REQ] NetSalary                            integer        max=99999999999999 min=0
+   [REQ] ProfessionalTaxUs16iii               integer        max=5000 min=0
+   [opt] Salaries                             array          
+   [opt] Section10_13A                        object         
+   [REQ] TotIncUnderHeadSalaries              integer        max=99999999999999 min=0
+   [REQ] TotalGrossSalary                     integer        max=99999999999999 min=0
+
+--- ScheduleHP: 3 fields; required=['TotalIncomeChargeableUnHP'] ---
+   [opt] PassThroghIncome                     integer        max=99999999999999 min=-99999999999999
+   [opt] PropertyDetails                      array          
+   [REQ] TotalIncomeChargeableUnHP            integer        max=99999999999999 min=-99999999999999
+
+--- ScheduleOS: 15 fields; required=['IncFrmLottery', 'DividendIncUs115BBDA', 'DividendIncUs115BBDAaiii', 'DividendIncUs115A1ai', 'DividendIncUs115AC', 'DividendIncUs115ACA', 'DividendIncUs115AD1i', 'DividendDTAA', 'NOT89A', 'IncChargeable'] ---
+   [REQ] DividendDTAA                         DateRangeType  
+   [opt] DividendIncUs115A1aA                 DateRangeType  
+   [REQ] DividendIncUs115A1ai                 DateRangeType  
+   [REQ] DividendIncUs115AC                   DateRangeType  
+   [REQ] DividendIncUs115ACA                  DateRangeType  
+   [REQ] DividendIncUs115AD1i                 DateRangeType  
+   [REQ] DividendIncUs115BBDA                 DateRangeType  
+   [REQ] DividendIncUs115BBDAaiii             DateRangeType  
+   [REQ] IncChargeable                        integer        max=99999999999999 min=0
+   [REQ] IncFrmLottery                        DateRangeType  
+   [opt] IncFrmOnGames                        DateRangeType  
+   [opt] IncFromOwnHorse                      object         
+   [opt] IncOthThanOwnRaceHorse               object         
+   [REQ] NOT89A                               DateRangeType  
+   [opt] TotOthSrcNoRaceHorse                 integer        max=99999999999999 min=0
+
+--- ScheduleEI: 12 fields; required=['TotalExemptInc', 'NetAgriIncOrOthrIncRule7', 'Others', 'IncNotChrgblToTax'] ---
+   [opt] ExcNetAgriInc                        object         
+   [opt] ExpIncAgri                           integer        max=99999999999999 min=0
+   [opt] GrossAgriRecpt                       integer        max=99999999999999 min=0
+   [opt] IncNotChrgblAsPerDTAA                object         
+   [REQ] IncNotChrgblToTax                    integer        max=99999999999999 min=0
+   [opt] InterestInc                          integer        max=99999999999999 min=0
+   [REQ] NetAgriIncOrOthrIncRule7             integer        max=99999999999999 min=0
+   [REQ] Others                               integer        max=99999999999999 min=0
+   [opt] OthersInc                            object         
+   [opt] PassThrIncNotChrgblTax               integer        max=99999999999999 min=0
+   [REQ] TotalExemptInc                       integer        max=99999999999999 min=0
+   [opt] UnabAgriLossPrev8                    integer        max=99999999999999 min=0
+
+--- Schedule80G: 8 fields; required=['TotalDonationsUs80GCash', 'TotalDonationsUs80GOtherMode', 'TotalDonationsUs80G', 'TotalEligibleDonationsUs80G'] ---
+   [opt] Don100Percent                        object         
+   [opt] Don100PercentApprReqd                object         
+   [opt] Don50PercentApprReqd                 object         
+   [opt] Don50PercentNoApprReqd               object         
+   [REQ] TotalDonationsUs80G                  integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GCash              integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GOtherMode         integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationsUs80G          integer        max=99999999999999 min=0
+
+--- Schedule80GGA: 5 fields; required=['TotalDonationAmtCash80GGA', 'TotalDonationAmtOtherMode80GGA', 'TotalDonationsUs80GGA', 'TotalEligibleDonationAmt80GGA'] ---
+   [opt] DonationDtlsSciRsrchRuralDev         array          
+   [REQ] TotalDonationAmtCash80GGA            integer        max=99999999999999 min=0
+   [REQ] TotalDonationAmtOtherMode80GGA       integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GGA                integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationAmt80GGA        integer        max=99999999999999 min=0
+
+--- Schedule80GGC: 5 fields; required=['TotalDonationAmtCash80GGC', 'TotalDonationAmtOtherMode80GGC', 'TotalDonationsUs80GGC', 'TotalEligibleDonationAmt80GGC'] ---
+   [opt] Schedule80GGCDetails                 array          
+   [REQ] TotalDonationAmtCash80GGC            integer        max=99999999999999 min=0
+   [REQ] TotalDonationAmtOtherMode80GGC       integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GGC                integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationAmt80GGC        integer        max=99999999999999 min=0
+
+--- Schedule80DD: 10 fields; required=['NatureOfDisability', 'TypeOfDisability', 'DeductionAmount', 'DependentType'] ---
+   [REQ] DeductionAmount                      integer        maxLen=14
+   [opt] DependentAadhaar                     ?              pattern=[0-9]{12}
+   [opt] DependentPan                         ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [REQ] DependentType                        ?              enum(8)
+   [opt] Form10IAAckNum                       string         maxLen=15
+   [opt] Form10IAFilingDate                   string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] FormAckNum11A                        string         maxLen=15
+   [REQ] NatureOfDisability                   ?              enum(2)
+   [REQ] TypeOfDisability                     ?              enum(2)
+   [opt] UDIDNum                              string         maxLen=18
+
+--- Schedule80U: 7 fields; required=['NatureOfDisability', 'DeductionAmount', 'TypeOfDisability'] ---
+   [REQ] DeductionAmount                      integer        maxLen=14
+   [opt] Form10IAAckNum                       string         maxLen=15
+   [opt] Form10IAFilingDate                   string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] FormAckNum11A                        string         maxLen=15
+   [REQ] NatureOfDisability                   ?              enum(2)
+   [REQ] TypeOfDisability                     ?              enum(2)
+   [opt] UDIDNum                              string         maxLen=18
+
+--- Schedule80D: 1 fields; required=[] ---
+   [opt] Sec80DSelfFamSrCtznHealth            object         
+
+--- Schedule80C: 2 fields; required=['Schedule80CDtls', 'TotalAmt'] ---
+   [REQ] Schedule80CDtls                      array          
+   [REQ] TotalAmt                             integer        max=99999999999999 min=0
+
+--- ScheduleTDS1: 2 fields; required=['TotalTDSonSalaries'] ---
+   [opt] TDSonSalary                          array          
+   [REQ] TotalTDSonSalaries                   integer        max=99999999999999 min=0
+
+--- ScheduleTDS2: 2 fields; required=['TotalTDSonOthThanSals'] ---
+   [opt] TDSOthThanSalaryDtls                 array          
+   [REQ] TotalTDSonOthThanSals                integer        max=99999999999999 min=0
+
+--- ScheduleTDS3: 2 fields; required=['TotalTDS3OnOthThanSal'] ---
+   [opt] TDS3onOthThanSalDtls                 array          
+   [REQ] TotalTDS3OnOthThanSal                integer        max=99999999999999 min=0
+
+--- ScheduleTCS: 2 fields; required=['TotalSchTCS'] ---
+   [opt] TCS                                  array          
+   [REQ] TotalSchTCS                          integer        max=99999999999999 min=0
+
+--- ScheduleIT: 2 fields; required=['TotalTaxPayments'] ---
+   [opt] TaxPayment                           array          
+   [REQ] TotalTaxPayments                     integer        max=99999999999999 min=0
+
+--- TaxPayment: 4 fields; required=['BSRCode', 'DateDep', 'SrlNoOfChaln', 'Amt'] ---
+   [REQ] Amt                                  integer        max=99999999999999 min=0
+   [REQ] BSRCode                              ?              pattern=[0-9]{3}[0-9A-Z]{4}
+   [REQ] DateDep                              string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] SrlNoOfChaln                         integer        max=99999 min=0
+
+--- ScheduleFA: 10 fields; required=[] ---
+   [opt] DetailsFinancialInterest             array          
+   [opt] DetailsForiegnBank                   array          
+   [opt] DetailsImmovableProperty             array          
+   [opt] DetailsOfAccntsHvngSigningAuth       array          
+   [opt] DetailsOfOthSourcesIncOutsideIndia   array          
+   [opt] DetailsOfTrustOutIndiaTrustee        array          
+   [opt] DetailsOthAssets                     array          
+   [opt] DtlsForeignCashValueInsurance        array          
+   [opt] DtlsForeignCustodialAcc              array          
+   [opt] DtlsForeignEquityDebtInterest        array          
+
+--- ScheduleFSI: 1 fields; required=[] ---
+   [opt] ScheduleFSIDtls                      array          
+
+--- ScheduleTR1: 8 fields; required=['TotalTaxPaidOutsideIndia', 'TotalTaxReliefOutsideIndia', 'TaxReliefOutsideIndiaDTAA', 'TaxReliefOutsideIndiaNotDTAA'] ---
+   [opt] AmtTaxRefunded                       integer        max=99999999999999 min=-99999999999999
+   [opt] AssmtYrTaxRelief                     ?              pattern=[0-9][0-9][0-9][0-9]-[0-9][0-9]
+   [opt] ScheduleTR                           array          
+   [opt] TaxPaidOutsideIndFlg                 ?              enum(2)
+   [REQ] TaxReliefOutsideIndiaDTAA            integer        max=99999999999999 min=0
+   [REQ] TaxReliefOutsideIndiaNotDTAA         integer        max=99999999999999 min=0
+   [REQ] TotalTaxPaidOutsideIndia             integer        max=99999999999999 min=0
+   [REQ] TotalTaxReliefOutsideIndia           integer        max=99999999999999 min=0
+
+--- ScheduleSPI: 1 fields; required=[] ---
+   [opt] SpecifiedPerson                      array          
+
+--- SchedulePTI: 1 fields; required=[] ---
+   [opt] SchedulePTIDtls                      array          
+
+--- ScheduleAL: 3 fields; required=['MovableAsset', 'LiabilityInRelatAssets'] ---
+   [opt] ImmovableDetails                     array          
+   [REQ] LiabilityInRelatAssets               integer        max=99999999999999 min=0
+   [REQ] MovableAsset                         MovableAsset   
+
+--- ScheduleAMT: 4 fields; required=['TotalIncItemPartBTI', 'DeductionClaimUndrAnySec', 'AdjustedUnderSec115JC', 'TaxPayableUnderSec115JC'] ---
+   [REQ] AdjustedUnderSec115JC                integer        max=99999999999999 min=0
+   [REQ] DeductionClaimUndrAnySec             integer        max=99999999999999 min=-99999999999999
+   [REQ] TaxPayableUnderSec115JC              integer        max=99999999999999 min=0
+   [REQ] TotalIncItemPartBTI                  integer        max=99999999999999 min=-99999999999999
+
+--- ScheduleAMTC: 14 fields; required=['TaxSection115JC', 'TaxOthProvisions', 'AmtTaxCreditAvailable', 'CurrYrAmtCreditFwd', 'CurrYrCreditCarryFwd', 'TotAMTGross', 'TotSetOffEys', 'TotBalBF', 'TaxSection115JD', 'AmtLiabilityAvailable', 'TotBalAMTCreditCF'] ---
+   [REQ] AmtLiabilityAvailable                integer        max=99999999999999 min=0
+   [REQ] AmtTaxCreditAvailable                integer        max=99999999999999 min=0
+   [opt] CurrAssYr                            ?              enum(1)
+   [REQ] CurrYrAmtCreditFwd                   integer        max=99999999999999 min=0
+   [REQ] CurrYrCreditCarryFwd                 integer        max=99999999999999 min=0
+   [opt] ScheduleAMTCDtls                     array          maxItems=13
+   [REQ] TaxOthProvisions                     integer        max=99999999999999 min=0
+   [REQ] TaxSection115JC                      integer        max=99999999999999 min=0
+   [REQ] TaxSection115JD                      integer        max=99999999999999 min=0
+   [REQ] TotAMTGross                          integer        max=99999999999999 min=0
+   [opt] TotAmtCreditUtilisedCY               integer        max=99999999999999 min=0
+   [REQ] TotBalAMTCreditCF                    integer        max=99999999999999 min=0
+   [REQ] TotBalBF                             integer        max=99999999999999 min=0
+   [REQ] TotSetOffEys                         integer        max=99999999999999 min=0
+
+--- ScheduleESOP: 9 fields; required=['PanofStartUp', 'DPIITRegNo', 'TotalTaxAttributedAmt'] ---
+   [REQ] DPIITRegNo                           string         pattern=DIPP[0-9]{3,5}
+   [REQ] PanofStartUp                         ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [opt] ScheduleESOP2122_Type                object         
+   [opt] ScheduleESOP2223_Type                object         
+   [opt] ScheduleESOP2324_Type                object         
+   [opt] ScheduleESOP2425_Type                object         
+   [opt] ScheduleESOP2526_Type                object         
+   [opt] ScheduleESOP2627_Type                object         
+   [REQ] TotalTaxAttributedAmt                integer        max=99999999999999 min=0
+
+--- Schedule112A: 10 fields; required=['SaleValue112A', 'CostAcqWithoutIndx112A', 'AcquisitionCost112A', 'LTCGBeforelowerB1B2112A', 'FairMktValueCapAst112A', 'ExpExclCnctTransfer112A', 'Deductions112A', 'Balance112A', 'TotalBalance112A'] ---
+   [REQ] AcquisitionCost112A                  integer        max=99999999999999 min=0
+   [REQ] Balance112A                          integer        max=99999999999999 min=-99999999999999
+   [REQ] CostAcqWithoutIndx112A               integer        max=99999999999999 min=0
+   [REQ] Deductions112A                       integer        max=99999999999999 min=0
+   [REQ] ExpExclCnctTransfer112A              integer        max=99999999999999 min=0
+   [REQ] FairMktValueCapAst112A               integer        max=99999999999999 min=0
+   [REQ] LTCGBeforelowerB1B2112A              integer        max=99999999999999 min=0
+   [REQ] SaleValue112A                        integer        max=99999999999999 min=0
+   [opt] Schedule112ADtls                     array          
+   [REQ] TotalBalance112A                     integer        max=99999999999999 min=-99999999999999
+
+--- ScheduleCGFor23: 8 fields; required=['ShortTermCapGainFor23', 'LongTermCapGain23', 'SumOfCGIncm', 'IncmFromVDATrnsf', 'TotScheduleCGFor23', 'CurrYrLosses', 'AccruOrRecOfCG'] ---
+   [REQ] AccruOrRecOfCG                       AccruOrRecOfCG 
+   [REQ] CurrYrLosses                         CurrYrLosses   
+   [opt] DeducClaimInfo                       DeducClaimInfo 
+   [REQ] IncmFromVDATrnsf                     integer        max=99999999999999 min=0
+   [REQ] LongTermCapGain23                    LongTermCapGain23 
+   [REQ] ShortTermCapGainFor23                ShortTermCapGainFor23 
+   [REQ] SumOfCGIncm                          integer        max=99999999999999 min=0
+   [REQ] TotScheduleCGFor23                   integer        max=99999999999999 min=0
+
+--- Schedule115AD: 10 fields; required=['SaleValue115AD', 'CostAcqWithoutIndx115AD', 'AcquisitionCost115AD', 'LTCGBeforelowerB1B2115AD', 'FairMktValueCapAst115AD', 'ExpExclCnctTransfer115AD', 'Deductions115AD', 'Balance115AD', 'TotalBalance115AD'] ---
+   [REQ] AcquisitionCost115AD                 integer        max=99999999999999 min=0
+   [REQ] Balance115AD                         integer        max=99999999999999 min=-99999999999999
+   [REQ] CostAcqWithoutIndx115AD              integer        max=99999999999999 min=0
+   [REQ] Deductions115AD                      integer        max=99999999999999 min=0
+   [REQ] ExpExclCnctTransfer115AD             integer        max=99999999999999 min=0
+   [REQ] FairMktValueCapAst115AD              integer        max=99999999999999 min=0
+   [REQ] LTCGBeforelowerB1B2115AD             integer        max=99999999999999 min=0
+   [REQ] SaleValue115AD                       integer        max=99999999999999 min=0
+   [opt] Schedule115ADDtls                    array          
+   [REQ] TotalBalance115AD                    integer        max=99999999999999 min=-99999999999999
+
+--- ScheduleVDA: 2 fields; required=['ScheduleVDADtls', 'TotIncCapGain'] ---
+   [REQ] ScheduleVDADtls                      array          
+   [REQ] TotIncCapGain                        integer        max=99999999999999 min=0
+
+--- ScheduleCFL: 12 fields; required=['TotalLossCFSummary', 'TotalOfBFLossesEarlierYrs'] ---
+   [opt] AdjTotBFLossInBFLA                   object         
+   [opt] CurrentAYloss                        object         
+   [opt] LossCFFromPrev2ndYearFromAY          object         
+   [opt] LossCFFromPrev3rdYearFromAY          object         
+   [opt] LossCFFromPrev4thYearFromAY          object         
+   [opt] LossCFFromPrev5thYearFromAY          object         
+   [opt] LossCFFromPrev6thYearFromAY          object         
+   [opt] LossCFFromPrev7thYearFromAY          object         
+   [opt] LossCFFromPrev8thYearFromAY          object         
+   [opt] LossCFFromPrevYrToAY                 object         
+   [REQ] TotalLossCFSummary                   object         
+   [REQ] TotalOfBFLossesEarlierYrs            object         
+
+--- ScheduleCYLA: 14 fields; required=['STCG20Per', 'STCG30Per', 'STCGAppRate', 'STCGDTAARate', 'LTCG12_5Per', 'LTCGDTAARate', 'TotalCurYr', 'TotalLossSetOff', 'LossRemAftSetOff'] ---
+   [opt] HP                                   object         
+   [opt] IncOSDTAA                            object         
+   [REQ] LTCG12_5Per                          object         
+   [REQ] LTCGDTAARate                         object         
+   [REQ] LossRemAftSetOff                     object         
+   [opt] OthSrcExclRaceHorse                  object         
+   [opt] OthSrcRaceHorse                      object         
+   [REQ] STCG20Per                            object         
+   [REQ] STCG30Per                            object         
+   [REQ] STCGAppRate                          object         
+   [REQ] STCGDTAARate                         object         
+   [opt] Salary                               object         
+   [REQ] TotalCurYr                           object         
+   [REQ] TotalLossSetOff                      object         
+
+--- ScheduleBFLA: 13 fields; required=['Salary', 'STCG20Per', 'STCG30Per', 'STCGAppRate', 'STCGDTAARate', 'LTCG12_5Per', 'LTCGDTAARate', 'IncomeOfCurrYrAftCYLABFLA', 'TotalBFLossSetOff'] ---
+   [opt] HP                                   object         
+   [opt] IncOSDTAA                            object         
+   [REQ] IncomeOfCurrYrAftCYLABFLA            integer        max=99999999999999 min=0
+   [REQ] LTCG12_5Per                          object         
+   [REQ] LTCGDTAARate                         object         
+   [opt] OthSrcExclRaceHorse                  object         
+   [opt] OthSrcRaceHorse                      object         
+   [REQ] STCG20Per                            object         
+   [REQ] STCG30Per                            object         
+   [REQ] STCGAppRate                          object         
+   [REQ] STCGDTAARate                         object         
+   [REQ] Salary                               object         
+   [REQ] TotalBFLossSetOff                    object         
+
+--- Schedule5A2014: 7 fields; required=['NameOfSpouse', 'PANOfSpouse', 'HPHeadIncome', 'CapGainHeadIncome', 'OtherSourcesHeadIncome', 'TotalHeadIncome'] ---
+   [opt] AadhaarOfSpouse                      ?              pattern=[0-9]{12}
+   [REQ] CapGainHeadIncome                    Sch5AIncType   
+   [REQ] HPHeadIncome                         Sch5AIncType   
+   [REQ] NameOfSpouse                         ?              maxLen=125 minLen=1
+   [REQ] OtherSourcesHeadIncome               Sch5AIncType   
+   [REQ] PANOfSpouse                          ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [REQ] TotalHeadIncome                      Sch5AIncType   
+
+--- ScheduleSI: 3 fields; required=['TotSplRateInc', 'TotSplRateIncTax'] ---
+   [opt] SplCodeRateTax                       array          
+   [REQ] TotSplRateInc                        integer        max=99999999999999 min=0
+   [REQ] TotSplRateIncTax                     integer        max=99999999999999 min=0
+
+--- PartA_GEN1: 2 fields; required=['PersonalInfo', 'FilingStatus'] ---
+   [REQ] FilingStatus                         FilingStatus   
+   [REQ] PersonalInfo                         PersonalInfo   
+
+--- TaxReturnPreparer: 3 fields; required=['IdentificationNoOfTRP', 'NameOfTRP', 'ReImbFrmGov'] ---
+   [REQ] IdentificationNoOfTRP                ?              pattern=[T][0-9]{9}|[0-9]{6}
+   [REQ] NameOfTRP                            ?              maxLen=125 minLen=1
+   [REQ] ReImbFrmGov                          integer        max=99999999999999 min=0
+
+--- Schedule80E: 2 fields; required=['Schedule80EDtls', 'TotalInterest80E'] ---
+   [REQ] Schedule80EDtls                      array          
+   [REQ] TotalInterest80E                     integer        max=99999999999999 min=0
+
+--- Schedule80EE: 2 fields; required=['Schedule80EEDtls', 'TotalInterest80EE'] ---
+   [REQ] Schedule80EEDtls                     array          
+   [REQ] TotalInterest80EE                    integer        max=99999999999999 min=0
+
+--- Schedule80EEA: 3 fields; required=['PropStmpDtyVal', 'Schedule80EEADtls', 'TotalInterest80EEA'] ---
+   [REQ] PropStmpDtyVal                       integer        max=4500000 min=0
+   [REQ] Schedule80EEADtls                    array          
+   [REQ] TotalInterest80EEA                   integer        max=99999999999999 min=0
+
+--- Schedule80EEB: 2 fields; required=['Schedule80EEBDtls', 'TotalInterest80EEB'] ---
+   [REQ] Schedule80EEBDtls                    array          
+   [REQ] TotalInterest80EEB                   integer        max=99999999999999 min=0
+
+--- Refund: 2 fields; required=['RefundDue', 'BankAccountDtls'] ---
+   [REQ] BankAccountDtls                      BankAccountDtls 
+   [REQ] RefundDue                            integer        max=99999999999999 min=0
+
+--- TaxPaid: 2 fields; required=['TaxesPaid'] ---
+   [opt] BalTaxPayable                        integer        max=99999999999999 min=0
+   [REQ] TaxesPaid                            TaxesPaid      
+
+--- EmployerOrDeductorOrCollectDetl: 2 fields; required=['TAN', 'EmployerOrDeductorOrCollecterName'] ---
+   [REQ] EmployerOrDeductorOrCollecterName    ?              maxLen=125 minLen=1
+   [REQ] TAN                                  ?              pattern=HYD[A-Z][0-9]{5}[A-Z]|VPN[A-Z][0-9]{5}[A-Z]|BBN[A-Z][0-9]{5}[A-Z]|BPL[A-Z][0-9]{5}[A-Z]|JBP[A-Z][0-9]{5}[A-Z]|CHE[A-Z][0-9]{5}[A-Z]|CMB[A-Z][0-9]{5}[A-Z]|MRI[A-Z][0-9]{5}[A-Z]|DEL[A-Z][0-9]{5}[A-Z]|CAL[A-Z][0-9]{5}[A-Z]|MRT[A-Z][0-9]{5}[A-Z]|AHM[A-Z][0-9]{5}[A-Z]|BRD[A-Z][0-9]{5}[A-Z]|RKT[A-Z][0-9]{5}[A-Z]|SRT[A-Z][0-9]{5}[A-Z]|BLR[A-Z][0-9]{5}[A-Z]|AGR[A-Z][0-9]{5}[A-Z]|KNP[A-Z][0-9]{5}[A-Z]|CHN[A-Z][0-9]{5}[A-Z]|TVD[A-Z][0-9]{5}[A-Z]|ALD[A-Z][0-9]{5}[A-Z]|LKN[A-Z][0-9]{5}[A-Z]|MUM[A-Z][0-9]{5}[A-Z]|NGP[A-Z][0-9]{5}[A-Z]|AMR[A-Z][0-9]{5}[A-Z]|JLD[A-Z][0-9]{5}[A-Z]|PTL[A-Z][0-9]{5}[A-Z]|RTK[A-Z][0-9]{5}[A-Z]|KLP[A-Z][0-9]{5}[A-Z]|NSK[A-Z][0-9]{5}[A-Z]|PNE[A-Z][0-9]{5}[A-Z]|PTN[A-Z][0-9]{5}[A-Z]|RCH[A-Z][0-9]{5}[A-Z]|JDH[A-Z][0-9]{5}[A-Z]|JPR[A-Z][0-9]{5}[A-Z]|SHL[A-Z][0-9]{5}[A-Z]
+
+--- ScheduleVIA: 2 fields; required=['UsrDeductUndChapVIA', 'DeductUndChapVIA'] ---
+   [REQ] DeductUndChapVIA                     DeductUndChapVIA 
+   [REQ] UsrDeductUndChapVIA                  UsrDeductUndChapVIA 
+
+######################## ITR-3 (287 definitions) ########################
+
+--- PersonalInfo: 9 fields; required=['AssesseeName', 'PAN', 'Address', 'SecondaryAdd', 'DOB', 'Status'] ---
+   [opt] AadhaarCardNo                        ?              pattern=[0-9]{12}
+   [REQ] Address                              Address        
+   [opt] AlternateAddress                     AlternateAddress 
+   [REQ] AssesseeName                         AssesseeName   
+   [REQ] DOB                                  string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] DateofBusCommencement                string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] PAN                                  ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [REQ] SecondaryAdd                         string         enum(2)
+   [REQ] Status                               string         enum(2)
+
+--- FilingStatus: 52 fields; required=['ReturnFileSec', 'IncFrmBusOrProf', 'SeventhProvisio139', 'ResidentialStatus', 'HeldUnlistedEqShrPrYrFlg', 'ForeignExchangeFlag', 'FiiFpiFlag', 'ItrFilingDueDate'] ---
+   [opt] AggrPaymentTransac                   number         max=99999999999999.98 min=0
+   [opt] AmtSeventhProvisio139i               integer        max=99999999999999 min=10000000
+   [opt] AmtSeventhProvisio139ii              integer        max=99999999999999 min=200000
+   [opt] AmtSeventhProvisio139iii             integer        max=99999999999999 min=100000
+   [opt] AssYrF10IEANewTaxReg                 string         enum(1)
+   [opt] AsseseeRepFlg                        ?              enum(2)
+   [opt] AssesseeRep                          AssesseeRep    
+   [opt] BenefitUs115HFlg                     ?              enum(2)
+   [opt] CompDirectorPrvYr                    object         
+   [opt] CompDirectorPrvYrFlg                 ?              enum(2)
+   [opt] ConditionsResStatus                  ?              enum(9)
+   [opt] DepAmtAggAmtExcd1CrPrYrFlg           ?              pattern=Y|N
+   [opt] F10IEAAckNoCurrAYNewTax              integer        max=999999999999999 min=100000000000000
+   [opt] F10IEAAckNoCurrAYOldTax              integer        max=999999999999999 min=100000000000000
+   [opt] F10IEACurrAYNewRegime                string         enum(2)
+   [opt] F10IEACurrAYOldRegime                string         enum(2)
+   [opt] F10IEADateCurrAYNewTax               string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] F10IEADateCurrAYOldTax               string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] F10IEAEarlierAYNewRegime             string         enum(2)
+   [REQ] FiiFpiFlag                           ?              enum(2)
+   [REQ] ForeignExchangeFlag                  ?              enum(2)
+   [opt] Form10IEAAssYear                     string         enum(2)
+   [opt] Form10IEAEarlierAYAckNewRegime       integer        max=999999999999999 min=100000000000000
+   [opt] Form10IEAEarlierAYAckOldRegime       integer        max=999999999999999 min=100000000000000
+   [opt] Form10IEAEarlierAYOldRegime          string         enum(2)
+   [opt] HeldUnlistedEqShrPrYr                object         
+   [REQ] HeldUnlistedEqShrPrYrFlg             ?              enum(2)
+   [REQ] IncFrmBusOrProf                      string         enum(2)
+   [opt] IncrExpAggAmt1LkElctrctyPrYrFlg      ?              pattern=Y|N
+   [opt] IncrExpAggAmt2LkTrvFrgnCntryFlg      ?              pattern=Y|N
+   [REQ] ItrFilingDueDate                     ?              enum(3) maxLen=10 minLen=9
+   [opt] JurisdictionResPrevYr                object         
+   [opt] LEIDtls                              object         
+   [opt] NoticeDate                           string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] NoticeNo                             ?              maxLen=100
+   [opt] NriPEinIndia                         ?              enum(2)
+   [opt] NriSEPinIndia                        ?              enum(3)
+   [opt] NumberOfUsers                        number         max=99999999999999.98 min=0
+   [opt] OptOldRegimeCurrAY                   string         enum(2)
+   [opt] OrigRetFiledDate                     string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] PartnerInFirm                        object         
+   [opt] PartnerInFirmFlg                     ?              enum(2)
+   [opt] PortugeseCC5A                        ?              enum(2)
+   [opt] ReceiptNo                            string         pattern=[0-9]{15}
+   [REQ] ResidentialStatus                    ?              enum(3)
+   [REQ] ReturnFileSec                        integer        enum(10) max=21 min=11
+   [opt] SebiRegnNo                           ?              pattern=IN[a-zA-Z]{2}FP[0-9]{6}
+   [REQ] SeventhProvisio139                   ?              pattern=Y|N
+   [opt] TotalPrStayIndia4PrecYr              integer        max=9999 min=0
+   [opt] TotalPrStayIndiaPrevYr               integer        max=999 min=0
+   [opt] clauseiv7provisio139i                ?              pattern=Y|N
+   [opt] clauseiv7provisio139iDtls            array          
+
+--- Verification: 4 fields; required=['Declaration', 'Capacity', 'Date', 'Place'] ---
+   [REQ] Capacity                             string         enum(4)
+   [REQ] Date                                 string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] Declaration                          object         
+   [REQ] Place                                ?              maxLen=50 minLen=1
+
+--- AssesseeName: 3 fields; required=['SurNameOrOrgName'] ---
+   [opt] FirstName                            ?              maxLen=25
+   [opt] MiddleName                           ?              maxLen=25
+   [REQ] SurNameOrOrgName                     ?              maxLen=75 minLen=1
+
+--- Address: 16 fields; required=['ResidenceNo', 'LocalityOrArea', 'CityOrTownOrDistrict', 'StateCode', 'CountryCode', 'CountryCodeMobile', 'MobileNo', 'EmailAddress'] ---
+   [REQ] CityOrTownOrDistrict                 ?              maxLen=50 minLen=1
+   [REQ] CountryCode                          CountryCode    
+   [REQ] CountryCodeMobile                    integer        pattern=[0-9]{1,5}
+   [opt] CountryCodeMobileNoSec               integer        pattern=[0-9]{1,5}
+   [REQ] EmailAddress                         ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [opt] EmailAddressSec                      ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [REQ] LocalityOrArea                       ?              maxLen=50 minLen=1
+   [REQ] MobileNo                             integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [opt] MobileNoSec                          integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [opt] Phone                                object         
+   [opt] PinCode                              integer        pattern=[1-9]{1}[0-9]{5} max=999999 min=100000
+   [opt] ResidenceName                        ?              maxLen=50
+   [REQ] ResidenceNo                          ?              maxLen=50 minLen=1
+   [opt] RoadOrStreet                         ?              maxLen=50
+   [REQ] StateCode                            StateCode      
+   [opt] ZipCode                              ?              maxLen=8
+
+--- AlternateAddress: 9 fields; required=['ResidenceNo', 'LocalityOrArea', 'CityOrTownOrDistrict', 'StateCode'] ---
+   [REQ] CityOrTownOrDistrict                 ?              maxLen=50 minLen=1
+   [opt] CountryCode                          CountryCode    
+   [REQ] LocalityOrArea                       ?              maxLen=50 minLen=1
+   [opt] PinCode                              integer        pattern=[1-9]{1}[0-9]{5} max=999999 min=100000
+   [opt] ResidenceName                        ?              maxLen=50
+   [REQ] ResidenceNo                          ?              maxLen=50 minLen=1
+   [opt] RoadOrStreet                         ?              maxLen=50
+   [REQ] StateCode                            StateCode      
+   [opt] ZipCode                              string         maxLen=8
+
+--- AssesseeRep: 4 fields; required=['RepName', 'RepEmailID', 'CountryCodeRepMobileNo', 'RepMobileNo'] ---
+   [REQ] CountryCodeRepMobileNo               integer        pattern=[0-9]{1,5}
+   [REQ] RepEmailID                           ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [REQ] RepMobileNo                          integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [REQ] RepName                              ?              maxLen=125 minLen=1
+
+--- ScheduleS: 12 fields; required=['TotalGrossSalary', 'AllwncExtentExemptUs10', 'NetSalary', 'DeductionUS16', 'DeductionUnderSection16ia', 'EntertainmntalwncUs16ii', 'ProfessionalTaxUs16iii', 'TotIncUnderHeadSalaries'] ---
+   [opt] AllwncExemptUs10                     object         
+   [REQ] AllwncExtentExemptUs10               integer        max=99999999999999 min=0
+   [REQ] DeductionUS16                        integer        max=99999999999999 min=0
+   [REQ] DeductionUnderSection16ia            integer        max=75000 min=0
+   [REQ] EntertainmntalwncUs16ii              integer        max=5000 min=0
+   [opt] Increliefus89A                       integer        max=99999999999999 min=0
+   [REQ] NetSalary                            integer        max=99999999999999 min=0
+   [REQ] ProfessionalTaxUs16iii               integer        max=5000 min=0
+   [opt] Salaries                             array          
+   [opt] Section10_13A                        object         
+   [REQ] TotIncUnderHeadSalaries              integer        max=99999999999999 min=0
+   [REQ] TotalGrossSalary                     integer        max=99999999999999 min=0
+
+--- ScheduleHP: 3 fields; required=['TotalIncomeChargeableUnHP'] ---
+   [opt] PassThroghIncome                     integer        max=99999999999999
+   [opt] PropertyDetails                      array          
+   [REQ] TotalIncomeChargeableUnHP            integer        max=99999999999999
+
+--- ScheduleOS: 15 fields; required=['TotOthSrcNoRaceHorse', 'IncFrmLottery', 'DividendIncUs115BBDA', 'DividendIncUs115BBDAaiii', 'DividendIncUs115A1ai', 'DividendIncUs115AC', 'DividendIncUs115ACA', 'DividendIncUs115AD1i', 'NOT89A', 'DividendDTAA', 'IncChargeable'] ---
+   [REQ] DividendDTAA                         DateRangeTypeOS 
+   [opt] DividendIncUs115A1aA                 DateRangeType  
+   [REQ] DividendIncUs115A1ai                 DateRangeTypeOS 
+   [REQ] DividendIncUs115AC                   DateRangeTypeOS 
+   [REQ] DividendIncUs115ACA                  DateRangeTypeOS 
+   [REQ] DividendIncUs115AD1i                 DateRangeTypeOS 
+   [REQ] DividendIncUs115BBDA                 DateRangeTypeOS 
+   [REQ] DividendIncUs115BBDAaiii             DateRangeTypeOS 
+   [REQ] IncChargeable                        integer        max=99999999999999 min=0
+   [REQ] IncFrmLottery                        DateRangeTypeOS 
+   [opt] IncFrmOnGames                        DateRangeType  
+   [opt] IncFromOwnHorse                      object         
+   [opt] IncOthThanOwnRaceHorse               object         
+   [REQ] NOT89A                               DateRangeTypeOS 
+   [REQ] TotOthSrcNoRaceHorse                 integer        max=99999999999999 min=0
+
+--- ScheduleEI: 13 fields; required=['TotalExemptInc', 'NetAgriIncOrOthrIncRule7'] ---
+   [opt] AgriIncRule7and8                     integer        max=99999999999999 min=0
+   [opt] ExcNetAgriInc                        object         
+   [opt] ExpIncAgri                           integer        max=99999999999999 min=0
+   [opt] GrossAgriRecpt                       integer        max=99999999999999 min=0
+   [opt] IncChrgblAsPerDTAA                   integer        max=99999999999999 min=0
+   [opt] IncNotChrgblAsPerDTAA                object         
+   [opt] InterestInc                          integer        max=99999999999999 min=0
+   [REQ] NetAgriIncOrOthrIncRule7             integer        max=99999999999999 min=0
+   [opt] Others                               integer        max=99999999999999 min=0
+   [opt] OthersInc                            object         
+   [opt] PassThrIncNotChrgblTax               integer        max=99999999999999 min=0
+   [REQ] TotalExemptInc                       integer        max=99999999999999 min=0
+   [opt] UnabAgriLossPrev8                    integer        max=99999999999999 min=0
+
+--- Schedule80G: 8 fields; required=['TotalDonationsUs80GCash', 'TotalDonationsUs80GOtherMode', 'TotalDonationsUs80G', 'TotalEligibleDonationsUs80G'] ---
+   [opt] Don100Percent                        object         
+   [opt] Don100PercentApprReqd                object         
+   [opt] Don50PercentApprReqd                 object         
+   [opt] Don50PercentNoApprReqd               object         
+   [REQ] TotalDonationsUs80G                  integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GCash              integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GOtherMode         integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationsUs80G          integer        max=99999999999999 min=0
+
+--- Schedule80GGA: 5 fields; required=['TotalDonationAmtCash80GGA', 'TotalDonationAmtOtherMode80GGA', 'TotalDonationsUs80GGA', 'TotalEligibleDonationAmt80GGA'] ---
+   [opt] DonationDtlsSciRsrchRuralDev         array          
+   [REQ] TotalDonationAmtCash80GGA            integer        max=99999999999999 min=0
+   [REQ] TotalDonationAmtOtherMode80GGA       integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GGA                integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationAmt80GGA        integer        max=99999999999999 min=0
+
+--- Schedule80GGC: 5 fields; required=['TotalDonationAmtCash80GGC', 'TotalDonationAmtOtherMode80GGC', 'TotalDonationsUs80GGC', 'TotalEligibleDonationAmt80GGC'] ---
+   [opt] Schedule80GGCDetails                 array          
+   [REQ] TotalDonationAmtCash80GGC            integer        max=99999999999999 min=0
+   [REQ] TotalDonationAmtOtherMode80GGC       integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GGC                integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationAmt80GGC        integer        max=99999999999999 min=0
+
+--- Schedule80DD: 10 fields; required=['NatureOfDisability', 'TypeOfDisability', 'DeductionAmount', 'DependentType'] ---
+   [REQ] DeductionAmount                      integer        max=99999999999999 min=0
+   [opt] DependentAadhaar                     ?              pattern=[0-9]{12}
+   [opt] DependentPan                         ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [REQ] DependentType                        ?              enum(8)
+   [opt] Form10IAAckNum                       string         maxLen=15
+   [opt] Form10IAFilingDate                   string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] FormAckNum11A                        string         maxLen=15
+   [REQ] NatureOfDisability                   ?              enum(2)
+   [REQ] TypeOfDisability                     ?              enum(2)
+   [opt] UDIDNum                              string         maxLen=18
+
+--- Schedule80U: 7 fields; required=['NatureOfDisability', 'TypeOfDisability', 'DeductionAmount'] ---
+   [REQ] DeductionAmount                      integer        max=99999999999999 min=0
+   [opt] Form10IAAckNum                       string         maxLen=15
+   [opt] Form10IAFilingDate                   string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] FormAckNum11A                        string         maxLen=15
+   [REQ] NatureOfDisability                   ?              enum(2)
+   [REQ] TypeOfDisability                     ?              enum(2)
+   [opt] UDIDNum                              string         maxLen=18
+
+--- Schedule80D: 1 fields; required=['Sec80DSelfFamSrCtznHealth'] ---
+   [REQ] Sec80DSelfFamSrCtznHealth            object         
+
+--- Schedule80C: 2 fields; required=['Schedule80CDtls', 'TotalAmt'] ---
+   [REQ] Schedule80CDtls                      array          
+   [REQ] TotalAmt                             integer        max=99999999999999 min=0
+
+--- ScheduleTDS1: 2 fields; required=['TotalTDSonSalaries'] ---
+   [opt] TDSonSalary                          array          
+   [REQ] TotalTDSonSalaries                   integer        max=99999999999999 min=0
+
+--- ScheduleTDS2: 2 fields; required=['TotalTDSonOthThanSals'] ---
+   [opt] TDSOthThanSalaryDtls                 array          
+   [REQ] TotalTDSonOthThanSals                integer        max=99999999999999 min=0
+
+--- ScheduleTDS3: 2 fields; required=['TotalTDS3OnOthThanSal'] ---
+   [opt] TDS3onOthThanSalDtls                 array          
+   [REQ] TotalTDS3OnOthThanSal                integer        max=99999999999999 min=0
+
+--- ScheduleTCS: 2 fields; required=['TotalSchTCS'] ---
+   [opt] TCS                                  array          
+   [REQ] TotalSchTCS                          integer        max=99999999999999 min=0
+
+--- ScheduleIT: 2 fields; required=['TotalTaxPayments'] ---
+   [opt] TaxPayment                           array          
+   [REQ] TotalTaxPayments                     integer        max=99999999999999 min=0
+
+--- TaxPayment: 4 fields; required=['BSRCode', 'DateDep', 'SrlNoOfChaln', 'Amt'] ---
+   [REQ] Amt                                  integer        max=99999999999999 min=0
+   [REQ] BSRCode                              ?              pattern=[0-9]{3}[0-9A-Z]{4}
+   [REQ] DateDep                              string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] SrlNoOfChaln                         integer        max=99999 min=0
+
+--- ScheduleFA: 10 fields; required=[] ---
+   [opt] DetailsFinancialInterest             array          
+   [opt] DetailsForiegnBank                   array          
+   [opt] DetailsImmovableProperty             array          
+   [opt] DetailsOfAccntsHvngSigningAuth       array          
+   [opt] DetailsOfOthSourcesIncOutsideIndia   array          
+   [opt] DetailsOfTrustOutIndiaTrustee        array          
+   [opt] DetailsOthAssets                     array          
+   [opt] DtlsForeignCashValueInsurance        array          
+   [opt] DtlsForeignCustodialAcc              array          
+   [opt] DtlsForeignEquityDebtInterest        array          
+
+--- ScheduleFSI: 1 fields; required=[] ---
+   [opt] ScheduleFSIDtls                      array          
+
+--- ScheduleTR1: 8 fields; required=['TotalTaxPaidOutsideIndia', 'TotalTaxReliefOutsideIndia', 'TaxReliefOutsideIndiaDTAA', 'TaxReliefOutsideIndiaNotDTAA'] ---
+   [opt] AmtTaxRefunded                       integer        max=99999999999999
+   [opt] AssmtYrTaxRelief                     ?              pattern=[0-9][0-9][0-9][0-9]-[0-9][0-9]
+   [opt] ScheduleTR                           array          
+   [opt] TaxPaidOutsideIndFlg                 ?              enum(2)
+   [REQ] TaxReliefOutsideIndiaDTAA            integer        max=99999999999999 min=0
+   [REQ] TaxReliefOutsideIndiaNotDTAA         integer        max=99999999999999 min=0
+   [REQ] TotalTaxPaidOutsideIndia             integer        max=99999999999999 min=0
+   [REQ] TotalTaxReliefOutsideIndia           integer        max=99999999999999 min=0
+
+--- ScheduleSPI: 1 fields; required=[] ---
+   [opt] SpecifiedPerson                      array          
+
+--- SchedulePTI: 1 fields; required=[] ---
+   [opt] SchedulePTIDtls                      array          
+
+--- ScheduleAL: 5 fields; required=['MovableAsset', 'InterstAOPFlag', 'LiabilityInRelatAssets'] ---
+   [opt] ImmovableDetails                     array          
+   [opt] InterestHeldInaAsset                 array          
+   [REQ] InterstAOPFlag                       ?              enum(2)
+   [REQ] LiabilityInRelatAssets               integer        max=99999999999999 min=0
+   [REQ] MovableAsset                         MovableAsset   
+
+--- ScheduleAMT: 6 fields; required=['TotalIncItem11', 'AdjustmentSec115JC', 'AdjustedUnderSec115JC', 'AdjustedUnderSec115JCIFSC', 'AdjustedUnderSec115JCOther', 'TaxPayableUnderSec115JC'] ---
+   [REQ] AdjustedUnderSec115JC                integer        max=99999999999999
+   [REQ] AdjustedUnderSec115JCIFSC            integer        max=99999999999999
+   [REQ] AdjustedUnderSec115JCOther           integer        max=99999999999999
+   [REQ] AdjustmentSec115JC                   AdjustmentSec115JC 
+   [REQ] TaxPayableUnderSec115JC              integer        max=99999999999999 min=0
+   [REQ] TotalIncItem11                       integer        max=99999999999999
+
+--- ScheduleAMTC: 14 fields; required=['TaxSection115JC', 'TaxOthProvisions', 'AmtTaxCreditAvailable', 'CurrYrAmtCreditFwd', 'CurrYrCreditCarryFwd', 'TotAMTGross', 'TotSetOffEys', 'TotBalBF', 'TotAmtCreditUtilisedCY', 'TotBalAMTCreditCF', 'TaxSection115JD', 'AmtLiabilityAvailable'] ---
+   [REQ] AmtLiabilityAvailable                integer        max=99999999999999 min=0
+   [REQ] AmtTaxCreditAvailable                integer        max=99999999999999 min=0
+   [opt] CurrAssYr                            ?              enum(1)
+   [REQ] CurrYrAmtCreditFwd                   integer        max=99999999999999 min=0
+   [REQ] CurrYrCreditCarryFwd                 integer        max=99999999999999 min=0
+   [opt] ScheduleAMTCDtls                     array          maxItems=13
+   [REQ] TaxOthProvisions                     integer        max=99999999999999 min=0
+   [REQ] TaxSection115JC                      integer        max=99999999999999 min=0
+   [REQ] TaxSection115JD                      integer        max=99999999999999 min=0
+   [REQ] TotAMTGross                          integer        max=99999999999999 min=0
+   [REQ] TotAmtCreditUtilisedCY               integer        max=99999999999999 min=0
+   [REQ] TotBalAMTCreditCF                    integer        max=99999999999999 min=0
+   [REQ] TotBalBF                             integer        max=99999999999999 min=0
+   [REQ] TotSetOffEys                         integer        max=99999999999999 min=0
+
+--- ScheduleESOP: 9 fields; required=['TotalTaxAttributedAmt'] ---
+   [opt] DPIITRegNo                           string         pattern=DIPP[0-9]{3,5}
+   [opt] PanofStartUp                         ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [opt] ScheduleESOP2122_Type                object         
+   [opt] ScheduleESOP2223_Type                object         
+   [opt] ScheduleESOP2324_Type                object         
+   [opt] ScheduleESOP2425_Type                object         
+   [opt] ScheduleESOP2526_Type                object         
+   [opt] ScheduleESOP2627_Type                object         
+   [REQ] TotalTaxAttributedAmt                integer        max=99999999999999 min=0
+
+--- Schedule112A: 9 fields; required=['SaleValue112A', 'CostAcqWithoutIndx112A', 'AcquisitionCost112A', 'LTCGBeforelowerB1B2112A', 'FairMktValueCapAst112A', 'ExpExclCnctTransfer112A', 'Deductions112A', 'Balance112A'] ---
+   [REQ] AcquisitionCost112A                  integer        max=99999999999999 min=0
+   [REQ] Balance112A                          integer        max=99999999999999 min=-99999999999999
+   [REQ] CostAcqWithoutIndx112A               integer        max=99999999999999 min=0
+   [REQ] Deductions112A                       integer        max=99999999999999 min=0
+   [REQ] ExpExclCnctTransfer112A              integer        max=99999999999999 min=0
+   [REQ] FairMktValueCapAst112A               integer        max=99999999999999 min=0
+   [REQ] LTCGBeforelowerB1B2112A              integer        max=99999999999999 min=0
+   [REQ] SaleValue112A                        integer        max=99999999999999 min=0
+   [opt] Schedule112ADtls                     array          
+
+--- ScheduleCGFor23: 9 fields; required=['ShortTermCapGainFor23', 'LongTermCapGain23', 'SumOfCGIncm', 'IncmFromVDATrnsf', 'TotScheduleCGFor23', 'DeducClaimInfo', 'CurrYrLosses', 'AccruOrRecOfCG'] ---
+   [REQ] AccruOrRecOfCG                       AccruOrRecOfCG 
+   [REQ] CurrYrLosses                         CurrYrLosses   
+   [REQ] DeducClaimInfo                       DeducClaimInfo 
+   [opt] EditAutopoulatedDetail               EditAutopoulatedDetail 
+   [REQ] IncmFromVDATrnsf                     integer        max=99999999999999 min=0
+   [REQ] LongTermCapGain23                    LongTermCapGain23 
+   [REQ] ShortTermCapGainFor23                ShortTermCapGainFor23 
+   [REQ] SumOfCGIncm                          integer        max=99999999999999 min=0
+   [REQ] TotScheduleCGFor23                   integer        max=99999999999999 min=0
+
+--- Schedule115AD: 9 fields; required=['SaleValue115AD', 'CostAcqWithoutIndx115AD', 'AcquisitionCost115AD', 'LTCGBeforelowerB1B2115AD', 'FairMktValueCapAst115AD', 'ExpExclCnctTransfer115AD', 'Deductions115AD', 'Balance115AD'] ---
+   [REQ] AcquisitionCost115AD                 integer        max=99999999999999 min=0
+   [REQ] Balance115AD                         integer        max=99999999999999 min=-99999999999999
+   [REQ] CostAcqWithoutIndx115AD              integer        max=99999999999999 min=0
+   [REQ] Deductions115AD                      integer        max=99999999999999 min=0
+   [REQ] ExpExclCnctTransfer115AD             integer        max=99999999999999 min=0
+   [REQ] FairMktValueCapAst115AD              integer        max=99999999999999 min=0
+   [REQ] LTCGBeforelowerB1B2115AD             integer        max=99999999999999 min=0
+   [REQ] SaleValue115AD                       integer        max=99999999999999 min=0
+   [opt] Schedule115ADDtls                    array          
+
+--- ScheduleVDA: 3 fields; required=['ScheduleVDADtls', 'TotIncBusiness', 'TotIncCapGain'] ---
+   [REQ] ScheduleVDADtls                      array          
+   [REQ] TotIncBusiness                       integer        max=99999999999999 min=0
+   [REQ] TotIncCapGain                        integer        max=99999999999999 min=0
+
+--- ScheduleCFL: 20 fields; required=['TotalLossCFSummary', 'TotalOfBFLossesEarlierYrs'] ---
+   [opt] AdjTotBFLossInBFLA                   object         
+   [opt] CurrentAYloss                        object         
+   [opt] LossCFCurrentAssmntYear              object         
+   [opt] LossCFCurrentAssmntYear2021          object         
+   [opt] LossCFCurrentAssmntYear2022          object         
+   [opt] LossCFCurrentAssmntYear2023          object         
+   [opt] LossCFCurrentAssmntYear2024          object         
+   [opt] LossCFCurrentAssmntYear2025          object         
+   [opt] LossCFCurrentAssmntYear2026          object         
+   [opt] LossCFFromPrev2ndYearFromAY          object         
+   [opt] LossCFFromPrev3rdYearFromAY          object         
+   [opt] LossCFFromPrev4thYearFromAY          object         
+   [opt] LossCFFromPrev5thYearFromAY          object         
+   [opt] LossCFFromPrev6thYearFromAY          object         
+   [opt] LossCFFromPrev7thYearFromAY          object         
+   [opt] LossCFFromPrev8thYearFromAY          object         
+   [opt] LossCFFromPrev9thYearFromAY          object         
+   [opt] LossCFFromPrevYrToAY                 object         
+   [REQ] TotalLossCFSummary                   object         
+   [REQ] TotalOfBFLossesEarlierYrs            object         
+
+--- ScheduleCYLA: 18 fields; required=['STCG20Per', 'STCG30Per', 'STCGAppRate', 'STCGDTAARate', 'LTCG12_5Per', 'LTCGDTAARate', 'TotalCurYr', 'TotalLossSetOff', 'LossRemAftSetOff'] ---
+   [opt] BusProfExclSpecProf                  object         
+   [opt] EditAutopoulatedDetail               EditAutopoulatedDetail 
+   [opt] HP                                   object         
+   [opt] IncOSDTAA                            object         
+   [REQ] LTCG12_5Per                          object         
+   [REQ] LTCGDTAARate                         object         
+   [REQ] LossRemAftSetOff                     object         
+   [opt] OthSrcExclRaceHorse                  object         
+   [opt] OthSrcRaceHorse                      object         
+   [REQ] STCG20Per                            object         
+   [REQ] STCG30Per                            object         
+   [REQ] STCGAppRate                          object         
+   [REQ] STCGDTAARate                         object         
+   [opt] Salary                               object         
+   [opt] SpecifiedInc                         object         
+   [opt] SpeculativeInc                       object         
+   [REQ] TotalCurYr                           object         
+   [REQ] TotalLossSetOff                      object         
+
+--- ScheduleBFLA: 17 fields; required=['Salary', 'STCG20Per', 'STCG30Per', 'STCGAppRate', 'STCGDTAARate', 'LTCG12_5Per', 'LTCGDTAARate', 'TotalBFLossSetOff', 'IncomeOfCurrYrAftCYLABFLA'] ---
+   [opt] BusProfExclSpecProf                  object         
+   [opt] EditAutopoulatedDetail               EditAutopoulatedDetail 
+   [opt] HP                                   object         
+   [opt] IncOSDTAA                            object         
+   [REQ] IncomeOfCurrYrAftCYLABFLA            integer        max=99999999999999 min=0
+   [REQ] LTCG12_5Per                          object         
+   [REQ] LTCGDTAARate                         object         
+   [opt] OthSrcExclRaceHorse                  object         
+   [opt] OthSrcRaceHorse                      object         
+   [REQ] STCG20Per                            object         
+   [REQ] STCG30Per                            object         
+   [REQ] STCGAppRate                          object         
+   [REQ] STCGDTAARate                         object         
+   [REQ] Salary                               object         
+   [opt] SpecifiedInc                         object         
+   [opt] SpeculativeInc                       object         
+   [REQ] TotalBFLossSetOff                    object         
+
+--- Schedule5A2014: 10 fields; required=['NameOfSpouse', 'PANOfSpouse', 'HPHeadIncome', 'BusHeadIncome', 'CapGainHeadIncome', 'OtherSourcesHeadIncome', 'TotalHeadIncome'] ---
+   [opt] AadhaarOfSpouse                      ?              pattern=[0-9]{12}
+   [opt] BooksSpouse44ABFlg                   ?              enum(2)
+   [opt] BooksSpouse92EFlg                    ?              enum(2)
+   [REQ] BusHeadIncome                        Sch5AIncType   
+   [REQ] CapGainHeadIncome                    Sch5AIncType   
+   [REQ] HPHeadIncome                         Sch5AIncType   
+   [REQ] NameOfSpouse                         ?              maxLen=125 minLen=1
+   [REQ] OtherSourcesHeadIncome               Sch5AIncType   
+   [REQ] PANOfSpouse                          ?              pattern=[A-Z]{5}[0-9]{4}[A-Z] maxLen=10 minLen=10
+   [REQ] TotalHeadIncome                      Sch5AIncType   
+
+--- ScheduleSI: 4 fields; required=['TotSplRateInc', 'TotSplRateIncTax'] ---
+   [opt] EditAutopoulatedDetail               EditAutopoulatedDetail 
+   [opt] SplCodeRateTax                       array          
+   [REQ] TotSplRateInc                        integer        max=99999999999999 min=0
+   [REQ] TotSplRateIncTax                     integer        max=99999999999999 min=0
+
+--- PartA_GEN1: 2 fields; required=['PersonalInfo', 'FilingStatus'] ---
+   [REQ] FilingStatus                         FilingStatus   
+   [REQ] PersonalInfo                         PersonalInfo   
+
+--- PartA_GEN2: 2 fields; required=['AuditInfo'] ---
+   [REQ] AuditInfo                            AuditInfo      
+   [opt] NatOfBus                             NatOfBus       
+
+--- PARTA_BS: 3 fields; required=['FundSrc', 'FundApply'] ---
+   [REQ] FundApply                            object         
+   [REQ] FundSrc                              object         
+   [opt] NoBooksOfAccBS                       object         
+
+--- PARTA_PL: 19 fields; required=['CreditsToPL', 'DebitsToPL', 'TaxProvAppr', 'NoBooksOfAccPL', 'TurnverFrmSpecActivity', 'NetIncomeFrmSpecActivity'] ---
+   [REQ] CreditsToPL                          object         
+   [REQ] DebitsToPL                           object         
+   [opt] Expenditure                          integer        max=99999999999999 min=0
+   [opt] GoodsDtlsUs44AE                      array          
+   [opt] GrossProfit                          integer        
+   [opt] NatOfBus44AD                         array          maxItems=3
+   [opt] NatOfBus44ADA                        array          maxItems=3
+   [opt] NatOfBus44AE                         array          maxItems=3
+   [REQ] NetIncomeFrmSpecActivity             integer        
+   [REQ] NoBooksOfAccPL                       object         
+   [opt] NonResidentPL                        object         
+   [opt] NonResidentPLDetails                 array          maxItems=5
+   [opt] PersumptiveInc44AD                   object         
+   [opt] PersumptiveInc44ADA                  object         
+   [REQ] TaxProvAppr                          object         
+   [opt] TotalNumOfMonths                     integer        max=120 min=0
+   [opt] TotalPrsumptvIncUs44E                integer        max=99999999999999 min=0
+   [opt] TotalPrsumptvIncUs44EGoods           integer        max=99999999999999 min=0
+   [REQ] TurnverFrmSpecActivity               integer        max=99999999999999 min=0
+
+--- ITR3ScheduleBP: 5 fields; required=['BusinessIncOthThanSpec', 'SpecBusinessInc', 'SpecifiedBusinessInc', 'IncChrgUnHdProftGain', 'BusSetoffCurrYr'] ---
+   [REQ] BusSetoffCurrYr                      object         
+   [REQ] BusinessIncOthThanSpec               object         
+   [REQ] IncChrgUnHdProftGain                 integer        max=99999999999999
+   [REQ] SpecBusinessInc                      object         
+   [REQ] SpecifiedBusinessInc                 object         
+
+--- ManufacturingAccount: 3 fields; required=['OpeningInventory', 'ClosingStock', 'CostOfGoodsPrdcd'] ---
+   [REQ] ClosingStock                         object         
+   [REQ] CostOfGoodsPrdcd                     integer        max=99999999999999
+   [REQ] OpeningInventory                     object         
+
+--- TradingAccount: 24 fields; required=['OperatingRevenueTotal', 'SalesGrossReceiptsTotal', 'TotRevenueFrmOperations', 'TardingAccTotCred', 'DirectExpenses'] ---
+   [opt] CarriageInward                       integer        max=99999999999999 min=0
+   [opt] ClsngStckOfFinishedStcks             integer        max=99999999999999 min=0
+   [REQ] DirectExpenses                       integer        max=99999999999999 min=0
+   [opt] DirectExpensesTotal                  integer        max=99999999999999 min=0
+   [opt] DutyTaxPay                           object         
+   [opt] ExciseCustomsVAT                     object         
+   [opt] GoodsCostPrdcdFrmMA                  integer        max=99999999999999
+   [opt] GrossProfitFrmBusProf                integer        max=99999999999999
+   [opt] GrossRcptFromProfession              integer        max=99999999999999 min=0
+   [opt] IncomeFutureTrd                      integer        max=99999999999999
+   [opt] IncomeIntradayTrd                    integer        max=99999999999999
+   [REQ] OperatingRevenueTotal                integer        max=99999999999999 min=0
+   [opt] OpngStckOfFinishedStcks              integer        max=99999999999999 min=0
+   [opt] OtherIncDtls                         array          
+   [opt] OtherOperatingRevenueDtls            array          
+   [opt] PowerAndFuel                         integer        max=99999999999999 min=0
+   [opt] Purchases                            integer        max=99999999999999 min=0
+   [opt] SaleOfGoods                          integer        max=99999999999999 min=0
+   [opt] SaleOfServices                       integer        max=99999999999999 min=0
+   [REQ] SalesGrossReceiptsTotal              integer        max=99999999999999 min=0
+   [REQ] TardingAccTotCred                    integer        max=99999999999999 min=0
+   [REQ] TotRevenueFrmOperations              integer        max=99999999999999 min=0
+   [opt] TurnoverFutureTrd                    integer        max=99999999999999 min=0
+   [opt] TurnoverIntradayTrd                  integer        max=99999999999999 min=0
+
+--- PARTA_OI: 21 fields; required=['MethodOfAcct', 'ChangeInAcctMethFlg', 'ProfDeviatDueAcctMeth', 'DecProOrIncLossUs145_2', 'NoCredToPLAmt', 'AmtDisallUs36', 'AmtDisallUs37', 'AmtDisallUs40', 'AmtDisallUs40A', 'AmtDisallUs43BPyNowAll', 'AmtDisall43B', 'AmtExciseCustomsVATOutstanding', 'DeemedProfUs33ABs', 'ProfTaxAmtUs41', 'PriorAmtIncCrDrPL', 'AmountOfExpDisAllwUs14A', 'InterestDisAllowUs23SMEAct', 'ScheduleTPSAFlg'] ---
+   [REQ] AmountOfExpDisAllwUs14A              integer        max=99999999999999 min=0
+   [REQ] AmtDisall43B                         object         
+   [REQ] AmtDisallUs36                        object         
+   [REQ] AmtDisallUs37                        object         
+   [REQ] AmtDisallUs40                        object         
+   [REQ] AmtDisallUs40A                       object         
+   [REQ] AmtDisallUs43BPyNowAll               object         
+   [REQ] AmtExciseCustomsVATOutstanding       object         
+   [REQ] ChangeInAcctMethFlg                  ?              enum(2)
+   [REQ] DecProOrIncLossUs145_2               integer        max=99999999999999
+   [opt] DeemedProfUs33AB                     integer        max=99999999999999 min=0
+   [opt] DeemedProfUs33ABA                    integer        max=99999999999999 min=0
+   [REQ] DeemedProfUs33ABs                    integer        max=99999999999999 min=0
+   [REQ] InterestDisAllowUs23SMEAct           integer        max=99999999999999 min=0
+   [REQ] MethodOfAcct                         ?              enum(2)
+   [opt] MethodOfValClgStk                    object         
+   [REQ] NoCredToPLAmt                        object         
+   [REQ] PriorAmtIncCrDrPL                    integer        max=99999999999999
+   [REQ] ProfDeviatDueAcctMeth                integer        max=99999999999999
+   [REQ] ProfTaxAmtUs41                       integer        max=99999999999999 min=0
+   [REQ] ScheduleTPSAFlg                      ?              pattern=Y|N
+
+--- PARTA_QD: 2 fields; required=[] ---
+   [opt] ManfactrConcern                      object         
+   [opt] TradingConcern                       object         
+
+--- ScheduleDPM: 1 fields; required=['PlantMachinery'] ---
+   [REQ] PlantMachinery                       object         
+
+--- ScheduleDOA: 5 fields; required=[] ---
+   [opt] Building                             object         
+   [opt] FurnitureFittings                    object         
+   [opt] IntangibleAssets                     object         
+   [opt] Land                                 object         
+   [opt] Ships                                object         
+
+--- ScheduleDEP: 1 fields; required=['SummaryFromDeprSch'] ---
+   [REQ] SummaryFromDeprSch                   SummaryFromDeprSch 
+
+--- ScheduleDCG: 1 fields; required=['SummaryFromDeprSchCG'] ---
+   [REQ] SummaryFromDeprSchCG                 SummaryFromDeprSchCG 
+
+--- ScheduleESR: 1 fields; required=['DeductionUs35'] ---
+   [REQ] DeductionUs35                        object         
+
+--- ITR3ScheduleUD: 11 fields; required=['CurrAssYr', 'CurBalCFNY', 'CurAllowBalCFNY', 'TotBFUDepritAmt', 'TotCurYrdepritSetoffInc', 'TotDepritBalCFNY', 'TotBFUAllowAmt', 'TotCurYrAllowSetoffInc', 'TotalBalCFNY'] ---
+   [REQ] CurAllowBalCFNY                      integer        max=99999999999999 min=0
+   [REQ] CurBalCFNY                           integer        max=99999999999999 min=0
+   [REQ] CurrAssYr                            ?              enum(1)
+   [opt] ScheduleUD                           array          
+   [opt] TotAdjustAccTax115BACAmt             integer        max=99999999999999 min=0
+   [REQ] TotBFUAllowAmt                       integer        max=99999999999999 min=0
+   [REQ] TotBFUDepritAmt                      integer        max=99999999999999 min=0
+   [REQ] TotCurYrAllowSetoffInc               integer        max=99999999999999 min=0
+   [REQ] TotCurYrdepritSetoffInc              integer        max=99999999999999 min=0
+   [REQ] TotDepritBalCFNY                     integer        max=99999999999999 min=0
+   [REQ] TotalBalCFNY                         integer        max=99999999999999 min=0
+
+--- ScheduleICDS: 11 fields; required=['TotalNetAmtDetl'] ---
+   [opt] AccPolicyAmtDetl                     ICDSinfo       
+   [opt] BorrowingCostsDetl                   ICDSinfo       
+   [opt] ConstContractsAmtDetl                ICDSinfo       
+   [opt] ForeignExgRatesDetl                  ICDSinfo       
+   [opt] GovtGrantsDetl                       ICDSinfo       
+   [opt] InventoriesValueDetl                 ICDSinfo       
+   [opt] ProvAssetsDetl                       ICDSinfo       
+   [opt] RevenueRcgAmtDetl                    ICDSinfo       
+   [opt] SecuritiesDetl                       ICDSinfo       
+   [opt] TangibleFixedAssetDetl               ICDSinfo       
+   [REQ] TotalNetAmtDetl                      object         
+
+--- ScheduleGST: 1 fields; required=[] ---
+   [opt] TurnoverGrsRcptForGSTIN              array          
+
+--- ScheduleIF: 5 fields; required=['TotalProfitShareAmt', 'TotalFirmCapBalOn31Mar'] ---
+   [opt] PartnerFirmDetails                   array          
+   [REQ] TotalFirmCapBalOn31Mar               integer        max=99999999999999
+   [opt] TotalIntrstAmtDueOrRecv              integer        max=99999999999999 min=0
+   [REQ] TotalProfitShareAmt                  integer        max=99999999999999
+   [opt] TotalRemunernAmtDueOrRecv            integer        max=99999999999999 min=0
+
+--- ScheduleTPSA: 9 fields; required=['AmtPrimaryAdjUs92CE_2A', 'AdditionalIncTax18PercAbove', 'Surcharge12Perc', 'HealthEducationCess', 'TotalAdditionalTax', 'TaxesPaid', 'NetTaxPayable', 'TotalAmountDeposited'] ---
+   [REQ] AdditionalIncTax18PercAbove          integer        max=99999999999999 min=0
+   [REQ] AmtPrimaryAdjUs92CE_2A               integer        max=99999999999999 min=0
+   [opt] DtlsTaxesPaid                        array          
+   [REQ] HealthEducationCess                  integer        max=99999999999999 min=0
+   [REQ] NetTaxPayable                        integer        max=99999999999999 min=0
+   [REQ] Surcharge12Perc                      integer        max=99999999999999 min=0
+   [REQ] TaxesPaid                            integer        max=99999999999999 min=0
+   [REQ] TotalAdditionalTax                   integer        max=99999999999999 min=0
+   [REQ] TotalAmountDeposited                 integer        max=99999999999999 min=0
+
+--- Schedule10AA: 1 fields; required=['DeductSEZ'] ---
+   [REQ] DeductSEZ                            object         
+
+--- Schedule80_IA: 3 fields; required=['Sch80SectionCode', 'DeductUs80_IA_4_iv', 'TotSchedule80_IA'] ---
+   [REQ] DeductUs80_IA_4_iv                   object         
+   [REQ] Sch80SectionCode                     ?              pattern=80-IA
+   [REQ] TotSchedule80_IA                     integer        max=99999999999999 min=0
+
+--- Schedule80_IB: 6 fields; required=['Sch80SectionCode', 'DeductMinOilUs80_IB_9_Und', 'DeductHousUs80_IB_10_Und', 'DeductFoodGrainUs80_IB_11A_Und', 'TotSchedule80_IB'] ---
+   [REQ] DeductFoodGrainUs80_IB_11A_Und       object         
+   [opt] DeductFruitVegUs80_IB_11A_Und        object         
+   [REQ] DeductHousUs80_IB_10_Und             object         
+   [REQ] DeductMinOilUs80_IB_9_Und            object         
+   [REQ] Sch80SectionCode                     ?              pattern=80-IB
+   [REQ] TotSchedule80_IB                     integer        max=99999999999999 min=0
+
+--- Schedule80_IC: 3 fields; required=['Sch80SectionCode', 'DeductInNorthEast', 'TotSchedule80_IC'] ---
+   [REQ] DeductInNorthEast                    object         
+   [REQ] Sch80SectionCode                     ?              pattern=80-IC_IE
+   [REQ] TotSchedule80_IC                     integer        max=99999999999999 min=0
+
+--- Schedule80RA: 5 fields; required=['TotalDonationAmtCash80RA', 'TotalDonationAmtOtherMode80RA', 'TotalDonationsUs80RA', 'TotalEligibleDonationAmt80RA'] ---
+   [opt] DonationDtlsRsrchAssctn              array          
+   [REQ] TotalDonationAmtCash80RA             integer        max=99999999999999 min=0
+   [REQ] TotalDonationAmtOtherMode80RA        integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80RA                 integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationAmt80RA         integer        max=99999999999999 min=0
+
+--- TaxReturnPreparer: 3 fields; required=['IdentificationNoOfTRP', 'NameOfTRP'] ---
+   [REQ] IdentificationNoOfTRP                ?              pattern=[T][0-9]{9}|[0-9]{6}
+   [REQ] NameOfTRP                            ?              maxLen=125 minLen=1
+   [opt] ReImbFrmGov                          integer        max=99999999999999 min=0
+
+--- Schedule80E: 2 fields; required=['Schedule80EDtls', 'TotalInterest80E'] ---
+   [REQ] Schedule80EDtls                      array          
+   [REQ] TotalInterest80E                     integer        max=99999999999999 min=0
+
+--- Schedule80EE: 2 fields; required=['Schedule80EEDtls', 'TotalInterest80EE'] ---
+   [REQ] Schedule80EEDtls                     array          
+   [REQ] TotalInterest80EE                    integer        max=99999999999999 min=0
+
+--- Schedule80EEA: 3 fields; required=['PropStmpDtyVal', 'Schedule80EEADtls', 'TotalInterest80EEA'] ---
+   [REQ] PropStmpDtyVal                       integer        max=4500000 min=0
+   [REQ] Schedule80EEADtls                    array          
+   [REQ] TotalInterest80EEA                   integer        max=99999999999999 min=0
+
+--- Schedule80EEB: 2 fields; required=['Schedule80EEBDtls', 'TotalInterest80EEB'] ---
+   [REQ] Schedule80EEBDtls                    array          
+   [REQ] TotalInterest80EEB                   integer        max=99999999999999 min=0
+
+--- Refund: 2 fields; required=['RefundDue', 'BankAccountDtls'] ---
+   [REQ] BankAccountDtls                      BankAccountDtls 
+   [REQ] RefundDue                            integer        max=99999999999999 min=0
+
+--- TaxPaid: 2 fields; required=['TaxesPaid'] ---
+   [opt] BalTaxPayable                        integer        max=99999999999999 min=0
+   [REQ] TaxesPaid                            TaxesPaid      
+
+--- EmployerOrDeductorOrCollectDetl: 2 fields; required=['TAN', 'EmployerOrDeductorOrCollecterName'] ---
+   [REQ] EmployerOrDeductorOrCollecterName    ?              maxLen=125 minLen=1
+   [REQ] TAN                                  ?              pattern=HYD[A-Z][0-9]{5}[A-Z]|VPN[A-Z][0-9]{5}[A-Z]|BBN[A-Z][0-9]{5}[A-Z]|BPL[A-Z][0-9]{5}[A-Z]|JBP[A-Z][0-9]{5}[A-Z]|CHE[A-Z][0-9]{5}[A-Z]|CMB[A-Z][0-9]{5}[A-Z]|MRI[A-Z][0-9]{5}[A-Z]|DEL[A-Z][0-9]{5}[A-Z]|CAL[A-Z][0-9]{5}[A-Z]|MRT[A-Z][0-9]{5}[A-Z]|AHM[A-Z][0-9]{5}[A-Z]|BRD[A-Z][0-9]{5}[A-Z]|RKT[A-Z][0-9]{5}[A-Z]|SRT[A-Z][0-9]{5}[A-Z]|BLR[A-Z][0-9]{5}[A-Z]|AGR[A-Z][0-9]{5}[A-Z]|KNP[A-Z][0-9]{5}[A-Z]|CHN[A-Z][0-9]{5}[A-Z]|TVD[A-Z][0-9]{5}[A-Z]|ALD[A-Z][0-9]{5}[A-Z]|LKN[A-Z][0-9]{5}[A-Z]|MUM[A-Z][0-9]{5}[A-Z]|NGP[A-Z][0-9]{5}[A-Z]|AMR[A-Z][0-9]{5}[A-Z]|JLD[A-Z][0-9]{5}[A-Z]|PTL[A-Z][0-9]{5}[A-Z]|RTK[A-Z][0-9]{5}[A-Z]|KLP[A-Z][0-9]{5}[A-Z]|NSK[A-Z][0-9]{5}[A-Z]|PNE[A-Z][0-9]{5}[A-Z]|PTN[A-Z][0-9]{5}[A-Z]|RCH[A-Z][0-9]{5}[A-Z]|JDH[A-Z][0-9]{5}[A-Z]|JPR[A-Z][0-9]{5}[A-Z]|SHL[A-Z][0-9]{5}[A-Z] maxLen=10 minLen=10
+
+--- ScheduleVIA: 2 fields; required=['UsrDeductUndChapVIA', 'DeductUndChapVIA'] ---
+   [REQ] DeductUndChapVIA                     DeductUndChapVIA 
+   [REQ] UsrDeductUndChapVIA                  UsrDeductUndChapVIA 
+
+######################## ITR-4 (73 definitions) ########################
+
+--- PersonalInfo: 9 fields; required=['AssesseeName', 'PAN', 'Address', 'SecondaryAdd', 'DOB', 'EmployerCategory', 'Status'] ---
+   [opt] AadhaarCardNo                        ?              pattern=[0-9]{12}
+   [REQ] Address                              Address        
+   [opt] AlternateAddress                     AlternateAddress 
+   [REQ] AssesseeName                         AssesseeName   
+   [REQ] DOB                                  string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] EmployerCategory                     string         enum(9)
+   [REQ] PAN                                  ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [REQ] SecondaryAdd                         string         enum(2)
+   [REQ] Status                               string         enum(3)
+
+--- FilingStatus: 29 fields; required=['ReturnFileSec', 'Form10IEAEarlierAYOldRegime', 'AsseseeRepFlg', 'ItrFilingDueDate'] ---
+   [opt] AmtSeventhProvisio139i               integer        max=99999999999999 min=10000000
+   [opt] AmtSeventhProvisio139ii              integer        max=99999999999999 min=200000
+   [opt] AmtSeventhProvisio139iii             integer        max=99999999999999 min=100000
+   [opt] AssYrF10IEANewTaxReg                 string         enum(1)
+   [REQ] AsseseeRepFlg                        ?              enum(2)
+   [opt] AssesseeRep                          AssesseeRep    
+   [opt] DepAmtAggAmtExcd1CrPrYrFlg           ?              pattern=Y|N
+   [opt] F10IEAAckNoCurrAYNewTax              integer        max=999999999999999 min=100000000000000
+   [opt] F10IEAAckNoCurrAYOldTax              integer        max=999999999999999 min=100000000000000
+   [opt] F10IEACurrAYNewRegime                string         enum(2)
+   [opt] F10IEACurrAYOldRegime                string         enum(2)
+   [opt] F10IEADateCurrAYNewTax               string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] F10IEADateCurrAYOldTax               string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] F10IEAEarlierAYNewRegime             string         enum(2)
+   [opt] Form10IEAAssYear                     string         enum(2)
+   [opt] Form10IEAEarlierAYAckNewRegime       integer        max=999999999999999 min=100000000000000
+   [opt] Form10IEAEarlierAYAckOldRegime       integer        max=999999999999999 min=100000000000000
+   [REQ] Form10IEAEarlierAYOldRegime          string         enum(3)
+   [opt] IncrExpAggAmt1LkElctrctyPrYrFlg      ?              pattern=Y|N
+   [opt] IncrExpAggAmt2LkTrvFrgnCntryFlg      ?              pattern=Y|N
+   [REQ] ItrFilingDueDate                     ?              pattern=2026-08-31 maxLen=10 minLen=9
+   [opt] NoticeDateUnderSec                   string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] NoticeNo                             ?              maxLen=100
+   [opt] OrigRetFiledDate                     string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [opt] ReceiptNo                            string         pattern=[0-9]{15}
+   [REQ] ReturnFileSec                        integer        enum(8) max=20 min=11
+   [opt] SeventhProvisio139                   ?              pattern=Y|N
+   [opt] clauseiv7provisio139i                ?              pattern=Y|N
+   [opt] clauseiv7provisio139iDtls            array          
+
+--- Verification: 3 fields; required=['Declaration', 'Capacity', 'Place'] ---
+   [REQ] Capacity                             string         enum(4)
+   [REQ] Declaration                          object         
+   [REQ] Place                                ?              maxLen=50 minLen=1
+
+--- AssesseeName: 3 fields; required=['SurNameOrOrgName'] ---
+   [opt] FirstName                            ?              maxLen=25
+   [opt] MiddleName                           ?              maxLen=25
+   [REQ] SurNameOrOrgName                     ?              maxLen=75 minLen=1
+
+--- Address: 16 fields; required=['ResidenceNo', 'LocalityOrArea', 'CityOrTownOrDistrict', 'StateCode', 'CountryCode', 'CountryCodeMobile', 'MobileNo', 'EmailAddress'] ---
+   [REQ] CityOrTownOrDistrict                 ?              maxLen=50 minLen=1
+   [REQ] CountryCode                          CountryCode    
+   [REQ] CountryCodeMobile                    integer        pattern=[0-9]{1,5}
+   [opt] CountryCodeMobileNoSec               integer        pattern=[0-9]{1,5}
+   [REQ] EmailAddress                         ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [opt] EmailAddressSec                      ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [REQ] LocalityOrArea                       ?              maxLen=50 minLen=1
+   [REQ] MobileNo                             integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [opt] MobileNoSec                          integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [opt] Phone                                object         
+   [opt] PinCode                              integer        pattern=[1-9]{1}[0-9]{5} max=999999 min=100000
+   [opt] ResidenceName                        ?              maxLen=50
+   [REQ] ResidenceNo                          ?              maxLen=50 minLen=1
+   [opt] RoadOrStreet                         ?              maxLen=50
+   [REQ] StateCode                            StateCode      
+   [opt] ZipCode                              string         maxLen=8
+
+--- AlternateAddress: 9 fields; required=['ResidenceNo', 'LocalityOrArea', 'CityOrTownOrDistrict', 'StateCode'] ---
+   [REQ] CityOrTownOrDistrict                 ?              maxLen=50 minLen=1
+   [opt] CountryCode                          CountryCode    
+   [REQ] LocalityOrArea                       ?              maxLen=50 minLen=1
+   [opt] PinCode                              integer        pattern=[1-9]{1}[0-9]{5} max=999999 min=100000
+   [opt] ResidenceName                        ?              maxLen=50
+   [REQ] ResidenceNo                          ?              maxLen=50 minLen=1
+   [opt] RoadOrStreet                         ?              maxLen=50
+   [REQ] StateCode                            StateCode      
+   [opt] ZipCode                              string         maxLen=8
+
+--- AssesseeRep: 4 fields; required=['RepName', 'RepEmailID', 'CountryCodeRepMobileNo', 'RepMobileNo'] ---
+   [REQ] CountryCodeRepMobileNo               integer        pattern=[0-9]{1,5}
+   [REQ] RepEmailID                           ?              pattern=([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+ maxLen=125
+   [REQ] RepMobileNo                          integer        pattern=[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}
+   [REQ] RepName                              ?              maxLen=125 minLen=1
+
+--- ScheduleBP: 10 fields; required=[] ---
+   [opt] FinanclPartclrOfBusiness             FinanclPartclrOfBusiness 
+   [opt] GoodsDtlsUs44AE                      array          maxItems=10
+   [opt] NatOfBus44AD                         array          
+   [opt] NatOfBus44ADA                        array          
+   [opt] NatOfBus44AE                         array          
+   [opt] PersumptiveInc44AD                   PersumptiveInc44AD 
+   [opt] PersumptiveInc44ADA                  PersumptiveInc44ADA 
+   [opt] PersumptiveInc44AE                   PersumptiveInc44AE 
+   [opt] TotalTurnoverGrsRcptGSTIN            integer        max=99999999999999 min=0
+   [opt] TurnoverGrsRcptForGSTIN              array          
+
+--- Schedule80G: 8 fields; required=['TotalDonationsUs80GCash', 'TotalDonationsUs80GOtherMode', 'TotalDonationsUs80G', 'TotalEligibleDonationsUs80G'] ---
+   [opt] Don100Percent                        object         
+   [opt] Don100PercentApprReqd                object         
+   [opt] Don50PercentApprReqd                 object         
+   [opt] Don50PercentNoApprReqd               object         
+   [REQ] TotalDonationsUs80G                  integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GCash              integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GOtherMode         integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationsUs80G          integer        max=99999999999999 min=0
+
+--- Schedule80GGC: 5 fields; required=['TotalDonationAmtCash80GGC', 'TotalDonationAmtOtherMode80GGC', 'TotalDonationsUs80GGC', 'TotalEligibleDonationAmt80GGC'] ---
+   [opt] Schedule80GGCDetails                 array          
+   [REQ] TotalDonationAmtCash80GGC            integer        max=99999999999999 min=0
+   [REQ] TotalDonationAmtOtherMode80GGC       integer        max=99999999999999 min=0
+   [REQ] TotalDonationsUs80GGC                integer        max=99999999999999 min=0
+   [REQ] TotalEligibleDonationAmt80GGC        integer        max=99999999999999 min=0
+
+--- Schedule80DD: 8 fields; required=['NatureOfDisability', 'TypeOfDisability', 'DeductionAmount', 'DependentType'] ---
+   [REQ] DeductionAmount                      integer        max=99999999999999 min=0
+   [opt] DependentAadhaar                     ?              pattern=[0-9]{12}
+   [opt] DependentPan                         ?              pattern=[A-Z]{5}[0-9]{4}[A-Z]
+   [REQ] DependentType                        ?              enum(8)
+   [opt] Form10IAAckNum                       string         maxLen=15
+   [REQ] NatureOfDisability                   ?              enum(2)
+   [REQ] TypeOfDisability                     ?              enum(2)
+   [opt] UDIDNum                              string         maxLen=18
+
+--- Schedule80U: 5 fields; required=['NatureOfDisability', 'TypeOfDisability', 'DeductionAmount'] ---
+   [REQ] DeductionAmount                      integer        max=99999999999999 min=0
+   [opt] Form10IAAckNum                       string         maxLen=15
+   [REQ] NatureOfDisability                   ?              enum(2)
+   [REQ] TypeOfDisability                     ?              enum(2)
+   [opt] UDIDNum                              string         maxLen=18
+
+--- Schedule80D: 1 fields; required=['Sec80DSelfFamSrCtznHealth'] ---
+   [REQ] Sec80DSelfFamSrCtznHealth            object         
+
+--- Schedule80C: 2 fields; required=['Schedule80CDtls', 'TotalAmt'] ---
+   [REQ] Schedule80CDtls                      array          
+   [REQ] TotalAmt                             integer        max=99999999999999 min=0
+
+--- ScheduleTCS: 2 fields; required=['TotalSchTCS'] ---
+   [opt] TCS                                  array          
+   [REQ] TotalSchTCS                          integer        max=99999999999999 min=0
+
+--- ScheduleIT: 2 fields; required=['TotalTaxPayments'] ---
+   [opt] TaxPayment                           array          
+   [REQ] TotalTaxPayments                     integer        max=99999999999999 min=0
+
+--- TaxPayment: 4 fields; required=['BSRCode', 'DateDep', 'SrlNoOfChaln', 'Amt'] ---
+   [REQ] Amt                                  integer        max=99999999999999 min=0
+   [REQ] BSRCode                              ?              pattern=[0-9]{3}[0-9A-Z]{4}
+   [REQ] DateDep                              string         pattern=([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))
+   [REQ] SrlNoOfChaln                         integer        max=99999 min=0
+
+--- ScheduleEA10_13A: 9 fields; required=['Placeofwork', 'ActlHRARecv', 'ActlRentPaid', 'DtlsSalUsSec171', 'BasicSalary', 'ActlRentPaid10Per', 'Sal40Or50Per', 'EligbleExmpAllwncUs13A'] ---
+   [REQ] ActlHRARecv                          integer        max=99999999999999 min=0
+   [REQ] ActlRentPaid                         integer        max=99999999999999 min=0
+   [REQ] ActlRentPaid10Per                    integer        max=99999999999999 min=0
+   [REQ] BasicSalary                          integer        max=99999999999999 min=0
+   [opt] DearnessAllwnc                       integer        max=99999999999999 min=0
+   [REQ] DtlsSalUsSec171                      integer        max=99999999999999 min=0
+   [REQ] EligbleExmpAllwncUs13A               integer        max=99999999999999 min=0
+   [REQ] Placeofwork                          string         enum(2)
+   [REQ] Sal40Or50Per                         integer        max=99999999999999 min=0
+
+--- TaxReturnPreparer: 3 fields; required=['IdentificationNoOfTRP', 'NameOfTRP'] ---
+   [REQ] IdentificationNoOfTRP                ?              pattern=[T][0-9]{9}|[0-9]{6}
+   [REQ] NameOfTRP                            ?              maxLen=125 minLen=1
+   [opt] ReImbFrmGov                          integer        max=99999999999999 min=0
+
+--- TaxExmpIntIncDtls: 1 fields; required=[] ---
+   [opt] OthersInc                            object         
+
+--- LTCG112A: 3 fields; required=['TotSaleCnsdrn', 'TotCstAcqisn', 'LongCap112A'] ---
+   [REQ] LongCap112A                          integer        max=125000 min=0
+   [REQ] TotCstAcqisn                         integer        max=99999999999999 min=0
+   [REQ] TotSaleCnsdrn                        integer        max=99999999999999 min=0
+
+--- Schedule80E: 2 fields; required=['Schedule80EDtls', 'TotalInterest80E'] ---
+   [REQ] Schedule80EDtls                      array          
+   [REQ] TotalInterest80E                     integer        max=99999999999999 min=0
+
+--- Schedule80EE: 2 fields; required=['Schedule80EEDtls', 'TotalInterest80EE'] ---
+   [REQ] Schedule80EEDtls                     array          
+   [REQ] TotalInterest80EE                    integer        max=99999999999999 min=0
+
+--- Schedule80EEA: 3 fields; required=['PropStmpDtyVal', 'Schedule80EEADtls', 'TotalInterest80EEA'] ---
+   [REQ] PropStmpDtyVal                       integer        max=4500000 min=0
+   [REQ] Schedule80EEADtls                    array          
+   [REQ] TotalInterest80EEA                   integer        max=99999999999999 min=0
+
+--- Schedule80EEB: 2 fields; required=['Schedule80EEBDtls', 'TotalInterest80EEB'] ---
+   [REQ] Schedule80EEBDtls                    array          
+   [REQ] TotalInterest80EEB                   integer        max=99999999999999 min=0
+
+--- Refund: 2 fields; required=['RefundDue', 'BankAccountDtls'] ---
+   [REQ] BankAccountDtls                      BankAccountDtls 
+   [REQ] RefundDue                            integer        max=99999999999999 min=0
+
+--- TaxPaid: 2 fields; required=['TaxesPaid', 'BalTaxPayable'] ---
+   [REQ] BalTaxPayable                        integer        max=99999999999999 min=0
+   [REQ] TaxesPaid                            TaxesPaid      
+
+--- EmployerOrDeductorOrCollectDetl: 2 fields; required=['TAN', 'EmployerOrDeductorOrCollecterName'] ---
+   [REQ] EmployerOrDeductorOrCollecterName    ?              maxLen=125 minLen=1
+   [REQ] TAN                                  ?              pattern=HYD[A-Z][0-9]{5}[A-Z]|VPN[A-Z][0-9]{5}[A-Z]|BBN[A-Z][0-9]{5}[A-Z]|BPL[A-Z][0-9]{5}[A-Z]|JBP[A-Z][0-9]{5}[A-Z]|CHE[A-Z][0-9]{5}[A-Z]|CMB[A-Z][0-9]{5}[A-Z]|MRI[A-Z][0-9]{5}[A-Z]|DEL[A-Z][0-9]{5}[A-Z]|CAL[A-Z][0-9]{5}[A-Z]|MRT[A-Z][0-9]{5}[A-Z]|AHM[A-Z][0-9]{5}[A-Z]|BRD[A-Z][0-9]{5}[A-Z]|RKT[A-Z][0-9]{5}[A-Z]|SRT[A-Z][0-9]{5}[A-Z]|BLR[A-Z][0-9]{5}[A-Z]|AGR[A-Z][0-9]{5}[A-Z]|KNP[A-Z][0-9]{5}[A-Z]|CHN[A-Z][0-9]{5}[A-Z]|TVD[A-Z][0-9]{5}[A-Z]|ALD[A-Z][0-9]{5}[A-Z]|LKN[A-Z][0-9]{5}[A-Z]|MUM[A-Z][0-9]{5}[A-Z]|NGP[A-Z][0-9]{5}[A-Z]|AMR[A-Z][0-9]{5}[A-Z]|JLD[A-Z][0-9]{5}[A-Z]|PTL[A-Z][0-9]{5}[A-Z]|RTK[A-Z][0-9]{5}[A-Z]|KLP[A-Z][0-9]{5}[A-Z]|NSK[A-Z][0-9]{5}[A-Z]|PNE[A-Z][0-9]{5}[A-Z]|PTN[A-Z][0-9]{5}[A-Z]|RCH[A-Z][0-9]{5}[A-Z]|JDH[A-Z][0-9]{5}[A-Z]|JPR[A-Z][0-9]{5}[A-Z]|SHL[A-Z][0-9]{5}[A-Z]
+
+--- IncomeDeductions: 22 fields; required=['IncomeFromBusinessProf', 'GrossSalary', 'NetSalary', 'DeductionUs16', 'IncomeFromSal', 'IncomeOthSrc', 'TotalIncomeChargeableUnHP', 'GrossTotIncome', 'GrossTotIncomeIncLTCG112A', 'UsrDeductUndChapVIA', 'DeductUndChapVIA', 'TotalIncome'] ---
+   [opt] AllwncExemptUs10                     object         
+   [REQ] DeductUndChapVIA                     DeductUndChapVIAType 
+   [REQ] DeductionUs16                        integer        max=99999999999999 min=0
+   [opt] DeductionUs16ia                      integer        max=75000 min=0
+   [opt] DeductionUs57iia                     integer        max=25000 min=0
+   [opt] EntertainmntalwncUs16ii              integer        max=5000 min=0
+   [REQ] GrossSalary                          integer        max=99999999999999 min=0
+   [REQ] GrossTotIncome                       integer        max=99999999999999
+   [REQ] GrossTotIncomeIncLTCG112A            integer        max=99999999999999
+   [REQ] IncomeFromBusinessProf               integer        max=99999999999999 min=0
+   [REQ] IncomeFromSal                        integer        max=99999999999999 min=0
+   [REQ] IncomeOthSrc                         integer        max=99999999999999
+   [REQ] NetSalary                            integer        max=99999999999999 min=0
+   [opt] OthersInc                            object         
+   [opt] PerquisitesValue                     integer        max=99999999999999 min=0
+   [opt] ProfessionalTaxUs16iii               integer        max=5000 min=0
+   [opt] ProfitsInSalary                      integer        max=99999999999999 min=0
+   [opt] PropertyDetails                      array          maxItems=2
+   [opt] Salary                               integer        max=99999999999999 min=0
+   [REQ] TotalIncome                          integer        max=5125000 min=0
+   [REQ] TotalIncomeChargeableUnHP            integer        max=99999999999999
+   [REQ] UsrDeductUndChapVIA                  UsrDeductUndChapVIAType 

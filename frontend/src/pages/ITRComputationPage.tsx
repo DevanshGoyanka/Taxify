@@ -1,47 +1,187 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, type SetStateAction } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAY } from '../contexts/AYContext';
-import { itrApi } from '../api/itr';
+import { itrV2 } from '../api/itrV2';
 import { clientsApi } from '../api/clients';
 import { itrAutomationApi } from '../api/itrAutomation';
 import type { AutomationJob } from '../api/itrAutomation';
-import { Spinner } from '../components/ui/Spinner';
-import StatusPill from '../components/StatusPill';
+import { filingSubmitApi, type FilingJobStatus, type VerificationMode } from '../api/filingSubmit';
+import { Spinner } from '../components/ui/Spinner';import StatusPill from '../components/StatusPill';
 import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
-import { CapitalGainsEntryManager } from '../components/CapitalGainsEntryManager';
+import { BankAccountManager } from '../components/BankAccountManager';
+import { PersonalInfoTab } from '../components/PersonalInfoTab';
+import { hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
+import { BusinessProfessionEntryManager, type BusinessProfessionScheduleData } from '../components/BusinessProfessionEntryManager';
 import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
+import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
+import ExemptIncomeWorkspace from '../components/exemptincome/ExemptIncomeWorkspace';
+import {
+  createReturnRepository, stripCompatibility,
+} from '../domain/returns';
+import {
+  banksToManager, challansToManager, deductionLoansToManager, familyPensionToManager, giftsToManager,
+  interestToManager, tdsToManager, winningsToManager,
+  updateBanksFromManager, updateBpNetProfit, updateCapitalGainsSchedule, updateChallanKindFromManager, updateDeductionLoansFromManager,
+  updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
+  updateHouseProperties, updateInterestFromManager, updateLossesBroughtForward, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
+  updateChapterVIA, updateTaxCreditsFromManager, updateTcsCredits, updateWinningsFromManager,
+  updatePensionContribution80CCC, updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
+  replaceDraft, type ReturnEditorModelV2,
+} from '../domain/returns/editorModelV2';
+import { createEmptyReturnDraft } from '../domain/returns/factory';
+import type { ReturnDraft } from '../domain/returns/types';
+import type {
+  BankManagerData, ChallanManagerEntry, DeductionLoanManagerData, FamilyPensionManagerEntry,
+  GiftManagerEntry, InterestManagerEntry, TdsManagerEntry, WinningManagerEntry,
+} from '../domain/returns/editorModelV2';
+import {
+  assessFormEligibilityFromDraft, collectEligibilityFactsFromDraft, type FormRecommendation, type ItrForm,
+} from '../domain/returns';
+import { activeSchedules, blockingSchedules, type ScheduleStatus } from '../domain/returns';
 import ImportConfirmationModal from '../components/ImportConfirmationModal';
 import type { ReconciledResults } from '../api/itrAutomation';
-import { mapReconciledToFormData } from '../utils/mapReconciledToFormData';
+import { calculateAgeFromDob as deriveAgeFromDob, getReferenceDate } from '../utils/age';
+import { mergeDraft } from '../domain/returns/draftPatch';
+import { buildPriorYearBPData, mapPrefillToDraftPatch } from '../utils/mapPrefillToDraftPatch';
+import type { ITR4ScheduleBPData } from '../components/business/ITR4ScheduleBPManager';
+import { businessesFromScheduleBp, scheduleBpFromBusinesses } from '../domain/returns/scheduleBpAdapter';
+import { mapReconciledToDraftPatch } from '../utils/mapReconciledToDraftPatch';
+import { mapAisToDraftPatch } from '../utils/mapAisToDraftPatch';
+import { map26asToDraftPatch } from '../utils/map26asToDraftPatch';
+import { mapTisToDraftPatch } from '../utils/mapTisToDraftPatch';
+import { validateCbdtFrontendFields } from '../domain/returns/filingPreflight';
 
-import { 
-  BusinessTab, 
-  OtherSourcesTab, 
-  DeductionsTab, 
-  TDSTab, 
-  TaxComputationTab
+const returnRepository = createReturnRepository();
+
+/**
+ * Derive age from DOB using the shared assessment-year-aware utility.
+ *
+ * The current ITR-1 production scope supports AY 2026-27; the shared utility
+ * keeps this call-site ready for a future assessment-year configuration.
+ */
+function calculateAgeFromDob(dob: string | undefined | null): number {
+  return deriveAgeFromDob(dob, '2026-27');
+}
+
+function validateCapitalGainsSchedule(schedule: any, form: string): string | null {
+  if (!schedule) return null;
+  const panPattern = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+  const isinPattern = /^IN[A-Z0-9]{10}$/;
+  const simple = form === 'ITR1' || form === 'ITR4';
+  const itr3 = form === 'ITR3';
+  if (simple) {
+    const block = schedule.simplified112A || {};
+    if (block.totalSaleConsideration !== undefined && Number(block.totalSaleConsideration) < 0) return '112A sale consideration cannot be negative.';
+    if (block.totalCostAcquisition !== undefined && Number(block.totalCostAcquisition) < 0) return '112A cost of acquisition cannot be negative.';
+    return null;
+  }
+  const numberRow = (rows: any[], required: string[], context: string): string | null => {
+    for (const row of rows) {
+      for (const key of required) {
+        const value = row[key];
+        const missing = value === undefined || value === '' || value === null;
+        if (missing) return `${context}: ${key.replace(/([A-Z])/g, ' $1').toLowerCase()} is required.`;
+        if (typeof value === 'string' && (key === 'name' || key === 'doneeName' || key === 'firmName' || key === 'address') && String(value).length > 250) return `${context}: ${key} exceeds the 250-character limit.`;
+      }
+    }
+    return null;
+  };
+  const scripRequired = ['isin','name','totalSaleValue','costWithoutIndexation','acquisitionCost','fmvPerUnit','totalFmv','transferExpenses'];
+  let error = numberRow(schedule.schedule112A || [], scripRequired, 'Schedule 112A');
+  if (error) return error;
+  error = numberRow(schedule.schedule115AD || [], scripRequired, 'Schedule 115AD');
+  if (error) return error;
+  for (const scrip of [...(schedule.schedule112A || []), ...(schedule.schedule115AD || [])]) if (String(scrip.isin) && !isinPattern.test(String(scrip.isin))) return 'Every Schedule 112A / 115AD scrip requires a valid ISIN in the form INE012345678.';
+  const vdaRequired = ['dateOfAcquisition','dateOfTransfer','head','acquisitionCost','consideration'];
+  error = numberRow(schedule.vda || [], vdaRequired, 'Schedule VDA');
+  if (error) return error;
+  for (const vda of schedule.vda || []) {
+    if (vda.dateOfAcquisition && vda.dateOfTransfer && String(vda.dateOfAcquisition) > String(vda.dateOfTransfer)) return 'VDA acquisition date must be on or before the transfer date.';
+    if (vda.head && !['CG','BI'].includes(String(vda.head))) return 'VDA head must be capital gains or business income.';
+    if (!itr3 && vda.head === 'BI') return 'Only ITR-3 may treat virtual digital asset transfers as business income.';
+  }
+  const claimRequired = ['section','dateOfTransfer','amountDeducted'];
+  error = numberRow(schedule.deductionClaims || [], claimRequired, 'Deduction claims');
+  if (error) return error;
+  for (const claim of schedule.deductionClaims || []) {
+    const allowed = itr3 ? ['54','54B','54EC','54F','115F','54D','54G','54GA'] : ['54','54B','54EC','54F','115F'];
+    if (!allowed.includes(String(claim.section))) return 'Deduction section is not permitted for the selected form.';
+    if (claim.ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(String(claim.ifsc))) return 'Deduction IFSC must follow the ABCD0123456 pattern.';
+    if (claim.accountNumber && String(claim.accountNumber).length > 20) return 'Capital Gains Account number cannot exceed 20 characters.';
+  }
+  for (const row of schedule.stDtaa || []) if (!row.countryName || !row.countryCode || !row.article || Number(row.treatyRate) < 0 || !row.itActSection || Number(row.itActRate) < 0) return 'Complete every STCG DTAA row with country, article, treaty rate and Income-tax Act section and rate.';
+  for (const row of schedule.ltDtaa || []) if (!row.countryName || !row.countryCode || !row.article || Number(row.treatyRate) < 0 || !row.itActSection || Number(row.itActRate) < 0) return 'Complete every LTCG DTAA row with country, article, treaty rate and Income-tax Act section and rate.';
+  for (const row of schedule.stImmovable || []) {
+    const transferees = row.transferees || [];
+    if (transferees.length === 0) return 'STCG land/building rows require at least one transferee.';
+    for (const buyer of transferees) if (!buyer.name || Number(buyer.share) < 0 || Number(buyer.share) > 100 || Number(buyer.amount) < 0 || (buyer.pan && !panPattern.test(String(buyer.pan)))) return 'Complete every STCG transferee with name, valid optional PAN, share 0–100 and non-negative amount.';
+  }
+  for (const row of schedule.ltImmovable || []) {
+    const transferees = row.transferees || [];
+    if (transferees.length === 0) return 'LTCG land/building rows require at least one transferee.';
+    for (const buyer of transferees) if (!buyer.name || Number(buyer.share) < 0 || Number(buyer.share) > 100 || Number(buyer.amount) < 0 || (buyer.pan && !panPattern.test(String(buyer.pan)))) return 'Complete every LTCG transferee with name, valid optional PAN, share 0–100 and non-negative amount.';
+    for (const improvement of row.improvements || []) if (!improvement.financialYear || Number(improvement.cost) < 0) return 'Complete every improvement with a financial year and non-negative cost.';
+    for (const exemption of row.exemptions || []) if (!exemption.section || Number(exemption.amount) < 0) return 'Complete every exemption with a section and non-negative amount.';
+  }
+  return null;
+}
+
+// Restricted-112A detection was folded into assessFormEligibilityFromDraft
+// in Phase 8: it reads draft.capitalGainsSchedule and the backend's
+// structured capital-gains issues directly. The standalone helper below was
+// deleted with the rest of the flat-blob bridge.
+
+import {
+  OtherSourcesTab,
+  DeductionsTab,
+  TDSTab,
+  TaxComputationTab, type CanonicalManagerBindings,
+  CapitalGainsTab,
 } from './ITRComputationTabs';
 
 export default function ITRComputationPage() {
-  const { clientId, year } = useParams();
+  const { clientId: routeClientId, year } = useParams();
+  const clientId = routeClientId || '';
   const navigate = useNavigate();
   const { ayParam } = useAY();
+  const effectiveAssessmentYear = year || ayParam || '2026-27';
+  const loadGenerationRef = useRef(0);
+  const loadedReturnKeyRef = useRef('');
+  const computationGenerationRef = useRef(0);
+  const suppressAutoDetectRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [validationReport, setValidationReport] = useState<{ valid: boolean; errors: string[]; warnings: string[] } | null>(null);
   const [activeTab, setActiveTab] = useState(0);
   const [regime, setRegime] = useState<'old' | 'new'>('new');
-  const [itrForm, setItrForm] = useState('ITR-1');
+  const [itrForm, setItrForm] = useState<ItrForm>('ITR-1');
+  const [eligibility, setEligibility] = useState<FormRecommendation | null>(null);
+  const [formLockedByUser, setFormLockedByUser] = useState(false);
   const [showImportMenu, setShowImportMenu] = useState(false);
   const [clientData, setClientData] = useState<any>(null);
+  const legacyClientId = clientData?.id as number | undefined;
   
   // Automation job state
   const [automationJobId, setAutomationJobId] = useState<number | null>(null);
   const [showStatusBox, setShowStatusBox] = useState(false);
   const [statusBoxJob, setStatusBoxJob] = useState<AutomationJob | null>(null);
+
+  // Type-3 Direct Submit (portal upload automation) state.
+  // The backend generates + validates the CBDT JSON and enqueues a
+  // Playwright upload job; we poll it here and surface the result inline.
+  const [filingJobId, setFilingJobId] = useState<number | null>(null);
+  const [filingSubmitting, setFilingSubmitting] = useState(false);
+  // Standalone acknowledgement (ITR-V) downloader state. The button is
+  // gated on a completed Direct Submit that produced an acknowledgement
+  // number; it triggers the standalone downloader (separate from the
+  // working uploader) to fetch the receipt PDF from the ITD portal.
+  const [fetchingAck, setFetchingAck] = useState(false);
+  const [filingJob, setFilingJob] = useState<FilingJobStatus | null>(null);
   
   // Part 2: Import document state
   const [importedAIS, setImportedAIS] = useState<any>(null);
@@ -51,171 +191,224 @@ export default function ITRComputationPage() {
   // Employer reconciliation state
   const [showReconciliationModal, setShowReconciliationModal] = useState(false);
   const [reconciliationResult, setReconciliationResult] = useState<any>(null);
+  const [editorModel, setEditorModel] = useState<ReturnEditorModelV2 | null>(null);
+  const editorRef = useRef<ReturnEditorModelV2 | null>(null);
+  // Monotonic counter bumped on every draft mutation so the debounced
+  // compute effect re-fires after imports/edits (not just on form/regime
+  // changes).  Without this, a prefill import that only changes the
+  // draft content would leave the tax summary stale at ₹0.
+  const [draftVersion, setDraftVersion] = useState(0);
 
   // Import confirmation modal state
   const [showImportConfirmModal, setShowImportConfirmModal] = useState(false);
   const [reconciledImportData, setReconciledImportData] = useState<ReconciledResults | null>(null);
   const [reconDiscrepancies, setReconDiscrepancies] = useState<string[]>([]);
-  const [formData, setFormData] = useState<any>({
-    // Personal Info - CBDT Mandatory Fields
-    gender: 'M', fatherName: '', maritalStatus: 'SINGLE', nationality: 'INDIA', residentialStatus: 'ROR',
-    isDirector: false, holdsUnlistedShares: false, agriculturalIncome: 0,
-    
-    // ===== SALARY INCOME - 101% CBDT COMPLIANT =====
-    // Section 17(1) - Salary Components
-    basic: 0, da: 0, bonus: 0, commission: 0,
-    // Allowances under Section 17(1)
-    hraReceived: 0, ltaReceived: 0, ceaReceived: 0, 
-    hostelAllowanceReceived: 0, transportAllowanceReceived: 0,
-    medicalReimbursementReceived: 0, conveyanceAllowanceReceived: 0, 
-    uniformAllowanceReceived: 0, otherAllowance: 0,
-    // Perquisites under Section 17(2)
-    perquisites: 0,
-    rentFreeAccommodationValue: 0, carValue: 0, gasFuelPowerValue: 0,
-    freeHolidayValue: 0, freeGoodsValue: 0, freeServicesValue: 0,
-    stockOptionsValue: 0, professionalTaxValue: 0,
-    // Profits in Lieu under Section 17(3)
-    profitsInLieu: 0,
-    gratuityReceived: 0, leaveEncashmentReceived: 0, 
-    commutationOfPensionReceived: 0, retrenchmentCompensation: 0, vrsCompensation: 0,
-    // Retirement Details
-    daForRetirement: 0, retirementDate: null,
-    isGovernmentEmployee: false, isPensioner: false,
-    
-    // ===== HRA EXEMPTION u/s 10(13A) =====
-    hraRent: 0, hraMetro: false, landlordPAN: '', landlordName: '',
-    
-    // ===== OTHER EXEMPTIONS =====
-    ltaExempt: 0, ceaExempt: 0, entertainmentAllowance: 0, otherExempt: 0,
-    
-    // ===== PROFESSIONAL TAX u/s 16(iii) =====
-    profTax: 0,
-    
-    // ===== LEGACY FIELDS (backward compatibility) =====  
-    allowances: 0, hra: 0, // Legacy HRA received field
-    // House Property
-    hpType: 'self', grossRent: 0, munTax: 0, homeLoanInt: 0, sopLoanInt: 0,
-    // Capital Gains
-    stcgEquityPre: 0, stcgEquityPost: 0, stcgOtherSlab: 0, 
-    ltcg112APre: 0, ltcg112APost: 0, ltcgOtherPre: 0, ltcgOtherPost: 0,
-    // Business Income
-    bizPresumptive: '44AD', bizTurnover: 0, bizDeclared: 0, bpNetProfit: 0,
-    // ===== OTHER SOURCES - CBDT COMPLIANT =====
-    // Interest Income
-    interestSB: 0, interestFD: 0, interestRD: 0, nscInterest: 0, scssInterest: 0, postOfficeInterest: 0, otherInterest: 0,
-    // Dividend Income
-    dividendShares: 0, dividendMF: 0, dividendUnits: 0, 
-    dividendCompanyName: '', dividendCompanyTAN: '',
-    // Winnings (Section 115BB - 30%)
-    lotteryIncome: 0, crosswordPuzzleIncome: 0, horseRaceIncome: 0, cardGameIncome: 0,
-    // Gifts (Section 56(2)(x))
-    giftsFromRelatives: 0, giftsFromNonRelatives: 0,
-    // Other
-    familyPension: 0, incomeFromITRefund: 0, accumulatedSPF: 0, casualIncome: 0,
-    // Legacy
-    dividends: 0, otherMisc: 0,
-    // VDA
-    vdaGains: 0,
-    // Deductions
-    s80C_epf: 0, s80C_ppf: 0, s80C_elss: 0, s80C_lic: 0, s80C_home: 0,
-    s80CCD1B: 0, s80CCD2: 0, s80D_self: 0, s80D_parent: 0, s80E: 0, s80TTA: 0, s80G: 0,
-    // Losses - CBDT Compliant
-    bfLossHP: 0, bfLossBusiness: 0, bfLossSTCG: 0, bfLossLTCG: 0, bfLossSpeculation: 0,
-    // Phase 1 Multi-Entry Structures (CBDT Compliant)
-    employerEntries: [],
-    capitalGainTransactions: [],
-    bankInterestEntries: [],
-    interestEntries: [],
-    donationEntries: [],
-    // Tax Payments - Multi-entry structures
-    tdsEntries: [],
-    advanceTaxEntries: [],
-    selfAssessmentTaxEntries: [],
-    bankAccountDetails: [],
-    // Legacy single-value fields (for backward compatibility)
-    tdsS192: 0, tds194A: 0, tdsOther: 0,
-    adv15Jun: 0, adv15Sep: 0, adv15Dec: 0, adv15Mar: 0, selfTax: 0,
-    age: 30
-  });
+
+  // The canonical draft is editor state, persistence state, and the only
+  // payload the rest of the page reads. No flat-blob projection survives.
+  const updateEditor = useCallback((update: (current: ReturnEditorModelV2) => ReturnEditorModelV2): void => {
+    setEditorModel((current) => {
+      if (!current) return current;
+      const next = update(current);
+      editorRef.current = next;
+      setDraftVersion((v) => v + 1);
+      return next;
+    });
+  }, []);
+  const handleRegimeChange = useCallback((nextRegime: 'old' | 'new'): void => {
+    setRegime(nextRegime);
+    updateEditor((current) => replaceDraft({ ...current.draft, regime: nextRegime }));
+  }, [updateEditor]);
+
+  const managers = useMemo<CanonicalManagerBindings>(() => ({
+    interest: (entries) => updateEditor((model) => updateInterestFromManager(model, entries)),
+    dividends: (entries) => updateEditor((model) => updateDividendsFromManager(model, entries)),
+    familyPension: (entry) => updateEditor((model) => updateFamilyPensionFromManager(model, entry)),
+    winnings: (entries) => updateEditor((model) => updateWinningsFromManager(model, entries)),
+    otherSources: (next) => updateEditor((model) => updateOtherSources(model, next)),
+    gifts: (entries) => updateEditor((model) => updateGiftsFromManager(model, entries)),
+    section80C: (data) => updateEditor((model) => updateSection80C(model, data.investments)),
+    section80D: (data) => updateEditor((model) => updateSection80D(model, data)),
+    donations: (entries) => updateEditor((model) => updateSection80G(model, entries)),
+    deductionLoans: (data) => updateEditor((model) => updateDeductionLoansFromManager(model, data)),
+    chapterVIA: (next) => updateEditor((model) => updateChapterVIA(model, next)),
+    pensionContribution80CCC: (entries) => updateEditor((model) => updatePensionContribution80CCC(model, entries)),
+    schedule80GGA: (entries) => updateEditor((model) => updateSchedule80GGA(model, entries)),
+    schedule80GGC: (entries) => updateEditor((model) => updateSchedule80GGC(model, entries)),
+    taxReturnPreparer: (next) => updateEditor((model) => updateTaxReturnPreparer(model, next)),
+    tds: (entries) => updateEditor((model) => updateTaxCreditsFromManager(model, entries)),
+    tcs: (entries) => updateEditor((model) => updateTcsCredits(model, entries)),
+    advanceTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'ADVANCE_TAX', entries)),
+    selfAssessmentTax: (entries) => updateEditor((model) => updateChallanKindFromManager(model, 'SELF_ASSESSMENT', entries)),
+    banks: (data) => updateEditor((model) => updateBanksFromManager(model, data)),
+  }), [updateEditor]);
 
   useEffect(() => {
-    if (!clientId) return;
+    const requestId = ++loadGenerationRef.current;
+    loadedReturnKeyRef.current = '';    ++computationGenerationRef.current;
+    if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
+    setBackendTaxResult(null);
+    setTaxResultLoading(false);
+    setTaxResultError(null);
+    setClientData(null);
+    setImportedAIS(null);
+    setImported26AS(null);
+    setImportedTIS(null);
+    setReconciliationResult(null);
+    setShowReconciliationModal(false);
+    const resetModel = replaceDraft(createEmptyReturnDraft(effectiveAssessmentYear, itrForm, regime));
+    editorRef.current = resetModel;
+    setEditorModel(resetModel);
+    if (!clientId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     Promise.all([
-      clientsApi.get(Number(clientId)),
-      itrApi.getFormData(Number(clientId), ayParam || '2026-27')
+      clientsApi.get(clientId),
+      returnRepository.get(clientId, effectiveAssessmentYear),
     ])
-      .then(([client, itrData]) => {
+      .then(([client, draft]) => {
+        if (requestId !== loadGenerationRef.current) return;
+        loadedReturnKeyRef.current = `${clientId}:${effectiveAssessmentYear}`;
         setClientData(client);
-        // Prioritize saved form data over client master data
-        // Map address fields from backend names to frontend names
-        setFormData((prev: any) => ({ 
-          ...prev,
-          // Use client data as fallback only if form data doesn't have it
-          name: itrData.name || client.name,
-          pan: itrData.pan || client.pan,
-          email: itrData.email || client.email,
-          mobile: itrData.mobile || client.mobile,
-          aadhaar: itrData.aadhaar || client.aadhaar,
-          dob: itrData.dob || client.dob,
-          fatherName: itrData.fatherName,
-          age: itrData.age,
-          // Address field mapping: backend -> frontend
-          flatNo: itrData.flatDoorNo || itrData.flatNo,
-          premises: itrData.premisesName || itrData.premises,
-          road: itrData.roadStreet || itrData.road,
-          area: itrData.area,
-          city: itrData.townCity || itrData.city,
-          state: itrData.state,
-          pincode: itrData.pinCode || itrData.pincode,
-          // Spread all other form data
-          ...itrData
-        }));
+        suppressAutoDetectRef.current = true;
+        setItrForm(draft.form);
+        setRegime(draft.regime);
+        // Hydrate the canonical personal-info block from the saved draft,
+        // falling back to the client record only when the draft is silent.
+        const hydrated: ReturnEditorModelV2 = replaceDraft({
+          ...draft,
+          personal: {
+            ...draft.personal,
+            name: draft.personal.name || client.name || '',
+            firstName: draft.personal.firstName || client.firstName || '',
+            middleName: draft.personal.middleName || client.middleName || '',
+            surnameOrOrgName: draft.personal.surnameOrOrgName || client.surname || '',
+            pan: draft.personal.pan || client.pan || '',
+            email: draft.personal.email || client.email || '',
+            mobile: draft.personal.mobile || client.mobile || '',
+            aadhaar: draft.personal.aadhaar || client.aadhaar || '',
+            dateOfBirth: draft.personal.dateOfBirth || client.dob || null,
+          },
+        });
+        editorRef.current = hydrated;
+        setEditorModel(hydrated);
       })
-      .catch(err => toast.error(err.message))
-      .finally(() => setLoading(false));
-  }, [clientId, ayParam]);
+      .catch((err: any) => {
+        if (requestId === loadGenerationRef.current) toast.error(err.message);
+      })
+      .finally(() => {
+        if (requestId === loadGenerationRef.current) setLoading(false);
+      });
+  }, [clientId, effectiveAssessmentYear]);
+
+  useEffect(() => {
+    if (!editorModel) return;
+    if (editorModel.draft.form === itrForm && editorModel.draft.regime === regime) return;
+    updateEditor((current) => replaceDraft({ ...current.draft, form: itrForm, regime }));
+  }, [editorModel, itrForm, regime, updateEditor]);
 
   const [backendTaxResult, setBackendTaxResult] = useState<any>(null);
   const [taxResultLoading, setTaxResultLoading] = useState(false);
+  const [taxResultError, setTaxResultError] = useState<string | null>(null);
 
   // Debounce timer ref for tax summary API calls
   const taxResultDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ── CBDT Eligibility (recomputed on every form edit) ────────────────────
+  // Under the canonical v2 path, the eligibility engine reads the typed
+  // draft's reconciliation evidence so imported OUT_OF_SCOPE_TAXABLE rows
+  // (capital-gains, business, VDA, foreign-remittance evidence) escalate
+  // the form recommendation — the import layer must never be silently ignored.
+  const eligibilityResult = useMemo<FormRecommendation | null>(
+    () => editorModel?.draft
+      ? assessFormEligibilityFromDraft(editorModel.draft, backendTaxResult)
+      : null,
+    [editorModel?.draft, backendTaxResult],
+  );
+
+  useEffect(() => {
+    if (!eligibilityResult) { setEligibility(null); return; }
+    setEligibility(eligibilityResult);
+    if (!formLockedByUser && eligibilityResult.recommendedForm !== itrForm) {
+      setItrForm(eligibilityResult.recommendedForm);
+      if (eligibilityResult.recommendedForm !== 'ITR-1') {
+        toast(`Auto‑recommended: ${eligibilityResult.recommendedForm} — ${eligibilityResult.reason}`, { icon: '🔍', duration: 4000 });
+      }
+    }
+  }, [eligibilityResult, formLockedByUser, itrForm]);
+
+  const taxSummaryPayloadKey = useMemo(
+    // The canonical draft is sent directly to the v2 compute endpoint via
+    // `editorRef.current.draft` (see the effect below).  This memo feeds the
+    // payload-key memo for debounce gating only.
+    () => JSON.stringify({ form: itrForm, regime, ay: effectiveAssessmentYear }),
+    [itrForm, effectiveAssessmentYear, regime],
+  );
 
   // Fetch backend-computed tax summary - replaces local computeTax()
-  // Debounced: only fires 500ms after user stops typing
+  // All ITR forms (ITR-1, ITR-2, ITR-3, ITR-4) use the same endpoint.
+  // The backend maps the flat payload to the correct canonical model
+  // (ITR1Input / ITR2Input / ITR4Input) based on the `form` field and
+  // runs the appropriate engine.  The frontend never needs a mapper.
+  //
+  // Debounced: only fires 500ms after user stops typing.
   useEffect(() => {
-    if (!clientId || !ayParam) return;
-
-    // Cancel any pending call
-    if (taxResultDebounceRef.current) {
-      clearTimeout(taxResultDebounceRef.current);
-    }
+    if (!clientId || loading || loadedReturnKeyRef.current !== `${clientId}:${effectiveAssessmentYear}`) return;
+    const requestId = ++computationGenerationRef.current;
+    // A result is authoritative only for the exact payload that produced it.
+    // Clear the prior draft's calculation while this draft is being recomputed.
+    setBackendTaxResult(null);
+    setTaxResultLoading(true);
+    setTaxResultError(null);
 
     taxResultDebounceRef.current = setTimeout(() => {
-      console.log('[TAX] Calling computeTaxSummary for Other Sources...', { ayParam, regime: regime, formDataKeys: Object.keys(formData || {}) });
-      setTaxResultLoading(true);
-      itrApi.computeTaxSummary(formData, ayParam || '2026-27', regime)
+      const currentDraft = editorRef.current?.draft;
+      if (!currentDraft) return;
+      const computePromise = itrV2.compute(stripCompatibility({ ...currentDraft, assessmentYear: effectiveAssessmentYear, form: itrForm, regime }));
+      computePromise
         .then((result: any) => {
-          console.log('[TAX] computeTaxSummary result - regimeUsed:', result.taxRegime, 'result:', result);
+          if (requestId !== computationGenerationRef.current) return;
           setBackendTaxResult(result);
+          setTaxResultError(null);
         })
         .catch((err: any) => {
-          console.error('[TAX] computeTaxSummary ERROR:', err);
-          // If backend call fails, clear result (no fallback to local)
-          setBackendTaxResult(null);
+          if (requestId !== computationGenerationRef.current) return;
+          // Preserve the last successful tax figures, but replace capital-gain
+          // validation state with the current rejected draft's structured
+          // issues so users can fix the exact rows that blocked computation.
+          const details = err?.details;
+          const capitalGainsSummary = details?.capitalGainsSummary;
+          if (capitalGainsSummary) {
+            setBackendTaxResult((previous: any) => ({
+              ...(previous || {}),
+              capitalGainsSummary,
+              capitalGainsStatus: details?.capitalGainsStatus || capitalGainsSummary.status,
+              capitalGainsIssues: details?.capitalGainsIssues || capitalGainsSummary.issues || [],
+              capitalGainsEligibility: details?.capitalGainsEligibility || capitalGainsSummary.eligibility || {},
+            }));
+          }
+          const msg = typeof err?.message === 'string' && err.message.length > 0
+            ? err.message
+            : 'Tax computation failed. Please try again.';
+          console.error('[TAX] compute failed:', { msg });
+          setTaxResultError(msg);
         })
-        .finally(() => setTaxResultLoading(false));
+        .finally(() => {
+          if (requestId === computationGenerationRef.current) setTaxResultLoading(false);
+        });
     }, 500);
-  }, [clientId, ayParam, regime, formData]);
 
-  // Cleanup on unmount
-  useEffect(() => {
     return () => {
-      if (taxResultDebounceRef.current) {
-        clearTimeout(taxResultDebounceRef.current);
-      }
+      if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
     };
+  }, [clientId, effectiveAssessmentYear, regime, taxSummaryPayloadKey, loading, draftVersion]);
+
+  // Invalidate all asynchronous completions after unmount.
+  useEffect(() => () => {
+    ++loadGenerationRef.current;
+    ++computationGenerationRef.current;
+    if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
   }, []);
 
   const taxResult = useMemo(() => {
@@ -223,19 +416,49 @@ export default function ITRComputationPage() {
     if (backendTaxResult) return backendTaxResult;
     // Return empty result when loading or no data - include ALL Other Sources properties
     return {
-      grossSalary: 0, hraExempt: 0, netSalary: 0, hpIncome: 0, cgTax: 0,
-      bizIncome: 0, otherIncome: 0, vdaTax: 0, gti: 0, gtiAfterSetOff: 0,
-      totalDeductions: 0, totalIncome: 0, normalTax: 0, rebate87A: 0,
-      surcharge: 0, cess: 0, totalTaxLiability: 0, totalTaxPaid: 0,
-      taxPayable: 0, refund: 0, vdaGains: 0,
+      // CBDT Income Summary
+      grossSalary: 0, hraExempt: 0, salaryBeforeSection16: 0, netSalary: 0,
+      incomeFromSal: 0, deductionUs16: 0,
+      hpIncome: 0, totalIncChargeHP: 0,
+      otherIncome: 0, incomeOthSrc: 0,
+      familyPensionIncome: 0, familyPensionDed: 0, deductUs57iia: 0,
+      bizIncome: 0,
+      gti: 0, grossTotIncome: 0, grossTotIncomeIncLTCG112A: 0, gtiAfterSetOff: 0,
+      totalDeductions: 0, deductChapVIA: 0,
+      hpLossDisallowed: 0,
+      totalIncomeBefore288A: 0, roundingAdjustment288A: 0, totalIncome: 0,
+
+      // CBDT Tax Computation
+      basicExemptionLimit: 0, normalRateIncome: 0,
+      incomeChargeableAboveBasicExemption: 0, nilTaxReason: null,
+      normalTax: 0, totalTaxPayable: 0,
+      rebate87A: 0, taxPayableOnRebate: 0,
+      surcharge: 0, cess: 0,
+      grossTaxLiability: 0, section89: 0,
+      netTaxLiability: 0, totalTaxLiability: 0,
+
+      // CBDT Taxes Paid
+      advanceTax: 0, totalTDS: 0, totalTCS: 0,
+      selfAssessmentTax: 0, totalTaxPaid: 0, totalTaxesPaid: 0,
+      claimedTDSEntered: 0, creditStatus: 'CONFIRMED',
+      creditValidationIssues: [], refundStatus: 'NONE',
+      enteredCredits: { tds: 0, advanceTax: 0, selfAssessmentTax: 0, total: 0 },
+      validatedCredits: { tds: 0, advanceTax: 0, selfAssessmentTax: 0, tcs: 0, total: 0 },
+      provisionalRefund: 0, provisionalTaxPayable: 0, blockedCreditsTotal: 0,
+      confirmedRefund: null, calculationStatus: 'CALCULATED',
+
+      // Balance / Refund
+      balTaxPayable: 0, taxPayable: 0,
+      refund: 0, refundDue: 0,
+
+      // Legacy fields still used by other tabs
+      vdaTax: 0, vdaGains: 0, cgTax: 0,
       totalInterest: 0, interestDeduction80TTA: 0, interestDeduction80TTB: 0,
       totalDividend: 0, dividendTaxableAtSpecialRate: 0, dividendTaxableAtNormalRate: 0,
-      totalWinnings: 0, winningsTax: 0, taxableGifts: 0, familyPensionDed: 0, specialRateIncome: 0,
-      familyPensionIncome: 0, // Added for Other Sources
+      totalWinnings: 0, winningsTax: 0, taxableGifts: 0, specialRateIncome: 0,
       tdsS192: 0, tds194A: 0, tdsOther: 0,
       adv15Jun: 0, adv15Sep: 0, adv15Dec: 0, adv15Mar: 0,
-      selfTax: 0, tdsEntries: [], selfAssessmentTaxEntries: [],
-      // Schedule S (Salary) fields — populated by backend SalaryScheduleComputer
+      selfTax: 0, tdsEntries: [], selfAssessmentTaxEntries: [], advanceTaxEntries: [],
       salaryIncome: 0, salary171: 0, salary172: 0, salary173: 0,
       ltaExempt: 0, gratuityExempt: 0, leaveEncashmentExempt: 0,
       pensionCommutationExempt: 0, transportExempt: 0,
@@ -244,85 +467,43 @@ export default function ITRComputationPage() {
       entertainmentAllowanceDed: 0, professionalTaxDed: 0,
       totalSection16Deductions: 0, salaryTDS: 0, salaryEmployerCount: 0,
       hraCondition1: 0, hraCondition2: 0, hraCondition3: 0,
-      hraIsMetro: false, hraCityClassified: ''
+      hraIsMetro: false, hraCityClassified: '',
+      deductionBreakdown: {} as Record<string, number>,
     };
   }, [backendTaxResult]);
 
+  // Recomputation-triggered eligibility: the eligibilityResult memo above
+  // already updates on every canonical-draft change via the typed
+  // assessFormEligibilityFromDraft evaluator.  This effect only resets the
+  // suppress flag after the first saved-form load so the engine doesn't
+  // immediately override the user-saved form choice.
   useEffect(() => {
-    autoDetectITRForm();
-  }, [
-    formData.basic, 
-    formData.bizTurnover, 
-    formData.bpNetProfit, 
-    formData.bizPresumptive,
-    formData.stcgPre, 
-    formData.stcgPost, 
-    formData.stcgOther,
-    formData.ltcgPre, 
-    formData.ltcgPost, 
-    formData.ltcgOther,
-    formData.vdaGains,
-    formData.grossRent, 
-    formData.interestFD, 
-    formData.dividends,
-    formData.isDirector,
-    formData.holdsUnlistedShares,
-    formData.agriculturalIncome,
-    formData.residentialStatus,
-    formData.bfLossHP,
-    formData.bfLossBusiness,
-    formData.bfLossSTCG,
-    formData.bfLossLTCG
-  ]);
+    if (suppressAutoDetectRef.current) {
+      suppressAutoDetectRef.current = false;
+    }
+  }, [editorModel?.draft]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Clear legacy fields if using new array-based system
-      const dataToSave = { ...formData };
-      
-      // Clear legacy TDS/SAT fields
-      if (dataToSave.tdsEntries && dataToSave.tdsEntries.length >= 0) {
-        dataToSave.tdsS192 = 0;
-        dataToSave.tds194A = 0;
-        dataToSave.tdsOther = 0;
+      const currentEditor = editorRef.current;
+      if (!currentEditor) throw new Error('Return is not loaded');
+
+      // Operate directly on the typed draft and avoid the legacy flat-blob
+      // round-trip entirely on save.  The canonical repository strips
+      // `compatibility` and pins the AY.
+      if (currentEditor.draft) {
+        await returnRepository.save(clientId, {
+          ...currentEditor.draft,
+          assessmentYear: effectiveAssessmentYear,
+          form: itrForm,
+          regime,
+        });
+        toast.success('Saved ✓');
+        return;
       }
-      if (dataToSave.selfAssessmentTaxEntries && dataToSave.selfAssessmentTaxEntries.length >= 0) {
-        dataToSave.selfTax = 0;
-      }
-      
-      // Clear legacy salary fields if using multi-employer
-      if (dataToSave.employerEntries && dataToSave.employerEntries.length > 0) {
-        dataToSave.basic = 0;
-        dataToSave.da = 0;
-        dataToSave.hra = 0;
-        dataToSave.bonus = 0;
-      }
-      
-      // Clear legacy CG fields if using transaction-based
-      if (dataToSave.capitalGainTransactions && dataToSave.capitalGainTransactions.length > 0) {
-        dataToSave.stcgEquityPre = 0;
-        dataToSave.stcgEquityPost = 0;
-        dataToSave.stcgOtherSlab = 0;
-        dataToSave.ltcg112APre = 0;
-        dataToSave.ltcg112APost = 0;
-        dataToSave.ltcgOtherPre = 0;
-        dataToSave.ltcgOtherPost = 0;
-      }
-      
-      // NOTE: Do NOT zero interestSB/interestFD when bankInterestEntries exist.
-      // tax.py reads interestSB, interestFD, interestRD, nscInterest,
-      // scssInterest, postOfficeInterest, otherInterest — NOT bankInterestEntries.
-      // Zeroing them makes all interest income invisible to the tax engine.
-      // bankInterestEntries are for display/reference only.
-      
-      // Clear legacy 80G field if using donation entries
-      if (dataToSave.donationEntries && dataToSave.donationEntries.length > 0) {
-        dataToSave.s80G = 0;
-      }
-      
-      await itrApi.saveFormData(Number(clientId), year!, dataToSave);
-      toast.success('Saved ✓');
+
+      throw new Error('Return draft is not loaded');
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -330,16 +511,274 @@ export default function ITRComputationPage() {
     }
   };
 
-  const handleDownloadJson = () => {
-    itrApi.downloadJson(Number(clientId), year!).catch(err => toast.error(err.message));
+  const handleValidate = async () => {
+    const currentEditor = editorRef.current;
+    setValidating(true);
+    setValidationReport(null);
+    try {
+      if (!currentEditor) throw new Error('Return is not loaded');
+      // Validate via the v2 compute path: persist the draft, run the canonical
+      // compute (which surfaces engine eligibility + cross-field errors), and
+      // report structured errors/warnings.  The legacy flat validate endpoint is
+      // retired with the flat-blob bridge.
+      const draft = {
+        ...currentEditor.draft,
+        assessmentYear: effectiveAssessmentYear,
+        form: itrForm,
+        regime,
+      };
+      const frontendErrors = validateCbdtFrontendFields(draft);
+      if (frontendErrors.length > 0) {
+        const report = { valid: false, errors: frontendErrors, warnings: [] };
+        setValidationReport(report);
+        toast.error(`${frontendErrors.length} blocking error(s) — see report`);
+        return;
+      }
+      await returnRepository.save(clientId, draft);
+      let report: { valid: boolean; errors: string[]; warnings: string[] };
+      try {
+        const result = await itrV2.compute(stripCompatibility(draft));
+        const errors: string[] = Array.isArray(result?.errors) ? result.errors : [];
+        const warnings: string[] = Array.isArray(result?.warnings) ? result.warnings : [];
+        report = { valid: errors.length === 0, errors, warnings };
+      } catch (err: any) {
+        const errors: string[] = Array.isArray(err?.errors) ? err.errors
+          : Array.isArray(err?.details?.errors) ? err.details.errors
+          : [err?.message || 'Validation failed'];
+        report = { valid: false, errors, warnings: [] };
+      }
+      setValidationReport(report);
+      if (report.valid && report.warnings.length === 0) {
+        toast.success('Validation passed ✓');
+      } else if (report.valid) {
+        toast(`${report.warnings.length} warning(s) — see report`, { icon: '⚠️' });
+      } else {
+        toast.error(`${report.errors.length} blocking error(s) — see report`);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Validation failed');
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const handleGenerateCbdtJson = async () => {
+    if (itrForm === 'ITR-3') {
+      toast.error('ITR-3 CBDT export is not implemented yet.');
+      return;
+    }
+    try {
+      const currentEditor = editorRef.current;
+      if (!currentEditor?.draft) throw new Error('Return is not loaded');
+      const frontendErrors = validateCbdtFrontendFields(currentEditor.draft);
+      if (frontendErrors.length > 0) {
+        throw Object.assign(new Error('Correct the CBDT-constrained fields before generating JSON.'), { errors: frontendErrors });
+      }
+      // Generate from the typed canonical draft without composing or
+      // normalizing a legacy payload. The v2 endpoint requires a persisted
+      // draft, so save first to publish the latest editor state.
+      await returnRepository.save(clientId, {
+        ...currentEditor.draft,
+        assessmentYear: effectiveAssessmentYear,
+        form: itrForm,
+        regime,
+      });
+      await itrV2.generate(clientId, effectiveAssessmentYear);
+      toast.success(`CBDT ${itrForm} JSON generated ✓`);
+    } catch (err: any) {
+      const message = err?.message || 'CBDT JSON generation failed';
+      const errors: string[] = Array.isArray(err?.errors) ? err.errors : [];
+      toast.error(
+        errors.length > 0 ? `${message}\n\n${errors.join('\n')}` : message,
+        { duration: 10000 }
+      );
+    }
   };
 
   const handleDownloadPdf = async () => {
     try {
-      await itrApi.downloadPdf(Number(clientId), year!);
+      await itrV2.downloadPdf(clientId, effectiveAssessmentYear);
       toast.success('PDF downloaded successfully');
     } catch (err: any) {
       toast.error(err.message || 'PDF download failed');
+    }
+  };
+
+  const handleDownloadJson = async () => {
+    try {
+      await itrV2.download(clientId, effectiveAssessmentYear);
+      toast.success('Draft JSON downloaded successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Draft JSON download failed');
+    }
+  };
+
+  // === Type-3 Direct Submit (portal upload automation) ===
+
+  /**
+   * Polling hook for a queued Direct-Submit filing job.
+   *
+   * Polls ``/api/v1/filing/jobs/{job_id}`` every 2s until the job reaches a
+   * terminal state, then surfaces the acknowledgement number or error.
+   */
+  useEffect(() => {
+    if (filingJobId === null) return;
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const stopPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+    const poll = async () => {
+      try {
+        const status = await filingSubmitApi.getJobStatus(filingJobId);
+        if (cancelled) return;
+        setFilingJob(status);
+        if (status.status === 'completed') {
+          stopPolling();
+          const filing = status.result?.filing;
+          const ack = filing?.acknowledgement_number;
+          if (filing?.everify_status === 'verified') {
+            toast.success(`Return submitted & e-verified ✓  ARN: ${ack ?? 'n/a'}`);
+          } else if (ack) {
+            toast.success(`Return submitted ✓  ARN: ${ack}`);
+          } else {
+            toast.success('Return submitted ✓');
+          }
+          // Auto-dismiss the success pill after 6s so the operator sees the
+          // result, then clear job state so the button re-enables.
+          setTimeout(() => {
+            if (cancelled) return;
+            setFilingJobId(null);
+            setFilingJob(null);
+            setFilingSubmitting(false);
+          }, 6000);
+        } else if (status.status === 'failed') {
+          // STOP the interval — otherwise the poll keeps firing forever.
+          // Keep the failed pill visible (no auto-clear) so the operator
+          // can read the reason; the ✕ button clears job state.
+          stopPolling();
+          setFilingSubmitting(false);
+          const reason = status.error_message || status.result?.filing?.reason || 'Portal upload failed';
+          toast.error(`Submit failed: ${reason.slice(0, 200)}`, { duration: 10000 });
+        }
+      } catch {
+        // transient poll error — retry on next tick
+      }
+    };
+    poll();
+    interval = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      stopPolling();
+    };
+  }, [filingJobId]);
+
+  const handleDirectSubmit = async () => {
+    if (itrForm === 'ITR-3' || itrForm === 'ITR-2') {
+      toast.error('Direct Submit is available for ITR-1 and ITR-4 only this season.');
+      return;
+    }
+    if (!clientId || filingSubmitting || filingJobId !== null) return;
+
+    // Consequential action — confirm before launching the portal upload.
+    const ay = effectiveAssessmentYear;
+    const ok = window.confirm(
+      `Direct Submit will generate the CBDT JSON and launch a visible browser\n` +
+      `that logs into the ITD portal as ${clientData?.pan ?? 'the taxpayer'} and uploads\n` +
+      `the ${itrForm} return for AY ${ay}.\n\n` +
+      `Verification mode: LATER (no OTP needed — verify after submission).\n\n` +
+      `Continue?`,
+    );
+    if (!ok) return;
+
+    setFilingSubmitting(true);
+    setFilingJob(null);
+    try {
+      const currentEditor = editorRef.current;
+      if (!currentEditor?.draft) throw new Error('Return is not loaded');
+      const frontendErrors = validateCbdtFrontendFields(currentEditor.draft);
+      if (frontendErrors.length > 0) {
+        throw Object.assign(new Error('Correct the CBDT-constrained fields before direct submission.'), { details: { errors: frontendErrors } });
+      }
+      await returnRepository.save(clientId, {
+        ...currentEditor.draft,
+        assessmentYear: ay,
+        form: itrForm,
+        regime,
+      });
+      const verificationMode: VerificationMode = 'LATER';
+      const res = await filingSubmitApi.submit(clientId, ay, itrForm, verificationMode);
+      setFilingJobId(res.job_id);
+      toast.success('Filing job queued — a browser will open to upload the JSON…');
+    } catch (err: any) {
+      setFilingSubmitting(false);
+      const message = err?.message || 'Direct Submit failed';
+      const errors: string[] = Array.isArray(err?.details?.errors) ? err.details.errors : [];
+      toast.error(
+        errors.length > 0 ? `${message}\n\n${errors.join('\n')}` : message,
+        { duration: 10000 },
+      );
+    }
+  };
+
+  // === Standalone Acknowledgement (ITR-V) download ===
+  /**
+   * Trigger the standalone Type-3 acknowledgement downloader. The backend
+   * logs in as the taxpayer, navigates to View Filed Returns, locates the
+   * row for the current assessment year (no pre-known ARN needed — the
+   * return may have been uploaded manually), and downloads the ITR-V PDF.
+   * If the ITR is not filed for the selected AY, the backend returns a
+   * 404 with a "file the ITR first" message which we surface here.
+   */
+  const handleFetchAcknowledgement = async () => {
+    if (!clientId || fetchingAck) return;
+    const ay = effectiveAssessmentYear;
+    const ok = window.confirm(
+      `This will open a visible browser, log into the ITD portal as ` +
+      `${clientData?.pan ?? 'the taxpayer'}, and check whether the ` +
+      `${itrForm} for AY ${ay} has been filed. If it has, the ITR-V ` +
+      `acknowledgement PDF will be downloaded.\n\nProceed?`,
+    );
+    if (!ok) return;
+    setFetchingAck(true);
+    try {
+      const blob = await filingSubmitApi.fetchAcknowledgement(clientId, ay, itrForm);
+      // Persist the PDF to the user's downloads via a synthetic anchor.
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${itrForm}_${ay}_Acknowledgement.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      toast.success(`Acknowledgement PDF downloaded for AY ${ay}.`);
+    } catch (err: any) {
+      // The backend returns errors as JSON ({detail: "..."}), but because
+      // the success path is responseType:'blob', axios delivers the error
+      // body as a Blob too. Parse it to surface the "file the ITR first"
+      // message cleanly.
+      let message = 'Acknowledgement download failed';
+      const errBlob = err?.response?.data;
+      if (errBlob instanceof Blob) {
+        try {
+          const text = await errBlob.text();
+          const parsed = JSON.parse(text);
+          message = parsed?.detail || message;
+        } catch {
+          message = await errBlob.text().catch(() => message);
+        }
+      } else if (typeof errBlob?.detail === 'string') {
+        message = errBlob.detail;
+      } else if (err?.message) {
+        message = err.message;
+      }
+      toast.error(message, { duration: 10000 });
+    } finally {
+      setFetchingAck(false);
     }
   };
 
@@ -351,7 +790,7 @@ export default function ITRComputationPage() {
     setStatusBoxJob(null);
 
     try {
-      const res = await itrAutomationApi.startImport(Number(clientId), ayParam || '2026-27');
+      const res = await itrAutomationApi.startImport(clientId, ayParam || '2026-27');
       setAutomationJobId(res.job_id);
       setShowStatusBox(true);
     } catch (err: any) {
@@ -373,61 +812,228 @@ export default function ITRComputationPage() {
   };
 
   const handleConfirmImport = () => {
-    // Map reconciled data to form fields using the existing formData shape
+    // Both AIS/TIS/26AS and the form-agnostic ITD Prefill are merged into the
+    // canonical draft via typed patches. There is no flat-blob intermediate.
     if (!reconciledImportData) {
       toast.error('No import data available');
       return;
     }
 
-    const { formDataUpdate, discrepancies, summary } = mapReconciledToFormData(reconciledImportData);
+    const discrepancies = Array.isArray((reconciledImportData as any).discrepancies) ? (reconciledImportData as any).discrepancies : [];
+    const summary = (reconciledImportData as any).summary ?? { totalIncome: 0, salaryEntries: 0, businessEntries: 0, interestEntries: 0, dividendEntries: 0, capitalGainsEntries: 0, unmatched_tis: 0, unmatched_ais: 0, unmatched_as26: 0 };
+    const prefillData = (reconciledImportData as any).prefill || null;
 
-    setFormData((prev: any) => {
-      // For multi-entry arrays, ONLY overwrite if the incoming update has entries;
-      // otherwise preserve any existing entries the user may have manually added.
-      const safeUpdate = { ...formDataUpdate };
-      const EMPTY_KEEP_KEYS = ['employerEntries', 'dividendEntries', 'bankInterestEntries', 'interestEntries',
-        'capitalGainTransactions', 'tdsEntries'];
-      for (const key of EMPTY_KEEP_KEYS) {
-        if (Array.isArray(safeUpdate[key]) && safeUpdate[key].length === 0 && prev[key]?.length > 0) {
-          delete safeUpdate[key];
-        }
+    // ──────────────────────────────────────────────────────────────────
+    // TEMPORARILY DISABLED (Phase 2 testing)
+    //
+    // The filed-return merge is commented out so the portal automation
+    // import doesn't surface the "already filed" blocking error during
+    // testing.  See FILED_RETURN_REACTIVATION_GUIDE.md for reactivation.
+    // REACTIVATE: const advisory = (reconciledImportData as any).filing_advisory;
+    const advisory = null as any;
+
+    // A portal import replaces a material portion of the draft. Any result
+    // computed for the pre-import generation must not be presented as current.
+    ++computationGenerationRef.current;
+    if (taxResultDebounceRef.current) clearTimeout(taxResultDebounceRef.current);
+    setBackendTaxResult(null);
+    setTaxResultLoading(true);
+    setTaxResultError('Computation unavailable for the imported draft until recalculated.');
+
+    let mergedImportData: ReturnDraft | null = null;
+    if (editorRef.current) {
+      // An import is AUTHORITATIVE for the sections it covers (income
+      // heads, employers, banks, TDS/TCS, businesses, capital gains,
+      // house property, losses).  It must REPLACE those sections, not
+      // accumulate via mergeDraft's append-only list semantics —
+      // otherwise every re-import layers new entries on top of old
+      // ones and the same interest appears 2×, 3×, 4×...  Personal info
+      // is preserved from the existing draft (the import may not carry
+      // it if the prefill didn't download).  See
+      // IMPORTS_AND_RECONCILIATION_END_TO_END.md §4.
+      // Prefill contributes ONLY personal info + refund bank account.
+      // Everything else (income heads, employers, TDS/TCS, deductions,
+      // capital gains) comes from the reconciled patch (26AS/AIS/TIS).
+      // This is the single source of truth — no duplication possible.
+      const prefillPatch = mapPrefillToDraftPatch(prefillData);
+      const reconciledPatch = mapReconciledToDraftPatch(reconciledImportData);
+      // Debug: trace what the import patches contain so blank-tab issues
+      // can be diagnosed without a debugger.
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] reconciledPatch keys:', Object.keys(reconciledPatch));
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] CG sales:', (reconciledImportData as any)?.capital_gain_sales?.length, 'purchases:', (reconciledImportData as any)?.capital_gain_purchases?.length);
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] CG schedule:', Object.keys(reconciledPatch.capitalGainsSchedule || {}));
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] businesses:', reconciledPatch.businesses?.length);
+        // eslint-disable-next-line no-console
+        console.debug('[handleConfirmImport] income_heads:', Object.keys((reconciledImportData as any)?.income_heads || {}));
       }
-      return { ...prev, ...safeUpdate };
-    });
+      // Start from a baseline that keeps personal/filing/regime/form
+      // but BLANKS every import-owned list so the patches populate them
+      // fresh (no accumulation across re-imports).
+      const prior = editorRef.current.draft;
+      // Clone personal/filing/form/regime + the house-property pass-through
+      // and exempt-income state from the prior draft (the import may not
+      // carry these), but BLANK every import-owned list so patches
+      // populate them fresh — no accumulation across re-imports.
+      const blankedBaseline: ReturnDraft = {
+        ...prior,
+        employers: [],
+        bankAccounts: [],
+        businesses: [],
+        houseProperties: [],
+        capitalGainsSchedule: {
+          ...prior.capitalGainsSchedule,
+          schedule112A: [],
+          schedule115AD: [],
+          purchases: [],
+          stEquity: [],
+          stImmovable: [],
+          ltImmovable: [],
+          vda: [],
+          stDtaa: [],
+          ltDtaa: [],
+          simplified112A: { totalSaleConsideration: 0, totalCostAcquisition: 0 },
+        },
+        otherSources: {
+          ...prior.otherSources,
+          interest: [],
+          dividends: [],
+          winnings: [],
+          gifts: [],
+          otherIncome: [],
+          dtaaIncome: [],
+          section89A: [],
+          accumulatedPf: [],
+          specialRateIncome: [],
+        },
+        taxes: { tds: [], tcs: [], challans: [] },
+        provenance: [],
+      };
+      mergedImportData = mergeDraft(
+        mergeDraft(blankedBaseline, prefillPatch),
+        reconciledPatch,
+      );
+      updateEditor((current) => replaceDraft(mergedImportData as ReturnDraft));
+    }
 
     // Collect discrepancy messages for the warning banner
     const msgs: string[] = [];
     if (discrepancies.length > 0) {
       msgs.push(
         `${discrepancies.length} discrepanc${discrepancies.length === 1 ? 'y' : 'ies'} found ` +
-        'between AIS, TIS, and 26AS. The higher amount has been used. ' +
+        'between AIS, TIS, and 26AS. The reconciled source amount has been selected. ' +
         'Review highlighted entries in Salary, Interest, Dividends, and Capital Gains tabs.'
       );
     }
-    if (reconciledImportData.summary.unmatched_tis > 0 ||
-        reconciledImportData.summary.unmatched_ais > 0 ||
-        reconciledImportData.summary.unmatched_as26 > 0) {
-      const parts = [];
-      if (reconciledImportData.summary.unmatched_tis) parts.push('TIS');
-      if (reconciledImportData.summary.unmatched_ais) parts.push('AIS');
-      if (reconciledImportData.summary.unmatched_as26) parts.push('26AS');
+    if (((reconciledImportData as any).category_control_discrepancies?.length || 0) > 0) {
+      for (const discrepancy of (reconciledImportData as any).category_control_discrepancies || []) {
+        msgs.push(
+          `${discrepancy.category}: TIS accepted total ₹${discrepancy.tis_accepted_total.toLocaleString('en-IN')} ` +
+          `differs from annexure detail total ₹${discrepancy.tis_detail_total.toLocaleString('en-IN')}. ` +
+          'The accepted TIS total controls computation; all detail rows remain preserved for review.'
+        );
+      }
+    }
+    if ((summary.unmatched_tis || 0) > 0 || (summary.unmatched_ais || 0) > 0 || (summary.unmatched_as26 || 0) > 0) {
+      const parts: string[] = [];
+      if (summary.unmatched_tis) parts.push('TIS');
+      if (summary.unmatched_ais) parts.push('AIS');
+      if (summary.unmatched_as26) parts.push('26AS');
       msgs.push(
-        `${reconciledImportData.summary.unmatched_tis + reconciledImportData.summary.unmatched_ais + reconciledImportData.summary.unmatched_as26} ` +
-        `entries from ${parts.join('/')} could not be matched and were skipped.`
+        `${(summary.unmatched_tis || 0) + (summary.unmatched_ais || 0) + (summary.unmatched_as26 || 0)} ` +
+        `entries found in only one of ${parts.join('/')} were preserved for review.`
       );
     }
+    // ──────────────────────────────────────────────────────────────────
+    // TEMPORARILY DISABLED (Phase 2 testing)
+    //
+    // The advisory banner is commented out so the portal automation
+    // import doesn't surface the "already filed" blocking warning during
+    // testing.  See FILED_RETURN_REACTIVATION_GUIDE.md for reactivation.
+    //
+    // REACTIVATE: const advisoryBanner = (reconciledImportData as any).filing_advisory;
+    // REACTIVATE: if (advisoryBanner && advisoryBanner.current_ay_already_filed) {
+    // REACTIVATE:   if (advisoryBanner.current_ay_is_revised) {
+    // REACTIVATE:     msgs.push(
+    // REACTIVATE:       `⚠️ ITR for AY ${advisoryBanner.download_assessment_year || ''} is already filed as a REVISED return ` +
+    // REACTIVATE:       `(section ${advisoryBanner.current_ay_filing_section || '139(5)'}). ` +
+    // REACTIVATE:       'The last filed ITR was a revised return. To file another revised return, ' +
+    // REACTIVATE:       'explicitly confirm the revised-return flow.'
+    // REACTIVATE:     );
+    // REACTIVATE:   } else {
+    // REACTIVATE:     msgs.push(
+    // REACTIVATE:       `⚠️ ITR for AY ${advisoryBanner.download_assessment_year || ''} is already filed ` +
+    // REACTIVATE:       `(section ${advisoryBanner.current_ay_filing_section || '139(1)'}). ` +
+    // REACTIVATE:       'To file a revised return, explicitly confirm the revised-return flow.'
+    // REACTIVATE:     );
+    // REACTIVATE:   }
+    // REACTIVATE: }
     setReconDiscrepancies(msgs);
 
     toast.success(
-      `Import complete: ${summary.totalIncome.toLocaleString('en-IN')} total income, ` +
-      `${summary.salaryEntries} salary, ${(summary as any).businessEntries || 0} business, ` +
-      `${summary.interestEntries} interest, ` +
-      `${summary.dividendEntries} dividend, ${summary.capitalGainsEntries} capital gains entries`
+      `Import complete: ${Number(summary.totalIncome || 0).toLocaleString('en-IN')} total income, ` +
+      `${Number(summary.salaryEntries || 0)} salary, ${Number((summary as any).businessEntries || 0)} business, ` +
+      `${Number(summary.interestEntries || 0)} interest, ` +
+      `${Number(summary.dividendEntries || 0)} dividend, ${Number(summary.capitalGainsEntries || 0)} capital gains entries`
     );
 
-    // Save to backend so form state persists
-    itrApi.saveFormData(Number(clientId), year!, { ...formData, ...formDataUpdate })
-      .catch(err => console.warn('Background save after import failed:', err));
+    // Show a secondary toast with Prefill-specific imports (deductions,
+    // bank accounts, personal info) that AIS/TIS/26AS don't carry.
+    const prefillSummary = (prefillData as any)?.summary ?? (prefillData as any) ?? {};
+    const prefillHasContent = !!prefillSummary.personalInfo || Number(prefillSummary.employerEntries || 0) > 0 || Number(prefillSummary.bankAccounts || 0) > 0;
+    if (prefillHasContent) {
+      const prefillParts: string[] = [];
+      if (prefillSummary.personalInfo) prefillParts.push('personal info');
+      if (Number(prefillSummary.employerEntries || 0) > 0) prefillParts.push(`${prefillSummary.employerEntries} employer(s)`);
+      if (Number(prefillSummary.bankAccounts || 0) > 0) prefillParts.push(`${prefillSummary.bankAccounts} bank account(s)`);
+      if (Number(prefillSummary.deductionsTotal || 0) > 0) prefillParts.push(`deductions ₹${Number(prefillSummary.deductionsTotal).toLocaleString('en-IN')}`);
+      if (Number(prefillSummary.tdsSalaryEntries || 0) > 0) prefillParts.push(`${prefillSummary.tdsSalaryEntries} TDS-salary`);
+      toast(`Prefill: ${prefillParts.join(', ')}`, { icon: '📋' });
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // TEMPORARILY DISABLED (Phase 2 testing)
+    //
+    // The filed-return toast and the "already filed" error toast are
+    // commented out so the portal automation import doesn't surface
+    // the blocking error during testing.  See
+    // FILED_RETURN_REACTIVATION_GUIDE.md for reactivation.
+    //
+    // REACTIVATE: if (filedReturnResult.summary.carryForwardLosses > 0 || filedReturnResult.summary.bankAccounts > 0) {
+    // REACTIVATE:   const frParts: string[] = [];
+    // REACTIVATE:   if (filedReturnResult.summary.carryForwardLosses > 0) frParts.push(`${filedReturnResult.summary.carryForwardLosses} brought-fwd loss(es)`);
+    // REACTIVATE:   if (filedReturnResult.summary.bankAccounts > 0) frParts.push(`${filedReturnResult.summary.bankAccounts} bank account(s)`);
+    // REACTIVATE:   if (filedReturnResult.summary.employerEntries > 0) frParts.push(`${filedReturnResult.summary.employerEntries} employer(s)`);
+    // REACTIVATE:   toast(`Filed return: ${frParts.join(', ')}`, { icon: '📄' });
+    // REACTIVATE: }
+    //
+    // REACTIVATE: if (advisory && advisory.current_ay_already_filed) {
+    // REACTIVATE:   if (advisory.current_ay_is_revised) {
+    // REACTIVATE:     toast.error(
+    // REACTIVATE:       `ITR for AY ${advisory.download_assessment_year || ''} is already filed as a REVISED return. ` +
+    // REACTIVATE:       'The last filed ITR was a revised return. To file another revised return, explicitly confirm the revised-return flow.',
+    // REACTIVATE:       { duration: 8000 }
+    // REACTIVATE:     );
+    // REACTIVATE:   } else {
+    // REACTIVATE:     toast.error(
+    // REACTIVATE:       `ITR for AY ${advisory.download_assessment_year || ''} is already filed. ` +
+    // REACTIVATE:       'To file a revised return, explicitly confirm the revised-return flow.',
+    // REACTIVATE:       { duration: 8000 }
+    // REACTIVATE:     );
+    // REACTIVATE:   }
+    // REACTIVATE: }
+
+    // ── Reassess eligibility after import ────────────────────────────────
+    setFormLockedByUser(false);
+
+    // Save to backend so form state persists using the canonical repository.
+    if (mergedImportData) {
+      returnRepository.save(clientId, mergedImportData).catch(err => console.warn('Background save after import failed:', err));
+    }
 
     setShowImportConfirmModal(false);
     setShowStatusBox(false);
@@ -462,15 +1068,52 @@ export default function ITRComputationPage() {
   };
 
   const handleFileImport = async (type: string, file: File) => {
+    const importGeneration = loadGenerationRef.current;
     try {
       toast.loading(`Importing ${type}...`);
       
       if (type === 'form16-pdf' || type === 'form16-json') {
-        const data = await import('../api/integration').then(m => m.integrationApi.extractForm16(file));
-        const populated = await import('../api/integration').then(m => m.integrationApi.autoPopulateFromForm16(formData, data));
-        setFormData((prev: any) => ({ ...prev, ...populated }));
+        const form16Data = await import('../api/integration').then(m => m.integrationApi.extractForm16(file));
+        if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
+        // The legacy /integration/autopopulate/form16 endpoint was a thin
+        // server-side merge with no real Form 16 parser.  Patch the first
+        // employer row directly on the canonical draft instead of round-
+        // tripping through a flat-blob composition.
+        const data = (form16Data || {}) as {
+            basic?: number; da?: number; hra?: number; bonus?: number;
+            professionalTax?: number; tdsDeducted?: number;
+          };
+        updateEditor((current) => {
+          const first = current.draft.employers[0] ?? {
+            id: 'employer-form16', customEmployerName: '', employerName: '', employerTAN: '',
+            natureOfEmployment: '', employerAddress: '', employerCity: '', employerStateCode: '',
+            employerPinCode: '', employerZipCode: '',
+            salaryNatureRows: [], perquisiteNatureRows: [], section10ExemptionRows: [],
+            basic: 0, da: 0, commission: 0, hra: 0, bonus: 0, allowances: 0, lta: 0,
+            otherAllowance: 0, arrearSalary: 0, perquisites: 0, profitsInLieu: 0, rentPaid: 0,
+            city: '', isMetroCity: false, isGovernmentEmployee: false, isDisabledEmployee: false,
+            commutedPension: 0, gratuity: 0, leaveEncashment: 0, averageMonthlySalary: 0,
+            yearsOfService: 0, unavailedLeaveDays: 0, actualLtaFare: 0, isDomesticTravel: false,
+            journeysInBlock: 0, ltaExempt: 0, numberOfChildren: 0, gratuityAlsoReceived: false,
+            transportAllowance: 0, childrenEducationAllowance: 0, hostelExpenditureAllowance: 0,
+            uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
+            vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0, tdsDeducted: 0,
+            employerNPS: 0,
+          };
+          const patched = {
+            ...first,
+            basic: data.basic ?? first.basic,
+            da: data.da ?? first.da,
+            hra: data.hra ?? first.hra,
+            bonus: data.bonus ?? first.bonus,
+            professionalTax: data.professionalTax ?? first.professionalTax,
+            tdsDeducted: data.tdsDeducted ?? first.tdsDeducted,
+          };
+          const employers = current.draft.employers.length > 0 ? [patched, ...current.draft.employers.slice(1)] : [patched];
+          return replaceDraft({ ...current.draft, employers });
+        });
         toast.dismiss();
-        toast.success('Form 16 imported and auto-populated');
+        toast.success('Form 16 imported into the canonical draft');
       } else if (type === 'ais-pdf' || type === 'ais-json' || type === 'tis-pdf' || type === '26as-pdf' || type === '26as-txt' || type === 'prefill') {
         const typeStr = type as string;
         let data: any;
@@ -478,7 +1121,8 @@ export default function ITRComputationPage() {
         const pan = clientData?.pan;
         const dob = clientData?.dob; // YYYY-MM-DD format
 
-        // Validate PAN and DOB are available for encrypted documents (except TXT/ZIP)
+        // Validate PAN and DOB are available for encrypted documents
+        // (ZIP uploads need DOB to unlock; PDF/TXT don't need it upfront)
         if ((typeStr === 'ais-pdf' || typeStr === 'ais-json' || typeStr === 'tis-pdf' || typeStr === '26as-pdf') && (!pan || !dob)) {
           toast.dismiss();
           toast.error('Client PAN and Date of Birth are required for importing encrypted ITD documents');
@@ -491,20 +1135,24 @@ export default function ITRComputationPage() {
           data = JSON.parse(text);
         } else if (typeStr === 'ais-pdf') {
           const { integrationApi } = await import('../api/integration');
-          data = await integrationApi.importAIS(file, Number(clientId), year!, pan!, dob!);
+          data = await integrationApi.importAIS(file, legacyClientId!, effectiveAssessmentYear, pan!, dob!);
+          if (importGeneration !== loadGenerationRef.current) return;
           setImportedAIS(data);
         } else if (typeStr === 'ais-json') {
           const { integrationApi } = await import('../api/integration');
           data = await integrationApi.importAISJson(file, pan!, dob!);
+          if (importGeneration !== loadGenerationRef.current) return;
           setImportedAIS(data);
         } else if (typeStr === 'tis-pdf') {
           const { integrationApi } = await import('../api/integration');
           data = await integrationApi.importTIS(file, pan!, dob!);
+          if (importGeneration !== loadGenerationRef.current) return;
           setImportedTIS(data);
         } else if (typeStr === '26as-txt' || typeStr === '26as-pdf') {
           const { integrationApi } = await import('../api/integration');
           // Backend will use client's DOB as password for ZIP files
-          data = await integrationApi.import26AS(file, Number(clientId));
+          data = await integrationApi.import26AS(file, legacyClientId!, pan, dob, effectiveAssessmentYear);
+          if (importGeneration !== loadGenerationRef.current) return;
           setImported26AS(data);
         }
         
@@ -516,276 +1164,63 @@ export default function ITRComputationPage() {
           setShowImportMenu(false);
           return;
         }
-        
-        // Auto-populate from all available documents
-        if (type === 'ais-pdf' || type === 'ais-json' || type === 'tis-pdf' || type === '26as-pdf' || type === '26as-txt') {
-          // For 26AS, transform TDS entries to frontend format
-          let tdsEntriesForForm = [];
-          
-          // Determine financial year from 26AS data
-          // Format from 26AS: "2025-2026" -> convert to "2025-26"
-          let fyFrom26AS = '2025-26'; // default
-          if (data.financialYear) {
-            const fyParts = data.financialYear.split('-');
-            if (fyParts.length === 2) {
-              fyFrom26AS = fyParts[0] + '-' + fyParts[1].substring(2);
-            }
-          }
-          
-          if (type === '26as-txt' || type === '26as-pdf') {
-            const tdsFrom26AS = data.tdsEntries || data.deductorAggregates || [];
-            tdsEntriesForForm = tdsFrom26AS.map((entry: any) => ({
-              section: entry.sectionCode || entry.section || '192',
-              deductorName: entry.employerName || entry.deductorName || 'Unknown Employer',
-              deductorTAN: entry.employerTAN || entry.deductorTAN || '',
-              deductorPAN: entry.deductorPAN || '',
-              incomeAmount: entry.incomeAmount || entry.totalAmount || 0,
-              tdsDeducted: entry.tdsDeducted || entry.totalTDS || 0,
-              certificateNo: entry.certificateNo || '',
-              deductionDate: entry.transactionDate || entry.deductionDate || '',
-              uniqueTransactionNo: entry.uniqueTransactionNo || entry.utrNo || '',
-              financialYear: fyFrom26AS, // Use correct FY from 26AS
-              verified26AS: true,
-              claimedInReturn: true
-            }));
-            console.log('26AS TDS entries transformed with FY:', fyFrom26AS, tdsEntriesForForm);
-          }
-          
-          // For 26AS only, directly set form data without calling autoPopulateAll
-          if (type === '26as-txt' || type === '26as-pdf') {
-            const incomeBreakdown = data.incomeBreakdown || {};
-            const deductorDetails = incomeBreakdown.deductorDetails || [];
-            
-            // Get financial year from 26AS data (format: "2025-2026" -> "2025-26")
-            let fyFrom26AS = data.financialYear || '2025-26';
-            if (fyFrom26AS.includes("2025")) {
-              fyFrom26AS = '2025-26';
-            } else if (fyFrom26AS.includes("2024")) {
-              fyFrom26AS = '2025-26';
-            }
-            
-            // TDS entries only (where TDS > 0)
-            const tdsOnlyEntries = tdsEntriesForForm.filter((e: any) => (e.tdsDeducted || 0) > 0);
-            
-            // ===== BUILD EMPLOYER ENTRIES (Summary per employer) =====
-            const salaryDeductors = deductorDetails.filter((d: any) => 
-              d.sectionCode === '192' || d.sectionCode === '192A'
-            );
-            
-            const employerEntriesFrom26AS = salaryDeductors.map((deductor: any) => ({
-              employerName: deductor.employerName || 'Employer',
-              employerTAN: deductor.employerTAN || '',
-              employerPAN: '',
-              basic: deductor.totalAmount || 0,
-              da: 0,
-              hra: 0,
-              bonus: 0,
-              allowances: 0,
-              perquisites: 0,
-              professionalTax: 0,
-              tdsDeducted: deductor.totalTDS || 0,
-              grossSalary: deductor.totalAmount || 0,
-              netSalary: (deductor.totalAmount || 0) - (deductor.totalTDS || 0),
-              financialYear: fyFrom26AS,
-              verified26AS: true
-            }));
-            
-            // ===== BUILD DIVIDEND ENTRIES (Summary per company) =====
-            const dividendDeductors = deductorDetails.filter((d: any) => d.sectionCode === '194');
-            const dividendEntriesFrom26AS = dividendDeductors.map((deductor: any) => ({
-              companyName: deductor.employerName || 'Company',
-              companyPAN: '',
-              dividendAmount: deductor.totalAmount || 0,
-              tdsDeducted: deductor.totalTDS || 0,
-              deductorTAN: deductor.employerTAN || '',
-              isin: '',
-              category: 'SHARES',
-              section: deductor.sectionCode || '194'
-            }));
-            
-            // ===== BUILD INTEREST ENTRIES (Summary per bank/deductor) =====
-            const interestDeductors = deductorDetails.filter((d: any) => 
-              d.sectionCode === '194A' || d.sectionCode === '193' || d.sectionCode === '194K'
-            );
-            const bankInterestEntriesFrom26AS = interestDeductors.map((deductor: any) => ({
-              bankName: deductor.employerName || 'Bank',
-              accountNumber: '',
-              accountType: 'SAVINGS',
-              interestEarned: deductor.totalAmount || 0,
-              tdsDeducted: deductor.totalTDS || 0,
-              deductorTAN: deductor.employerTAN || '',
-              section: deductor.sectionCode || '194A'
-            }));
-            
-            // Calculate total income from all heads
-            const totalIncomeFrom26AS = 
-              (incomeBreakdown.salaryIncome || 0) + 
-              (incomeBreakdown.dividendIncome || 0) + 
-              (incomeBreakdown.interestIncome || 0) +
-              (incomeBreakdown.housePropertyIncome || 0) +
-              (incomeBreakdown.capitalGains || 0) +
-              (incomeBreakdown.businessIncome || 0) +
-              (incomeBreakdown.lotteryIncome || 0) +
-              (incomeBreakdown.vdaIncome || 0) +
-              (incomeBreakdown.onlineGamingIncome || 0) +
-              (incomeBreakdown.tcsIncome || 0);
-            
-            const formDataUpdate: any = {
-              // ===== SALARY ENTRIES =====
-              employerEntries: employerEntriesFrom26AS.length > 0 ? employerEntriesFrom26AS : [],
-              basic: employerEntriesFrom26AS.length > 0 ? employerEntriesFrom26AS[0].basic : 0,
-              
-              // ===== TDS ENTRIES =====
-              tdsEntries: tdsOnlyEntries,
-              tdsS192: incomeBreakdown.salaryIncome > 0 ? (data.totalTdsSalary || 0) : 0,
-              tds194A: incomeBreakdown.interestIncome > 0 ? (data.totalTdsInterest || 0) : 0,
-              tdsOther: (data.totalTDS || 0) - (data.totalTdsSalary || 0) - (data.totalTdsInterest || 0),
-              
-              // Store 26AS import info for display
-              imported26AS: {
-                totalTDS: data.totalTDS,
-                totalIncome: totalIncomeFrom26AS,
-                financialYear: fyFrom26AS,
-                assessmentYear: data.assessmentYear || '2026-27',
-                deductorCount: tdsOnlyEntries.length,
-                incomeBreakdown: incomeBreakdown
-              },
-              
-              // ===== DIVIDEND ENTRIES (per company) =====
-              dividendEntries: dividendEntriesFrom26AS.length > 0 ? dividendEntriesFrom26AS : [],
-              
-              // ===== BANK INTEREST ENTRIES (per bank) =====
-              bankInterestEntries: bankInterestEntriesFrom26AS.length > 0 ? bankInterestEntriesFrom26AS : [],
-              
-              // ===== MAP TO RESPECTIVE INCOME HEADS =====
-              // IMPORTANT: interestSB and interestFD must NOT both be set to
-              // interestIncome, because tax.py sums them (savings_bank = interestSB
-              // + postOfficeInterest, fixed_deposit = interestFD + interestRD + ...).
-              // Setting both to X gives 2X in GTI. Same for dividends vs dividendShares.
-              grossRent: incomeBreakdown.housePropertyIncome || 0,
-              ltcgProperty: incomeBreakdown.capitalGains || 0,
-              bizTurnover: incomeBreakdown.businessIncome || 0,
-              interestSB: incomeBreakdown.interestIncome || 0,
-              interestFD: 0,
-              dividendShares: incomeBreakdown.dividendIncome || 0,
-              lotteryIncome: incomeBreakdown.lotteryIncome || 0,
-              horseRaceIncome: incomeBreakdown.horseRaceIncome || 0,
-              vdaGains: incomeBreakdown.vdaIncome || 0,
-              onlineGamingIncome: incomeBreakdown.onlineGamingIncome || 0,
-              tcsCollections: incomeBreakdown.tcsIncome || 0,
-              incomeBreakdown26AS: incomeBreakdown,
-            };
-            
-            console.log('26AS Import - Employer Entries:', employerEntriesFrom26AS);
-            console.log('26AS Import - Dividend Entries:', dividendEntriesFrom26AS);
-            console.log('26AS Import - Interest Entries:', bankInterestEntriesFrom26AS);
-            
-            setFormData((prev: any) => ({ ...prev, ...formDataUpdate }));
-            await itrApi.saveFormData(Number(clientId), year!, { ...formData, ...formDataUpdate });
-            toast.dismiss();
-            
-            const message = `26AS imported! ${tdsOnlyEntries.length} TDS entries. ` +
-              `Salary: ${employerEntriesFrom26AS.length} employer (₹${(incomeBreakdown.salaryIncome || 0).toLocaleString('en-IN')}), ` +
-              `Dividends: ${dividendEntriesFrom26AS.length} companies (₹${(incomeBreakdown.dividendIncome || 0).toLocaleString('en-IN')})`;
-            toast.success(message);
-            setShowImportMenu(false);
-            return;
-          }
-          
-          const { integrationApi } = await import('../api/integration');
 
-          // Auto-populate from AIS and TIS documents
-          const populated = await integrationApi.autoPopulateAll(
-            Number(clientId),
-            year!,
-            importedAIS || data,
-            imported26AS || data,
-            importedTIS || data
-          );
-          
-          setFormData((prev: any) => ({ ...prev, ...populated }));
-          
-          // If both AIS and 26AS available, check reconciliation
-          const ais = importedAIS || data;
-          const f26as = imported26AS || data;
-          const tis = importedTIS || data;
-          
-          if (ais && f26as) {
-            const report = await integrationApi.getReconciliationReport(ais, f26as, tis);
-            if (report.hasDiscrepancies) {
-              toast.dismiss();
-              toast.error(`${type.toUpperCase()} imported. Reconciliation needed - ${report.items.length} discrepancies found.`);
-              setShowImportMenu(false);
-              return;
-            }
-          }
-          
-          await itrApi.saveFormData(Number(clientId), year!, { ...formData, ...populated });
+        // Canonical imports bypass the legacy flat-blob adapter entirely.
+        // The typed draft is patched and persisted directly.
+        if (editorRef.current && typeStr !== 'prefill') {
+          const patch = typeStr === '26as-pdf' || typeStr === '26as-txt'
+            ? map26asToDraftPatch(data)
+            : typeStr === 'tis-pdf'
+              ? mapTisToDraftPatch(data)
+              : mapAisToDraftPatch(data);
+          const merged = mergeDraft(editorRef.current.draft, patch);
+          updateEditor((current) => replaceDraft(merged));
+          await returnRepository.save(clientId, merged);
           toast.dismiss();
-          toast.success(`${type.toUpperCase()} imported and auto-populated successfully!`);
-        } else if (type === 'prefill') {
+          toast.success(`${typeStr.toUpperCase()} imported into the canonical draft`);
+          setShowImportMenu(false);
+          return;
+        }
+
+        if (type === 'prefill') {
           // ITD Prefill - use backend import API with clientId tracking
           const { integrationApi } = await import('../api/integration');
-          
-          // Import to backend - this saves to database
+
+          // Import to backend - this parses + persists to ImportedDocument
+          // and returns the form-agnostic extraction dict.
           const importResult = await integrationApi.importITDPrefill(
-            file, 
-            Number(clientId), 
-            year!
+            file,
+            legacyClientId!,
+            effectiveAssessmentYear
           );
-          
-          console.log('Prefill import result:', importResult);
-          toast.success('Prefill imported successfully! Reloading data...');
-          
-          // Reload form data from backend to get the extracted data
-          const freshFormData = await itrApi.getFormData(Number(clientId), year!);
-          console.log('Fresh form data from backend:', freshFormData);
-          
-          // Update form with the extracted data - use direct assignment for numeric fields
-          setFormData((prev: any) => ({ 
-            ...prev,
-            // Numeric fields - use ?? for null/undefined, allow 0 values through
-            interestSB: freshFormData.interestSB ?? prev.interestSB,
-            interestFD: freshFormData.interestFD ?? prev.interestFD,
-            bankInterest: freshFormData.bankInterest ?? prev.bankInterest,
-            totalDividend: freshFormData.totalDividend ?? prev.totalDividend,
-            dividends: freshFormData.dividends ?? prev.dividends,
-            itRefundInterest: freshFormData.itRefundInterest ?? prev.itRefundInterest,
-            incomeFromITRefund: freshFormData.incomeFromITRefund ?? prev.incomeFromITRefund,
-            s80TTB: freshFormData.s80TTB ?? prev.s80TTB,
-            s80C: freshFormData.s80C ?? prev.s80C,
-            s80D: freshFormData.s80D ?? prev.s80D,
-            s80E: freshFormData.s80E ?? prev.s80E,
-            s80TTA: freshFormData.s80TTA ?? prev.s80TTA,
-            s80G: freshFormData.s80G ?? prev.s80G,
-            s80CCD: freshFormData.s80CCD ?? prev.s80CCD,
-            s80CCC1B: freshFormData.s80CCC1B ?? prev.s80CCC1B,
-            totalTds: freshFormData.totalTds ?? prev.totalTds,
-            tds194A: freshFormData.tds194A ?? prev.tds194A,
-            // String fields - use || for empty strings
-            name: freshFormData.name || prev.name,
-            pan: freshFormData.pan || prev.pan,
-            email: freshFormData.email || prev.email,
-            mobile: freshFormData.mobile || prev.mobile,
-            aadhaar: freshFormData.aadhaar || prev.aadhaar,
-            // Array fields - preserve if empty
-            employerEntries: freshFormData.employerEntries || prev.employerEntries,
-            tdsEntries: freshFormData.tdsEntries || prev.tdsEntries,
-            bankAccountDetails: freshFormData.bankAccountDetails || prev.bankAccountDetails,
-            bankInterestEntries: freshFormData.bankInterestEntries || prev.bankInterestEntries,
-          }));
-          
+
+          // importResult.data is the PrefillExtraction dict.  Pull its summary
+          // block directly (the typed patcher below carries every
+          // employer/bank/deduction entry into the draft).
+          const prefillPayload = importResult.data || importResult;
+
+          if (importGeneration !== loadGenerationRef.current || !editorRef.current) return;
+          const merged = mergeDraft(editorRef.current.draft, mapPrefillToDraftPatch(prefillPayload));
+          updateEditor((current) => replaceDraft(merged));
+          await returnRepository.save(clientId, merged);
+
           setShowImportMenu(false);
-          
-          // All data is now loaded from backend, just show success message
+
+          const prefillSummary = (prefillPayload as any)?.summary ?? (prefillPayload as any) ?? {};
+          const prefillParts: string[] = [];
+          if (prefillSummary.personalInfo) prefillParts.push('personal info');
+          if (Number(prefillSummary.employerEntries || 0) > 0) prefillParts.push(`${prefillSummary.employerEntries} employer(s)`);
+          if (Number(prefillSummary.bankAccounts || 0) > 0) prefillParts.push(`${prefillSummary.bankAccounts} bank account(s)`);
+          if (Number(prefillSummary.deductionsTotal || 0) > 0) prefillParts.push(`deductions ₹${Number(prefillSummary.deductionsTotal).toLocaleString('en-IN')}`);
           toast.dismiss();
-          toast.success('Prefill data imported and loaded successfully!');
+          toast.success(`Prefill imported: ${prefillParts.join(', ') || 'canonical draft updated'}`);
         } else {
-          setFormData((prev: any) => ({ ...prev, ...data }));
+          // All non-prefill import types now flow through the typed patcher
+          // branch above; if any new type falls through here, surface an
+          // explicit error rather than silently writing to a flat blob.
+          toast.dismiss();
+          toast.error(`No typed patcher wired for ${String(type).toUpperCase()}; import aborted.`);
         }
-        
-        toast.dismiss();
-        toast.success(`${type.toUpperCase()} imported and validated`);
       }
       setShowImportMenu(false);
     } catch (err: any) {
@@ -801,15 +1236,15 @@ export default function ITRComputationPage() {
       return;
     }
 
-    // Update employer entries based on action
-    const updatedEntries = formData.employerEntries.map((entry: any) => {
-      const matchingDiscrepancy = reconciliationResult?.discrepancies?.find(
-        (d: any) => d.employerTAN === entry.employerTAN
-      );
-      
-      if (matchingDiscrepancy && matchingDiscrepancy.employerTAN === discrepancy.employerTAN) {
-        if (action === 'USE_NEW') {
-          // Apply new values from discrepancy
+    // Update employer entries based on action.  Apply new values directly to
+    // the canonical draft.employers list and strip any reconciliation row
+    // matching the same TAN from the displayed discrepancies.
+    updateEditor((current) => {
+      const list = current.draft.employers.map((entry: any) => {
+        const matchingDiscrepancy = reconciliationResult?.discrepancies?.find(
+          (d: any) => d.employerTAN === entry.employerTAN,
+        );
+        if (matchingDiscrepancy && matchingDiscrepancy.employerTAN === discrepancy.employerTAN && action === 'USE_NEW') {
           const updated = { ...entry };
           matchingDiscrepancy.fieldDiscrepancies.forEach((field: any) => {
             const fieldKey = field.fieldName.toLowerCase().replace(/\s+/g, '');
@@ -826,12 +1261,10 @@ export default function ITRComputationPage() {
           });
           return updated;
         }
-        // KEEP_EXISTING - no changes needed
-      }
-      return entry;
+        return entry;
+      });
+      return replaceDraft({ ...current.draft, employers: list });
     });
-
-    setFormData({ ...formData, employerEntries: updatedEntries });
     toast.success(`Applied ${action === 'USE_NEW' ? 'new' : 'existing'} values for ${discrepancy.employerName}`);
     
     // Remove resolved discrepancy
@@ -847,219 +1280,9 @@ export default function ITRComputationPage() {
     }
   };
 
-  const autoDetectITRForm = () => {
-    // Comprehensive ITR form detection based on CBDT rules - AY 2026-27
-    const hasBusinessIncome = (formData.bizTurnover || 0) > 0 || (formData.bpNetProfit || 0) > 0;
-    const hasPresumptiveIncome = hasBusinessIncome && formData.bizPresumptive && formData.bizPresumptive !== 'Regular';
-    
-    // Capital Gains - ALL types including real-estate, movable, VDA, securities
-    const hasCapitalGains = 
-      (formData.stcgPre || 0) > 0 || 
-      (formData.stcgPost || 0) > 0 || 
-      (formData.stcgOther || 0) > 0 ||
-      (formData.ltcgPre || 0) > 0 || 
-      (formData.ltcgPost || 0) > 0 || 
-      (formData.ltcgOther || 0) > 0 ||
-      (formData.vdaGains || 0) > 0;
-    
-    // Special Income - Lottery, Online Gaming, Card Games, Race Winnings
-    const hasSpecialIncome = 
-      (formData.winnings || 0) > 0 || 
-      (formData.lotteryIncome || 0) > 0 ||
-      (formData.onlineGamingIncome || 0) > 0 ||
-      (formData.cardGameIncome || 0) > 0 ||
-      (formData.raceWinnings || 0) > 0;
-    
-    // Exempt Income (Schedule EI)
-    const hasExemptIncome = 
-      (formData.agriculturalIncome || 0) > 0 ||
-      (formData.rajarshi || 0) > 0 ||
-      (formData.municipal || 0) > 0 ||
-      (formData.scholarship || 0) > 0 ||
-      (formData.gratuity || 0) > 0 ||
-      (formData.severance || 0) > 0 ||
-      (formData.vrs || 0) > 0;
-    
-    const hasMultipleProperties = formData.hpType === 'letout' && (formData.grossRent || 0) > 0;
-    const hasForeignIncome = (formData.foreignIncome || 0) > 0 || (formData.foreignAssets || 0) > 0;
-    const totalIncome = taxResult.totalIncome || 0;
-    const agriculturalIncome = formData.agriculturalIncome || 0;
-    const isDirector = formData.isDirector || false;
-    const hasUnlistedShares = formData.holdsUnlistedShares || false;
-    const isNonResident = formData.residentialStatus && formData.residentialStatus !== 'ROR';
-    const hasBFLoss = (formData.bfLossHP || 0) > 0 || (formData.bfLossBusiness || 0) > 0 || 
-                      (formData.bfLossSTCG || 0) > 0 || (formData.bfLossLTCG || 0) > 0;
-
-    let detectedForm = 'ITR-1';
-    let reason = '';
-
-    // Priority 1: ITR-4 (Presumptive taxation)
-    if (hasPresumptiveIncome) {
-      detectedForm = 'ITR-4';
-      reason = 'Presumptive income under 44AD/44ADA';
-    }
-    // Priority 2: ITR-3 (Business/Professional income - non-presumptive)
-    else if (hasBusinessIncome) {
-      detectedForm = 'ITR-3';
-      reason = 'Business or professional income';
-    }
-    // Priority 3: ITR-2 conditions - Capital Gains (Real-estate, Movable, Foreign, Securities, VDA)
-    else if (hasCapitalGains) {
-      detectedForm = 'ITR-2';
-      reason = 'Capital gains from investments/real-estate/VDA/securities';
-    }
-    // Priority 4: ITR-2 - Special Income (Lottery, Online Gaming)
-    else if (hasSpecialIncome) {
-      detectedForm = 'ITR-2';
-      reason = 'Lottery/Online gaming/Card game winnings (Section 115BB)';
-    }
-    // Priority 5: ITR-2 - Multiple house properties
-    else if (hasMultipleProperties) {
-      detectedForm = 'ITR-2';
-      reason = 'Multiple house properties';
-    }
-    // Priority 6: ITR-2 - Foreign income/assets
-    else if (hasForeignIncome) {
-      detectedForm = 'ITR-2';
-      reason = 'Foreign income or assets';
-    }
-    // Priority 7: ITR-2 - Total income > ₹50 lakh
-    else if (totalIncome > 5000000) {
-      detectedForm = 'ITR-2';
-      reason = 'Total income exceeds ₹50 lakhs';
-    }
-    // Priority 8: ITR-2 - Non-resident
-    else if (isNonResident) {
-      detectedForm = 'ITR-2';
-      reason = 'Non-resident or RNOR status';
-    }
-    // Priority 9: ITR-2 - Director in company/firm
-    else if (isDirector) {
-      detectedForm = 'ITR-2';
-      reason = 'Director in a company';
-    }
-    // Priority 10: ITR-2 - Holds unlisted shares
-    else if (hasUnlistedShares) {
-      detectedForm = 'ITR-2';
-      reason = 'Holds unlisted equity shares';
-    }
-    // Priority 11: ITR-2 - Agricultural income > ₹5,000
-    else if (agriculturalIncome > 5000) {
-      detectedForm = 'ITR-2';
-      reason = 'Agricultural income exceeds ₹5,000';
-    }
-    // Priority 12: ITR-2 - Exempt income
-    else if (hasExemptIncome) {
-      detectedForm = 'ITR-2';
-      reason = 'Exempt income (Schedule EI)';
-    }
-    // Priority 13: ITR-2 - Brought forward losses
-    else if (hasBFLoss) {
-      detectedForm = 'ITR-2';
-      reason = 'Brought forward losses';
-    }
-    else {
-      reason = 'Salary with simple income structure';
-    }
-
-    // Only update if form changed
-    if (detectedForm !== itrForm) {
-      setItrForm(detectedForm);
-      toast(`Auto-detected: ${detectedForm} - ${reason}`, { icon: '🔍', duration: 4000 });
-    }
-  };
-
-  const validateITRFormSelection = (selectedForm: string) => {
-    // Validate if manually selected form is eligible - CBDT Rules for ITR-1/ITR-2
-    const hasBusinessIncome = (formData.bizTurnover || 0) > 0 || (formData.bpNetProfit || 0) > 0;
-    const hasPresumptiveIncome = hasBusinessIncome && formData.bizPresumptive && formData.bizPresumptive !== 'Regular';
-    
-    // ALL Capital Gains - Real-estate, Movable, Foreign, Securities, VDA
-    const hasCapitalGains = 
-      (formData.stcgPre || 0) > 0 || 
-      (formData.stcgPost || 0) > 0 || 
-      (formData.stcgOther || 0) > 0 ||
-      (formData.ltcgPre || 0) > 0 || 
-      (formData.ltcgPost || 0) > 0 || 
-      (formData.ltcgOther || 0) > 0 ||
-      (formData.vdaGains || 0) > 0;
-    
-    // Special Income - Lottery, Online Gaming
-    const hasSpecialIncome = 
-      (formData.winnings || 0) > 0 || 
-      (formData.lotteryIncome || 0) > 0 ||
-      (formData.onlineGamingIncome || 0) > 0 ||
-      (formData.cardGameIncome || 0) > 0 ||
-      (formData.raceWinnings || 0) > 0;
-    
-    // Exempt Income
-    const hasExemptIncome = 
-      (formData.rajarshi || 0) > 0 ||
-      (formData.municipal || 0) > 0 ||
-      (formData.scholarship || 0) > 0 ||
-      (formData.gratuity || 0) > 0 ||
-      (formData.severance || 0) > 0 ||
-      (formData.vrs || 0) > 0;
-    
-    const totalIncome = taxResult.totalIncome || 0;
-    const agriculturalIncome = formData.agriculturalIncome || 0;
-    const isDirector = formData.isDirector || false;
-    const hasUnlistedShares = formData.holdsUnlistedShares || false;
-    const isNonResident = formData.residentialStatus && formData.residentialStatus !== 'ROR';
-    const hasBFLoss = (formData.bfLossHP || 0) > 0 || (formData.bfLossBusiness || 0) > 0 || 
-                      (formData.bfLossSTCG || 0) > 0 || (formData.bfLossLTCG || 0) > 0;
-    const hasForeignIncome = (formData.foreignIncome || 0) > 0 || (formData.foreignAssets || 0) > 0;
-
-    const errors: string[] = [];
-
-    if (selectedForm === 'ITR-1') {
-      // Rule 10: Total income > ₹50 lakh
-      if (totalIncome > 5000000) errors.push('Total income exceeds ₹50 lakhs (Rule 10)');
-      // Capital Gains - All types
-      if (hasCapitalGains) errors.push('Capital gains (Real-estate/Movable/Securities/VDA) not allowed in ITR-1');
-      // Business Income
-      if (hasBusinessIncome) errors.push('Business income not allowed in ITR-1 (use ITR-3/ITR-4)');
-      // Agricultural Income
-      if (agriculturalIncome > 5000) errors.push('Agricultural income exceeds ₹5,000');
-      // Director in company/firm
-      if (isDirector) errors.push('Directors must file ITR-2 or ITR-3');
-      // Unlisted shares
-      if (hasUnlistedShares) errors.push('Unlisted shares holders must file ITR-2');
-      // Non-resident
-      if (isNonResident) errors.push('Non-residents/RNOR must file ITR-2');
-      // Brought forward losses
-      if (hasBFLoss) errors.push('Brought forward losses not allowed in ITR-1');
-      // Special income (Lottery, Gaming)
-      if (hasSpecialIncome) errors.push('Lottery/Online gaming winnings require ITR-2 (Section 115BB)');
-      // Foreign income
-      if (hasForeignIncome) errors.push('Foreign income/assets require ITR-2');
-      // Exempt income requiring Schedule EI
-      if (hasExemptIncome) errors.push('Exempt income requires ITR-2 (Schedule EI)');
-    }
-    else if (selectedForm === 'ITR-2') {
-      // ITR-2 cannot have regular business income (use ITR-3)
-      if (hasBusinessIncome && !hasPresumptiveIncome) {
-        errors.push('Regular business income requires ITR-3 or ITR-4 (presumptive)');
-      }
-      // ITR-2 cannot have presumptive business (use ITR-4)
-      if (hasPresumptiveIncome) {
-        errors.push('Presumptive income (44AD/44ADA/44AE) requires ITR-4');
-      }
-    }
-    else if (selectedForm === 'ITR-3') {
-      if (!hasBusinessIncome) errors.push('ITR-3 is only for business/professional income');
-      if (hasPresumptiveIncome) errors.push('Presumptive income should use ITR-4');
-    }
-    else if (selectedForm === 'ITR-4') {
-      if (!hasPresumptiveIncome) errors.push('ITR-4 is only for presumptive taxation (44AD/44ADA/44AE)');
-    }
-
-    if (errors.length > 0) {
-      toast.error(`ITR-${selectedForm.split('-')[1]} not eligible:\n${errors.join('\n')}`, { duration: 6000 });
-      return false;
-    }
-    return true;
-  };
+  // The legacy autoDetectITRForm function was deleted in Phase 8: ITR form
+  // selection now flows through assessFormEligibilityFromDraft and the
+  // `eligibilityResult` useMemo above, which reads the typed canonical draft.
 
   if (loading) {
     return (
@@ -1112,43 +1335,82 @@ export default function ITRComputationPage() {
               <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
                 <span className="mono">{clientData?.pan || ''}</span>
                 <span style={{ margin: '0 8px' }}>•</span>
-                <span>AY {ayParam || '2026-27'}</span>
+                <span>AY {effectiveAssessmentYear}</span>
               </div>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <select
-              value={itrForm}
-              onChange={(e) => {
-                const newForm = e.target.value;
-                if (validateITRFormSelection(newForm)) {
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <select
+                value={itrForm}
+                onChange={(e) => {
+                  const newForm = e.target.value as ItrForm;
+                  const blockers = eligibility?.blockersByForm?.[newForm] ?? [];
+                  if (blockers.length > 0) {
+                    toast.error(
+                      `${newForm} has ${blockers.length} blocker(s):\n${blockers.join('\n')}`,
+                      { duration: 6000 },
+                    );
+                  }
+                  // Block downgrade to ITR-1/4 when non-112A Capital Gains data exists.
+                  const isDowngrade = (newForm === 'ITR-1' || newForm === 'ITR-4') && (itrForm === 'ITR-2' || itrForm === 'ITR-3');
+                  if (isDowngrade && hasNonSimplifiedCapitalGains(editorModel?.draft.capitalGainsSchedule)) {
+                    const confirmDowngrade = window.confirm(
+                      `Switching to ${newForm} will prevent the following Capital Gains data from being filed:\n\n` +
+                      `• Full Schedule CG (STCG/LTCG land & building, equity, NRI, other assets, slump sales)\n` +
+                      `• Schedule 112A scrip-level detail\n• Schedule 115AD\n• Schedule VDA\n• DTAA rows\n• Deduction claims\n• Loss set-off matrix\n\n` +
+                      `The data will be preserved but will NOT be included in the filed return.\n\n` +
+                      `Switch to ${newForm} anyway?`
+                    );
+                    if (!confirmDowngrade) {
+                      // Revert the select by forcing re-render with the old value.
+                      setItrForm(itrForm);
+                      return;
+                    }
+                  }
+                  // Allow the switch anyway — blockers disable filing, not viewing.
                   setItrForm(newForm);
-                } else {
-                  // Revert to previous value if validation fails
-                  e.target.value = itrForm;
-                }
-              }}
-              style={{
-                padding: '6px 12px',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                fontSize: 13,
-                fontWeight: 500,
-                background: 'white'
-              }}
-            >
-              <option value="ITR-1">ITR-1</option>
-              <option value="ITR-2">ITR-2</option>
-              <option value="ITR-3">ITR-3</option>
-              <option value="ITR-4">ITR-4</option>
-            </select>
+                  setFormLockedByUser(true);
+                  if (eligibility && newForm === eligibility.recommendedForm) {
+                    toast.success(`Switched to recommended ${newForm}`);
+                  }
+                }}
+                style={{
+                  padding: '6px 12px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  background: 'white',
+                }}
+              >
+                {(['ITR-1', 'ITR-2', 'ITR-3', 'ITR-4'] as const).map((f) => (
+                  <option key={f} value={f}>
+                    {f}{eligibility?.recommendedForm === f ? ' ★' : ''}{eligibility?.blockersByForm?.[f]?.length ? ` (${eligibility.blockersByForm[f].length})` : ''}
+                  </option>
+                ))}
+              </select>
+              {eligibility && itrForm !== eligibility.recommendedForm && (
+                <button
+                  onClick={() => { setItrForm(eligibility.recommendedForm); setFormLockedByUser(false); }}
+                  title={`Switch to recommended ${eligibility.recommendedForm}`}
+                  style={{
+                    padding: '2px 8px',
+                    background: 'var(--gold)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 4,
+                    fontSize: 11,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Use {eligibility.recommendedForm}
+                </button>
+              )}
+            </div>
             <select
               value={regime}
-              onChange={(e) => {
-                const newRegime = e.target.value as 'old' | 'new';
-                console.log('[REGIME] Changed from', regime, 'to', newRegime);
-                setRegime(newRegime);
-              }}
+              onChange={(e) => handleRegimeChange(e.target.value as 'old' | 'new')}
               style={{
                 padding: '6px 12px',
                 border: '1px solid var(--border)',
@@ -1342,19 +1604,44 @@ export default function ITRComputationPage() {
           </button>
 
           <button
-            onClick={handleDownloadJson}
+            onClick={handleValidate}
+            disabled={validating}
             style={{
               padding: '6px 12px',
-              background: 'var(--accent-blue)',
+              background: validating ? 'var(--border)' : 'var(--accent-blue)',
               color: 'white',
               border: 'none',
               borderRadius: 6,
               fontSize: 12,
-              cursor: 'pointer'
+              fontWeight: 500,
+              cursor: validating ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6
             }}
           >
-            JSON
+            {validating && <Spinner size={12} />}
+            Validate
           </button>
+
+          {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (
+            <button
+              onClick={handleGenerateCbdtJson}
+              title="Generate and download the official CBDT ITD-compliant JSON (ITR-1/ITR-4)"
+              style={{
+                padding: '6px 12px',
+                background: 'var(--gold)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              CBDT JSON
+            </button>
+          )}
 
           <button
             onClick={handleDownloadPdf}
@@ -1370,10 +1657,181 @@ export default function ITRComputationPage() {
           >
             PDF
           </button>
+
+          <button
+            onClick={handleDownloadJson}
+            title="Download the saved canonical ReturnDraft as a JSON file"
+            style={{
+              padding: '6px 12px',
+              background: 'var(--accent-purple)',
+              color: 'white',
+              border: 'none',
+              borderRadius: 6,
+              fontSize: 12,
+              cursor: 'pointer'
+            }}
+          >
+            Draft JSON
+          </button>
+
+          {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (
+            <>
+            <button
+              onClick={handleDirectSubmit}
+              disabled={filingSubmitting || filingJobId !== null}
+              title="Generate the CBDT JSON and launch a visible browser that logs into the ITD portal and uploads the return (Type-3, verification mode: LATER)"
+              style={{
+                padding: '6px 12px',
+                background: (filingSubmitting || filingJobId !== null)
+                  ? 'var(--border)'
+                  : 'var(--accent-navy, #0b3d6b)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: (filingSubmitting || filingJobId !== null) ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {filingSubmitting && <Spinner size={12} />}
+              Direct Submit
+            </button>
+            {/* Standalone acknowledgement (ITR-V) downloader — separate from
+                the working uploader. Always available in ITR-1/ITR-4: the
+                return for the selected AY may already be filed (manually or
+                via Direct Submit), so the button logs in and checks the
+                portal. The backend returns a "file the ITR first" message
+                when no acknowledgement exists for the AY. */}
+            <button
+              onClick={handleFetchAcknowledgement}
+              disabled={fetchingAck}
+              title="Log into the ITD portal and download the ITR-V acknowledgement PDF for the current AY (standalone downloader, separate from Direct Submit). If the ITR is not filed for this AY, you will be prompted to file it first."
+              style={{
+                padding: '6px 12px',
+                background: fetchingAck
+                  ? 'var(--border)'
+                  : 'var(--accent-green, #1a7f4b)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: fetchingAck ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {fetchingAck && <Spinner size={12} />}
+              Acknowledgement
+            </button>
+            </>
+          )}
+
+          {filingJobId !== null && filingJob && (
+            <span
+              className={`badge badge-${filingJob.status === 'completed' ? 'success' : filingJob.status === 'failed' ? 'danger' : 'info'}`}
+              style={{
+                fontSize: 11.5,
+                padding: '5px 10px',
+                borderRadius: 'var(--radius-sm)',
+                lineHeight: 1.3,
+                userSelect: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+              title={filingJob.error_message ? filingJob.error_message.slice(0, 200) : undefined}
+            >
+              {filingJob.status !== 'completed' && filingJob.status !== 'failed' && (
+                <span
+                  style={{
+                    display: 'inline-block',
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: 'currentColor',
+                    animation: 'pulse 1.2s ease-in-out infinite',
+                  }}
+                />
+              )}
+              <span>
+                {filingJob.status === 'queued' && 'Filing queued…'}
+                {filingJob.status === 'running' && (filingJob.progress_label || filingJob.status_message || 'Uploading…')}
+                {filingJob.status === 'completed' && (() => {
+                  const ack = filingJob.result?.filing?.acknowledgement_number;
+                  return ack ? `Submitted ✓ ${ack}` : 'Submitted ✓';
+                })()}
+                {filingJob.status === 'failed' && 'Submit failed'}
+              </span>
+              {filingJob.status !== 'completed' && (
+                <button
+                  onClick={() => {
+                    setFilingJobId(null);
+                    setFilingJob(null);
+                    setFilingSubmitting(false);
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    margin: 0,
+                    marginLeft: 2,
+                    fontSize: 10,
+                    color: 'inherit',
+                    opacity: 0.6,
+                    lineHeight: 1,
+                  }}
+                  title="Dismiss"
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          )}
         </div>
       </div>
 
+      {taxResultLoading && (
+        <div role="status" style={{ marginBottom: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
+          Computing tax summary…
+        </div>
+      )}
+      {taxResultError && (
+        <div role="alert" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--error)', background: 'var(--error-bg)' }}>
+          {backendTaxResult
+            ? <>Current draft has an error; figures below are from the last successful backend computation: {taxResultError}</>
+            : <>Tax computation failed: {taxResultError}</>}
+        </div>
+      )}
+      {backendTaxResult?.filingComputationStatus === 'PROVISIONAL_COMMON_INCOME_PREVIEW' && (
+        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d' }}>
+          <strong>Provisional preview only.</strong>{' '}
+          {backendTaxResult.filingComputationMessage}
+        </div>
+      )}
 
+      {validationReport && !validationReport.valid && (
+        <div role="alert" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--error)', background: 'var(--error-bg)' }}>
+          <strong>Blocking errors ({validationReport.errors.length}):</strong>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {validationReport.errors.map((e, i) => <li key={i} style={{ fontSize: 13 }}>{e}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {validationReport && validationReport.valid && validationReport.warnings.length > 0 && (
+        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--text-secondary)', background: 'var(--warn-bg, #fff8e1)' }}>
+          <strong>Warnings ({validationReport.warnings.length}):</strong>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {validationReport.warnings.map((w, i) => <li key={i} style={{ fontSize: 13 }}>{w}</li>)}
+          </ul>
+        </div>
+      )}
 
       {/* Reconciliation Discrepancy Warning Banner */}
       {reconDiscrepancies.length > 0 && (
@@ -1413,6 +1871,82 @@ export default function ITRComputationPage() {
         </div>
       )}
 
+    {/* ── Eligibility Banner (CBDT) ──────────────────────────────────── */}
+      {eligibility && (
+        <div style={{
+          marginBottom: 12,
+          padding: '10px 16px',
+          borderRadius: 8,
+          background: eligibility.blockers.length > 0 ? '#fef2f2' : '#f0fdf4',
+          border: `1px solid ${eligibility.blockers.length > 0 ? '#fecaca' : '#bbf7d0'}`,
+          fontSize: 13,
+          color: eligibility.blockers.length > 0 ? '#991b1b' : '#166534',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <strong>{eligibility.blockers.length > 0 ? '⚠️' : '✅'} Recommended: {eligibility.recommendedForm}</strong>
+              {' — '}{eligibility.reason}
+              {eligibility.blockers.length > 0 && (
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }}>
+                  {eligibility.blockers.map((b, i) => <li key={i}>{b}</li>)}
+                </ul>
+              )}
+            </div>
+            {formLockedByUser && (
+              <button
+                onClick={() => setFormLockedByUser(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  textDecoration: 'underline',
+                  padding: '2px 4px',
+                }}
+              >
+                Unlock
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Schedule Checklist (dynamic per form) ─────────────────────── */}
+      {eligibility && editorModel && (() => {
+        const facts = collectEligibilityFactsFromDraft(editorModel.draft, backendTaxResult);
+        const schedules = activeSchedules(itrForm as ItrForm, facts);
+        if (schedules.length === 0) return null;
+        const blocking = new Set(blockingSchedules(itrForm as ItrForm, facts).map(s => s.id));
+        const statusColors: Record<ScheduleStatus, string> = {
+          'available': '#166534', 'partial': '#92400e', 'missing': '#991b1b',
+          'derived': '#6b7280', 'not-applicable': '#9ca3af', 'unavailable': '#9ca3af',
+        };
+        const statusBg: Record<ScheduleStatus, string> = {
+          'available': '#dcfce7', 'partial': '#fffbeb', 'missing': '#fef2f2',
+          'derived': '#f3f4f6', 'not-applicable': '#f3f4f6', 'unavailable': '#f3f4f6',
+        };
+        return (
+          <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 12 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: '#334155' }}>
+              Schedules for {itrForm} ({schedules.length})
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {schedules.map(({ schedule, status }) => (
+                <span key={schedule.id} style={{
+                  padding: '2px 8px', borderRadius: 4, fontSize: 11,
+                  color: statusColors[status], background: statusBg[status],
+                  border: `1px solid ${blocking.has(schedule.id) ? '#f87171' : 'transparent'}`,
+                  fontWeight: blocking.has(schedule.id) ? 600 : 400,
+                }} title={schedule.description}>
+                  {schedule.label}{blocking.has(schedule.id) ? ' ⚠' : ''}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       <div style={{
         background: 'var(--navy)',
         borderRadius: 'var(--radius)',
@@ -1447,16 +1981,28 @@ export default function ITRComputationPage() {
         borderRadius: 'var(--radius)',
         border: '1px solid var(--border)'
       }}>
-        {activeTab === 0 && <PersonalInfoTab formData={formData} setFormData={setFormData} />}
-        {activeTab === 1 && <SalaryTab formData={formData} setFormData={setFormData} taxResult={taxResult} ayParam={ayParam} regime={regime} />}
-        {activeTab === 2 && <HousePropertyTab formData={formData} setFormData={setFormData} taxResult={taxResult} itrForm={itrForm} />}
-        {activeTab === 3 && <CapitalGainsTab formData={formData} setFormData={setFormData} taxResult={taxResult} year={year!} />}
-        {activeTab === 4 && <BusinessTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
-        {activeTab === 5 && <OtherSourcesTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
-        {activeTab === 6 && <ExemptIncomeTab formData={formData} setFormData={setFormData} />}
-        {activeTab === 7 && <DeductionsTab formData={formData} setFormData={setFormData} regime={regime} taxResult={taxResult} />}
-        {activeTab === 8 && <TDSTab formData={formData} setFormData={setFormData} taxResult={taxResult} />}
-        {activeTab === 9 && <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />}
+        {activeTab === 0 && editorModel && <PersonalInfoTab draft={editorModel.draft} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={(patch: any) => updateEditor((current) => ({
+          ...current,
+          draft: {
+            ...current.draft,
+            ...(patch.regime ? { regime: patch.regime } : {}),
+            ...(patch.personal ? { personal: { ...current.draft.personal, ...patch.personal } } : {}),
+            ...(patch.filing ? { filing: { ...current.draft.filing, ...patch.filing } } : {}),
+            ...(patch.verification ? { verification: { ...current.draft.verification, ...patch.verification } } : {}),
+            ...(patch.taxReturnPreparer ? { taxReturnPreparer: { ...current.draft.taxReturnPreparer, ...patch.taxReturnPreparer } } : {}),
+          },
+        }))} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} />}
+        {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={tdsToManager(editorModel?.draft?.taxes?.tds ?? [])} />}
+        {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} taxResult={backendTaxResult} />}
+        {activeTab === 3 && editorModel && <CapitalGainsTab draft={editorModel.draft} taxResult={taxResult} itrForm={itrForm as ItrForm} onChange={(schedule) => updateEditor((model) => updateCapitalGainsSchedule(model, schedule))} />}
+        {activeTab === 4 && editorModel && <BusinessTab taxResult={taxResult} itrForm={itrForm as string} draft={editorModel.draft} onChangeBusinesses={(entries: ReturnDraft['businesses']) => updateEditor((model) => replaceDraft({ ...model.draft, businesses: entries }))} onChangeBpNetProfit={(value: number) => updateEditor((model) => updateBpNetProfit(model, value))} priorYearData={buildPriorYearBPData((reconciledImportData as any)?.prefill)} />}
+        {activeTab === 5 && <OtherSourcesTab taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel as any} />}
+        {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
+        {activeTab === 7 && editorModel && <DeductionsTab regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
+        {activeTab === 8 && editorModel && <TDSTab taxResult={taxResult} managers={managers} editorModel={editorModel as any} />}
+        {activeTab === 9 && (!backendTaxResult && taxResultError
+          ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until the first computation succeeds.</div>
+          : <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />)}
       </div>
 
       {/* Employer Reconciliation Modal */}
@@ -1471,91 +2017,13 @@ export default function ITRComputationPage() {
 }
 
 // ============================================================================
-// EXEMPT INCOME TAB - CBDT SCHEDULE EI (VR1-027, VR1-028)
+// EXEMPT INCOME TAB - Replaced by the canonical ExemptIncomeWorkspace component.
+// The old scalar editor (including the stale section 10(38) path) has been removed
+// to eliminate duplicate capture; non-salary exempt income is now owned solely by
+// the canonical Schedule EI superset on ReturnDraft.exemptIncome.
 // ============================================================================
-function ExemptIncomeTab({ formData, setFormData }: any) {
-  return (
-    <div>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Schedule EI - Exempt Income (CBDT VR1-027, VR1-028)
-      </h3>
-      
-      <div style={{ padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)', marginBottom: 16 }}>
-        Exempt income is reported in Schedule EI. Agricultural income above Rs 5,000 requires ITR-2.
-      </div>
 
-      {/* Agricultural Income */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Agricultural Income (Section 10(1))
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Gross Agricultural Income" value={formData.agricultureIncome || 0} onChange={(v: any) => setFormData({ ...formData, agricultureIncome: v })} />
-        <Field label="Deductible Agricultural Expenses" value={formData.agricultureExpenses || 0} onChange={(v: any) => setFormData({ ...formData, agricultureExpenses: v })} />
-        <Field label="Net Agricultural Income" value={(formData.agricultureIncome || 0) - (formData.agricultureExpenses || 0)} computed />
-      </div>
-
-      {/* Exempt Interest Income */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Exempt Interest Income (Section 10)
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="PPF Interest (Exempt)" value={formData.ppfInterest || 0} onChange={(v: any) => setFormData({ ...formData, ppfInterest: v })} />
-        <Field label="Sukanya Samriddhi Interest (Exempt)" value={formData.sukanyaSamriddhiInterest || 0} onChange={(v: any) => setFormData({ ...formData, sukanyaSamriddhiInterest: v })} />
-        <Field label="Other Exempt Interest" value={formData.otherExemptInterest || 0} onChange={(v: any) => setFormData({ ...formData, otherExemptInterest: v })} />
-      </div>
-
-      {/* Long Term Capital Gains Exempt */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        LTCG Exempt u/s 10(33) - Equity Shares
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="LTCG u/s 10(33) - Equity" value={formData.ltcgExempt || 0} onChange={(v: any) => setFormData({ ...formData, ltcgExempt: v })} />
-        <Field label="LTCG Exemption u/s 10(38)" value={formData.ltcgExempt38 || 0} onChange={(v: any) => setFormData({ ...formData, ltcgExempt38: v })} />
-        <Field label="Total Exempt LTCG" value={(formData.ltcgExempt || 0) + (formData.ltcgExempt38 || 0)} computed />
-      </div>
-
-      {/* Other Exempt Income */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Other Exempt Income
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Gratuity Exempt u/s 10(10)" value={formData.gratuityExempt || 0} onChange={(v: any) => setFormData({ ...formData, gratuityExempt: v })} />
-        <Field label="Leave Encashment Exempt u/s 10(10AA)" value={formData.leaveEncashmentExempt || 0} onChange={(v: any) => setFormData({ ...formData, leaveEncashmentExempt: v })} />
-        <Field label="VRS Compensation Exempt u/s 10(10C)" value={formData.vrsCompensationExempt || 0} onChange={(v: any) => setFormData({ ...formData, vrsCompensationExempt: v })} />
-        <Field label="Commutation of Pension" value={formData.commutationPension || 0} onChange={(v: any) => setFormData({ ...formData, commutationPension: v })} />
-        <Field label="Share of Profit from Firm/HUF" value={formData.shareOfProfitFirm || 0} onChange={(v: any) => setFormData({ ...formData, shareOfProfitFirm: v })} />
-        <Field label="Any Other Exempt Income" value={formData.otherExemptIncome || 0} onChange={(v: any) => setFormData({ ...formData, otherExemptIncome: v })} />
-      </div>
-
-      {/* Total Exempt Income Summary */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--gold)' }}>
-        Total Exempt Income
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        <Field 
-          label="Total Exempt Income (Schedule EI)" 
-          value={
-            (formData.agricultureIncome || 0) +
-            (formData.ppfInterest || 0) +
-            (formData.sukanyaSamriddhiInterest || 0) +
-            (formData.otherExemptInterest || 0) +
-            (formData.ltcgExempt || 0) +
-            (formData.ltcgExempt38 || 0) +
-            (formData.gratuityExempt || 0) +
-            (formData.leaveEncashmentExempt || 0) +
-            (formData.vrsCompensationExempt || 0) +
-            (formData.commutationPension || 0) +
-            (formData.shareOfProfitFirm || 0) +
-            (formData.otherExemptIncome || 0)
-          } 
-          computed 
-        />
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, value, onChange, computed, prefix = '₹', type = 'number', required = false }: any) {
+function Field({ label, value, onChange, computed, prefix = '₹', type = 'number', required = false, pattern, maxLength, min, max, inputMode, helpText }: any) {
   const [displayValue, setDisplayValue] = React.useState('');
   const [isFocused, setIsFocused] = React.useState(false);
 
@@ -1664,12 +2132,19 @@ function Field({ label, value, onChange, computed, prefix = '₹', type = 'numbe
           </span>
         )}
         <input
-          type="text"
-          value={computed ? (type === 'number' ? formatIndianNumber(value) : value) : displayValue}
+          type={type === 'number' ? 'text' : type}
+          value={computed ? (type === 'number' ? formatIndianNumber(value) : value ?? '') : displayValue}
           onChange={handleChange}
           onFocus={handleFocus}
           onBlur={handleBlur}
           readOnly={computed}
+          required={required}
+          pattern={pattern}
+          maxLength={maxLength}
+          min={min}
+          max={max}
+          inputMode={inputMode || (type === 'number' ? 'numeric' : undefined)}
+          aria-label={label}
           placeholder={type === 'number' && !computed ? '0' : ''}
           style={{
             width: '100%',
@@ -1684,380 +2159,85 @@ function Field({ label, value, onChange, computed, prefix = '₹', type = 'numbe
           }}
         />
       </div>
+      {helpText && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>{helpText}</div>}
     </div>
   );
 }
 
-function PersonalInfoTab({ formData, setFormData }: any) {
-  const calculateAge = (dob: string) => {
-    if (!dob) return 0;
-    const birthDate = new Date(dob);
-    const refDate = new Date('2026-03-31'); // Age as on 31st March of AY
-    let age = refDate.getFullYear() - birthDate.getFullYear();
-    const monthDiff = refDate.getMonth() - birthDate.getMonth();
-    if (monthDiff < 0 || (monthDiff === 0 && refDate.getDate() < birthDate.getDate())) {
-      age--;
+function SalaryTab({ entries, onChange, taxResult, ayParam, regime, tdsEntries }: any) {
+  return <EmployerEntryManager entries={entries} onChange={onChange} assessmentYear={ayParam || '2026-27'} taxRegime={regime === 'new' ? 'NEW' : 'OLD'} backendResult={taxResult} tdsEntries={tdsEntries || []} />;
+}
+
+function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm, taxResult }: any) {
+  return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} taxResult={taxResult} />;
+}
+
+function BusinessTab({ taxResult, itrForm, draft, onChangeBusinesses, priorYearData }: { taxResult: any; itrForm: string; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void; priorYearData?: ITR4ScheduleBPData | null }): React.ReactElement {
+  if (itrForm === 'ITR-4') {
+    return <BusinessProfessionEntryManager
+      data={{ ITR4ScheduleBP: scheduleBpFromBusinesses(draft.businesses) }}
+      onChange={(next) => onChangeBusinesses(businessesFromScheduleBp(next.ITR4ScheduleBP ?? {}))}
+      selectedForm={itrForm}
+      taxResult={taxResult}
+      priorYearData={priorYearData}
+    />;
+  }
+  // Surface the reconciled business income the import produced (GST
+  // turnover, business receipts, commission, etc. rolled into a presumptive
+  // 44AD/44ADA entry on draft.businesses).  The BusinessProfessionEntryManager
+  // below captures the full official ITR-3/4 Schedule BP beyond the
+  // presumptive roll-up; that fuller state is kept in a localStorage cache
+  // keyed by PAN+AY+form so switching tabs (which unmounts this component)
+  // does not lose it.
+  const cacheKey = `biz-schedule-${draft.personal?.pan || 'unknown'}-${draft.assessmentYear || ''}-${itrForm}`;
+  const importedBusiness = draft.businesses[0] as any;
+  const importedData: BusinessProfessionScheduleData = (importedBusiness?.businessSpecific ?? {}) as BusinessProfessionScheduleData;
+  const [data, setData] = useState<BusinessProfessionScheduleData>(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      return raw ? JSON.parse(raw) as BusinessProfessionScheduleData : importedData;
+    } catch {
+      return importedData;
     }
-    return age;
-  };
-
-  const handleDobChange = (dob: string) => {
-    const age = calculateAge(dob);
-    setFormData({ ...formData, dob, age });
-  };
-
-  return (
-    <div>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Part A - General Information (Auto-populated from Client Master)
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Name of Assessee" value={formData.name || ''} onChange={(v: any) => setFormData({ ...formData, name: v })} type="text" prefix="" />
-        <Field label="PAN" value={formData.pan || ''} onChange={(v: any) => setFormData({ ...formData, pan: v })} type="text" prefix="" />
-        <Field label="Aadhaar Number" value={formData.aadhaar || ''} onChange={(v: any) => setFormData({ ...formData, aadhaar: v })} type="text" prefix="" />
-        <Field label="Date of Birth / Formation" value={formData.dob || ''} onChange={handleDobChange} type="date" prefix="" />
-        <Field label="Age as on 31/03" value={formData.age} computed prefix="" />
-        <Field label="Status" value={formData.status || 'Individual'} onChange={(v: any) => setFormData({ ...formData, status: v })} type="text" prefix="" />
+  });
+  // When the import's business roll-up changes (e.g. re-import), re-seed
+  // from the draft so the imported figures are never lost behind a stale
+  // cache.
+  useEffect(() => {
+    setData((prev) => {
+      const seed = importedData;
+      const hasImport = Object.keys(seed).length > 0;
+      if (!hasImport) return prev;
+      return { ...prev, ...seed };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey, draft.businesses]);
+  const handleChange = useCallback((next: BusinessProfessionScheduleData) => {
+    setData(next);
+    try { localStorage.setItem(cacheKey, JSON.stringify(next)); } catch { /* ignore quota */ }
+  }, [cacheKey]);
+  // Imported presumptive roll-up banner (turnover + scheme + declared
+  // income) so the user sees the reconciled business income even before
+  // they fill the full Schedule BP.
+  const importedRollup = importedBusiness
+    ? { scheme: importedBusiness.scheme, turnover: Number(importedBusiness.digitalReceipts ?? importedBusiness.grossReceipts ?? 0), declaredIncome: Number(importedBusiness.declaredIncome ?? 0), businessName: importedBusiness.businessName || '' }
+    : null;
+  return <>
+    {importedRollup && (
+      <div style={{ marginBottom: 12, padding: '10px 14px', background: 'var(--gold-pale)', border: '1px solid var(--gold)', borderRadius: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+        <strong>Reconciled business income (from AIS/TIS):</strong>
+        &nbsp;{importedRollup.businessName} — {importedRollup.scheme} —
+        Gross receipts ₹{Number(importedRollup.turnover || 0).toLocaleString('en-IN')} →
+        Presumptive income ₹{Number(importedRollup.declaredIncome || 0).toLocaleString('en-IN')}.
+        &nbsp;Review and adjust the Schedule BP below.
       </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        CBDT Mandatory Fields
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Father's Name *" value={formData.fatherName || ''} onChange={(v: any) => setFormData({ ...formData, fatherName: v })} type="text" prefix="" required />
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Gender *
-          </label>
-          <select
-            value={formData.gender || 'M'}
-            onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-            <option value="T">Transgender</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Marital Status *
-          </label>
-          <select
-            value={formData.maritalStatus || 'SINGLE'}
-            onChange={(e) => setFormData({ ...formData, maritalStatus: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="SINGLE">Single</option>
-            <option value="MARRIED">Married</option>
-            <option value="DIVORCED">Divorced</option>
-            <option value="WIDOWED">Widowed</option>
-          </select>
-        </div>
-        <Field label="Nationality *" value={formData.nationality || 'INDIA'} onChange={(v: any) => setFormData({ ...formData, nationality: v })} type="text" prefix="" required />
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Director in Company?
-          </label>
-          <select
-            value={formData.isDirector ? 'Y' : 'N'}
-            onChange={(e) => setFormData({ ...formData, isDirector: e.target.value === 'Y' })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="N">No</option>
-            <option value="Y">Yes (Triggers ITR-2)</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Holds Unlisted Shares?
-          </label>
-          <select
-            value={formData.holdsUnlistedShares ? 'Y' : 'N'}
-            onChange={(e) => setFormData({ ...formData, holdsUnlistedShares: e.target.value === 'Y' })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="N">No</option>
-            <option value="Y">Yes (Triggers ITR-2)</option>
-          </select>
-        </div>
-        <Field label="Agricultural Income (>₹5,000 triggers ITR-2)" value={formData.agriculturalIncome || 0} onChange={(v: any) => setFormData({ ...formData, agriculturalIncome: v })} />
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Contact Details
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Email Address" value={formData.email || ''} onChange={(v: any) => setFormData({ ...formData, email: v })} type="email" prefix="" />
-        <Field label="Mobile Number" value={formData.mobile || ''} onChange={(v: any) => setFormData({ ...formData, mobile: v })} type="tel" prefix="" />
-        <Field label="Telephone (STD-Number)" value={formData.telephone || ''} onChange={(v: any) => setFormData({ ...formData, telephone: v })} type="tel" prefix="" />
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Address for Communication
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Flat/Door/Block No." value={formData.flatNo || ''} onChange={(v: any) => setFormData({ ...formData, flatNo: v })} type="text" prefix="" />
-        <Field label="Name of Premises/Building/Village" value={formData.premises || ''} onChange={(v: any) => setFormData({ ...formData, premises: v })} type="text" prefix="" />
-        <Field label="Road/Street/Post Office" value={formData.road || ''} onChange={(v: any) => setFormData({ ...formData, road: v })} type="text" prefix="" />
-        <Field label="Area/Locality" value={formData.area || ''} onChange={(v: any) => setFormData({ ...formData, area: v })} type="text" prefix="" />
-        <Field label="Town/City/District" value={formData.city || ''} onChange={(v: any) => setFormData({ ...formData, city: v })} type="text" prefix="" />
-        <Field label="State" value={formData.state || ''} onChange={(v: any) => setFormData({ ...formData, state: v })} type="text" prefix="" />
-        <Field label="PIN Code" value={formData.pincode || ''} onChange={(v: any) => setFormData({ ...formData, pincode: v })} type="text" prefix="" />
-        <Field label="Country" value={formData.country || 'India'} onChange={(v: any) => setFormData({ ...formData, country: v })} type="text" prefix="" />
-      </div>
-
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Filing Details
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Return Filed u/s
-          </label>
-          <select
-            value={formData.filingSection || '139(1)'}
-            onChange={(e) => setFormData({ ...formData, filingSection: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="139(1)">139(1) - On or before due date</option>
-            <option value="139(4)">139(4) - Belated return</option>
-            <option value="139(5)">139(5) - Revised return</option>
-            <option value="119(2)(b)">119(2)(b) - After condonation of delay</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Residential Status
-          </label>
-          <select
-            value={formData.residentialStatus || 'ROR'}
-            onChange={(e) => setFormData({ ...formData, residentialStatus: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="ROR">Resident</option>
-            <option value="RNOR">Resident but Not Ordinarily Resident</option>
-            <option value="NR">Non-Resident</option>
-          </select>
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Employer Category * (VR1-EC-001)
-          </label>
-          <select
-            value={formData.employerCategory || 'OTH'}
-            onChange={(e) => setFormData({ ...formData, employerCategory: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="CGOV">Central Government (CGOV)</option>
-            <option value="SGOV">State Government (SGOV)</option>
-            <option value="PSU">Public Sector Undertaking (PSU)</option>
-            <option value="PE">Pensioner (PE)</option>
-            <option value="PESG">Pensioner (State Government) (PESG)</option>
-            <option value="PEPS">Pensioner (PSU) (PEPS)</option>
-            <option value="PEO">Other Pensioner (PEO)</option>
-            <option value="OTH">Others (OTH)</option>
-            <option value="NA">Not Applicable (NA)</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Bank Details for Refund - VR1-091 */}
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)', marginTop: 24 }}>
-        Bank Details for Refund (VR1-091)
-      </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-        <Field label="Bank Name" value={formData.bankName || ''} onChange={(v: any) => setFormData({ ...formData, bankName: v })} type="text" prefix="" />
-        <Field label="Account Number" value={formData.bankAccountNo || ''} onChange={(v: any) => setFormData({ ...formData, bankAccountNo: v })} type="text" prefix="" />
-        <Field label="IFSC Code" value={formData.bankIFSC || ''} onChange={(v: any) => setFormData({ ...formData, bankIFSC: v })} type="text" prefix="" />
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            Account Type
-          </label>
-          <select
-            value={formData.bankAccountType || 'SAVINGS'}
-            onChange={(e) => setFormData({ ...formData, bankAccountType: e.target.value })}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13
-            }}
-          >
-            <option value="SAVINGS">Savings Account</option>
-            <option value="CURRENT">Current Account</option>
-          </select>
-        </div>
-      </div>
-
-      <div style={{ marginTop: 16, padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)' }}>
-        ℹ️ Personal information is auto-populated from Client Master and imported documents (26AS, AIS, TIS). PAN validation ensures data integrity.
-      </div>
-    </div>
-  );
-}
-
-function SalaryTab({ formData, setFormData, ayParam, regime, taxResult }: any) {
-  return (
-    <div>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Income from Salary (CBDT Schedule S - Section 15-17)
-      </h3>
-
-      {/* Multi-Employer Entry Manager — backend-computed results shown via taxResult */}
-      <EmployerEntryManager
-        entries={formData.employerEntries || []}
-        onChange={(entries) => setFormData({ ...formData, employerEntries: entries })}
-        assessmentYear={ayParam || '2026-27'}
-        taxRegime={regime === 'new' ? 'NEW' : 'OLD'}
-        backendResult={{
-          grossSalaryTotal: taxResult?.grossSalary,
-          hraExempt: taxResult?.hraExempt,
-          ltaExempt: taxResult?.ltaExempt,
-          gratuityExempt: taxResult?.gratuityExempt,
-          leaveEncashmentExempt: taxResult?.leaveEncashmentExempt,
-          pensionCommutationExempt: taxResult?.pensionCommutationExempt,
-          transportAllowanceExempt: taxResult?.transportExempt,
-          childrenEducationExempt: taxResult?.childrenEducationExempt,
-          hostelExpenditureExempt: taxResult?.hostelExempt,
-          uniformAllowanceExempt: taxResult?.uniformExempt,
-          totalSection10Exempt: taxResult?.totalSection10Exempt,
-          standardDeduction: taxResult?.standardDeduction,
-          entertainmentAllowanceDed: taxResult?.entertainmentAllowanceDed,
-          professionalTaxDed: taxResult?.professionalTaxDed,
-          totalSection16Deductions: taxResult?.totalSection16Deductions,
-          netTaxableSalary: taxResult?.salaryIncome,
-          totalTDSDeducted: taxResult?.salaryTDS,
-          employerCount: taxResult?.salaryEmployerCount,
-          hraCondition1_Actual: taxResult?.hraCondition1,
-          hraCondition2_RentMinus10Pct: taxResult?.hraCondition2,
-          hraCondition3_MetroPct: taxResult?.hraCondition3,
-          hraIsMetroCity: taxResult?.hraIsMetro,
-          hraCityClassified: taxResult?.hraCityClassified,
-        }}
-      />
-    </div>
-  );
-}
-
-function HousePropertyTab({ formData, setFormData, taxResult, itrForm }: any) {
-  return (
-    <div>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Income from House Property (CBDT Schedule HP - Section 22-27)
-      </h3>
-      
-      {/* Multi-Property Entry Manager */}
-      <HousePropertyEntryManager
-        entries={formData.housePropertyEntries || []}
-        onChange={(entries) => setFormData({ ...formData, housePropertyEntries: entries })}
-        itrForm={itrForm}
-      />
-
-      {/* Brought Forward Losses */}
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginTop: 24, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Brought Forward Losses - House Property
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
-        <Field label="HP Loss B/F (max 2L set-off)" value={formData.bfLossHP || 0} onChange={(v: any) => setFormData({ ...formData, bfLossHP: v })} />
-      </div>
-    </div>
-  );
-}
-
-function CapitalGainsTab({ formData, setFormData, taxResult }: any) {
-  return (
-    <div>
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>
-        Income from Capital Gains (CBDT Schedule CG - Section 45-55)
-      </h3>
-      
-      {/* Capital Gains Transaction Manager */}
-      <CapitalGainsEntryManager
-        entries={formData.capitalGainTransactions || []}
-        onChange={(entries) => setFormData({ ...formData, capitalGainTransactions: entries })}
-      />
-      
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginTop: 24, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Legacy Aggregated Fields (Use transaction-based entry above for CBDT compliance)
-      </h4>
-      
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Short Term Capital Gains</h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
-        <Field label="Pre 23 Jul 2024 (15%)" value={formData.stcgPre} onChange={(v: any) => setFormData({ ...formData, stcgPre: v })} />
-        <Field label="Post 23 Jul 2024 (20%)" value={formData.stcgPost} onChange={(v: any) => setFormData({ ...formData, stcgPost: v })} />
-        <Field label="Other Assets (20%)" value={formData.stcgOther} onChange={(v: any) => setFormData({ ...formData, stcgOther: v })} />
-      </div>
-
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Long Term Capital Gains</h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
-        <Field label="Pre 23 Jul 2024" value={formData.ltcgPre} onChange={(v: any) => setFormData({ ...formData, ltcgPre: v })} />
-        <Field label="Post 23 Jul 2024" value={formData.ltcgPost} onChange={(v: any) => setFormData({ ...formData, ltcgPost: v })} />
-        <Field label="Other Assets" value={formData.ltcgOther} onChange={(v: any) => setFormData({ ...formData, ltcgOther: v })} />
-      </div>
-
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Virtual Digital Assets (Section 115BBH)
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
-        <Field label="Net VDA Gains" value={formData.vdaGains} onChange={(v: any) => setFormData({ ...formData, vdaGains: v })} />
-        <Field label="VDA Tax @ 30%" value={taxResult.vdaTax} computed />
-      </div>
-      <div style={{ padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 12, color: 'var(--info)', marginBottom: 20 }}>
-        ℹ️ VDA transactions are taxed at flat 30% with no deductions or set-off allowed as per CBDT rules
-      </div>
-
-      <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-        Brought Forward Losses - Capital Gains
-      </h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-        <Field label="STCG Loss B/F" value={formData.bfLossSTCG || 0} onChange={(v: any) => setFormData({ ...formData, bfLossSTCG: v })} />
-        <Field label="LTCG Loss B/F" value={formData.bfLossLTCG || 0} onChange={(v: any) => setFormData({ ...formData, bfLossLTCG: v })} />
-        <Field label="Total CG Tax" value={taxResult.cgTax} computed />
-      </div>
-    </div>
-  );
+    )}
+    <BusinessProfessionEntryManager
+      data={data}
+      onChange={handleChange}
+      selectedForm={itrForm}
+      taxResult={taxResult}
+      priorYearData={priorYearData}
+    />
+  </>;
 }

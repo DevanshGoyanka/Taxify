@@ -12,17 +12,28 @@ from other ITR forms bleed in — this file owns ITR-1 output exclusively.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from app.engine.calculators.itr1 import ITR1Result
-from decimal import Decimal as _Decimal
-
-# Module-level deduction breakdown -- rebound by build_itr1_json before use.
-_DED_BREAKDOWN: dict[str, _Decimal] = {}
-
-def _d(key: str) -> _Decimal:
-    """Return deduction amount from the module-level breakdown dict."""
-    return _DED_BREAKDOWN.get(key, _Decimal("0"))
+from app.engine.constants import (
+    SECTION_80DD_LIMIT,
+    SECTION_80DD_SEVERE_LIMIT,
+    SECTION_80U_LIMIT,
+    SECTION_80U_SEVERE_LIMIT,
+)
+from app.engine.schedules.deductions.section_80gga import Section80GGAResult
+from app.engine.schedules.deductions.section_80ggc import Section80GGCResult
+from app.engine.schedules.deductions.section_80c import Section80CResult
+from app.engine.schedules.deductions._loan_common import LoanDeductionResult
+from app.schemas.itr1 import (
+    BankAccountType,
+    FilingAddress,
+    ITR1FilingProfile,
+    ITR1Input,
+    PostalAddress,
+    PropertyFilingProfile,
+    SeventhProvisoDetails,
+)
 
 
 from app.engine.itd.common import (
@@ -39,6 +50,264 @@ from app.engine.itd.common import (
 )
 
 
+def _address_from_profile(address: PostalAddress, *, include_contact: bool) -> dict[str, Any]:
+    """Map a typed filing address to the official address structure.
+
+    The CBDT ITR-1 Address schema requires CountryCodeMobileNoSec and
+    MobileNoSec keys to always be present (emitted as 0 when the assessee
+    has no secondary mobile).  EmailAddressSec is optional and is omitted
+    entirely when the assessee has no secondary email.
+    """
+    mapped: dict[str, Any] = {
+        "ResidenceNo": address.residence_no,
+        "ResidenceName": address.residence_name,
+        "RoadOrStreet": address.road_or_street,
+        "LocalityOrArea": address.locality_or_area,
+        "CityOrTownOrDistrict": address.city_or_town_or_district,
+        "StateCode": address.state_code,
+        "CountryCode": address.country_code,
+        "ZipCode": address.zip_code,
+    }
+    if address.pin_code is not None:
+        mapped["PinCode"] = int(address.pin_code)
+    if include_contact:
+        if not isinstance(address, FilingAddress):
+            raise ValueError("Primary filing address requires contact details")
+        mapped.update({
+            "CountryCodeMobile": address.mobile_country_code,
+            "MobileNo": int(address.mobile_no),
+            "CountryCodeMobileNoSec": address.secondary_mobile_country_code,
+            "MobileNoSec": int(address.secondary_mobile_no) if address.secondary_mobile_no else 0,
+            "EmailAddress": address.email,
+        })
+        # EmailAddressSec is optional in the CBDT schema — emit it only
+        # when the assessee actually entered a secondary email.  Never
+        # fabricate a placeholder.
+        if address.secondary_email:
+            mapped["EmailAddressSec"] = address.secondary_email
+    return mapped
+
+
+def _personal_info_from_profile(profile: ITR1FilingProfile) -> dict[str, Any]:
+    """Build official personal information exclusively from real profile data."""
+    personal: dict[str, Any] = {
+        "AssesseeName": {
+            "FirstName": profile.first_name,
+            "MiddleName": profile.middle_name,
+            "SurNameOrOrgName": profile.surname,
+        },
+        "PAN": profile.pan,
+        "Address": _address_from_profile(profile.primary_address, include_contact=True),
+        "SecondaryAdd": "Y" if profile.alternate_address else "N",
+        "DOB": profile.date_of_birth.isoformat(),
+        "EmployerCategory": profile.employer_category,
+    }
+    if profile.alternate_address is not None:
+        personal["AlternateAddress"] = _address_from_profile(
+            profile.alternate_address,
+            include_contact=False,
+        )
+    if profile.aadhaar_number is not None:
+        personal["AadhaarCardNo"] = profile.aadhaar_number
+    return personal
+
+
+def _verification_from_profile(profile: ITR1FilingProfile) -> dict[str, Any]:
+    """Build official verification from the typed filing profile."""
+    full_name = " ".join(
+        part for part in (profile.first_name, profile.middle_name, profile.surname) if part
+    )
+    return _verification(
+        assessee_name=full_name,
+        father_name=profile.father_name,
+        pan=profile.pan,
+        place=profile.verification_place,
+        capacity=profile.verification_capacity,
+    )
+
+
+def _property_schedule(
+    result: ITR1Result,
+    input_data: ITR1Input,
+    profile: Optional[PropertyFilingProfile],
+) -> list[dict[str, Any]]:
+    """Build the official ``PropertyDetails`` array from computed values.
+
+    The CBDT AY 2026-27 ITR-1 V1.1 schema permits at most two
+    ``PropertyDetails`` rows. The ITR-1 calculator computes one HPResult
+    per property (retained in ``result.hp_results``) and this builder emits
+    a matching ``PropertyDetails`` row per property, numbered HPSNo 1 and 2.
+
+    Backward-compatible single-property callers may pass ``profile`` as
+    the single ``PropertyFilingProfile``; multi-property callers must set
+    ``input_data.property_profiles`` (the schema's model_validator mirrors
+    ``property_profile`` into the first slot).
+    """
+    # Resolve the list of per-property HPResults. Prefer the dedicated
+    # hp_results attribute; fall back to schedules["hp"] for older paths.
+    hp_results: list = list(getattr(result, "hp_results", []) or [])
+    if not hp_results:
+        hp_raw = result.schedules.get("hp") if result.schedules else None
+        if isinstance(hp_raw, list):
+            hp_results = list(hp_raw)
+        elif hp_raw is not None:
+            hp_results = [hp_raw]
+    if not hp_results:
+        raise ValueError("Computed house-property schedule is missing")
+
+    # Resolve the matching property inputs and profiles, in row order,
+    # using the reconciliation helpers (which handle model_copy staleness).
+    hp_inputs = input_data.reconciled_house_properties()
+    profiles = input_data.reconciled_property_profiles()
+    if not profiles and profile is not None:
+        profiles = [profile]
+    # Pad missing profiles with the single profile (backward-compat) so the
+    # first row always has an address; reject if none available at all.
+    if not profiles:
+        raise ValueError("property_profile is required for official ITR-1 JSON")
+    while len(profiles) < len(hp_results):
+        profiles.append(profiles[0])
+    while len(hp_inputs) < len(hp_results):
+        hp_inputs.append(hp_inputs[0])
+
+    rows: list[dict[str, Any]] = []
+    for idx, (hp, hp_input, prof) in enumerate(zip(hp_results, hp_inputs, profiles), start=1):
+        if hp_input.ownership_share_percentage != prof.assessee_share_percentage:
+            raise ValueError(
+                f"House-property ownership share does not match filing "
+                f"profile (property {idx})"
+            )
+        property_loans = []
+        if hp_input.home_loan_interest_paid > 0:
+            target_interest = _to_rupees(hp_input.home_loan_interest_paid)
+            allocated_interest = 0
+            for loan in input_data.loan_details_24b_list:
+                if loan.property_sequence_no != idx:
+                    continue
+                if not loan.lender_name or not loan.account_or_reference_number \
+                        or loan.sanction_date is None:
+                    raise ValueError(
+                        f"Section 24(b) loan details are incomplete for property {idx}"
+                    )
+                row_interest = _to_rupees(
+                    loan.interest_paid_self_occupied
+                    if hp_input.property_type.value == "S"
+                    else loan.interest_paid_let_out
+                )
+                property_loans.append({
+                    "LoanTknFrom": loan.loan_taken_from.value,
+                    "BankOrInstnName": loan.lender_name,
+                    "LoanAccNoOfBankOrInstnRefNo": loan.account_or_reference_number,
+                    "DateofLoan": loan.sanction_date.isoformat(),
+                    "TotalLoanAmt": _to_rupees(loan.loan_amount),
+                    "LoanOutstndngAmt": _to_rupees(loan.outstanding_loan_amount),
+                    "InterestUs24B": row_interest,
+                })
+                allocated_interest += row_interest
+            if not property_loans or allocated_interest != target_interest:
+                raise ValueError(
+                    "Section 24(b) loan details must cross-foot to interest "
+                    f"for property {idx}"
+                )
+
+        annual_value = _to_rupees(hp.gross_annual_value)
+        balance = _to_rupees(hp.net_annual_value)
+        rent_not_realized = _to_rupees(hp.rent_not_realized)
+        local_taxes = _to_rupees(hp.municipal_taxes)
+        total_unrealized_and_tax = rent_not_realized + local_taxes
+        if annual_value - total_unrealized_and_tax != balance:
+            raise ValueError(
+                f"House-property unrealized rent and municipal taxes do not "
+                f"cross-foot (property {idx})"
+            )
+        owned_value = _to_rupees(hp.annual_value_owned)
+        interest = _to_rupees(hp.interest_on_loan)
+        arrears = _to_rupees(hp.arrears_unrealised_rent)
+        arrears_taxable = _to_rupees(hp.arrears_unrealised_rent * Decimal("0.7"))
+        income = _to_rupees(hp.income_chargeable)
+        standard_deduction = owned_value - interest + arrears_taxable - income
+        if standard_deduction < 0:
+            raise ValueError(
+                f"House-property deduction does not cross-foot (property {idx})"
+            )
+        total_deduction = standard_deduction + interest
+
+        address: dict[str, Any] = {
+            "AddrDetail": prof.address_detail,
+            "CityOrTownOrDistrict": prof.city_or_town_or_district,
+            "StateCode": prof.state_code,
+            "CountryCode": prof.country_code,
+        }
+        if prof.pin_code is not None:
+            address["PinCode"] = int(prof.pin_code)
+        if prof.zip_code is not None:
+            address["ZipCode"] = prof.zip_code
+
+        rent_details: dict[str, Any] = {
+            "AnnualLetableValue": annual_value,
+            "TotalUnrealizedAndTax": total_unrealized_and_tax,
+            "BalanceALV": balance,
+            "AnnualOfPropOwned": owned_value,
+            "ThirtyPercentOfBalance": standard_deduction,
+            "IntOnBorwCap": interest,
+            "TotalDeduct": total_deduction,
+            "IncomeOfHP": income,
+        }
+        if local_taxes > 0:
+            rent_details["LocalTaxes"] = local_taxes
+        if rent_not_realized > 0:
+            rent_details["RentNotRealized"] = rent_not_realized
+        if arrears > 0:
+            rent_details["ArrearsUnrealizedRentRcvd"] = arrears
+        if property_loans:
+            rent_details["Section24B"] = {
+                "Section24BDtls": property_loans,
+                "TotalInterestUs24B": sum(
+                    row["InterestUs24B"] for row in property_loans
+                ),
+            }
+
+        property_row = {
+            "HPSNo": idx,
+            "AddressDetailWithZipCode": address,
+            "PropertyOwner": prof.property_owner,
+            "PropCoOwnedFlg": "YES" if prof.is_co_owned else "NO",
+            "AsseseeShareProperty": float(prof.assessee_share_percentage),
+            "ifLetOut": hp_input.property_type.value,
+            "Rentdetails": rent_details,
+        }
+        if prof.property_owner_other:
+            property_row["PropertyOwnerOther"] = prof.property_owner_other
+        if prof.co_owners:
+            property_row["CoOwners"] = [
+                {
+                    "CoOwnersSNo": owner.serial_number,
+                    "NameCoOwner": owner.name,
+                    **({"PAN_CoOwner": owner.pan} if owner.pan else {}),
+                    **({"Aadhaar_CoOwner": owner.aadhaar} if owner.aadhaar else {}),
+                    **(
+                        {"PercentShareProperty": float(owner.share_percentage)}
+                        if owner.share_percentage is not None else {}
+                    ),
+                }
+                for owner in prof.co_owners
+            ]
+        if prof.tenants:
+            property_row["TenantDetails"] = [
+                {
+                    "TenantSNo": tenant.serial_number,
+                    "NameofTenant": tenant.name,
+                    **({"PANofTenant": tenant.pan} if tenant.pan else {}),
+                    **({"AadhaarofTenant": tenant.aadhaar} if tenant.aadhaar else {}),
+                    **({"PANTANofTenant": tenant.pan_or_tan} if tenant.pan_or_tan else {}),
+                }
+                for tenant in prof.tenants
+            ]
+        rows.append(property_row)
+
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # ITR-1 FilingStatus
 # ---------------------------------------------------------------------------
@@ -46,14 +315,67 @@ from app.engine.itd.common import (
 def _filing_status_itr1(
     return_file_sec: int = 11,
     opt_out_new_regime: str = "N",
+    *,
+    seventh_proviso: Optional["SeventhProvisoDetails"] = None,
+    profile: Optional[ITR1FilingProfile] = None,
 ) -> dict:
-    return {
+    """Build the ITR-1 FilingStatus block from real entered declarations.
+
+    Every seventh-proviso field is emitted only when the assessee actually
+    declared it.  The CBDT schema sets a minimum of 200000 on
+    AmtSeventhProvisio139ii and 100000 on AmtSeventhProvisio139iii, so
+    those amount keys must be omitted entirely when the corresponding
+    flag is "N" (emitting 0 violates the schema minimum).
+    """
+    sp = seventh_proviso
+    has_seventh = sp is not None and (
+        sp.foreign_travel_flag
+        or sp.electricity_expenditure_flag
+        or sp.other_clause_iv_flag
+    )
+    result: dict[str, Any] = {
         "ReturnFileSec": return_file_sec,
         "OptOutNewTaxRegime": opt_out_new_regime,
-        "SeventhProvisio139": "N",
-        "AsseseeRepFlg": "N",
+        "SeventhProvisio139": "Y" if has_seventh else "N",
+        "AsseseeRepFlg": (
+            "Y" if profile is not None and profile.assessee_representative else "N"
+        ),
         "ItrFilingDueDate": "2026-07-31",
     }
+    if sp is not None:
+        result["IncrExpAggAmt2LkTrvFrgnCntryFlg"] = "Y" if sp.foreign_travel_flag else "N"
+        if sp.foreign_travel_flag:
+            result["AmtSeventhProvisio139ii"] = _to_rupees(sp.foreign_travel_amount)
+        result["IncrExpAggAmt1LkElctrctyPrYrFlg"] = "Y" if sp.electricity_expenditure_flag else "N"
+        if sp.electricity_expenditure_flag:
+            result["AmtSeventhProvisio139iii"] = _to_rupees(sp.electricity_expenditure_amount)
+        result["clauseiv7provisio139i"] = "Y" if sp.other_clause_iv_flag else "N"
+        if sp.other_clause_iv_flag:
+            result["clauseiv7provisio139iDtls"] = [
+                {
+                    "clauseiv7provisio139iNature": row.nature,
+                    "clauseiv7provisio139iAmount": _to_rupees(row.amount),
+                }
+                for row in sp.clause_iv_details
+            ]
+    if profile is not None:
+        if profile.original_acknowledgement_no:
+            result["ReceiptNo"] = profile.original_acknowledgement_no
+        if profile.original_return_date:
+            result["OrigRetFiledDate"] = profile.original_return_date.isoformat()
+        if profile.notice_number:
+            result["NoticeNo"] = profile.notice_number
+        if profile.notice_date:
+            result["NoticeDateUnderSec"] = profile.notice_date.isoformat()
+        if profile.assessee_representative:
+            rep = profile.assessee_representative
+            result["AssesseeRep"] = {
+                "RepName": rep.name,
+                "RepEmailID": rep.email,
+                "CountryCodeRepMobileNo": rep.mobile_country_code,
+                "RepMobileNo": int(rep.mobile_no),
+            }
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +392,8 @@ def _chapter_via_itr1(
     ded_80d: Decimal = Decimal("0"),
     ded_80dd: Decimal = Decimal("0"),
     ded_80ddb: Decimal = Decimal("0"),
+    ddb_user_type: Optional[str] = None,
+    ddb_disease: Optional[str] = None,
     ded_80e: Decimal = Decimal("0"),
     ded_80ee: Decimal = Decimal("0"),
     ded_80eea: Decimal = Decimal("0"),
@@ -82,9 +406,12 @@ def _chapter_via_itr1(
     ded_80tta: Decimal = Decimal("0"),
     ded_80ttb: Decimal = Decimal("0"),
     ded_80cch: Decimal = Decimal("0"),
+    pension_80ccc: Optional[list[dict[str, Any]]] = None,
+    pran_number: Optional[str] = None,
+    form_10ba_ack_number: Optional[str] = None,
 ) -> dict:
     """ITR-1 DeductUndChapVIA / UsrDeductUndChapVIA — includes Section80GGA."""
-    return {
+    result = {
         "Section80C": _to_rupees(ded_80c),
         "Section80CCC": _to_rupees(ded_80ccc),
         "Section80CCDEmployeeOrSE": _to_rupees(ded_80ccd1),
@@ -107,6 +434,17 @@ def _chapter_via_itr1(
         "AnyOthSec80CCH": _to_rupees(ded_80cch),
         "TotalChapVIADeductions": _to_rupees(deductions_total),
     }
+    if ddb_user_type is not None:
+        result["Section80DDBUsrType"] = ddb_user_type
+    if ddb_disease is not None:
+        result["NameOfSpecDisease80DDB"] = ddb_disease
+    if pension_80ccc:
+        result["PensionContribution80CCC"] = pension_80ccc
+    if pran_number:
+        result["PRANDtls"] = [{"PRANNum": pran_number}]
+    if form_10ba_ack_number:
+        result["Form10BAAckNum"] = form_10ba_ack_number
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +466,11 @@ def _income_deductions_itr1(
     total_income: Decimal,
     deductions_total: Decimal,
     hp_schedules: Optional[list[dict]] = None,
+    allowance_rows: Optional[list[dict]] = None,
+    other_source_rows: Optional[list[dict]] = None,
+    deduction_57iia: Decimal = Decimal("0"),
+    exempt_income_rows: Optional[list[dict]] = None,
+    exempt_income_total: Decimal = Decimal("0"),
     perquisites_value: Decimal = Decimal("0"),
     profits_in_lieu: Decimal = Decimal("0"),
     ded_80c: Decimal = Decimal("0"),
@@ -138,27 +481,49 @@ def _income_deductions_itr1(
     ded_80d: Decimal = Decimal("0"),
     ded_80dd: Decimal = Decimal("0"),
     ded_80ddb: Decimal = Decimal("0"),
+    usr_80ddb: Optional[Decimal] = None,
+    ddb_user_type: Optional[str] = None,
+    ddb_disease: Optional[str] = None,
     ded_80u: Decimal = Decimal("0"),
     ded_80tta: Decimal = Decimal("0"),
     ded_80ttb: Decimal = Decimal("0"),
     ded_80e: Decimal = Decimal("0"),
+    usr_80e: Optional[Decimal] = None,
     ded_80ee: Decimal = Decimal("0"),
+    usr_80ee: Optional[Decimal] = None,
     ded_80eea: Decimal = Decimal("0"),
+    usr_80eea: Optional[Decimal] = None,
     ded_80eeb: Decimal = Decimal("0"),
+    usr_80eeb: Optional[Decimal] = None,
     ded_80g: Decimal = Decimal("0"),
+    usr_80g: Optional[Decimal] = None,
     ded_80gg: Decimal = Decimal("0"),
     ded_80gga: Decimal = Decimal("0"),
+    usr_80gga: Optional[Decimal] = None,
     ded_80ggc: Decimal = Decimal("0"),
+    usr_80ggc: Optional[Decimal] = None,
     ded_80cch: Decimal = Decimal("0"),
+    pension_80ccc: Optional[list[dict[str, Any]]] = None,
+    pran_number: Optional[str] = None,
+    form_10ba_ack_number: Optional[str] = None,
 ) -> dict:
+    # CBDT validation rule #59: GrossSalary = Salary (17(1)) + PerquisitesValue
+    # (17(2)) + ProfitsInSalary (17(3)). "Salary" is the salary as per section
+    # 17(1) -- the 17(1) portion of gross salary, NOT net_salary + deductions.
+    # The previous "net_salary + ded_us16" computation produced a figure larger
+    # than gross_salary (e.g. 675000 for a 600000 gross), violating rule #59
+    # and triggering a cross-field mismatch on the e-filing portal.
+    salary_17_1 = max(Decimal("0"), gross_salary - perquisites_value - profits_in_lieu)
     return {
         "GrossSalary": _to_rupees(gross_salary),
-        "Salary": _to_rupees(net_salary + ded_us16),
+        "Salary": _to_rupees(salary_17_1),
         "PerquisitesValue": _to_rupees(perquisites_value),
         "ProfitsInSalary": _to_rupees(profits_in_lieu),
         "AllwncExemptUs10": {
-            "AllwncExemptUs10Dtls": [],
-            "TotalAllwncExemptUs10": 0,
+            "AllwncExemptUs10Dtls": allowance_rows or [],
+            "TotalAllwncExemptUs10": sum(
+                row["SalOthAmount"] for row in (allowance_rows or [])
+            ),
         },
         "NetSalary": _to_rupees(net_salary),
         "DeductionUs16": _to_rupees(ded_us16),
@@ -170,21 +535,49 @@ def _income_deductions_itr1(
         "TotalIncomeChargeableUnHP": _to_rupees(income_hp),
         "IncomeOthSrc": _to_rupees(income_os),
         "OthersInc": {
-            "OthersIncDtlsOthSrc": [],
+            "OthersIncDtlsOthSrc": other_source_rows or [],
         },
-        "DeductionUs57iia": 0,
+        "DeductionUs57iia": _to_rupees(deduction_57iia),
         "GrossTotIncome": _to_rupees(gti),
         "GrossTotIncomeIncLTCG112A": _to_rupees(gti_cg),
         "UsrDeductUndChapVIA": _chapter_via_itr1(
-            deductions_total,
+            deductions_total
+            - ded_80ddb
+            + (usr_80ddb if usr_80ddb is not None else ded_80ddb)
+            - ded_80e
+            + (usr_80e if usr_80e is not None else ded_80e)
+            - ded_80ee
+            + (usr_80ee if usr_80ee is not None else ded_80ee)
+            - ded_80eea
+            + (usr_80eea if usr_80eea is not None else ded_80eea)
+            - ded_80eeb
+            + (usr_80eeb if usr_80eeb is not None else ded_80eeb)
+            - ded_80g
+            + (usr_80g if usr_80g is not None else ded_80g)
+            - ded_80gga
+            + (usr_80gga if usr_80gga is not None else ded_80gga)
+            - ded_80ggc
+            + (usr_80ggc if usr_80ggc is not None else ded_80ggc),
             ded_80c=ded_80c, ded_80ccc=ded_80ccc, ded_80ccd1=ded_80ccd1,
             ded_80ccd1b=ded_80ccd1b,
             ded_80ccd2=ded_80ccd2, ded_80d=ded_80d, ded_80dd=ded_80dd,
-            ded_80ddb=ded_80ddb, ded_80u=ded_80u, ded_80tta=ded_80tta,
-            ded_80ttb=ded_80ttb, ded_80e=ded_80e, ded_80ee=ded_80ee,
-            ded_80eea=ded_80eea, ded_80eeb=ded_80eeb, ded_80g=ded_80g,
-            ded_80gg=ded_80gg, ded_80gga=ded_80gga, ded_80ggc=ded_80ggc,
+            ded_80ddb=(usr_80ddb if usr_80ddb is not None else ded_80ddb),
+            ddb_user_type=ddb_user_type,
+            ddb_disease=ddb_disease,
+            ded_80u=ded_80u, ded_80tta=ded_80tta,
+            ded_80ttb=ded_80ttb,
+            ded_80e=(usr_80e if usr_80e is not None else ded_80e),
+            ded_80ee=(usr_80ee if usr_80ee is not None else ded_80ee),
+            ded_80eea=(usr_80eea if usr_80eea is not None else ded_80eea),
+            ded_80eeb=(usr_80eeb if usr_80eeb is not None else ded_80eeb),
+            ded_80g=(usr_80g if usr_80g is not None else ded_80g),
+            ded_80gg=ded_80gg,
+            ded_80gga=(usr_80gga if usr_80gga is not None else ded_80gga),
+            ded_80ggc=(usr_80ggc if usr_80ggc is not None else ded_80ggc),
             ded_80cch=ded_80cch,
+            pension_80ccc=pension_80ccc,
+            pran_number=pran_number,
+            form_10ba_ack_number=form_10ba_ack_number,
         ),
         "DeductUndChapVIA": _chapter_via_itr1(
             deductions_total,
@@ -199,8 +592,8 @@ def _income_deductions_itr1(
         ),
         "TotalIncome": _to_rupees_rounded10(total_income),
         "ExemptIncAgriOthUs10": {
-            "ExemptIncAgriOthUs10Dtls": [],
-            "ExemptIncAgriOthUs10Total": 0,
+            "ExemptIncAgriOthUs10Dtls": exempt_income_rows or [],
+            "ExemptIncAgriOthUs10Total": _to_rupees(exempt_income_total),
         },
     }
 
@@ -223,26 +616,32 @@ def _tax_computation_itr1(
     interest_234b: Decimal,
     interest_234c: Decimal,
     late_fee_234f: Decimal,
+    fees_234i: Decimal = Decimal("0"),
 ) -> dict:
-    """ITR-1 TaxComputation — includes TotalIntrstPay (not in ITR-4)."""
+    """ITR-1 TaxComputation — includes TotalIntrstPay (not in ITR-4).
+
+    Intermediate tax and interest components are emitted in whole rupees.
+    Only total income, balance tax payable, and refund due are rounded to the
+    nearest ₹10 under sections 288A/288B.
+    """
     return {
-        "TotalTaxPayable": _to_rupees_rounded10(slab_tax),
-        "Rebate87A": _to_rupees_rounded10(rebate_87a),
-        "TaxPayableOnRebate": _to_rupees_rounded10(tax_after_rebate),
-        "EducationCess": _to_rupees_rounded10(cess),
-        "GrossTaxLiability": _to_rupees_rounded10(gross_tax_liability),
-        "Section89": _to_rupees_rounded10(relief_89),
-        "NetTaxLiability": _to_rupees_rounded10(net_tax_liability),
-        "TotalIntrstPay": _to_rupees_rounded10(total_interest + late_fee_234f),
+        "TotalTaxPayable": _to_rupees(slab_tax),
+        "Rebate87A": _to_rupees(rebate_87a),
+        "TaxPayableOnRebate": _to_rupees(tax_after_rebate),
+        "EducationCess": _to_rupees(cess),
+        "GrossTaxLiability": _to_rupees(gross_tax_liability),
+        "Section89": _to_rupees(relief_89),
+        "NetTaxLiability": _to_rupees(net_tax_liability),
+        "TotalIntrstPay": _to_rupees(total_interest + late_fee_234f + fees_234i),
         "IntrstPay": {
-            "IntrstPayUs234A": _to_rupees_rounded10(interest_234a),
-            "IntrstPayUs234B": _to_rupees_rounded10(interest_234b),
-            "IntrstPayUs234C": _to_rupees_rounded10(interest_234c),
-            "LateFilingFee234F": _to_rupees_rounded10(late_fee_234f),
-            "FeeFurnish234I": 0,
+            "IntrstPayUs234A": _to_rupees(interest_234a),
+            "IntrstPayUs234B": _to_rupees(interest_234b),
+            "IntrstPayUs234C": _to_rupees(interest_234c),
+            "LateFilingFee234F": _to_rupees(late_fee_234f),
+            "FeeFurnish234I": _to_rupees(fees_234i),
         },
-        "TotTaxPlusIntrstPay": _to_rupees_rounded10(
-            gross_tax_liability + total_interest + late_fee_234f
+        "TotTaxPlusIntrstPay": _to_rupees(
+            gross_tax_liability + total_interest + late_fee_234f + fees_234i
         ),
     }
 
@@ -273,102 +672,501 @@ def _tax_paid_itr1(
 
 def _refund_itr1(
     refund_due: Decimal,
-    bank_name: str,
-    account_no: str,
-    ifsc: str,
-) -> dict:
+    bank_accounts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the mandatory refund section from real bank-account rows."""
+    if not bank_accounts:
+        raise ValueError("At least one bank account is required for ITD JSON")
     return {
         "RefundDue": _to_rupees_rounded10(refund_due),
-        "BankAccountDtls": {
-            "AddtnlBankDetails": [
-                {
-                    "IFSCCode": _str_or(ifsc, "SBIN0000001"),
-                    "BankName": _str_or(bank_name, "BankName"),
-                    "BankAccountNo": _str_or(account_no, "0000000001"),
-                    "AccountType": "SB",
-                    "UseForRefund": "true",
-                }
-            ],
-        },
+        "BankAccountDtls": {"AddtnlBankDetails": bank_accounts},
     }
+
+
+def _bank_row(
+    *,
+    ifsc: str,
+    bank_name: str,
+    account_number: str,
+    account_type: str,
+    use_for_refund: bool,
+) -> dict[str, Any]:
+    """Build one official bank-account row."""
+    return {
+        "IFSCCode": ifsc,
+        "BankName": bank_name,
+        "BankAccountNo": account_number,
+        "AccountType": account_type,
+        "UseForRefund": "true" if use_for_refund else "false",
+    }
+
+
+def _bank_accounts_from_input(input_data: ITR1Input) -> list[dict[str, Any]]:
+    """Map validated bank accounts to official account codes without defaults."""
+    primary_count = sum(account.is_primary for account in input_data.bank_accounts)
+    if primary_count != 1:
+        raise ValueError("Exactly one bank account must be selected for refund")
+    rows: list[dict[str, Any]] = []
+    for account in input_data.bank_accounts:
+        if not account.bank_name:
+            raise ValueError("Every bank account requires bank_name for ITD JSON")
+        rows.append(_bank_row(
+            ifsc=account.ifsc_code,
+            bank_name=account.bank_name,
+            account_number=account.account_number,
+            account_type=BankAccountType(account.account_type).itd_code,
+            use_for_refund=account.is_primary,
+        ))
+    return rows
 
 
 # ---------------------------------------------------------------------------
 # ITR-1 Schedule helpers
 # ---------------------------------------------------------------------------
 
+def _policy_insurance_details(policies: list, section_code: str) -> list:
+    """Build ``Sch80DInsDtls`` rows for one 80D bucket from policy entries.
+
+    Args:
+        policies: ``InsurancePolicy`` rows from ``Schedule80D``.
+        section_code: The bucket code ("1a" self non-senior, "1b" self senior,
+            "2a" parents non-senior, "2b" parents senior).
+
+    Returns:
+        A list of dicts with ``InsurerName``, ``PolicyNo`` and
+        ``HealthInsAmt`` keys, per the official V1.1 ``Sch80DInsDtls`` schema.
+    """
+    rows: list[dict] = []
+    for p in policies or []:
+        if str(getattr(p, "section", "1a")) != section_code:
+            continue
+        insurer = (getattr(p, "insurer_name", None) or "").strip() or "Not Provided"
+        policy_no = (getattr(p, "policy_number", None) or "").strip() or "Not Provided"
+        amount = _to_rupees(getattr(p, "premium_paid", Decimal("0")) or Decimal("0"))
+        rows.append({
+            "InsurerName": insurer[:125],
+            "PolicyNo": policy_no[:75],
+            "HealthInsAmt": amount,
+        })
+    return rows
+
+
 def _schedule_80d(
     senior_flag_self: str,
     senior_flag_parents: str,
-    self_amt: Decimal,
-    parents_amt: Decimal,
+    self_premium: Decimal,
+    parents_premium: Decimal,
+    preventive_self: Decimal,
+    preventive_parents: Decimal,
     eligible_deduction: Decimal,
+    eligible_self: Optional[Decimal] = None,
+    eligible_parents: Optional[Decimal] = None,
+    medical_expense_self_senior: Decimal = Decimal("0"),
+    medical_expense_parents_senior: Decimal = Decimal("0"),
+    policies: Optional[list] = None,
 ) -> dict:
+    self_aggregate = (
+        eligible_self
+        if eligible_self is not None
+        else self_premium + preventive_self + medical_expense_self_senior
+    )
+    parents_aggregate = (
+        eligible_parents
+        if eligible_parents is not None
+        else parents_premium + preventive_parents + medical_expense_parents_senior
+    )
+    self_non_senior_rows = _policy_insurance_details(policies, "1a")
+    self_senior_rows = _policy_insurance_details(policies, "1b")
+    parents_non_senior_rows = _policy_insurance_details(policies, "2a")
+    parents_senior_rows = _policy_insurance_details(policies, "2b")
     return {
         "Sec80DSelfFamSrCtznHealth": {
             "SeniorCitizenFlag": senior_flag_self,
-            "SelfAndFamily": _to_rupees(self_amt) if senior_flag_self == "N" else 0,
-            "HealthInsPremSlfFam": _to_rupees(self_amt) if senior_flag_self == "N" else 0,
+            "SelfAndFamily": _to_rupees(self_aggregate) if senior_flag_self == "N" else 0,
+            "HealthInsPremSlfFam": _to_rupees(self_premium) if senior_flag_self == "N" else 0,
             "Sec80DSelfFamHIDtls": {
-                "Sch80DInsDtls": [],
-                "TotalPayments": _to_rupees(self_amt) if senior_flag_self == "N" else 0,
+                "Sch80DInsDtls": self_non_senior_rows,
+                "TotalPayments": _to_rupees(self_premium) if senior_flag_self == "N" else 0,
             },
-            "PrevHlthChckUpSlfFam": 0,
-            "SelfAndFamilySeniorCitizen": _to_rupees(self_amt) if senior_flag_self in ("Y", "S") else 0,
-            "HlthInsPremSlfFamSrCtzn": _to_rupees(self_amt) if senior_flag_self in ("Y", "S") else 0,
+            "PrevHlthChckUpSlfFam": _to_rupees(preventive_self) if senior_flag_self == "N" else 0,
+            "SelfAndFamilySeniorCitizen": _to_rupees(self_aggregate) if senior_flag_self == "Y" else 0,
+            "HlthInsPremSlfFamSrCtzn": _to_rupees(self_premium) if senior_flag_self == "Y" else 0,
             "Sec80DSelfFamSrCtznHIDtls": {
-                "Sch80DInsDtls": [],
-                "TotalPayments": _to_rupees(self_amt) if senior_flag_self in ("Y", "S") else 0,
+                "Sch80DInsDtls": self_senior_rows,
+                "TotalPayments": _to_rupees(self_premium) if senior_flag_self == "Y" else 0,
             },
-            "PrevHlthChckUpSlfFamSrCtzn": 0,
-            "MedicalExpSlfFamSrCtzn": 0,
+            "PrevHlthChckUpSlfFamSrCtzn": _to_rupees(preventive_self) if senior_flag_self == "Y" else 0,
+            "MedicalExpSlfFamSrCtzn": (
+                _to_rupees(medical_expense_self_senior) if senior_flag_self == "Y" else 0
+            ),
             "ParentsSeniorCitizenFlag": senior_flag_parents,
-            "Parents": _to_rupees(parents_amt) if senior_flag_parents == "N" else 0,
-            "HlthInsPremParents": _to_rupees(parents_amt) if senior_flag_parents == "N" else 0,
+            "Parents": _to_rupees(parents_aggregate) if senior_flag_parents == "N" else 0,
+            "HlthInsPremParents": _to_rupees(parents_premium) if senior_flag_parents == "N" else 0,
             "Sec80DParentsHIDtls": {
-                "Sch80DInsDtls": [],
-                "TotalPayments": _to_rupees(parents_amt) if senior_flag_parents == "N" else 0,
+                "Sch80DInsDtls": parents_non_senior_rows,
+                "TotalPayments": _to_rupees(parents_premium) if senior_flag_parents == "N" else 0,
             },
-            "PrevHlthChckUpParents": 0,
-            "ParentsSeniorCitizen": _to_rupees(parents_amt) if senior_flag_parents in ("Y", "P") else 0,
-            "HlthInsPremParentsSrCtzn": _to_rupees(parents_amt) if senior_flag_parents in ("Y", "P") else 0,
+            "PrevHlthChckUpParents": _to_rupees(preventive_parents) if senior_flag_parents == "N" else 0,
+            "ParentsSeniorCitizen": _to_rupees(parents_aggregate) if senior_flag_parents == "Y" else 0,
+            "HlthInsPremParentsSrCtzn": _to_rupees(parents_premium) if senior_flag_parents == "Y" else 0,
             "Sec80DParentsSrCtznHIDtls": {
-                "Sch80DInsDtls": [],
-                "TotalPayments": _to_rupees(parents_amt) if senior_flag_parents in ("Y", "P") else 0,
+                "Sch80DInsDtls": parents_senior_rows,
+                "TotalPayments": _to_rupees(parents_premium) if senior_flag_parents == "Y" else 0,
             },
-            "PrevHlthChckUpParentsSrCtzn": 0,
-            "MedicalExpParentsSrCtzn": 0,
+            "PrevHlthChckUpParentsSrCtzn": _to_rupees(preventive_parents) if senior_flag_parents == "Y" else 0,
+            "MedicalExpParentsSrCtzn": (
+                _to_rupees(medical_expense_parents_senior)
+                if senior_flag_parents == "Y" else 0
+            ),
             "EligibleAmountOfDedn": _to_rupees(eligible_deduction),
         }
     }
 
 
-def _schedule_80c(total_amt: Decimal) -> dict:
+def _schedule_80c(details: Section80CResult) -> dict[str, Any]:
+    """Serialize a computed Section 80C result without recalculating eligibility."""
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated_eligible = 0
+    rows: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        source = computed.source
+        if not source.identifier_number:
+            raise ValueError("Schedule 80C entries require identifier_number")
+        if index == len(details.rows) - 1:
+            eligible = eligible_rupees - allocated_eligible
+        else:
+            eligible = min(
+                _to_rupees(computed.eligible_amount),
+                eligible_rupees - allocated_eligible,
+            )
+            allocated_eligible += eligible
+        rows.append({
+            "IdentificationNo": source.identifier_number,
+            "Amount": eligible,
+        })
+    emitted = sum(row["Amount"] for row in rows)
+    if emitted != eligible_rupees:
+        raise ValueError("Schedule 80C eligible rows do not cross-foot")
     return {
-        "Schedule80CDtls": [],
-        "TotalAmt": _to_rupees(total_amt),
+        "Schedule80CDtls": rows,
+        "TotalAmt": emitted,
     }
 
 
-def _schedule_80g(
-    total_donations_cash: Decimal,
-    total_donations_other: Decimal,
-) -> dict:
-    result: dict[str, Any] = {
-        "TotalDonationsUs80GCash": _to_rupees(total_donations_cash),
-        "TotalDonationsUs80GOtherMode": _to_rupees(total_donations_other),
-        "TotalDonationsUs80G": _to_rupees(total_donations_cash + total_donations_other),
-        "TotalEligibleDonationsUs80G": 0,
+def _donation_address(address: Any) -> dict[str, Any]:
+    """Serialize one official donation-recipient address."""
+    return {
+        "AddrDetail": address.address_line,
+        "CityOrTownOrDistrict": address.city_or_district,
+        "StateCode": address.state_code,
+        "PinCode": address.pin_code,
     }
-    if total_donations_cash > 0 or total_donations_other > 0:
-        result["Don100Percent"] = {
-            "DoneeWithPan": [{"NameOfDonee": "Donee", "PANOfDonee": "AAAAA0000A", "AmountOfDonation": _to_rupees(total_donations_cash + total_donations_other)}],
-            "TotDon100PercentCash": _to_rupees(total_donations_cash),
-            "TotDon100PercentOtherMode": _to_rupees(total_donations_other),
-            "TotDon100Percent": _to_rupees(total_donations_cash + total_donations_other),
-            "TotEligibleDon100Percent": 0,
+
+
+def _schedule_80g(details: Any) -> dict[str, Any]:
+    """Serialize a computed Section 80G result without recalculating eligibility."""
+    category_specs = {
+        "100_without_limit": (
+            "Don100Percent", "TotDon100PercentCash",
+            "TotDon100PercentOtherMode", "TotDon100Percent",
+            "TotEligibleDon100Percent",
+        ),
+        "50_without_limit": (
+            "Don50PercentNoApprReqd", "TotDon50PercentNoApprReqdCash",
+            "TotDon50PercentNoApprReqdOtherMode", "TotDon50PercentNoApprReqd",
+            "TotEligibleDon50Percent",
+        ),
+        "100_with_limit": (
+            "Don100PercentApprReqd", "TotDon100PercentApprReqdCash",
+            "TotDon100PercentApprReqdOtherMode", "TotDon100PercentApprReqd",
+            "TotEligibleDon100PercentApprReqd",
+        ),
+        "50_with_limit": (
+            "Don50PercentApprReqd", "TotDon50PercentApprReqdCash",
+            "TotDon50PercentApprReqdOtherMode", "TotDon50PercentApprReqd",
+            "TotEligibleDon50PercentApprReqd",
+        ),
+    }
+    schedule: dict[str, Any] = {}
+    emitted_eligible = 0
+    for category_key, keys in category_specs.items():
+        category = details.categories.get(category_key)
+        if category is None or not category.rows:
+            continue
+        rows = []
+        category_eligible = _to_rupees(category.eligible_amount)
+        allocated = 0
+        for index, computed in enumerate(category.rows):
+            source = computed.source
+            if not source.donee_name or not source.donee_pan or source.address is None:
+                raise ValueError("Complete donee identity and address are required for Schedule 80G")
+            eligible = (
+                category_eligible - allocated
+                if index == len(category.rows) - 1
+                else min(_to_rupees(computed.eligible_amount), category_eligible - allocated)
+            )
+            allocated += eligible
+            row = {
+                "DoneeWithPanName": source.donee_name,
+                "DoneePAN": source.donee_pan,
+                "AddressDetail": _donation_address(source.address),
+                "DonationAmtCash": _to_rupees(source.cash_amount),
+                "DonationAmtOtherMode": _to_rupees(source.non_cash_amount),
+                "DonationAmt": _to_rupees(computed.gross_amount),
+                "EligibleDonationAmt": eligible,
+            }
+            if source.approval_reference_number:
+                row["ArnNbr"] = source.approval_reference_number
+            if source.transaction_ref:
+                row["TransactionRefNum"] = source.transaction_ref
+            if source.ifsc_code:
+                row["IFSCCode"] = source.ifsc_code
+            rows.append(row)
+        object_key, cash_key, other_key, gross_key, eligible_key = keys
+        schedule[object_key] = {
+            "DoneeWithPan": rows,
+            cash_key: sum(row["DonationAmtCash"] for row in rows),
+            other_key: sum(row["DonationAmtOtherMode"] for row in rows),
+            gross_key: sum(row["DonationAmt"] for row in rows),
+            eligible_key: sum(row["EligibleDonationAmt"] for row in rows),
         }
-    return result
+        emitted_eligible += schedule[object_key][eligible_key]
+    schedule.update({
+        "TotalDonationsUs80GCash": _to_rupees(details.cash_amount),
+        "TotalDonationsUs80GOtherMode": _to_rupees(details.other_mode_amount),
+        "TotalDonationsUs80G": _to_rupees(details.gross_amount),
+        "TotalEligibleDonationsUs80G": emitted_eligible,
+    })
+    if emitted_eligible != _to_rupees(details.allowed_deduction):
+        raise ValueError("Schedule 80G eligible rows do not cross-foot")
+    return schedule
+
+
+def _schedule_80gga(details: Section80GGAResult) -> dict[str, Any]:
+    """Serialize a computed Section 80GGA result without eligibility logic."""
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated_eligible = 0
+    eligible_indices = [
+        index for index, computed in enumerate(details.rows)
+        if computed.eligible_amount > 0
+    ]
+    final_eligible_index = eligible_indices[-1] if eligible_indices else None
+    rows: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        cash = _to_rupees(computed.source.cash_amount)
+        other = _to_rupees(computed.source.other_mode_amount)
+        if index == final_eligible_index:
+            eligible = eligible_rupees - allocated_eligible
+        elif computed.eligible_amount > 0:
+            eligible = min(
+                _to_rupees(computed.eligible_amount),
+                eligible_rupees - allocated_eligible,
+            )
+            allocated_eligible += eligible
+        else:
+            eligible = 0
+        rows.append({
+            "RelevantClauseUndrDedClaimed": computed.source.relevant_clause.value,
+            "NameOfDonee": computed.source.donee_name,
+            "AddressDetail": _donation_address(computed.source.address),
+            "DoneePAN": computed.source.donee_pan,
+            "DonationAmtCash": cash,
+            "DonationAmtOtherMode": other,
+            "DonationAmt": cash + other,
+            "EligibleDonationAmt": eligible,
+        })
+    emitted_eligible = sum(row["EligibleDonationAmt"] for row in rows)
+    if emitted_eligible != _to_rupees(details.allowed_deduction):
+        raise ValueError("Schedule 80GGA eligible rows do not cross-foot")
+    return {
+        "DonationDtlsSciRsrchRuralDev": rows,
+        "TotalDonationAmtCash80GGA": sum(row["DonationAmtCash"] for row in rows),
+        "TotalDonationAmtOtherMode80GGA": sum(
+            row["DonationAmtOtherMode"] for row in rows
+        ),
+        "TotalDonationsUs80GGA": sum(row["DonationAmt"] for row in rows),
+        "TotalEligibleDonationAmt80GGA": emitted_eligible,
+    }
+
+
+def _schedule_80ggc(details: Section80GGCResult) -> dict[str, Any]:
+    """Serialize a computed Section 80GGC result without eligibility logic."""
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated_eligible = 0
+    eligible_indices = [
+        index for index, computed in enumerate(details.rows)
+        if computed.eligible_amount > 0
+    ]
+    final_eligible_index = eligible_indices[-1] if eligible_indices else None
+    rows: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        source = computed.source
+        cash = _to_rupees(source.cash_amount)
+        other = _to_rupees(source.other_mode_amount)
+        if index == final_eligible_index:
+            eligible = eligible_rupees - allocated_eligible
+        elif computed.eligible_amount > 0:
+            eligible = min(
+                _to_rupees(computed.eligible_amount),
+                eligible_rupees - allocated_eligible,
+            )
+            allocated_eligible += eligible
+        else:
+            eligible = 0
+        if source.contribution_date is None:
+            raise ValueError("Schedule 80GGC requires a contribution date")
+        row: dict[str, Any] = {
+            "DonationDate": source.contribution_date.isoformat(),
+            "DonationAmtCash": cash,
+            "DonationAmtOtherMode": other,
+            "DonationAmt": cash + other,
+            "EligibleDonationAmt": eligible,
+        }
+        if source.transaction_ref:
+            row["TransactionRefNum"] = source.transaction_ref
+        if source.ifsc_code:
+            row["IFSCCode"] = source.ifsc_code
+        if source.political_party_name:
+            row["PoliticalPartyName"] = source.political_party_name
+        if source.political_party_pan:
+            row["PoliticalPartyPAN"] = source.political_party_pan
+        rows.append(row)
+    emitted_eligible = sum(row["EligibleDonationAmt"] for row in rows)
+    if emitted_eligible != eligible_rupees:
+        raise ValueError("Schedule 80GGC eligible rows do not cross-foot")
+    return {
+        "Schedule80GGCDetails": rows,
+        "TotalDonationAmtCash80GGC": sum(row["DonationAmtCash"] for row in rows),
+        "TotalDonationAmtOtherMode80GGC": sum(
+            row["DonationAmtOtherMode"] for row in rows
+        ),
+        "TotalDonationsUs80GGC": sum(row["DonationAmt"] for row in rows),
+        "TotalEligibleDonationAmt80GGC": emitted_eligible,
+    }
+
+
+def _schedule_deduction_loan(
+    details: LoanDeductionResult,
+    *,
+    section: str,
+    property_stamp_duty_value: Optional[Decimal] = None,
+) -> dict[str, Any]:
+    """Serialize a computed loan-deduction result without recalculating.
+
+    Consumes the typed ``LoanDeductionResult`` produced by the dedicated
+    section module and emits official rows with deterministic whole-rupee
+    eligibility already allocated.
+    """
+    if section not in {"80E", "80EE", "80EEA", "80EEB"}:
+        raise ValueError(f"Unsupported deduction loan section: {section}")
+    if not details.rows:
+        raise ValueError(
+            f"A positive Section {section} claim requires official loan rows"
+        )
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated = 0
+    interest_key = f"Interest{section}"
+    mapped: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        entry = computed.source
+        if index == len(details.rows) - 1:
+            row_interest = eligible_rupees - allocated
+        else:
+            row_interest = min(
+                _to_rupees(computed.eligible_interest),
+                eligible_rupees - allocated,
+            )
+            allocated += row_interest
+        row = {
+            "LoanTknFrom": entry.loan_taken_from.value,
+            "BankOrInstnName": entry.lender_name,
+            "LoanAccNoOfBankOrInstnRefNo": entry.account_or_reference_number,
+            "DateofLoan": entry.loan_date.isoformat(),
+            "TotalLoanAmt": _to_rupees(entry.total_loan_amount),
+            "LoanOutstndngAmt": _to_rupees(entry.outstanding_loan_amount),
+            interest_key: row_interest,
+        }
+        if section == "80EEB":
+            row["VehicleRegNo"] = entry.vehicle_registration_number
+        mapped.append(row)
+
+    total = sum(row[interest_key] for row in mapped)
+    if total != eligible_rupees:
+        raise ValueError(f"Schedule {section} emitted rows do not cross-foot")
+    schedule = {
+        f"Schedule{section}Dtls": mapped,
+        f"TotalInterest{section}": total,
+    }
+    if section == "80EEA":
+        if property_stamp_duty_value is None:
+            raise ValueError("Schedule 80EEA requires property stamp-duty value")
+        schedule["PropStmpDtyVal"] = _to_rupees(property_stamp_duty_value)
+    return schedule
+
+
+def _schedule_80e(details: LoanDeductionResult) -> dict[str, Any]:
+    """Serialize Schedule 80E from a computed loan-deduction result."""
+    return _schedule_deduction_loan(details, section="80E")
+
+
+def _disability_schedule_fields(
+    schedule: Any,
+    computed_deduction: Decimal,
+    section: str,
+) -> dict[str, Any]:
+    """Map and cross-foot fields shared by official 80DD and 80U schedules."""
+    amount = _to_rupees(computed_deduction)
+    limits = {
+        "80DD": (SECTION_80DD_LIMIT, SECTION_80DD_SEVERE_LIMIT),
+        "80U": (SECTION_80U_LIMIT, SECTION_80U_SEVERE_LIMIT),
+    }
+    normal_limit, severe_limit = limits[section]
+    expected = severe_limit if schedule.disability_type.value == "severe" else normal_limit
+    expected_rupees = _to_rupees(expected)
+    if _to_rupees(schedule.deduction_amount) != expected_rupees:
+        raise ValueError(
+            f"Schedule {section} deduction must be Rs {expected_rupees} "
+            "for the selected severity"
+        )
+    if amount <= 0 or amount > expected_rupees:
+        raise ValueError(
+            f"Schedule {section} computed deduction must be positive and not exceed "
+            f"Rs {expected_rupees}"
+        )
+    mapped: dict[str, Any] = {
+        "NatureOfDisability": schedule.disability_type.itd_code,
+        "TypeOfDisability": schedule.disability_category.itd_code,
+        "DeductionAmount": amount,
+    }
+    if schedule.form_10ia_ack_number:
+        mapped["Form10IAAckNum"] = schedule.form_10ia_ack_number
+    if schedule.udid_number:
+        mapped["UDIDNum"] = schedule.udid_number
+    return mapped
+
+
+def _schedule_80dd(schedule: Any, computed_deduction: Decimal) -> dict[str, Any]:
+    """Build the official Section 80DD dependent-disability schedule."""
+    if schedule is None:
+        raise ValueError("A positive Section 80DD claim requires Schedule 80DD details")
+    if schedule.dependent_relationship is None:
+        raise ValueError("Schedule 80DD requires dependent_relationship")
+    if schedule.dependent_relationship.value == "member_of_huf":
+        raise ValueError("ITR-1 Schedule 80DD does not allow an HUF member dependent")
+    mapped = _disability_schedule_fields(schedule, computed_deduction, "80DD")
+    mapped["DependentType"] = schedule.dependent_relationship.itd_code
+    if schedule.dependent_pan:
+        mapped["DependentPan"] = schedule.dependent_pan
+    if schedule.dependent_aadhaar:
+        mapped["DependentAadhaar"] = schedule.dependent_aadhaar
+    return mapped
+
+
+def _schedule_80u(schedule: Any, computed_deduction: Decimal) -> dict[str, Any]:
+    """Build the official Section 80U self-disability schedule."""
+    if schedule is None:
+        raise ValueError("A positive Section 80U claim requires Schedule 80U details")
+    return _disability_schedule_fields(schedule, computed_deduction, "80U")
 
 
 def _schedule_ea10_13a(
@@ -455,12 +1253,289 @@ def _tds_other_schedule_itr1(tds_other_entries: Optional[list[dict]] = None) -> 
     }
 
 
+def _positive_rows(
+    values: Mapping[str, Decimal],
+    label_key: str,
+    amount_key: str,
+) -> list[dict[str, Any]]:
+    """Convert positive labelled amounts to official two-column row objects."""
+    return [
+        {label_key: label, amount_key: _to_rupees(amount)}
+        for label, amount in values.items()
+        if amount > 0
+    ]
+
+
+def _allowance_rows(input_data: Optional[ITR1Input], result: ITR1Result) -> list[dict[str, Any]]:
+    """Build Section 10 salary-exemption rows from computed exempt amounts.
+
+    Uses the ``SalaryResult`` computed-exemption breakdown (statutory ceilings
+    applied) rather than the raw gross-received amounts from the input schema.
+    """
+    if input_data is None:
+        return []
+    salary = input_data.salary_income
+    sal_sched = result.schedules.get("salary") if result.schedules else None
+    # Computed exempt amounts from the salary schedule (ceilings applied).
+    gratuity_exempt = getattr(sal_sched, "gratuity_exempt", salary.gratuity_received) if sal_sched else salary.gratuity_received
+    leave_encashment_exempt = getattr(sal_sched, "leave_encashment_exempt", salary.leave_encashment_received) if sal_sched else salary.leave_encashment_received
+    vrs_exempt = getattr(sal_sched, "vrs_exempt", salary.vrs_compensation) if sal_sched else salary.vrs_compensation
+    commuted_pension_exempt = getattr(sal_sched, "commuted_pension_exempt", salary.commuted_pension_received) if sal_sched else salary.commuted_pension_received
+    transport_exempt = getattr(sal_sched, "transport_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    cea_exempt = getattr(sal_sched, "children_education_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    hostel_exempt = getattr(sal_sched, "hostel_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    hra_exempt = getattr(sal_sched, "hra_exempt", salary.hra_exempt_amount) if sal_sched else salary.hra_exempt_amount
+    lta_exempt = getattr(sal_sched, "lta_exempt", salary.lta_exempt_amount) if sal_sched else salary.lta_exempt_amount
+    amounts = {
+        "10(5)": lta_exempt,
+        "10(6)": salary.sec10_6_embassy_exempt,
+        "10(7)": salary.sec10_7_foreign_allowance,
+        "10(10)": gratuity_exempt,
+        "10(10A)": commuted_pension_exempt,
+        "10(10AA)": leave_encashment_exempt,
+        "10(10B)(i)": salary.retrenchment_compensation,
+        "10(10C)": vrs_exempt,
+        "10(10CC)": salary.sec10_10cc_perquisite_tax,
+        "10(13A)": hra_exempt,
+        "10(14)(i)": cea_exempt,
+        "10(14)(ii)": hostel_exempt,
+    }
+    return _positive_rows(amounts, "SalNatureDesc", "SalOthAmount")
+
+
+def _other_source_rows(
+    result: ITR1Result,
+    input_data: Optional[ITR1Input],
+) -> list[dict[str, Any]]:
+    """Build exact other-source category rows retained by the calculator."""
+    schedule = result.schedules.get("os") if result.schedules else None
+    if schedule is None:
+        return []
+    if input_data is not None and input_data.other_sources_income.source_details:
+        rows = [
+            {
+                "OthSrcNatureDesc": detail.nature,
+                "OthSrcOthAmount": _to_rupees(detail.amount),
+                **(
+                    {"OthSrcOthNatOfInc": detail.other_description}
+                    if detail.nature == "OTH" else {}
+                ),
+            }
+            for detail in input_data.other_sources_income.source_details
+            if detail.amount > 0
+        ]
+    else:
+        amounts = {
+            "SAV": schedule.savings_bank_interest,
+            "IFD": schedule.fixed_deposit_interest,
+            "TAX": schedule.interest_on_it_refund,
+            "FAP": schedule.family_pension_gross,
+            "DIV": schedule.dividend_income,
+        }
+        rows = _positive_rows(amounts, "OthSrcNatureDesc", "OthSrcOthAmount")
+    if input_data is None:
+        return rows
+
+    qbr = input_data.dividend_quarterly_breakdown
+    for row in rows:
+        if row["OthSrcNatureDesc"] != "DIV":
+            continue
+        row["DividendInc"] = {
+            "DateRange": {
+                "Upto15Of6": _to_rupees(qbr.get("Q1", Decimal("0"))),
+                "Upto15Of9": _to_rupees(qbr.get("Q2", Decimal("0"))),
+                "Up16Of9To15Of12": _to_rupees(qbr.get("Q3", Decimal("0"))),
+                "Up16Of12To15Of3": _to_rupees(qbr.get("Q4", Decimal("0"))),
+                "Up16Of3To31Of3": _to_rupees(qbr.get("Q5", Decimal("0"))),
+            },
+        }
+    return rows
+
+
+def _exempt_income_rows(input_data: Optional[ITR1Input]) -> list[dict[str, Any]]:
+    """Build exempt-income rows that can be represented without invention."""
+    if input_data is None:
+        return []
+    rows = [
+        {
+            "Category": entry.category,
+            "SubCategory": entry.sub_category,
+            **({"Description": entry.description} if entry.description else {}),
+            "OthAmount": _to_rupees(entry.amount),
+        }
+        for entry in input_data.exempt_income_entries
+    ]
+    if input_data.agriculture_income > 0 and not any(
+        row["SubCategory"] == "10(1)" for row in rows
+    ):
+        rows.append({
+            "Category": "AGRI",
+            "SubCategory": "10(1)",
+            "Description": "Agricultural income",
+            "OthAmount": _to_rupees(input_data.agriculture_income),
+        })
+    return rows
+
+
+def _official_tds_section(section: str) -> str:
+    """Translate an Income-tax Act section label to the official schema code."""
+    normalized = section.strip().upper().replace("SECTION", "").replace(" ", "")
+    direct_codes = {
+        "192A", "193", "194", "195",
+    }
+    if normalized in direct_codes:
+        return normalized
+    if normalized in {"194IA", "194IB", "194IC"}:
+        return f"4-{normalized[3:]}"
+    if normalized.startswith("194"):
+        return f"9{normalized[2:]}"
+    if normalized.startswith("196"):
+        return f"9{normalized[2:]}"
+    return normalized
+
+
+def _tds_salary_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
+    """Build Schedule TDS1 exclusively from validated Form 16 rows."""
+    rows = []
+    for entry in input_data.tds1_entries or []:
+        if not entry.employer_tan or not entry.employer_name:
+            raise ValueError("TDS1 entries require employer TAN and name for ITD JSON")
+        rows.append({
+            "EmployerOrDeductorOrCollectDetl": {
+                "TAN": entry.employer_tan,
+                "EmployerOrDeductorOrCollecterName": entry.employer_name,
+            },
+            "IncChrgSal": _to_rupees(entry.income_chargeable),
+            "TotalTDSSal": _to_rupees(entry.tds_deducted),
+        })
+    if not rows:
+        return None
+    return {
+        "TDSonSalary": rows,
+        "TotalTDSonSalaries": sum(row["TotalTDSSal"] for row in rows),
+    }
+
+
+def _tds_other_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
+    """Build Schedule TDS2 exclusively from validated Form 16A rows."""
+    rows = []
+    for entry in input_data.tds2_entries or []:
+        if not entry.deductor_name:
+            raise ValueError("TDS2 entries require deductor name for ITD JSON")
+        rows.append({
+            "EmployerOrDeductorOrCollectDetl": {
+                "TAN": entry.deductor_tan,
+                "EmployerOrDeductorOrCollecterName": entry.deductor_name,
+            },
+            "TDSSection": _official_tds_section(entry.tds_section),
+            "AmtForTaxDeduct": _to_rupees(entry.gross_amount),
+            "DeductedYr": entry.deducted_year or (
+                entry.financial_year.split("-")[0]
+                if entry.financial_year
+                else "2025"
+            ),
+            "TotTDSOnAmtPaid": _to_rupees(entry.tds_deducted),
+            "ClaimOutOfTotTDSOnAmtPaid": _to_rupees(entry.tds_claimed_this_year),
+        })
+    if not rows:
+        return None
+    return {
+        "TDSonOthThanSal": rows,
+        "TotalTDSonOthThanSals": sum(
+            row["ClaimOutOfTotTDSOnAmtPaid"] for row in rows
+        ),
+    }
+
+
+def _tds3_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
+    """Build Schedule TDS3 from validated non-resident tenant rows.
+
+    Emits the official ``ScheduleTDS3Dtls`` object with one ``TDS3Details``
+    entry per typed ``TDS3Entry`` row. All official required fields are
+    populated from the tenant/buyer identity and the gross/TDS amounts.
+    """
+    if not input_data.tds3_entries:
+        return None
+    rows: list[dict[str, Any]] = []
+    for entry in input_data.tds3_entries:
+        if not entry.tenant_pan or not entry.tenant_name:
+            raise ValueError("TDS3 entries require tenant PAN and name for ITD JSON")
+        row: dict[str, Any] = {
+            "PANofTenant": entry.tenant_pan,
+            "NameOfTenant": entry.tenant_name,
+            "GrsRcptToTaxDeduct": _to_rupees(entry.gross_receipt),
+            "DeductedYr": entry.deducted_yr,
+            "TDSDeducted": _to_rupees(entry.tds_deducted),
+            "TDSClaimed": _to_rupees(entry.tds_claimed),
+            "TDSSection": _official_tds_section(entry.tds_section),
+        }
+        if entry.tenant_aadhaar:
+            row["AadhaarofTenant"] = entry.tenant_aadhaar
+        rows.append(row)
+    return {
+        "TDS3Details": rows,
+        "TotalTDS3Details": sum(row["TDSClaimed"] for row in rows),
+    }
+
+
+def _tcs_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
+    """Build Schedule TCS exclusively from validated collector rows."""
+    rows = []
+    for entry in input_data.tcs_entries or []:
+        if not entry.collector_name:
+            raise ValueError("TCS entries require collector name for ITD JSON")
+        collected_year = (
+            entry.financial_year.split("-")[0]
+            if entry.financial_year
+            else "2025"
+        )
+        rows.append({
+            "EmployerOrDeductorOrCollectDetl": {
+                "TAN": entry.collector_tan,
+                "EmployerOrDeductorOrCollecterName": entry.collector_name,
+            },
+            "AmtTaxCollected": _to_rupees(entry.gross_amount),
+            "CollectedYr": collected_year,
+            "TotalTCS": _to_rupees(entry.tcs_collected),
+            "AmtTCSClaimedThisYear": _to_rupees(entry.tcs_credit_claimed),
+        })
+    if not rows:
+        return None
+    return {
+        "TCS": rows,
+        "TotalSchTCS": sum(row["AmtTCSClaimedThisYear"] for row in rows),
+    }
+
+
+def _tax_payments_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
+    """Build Schedule IT from complete challan rows without fabricating data."""
+    rows = []
+    for entry in input_data.tax_payment_entries:
+        if not entry.bsr_code or not entry.payment_date or not entry.challan_serial_number:
+            raise ValueError(
+                "Tax payment entries require BSR code, payment date, and challan serial number"
+            )
+        rows.append({
+            "BSRCode": entry.bsr_code,
+            "DateDep": entry.payment_date.isoformat(),
+            "SrlNoOfChaln": int(entry.challan_serial_number),
+            "Amt": _to_rupees(entry.amount),
+        })
+    if not rows:
+        return None
+    return {
+        "TaxPayment": rows,
+        "TotalTaxPayments": sum(row["Amt"] for row in rows),
+    }
+
+
 # ============================================================================
 # Public API
 # ============================================================================
 
 def build_itr1_json(
     result: ITR1Result,
+    input_data: Optional[ITR1Input] = None,
     *,
     pan: str = "AAAAA0000A",
     first_name: str = "",
@@ -481,10 +1556,10 @@ def build_itr1_json(
     opt_out_new_regime: str = "N",
     return_file_sec: int = 11,
     father_name: str = "",
-    ver_place: str = "Delhi",
-    bank_name: str = "BankName",
-    account_no: str = "0000000001",
-    ifsc: str = "SBIN0000001",
+    ver_place: Optional[str] = None,
+    bank_name: Optional[str] = None,
+    account_no: Optional[str] = None,
+    ifsc: Optional[str] = None,
     tds_salary_entries: Optional[list[dict]] = None,
     tds_other_entries: Optional[list[dict]] = None,
     hra_received: Optional[Decimal] = None,
@@ -492,45 +1567,123 @@ def build_itr1_json(
     hra_metro: bool = False,
     schedule_80d_senior_self: str = "N",
     schedule_80d_senior_parents: str = "N",
-    schedule_80d_self_amt: Optional[Decimal] = None,
-    schedule_80d_parents_amt: Optional[Decimal] = None,
+    schedule_80d_self_premium: Optional[Decimal] = None,
+    schedule_80d_parents_premium: Optional[Decimal] = None,
     cg_sale_consideration: Optional[Decimal] = None,
     cg_cost_acquisition: Optional[Decimal] = None,
 ) -> dict:
     """Build an ITD-compliant ITR-1 JSON document."""
 
-    assessee_name = f"{first_name} {last_name}".strip()
-    ver = _verification(
-        assessee_name=assessee_name or "ASSESSEE",
-        father_name=father_name or "FATHER",
-        pan=pan,
-        place=ver_place,
-    )
+    if input_data is not None:
+        if input_data.filing_profile is None:
+            raise ValueError("filing_profile is required for official ITR-1 JSON")
+        profile = input_data.filing_profile
+        personal = _personal_info_from_profile(profile)
+        ver = _verification_from_profile(profile)
+        filing = _filing_status_itr1(
+            return_file_sec=profile.return_file_section,
+            opt_out_new_regime=("Y" if input_data.tax_regime.value == "old" else "N"),
+            seventh_proviso=profile.seventh_proviso,
+            profile=profile,
+        )
+    else:
+        assessee_name = f"{first_name} {last_name}".strip()
+        ver = _verification(
+            assessee_name=assessee_name or "ASSESSEE",
+            father_name=father_name or "FATHER",
+            pan=pan,
+            place=ver_place,
+        )
 
-    personal = _personal_info_base(
-        pan=pan, first_name=first_name, middle_name=middle_name, last_name=last_name,
-        dob=dob, employer_category=employer_category,
-        residence_no=residence_no, locality=locality, city=city,
-        state_code=state_code, country_code=country_code,
-        mobile_no=mobile_no, email=email, aadhaar=aadhaar,
-        secondary_add=secondary_add, pin_code=pin_code,
-    )
-    # Omit EmailAddressSec from Address — it's optional and "" fails regex
-    if "Address" in personal:
-        personal["Address"].pop("EmailAddressSec", None)
+        personal = _personal_info_base(
+            pan=pan, first_name=first_name, middle_name=middle_name, last_name=last_name,
+            dob=dob, employer_category=employer_category,
+            residence_no=residence_no, locality=locality, city=city,
+            state_code=state_code, country_code=country_code,
+            mobile_no=mobile_no, email=email, aadhaar=aadhaar,
+            secondary_add=secondary_add, pin_code=pin_code,
+        )
+        if "Address" in personal:
+            personal["Address"].pop("EmailAddressSec", None)
 
-    filing = _filing_status_itr1(
-        return_file_sec=return_file_sec,
-        opt_out_new_regime=opt_out_new_regime,
-    )
+        filing = _filing_status_itr1(
+            return_file_sec=return_file_sec,
+            opt_out_new_regime=opt_out_new_regime,
+        )
 
-    # -- Extract per-section deduction amounts from breakdown ----------------
-    # DeductionResult is a dataclass with a .breakdown dict attribute.
+    # -- Extract per-section deduction amounts from the request-local result --
     ded_sched = result.schedules.get("deductions") if result.schedules else None
-    global _DED_BREAKDOWN
-    _DED_BREAKDOWN = getattr(ded_sched, "breakdown", {}) if ded_sched else {}
+    ded_breakdown: Mapping[str, Decimal] = (
+        getattr(ded_sched, "breakdown", {}) if ded_sched else {}
+    )
+
+    def deduction(key: str) -> Decimal:
+        """Return one computed deduction amount for this build only."""
+        if key == "80C":
+            direct = ded_breakdown.get("80C")
+            if direct is not None:
+                return direct
+            combined = ded_breakdown.get("80C+80CCC+80CCD(1)", Decimal("0"))
+            return max(
+                Decimal("0"),
+                combined
+                - ded_breakdown.get("80CCC", Decimal("0"))
+                - ded_breakdown.get("80CCD(1)", Decimal("0")),
+            )
+        return ded_breakdown.get(key, Decimal("0"))
+
+    os_schedule = result.schedules.get("os") if result.schedules else None
+    allowance_rows = _allowance_rows(input_data, result)
+    other_source_rows = _other_source_rows(result, input_data)
+    exempt_income_rows = _exempt_income_rows(input_data)
+    exempt_income_total = sum(
+        (Decimal(row["OthAmount"]) for row in exempt_income_rows),
+        Decimal("0"),
+    )
+    if input_data is not None:
+        if input_data.property_profile is None:
+            raise ValueError("property_profile is required for official ITR-1 JSON")
+        property_schedules = _property_schedule(
+            result,
+            input_data,
+            input_data.property_profile,
+        )
+    else:
+        property_schedules = None
+
+    if input_data is not None:
+        ddb_input = input_data.deductions_chapter6a
+        details_80ddb = (
+            ded_sched.section_details.get("80DDB") if ded_sched else None
+        )
+        if details_80ddb is None:
+            if ddb_input.amount_80ddb > 0 or ddb_input.details_80ddb is not None:
+                raise ValueError("Section 80DDB computation details are missing")
+            usr_80ddb = None
+            ddb_user_type = None
+            ddb_disease = None
+        elif details_80ddb.source is not None:
+            usr_80ddb = details_80ddb.user_claim
+            ddb_user_type = details_80ddb.source.user_type.value
+            ddb_disease = details_80ddb.source.disease.value
+        else:
+            usr_80ddb = None
+            ddb_user_type = None
+            ddb_disease = None
+    else:
+        usr_80ddb = None
+        ddb_user_type = None
+        ddb_disease = None
 
     gti_cg = result.gross_total_income  # Already includes capital_gains_112a
+    pension_80ccc = None
+    if input_data is not None and input_data.schedule_80ccc_entries:
+        pension_80ccc = [{
+            "TypeofIdentifier": entry.identifier_type,
+            "NameofIdentifier": entry.identifier_name,
+            "Amount": _to_rupees(entry.amount),
+        } for entry in input_data.schedule_80ccc_entries]
+
     income = _income_deductions_itr1(
         gross_salary=result.salary_gross,
         net_salary=result.salary_net,
@@ -545,26 +1698,51 @@ def build_itr1_json(
         gti_cg=gti_cg,
         total_income=result.taxable_income,
         deductions_total=result.deductions_total,
+        hp_schedules=property_schedules,
+        allowance_rows=allowance_rows,
+        other_source_rows=other_source_rows,
+        deduction_57iia=(os_schedule.deduction_57iia if os_schedule else Decimal("0")),
+        exempt_income_rows=exempt_income_rows,
+        exempt_income_total=exempt_income_total,
         perquisites_value=result.salary_perquisites,
         profits_in_lieu=result.salary_profits_in_lieu,
-        ded_80c=_d("80C+80CCC+80CCD(1)"), ded_80ccc=_d("80CCC"), ded_80ccd1=_d("80CCD(1)"),
-        ded_80ccd1b=_d("80CCD(1B)"),
-        ded_80ccd2=_d("80CCD(2)"),
-        ded_80d=_d("80D"),
-        ded_80dd=_d("80DD"),
-        ded_80ddb=_d("80DDB"),
-        ded_80u=_d("80U"),
-        ded_80tta=_d("80TTA"),
-        ded_80ttb=_d("80TTB"),
-        ded_80e=_d("80E"),
-        ded_80ee=_d("80EE"),
-        ded_80eea=_d("80EEA"),
-        ded_80eeb=_d("80EEB"),
-        ded_80g=_d("80G"),
-        ded_80gg=_d("80GG"),
-        ded_80gga=_d("80GGA"),
-        ded_80ggc=_d("80GGC"),
-        ded_80cch=_d("80CCH"),
+        ded_80c=deduction("80C"), ded_80ccc=deduction("80CCC"), ded_80ccd1=deduction("80CCD(1)"),
+        ded_80ccd1b=deduction("80CCD(1B)"),
+        ded_80ccd2=deduction("80CCD(2)"),
+        ded_80d=deduction("80D"),
+        ded_80dd=deduction("80DD"),
+        ded_80ddb=deduction("80DDB"),
+        usr_80ddb=usr_80ddb,
+        ddb_user_type=ddb_user_type,
+        ddb_disease=ddb_disease,
+        ded_80u=deduction("80U"),
+        ded_80tta=deduction("80TTA"),
+        ded_80ttb=deduction("80TTB"),
+        ded_80e=deduction("80E"),
+        usr_80e=(
+            input_data.deductions_chapter6a.amount_80e
+            if input_data is not None
+            else None
+        ),
+        ded_80ee=deduction("80EE"),
+        usr_80ee=(input_data.deductions_chapter6a.amount_80ee if input_data else None),
+        ded_80eea=deduction("80EEA"),
+        usr_80eea=(input_data.deductions_chapter6a.amount_80eea if input_data else None),
+        ded_80eeb=deduction("80EEB"),
+        usr_80eeb=(input_data.deductions_chapter6a.amount_80eeb if input_data else None),
+        ded_80g=deduction("80G"),
+        usr_80g=(input_data.deductions_chapter6a.amount_80g if input_data else None),
+        ded_80gg=deduction("80GG"),
+        ded_80gga=deduction("80GGA"),
+        usr_80gga=(input_data.deductions_chapter6a.amount_80gga if input_data else None),
+        ded_80ggc=deduction("80GGC"),
+        usr_80ggc=(input_data.deductions_chapter6a.amount_80ggc if input_data else None),
+        ded_80cch=deduction("80CCH"),
+        pension_80ccc=pension_80ccc,
+        pran_number=(input_data.pran_number if input_data else None),
+        form_10ba_ack_number=(
+            input_data.form_10ba_ack_number if input_data else None
+        ),
     )
 
     tax = _tax_computation_itr1(
@@ -581,6 +1759,7 @@ def build_itr1_json(
         interest_234b=result.interest_234b,
         interest_234c=result.interest_234c,
         late_fee_234f=result.late_fee_234f,
+        fees_234i=result.fees_234i,
     )
 
     tax_paid = _tax_paid_itr1(
@@ -591,12 +1770,19 @@ def build_itr1_json(
         balance_payable=result.balance_payable,
     )
 
-    refund = _refund_itr1(
-        refund_due=result.refund_due,
-        bank_name=bank_name,
-        account_no=account_no,
-        ifsc=ifsc,
-    )
+    if input_data is not None:
+        bank_rows = _bank_accounts_from_input(input_data)
+    elif bank_name and account_no and ifsc:
+        bank_rows = [_bank_row(
+            ifsc=ifsc,
+            bank_name=bank_name,
+            account_number=account_no,
+            account_type="SB",
+            use_for_refund=True,
+        )]
+    else:
+        raise ValueError("Bank account details are required for ITD JSON")
+    refund = _refund_itr1(result.refund_due, bank_rows)
 
     # ── Assemble ─────────────────────────────────────────��──────────────
 
@@ -610,117 +1796,229 @@ def build_itr1_json(
         "TaxPaid": tax_paid,
         "Refund": refund,
         "Verification": ver,
-        "Schedule80G": _schedule_80g(_d("80G"), Decimal("0")),
-        "Schedule80GGA": {
-            "DonationDtlsSciRsrchRuralDev": [],
-            "TotalDonationAmtCash80GGA": 0,
-            "TotalDonationAmtOtherMode80GGA": _to_rupees(_d("80GGA")),
-            "TotalDonationsUs80GGA": _to_rupees(_d("80GGA")),
-            "TotalEligibleDonationAmt80GGA": _to_rupees(_d("80GGA")),
-        },
-        "Schedule80GGC": {
-            "Schedule80GGCDetails": [],
-            "TotalDonationAmtCash80GGC": 0,
-            "TotalDonationAmtOtherMode80GGC": _to_rupees(_d("80GGC")),
-            "TotalDonationsUs80GGC": _to_rupees(_d("80GGC")),
-            "TotalEligibleDonationAmt80GGC": _to_rupees(_d("80GGC")),
-        },
-        "Schedule80D": _schedule_80d(
-            senior_flag_self=schedule_80d_senior_self,
-            senior_flag_parents=schedule_80d_senior_parents,
-            self_amt=_zero_if_none(schedule_80d_self_amt) or _d("80D"),
-            parents_amt=_zero_if_none(schedule_80d_parents_amt),
-            eligible_deduction=(_zero_if_none(schedule_80d_self_amt) + _zero_if_none(schedule_80d_parents_amt)) or _d("80D"),
-        ),
-        "Schedule80DD": {
-            "NatureOfDisability": "1",
-            "TypeOfDisability": "2",
-            "DeductionAmount": _to_rupees(_d("80DD")),
-            "DependentType": "1",
-            "DependentPan": "AAAAA0000A",
-            "DependentAadhaar": "000000000000",
-            "Form10IAAckNum": "",
-            "UDIDNum": "",
-        },
-        "Schedule80U": {
-            "NatureOfDisability": "1",
-            "TypeOfDisability": "2",
-            "DeductionAmount": _to_rupees(_d("80U")),
-            "Form10IAAckNum": "",
-            "UDIDNum": "",
-        },
-        "Schedule80E": {
-            "Schedule80EDtls": [],
-            "TotalInterest80E": _to_rupees(_d("80E")),
-        },
-        "Schedule80EE": {
-            "Schedule80EEDtls": [],
-            "TotalInterest80EE": _to_rupees(_d("80EE")),
-        },
-        "Schedule80EEA": {
-            "PropStmpDtyVal": 0,
-            "Schedule80EEADtls": [],
-            "TotalInterest80EEA": _to_rupees(_d("80EEA")),
-        },
-        "Schedule80EEB": {
-            "Schedule80EEBDtls": [],
-            "TotalInterest80EEB": _to_rupees(_d("80EEB")),
-        },
-        "Schedule80C": _schedule_80c(_d("80C+80CCC+80CCD(1)")),
-        "ScheduleEA10_13A": _schedule_ea10_13a(
-            place_of_work=("1" if hra_metro else "2"),
-            hra_received=_zero_if_none(hra_received),
-            rent_paid=_zero_if_none(rent_paid),
-        ),
-        "TaxReturnPreparer": _tax_return_preparer(),
     }
 
-    # Conditional: TDS on Salary
-    # TDS on Salary: auto-populate from result.total_tds if no entries passed
-    _sal_entries = tds_salary_entries
-    if not _sal_entries and result.total_tds > 0:
-        _sal_entries = [{"EmployerOrDeductorOrCollectDetl": {"TAN": "AAAAA0000A", "EmployerOrDeductorOrCollecterName": "Employer"}, "TotalTDSSal": _to_rupees(result.total_tds)}]
-    tds_sal = _tds_salary_schedule_itr1(_sal_entries)
-    if tds_sal:
-        itr1["TDSonSalaries"] = tds_sal
+    if input_data is not None and input_data.tax_return_preparer is not None:
+        itr1["TaxReturnPreparer"] = _tax_return_preparer(input_data.tax_return_preparer)
 
-    # TDS on Other Income
-    _oth_entries = tds_other_entries
-    if not _oth_entries and result.total_tds > 0:
-        _oth_entries = [{"EmployerOrDeductorOrCollectDetl": {"TAN": "AAAAA0000A"}, "AmtForTaxDeduct": _to_rupees(result.total_tds), "ClaimOutOfTotTDSOnAmtPaid": _to_rupees(result.total_tds), "TotTDSOnAmtPaid": _to_rupees(result.total_tds)}]
-    tds_oth = _tds_other_schedule_itr1(_oth_entries)
-    if tds_oth:
-        itr1["TDSonOthThanSals"] = tds_oth
+    if input_data is not None:
+        details_80c = ded_sched.section_details.get("80C") if ded_sched else None
+        if deduction("80C") > 0:
+            if details_80c is None or not details_80c.rows:
+                raise ValueError("A positive Section 80C claim requires Schedule 80C detail rows")
+            itr1["Schedule80C"] = _schedule_80c(details_80c)
 
-    # Conditional: TCS
-    if result.total_tcs > 0:
-        itr1["ScheduleTCS"] = {
-            "TCS": [{"EmployerOrDeductorOrCollectDetl": {"TAN": "DELA00001A"}, "AmtTCSClaimedThisYear": _to_rupees(result.total_tcs)}],
-            "TotalSchTCS": _to_rupees(result.total_tcs),
-        }
+        if deduction("80D") > 0:
+            ded_input = input_data.deductions_chapter6a
+            details_80d = ded_sched.section_details.get("80D") if ded_sched else None
+            schedule_80d = input_data.schedule_80d
+            if details_80d is None:
+                raise ValueError("Section 80D computation details are missing")
+            self_flag = (
+                "S" if schedule_80d and schedule_80d.not_claiming_self
+                else "Y" if details_80d.senior_self
+                else "N"
+            )
+            parents_flag = (
+                "P" if schedule_80d and schedule_80d.not_claiming_parents
+                else "Y" if details_80d.senior_parents
+                else "N"
+            )
+            itr1["Schedule80D"] = _schedule_80d(
+                senior_flag_self=self_flag,
+                senior_flag_parents=parents_flag,
+                self_premium=details_80d.self_premium,
+                parents_premium=details_80d.parents_premium,
+                preventive_self=details_80d.preventive_self,
+                preventive_parents=details_80d.preventive_parents,
+                eligible_deduction=details_80d.allowed_deduction,
+                eligible_self=details_80d.eligible_self,
+                eligible_parents=details_80d.eligible_parents,
+                medical_expense_self_senior=(
+                    schedule_80d.medical_expense_self_senior if schedule_80d else Decimal("0")
+                ),
+                medical_expense_parents_senior=(
+                    schedule_80d.medical_expense_parents_senior if schedule_80d else Decimal("0")
+                ),
+                policies=(schedule_80d.policies if schedule_80d else None),
+            )
 
-    # Conditional: TaxPayments (only when challans exist)
-    if result.advance_tax_paid > 0 or result.self_assessment_tax_paid > 0:
-        challans = []
-        if result.advance_tax_paid > 0:
-            challans.append({"BSRCode": "1234567", "DateDep": "2025-06-15", "SrlNoOfChaln": 1, "Amt": _to_rupees(result.advance_tax_paid)})
-        if result.self_assessment_tax_paid > 0:
-            challans.append({"BSRCode": "1234567", "DateDep": "2025-07-15", "SrlNoOfChaln": 2, "Amt": _to_rupees(result.self_assessment_tax_paid)})
-        itr1["TaxPayments"] = {"TaxPayment": challans, "TotalTaxPayments": _to_rupees(result.advance_tax_paid + result.self_assessment_tax_paid)}
-        # Conditional: ScheduleTDS3Dtls (non-resident TDS, empty for ITR-1)
-    itr1["ScheduleTDS3Dtls"] = {
-        "TDS3Details": [],
-        "TotalTDS3Details": 0,
-    }
+        schedule_80dd = input_data.disability_schedule_80dd()
+        schedule_80u = input_data.disability_schedule_80u()
+        details_80dd = ded_sched.section_details.get("80DD") if ded_sched else None
+        details_80u = ded_sched.section_details.get("80U") if ded_sched else None
+        ded_80dd = deduction("80DD")
+        ded_80u = deduction("80U")
+        if ded_80dd > 0:
+            if details_80dd is None or details_80dd.source is None:
+                raise ValueError("A positive Section 80DD claim requires Schedule 80DD details")
+            itr1["Schedule80DD"] = _schedule_80dd(details_80dd.source, ded_80dd)
+        elif schedule_80dd is not None:
+            raise ValueError("Schedule 80DD details require a positive 80DD deduction")
 
-# Conditional: LTCG 112A
-    if cg_sale_consideration is not None and cg_cost_acquisition is not None:
+        if ded_80u > 0:
+            if details_80u is None or details_80u.source is None:
+                raise ValueError("A positive Section 80U claim requires Schedule 80U details")
+            itr1["Schedule80U"] = _schedule_80u(details_80u.source, ded_80u)
+        elif schedule_80u is not None:
+            raise ValueError("Schedule 80U details require a positive 80U deduction")
+
+        ded_80e = deduction("80E")
+        details_80e = ded_sched.section_details.get("80E") if ded_sched else None
+        if ded_80e > 0:
+            if details_80e is None or not details_80e.rows:
+                raise ValueError("A positive Section 80E claim requires official loan rows")
+            itr1["Schedule80E"] = _schedule_80e(details_80e)
+        elif input_data.schedule_80e_entries:
+            raise ValueError("Schedule 80E rows require a positive eligible deduction")
+
+        for section in ("80EE", "80EEA", "80EEB"):
+            eligible = deduction(section)
+            details_loan = ded_sched.section_details.get(section) if ded_sched else None
+            if eligible > 0:
+                if details_loan is None or not details_loan.rows:
+                    raise ValueError(
+                        f"A positive Section {section} claim requires official loan rows"
+                    )
+                itr1[f"Schedule{section}"] = _schedule_deduction_loan(
+                    details_loan,
+                    section=section,
+                    property_stamp_duty_value=(
+                        input_data.property_stamp_duty_value_80eea
+                        if section == "80EEA"
+                        else None
+                    ),
+                )
+
+        details_80g = result.schedules["deductions"].section_details.get("80G")
+        if deduction("80G") > 0:
+            if details_80g is None or not details_80g.categories:
+                raise ValueError("Complete official Schedule 80G donation rows are required")
+            itr1["Schedule80G"] = _schedule_80g(details_80g)
+        elif input_data.deductions_chapter6a.donations_80g:
+            raise ValueError("Schedule 80G rows require a positive eligible deduction")
+
+        details_80gga = result.schedules["deductions"].section_details.get("80GGA")
+        if deduction("80GGA") > 0:
+            if details_80gga is None or not details_80gga.rows:
+                raise ValueError("Complete official Schedule 80GGA donation rows are required")
+            itr1["Schedule80GGA"] = _schedule_80gga(details_80gga)
+        elif input_data.schedule_80gga and input_data.schedule_80gga.donations:
+            raise ValueError("Schedule 80GGA rows require a positive eligible deduction")
+
+        details_80ggc = result.schedules["deductions"].section_details.get("80GGC")
+        if deduction("80GGC") > 0:
+            if details_80ggc is None or not details_80ggc.rows:
+                raise ValueError("Complete official Schedule 80GGC contribution rows are required")
+            itr1["Schedule80GGC"] = _schedule_80ggc(details_80ggc)
+        elif input_data.schedule_80ggc and input_data.schedule_80ggc.contributions:
+            raise ValueError("Schedule 80GGC rows require a positive eligible deduction")
+
+        incomplete_claims: dict[str, Decimal] = {}
+        unsupported = [name for name, amount in incomplete_claims.items() if amount > 0]
+        if unsupported:
+            raise ValueError(
+                "Complete official schedule details are required for: "
+                + ", ".join(unsupported)
+            )
+
+        hra = input_data.hra_details or input_data.schedule_10_13a
+        if hra is not None:
+            hra_schedule = _schedule_ea10_13a(
+                place_of_work=("1" if hra.is_metro_city else "2"),
+                hra_received=hra.actual_hra_received,
+                rent_paid=hra.rent_paid,
+                basic_salary=hra.salary_for_hra,
+                dearness_allowance=hra.dearness_allowance,
+            )
+            claimed_hra = _to_rupees(input_data.salary_income.hra_exempt_amount)
+            if hra_schedule["EligbleExmpAllwncUs13A"] != claimed_hra:
+                raise ValueError(
+                    "Schedule 10(13A) eligible exemption must equal the HRA exemption claimed"
+                )
+            itr1["ScheduleEA10_13A"] = hra_schedule
+    else:
+        # Legacy callers may still provide aggregate schedules explicitly.
+        if deduction("80C") > 0:
+            raise ValueError("Schedule 80C detail rows are required for ITD JSON")
+        if deduction("80D") > 0:
+            itr1["Schedule80D"] = _schedule_80d(
+                senior_flag_self=schedule_80d_senior_self,
+                senior_flag_parents=schedule_80d_senior_parents,
+                self_premium=_zero_if_none(schedule_80d_self_premium),
+                parents_premium=_zero_if_none(schedule_80d_parents_premium),
+                preventive_self=Decimal("0"),
+                preventive_parents=Decimal("0"),
+                eligible_deduction=deduction("80D"),
+            )
+
+    if input_data is not None:
+        tds_salary = _tds_salary_from_input(input_data)
+        if tds_salary:
+            itr1["TDSonSalaries"] = tds_salary
+
+        tds_other = _tds_other_from_input(input_data)
+        if tds_other:
+            itr1["TDSonOthThanSals"] = tds_other
+
+        tcs = _tcs_from_input(input_data)
+        if tcs:
+            itr1["ScheduleTCS"] = tcs
+
+        tds3 = _tds3_from_input(input_data)
+        if tds3:
+            itr1["ScheduleTDS3Dtls"] = tds3
+
+        tax_payments = _tax_payments_from_input(input_data)
+        if tax_payments:
+            itr1["TaxPayments"] = tax_payments
+
+    else:
+        # Compatibility path for legacy callers that supply already-mapped rows.
+        tds_salary = _tds_salary_schedule_itr1(tds_salary_entries)
+        if tds_salary:
+            itr1["TDSonSalaries"] = tds_salary
+        tds_other = _tds_other_schedule_itr1(tds_other_entries)
+        if tds_other:
+            itr1["TDSonOthThanSals"] = tds_other
+
+    # Conditional: LTCG 112A. Canonical transaction evidence and the compact
+    # simplified-112A aggregate both live on the typed capital-gains model.
+    # Prefer that model whenever it carries sale/cost evidence, then fall back
+    # to legacy keyword arguments supplied by older callers.
+    typed_cg = input_data.capital_gains if input_data is not None else None
+    has_typed_evidence = bool(
+        typed_cg is not None
+        and (
+            typed_cg.transactions
+            or typed_cg.full_value_of_consideration > 0
+            or typed_cg.cost_of_acquisition > 0
+        )
+    )
+    sale_consideration = (
+        typed_cg.full_value_of_consideration
+        if has_typed_evidence and typed_cg is not None
+        else cg_sale_consideration
+    )
+    cost_acquisition = (
+        typed_cg.cost_of_acquisition
+        if has_typed_evidence and typed_cg is not None
+        else cg_cost_acquisition
+    )
+    if sale_consideration is not None and cost_acquisition is not None:
         itr1["LTCG112A"] = _ltcg_112a_schedule(
-            sale_consideration=cg_sale_consideration,
-            cost_acquisition=cg_cost_acquisition,
+            sale_consideration=sale_consideration,
+            cost_acquisition=cost_acquisition,
             long_cap_112a=result.capital_gains_112a,
         )
 
-    itr1["CreationInfo"]["Digest"] = _compute_digest(itr1)
+    # Digest is computed over the COMPLETE ITR document (the whole
+    # ``{"ITR": {"ITR1": ...}}`` JSON, matching the ITD reference
+    # ``API_Testing/digest_generator.py`` and the SOP §5.3 Step 1 "Read
+    # the Input JSON"), with the Digest value replaced by the placeholder
+    # "-". Hashing only the inner ITR1 dict would diverge from the bytes
+    # the portal hashes over the uploaded file.
+    wrapped = {"ITR": {"ITR1": itr1}}
+    itr1["CreationInfo"]["Digest"] = _compute_digest(wrapped)
 
-    return {"ITR": {"ITR1": itr1}}
+    return wrapped

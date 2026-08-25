@@ -1,0 +1,130 @@
+name: ci
+
+# Roadmap §10.6 — the ratchet has been raised.
+#
+# The suite used to sit at 177 failures, which is why this workflow originally
+# ran build and lint only. Almost all of that turned out to be two defects
+# rather than accumulated debt: the CBDT schema loaders pointed at a path that
+# does not exist, and nine third-party imports were never declared in
+# requirements.txt. With both fixed the suite is 961 passed / 0 failed, so
+# tests now gate merges.
+#
+# The --ignore list is the set of files that still fail at COLLECTION. They are
+# old manual ERI scripts that import modules which no longer exist
+# (app.eri.login, automation) plus one UTF-16 file containing no real test.
+# They are not tests; delete or repair them and shorten this list.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: frontend build + typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck + build
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: https://itrbharo.duckdns.org
+        run: npm run build          # tsc -b && vite build
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+        continue-on-error: true      # advisory until the existing lint debt is cleared
+
+  backend:
+    name: backend imports + dependency completeness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Install declared dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile every module
+        run: python -m compileall -q app ais_extractor scripts
+
+      # This is the check that would have caught the nine undeclared packages
+      # that broke portal automation in production. Most imports here are lazy
+      # (inside functions), so nothing fails at startup - only when a user hits
+      # the feature. Fail the build instead.
+      - name: Every third-party import must be declared in requirements.txt
+        run: |
+          python - <<'PY'
+          import ast, pathlib, sys
+
+          mods = set()
+          for root in (pathlib.Path("app"), pathlib.Path("ais_extractor")):
+              for f in root.rglob("*.py"):
+                  try:
+                      tree = ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
+                  except SyntaxError:
+                      continue
+                  for n in ast.walk(tree):
+                      if isinstance(n, ast.Import):
+                          for a in n.names:
+                              mods.add(a.name.split(".")[0])
+                      elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                          mods.add(n.module.split(".")[0])
+
+          local = {"app", "ais_extractor", "tests", "scripts",
+                   "extractor", "as26_extractor", "tis_extractor", "config"}
+          # Windows-only, guarded by try/except in app/eri/envelope.py
+          platform_only = {"win32crypt"}
+
+          missing = []
+          for m in sorted(mods - set(sys.stdlib_module_names) - local - platform_only):
+              if m.startswith("_"):
+                  continue
+              try:
+                  __import__(m)
+              except Exception:
+                  missing.append(m)
+
+          if missing:
+              print("UNDECLARED DEPENDENCIES:", ", ".join(missing))
+              print("Add them to requirements.txt.")
+              sys.exit(1)
+          print("all third-party imports are declared")
+          PY
+
+      - name: Tests
+        run: |
+          pytest -q \
+            --ignore=tests/test_itr1_e2e.py \
+            --ignore=tests/test_itr4_e2e.py \
+            --ignore=tests/test_simple.py \
+            --ignore=tests/test_acknowledgement.py \
+            --ignore=tests/test_add_client.py \
+            --ignore=tests/test_everify.py \
+            --ignore=tests/test_goypt2026a.py \
+            --ignore=tests/test_prefill.py \
+            --ignore=tests/test_proxy.py \
+            --ignore=tests/test_download_temp.py \
+            --ignore=tests/test_26as_batch.py \
+            --ignore=ais_extractor
+        # e2e suites are excluded because they place live ERI calls against ITD.

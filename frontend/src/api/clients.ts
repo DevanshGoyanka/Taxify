@@ -1,34 +1,49 @@
 import axiosInstance from './axiosInstance';
+import type {
+  ClientListParams,
+  ClientRecord,
+  ClientUpsertPayload,
+} from '../types/client.types';
+
+export type ClientIdentifier = string | number;
 
 export const clientsApi = {
-  list: async (params?: { search?: string; assessmentYear?: string; status?: string }) => {
-    const { data } = await axiosInstance.get('/clients', { params });
-    return data as any[];
-  },
-  get: async (id: number) => {
-    const { data } = await axiosInstance.get(`/clients/${id}`);
+  list: async (params?: ClientListParams): Promise<ClientRecord[]> => {
+    const { data } = await axiosInstance.get<ClientRecord[]>('/clients', { params });
     return data;
   },
-  create: async (payload: any) => {
-    const { data } = await axiosInstance.post('/clients', payload);
+  get: async (id: ClientIdentifier): Promise<ClientRecord> => {
+    const { data } = await axiosInstance.get<ClientRecord>(`/clients/${id}`);
     return data;
   },
-  update: async (id: number, payload: any) => {
-    const { data } = await axiosInstance.put(`/clients/${id}`, payload);
+  create: async (payload: ClientUpsertPayload): Promise<ClientRecord> => {
+    const { data } = await axiosInstance.post<ClientRecord>('/clients', payload);
     return data;
   },
-  delete: async (id: number) => {
+  update: async (id: ClientIdentifier, payload: Partial<ClientUpsertPayload>): Promise<ClientRecord> => {
+    const { data } = await axiosInstance.put<ClientRecord>(`/clients/${id}`, payload);
+    return data;
+  },
+  archive: async (id: ClientIdentifier): Promise<void> => {
     await axiosInstance.delete(`/clients/${id}`);
   },
-  getYears: async (id: number) => {
-    const { data } = await axiosInstance.get(`/clients/${id}/years`);
+  /** @deprecated Use archive; retained while older callers are migrated. */
+  delete: async (id: ClientIdentifier): Promise<void> => {
+    await axiosInstance.delete(`/clients/${id}`);
+  },
+  restore: async (id: ClientIdentifier): Promise<ClientRecord> => {
+    const { data } = await axiosInstance.post<ClientRecord>(`/clients/${id}/restore`);
     return data;
   },
-  analyzepan: async (id: number) => {
+  getYears: async (id: ClientIdentifier): Promise<string[]> => {
+    const { data } = await axiosInstance.get<string[]>(`/clients/${id}/years`);
+    return data;
+  },
+  analyzepan: async (id: ClientIdentifier) => {
     const { data } = await axiosInstance.get(`/clients/${id}/pan-analysis`);
     return data;
   },
-  classifyITR: async (id: number, incomeProfile: any) => {
+  classifyITR: async (id: ClientIdentifier, incomeProfile: Record<string, unknown>) => {
     const { data } = await axiosInstance.post(`/clients/${id}/itr-classification`, incomeProfile);
     return data;
   },

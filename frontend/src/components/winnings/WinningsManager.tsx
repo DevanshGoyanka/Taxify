@@ -53,7 +53,8 @@ export function WinningsManager({ entries = [], onChange }: WinningsManagerProps
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ fontWeight: 600, fontSize: 13 }}>₹{entry.grossAmount.toLocaleString('en-IN')}</span>
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>TDS: ₹{(entry.tdsDeducted || 0).toLocaleString('en-IN')}</span>
-              <span style={{ fontSize: 11, color: '#c62828' }}>Tax: ₹{Math.round(entry.grossAmount * 0.30).toLocaleString('en-IN')}</span>
+              {/* Tax is computed by the backend engine u/s 115BB; the
+                  frontend does not perform statutory tax calculations. */}
             </div>
           </div>
 

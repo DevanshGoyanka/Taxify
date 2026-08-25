@@ -1,6 +1,12 @@
-import pytest
+import json
+from datetime import date
 from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from jsonschema import Draft4Validator
 from pydantic import ValidationError
+
 from app.schemas.itr4 import (
     ITR4Input,
     PresumptiveBusinessIncome44AD,
@@ -8,16 +14,225 @@ from app.schemas.itr4 import (
     PresumptiveGoodsCarriage44AE,
     GoodsCarriageVehicle,
     PresumptiveScheme,
+    ITR4FilingProfile,
+    ITR4FilingAddress,
+    ITR4BankAccount,
 )
-from app.schemas.itr1 import AgeBracket, TaxRegime, SalaryIncome, HousePropertyIncome, PropertyType, Chapter6ADeductions
+from app.schemas.itr1 import (
+    AgeBracket,
+    CapitalGainsIncome,
+    Chapter6ADeductions,
+    CompactExemptIncomeEntry,
+    HousePropertyIncome,
+    PropertyType,
+    SalaryIncome,
+    TDS2Entry,
+    TDS3Entry,
+    TaxRegime,
+)
 from app.engine.calculators.itr4 import compute as compute_itr4
+from app.engine.itd.itr4 import build_itr4_json
+
+
+_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "frontend"
+    / "ITD OFFICAL REFERENCE DOCS"
+    / "AY 2026-27 Offical Schema JSON"
+    / "ITR-4_2026_Main_V1.1 (1).json"
+)
+
+
+def _minimal_filing_profile() -> ITR4FilingProfile:
+    """Build a minimal ITR-4 filing profile for builder unit tests."""
+    return ITR4FilingProfile(
+        pan="ABCDE1234F",
+        first_name="Test",
+        surname="Taxpayer",
+        date_of_birth=date(1990, 1, 1),
+        primary_address=ITR4FilingAddress(
+            residence_no="1",
+            locality_or_area="Locality",
+            city_or_town_or_district="City",
+            state_code="07",
+            country_code="91",
+            pin_code="110001",
+            mobile_country_code=91,
+            mobile_no="9999999999",
+            email="test@example.com",
+        ),
+        father_name="Father",
+        verification_place="Delhi",
+    )
+
+
+def _minimal_bank_account() -> ITR4BankAccount:
+    """Build a minimal bank account for builder unit tests."""
+    return ITR4BankAccount(
+        account_number="12345678901",
+        ifsc_code="SBIN0000001",
+        bank_name="Test Bank",
+        account_type="savings",
+        is_primary=True,
+    )
+
+
+def test_itr4_builder_projects_canonical_restricted_112a_schedule():
+    """ITR-4 official JSON must consume canonical restricted transactions."""
+    capital_gains = CapitalGainsIncome(transactions=[{
+        "assetType": "LISTED_EQUITY",
+        "purchaseDate": "2023-01-01",
+        "saleDate": "2025-01-02",
+        "purchaseCost": "100000",
+        "saleCost": "120000",
+        "transferExpenses": "1000",
+        "sttPaidOnAcquisition": True,
+        "sttPaidOnTransfer": True,
+        "recognizedExchange": True,
+    }])
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("0"), digital_turnover=Decimal("0"), cash_turnover=Decimal("0")),
+        capital_gains=capital_gains,
+        filing_profile=_minimal_filing_profile(),
+        bank_accounts=[_minimal_bank_account()],
+    )
+    result = compute_itr4(itr_input)
+    schedule = build_itr4_json(result, itr_input)["ITR"]["ITR4"]["LTCG112A"]
+    assert schedule == {
+        "TotSaleCnsdrn": 120000,
+        "TotCstAcqisn": 101000,
+        "LongCap112A": 19000,
+    }
+
+
+def test_itr4_builder_projects_simplified_112a_aggregate_evidence():
+    """Compact-form sale and cost evidence must reach the official schedule."""
+    capital_gains = CapitalGainsIncome(
+        ltcg_112a=Decimal("20000"),
+        full_value_of_consideration=Decimal("120000"),
+        cost_of_acquisition=Decimal("100000"),
+    )
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("500000"),
+            digital_turnover=Decimal("500000"),
+            cash_turnover=Decimal("0"),
+        ),
+        capital_gains=capital_gains,
+        filing_profile=_minimal_filing_profile(),
+        bank_accounts=[_minimal_bank_account()],
+    )
+
+    result = compute_itr4(itr_input)
+    assert build_itr4_json(result, itr_input)["ITR"]["ITR4"]["LTCG112A"] == {
+        "TotSaleCnsdrn": 120000,
+        "TotCstAcqisn": 100000,
+        "LongCap112A": 20000,
+    }
+
+
+def test_itr4_builder_preserves_compact_optional_schedule_fields():
+    """Compact declarations, exempt income, and TDS carry-forward data are exact."""
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("500000"),
+            digital_turnover=Decimal("500000"),
+            cash_turnover=Decimal("0"),
+        ),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("12000")),
+        pran_number="123456789012",
+        form_10ba_ack_number="123456789012345",
+        exempt_income_entries=[CompactExemptIncomeEntry(
+            category="OTH",
+            sub_category="10(16)",
+            description="Scholarship",
+            amount=Decimal("25000"),
+        )],
+        tds2_entries=[TDS2Entry(
+            deductor_tan="MUMA00001A",
+            deductor_name="Example Bank",
+            tds_section="194A",
+            gross_amount=Decimal("20000"),
+            tds_deducted=Decimal("2000"),
+            tds_claimed_this_year=Decimal("1500"),
+            deducted_year="2024",
+            brought_forward_tds=Decimal("100"),
+            head_of_income="OS",
+            tds_credit_carried_forward=Decimal("600"),
+        )],
+        tds3_entries=[TDS3Entry(
+            tenant_pan="ABCDE1234F",
+            tenant_name="Tenant",
+            gross_receipt=Decimal("100000"),
+            deducted_yr="2024",
+            tds_deducted=Decimal("5000"),
+            tds_claimed=Decimal("4000"),
+            tds_section="194IB",
+            brought_forward_tds=Decimal("200"),
+            head_of_income="HP",
+            tds_credit_carried_forward=Decimal("1200"),
+        )],
+        filing_profile=_minimal_filing_profile(),
+        bank_accounts=[_minimal_bank_account()],
+    )
+
+    result = compute_itr4(itr_input)
+    document = build_itr4_json(result, itr_input)
+    itr4 = document["ITR"]["ITR4"]
+    chapter = itr4["IncomeDeductions"]["UsrDeductUndChapVIA"]
+    assert chapter["AnyOthSec80CCH"] == 12000
+    assert chapter["PRANDtls"] == [{"PRANNum": "123456789012"}]
+    assert chapter["Form10BAAckNum"] == "123456789012345"
+    assert itr4["TaxExmpIntIncDtls"]["OthersInc"]["OthersIncDtls"] == [{
+        "Category": "OTH",
+        "SubCategory": "10(16)",
+        "Description": "Scholarship",
+        "OthAmount": 25000,
+    }]
+    assert itr4["TDSonOthThanSals"]["TDSonOthThanSalDtls"][0] == {
+        "TANOfDeductor": "MUMA00001A",
+        "TDSSection": "94A",
+        "DeductedYr": "2024",
+        "BroughtFwdTDSAmt": 100,
+        "TDSDeducted": 2000,
+        "TDSClaimed": 1500,
+        "GrossAmount": 20000,
+        "HeadOfIncome": "OS",
+        "TDSCreditCarriedFwd": 600,
+    }
+    assert itr4["ScheduleTDS3Dtls"]["TDS3Details"][0] == {
+        "PANofTenant": "ABCDE1234F",
+        "DeductedYr": "2024",
+        "BroughtFwdTDSAmt": 200,
+        "TDSDeducted": 5000,
+        "TDSClaimed": 4000,
+        "TDSSection": "4-IB",
+        "GrossAmount": 100000,
+        "HeadOfIncome": "HP",
+        "TDSCreditCarriedFwd": 1200,
+    }
+    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8-sig"))
+    assert list(Draft4Validator(schema).iter_errors(document)) == []
+
 
 def test_itr4_no_income():
-    """Scenario 1: No income, scheme NONE."""
+    """Scenario 1: No income, scheme S44AD with zero turnover."""
     itr_input = ITR4Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
-        presumptive_scheme=PresumptiveScheme.NONE,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("0"), digital_turnover=Decimal("0"), cash_turnover=Decimal("0")),
         salary_income=SalaryIncome(gross_salary=Decimal("0")),
     )
     res = compute_itr4(itr_input)
@@ -58,6 +273,37 @@ def test_itr4_44ad_business_old_regime():
     # Rebate u/s 87A: 100% since taxable_income <= 5L
     assert res.rebate_87a == Decimal("2500")
     assert res.net_tax_liability == Decimal("0")
+
+
+def test_itr4_co_owned_property_uses_owned_annual_value():
+    """ITR-4 applies the property share before the section 24(a) deduction."""
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("0"),
+            digital_turnover=Decimal("0"),
+            cash_turnover=Decimal("0"),
+        ),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.DEEMED_LET_OUT,
+            annual_rent_received=Decimal("240000"),
+            rent_not_realized=Decimal("12000"),
+            municipal_taxes_paid=Decimal("12000"),
+            ownership_share_percentage=Decimal("55.5"),
+            home_loan_interest_paid=Decimal("20000"),
+        ),
+    )
+
+    result = compute_itr4(itr_input)
+    hp = result.schedules["hp"]
+
+    assert hp.net_annual_value == Decimal("216000")
+    assert hp.annual_value_owned == Decimal("119880")
+    assert hp.standard_deduction_30pct == Decimal("35964")
+    assert hp.interest_on_loan == Decimal("20000")
+    assert hp.income_chargeable == Decimal("63916")
 
 def test_itr4_44ada_professional_new_regime():
     """Scenario 3: 44ADA presumptive professional, new regime, 87A rebate crossover (exact 12L)."""
@@ -141,8 +387,12 @@ def test_itr4_44ae_goods_carriage_high_income():
     # Total Slab Tax = 297,300
     assert res.slab_tax == Decimal("297300")
     # Cess = 297,300 * 4% = 11,892
-    # Total tax payable = 297,300 + 11,892 = 309,192 -> Rounded to nearest 10 = 309,190
-    assert res.net_tax_liability == Decimal("309190")
+    # Aggregate liability = 297,300 + 11,892 = 309,192. Section 288B rounding
+    # is applied only to balance_payable / refund_due, not to the intermediate
+    # net_tax_liability aggregate.
+    assert res.gross_tax_liability == Decimal("309192")
+    assert res.net_tax_liability == Decimal("309192")
+    assert res.balance_payable == Decimal("309190")
 
 def test_itr4_validation_failures():
     """Scenario 5: 44AD limits and vehicle count validation checks."""
@@ -174,7 +424,7 @@ def test_itr4_validation_failures():
             ),
         )
     )
-    assert any("Cash receipts exceed 5% limit" in e for e in result.errors)
+    assert any("cash receipts" in e.lower() and "5%" in e for e in result.errors)
 
     # Case 5c: More than 10 vehicles owned u/s 44AE
     result = compute_itr4(
@@ -187,7 +437,7 @@ def test_itr4_validation_failures():
             ),
         )
     )
-    assert any("cannot own more than 10 vehicles" in e for e in result.errors)
+    assert any("10" in e and "vehicles" in e.lower() for e in result.errors)
 
 def test_itr4_44ada_validation_failures():
     """Scenario 6: 44ADA gross receipts limits validation checks."""
@@ -219,4 +469,4 @@ def test_itr4_44ada_validation_failures():
             ),
         )
     )
-    assert any("Cash receipts exceed 5% limit" in e for e in result.errors)
+    assert any("cash receipts" in e.lower() and "5%" in e for e in result.errors)

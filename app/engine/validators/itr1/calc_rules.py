@@ -77,7 +77,7 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
         ))
 
     # Rule 160: New regime HP loss → GTI = salary + OS only (HP loss disallowed)
-    if is_new and result.hp_loss_disallowed < 0:
+    if is_new and result.hp_loss_disallowed > 0:
         expected_new_gti = result.salary_income + result.other_sources_income + cg_112a
         if not _eq(gti, expected_new_gti):
             results.append(_make(
@@ -150,6 +150,11 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
     ded_sched = schedules.get("deductions") if isinstance(schedules, dict) else None
     if ded_sched and hasattr(ded_sched, "breakdown") and ded_sched.breakdown:
         breakdown_sum = sum(ded_sched.breakdown.values(), _z)
+        if "80C+80CCC+80CCD(1)" in ded_sched.breakdown:
+            breakdown_sum -= (
+                ded_sched.breakdown.get("80CCC", _z)
+                + ded_sched.breakdown.get("80CCD(1)", _z)
+            )
         if not _eq(ded_total, breakdown_sum, Decimal("1")):
             results.append(_make(
                 "ITR1-R017", False,
@@ -186,9 +191,12 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
         ))
 
     # Rule 27: Total Tax Fees Interest = tax+cess+interest+fees - relief
+    # CBDT rule 27: Total Tax, Fees & Interest = Gross Tax & Cess + Interest
+    # u/s 234A + 234B + 234C + Fees u/s 234I + Fees u/s 234F − Relief u/s 89
     expected_ttfi = (
         result.gross_tax_liability
         + result.total_interest
+        + result.fees_234i
         + result.late_fee_234f
         - result.relief_89
     )
@@ -197,50 +205,52 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
             "ITR1-R027", False,
             f"Total Tax Fees Interest mismatch: {result.net_tax_liability} != "
             f"Gross tax({result.gross_tax_liability}) + "
-            f"Interest({result.total_interest}) + Fees({result.late_fee_234f}) - "
+            f"Interest({result.total_interest}) + Fees 234I({result.fees_234i}) "
+            f"+ Fees 234F({result.late_fee_234f}) - "
             f"Relief({result.relief_89}) = {expected_ttfi}",
             "net_tax_liability",
         ))
 
-    # Rule 28: Total interest = 234A + 234B + 234C + 234F + 234I
+    # Rule 28: Total interest+fees = 234A + 234B + 234C + 234F + 234I
     expected_interest = (
         result.interest_234a
         + result.interest_234b
         + result.interest_234c
         + result.late_fee_234f
+        + result.fees_234i
     )
-    total_interest_plus_fees = result.total_interest + result.late_fee_234f
+    total_interest_plus_fees = result.total_interest + result.late_fee_234f + result.fees_234i
     if not _eq(total_interest_plus_fees, expected_interest, Decimal("1")):
         results.append(_make(
             "ITR1-R028", False,
             f"Total Interest+Late Fee mismatch: "
-            f"total_interest+late_fee={total_interest_plus_fees} != "
+            f"total_interest+late_fee+234i={total_interest_plus_fees} != "
             f"234A({result.interest_234a})+234B({result.interest_234b})+"
-            f"234C({result.interest_234c})+234F({result.late_fee_234f}) = "
-            f"{expected_interest}",
+            f"234C({result.interest_234c})+234F({result.late_fee_234f})+"
+            f"234I({result.fees_234i}) = {expected_interest}",
             "total_interest",
         ))
 
     # Rule 140: Total Tax Fee Interest = Balance Tax after Relief + Total Interest Fee
     balance_after_relief = result.gross_tax_liability - result.relief_89
-    expected_140 = balance_after_relief + result.total_interest + result.late_fee_234f
+    expected_140 = balance_after_relief + result.total_interest + result.late_fee_234f + result.fees_234i
     if not _eq(result.net_tax_liability, expected_140, Decimal("10")):
         results.append(_make(
             "ITR1-R140", False,
             f"Total Tax Fee Interest mismatch (Rule 140): {result.net_tax_liability} != "
             f"Balance after relief({balance_after_relief}) + "
-            f"Total Interest Fee({result.total_interest + result.late_fee_234f}) = "
+            f"Total Interest Fee({result.total_interest + result.late_fee_234f + result.fees_234i}) = "
             f"{expected_140}",
             "net_tax_liability",
         ))
 
     # Rule 23: 87A old regime — income must be <= 5,00,000 for rebate
     if is_old and result.rebate_87a > 0:
-        if gti > 500_000:
+        if ti > 500_000:
             results.append(_make(
                 "ITR1-R023", False,
                 f"87A rebate claimed (Rs {result.rebate_87a}) but total income "
-                f"(Rs {gti}) exceeds Rs 5,00,000 limit",
+                f"(Rs {ti}) exceeds Rs 5,00,000 limit",
                 "rebate_87a",
             ))
 
@@ -341,56 +351,87 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
     # ===================================================================
     # SECTION: House Property Schedule Checks
     # ===================================================================
+    # The ITR-1 calculator stores schedules["hp"] as a list of HPResult
+    # objects (one per PropertyDetails row, up to two under the AY 2026-27
+    # schema). The legacy single-object path is retained for callers that
+    # bypass the multi-property compute path.
 
-    hp_sched = schedules.get("hp") if isinstance(schedules, dict) else None
+    hp_sched_raw = schedules.get("hp") if isinstance(schedules, dict) else None
+    if isinstance(hp_sched_raw, list):
+        hp_sched_list = hp_sched_raw
+    elif hp_sched_raw is None:
+        hp_sched_list = []
+    else:
+        hp_sched_list = [hp_sched_raw]
 
-    # Rule 46: NAV = rent - municipal taxes (for let-out / deemed let-out)
-    if hp.property_type != PropertyType.SELF_OCCUPIED and hp_sched:
-        if hasattr(hp_sched, "net_annual_value") and hasattr(hp_sched, "gross_annual_value") and hasattr(hp_sched, "municipal_taxes"):
-            expected_nav = max(_z, hp_sched.gross_annual_value - hp_sched.municipal_taxes)
-            if not _eq(hp_sched.net_annual_value, expected_nav):
-                results.append(_make(
-                    "ITR1-R046", False,
-                    f"Net Annual Value mismatch: computed={hp_sched.net_annual_value}, "
-                    f"expected GAV({hp_sched.gross_annual_value}) - "
-                    f"Municipal Taxes({hp_sched.municipal_taxes}) = {expected_nav}",
-                    "house_property_income",
-                ))
+    hp_input_list = list(inp.house_properties) or ([inp.house_property_income] if inp.house_property_income else [])
 
-    # Rule 47: HP income chargeable = NAV - 30% std ded - interest + arrears
-    if hp.property_type != PropertyType.SELF_OCCUPIED and hp_sched:
-        if all(hasattr(hp_sched, a) for a in ["net_annual_value", "standard_deduction_30pct", "interest_on_loan", "arrears_unrealised_rent", "income_chargeable"]):
-            expected_hp_income = (
-                hp_sched.net_annual_value
-                - hp_sched.standard_deduction_30pct
-                - hp_sched.interest_on_loan
-                + (hp_sched.arrears_unrealised_rent * Decimal("0.7"))
-            )
-            if not _eq(hp_sched.income_chargeable, expected_hp_income, Decimal("1")):
-                results.append(_make(
-                    "ITR1-R047", False,
-                    f"House Property income chargeable mismatch: computed="
-                    f"{hp_sched.income_chargeable}, expected "
-                    f"NAV({hp_sched.net_annual_value}) - "
-                    f"30%({hp_sched.standard_deduction_30pct}) - "
-                    f"Interest({hp_sched.interest_on_loan}) + "
-                    f"Arrears({hp_sched.arrears_unrealised_rent}) = "
-                    f"{expected_hp_income}",
-                    "house_property_income",
-                ))
+    for idx, hp_sched in enumerate(hp_sched_list):
+        hp_input = hp_input_list[idx] if idx < len(hp_input_list) else inp.house_property_income
+        field_scope = (
+            f"house_property_income[{idx}]"
+            if len(hp_sched_list) > 1
+            else "house_property_income"
+        )
 
-    # Rule 43: HP standard deduction = 30% of Annual Value
-    if hp.property_type != PropertyType.SELF_OCCUPIED and hp_sched:
-        if hasattr(hp_sched, "net_annual_value") and hasattr(hp_sched, "standard_deduction_30pct"):
-            expected_30 = hp_sched.net_annual_value * Decimal("0.3")
-            if not _eq(hp_sched.standard_deduction_30pct, expected_30, Decimal("1")):
-                results.append(_make(
-                    "ITR1-R043", False,
-                    f"HP 30% standard deduction mismatch: "
-                    f"computed={hp_sched.standard_deduction_30pct}, "
-                    f"expected 30% of NAV({hp_sched.net_annual_value}) = {expected_30}",
-                    "house_property_income",
-                ))
+        # Rule 46: Balance ALV = GAV - unrealized rent - municipal taxes.
+        if hp_input.property_type != PropertyType.SELF_OCCUPIED:
+            if all(hasattr(hp_sched, field) for field in (
+                "net_annual_value", "gross_annual_value",
+                "rent_not_realized", "municipal_taxes",
+            )):
+                expected_nav = max(
+                    _z,
+                    hp_sched.gross_annual_value
+                    - hp_sched.rent_not_realized
+                    - hp_sched.municipal_taxes,
+                )
+                if not _eq(hp_sched.net_annual_value, expected_nav):
+                    results.append(_make(
+                        "ITR1-R046", False,
+                        f"Balance annual value mismatch (property {idx + 1}): "
+                        f"computed={hp_sched.net_annual_value}, "
+                        f"expected GAV({hp_sched.gross_annual_value}) - "
+                        f"Rent not realized({hp_sched.rent_not_realized}) - "
+                        f"Municipal Taxes({hp_sched.municipal_taxes}) = {expected_nav}",
+                        field_scope,
+                    ))
+
+        # Rule 47: HP income = owned AV - 30% deduction - interest + arrears.
+        if hp_input.property_type != PropertyType.SELF_OCCUPIED:
+            if all(hasattr(hp_sched, a) for a in ["annual_value_owned", "standard_deduction_30pct", "interest_on_loan", "arrears_unrealised_rent", "income_chargeable"]):
+                expected_hp_income = (
+                    hp_sched.annual_value_owned
+                    - hp_sched.standard_deduction_30pct
+                    - hp_sched.interest_on_loan
+                    + (hp_sched.arrears_unrealised_rent * Decimal("0.7"))
+                )
+                if not _eq(hp_sched.income_chargeable, expected_hp_income, Decimal("1")):
+                    results.append(_make(
+                        "ITR1-R047", False,
+                        f"House Property income chargeable mismatch (property {idx + 1}): "
+                        f"computed={hp_sched.income_chargeable}, expected "
+                        f"owned annual value({hp_sched.annual_value_owned}) - "
+                        f"30%({hp_sched.standard_deduction_30pct}) - "
+                        f"Interest({hp_sched.interest_on_loan}) + "
+                        f"Arrears({hp_sched.arrears_unrealised_rent}) = "
+                        f"{expected_hp_income}",
+                        field_scope,
+                    ))
+
+        # Rule 43: HP standard deduction = 30% of assessee-owned annual value.
+        if hp_input.property_type != PropertyType.SELF_OCCUPIED:
+            if hasattr(hp_sched, "annual_value_owned") and hasattr(hp_sched, "standard_deduction_30pct"):
+                expected_30 = hp_sched.annual_value_owned * Decimal("0.3")
+                if not _eq(hp_sched.standard_deduction_30pct, expected_30, Decimal("1")):
+                    results.append(_make(
+                        "ITR1-R043", False,
+                        f"HP 30% standard deduction mismatch (property {idx + 1}): "
+                        f"computed={hp_sched.standard_deduction_30pct}, "
+                        f"expected 30% of owned annual value"
+                        f"({hp_sched.annual_value_owned}) = {expected_30}",
+                        field_scope,
+                    ))
 
     # ===================================================================
     # SECTION: Standard Deduction Limits (from schedule values)
@@ -565,7 +606,12 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
         if ch6a.amount_80d_self_family > _z or ch6a.amount_80d_parents > _z:
             if inp.schedule_80d:
                 sd = inp.schedule_80d
-                d_via_total = ch6a.amount_80d_self_family + ch6a.amount_80d_parents
+                d_via_total = (
+                    ch6a.amount_80d_self_family
+                    + ch6a.amount_80d_parents
+                    + ch6a.amount_80d_preventive_self
+                    + ch6a.amount_80d_preventive_parents
+                )
                 # Schedule total = premiums + preventive checkup (but limited by caps)
                 # The engine-computed total is in the breakdown
                 eng_80d = ded_breakdown.get("80D", _z)
@@ -671,7 +717,12 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
             ("80CCD1B", ch6a.amount_80ccd1b, "deductions_chapter6a.amount_80ccd1b"),
             ("80CCD2", ch6a.amount_80ccd2, "deductions_chapter6a.amount_80ccd2"),
             ("80CCH", ch6a.amount_80cch, "deductions_chapter6a.amount_80cch"),
-            ("80D", ch6a.amount_80d_self_family + ch6a.amount_80d_parents, "deductions_chapter6a"),
+            ("80D", (
+                ch6a.amount_80d_self_family
+                + ch6a.amount_80d_parents
+                + ch6a.amount_80d_preventive_self
+                + ch6a.amount_80d_preventive_parents
+            ), "deductions_chapter6a"),
             ("80DD", ch6a.amount_80dd, "deductions_chapter6a.amount_80dd"),
             ("80DDB", ch6a.amount_80ddb, "deductions_chapter6a.amount_80ddb"),
             ("80E", ch6a.amount_80e, "deductions_chapter6a.amount_80e"),

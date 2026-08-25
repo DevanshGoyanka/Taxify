@@ -1,688 +1,120 @@
-import React, { useState, useEffect } from 'react';
-import { calculateHouseProperty, type HousePropertyInput, type PropertyCalculation, type HousePropertyCalculationResponse } from '../services/housePropertyCalculationService';
+import React from 'react';
+import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
+import type { HomeLoan, HouseProperty, TenantDetail } from '../domain/returns/types';
+import { STATE_CODE_OPTIONS, type StateCode } from '../domain/returns/cbdtEnums';
+const MONEY_MAX = 99999999999999;
+const PAN_PATTERN = '[A-Z]{5}[0-9]{4}[A-Z]';
+const PAN_TAN_PATTERN = '(?:[A-Z]{5}[0-9]{4}[A-Z]|[A-Z]{4}[0-9]{5}[A-Z])';
+const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: '#fff', color: 'var(--text-primary)' };
+const gridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 16 };
+const labelStyle: React.CSSProperties = { display: 'block', marginBottom: 5, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' };
 
-// Comprehensive House Property Entry interface - CBDT AY 2026-27 compliant
-interface HousePropertyEntry {
-  // ===== Property Identification =====
-  id: string;
-  name: string;  // User-friendly name for identification
-  propertySequenceNo: number;  // HPSNo (1 or 2 for ITR-1)
-  
-  // ===== Property Type =====
-  propertyType: 'SELF_OCCUPIED' | 'LET_OUT' | 'DEEMED_LET_OUT';
-  
-  // ===== Full Address =====
-  address: string;           // AddrDetail
-  premisesName?: string;    // ResidenceName (NEW)
-  roadOrStreet?: string;    // RoadOrStreet (NEW)
-  area?: string;           // LocalityOrArea (NEW)
-  city: string;             // CityOrTownOrDistrict
-  state: string;
-  pinCode: string;
-  countryCode?: string;     // Default "91" (NEW)
-  propertyIdentificationNo: string;
-  
-  // ===== Ownership (NEW AY 2026-27) =====
-  propertyOwnerType: 'SE' | 'MI' | 'SP' | 'OT';  // Single/Minor/Self+Spouse/Others
-  ownershipType: 'SOLE' | 'JOINT';
-  ownershipShare: number;   // Percentage
-  isCoOwned: boolean;
-  isPropertyInJointOwnership?: boolean;
-  coOwners: Array<{
-    coOwnerSNo?: number;
-    name: string;
-    pan: string;
-    aadhaar?: string;     // NEW AY 2026-27
-    share: number;
-  }>;
-  
-  // ===== Let-out property fields =====
-  annualRent: number;
-  municipalRateableValue: number;
-  fairRentValue: number;
-  standardRent: number;
-  annualLettingValue: number;
-  unrealizedRent: number;
-  arrearsOfRent: number;
-  vacancyPeriodMonths: number;
-  
-  // ===== Deductions =====
-  municipalTaxesPaid: number;
-  interestOnLoan: number;
-  preConstructionInterest: number;
-  
-  // ===== Loan Details - Section 24B (NEW AY 2026-27) =====
-  lenderName: string;
-  lenderPAN: string;
-  lenderType?: 'B' | 'I' | 'L';  // Bank/Institution/Lender
-  loanAccountNo: string;
-  loanSanctionDate: string;
-  constructionCompletionDate: string;
-  principalRepayment: number;
-  totalLoanAmount?: number;        // NEW
-  loanOutstandingAmount?: number;   // NEW
-  completedWithin5Years?: boolean;  // NEW
-  
-  // ===== Home Loans List (NEW AY 2026-27) =====
-  homeLoans?: Array<{
-    lenderType?: 'B' | 'I' | 'L';
-    lenderName: string;
-    lenderPAN?: string;
-    loanAccountNo?: string;
-    dateOfLoan?: string;
-    totalLoanAmount?: number;
-    loanOutstandingAmount?: number;
-    interestUs24B?: number;
-    constructionCompletionDate?: string;
-    completedWithin5Years?: boolean;
-    preConstructionInterest?: number;
-  }>;
-  
-  // ===== Tenant Details (NEW AY 2026-27) =====
-  tenantName: string;
-  tenantPAN: string;
-  tenantAadhaar?: string;  // NEW
-  
-  // ===== Computed (from Backend) =====
-  grossAnnualValue: number;
-  netAnnualValue: number;
-  standardDeduction30Pct: number;
-  incomeFromHP: number;  // CAN BE NEGATIVE (LOSS)
-  
-  // Max rent calculations
-  maxRent?: number;
-  
-  // ===== Pre-construction interest =====
-  preConstructionInterestClaimed?: number;
+interface HousePropertyComputed {
+  annualLettableValue: number;
+  rentNotRealized: number;
+  localTaxes: number;
+  totalUnrealizedAndTax: number;
+  balanceALV: number;
+  annualOfPropOwned: number;
+  thirtyPercentOfBalance: number;
+  interestOnBorrowedCapital: number;
+  totalDeduction: number;
+  arrearsUnrealizedRentReceived: number;
+  incomeOfHP: number;
 }
-
-interface HousePropertyEntryManagerProps {
-  entries: HousePropertyEntry[];
-  onChange: (entries: HousePropertyEntry[]) => void;
-  itrForm: string;
+interface TaxSummary {
+  hpIncome?: number;
+  totalIncChargeHP?: number;
+  housePropertyDetails?: HousePropertyComputed[];
 }
+interface Props { entries: HouseProperty[]; passThroughIncome: number; onChange: (entries: HouseProperty[], passThroughIncome: number) => void; itrForm: string; taxResult?: TaxSummary | null; }
+interface FieldProps extends React.InputHTMLAttributes<HTMLInputElement> { label: string; value: string | number; onValue: (value: string | number) => void; }
 
-export function HousePropertyEntryManager({ entries, onChange, itrForm }: HousePropertyEntryManagerProps) {
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
-  const [showCoOwnerModal, setShowCoOwnerModal] = useState<number | null>(null);
-  const [calculationResponse, setCalculationResponse] = useState<HousePropertyCalculationResponse | null>(null);
-  const [isInitialized, setIsInitialized] = useState(false);
+/** Captures CBDT Schedule HP details while displaying only backend-computed tax results. */
+export function HousePropertyEntryManager({ entries, passThroughIncome, onChange, itrForm, taxResult }: Props): React.ReactElement {
+  const normalizedForm = itrForm.replace('-', '').toUpperCase();
+  const maxProperties = normalizedForm === 'ITR1' ? 2 : normalizedForm === 'ITR4' ? 1 : Number.POSITIVE_INFINITY;
+  const addressMax = maxProperties === 2 ? 50 : 200;
+  const isItr2 = normalizedForm === 'ITR2';
+  const supportsPassThrough = isItr2 || normalizedForm === 'ITR3';
 
-  // Normalize ITR form (handle both 'ITR-1' and 'ITR1' formats)
-  const normalizedForm = itrForm.replace('-', '');
-  const maxProperties = normalizedForm === 'ITR1' ? 1 : 999;
+  const commit = (next: HouseProperty[]): void => onChange(next, passThroughIncome);
+  const patch = (index: number, values: Partial<HouseProperty>): void => commit(entries.map((entry, i) => i === index ? { ...entry, ...values } : entry));
+  const patchNested = <T extends 'coOwners' | 'tenantDetails' | 'homeLoans'>(propertyIndex: number, key: T, rowIndex: number, values: Partial<HouseProperty[T][number]>): void => {
+    const entry = entries[propertyIndex];
+    const rows = entry[key].map((row, index) => index === rowIndex ? { ...row, ...values } : row) as HouseProperty[T];
+    patch(propertyIndex, { [key]: rows } as Pick<HouseProperty, T>);
+  };
+  const removeNested = (propertyIndex: number, key: 'coOwners' | 'tenantDetails' | 'homeLoans', rowIndex: number): void => patch(propertyIndex, { [key]: entries[propertyIndex][key].filter((_, index) => index !== rowIndex) });
 
-  const recalculateAllProperties = async (updatedEntries: HousePropertyEntry[]) => {
-    try {
-      // Map frontend entry format to API input format
-      const inputs: HousePropertyInput[] = updatedEntries.map(entry => ({
-        propertySequenceNo: entry.propertySequenceNo || 1,
-        propertyType: entry.propertyType,
-        address: entry.address,
-        city: entry.city,
-        state: entry.state,
-        pinCode: entry.pinCode,
-        propertyIdentificationNo: entry.propertyIdentificationNo,
-        propertyOwnerType: entry.propertyOwnerType,
-        ownershipType: entry.ownershipType,
-        ownershipShare: entry.ownershipShare,
-        isCoOwned: entry.isCoOwned,
-        coOwners: entry.coOwners?.map(co => ({
-          name: co.name,
-          pan: co.pan,
-          aadhaar: co.aadhaar || '',
-          sharePercentage: co.share
-        })),
-        annualRent: entry.annualRent,
-        municipalRateableValue: entry.municipalRateableValue,
-        fairRentValue: entry.fairRentValue,
-        standardRent: entry.standardRent,
-        unrealizedRent: entry.unrealizedRent,
-        arrearsOfRent: entry.arrearsOfRent,
-        vacancyPeriodMonths: entry.vacancyPeriodMonths,
-        municipalTaxesPaid: entry.municipalTaxesPaid,
-        interestOnLoan: entry.interestOnLoan,
-        preConstructionInterest: entry.preConstructionInterest,
-        homeLoans: entry.homeLoans?.map(loan => ({
-          lenderType: loan.lenderType || 'B',
-          lenderName: loan.lenderName || '',
-          lenderPAN: loan.lenderPAN || '',
-          loanAccountNo: loan.loanAccountNo || '',
-          dateOfLoan: loan.dateOfLoan || '',
-          totalLoanAmount: loan.totalLoanAmount || 0,
-          loanOutstandingAmount: loan.loanOutstandingAmount || 0,
-          interestUs24B: loan.interestUs24B || entry.interestOnLoan || 0
-        })) || undefined,
-        tenantName: entry.tenantName,
-        tenantPAN: entry.tenantPAN,
-        tenantAadhaar: entry.tenantAadhaar || ''
-      }));
-
-      const response = await calculateHouseProperty(itrForm.replace('-', '').replace('ITR', '2025-26'), inputs);
-      setCalculationResponse(response);
-
-      // Map response back to entries
-      const recalculated = updatedEntries.map((entry, idx) => {
-        const calc = response.properties[idx];
-        if (!calc) return entry;
-        return {
-          ...entry,
-          grossAnnualValue: calc.grossAnnualValue || 0,
-          netAnnualValue: calc.netAnnualValue || 0,
-          standardDeduction30Pct: calc.standardDeduction || 0,
-          incomeFromHP: calc.incomeFromHP || 0,
-        };
-      });
-      onChange(recalculated);
-    } catch (error) {
-      console.error('Error calculating house property:', error);
-    }
+  const addProperty = (): void => {
+    if (entries.length >= maxProperties) return;
+    const property: HouseProperty = { id: `hp_${Date.now()}`, name: '', propertySequenceNo: entries.length + 1, propertyType: 'SELF_OCCUPIED',
+      address: '', premisesName: '', roadOrStreet: '', area: '', city: '', state: '', pinCode: '', zipCode: '', countryCode: '91', propertyIdentificationNo: '',
+      propertyOwnerType: 'SE', propertyOwnerOther: '', ownershipType: 'SOLE', ownershipShare: 100, isCoOwned: false, isPropertyInJointOwnership: false, coOwners: [],
+      annualRent: 0, municipalRateableValue: 0, fairRentValue: 0, standardRent: 0, annualLettingValue: 0, unrealizedRent: 0, arrearsOfRent: 0,
+      vacancyPeriodMonths: 0, municipalTaxesPaid: 0, interestOnLoan: 0, preConstructionInterest: 0, lenderName: '', lenderPAN: '', lenderType: 'B',
+      loanAccountNo: '', loanSanctionDate: '', constructionCompletionDate: '', principalRepayment: 0, totalLoanAmount: 0, loanOutstandingAmount: 0,
+      completedWithin5Years: false, homeLoans: [], tenantDetails: [], tenantName: '', tenantPAN: '', tenantAadhaar: '', passThroughIncome: 0,
+      grossAnnualValue: 0, netAnnualValue: 0, standardDeduction30Pct: 0, incomeFromHP: 0, maxRent: 0, preConstructionInterestClaimed: 0 };
+    commit([...entries, property]);
   };
 
-  // Auto-recalculate ONLY on initial load when entries have stale computed values
-  // We do NOT depend on [entries] in the second useEffect to avoid infinite loops:
-  // updateEntry -> onChange -> parent re-renders -> entries prop changes -> useEffect fires
-  // -> recalculateAllProperties -> onChange again -> infinite loop
-  useEffect(() => {
-    if (!isInitialized && entries.length > 0) {
-      // Check if needs recalculation (old format with computed values)
-      const needsRecalculation = entries.some(e => e.grossAnnualValue === 0 && (e.annualRent > 0 || e.interestOnLoan > 0));
-      if (needsRecalculation) {
-        recalculateAllProperties(entries);
-      }
-      setIsInitialized(true);
-    }
-  }, [entries, isInitialized]);
-  // NOTE: The second useEffect that called recalculateAllProperties on every [entries] change
-  // has been intentionally removed to prevent the infinite loop:
-  //   updateEntry -> onChange -> entries prop change -> useEffect -> recalculate -> onChange -> loop
-  // Recalculation is now triggered directly inside updateEntry() after field changes.
-
-  const addProperty = () => {
-    if (entries.length >= maxProperties) {
-      alert(`ITR-${itrForm.replace('ITR', '')} allows maximum ${maxProperties} property/properties`);
-      return;
-    }
-
-    const newEntry: HousePropertyEntry = {
-      id: `hp_${Date.now()}`,
-      name: '',
-      propertySequenceNo: entries.length + 1,
-      propertyType: 'SELF_OCCUPIED',
-      address: '',
-      premisesName: '',
-      roadOrStreet: '',
-      area: '',
-      city: '',
-      state: '',
-      pinCode: '',
-      countryCode: '91',
-      propertyIdentificationNo: '',
-      propertyOwnerType: 'SE',
-      ownershipType: 'SOLE',
-      ownershipShare: 100,
-      isCoOwned: false,
-      isPropertyInJointOwnership: false,
-      coOwners: [],
-      annualRent: 0,
-      municipalRateableValue: 0,
-      fairRentValue: 0,
-      standardRent: 0,
-      annualLettingValue: 0,
-      unrealizedRent: 0,
-      arrearsOfRent: 0,
-      vacancyPeriodMonths: 0,
-      municipalTaxesPaid: 0,
-      interestOnLoan: 0,
-      preConstructionInterest: 0,
-      lenderName: '',
-      lenderPAN: '',
-      lenderType: 'B',
-      loanAccountNo: '',
-      loanSanctionDate: '',
-      constructionCompletionDate: '',
-      principalRepayment: 0,
-      totalLoanAmount: 0,
-      loanOutstandingAmount: 0,
-      completedWithin5Years: true,
-      homeLoans: [],
-      tenantName: '',
-      tenantPAN: '',
-      tenantAadhaar: '',
-      grossAnnualValue: 0,
-      netAnnualValue: 0,
-      standardDeduction30Pct: 0,
-      incomeFromHP: 0,
-      maxRent: 0,
-      preConstructionInterestClaimed: 0
-    };
-
-    onChange([...entries, newEntry]);
-    setExpandedIndex(entries.length);
-  };
-
-  const updateEntry = (index: number, field: string, value: any) => {
-    const updated = [...entries];
-    updated[index] = { ...updated[index], [field]: value };
-    onChange(updated);
-    // Trigger backend recalculation
-    if (isInitialized) {
-      recalculateAllProperties(updated);
-    }
-  };
-
-  const removeEntry = (index: number) => {
-    const updated = entries.filter((_, i) => i !== index);
-    onChange(updated);
-    if (expandedIndex === index) setExpandedIndex(null);
-  };
-
-  const addCoOwner = (propertyIndex: number) => {
-    const updated = [...entries];
-    updated[propertyIndex].coOwners.push({ name: '', pan: '', share: 0 });
-    onChange(updated);
-  };
-
-  const updateCoOwner = (propertyIndex: number, coOwnerIndex: number, field: string, value: any) => {
-    const updated = [...entries];
-    updated[propertyIndex].coOwners[coOwnerIndex] = {
-      ...updated[propertyIndex].coOwners[coOwnerIndex],
-      [field]: value
-    };
-    onChange(updated);
-  };
-
-  const removeCoOwner = (propertyIndex: number, coOwnerIndex: number) => {
-    const updated = [...entries];
-    updated[propertyIndex].coOwners = updated[propertyIndex].coOwners.filter((_, i) => i !== coOwnerIndex);
-    onChange(updated);
-  };
-
-  const totalIncome = calculationResponse?.totalIncomeFromHP ?? entries.reduce((sum, e) => sum + e.incomeFromHP, 0);
-
-  return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>
-          House Property Entries ({entries.length}/{maxProperties === 999 ? '∞' : maxProperties})
-        </h3>
-        <button
-          onClick={addProperty}
-          disabled={entries.length >= maxProperties}
-          style={{
-            padding: '6px 12px',
-            background: entries.length >= maxProperties ? 'var(--border)' : 'var(--gold)',
-            color: 'white',
-            border: 'none',
-            borderRadius: 6,
-            fontSize: 13,
-            cursor: entries.length >= maxProperties ? 'not-allowed' : 'pointer'
-          }}
-        >
-          + Add Property
-        </button>
-      </div>
-
-      {entries.length === 0 && (
-        <div style={{ padding: 24, textAlign: 'center', background: 'var(--bg)', borderRadius: 6, border: '1px dashed var(--border)' }}>
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-            No house property entries added yet
-          </p>
-          <button
-            onClick={addProperty}
-            style={{
-              padding: '8px 16px',
-              background: 'var(--gold)',
-              color: 'white',
-              border: 'none',
-              borderRadius: 6,
-              fontSize: 13,
-              cursor: 'pointer'
-            }}
-          >
-            Add First Property
-          </button>
+  const updatePassThroughIncome = (value: number): void => onChange(entries, value);
+  const hasBackendResult = taxResult !== null && taxResult !== undefined;
+  const totalIncome = Number(taxResult?.totalIncChargeHP ?? taxResult?.hpIncome ?? 0);
+  return <div style={{ marginBottom: 24 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}><h3 style={{ fontSize: 14, color: 'var(--text-secondary)' }}>House Property Entries ({entries.length}/{Number.isFinite(maxProperties) ? maxProperties : '∞'})</h3><button type="button" onClick={addProperty} disabled={entries.length >= maxProperties} style={{ padding: '6px 12px', background: 'var(--gold)', color: '#fff', border: 0, borderRadius: 6 }}>+ Add Property</button></div>
+    {entries.length === 0 && <div style={{ padding: 24, textAlign: 'center', background: 'var(--bg)', color: 'var(--text-muted)' }}>No house property entries.</div>}
+    {entries.map((entry, index) => {
+      const computed = taxResult?.housePropertyDetails?.[index];
+      return <div key={entry.id} style={{ padding: 16, marginBottom: 24, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14 }}><strong style={{ fontSize: 13 }}>House Property — HPSNo {entry.propertySequenceNo}</strong><button type="button" onClick={() => commit(entries.filter((_, i) => i !== index))} style={{ background: 'var(--danger)', color: '#fff', border: 0, borderRadius: 4, padding: '4px 8px' }}>Remove</button></div>
+        <Section title="Property details"><div style={gridStyle}>
+          <NumberReadout label="House Property Serial Number (HPSNo) *" value={entry.propertySequenceNo} />
+          <Select label="Property type *" value={entry.propertyType} required onChange={(value) => patch(index, { propertyType: value as HouseProperty['propertyType'] })} options={[['SELF_OCCUPIED','Self occupied'],['LET_OUT','Let out'],['DEEMED_LET_OUT','Deemed let out']]} />
+          <Field label="Address *" type="text" value={entry.address} required maxLength={addressMax} onValue={(value) => patch(index, { address: String(value) })} />
+          <Field label="City / Town / District *" type="text" value={entry.city} required maxLength={50} onValue={(value) => patch(index, { city: String(value) })} />
+          <Select label="State code *" value={entry.state} required onChange={(value) => patch(index, { state: value as StateCode | '', pinCode: value === '99' ? '' : entry.pinCode, zipCode: value === '99' ? entry.zipCode : '' })} options={[["", "Select state"], ...STATE_CODE_OPTIONS.map(({ code, label }) => [code, `${code} — ${label}`] as [string,string])]} />
+          <Select label="Country code *" value={entry.countryCode} required onChange={(value) => patch(index, { countryCode: value, state: value === '91' ? (entry.state === '99' ? '' : entry.state) : '99', pinCode: value === '91' ? entry.pinCode : '', zipCode: value === '91' ? '' : entry.zipCode })} options={[['','Select'], ...ITD_COUNTRY_CODES.map((country) => [country.value, `${country.value} — ${country.label}`] as [string,string])]} />
+          {entry.state === '99' ? <Field label="ZIP / Postal code *" type="text" value={entry.zipCode} required maxLength={8} onValue={(value) => patch(index, { zipCode: String(value) })} /> : <Field label="PIN code *" type="text" value={entry.pinCode} required inputMode="numeric" pattern="[1-9][0-9]{5}" maxLength={6} onValue={(value) => patch(index, { pinCode: String(value) })} />}
+        </div></Section>
+        <Section title="Ownership"><div style={gridStyle}>
+          <Select label="Property owner type *" value={entry.propertyOwnerType} required onChange={(value) => patch(index, { propertyOwnerType: value as HouseProperty['propertyOwnerType'], propertyOwnerOther: value === 'OT' ? entry.propertyOwnerOther : '' })} options={[['SE','Self'],['MI','Minor'],['SP','Self and spouse'],['OT','Other']]} />
+          {entry.propertyOwnerType === 'OT' && <Field label="Other owner description *" type="text" value={entry.propertyOwnerOther} required maxLength={50} onValue={(value) => patch(index, { propertyOwnerOther: String(value) })} />}
+          <Select label="Is property co-owned? *" value={entry.isCoOwned ? 'Y' : 'N'} required onChange={(value) => patch(index, { isCoOwned: value === 'Y', ownershipType: value === 'Y' ? 'JOINT' : 'SOLE', isPropertyInJointOwnership: value === 'Y', ownershipShare: value === 'Y' ? entry.ownershipShare : 100, coOwners: value === 'Y' ? entry.coOwners : [] })} options={[['N','No'],['Y','Yes']]} />
+          {(isItr2 || entry.isCoOwned) && <Field label="Your ownership share % *" value={entry.ownershipShare} required readOnly={!entry.isCoOwned} min={entry.isCoOwned ? 0.01 : 100} max={entry.isCoOwned ? 99.99 : 100} step="0.01" onValue={(value) => patch(index, { ownershipShare: Number(value) })} />}
         </div>
-      )}
-
-      {entries.map((entry, index) => (
-        <div
-          key={entry.id}
-          style={{
-            marginBottom: 12,
-            border: '1px solid var(--border)',
-            borderRadius: 6,
-            overflow: 'hidden'
-          }}
-        >
-          {/* Header */}
-          <div
-            onClick={() => setExpandedIndex(expandedIndex === index ? null : index)}
-            style={{
-              padding: 12,
-              background: 'var(--bg)',
-              cursor: 'pointer',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>
-                {entry.name ? entry.name : `Property #${index + 1}`}
-              </span>
-              <span style={{
-                padding: '2px 8px',
-                background: entry.propertyType === 'SELF_OCCUPIED' ? 'var(--info-bg)' : 'var(--success-bg)',
-                color: entry.propertyType === 'SELF_OCCUPIED' ? 'var(--info)' : 'var(--success)',
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 500
-              }}>
-                {entry.propertyType.replace('_', ' ')}
-              </span>
-              {entry.address && (
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {entry.address.substring(0, 40)}{entry.address.length > 40 ? '...' : ''}
-                </span>
-              )}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ fontSize: 13, fontFamily: 'DM Mono', color: entry.incomeFromHP >= 0 ? 'var(--success)' : 'var(--error)' }}>
-                ₹{entry.incomeFromHP.toLocaleString('en-IN')}
-              </span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeEntry(index);
-                }}
-                style={{
-                  padding: '4px 8px',
-                  background: 'var(--error-bg)',
-                  color: 'var(--error)',
-                  border: 'none',
-                  borderRadius: 4,
-                  fontSize: 11,
-                  cursor: 'pointer'
-                }}
-              >
-                Remove
-              </button>
-              <span style={{ fontSize: 18, color: 'var(--text-secondary)' }}>
-                {expandedIndex === index ? '▼' : '▶'}
-              </span>
-            </div>
-          </div>
-
-          {/* Expanded Content */}
-          {expandedIndex === index && (
-            <div style={{ padding: 16, background: 'white' }}>
-              {/* Property Details */}
-              <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-                Property Details (CBDT Mandatory)
-              </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-                <div>
-                  <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 500 }}>Property Name (for easy identification)</label>
-                  <input
-                    type="text"
-                    value={entry.name || ''}
-                    onChange={(e) => updateEntry(index, 'name', e.target.value)}
-                    placeholder="e.g., Mumbai Flat, Bangalore Villa"
-                    style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 500 }}>Property Type *</label>
-                  <select
-                    value={entry.propertyType}
-                    onChange={(e) => updateEntry(index, 'propertyType', e.target.value)}
-                    style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}
-                  >
-                    <option value="SELF_OCCUPIED">Self Occupied</option>
-                    <option value="LET_OUT">Let Out</option>
-                    <option value="DEEMED_LET_OUT">Deemed Let Out</option>
-                  </select>
-                </div>
-                <InputField label="Property ID/Survey No *" value={entry.propertyIdentificationNo} onChange={(v) => updateEntry(index, 'propertyIdentificationNo', v)} type="text" />
-                <div>
-                  <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 500 }}>Ownership Type *</label>
-                  <select
-                    value={entry.ownershipType}
-                    onChange={(e) => updateEntry(index, 'ownershipType', e.target.value)}
-                    style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}
-                  >
-                    <option value="SOLE">Sole Ownership</option>
-                    <option value="JOINT">Joint Ownership</option>
-                  </select>
-                </div>
-                <InputField label="Address *" value={entry.address} onChange={(v) => updateEntry(index, 'address', v)} type="text" />
-                <InputField label="City *" value={entry.city} onChange={(v) => updateEntry(index, 'city', v)} type="text" />
-                <InputField label="State *" value={entry.state} onChange={(v) => updateEntry(index, 'state', v)} type="text" />
-                <InputField label="PIN Code *" value={entry.pinCode} onChange={(v) => updateEntry(index, 'pinCode', v)} type="text" />
-                <InputField label="Your Ownership Share %" value={entry.ownershipShare} onChange={(v) => updateEntry(index, 'ownershipShare', v)} />
-                <div>
-                  <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 500 }}>Is Property Co-owned?</label>
-                  <select
-                    value={entry.isCoOwned ? 'YES' : 'NO'}
-                    onChange={(e) => updateEntry(index, 'isCoOwned', e.target.value === 'YES')}
-                    style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12 }}
-                  >
-                    <option value="NO">No</option>
-                    <option value="YES">Yes</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Co-owners Section */}
-              {entry.isCoOwned && (
-                <div style={{ marginTop: 16, padding: 12, background: 'var(--bg)', borderRadius: 6 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                    <h5 style={{ fontSize: 12, fontWeight: 600 }}>Co-owners Details</h5>
-                    <button
-                      onClick={() => addCoOwner(index)}
-                      style={{
-                        padding: '4px 8px',
-                        background: 'var(--gold)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 4,
-                        fontSize: 11,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      + Add Co-owner
-                    </button>
-                  </div>
-                  {entry.coOwners.map((coOwner, coIndex) => (
-                    <div key={coIndex} style={{ display: 'grid', gridTemplateColumns: '2fr 2fr 1fr auto', gap: 8, marginBottom: 8, alignItems: 'end' }}>
-                      <InputField label="Co-owner Name" value={coOwner.name} onChange={(v) => updateCoOwner(index, coIndex, 'name', v)} type="text" />
-                      <InputField label="Co-owner PAN" value={coOwner.pan} onChange={(v) => updateCoOwner(index, coIndex, 'pan', v)} type="text" />
-                      <InputField label="Share %" value={coOwner.share} onChange={(v) => updateCoOwner(index, coIndex, 'share', v)} />
-                      <button
-                        onClick={() => removeCoOwner(index, coIndex)}
-                        style={{
-                          padding: '6px 8px',
-                          background: 'var(--error-bg)',
-                          color: 'var(--error)',
-                          border: 'none',
-                          borderRadius: 4,
-                          fontSize: 11,
-                          cursor: 'pointer'
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Let-out Property Fields */}
-              {entry.propertyType === 'LET_OUT' && (
-                <>
-                  <h4 style={{ fontSize: 13, fontWeight: 600, marginTop: 16, marginBottom: 12, color: 'var(--text-secondary)' }}>
-                    Rental Income Details (CBDT Schedule HP)
-                  </h4>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-                    <InputField label="Annual Rent Received" value={entry.annualRent} onChange={(v) => updateEntry(index, 'annualRent', v)} />
-                    <InputField label="Municipal Rateable Value" value={entry.municipalRateableValue} onChange={(v) => updateEntry(index, 'municipalRateableValue', v)} />
-                    <InputField label="Fair Rent Value" value={entry.fairRentValue} onChange={(v) => updateEntry(index, 'fairRentValue', v)} />
-                    <InputField label="Standard Rent (if applicable)" value={entry.standardRent} onChange={(v) => updateEntry(index, 'standardRent', v)} />
-                    <InputField label="Unrealized Rent" value={entry.unrealizedRent} onChange={(v) => updateEntry(index, 'unrealizedRent', v)} />
-                    <InputField label="Arrears of Rent Received" value={entry.arrearsOfRent} onChange={(v) => updateEntry(index, 'arrearsOfRent', v)} />
-                    <InputField label="Vacancy Period (months)" value={entry.vacancyPeriodMonths} onChange={(v) => updateEntry(index, 'vacancyPeriodMonths', v)} />
-                    <InputField label="Municipal Taxes Paid" value={entry.municipalTaxesPaid} onChange={(v) => updateEntry(index, 'municipalTaxesPaid', v)} />
-                  </div>
-
-                  {/* Detailed HP computation breakdown - matches salary tab style */}
-                  <div style={{ padding: '14px 16px', background: '#fef3e2', borderRadius: 8, marginBottom: 16, border: '1px solid #f3d9a8' }}>
-                    {/* Gross Annual Value */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 8, borderBottom: '1px dashed #f3d9a8' }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>Gross Annual Value (GAV)</span>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: '#1e293b' }}>₹{entry.grossAnnualValue.toLocaleString('en-IN')}</span>
-                    </div>
-
-                    {/* Municipal Taxes */}
-                    <div style={{ paddingTop: 8, paddingBottom: 8, borderBottom: '1px dashed #f3d9a8' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
-                        <span>Less: Municipal Taxes Paid</span>
-                        <span style={{ color: '#ef4444' }}>- ₹{entry.municipalTaxesPaid.toLocaleString('en-IN')}</span>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600, color: '#1e293b', marginTop: 6 }}>
-                        <span>= Net Annual Value (NAV)</span>
-                        <span>₹{entry.netAnnualValue.toLocaleString('en-IN')}</span>
-                      </div>
-                    </div>
-
-                    {/* Standard Deduction 30% */}
-                    <div style={{ paddingTop: 8, paddingBottom: 8, borderBottom: '1px dashed #f3d9a8' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
-                        <span>Less: Standard Deduction u/s 24(a) <span style={{ fontSize: 10, color: '#94a3b8' }}>(30% of NAV)</span></span>
-                        <span style={{ color: '#ef4444' }}>- ₹{entry.standardDeduction30Pct.toLocaleString('en-IN')}</span>
-                      </div>
-                    </div>
-
-                    {/* Interest on Loan */}
-                    <div style={{ paddingTop: 8, paddingBottom: 8, borderBottom: '1px dashed #f3d9a8' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
-                        <span>
-                          Less: Interest on Loan u/s 24(b)
-                          {entry.interestOnLoan > 0 && (
-                            <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>(uncapped for let-out)</span>
-                          )}
-                        </span>
-                        <span style={{ color: '#ef4444' }}>
-                          - ₹{((entry.interestOnLoan || 0) + (entry.preConstructionInterest > 0 ? entry.preConstructionInterest / 5 : 0)).toLocaleString('en-IN')}
-                        </span>
-                      </div>
-                      {entry.preConstructionInterest > 0 && (
-                        <div style={{ fontSize: 11, color: '#94a3b8', paddingLeft: 8, marginTop: 2 }}>
-                          Includes pre-construction interest: ₹{(entry.preConstructionInterest / 5).toLocaleString('en-IN')} (1/5th of ₹{entry.preConstructionInterest.toLocaleString('en-IN')})
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Net Income from HP */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 10 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>= Income from House Property</span>
-                      <span style={{ fontSize: 16, fontWeight: 700, color: entry.incomeFromHP >= 0 ? '#16a34a' : '#dc2626' }}>
-                        ₹{entry.incomeFromHP.toLocaleString('en-IN')}
-                      </span>
-                    </div>
-                  </div>
-
-                  <h4 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)' }}>
-                    Tenant Details
-                  </h4>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-                    <InputField label="Tenant Name" value={entry.tenantName} onChange={(v) => updateEntry(index, 'tenantName', v)} type="text" />
-                    <InputField label="Tenant PAN" value={entry.tenantPAN} onChange={(v) => updateEntry(index, 'tenantPAN', v)} type="text" />
-                  </div>
-                </>
-              )}
-
-              {/* Loan Details */}
-              <h4 style={{ fontSize: 13, fontWeight: 600, marginTop: 16, marginBottom: 12, color: 'var(--text-secondary)' }}>
-                Home Loan Details (if applicable)
-              </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-                <InputField label="Interest on Loan" value={entry.interestOnLoan} onChange={(v) => updateEntry(index, 'interestOnLoan', v)} />
-                <InputField label="Pre-construction Interest" value={entry.preConstructionInterest} onChange={(v) => updateEntry(index, 'preConstructionInterest', v)} />
-                <InputField label="Principal Repayment (for 80C)" value={entry.principalRepayment} onChange={(v) => updateEntry(index, 'principalRepayment', v)} />
-                <InputField label="Lender Name" value={entry.lenderName} onChange={(v) => updateEntry(index, 'lenderName', v)} type="text" />
-                <InputField label="Lender PAN" value={entry.lenderPAN} onChange={(v) => updateEntry(index, 'lenderPAN', v)} type="text" />
-                <InputField label="Loan Account Number" value={entry.loanAccountNo} onChange={(v) => updateEntry(index, 'loanAccountNo', v)} type="text" />
-                <InputField label="Loan Sanction Date" value={entry.loanSanctionDate} onChange={(v) => updateEntry(index, 'loanSanctionDate', v)} type="date" />
-                <InputField label="Construction Completion Date" value={entry.constructionCompletionDate} onChange={(v) => updateEntry(index, 'constructionCompletionDate', v)} type="date" />
-              </div>
-
-              {/* Income Summary */}
-              <div style={{ marginTop: 16, padding: 12, background: entry.incomeFromHP >= 0 ? 'var(--success-bg)' : 'var(--error-bg)', borderRadius: 6 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: entry.incomeFromHP >= 0 ? 'var(--success)' : 'var(--error)' }}>
-                  Income/Loss from this Property: ₹{entry.incomeFromHP.toLocaleString('en-IN')}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      ))}
-
-      {/* Total Summary */}
-      {entries.length > 0 && (
-        <div style={{ marginTop: 16, padding: 16, background: 'var(--gold-pale)', borderRadius: 6, border: '1px solid var(--gold)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>Total Income from House Property</span>
-            <span style={{ fontSize: 16, fontWeight: 600, fontFamily: 'DM Mono', color: totalIncome >= 0 ? 'var(--success)' : 'var(--error)' }}>
-              ₹{totalIncome.toLocaleString('en-IN')}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* CBDT Compliance Info */}
-      <div style={{ marginTop: 16, padding: 12, background: 'var(--info-bg)', borderRadius: 6, fontSize: 11, color: 'var(--info)' }}>
-        <strong>CBDT Schedule HP Requirements:</strong>
-        <ul style={{ marginTop: 8, paddingLeft: 20, marginBottom: 0 }}>
-          <li>Property Identification Number (Survey/Plot No) is mandatory</li>
-          <li>For let-out property: GAV = Higher of (Rent, Municipal Value, Fair Rent) - Unrealized Rent</li>
-          <li>Standard Deduction: 30% of Net Annual Value (automatic)</li>
-          <li>Self-occupied: Interest deduction limited to ₹2,00,000</li>
-          <li>Pre-construction interest: Deductible in 5 equal installments</li>
-          <li>Co-owner details required if property is jointly owned</li>
-        </ul>
-      </div>
-    </div>
-  );
+        {entry.isCoOwned && <Rows title="Co-owner details" add={() => patch(index, { coOwners: [...entry.coOwners, { coOwnerSNo: entry.coOwners.length + 1, name: '', pan: '', aadhaar: '', share: 0 }] })}>{entry.coOwners.map((owner, row) => <div key={row} style={gridStyle}><Field label={`Serial ${row + 1} — Name *`} type="text" value={owner.name} required maxLength={125} onValue={(value) => patchNested(index, 'coOwners', row, { name: String(value) })} /><Field label="PAN" type="text" value={owner.pan} pattern={PAN_PATTERN} maxLength={10} onValue={(value) => patchNested(index, 'coOwners', row, { pan: String(value).toUpperCase() })} /><Field label="Aadhaar" type="text" value={owner.aadhaar} inputMode="numeric" pattern="[0-9]{12}" maxLength={12} onValue={(value) => patchNested(index, 'coOwners', row, { aadhaar: String(value) })} /><Field label="Share % *" value={owner.share} required min={0.01} max={99.99} step="0.01" onValue={(value) => patchNested(index, 'coOwners', row, { share: Number(value) })} /><Remove onClick={() => removeNested(index, 'coOwners', row)} /></div>)}</Rows>}
+        </Section>
+        {(isItr2 || entry.propertyType !== 'SELF_OCCUPIED') && <Section title="Rent details"><div style={gridStyle}>
+          <Money label="Annual Lettable Value *" required value={entry.annualLettingValue} onValue={(value) => patch(index, { annualLettingValue: Number(value) })} />
+          <Money label="Rent not realized" value={entry.unrealizedRent} onValue={(value) => patch(index, { unrealizedRent: Number(value) })} />
+          <Money label="Local taxes" value={entry.municipalTaxesPaid} onValue={(value) => patch(index, { municipalTaxesPaid: Number(value) })} />
+          <Money label="Arrears / unrealized rent received" value={entry.arrearsOfRent} onValue={(value) => patch(index, { arrearsOfRent: Number(value) })} />
+        </div></Section>}
+        <Rows title="Tenant details (optional)" add={() => patch(index, { tenantDetails: [...entry.tenantDetails, { tenantSNo: entry.tenantDetails.length + 1, name: '', pan: '', aadhaar: '', panOrTan: '' }] })}>{entry.tenantDetails.map((tenant: TenantDetail, row) => <div key={row} style={gridStyle}><Field label={`Serial ${row + 1} — Name *`} type="text" value={tenant.name} required maxLength={125} onValue={(value) => patchNested(index, 'tenantDetails', row, { name: String(value) })} /><Field label="PAN" type="text" value={tenant.pan} pattern={PAN_PATTERN} maxLength={10} onValue={(value) => patchNested(index, 'tenantDetails', row, { pan: String(value).toUpperCase() })} /><Field label="Aadhaar" type="text" value={tenant.aadhaar} pattern="[0-9]{12}" inputMode="numeric" maxLength={12} onValue={(value) => patchNested(index, 'tenantDetails', row, { aadhaar: String(value) })} /><Field label="PAN / TAN" type="text" value={tenant.panOrTan} pattern={PAN_TAN_PATTERN} maxLength={10} onValue={(value) => patchNested(index, 'tenantDetails', row, { panOrTan: String(value).toUpperCase() })} /><Remove onClick={() => removeNested(index, 'tenantDetails', row)} /></div>)}</Rows>
+        <Section title="Section 24(b) home loans"><Rows title="Loan details" add={() => patch(index, { homeLoans: [...entry.homeLoans, { lenderType: 'B', lenderName: '', lenderPAN: '', loanAccountNo: '', dateOfLoan: '', totalLoanAmount: 0, loanOutstandingAmount: 0, interestUs24B: 0, constructionCompletionDate: '', completedWithin5Years: false, preConstructionInterest: 0 }] })}>{entry.homeLoans.map((loan: HomeLoan, row) => <div key={row} style={gridStyle}><Select label="Lender source *" value={loan.lenderType} required onChange={(value) => patchNested(index, 'homeLoans', row, { lenderType: value as HomeLoan['lenderType'] })} options={[['B','Bank'],['I','Institution']]} /><Field label="Lender name *" type="text" value={loan.lenderName} required maxLength={125} onValue={(value) => patchNested(index, 'homeLoans', row, { lenderName: String(value) })} /><Field label="Account / reference *" type="text" value={loan.loanAccountNo} required maxLength={20} pattern="[A-Za-z0-9 /-]+" onValue={(value) => patchNested(index, 'homeLoans', row, { loanAccountNo: String(value) })} /><Field label="Date of loan *" type="date" value={loan.dateOfLoan} required onValue={(value) => patchNested(index, 'homeLoans', row, { dateOfLoan: String(value) })} /><Money label="Total loan amount *" required value={loan.totalLoanAmount} onValue={(value) => patchNested(index, 'homeLoans', row, { totalLoanAmount: Number(value) })} /><Money label="Outstanding amount *" required value={loan.loanOutstandingAmount} onValue={(value) => patchNested(index, 'homeLoans', row, { loanOutstandingAmount: Number(value) })} /><Money label="Interest u/s 24(b) *" required value={loan.interestUs24B} onValue={(value) => patchNested(index, 'homeLoans', row, { interestUs24B: Number(value) })} /><Remove onClick={() => removeNested(index, 'homeLoans', row)} /></div>)}</Rows></Section>
+        <Section title="Computed Schedule HP result"><div style={gridStyle}>
+          <Readout label="Total unrealized rent and local taxes" value={computed?.totalUnrealizedAndTax ?? null} />
+          <Readout label="Balance annual letting value" value={computed?.balanceALV ?? null} />
+          <Readout label="Annual value of your owned share" value={computed?.annualOfPropOwned ?? null} />
+          <Readout label="30% deduction u/s 24(a)" value={computed?.thirtyPercentOfBalance ?? null} />
+          <Readout label="Total deduction" value={computed?.totalDeduction ?? null} />
+          <Readout label="Income from this house property" value={computed?.incomeOfHP ?? null} />
+        </div><p style={{ margin: '0 0 16px', fontSize: 11, color: 'var(--text-muted)' }}>{hasBackendResult ? 'Read-only values calculated by the tax engine for this property.' : 'Run computation to view the tax-engine result.'}</p></Section>
+      </div>;
+    })}
+    {supportsPassThrough && <Section title="Schedule HP pass-through income"><div style={gridStyle}><Field label="Pass-through income" value={passThroughIncome} type="number" min={isItr2 ? -MONEY_MAX : undefined} max={MONEY_MAX} step="1" onValue={(value) => updatePassThroughIncome(Number(value))} /></div></Section>}
+    <div style={{ padding: 16, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, display: 'flex', justifyContent: 'space-between' }}><strong>Total Income Chargeable under House Property *</strong><strong>{hasBackendResult ? `₹${totalIncome.toLocaleString('en-IN')}` : '—'}</strong></div>
+  </div>;
 }
 
-// Helper Input Field Component
-interface InputFieldProps {
-  label: string;
-  value: string | number;
-  onChange: (value: string | number) => void;
-  type?: 'text' | 'number' | 'date';
-}
-
-function InputField({ label, value, onChange, type = 'number' }: InputFieldProps) {
-  return (
-    <div>
-      <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 500, color: 'var(--text-secondary)' }}>
-        {label}
-      </label>
-      <input
-        type={type}
-        value={value || (type === 'number' ? 0 : '')}
-        onChange={(e) => onChange(type === 'number' ? Number(e.target.value) : e.target.value)}
-        style={{
-          width: '100%',
-          padding: '6px 8px',
-          border: '1px solid var(--border)',
-          borderRadius: 4,
-          fontSize: 12,
-          fontFamily: type === 'number' ? 'DM Mono' : 'inherit'
-        }}
-      />
-    </div>
-  );
-}
+function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement { return <section><h4 style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '20px 0 12px' }}>{title}</h4>{children}</section>; }
+function Rows({ title, add, children }: { title: string; add: () => void; children: React.ReactNode }): React.ReactElement { return <div style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 6, marginBottom: 16 }}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}><strong style={{ fontSize: 12 }}>{title}</strong><button type="button" onClick={add} style={{ background: 'var(--gold)', color: '#fff', border: 0, borderRadius: 5, padding: '5px 9px' }}>+ Add</button></div>{children}</div>; }
+function Field({ label, value, onValue, type = 'number', ...props }: FieldProps): React.ReactElement { return <div><label style={labelStyle}>{label}</label><input {...props} type={type} value={value ?? ''} onChange={(event) => onValue(type === 'number' ? Number(event.target.value) : event.target.value)} style={inputStyle} /></div>; }
+function Money(props: Omit<FieldProps, 'type'>): React.ReactElement { return <Field {...props} type="number" min={0} max={MONEY_MAX} step="1" inputMode="numeric" />; }
+function Select({ label, value, options, onChange, required }: { label: string; value: string; options: Array<[string,string]>; onChange: (value: string) => void; required?: boolean }): React.ReactElement { return <div><label style={labelStyle}>{label}</label><select value={value} required={required} onChange={(event) => onChange(event.target.value)} style={inputStyle}>{options.map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></div>; }
+function Remove({ onClick }: { onClick: () => void }): React.ReactElement { return <div><button type="button" onClick={onClick} style={{ background: 'var(--danger)', color: '#fff', border: 0, borderRadius: 4, padding: '7px 9px' }}>Remove</button></div>; }
+function NumberReadout({ label, value }: { label: string; value: number }): React.ReactElement { return <div><label style={labelStyle}>{label}</label><input readOnly type="number" value={value} style={{ ...inputStyle, background: '#f8fafc' }} /></div>; }
+function Readout({ label, value }: { label: string; value: number | null }): React.ReactElement { return <div><label style={labelStyle}>{label}</label><input readOnly value={value === null ? '—' : `₹${Number(value).toLocaleString('en-IN')}`} style={{ ...inputStyle, background: '#f8fafc' }} /></div>; }
