@@ -1,0 +1,860 @@
+<title>Taxify Prod Audit</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+  /* ── Token layer ─────────────────────────────────────────────── */
+  :root {
+    --bg:          #F2F4F8;
+    --surface:     #FFFFFF;
+    --surface-2:   #E8EBF2;
+    --border:      #D4D8E4;
+    --text:        #181C27;
+    --muted:       #5B6478;
+    --accent:      #1B3A5C;
+    --accent-fg:   #FFFFFF;
+
+    --blocker:     #B52830;
+    --blocker-bg:  #FBF0F0;
+    --blocker-bd:  #EAB4B4;
+
+    --high:        #C45A10;
+    --high-bg:     #FDF3EC;
+    --high-bd:     #E8C09A;
+
+    --medium:      #1E6FA5;
+    --medium-bg:   #EEF6FC;
+    --medium-bd:   #9FCDE8;
+
+    --low:         #4A6472;
+    --low-bg:      #EDF1F3;
+    --low-bd:      #A8BDC6;
+
+    --mono:        "JetBrains Mono", "Fira Code", monospace;
+    --sans:        "Source Sans 3", system-ui, sans-serif;
+    --display:     "Fraunces", Georgia, serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:          #0E1117;
+      --surface:     #161B26;
+      --surface-2:   #1E2436;
+      --border:      #2A3148;
+      --text:        #DDE2EF;
+      --muted:       #7A869E;
+      --accent:      #4A7DB5;
+      --accent-fg:   #FFFFFF;
+
+      --blocker-bg:  #200E0E;
+      --blocker-bd:  #5A2020;
+
+      --high-bg:     #1E1108;
+      --high-bd:     #6B3510;
+
+      --medium-bg:   #091828;
+      --medium-bd:   #1A4E78;
+
+      --low-bg:      #101618;
+      --low-bd:      #2A3C44;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:          #0E1117;
+    --surface:     #161B26;
+    --surface-2:   #1E2436;
+    --border:      #2A3148;
+    --text:        #DDE2EF;
+    --muted:       #7A869E;
+    --accent:      #4A7DB5;
+    --accent-fg:   #FFFFFF;
+
+    --blocker-bg:  #200E0E;
+    --blocker-bd:  #5A2020;
+
+    --high-bg:     #1E1108;
+    --high-bd:     #6B3510;
+
+    --medium-bg:   #091828;
+    --medium-bd:   #1A4E78;
+
+    --low-bg:      #101618;
+    --low-bd:      #2A3C44;
+  }
+
+  /* ── Reset & base ────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Layout shell ────────────────────────────────────────────── */
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  /* ── Header ──────────────────────────────────────────────────── */
+  .header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 28px;
+    margin-bottom: 36px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  .header h1 {
+    font-family: var(--display);
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+
+  .header-meta {
+    font-size: 13px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  /* ── Verdict banner ──────────────────────────────────────────── */
+  .verdict {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--blocker-bg);
+    border: 1px solid var(--blocker-bd);
+    border-left: 4px solid var(--blocker);
+    border-radius: 6px;
+    padding: 18px 22px;
+    margin-bottom: 32px;
+  }
+
+  .verdict-icon {
+    font-size: 28px;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
+  .verdict-text strong {
+    display: block;
+    font-family: var(--display);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--blocker);
+    margin-bottom: 2px;
+  }
+
+  .verdict-text p {
+    font-size: 13.5px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  /* ── Stats row ───────────────────────────────────────────────── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 40px;
+  }
+
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+    text-align: center;
+  }
+
+  .stat-num {
+    font-family: var(--display);
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 4px;
+  }
+
+  .stat-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .stat.blocker .stat-num { color: var(--blocker); }
+  .stat.high    .stat-num { color: var(--high); }
+  .stat.medium  .stat-num { color: var(--medium); }
+  .stat.low     .stat-num { color: var(--low); }
+
+  /* ── Section heading ─────────────────────────────────────────── */
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    margin-top: 40px;
+  }
+
+  .section-head:first-of-type { margin-top: 0; }
+
+  .severity-chip {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 3px;
+  }
+
+  .chip-blocker { background: var(--blocker); color: #fff; }
+  .chip-high    { background: var(--high);    color: #fff; }
+  .chip-medium  { background: var(--medium);  color: #fff; }
+  .chip-low     { background: var(--low);     color: #fff; }
+
+  .section-head h2 {
+    font-family: var(--display);
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .section-desc {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 14px;
+    padding-left: 2px;
+  }
+
+  /* ── Finding card ────────────────────────────────────────────── */
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+
+  .finding-inner {
+    display: grid;
+    grid-template-columns: 3px 1fr;
+  }
+
+  .finding-bar-blocker { background: var(--blocker); }
+  .finding-bar-high    { background: var(--high); }
+  .finding-bar-medium  { background: var(--medium); }
+  .finding-bar-low     { background: var(--low); }
+
+  .finding-body {
+    padding: 14px 18px;
+  }
+
+  .finding-id {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+
+  .finding-title {
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.35;
+    margin-bottom: 6px;
+    text-wrap: balance;
+  }
+
+  .finding-desc {
+    font-size: 13.5px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-bottom: 8px;
+  }
+
+  .finding-desc strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .loc {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 8px;
+    margin-top: 2px;
+    margin-right: 4px;
+    margin-bottom: 2px;
+  }
+
+  .locs { display: flex; flex-wrap: wrap; gap: 4px; }
+
+  .tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 1px 7px;
+    border-radius: 2px;
+    display: inline-block;
+    margin-right: 4px;
+  }
+
+  .tag-dup      { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+  .tag-wrong    { background: #FFF5F5; color: #8B2020; border: 1px solid #F0C0C0; }
+  .tag-partial  { background: #FFFBEA; color: #7A5F00; border: 1px solid #E8D680; }
+  .tag-missing  { background: var(--medium-bg); color: var(--medium); border: 1px solid var(--medium-bd); }
+  .tag-security { background: #F5F0FF; color: #5B3FA0; border: 1px solid #C9B8F0; }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .tag-wrong    { background: #280C0C; color: #E07070; border-color: #4A1818; }
+    :root:not([data-theme="light"]) .tag-partial  { background: #1E1900; color: #C8A800; border-color: #4A4000; }
+    :root:not([data-theme="light"]) .tag-security { background: #160F28; color: #A88EE0; border-color: #3A2860; }
+  }
+
+  :root[data-theme="dark"] .tag-wrong    { background: #280C0C; color: #E07070; border-color: #4A1818; }
+  :root[data-theme="dark"] .tag-partial  { background: #1E1900; color: #C8A800; border-color: #4A4000; }
+  :root[data-theme="dark"] .tag-security { background: #160F28; color: #A88EE0; border-color: #3A2860; }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 40px 0 0;
+  }
+
+  .footer {
+    margin-top: 48px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  @media (max-width: 600px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .header h1 { font-size: 24px; }
+  }
+</style>
+
+<div class="page">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="eyebrow">Taxify · Production Readiness Audit · AY 2026-27</div>
+    <h1>ITR-1 &amp; ITR-4 Sign-off Report</h1>
+    <div class="header-meta">Audited 2026-08-26 &nbsp;·&nbsp; 29 findings across 4 severity levels</div>
+  </header>
+
+  <!-- Verdict -->
+  <div class="verdict">
+    <div class="verdict-icon">⛔</div>
+    <div class="verdict-text">
+      <strong>Not production ready.</strong>
+      <p>7 blockers must be resolved before any real taxpayer filing. ITD portal rejects on fake TANs; ~90 CBDT validation rules are unimplemented; and a child allowance field is silently hardcoded to zero for everyone. High-severity tax logic errors exist in 80CCD(2) and the duplicate ERI route architecture introduces divergence risk.</p>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat blocker">
+      <div class="stat-num">7</div>
+      <div class="stat-label">Blockers</div>
+    </div>
+    <div class="stat high">
+      <div class="stat-num">8</div>
+      <div class="stat-label">High</div>
+    </div>
+    <div class="stat medium">
+      <div class="stat-num">9</div>
+      <div class="stat-label">Medium</div>
+    </div>
+    <div class="stat low">
+      <div class="stat-num">5</div>
+      <div class="stat-label">Low</div>
+    </div>
+  </div>
+
+  <!-- ── BLOCKERS ─────────────────────────────────────────────── -->
+  <div class="section-head">
+    <span class="severity-chip chip-blocker">Blocker</span>
+    <h2>Must fix before any real filing</h2>
+  </div>
+  <p class="section-desc">ITD portal will hard-reject, or silent data corruption will occur.</p>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-blocker"></div>
+      <div class="finding-body">
+        <div class="finding-id">B-01 &nbsp;<span class="tag tag-wrong">Wrong</span></div>
+        <div class="finding-title">Fake TAN "DELA00001A" hardcoded as fallback in both ITR-1 and ITR-4 builders</div>
+        <div class="finding-desc">
+          When a TDS entry in the input doesn't carry a TAN, the JSON builder falls back to the fabricated value <code>DELA00001A</code>. The ITD portal validates every TAN against its deductor registry — a non-existent TAN causes a <strong>hard portal rejection of the entire filing</strong>. The right fix is to make TAN a required field on the TDS entry schema and surface the validation error before building the JSON.
+        </div>
+        <div class="locs">
+          <span class="loc">app/engine/itd/itr1.py:1218, 1241</span>
+          <span class="loc">app/engine/itd/itr4.py:2292, 2314</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-blocker"></div>
+      <div class="finding-body">
+        <div class="finding-id">B-02 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">/itr1/compute-json does not call validate_itr1_json() — ITR-4 does, ITR-1 doesn't</div>
+        <div class="finding-desc">
+          <code>itr1_schema.py</code> exports <code>validate_itr1_json()</code> which runs the generated JSON against the official CBDT schema. The <code>/itr4/compute-json</code> route calls the equivalent <code>validate_itr4_json()</code> (itr.py:523). The <code>/itr1/compute-json</code> route (itr.py:329–383) performs no such step — schema-invalid JSON is silently returned and would fail at the ITD portal. One import and one call is the fix.
+        </div>
+        <div class="locs">
+          <span class="loc">app/routers/itr.py:329–383</span>
+          <span class="loc">app/engine/itd/itr1_schema.py:45</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-blocker"></div>
+      <div class="finding-body">
+        <div class="finding-id">B-03 &nbsp;<span class="tag tag-partial">Partial</span></div>
+        <div class="finding-title">Children education &amp; hostel allowance hardcoded to num_children=0 — always ₹0 for everyone</div>
+        <div class="finding-desc">
+          The salary schedule computes Section 10(14) child exemptions by calling <code>_exempt_children_education(allowance, 0)</code> and <code>_exempt_hostel(allowance, 0)</code> — literally passing <code>0</code> as the child count. The comment in the code confirms this: <em>"the schema does not yet have a dedicated field, so default to 0 children (i.e., exemption = 0)"</em>. Any taxpayer with children claiming ₹100–₹300/month per child gets <strong>zero exemption</strong>, inflating their taxable salary.
+        </div>
+        <div class="locs">
+          <span class="loc">app/engine/schedules/salary.py:154–158</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-blocker"></div>
+      <div class="finding-body">
+        <div class="finding-id">B-04 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">~50 ITR-1 CBDT portal validation rules unimplemented</div>
+        <div class="finding-desc">
+          Your own <code>REMAINING_ITEMS_TO_IMPLEMENT.md</code> documents these explicitly. Notable missing rules: <strong>Rules 31–42</strong> (exempt income dropdown uniqueness), <strong>44–46</strong> (HP annual value computations), <strong>66–73</strong> (exempt allowance limits), <strong>78–87</strong> (80G donee PAN validation), <strong>261–263</strong> (HRA exemption schedule detail), <strong>295–300</strong> (co-ownership validations). The ITD portal runs its own rule engine on uploaded JSON and rejects on any failed rule. Passing your API's validation does not mean the portal will accept it.
+        </div>
+        <div class="locs">
+          <span class="loc">Docs/REMAINING_ITEMS_TO_IMPLEMENT.md</span>
+          <span class="loc">app/engine/validators/itr1/</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-blocker"></div>
+      <div class="finding-body">
+        <div class="finding-id">B-05 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">~40 ITR-4 CBDT portal validation rules unimplemented</div>
+        <div class="finding-desc">
+          Same problem as B-04 for ITR-4 (Sugam). Missing rules include 44AD/44ADA/44AE turnover limit cross-checks, HP co-ownership, 80G PAN validation, and exempt income dropdown uniqueness. Filing a return that passes your validator but fails the portal's rule engine leaves the taxpayer with a non-filed status and a confusing error from the ITD portal.
+        </div>
+        <div class="locs">
+          <span class="loc">Docs/REMAINING_ITEMS_TO_IMPLEMENT.md (ITR-4 section)</span>
+          <span class="loc">app/engine/validators/itr4/</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-blocker"></div>
+      <div class="finding-body">
+        <div class="finding-id">B-06 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">GST Schedule absent from ITR-4 — any GST-registered presumptive taxpayer cannot properly file</div>
+        <div class="finding-desc">
+          ITR-4 requires a GSTIN-wise turnover schedule for any taxpayer with a GSTIN. The <code>REMAINING_ITEMS_TO_IMPLEMENT.md</code> explicitly lists "GST Schedule — Not implemented". The builder does emit <code>TurnoverGrsRcptForGSTIN</code> as an empty array with a zero total, which means <strong>GSTIN data is silently dropped</strong> rather than reported. A GST-registered 44AD/44ADA assessee filing through Taxify will produce a non-compliant JSON.
+        </div>
+        <div class="locs">
+          <span class="loc">app/engine/itd/itr4.py:734–756</span>
+          <span class="loc">Docs/REMAINING_ITEMS_TO_IMPLEMENT.md</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-blocker"></div>
+      <div class="finding-body">
+        <div class="finding-id">B-07 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">HRA Schedule 10(13A) computation detail absent from ITD JSON output</div>
+        <div class="finding-desc">
+          CBDT rules 261–263 require the Schedule 10(13A) breakdown (city category, actual HRA received, rent paid, 10%-of-salary threshold) in the JSON. Taxify accepts <code>hra_exempt_amount</code> as a user-entered figure and passes it through, but never builds the schedule backing it. The ITD portal will reject filings where the HRA exemption is claimed without the corroborating schedule details. This affects a large proportion of salaried ITR-1 filers.
+        </div>
+        <div class="locs">
+          <span class="loc">app/engine/itd/itr1.py (no Schedule 10_13A builder)</span>
+          <span class="loc">app/schemas/itr1.py (hra_exempt_amount is user-input, no schedule fields)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── HIGH ─────────────────────────────────────────────────── -->
+  <div class="section-head">
+    <span class="severity-chip chip-high">High</span>
+    <h2>Incorrect tax logic or missing required fields</h2>
+  </div>
+  <p class="section-desc">Will produce wrong tax figures or cause portal failures for specific taxpayer profiles.</p>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-high"></div>
+      <div class="finding-body">
+        <div class="finding-id">H-01 &nbsp;<span class="tag tag-wrong">Wrong</span></div>
+        <div class="finding-title">80CCD(2) statutory cap silently bypassed when salary base is zero</div>
+        <div class="finding-desc">
+          In <code>section_80ccd2.py:64</code>: <code>ceiling = (salary * pct) if salary > 0 else user_claim</code>. When no salary base is provided the ceiling collapses to the user's own claim — making it a no-op cap. A taxpayer claiming ₹5L in employer NPS with ₹0 salary on record gets the full ₹5L deduction instead of ₹0. The caller in <code>itr1.py</code> passes salary correctly, but the fallback logic itself is wrong and will corrupt results for any edge case where the salary field is absent.
+        </div>
+        <div class="locs">
+          <span class="loc">app/engine/schedules/deductions/section_80ccd2.py:64</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-high"></div>
+      <div class="finding-body">
+        <div class="finding-id">H-02 &nbsp;<span class="tag tag-wrong">Wrong</span></div>
+        <div class="finding-title">SECTION_80CCD2_LIMIT annotated "No upper limit" — misrepresents the statute</div>
+        <div class="finding-desc">
+          <code>constants.py:171</code> declares <code>SECTION_80CCD2_LIMIT: Final[Decimal] = None</code> with the comment <em>"No upper limit"</em>. The section absolutely has a ceiling (10% or 14% of salary). This misleading constant invites future developers to skip the cap entirely if they import it. The constant should be removed or replaced with the two percentage constants that already exist in <code>section_80ccd2.py</code>.
+        </div>
+        <div class="locs">
+          <span class="loc">app/engine/constants.py:170–171</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-high"></div>
+      <div class="finding-body">
+        <div class="finding-id">H-03 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">AadhaarCardNo field missing from ITR-1 schema and CBDT JSON output</div>
+        <div class="finding-desc">
+          The CBDT ITR-1 JSON schema requires <code>AadhaarCardNo</code> (or an Aadhaar enrolment ID). Your <code>REMAINING_ITEMS_TO_IMPLEMENT.md</code> lists it as a known gap. Without it the generated JSON is structurally incomplete and will fail schema validation at the ITD portal for any taxpayer whose Aadhaar is seeded with PAN.
+        </div>
+        <div class="locs">
+          <span class="loc">app/schemas/itr1.py (field absent)</span>
+          <span class="loc">Docs/REMAINING_ITEMS_TO_IMPLEMENT.md</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-high"></div>
+      <div class="finding-body">
+        <div class="finding-id">H-04 &nbsp;<span class="tag tag-partial">Partial</span></div>
+        <div class="finding-title">SeventhProvisio139 declared but triggering-threshold logic absent</div>
+        <div class="finding-desc">
+          The schema accepts a <code>seventh_provisio_139</code> string field, but nowhere does the engine check whether the three statutory triggers are actually met: bank deposits &gt; ₹1 Cr, foreign travel &gt; ₹2 L, or electricity consumption &gt; ₹1 L. A taxpayer who crosses one of these thresholds but doesn't set the flag manually will be non-compliant. This must be auto-derived from other input fields, not left to the user.
+        </div>
+        <div class="locs">
+          <span class="loc">app/schemas/itr1.py:1434</span>
+          <span class="loc">app/engine/validators/itr1/input_rules.py (no threshold check)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-high"></div>
+      <div class="finding-body">
+        <div class="finding-id">H-05 &nbsp;<span class="tag tag-dup">Duplication</span></div>
+        <div class="finding-title">Two separate ERI route sets wired — divergence risk when one is updated</div>
+        <div class="finding-desc">
+          <code>/api/v1/eri/*</code> routes live in <code>integration.py</code> and <code>/eri/*</code> routes live in <code>eri.py</code>. Both are mounted in <code>main.py</code>. Both handle ERI login, add-client, prefill, e-verify, and acknowledgement. The README acknowledges this as "known duplication." Each update to ERI business logic must be applied in two places or the routes diverge. In production with real ERI credentials, a silent divergence means one path files correctly and the other doesn't.
+        </div>
+        <div class="locs">
+          <span class="loc">app/routers/integration.py (/api/v1/eri/*)</span>
+          <span class="loc">app/routers/eri.py (/eri/*)</span>
+          <span class="loc">app/main.py (both mounted)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-high"></div>
+      <div class="finding-body">
+        <div class="finding-id">H-06 &nbsp;<span class="tag tag-partial">Partial</span></div>
+        <div class="finding-title">Test suite is at 177 failures + 13 collection errors — zero regression safety net</div>
+        <div class="finding-desc">
+          The README documents this baseline. With no green tests, every bug fix or feature addition has no automated check confirming it didn't break something else. In a tax engine where a one-line constant change can swing a taxpayer's liability by lakhs, this is a production risk. The collection errors mean some test modules cannot even be imported, which likely means the real failure count is higher.
+        </div>
+        <div class="locs">
+          <span class="loc">README.md (Running Tests section)</span>
+          <span class="loc">tests/ (all)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-high"></div>
+      <div class="finding-body">
+        <div class="finding-id">H-07 &nbsp;<span class="tag tag-partial">Partial</span></div>
+        <div class="finding-title">PDF download is a lightweight summary, not a CBDT acknowledgement or ITR-V</div>
+        <div class="finding-desc">
+          The <code>download-pdf</code> endpoint emits a simple reportlab-generated text summary of stored <code>form_data</code>. It explicitly states in its docstring: <em>"A full CBDT-compliant PDF should be generated from the canonical engine result."</em> Taxpayers expect the ITR-V acknowledgement from this endpoint. If CA practices are presenting this to clients as the filed document, it will cause confusion and compliance issues.
+        </div>
+        <div class="locs">
+          <span class="loc">app/routers/client_itr.py:251–288</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-high"></div>
+      <div class="finding-body">
+        <div class="finding-id">H-08 &nbsp;<span class="tag tag-security">Security</span></div>
+        <div class="finding-title">CORS configured with allow_methods=["*"] and allow_headers=["*"] with credentials allowed</div>
+        <div class="finding-desc">
+          Combining <code>allow_credentials=True</code> with wildcard methods and headers is overly permissive and creates CSRF surface. Since the API handles real taxpayer PII and ERI credentials, the CORS policy should explicitly enumerate the allowed methods (<code>GET, POST, PUT, DELETE</code>) and headers (<code>Authorization, Content-Type</code>) rather than passing everything through.
+        </div>
+        <div class="locs">
+          <span class="loc">app/main.py:130–133</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MEDIUM ─────────────────────────────────────────────────── -->
+  <div class="section-head">
+    <span class="severity-chip chip-medium">Medium</span>
+    <h2>Maintenance &amp; correctness debt</h2>
+  </div>
+  <p class="section-desc">Won't cause immediate portal rejection but will create support burden or silent errors for edge cases.</p>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-medium"></div>
+      <div class="finding-body">
+        <div class="finding-id">M-01 &nbsp;<span class="tag tag-dup">Duplication</span></div>
+        <div class="finding-title">/tax-summary/compute and /api/tax/compute are duplicate routes for the same handler</div>
+        <div class="finding-desc">Two aliased routes with no deprecation path — any future change to the handler must be tested against both URLs, and API consumers don't know which to use.</div>
+        <div class="locs"><span class="loc">app/routers/tax.py</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-medium"></div>
+      <div class="finding-body">
+        <div class="finding-id">M-02 &nbsp;<span class="tag tag-security">Security</span></div>
+        <div class="finding-title">PORTAL_ENCRYPTION_KEY is optional — missing key silently stores portal passwords in plaintext</div>
+        <div class="finding-desc">If the env var is absent at deployment, Fernet encryption is bypassed and client ITD portal passwords are stored as plaintext in SQLite. On a shared EC2 instance this is a significant PII risk. The key should be required at startup.</div>
+        <div class="locs"><span class="loc">app/schemas/security/portal_crypto.py</span><span class="loc">README.md (Environment Variables)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-medium"></div>
+      <div class="finding-body">
+        <div class="finding-id">M-03 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">80G donee PAN validation not implemented — HIGH priority per your own docs</div>
+        <div class="finding-desc">Rules 78–87 require PAN-level validation of 80G donee institutions. Marked HIGH priority in <code>REMAINING_ITEMS_TO_IMPLEMENT.md</code>. Incorrect 80G donations inflate deductions and can trigger scrutiny.</div>
+        <div class="locs"><span class="loc">Docs/REMAINING_ITEMS_TO_IMPLEMENT.md (Rules 78–87)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-medium"></div>
+      <div class="finding-body">
+        <div class="finding-id">M-04 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">IFSC code validation absent — Rule 107 requires RBI-database check for non-cash donations</div>
+        <div class="finding-desc">Any 80G donation via bank transfer requires a valid IFSC. Currently any string passes. An invalid IFSC will cause a portal rejection for donation-heavy returns.</div>
+        <div class="locs"><span class="loc">Docs/REMAINING_ITEMS_TO_IMPLEMENT.md (Rule 107)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-medium"></div>
+      <div class="finding-body">
+        <div class="finding-id">M-05 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">Co-ownership property validations (Rules 295–300) absent</div>
+        <div class="finding-desc">Co-owned house property requires cross-owner income splitting and co-owner Aadhaar/PAN fields. These validations are listed as HIGH priority gaps. A co-owner claiming 100% income on an ITR-1 will be flagged in scrutiny.</div>
+        <div class="locs"><span class="loc">Docs/REMAINING_ITEMS_TO_IMPLEMENT.md (Rules 295–300)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-medium"></div>
+      <div class="finding-body">
+        <div class="finding-id">M-06 &nbsp;<span class="tag tag-partial">Partial</span></div>
+        <div class="finding-title">ITR-2 and ITR-3 compute-json routes are callable but engines have major known gaps</div>
+        <div class="finding-desc">Both <code>/itr2/compute-json</code> and <code>/itr3/compute-json</code> are live and authenticated. ITR-2 lacks Schedule FSI, FA, 5A, ESOP, PTI. ITR-3 lacks PartA_OI, PartA_QD, ScheduleGST, ScheduleDCG, ScheduleUD. These endpoints should return 501 until those gaps are closed, not silently emit incomplete JSON.</div>
+        <div class="locs"><span class="loc">app/routers/itr.py:386–469</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-medium"></div>
+      <div class="finding-body">
+        <div class="finding-id">M-07 &nbsp;<span class="tag tag-partial">Partial</span></div>
+        <div class="finding-title">Automation modules marked standalone but partially wired into API via integration router</div>
+        <div class="finding-desc">The README says <code>app/automation/</code> is "NOT wired to API" — but <code>integration.py</code> imports parts of it for 26AS parsing. This creates a hidden runtime dependency: if automation's Playwright dependencies are absent, the 26AS import endpoint fails with an ImportError in production.</div>
+        <div class="locs"><span class="loc">app/routers/integration.py (/integration/26as/import)</span><span class="loc">app/automation/ (ais_converter, as26_converter)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-medium"></div>
+      <div class="finding-body">
+        <div class="finding-id">M-08 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">Exempt income dropdown uniqueness (Rules 31–42) not enforced</div>
+        <div class="finding-desc">CBDT rules require that each exempt income nature code appears only once in the Schedule EI listing. Duplicates cause a portal rule-engine rejection. No uniqueness check exists in the validator.</div>
+        <div class="locs"><span class="loc">app/engine/validators/itr1/input_rules.py</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-medium"></div>
+      <div class="finding-body">
+        <div class="finding-id">M-09 &nbsp;<span class="tag tag-missing">Missing</span></div>
+        <div class="finding-title">No rate limiting on any API endpoint</div>
+        <div class="finding-desc">A single-worker uvicorn on a t3.micro with no rate limiting means auth endpoints (<code>/auth/login</code>, <code>/auth/signup</code>) are open to credential stuffing, and compute endpoints that invoke the Playwright/PDF stack can be abused to exhaust the instance. Given real taxpayer PII is held, even basic token-bucket rate limiting on auth routes is needed.</div>
+        <div class="locs"><span class="loc">app/main.py (no rate limit middleware)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── LOW ─────────────────────────────────────────────────────── -->
+  <div class="section-head">
+    <span class="severity-chip chip-low">Low</span>
+    <h2>Technical debt &amp; hygiene</h2>
+  </div>
+  <p class="section-desc">Address post-launch or in the next sprint.</p>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-low"></div>
+      <div class="finding-body">
+        <div class="finding-id">L-01 &nbsp;<span class="tag tag-dup">Duplication</span></div>
+        <div class="finding-title">saved_return table (legacy /returns/* endpoints) is orphaned from the client workflow</div>
+        <div class="finding-desc">Two parallel return-storage models exist: <code>client_itr</code> (client-scoped, the real workflow) and <code>saved_return</code> (user-scoped legacy). Both are live. Confusion about which one "matters" leads to incorrect dashboard counts and orphaned records.</div>
+        <div class="locs"><span class="loc">app/db/models.py</span><span class="loc">app/routers/itr.py (/returns/*)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-low"></div>
+      <div class="finding-body">
+        <div class="finding-id">L-02 &nbsp;<span class="tag tag-security">Security</span></div>
+        <div class="finding-title">JWT has no refresh token — 24h tokens cannot be revoked</div>
+        <div class="finding-desc">If a token is leaked (e.g., via a support ticket), it remains valid for up to 24 hours with no mechanism to revoke it. Given the PII sensitivity, consider a shorter expiry + refresh token pattern or a token denylist.</div>
+        <div class="locs"><span class="loc">app/auth/security.py:23</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-low"></div>
+      <div class="finding-body">
+        <div class="finding-id">L-03 &nbsp;<span class="tag tag-wrong">Wrong</span></div>
+        <div class="finding-title">Internal exception text exposed verbatim in HTTP 500 responses</div>
+        <div class="finding-desc"><code>detail=f"ITD JSON generation failed: {exc}"</code> leaks stack frames and internal variable state to API consumers in production. Wrap with a sanitized message and log the full exception server-side.</div>
+        <div class="locs"><span class="loc">app/routers/itr.py:375</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-low"></div>
+      <div class="finding-body">
+        <div class="finding-id">L-04 &nbsp;<span class="tag tag-partial">Partial</span></div>
+        <div class="finding-title">Several packages in requirements.txt have no version pin</div>
+        <div class="finding-desc"><code>sqlalchemy</code> (no version), <code>python-dotenv</code> (no version). A pip install on a fresh EC2 instance or CI runner could pull a breaking major version. Pin everything.</div>
+        <div class="locs"><span class="loc">requirements.txt:14, 15</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="finding">
+    <div class="finding-inner">
+      <div class="finding-bar finding-bar-low"></div>
+      <div class="finding-body">
+        <div class="finding-id">L-05 &nbsp;<span class="tag tag-dup">Duplication</span></div>
+        <div class="finding-title">schemas/ root directory duplicates app/schemas/ — two copies of itr1_input.py and itr4_input.py</div>
+        <div class="finding-desc">A top-level <code>schemas/</code> directory with older copies of the Pydantic schemas exists alongside the canonical <code>app/schemas/</code>. Divergence is a matter of time. CLI tools referencing the root copies will silently operate on stale schema definitions.</div>
+        <div class="locs"><span class="loc">schemas/itr1_input.py</span><span class="loc">app/schemas/itr1.py</span></div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <span>Taxify · ITR-1 &amp; ITR-4 Production Audit</span>
+    <span>AY 2026-27 · 2026-08-26</span>
+  </footer>
+
+</div>

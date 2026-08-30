@@ -119,6 +119,96 @@ def start_automation_import(
     }
 
 
+# ── Standalone portal login (no download, no submission) ────────────────────
+
+
+@router.post("/clients/{client_id}/automation/login")
+async def login_client_portal(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Launch a visible browser, log in to the ITD portal, and leave it open.
+
+    Performs only the login (PAN + password via the proven SAM sequence) and
+    returns once the authenticated dashboard is reached. The browser stays
+    open in the shared ``browser_manager`` context so follow-up after-login
+    tasks (manual navigation, a subsequent import/filing job, etc.) reuse the
+    same authenticated session. No download and no submission occur here.
+    """
+    import asyncio
+
+    from app.automation.auth import login_itd
+    from app.automation.browser import browser_manager
+    from app.automation.timing import AutomationTimeline
+    from app.schemas.security.portal_crypto import decrypt_portal_password
+
+    client = resolve_owned_client(client_id, current_user.id, db)
+    if not client.pan:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Client does not have a PAN on file.",
+        )
+    if not client.portal_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Client does not have a portal password. "
+                "Update the client with portal_password first."
+            ),
+        )
+    try:
+        password = decrypt_portal_password(client.portal_password)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The client's portal password could not be decrypted. Re-save it.",
+        ) from exc
+
+    logger.info(
+        "User %d requesting standalone portal login for client %s (%s)",
+        current_user.id, client.public_id, client.pan,
+    )
+
+    def _log(message: str) -> None:
+        logger.info("portal-login[%s]: %s", client.public_id, message)
+
+    timeline = AutomationTimeline(_log)
+    try:
+        context = await browser_manager.get_context(
+            log_callback=_log,
+            interactive=True,
+            timeline=timeline,
+        )
+        await login_itd(
+            user_id=client.pan,
+            password=password,
+            log_callback=_log,
+            context=context,
+            timeline=timeline,
+        )
+        # Leave the browser open for follow-up after-login tasks. The shared
+        # browser_manager keeps the authenticated context alive.
+        return {
+            "status": "logged_in",
+            "client_id": client.public_id,
+            "pan": client.pan,
+            "message": (
+                "Logged in to the ITD portal. The browser is left open so "
+                "follow-up after-login tasks can reuse the session."
+            ),
+        }
+    except Exception as exc:
+        logger.warning(
+            "Standalone portal login failed for client %s: %s",
+            client.public_id, exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Portal login failed: {exc}",
+        ) from exc
+
+
 # ── Polling endpoint ────────────────────────────────────────────────────────
 
 

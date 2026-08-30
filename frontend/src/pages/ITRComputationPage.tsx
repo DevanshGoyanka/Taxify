@@ -612,6 +612,32 @@ export default function ITRComputationPage() {
       toast.error(err.message || 'Draft JSON download failed');
     }
   };
+  const handleDownloadJson = async () => {
+    try {
+      await itrV2.download(clientId, effectiveAssessmentYear);
+      toast.success('Draft JSON downloaded successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Draft JSON download failed');
+    }
+  };
+  // Standalone portal login: launches a visible browser, logs in with the
+  // client's PAN + stored portal password, and leaves the browser open so
+  // after-login tasks can reuse the authenticated session. No download or
+  // submission occurs here.
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
+  const handleLogin = async () => {
+    if (loginSubmitting) return;
+    setLoginSubmitting(true);
+    const toastId = toast.loading('Launching browser and logging in to the ITD portal...');
+    try {
+      const res = await itrAutomationApi.loginPortal(clientId);
+      toast.success(`Logged in as ${res.pan}. Browser left open for follow-up tasks.`, { id: toastId });
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || err.message || 'Portal login failed', { id: toastId });
+    } finally {
+      setLoginSubmitting(false);
+    }
+  };
 
   // === Type-3 Direct Submit (portal upload automation) ===
 
@@ -1659,8 +1685,9 @@ export default function ITRComputationPage() {
           </button>
 
           <button
-            onClick={handleDownloadJson}
-            title="Download the saved canonical ReturnDraft as a JSON file"
+            onClick={handleLogin}
+            disabled={loginSubmitting}
+            title="Launch a visible browser, log in to the ITD portal with the client's PAN + password, and leave the browser open for follow-up after-login tasks"
             style={{
               padding: '6px 12px',
               background: 'var(--accent-purple)',
@@ -1668,10 +1695,11 @@ export default function ITRComputationPage() {
               border: 'none',
               borderRadius: 6,
               fontSize: 12,
-              cursor: 'pointer'
+              cursor: loginSubmitting ? 'wait' : 'pointer',
+              opacity: loginSubmitting ? 0.6 : 1
             }}
           >
-            Draft JSON
+            {loginSubmitting ? 'Logging in…' : 'Login'}
           </button>
 
           {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (
