@@ -103,7 +103,7 @@ def _eri_environment_hint() -> str:
         "provider it has not enabled for filing, so this usually means the "
         "SW_ID is not yet authorised rather than that the JSON is wrong. "
         "Complete Phase 4 of Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md — run "
-        "scripts/type3_uat_sanity.py and email the pack to "
+        "scripts/eri_uat_sanity.py and email the pack to "
         "erihelp@incometax.gov.in — and await ITD SW_ID enablement."
     )
 
