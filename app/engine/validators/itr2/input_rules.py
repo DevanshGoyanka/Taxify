@@ -14,7 +14,7 @@ from typing import Any
 
 from app.engine.validators.base import Severity, ValidationResult
 from app.schemas.itr1 import PropertyType, TaxRegime
-from app.schemas.itr2 import CGAssetType, ITR2Input, ResidentialStatus
+from app.schemas.itr2 import AssesseeStatus, CGAssetType, ITR2Input, ResidentialStatus
 
 _ZERO = Decimal("0")
 _AY_PATTERN = re.compile(r"^(\d{4})-(\d{2})$")
@@ -197,6 +197,86 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "ITR2-IN-HP-005", False,
                 "A non-co-owned property's assessee share must equal 100%.",
                 f"{path}.assessee_share_percent", "== 100", str(detail.assessee_share_percent),
+            ))
+
+    # ── Chapter VI-A Deductions — Phase 5C ─────────────────────────────────
+    # Every section's compute() in app/engine/schedules/deductions/ already
+    # self-caps to its statutory limit via min() and independently zeroes
+    # under the new regime (verified against every section module: 80C/
+    # 80CCC/80CCD1/80CCD1B/80D/80DD/80DDB/80E/80EE/80EEA/80EEB/80G/80GG/
+    # 80GGA/80GGC/80TTA/80TTB/80U all gate on `regime == TaxRegime.NEW`;
+    # 80CCD(2) and 80CCH do not, correctly, since both remain claimable
+    # under the new regime) — so a pre-compute cap/regime validator would be
+    # redundant for all of them. The one exception below (VIA-001) exists
+    # because the *silent-drop* itself, not the cap, is the thing worth
+    # surfacing to the taxpayer pre-compute — same rationale as SAL-006/7/8.
+    # What the calculator genuinely does NOT check — no section module takes
+    # an assessee-status or residential-status parameter at all — is
+    # eligibility by assessee type/residency, which is where 5C's real gap
+    # is and where the two rules below are aimed.
+    ch6a = inp.deductions_chapter6a
+    if ch6a is not None and inp.tax_regime == TaxRegime.NEW:
+        _new_regime_disallowed = {
+            "80C/80CCC/80CCD(1)": ch6a.amount_80c + ch6a.amount_80ccc + ch6a.amount_80ccd1,
+            "80CCD(1B)": ch6a.amount_80ccd1b,
+            "80D": ch6a.amount_80d_self_family + ch6a.amount_80d_parents,
+            "80DD": ch6a.amount_80dd,
+            "80DDB": ch6a.amount_80ddb,
+            "80E": ch6a.amount_80e,
+            "80EE": ch6a.amount_80ee,
+            "80EEA": ch6a.amount_80eea,
+            "80EEB": ch6a.amount_80eeb,
+            "80G": ch6a.amount_80g,
+            "80GG": ch6a.amount_80gg,
+            "80GGA": ch6a.amount_80gga,
+            "80GGC": ch6a.amount_80ggc,
+            "80TTA": ch6a.amount_80tta,
+            "80TTB": ch6a.amount_80ttb,
+            "80U": ch6a.amount_80u,
+        }
+        claimed = {section: amount for section, amount in _new_regime_disallowed.items() if amount > _ZERO}
+        if claimed:
+            results.append(_result(
+                "ITR2-IN-VIA-001", False,
+                "These Chapter VI-A deductions cannot be claimed under the new tax regime: "
+                + ", ".join(sorted(claimed)) + ".",
+                "deductions_chapter6a", "all listed sections == 0",
+                ", ".join(f"{k}={v}" for k, v in sorted(claimed.items())),
+            ))
+    if ch6a is not None and inp.filing_profile is not None and inp.filing_profile.assessee_status == AssesseeStatus.HUF:
+        _huf_disallowed = {
+            "80CCD(1)": ch6a.amount_80ccd1,
+            "80CCD(1B)": ch6a.amount_80ccd1b,
+            "80CCD(2)": ch6a.amount_80ccd2,
+            "80E": ch6a.amount_80e,
+            "80EE": ch6a.amount_80ee,
+            "80EEA": ch6a.amount_80eea,
+            "80EEB": ch6a.amount_80eeb,
+            "80U": ch6a.amount_80u,
+        }
+        claimed_huf = {section: amount for section, amount in _huf_disallowed.items() if amount > _ZERO}
+        if claimed_huf:
+            results.append(_result(
+                "ITR2-IN-VIA-002", False,
+                "These Chapter VI-A deductions are not available to a HUF assessee: "
+                + ", ".join(sorted(claimed_huf)) + ".",
+                "deductions_chapter6a", "all listed sections == 0",
+                ", ".join(f"{k}={v}" for k, v in sorted(claimed_huf.items())),
+            ))
+    if ch6a is not None and inp.residential_status == ResidentialStatus.NON_RESIDENT:
+        _nri_disallowed = {
+            "80DD": ch6a.amount_80dd,
+            "80DDB": ch6a.amount_80ddb,
+            "80U": ch6a.amount_80u,
+        }
+        claimed_nri = {section: amount for section, amount in _nri_disallowed.items() if amount > _ZERO}
+        if claimed_nri:
+            results.append(_result(
+                "ITR2-IN-VIA-003", False,
+                "These Chapter VI-A deductions are not available to a non-resident: "
+                + ", ".join(sorted(claimed_nri)) + ".",
+                "deductions_chapter6a", "all listed sections == 0",
+                ", ".join(f"{k}={v}" for k, v in sorted(claimed_nri.items())),
             ))
 
     # The schema has no assessee type or business-income field. Its shape itself

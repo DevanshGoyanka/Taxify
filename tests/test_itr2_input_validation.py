@@ -15,8 +15,19 @@ from datetime import date
 from decimal import Decimal
 
 from app.engine.validators.itr2.input_rules import validate_itr2_input
-from app.schemas.itr1 import HousePropertyIncome, PropertyType, SalaryIncome, TaxRegime
-from app.schemas.itr2 import AgeBracket, CG112AScrip, CGAssetType, CGTransaction, ITR2Input, PropertyFilingDetail, VDATransaction
+from app.schemas.itr1 import Chapter6ADeductions, FilingAddress, HousePropertyIncome, PropertyType, SalaryIncome, TaxRegime
+from app.schemas.itr2 import (
+    AgeBracket,
+    AssesseeStatus,
+    CG112AScrip,
+    CGAssetType,
+    CGTransaction,
+    ITR2FilingProfile,
+    ITR2Input,
+    PropertyFilingDetail,
+    ResidentialStatus,
+    VDATransaction,
+)
 
 
 def failed(results, rule_id: str) -> bool:
@@ -323,3 +334,61 @@ def test_VDA_004_transfer_date_after_financial_year_end_fails():
         acquisition_cost=Decimal("50000"), consideration_received=Decimal("90000"),
     )])
     assert failed(validate_itr2_input(inp), "ITR2-IN-VDA-004")
+
+
+# ── Phase 5C: Chapter VI-A deductions ───────────────────────────────────────
+
+def _filing_profile(assessee_status: AssesseeStatus = AssesseeStatus.INDIVIDUAL) -> ITR2FilingProfile:
+    return ITR2FilingProfile(
+        pan="ABCPN1234F", assessee_status=assessee_status, surname_or_org_name="Nair",
+        date_of_birth_or_formation=date(1985, 6, 15), father_name="Ramesh Nair",
+        verification_place="Mumbai",
+        primary_address=FilingAddress(
+            residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
+            state_code="27", mobile_no="9876543210", email="priya@example.com",
+        ),
+    )
+
+
+def test_VIA_001_new_regime_without_chapter6a_claims_passes():
+    inp = _base_input(tax_regime=TaxRegime.NEW, deductions_chapter6a=Chapter6ADeductions())
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-001")
+
+
+def test_VIA_001_new_regime_with_80c_claim_fails():
+    inp = _base_input(tax_regime=TaxRegime.NEW, deductions_chapter6a=Chapter6ADeductions(
+        amount_80c=Decimal("50000"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-001")
+
+
+def test_VIA_002_individual_with_80e_claim_passes():
+    inp = _base_input(
+        filing_profile=_filing_profile(AssesseeStatus.INDIVIDUAL),
+        deductions_chapter6a=Chapter6ADeductions(amount_80e=Decimal("30000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-002")
+
+
+def test_VIA_002_huf_with_80e_claim_fails():
+    inp = _base_input(
+        filing_profile=_filing_profile(AssesseeStatus.HUF),
+        deductions_chapter6a=Chapter6ADeductions(amount_80e=Decimal("30000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-002")
+
+
+def test_VIA_003_resident_with_80dd_claim_passes():
+    inp = _base_input(
+        residential_status=ResidentialStatus.RESIDENT,
+        deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("75000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-003")
+
+
+def test_VIA_003_non_resident_with_80dd_claim_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("75000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-003")

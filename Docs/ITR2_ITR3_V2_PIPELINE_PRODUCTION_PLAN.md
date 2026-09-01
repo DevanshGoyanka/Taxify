@@ -22,7 +22,7 @@ items point to, not a duplicate.
 | 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
 | 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
-| 5 | Complete the ITR-2 CBDT validator suite (5A/5B ✅ Delivered 2026-09-02; 5C–5E not started — see §Phase 5, 790 official rules found) | In progress |
+| 5 | Complete the ITR-2 CBDT validator suite (5A/5B/5C ✅ Delivered 2026-09-02; 5D–5E not started — see §Phase 5, 790 official rules found) | In progress |
 | 6 | Frontend: wire ITR-2 onto the canonical pipeline | Not started |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started |
 | 8 | ITR-3 (mirrors 1–7, reusing ITR-2's types) | Not started |
@@ -622,6 +622,57 @@ test per new rule, known-good and known-bad cases, same pattern as ITR-1's R145 
   rules against existing fixtures. Full suite (`pytest tests/ -q`, same deselect list as 5A's
   note) — **1365 passed, 0 failed.** `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed.
   `npm run build` — clean (5B touched no frontend files; run for full-verification discipline).
+
+**5C Delivered 2026-09-02.**
+
+- **`app/engine/validators/itr2/input_rules.py`** — added 3 Chapter VI-A rules
+  (`ITR2-IN-VIA-001`/`002`/`003`), by far the smallest of the four rule sets shipped so far
+  despite Chapter VI-A being the *largest* CBDT rule cluster (~150 rules). Before writing
+  anything, read every one of the 24 modules in `app/engine/schedules/deductions/` in full
+  (`section_80c.py`, `section_80d.py`, `section_80dd.py`, `section_80ddb.py`, `section_80e.py`,
+  `section_80ee.py`/`80eea.py`/`80eeb.py`, `section_80g.py`, `section_80gg.py`,
+  `section_80gga.py`/`80ggc.py`, `section_80tta.py`/`80ttb.py`, `section_80u.py`,
+  `section_80ccd1b.py`/`80ccd2.py`/`80cch.py`) — every single one already self-caps to its
+  statutory limit via `min()` and independently zeroes under the new regime by checking
+  `regime == TaxRegime.NEW` (except 80CCD(2) and 80CCH, correctly, since both remain claimable
+  under the new regime per actual law) — even section_80gg.py's HRA/80GG mutual-exclusivity
+  cross-check (CBDT rule 52) is already engine-enforced. This makes essentially the entire
+  literal-cap and per-section-new-regime portion of the catalog (CBDT rules 277–365, 611–697,
+  and more) exactly what 5A found for Schedule S: dead code if re-implemented as validators.
+  What none of the 24 modules take as a parameter, at all, is assessee status or residential
+  status — `compute_all()`'s signature is `(ded, gti, age_bracket, regime, os_input, ...)`, no
+  HUF/non-resident gate anywhere — so a HUF or non-resident assessee claiming an
+  individual-only or resident-only deduction would currently compute a materially wrong
+  (too-low) tax liability with no error. That gap is where all three shipped rules are aimed:
+  - `ITR2-IN-VIA-001` (consolidates CBDT rule 342 + the per-section rules it summarizes: 304,
+    315, 323, 350, etc.): claiming any of 80C/80CCC/80CCD(1)/80CCD(1B)/80D/80DD/80DDB/80E/
+    80EE/80EEA/80EEB/80G/80GG/80GGA/80GGC/80TTA/80TTB/80U under the new regime is rejected
+    pre-compute — same "surface the silent drop, don't let it compute a correct-but-unwanted
+    result" rationale as `SAL-006`/`007`/`008`. One consolidated rule rather than ~17 near-
+    duplicates, listing exactly which claimed sections triggered it. 80CCD(2)/80CCH
+    deliberately excluded — they're legitimately claimable under the new regime.
+  - `ITR2-IN-VIA-002` (CBDT rules 317–321, 324–326): a HUF assessee (`filing_profile.
+    assessee_status == AssesseeStatus.HUF`) cannot claim 80CCD(1)/80CCD(1B)/80CCD(2)/80E/
+    80EE/80EEA/80EEB/80U. Guarded on `filing_profile is not None`, since it's a
+    gateway-attached field not populated during bare `compute_canonical_itr2`.
+  - `ITR2-IN-VIA-003` (CBDT rules 327–329): a non-resident (`inp.residential_status ==
+    ResidentialStatus.NON_RESIDENT`, always populated — defaults to `RESIDENT`, unlike
+    `filing_profile`) cannot claim 80DD/80DDB/80U.
+  - **Not implemented**: 80TTA's senior-citizen exclusion and 80TTB's non-senior exclusion
+    (CBDT rules 322/323) — both already engine-enforced via the `age_bracket`-derived
+    `is_senior` flag `compute_all()` already threads into `section_80tta.py`/`section_80ttb.py`.
+    80QQB/80RRB (CBDT rules 333–336, 340–341, 630–635, 691–692) are not representable at all —
+    `Chapter6ADeductions` has no field for either section.
+- **`tests/test_itr2_input_validation.py`** — added 6 tests (one known-good + one known-bad per
+  rule, 3 rules × 2) under a new "Phase 5C" section, including a `_filing_profile()` helper for
+  constructing a minimal valid `ITR2FilingProfile` (needed only for `VIA-002`'s HUF check).
+- **Verification:** `pytest tests/test_itr2_input_validation.py -v` — 40 passed.
+  `pytest tests/test_draft_to_itr2_input.py tests/test_filing_gateway_v2_itr2.py
+  tests/test_itr2_validators.py tests/test_itr2_integration.py tests/test_itr2_itd_builder.py
+  tests/test_itr2_production_path.py -q` — 89 passed, no regressions. Full suite (`pytest
+  tests/ -q`, same deselect list as 5A/5B's notes) — **1371 passed, 0 failed.** `npx tsc -b` —
+  0 errors. `npx vitest run` — 167 passed. `npm run build` — clean (5C touched no frontend
+  files; run for full-verification discipline).
 
 ### Phase 6 — Frontend: wire ITR-2 onto the canonical `ReturnDraft`
 
