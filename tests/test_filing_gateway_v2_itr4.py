@@ -96,6 +96,7 @@ def _filing_ready_itr4(scheme: str = "44AD") -> ReturnDraft:
     p.mobile = "9876543210"
     p.email = "rahul@example.com"
     draft.verification.place = "Delhi"
+    draft.verification.date = "2026-07-31"
     draft.verification.declarationAccepted = True
     draft.verification.capacity = "SELF"
     draft.bankAccounts = [BankAccount(
@@ -133,21 +134,74 @@ def _filing_ready_itr4(scheme: str = "44AD") -> ReturnDraft:
 
 # ── compute_canonical_itr4 ───────────────────────────────────────────────────
 
-def test_compute_canonical_itr4_returns_summary():
-    """compute_canonical_itr4 maps + computes once and returns a summary."""
+def test_compute_canonical_itr4_prepares_filing_data_before_calculation() -> None:
+    """Compute receives the complete ITR-4 profile and refund data."""
     draft = _filing_ready_itr4("44AD")
+    draft.taxReturnPreparer.used = True
+    draft.taxReturnPreparer.identificationNumber = "123456"
+    draft.taxReturnPreparer.name = "Registered Tax Preparer"
+    draft.taxReturnPreparer.reimbursementFromGovernment = Decimal("750")
+
     pipeline = compute_canonical_itr4(draft)
+
     assert isinstance(pipeline, ITR4PipelineResult)
     assert pipeline.computation.gross_total_income > 0
     assert "grossTotalIncome" in pipeline.summary
     assert pipeline.summary["computedByFormEngine"] == "ITR-1"  # shared summary
     assert pipeline.breakdown["presumptive_scheme"] == "44AD"
+    assert pipeline.typed_input.filing_profile is not None
+    assert pipeline.typed_input.filing_profile.pan == draft.personal.pan
+    assert pipeline.typed_input.filing_profile.verification_place == draft.verification.place
+    assert len(pipeline.typed_input.bank_accounts) == 1
+    assert pipeline.typed_input.bank_accounts[0].is_primary is True
+    assert pipeline.typed_input.tax_return_preparer is not None
+
+
+def test_itr4_json_reuses_prepared_input_without_late_enrichment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSON generation passes the same prepared profile to the builder."""
+    draft = _filing_ready_itr4("44AD")
+    captured: dict[str, object] = {}
+
+    def fake_build(result: object, typed_input: object) -> dict[str, object]:
+        captured["typed_input"] = typed_input
+        return {"ITR": {"ITR4": {"ok": True}}}
+
+    import app.engine.filing_gateway_v2 as gateway
+    monkeypatch.setattr(gateway, "build_itr4_json", fake_build)
+    monkeypatch.setattr(gateway, "validate_itr4_json", lambda document: None)
+
+    expected = compute_canonical_itr4(draft)
+    official, _summary = gateway.generate_cbdt_json(draft)
+
+    assert official["ITR"]["ITR4"]["ok"] is True
+    actual = captured["typed_input"]
+    assert getattr(actual, "filing_profile") == expected.typed_input.filing_profile
+    assert getattr(actual, "bank_accounts") == expected.typed_input.bank_accounts
 
 
 def test_compute_canonical_dispatches_itr1_and_itr4():
     """compute_canonical routes ITR-1 and ITR-4 to the correct pipeline."""
     itr1 = create_empty_draft("2026-27", "ITR-1", "new")
     itr1.employers = [Employer(id="e1", basic=Decimal("800000"))]
+    itr1.personal.pan = "ABCDE1234F"
+    itr1.personal.firstName = "Rahul"
+    itr1.personal.surnameOrOrgName = "Sharma"
+    itr1.personal.fatherName = "Mohan Sharma"
+    itr1.personal.dateOfBirth = "1980-05-15"
+    itr1.personal.flatNo = "12A"
+    itr1.personal.localityOrArea = "Central"
+    itr1.personal.city = "Delhi"
+    itr1.personal.stateCode = "07"
+    itr1.personal.pinCode = "110001"
+    itr1.personal.employerCategory = "OTH"
+    itr1.personal.mobile = "9876543210"
+    itr1.personal.email = "rahul@example.com"
+    itr1.verification.place = "Delhi"
+    itr1.verification.date = "2026-07-31"
+    itr1.verification.declarationAccepted = True
+    itr1.verification.capacity = "SELF"
     result1 = compute_canonical(itr1)
     assert isinstance(result1, ITR1PipelineResult)
 
@@ -694,6 +748,7 @@ def test_generate_cbdt_json_itr1_still_works():
     p.firstName = "Rahul"
     p.surnameOrOrgName = "Sharma"
     p.fatherName = "Mohan Sharma"
+    p.employerCategory = "OTH"
     p.dateOfBirth = "1980-05-15"
     p.flatNo = "12A"
     p.localityOrArea = "Central"
@@ -703,6 +758,7 @@ def test_generate_cbdt_json_itr1_still_works():
     p.mobile = "9876543210"
     p.email = "rahul@example.com"
     draft.verification.place = "Delhi"
+    draft.verification.date = "2026-07-31"
     draft.verification.declarationAccepted = True
     draft.verification.capacity = "SELF"
     pipeline = compute_canonical(draft)

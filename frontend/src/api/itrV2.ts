@@ -21,6 +21,25 @@ function encoded(value: string | number): string {
   return encodeURIComponent(String(value));
 }
 
+function formatErrorValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
+    const record = value as { field?: unknown; message?: unknown; msg?: unknown; detail?: unknown };
+    const message = record.message ?? record.msg ?? record.detail;
+    if (message !== undefined) {
+      const prefix = record.field ? `${String(record.field)}: ` : '';
+      return `${prefix}${formatErrorValue(message)}`;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return 'Invalid structured error detail';
+    }
+  }
+  return String(value);
+}
+
 async function parseBlobError(error: unknown): Promise<never> {
   const responseData = (error as { response?: { data?: unknown } })?.response?.data;
   if (!(responseData instanceof Blob)) throw error;
@@ -36,8 +55,10 @@ async function parseBlobError(error: unknown): Promise<never> {
     : body;
   if (detail && typeof detail === 'object') {
     const record = detail as { message?: unknown; errors?: unknown };
-    const errors = Array.isArray(record.errors) ? record.errors.map(String) : [];
-    throw new CbdtGenerationError(String(record.message ?? 'CBDT JSON generation failed'), errors);
+    const errors = Array.isArray(record.errors)
+      ? record.errors.map(formatErrorValue).filter(Boolean)
+      : [];
+    throw new CbdtGenerationError(formatErrorValue(record.message) || 'CBDT JSON generation failed', errors);
   }
   throw new CbdtGenerationError(typeof detail === 'string' && detail ? detail : 'CBDT JSON generation failed');
 }

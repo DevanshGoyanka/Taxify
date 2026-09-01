@@ -1155,7 +1155,19 @@ def compute_canonical_itr4(draft: ReturnDraft) -> ITR4PipelineResult:
         )
     try:
         typed_input, breakdown = draft_to_itr4_input(draft)
+        filing_profile = _itr4_filing_profile(draft)
+        property_profile = _itr4_property_profile(draft)
+        bank_accounts = _itr4_bank_accounts(draft)
+        tax_return_preparer = _itr4_tax_return_preparer(draft)
+        typed_input = typed_input.model_copy(update={
+            "filing_profile": filing_profile,
+            "property_profile": property_profile,
+            "bank_accounts": bank_accounts,
+            "tax_return_preparer": tax_return_preparer,
+        })
         result = compute_itr4(typed_input)
+    except FilingGatewayV2Error:
+        raise
     except (DraftMappingError, ValidationError, ValueError) as exc:
         raise FilingGatewayV2Error(
             "ITR-4 mapping or computation failed.", [str(exc)]
@@ -1180,15 +1192,7 @@ def _generate_cbdt_json_itr4(draft: ReturnDraft) -> tuple[dict[str, Any], dict[s
     (parity with the legacy ``_build_itr4_official_json``).
     """
     pipeline = compute_canonical_itr4(draft)
-    filing_profile = _itr4_filing_profile(draft)
-    property_profile = _itr4_property_profile(draft)
-    bank_accounts = _itr4_bank_accounts(draft)
-    typed_input = pipeline.typed_input.model_copy(update={
-        "filing_profile": filing_profile,
-        "property_profile": property_profile,
-        "bank_accounts": bank_accounts,
-        "tax_return_preparer": _itr4_tax_return_preparer(draft),
-    })
+    typed_input = pipeline.typed_input
 
     from app.engine.validators.itr4 import (
         run_input_validation,

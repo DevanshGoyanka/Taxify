@@ -2,7 +2,7 @@
 
 ## Unified preparation flow for ITR-1, ITR-4, and partially implemented ITR-2
 
-**Status:** Phase 4 (ITR-1 canonical preparation) completed and manually verified by the user on 2026-09-02. ITR-4 and ITR-2 remain on their pre-migration flows.
+**Status:** Phase 5 (ITR-4 canonical preparation) completed and verified. ITR-1 canonical preparation remains complete; ITR-2 remains on its partial/pre-migration flow.
 **Scope:** Backend canonical pipeline, typed return models, field mapping, calculation, validation, CBDT JSON generation, legacy ITR-2 compatibility, and regression testing
 **Forms:** ITR-1 AY 2026-27, ITR-4 AY 2026-27, ITR-2 AY 2026-27 partial/v2 path
 **Primary objective:** Eliminate the split `compute first → enrich later` flow and make one complete canonical return representation the only source for computation and filing JSON.
@@ -16,7 +16,7 @@
 | 2 | Shared normalization and hashing | ⬜ Not started |
 | 3 | Shared mapping-helper extraction | ⬜ Not started |
 | 4 | ITR-1 complete preparation and JSON parity | ✅ Completed and manually verified |
-| 5 | ITR-4 complete preparation | ⬜ Not started |
+| 5 | ITR-4 complete preparation | ✅ Completed |
 | 6 | ITR-2 complete preparation | ⬜ Not started |
 | 7+ | Unified gateway, builders, frontend, legacy cleanup | ⬜ Not started |
 
@@ -187,33 +187,45 @@ The migration fixed the timing and consistency of the existing ITR-1 profile map
 
 These are not to be described as completed by this phase. The completed change specifically establishes that the existing supported ITR-1 profile/property/bank/verification/TRP data is prepared before computation and reused during JSON generation.
 
-### 2.3 Current ITR-4 compute path
+### 2.3 Completed ITR-4 canonical compute path
 
 ```text
 ReturnDraft
   → compute_canonical_itr4()
   → draft_to_itr4_input()
-  → ITR4Input
+  → _itr4_filing_profile()
+  → _itr4_property_profile()
+  → _itr4_bank_accounts()
+  → _itr4_tax_return_preparer()
+  → complete ITR4Input
   → compute_itr4()
   → ITR4Result
 ```
 
-### 2.4 Current ITR-4 JSON path
+The complete supported ITR-4 filing input is prepared before calculation. Filing profile, property profile, refund bank accounts, verification data, and optional TRP data are therefore available to the calculator input and are not added after computation.
+
+### 2.4 Completed ITR-4 JSON path
 
 ```text
 ReturnDraft
   → compute_canonical_itr4()
-  → _itr4_filing_profile(draft)
-  → _itr4_property_profile(draft)
-  → _itr4_bank_accounts(draft)
-  → _itr4_tax_return_preparer(draft)
-  → typed_input.model_copy(update={...})
+  → complete pipeline.typed_input
   → ITR-4 validators
   → build_itr4_json()
   → official schema validation
 ```
 
-The same split exists in ITR-4. The mapper documentation explicitly describes filing profile, bank accounts, and TRP as a later Phase 3 gateway concern.
+JSON generation reuses the exact prepared typed input returned by `compute_canonical_itr4()`; it does not perform a second `model_copy(update={...})` enrichment pass. The official builder still emits the CBDT wire-level `PersonalInfo`, property, verification, refund-bank, and optional `TaxReturnPreparer` blocks from that prepared input.
+
+Verification completed:
+
+```text
+ITR-4 gateway + calculator + input-validation suites: 164 passed
+Application compilation: passed
+git diff --check: passed
+```
+
+Remaining ITR-4 limitations are unchanged: shared profile normalization, immutable canonical context/hashing, broader Category B/D coverage, and cross-form personal-profile extraction remain future work. ITR-2 still uses its partial/pre-migration JSON enrichment path.
 
 ### 2.5 Current ITR-2 v2 path
 
