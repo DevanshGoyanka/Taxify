@@ -100,8 +100,8 @@ app/schemas/itr*.py  →   app/engine/calculators/itr*.py  →  app/engine/itd/i
    CBDT JSON schema (`additionalProperties: false`), including the `CreationInfo.Digest` —
    SHA-256 over the sorted JSON, computed after all schedules are built.
 
-Full field-by-field reference for all four forms: `Docs/ARCHITECTURE.md` (1800+ lines).
-Frontend-to-ITD field mapping: `Docs/frontend_integration_audit.md`.
+Full verified end-to-end architecture reference (every route, the v2 canonical pipeline,
+Type-3 submission, DB persistence): `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`.
 
 ### Routers → engine wiring
 

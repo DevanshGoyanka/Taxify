@@ -25,8 +25,8 @@ CI/CD via GitHub Actions (§10) — not an AWS resource, does not touch the free
 
 ## 2. Blockers to resolve before provisioning
 
-> **RESOLVED — ITD IP whitelisting.** The source-IP dependency described in
-> `Docs/ec2-proxy-decision.md` (whitelisted egress via `3.108.145.216`) has been
+> **RESOLVED — ITD IP whitelisting.** The source-IP dependency that used to require a
+> whitelisted-egress jump host (`3.108.145.216`) has been
 > **eliminated**. ERI endpoints no longer require the deployment IP to be whitelisted, so a
 > fresh EC2 instance with any public IP can reach them. No paperwork dependency, no jump-host
 > egress requirement, no provisioning order constraint.

@@ -2,7 +2,11 @@
 
 **Status:** Active implementation tracker. Phase status updated as each phase completes testing.
 **Scope:** Build the canonical (v2) ITR-4 pipeline mirroring the working ITR-1 v2 pipeline, then delete every legacy flat-blob path now that both ITR-1 and ITR-4 run on the single canonical `ReturnDraft`.
-**Authority:** This file is the single source of truth for the ITR-4 build + legacy deletion. The audit is in `ITR1_DATA_FLOW_AUDIT.md`; the original simplification plan is in `ITR1_DATA_FLOW_SIMPLIFICATION_PLAN.md`.
+**Authority:** This file is the single source of truth for the ITR-4 build + legacy deletion.
+The original simplification plan is in `ITR1_DATA_FLOW_SIMPLIFICATION_PLAN.md`; the audit that
+motivated it is superseded and removed — see `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`
+for the current, verified architecture (including where this plan's own Phase 7 "files to
+delete" claim turned out to be inaccurate — `filing_gateway.py` was not fully deleted).
 **Final deliverable:** Production-ready ITR-1 **and** ITR-4 — both on one canonical `ReturnDraft`, one mapper per form, no flat-blob duplication, no dead files.
 
 ---

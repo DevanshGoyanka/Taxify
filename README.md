@@ -220,11 +220,9 @@ Day-to-day operations: [`docs/runbook.md`](docs/runbook.md).
 │   └── __init__.py
 ├── API_Testing/                    # ERI API testing scripts, DSC signing tools, keystores
 ├── Docs/                           # All project documentation + audit CSV/TXT artifacts
-│   ├── ec2-proxy-decision.md       # EC2 proxy architecture decision for ITD connectivity
-│   ├── ARCHITECTURE.md             # Full architecture reference (1,800+ lines)
-│   ├── frontend_integration_audit.md  # Complete field-level pipeline map (1,300+ lines)
-│   ├── REMAINING_ITEMS_TO_IMPLEMENT.md # CBDT rule gaps per ITR form
-│   ├── itr_schedule_audit.md       # ITR schedule implementation audit
+│   ├── ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md  # Verified end-to-end architecture reference
+│   ├── TAXIFY_ROADMAP_BY_BUILD_FLOW.md           # Build-sequenced feature roadmap + CBDT gaps
+│   ├── ERI_UAT_EXPANSION_PLAN.md                 # ITR-2/3/5/6/7 UAT certification phase plan
 │   └── audit_itr*.csv              # Generated schema-coverage audit output
 ├── .env                            # SECRET_KEY, FRONTEND_URL, ERI_* credentials (not committed)
 ├── .gitignore
@@ -526,12 +524,11 @@ resolution fails without it.
 
 | Doc | Purpose |
 |---|---|
-| [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md) | Full architecture reference — 1,800+ lines covering every schedule, calculator, and ITD builder |
-| [`Docs/frontend_integration_audit.md`](Docs/frontend_integration_audit.md) | Field-level pipeline map: frontend → API → calculator → ITD JSON |
-| [`Docs/REMAINING_ITEMS_TO_IMPLEMENT.md`](Docs/REMAINING_ITEMS_TO_IMPLEMENT.md) | CBDT rule gaps per ITR form |
-| [`Docs/itr_schedule_audit.md`](Docs/itr_schedule_audit.md) | ITR schedule implementation audit |
-| `Docs/CBDT_FRONTEND_*.md` | CBDT ↔ frontend field audits for AY 2026-27 |
-| [`Docs/ec2-proxy-decision.md`](Docs/ec2-proxy-decision.md) | Historical: EC2 proxy for ITD connectivity |
+| [`Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`](Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md) | Verified end-to-end architecture reference — every route, the full v2 canonical pipeline, Type-3 submission, DB persistence |
+| [`Docs/TAXIFY_ROADMAP_BY_BUILD_FLOW.md`](Docs/TAXIFY_ROADMAP_BY_BUILD_FLOW.md) | Build-sequenced feature roadmap and CBDT rule gaps per ITR form |
+| [`Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md`](Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md) | Type-2 vs Type-3 ERI architecture |
+| [`Docs/ERI_UAT_EXPANSION_PLAN.md`](Docs/ERI_UAT_EXPANSION_PLAN.md) | ITR-2/3/5/6/7 UAT certification phase plan |
+| [`Docs/ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md`](Docs/ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md) | How the canonical `ReturnDraft` v2 pipeline was built |
 
 ### Operations
 
