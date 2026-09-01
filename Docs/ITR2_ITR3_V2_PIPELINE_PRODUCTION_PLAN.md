@@ -1,13 +1,8 @@
 # ITR-2 & ITR-3 — v2 Canonical Pipeline Production Implementation Plan
 
-**Status:** Active implementation tracker. No phase starts until the previous phase's tests
-pass and the user has approved it. Updated immediately after each phase — status, files
-touched, verification result — matching the convention of `ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md`.
+**Status:** Active implementation tracker. Phases 1–5D are delivered; Phase 5E remains, followed by the mandatory shared canonical-profile and complete-preparer migration before frontend or direct-submit work begins. Updated immediately after each phase — status, files touched, verification result — matching the convention of `ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md`.
 **Date:** 2026-09-01 (created) · last phase update 2026-09-02
-**Authority:** This is the single source of truth for building ITR-2 and ITR-3 to the exact
-same production standard ITR-1 and ITR-4 already meet. It is verified against
-`Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md` (the ground-truth architecture audit) at every
-step — nothing here is guessed from an older doc's claims.
+**Authority:** This is the single source of truth for building ITR-2 and ITR-3 on the same complete-preparation standard now established by the ITR-1 and ITR-4 canonical flows. It is verified against `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md` and `Docs/design/CANONICAL_RETURN_PIPELINE_MIGRATION_PLAN.md` at every step — nothing here is guessed from an older doc's claims.
 **Relationship to `Docs/ERI_UAT_EXPANSION_PLAN.md`:** that doc owns the shared UAT-pack
 tooling (credential-bundle switching, `scripts/eri_uat_sanity.py`) and the final
 UAT-sample-generation step for ITD certification. Its Phases 2–11 (the ITR-2/ITR-3 build
@@ -22,10 +17,12 @@ items point to, not a duplicate.
 | 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
 | 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
-| 5 | Complete the ITR-2 CBDT validator suite (5A/5B/5C/5D ✅ Delivered 2026-09-02; 5E not started — see §Phase 5, 790 official rules found) | In progress |
-| 6 | Frontend: wire ITR-2 onto the canonical pipeline | Not started |
-| 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started |
-| 8 | ITR-3 (mirrors 1–7, reusing ITR-2's types) | Not started |
+| 5 | Complete the ITR-2 CBDT validator suite (5A/5B/5C/5D ✅; 5E remaining) | In progress |
+| 5F | Shared canonical personal-profile foundation | Not started — mandatory before frontend/ITR-3 |
+| 5G | Migrate ITR-2 to complete pre-calculation preparation | Not started |
+| 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | Blocked until 5G |
+| 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Blocked until 5G |
+| 8 | ITR-3 on the shared complete-preparation contract | Not started |
 | 9 | Delete the dead ITR-2 legacy path | Not started |
 | 10 | Production hardening + final verification | Not started |
 
@@ -40,8 +37,7 @@ in before JSON emission, frontend hitting only `/v2/*` and `/api/v1/filing/*`, p
 via `ClientITR.form_data` as serialized `ReturnDraft`, Digest via `app/eri/digest.py`, and
 Type-3 submission working via the existing form-agnostic uploader.
 
-ITR-2 and ITR-3 meet **none** of this today. Verified current state (research conducted this
-session, cross-checked against actual code):
+ITR-2 and ITR-3 do not yet meet the complete-preparation standard. ITR-2 now has substantial delivered foundation work — typed draft fields, canonical mapping, v2 dispatch, JSON generation, and validator coverage through 5D — but its filing-detail enrichment still requires the Phase 5F/5G migration. ITR-3 remains without a canonical mapper, v2 dispatch, or production frontend path. Verified current state (research conducted this session, cross-checked against actual code):
 
 | | ITR-2 | ITR-3 |
 |---|---|---|
@@ -65,7 +61,8 @@ This plan closes every one of these gaps, in the same order and with the same ri
 3. **Tests first.** Every phase has a test list; not complete until its own tests pass **and**
    the ITR-1/ITR-4 suites stay green.
 4. **Commit per phase**, referencing this doc; this doc's status flips ⬜→✅ after tests pass.
-5. **No shortcut code.** Everything touched in `app/eri/`, `app/engine/`, or the filing
+5. **Preparation before calculation.** Every form must construct one complete typed input — including filing profile, property/employer/TDS details, bank accounts, verification, representative data, and TRP where applicable — before invoking its calculator. JSON generation may only serialize the prepared input.
+6. **No shortcut code.** Everything touched in `app/eri/`, `app/engine/`, or the filing
    pipeline is production-grade and reused unchanged later — this is a hard constraint from
    the user, not a suggestion.
 6. **Never route through `app/engine/filing_gateway.py`.** Confirmed dead/unreachable for
@@ -75,19 +72,66 @@ This plan closes every one of these gaps, in the same order and with the same ri
 
 ## 3. Target architecture (after this plan)
 
-```
-ClientITR.form_data = JSON(ReturnDraft)        ← ONE typed shape, all four forms
-  ├─ ITR-1: draft_to_itr1_input → compute_itr1 → build_itr1_json      (existing)
-  ├─ ITR-4: draft_to_itr4_input → compute_itr4 → build_itr4_json      (existing)
-  ├─ ITR-2: draft_to_itr2_input → compute_itr2 → build_itr2_json      (this plan)
-  └─ ITR-3: draft_to_itr3_input → compute_itr3 → build_itr3_json      (this plan)
-       each gated by run_input_validation + run_calc_validation (CBDT Category A/B/D)
+The non-negotiable invariant is the same one now used by the completed ITR-1 and ITR-4 flows:
 
-Deleted once ITR-2/ITR-3 are repointed (Phase 9):
-  ✗ app/routers/tax.py::_compute_itr2_from_flat_payload
-  ✗ frontend/src/api/itr2Mapper.ts
-  ✗ app/routers/itr.py's dead /itr{2,3}/compute[-json] routes (already unreachable, formally removed)
+```text
+One persisted ReturnDraft
+    → one complete form-specific prepared input
+        → input validation
+        → one calculation result
+            ├── compute summary
+            └── CBDT JSON
+                → official schema validation
+                → digest / submission
 ```
+
+Taxpayer-level filing facts are prepared before calculation, even when CBDT represents them as separate wire blocks:
+
+```text
+ReturnDraft
+  → normalize_return_draft()
+  → prepare_personal_profile()
+       ├── identity, contact, addresses
+       ├── filing status and eligibility
+       ├── verification and representative details
+       ├── bank accounts
+       └── tax-return-preparer
+  → form-specific preparer
+       ├── prepare_itr1()  [existing reference implementation]
+       ├── prepare_itr2()
+       ├── prepare_itr3()
+       └── prepare_itr4()  [existing reference implementation]
+  → complete typed input
+  → input validation
+  → calculator
+  → calculation validation
+  → PreparedReturn
+  → serializer reads only the prepared typed input
+```
+
+The serializer may emit separate CBDT `PersonalInfo`, `FilingStatus`, `Verification`,
+`Refund.BankAccountDtls`, `TaxReturnPreparer`, and schedule blocks. It must not reconstruct
+those values from `ReturnDraft` or perform `model_copy(update={...})` enrichment after
+calculation. ITR-2-specific property, employer, and TDS3 filing-detail arrays remain
+schedule-level data, but they must be assembled by the same preparer before calculation.
+
+```text
+ClientITR.form_data = JSON(ReturnDraft)
+  ├─ ITR-1: complete prepared input → compute_itr1 → build_itr1_json
+  ├─ ITR-4: complete prepared input → compute_itr4 → build_itr4_json
+  ├─ ITR-2: complete prepared input → compute_itr2 → build_itr2_json
+  └─ ITR-3: complete prepared input → compute_itr3 → build_itr3_json
+       each gated by input + calculation validation
+```
+
+Deleted only after all consumers are repointed through the complete preparer (Phase 9):
+  ✗ `app/routers/tax.py::_compute_itr2_from_flat_payload`
+  ✗ `frontend/src/api/itr2Mapper.ts`
+  ✗ dead legacy `/itr{2,3}/compute[-json]` routes
+
+Current ITR-2 v2 compute and JSON code is foundational but not yet architecture-complete:
+its mapper/calculator/validator work is valuable and retained, while its filing profile and
+schedule-detail enrichment must move into the pre-calculation preparer phases below.
 
 ---
 
@@ -720,78 +764,77 @@ test per new rule, known-good and known-bad cases, same pattern as ITR-1's R145 
   `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed. `npm run build` — clean (5D touched
   no frontend files; run for full-verification discipline).
 
-### Phase 6 — Frontend: wire ITR-2 onto the canonical `ReturnDraft`
+### Phase 5F — Shared canonical personal-profile foundation
 
-Mirrors `ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md` Phase 4 exactly: `itrV2.ts`/
-`canonicalRepository.ts` already handle any form via the generic `ReturnDraft` — no new API
-client code needed there. What needs form-aware UI work: `PersonalInfoTab` (already
-`itrForm`-aware per the pipeline reference doc), `CapitalGainsTab`/`CapitalGainsEntryManager`
-(consuming Phase 1's newly-typed schedule fields instead of raw `JsonRow[]`), and any new tab
-needed for FSI/TR/FA/SPI/PTI/AMT/AL/5A/ESOP capture (`scheduleRegistry.ts` currently marks all
-of these `status: 'missing'` — this phase is what changes that).
+**Mandatory architecture gate before frontend wiring, direct submission, or ITR-3 implementation.**
 
-**Scope note for when this phase starts:** the *data* being capturable (typed fields existing,
-mapper consuming them) is this plan's job; a fully polished capture UI for all 9 previously-
-missing schedules is a large frontend undertaking in its own right and may warrant its own
-sub-phase breakdown once Phase 1/2's types are locked in — sized precisely at that point, not
-guessed now.
+Create one shared internal representation for taxpayer-level information rather than allowing form gateways or JSON builders to map the same facts independently. The profile owns identity, contact and addresses, filing status, eligibility declarations, verification, representative details, bank accounts, and optional tax-return-preparer details.
 
-### Phase 7 — ITR-2 v2 endpoints + Direct Submit extension
+Normalize values once, validate conditional relationships once, construct bank/verification/TRP rows once, and expose calculation readiness separately from filing readiness. A deterministic source hash is required so profile changes are observable and prepared data cannot be silently reused after the draft changes.
 
-- `client_itr_v2.py`'s existing `generate-cbdt-json`/`download`/`download-pdf` routes already
-  dispatch generically on `draft.form` via `filing_gateway_v2` — confirm no ITR-2-specific
-  branching is needed there (per the pipeline reference doc, they call `generate_cbdt_json`
-  generically already).
-- `app/routers/filing.py::_normalize_form` currently hard-restricts to ITR-1/ITR-4 — extend
-  the allowlist to include ITR-2 once Phases 1–5 are done and tested. This is confirmed to be
-  a small, contained change — the uploader/worker (`app/filing_automation/`) is already
-  form-agnostic (reads the form type from the generated JSON itself, per
-  `uploader.py::_filing_section_from_json`).
-- Frontend: `ITRComputationPage.tsx`'s `handleDirectSubmit` currently hard-gates out ITR-2/3
-  (`"Direct Submit is available for ITR-1 and ITR-4 only this season"`) — remove ITR-2 from
-  that gate once the backend allowlist change lands and is tested end-to-end on UAT.
+**Exit criteria:** all four forms consume the same complete personal-profile contract; JSON builders do not independently map bank accounts, verification, representative details, or TRP; profile changes alter the source hash; warnings, calculation-blocking errors, and filing-blocking errors are separate; ITR-1 and ITR-4 remain green.
 
-**Tests:** integration test posting a full ITR-2 draft through generate → submit (UAT mode) →
-poll → acknowledgement, mirroring the existing Direct Submit UAT checklist from
-`DUAL_MODE_ERI_INTEGRATION_PLAN.md` Phase 3.
+### Phase 5G — Migrate ITR-2 to complete pre-calculation preparation
 
-### Phase 8 — ITR-3: repeat Phases 1–7's applicable subset
+Replace the current ITR-2 split flow:
 
-ITR-3 reuses ITR-2's schedule types **directly by import** — confirmed:
-`app/schemas/itr3.py:43-48` already imports `CGTransaction`, `CG112AScrip`, `VDATransaction`,
-`BFLossItem`, `ScheduleSIEntry`, `AgriculturalIncome`, `ExemptIncome`, `FSICountryEntry`,
-`TR1Entry`, `SPIEntry`, `AMTInput` from `itr2.py` verbatim — so Phase 1/2's `ReturnDraft`
-additions serve ITR-3 with **no redesign**, only a new mapper + validators + PGBP-specific
-draft fields.
+```text
+current: draft_to_itr2_input → compute_itr2 → late filing/detail enrichment → JSON
+required: ReturnDraft → prepare_itr2 → complete ITR2Input → validate → compute → JSON
+```
 
-**Known gap to close first:** `itr3.py` does **not** import or redefine `CFLLossItem`,
-`ForeignAssetEntry`, `Schedule5AInput`, or `ESOPDeferralInput` from `itr2.py` — before ITR-3's
-mapper can use the draft's foreign-assets/Schedule-5A/ESOP fields, `itr3.py` needs those four
-imports added (a small, low-risk change, matching the exact reuse pattern already established
-for the other 10 types).
+Introduce a preparer equivalent to the completed ITR-1/ITR-4 lifecycle:
 
-**ITR-3-specific additive draft fields** (business/PGBP — `app/engine/schedules/business.py`
-already computes this for the calculator, so the draft needs the *input* shape): business
-identity, disallowances (u/36, u/37, u/40, u/40A, u/43B), deemed incomes, depreciation
-(books vs IT), ICDS adjustment, speculative/specified-business baskets, balance sheet, audit
-info (44AB/44AA/92E), nature-of-business codes, partner-in-firm entries, unabsorbed-
-depreciation entries. `ITR3BusinessCoreManager.tsx` already exists on the frontend — confirm
-in Phase 8.1 whether it already captures this shape or needs the same typed-field treatment
-Phase 1 gave capital gains.
+```python
+def prepare_itr2(draft: ReturnDraft) -> PreparedReturn[ITR2Input, ITR2Result]:
+    """Prepare and calculate one complete ITR-2 return."""
+```
 
-**Validator suite**: `app/engine/validators/itr3/` is 57 lines total — essentially
-unimplemented, the largest single validator-authoring task in this whole plan. Built from
-`Reference Docs by CBDT & ITD/Official Validations/CBDT_e-filing_ITR-3_Validation Rules_V1.0_AY
-26-27 (1).pdf` (already in the repo), same pattern as Phase 5, from near-zero.
+Preparation order: normalize the draft and check reconciliation; build the shared personal profile; map all ITR-2 income, loss, deduction, tax, and filing-detail schedules; construct one complete `ITR2Input`; run input validation; calculate; run calculation validation; compute filing readiness; return the prepared input, result, breakdown, summary, readiness, and source hash.
 
-**Sub-phases** (mirroring Phases 1–7 above, applied to ITR-3): 8.1 extend `ReturnDraft` for
-PGBP/balance-sheet/audit fields, 8.2 fix `itr3.py`'s missing imports, 8.3 canonical mapper
-(`draft_to_itr3_input.py`), 8.4 wire into `filing_gateway_v2.py`, 8.5 complete validators
-(largest sub-phase), 8.6 frontend wiring, 8.7 v2 endpoints + Direct Submit allowlist.
+The existing `_itr2_filing_profile()`, `_itr2_property_filing_details()`, `_itr2_employer_filing_details()`, and `_itr2_tds3_filing_details()` functions must move into or delegate to this preparer. After migration, `_generate_cbdt_json_itr2()` passes the already-prepared `pipeline.typed_input` to `build_itr2_json()` and never performs late `model_copy(update={...})` enrichment or reads filing data from `ReturnDraft` again.
+
+**Production-status rule:** ITR-2 is not filing-ready merely because Phase 5E validators pass. Phases 5F and 5G must pass before frontend or Direct Submit is enabled.
+
+
+### Phase 6 ? Frontend: wire ITR-2 onto the canonical `ReturnDraft`
+
+Starts only after Phases 5E, 5F, and 5G pass. The editor persists one `ReturnDraft`, and the generic v2 gateway consumes the same complete prepared input for computation and JSON. Personal/profile/verification/refund/TRP fields remain personal-profile concerns; property/employer/TDS3 details remain schedule concerns.
+
+`itrV2.ts`/`canonicalRepository.ts` already handle generic `ReturnDraft` operations. Form-aware UI work includes `PersonalInfoTab`, `CapitalGainsTab`/`CapitalGainsEntryManager`, and capture tabs for FSI/TR/FA/SPI/PTI/AMT/AL/5A/ESOP. The schedule registry must not mark fields as supported until the corresponding mapper, preparer, validator, and JSON path are complete.
+
+**Scope note:** polished capture UI for missing schedules may require sub-phases after the canonical data contract is locked; no UI phase may introduce a second filing/computation representation.
+
+### Phase 7 ? ITR-2 v2 endpoints + Direct Submit extension
+
+- Confirm `client_itr_v2.py` routes consume the complete prepared pipeline without ITR-2-specific enrichment.
+- Extend `app/routers/filing.py::_normalize_form` to ITR-2 only after Phases 5E?5G and frontend tests pass.
+- Remove the frontend ITR-2 Direct Submit gate only after backend and UAT integration tests pass.
+
+**Tests:** integration test a full ITR-2 draft through generation, UAT submission, polling, and acknowledgement.
+
+### Phase 8 ? ITR-3: build on the shared complete-preparation contract
+
+ITR-3 must not copy the current ITR-2 split mapper/gateway pattern. It starts only after Phase 5F establishes the shared personal profile and Phase 5G proves the complete-preparer lifecycle.
+
+```text
+ReturnDraft ? prepare_personal_profile()
+  ? ITR-3 schedule preparer (PGBP, balance sheet, audit, CG, FSI/TR/FA, etc.)
+  ? complete ITR3Input
+  ? input validation ? compute_itr3
+  ? calculation validation ? PreparedReturn
+  ? build_itr3_json(prepared.typed_input)
+```
+
+Reuse the shared personal profile and semantically identical schedule helpers, but do not reuse whole ITR-2 input models where ITR-3 semantics differ. ITR-3-specific preparation includes PGBP, balance sheet, audit information, depreciation, disallowances, speculative/specified business, partners, and unabsorbed depreciation.
+
+The ITR-3 validator work requires a separate rule inventory. Classify every official rule as `IMPLEMENTED`, `CALCULATOR_ENFORCED`, `SCHEMA_ENFORCED`, `BUILDER_GUARANTEED`, `NOT_REPRESENTABLE`, `EXTERNAL`, or `PENDING`; do not infer production readiness from PDF rule count alone.
+
+**Sub-phases:** 8.1 extend draft fields, 8.2 close schema imports, 8.3 build the complete canonical mapper/preparer, 8.4 wire gateway dispatch, 8.5 build the classified validator suite, 8.6 wire the frontend, and 8.7 extend endpoints/Direct Submit. Every sub-phase must preserve the same single prepared input for computation and JSON.
 
 ### Phase 9 — Delete the now-dead ITR-2 legacy path
 
-Once Phases 1–7 are tested and the frontend no longer calls the flat-payload path:
+Once Phases 5E–5G, Phase 6, and Phase 7 are tested and the frontend no longer calls the flat-payload path:
 - `app/routers/tax.py::_compute_itr2_from_flat_payload` and its call sites.
 - `frontend/src/api/itr2Mapper.ts` (already confirmed to have zero external importers even
   today — safe to remove regardless of timing, but grouped here for a single clean commit).
