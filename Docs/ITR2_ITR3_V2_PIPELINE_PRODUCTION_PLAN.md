@@ -22,7 +22,7 @@ items point to, not a duplicate.
 | 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
 | 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
-| 5 | Complete the ITR-2 CBDT validator suite (sub-phases 5A–5E — see §Phase 5, 790 official rules found) | In progress |
+| 5 | Complete the ITR-2 CBDT validator suite (5A ✅ Delivered 2026-09-02; 5B–5E not started — see §Phase 5, 790 official rules found) | In progress |
 | 6 | Frontend: wire ITR-2 onto the canonical pipeline | Not started |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started |
 | 8 | ITR-3 (mirrors 1–7, reusing ITR-2's types) | Not started |
@@ -497,6 +497,63 @@ just more of them:
 
 **Tests:** `tests/test_itr2_input_validation.py`, `tests/test_itr2_calc_validation.py` — one
 test per new rule, known-good and known-bad cases, same pattern as ITR-1's R145 tests.
+
+**5A Delivered 2026-09-02.**
+
+- **`app/engine/validators/itr2/input_rules.py`** — added 8 Schedule S (Salary) rules
+  (`ITR2-IN-SAL-001`..`008`) and 5 Schedule HP (House Property) rules (`ITR2-IN-HP-001`..
+  `005`), all Category A. Scoped deliberately to what's genuinely checkable and non-redundant
+  against this codebase's architecture — read `app/engine/schedules/salary.py` and
+  `house_property.py` in full before writing any rule, which changed the plan in three ways:
+  - **Most of the CBDT catalog's salary-exemption cap rules are structurally already
+    guaranteed and were *not* re-implemented as validators**: gratuity/leave-encashment/VRS/
+    retrenchment/commuted-pension exemptions are computed by the engine from the taxpayer's
+    *gross received* amount with the statutory ceiling applied via `min()` inside the
+    calculator itself — there is no user-suppliable "exempt amount" field for those that could
+    violate the cap, so a pre-compute validator re-checking the cap would just be dead code.
+    The rules actually implemented (`SAL-001`..`004`) are the ones where the schema *does*
+    take a direct pass-through exempt-amount claim from the user (LTA, embassy/foreign-service
+    allowance, 10(10CC) employer-paid perquisite tax) — those genuinely need a ceiling check.
+  - **New-regime rules (`SAL-006`..`008`) catch claims the calculator currently discards
+    silently rather than rejecting.** `salary.py`'s new-regime branch unconditionally zeroes
+    HRA/LTA/entertainment/professional-tax regardless of what the user submitted — filing a
+    new-regime return with those fields populated previously produced a correct *result* but
+    with no signal to the taxpayer that their claim was dropped. These rules surface that as a
+    pre-compute Category A error instead.
+  - **A planned rule was discovered to be dead code before being written and was dropped**:
+    `HousePropertyIncome.ownership_share_percentage` has a schema-level `Gt(gt=0)` constraint,
+    so "block interest deduction when co-owned share is zero" (CBDT rule 70) can never fire —
+    Pydantic itself never lets that state exist. Caught by the test-first pass (the known-bad
+    case for it wouldn't even construct), not shipped.
+  - **`HP-004`/`005` (co-owned share consistency) read `property_filing_details`** —a
+    gateway-attached field, not compute-relevant — since that's the only place `co_owned` and
+    `assessee_share_percent` live together; `HousePropertyIncome` itself has no co-owned flag,
+    only the resulting share percentage.
+  - **Not implemented, and explicitly out of scope for 5A**: CBDT rule 29 (old-regime HRA ≤
+    50% of Basic+DA) — `SalaryIncome` has no Basic/DA breakout to check it against, and no
+    proxy was fabricated in its place; CBDT rule 82 (co-owner PAN must differ from assessee
+    PAN) — `PropertyFilingDetail` captures no co-owner PAN field at all; the Schedule
+    24(b)/80EE/80EEA loan-detail cross-checks (rules 607–639) — `ITR2Input` has no granular
+    loan-detail schedule the way ITR-1/4 do. All three are genuine schema gaps, not omissions
+    of convenience.
+  - The literal-cap self-occupied-interest rules (72: old regime ≤ ₹2L; 81: new regime ₹0)
+    were deliberately **not** implemented as Category A blocks: `house_property.py` already
+    caps/disallows correctly (clamping with carry-forward, not rejecting) for both regimes —
+    over-limit interest is legal input the engine handles correctly, so a hard block there
+    would incorrectly reject valid returns.
+- **`tests/test_itr2_input_validation.py`** (new) — 26 tests (one known-good + one known-bad
+  per rule, 13 rules × 2), mirroring `test_itr1_input_validation.py`'s pattern.
+- **`tests/test_filing_gateway_v2_itr2.py`** — one pre-existing fixture (`HouseProperty(...,
+  propertyType="LET_OUT")` with no rent) legitimately started failing under the new `HP-002`
+  rule — a genuinely invalid draft (a let-out property can't have zero rent), not a rule bug.
+  Fixed the fixture to supply `annualLettingValue`, not loosened the rule.
+- **Verification:** `pytest tests/test_itr2_input_validation.py -v` — 26 passed.
+  `pytest tests/test_itr2_validators.py tests/test_itr2_integration.py
+  tests/test_itr2_itd_builder.py tests/test_itr2_production_path.py -q` — 40 passed (no
+  conflicts with the new rule IDs). Full suite (`pytest tests/ -q`, same deselect list as
+  Phase 4's note plus the pre-existing `test_26as_batch.py::test_single_file` fixture-config
+  error) — **1354 passed, 0 failed.** `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed.
+  `npm run build` — clean (5A touched no frontend files; run for full-verification discipline).
 
 ### Phase 6 — Frontend: wire ITR-2 onto the canonical `ReturnDraft`
 

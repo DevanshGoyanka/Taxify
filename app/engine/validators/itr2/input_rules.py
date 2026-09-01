@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.engine.validators.base import Severity, ValidationResult
+from app.schemas.itr1 import PropertyType, TaxRegime
 from app.schemas.itr2 import CGAssetType, ITR2Input, ResidentialStatus
 
 _ZERO = Decimal("0")
@@ -74,6 +75,118 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
         means that all represented pre-computation invariants passed.
     """
     results: list[ValidationResult] = []
+
+    # ── Schedule S (Salary) — Phase 5A ─────────────────────────────────────
+    # Only checks pass-through exemption claims the engine does NOT itself cap
+    # or compute from a statutory formula (gratuity/leave-encashment/VRS/
+    # retrenchment/commuted-pension exemptions are all engine-computed from
+    # gross-received amounts with their own statutory ceiling — see
+    # app/engine/schedules/salary.py — so there is no user-suppliable "exempt
+    # amount" for those that could violate a cap; re-validating them here
+    # would be redundant). HRA's CBDT cap (50% of Basic+DA) is not checked:
+    # SalaryIncome has no Basic/DA breakout to check it against — a known,
+    # documented gap, not approximated with a fabricated proxy.
+    sal = inp.salary_income
+    if sal is not None:
+        gross_salary_total = sal.gross_salary + sal.perquisites_value + sal.profits_in_lieu_of_salary
+        if sal.lta_exempt_amount > sal.lta_amount_received:
+            results.append(_result(
+                "ITR2-IN-SAL-001", False,
+                "LTA claimed exempt cannot exceed LTA amount received.",
+                "salary_income.lta_exempt_amount",
+                f"<= {sal.lta_amount_received}", str(sal.lta_exempt_amount),
+            ))
+        if sal.sec10_6_embassy_exempt > gross_salary_total:
+            results.append(_result(
+                "ITR2-IN-SAL-002", False,
+                "Sec 10(6) embassy/high-commission exempt allowance cannot exceed gross salary.",
+                "salary_income.sec10_6_embassy_exempt",
+                f"<= {gross_salary_total}", str(sal.sec10_6_embassy_exempt),
+            ))
+        if sal.sec10_7_foreign_allowance > gross_salary_total:
+            results.append(_result(
+                "ITR2-IN-SAL-003", False,
+                "Sec 10(7) foreign-service allowance cannot exceed gross salary.",
+                "salary_income.sec10_7_foreign_allowance",
+                f"<= {gross_salary_total}", str(sal.sec10_7_foreign_allowance),
+            ))
+        if sal.sec10_10cc_perquisite_tax > sal.perquisites_value:
+            results.append(_result(
+                "ITR2-IN-SAL-004", False,
+                "Sec 10(10CC) employer-paid tax on perquisite cannot exceed the value of perquisites.",
+                "salary_income.sec10_10cc_perquisite_tax",
+                f"<= {sal.perquisites_value}", str(sal.sec10_10cc_perquisite_tax),
+            ))
+        if not sal.is_government_employee and sal.entertainment_allowance > _ZERO:
+            results.append(_result(
+                "ITR2-IN-SAL-005", False,
+                "Entertainment allowance deduction u/s 16(ii) is allowed only for government employees.",
+                "salary_income.entertainment_allowance", _ZERO, str(sal.entertainment_allowance),
+            ))
+        if inp.tax_regime == TaxRegime.NEW:
+            if sal.hra_exempt_amount > _ZERO or sal.lta_exempt_amount > _ZERO:
+                results.append(_result(
+                    "ITR2-IN-SAL-006", False,
+                    "HRA and LTA exemptions cannot be claimed under the new tax regime.",
+                    "salary_income", "hra_exempt_amount == 0 and lta_exempt_amount == 0",
+                    f"hra={sal.hra_exempt_amount}, lta={sal.lta_exempt_amount}",
+                ))
+            if sal.entertainment_allowance > _ZERO:
+                results.append(_result(
+                    "ITR2-IN-SAL-007", False,
+                    "Entertainment allowance u/s 16(ii) cannot be claimed under the new tax regime.",
+                    "salary_income.entertainment_allowance", _ZERO, str(sal.entertainment_allowance),
+                ))
+            if sal.professional_tax_paid > _ZERO:
+                results.append(_result(
+                    "ITR2-IN-SAL-008", False,
+                    "Professional tax u/s 16(iii) cannot be claimed under the new tax regime.",
+                    "salary_income.professional_tax_paid", _ZERO, str(sal.professional_tax_paid),
+                ))
+
+    # ── Schedule HP (House Property) — Phase 5A ────────────────────────────
+    hp_rows = list(inp.house_properties)
+    if inp.house_property_income is not None:
+        hp_rows.append(inp.house_property_income)
+    self_occupied_count = 0
+    for index, hp in enumerate(hp_rows):
+        path = f"house_properties[{index}]"
+        if hp.property_type == PropertyType.SELF_OCCUPIED:
+            self_occupied_count += 1
+        if hp.annual_rent_received == _ZERO and hp.municipal_taxes_paid > _ZERO:
+            results.append(_result(
+                "ITR2-IN-HP-001", False,
+                "Municipal tax is not allowed where gross rent received/receivable/"
+                "lettable value is zero.",
+                f"{path}.municipal_taxes_paid", _ZERO, str(hp.municipal_taxes_paid),
+            ))
+        if hp.property_type in (PropertyType.LET_OUT, PropertyType.DEEMED_LET_OUT) and hp.annual_rent_received <= _ZERO:
+            results.append(_result(
+                "ITR2-IN-HP-002", False,
+                "A let-out or deemed-let-out property requires positive gross rent "
+                "received/receivable/lettable value.",
+                f"{path}.annual_rent_received", "> 0", str(hp.annual_rent_received),
+            ))
+    if self_occupied_count > 2:
+        results.append(_result(
+            "ITR2-IN-HP-003", False,
+            "No more than two properties can be claimed as self-occupied.",
+            "house_properties", "<= 2 self-occupied", str(self_occupied_count),
+        ))
+    for index, detail in enumerate(inp.property_filing_details):
+        path = f"property_filing_details[{index}]"
+        if detail.co_owned and detail.assessee_share_percent >= Decimal("100"):
+            results.append(_result(
+                "ITR2-IN-HP-004", False,
+                "A co-owned property must have an assessee share below 100%.",
+                f"{path}.assessee_share_percent", "< 100", str(detail.assessee_share_percent),
+            ))
+        if not detail.co_owned and detail.assessee_share_percent != Decimal("100"):
+            results.append(_result(
+                "ITR2-IN-HP-005", False,
+                "A non-co-owned property's assessee share must equal 100%.",
+                f"{path}.assessee_share_percent", "== 100", str(detail.assessee_share_percent),
+            ))
 
     # The schema has no assessee type or business-income field. Its shape itself
     # restricts this form to an individual/HUF without current PGBP income.

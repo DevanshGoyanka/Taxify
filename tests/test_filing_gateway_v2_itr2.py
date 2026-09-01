@@ -129,7 +129,7 @@ def test_generate_cbdt_json_itr2_property_details_match_house_property_count() -
     draft = _filing_ready_itr2_draft()
     draft.houseProperties = [
         HouseProperty(id="hp1", propertyType="SELF_OCCUPIED"),
-        HouseProperty(id="hp2", propertyType="LET_OUT"),
+        HouseProperty(id="hp2", propertyType="LET_OUT", annualLettingValue=Decimal("240000")),
     ]
     official_json, _summary = generate_cbdt_json(draft)
     schedule_hp = official_json["ITR"]["ITR2"].get("ScheduleHP")
