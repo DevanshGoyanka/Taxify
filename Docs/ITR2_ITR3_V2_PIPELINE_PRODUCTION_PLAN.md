@@ -65,7 +65,7 @@ This plan closes every one of these gaps, in the same order and with the same ri
 6. **No shortcut code.** Everything touched in `app/eri/`, `app/engine/`, or the filing
    pipeline is production-grade and reused unchanged later — this is a hard constraint from
    the user, not a suggestion.
-6. **Never route through `app/engine/filing_gateway.py`.** Confirmed dead/unreachable for
+7. **Never route through `app/engine/filing_gateway.py`.** Confirmed dead/unreachable for
    ITR-1/ITR-4 (`ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md` §4) and was never a real fallback
    for ITR-2/ITR-3 either — every live route hard-normalizes to ITR-1/ITR-4 before reaching
    it. `filing_gateway_v2.py`'s dispatch is the only place new forms get added.
@@ -763,6 +763,65 @@ test per new rule, known-good and known-bad cases, same pattern as ITR-1's R145 
   tests/ -q`, same deselect list as prior sub-phases' notes) — **1374 passed, 0 failed.**
   `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed. `npm run build` — clean (5D touched
   no frontend files; run for full-verification discipline).
+
+### Phase 5E — Remaining ITR-2 validation rules (not started)
+
+Phase 5E is the remaining part of the ITR-2 validator suite and must be completed before Phase 5F or any frontend/direct-submit work begins. It covers the rules that were intentionally left after Phases 5A–5D and must use the same disciplined rule-tracing method: implement only checks that are genuinely representable, user-suppliable, and not already guaranteed elsewhere in the pipeline.
+
+**Scope:**
+
+- AMT/AMTC consistency;
+- Schedule EI required-detail relationships and total reconciliation;
+- PTI detail/count reconciliation;
+- FSI/TR/FA cross-schedule consistency;
+- Schedule 5A consistency;
+- Schedule AL consistency;
+- TDS/TCS/advance-tax/self-assessment and IT reconciliation;
+- Part B-TI/TTI final reconciliation;
+- the remaining Category B and Category D rules.
+
+**Implementation method:**
+
+1. Read the official ITR-2 validation rule and identify its exact CBDT category.
+2. Trace every referenced field through `ReturnDraft`, `draft_to_itr2_input.py`, the relevant schedule/calculator, and `build_itr2_json`.
+3. Write a known-bad construction test first. If Pydantic rejects the state, classify the rule as `STRUCTURALLY_GUARANTEED` rather than adding dead validator code.
+4. If the calculator already caps, derives, or rejects the state, classify it as `CALCULATOR_ENFORCED`.
+5. If programmatic JSON construction guarantees the identity, classify it as `BUILDER_GUARANTEED`.
+6. If a required field is absent from the canonical models, classify it as `NOT_REPRESENTABLE`; do not fabricate a proxy field.
+7. If the rule requires portal, database, or external data unavailable to the local pipeline, classify it as `EXTERNAL_CHECK`.
+8. Implement only the remaining applicable rules as `ValidationRule` entries with Category A/B/D severity and actionable messages.
+
+For every omitted official rule, record:
+
+```text
+Official rule:
+Disposition: IMPLEMENTED | STRUCTURALLY_GUARANTEED | CALCULATOR_ENFORCED |
+             BUILDER_GUARANTEED | NOT_REPRESENTABLE | EXTERNAL_CHECK | PENDING
+Reason:
+Test/evidence:
+```
+
+Do not mechanically add validators for fields the calculator does not consume, duplicated arithmetic that the builder already derives, or formula behavior that belongs in the calculator rather than an input gate. Phase 5E must not claim full official-rule coverage merely because the PDF contains a fixed number of rules.
+
+**Files:**
+
+- `app/engine/validators/itr2/input_rules.py` — applicable Category A input rules;
+- `app/engine/validators/itr2/calc_rules.py` — applicable post-calculation reconciliation rules;
+- `tests/test_itr2_input_validation.py` — known-good and known-bad input cases;
+- `tests/test_itr2_calc_validation.py` — calculation and cross-schedule cases;
+- the Phase 5 validation inventory/documentation, recording every omitted rule's disposition.
+
+**Exit criteria:**
+
+- Every considered 5E rule has a recorded disposition and evidence.
+- Each implemented rule has a passing known-good case and a failing known-bad case.
+- `run_input_validation` and `run_calc_validation` block invalid returns with specific messages.
+- A known-good ITR-2 fixture reaches `can_upload=True` with no Category-A blocking errors.
+- ITR-2 mapper, calculator, builder, official-schema, and production-path tests remain green.
+- ITR-1 and ITR-4 regression suites remain green.
+- Frontend type-check, Vitest, and production build remain green.
+
+**Tests:** extend `tests/test_itr2_input_validation.py` and `tests/test_itr2_calc_validation.py`; run the ITR-2 integration, builder, production-path, ITR-1/ITR-4 regression, frontend type/build, and applicable full suite before marking 5E delivered.
 
 ### Phase 5F — Shared canonical personal-profile foundation
 
