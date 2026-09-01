@@ -78,45 +78,102 @@ Deleted once ITR-2/ITR-3 are repointed (Phase 9):
 
 ## 4. Phase-wise plan
 
-### Phase 1 — Type the capital-gains schedule (backend + frontend)
+### Phase 1 — Type the capital-gains schedule on the backend (mirror, not redesign) ✅ Delivered 2026-09-01
 
-**The single biggest schema gap, and the reason this starts here rather than with the
-mapper.** Per the user's explicit direction: reuse the frontend's existing capital-gains
-structure rather than adding parallel fields. Research findings (verified against
-`frontend/src/domain/returns/types.ts`):
+**Correction found before implementing:** the frontend's `CapitalGainsSchedule` typing is
+**already shipped** — a separate, earlier workstream
+(`Docs/ITR1_ITR4_CAPITAL_GAINS_AND_UNIFIED_IMPORTS_IMPLEMENTATION_GUIDE.md`, Phases 1–2,
+completed and live 2026-08-19) typed `frontend/src/domain/returns/types.ts`'s
+`CapitalGainsSchedule` in full, including a **deliberate, already-shipped scope decision**
+(that doc's own §Notes) to leave 10 sub-arrays — `stEquity`, `stNriUnlisted`, `stOtherAssets`,
+`ltProviso112`, `ltNri112115`, `ltForeignAssets`, `ltOtherAssets`, `stSlumpSale`,
+`ltSlumpSale`, `buyBackLosses` — as generic `JsonRow[]` rows, because
+`CapitalGainsEntryManager.tsx` already edits them with its own field-spec validation and a
+full retype was explicitly out of scope. That doc's own closing line: *"the typed schedule
+from Phase 1 makes it ready for a future ITR-2 workstream"* — this phase is that workstream.
 
-- `CapitalGainsSchedule` already has **typed** `schedule112A: Scrip112A[]`, `vda: VdaEntry[]`,
-  `schedule115AD: Scrip115AD[]`, `stImmovable`/`ltImmovable: ImmovableAssetGain[]`,
-  `purchases: CapitalGainPurchase[]`, `deductionClaims: DeductionClaim[]`,
-  `stUnutilized`/`ltUnutilized: UnutilizedDeposit[]`, `stDtaa`/`ltDtaa: DtaaEntry[]`,
-  `aggregates: CapitalGainsAggregates`, `lossSetOff: LossSetOff`.
-- Still **untyped** `JsonRow[]`: `stEquity`, `stOtherAssets`, `stNriUnlisted`, `ltProviso112`,
-  `ltNri112115`, `ltForeignAssets`, `ltOtherAssets`, `stSlumpSale`, `ltSlumpSale`,
-  `buyBackLosses` — these need real types before ITR-2's calculator can consume them
-  (`compute_itr2` needs `asset_type`, both acquisition/transfer dates, consideration, cost,
-  STT flags, per-transaction exemption claims — see Phase 3's field table).
-- The **backend** `ReturnDraft.capitalGainsSchedule` is still `dict` — untyped. This phase
-  replaces it with a real nested Pydantic model mirroring the frontend's field names exactly
-  (`schedule112A`, `vda`, `stImmovable`, etc.), so there is one shape, not two.
+**Corrected scope: this phase only mirrors the existing, stable frontend shape on the
+backend — it does not re-open the JsonRow[] scope decision.** The backend
+`ReturnDraft.capitalGainsSchedule` is still an untyped `dict`; every other typed sub-array
+(`schedule112A`, `schedule115AD`, `vda`, `stImmovable`/`ltImmovable`, `purchases`,
+`deductionClaims`, `stUnutilized`/`ltUnutilized`, `stDtaa`/`ltDtaa`, `aggregates`,
+`stSection48`, `ltNriProviso48`, `ltNri112A`, flags, `quarterly`, `lossSetOff`) gets a real
+Pydantic model with field names matching `types.ts` exactly; the 10 `JsonRow[]`-equivalent
+fields become `list[dict[str, Any]]` — matching, not fixing, the frontend's own decision.
 
 **Files:**
-- `app/schemas/return_draft.py` — replace `capitalGainsSchedule: dict` with a typed
-  `CapitalGainsSchedule` model. **Must stay backward-compatible with ITR-1's existing
-  `simplified112A` dict read** (`app/engine/draft_to_itr1_input.py:793`,
-  `sched.get("simplified112A")`) — either keep `simplified112A` as a field on the new typed
-  model, or provide a `model_validator` that accepts the old dict shape during the
-  transition. Verify against ITR-1's regression suite, not assumption.
-- `frontend/src/domain/returns/types.ts` — type the 10 remaining `JsonRow[]` fields listed
-  above with real interfaces (matching the fields ITR-2's `CGTransaction` needs — asset type,
-  dates, consideration, cost basis, STT flags, exemption claims).
-- `frontend/src/components/CapitalGainsEntryManager.tsx` — currently edits some of these as
-  untyped rows; once typed, this component's form fields get real validation. (Scope check
-  when this phase starts: does the full UI rework belong in this phase or a follow-up? Default
-  assumption — type the data model now, defer full UI polish to a later pass, since the
-  mapper only needs the *data* to be typed correctly, not the editing experience to be final.)
+- `app/schemas/return_draft.py` — replace `capitalGainsSchedule: dict` with the typed
+  `CapitalGainsSchedule` model (new nested types added: `Simplified112ABlock`,
+  `TransfereeDetail`, `ImprovementDetail`, `ExemptionClaim`, `ImmovableAssetGain`,
+  `Scrip112A`, `Scrip115AD`, `VdaEntry`, `CapitalGainPurchase`, `DtaaEntry`,
+  `DeductionClaim`, `UnutilizedDeposit`, `CapitalGainsAggregates`, plus two small aggregate
+  blocks for `stSection48`/`ltNriProviso48`).
+- **Every call site that touches `draft.capitalGainsSchedule` as a raw dict must be updated**
+  (found by grepping the whole `app/` and `tests/` trees, not assumed): `app/engine/
+  draft_to_itr1_input.py::_map_capital_gains` (dict `.get()` → attribute access),
+  `app/engine/filing_gateway_v2.py`'s capital-gains-summary builder (same fix),
+  `app/engine/flat_to_draft.py` (the legacy one-way migration adapter — wrap in
+  `CapitalGainsSchedule.model_validate(...)` with a fallback to an empty schedule on
+  failure, since old rows may not conform and this adapter must not crash migration),
+  `audit_itr_coverage.py`'s two draft builders (construct the typed model, not a dict
+  literal), and the two tests that currently assign a raw dict post-construction
+  (`tests/test_filing_gateway_v2.py`, `tests/test_tax_v2_compute.py`) — `ReturnDraft` has no
+  `validate_assignment=True`, so a raw-dict assignment after construction silently stores an
+  unvalidated dict instead of coercing it, which would break every attribute-access read.
+  (`tests/test_ay2026_calculator_regressions.py`'s `capitalGainsSchedule` dict is a raw JSON
+  payload to the legacy `compute_tax_summary` flat-blob function, not a `ReturnDraft` —
+  unaffected, confirmed by reading its call site.)
 
-**Tests:** schema round-trip tests (typed CG schedule serializes/deserializes losslessly),
-ITR-1 regression suite stays green (still reads `simplified112A` correctly).
+**Tests:** schema round-trip tests (typed CG schedule serializes/deserializes losslessly,
+`extra="forbid"` still rejects unknown keys), ITR-1 regression suite stays green.
+
+**Delivered (backend only — frontend was already done, confirmed no change needed):**
+- `app/schemas/return_draft.py` — added `CapitalGainsSchedule` and 15 nested types
+  (`Simplified112ABlock`, `CGTransfereeDetail`, `CGImprovementDetail`, `CGExemptionClaim`,
+  `ImmovableAssetGain`, `Scrip112A`, `Scrip115AD`, `VdaEntry`, `CapitalGainPurchase`,
+  `CGDtaaEntry`, `CGDeductionClaim`, `CGUnutilizedDeposit`, `CapitalGainsAggregates`,
+  `CGSection48Block`, `CGNriProviso48Block`), field names matching `types.ts` exactly; the 10
+  frontend-JsonRow[] fields became `list[dict[str, Any]]` — same scope, not re-typed.
+  `ReturnDraft.capitalGainsSchedule` changed from `dict` to `CapitalGainsSchedule`.
+- `app/engine/draft_to_itr1_input.py::_map_capital_gains` — `sched.get("simplified112A")`
+  dict access → `draft.capitalGainsSchedule.simplified112A` attribute access.
+- `app/engine/filing_gateway_v2.py`'s capital-gains-summary builder — same dict→attribute
+  fix; the old `if simplified:` truthiness check (always true for a non-optional typed
+  field) replaced with an explicit `has_simplified = sale > 0 or cost > 0` computed value,
+  preserving the original "block present vs empty" semantics.
+- `app/engine/flat_to_draft.py` — the legacy one-way migration adapter now constructs
+  `CapitalGainsSchedule.model_validate(...)` with a fallback to an empty schedule on
+  `ValidationError`, so an old, non-conforming saved row can't crash migration.
+- `audit_itr_coverage.py` — both draft builders construct `CapitalGainsSchedule(...)`
+  instead of a dict literal (one directly; one copies the already-typed attribute from
+  another draft, unchanged).
+- `tests/test_filing_gateway_v2.py`, `tests/test_tax_v2_compute.py` — updated the two
+  post-construction dict assignments to construct `CapitalGainsSchedule(...)`.
+- `tests/test_return_draft_schema.py` — 5 new tests: typed-empty-default, full round-trip
+  (typed sub-arrays + generic rows together), `extra="forbid"` on the schedule itself, same
+  on a typed sub-array element, and backward compatibility with the old
+  simplified-112A-only shape every existing ITR-1/4 client has saved today.
+- Frontend: confirmed via `Docs/ITR1_ITR4_CAPITAL_GAINS_AND_UNIFIED_IMPORTS_IMPLEMENTATION_GUIDE.md`
+  that `types.ts`'s `CapitalGainsSchedule` was already fully typed and live (a separate,
+  earlier, completed workstream) — no frontend change was needed for this phase.
+
+**Verification (all run 2026-09-01):**
+- `pytest tests/test_return_draft_schema.py` — 17 passed (12 existing + 5 new).
+- `pytest tests/test_filing_gateway_v2.py tests/test_tax_v2_compute.py tests/test_itr1_calculator.py
+  tests/test_itr4_calculator.py tests/test_draft_to_itr1_input.py tests/test_itr1_golden_suite.py
+  tests/test_itr1_filing_gateway_profile.py tests/test_itr1_filing_gateway_profile_v2.py
+  tests/test_112a_unification.py tests/test_filing_orchestrator.py tests/test_personal_info_contract.py
+  tests/test_eri_creation_info_invariant.py tests/test_eri_routers.py` — 171 passed.
+- `python -c "import app.main"` — OK.
+- `npm run build` — clean, no type errors.
+- **Pre-existing, unrelated finding surfaced during verification**: 18 tests in
+  `tests/test_filing_gateway_v2_itr4.py` fail on today's date (2026-09-01) — confirmed via
+  `git stash` that they fail identically on the pre-this-phase baseline. Root cause: ITR-4's
+  due date is 31 August, and these fixtures are pinned to a pre-due-date filing scenario with
+  no date-adaptive logic (the same class of bug `scripts/eri_uat_sanity.py`'s
+  `_apply_current_filing_section` was built to route around for the UAT pack, but these
+  particular test fixtures don't use it). Out of scope for this phase; flagged for separate
+  follow-up, not fixed here.
 
 ### Phase 2 — Extend `ReturnDraft` / `types.ts` with the remaining ITR-2 fields
 

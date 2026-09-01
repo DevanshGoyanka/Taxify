@@ -778,28 +778,22 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
 def _map_capital_gains(draft: ReturnDraft) -> CapitalGainsIncome | None:
     """Map the capital-gains schedule to the ITR-1 ``CapitalGainsIncome``.
 
-    ITR-1 permits LTCG u/s 112A only. The canonical draft carries the raw
-    ``capitalGainsSchedule`` dict; the authoritative ITR-1/ITR-4 source is
-    the structured ``simplified112A`` block (sale consideration minus cost
-    of acquisition, floored at 0).  A bare ``ltcg112A`` scalar is NOT
-    trusted — older import paths wrote a purchase cost into it,
-    fabricating a fake gain that blocked ITR-1 with
+    ITR-1 permits LTCG u/s 112A only. The canonical draft carries the typed
+    ``capitalGainsSchedule`` (``app.schemas.return_draft.CapitalGainsSchedule``);
+    the authoritative ITR-1/ITR-4 source is the structured ``simplified112A``
+    block (sale consideration minus cost of acquisition, floored at 0).  A bare
+    ``ltcg112A`` scalar is NOT trusted — older import paths wrote a purchase
+    cost into it, fabricating a fake gain that blocked ITR-1 with
     "LTCG u/s 112A of Rs 499975 exceeds Rs 125000".  A purchase with no
     sale is never a capital gain; only a positive (sale - cost) is.
     Full 112A portfolio computation remains in
     ``app.engine.schedules.restricted_112a`` (invoked by the Phase 2
     compute endpoint when canonical transaction evidence is present).
     """
-    sched = draft.capitalGainsSchedule or {}
-    simplified = sched.get("simplified112A") or {}
-    if simplified:
-        sale = Decimal(str(simplified.get("totalSaleConsideration", 0) or 0))
-        cost = Decimal(str(simplified.get("totalCostAcquisition", 0) or 0))
-        ltcg_112a = max(Decimal("0"), sale - cost)
-    else:
-        sale = Decimal("0")
-        cost = Decimal("0")
-        ltcg_112a = Decimal("0")
+    simplified = draft.capitalGainsSchedule.simplified112A
+    sale = simplified.totalSaleConsideration
+    cost = simplified.totalCostAcquisition
+    ltcg_112a = max(Decimal("0"), sale - cost)
     return CapitalGainsIncome(
         ltcg_112a=ltcg_112a,
         full_value_of_consideration=sale,

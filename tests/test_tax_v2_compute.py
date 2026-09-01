@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.routers.tax_v2 import compute_tax_summary_v2
 from app.schemas.return_draft import (
+    CapitalGainsSchedule,
     Employer,
     ReconciliationDiscrepancy,
     ReturnDraft,
@@ -45,12 +46,12 @@ def test_compute_v2_surfaces_per_row_capital_gains_for_simplified_112a() -> None
     """
     draft = create_empty_draft("2026-27", "ITR-1", "new")
     draft.employers = [Employer(id="e1", basic=Decimal("800000"))]
-    draft.capitalGainsSchedule = {  # type: ignore[assignment]
-        "simplified112A": {
+    draft.capitalGainsSchedule = CapitalGainsSchedule(
+        simplified112A={
             "totalSaleConsideration": Decimal("41871"),
             "totalCostAcquisition": Decimal("20586"),
         }
-    }
+    )
     summary = compute_tax_summary_v2(draft)
     cg = summary["capitalGainsSummary"]
     assert cg["status"] == "VALID"

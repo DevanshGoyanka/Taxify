@@ -422,6 +422,233 @@ PresumptiveBusiness = Union[Presumptive44AD, Presumptive44ADA, Presumptive44AE]
 
 
 # ---------------------------------------------------------------------------
+# Capital Gains (Schedule CG)
+#
+# Mirrors frontend/src/domain/returns/types.ts::CapitalGainsSchedule exactly,
+# including its 2026-08-19 scope decision: stEquity, stNriUnlisted,
+# stOtherAssets, ltProviso112, ltNri112115, ltForeignAssets, ltOtherAssets,
+# stSlumpSale, ltSlumpSale, and buyBackLosses stay generic rows (frontend's
+# CapitalGainsEntryManager.tsx already edits them with its own field-spec
+# validation; re-typing them was explicitly out of scope there and stays out
+# of scope here — this is a mirror, not a redesign).
+# ---------------------------------------------------------------------------
+
+CGExemptionSection = Literal["54", "54B", "54EC", "54F", "115F", "54D", "54G", "54GA", ""]
+
+
+class Simplified112ABlock(_StrictModel):
+    """ITR-1/4 quick-entry 112A aggregate. Auto-populated from imported scrips."""
+
+    totalSaleConsideration: Money = Field(default=Decimal("0"))
+    totalCostAcquisition: Money = Field(default=Decimal("0"))
+
+
+class CGTransfereeDetail(Identified):
+    """A transferee detail nested inside an immovable-property gain row."""
+
+    name: str = Field(default="")
+    pan: str = Field(default="")
+    aadhaar: str = Field(default="")
+    panOrTan: str = Field(default="")
+    share: Money = Field(default=Decimal("0"))
+    amount: Money = Field(default=Decimal("0"))
+    address: str = Field(default="")
+    stateCode: str = Field(default="")
+    countryCode: str = Field(default="")
+    pinCode: str = Field(default="")
+    zipCode: str = Field(default="")
+
+
+class CGImprovementDetail(Identified):
+    """An improvement-cost detail nested inside a long-term immovable gain row."""
+
+    serialNumber: int = Field(default=0)
+    cost: Money = Field(default=Decimal("0"))
+    financialYear: str = Field(default="")
+    indexedCost: Optional[Money] = Field(default=None)
+
+
+class CGExemptionClaim(Identified):
+    """An exemption claim nested inside an immovable-property gain row."""
+
+    section: CGExemptionSection = Field(default="")
+    amount: Money = Field(default=Decimal("0"))
+
+
+class ImmovableAssetGain(Identified):
+    """One STCG/LTCG land-or-building row (Schedule CG A1/B1)."""
+
+    dateOfPurchase: Optional[str] = Field(default=None)
+    dateOfSale: str = Field(default="")
+    fullConsideration: Money = Field(default=Decimal("0"))
+    stampDutyValue: Optional[Money] = Field(default=None)
+    propertyAddress: Optional[str] = Field(default=None)
+    consideration50C: Optional[Money] = Field(default=None)
+    acquisitionCost: Money = Field(default=Decimal("0"))
+    improvementCost: Optional[Money] = Field(default=None)
+    transferExpenses: Money = Field(default=Decimal("0"))
+    deduction54B: Optional[Money] = Field(default=None)
+    totalDeductions: Optional[Money] = Field(default=None)
+    balance: Optional[Money] = Field(default=None)
+    capitalGain: Optional[Money] = Field(default=None)
+    indexedAcquisitionCost: Optional[Money] = Field(default=None)
+    indexedImprovementCost: Optional[Money] = Field(default=None)
+    improvementFinancialYear: Optional[str] = Field(default=None)
+    exemptionSection: CGExemptionSection = Field(default="")
+    exemptionAmount: Optional[Money] = Field(default=None)
+    transferees: list[CGTransfereeDetail] = Field(default_factory=list)
+    improvements: list[CGImprovementDetail] = Field(default_factory=list)
+    exemptions: list[CGExemptionClaim] = Field(default_factory=list)
+
+
+class Scrip112A(Identified):
+    """One scrip in Schedule 112A (listed equity / equity-oriented MF)."""
+
+    shareOnOrBefore: Literal["BE", "AE", ""] = Field(default="")
+    isin: str = Field(default="")
+    name: str = Field(default="")
+    quantity: Money = Field(default=Decimal("0"))
+    salePricePerUnit: Money = Field(default=Decimal("0"))
+    totalSaleValue: Money = Field(default=Decimal("0"))
+    costWithoutIndexation: Money = Field(default=Decimal("0"))
+    acquisitionCost: Money = Field(default=Decimal("0"))
+    fmvPerUnit: Money = Field(default=Decimal("0"))
+    totalFmv: Money = Field(default=Decimal("0"))
+    transferExpenses: Money = Field(default=Decimal("0"))
+    ltcgBeforeLower: Optional[Money] = Field(default=None)
+    totalDeductions: Optional[Money] = Field(default=None)
+    balance: Optional[Money] = Field(default=None)
+
+
+class Scrip115AD(Scrip112A):
+    """One scrip in Schedule 115AD (FII/FPI). Same shape as Scrip112A."""
+
+
+class VdaEntry(Identified):
+    """One Virtual Digital Asset transaction (Sec 115BBH)."""
+
+    dateOfAcquisition: str = Field(default="")
+    dateOfTransfer: str = Field(default="")
+    head: Literal["CG", "BI", ""] = Field(default="")
+    acquisitionCost: Money = Field(default=Decimal("0"))
+    consideration: Money = Field(default=Decimal("0"))
+    incomeFromVda: Optional[Money] = Field(default=None)
+
+
+class CapitalGainPurchase(Identified):
+    """A read-only purchase-reference row (AIS SFT-18(Pur)/SFT-17(Pur))."""
+
+    informationCode: str = Field(default="")
+    reportingSource: str = Field(default="")
+    securityName: str = Field(default="")
+    isin: str = Field(default="")
+    period: str = Field(default="")
+    purchaseAmount: Money = Field(default=Decimal("0"))
+    accountId: str = Field(default="")
+    status: str = Field(default="")
+
+
+class CGDtaaEntry(Identified):
+    """A DTAA-rate capital gains row (Schedule CG A6/B7)."""
+
+    amount: Money = Field(default=Decimal("0"))
+    itemNumber: Optional[str] = Field(default=None)
+    countryName: str = Field(default="")
+    countryCode: Optional[str] = Field(default=None)
+    article: str = Field(default="")
+    treatyRate: Optional[Money] = Field(default=None)
+    trcAvailable: Optional[bool] = Field(default=None)
+    itActSection: Optional[str] = Field(default=None)
+    itActRate: Optional[Money] = Field(default=None)
+    applicableRate: Optional[Money] = Field(default=None)
+
+
+class CGDeductionClaim(Identified):
+    """A s.54/54B/54EC/54F/115F/54D/54G/54GA deduction claim (Schedule CG F)."""
+
+    section: CGExemptionSection = Field(default="")
+    dateOfTransfer: str = Field(default="")
+    newAssetCost: Optional[Money] = Field(default=None)
+    dateOfPurchase: Optional[str] = Field(default=None)
+    amountDeposited: Optional[Money] = Field(default=None)
+    depositDate: Optional[str] = Field(default=None)
+    accountNumber: Optional[str] = Field(default=None)
+    ifsc: Optional[str] = Field(default=None)
+    amountDeducted: Money = Field(default=Decimal("0"))
+
+
+class CGUnutilizedDeposit(Identified):
+    """Prior-year unutilized CG deposit (s.54/54B/54D/54G/54GA reinvestment)."""
+
+    transferPreviousYear: str = Field(default="")
+    sectionClaimed: str = Field(default="")
+    yearAssetAcquired: Optional[str] = Field(default=None)
+    amountUtilized: Money = Field(default=Decimal("0"))
+    amountUnutilized: Money = Field(default=Decimal("0"))
+
+
+class CapitalGainsAggregates(_StrictModel):
+    """Pass-through STCG/LTCG aggregates for the schedule."""
+
+    stPassThrough: Money = Field(default=Decimal("0"))
+    stPassThrough20: Money = Field(default=Decimal("0"))
+    stPassThrough30: Money = Field(default=Decimal("0"))
+    stPassThroughApplicable: Money = Field(default=Decimal("0"))
+    ltPassThrough: Money = Field(default=Decimal("0"))
+    ltPassThrough112A: Money = Field(default=Decimal("0"))
+    ltPassThrough125: Money = Field(default=Decimal("0"))
+
+
+class CGSection48Block(_StrictModel):
+    """NRI STT paid/not-paid aggregates."""
+
+    nriSttPaid: Money = Field(default=Decimal("0"))
+    nriSttNotPaid: Money = Field(default=Decimal("0"))
+
+
+class CGNriProviso48Block(_StrictModel):
+    """NRI LTCG without indexation + s.54F."""
+
+    ltcgWithoutBenefit: Money = Field(default=Decimal("0"))
+    deduction54F: Money = Field(default=Decimal("0"))
+
+
+class CapitalGainsSchedule(_StrictModel):
+    """The fully-typed canonical Capital Gains Schedule."""
+
+    simplified112A: Simplified112ABlock = Field(default_factory=Simplified112ABlock)
+    stImmovable: list[ImmovableAssetGain] = Field(default_factory=list)
+    stEquity: list[dict[str, Any]] = Field(default_factory=list)
+    stNriUnlisted: list[dict[str, Any]] = Field(default_factory=list)
+    stOtherAssets: list[dict[str, Any]] = Field(default_factory=list)
+    stSlumpSale: list[dict[str, Any]] = Field(default_factory=list)
+    ltImmovable: list[ImmovableAssetGain] = Field(default_factory=list)
+    ltProviso112: list[dict[str, Any]] = Field(default_factory=list)
+    ltNri112115: list[dict[str, Any]] = Field(default_factory=list)
+    ltForeignAssets: list[dict[str, Any]] = Field(default_factory=list)
+    ltOtherAssets: list[dict[str, Any]] = Field(default_factory=list)
+    ltSlumpSale: list[dict[str, Any]] = Field(default_factory=list)
+    schedule112A: list[Scrip112A] = Field(default_factory=list)
+    schedule115AD: list[Scrip115AD] = Field(default_factory=list)
+    purchases: list[CapitalGainPurchase] = Field(default_factory=list)
+    vda: list[VdaEntry] = Field(default_factory=list)
+    stUnutilized: list[CGUnutilizedDeposit] = Field(default_factory=list)
+    ltUnutilized: list[CGUnutilizedDeposit] = Field(default_factory=list)
+    stDtaa: list[CGDtaaEntry] = Field(default_factory=list)
+    ltDtaa: list[CGDtaaEntry] = Field(default_factory=list)
+    buyBackLosses: list[dict[str, Any]] = Field(default_factory=list)
+    deductionClaims: list[CGDeductionClaim] = Field(default_factory=list)
+    stSection48: CGSection48Block = Field(default_factory=CGSection48Block)
+    ltNriProviso48: CGNriProviso48Block = Field(default_factory=CGNriProviso48Block)
+    ltNri112A: dict[str, Money] = Field(default_factory=dict)
+    stUnutilizedFlag: Literal["Y", "N", "X"] = Field(default="N")
+    ltUnutilizedFlag: Literal["Y", "N", "X"] = Field(default="N")
+    quarterly: dict[str, Money] = Field(default_factory=dict)
+    aggregates: CapitalGainsAggregates = Field(default_factory=CapitalGainsAggregates)
+    lossSetOff: dict[str, Money] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
 # Other Sources (Schedule OS)
 # ---------------------------------------------------------------------------
 
@@ -1104,7 +1331,7 @@ class ReturnDraft(_StrictModel):
     houseProperties: list[HouseProperty] = Field(default_factory=list)
     housePropertyPassThroughIncome: Money = Field(default=Decimal("0"))
     businesses: list[PresumptiveBusiness] = Field(default_factory=list)
-    capitalGainsSchedule: dict = Field(default_factory=dict)
+    capitalGainsSchedule: CapitalGainsSchedule = Field(default_factory=CapitalGainsSchedule)
     otherSources: OtherSources = Field(default_factory=OtherSources)
     exemptIncome: ExemptIncomeSchedule = Field(default_factory=ExemptIncomeSchedule)
     deductions: Deductions = Field(default_factory=Deductions)

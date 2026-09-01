@@ -142,10 +142,13 @@ def _capital_gains_summary(
     ``capital_gains_112a``. Per-scrip detail (ITR-2/3) is handled by the
     per-scrip path elsewhere; this summary is the ITR-1/4 simplified view.
     """
-    sched = (draft.capitalGainsSchedule or {}) if draft.capitalGainsSchedule else {}
-    simplified = sched.get("simplified112A") or {}
-    sale = Decimal(str(simplified.get("totalSaleConsideration", 0) or 0)) if simplified else Decimal("0")
-    cost = Decimal(str(simplified.get("totalCostAcquisition", 0) or 0)) if simplified else Decimal("0")
+    simplified = draft.capitalGainsSchedule.simplified112A
+    sale = simplified.totalSaleConsideration
+    cost = simplified.totalCostAcquisition
+    # Whether the simplified112A block actually carries data — the typed
+    # schedule always has the block present (Pydantic default), so "present"
+    # now means "non-zero", replacing the old dict-truthiness check.
+    has_simplified = sale > 0 or cost > 0
     # The engine's authoritative net 112A gain (already exemption-adjusted
     # where applicable). For the simplified path this equals max(0, sale-cost).
     ltcg_112a = Decimal(str(result.capital_gains_112a or 0))
@@ -156,7 +159,7 @@ def _capital_gains_summary(
     ltcg_total = ltcg_112a
     total_capital_gains = ltcg_112a
     transactions: list[dict[str, Any]] = []
-    if simplified and (sale > 0 or cost > 0):
+    if has_simplified:
         # Single aggregate row mirrors Section112ATransactionResult.to_dict()
         # field names so the frontend overlay (ct.actual_cost / ct.gain /
         # ct.transfer_expenses) lights up the readouts correctly.
@@ -174,7 +177,7 @@ def _capital_gains_summary(
             "grandfathering_applied": False,
         })
     return {
-        "status": "VALID" if transactions else ("EMPTY" if not simplified else "EVIDENCE_ONLY"),
+        "status": "VALID" if transactions else ("EMPTY" if not has_simplified else "EVIDENCE_ONLY"),
         "gross112AGain": _decimal_float(ltcg_112a),
         "fullValueOfConsideration": _decimal_float(sale),
         "costOfAcquisition": _decimal_float(cost),

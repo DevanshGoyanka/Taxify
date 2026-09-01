@@ -21,14 +21,18 @@ import pytest
 from app.schemas.return_draft import (
     AlternateAddress,
     BankAccount,
+    CapitalGainsSchedule,
     Employer,
     DividendIncome,
+    ImmovableAssetGain,
     Investment80C,
     InterestIncome,
     ReturnDraft,
+    Scrip112A,
     SeventhProviso,
     TdsCredit,
     TaxChallan,
+    VdaEntry,
     create_empty_draft,
     draft_from_client_seed,
 )
@@ -266,3 +270,88 @@ def test_itr1_draft_without_additive_fields_still_validates():
     assert draft.personal.assesseeStatus == "I"
     assert draft.personal.employerCategory == ""
     assert draft.filing.seventhProviso.foreignTravel is False
+
+
+# ── ITR-2/3 plan Phase 1: typed capitalGainsSchedule ─────────────────────────
+# Mirrors frontend/src/domain/returns/types.ts::CapitalGainsSchedule exactly
+# (Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md Phase 1).
+
+def test_empty_draft_has_typed_empty_capital_gains_schedule():
+    """The default CapitalGainsSchedule is a real typed instance, not a dict."""
+    draft = create_empty_draft("2026-27", "ITR-1", "new")
+    assert isinstance(draft.capitalGainsSchedule, CapitalGainsSchedule)
+    assert draft.capitalGainsSchedule.simplified112A.totalSaleConsideration == Decimal("0")
+    assert draft.capitalGainsSchedule.schedule112A == []
+    assert draft.capitalGainsSchedule.stEquity == []
+    assert draft.capitalGainsSchedule.stUnutilizedFlag == "N"
+
+
+def test_capital_gains_schedule_round_trips_typed_and_generic_rows():
+    """Typed sub-arrays (112A, VDA, immovable) and generic JsonRow[] fields
+    both survive a full JSON round-trip losslessly."""
+    draft = create_empty_draft("2026-27", "ITR-2", "new")
+    draft.capitalGainsSchedule = CapitalGainsSchedule(
+        simplified112A={"totalSaleConsideration": Decimal("500000"), "totalCostAcquisition": Decimal("300000")},
+        schedule112A=[Scrip112A(
+            id="s1", isin="INE001A01036", name="Reliance", quantity=Decimal("100"),
+            salePricePerUnit=Decimal("2500"), totalSaleValue=Decimal("250000"),
+            costWithoutIndexation=Decimal("200000"), acquisitionCost=Decimal("200000"),
+        )],
+        vda=[VdaEntry(
+            id="v1", dateOfAcquisition="2025-01-01", dateOfTransfer="2025-06-01",
+            head="CG", acquisitionCost=Decimal("10000"), consideration=Decimal("15000"),
+        )],
+        ltImmovable=[ImmovableAssetGain(
+            id="p1", dateOfSale="2025-12-01", fullConsideration=Decimal("8000000"),
+            acquisitionCost=Decimal("3000000"), transferExpenses=Decimal("50000"),
+        )],
+        # Generic JsonRow[]-equivalent field — arbitrary keys must pass through
+        # untouched (matches the frontend's deliberately-untyped scope).
+        stEquity=[{"isin": "INE002A01018", "grossGain": 5000, "customField": "x"}],
+    )
+    restored = ReturnDraft.model_validate_json(draft.model_dump_json())
+    cg = restored.capitalGainsSchedule
+    assert cg.simplified112A.totalSaleConsideration == Decimal("500000")
+    assert len(cg.schedule112A) == 1
+    assert cg.schedule112A[0].isin == "INE001A01036"
+    assert len(cg.vda) == 1
+    assert cg.vda[0].head == "CG"
+    assert len(cg.ltImmovable) == 1
+    assert cg.ltImmovable[0].fullConsideration == Decimal("8000000")
+    assert cg.stEquity == [{"isin": "INE002A01018", "grossGain": 5000, "customField": "x"}]
+
+
+def test_capital_gains_schedule_rejects_unknown_key():
+    """extra='forbid' still holds on the typed CG schedule itself."""
+    with pytest.raises(Exception):
+        ReturnDraft.model_validate({
+            "assessmentYear": "2026-27", "form": "ITR-2",
+            "capitalGainsSchedule": {"bogusField": 123},
+        })
+
+
+def test_capital_gains_schedule_rejects_unknown_key_in_typed_subarray():
+    """extra='forbid' also holds on typed sub-array elements like Scrip112A."""
+    with pytest.raises(Exception):
+        ReturnDraft.model_validate({
+            "assessmentYear": "2026-27", "form": "ITR-2",
+            "capitalGainsSchedule": {
+                "schedule112A": [{"id": "s1", "legacyAliasField": "x"}],
+            },
+        })
+
+
+def test_old_simplified_112a_only_shape_still_validates():
+    """Backward compatibility: a draft with only the old simplified112A block
+    (the shape every ITR-1/4 client currently has saved) still loads."""
+    draft = ReturnDraft.model_validate({
+        "assessmentYear": "2026-27", "form": "ITR-1",
+        "capitalGainsSchedule": {
+            "simplified112A": {
+                "totalSaleConsideration": "180000",
+                "totalCostAcquisition": "100000",
+            },
+        },
+    })
+    assert draft.capitalGainsSchedule.simplified112A.totalSaleConsideration == Decimal("180000")
+    assert draft.capitalGainsSchedule.schedule112A == []

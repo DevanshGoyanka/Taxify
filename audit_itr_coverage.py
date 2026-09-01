@@ -35,6 +35,7 @@ from app.engine.filing_gateway_v2 import generate_cbdt_json, FilingGatewayV2Erro
 from app.schemas.return_draft import (
     AlternateAddress,
     BankAccount,
+    CapitalGainsSchedule,
     Category80D,
     CoOwner,
     DeductionLoan,
@@ -513,12 +514,12 @@ def build_full_itr1_draft(*, loan_variant: str = "80EEA") -> ReturnDraft:
     # from the post-exemption taxable 112A; ITR4-R264 compared
     # result.capital_gains_112a against the post-exemption taxable_income);
     # both are now fixed so a positive gain validates cleanly.
-    draft.capitalGainsSchedule = {
-        "simplified112A": {
+    draft.capitalGainsSchedule = CapitalGainsSchedule(
+        simplified112A={
             "totalSaleConsideration": Decimal("180000"),
             "totalCostAcquisition": Decimal("100000"),
         },
-    }
+    )
     draft.deductions.schedule80GGA = [Schedule80GGAEntry(
         id="gga1", relevantClause="80GGA2a", doneeName="Research Fund",
         doneePAN="BBBBB1234B", addressLine="2 Science Road", city="Delhi",
@@ -679,7 +680,7 @@ def build_full_itr4_draft(*, scheme: str = "44AD", loan_variant: str = "80EEA") 
     draft.otherSources = conditional.otherSources
     draft.deductions = conditional.deductions
     # The ITR-4 draft mapper reuses the shared ``_map_capital_gains`` helper,
-    # which reads ``draft.capitalGainsSchedule["simplified112A"]`` the same
+    # which reads ``draft.capitalGainsSchedule.simplified112A`` the same
     # way as ITR-1. The conditional ITR-1 draft carries the block, but
     # ``build_full_itr4_draft`` builds its own draft object, so mirror the
     # same restricted-112A block here so the three LTCG112A fields are

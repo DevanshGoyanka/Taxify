@@ -23,9 +23,12 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Iterable
 
+from pydantic import ValidationError
+
 from app.schemas.return_draft import (
     BankAccount,
     BankAccountType,
+    CapitalGainsSchedule,
     DeductionLoan,
     Deductions,
     DividendIncome,
@@ -774,11 +777,20 @@ def flat_to_draft(payload: Any) -> ReturnDraft:
                               draft.houseProperties[0].passThroughIncome if draft.houseProperties else Decimal("0")))
     )
 
-    # ── Capital gains schedule (preserved as-is) ──────────────────────────
+    # ── Capital gains schedule ─────────────────────────────────────────────
+    # Best-effort: an old flat blob's capitalGainsSchedule dict may predate
+    # the typed shape entirely, or carry keys that no longer match. This is a
+    # one-way legacy migration adapter, so a shape mismatch falls back to an
+    # empty schedule rather than blocking the whole draft from loading.
     if _is_record(source.get("capitalGainsSchedule")):
-        draft.capitalGainsSchedule = source["capitalGainsSchedule"]  # type: ignore[assignment]
+        try:
+            draft.capitalGainsSchedule = CapitalGainsSchedule.model_validate(
+                source["capitalGainsSchedule"]
+            )
+        except ValidationError:
+            draft.capitalGainsSchedule = CapitalGainsSchedule()
     else:
-        draft.capitalGainsSchedule = {}
+        draft.capitalGainsSchedule = CapitalGainsSchedule()
 
     # ── Businesses ─────────────────────────────────────────────────────────
     business_rows = _array(source, "businessEntries") or _array(source, "businesses")

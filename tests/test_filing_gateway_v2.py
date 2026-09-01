@@ -11,6 +11,7 @@ import app.engine.filing_gateway_v2 as gateway
 from app.schemas.return_draft import (
     AlternateAddress,
     BankAccount,
+    CapitalGainsSchedule,
     Category80D,
     CoOwner,
     Employer,
@@ -533,12 +534,12 @@ def test_compute_canonical_itr1_purchase_only_does_not_fabricate_112a_gain() -> 
     """
     draft = _filing_ready_draft()
     # Simulate the simplified 112A block with only a cost (purchase) and no sale.
-    draft.capitalGainsSchedule = {
-        "simplified112A": {
+    draft.capitalGainsSchedule = CapitalGainsSchedule(
+        simplified112A={
             "totalSaleConsideration": 0,
             "totalCostAcquisition": Decimal("499975"),
         },
-    }
+    )
     result = gateway.compute_canonical_itr1(draft)
     # The gain must be 0 (sale - cost floored at 0), so ITR-1 stays eligible.
     assert result.computation.capital_gains_112a == Decimal("0")
