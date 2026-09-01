@@ -101,7 +101,31 @@ app/schemas/itr*.py  →   app/engine/calculators/itr*.py  →  app/engine/itd/i
    SHA-256 over the sorted JSON, computed after all schedules are built.
 
 Full verified end-to-end architecture reference (every route, the v2 canonical pipeline,
-Type-3 submission, DB persistence): `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`.
+Type-3 submission, DB persistence): `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`. ITR-2/
+ITR-3's build-out onto that same v2 pipeline is tracked phase-by-phase, including a
+"Delivered" note per completed phase (files touched, gaps found, verification), in
+`Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` — read that first before assuming ITR-2/3
+architecture from this file or from `README.md`, both of which describe the legacy
+per-form schema pipeline below, not the newer draft-based one.
+
+### v2 canonical pipeline (`ReturnDraft`)
+
+The production compute/filing path for the frontend's single multi-form editor. One
+canonical `ReturnDraft` (`app/schemas/return_draft.py`) covers every form; per-form pipeline:
+
+```
+ReturnDraft → draft_to_itr{N}_input.py → calculator → validators/itr{N}/ → itd/itr{N}.py
+```
+
+`app/engine/filing_gateway_v2.py` is the single dispatch point — `compute_canonical(draft)`
+and `generate_cbdt_json(draft)` switch on `draft.form` to per-form
+`compute_canonical_itr{N}()` / `_generate_cbdt_json_itr{N}()` functions, each of which: maps
+the draft to the form's typed `Input` model, runs the calculator, then (for JSON generation)
+constructs the official-JSON-only filing profile/property/bank-account objects, runs the CBDT
+Category A/B/D validators (`app/engine/validators/itr{N}/`) so blocking errors stop generation
+before it reaches the portal, then builds and schema-validates the CBDT JSON. Live for ITR-1,
+ITR-2, and ITR-4 as of this writing; ITR-3 is not yet wired (still legacy-only) — check the
+production plan doc above for current status before assuming either way.
 
 ### Routers → engine wiring
 
@@ -136,6 +160,16 @@ endpoint's parsing step.
 gateway vs Type-3 offline utility, switched by env var, validated at startup via
 `assert_credentials_at_startup()`). DSC signing is Windows-only (`win32crypt`); the Linux
 deployment runs Type-3, which needs no DSC.
+
+### CBDT/ITD source material
+
+`Reference Docs by CBDT & ITD/` holds the official source documents CBDT rule citations and
+validators are extracted from: `Official JSON Schema/` (per-form schema JSON, what
+`app/engine/itd/itr{N}_schema.py` validates against), `Official Validations/` (the per-form
+Validation Rules PDFs `app/engine/validators/itr{N}/` is built from), and `Official ITR
+FORMS/` (the plain ITR-1 through ITR-7/-U/-V form PDFs). No taxpayer PII in this folder —
+distinct from the `*Test Data*`/`*Test Scenario Sheet*` xlsx files elsewhere in the repo,
+which do carry real operator PII and are `.gitignore`d, never committed.
 
 ### Database
 
