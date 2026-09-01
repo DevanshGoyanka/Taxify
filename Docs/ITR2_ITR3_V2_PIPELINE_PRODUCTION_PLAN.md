@@ -22,7 +22,7 @@ items point to, not a duplicate.
 | 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
 | 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
-| 5 | Complete the ITR-2 CBDT validator suite | Not started |
+| 5 | Complete the ITR-2 CBDT validator suite (sub-phases 5A–5E — see §Phase 5, 790 official rules found) | In progress |
 | 6 | Frontend: wire ITR-2 onto the canonical pipeline | Not started |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started |
 | 8 | ITR-3 (mirrors 1–7, reusing ITR-2's types) | Not started |
@@ -460,13 +460,40 @@ add `compute_canonical_itr2()` and `_generate_cbdt_json_itr2()`, mirroring
 
 ### Phase 5 — Complete the ITR-2 CBDT validator suite
 
-**The hardest phase**, same reason Type-3's own validation layer was flagged as the hardest
-part of that plan. `app/engine/validators/itr2/input_rules.py` (365 lines) and
-`calc_rules.py` (260 lines) cover ~15% of ITR-1's suite. Extended from the official
+**The hardest phase — bigger than originally scoped.** Reading the full official
 `Reference Docs by CBDT & ITD/Official Validations/CBDT__e-Filing_ITR 2_Validation Rules_AY
-2026-27_V1.0 (1).pdf` (already in the repo), following the exact `ValidationRule`/Category
-A-B-D/`ValidationReport.can_upload`/`blocking_errors` pattern `itr1/input_rules.py` already
-establishes — no new validation framework, filling in the existing one.
+2026-27_V1.0 (1).pdf` (51 pages, done 2026-09-02) surfaced **764 Category A (blocking) rules
++ 26 Category B/D rules = 790 total** — comparable in density to ITR-1's 4,431-line suite,
+against a materially more complex form. `app/engine/validators/itr2/input_rules.py` (365
+lines) and `calc_rules.py` (260/266 lines as of Phase 4) cover a small fraction of that.
+
+A meaningful share of the 790 are **not independently checkable against this codebase's
+architecture** — they're consistency checks between a CBDT dropdown-UI's sub-fields and their
+own displayed totals (e.g. "sum of drop-downs in Sl.No. 1a of Schedule S should equal Sl.No.
+1a"). This repo has no such UI; `build_itr2_json` constructs the JSON programmatically from
+typed fields, so those identities are already guaranteed by construction and add no value as
+a runtime check. The genuinely applicable rules are the real business-logic ones: deduction
+caps by regime/status/age, HRA/exemption formulas, mandatory-detail-when-claimed checks,
+regime-conditional restrictions, due-date-gated deductions, and cross-schedule reconciliation.
+
+Per user decision 2026-09-02: split into sub-phases by rule cluster, each following the exact
+`ValidationRule`/Category A-B-D/`ValidationReport.can_upload`/`blocking_errors` pattern
+`itr1/input_rules.py` already establishes (no new validation framework), each with its own
+Delivered block, tests, verification, and commit — same checkpoint discipline as Phases 1–4,
+just more of them:
+
+- **5A — Schedule S (Salary) + Schedule HP (House Property)**, including the 24(b)/80EE/80EEA
+  loan cross-checks that live between the two.
+- **5B — Schedule CG / 112A / 115AD(1)(b)(iii) / VDA** (capital gains, the largest single
+  computational schedule).
+- **5C — Chapter VI-A deduction suite** (80C/80CCC/80CCD/80D/80DD/80DDB/80E/80EE/80EEA/80EEB/
+  80G/80GG/80GGA/80GGC/80QQB/80RRB/80TTA/80TTB/80U/80CCH) — the largest rule cluster (~150
+  rules), mostly a repeating "eligible amount ≤ user-enterable amount, mandatory detail when
+  claimed, regime/status/age gate" pattern.
+- **5D — Schedule OS (Other Sources) + Schedule SI + CYLA/BFLA/CFL loss set-off.**
+- **5E — AMT/AMTC, Schedule EI (exempt income), PTI, FSI/TR/FA, Schedule 5A, Schedule AL,
+  TDS/TCS/IT reconciliation, Part B-TI/TTI final reconciliation, and the 26 Category B/D
+  rules.**
 
 **Tests:** `tests/test_itr2_input_validation.py`, `tests/test_itr2_calc_validation.py` — one
 test per new rule, known-good and known-bad cases, same pattern as ITR-1's R145 tests.
