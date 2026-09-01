@@ -178,8 +178,15 @@ checks between a CBDT dropdown-UI's sub-fields and their own displayed totals, o
 constructs official JSON programmatically from typed fields rather than summing a raw
 editable UI, and the calculator already applies statutory caps/formulas internally, so a large
 fraction of the catalog is either already structurally guaranteed or belongs in the calculator,
-not a pre-compute validator. Before adding a rule, trace whether the field it checks is
-actually user-suppliable and not already capped/computed by the engine — `input_rules.py` is
+not a pre-compute validator. Before adding a rule, check three things: (1) is the field it
+checks actually user-suppliable and not already capped/computed by the engine — grep the
+relevant `app/engine/schedules/` module for whether it even reads that field, since some
+fields (e.g. `ITR2Input.cf_losses`, most of `ScheduleSIEntry.deductions`) are wired into the
+schema but never consumed by the calculator at all; (2) does the Pydantic schema itself
+already reject the bad state via a `@model_validator` — write the known-bad test case *first*,
+because if it can't even construct, the rule is dead before it ships (found twice: a
+zero-ownership-share HP rule, a 115BB deduction rule); (3) is there an existing rule elsewhere
+in the same file already covering it via a different, less obvious path. `input_rules.py` is
 for genuine pre-compute gates, not a transcription of the PDF. ITR-2's validator build-out is
 tracked rule-by-rule (implemented vs. structurally-covered vs. genuinely out of scope, each
 cited by its official rule number) in `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` §Phase 5.
