@@ -171,6 +171,19 @@ FORMS/` (the plain ITR-1 through ITR-7/-U/-V form PDFs). No taxpayer PII in this
 distinct from the `*Test Data*`/`*Test Scenario Sheet*` xlsx files elsewhere in the repo,
 which do carry real operator PII and are `.gitignore`d, never committed.
 
+A form's Validation Rules PDF typically catalogs several hundred rules (ITR-2's has 790), but
+most are *not* meaningful additions to `app/engine/validators/itr{N}/`: many are consistency
+checks between a CBDT dropdown-UI's sub-fields and their own displayed totals, or calculator
+*formula* behavior (rate/classification logic) rather than input-shape validation — this repo
+constructs official JSON programmatically from typed fields rather than summing a raw
+editable UI, and the calculator already applies statutory caps/formulas internally, so a large
+fraction of the catalog is either already structurally guaranteed or belongs in the calculator,
+not a pre-compute validator. Before adding a rule, trace whether the field it checks is
+actually user-suppliable and not already capped/computed by the engine — `input_rules.py` is
+for genuine pre-compute gates, not a transcription of the PDF. ITR-2's validator build-out is
+tracked rule-by-rule (implemented vs. structurally-covered vs. genuinely out of scope, each
+cited by its official rule number) in `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` §Phase 5.
+
 ### Database
 
 SQLite via SQLAlchemy (`app/db/`). Core tables: `user`, `client` (PAN, encrypted
