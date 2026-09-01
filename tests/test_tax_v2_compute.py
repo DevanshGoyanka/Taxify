@@ -69,8 +69,13 @@ def test_compute_v2_surfaces_per_row_capital_gains_for_simplified_112a() -> None
 
 
 def test_compute_v2_rejects_non_itr1_form_with_422() -> None:
-    """Unsupported canonical forms fail at the v2 boundary with 422."""
-    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-2")
+    """Unsupported canonical forms fail at the v2 boundary with 422.
+
+    ITR-3 remains unsupported (Phase 8 of
+    Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md); ITR-2 is supported by
+    the v2 pipeline as of Phase 4 and is covered by its own tests instead.
+    """
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-3")
     with pytest.raises(HTTPException) as caught:
         compute_tax_summary_v2(draft)
     assert caught.value.status_code == 422

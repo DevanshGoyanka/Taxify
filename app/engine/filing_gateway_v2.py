@@ -17,12 +17,21 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.engine.calculators.itr1 import ITR1Result, compute as compute_itr1
+from app.engine.calculators.itr2 import ITR2Result, compute as compute_itr2
 from app.engine.calculators.itr4 import ITR4Result, compute as compute_itr4
 from app.engine.common.due_dates import filing_section_due_date_error
-from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input
+from app.engine.draft_to_itr1_input import (
+    _SALARY_SECTIONS,
+    _TAN_PATTERN,
+    DraftMappingError,
+    draft_to_itr1_input,
+)
+from app.engine.draft_to_itr2_input import draft_to_itr2_input
 from app.engine.draft_to_itr4_input import draft_to_itr4_input
 from app.engine.itd.itr1 import build_itr1_json
 from app.engine.itd.itr1_schema import ITR1SchemaValidationError, validate_itr1_json
+from app.engine.itd.itr2 import build_itr2_json
+from app.engine.itd.itr2_schema import validate_itr2_json
 from app.engine.itd.itr4 import build_itr4_json
 from app.engine.itd.itr4_schema import validate_itr4_json
 from app.schemas.itr1 import (
@@ -37,6 +46,16 @@ from app.schemas.itr1 import (
     SeventhProvisoClauseDetail,
     SeventhProvisoDetails,
     TaxReturnPreparer,
+)
+from app.schemas.itr2 import (
+    AssesseeStatus as ITR2AssesseeStatus,
+    EmployerFilingDetail,
+    ITR2FilingProfile,
+    ITR2Input,
+    PropertyFilingDetail,
+    ResidentialStatus as ITR2ResidentialStatus,
+    ReturnFileSection as ITR2ReturnFileSection,
+    TDS3FilingDetail,
 )
 from app.schemas.itr4 import (
     ITR4BankAccount,
@@ -1185,30 +1204,565 @@ def _generate_cbdt_json_itr4(draft: ReturnDraft) -> tuple[dict[str, Any], dict[s
     return official_json, pipeline.summary
 
 
-def compute_canonical(draft: ReturnDraft) -> ITR1PipelineResult | ITR4PipelineResult:
-    """Form-dispatching compute entrypoint (Phase 3).
+# ---------------------------------------------------------------------------
+# ITR-2 (Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md Phase 4)
+# ---------------------------------------------------------------------------
 
-    Used by ``tax_v2.compute_tax_summary_v2`` so ITR-1 and ITR-4 both compute
-    via the single canonical pipeline — no legacy delegation.
+@dataclass(frozen=True)
+class ITR2PipelineResult:
+    """Immutable output from one canonical ITR-2 computation."""
+
+    typed_input: ITR2Input
+    computation: ITR2Result
+    breakdown: dict[str, Any]
+    summary: dict[str, Any]
+
+
+_ITR2_SECTION_CODES: dict[str, ITR2ReturnFileSection] = {
+    "139(1)": ITR2ReturnFileSection.ON_TIME_139_1,
+    "139(4)": ITR2ReturnFileSection.BELATED_139_4,
+    "142(1)": ITR2ReturnFileSection.NOTICE_142_1,
+    "148": ITR2ReturnFileSection.NOTICE_148,
+    "153C": ITR2ReturnFileSection.NOTICE_153C,
+    "139(5)": ITR2ReturnFileSection.REVISED_139_5,
+    "139(9)": ITR2ReturnFileSection.DEFECTIVE_139_9,
+    "119(2)(b)": ITR2ReturnFileSection.CONDONATION_119_2B,
+}
+
+_ITR2_RESIDENTIAL_STATUS: dict[str, ITR2ResidentialStatus] = {
+    "ROR": ITR2ResidentialStatus.RESIDENT,
+    "RNOR": ITR2ResidentialStatus.NOT_ORDINARILY_RESIDENT,
+    "NR": ITR2ResidentialStatus.NON_RESIDENT,
+}
+
+
+def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
+    """Construct the official ITR-2 filing profile from canonical fields.
+
+    Mirrors ``_filing_profile`` (ITR-1's closest analogue — same shared
+    ``FilingAddress``/``PostalAddress`` types, same verification-capacity
+    restriction), adapted for ``ITR2FilingProfile``'s distinct field set:
+    flat seventh-proviso fields (not a nested block), the ITR-2-only
+    declarations (residential status, director/unlisted-equity/FII-FPI,
+    Portuguese Civil Code), and no representative-verification support (the
+    schema's ``verification_capacity`` only allows ``S``/``K``).
+    """
+    personal = draft.personal
+    filing = draft.filing
+    verification = draft.verification
+
+    try:
+        dob = datetime.date.fromisoformat(_required(personal.dateOfBirth, "dateOfBirth"))
+    except ValueError as exc:
+        if isinstance(exc, FilingGatewayV2Error):
+            raise
+        raise FilingGatewayV2Error(
+            "ITR-2 filing profile is invalid.",
+            ["personal.dateOfBirth must be a valid YYYY-MM-DD date."],
+        ) from exc
+
+    return_section = _ITR2_SECTION_CODES.get(filing.filingSection)
+    if return_section is None:
+        raise FilingGatewayV2Error(
+            "Official v2 ITR-2 generation supports filing sections 139(1), "
+            "139(4), 142(1), 148, 153C, 139(5), 139(9), 119(2)(b).",
+            [f"filingSection {filing.filingSection!r} is not supported."],
+        )
+    _reject_section_after_due_date(draft)
+
+    if not verification.declarationAccepted:
+        raise FilingGatewayV2Error(
+            "Verification declaration must be accepted for official ITR-2 JSON.",
+            ["verification.declarationAccepted must be true."],
+        )
+    if verification.capacity not in {"SELF", "KARTA"}:
+        raise FilingGatewayV2Error(
+            "ITR-2 verification capacity is invalid.",
+            ["verification.capacity must be SELF or KARTA for ITR-2 — "
+             "representative-filed ITR-2 verification is not yet supported."],
+        )
+
+    secondary_mobile = personal.secondaryMobile.strip() or None
+    secondary_email = personal.secondaryEmail.strip() or None
+    try:
+        address = FilingAddress(
+            residence_no=_required(personal.flatNo, "flatNo"),
+            residence_name=personal.residenceName.strip(),
+            road_or_street=personal.roadOrStreet.strip(),
+            locality_or_area=_required(personal.localityOrArea, "localityOrArea"),
+            city_or_town_or_district=_required(personal.city, "city"),
+            state_code=_required(personal.stateCode, "stateCode"),
+            country_code=personal.countryCode.strip() or "91",
+            pin_code=personal.pinCode.strip() or None,
+            zip_code=personal.zipCode.strip(),
+            mobile_country_code=int(personal.mobileCountryCode or "91"),
+            mobile_no=_required(personal.mobile, "mobile"),
+            email=_required(personal.email, "email"),
+            secondary_mobile_country_code=(
+                int(personal.secondaryMobileCountryCode or "91") if secondary_mobile else 0
+            ),
+            secondary_mobile_no=secondary_mobile,
+            secondary_email=secondary_email,
+        )
+        alternate_address = None
+        if personal.secondaryAddressDifferent:
+            alt = personal.alternateAddress
+            if alt is None:
+                raise FilingGatewayV2Error(
+                    "ITR-2 filing profile is incomplete.",
+                    ["personal.alternateAddress is required when "
+                     "secondaryAddressDifferent is true."],
+                )
+            alternate_address = PostalAddress(
+                residence_no=_required(alt.residenceNo, "alternateAddress.residenceNo"),
+                residence_name=alt.residenceName.strip(),
+                road_or_street=alt.roadOrStreet.strip(),
+                locality_or_area=_required(
+                    alt.localityOrArea, "alternateAddress.localityOrArea"
+                ),
+                city_or_town_or_district=_required(
+                    alt.cityOrTownOrDistrict,
+                    "alternateAddress.cityOrTownOrDistrict",
+                ),
+                state_code=_required(alt.stateCode, "alternateAddress.stateCode"),
+                country_code=alt.countryCode.strip() or "91",
+                pin_code=alt.pinCode.strip() or None,
+                zip_code=alt.zipCode.strip(),
+            )
+
+        seventh = filing.seventhProviso
+        surname = personal.surnameOrOrgName.strip() or personal.name.strip()
+        status_map = {"I": ITR2AssesseeStatus.INDIVIDUAL, "H": ITR2AssesseeStatus.HUF}
+        return ITR2FilingProfile(
+            pan=_required(personal.pan, "pan").upper(),
+            assessee_status=status_map.get(personal.assesseeStatus, ITR2AssesseeStatus.INDIVIDUAL),
+            first_name=personal.firstName.strip(),
+            middle_name=personal.middleName.strip(),
+            surname_or_org_name=_required(surname, "surnameOrOrgName"),
+            date_of_birth_or_formation=dob,
+            aadhaar_number=personal.aadhaar.strip() or None,
+            primary_address=address,
+            alternate_address=alternate_address,
+            residential_status=_ITR2_RESIDENTIAL_STATUS.get(
+                personal.residentialStatus, ITR2ResidentialStatus.RESIDENT
+            ),
+            return_file_section=return_section,
+            receipt_number=filing.originalAcknowledgementNumber.strip() or None,
+            original_return_date=_to_date(filing.originalFilingDate),
+            notice_number=filing.noticeNumber.strip() or None,
+            notice_date=_to_date(filing.noticeDate),
+            opted_out_new_tax_regime=draft.regime == "old",
+            seventh_proviso_139=(
+                seventh.depositExceedsOneCrore
+                or seventh.foreignTravel
+                or seventh.electricityExpenditure
+                or seventh.otherClauseIV
+            ),
+            foreign_travel_expenditure=seventh.foreignTravelAmount,
+            electricity_expenditure=seventh.electricityExpenditureAmount,
+            current_account_deposits=seventh.depositAmount,
+            is_company_director=personal.isDirector,
+            held_unlisted_equity=personal.holdsUnlistedShares,
+            is_fii_fpi=filing.isFiiFpi,
+            sebi_registration_number=filing.sebiRegistrationNumber.strip() or None,
+            portuguese_civil_code_applies=filing.portugueseCivilCodeApplies,
+            father_name=_required(personal.fatherName, "fatherName"),
+            verification_place=_required(verification.place, "verification.place"),
+            verification_capacity="K" if verification.capacity == "KARTA" else "S",
+        )
+    except (ValidationError, ValueError) as exc:
+        if isinstance(exc, FilingGatewayV2Error):
+            raise
+        raise FilingGatewayV2Error("ITR-2 filing profile is invalid.", [str(exc)]) from exc
+
+
+def _itr2_property_filing_details(draft: ReturnDraft) -> list[PropertyFilingDetail]:
+    """Map one ``PropertyFilingDetail`` per house property row.
+
+    ``ITR2Input`` requires an exact 1:1 count match against however many
+    property rows the draft carries (enforced by
+    ``ITR2Input.validate_cross_schedule_contract``) — returning an empty
+    list when there are no properties, rather than a placeholder row, keeps
+    that count correct in the common no-house-property case.
+    """
+    details: list[PropertyFilingDetail] = []
+    for index, row in enumerate(draft.houseProperties, start=1):
+        city = (row.city or draft.personal.city).strip() or "City"
+        state = (row.state or draft.personal.stateCode).strip() or "07"
+        country = (row.countryCode or draft.personal.countryCode or "91").strip()
+        pin = (row.pinCode or draft.personal.pinCode).strip() or None
+        zip_code = (row.zipCode or draft.personal.zipCode).strip() or None
+        address = (row.address or row.premisesName or row.name
+                   or draft.personal.flatNo or draft.personal.residenceName).strip() or "NA"
+        try:
+            details.append(PropertyFilingDetail(
+                address_detail=address[:200],
+                city_or_town_or_district=city[:50],
+                state_code=state[:2],
+                country_code=country or "91",
+                pin_code=pin,
+                zip_code=zip_code,
+                property_owner=row.propertyOwnerType,
+                co_owned=row.isCoOwned,
+                assessee_share_percent=row.ownershipShare if row.isCoOwned else Decimal("100"),
+            ))
+        except (ValidationError, ValueError) as exc:
+            raise FilingGatewayV2Error(
+                f"ITR-2 property filing detail [{index}] is invalid.", [str(exc)]
+            ) from exc
+    return details
+
+
+def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDetail]:
+    """Map one ``EmployerFilingDetail`` per row that becomes a TDS1 entry.
+
+    Count must exactly match ``len(tds1_entries)``
+    (``ITR2Input.validate_cross_schedule_contract``), so this replays the
+    exact same accept/reject filter ``draft_to_itr1_input._map_tds`` uses to
+    build ``tds1_entries`` (claimed-in-return, non-TDS3, valid TAN, salary
+    section) over ``draft.taxes.tds``, rather than deriving counts from
+    ``draft.employers`` independently — the two lists are not guaranteed to
+    correspond 1:1 (an employer row need not have a matching TDS credit,
+    and vice versa).
+    """
+    details: list[EmployerFilingDetail] = []
+    for index, row in enumerate(draft.taxes.tds, start=1):
+        if row.claimedInReturn is False or row.schedule == "TDS3":
+            continue
+        tan = (row.deductorTAN or "").strip().upper()
+        if not _TAN_PATTERN.fullmatch(tan):
+            continue
+        section = (row.section or "").strip().upper()
+        if section not in _SALARY_SECTIONS:
+            continue
+        employer = next(
+            (e for e in draft.employers if (e.employerTAN or "").strip().upper() == tan),
+            None,
+        )
+        # Must be byte-identical to TDS1Entry.employer_name
+        # (`row.deductorName or None`, built by draft_to_itr1_input._map_tds)
+        # — build_itr2_json's Schedule S rejects any filing-detail row whose
+        # name doesn't match its TDS1 entry's name exactly.
+        name = row.deductorName or "Employer"
+        city = (
+            (employer.employerCity if employer else "") or draft.personal.city
+        ).strip() or "City"
+        state = (
+            (employer.employerStateCode if employer else "") or draft.personal.stateCode
+        ).strip() or "07"
+        address = ((employer.employerAddress if employer else "") or "NA").strip()
+        try:
+            details.append(EmployerFilingDetail(
+                employer_tan=tan,
+                employer_name=name[:125],
+                nature_of_employment=(employer.natureOfEmployment if employer else "") or "OTH",
+                address_detail=address[:200] or "NA",
+                city_or_town_or_district=city[:50],
+                state_code=state[:2],
+            ))
+        except (ValidationError, ValueError) as exc:
+            raise FilingGatewayV2Error(
+                f"ITR-2 employer filing detail [{index}] is invalid.", [str(exc)]
+            ) from exc
+    return details
+
+
+def _itr2_tds3_filing_details(draft: ReturnDraft) -> list[TDS3FilingDetail]:
+    """Map one ``TDS3FilingDetail`` per row that becomes a TDS3 entry.
+
+    Count must exactly match ``len(tds3_entries)``
+    (``ITR2Input.validate_cross_schedule_contract``), so this replays the
+    exact same accept/reject filter ``draft_to_itr1_input._map_tds3`` uses
+    (claimed-in-return, TDS3 schedule) rather than additionally requiring a
+    non-empty PAN here — an empty-PAN row still becomes a ``TDS3Entry`` and
+    must still get a matching filing-detail row to keep counts aligned.
+    """
+    details: list[TDS3FilingDetail] = []
+    index = 0
+    for row in draft.taxes.tds:
+        if row.claimedInReturn is False or row.schedule != "TDS3":
+            continue
+        index += 1
+        pan = (row.panOfTenant or "").strip().upper()
+        head = row.headOfIncome if row.headOfIncome in {"HP", "CG", "OS", "EI"} else "OS"
+        try:
+            details.append(TDS3FilingDetail(
+                buyer_tenant_pan=pan,
+                head_of_income=head,
+            ))
+        except (ValidationError, ValueError) as exc:
+            raise FilingGatewayV2Error(
+                f"ITR-2 TDS3 filing detail [{index}] is invalid.", [str(exc)]
+            ) from exc
+    return details
+
+
+def _itr2_capital_gains_summary(result: ITR2Result) -> dict[str, Any]:
+    """Real Schedule CG/VDA totals for the ITR-2 response summary.
+
+    Unlike ``_capital_gains_summary`` (ITR-1/4's *simplified* 112A-aggregate
+    overlay, keyed to the frontend's aggregate-only CapitalGainsEntryManager
+    view — not applicable here since ITR-2 carries the full per-transaction
+    Schedule CG, not ``simplified112A``), this reads the true STCG/LTCG
+    split and total directly off the engine's own ``schedules["cg"]``
+    result rather than approximating or fabricating a per-row overlay.
+    """
+    cg = result.schedules.get("cg") if result.schedules else None
+    stcg_total = _decimal_float(getattr(cg.stcg, "total_stcg", 0)) if cg else 0.0
+    ltcg_total = _decimal_float(getattr(cg.ltcg, "total_ltcg", 0)) if cg else 0.0
+    total_cg = _decimal_float(getattr(cg, "total_capital_gains", 0)) if cg else 0.0
+    return {
+        "status": "VALID" if cg is not None else "EMPTY",
+        "totalSTCG": stcg_total,
+        "totalLTCG": ltcg_total,
+        "totalCapitalGains": total_cg,
+        "vdaIncome": _decimal_float(result.vda_income),
+    }
+
+
+def _itr2_summary_from_result(
+    result: ITR2Result,
+    breakdown: dict[str, Any],
+    draft: ReturnDraft,
+) -> dict[str, Any]:
+    """Build the v2 response summary for an ITR-2 computation.
+
+    Mirrors ``_summary_from_result``'s shape (top-level headline aliases and
+    breakdown block already consumed by the frontend for ITR-1/4) but reads
+    ``ITR2Result``'s own field names throughout: it does not share
+    ``ITR1Result``'s ``capital_gains_112a`` / ``advance_tax_paid`` /
+    ``self_assessment_tax_paid`` attributes (``ITR2Result`` names these
+    ``capital_gains_income`` / ``total_advance_tax`` /
+    ``total_self_assessment_tax``), so calling ``_summary_from_result``
+    directly on an ``ITR2Result`` raises ``AttributeError`` at runtime.
+    """
+    deductions = result.schedules.get("deductions") if result.schedules else None
+    raw_deductions = getattr(deductions, "breakdown", {}) if deductions else {}
+    deduction_breakdown = {
+        str(key): _decimal_float(value) for key, value in raw_deductions.items()
+    }
+    total_tds = _decimal_float(result.total_tds)
+    total_paid = _decimal_float(result.total_taxes_paid)
+    balance = _decimal_float(result.balance_payable)
+    refund = _decimal_float(result.refund_due)
+    issues = list(breakdown.get("credit_validation_issues", []))
+    warnings = list(result.warnings)
+    hp_raw = result.schedules.get("hp") if result.schedules else None
+    hp_rows = hp_raw if isinstance(hp_raw, list) else ([hp_raw] if hp_raw else [])
+    house_property_details = [
+        {
+            "propertySequenceNo": index,
+            "annualLettableValue": _decimal_float(row.gross_annual_value),
+            "rentNotRealized": _decimal_float(row.rent_not_realized),
+            "localTaxes": _decimal_float(row.municipal_taxes),
+            "totalUnrealizedAndTax": _decimal_float(
+                row.rent_not_realized + row.municipal_taxes
+            ),
+            "balanceALV": _decimal_float(row.net_annual_value),
+            "annualOfPropOwned": _decimal_float(row.annual_value_owned),
+            "thirtyPercentOfBalance": _decimal_float(row.standard_deduction_30pct),
+            "interestOnBorrowedCapital": _decimal_float(row.interest_on_loan),
+            "totalDeduction": _decimal_float(
+                row.standard_deduction_30pct + row.interest_on_loan
+            ),
+            "arrearsUnrealizedRentReceived": _decimal_float(row.arrears_unrealised_rent),
+            "incomeOfHP": _decimal_float(row.income_chargeable),
+        }
+        for index, row in enumerate(hp_rows, start=1)
+    ]
+    cg_summary = _itr2_capital_gains_summary(result)
+    return {
+        "gti": _decimal_float(result.gross_total_income),
+        "grossTotalIncome": _decimal_float(result.gross_total_income),
+        "grossTotIncome": _decimal_float(result.gross_total_income),
+        "totalDeductions": _decimal_float(result.deductions_total),
+        "totalIncome": _decimal_float(result.taxable_income),
+        "totalTaxPayable": _decimal_float(result.tax_before_rebate),
+        "netTaxLiability": _decimal_float(result.net_tax_liability),
+        "totalTaxLiability": _decimal_float(result.net_tax_liability),
+        "totalTDS": total_tds,
+        "totalTCS": _decimal_float(result.total_tcs),
+        "advanceTax": _decimal_float(result.total_advance_tax),
+        "selfAssessmentTax": _decimal_float(result.total_self_assessment_tax),
+        "totalTaxPaid": total_paid,
+        "totalTaxesPaid": total_paid,
+        "balTaxPayable": balance,
+        "taxPayable": balance,
+        "balancePayable": balance,
+        "refund": refund,
+        "refundDue": refund,
+        "hpIncome": _decimal_float(result.house_property_income),
+        "totalIncChargeHP": _decimal_float(result.house_property_income),
+        "housePropertyDetails": house_property_details,
+        "breakdown": {
+            "income": {
+                "salary": _decimal_float(result.salary_income),
+                "houseProperty": _decimal_float(result.house_property_income),
+                "otherSources": _decimal_float(result.other_sources_income),
+                "capitalGains": _decimal_float(result.capital_gains_income),
+            },
+            "deductions": deduction_breakdown,
+            "tax": {
+                "slabTax": _decimal_float(result.slab_tax),
+                "specialRateTax": _decimal_float(result.special_rate_tax),
+                "amtTax": _decimal_float(result.amt_tax),
+                "rebate87A": _decimal_float(result.rebate_87a),
+                "surcharge": _decimal_float(result.surcharge),
+                "cess": _decimal_float(result.health_education_cess),
+                "interest": _decimal_float(result.total_interest),
+            },
+            "credits": {
+                "tds": total_tds,
+                "tcs": _decimal_float(result.total_tcs),
+                "advanceTax": _decimal_float(result.total_advance_tax),
+                "selfAssessmentTax": _decimal_float(result.total_self_assessment_tax),
+            },
+        },
+        "issues": issues,
+        "creditValidationIssues": issues,
+        "warnings": warnings,
+        "calculationStatus": "CALCULATED_WITH_CREDIT_ISSUES" if issues else "CALCULATED",
+        "computedByFormEngine": "ITR-2",
+        "filingComputationStatus": "FORM_COMPUTATION",
+        "capitalGainsSummary": cg_summary,
+        "capitalGainsStatus": "FULL_SCHEDULE_CG",
+        "capitalGainsIssues": [],
+        "capitalGainsEligibility": {"ITR-2": True},
+        "totalSTCG": cg_summary["totalSTCG"],
+        "totalLTCG": cg_summary["totalLTCG"],
+        "totalCapitalGains": cg_summary["totalCapitalGains"],
+        "vdaIncome": cg_summary["vdaIncome"],
+    }
+
+
+def compute_canonical_itr2(draft: ReturnDraft) -> ITR2PipelineResult:
+    """Map and compute a canonical ITR-2 draft exactly once.
+
+    Args:
+        draft: Validated canonical return draft (``form == "ITR-2"``).
+
+    Returns:
+        Typed input, computation, mapping breakdown, and response summary.
+
+    Raises:
+        FilingGatewayV2Error: If mapping or computation fails, or pending
+            reconciliation discrepancies block compute. Unlike ITR-1/4,
+            ITR-2 has no "out of scope" evidence rejection — it is itself
+            the form that scope-escalation routes *to*.
+    """
+    if draft.form != "ITR-2":
+        raise FilingGatewayV2Error(
+            "compute_canonical_itr2 requires draft.form == 'ITR-2'."
+        )
+    pending = [
+        item for item in draft.reconciliation.discrepancies
+        if item.status == "PENDING"
+    ]
+    if pending:
+        raise FilingGatewayV2Error(
+            "Manual confirmation is required for imported AIS/TIS "
+            "reconciliation discrepancies before compute or generation.",
+            [f"Pending reconciliation discrepancy: {category}."
+             for category in sorted({item.category for item in pending})],
+        )
+    try:
+        typed_input, breakdown = draft_to_itr2_input(draft)
+        result = compute_itr2(typed_input)
+    except (DraftMappingError, ValidationError, ValueError) as exc:
+        raise FilingGatewayV2Error(
+            "ITR-2 mapping or computation failed.", [str(exc)]
+        ) from exc
+    if result.errors:
+        raise FilingGatewayV2Error(
+            "ITR-2 computation rejected the canonical draft.",
+            [str(error) for error in result.errors],
+        )
+    return ITR2PipelineResult(
+        typed_input=typed_input,
+        computation=result,
+        breakdown=breakdown,
+        summary=_itr2_summary_from_result(result, breakdown, draft),
+    )
+
+
+def _generate_cbdt_json_itr2(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build + validate the official ITR-2 CBDT JSON from a canonical draft.
+
+    Runs the full CBDT Category A/B/D rule validators before JSON emission —
+    ``app/engine/validators/itr2/`` is a thin suite today (Phase 5 completes
+    it); whatever it does check still runs here, same as every other form.
+    """
+    pipeline = compute_canonical_itr2(draft)
+    filing_profile = _itr2_filing_profile(draft)
+    property_filing_details = _itr2_property_filing_details(draft)
+    employer_filing_details = _itr2_employer_filing_details(draft)
+    tds3_filing_details = _itr2_tds3_filing_details(draft)
+    typed_input = pipeline.typed_input.model_copy(update={
+        "filing_profile": filing_profile,
+        "filing_section": filing_profile.return_file_section,
+        "property_filing_details": property_filing_details,
+        "employer_filing_details": employer_filing_details,
+        "tds3_filing_details": tds3_filing_details,
+    })
+
+    from app.engine.validators.itr2 import run_input_validation, run_calc_validation
+
+    input_report = run_input_validation(typed_input)
+    if not input_report.can_upload:
+        raise FilingGatewayV2Error(
+            "ITR-2 CBDT Category A input validation failed.",
+            [r.message for r in input_report.blocking_errors],
+        )
+    calc_report = run_calc_validation(typed_input, pipeline.computation)
+    if not calc_report.can_upload:
+        raise FilingGatewayV2Error(
+            "ITR-2 CBDT Category A calculation validation failed.",
+            [r.message for r in calc_report.blocking_errors],
+        )
+
+    try:
+        official_json = build_itr2_json(pipeline.computation, typed_input)
+        validate_itr2_json(official_json)
+    except Exception as exc:
+        logger.exception(
+            "ITR-2 official JSON generation failed: %s: %s",
+            type(exc).__name__, exc,
+        )
+        raise FilingGatewayV2Error(
+            "ITR-2 official JSON generation failed.",
+            [f"{type(exc).__name__}: {exc}"],
+        ) from exc
+    return official_json, pipeline.summary
+
+
+def compute_canonical(
+    draft: ReturnDraft,
+) -> ITR1PipelineResult | ITR2PipelineResult | ITR4PipelineResult:
+    """Form-dispatching compute entrypoint (Phase 3/4).
+
+    Used by ``tax_v2.compute_tax_summary_v2`` so ITR-1, ITR-2, and ITR-4 all
+    compute via the single canonical pipeline — no legacy delegation.
 
     Args:
         draft: Validated canonical return draft.
 
     Returns:
-        The per-form pipeline result (``ITR1PipelineResult`` or
-        ``ITR4PipelineResult``).
+        The per-form pipeline result (``ITR1PipelineResult``,
+        ``ITR2PipelineResult``, or ``ITR4PipelineResult``).
 
     Raises:
-        FilingGatewayV2Error: If the form is not ITR-1 or ITR-4 (ITR-2/3 not
-            yet supported by the v2 pipeline).
+        FilingGatewayV2Error: If the form is not ITR-1, ITR-2, or ITR-4
+            (ITR-3 not yet supported by the v2 pipeline).
     """
     if draft.form == "ITR-1":
         return compute_canonical_itr1(draft)
+    if draft.form == "ITR-2":
+        return compute_canonical_itr2(draft)
     if draft.form == "ITR-4":
         return compute_canonical_itr4(draft)
     raise FilingGatewayV2Error(
-        "The v2 canonical compute endpoint currently supports ITR-1 and "
-        "ITR-4 only.",
+        "The v2 canonical compute endpoint currently supports ITR-1, "
+        "ITR-2, and ITR-4 only.",
         [f"Form {draft.form!r} is not supported by the v2 pipeline yet."],
     )
 
@@ -1250,10 +1804,13 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
 
     if draft.form == "ITR-1":
         return _generate_cbdt_json_itr1(draft)
+    if draft.form == "ITR-2":
+        return _generate_cbdt_json_itr2(draft)
     if draft.form == "ITR-4":
         return _generate_cbdt_json_itr4(draft)
     raise FilingGatewayV2Error(
-        "The v2 canonical pipeline currently supports ITR-1 and ITR-4 only.",
+        "The v2 canonical pipeline currently supports ITR-1, ITR-2, and "
+        "ITR-4 only.",
         [f"Form {draft.form!r} is not supported by the v2 pipeline yet."],
     )
 

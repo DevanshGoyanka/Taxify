@@ -11,10 +11,14 @@ today (`Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` §1).
 Phase 3 scope (mirrors ITR-4's split): compute-relevant fields only. The
 full ``ITR2FilingProfile`` (address, verification, receipt/notice numbers)
 and per-row official-filing detail (``employer_filing_details``,
-``property_filing_details``, ``tds3_filing_details``, ``bank_accounts``) are
-constructed in Phase 4 by ``filing_gateway_v2.py``, the same way ITR-4's
-``filing_profile``/``property_profile``/``bank_accounts`` are built outside
-this mapper — those are official-JSON concerns, not compute concerns.
+``property_filing_details``, ``tds3_filing_details``) are constructed in
+Phase 4 by ``filing_gateway_v2.py``, the same way ITR-4's
+``filing_profile``/``property_profile`` are built outside this mapper —
+those are official-JSON concerns, not compute concerns. ``bank_accounts``
+is the one exception: unlike ITR-4 (which has its own distinct
+``ITR4BankAccount`` type needing gateway-layer validation), ITR2Input
+reuses ITR-1's plain shared ``BankAccount`` type directly, so this mapper
+maps it here via the same ``_map_bank_accounts`` helper ITR-1 already uses.
 
 Shared heads reuse: salary / house property / other sources / deductions /
 TDS / TCS / tax payments are the *same* typed ``ReturnDraft`` fields ITR-1
@@ -81,6 +85,7 @@ from app.schemas.return_draft import ReturnDraft
 # Shared form-agnostic helpers — one implementation of each shared head.
 from app.engine.draft_to_itr1_input import (
     _age_bracket_from_dob,
+    _map_bank_accounts,
     _map_deductions,
     _map_house_properties,
     _map_other_sources,
@@ -480,6 +485,7 @@ def draft_to_itr2_input(
     spi_entries = _map_spi_entries(draft)
     pti_entries = _map_pti_entries(draft)
     amt_input = _map_amt_input(draft)
+    bank_accounts = _map_bank_accounts(draft.bankAccounts)
 
     itr2_input = ITR2Input(
         age_bracket=age_bracket,
@@ -508,7 +514,7 @@ def draft_to_itr2_input(
         tds3_entries=tds3_entries,
         tcs_entries=tcs_entries,
         tax_payment_entries=tax_payment_entries,
-        bank_accounts=[],
+        bank_accounts=bank_accounts,
         advance_tax_paid=advance_tax,
         advance_tax_q1=quarterly[0] or None,
         advance_tax_q2=quarterly[1] or None,

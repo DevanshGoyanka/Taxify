@@ -21,7 +21,7 @@ items point to, not a duplicate.
 | 1 | Type the capital-gains schedule (backend mirror of the frontend's shape) | ✅ Delivered 2026-09-01 |
 | 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
 | 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
-| 4 | Wire ITR-2 into `filing_gateway_v2.py` | Not started |
+| 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
 | 5 | Complete the ITR-2 CBDT validator suite | Not started |
 | 6 | Frontend: wire ITR-2 onto the canonical pipeline | Not started |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started |
@@ -387,6 +387,76 @@ add `compute_canonical_itr2()` and `_generate_cbdt_json_itr2()`, mirroring
 `build_itr2_json`, so Category A failures block generation instead of reaching the portal.
 
 **Tests:** `tests/test_filing_gateway_v2_itr2.py` (new, mirrors `test_filing_gateway_v2_itr4.py`).
+
+**Delivered 2026-09-02.**
+
+- **`app/engine/filing_gateway_v2.py`** — added the full ITR-2 gateway section
+  (`ITR2PipelineResult`, `_itr2_filing_profile`, `_itr2_property_filing_details`,
+  `_itr2_employer_filing_details`, `_itr2_tds3_filing_details`, `compute_canonical_itr2`,
+  `_generate_cbdt_json_itr2`) mirroring the ITR-4 pattern (`_itr4_filing_profile` /
+  `compute_canonical_itr4` / `_generate_cbdt_json_itr4`), and extended both
+  `compute_canonical()` and `generate_cbdt_json()` dispatch with an ITR-2 branch. Real gaps
+  found and fixed while wiring, not glossed over:
+  - `_itr2_filing_profile` restricts `verification.capacity` to `SELF`/`KARTA` only —
+    `ITR2FilingProfile.verification_capacity: Literal["S","K"]` has no representative-filing
+    slot at all (unlike ITR-1's `S`/`R`), so a `REPRESENTATIVE`/`PARTNER` capacity is rejected
+    with a clear `FilingGatewayV2Error` before it ever reaches JSON generation.
+  - `_itr2_property_filing_details` / `_itr2_employer_filing_details` / `_itr2_tds3_filing_details`
+    must produce exactly one row per `property_filing_details`/`tds1_entries`/`tds3_entries`
+    row (`ITR2Input.validate_cross_schedule_contract`). The employer/TDS3 helpers do **not**
+    walk `draft.employers`/`draft.taxes.tds` independently — they replay the identical
+    accept/reject filter `draft_to_itr1_input._map_tds`/`_map_tds3` already use to build
+    `tds1_entries`/`tds3_entries` (claimed-in-return, non-TDS3, valid TAN, salary section),
+    including sourcing `employer_name` from the exact same `row.deductorName` value TDS1Entry
+    uses — `build_itr2_json`'s Schedule S rejects any filing-detail row whose name doesn't
+    match its TDS1 entry byte-for-byte, so deriving the name from `draft.employers` instead
+    (a plausible first attempt) fails at JSON-build time whenever the two names differ.
+  - Added a dedicated `_itr2_summary_from_result`/`_itr2_capital_gains_summary` rather than
+    reusing ITR-1/4's `_summary_from_result`/`_capital_gains_summary`: `ITR2Result` does not
+    share `ITR1Result`'s `capital_gains_112a`/`advance_tax_paid`/`self_assessment_tax_paid`
+    attribute names (`capital_gains_income`/`total_advance_tax`/`total_self_assessment_tax`
+    instead), so blind reuse raises `AttributeError` at runtime; and ITR-1/4's capital-gains
+    summary is explicitly the *simplified 112A aggregate* overlay keyed to
+    `draft.capitalGainsSchedule.simplified112A`, which ITR-2 doesn't use (it carries the full
+    per-transaction Schedule CG). The new summary reads real STCG/LTCG/total figures straight
+    off the engine's own `result.schedules["cg"]` instead of fabricating a per-row overlay.
+  - Found and fixed a genuine pre-existing bug in **`app/engine/validators/itr2/calc_rules.py`**
+    (ITR2-CALC-018/019): the balance-payable/refund-due reconciliation checks compared against
+    a ₹1 tolerance, but both fields are `round_to_nearest_10(...)` (section 288B) in
+    `app/engine/calculators/itr2.py` — so any return whose raw payable/refund isn't already a
+    multiple of 10 false-positived as a Category-A blocking error. Fixed to use the same ₹10
+    tolerance ITR-1's equivalent rules (`ITR1-R105`/`R106`) already use for the identical
+    reason — this was blocking every realistic filing-ready draft from generating.
+- **`app/engine/draft_to_itr2_input.py`** — small Phase-3 scope correction made just before
+  this phase started: `bank_accounts` is now mapped directly via the shared
+  `_map_bank_accounts` (reused from `draft_to_itr1_input`), since `ITR2Input.bank_accounts`
+  is `list[app.schemas.itr1.BankAccount]` — the same shared type ITR-1 uses, unlike ITR-4's
+  distinct bank-account type that genuinely needs gateway-layer construction.
+- **`tests/test_filing_gateway_v2_itr2.py`** (new) — 7 tests: compute returns a populated
+  summary; pending AIS/TIS reconciliation blocks compute; `compute_canonical()` dispatches
+  ITR-2 to the new pipeline; `compute_canonical_itr2` rejects a non-ITR-2 draft;
+  `generate_cbdt_json` produces official JSON that passes the CBDT Category A validators and
+  the official JSON schema; representative verification capacity is rejected; and
+  `PropertyFilingDetail` rows are emitted 1:1 with canonical house properties.
+- **Updated for the new ITR-2 dispatch branch** (both were asserting "ITR-2/3 unsupported",
+  which stopped being true for ITR-2 this phase — updated to assert against ITR-3, which is
+  still correctly unsupported pending Phase 8):
+  `tests/test_filing_gateway_v2_itr4.py::test_compute_canonical_rejects_unsupported_form`,
+  `tests/test_tax_v2_compute.py::test_compute_v2_rejects_non_itr1_form_with_422`.
+- **Verification:**
+  - `pytest tests/test_filing_gateway_v2_itr2.py tests/test_filing_gateway_v2.py
+    tests/test_draft_to_itr2_input.py -q` — 41 passed.
+  - `pytest tests/ -q` (deselecting `test_filing_gateway_v2_itr4.py` and the pre-existing
+    stale-`app.eri.login`-import collection failures already logged in Phase 3's delivered
+    note) — **1327 passed, 0 failed.** `test_filing_gateway_v2_itr4.py` itself carries 18
+    pre-existing failures, confirmed via `git stash` to be present identically on the
+    pre-Phase-4 commit — the AY2026-27 due dates (31-Jul/31-Aug-2026) have now passed relative
+    to the system clock (2026-09-02+), so ITR-4 test fixtures using an on-time 139(1) section
+    without an explicit past `verification.date` now hit the real due-date guard. Unrelated to
+    this phase's changes; not fixed here (out of scope — a test-fixture dating issue, not a
+    Phase 4 wiring defect).
+  - `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed. `npm run build` — clean (Phase 4
+    touched no frontend files; run for full-verification discipline anyway).
 
 ### Phase 5 — Complete the ITR-2 CBDT validator suite
 

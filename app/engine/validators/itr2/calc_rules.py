@@ -164,15 +164,21 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
             "total_taxes_paid", str(expected_paid), str(result.total_taxes_paid),
         ))
 
+    # ITR2-CALC-018/019 compare against section-288B-rounded fields:
+    # balance_payable/refund_due are each round_to_nearest_10(...) of this
+    # raw difference (app/engine/calculators/itr2.py), so a flat ₹1
+    # tolerance false-positives on any return whose raw diff isn't already
+    # a multiple of 10 — mirrors the ₹10 tolerance ITR-1's equivalent rules
+    # (ITR1-R105/R106) already use for the same reason.
     payable_diff = result.net_tax_liability - result.total_taxes_paid
     expected_payable = max(_ZERO, payable_diff)
     expected_refund = max(_ZERO, -payable_diff)
-    if _different(result.balance_payable, expected_payable):
+    if _different(result.balance_payable, expected_payable, Decimal("10")):
         results.append(_result(
             "ITR2-CALC-018", "Balance payable does not reconcile with liability and taxes paid.",
             "balance_payable", str(expected_payable), str(result.balance_payable),
         ))
-    if _different(result.refund_due, expected_refund):
+    if _different(result.refund_due, expected_refund, Decimal("10")):
         results.append(_result(
             "ITR2-CALC-019", "Refund due does not reconcile with liability and taxes paid.",
             "refund_due", str(expected_refund), str(result.refund_due),
