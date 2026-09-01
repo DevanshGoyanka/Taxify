@@ -1153,6 +1153,27 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
     bank_accounts = _map_bank_accounts(draft.bankAccounts)
     hra_details = _map_hra_details(draft.employers) if tax_regime == TaxRegime.OLD else None
 
+    # Preserve the frontend's explicit ITR eligibility facts instead of
+    # silently converting every draft into an eligible resident individual.
+    assessee_type_by_code = {
+        "I": AssesseeType.INDIVIDUAL,
+        "H": AssesseeType.HUF,
+        "F": AssesseeType.FIRM,
+    }
+    try:
+        assessee_type = assessee_type_by_code[draft.personal.assesseeStatus]
+    except KeyError as exc:
+        raise DraftMappingError(
+            f"Unsupported assessee status: {draft.personal.assesseeStatus}"
+        ) from exc
+    has_foreign_income_or_assets = bool(
+        draft.foreignAssets
+        or draft.foreignSourceIncome
+        or draft.foreignTaxRelief
+        or draft.otherSources.dtaaIncome
+    )
+    is_resident = draft.personal.residentialStatus == "ROR"
+
     itr1_input = ITR1Input(
         age_bracket=age_bracket,
         tax_regime=tax_regime,
@@ -1172,11 +1193,11 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         advance_tax_q2=quarterly[1],
         advance_tax_q3=quarterly[2],
         advance_tax_q4=quarterly[3],
-        assessee_type=AssesseeType.INDIVIDUAL,
-        is_resident=True,
-        is_director=False,
-        has_foreign_assets=False,
-        has_unlisted_equity=False,
+        assessee_type=assessee_type,
+        is_resident=is_resident,
+        is_director=draft.personal.isDirector,
+        has_foreign_assets=has_foreign_income_or_assets,
+        has_unlisted_equity=draft.personal.holdsUnlistedShares,
         nature_of_employment=(draft.employers[0].natureOfEmployment or None) if draft.employers else None,
         house_property_count=max(1, len(draft.houseProperties)),
         relief_89=Decimal("0"),

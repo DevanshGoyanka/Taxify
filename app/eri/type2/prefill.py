@@ -84,7 +84,7 @@ def request_prefill_otp(pan: str, assessment_year: str, otp_source_flag: str, au
         f"{get_eri_base_url().rstrip('/')}/requestPrefillOTP",
         json=envelope,
         headers=headers,
-        verify=False,
+        verify=True,
         timeout=120.0
     )
     
@@ -122,7 +122,7 @@ def get_prefill_data(pan: str, assessment_year: str, auth_token: str, otp_source
         f"{get_eri_base_url().rstrip('/')}/getPrefill",
         json=envelope,
         headers=headers,
-        verify=False,
+        verify=True,
         timeout=120.0
     )
     

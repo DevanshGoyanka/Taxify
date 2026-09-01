@@ -47,7 +47,7 @@ def eri_post(url_path: str, payload: dict, eri_user_id: str, auth_token: Optiona
         headers["authToken"] = auth_token
         
     try:
-        with httpx.Client(timeout=30.0, verify=False) as client:
+        with httpx.Client(timeout=30.0, verify=True) as client:
             response = client.post(url, json=envelope, headers=headers)
             
             # Raise exception if status code is not 200/201

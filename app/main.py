@@ -96,12 +96,6 @@ install_uvicorn_access_privacy_filter(logging.getLogger("uvicorn.access"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: create tables + launch background worker.  Shutdown: stop worker."""
-    # Back up .env BEFORE any other code reads or modifies it, so a recent
-    # copy of all secrets is always available on disk if the live file is
-    # accidentally changed or corrupted.
-    from app.security.env_backup import backup_env
-    backup_env()
-
     # Validate the active ERI credential bundle (mode/env) is sane before
     # serving traffic. Fails fast on production misconfiguration (mock DSC,
     # missing AWS host for Type-2, missing digest secret).

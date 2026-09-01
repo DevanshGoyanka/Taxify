@@ -47,7 +47,7 @@ def update_ver_mode(pan: str, ack_num: str, ay: str, form_code: str, ver_mode: s
         f"{get_eri_base_url().rstrip('/')}/updateVerMode",
         json=envelope,
         headers=headers,
-        verify=False
+        verify=True
     )
     
     if response.status_code != 200:
@@ -83,7 +83,7 @@ def generate_evc(pan: str, ack_num: str, ay: str, form_code: str, ver_mode: str,
         f"{get_eri_base_url().rstrip('/')}/generateEvc",
         json=envelope,
         headers=headers,
-        verify=False,
+        verify=True,
         timeout=120.0
     )
     
@@ -132,7 +132,7 @@ def verify_evc(pan: str, ack_num: str, ay: str, form_code: str, ver_mode: str, t
         f"{get_eri_base_url().rstrip('/')}/verifyEvc",
         json=envelope,
         headers=headers,
-        verify=False,
+        verify=True,
         timeout=120.0
     )
     

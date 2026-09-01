@@ -44,7 +44,7 @@ def get_acknowledgement(pan: str, ack_number: str, auth_token: str) -> bytes:
         f"{get_eri_base_url().rstrip('/')}/getAcknowledgement",
         json=envelope,
         headers=headers,
-        verify=False,
+        verify=True,
         timeout=120.0
     )
     
