@@ -506,29 +506,43 @@ test per new rule, known-good and known-bad cases, same pattern as ITR-1's R145 
   against this codebase's architecture — read `app/engine/schedules/salary.py` and
   `house_property.py` in full before writing any rule, which changed the plan in three ways:
   - **Most of the CBDT catalog's salary-exemption cap rules are structurally already
-    guaranteed and were *not* re-implemented as validators**: gratuity/leave-encashment/VRS/
-    retrenchment/commuted-pension exemptions are computed by the engine from the taxpayer's
-    *gross received* amount with the statutory ceiling applied via `min()` inside the
-    calculator itself — there is no user-suppliable "exempt amount" field for those that could
-    violate the cap, so a pre-compute validator re-checking the cap would just be dead code.
-    The rules actually implemented (`SAL-001`..`004`) are the ones where the schema *does*
-    take a direct pass-through exempt-amount claim from the user (LTA, embassy/foreign-service
-    allowance, 10(10CC) employer-paid perquisite tax) — those genuinely need a ceiling check.
-  - **New-regime rules (`SAL-006`..`008`) catch claims the calculator currently discards
-    silently rather than rejecting.** `salary.py`'s new-regime branch unconditionally zeroes
-    HRA/LTA/entertainment/professional-tax regardless of what the user submitted — filing a
-    new-regime return with those fields populated previously produced a correct *result* but
-    with no signal to the taxpayer that their claim was dropped. These rules surface that as a
-    pre-compute Category A error instead.
+    guaranteed and were *not* re-implemented as validators**: CBDT rules 28 (gratuity, 20L/25L
+    caps), 36 (entertainment allowance formula — least of ₹5,000/⅕ salary/20% basic), 40
+    (₹50,000 old-regime standard-deduction cap), 44 (commuted pension — ⅓ formula for
+    non-govt), 45 (leave encashment, 25L cap), 46 (VRS compensation, 5L cap), 56 (disabled-
+    employee transport allowance, ₹38,400 cap), and 66 (retrenchment compensation, 5L cap) are
+    all computed by the engine from the taxpayer's *gross received* amount with the statutory
+    ceiling applied via `min()`/formula inside `app/engine/schedules/salary.py`'s `compute()`
+    itself — there is no user-suppliable "exempt amount" field for those that could violate the
+    cap, so a pre-compute validator re-checking the cap would just be dead code. The rules
+    actually implemented (`SAL-001`..`004`, CBDT rules 41/42/43/48) are the ones where the
+    schema *does* take a direct pass-through exempt-amount claim from the user (LTA, embassy/
+    foreign-service allowance, 10(10CC) employer-paid perquisite tax) — those genuinely need a
+    ceiling check.
+  - `SAL-005` is CBDT rule 35 (entertainment allowance restricted to government employees).
+  - **New-regime rules `SAL-006`/`007`/`008` (CBDT rules 54/58/57 respectively) catch claims
+    the calculator currently discards silently rather than rejecting.** `salary.py`'s
+    new-regime branch unconditionally zeroes HRA/LTA/entertainment/professional-tax regardless
+    of what the user submitted — filing a new-regime return with those fields populated
+    previously produced a correct *result* but with no signal to the taxpayer that their claim
+    was dropped. These rules surface that as a pre-compute Category A error instead. (Rule 54
+    also names Sec 10(14)(i)/(ii) and Sec 10(17) MP/MLA/MLC allowances; not included in
+    `SAL-006` — 10(14)(i)/(ii) already always compute to a zero exemption regardless of regime
+    in this engine's `_exempt_children_education`/`_exempt_hostel`, since the number-of-children
+    input those need is hardcoded to 0, and there is no Sec 10(17) field on `SalaryIncome` at
+    all — so extending the rule to them would either be redundant or unrepresentable.)
   - **A planned rule was discovered to be dead code before being written and was dropped**:
     `HousePropertyIncome.ownership_share_percentage` has a schema-level `Gt(gt=0)` constraint,
     so "block interest deduction when co-owned share is zero" (CBDT rule 70) can never fire —
     Pydantic itself never lets that state exist. Caught by the test-first pass (the known-bad
     case for it wouldn't even construct), not shipped.
-  - **`HP-004`/`005` (co-owned share consistency) read `property_filing_details`** —a
-    gateway-attached field, not compute-relevant — since that's the only place `co_owned` and
-    `assessee_share_percent` live together; `HousePropertyIncome` itself has no co-owned flag,
-    only the resulting share percentage.
+  - `HP-001` is CBDT rule 71 (no municipal tax when gross rent is zero); `HP-002` is rule 74
+    (let-out/deemed-let-out requires positive rent); `HP-003` is rule 80 (max two self-occupied
+    properties).
+  - **`HP-004`/`005` (CBDT rules 751/753, co-owned share consistency) read
+    `property_filing_details`** — a gateway-attached field, not compute-relevant — since that's
+    the only place `co_owned` and `assessee_share_percent` live together; `HousePropertyIncome`
+    itself has no co-owned flag, only the resulting share percentage.
   - **Not implemented, and explicitly out of scope for 5A**: CBDT rule 29 (old-regime HRA ≤
     50% of Basic+DA) — `SalaryIncome` has no Basic/DA breakout to check it against, and no
     proxy was fabricated in its place; CBDT rule 82 (co-owner PAN must differ from assessee
