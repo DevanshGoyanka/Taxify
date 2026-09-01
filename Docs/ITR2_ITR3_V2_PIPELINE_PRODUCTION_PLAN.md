@@ -20,7 +20,7 @@ items point to, not a duplicate.
 |---|---|---|
 | 1 | Type the capital-gains schedule (backend mirror of the frontend's shape) | ✅ Delivered 2026-09-01 |
 | 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
-| 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | Not started |
+| 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | Not started |
 | 5 | Complete the ITR-2 CBDT validator suite | Not started |
 | 6 | Frontend: wire ITR-2 onto the canonical pipeline | Not started |
@@ -284,7 +284,7 @@ recorded here for the audit trail):**
 **Tests:** `tests/test_return_draft_schema.py` — additive-field round-trip tests, ITR-1/4
 regression suites stay green, `extra="forbid"` still rejects unknown keys.
 
-### Phase 3 — Canonical mapper: `app/engine/draft_to_itr2_input.py`
+### Phase 3 — Canonical mapper: `app/engine/draft_to_itr2_input.py` ✅ Delivered 2026-09-02
 
 Mirrors `draft_to_itr4_input.py`'s structure exactly: single public
 `draft_to_itr2_input(draft) -> (ITR2Input, breakdown)`, imports shared-head helpers
@@ -316,6 +316,66 @@ reimplementing them — confirmed established convention.
 
 **Tests:** `tests/test_draft_to_itr2_input.py` — golden vectors, draft → `ITR2Input` →
 `compute_itr2` → sane `ITR2Result`.
+
+**Delivered:**
+- `app/engine/draft_to_itr2_input.py` (new, ~420 lines) — `draft_to_itr2_input(draft) ->
+  (ITR2Input, breakdown)`. Reuses 9 shared helpers from `draft_to_itr1_input.py` unchanged
+  (`_age_bracket_from_dob`, `_map_salary`, `_map_house_properties`, `_map_other_sources`,
+  `_map_deductions`, `_map_tds`, `_map_tds3`, `_map_tcs`, `_map_tax_payments`, `_to_date`).
+  New ITR-2-specific mapping functions: `_map_residential_status` (ROR/RNOR/NR → RES/NRI/NOR),
+  `_map_112a_scrips`, `_map_immovable_gains`, `_map_vda_transactions`, `_map_bf_losses`,
+  `_map_agricultural_income`, `_map_exempt_income`, `_map_fsi_entries`, `_map_tr1_entries`,
+  `_map_foreign_assets`, `_map_spi_entries`, `_map_pti_entries`, `_map_amt_input`,
+  `_map_si_entries`. `filing_profile`/`employer_filing_details`/`property_filing_details`/
+  `tds3_filing_details`/`bank_accounts` left empty/`None`, matching ITR-4's exact pattern —
+  Phase 4 constructs those (official-JSON concerns, not compute concerns).
+- **Schema gap found and closed additively**: `app/schemas/return_draft.py`'s `Scrip112A`
+  (shipped by an earlier, separate CG workstream) had no acquisition/transfer date fields at
+  all, but CBDT's `CG112AScrip` requires a transfer date. Added
+  `dateOfAcquisition`/`dateOfTransfer` as `Optional[str]` (zero risk to existing construction
+  sites) to both `return_draft.py` and `frontend/src/domain/returns/types.ts`. The mapper
+  **skips** (does not fabricate) a scrip missing a transfer date, surfacing the count via
+  `breakdown["cg_112a_scrips_skipped_no_date"]` — until the capture UI is extended to record
+  per-scrip dates (a follow-up frontend task), 112A scrips entered today won't reach Schedule
+  112A in the CBDT JSON. This is a real, visible limitation, not a silent one.
+- **Real, pre-existing bug found and fixed**: `app/schemas/itr2.py`'s
+  `FSICountryEntry.derive_and_validate_total` unconditionally reassigned
+  `self.total_income` inside a `mode="after"` validator on a model with
+  `validate_assignment=True` — every assignment re-triggered the same validator, causing
+  infinite recursion (Python's recursion limit) on **every** construction, not something this
+  phase introduced. This mapper is apparently the first real caller to ever construct one
+  without pre-supplying a matching `total_income`. Fixed with a `!= computed` guard before
+  the assignment (checked every other `model_validator(mode="after")` in the file — this was
+  the only instance of the pattern).
+- Explicitly NOT mapped this phase (documented in the module docstring, not silently
+  dropped): the capital-gains schedule's 10 generic-row fields (`stEquity`, `stNriUnlisted`,
+  `stOtherAssets`, `ltProviso112`, `ltNri112115`, `ltForeignAssets`, `ltOtherAssets`,
+  `stSlumpSale`, `ltSlumpSale`, `buyBackLosses`) — no fixed key shape exists for them yet;
+  mapping them requires reading `CapitalGainsEntryManager.tsx`'s exact field-spec key names
+  rather than guessing.
+- `tests/test_draft_to_itr2_input.py` (new) — 8 tests exercising every mapped ITR-2-specific
+  head end-to-end through `compute_itr2` (112A scrip with/without date, immovable LTCG, VDA,
+  FSI/TR/FA/SPI/PTI, AMT + Schedule SI, brought-forward losses, new-regime deduction zeroing).
+
+**Verification (all run 2026-09-02):**
+- `pytest tests/test_draft_to_itr2_input.py` — 8 passed.
+- `pytest tests/test_itr2_integration.py tests/test_itr2_itd_builder.py
+  tests/test_itr2_production_path.py tests/test_itr2_validators.py` — 40 passed (confirms the
+  `FSICountryEntry` fix doesn't disturb existing ITR-2 coverage).
+- `pytest tests/test_return_draft_schema.py tests/test_filing_gateway_v2.py
+  tests/test_tax_v2_compute.py tests/test_itr1_calculator.py tests/test_itr4_calculator.py
+  tests/test_draft_to_itr1_input.py tests/test_draft_to_itr2_input.py
+  tests/test_itr1_golden_suite.py tests/test_itr1_filing_gateway_profile.py
+  tests/test_itr1_filing_gateway_profile_v2.py tests/test_112a_unification.py
+  tests/test_filing_orchestrator.py tests/test_personal_info_contract.py
+  tests/test_eri_creation_info_invariant.py tests/test_eri_routers.py
+  tests/test_itr2_integration.py tests/test_itr2_itd_builder.py
+  tests/test_itr2_production_path.py tests/test_itr2_validators.py` — 222 passed.
+- Full-repo sweep (`pytest tests/ --continue-on-collection-errors`, excluding the known
+  ITR-4 date-bomb file and live-client/e2e tests): **1319 passed, 0 failed** — 9 pre-existing
+  collection errors (stale `app.eri.login` imports from before the Type-2 module reorg, e.g.
+  `test_acknowledgement.py`), unrelated to this phase.
+- `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed. `npm run build` — clean.
 
 ### Phase 4 — Wire ITR-2 into `filing_gateway_v2.py` + CBDT validators
 

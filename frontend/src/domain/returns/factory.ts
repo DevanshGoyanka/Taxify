@@ -74,7 +74,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
     verification: { capacity: 'SELF', place: '', date: null, declarationAccepted: false },
     taxReturnPreparer: { used: false, identificationNumber: '', name: '', reimbursementFromGovernment: 0 },
     provenance: [], reconciliation: { evidence: [], discrepancies: [] },
-    broughtForwardLossEntries: [], carriedForwardLossEntries: [],
+    broughtForwardLossEntries: [], carriedForwardLossEntries: [], scheduleSIEntries: [],
     foreignSourceIncome: [], foreignTaxRelief: [], foreignAssets: [],
     clubbedIncome: [], passThroughIncomeEntries: [],
     amt: null, assetLiability: null, portugueseCivilCode: null,

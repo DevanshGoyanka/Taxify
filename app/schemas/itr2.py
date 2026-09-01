@@ -382,11 +382,23 @@ class FSICountryEntry(StrictModel):
 
     @model_validator(mode="after")
     def derive_and_validate_total(self) -> "FSICountryEntry":
-        """Derive total foreign income and reject conflicting totals."""
+        """Derive total foreign income and reject conflicting totals.
+
+        Guarded with ``!= computed`` before assigning: ``StrictModel`` sets
+        ``validate_assignment=True``, so an unconditional
+        ``self.total_income = computed`` here re-triggers this same "after"
+        validator on every assignment, recursing infinitely (Python's
+        recursion limit) the moment any caller constructs an entry without
+        pre-supplying a matching ``total_income`` — the previously untested
+        common case. Only assigning when the value actually changes lets the
+        second (post-assignment) validator pass see them already equal and
+        return without reassigning, terminating the recursion.
+        """
         computed = self.salary_income + self.hp_income + self.cg_income + self.os_income
         if self.total_income is not None and self.total_income != computed:
             raise ValueError("FSI total_income does not reconcile to income heads")
-        self.total_income = computed
+        if self.total_income != computed:
+            self.total_income = computed
         return self
 
 
