@@ -102,6 +102,39 @@ async def update_browser_status(page: Page, text: str):
         await page.evaluate(js_code)
     except Exception:
         pass
+async def clear_browser_status(page: Page):
+    """Remove the floating automation-status badge from the page (and any child
+    frames) and stop the persistent re-injection interval.
+
+    Used when a standalone automation step finishes and no further badge
+    updates are expected — e.g. after a standalone portal login leaves the
+    browser open, so the user does not see a stale "settling" badge.
+    """
+    try:
+        await page.evaluate("""() => {
+            if (window._statusInterval) {
+                clearInterval(window._statusInterval);
+                window._statusInterval = null;
+            }
+            window._statusText = "";
+            function removeBadge(doc) {
+                if (!doc) return;
+                const badge = doc.getElementById('automation-status-badge');
+                if (badge && badge.parentNode) badge.parentNode.removeChild(badge);
+            }
+            removeBadge(document);
+            try {
+                const frames = document.querySelectorAll('frame, iframe');
+                for (let i = 0; i < frames.length; i++) {
+                    try {
+                        const frameDoc = frames[i].contentDocument || frames[i].contentWindow.document;
+                        removeBadge(frameDoc);
+                    } catch(fe) {}
+                }
+            } catch(e) {}
+        }""")
+    except Exception:
+        pass
 
 async def click_xpath(page: Page, xpath_selector: str, log_callback):
     """

@@ -604,22 +604,6 @@ export default function ITRComputationPage() {
     }
   };
 
-  const handleDownloadJson = async () => {
-    try {
-      await itrV2.download(clientId, effectiveAssessmentYear);
-      toast.success('Draft JSON downloaded successfully');
-    } catch (err: any) {
-      toast.error(err.message || 'Draft JSON download failed');
-    }
-  };
-  const handleDownloadJson = async () => {
-    try {
-      await itrV2.download(clientId, effectiveAssessmentYear);
-      toast.success('Draft JSON downloaded successfully');
-    } catch (err: any) {
-      toast.error(err.message || 'Draft JSON download failed');
-    }
-  };
   // Standalone portal login: launches a visible browser, logs in with the
   // client's PAN + stored portal password, and leaves the browser open so
   // after-login tasks can reuse the authenticated session. No download or
@@ -1690,11 +1674,12 @@ export default function ITRComputationPage() {
             title="Launch a visible browser, log in to the ITD portal with the client's PAN + password, and leave the browser open for follow-up after-login tasks"
             style={{
               padding: '6px 12px',
-              background: 'var(--accent-purple)',
+              background: 'var(--accent-rose, #BE185D)',
               color: 'white',
               border: 'none',
               borderRadius: 6,
               fontSize: 12,
+              fontWeight: 600,
               cursor: loginSubmitting ? 'wait' : 'pointer',
               opacity: loginSubmitting ? 0.6 : 1
             }}

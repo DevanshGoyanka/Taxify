@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import threading
 import asyncio
 
 from playwright.async_api import async_playwright
@@ -144,6 +145,56 @@ class BrowserManager:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
+
+    def __init__(self):
+        # Dedicated thread + Proactor event loop for Playwright.
+        #
+        # uvicorn --reload forces a WindowsSelectorEventLoop (see uvicorn's
+        # `use_subprocess = reload or workers > 1`), and a Selector loop cannot
+        # spawn subprocesses — the exact `NotImplementedError` Playwright raises
+        # when it tries to launch its Node driver via create_subprocess_exec.
+        # Playwright objects are bound to the loop where `.start()` runs, so the
+        # whole browser session must live on ONE loop. We give the manager its
+        # own daemon thread running a Proactor loop (subprocess-capable) and
+        # route all browser work through `dispatch()`, independent of whether
+        # the server was launched with --reload.
+        if not hasattr(self, "_loop"):
+            self._loop: asyncio.AbstractEventLoop | None = None
+            self._loop_thread: threading.Thread | None = None
+            self._loop_lock = threading.Lock()
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        """Return the manager's dedicated Proactor event loop, starting the
+        background thread that owns it on first use."""
+        with self._loop_lock:
+            if self._loop is None or not self._loop.is_running():
+                if sys.platform == "win32":
+                    asyncio.set_event_loop_policy(
+                        asyncio.WindowsProactorEventLoopPolicy()
+                    )
+                loop = asyncio.new_event_loop()
+                self._loop = loop
+                thread = threading.Thread(
+                    target=self._run_loop,
+                    name="playwright-loop",
+                    daemon=True,
+                )
+                self._loop_thread = thread
+                thread.start()
+            return self._loop
+
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    async def dispatch(self, coro):
+        """Run ``coro`` (an awaitable) on the dedicated Playwright loop/thread
+        and return its result. Lets browser work run on a subprocess-capable
+        Proactor loop regardless of the caller's event loop (e.g. uvicorn's
+        Selector loop under --reload)."""
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return await asyncio.wrap_future(future)
 
     def _set_browsers_env(self):
         """Tell Playwright where to find/store browsers before any API call."""

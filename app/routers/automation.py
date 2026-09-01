@@ -140,6 +140,7 @@ async def login_client_portal(
 
     from app.automation.auth import login_itd
     from app.automation.browser import browser_manager
+    from app.automation.downloader import clear_browser_status
     from app.automation.timing import AutomationTimeline
     from app.schemas.security.portal_crypto import decrypt_portal_password
 
@@ -174,19 +175,32 @@ async def login_client_portal(
         logger.info("portal-login[%s]: %s", client.public_id, message)
 
     timeline = AutomationTimeline(_log)
-    try:
+
+    async def _run_login():
+        # Runs on browser_manager's dedicated Proactor loop thread so that
+        # Playwright can spawn its Node driver regardless of uvicorn's loop
+        # (uvicorn --reload forces a Windows Selector loop that cannot spawn
+        # subprocesses -> NotImplementedError).
         context = await browser_manager.get_context(
             log_callback=_log,
             interactive=True,
             timeline=timeline,
         )
-        await login_itd(
+        page = await login_itd(
             user_id=client.pan,
             password=password,
             log_callback=_log,
             context=context,
             timeline=timeline,
         )
+        # Login is complete and no further automation steps follow for this
+        # standalone flow. Remove the automation status badge so the browser
+        # left open for the user does not keep showing a stale "settling" note.
+        await clear_browser_status(page)
+        return page
+
+    try:
+        await browser_manager.dispatch(_run_login())
         # Leave the browser open for follow-up after-login tasks. The shared
         # browser_manager keeps the authenticated context alive.
         return {
