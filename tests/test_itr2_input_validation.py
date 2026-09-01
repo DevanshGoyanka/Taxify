@@ -2,19 +2,21 @@
 ITR-2 input validation rules (CBDT Category A, AY 2026-27).
 
 Phase 5A of Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md — Schedule S (Salary)
-and Schedule HP (House Property) rules extracted from the official CBDT ITR-2
-Validation Rules PDF. One known-good and one known-bad case per rule.
+and Schedule HP (House Property) rules; Phase 5B — Schedule CG/112A/VDA
+(capital gains) rules. Both extracted from the official CBDT ITR-2 Validation
+Rules PDF. One known-good and one known-bad case per rule.
 
 Run: pytest tests/test_itr2_input_validation.py -v
 """
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from app.engine.validators.itr2.input_rules import validate_itr2_input
 from app.schemas.itr1 import HousePropertyIncome, PropertyType, SalaryIncome, TaxRegime
-from app.schemas.itr2 import AgeBracket, ITR2Input, PropertyFilingDetail
+from app.schemas.itr2 import AgeBracket, CG112AScrip, CGAssetType, CGTransaction, ITR2Input, PropertyFilingDetail, VDATransaction
 
 
 def failed(results, rule_id: str) -> bool:
@@ -242,3 +244,82 @@ def test_HP_005_non_co_owned_share_below_100_fails():
         )],
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-HP-005")
+
+
+# ── Phase 5B: Schedule CG / 112A / VDA ──────────────────────────────────────
+
+def test_CG_007_land_building_transfer_within_financial_year_passes():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-007")
+
+
+def test_CG_007_land_building_transfer_after_financial_year_end_fails():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 4, 1),
+        full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-007")
+
+
+def test_CG_008_54ec_deduction_within_cap_passes():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2025, 12, 1),
+        full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+        deduction_us54ec=Decimal("5000000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-008")
+
+
+def test_CG_008_54ec_deduction_exceeding_cap_fails():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2025, 12, 1),
+        full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+        deduction_us54ec=Decimal("5000001"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-008")
+
+
+def _base_112a_scrip(**overrides) -> CG112AScrip:
+    fields = dict(
+        isin_code="INE001A01036", share_unit_name="Reliance Industries",
+        date_of_transfer=date(2025, 12, 1),
+        num_shares_units=Decimal("100"), sale_price_per_share=Decimal("3000"),
+        total_sale_value=Decimal("300000"), cost_acq_without_index=Decimal("100000"),
+    )
+    fields.update(overrides)
+    return CG112AScrip(**fields)
+
+
+def test_112A_008_post_2018_scrip_without_fmv_passes():
+    inp = _base_input(cg_112a_scrips=[_base_112a_scrip(is_before_31jan2018=False)])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-112A-008")
+
+
+def test_112A_008_post_2018_scrip_with_fmv_fails():
+    inp = _base_input(cg_112a_scrips=[_base_112a_scrip(
+        is_before_31jan2018=False, fmv_per_share=Decimal("1000"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-112A-008")
+
+
+def test_VDA_004_dates_within_financial_year_passes():
+    inp = _base_input(vda_transactions=[VDATransaction(
+        date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2026, 1, 1),
+        acquisition_cost=Decimal("50000"), consideration_received=Decimal("90000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VDA-004")
+
+
+def test_VDA_004_transfer_date_after_financial_year_end_fails():
+    inp = _base_input(vda_transactions=[VDATransaction(
+        date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2026, 4, 1),
+        acquisition_cost=Decimal("50000"), consideration_received=Decimal("90000"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VDA-004")

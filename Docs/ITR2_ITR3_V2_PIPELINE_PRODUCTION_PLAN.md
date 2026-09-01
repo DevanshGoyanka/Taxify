@@ -22,7 +22,7 @@ items point to, not a duplicate.
 | 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
 | 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
-| 5 | Complete the ITR-2 CBDT validator suite (5A ✅ Delivered 2026-09-02; 5B–5E not started — see §Phase 5, 790 official rules found) | In progress |
+| 5 | Complete the ITR-2 CBDT validator suite (5A/5B ✅ Delivered 2026-09-02; 5C–5E not started — see §Phase 5, 790 official rules found) | In progress |
 | 6 | Frontend: wire ITR-2 onto the canonical pipeline | Not started |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started |
 | 8 | ITR-3 (mirrors 1–7, reusing ITR-2's types) | Not started |
@@ -568,6 +568,60 @@ test per new rule, known-good and known-bad cases, same pattern as ITR-1's R145 
   Phase 4's note plus the pre-existing `test_26as_batch.py::test_single_file` fixture-config
   error) — **1354 passed, 0 failed.** `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed.
   `npm run build` — clean (5A touched no frontend files; run for full-verification discipline).
+
+**5B Delivered 2026-09-02.**
+
+- **`app/engine/validators/itr2/input_rules.py`** — added 2 new Schedule CG rules
+  (`ITR2-IN-CG-007`/`008`), 1 Schedule 112A rule (`ITR2-IN-112A-008`), and 1 Schedule VDA rule
+  (`ITR2-IN-VDA-004`), plus a `_financial_year_end(inp)` helper (31 March of the AY's
+  financial year, reusing the existing `_current_assessment_year` derivation). A much smaller
+  addition than 5A's 13 rules — most of the CBDT catalog's ~150 Schedule CG rules turned out
+  to be either (a) column-arithmetic identities against the official form's raw sub-schedule
+  layout that `build_itr2_json` already guarantees by constructing the JSON programmatically
+  rather than summing user-edited dropdowns, or (b) already forced by *existing* rules once
+  actually traced through:
+  - `ITR2-IN-CG-007` (CBDT rule 750): a `LAND_BUILDING` transaction's `date_of_transfer` cannot
+    fall after 31 March of the financial year.
+  - `ITR2-IN-CG-008` (CBDT rule 591): `deduction_us54ec` (§54EC bonds) is capped at ₹50,00,000
+    — the only one of the four capital-gain exemption sections (54/54B/54EC/54F) with a flat
+    statutory rupee cap in the catalog; the other three are reinvestment-conditioned with no
+    flat cap, so no equivalent rule was added for them.
+  - `ITR2-IN-112A-008` (CBDT rules 173/174): a scrip acquired on/after 1 February 2018
+    (`is_before_31jan2018=False`) cannot carry a 31-Jan-2018 FMV — grandfathering doesn't apply
+    to it.
+  - `ITR2-IN-VDA-004` (CBDT rule 748): a VDA transaction's acquisition or transfer date cannot
+    fall after 31 March of the financial year.
+  - **Two planned rules were traced to existing coverage and dropped before being written**:
+    the CBDT catalog's "zero consideration ⇒ zero transfer expenses" pattern (rules 101–108)
+    is unreachable for `CGTransaction` — `ITR2-IN-CG-003` already forces `full_consideration >
+    0` unconditionally for every transaction — and for `CG112AScrip` the same zero-consideration
+    state is already caught by the existing `ITR2-IN-112A-002`–`004` chain (positive quantity,
+    positive unit price, and their product reconciling to `total_sale_value`) whenever those
+    two factors are positive, and by `112A-002`/`003` directly when they aren't. Adding either
+    would have been dead-or-redundant code, so neither was written.
+  - **Not implemented, and explicitly out of scope for 5B**: CBDT rules 175/176 (10% stamp-duty
+    safe-harbor threshold for immovable-property full value of consideration) and 184/185
+    (24-month holding-period long/short classification) are calculator *formula* behavior, not
+    input-shape validation — fixing either belongs to `app/engine/calculators/itr2.py`, not a
+    Category A pre-compute gate, and auditing the calculator's own correctness is outside this
+    validator-completion phase's mandate. CBDT rule 186 (year-of-improvement mandatory when
+    cost-of-improvement is declared) is not representable — `CGTransaction` has no
+    year-of-improvement field. CBDT rule 590 (mandatory CGAS/investment detail when an
+    exemption amount is claimed) targets `CapitalGainExemptionClaim`, a second, parallel
+    per-claim schema on `CGTransaction.exemptions` that is not confirmed to be populated by
+    `draft_to_itr2_input.py` (the mapper only writes the flat `deduction_us54*` scalars) — not
+    validated against an unconfirmed-live path. The Schedule 115AD(1)(b)(iii) proviso block
+    (rules 91–97, 142, 174, 177, 187 — the FII/FPI non-resident LTCG equivalent of Schedule
+    112A) is not representable at all — `ITR2Input` has no separate 115AD scrip list.
+- **`tests/test_itr2_input_validation.py`** — added 8 tests (one known-good + one known-bad per
+  rule, 4 rules × 2) under a new "Phase 5B" section.
+- **Verification:** `pytest tests/test_itr2_input_validation.py -v` — 34 passed.
+  `pytest tests/test_draft_to_itr2_input.py tests/test_filing_gateway_v2_itr2.py
+  tests/test_itr2_validators.py tests/test_itr2_integration.py tests/test_itr2_itd_builder.py
+  tests/test_itr2_production_path.py -q` — 81 passed, no regressions from the new CG/112A/VDA
+  rules against existing fixtures. Full suite (`pytest tests/ -q`, same deselect list as 5A's
+  note) — **1365 passed, 0 failed.** `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed.
+  `npm run build` — clean (5B touched no frontend files; run for full-verification discipline).
 
 ### Phase 6 — Frontend: wire ITR-2 onto the canonical `ReturnDraft`
 

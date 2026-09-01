@@ -64,6 +64,17 @@ def _parse_assessment_year(value: str) -> int | None:
     return first if second == (first + 1) % 100 else None
 
 
+def _financial_year_end(inp: ITR2Input) -> date:
+    """Return 31 March of the financial year the return is filed for.
+
+    AY 2026-27's financial year (2025-26) ends 31 March 2026; ``due_date``/
+    ``filing_date`` fall within the AY (e.g. July 2026), so their calendar
+    year — the same value ``_current_assessment_year`` derives — is the FY's
+    closing year.
+    """
+    return date(_current_assessment_year(inp), 3, 31)
+
+
 def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
     """Validate all supported ITR-2 input-level rules.
 
@@ -260,6 +271,19 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "Pre-1 February 2018 section 112A assets require 31 January 2018 FMV.",
                 f"{path}.fair_market_value_jan2018", "non-null", None,
             ))
+        if tx.asset_type == CGAssetType.LAND_BUILDING and tx.date_of_transfer > _financial_year_end(inp):
+            results.append(_result(
+                "ITR2-IN-CG-007", False,
+                "Date of sale/transfer of land or building cannot be after 31 March "
+                "of the financial year.",
+                f"{path}.date_of_transfer", f"<= {_financial_year_end(inp)}", str(tx.date_of_transfer),
+            ))
+        if tx.deduction_us54ec > Decimal("5000000"):
+            results.append(_result(
+                "ITR2-IN-CG-008", False,
+                "Deduction u/s 54EC (investment in specified bonds) is capped at ₹50,00,000.",
+                f"{path}.deduction_us54ec", "<= 5000000", str(tx.deduction_us54ec),
+            ))
 
     for index, scrip in enumerate(inp.cg_112a_scrips or []):
         path = f"cg_112a_scrips[{index}]"
@@ -311,6 +335,13 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "Schedule 112A balance must equal sale value less total deductions.",
                 f"{path}.balance", str(expected_balance), str(supplied_balance),
             ))
+        if not scrip.is_before_31jan2018 and scrip.fmv_per_share > _ZERO:
+            results.append(_result(
+                "ITR2-IN-112A-008", False,
+                "Fair market value as on 31 January 2018 cannot be entered for shares "
+                "acquired on or after 1 February 2018 (grandfathering does not apply).",
+                f"{path}.fmv_per_share", _ZERO, str(scrip.fmv_per_share),
+            ))
 
     for index, tx in enumerate(inp.vda_transactions or []):
         path = f"vda_transactions[{index}]"
@@ -318,6 +349,14 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             results.append(_result(
                 "ITR2-IN-VDA-001", False, "VDA transfer date must follow acquisition date.",
                 f"{path}.date_of_transfer", f"> {tx.date_of_acquisition}", str(tx.date_of_transfer),
+            ))
+        if tx.date_of_acquisition > _financial_year_end(inp) or tx.date_of_transfer > _financial_year_end(inp):
+            results.append(_result(
+                "ITR2-IN-VDA-004", False,
+                "VDA date of acquisition or date of transfer cannot be after 31 March "
+                "of the financial year.",
+                path, f"<= {_financial_year_end(inp)}",
+                f"acquisition={tx.date_of_acquisition}, transfer={tx.date_of_transfer}",
             ))
         if tx.consideration_received <= _ZERO:
             results.append(_result(
