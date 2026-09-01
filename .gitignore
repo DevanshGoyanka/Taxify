@@ -97,6 +97,12 @@ frontend/.next/
 # Logs
 *.log
 
+# ITD-provided test-data spreadsheets — contain real PII (name, PAN, DOB) for
+# UAT test scenarios. Keep local-only for scripts/eri_uat_sanity.py to read;
+# never let this into git history.
+*Test Data*.xlsx
+*Test Scenario Sheet*.xlsx
+
 # Downloaded files / sensitive documents
 downloads/
 Docs/*.pdf
