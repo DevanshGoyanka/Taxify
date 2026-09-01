@@ -26,6 +26,7 @@ from app.schemas.itr2 import (
     ITR2Input,
     PropertyFilingDetail,
     ResidentialStatus,
+    ScheduleSIEntry,
     VDATransaction,
 )
 
@@ -392,3 +393,26 @@ def test_VIA_003_non_resident_with_80dd_claim_fails():
         deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("75000")),
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-003")
+
+
+# ── Phase 5D: Schedule OS / Schedule SI / CYLA-BFLA-CFL ─────────────────────
+
+def test_SI_001_online_game_winnings_without_deduction_passes():
+    inp = _base_input(si_entries=[ScheduleSIEntry(
+        section="115BBJ", gross_income=Decimal("20000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SI-001")
+
+
+def test_SI_001_online_game_winnings_with_deduction_fails():
+    inp = _base_input(si_entries=[ScheduleSIEntry(
+        section="115BBJ", gross_income=Decimal("20000"), deductions=Decimal("1000"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SI-001")
+
+
+def test_SI_001_other_section_with_deduction_passes():
+    inp = _base_input(si_entries=[ScheduleSIEntry(
+        section="115BBF", gross_income=Decimal("50000"), deductions=Decimal("5000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SI-001")

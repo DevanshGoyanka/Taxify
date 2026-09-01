@@ -22,7 +22,7 @@ items point to, not a duplicate.
 | 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
 | 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
-| 5 | Complete the ITR-2 CBDT validator suite (5A/5B/5C ✅ Delivered 2026-09-02; 5D–5E not started — see §Phase 5, 790 official rules found) | In progress |
+| 5 | Complete the ITR-2 CBDT validator suite (5A/5B/5C/5D ✅ Delivered 2026-09-02; 5E not started — see §Phase 5, 790 official rules found) | In progress |
 | 6 | Frontend: wire ITR-2 onto the canonical pipeline | Not started |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started |
 | 8 | ITR-3 (mirrors 1–7, reusing ITR-2's types) | Not started |
@@ -673,6 +673,52 @@ test per new rule, known-good and known-bad cases, same pattern as ITR-1's R145 
   tests/ -q`, same deselect list as 5A/5B's notes) — **1371 passed, 0 failed.** `npx tsc -b` —
   0 errors. `npx vitest run` — 167 passed. `npm run build` — clean (5C touched no frontend
   files; run for full-verification discipline).
+
+**5D Delivered 2026-09-02.**
+
+- **`app/engine/validators/itr2/input_rules.py`** — added 1 Schedule SI rule
+  (`ITR2-IN-SI-001`). The smallest of the five rule sets shipped in Phase 5 — Schedule OS,
+  CYLA/BFLA/CFL, and most of Schedule SI turned out to have essentially nothing left to add:
+  - **Schedule OS is almost entirely non-representable, not just already-guaranteed.**
+    `OtherSourcesIncome` (shared with ITR-1) is a flat gross-income-bucket model with no
+    expense/deduction sub-schedule, no racehorse-income field, no dividend-interest-expenditure
+    field. ITR-1's own three Schedule-OS rules (`R050`/`R052`/`R145`) all key off
+    ITR1Input-only fields — `other_sources_dropdowns`, `other_sources_total`,
+    `dividend_quarterly_breakdown` — none of which exist on `ITR2Input`, so there was nothing
+    to adapt from ITR-1 here, unlike Chapter VI-A's reusable pattern in 5C. The one cap that
+    *is* representable (57(iia) family-pension deduction) is engine-computed in
+    `app/engine/schedules/other_sources.py` exactly like 5A's salary exemptions — `min(fp/3,
+    cap)`, only applied `if fp > 0` — so it needs no separate validator.
+  - **`ITR2Input.cf_losses` is a vestigial input field**: grepping
+    `app/engine/calculators/itr2.py` confirms it is never read — the calculator's own "cfl"
+    schedule is derived entirely from `bf_losses` and current-year losses, not from
+    `inp.cf_losses`. A validator against an input the calculator never consumes would check
+    something with no effect on the filed return, so none was written. The remaining CYLA/
+    BFLA/CFL catalog rules (234–274) are column-arithmetic identities against
+    `build_itr2_json`'s own output construction — build-time-guaranteed, same as 5B's Schedule
+    CG finding.
+  - **`ITR2-IN-SI-001` (Section 58(4), no deduction against 115BBJ online-game winnings)**:
+    `ScheduleSIEntry` itself already carries a `reject_disallowed_deductions` model validator
+    blocking a nonzero `deductions` claim for sections `115BB`/`115BBE` — discovered mid-test
+    (the known-bad case for 115BB wouldn't even construct, same dead-code-before-shipping
+    pattern as 5A's dropped HP rule), so that half of the originally planned rule was dropped.
+    `115BBJ` (winnings from online games — the same Section 58(4) "no deduction" rule applies)
+    is the one section the schema does *not* already cover, and is genuinely representable, so
+    the rule was narrowed to just that. `.deductions` and `.tax_rate_pct` are both ignored by
+    every `compute_*` function in `app/engine/schedules/special_rates.py` (hardcoded rate
+    constants; only `.gross_income` is read) — but unlike the caps found elsewhere in 5A–5C,
+    that isn't a reason to skip the rule: the claim is legally invalid under Section 58(4), not
+    merely uncomputed, so it's worth rejecting outright rather than letting it silently vanish.
+- **`tests/test_itr2_input_validation.py`** — added 3 tests under a new "Phase 5D" section
+  (one for `115BBJ` with a deduction failing, one without passing, one confirming an
+  unrelated section — `115BBF`, which does permit deductions — is unaffected).
+- **Verification:** `pytest tests/test_itr2_input_validation.py -v` — 43 passed.
+  `pytest tests/test_draft_to_itr2_input.py tests/test_filing_gateway_v2_itr2.py
+  tests/test_itr2_validators.py tests/test_itr2_integration.py tests/test_itr2_itd_builder.py
+  tests/test_itr2_production_path.py -q` — 95 passed, no regressions. Full suite (`pytest
+  tests/ -q`, same deselect list as prior sub-phases' notes) — **1374 passed, 0 failed.**
+  `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed. `npm run build` — clean (5D touched
+  no frontend files; run for full-verification discipline).
 
 ### Phase 6 — Frontend: wire ITR-2 onto the canonical `ReturnDraft`
 

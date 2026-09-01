@@ -526,6 +526,44 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 str(tr_by_country.get(country, (_ZERO, _ZERO))),
             ))
 
+    # ── Schedule OS / Schedule SI / CYLA-BFLA-CFL — Phase 5D ───────────────
+    # Schedule OS (`OtherSourcesIncome`) has almost nothing left to validate:
+    # it is a flat gross-income-bucket model shared with ITR-1, and ITR-1's
+    # own Schedule OS rules (R050/R052/R145) all key off ITR1Input-only
+    # fields — `other_sources_dropdowns`, `other_sources_total`,
+    # `dividend_quarterly_breakdown` — none of which exist on ITR2Input, so
+    # there is nothing to adapt from ITR-1 here. The 57(iia) family-pension
+    # deduction cap is engine-computed in app/engine/schedules/other_sources.py
+    # (`min(fp/3, cap)`, only applied `if fp > 0`) exactly like 5A's salary
+    # exemptions, so it needs no separate validator either.
+    # CYLA/BFLA/CFL: `ITR2Input.cf_losses` is never read by the calculator
+    # (`app/engine/calculators/itr2.py` derives its own "cfl" schedule from
+    # `bf_losses` and current-year losses) — a vestigial input field, so a
+    # validator against it would check something with no effect on the
+    # filed return. The remaining CBDT catalog rules here (234–274) are
+    # column-arithmetic identities against `build_itr2_json`'s own output
+    # construction, already build-time-guaranteed.
+    # Schedule SI: `ScheduleSIEntry.deductions` and `.tax_rate_pct` are BOTH
+    # ignored by every `compute_*` function in
+    # app/engine/schedules/special_rates.py (rates are hardcoded constants;
+    # only `.gross_income` is read) — but unlike the caps found elsewhere,
+    # that isn't itself a reason to skip a rule: Section 58(4) makes any
+    # deduction against lottery/game-winning income *legally* invalid, not
+    # just uncomputed, so a nonzero claim there is worth rejecting outright
+    # rather than letting it silently vanish. `ScheduleSIEntry` itself already
+    # has a `reject_disallowed_deductions` model validator blocking this for
+    # sections 115BB/115BBE — 115BBJ (online game winnings, same Section 58(4)
+    # disallowance) is the one section it does NOT cover, so that's the only
+    # one left for this rule to add.
+    for index, si in enumerate(inp.si_entries or []):
+        if si.section == "115BBJ" and si.deductions > _ZERO:
+            results.append(_result(
+                "ITR2-IN-SI-001", False,
+                "No deduction or allowance is permitted against income taxable "
+                "under section 115BBJ (winnings from online games) — section 58(4).",
+                f"si_entries[{index}].deductions", _ZERO, str(si.deductions),
+            ))
+
     if inp.amt_input is not None:
         amt = inp.amt_input
         expected_amt = amt.adjusted_total_income * amt.amt_rate_pct / Decimal("100")
