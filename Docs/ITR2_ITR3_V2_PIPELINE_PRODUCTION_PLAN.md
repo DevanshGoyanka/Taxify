@@ -3,7 +3,7 @@
 **Status:** Active implementation tracker. No phase starts until the previous phase's tests
 pass and the user has approved it. Updated immediately after each phase — status, files
 touched, verification result — matching the convention of `ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md`.
-**Date:** 2026-09-01
+**Date:** 2026-09-01 (created) · last phase update 2026-09-02
 **Authority:** This is the single source of truth for building ITR-2 and ITR-3 to the exact
 same production standard ITR-1 and ITR-4 already meet. It is verified against
 `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md` (the ground-truth architecture audit) at every
@@ -13,6 +13,21 @@ tooling (credential-bundle switching, `scripts/eri_uat_sanity.py`) and the final
 UAT-sample-generation step for ITD certification. Its Phases 2–11 (the ITR-2/ITR-3 build
 items) are **superseded by this document** — treat this doc as the detailed phase plan those
 items point to, not a duplicate.
+
+## Progress at a glance
+
+| Phase | What | Status |
+|---|---|---|
+| 1 | Type the capital-gains schedule (backend mirror of the frontend's shape) | ✅ Delivered 2026-09-01 |
+| 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
+| 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | Not started |
+| 4 | Wire ITR-2 into `filing_gateway_v2.py` | Not started |
+| 5 | Complete the ITR-2 CBDT validator suite | Not started |
+| 6 | Frontend: wire ITR-2 onto the canonical pipeline | Not started |
+| 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started |
+| 8 | ITR-3 (mirrors 1–7, reusing ITR-2's types) | Not started |
+| 9 | Delete the dead ITR-2 legacy path | Not started |
+| 10 | Production hardening + final verification | Not started |
 
 ---
 
@@ -175,7 +190,7 @@ fields become `list[dict[str, Any]]` — matching, not fixing, the frontend's ow
   particular test fixtures don't use it). Out of scope for this phase; flagged for separate
   follow-up, not fixed here.
 
-### Phase 2 — Extend `ReturnDraft` / `types.ts` with the remaining ITR-2 fields
+### Phase 2 — Extend `ReturnDraft` / `types.ts` with the remaining ITR-2 fields ✅ Delivered 2026-09-02
 
 Everything capital-gains-shaped is Phase 1's job; this phase covers the rest, using the
 **already-drafted but unwired** types already sitting in `return_draft.py` (added, then
@@ -186,21 +201,32 @@ below rather than redesigned from scratch:
   `PersonalInfo.holdsUnlistedShares` already exist on the frontend and are wired into
   `ClientsPage.tsx`'s intake questionnaire + `eligibility.ts` — the backend gets fields with
   these exact names, not `isCompanyDirector`/`heldUnlistedEquity`.
-- **`residentialStatus`: `"RES"|"NRI"|"NOR"`** (confirmed) — matches the backend `ITR2Input`
-  schema that must actually be produced and `itr2Mapper.ts`'s existing enum. The frontend's
-  `PersonalInfo.residentialStatus?: 'ROR'|'RNOR'|'NR'` (a pre-existing, already-inconsistent,
-  unwired field) needs a coordinated fix in this same phase — align it to `RES/NRI/NOR` so
-  there is one enum, not two, across the whole codebase.
+- **`residentialStatus`: correction found while implementing.** The official CBDT ITR-2 JSON
+  Schema (`Reference Docs by CBDT & ITD/Official JSON Schema/ITR-2_2026_Main_V1.1 (2).json`)
+  confirms the wire format really is `RES/NRI/NOR` — matching `itr2.py`'s existing enum. But
+  `frontend/src/domain/eligibility.ts`'s `EligibilityFacts.residentialStatus:
+  'ROR'|'RNOR'|'NR'` is **live, wired, tested code** (20+ references in
+  `eligibility.test.ts`/`scheduleRegistry.test.ts`, two direct equality comparisons gating
+  real form-recommendation logic) already reading from `draft.personal.residentialStatus`.
+  Renaming its values would touch live eligibility logic for zero benefit. **Decision: the
+  backend `PersonalInfo.residentialStatus` field uses `'ROR'|'RNOR'|'NR'`** — matching the
+  already-shipped, already-tested frontend exactly, zero frontend change needed — and
+  **`draft_to_itr2_input.py` (Phase 3) translates `ROR→RES, NR→NRI, RNOR→NOR`** when building
+  `ITR2Input.residential_status`, the same way every existing mapper already translates
+  draft-level friendly values into CBDT-exact codes (e.g. `SELF_OCCUPIED→S`, `SELF→S`).
 - **New, no frontend collision** (confirmed zero prior representation via `scheduleRegistry.ts`
   marking all of these `status: 'missing'`): Schedule FSI, Schedule TR, Schedule FA, Schedule
   SPI (clubbing), Schedule PTI (pass-through income — name the field
   `passThroughIncomeEntries`, not `passThroughIncome`, to avoid confusion with the existing
   `HouseProperty.passThroughIncome` and `housePropertyPassThroughIncome` fields), AMT,
   Schedule AL, Schedule 5A (Portuguese Civil Code), ESOP deferral.
-- **`BroughtForwardLosses`**: frontend's existing type is a flat current-year aggregate (5
-  scalars), already wired to ITR-1/4's CYLA/BFLA. ITR-2 needs per-AY entries — extend the
-  existing type additively with a new `entries: BroughtForwardLossEntry[]` field rather than
-  adding an unrelated top-level list.
+- **`BroughtForwardLosses` — correction found while implementing**: the frontend's existing
+  `lossesBroughtForward: BroughtForwardLosses` (a flat current-year aggregate, 5 scalars) was
+  already on `types.ts`/`factory.ts` but **not read by any Python code at all** — not even by
+  ITR-1/4. ITR-2's `bf_losses: List[BFLossItem]` needs a genuinely different shape (per-AY
+  entries), so this isn't an extension of a live field — it's two brand-new, separate
+  top-level fields: `broughtForwardLossEntries`/`carriedForwardLossEntries`, added to both
+  `return_draft.py` and `types.ts` since neither side had this shape before.
 - **New declarations with no frontend field at all yet**: `sebiRegistrationNumber`,
   `isFiiFpi`, `portugueseCivilCodeApplies` — add to `FilingStatus` alongside the existing
   ITR-4 declaration-style fields.
@@ -208,6 +234,52 @@ below rather than redesigned from scratch:
 **Files:** `app/schemas/return_draft.py` (revise the already-drafted block), 
 `frontend/src/domain/returns/types.ts` (mirror in the same phase — per the user's explicit
 "update the frontend mirror in lockstep" instruction, this is not deferred).
+
+**Delivered:**
+- `app/schemas/return_draft.py` — `PersonalInfo` gained `residentialStatus` (`ROR/RNOR/NR`,
+  matching `eligibility.ts` exactly — not the CBDT wire codes, which the future mapper
+  derives), `isDirector`, `holdsUnlistedShares` (both already-live frontend field names).
+  `FilingStatus` gained `sebiRegistrationNumber`, `isFiiFpi`, `portugueseCivilCodeApplies`.
+  `ReturnDraft` gained 11 new fields backed by 12 new types: `BroughtForwardLosses` (parity
+  aggregate, mirrors the frontend's already-shipped-but-Python-unused type),
+  `BroughtForwardLossEntry`/`CarriedForwardLossEntry` (new per-AY shape),
+  `ForeignSourceIncomeEntry` (FSI), `ForeignTaxReliefEntry` (TR), `ForeignAssetEntry` (FA),
+  `ClubbedIncomeEntry` (SPI), `PassThroughIncomeEntry` (PTI), `AMTDetails`/`AMTCreditEntry`,
+  `AssetLiabilityDetails` (AL), `PortugueseCivilCodeDetails` (5A), `ESOPDeferralEntry`.
+- `frontend/src/domain/returns/types.ts` — the 9 genuinely-new schedules mirrored field-for-
+  field (12 new interfaces/types); `FilingStatus` gained the 3 new declarations.
+  `residentialStatus`/`isDirector`/`holdsUnlistedShares` needed **no frontend change** —
+  already live on `PersonalInfo` since before this phase.
+- `frontend/src/domain/returns/factory.ts` — `createEmptyReturnDraft()` populates all 11 new
+  `ReturnDraft` fields and the 3 new `FilingStatus` fields with their empty defaults;
+  `tsc -b`'s required-property checking caught this automatically (a missing field here would
+  have been a compile error, not a silent gap).
+- `tests/test_return_draft_schema.py` — 3 new tests: empty-ITR-2-draft defaults, full
+  round-trip of populated Phase 2 fields, and an ITR-1 regression confirming none of this
+  changes ITR-1's behavior.
+
+**Corrections found while implementing (both already folded into the description above,
+recorded here for the audit trail):**
+1. `residentialStatus` — reversed the original "align frontend to RES/NRI/NOR" decision after
+   discovering `eligibility.ts`'s `'ROR'|'RNOR'|'NR'` is live, tested, wired logic (not a
+   throwaway field) — translation belongs in the future mapper, not a frontend rename.
+2. `BroughtForwardLosses` — the plan assumed extending an "already wired to ITR-1/4" type;
+   grepping actual Python call sites found zero references anywhere, and the shape ITR-2
+   needs (per-AY) is different from the existing flat aggregate anyway, so this became two
+   new fields instead of an extension.
+
+**Verification (all run 2026-09-02):**
+- `python -c "import app.main"` — OK.
+- `pytest tests/test_return_draft_schema.py tests/test_filing_gateway_v2.py
+  tests/test_tax_v2_compute.py tests/test_itr1_calculator.py tests/test_itr4_calculator.py
+  tests/test_draft_to_itr1_input.py tests/test_itr1_golden_suite.py
+  tests/test_itr1_filing_gateway_profile.py tests/test_itr1_filing_gateway_profile_v2.py
+  tests/test_112a_unification.py tests/test_filing_orchestrator.py
+  tests/test_personal_info_contract.py tests/test_eri_creation_info_invariant.py
+  tests/test_eri_routers.py` — 174 passed.
+- `npx tsc -b` — 0 errors.
+- `npx vitest run` — 21 files / 167 tests passed.
+- `npm run build` — clean production build.
 
 **Tests:** `tests/test_return_draft_schema.py` — additive-field round-trip tests, ITR-1/4
 regression suites stay green, `extra="forbid"` still rejects unknown keys.

@@ -649,6 +649,190 @@ class CapitalGainsSchedule(_StrictModel):
 
 
 # ---------------------------------------------------------------------------
+# ITR-2/ITR-3 additive schedules (FSI, TR, FA, SPI, PTI, AMT, AL, 5A, ESOP,
+# brought/carried-forward loss ledger) — ignored by the ITR-1/ITR-4 pipelines.
+# ---------------------------------------------------------------------------
+
+ResidentialStatus = Literal["ROR", "RNOR", "NR"]
+"""ITR-2/3 residential status. Matches frontend/eligibility.ts's existing,
+live, tested enum exactly — NOT the CBDT wire format (RES/NRI/NOR), which
+the ITR-2/3 draft-to-input mapper derives via ROR->RES, RNOR->NOR, NR->NRI,
+the same way every other mapper already translates draft-level values into
+CBDT-exact codes. Renaming eligibility.ts's already-shipped enum instead
+would touch live, tested form-recommendation logic for no benefit."""
+
+ForeignReliefSection = Literal["90", "90A", "91"]
+ForeignAssetType = Literal[
+    "BANK_ACCOUNT", "CUSTODIAL_ACCOUNT", "EQUITY_DEBT_INTEREST",
+    "CASH_VALUE_INSURANCE", "FINANCIAL_INTEREST", "IMMOVABLE_PROPERTY",
+    "SIGNING_AUTHORITY", "TRUST", "OTHER_FOREIGN_INCOME", "OTHER_ASSET",
+]
+ClubbedHeadOfIncome = Literal["SAL", "HP", "CG", "OS"]
+PTIIncomeHead = Literal["HP", "STCG", "LTCG", "OS"]
+LossHead = Literal["HP", "STCG", "LTCG", "RaceHorse"]
+
+
+class BroughtForwardLosses(_StrictModel):
+    """Canonical current-year aggregate of brought-forward losses.
+
+    Mirrors frontend/src/domain/returns/types.ts::BroughtForwardLosses
+    exactly. Not currently read by any ITR-1/4 mapper (the frontend type
+    itself is defined but not deeply wired yet either) — added here for
+    parity so ITR-2/3 has the same aggregate the frontend already models.
+    """
+
+    bfLossHP: Money = Field(default=Decimal("0"))
+    bfLossBusiness: Money = Field(default=Decimal("0"))
+    bfLossSTCG: Money = Field(default=Decimal("0"))
+    bfLossLTCG: Money = Field(default=Decimal("0"))
+    bfLossSpeculation: Money = Field(default=Decimal("0"))
+
+
+class BroughtForwardLossEntry(Identified):
+    """Opening brought-forward loss balance for one origin AY (Schedule CFL
+    opening rows). ITR-2/3 only — no frontend representation exists yet for
+    this per-AY shape (only the flat current-year aggregate above does)."""
+
+    assessmentYear: str = Field(default="")
+    head: LossHead = Field(default="HP")
+    subCategory: str = Field(default="")
+    originalLoss: Money = Field(default=Decimal("0"))
+    broughtForward: Money = Field(default=Decimal("0"))
+    dateOfFiling: Optional[str] = Field(default=None)
+
+
+class CarriedForwardLossEntry(Identified):
+    """Legacy CFL control total retained for reconciliation only. ITR-2/3."""
+
+    assessmentYearOfLoss: str = Field(default="")
+    head: LossHead = Field(default="HP")
+    originalLoss: Money = Field(default=Decimal("0"))
+    lossRemaining: Money = Field(default=Decimal("0"))
+
+
+class ForeignSourceIncomeEntry(Identified):
+    """Schedule FSI: foreign-source income and foreign tax, per jurisdiction."""
+
+    countryCode: str = Field(default="")
+    taxIdentificationNo: str = Field(default="")
+    salaryIncome: Money = Field(default=Decimal("0"))
+    hpIncome: Money = Field(default=Decimal("0"))
+    cgIncome: Money = Field(default=Decimal("0"))
+    osIncome: Money = Field(default=Decimal("0"))
+    taxPaidOutsideIndia: Money = Field(default=Decimal("0"))
+    taxPayableInIndia: Money = Field(default=Decimal("0"))
+    reliefSection: ForeignReliefSection = Field(default="90")
+
+
+class ForeignTaxReliefEntry(Identified):
+    """Schedule TR: foreign tax relief claim for one jurisdiction (Sec 90/90A/91)."""
+
+    countryCode: str = Field(default="")
+    taxIdentificationNo: str = Field(default="")
+    incomeIncludedInThisReturn: Money = Field(default=Decimal("0"))
+    taxPaidOutsideIndia: Money = Field(default=Decimal("0"))
+    indianTaxPayable: Money = Field(default=Decimal("0"))
+    reliefClaimed: Money = Field(default=Decimal("0"))
+    reliefSection: ForeignReliefSection = Field(default="90")
+    form67Filed: bool = Field(default=False)
+
+
+class ForeignAssetEntry(Identified):
+    """Schedule FA: one foreign asset or account disclosure."""
+
+    assetType: ForeignAssetType = Field(default="OTHER_ASSET")
+    countryCode: str = Field(default="")
+    institutionOrEntityName: str = Field(default="")
+    address: str = Field(default="")
+    accountOrAssetIdentifier: str = Field(default="")
+    ownershipStatus: str = Field(default="")
+    openingOrAcquisitionDate: str = Field(default="")
+    peakValue: Money = Field(default=Decimal("0"))
+    closingValue: Money = Field(default=Decimal("0"))
+    grossIncome: Money = Field(default=Decimal("0"))
+    incomeOffered: Money = Field(default=Decimal("0"))
+    incomeHead: Optional[ClubbedHeadOfIncome] = Field(default=None)
+
+
+class ClubbedIncomeEntry(Identified):
+    """Schedule SPI: income clubbed under Section 64."""
+
+    specifiedPersonName: str = Field(default="")
+    pan: str = Field(default="")
+    relationship: str = Field(default="")
+    amountIncluded: Money = Field(default=Decimal("0"))
+    headOfIncome: ClubbedHeadOfIncome = Field(default="OS")
+
+
+class PassThroughIncomeEntry(Identified):
+    """Schedule PTI: pass-through income from a business trust or investment
+    fund. Named distinctly from HouseProperty.passThroughIncome and the
+    CapitalGainsAggregates pass-through fields — those are unrelated HP/CG
+    concepts that happen to share the phrase "pass-through"."""
+
+    entityName: str = Field(default="")
+    entityPAN: str = Field(default="")
+    incomeHead: PTIIncomeHead = Field(default="OS")
+    section: str = Field(default="")
+    incomeAmount: Money = Field(default=Decimal("0"))
+    tdsCredit: Money = Field(default=Decimal("0"))
+
+
+class AMTCreditEntry(Identified):
+    """AMT credit brought forward from one assessment year."""
+
+    assessmentYear: str = Field(default="")
+    creditBroughtForward: Money = Field(default=Decimal("0"))
+
+
+class AMTDetails(_StrictModel):
+    """Alternate Minimum Tax additions and opening credit ledger. ITR-2/3."""
+
+    deduction10AA: Money = Field(default=Decimal("0"))
+    deduction80IAto80RRBExcept80P: Money = Field(default=Decimal("0"))
+    deduction35ADNetDepreciation: Money = Field(default=Decimal("0"))
+    creditsBroughtForward: list[AMTCreditEntry] = Field(default_factory=list)
+
+
+class AssetLiabilityDetails(_StrictModel):
+    """Schedule AL: assets and related liabilities (mandatory above the income threshold)."""
+
+    immovableProperty: Money = Field(default=Decimal("0"))
+    cashInHand: Money = Field(default=Decimal("0"))
+    bankDeposits: Money = Field(default=Decimal("0"))
+    sharesAndSecurities: Money = Field(default=Decimal("0"))
+    insurancePolicies: Money = Field(default=Decimal("0"))
+    loansAndAdvances: Money = Field(default=Decimal("0"))
+    jewellery: Money = Field(default=Decimal("0"))
+    art: Money = Field(default=Decimal("0"))
+    vehiclesBoatsAircraft: Money = Field(default=Decimal("0"))
+    relatedLiabilities: Money = Field(default=Decimal("0"))
+
+
+class PortugueseCivilCodeDetails(_StrictModel):
+    """Schedule 5A: Portuguese Civil Code income apportionment facts."""
+
+    spouseName: str = Field(default="")
+    spousePAN: str = Field(default="")
+    spouseAadhaar: str = Field(default="")
+    hpAmountApportioned: Money = Field(default=Decimal("0"))
+    cgAmountApportioned: Money = Field(default=Decimal("0"))
+    osAmountApportioned: Money = Field(default=Decimal("0"))
+    tdsApportioned: Money = Field(default=Decimal("0"))
+
+
+class ESOPDeferralEntry(Identified):
+    """Eligible-startup ESOP tax deferral ledger entry (Sec 191(2))."""
+
+    employerPAN: str = Field(default="")
+    dpiitRegistrationNumber: str = Field(default="")
+    assessmentYear: str = Field(default="")
+    taxDeferredBroughtForward: Money = Field(default=Decimal("0"))
+    taxPayableCurrentYear: Money = Field(default=Decimal("0"))
+    balanceTaxCarriedForward: Money = Field(default=Decimal("0"))
+
+
+# ---------------------------------------------------------------------------
 # Other Sources (Schedule OS)
 # ---------------------------------------------------------------------------
 
@@ -1182,8 +1366,26 @@ class FilingStatus(_StrictModel):
     form10IEACurrentAYOldRegimeAck: str = Field(default="")
     seventhProviso: SeventhProviso = Field(
         default_factory=SeventhProviso,
-        description="Seventh-proviso to Section 139(1) declarations. ITR-4 "
-        "FilingStatus field; ignored by ITR-1.",
+        description="Seventh-proviso to Section 139(1) declarations. Shared "
+        "by ITR-4 and ITR-2 (ITR2FilingProfile.seventh_proviso_139 maps to "
+        "this same block's foreignTravelAmount/electricityExpenditureAmount/"
+        "depositAmount fields); ignored by ITR-1.",
+    )
+    # ── Additive ITR-2 fields (ignored by ITR-1/ITR-4) ────────────────────
+    sebiRegistrationNumber: str = Field(
+        default="",
+        description="SEBI FII/FPI registration number, required when isFiiFpi "
+        "is true. ITR-2 only.",
+    )
+    isFiiFpi: bool = Field(
+        default=False,
+        description="Whether the assessee is a Foreign Institutional Investor "
+        "/ Foreign Portfolio Investor. ITR-2 only.",
+    )
+    portugueseCivilCodeApplies: bool = Field(
+        default=False,
+        description="Whether the Portuguese Civil Code (Schedule 5A income "
+        "apportionment) applies to this assessee. ITR-2 only.",
     )
 
 
@@ -1247,6 +1449,25 @@ class PersonalInfo(_StrictModel):
         default=None,
         description="ITR-4 AlternateAddress block. Emitted only when "
         "secondaryAddressDifferent is true.",
+    )
+    # ── Additive ITR-2/3 fields (ignored by ITR-1/ITR-4) ──────────────────
+    residentialStatus: ResidentialStatus = Field(
+        default="ROR",
+        description="ITR-2/3 residential status (ROR/RNOR/NR). Already live on "
+        "the frontend (eligibility.ts); ITR-1 implicitly assumes ROR and "
+        "ignores this field. The ITR-2/3 mapper translates to the CBDT wire "
+        "codes RES/NRI/NOR.",
+    )
+    isDirector: bool = Field(
+        default=False,
+        description="Whether the assessee is a director in a company at any "
+        "time during the year. Already live on the frontend (ClientsPage "
+        "intake, eligibility.ts). ITR-2/3 only.",
+    )
+    holdsUnlistedShares: bool = Field(
+        default=False,
+        description="Whether the assessee held unlisted equity shares at any "
+        "time during the year. Already live on the frontend. ITR-2/3 only.",
     )
 
 
@@ -1341,6 +1562,19 @@ class ReturnDraft(_StrictModel):
     taxReturnPreparer: TaxReturnPreparer = Field(default_factory=TaxReturnPreparer)
     provenance: list[ImportProvenance] = Field(default_factory=list)
     reconciliation: ReconciliationState = Field(default_factory=ReconciliationState)
+    # ── Additive ITR-2/3 fields (ignored by ITR-1/ITR-4) ──────────────────
+    lossesBroughtForward: BroughtForwardLosses = Field(default_factory=BroughtForwardLosses)
+    broughtForwardLossEntries: list[BroughtForwardLossEntry] = Field(default_factory=list)
+    carriedForwardLossEntries: list[CarriedForwardLossEntry] = Field(default_factory=list)
+    foreignSourceIncome: list[ForeignSourceIncomeEntry] = Field(default_factory=list)
+    foreignTaxRelief: list[ForeignTaxReliefEntry] = Field(default_factory=list)
+    foreignAssets: list[ForeignAssetEntry] = Field(default_factory=list)
+    clubbedIncome: list[ClubbedIncomeEntry] = Field(default_factory=list)
+    passThroughIncomeEntries: list[PassThroughIncomeEntry] = Field(default_factory=list)
+    amt: Optional[AMTDetails] = Field(default=None)
+    assetLiability: Optional[AssetLiabilityDetails] = Field(default=None)
+    portugueseCivilCode: Optional[PortugueseCivilCodeDetails] = Field(default=None)
+    esopDeferrals: list[ESOPDeferralEntry] = Field(default_factory=list)
 
 
 def create_empty_draft(assessment_year: str = "", form: ItrForm = "ITR-1", regime: TaxRegime = "new") -> ReturnDraft:
