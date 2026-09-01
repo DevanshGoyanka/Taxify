@@ -33,16 +33,7 @@ later — nothing written only to "pass UAT."
 |---|---|---|---|
 | 0 | Credential-switching mechanism — decision | `app/eri/config.py` (reverted, untouched) | ✅ **Decided 2026-09-01 — see below** |
 | 1 | Generalize the UAT sanity-pack script | `scripts/eri_uat_sanity.py` (new, replaces `scripts/type3_uat_sanity.py`) | ✅ **Delivered 2026-09-01** |
-| 2 | ITR-2 — extend `ReturnDraft` | `app/schemas/return_draft.py` | Not started |
-| 3 | ITR-2 — canonical mapper | `app/engine/draft_to_itr2_input.py` (new) | Not started |
-| 4 | ITR-2 — wire into v2 pipeline | `app/engine/filing_gateway_v2.py` | Not started |
-| 5 | ITR-2 — complete CBDT validators | `app/engine/validators/itr2/input_rules.py`, `calc_rules.py` | Not started |
-| 6 | ITR-2 — draft builder + sanity registration | `audit_itr_coverage.py`, `scripts/eri_uat_sanity.py` | Not started |
-| 7 | ITR-3 — extend `ReturnDraft` | `app/schemas/return_draft.py` | Not started |
-| 8 | ITR-3 — canonical mapper | `app/engine/draft_to_itr3_input.py` (new) | Not started |
-| 9 | ITR-3 — wire into v2 pipeline | `app/engine/filing_gateway_v2.py` | Not started |
-| 10 | ITR-3 — complete CBDT validators | `app/engine/validators/itr3/input_rules.py`, `calc_rules.py` | Not started |
-| 11 | ITR-3 — draft builder + sanity registration | `audit_itr_coverage.py`, `scripts/eri_uat_sanity.py` | Not started |
+| 2–11 | ITR-2 & ITR-3 build (schema, mapper, v2 wiring, validators, draft builder) | see `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` | **Superseded by that doc — tracked there, not here** |
 | 12 | Generate + verify Type-3 UAT pack (ITR-2, ITR-3) | `downloads/type3_uat_sanity/` (output) | Not started |
 | 13 | Generate + verify Type-2 UAT pack (ITR-2, 3, 4) | `downloads/type2_uat_sanity/` (output) | Not started |
 | 14 | ITR-5 — full build (sub-phased on start) | `app/schemas/itr5.py` + calculator + builder + validators | Not started, scoped below |
@@ -160,87 +151,21 @@ ITR-4` (regression check against the already-mailed ITR-1/ITR-4 packs).
 
 ---
 
-## Phase 2 — ITR-2: extend `ReturnDraft`
+## Phases 2–11 — ITR-2 & ITR-3 build
 
-**File:** `app/schemas/return_draft.py` (additive only — ITR-1/ITR-4 fields never touched,
-same rule `ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md` Phase 1 used).
+**Moved.** The full schema/mapper/validator/frontend build for both forms — extend
+`ReturnDraft`, canonical mappers, `filing_gateway_v2.py` wiring, CBDT validator completion,
+frontend wiring, Direct Submit allowlist extension, and legacy-path deletion — is tracked in
+detail in **`Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md`**, verified against
+`Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`'s ground-truth architecture audit. That doc's
+Phases 1–7 (ITR-2) and Phase 8 (ITR-3) are what Phases 2–11 here used to describe at a
+coarser level — this file no longer duplicates that detail.
 
-**What's added:** whatever `ITR2Input` (`app/schemas/itr2.py`, 655 lines) needs that
-`ReturnDraft` doesn't already carry — read against the existing ITR-2 schema field-by-field
-before writing. From the ITR-2 schema types already imported by ITR-3
-(`CG112ATransaction`, `STCG111ATransaction`, `LandBuildingTransaction`, `VDATransaction`,
-`FAEntry`, `SPISpecifiedPersonEntry`, `AMTEntry`, etc. — see `Docs/ARCHITECTURE.md` §5.1),
-the likely additions are: full capital-gains transaction lists, VDA transactions, foreign
-assets (FA), foreign source income (FSI), clubbing (SPI/5A), AMT entries. Exact field list
-finalized when this phase starts (reading `app/schemas/itr2.py` line-by-line against the
-current `ReturnDraft`, not guessed here).
-
-**Tests:** 3 new cases in `tests/test_return_draft_schema.py` (empty ITR-2 draft validates;
-additive fields round-trip; existing ITR-1/ITR-4 drafts still validate — same 3-case pattern
-`ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md` Phase 1 used).
-
-## Phase 3 — ITR-2: canonical mapper
-
-**File:** `app/engine/draft_to_itr2_input.py` (new), mirrors `app/engine/draft_to_itr4_input.py`
-structure exactly: typed `ReturnDraft` → `ITR2Input`, no alias/flat-blob guessing.
-
-**Tests:** `tests/test_draft_to_itr2_input.py` (new) — golden vectors: draft → `ITR2Input` →
-`compute_itr2` (existing calculator, `app/engine/calculators/itr2.py`, unchanged).
-
-## Phase 4 — ITR-2: wire into the v2 pipeline
-
-**File:** `app/engine/filing_gateway_v2.py`. Extends the two dispatch points that currently
-hardcode ITR-1/ITR-4 only:
-- `compute_canonical()` (line ~1202): add `if draft.form == "ITR-2": return compute_canonical_itr2(draft)`.
-- `generate_cbdt_json()` (line ~1248): add `if draft.form == "ITR-2": return _generate_cbdt_json_itr2(draft)`.
-- New `compute_canonical_itr2()` and `_generate_cbdt_json_itr2()`, mirroring
-  `compute_canonical_itr4`/`_generate_cbdt_json_itr4` exactly, including running
-  `run_input_validation` + `run_calc_validation` from `app.engine.validators.itr2` before
-  calling `build_itr2_json` (Phase 5 makes those calls meaningful).
-
-**Tests:** `tests/test_filing_gateway_v2_itr2.py` (new) — parity/smoke tests mirroring
-`tests/test_filing_gateway_v2_itr4.py`.
-
-## Phase 5 — ITR-2: complete the CBDT validator suite
-
-**The critical phase.** `app/engine/validators/itr2/input_rules.py` (365 lines) and
-`calc_rules.py` (260 lines) today cover roughly 15% of what ITR-1's suite covers (4431
-lines). Extended from `Reference Docs by CBDT & ITD/Official Validations/CBDT__e-Filing_ITR
-2_Validation Rules_AY 2026-27_V1.0 (1).pdf`, following the exact `ValidationRule`/Category
-A-B-D/`ValidationReport.can_upload`/`blocking_errors` pattern `itr1/input_rules.py` already
-establishes — no new validation framework, this is filling in an existing one.
-
-**Tests:** extend `tests/test_itr1_input_validation.py`'s ITR-2 analog (new
-`tests/test_itr2_input_validation.py` if it doesn't already meaningfully exist) — one test
-per new rule, known-good and known-bad cases, same pattern as the R145 tests added to ITR-1.
-
-## Phase 6 — ITR-2: draft builder + sanity registration
-
-**Files:** `build_full_itr2_draft()` added to `audit_itr_coverage.py` (mirrors
-`build_full_itr1_draft`/`build_full_itr4_draft`), seeded from the real ITD test-data sheet
-(`Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/Sunit Ramashankar
-Goyanka Test Data 2026*.xlsx`) wherever it has ITR-2 scenarios, synthetic-but-maximal
-elsewhere. Registered into Phase 1's `scripts/eri_uat_sanity.py` form-variant registry.
-
-**Verification:** `python scripts/eri_uat_sanity.py --mode type3 --forms ITR-2` (and
-`--mode type2`) produces a `generated` status with `digest_round_trips: true` and zero
-Category-A validator findings.
-
-## Phase 7–11 — ITR-3: same five phases, applied to ITR-3
-
-Identical shape to Phases 2–6, for ITR-3:
-- Phase 7: extend `ReturnDraft` for ITR-3-specific fields not already covered by the Phase 2
-  additions (PGBP/business schedules per `app/engine/schedules/business.py`, balance sheet,
-  partner-in-firm — `app/schemas/itr3.py` is only 263 lines, the smallest of the four
-  existing schemas, so the gap analysis here is the fastest of the two Track A forms).
-- Phase 8: `app/engine/draft_to_itr3_input.py` (new).
-- Phase 9: wire `compute_canonical_itr3`/`_generate_cbdt_json_itr3` into
-  `filing_gateway_v2.py`.
-- Phase 10: **the largest single phase in Track A.** `app/engine/validators/itr3/` is 57
-  lines total today — essentially unimplemented (a stub, not a partial suite like ITR-2's).
-  Built from `Reference Docs by CBDT & ITD/Official Validations/CBDT_e-filing_ITR-3_Validation
-  Rules_V1.0_AY 26-27 (1).pdf` from near-zero, same pattern as Phase 5.
-- Phase 11: `build_full_itr3_draft()` + sanity-script registration.
+Once that doc's Phase 6 (ITR-2 draft builder equivalent) and Phase 8 (ITR-3) land, come back
+here for the draft-builder-to-sanity-script registration step
+(`build_full_itr2_draft()`/`build_full_itr3_draft()` in `audit_itr_coverage.py`, seeded from
+the real ITD test-data sheet where it has matching scenarios, registered into
+`scripts/eri_uat_sanity.py`'s form-variant registry) and Phases 12–13 below.
 
 ## Phase 12 — Generate + verify the Type-3 UAT pack (ITR-2, ITR-3)
 
