@@ -381,10 +381,29 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
         )
     try:
         typed_input, breakdown = draft_to_itr1_input(draft)
+        profiles = _property_profiles(draft)
+        filing_profile = _filing_profile(draft)
+        tax_return_preparer = _itr1_tax_return_preparer(draft)
+        filing_profile = filing_profile.model_copy(update={
+            "bank_accounts": typed_input.bank_accounts,
+            "tax_return_preparer": tax_return_preparer,
+        })
+        typed_input = typed_input.model_copy(update={
+            "filing_profile": filing_profile,
+            "property_profile": profiles[0],
+            "property_profiles": profiles,
+            "tax_return_preparer": tax_return_preparer,
+        })
         result = compute_itr1(typed_input)
+    except FilingGatewayV2Error:
+        raise
     except (DraftMappingError, ValidationError, ValueError) as exc:
         logger.debug("compute_canonical_itr1 REJECT mapping/compute error: %s", exc)
-        raise FilingGatewayV2Error("ITR-1 mapping or computation failed.", [str(exc)]) from exc
+        errors = getattr(exc, "errors", None) or [str(exc)]
+        raise FilingGatewayV2Error(
+            "ITR-1 mapping or computation failed.",
+            errors,
+        ) from exc
     if result.errors:
         logger.debug("compute_canonical_itr1 REJECT result.errors=%s", result.errors)
         raise FilingGatewayV2Error(
@@ -1818,13 +1837,7 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
 def _generate_cbdt_json_itr1(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, Any]]:
     """ITR-1 official JSON generation (the original generate_cbdt_json body)."""
     pipeline = compute_canonical_itr1(draft)
-    profiles = _property_profiles(draft)
-    typed_input = pipeline.typed_input.model_copy(update={
-        "filing_profile": _filing_profile(draft),
-        "property_profile": profiles[0],
-        "property_profiles": profiles,
-        "tax_return_preparer": _itr1_tax_return_preparer(draft),
-    })
+    typed_input = pipeline.typed_input
 
     from app.engine.validators.itr1 import (
         run_input_validation,

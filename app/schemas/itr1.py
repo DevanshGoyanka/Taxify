@@ -1080,6 +1080,8 @@ class ITR1Input(BaseModel):
             "backward-compatible single-property callers."
         ),
     )
+    # Deprecated compatibility projection. Canonical ITR-1 preparation stores
+    # the same value on filing_profile.tax_return_preparer.
     tax_return_preparer: Optional["TaxReturnPreparer"] = None
 
     @model_validator(mode="after")
@@ -1436,7 +1438,11 @@ class ITR1FilingProfile(BaseModel):
     # Form 10-IEA acknowledgement when the assessee opts out of the new
     # regime via Form 10-IEA.  Empty string → emitted as "N" / omitted.
     form_10iea_acknowledgement: str = Field(default="", max_length=25)
-    form_10iea_date: Optional[date] = None
+    # Taxpayer-level filing data owned by the canonical personal profile.
+    # These fields are projected into the separate CBDT Refund and
+    # TaxReturnPreparer wire blocks by the JSON builder.
+    bank_accounts: List["BankAccount"] = Field(default_factory=list)
+    tax_return_preparer: Optional["TaxReturnPreparer"] = None
 
     @model_validator(mode="after")
     def validate_opt_out_requires_form_10iea(self) -> "ITR1FilingProfile":

@@ -66,6 +66,26 @@ def _filing_ready_draft() -> ReturnDraft:
     return draft
 
 
+def test_itr1_compute_prepares_profile_before_calculation() -> None:
+    """Compute receives the complete profile, bank accounts, and TRP data."""
+    draft = _filing_ready_draft()
+    draft.taxReturnPreparer.used = True
+    draft.taxReturnPreparer.identificationNumber = "123456"
+    draft.taxReturnPreparer.name = "Registered Tax Preparer"
+    draft.taxReturnPreparer.reimbursementFromGovernment = Decimal("750")
+
+    pipeline = gateway.compute_canonical_itr1(draft)
+    profile = pipeline.typed_input.filing_profile
+
+    assert profile is not None
+    assert profile.pan == draft.personal.pan
+    assert profile.verification_place == draft.verification.place
+    assert profile.bank_accounts == pipeline.typed_input.bank_accounts
+    assert profile.tax_return_preparer is not None
+    assert profile.tax_return_preparer.identification_number == "123456"
+    assert pipeline.typed_input.property_profiles
+
+
 def test_itr1_rejects_itr4_only_verification_capacity() -> None:
     """ITR-1 must not silently map Karta or Partner verification to Self."""
     draft = _filing_ready_draft()

@@ -27,16 +27,17 @@ function makeFacts(overrides: Partial<EligibilityFacts> = {}): EligibilityFacts 
 }
 
 describe('SCHEDULE_REGISTRY', () => {
-  it('has every official schedule for ITR-1', () => {
+  it('hides the requested personal and income schedules for ITR-1', () => {
     const ids = schedulesForForm('ITR-1').map(s => s.id);
-    expect(ids).toContain('PersonalInfo');
-    expect(ids).toContain('FilingStatus');
-    expect(ids).toContain('ScheduleS');
-    expect(ids).toContain('ScheduleHP');
-    expect(ids).toContain('ScheduleOS');
-    expect(ids).toContain('LTCG112A');
-    expect(ids).toContain('Verification');
-    // Should NOT contain ITR-2/3-only schedules
+    expect(ids).not.toContain('PersonalInfo');
+    expect(ids).not.toContain('FilingStatus');
+    expect(ids).not.toContain('ScheduleS');
+    expect(ids).not.toContain('ScheduleHP');
+    expect(ids).not.toContain('ScheduleOS');
+    expect(ids).not.toContain('ScheduleEI');
+    expect(ids).not.toContain('LTCG112A');
+    expect(ids).not.toContain('Verification');
+    expect(ids).toContain('TaxReturnPreparer');
     expect(ids).not.toContain('ScheduleCGFor23');
     expect(ids).not.toContain('ITR3ScheduleBP');
   });
@@ -79,7 +80,7 @@ describe('SCHEDULE_REGISTRY', () => {
     const s = getSchedule('ScheduleS');
     expect(s).toBeDefined();
     expect(s!.id).toBe('ScheduleS');
-    expect(s!.forms).toContain('ITR-1');
+    expect(s!.forms).not.toContain('ITR-1');
   });
 
   it('getSchedule returns undefined for unknown IDs', () => {
@@ -91,11 +92,10 @@ describe('activeSchedules', () => {
   it('returns required and available schedules for ITR-1 simple salary case', () => {
     const active = activeSchedules('ITR-1', makeFacts());
     const ids = active.map(a => a.schedule.id);
-    expect(ids).toContain('PersonalInfo');
-    expect(ids).toContain('FilingStatus');
-    expect(ids).toContain('ScheduleS'); // salary is present
-    expect(ids).toContain('Verification');
-    // ScheduleBP should NOT appear for ITR-1
+    expect(ids).not.toContain('ScheduleS');
+    expect(ids).not.toContain('PersonalInfo');
+    expect(ids).not.toContain('FilingStatus');
+    expect(ids).not.toContain('Verification');
     expect(ids).not.toContain('ScheduleBP');
   });
 
@@ -125,14 +125,11 @@ describe('activeSchedules', () => {
 });
 
 describe('blockingSchedules', () => {
-  it('returns Verification and FilingStatus as blockers for ITR-1 (always required, missing/partial)', () => {
+  it('returns no ITR-1 blockers after requested schedules are removed', () => {
     const blocking = blockingSchedules('ITR-1', makeFacts());
     const ids = blocking.map(s => s.id);
-    // Verification is always required and currently 'missing' — that's a blocker.
-    expect(ids).toContain('Verification');
-    // FilingStatus is always required and currently 'partial' — that's a blocker.
-    expect(ids).toContain('FilingStatus');
-    // ScheduleHP, ScheduleOS, LTCG112A are optional for ITR-1 — NOT blockers.
+    expect(ids).not.toContain('Verification');
+    expect(ids).not.toContain('FilingStatus');
     expect(ids).not.toContain('ScheduleHP');
     expect(ids).not.toContain('ScheduleOS');
     expect(ids).not.toContain('LTCG112A');

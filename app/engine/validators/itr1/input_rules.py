@@ -153,20 +153,24 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     ))
 
     # R099: a claimed TDS2/TDS3/TCS credit must identify its deduction year.
-    for schedule_name, entries, claim_field in (
-        ("tds2_entries", inp.tds2_entries or [], "tds_claimed_this_year"),
-        ("tds3_entries", inp.tds3_entries or [], "tds_claimed_this_year"),
-        ("tcs_entries", inp.tcs_entries or [], "tcs_credit_claimed"),
+    # TDS3 uses the canonical fields ``tds_claimed`` and ``deducted_yr``;
+    # unlike TDS2/TCS it does not expose ``tds_claimed_this_year`` or
+    # ``financial_year``. Keep the schedule-specific field names here so a
+    # claimed TDS3 row cannot bypass this rule through getattr defaults.
+    for schedule_name, entries, claim_field, year_field in (
+        ("tds2_entries", inp.tds2_entries or [], "tds_claimed_this_year", "financial_year"),
+        ("tds3_entries", inp.tds3_entries or [], "tds_claimed", "deducted_yr"),
+        ("tcs_entries", inp.tcs_entries or [], "tcs_credit_claimed", "financial_year"),
     ):
         for index, entry in enumerate(entries):
             claim = getattr(entry, claim_field, _z)
-            year = getattr(entry, "financial_year", None)
-            if claim > _z and (not year or year in {"0", "0000-00"}):
+            year = getattr(entry, year_field, None)
+            if claim > _z and (not year or str(year) in {"0", "0000", "0000-00"}):
                 results.append(_make(
                     "ITR1-R099",
                     False,
-                    f"{schedule_name} row {index + 1}: financial year is mandatory when tax credit is claimed.",
-                    f"{schedule_name}[{index}].financial_year",
+                    f"{schedule_name} row {index + 1}: deduction year is mandatory when tax credit is claimed.",
+                    f"{schedule_name}[{index}].{year_field}",
                 ))
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -2598,8 +2602,10 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # ========================================================================
 
     if is_new:
-        # Rule 148: Transport allowance only for VIsually Imaired (cap Rs 38,400)
-        if sal.transport_allowance > 0:
+        # Rule 148: Transport allowance is capped at Rs 38,400 under the
+        # new-regime rule; valid amounts at or below the statutory cap must
+        # not be rejected merely because they are positive.
+        if sal.transport_allowance > Decimal("38400"):
             results.append(_make(
                 "ITR1-R148", False,
                 f"Transport allowance of Rs {sal.transport_allowance} claimed under "
@@ -2608,8 +2614,10 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "salary_income.transport_allowance",
             ))
 
-        # Rule 149: LTA and HRA not available in new regime
-        if sal.lta_amount_received > _z or sal.lta_exempt_amount > _z:
+        # Rule 149: LTA exemption is not available in the new regime. Merely
+        # receiving taxable LTA does not constitute an exemption claim; only
+        # a positive exempt amount should trigger this blocking rule.
+        if sal.lta_exempt_amount > _z:
             results.append(_make(
                 "ITR1-R149", False,
                 f"LTA exemption claimed under new regime. LTA (Sec 10(5)) is not "

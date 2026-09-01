@@ -17,6 +17,7 @@ from app.schemas.itr1 import (
     SpecifiedDisease80DDB, Schedule80CEntry, Schedule80EEntry, Schedule80DD,
     Schedule80U, DisabilitySeverity, DependentRelationship,
     EducationLoanLenderType,
+    TDS3Entry,
 )
 from app.engine.validators.itr1.input_rules import validate_itr1_input
 from app.engine.validators.base import Severity
@@ -156,9 +157,31 @@ def test_R145_all_zero_breakup_is_warning_not_block():
     assert r145.severity == Severity.B
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 80C / 80CCC / 80CCD(1) Combined Limits
-# ═══════════════════════════════════════════════════════════════════════════════
+def test_R099_tds3_claim_requires_deducted_year():
+    """A claimed TDS3 credit without a deduction year must be blocked."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        tds3_entries=[TDS3Entry.model_construct(
+            tenant_pan="ABCDE1234F",
+            tenant_name="Tenant",
+            gross_receipt=Decimal("100000"),
+            tds_deducted=Decimal("10000"),
+            tds_claimed=Decimal("10000"),
+            tds_section="194IB",
+            deducted_yr="",
+        )],
+    )
+
+    results = validate_itr1_input(inp)
+
+    assert failed(results, "ITR1-R099")
+
+
 
 def test_R001_80c_combined_exceeds_150k_old_regime():
     """Rule 1: 80C+80CCC+80CCD(1) > Rs 1,50,000 in old regime is blocked."""
@@ -1277,19 +1300,56 @@ def test_R105_transport_allowance_exceeds_max():
     assert failed(results, "ITR1-R105")
 
 
+def test_R148_new_regime_transport_allowance_at_or_below_cap_is_allowed():
+    """Transport allowance up to Rs 38,400 must not trigger R148."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("500000"),
+            transport_allowance=Decimal("38400"),
+        ),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R148")
+
+
 def test_R107_lta_exempt_exceeds_received():
     inp = ITR1Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
-        salary_income=SalaryIncome(gross_salary=Decimal("500000"),
-                                    lta_amount_received=Decimal("20000"),
-                                    lta_exempt_amount=Decimal("30000")),
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("500000"),
+            lta_amount_received=Decimal("20000"),
+            lta_exempt_amount=Decimal("30000"),
+        ),
         house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
         other_sources_income=OtherSourcesIncome(),
         deductions_chapter6a=Chapter6ADeductions(),
     )
     results = validate_itr1_input(inp)
     assert failed(results, "ITR1-R107")
+
+
+def test_R149_new_regime_taxable_lta_receipt_is_allowed():
+    """Receiving LTA without claiming exemption must not trigger R149."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("500000"),
+            lta_amount_received=Decimal("25000"),
+            lta_exempt_amount=Decimal("0"),
+        ),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R149")
 
 
 def test_R108_new_regime_gratuity_disallowed():

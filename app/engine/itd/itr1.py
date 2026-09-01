@@ -26,6 +26,7 @@ from app.engine.schedules.deductions.section_80ggc import Section80GGCResult
 from app.engine.schedules.deductions.section_80c import Section80CResult
 from app.engine.schedules.deductions._loan_common import LoanDeductionResult
 from app.schemas.itr1 import (
+    BankAccount,
     BankAccountType,
     FilingAddress,
     ITR1FilingProfile,
@@ -699,6 +700,25 @@ def _bank_row(
         "AccountType": account_type,
         "UseForRefund": "true" if use_for_refund else "false",
     }
+
+
+def _bank_accounts_from_accounts(accounts: list[BankAccount]) -> list[dict[str, Any]]:
+    """Serialize canonical-profile bank accounts to official ITR-1 rows."""
+    primary_count = sum(account.is_primary for account in accounts)
+    if primary_count != 1:
+        raise ValueError("Exactly one bank account must be selected for refund")
+    rows: list[dict[str, Any]] = []
+    for account in accounts:
+        if not account.bank_name:
+            raise ValueError("Every bank account requires bank_name for ITD JSON")
+        rows.append(_bank_row(
+            ifsc=account.ifsc_code,
+            bank_name=account.bank_name,
+            account_number=account.account_number,
+            account_type=BankAccountType(account.account_type).itd_code,
+            use_for_refund=account.is_primary,
+        ))
+    return rows
 
 
 def _bank_accounts_from_input(input_data: ITR1Input) -> list[dict[str, Any]]:
@@ -1771,7 +1791,11 @@ def build_itr1_json(
     )
 
     if input_data is not None:
-        bank_rows = _bank_accounts_from_input(input_data)
+        profile = input_data.filing_profile
+        if profile is not None and profile.bank_accounts:
+            bank_rows = _bank_accounts_from_accounts(profile.bank_accounts)
+        else:
+            bank_rows = _bank_accounts_from_input(input_data)
     elif bank_name and account_no and ifsc:
         bank_rows = [_bank_row(
             ifsc=ifsc,
@@ -1798,8 +1822,15 @@ def build_itr1_json(
         "Verification": ver,
     }
 
-    if input_data is not None and input_data.tax_return_preparer is not None:
-        itr1["TaxReturnPreparer"] = _tax_return_preparer(input_data.tax_return_preparer)
+    if input_data is not None:
+        profile = input_data.filing_profile
+        preparer = (
+            profile.tax_return_preparer
+            if profile is not None and profile.tax_return_preparer is not None
+            else input_data.tax_return_preparer
+        )
+        if preparer is not None:
+            itr1["TaxReturnPreparer"] = _tax_return_preparer(preparer)
 
     if input_data is not None:
         details_80c = ded_sched.section_details.get("80C") if ded_sched else None

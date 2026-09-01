@@ -100,9 +100,20 @@ def _resolve_client_id(raw: Optional[str], db: Session, current_user: User) -> O
     return client.id if client else None
 
 
+def _require_client_id(raw: Optional[str], db: Session, current_user: User) -> int:
+    """Resolve a required user-owned client identifier for persisted imports."""
+    client_id = _resolve_client_id(raw, db, current_user)
+    if client_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="A valid clientId belonging to the authenticated user is required for imports.",
+        )
+    return client_id
+
+
 def _upsert_imported_document(
     db: Session,
-    client_id: Optional[int],
+    client_id: int,
     user_id: int,
     assessment_year: str,
     document_type: str,
@@ -186,7 +197,7 @@ async def parse_reconcile(
     """
     parsers = _load_parsers()
     ay = assessmentYear or ""
-    client_db_id = _resolve_client_id(clientId, db, current_user)
+    client_db_id = _require_client_id(clientId, db, current_user)
 
     parsed: dict[str, Any] = {}
     raw_blobs: dict[str, bytes] = {}
