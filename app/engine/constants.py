@@ -75,8 +75,11 @@ CHILDREN_EDUCATION_MAX_CHILDREN: Final[int] = 2
 HOSTEL_ALLOWANCE_LIMIT: Final[Decimal] = Decimal("3600")
 HOSTEL_ALLOWANCE_PER_CHILD: Final[Decimal] = Decimal("300")
 
-# Sec 10(10A) — Commuted pension: 1/3rd non-commuted portion for non-govt.
-COMMUTED_PENSION_NON_GOV_T_PCT: Final[Decimal] = Decimal("1") / Decimal("3")
+# Sec 10(10A) — Commuted pension, non-govt: 1/3rd if gratuity is also
+# received, 1/2 if not (a higher, more generous fraction when there is no
+# separate gratuity payout to rely on).
+COMMUTED_PENSION_WITH_GRATUITY_PCT: Final[Decimal] = Decimal("1") / Decimal("3")
+COMMUTED_PENSION_WITHOUT_GRATUITY_PCT: Final[Decimal] = Decimal("1") / Decimal("2")
 
 # Sec 10(10) — Gratuity, non-govt, employees NOT covered under the Payment of
 # Gratuity Act 1972: half a month's average salary (last 10 months) per

@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import { INR } from '../utils/formatters';
+import { IndianNumberInput } from '../components/IndianNumberInput';
 import ScheduleOSWorkspace from '../components/othersources/ScheduleOSWorkspace';
 import DeductionsWorkspace from '../components/deductions/DeductionsWorkspace';
 import type { ReturnDraft } from '../domain/returns/types';
@@ -616,10 +617,10 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
                     <div><label style={labelStyle}>TCS Credit Owner</label><select style={inputStyle} value={entry.tcsCreditOwner || '1'} onChange={(e) => updateTDSEntry(index, 'tcsCreditOwner', e.target.value as '1' | '2')}><option value="1">1 — Self</option><option value="2">2 — Spouse / Other Person</option></select></div>
                     <div><label style={labelStyle}>PAN of Spouse / Other</label><input style={inputStyle} type="text" maxLength={10} value={entry.panOfSpouseOrOthrPrsn || ''} onChange={(e) => updateTDSEntry(index, 'panOfSpouseOrOthrPrsn', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))} placeholder="ABCDE1234F" /></div>
-                    <div><label style={labelStyle}>TCS Collected (own)</label><input style={inputStyle} type="number" min={0} value={entry.tcsAmtCollOwnHand || ''} onChange={(e) => updateTDSEntry(index, 'tcsAmtCollOwnHand', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
-                    <div><label style={labelStyle}>TCS Collected (spouse/other)</label><input style={inputStyle} type="number" min={0} value={entry.tcsAmtCollSpouseOrOthrHand || ''} onChange={(e) => updateTDSEntry(index, 'tcsAmtCollSpouseOrOthrHand', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
-                    <div><label style={labelStyle}>TCS Claimed (own)</label><input style={inputStyle} type="number" min={0} value={entry.tcsClaimedAmtCollOwnHand || ''} onChange={(e) => updateTDSEntry(index, 'tcsClaimedAmtCollOwnHand', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
-                    <div><label style={labelStyle}>TCS Claimed (spouse/other)</label><input style={inputStyle} type="number" min={0} value={entry.tcsClaimedAmtCollSpouseOrOthrHand || ''} onChange={(e) => updateTDSEntry(index, 'tcsClaimedAmtCollSpouseOrOthrHand', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>TCS Collected (own)</label><IndianNumberInput style={inputStyle} value={entry.tcsAmtCollOwnHand || 0} onChange={(v) => updateTDSEntry(index, 'tcsAmtCollOwnHand', v)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>TCS Collected (spouse/other)</label><IndianNumberInput style={inputStyle} value={entry.tcsAmtCollSpouseOrOthrHand || 0} onChange={(v) => updateTDSEntry(index, 'tcsAmtCollSpouseOrOthrHand', v)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>TCS Claimed (own)</label><IndianNumberInput style={inputStyle} value={entry.tcsClaimedAmtCollOwnHand || 0} onChange={(v) => updateTDSEntry(index, 'tcsClaimedAmtCollOwnHand', v)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>TCS Claimed (spouse/other)</label><IndianNumberInput style={inputStyle} value={entry.tcsClaimedAmtCollSpouseOrOthrHand || 0} onChange={(v) => updateTDSEntry(index, 'tcsClaimedAmtCollSpouseOrOthrHand', v)} placeholder="0" /></div>
                   </div>
                 </div>
               );
@@ -630,11 +631,11 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
                     <div><label style={labelStyle}>Name of Tenant / Buyer *</label><input style={inputStyle} type="text" maxLength={125} value={entry.nameOfTenant || ''} onChange={(e) => updateTDSEntry(index, 'nameOfTenant', e.target.value)} placeholder="Tenant / buyer name" /></div>
                     <div><label style={labelStyle}>PAN of Tenant / Buyer</label><input style={inputStyle} type="text" maxLength={10} value={entry.panOfTenant || ''} onChange={(e) => updateTDSEntry(index, 'panOfTenant', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))} placeholder="ABCDE1234F" /></div>
                     <div><label style={labelStyle}>Aadhaar of Tenant / Buyer</label><input style={inputStyle} type="text" maxLength={12} inputMode="numeric" value={entry.aadhaarOfTenant || ''} onChange={(e) => updateTDSEntry(index, 'aadhaarOfTenant', e.target.value.replace(/\D/g, '').slice(0, 12))} placeholder="12-digit Aadhaar" /></div>
-                    <div><label style={labelStyle}>Gross Receipt to Tax Deduct (₹)</label><input style={inputStyle} type="number" min={0} value={entry.grsRcptToTaxDeduct || ''} onChange={(e) => updateTDSEntry(index, 'grsRcptToTaxDeduct', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
-                    <div><label style={labelStyle}>TDS Claimed (₹)</label><input style={inputStyle} type="number" min={0} value={entry.tdsClaimed || ''} onChange={(e) => updateTDSEntry(index, 'tdsClaimed', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Gross Receipt to Tax Deduct (₹)</label><IndianNumberInput style={inputStyle} value={entry.grsRcptToTaxDeduct || 0} onChange={(v) => updateTDSEntry(index, 'grsRcptToTaxDeduct', v)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>TDS Claimed (₹)</label><IndianNumberInput style={inputStyle} value={entry.tdsClaimed || 0} onChange={(v) => updateTDSEntry(index, 'tdsClaimed', v)} placeholder="0" /></div>
                     <div><label style={labelStyle}>Head of Income</label><select style={inputStyle} value={entry.headOfIncome || 'NA'} onChange={(e) => updateTDSEntry(index, 'headOfIncome', e.target.value as 'HP' | 'CG' | 'OS' | 'BP' | 'EI' | 'NA')}><option value="NA">NA — Not Applicable</option><option value="HP">HP — House Property</option><option value="CG">CG — Capital Gains</option><option value="OS">OS — Other Sources</option><option value="BP">BP — Business/Profession</option><option value="EI">EI — Exempt Income</option></select></div>
-                    <div><label style={labelStyle}>Brought-fwd TDS Amt (₹)</label><input style={inputStyle} type="number" min={0} value={entry.broughtFwdTDSAmt || ''} onChange={(e) => updateTDSEntry(index, 'broughtFwdTDSAmt', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
-                    <div><label style={labelStyle}>Carried-fwd TDS Amt (₹)</label><input style={inputStyle} type="number" min={0} value={entry.amtCarriedFwd || ''} onChange={(e) => updateTDSEntry(index, 'amtCarriedFwd', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Brought-fwd TDS Amt (₹)</label><IndianNumberInput style={inputStyle} value={entry.broughtFwdTDSAmt || 0} onChange={(v) => updateTDSEntry(index, 'broughtFwdTDSAmt', v)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Carried-fwd TDS Amt (₹)</label><IndianNumberInput style={inputStyle} value={entry.amtCarriedFwd || 0} onChange={(v) => updateTDSEntry(index, 'amtCarriedFwd', v)} placeholder="0" /></div>
                   </div>
                 </div>
               );
@@ -646,9 +647,9 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
                     <div><label style={labelStyle}>PAN of Other Person</label><input style={inputStyle} type="text" maxLength={10} value={entry.panOfOtherPerson || ''} onChange={(e) => updateTDSEntry(index, 'panOfOtherPerson', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))} placeholder="ABCDE1234F" /></div>
                     <div><label style={labelStyle}>Aadhaar of Other Person</label><input style={inputStyle} type="text" maxLength={12} inputMode="numeric" value={entry.aadhaarOfOtherPerson || ''} onChange={(e) => updateTDSEntry(index, 'aadhaarOfOtherPerson', e.target.value.replace(/\D/g, '').slice(0, 12))} placeholder="12-digit Aadhaar" /></div>
                     <div><label style={labelStyle}>Head of Income</label><select style={inputStyle} value={entry.headOfIncome || 'NA'} onChange={(e) => updateTDSEntry(index, 'headOfIncome', e.target.value as 'HP' | 'CG' | 'OS' | 'BP' | 'EI' | 'NA')}><option value="NA">NA — Not Applicable</option><option value="HP">HP — House Property</option><option value="CG">CG — Capital Gains</option><option value="OS">OS — Other Sources</option><option value="BP">BP — Business/Profession</option><option value="EI">EI — Exempt Income</option></select></div>
-                    <div><label style={labelStyle}>Brought-fwd TDS Amt (₹)</label><input style={inputStyle} type="number" min={0} value={entry.broughtFwdTDSAmt || ''} onChange={(e) => updateTDSEntry(index, 'broughtFwdTDSAmt', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
-                    <div><label style={labelStyle}>Carried-fwd TDS Amt (₹)</label><input style={inputStyle} type="number" min={0} value={entry.amtCarriedFwd || ''} onChange={(e) => updateTDSEntry(index, 'amtCarriedFwd', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
-                    <div><label style={labelStyle}>Claim out of Total TDS (₹)</label><input style={inputStyle} type="number" min={0} value={entry.claimOutOfTotTDSOnAmtPaid || ''} onChange={(e) => updateTDSEntry(index, 'claimOutOfTotTDSOnAmtPaid', parseFloat(e.target.value) || 0)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Brought-fwd TDS Amt (₹)</label><IndianNumberInput style={inputStyle} value={entry.broughtFwdTDSAmt || 0} onChange={(v) => updateTDSEntry(index, 'broughtFwdTDSAmt', v)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Carried-fwd TDS Amt (₹)</label><IndianNumberInput style={inputStyle} value={entry.amtCarriedFwd || 0} onChange={(v) => updateTDSEntry(index, 'amtCarriedFwd', v)} placeholder="0" /></div>
+                    <div><label style={labelStyle}>Claim out of Total TDS (₹)</label><IndianNumberInput style={inputStyle} value={entry.claimOutOfTotTDSOnAmtPaid || 0} onChange={(v) => updateTDSEntry(index, 'claimOutOfTotTDSOnAmtPaid', v)} placeholder="0" /></div>
                   </div>
                 </div>
               );
@@ -748,11 +749,11 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontSize: 11, fontWeight: 600 }}>Amount (₹) *</label>
-              <input type="number" value={entry.amount || ''} onChange={(e) => {
+              <IndianNumberInput value={entry.amount || 0} onChange={(v) => {
                 const updated = [...(advanceTaxEntries)];
-                updated[index] = { ...updated[index], amount: parseFloat(e.target.value) || 0 };
+                updated[index] = { ...updated[index], amount: v };
                 managers.advanceTax(updated);
-              }} placeholder="0" min={0} style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontWeight: 600 }} />
+              }} placeholder="0" style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontWeight: 600 }} />
             </div>
           </div>
         </div>

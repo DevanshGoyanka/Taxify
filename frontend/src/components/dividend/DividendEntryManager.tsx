@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import type { DividendSection } from '../../types/scheduleOS';
+import { IndianNumberInput } from '../IndianNumberInput';
 
 interface DividendEntryCompat {
   id?: string;
@@ -120,14 +121,14 @@ export function DividendEntryManager({ entries = [], onChange }: DividendEntryMa
                         style={{ flex: 3, minWidth: 200, padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
                         <span style={{ fontSize: 10, color: '#888' }}>₹</span>
-                        <input type="number" value={getAmount(entry) || ''} 
-                          onChange={(e) => updateEntry(entry.id!, { grossAmount: parseFloat(e.target.value) || 0 })}
+                        <IndianNumberInput value={getAmount(entry) || 0}
+                          onChange={(v) => updateEntry(entry.id!, { grossAmount: v })}
                           style={{ width: '100%', padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
                         <span style={{ fontSize: 10, color: '#888' }}>TDS ₹</span>
-                        <input type="number" value={entry.tdsDeducted || ''}
-                          onChange={(e) => updateEntry(entry.id!, { tdsDeducted: parseFloat(e.target.value) || 0 })}
+                        <IndianNumberInput value={entry.tdsDeducted || 0}
+                          onChange={(v) => updateEntry(entry.id!, { tdsDeducted: v })}
                           style={{ width: '100%', padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                       </div>
                       <button onClick={() => removeEntry(entry.id!)} style={{ padding: '2px 8px', fontSize: 12, border: 'none', borderRadius: 3, color: '#999', background: 'transparent', cursor: 'pointer' }}>✕</button>

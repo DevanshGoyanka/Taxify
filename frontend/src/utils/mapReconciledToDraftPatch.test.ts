@@ -20,7 +20,6 @@ describe('mapReconciledToDraftPatch', () => {
       tdsDeducted: 10,
       natureOfEmployment: 'OTH',
       employerAddress: '',
-      salaryNatureRows: [],
       isDomesticTravel: true,
     });
     expect(patch.otherSources?.interest?.[0]).toMatchObject({ kind: 'TERM_DEPOSIT', grossAmount: 200 });

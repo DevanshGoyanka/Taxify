@@ -33,7 +33,8 @@ from app.engine.constants import (
     CHILDREN_EDUCATION_MAX_CHILDREN,
     HOSTEL_ALLOWANCE_LIMIT,
     HOSTEL_ALLOWANCE_PER_CHILD,
-    COMMUTED_PENSION_NON_GOV_T_PCT,
+    COMMUTED_PENSION_WITH_GRATUITY_PCT,
+    COMMUTED_PENSION_WITHOUT_GRATUITY_PCT,
     GRATUITY_NON_COVERED_SALARY_MULTIPLE,
     LEAVE_ENCASHMENT_MAX_DAYS_PER_YEAR,
     LEAVE_ENCASHMENT_MAX_MONTHS_AVERAGE_SALARY,
@@ -125,11 +126,20 @@ def _exempt_vrs(received: Decimal) -> Decimal:
     return min(max(_ZERO, received), VRS_COMPENSATION_EXEMPTION_LIMIT)
 
 
-def _exempt_commutted_pension(received: Decimal, is_govt: bool) -> Decimal:
-    """Exempt commuted pension u/s 10(10A): govt fully; others — 1/3rd of value."""
+def _exempt_commutted_pension(
+    received: Decimal, is_govt: bool, gratuity_also_received: bool = True,
+) -> Decimal:
+    """Exempt commuted pension u/s 10(10A): govt fully exempt.
+
+    Non-govt: 1/3rd of value if gratuity is also received, 1/2 if not.
+    Defaults to the gratuity-received (1/3rd, lower) fraction when the
+    caller does not specify -- the conservative choice, matching this
+    module's "never over-grant an exemption" convention.
+    """
     if is_govt:
         return max(_ZERO, received)
-    return max(_ZERO, received) * COMMUTED_PENSION_NON_GOV_T_PCT
+    pct = COMMUTED_PENSION_WITH_GRATUITY_PCT if gratuity_also_received else COMMUTED_PENSION_WITHOUT_GRATUITY_PCT
+    return max(_ZERO, received) * pct
 
 
 def _exempt_transport(allowance: Decimal, is_disabled: bool) -> Decimal:
@@ -199,6 +209,7 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
     )
     commuted_pension_exempt = _exempt_commutted_pension(
         input_data.commuted_pension_received, is_govt,
+        input_data.is_gratuity_also_received,
     )
     vrs_exempt = _exempt_vrs(input_data.vrs_compensation)
     # Retrenchment compensation uses the same Rs 5L ceiling as VRS (10(10C)).

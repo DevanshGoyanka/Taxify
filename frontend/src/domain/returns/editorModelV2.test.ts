@@ -31,15 +31,15 @@ function employer(): Employer {
   return {
     id: 'employer-1', customEmployerName: '', employerName: 'Acme', employerTAN: '', natureOfEmployment: 'OTH',
     employerAddress: '', employerCity: '', employerStateCode: '', employerPinCode: '', employerZipCode: '',
-    salaryNatureRows: [], perquisiteNatureRows: [], section10ExemptionRows: [],
+    section10ExemptionRows: [],
     basic: 100, da: 0, commission: 0, hra: 0, bonus: 0, allowances: 0, lta: 0,
     otherAllowance: 0, arrearSalary: 0, perquisites: 0, profitsInLieu: 0, rentPaid: 0,
     city: '', isMetroCity: false, isGovernmentEmployee: false, isDisabledEmployee: false,
     commutedPension: 0, gratuity: 0, leaveEncashment: 0, averageMonthlySalary: 0, yearsOfService: 0,
-    unavailedLeaveDays: 0, actualLtaFare: 0, isDomesticTravel: true, journeysInBlock: 0, ltaExempt: 0,
+    unavailedLeaveDays: 0, actualLtaFare: 0, isDomesticTravel: true, journeysInBlock: 0,
     numberOfChildren: 0, gratuityAlsoReceived: false, transportAllowance: 0, childrenEducationAllowance: 0,
     hostelExpenditureAllowance: 0, uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
-    vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0, tdsDeducted: 0,
+    vrsCompensation: 0, retrenchmentCompensation: 0, tdsDeducted: 0,
   };
 }
 

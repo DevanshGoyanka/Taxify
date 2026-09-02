@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { GiftEntry, GiftPropertyType } from '../../types/scheduleOS';
+import { IndianNumberInput } from '../IndianNumberInput';
 
 interface GiftPropertyManagerProps {
   entries: GiftEntry[];
@@ -70,8 +71,8 @@ export function GiftPropertyManager({ entries = [], onChange }: GiftPropertyMana
                   style={{ flex: 2, minWidth: 140, padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
                   <span style={{ fontSize: 10, color: '#888' }}>₹</span>
-                  <input type="number" value={entry.value || ''}
-                    onChange={(e) => updateEntry(entry.id, { value: parseFloat(e.target.value) || 0 })}
+                  <IndianNumberInput value={entry.value || 0}
+                    onChange={(v) => updateEntry(entry.id, { value: v })}
                     placeholder="Value"
                     style={{ width: '100%', padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                 </div>

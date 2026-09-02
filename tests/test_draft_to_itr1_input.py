@@ -468,6 +468,41 @@ def test_standard_deduction_claimed_mapped_to_regime_cap() -> None:
     assert new_input.salary_income.standard_deduction_claimed == Decimal("75000")
 
 
+def test_uniform_allowance_reaches_gross_salary_fully_taxable() -> None:
+    """employer.uniformAllowance must reach taxable income -- there is no
+    evidence field for "actual expenditure incurred" (the real Section
+    10(14)(i)/Rule 2BB exemption basis), so it is taxed fully rather than
+    exempted without evidence or silently dropped (§11.9 follow-up)."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        uniformAllowance=Decimal("15000"),
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.gross_salary == Decimal("515000")
+
+
+def test_gratuity_also_received_flag_reaches_salary_income() -> None:
+    """employer.gratuityAlsoReceived must reach SalaryIncome and affect the
+    Section 10(10A) commuted-pension exemption fraction -- previously
+    captured on the frontend but never wired, so the exemption always used
+    the flat 1/3rd fraction (§11.9 follow-up)."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", natureOfEmployment="OTH",
+        basic=Decimal("500000"),
+        commutedPension=Decimal("300000"), gratuityAlsoReceived=False,
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.is_gratuity_also_received is False
+    result = compute_itr1(itr1_input)
+    assert result.salary_commutted_pension_exempt == Decimal("150000")  # 1/2, not 1/3
+
+
 def test_other_taxable_salary_and_arrears_reach_gross_salary() -> None:
     """Other taxable salary and arrears/advance salary must be counted as
     income -- previously employer.otherAllowance/.arrearSalary were never
@@ -938,3 +973,20 @@ def test_mapper_derives_detail_backed_deductions_and_form_10ia_flag():
     assert typed.deductions_chapter6a.amount_80gga == Decimal("3000")
     assert typed.deductions_chapter6a.amount_80ggc == Decimal("4000")
     assert typed.schedule_80gga.donations[0].relevant_clause.value == "80GGA2aa"
+
+
+def test_80ddb_reimbursement_reaches_details_and_reduces_deduction() -> None:
+    """ChapterVIA.section80DDBReimbursement must reach
+    Section80DDBDetails.reimbursement_amount -- previously there was no
+    frontend field to source it from at all
+    (Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §11.9)."""
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    via = draft.deductions.chapterVIA
+    via.section80DDB = Decimal("60000")
+    via.section80DDBUserType = "1"
+    via.section80DDBNameOfSpecDisease = "a"
+    via.section80DDBReimbursement = Decimal("15000")
+
+    typed, _ = draft_to_itr1_input(draft)
+
+    assert typed.deductions_chapter6a.details_80ddb.reimbursement_amount == Decimal("15000")

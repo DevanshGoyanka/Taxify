@@ -205,8 +205,6 @@ class Employer(Identified):
     employerStateCode: str = Field(default="")
     employerPinCode: str = Field(default="")
     employerZipCode: str = Field(default="")
-    salaryNatureRows: list[SalaryNatureRow] = Field(default_factory=list)
-    perquisiteNatureRows: list[SalaryNatureRow] = Field(default_factory=list)
     section10ExemptionRows: list[SalaryNatureRow] = Field(default_factory=list)
     basic: Money = Field(default=Decimal("0"))
     da: Money = Field(default=Decimal("0"))
@@ -233,7 +231,6 @@ class Employer(Identified):
     actualLtaFare: Money = Field(default=Decimal("0"))
     isDomesticTravel: bool = Field(default=False)
     journeysInBlock: int = Field(default=0)
-    ltaExempt: Money = Field(default=Decimal("0"))
     numberOfChildren: int = Field(default=0)
     gratuityAlsoReceived: bool = Field(default=False)
     transportAllowance: Money = Field(default=Decimal("0"))
@@ -244,7 +241,6 @@ class Employer(Identified):
     professionalTax: Money = Field(default=Decimal("0"))
     vrsCompensation: Money = Field(default=Decimal("0"))
     retrenchmentCompensation: Money = Field(default=Decimal("0"))
-    otherExempt: Money = Field(default=Decimal("0"))
     tdsDeducted: Money = Field(default=Decimal("0"))
 
 
@@ -1205,6 +1201,7 @@ class ChapterVIA(_StrictModel):
     section80DDB: Money = Field(default=Decimal("0"))
     section80DDBUserType: Section80DDBUserType = Field(default="")
     section80DDBNameOfSpecDisease: str = Field(default="")
+    section80DDBReimbursement: Money = Field(default=Decimal("0"))
     section80E: Money = Field(default=Decimal("0"))
     section80EE: Money = Field(default=Decimal("0"))
     section80EEA: Money = Field(default=Decimal("0"))
@@ -1671,6 +1668,7 @@ def migrate_stored_draft_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """
     payload = _migrate_other_clause_iv_detail(payload)
     payload = _migrate_employer_nps(payload)
+    payload = _migrate_employer_vestigial_salary_fields(payload)
     return payload
 
 
@@ -1720,6 +1718,40 @@ def _migrate_employer_nps(payload: dict[str, Any]) -> dict[str, Any]:
     migrated = dict(payload)
     migrated["employers"] = [
         {key: value for key, value in row.items() if key != "employerNPS"}
+        if isinstance(row, dict) else row
+        for row in employers
+    ]
+    return migrated
+
+
+_EMPLOYER_VESTIGIAL_SALARY_KEYS = frozenset({
+    "ltaExempt", "otherExempt", "salaryNatureRows", "perquisiteNatureRows",
+})
+
+
+def _migrate_employer_vestigial_salary_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Four more per-employer fields removed for the same reason as
+    ``employerNPS`` above (Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §11.9): each had no live reader anywhere in the canonical pipeline, and
+    ``ltaExempt``/``salaryNatureRows``/``perquisiteNatureRows`` additionally
+    had no live frontend writer either (the LTA exemption is recomputed
+    from evidence -- ``actualLtaFare``/``isDomesticTravel`` -- since the
+    §5.1 P0 fix; ``salaryNatureRows``/``perquisiteNatureRows`` were always
+    written as ``[]`` by every mapper/importer, unlike the structurally
+    similar ``section10ExemptionRows``, which has a real UI and is kept).
+    None of the four ever carried a value that reached any computation, so
+    there is no taxpayer data to preserve.
+    """
+    employers = payload.get("employers")
+    if not isinstance(employers, list) or not any(
+        isinstance(row, dict) and _EMPLOYER_VESTIGIAL_SALARY_KEYS & row.keys()
+        for row in employers
+    ):
+        return payload
+
+    migrated = dict(payload)
+    migrated["employers"] = [
+        {key: value for key, value in row.items() if key not in _EMPLOYER_VESTIGIAL_SALARY_KEYS}
         if isinstance(row, dict) else row
         for row in employers
     ]

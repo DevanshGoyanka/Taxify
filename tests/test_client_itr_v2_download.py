@@ -21,7 +21,7 @@ from app.routers.client_itr_v2 import (
     router as v2_router,
 )
 from app.routers.client_itr import router as legacy_router
-from app.schemas.return_draft import migrate_stored_draft_payload
+from app.schemas.return_draft import ReturnDraft, migrate_stored_draft_payload
 
 
 def _router_paths(router) -> set[str]:
@@ -182,6 +182,33 @@ def test_stored_draft_migration_preserves_nonempty_legacy_clause_iv_detail() -> 
         migrated["filing"]["seventhProviso"]["otherClauseIVDetail"]
         == "Historical taxpayer disclosure"
     )
+
+
+def test_stored_draft_migration_strips_vestigial_employer_salary_fields() -> None:
+    """ltaExempt/otherExempt/salaryNatureRows/perquisiteNatureRows were removed
+    from the Employer schema (Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §11.9) -- a stored draft carrying an employer row with any of them must
+    still validate after migration, with the obsolete keys stripped and every
+    other field on the row preserved untouched."""
+    payload = json.loads(_canonical_draft_json())
+    payload["employers"] = [{
+        "id": "e1", "employerName": "Acme", "basic": "500000",
+        "ltaExempt": "1000", "otherExempt": "2000",
+        "salaryNatureRows": [{"id": "r1", "natureCode": "10(6)", "otherDescription": "", "amount": "0"}],
+        "perquisiteNatureRows": [],
+    }]
+
+    migrated = migrate_stored_draft_payload(payload)
+
+    row = migrated["employers"][0]
+    assert "ltaExempt" not in row
+    assert "otherExempt" not in row
+    assert "salaryNatureRows" not in row
+    assert "perquisiteNatureRows" not in row
+    assert row["employerName"] == "Acme"
+    assert row["basic"] == "500000"
+    # And the migrated payload must actually validate end-to-end.
+    ReturnDraft.model_validate(migrated)
 
 
 def test_load_saved_draft_rejects_legacy_blob(monkeypatch) -> None:

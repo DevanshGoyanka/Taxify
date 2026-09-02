@@ -340,7 +340,9 @@ value (confirmed: it only appears as a `0` default in the same import-mapper fil
 populated — it's dead schema surface, not a live bug.
 
 ### 6.3 Retirement-benefit evidence fields (`averageMonthlySalary`, `yearsOfService`,
-`unavailedLeaveDays`) are captured but not used by the current simplified exemption formulas
+`unavailedLeaveDays`) are captured but not used by the current simplified exemption formulas —
+**Fixed (2026-09-03), superseded by §11.8/§12** (see also §11.1-§11.7 for the much larger bug
+this finding led to)
 
 Distinct from §5.1: this is **not** a missing frontend field — `EmployerEntryManager.tsx:529-531`
 does capture these three values, and the frontend does write them to the canonical draft. The
@@ -355,7 +357,7 @@ to (not inside) this audit's field-presence scope and may already be a known, de
 simplification.
 
 ### 6.4 Money input parsing: `Number(x) || 0` silently coerces invalid entries to zero — not a
-decimal/paise precision problem
+decimal/paise precision problem — **Fixed (2026-09-03), see §13**
 
 **Correction (2026-09-03):** this finding was originally written as "frontend uses JS `number`,
 backend uses `Decimal`," implying the fix was a decimal-string state migration to preserve paise
@@ -749,15 +751,20 @@ isolation (adding the two sub-limit formulas) would have been pointless while
   `self.schedule_80dd or nested` — the mechanical script cannot distinguish the two classes'
   same-named fields; manual verification confirmed this is correctly wired, just not through the
   nested copy.
-- **`Section80DDBDetails.reimbursement_amount`** — flagged and genuinely unset, but there is no
-  frontend field anywhere to source it from (`ChapterVIA` in `app/schemas/return_draft.py` has
-  no 80DDB-reimbursement input, confirmed by grep). Defaulting to `0` (no insurance/employer
-  reimbursement received) is the correct behavior for the common case; this is a minor, rare-
-  case **missing frontend input**, not a mapper omission like the rest of this section — noted
-  here for completeness, not escalated to §11.1-§11.7's severity.
-- **`PoliticalContribution.contribution_mode`** — flagged and genuinely unset with no live
-  reader; the same class of vestigial field as the already-fixed `employerNPS` (§6.2). Low
-  priority, optional cleanup only.
+- **`Section80DDBDetails.reimbursement_amount`** — flagged and genuinely unset; there was no
+  frontend field anywhere to source it from. **Fixed (2026-09-03), see §13** — a new
+  `ChapterVIA.section80DDBReimbursement` field and UI input were added rather than left as a
+  documented gap, since the user asked for every open item closed.
+- **`PoliticalContribution.contribution_mode`** — **correction (2026-09-03):** this was
+  originally misclassified as vestigial by the mechanical script, which only checks kwargs
+  passed at construction time. Re-verified by hand: `contribution_mode` is a
+  `model_validator`-derived field (`app/schemas/itr1.py`'s `Donation80GGC`-equivalent
+  normalizer: `self.contribution_mode = "cash" if ... else "non_cash"`), always self-computed
+  from `cash_amount`/`other_mode_amount` regardless of whether the mapper passes it explicitly,
+  and it **is** read live by `app/engine/validators/itr4/input_rules.py`. Not a bug, not
+  vestigial — no action needed. Flagged here as a caution about the mechanical script's blind
+  spot for validator-derived fields, confirmed not to have caused any other false removal in
+  this audit's fixes.
 - **`employer.uniformAllowance`** (found while implementing the fix below, not by the script —
   it has no corresponding scalar `SalaryIncome` field at all, so the AST cross-reference could
   not flag it) — a real, rendered frontend input (`EmployerEntryManager.tsx:508`) with no live
@@ -924,3 +931,107 @@ Both fixes are documented inline at the removal/change site with the same reason
   outside pytest): confirmed the gratuity salary sub-limit (`0.5 × avg × years`), the leave-
   encashment cash-equivalent-of-leave sub-limit with the 30-days-per-year cap actually binding,
   and full exemption for government employees regardless of amount.
+
+---
+
+## 13. §6.4 and remaining-open-item fix write-up (2026-09-03)
+
+Closes out every item left open at the end of §12: §6.4 (money input parsing), plus the four
+smaller gaps found and fixed along the way while verifying §6.4 in a real client return in the
+browser.
+
+### 13.1 §6.4 — money input parsing consolidated onto `IndianNumberInput`
+
+A correctly-built shared component already existed —
+`frontend/src/components/IndianNumberInput.tsx` — with real integer-rupee semantics
+(`Math.round(Number(rawValue))`), Indian lakh/crore comma formatting, and a `!isNaN(numValue)`
+guard that rejects a garbled edit instead of coercing it to `0`. It was used in exactly one
+place (`AdvancedTaxPage.tsx`) before this fix. Replaced the ad hoc `parseFloat(e.target.value)
+|| 0` / `Number(e.target.value) || 0` pattern with it across every site the original §6.4
+finding named, plus every other occurrence found by a fresh `grep -rn` sweep:
+`DeductionLoanManager.tsx`, `dividend/DividendEntryManager.tsx`, `DonationEntryManager.tsx`,
+`familyPension/FamilyPensionManager.tsx`, `gifts/GiftPropertyManager.tsx`,
+`interest/InterestEntryManager.tsx`, `Section80CManager.tsx`, `Section80DManager.tsx`,
+`winnings/WinningsManager.tsx`, and `ITRComputationTabs.tsx` (TDS/TCS/advance-tax tabs, 11
+separate fields).
+
+`EmployerEntryManager.tsx`'s own local `AmountInput` helper (§6.4's original citation) was not
+just using the ad hoc pattern — it was worse: `Number(e.target.value.replace(/\D/g, ''))`
+strips every non-digit character including the decimal point, so a value like `"50000.50"`
+became `"5000050"`, a **100x error**, rather than rounding to `50001`. `AmountInput` now
+delegates to `IndianNumberInput` (kept as a thin same-signature wrapper so its ~30 existing call
+sites needed no changes).
+
+`ITR2SchedulesWorkspace.tsx` has the same ad hoc pattern but was deliberately left untouched —
+it is exclusively ITR-2 UI, outside every citation in the original §6.4 finding and outside this
+audit's scope per the user's own stated sequencing (ITR-1 → ITR-4 → ITR-2 → ITR-3).
+`CapitalGainsEntryManager.tsx`'s `Number(row[field] ?? 0) || 0` was also left alone — it
+aggregates already-numeric *imported* row data in a `reduce()`, not a keystroke handler, so it
+isn't an instance of the bug this finding describes.
+
+**Verified in the running app, not just by type-checking:** signed into a real client return
+(ITR-4, salary tab) and typed `50000.75` into an `IndianNumberInput`-backed field — it correctly
+rounded to `50,001` on blur (confirmed the exact bug described above no longer reproduces).
+Typed garbled text (`abc12,34x5`) into the same field — the component correctly rejected it and
+kept the last valid value rather than corrupting or zeroing it. The test edit was reverted
+before navigating away; nothing was saved to the client's actual return.
+
+**Incident during verification, disclosed for completeness:** while getting the app running to
+test this in a browser, a `curl` health-check to the already-running dev backend timed out, and
+a second `python run.py` instance was started to investigate — briefly leaving two processes
+bound to port 8000. The extra process was killed once noticed, but investigating further command
+output established that the pre-existing backend on that port was not responding either. The
+user reported having manually closed both their backend and frontend dev servers around the same
+time, which was the actual explanation — no server state was corrupted by this session; both
+were cleanly restarted (`python run.py`; `npm run dev` via `.claude/launch.json`, added this
+session) to complete the browser verification.
+
+### 13.2 Additional gaps found and fixed while verifying §6.4 (not part of the original audit)
+
+- **`employer.uniformAllowance`** (§11.9's documented-but-deferred item) — still has no
+  statutory basis for a formulaic exemption (Section 10(14)(i)/Rule 2BB exempts only *actual
+  expenditure incurred*, a fact this product does not capture), so no exemption is claimed for
+  it. But it was reaching neither income nor exemption at all — the received amount is now
+  added to `section_17_1` as fully taxable income (`app/engine/draft_to_itr1_input.py::_map_salary`),
+  the same conservative treatment already used for `other_taxable_salary`: it reaches income,
+  and claims no unverifiable relief.
+- **`employer.gratuityAlsoReceived`** — a real, rendered frontend control
+  (`EmployerEntryManager.tsx:532`, conditionally shown alongside commuted pension) that
+  determines the Section 10(10A) commuted-pension exemption fraction (1/3rd if gratuity is also
+  received, 1/2 if not) but was never wired to the calculator, which always used the flat 1/3rd
+  fraction. New `SalaryIncome.is_gratuity_also_received` field (default `True`, the lower/
+  conservative fraction); `_exempt_commutted_pension()` now takes it as a parameter; new
+  constants `COMMUTED_PENSION_WITH_GRATUITY_PCT`/`COMMUTED_PENSION_WITHOUT_GRATUITY_PCT` replace
+  the old single `COMMUTED_PENSION_NON_GOV_T_PCT`. This under-exemption (not under-income) bug
+  was found by re-reading the Employer schema line-by-line while removing the vestigial fields
+  below, not by the original AST script.
+- **`ChapterVIA.section80DDBReimbursement`** — §11.9 had documented this as a rare, low-severity
+  gap not worth escalating; implemented anyway per the user's "fix all the open" instruction.
+  New field + a `NumberField` input in `DeductionsWorkspace.tsx`'s 80DDB section, wired to
+  `Section80DDBDetails.reimbursement_amount` in the mapper.
+- **Vestigial field cleanup**: `employer.ltaExempt` (found to be dead in the same pass — no live
+  frontend writer since the §5.1 LTA fix moved exemption computation to evidence-based
+  recomputation, and no reader either), `employer.otherExempt`, `employer.salaryNatureRows`,
+  `employer.perquisiteNatureRows` removed from the `Employer` schema, the frontend type, every
+  default-construction site, and test fixtures — same treatment as the already-fixed
+  `employerNPS` (§6.2), including a `migrate_stored_draft_payload` migration
+  (`_migrate_employer_vestigial_salary_fields`) so previously-saved drafts carrying any of the
+  four keys still load. `PoliticalContribution.contribution_mode` was investigated for the same
+  treatment but found to be a live, correctly self-computed field — see the correction in §11.9.
+
+### 13.3 Verification
+
+- `npx tsc -b`, `npx vitest run` (185 passed), `npm run build` — all clean after both the
+  money-input consolidation and the four follow-up fixes.
+- New tests: 4 in `tests/test_salary_schedule.py` (commuted-pension gratuity-also-received
+  fraction, govt-fully-exempt, and the conservative default), 3 in `tests/test_draft_to_itr1_input.py`
+  (uniform allowance reaching gross salary, gratuity-also-received flag reaching `SalaryIncome`
+  and the calculator, 80DDB reimbursement reaching `Section80DDBDetails`), 1 in
+  `tests/test_client_itr_v2_download.py` (the new migration strips all four vestigial keys from
+  a stored employer row and the migrated payload still validates end-to-end).
+- `pytest tests/test_salary_schedule.py tests/test_draft_to_itr1_input.py tests/test_client_itr_v2_download.py -q`
+  — 60 + 44 + 13 = 117 passed.
+- Full backend suite (same pre-existing-exclusion list as prior phase notes) — 1530 passed, same
+  3 pre-existing failures + 1 collection error as every prior run this session, confirmed
+  unrelated by inspection (unchanged failure set, `test_tax_v2_compute.py`/`test_26as_batch.py`,
+  nothing this change touches).

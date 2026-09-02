@@ -219,7 +219,7 @@ def _employer(item: JsonRecord, index: int) -> Employer:
         yearsOfService=_integer(item.get("yearsOfService")),
         unavailedLeaveDays=_integer(item.get("unavailedLeaveDays")),
         actualLtaFare=m("actualLtaFare"), isDomesticTravel=_bool(item.get("isDomesticTravel")),
-        journeysInBlock=_integer(item.get("journeysInBlock")), ltaExempt=m("ltaExempt"),
+        journeysInBlock=_integer(item.get("journeysInBlock")),
         numberOfChildren=_integer(item.get("numberOfChildren")),
         gratuityAlsoReceived=_bool(item.get("gratuityAlsoReceived")),
         transportAllowance=m("transportAllowance"),
@@ -230,7 +230,7 @@ def _employer(item: JsonRecord, index: int) -> Employer:
         professionalTax=m("professionalTax", "profTax"),
         vrsCompensation=m("vrsCompensation"),
         retrenchmentCompensation=m("retrenchmentCompensation"),
-        otherExempt=m("otherExempt"), tdsDeducted=m("tdsDeducted"),
+        tdsDeducted=m("tdsDeducted"),
     )
 
 

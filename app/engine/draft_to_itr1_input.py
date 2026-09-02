@@ -189,17 +189,26 @@ def _map_salary(
     arrear_salary = sum((e.arrearSalary for e in employers), Decimal("0"))
     perquisites = sum((e.perquisites for e in employers), Decimal("0"))
     profits_in_lieu = sum((e.profitsInLieu for e in employers), Decimal("0"))
+    # Uniform allowance's Section 10(14)(i)/Rule 2BB exemption is "actual
+    # expenditure incurred," not a fixed statutory rate -- this product
+    # captures no such evidence field (see
+    # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §11.9), so no
+    # exemption can be verified. Taxing it fully (like other_taxable_salary)
+    # is the conservative default: it still reaches income rather than
+    # silently vanishing, and claims no unverifiable exemption.
+    uniform_allowance = sum((e.uniformAllowance for e in employers), Decimal("0"))
 
     # Section 17(1) salary: every taxable cash-salary component captured on
     # the Employer row except perquisites (17(2)) and profits in lieu
     # (17(3)), which are tracked separately below. LTA received, "other
-    # taxable salary", and arrears/advance salary were previously omitted
-    # here entirely — a real income-understatement bug, not just a missing
-    # exemption — confirmed by grep: none of employer.lta/.otherAllowance/
-    # .arrearSalary was read anywhere else in the canonical pipeline.
+    # taxable salary", arrears/advance salary, and uniform allowance were
+    # previously omitted here entirely — a real income-understatement bug,
+    # not just a missing exemption — confirmed by grep: none of
+    # employer.lta/.otherAllowance/.arrearSalary/.uniformAllowance was read
+    # anywhere else in the canonical pipeline.
     section_17_1 = (
         basic + da + bonus + commission + hra_received + lta_received
-        + other_allowance + other_taxable_salary + arrear_salary
+        + other_allowance + other_taxable_salary + arrear_salary + uniform_allowance
     )
     gross_salary = section_17_1 + perquisites + profits_in_lieu
 
@@ -274,6 +283,19 @@ def _map_salary(
     unavailed_leave_days = (
         primary_retirement_employer.unavailedLeaveDays if primary_retirement_employer else 0
     )
+    # Whether gratuity was also received determines the Section 10(10A)
+    # commuted-pension exemption fraction (1/3rd vs 1/2) -- captured on the
+    # frontend per-employer, conditionally shown alongside commuted pension
+    # (EmployerEntryManager.tsx:532-536), but previously never reached the
+    # calculator at all, so the exemption always used the flat 1/3rd
+    # fraction regardless of whether the taxpayer actually had a separate
+    # gratuity payout.
+    commuted_pension_employer = max(employers, key=lambda e: e.commutedPension, default=None)
+    is_gratuity_also_received = (
+        commuted_pension_employer.gratuityAlsoReceived
+        if commuted_pension_employer is not None and commuted_pension_employer.commutedPension > 0
+        else True
+    )
 
     # Transport allowance (10(14), disabled employees) and the two
     # per-child Section 10(14) allowances.
@@ -335,6 +357,7 @@ def _map_salary(
         average_monthly_salary=average_monthly_salary,
         years_of_service=years_of_service,
         unavailed_leave_days=unavailed_leave_days,
+        is_gratuity_also_received=is_gratuity_also_received,
     )
     # Keep the breakdown total consistent with what schedules/salary.py now
     # treats as gross (see the retirement-receipts comment on the ``gross``
@@ -878,6 +901,7 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
             details_80ddb = Section80DDBDetails(
                 user_type=via.section80DDBUserType,
                 disease=via.section80DDBNameOfSpecDisease,
+                reimbursement_amount=via.section80DDBReimbursement,
             )
 
     ded_input = Chapter6ADeductions(

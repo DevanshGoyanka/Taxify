@@ -292,6 +292,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
         <NumberField label="80DDB amount (₹)" value={chapterVIA.section80DDB} hint="Max ₹40,000 (₹1,00,000 senior citizen)" onChange={(value) => patch({ section80DDB: value })} />
         <SelectField label="User type" value={chapterVIA.section80DDBUserType} options={USERTYPE_OPTIONS} onChange={(value) => patch({ section80DDBUserType: value })} />
         <SelectField label="Disease code" value={chapterVIA.section80DDBNameOfSpecDisease} options={DISEASE_OPTIONS} onChange={(value) => patch({ section80DDBNameOfSpecDisease: value })} hint="Specified disease under Rule 3D" />
+        <NumberField label="Reimbursement received (₹)" value={chapterVIA.section80DDBReimbursement} hint="Insurance/employer reimbursement, if any -- reduces the claim" onChange={(value) => patch({ section80DDBReimbursement: value })} />
       </div>
       <h4 style={{ ...styles.panelTitle, marginTop: 20, marginBottom: 10 }}>Section 80U — self disability</h4>
       <div style={styles.grid}>

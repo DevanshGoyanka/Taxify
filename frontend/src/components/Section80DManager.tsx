@@ -10,6 +10,7 @@
 // UI style matches DonationEntryManager: collapsible cards with category badges.
 
 import React, { useState } from 'react';
+import { IndianNumberInput } from './IndianNumberInput';
 
 // ---- Per-policy entry (maps to Sch80DInsDtls) ----
 interface Policy80D {
@@ -247,8 +248,8 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
                         </div>
                         <div>
                           <label style={labelStyle}>Premium Amount (₹) *</label>
-                          <input type="number" value={p.premiumAmount || ''} onChange={e => updatePolicy(cm.key, p.id, 'premiumAmount', parseFloat(e.target.value) || 0)}
-                            placeholder="0" min={0} style={{ ...inputStyle, fontWeight: 600 }} />
+                          <IndianNumberInput value={p.premiumAmount || 0} onChange={v => updatePolicy(cm.key, p.id, 'premiumAmount', v)}
+                            style={{ ...inputStyle, fontWeight: 600 }} />
                         </div>
                         <div>
                           <label style={labelStyle}>Policy Type *</label>
@@ -274,15 +275,15 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginTop: 8, padding: '0 2px' }}>
               <div>
                 <label style={labelStyle}>Preventive Health Checkup</label>
-                <input type="number" value={cat.preventiveCheckup || ''} min={0}
-                  onChange={e => updateCategory(cm.key, c => ({ ...c, preventiveCheckup: parseFloat(e.target.value) || 0 }))}
+                <IndianNumberInput value={cat.preventiveCheckup || 0}
+                  onChange={v => updateCategory(cm.key, c => ({ ...c, preventiveCheckup: v }))}
                   style={inputStyle} />
               </div>
               {cm.key === 'selfFamilySenior' || cm.key === 'parentsSenior' ? (
                 <div>
                   <label style={labelStyle}>Medical Expense (non-insured seniors)</label>
-                  <input type="number" value={cat.medicalExpense || ''} min={0}
-                    onChange={e => updateCategory(cm.key, c => ({ ...c, medicalExpense: parseFloat(e.target.value) || 0 }))}
+                  <IndianNumberInput value={cat.medicalExpense || 0}
+                    onChange={v => updateCategory(cm.key, c => ({ ...c, medicalExpense: v }))}
                     style={inputStyle} />
                 </div>
               ) : null}

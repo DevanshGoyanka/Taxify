@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import type { InterestEntry, InterestITDTag } from '../../types/scheduleOS';
 import { INTEREST_TAG_INFO } from '../../types/scheduleOS';
+import { IndianNumberInput } from '../IndianNumberInput';
 
 interface InterestEntryManagerProps {
   entries: InterestEntry[];
@@ -118,14 +119,14 @@ export function InterestEntryManager({ entries = [], onChange }: InterestEntryMa
                         style={{ flex: 3, minWidth: 200, padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
                         <span style={{ fontSize: 10, color: '#888' }}>₹</span>
-                        <input type="number" value={entry.grossAmount || ''}
-                          onChange={(e) => updateEntry(entry.id, { grossAmount: parseFloat(e.target.value) || 0 })}
+                        <IndianNumberInput value={entry.grossAmount || 0}
+                          onChange={(v) => updateEntry(entry.id, { grossAmount: v })}
                           style={{ width: '100%', padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
                         <span style={{ fontSize: 10, color: '#888' }}>TDS ₹</span>
-                        <input type="number" value={entry.tdsDeducted || ''}
-                          onChange={(e) => updateEntry(entry.id, { tdsDeducted: parseFloat(e.target.value) || 0 })}
+                        <IndianNumberInput value={entry.tdsDeducted || 0}
+                          onChange={(v) => updateEntry(entry.id, { tdsDeducted: v })}
                           style={{ width: '100%', padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                       </div>
                       <button onClick={() => removeEntry(entry.id)} style={{ padding: '2px 8px', fontSize: 12, border: 'none', borderRadius: 3, color: '#999', background: 'transparent', cursor: 'pointer' }}>✕</button>

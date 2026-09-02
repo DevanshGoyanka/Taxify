@@ -285,6 +285,16 @@ class SalaryIncome(BaseModel):
             "encashment cash-equivalent sub-limit test."
         ),
     )
+    is_gratuity_also_received: bool = Field(
+        default=True,
+        description=(
+            "True if gratuity was also received alongside commuted pension. "
+            "Determines the Section 10(10A) non-government exemption "
+            "fraction: 1/3rd if gratuity is also received, 1/2 if not. "
+            "Defaults to True (the lower, conservative fraction) when "
+            "unspecified."
+        ),
+    )
 
 
 

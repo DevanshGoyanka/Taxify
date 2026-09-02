@@ -11,6 +11,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.engine.schedules.salary import (
+    _exempt_commutted_pension,
     _exempt_gratuity,
     _exempt_leave_encashment,
     compute,
@@ -153,3 +154,30 @@ def test_children_allowances_use_real_number_of_children():
     result = compute(salary_input, TaxRegime.OLD)
     assert result.children_education_exempt == Decimal("2400")  # 100*12*2
     assert result.hostel_exempt == Decimal("7200")  # 300*12*2
+
+
+# ── Commuted pension (Section 10(10A)) — gratuity-also-received fraction ──
+
+def test_commuted_pension_govt_fully_exempt():
+    assert _exempt_commutted_pension(Decimal("500000"), True) == Decimal("500000")
+
+
+def test_commuted_pension_non_govt_one_third_when_gratuity_also_received():
+    result = _exempt_commutted_pension(Decimal("300000"), False, True)
+    assert round(result, 2) == Decimal("100000.00")  # 300000 / 3 (1/3 is a repeating decimal)
+
+
+def test_commuted_pension_non_govt_one_half_when_no_gratuity():
+    """The more generous 1/2 fraction applies when no separate gratuity was
+    received -- previously always used the 1/3rd fraction unconditionally,
+    since employer.gratuityAlsoReceived (captured on the frontend) was
+    never wired to the calculator (§11.9 follow-up)."""
+    result = _exempt_commutted_pension(Decimal("300000"), False, False)
+    assert result == Decimal("150000")  # 300000 / 2
+
+
+def test_commuted_pension_defaults_to_conservative_one_third():
+    """Caller omitting the flag gets the lower (1/3rd), not the more
+    generous (1/2), fraction -- never over-grant without evidence."""
+    result = _exempt_commutted_pension(Decimal("300000"), False)
+    assert round(result, 2) == Decimal("100000.00")

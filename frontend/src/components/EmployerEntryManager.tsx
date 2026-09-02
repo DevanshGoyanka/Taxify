@@ -6,6 +6,7 @@ import {
   type StateCode,
 } from '../domain/returns/cbdtEnums';
 import { isValidTan, normalizeTan } from '../utils/taxIdentifiers';
+import { IndianNumberInput } from './IndianNumberInput';
 
 interface EmployerEntry {
   id: string;
@@ -167,15 +168,12 @@ function Field({
 }
 
 function AmountInput({ value, onChange }: { value: number | undefined; onChange: (v: number) => void }): React.JSX.Element {
-  return (
-    <input
-      type="text"
-      inputMode="numeric"
-      value={value ? String(value) : ''}
-      onChange={(e) => onChange(Number(e.target.value.replace(/\D/g, '')) || 0)}
-      style={INPUT_STYLE}
-    />
-  );
+  // Delegates to the shared IndianNumberInput rather than stripping
+  // non-digit characters itself -- the previous \D-strip implementation
+  // silently mangled any value containing a decimal point (e.g. "50000.50"
+  // became "5000050", a 100x error) instead of rounding it, and produced
+  // Indian lakh/crore comma formatting nowhere else this form's inputs did.
+  return <IndianNumberInput value={value ?? 0} onChange={onChange} style={INPUT_STYLE} />;
 }
 
 function TextInput({ value, onChange, maxLength }: { value: string | undefined; onChange: (v: string) => void; maxLength?: number }): React.JSX.Element {

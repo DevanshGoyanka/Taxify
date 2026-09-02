@@ -4,6 +4,7 @@
 // Matches DonationEntryManager UI style: collapsible cards with type badges.
 
 import React, { useState, useMemo } from 'react';
+import { IndianNumberInput } from './IndianNumberInput';
 
 interface Investment80C {
   id: string;
@@ -159,8 +160,8 @@ export const Section80CManager: React.FC<Section80CManagerProps> = ({ data, onCh
                   </div>
                   <div>
                     <label style={{ ...labelStyle, color: '#2e7d32' }}>Amount (₹) *</label>
-                    <input type="number" value={inv.amount || ''} onChange={e => updateInvestment(inv.id, 'amount', parseFloat(e.target.value) || 0)}
-                      placeholder="0" min={0} style={{ ...inputStyle, fontWeight: 600, color: '#2e7d32' }} />
+                    <IndianNumberInput value={inv.amount || 0} onChange={v => updateInvestment(inv.id, 'amount', v)}
+                      style={{ ...inputStyle, fontWeight: 600, color: '#2e7d32' }} />
                   </div>
                 </div>
               </div>

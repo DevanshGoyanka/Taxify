@@ -10,6 +10,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { INDIAN_STATE_CODE_OPTIONS, type StateCode } from '../domain/returns/cbdtEnums';
+import { IndianNumberInput } from './IndianNumberInput';
 
 // ---- 4 official 80G categories ----
 type DonationCategory = '100_NO_APPROVAL' | '50_NO_APPROVAL' | '100_APPROVAL_REQD' | '50_APPROVAL_REQD';
@@ -320,18 +321,18 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 12 }}>
                   <div>
                     <label style={labelStyle}>Cash Amount (₹)</label>
-                    <input type="number" value={entry.donationAmtCash || ''}
-                      onChange={e => updateEntry(entry.id, 'donationAmtCash', parseFloat(e.target.value) || 0)}
-                      placeholder="0" min={0} style={inputStyle} />
+                    <IndianNumberInput value={entry.donationAmtCash || 0}
+                      onChange={v => updateEntry(entry.id, 'donationAmtCash', v)}
+                      style={inputStyle} />
                     {entry.donationAmtCash > 2000 && (
                       <span style={{ fontSize: 10, color: '#f44336' }}>⚠ Cash donations &gt; ₹2,000 not eligible for 80G</span>
                     )}
                   </div>
                   <div>
                     <label style={labelStyle}>Bank/Digital Amount (₹)</label>
-                    <input type="number" value={entry.donationAmtOtherMode || ''}
-                      onChange={e => updateEntry(entry.id, 'donationAmtOtherMode', parseFloat(e.target.value) || 0)}
-                      placeholder="0" min={0} style={inputStyle} />
+                    <IndianNumberInput value={entry.donationAmtOtherMode || 0}
+                      onChange={v => updateEntry(entry.id, 'donationAmtOtherMode', v)}
+                      style={inputStyle} />
                   </div>
                   <div>
                     <label style={labelStyle}>Total Donation</label>

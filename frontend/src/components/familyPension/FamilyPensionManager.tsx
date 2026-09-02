@@ -1,5 +1,6 @@
 import React from 'react';
 import type { FamilyPensionEntry } from '../../types/scheduleOS';
+import { IndianNumberInput } from '../IndianNumberInput';
 
 interface FamilyPensionManagerProps {
   entry: FamilyPensionEntry | null;
@@ -32,8 +33,8 @@ export function FamilyPensionManager({ entry = null, onChange }: FamilyPensionMa
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
           <span style={{ fontSize: 10, color: '#888' }}>₹</span>
-          <input type="number" value={grossAmount || ''}
-            onChange={(e) => onChange({ grossAmount: parseFloat(e.target.value) || 0, payerName: entry?.payerName, relationToPensioner: entry?.relationToPensioner })}
+          <IndianNumberInput value={grossAmount || 0}
+            onChange={(v) => onChange({ grossAmount: v, payerName: entry?.payerName, relationToPensioner: entry?.relationToPensioner })}
             placeholder="Gross Pension"
             style={{ width: '100%', padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
         </div>

@@ -8,17 +8,15 @@ export interface Identified { id: string; }
 export interface Employer extends Identified {
   customEmployerName: string; employerName: string; employerTAN: string; natureOfEmployment: NatureOfEmployment | '';
   employerAddress: string; employerCity: string; employerStateCode: StateCode | ''; employerPinCode: string; employerZipCode: string;
-  salaryNatureRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
-  perquisiteNatureRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
   section10ExemptionRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
   basic: Money; da: Money; commission: Money; hra: Money; bonus: Money; allowances: Money; lta: Money;
   otherAllowance: Money; arrearSalary: Money; perquisites: Money; profitsInLieu: Money; rentPaid: Money;
   city: string; isMetroCity: boolean; isGovernmentEmployee: boolean; isDisabledEmployee: boolean;
   commutedPension: Money; gratuity: Money; leaveEncashment: Money; averageMonthlySalary: Money; yearsOfService: number;
-  unavailedLeaveDays: number; actualLtaFare: Money; isDomesticTravel: boolean; journeysInBlock: number; ltaExempt: Money;
+  unavailedLeaveDays: number; actualLtaFare: Money; isDomesticTravel: boolean; journeysInBlock: number;
   numberOfChildren: number; gratuityAlsoReceived: boolean; transportAllowance: Money; childrenEducationAllowance: Money;
   hostelExpenditureAllowance: Money; uniformAllowance: Money; entertainmentAllowance: Money; professionalTax: Money;
-  vrsCompensation: Money; retrenchmentCompensation: Money; otherExempt: Money; tdsDeducted: Money;
+  vrsCompensation: Money; retrenchmentCompensation: Money; tdsDeducted: Money;
 }
 export interface CoOwner { coOwnerSNo: number; name: string; pan: string; aadhaar: string; share: number; }
 export interface TenantDetail { tenantSNo: number; name: string; pan: string; aadhaar: string; panOrTan: string; }
@@ -139,6 +137,7 @@ export interface ChapterVIA {
   section80DDB: Money;
   section80DDBUserType: '1' | '2' | '';
   section80DDBNameOfSpecDisease: string;
+  section80DDBReimbursement: Money;
   section80E: Money;
   section80EE: Money;
   section80EEA: Money;
@@ -187,7 +186,7 @@ export interface BusinessDeductions {
 export const EMPTY_CHAPTER_VIA: ChapterVIA = {
   section80C: 0, section80CCC: 0, pensionContribution80CCC: 0, section80CCDEmployeeOrSE: 0, section80CCD1B: 0, section80CCDEmployer: 0, pranNumber: '',
   section80D: 0, section80DD: 0, section80DDNatureOfDisability: '', section80DDTypeOfDisability: '', section80DDDependentType: '', section80DDDependentPAN: '', section80DDDependentAadhaar: '', section80DDForm10IA: { filed: 'N', acknowledgementNumber: '', filingDate: null, formAckNum11A: '' }, section80DDUDIDNumber: '',
-  section80DDB: 0, section80DDBUserType: '', section80DDBNameOfSpecDisease: '',
+  section80DDB: 0, section80DDBUserType: '', section80DDBNameOfSpecDisease: '', section80DDBReimbursement: 0,
   section80E: 0, section80EE: 0, section80EEA: 0, section80EEAStampDutyValue: 0, section80EEB: 0,
   section80G: 0, section80GG: 0, section80GGRentPaid: 0, section80GGA: 0, section80GGC: 0,
   section80U: 0, section80UNatureOfDisability: '', section80UTypeOfDisability: '', section80UForm10IA: { filed: 'N', acknowledgementNumber: '', filingDate: null, formAckNum11A: '' }, section80UUDIDNumber: '',
