@@ -14,8 +14,19 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from app.engine.validators.itr2.input_rules import validate_itr2_input
-from app.schemas.itr1 import Chapter6ADeductions, FilingAddress, HousePropertyIncome, PropertyType, SalaryIncome, TaxRegime
+from app.schemas.itr1 import (
+    Chapter6ADeductions,
+    FilingAddress,
+    HousePropertyIncome,
+    PropertyType,
+    SalaryIncome,
+    TaxRegime,
+    TDS2Entry,
+    TDS3Entry,
+)
 from app.schemas.itr2 import (
     AgeBracket,
     AssesseeStatus,
@@ -416,3 +427,81 @@ def test_SI_001_other_section_with_deduction_passes():
         section="115BBF", gross_income=Decimal("50000"), deductions=Decimal("5000"),
     )])
     assert not failed(validate_itr2_input(inp), "ITR2-IN-SI-001")
+
+
+# ── Phase 5E: AMT/TDS reconciliation, Schedule AL, Form reminders ──────────
+
+def test_TDS_001_claim_within_deducted_plus_brought_forward_passes():
+    inp = _base_input(tds2_entries=[TDS2Entry(
+        deductor_tan="MUMA12345B", tds_section="194A",
+        tds_deducted=Decimal("10000"), brought_forward_tds=Decimal("5000"),
+        tds_claimed_this_year=Decimal("15000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-TDS-001")
+
+
+def test_TDS_001_claim_ignoring_deducted_alone_would_have_failed_but_brought_forward_covers_it():
+    """A claim that exceeds tds_deducted alone is fine once brought_forward_tds covers it —
+    this is the exact false-rejection this rule's CBDT-rule-466 fix corrects."""
+    inp = _base_input(tds2_entries=[TDS2Entry(
+        deductor_tan="MUMA12345B", tds_section="194A",
+        tds_deducted=Decimal("10000"), brought_forward_tds=Decimal("5000"),
+        tds_claimed_this_year=Decimal("12000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-TDS-001")
+
+
+def test_TDS_001_claim_exceeding_deducted_plus_brought_forward_fails():
+    inp = _base_input(tds2_entries=[TDS2Entry(
+        deductor_tan="MUMA12345B", tds_section="194A",
+        tds_deducted=Decimal("10000"), brought_forward_tds=Decimal("5000"),
+        tds_claimed_this_year=Decimal("15001"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-001")
+
+
+def test_tds3entry_schema_allows_claim_within_deducted_plus_brought_forward():
+    """TDS3's own model_validator (app/schemas/itr1.py) enforces CBDT rule
+    466/467 directly — no ITR2-IN-TDS rule is needed for TDS3 as a result,
+    since a violating TDS3Entry can never be constructed in the first place."""
+    entry = TDS3Entry(
+        tenant_pan="ABCPN1234F", tenant_name="Tenant", tds_section="194IB",
+        tds_deducted=Decimal("10000"), brought_forward_tds=Decimal("5000"),
+        tds_claimed=Decimal("15000"),
+    )
+    assert entry.tds_claimed == Decimal("15000")
+
+
+def test_tds3entry_schema_rejects_claim_exceeding_deducted_plus_brought_forward():
+    with pytest.raises(ValueError, match="cannot exceed deducted credit plus brought-forward"):
+        TDS3Entry(
+            tenant_pan="ABCPN1234F", tenant_name="Tenant", tds_section="194IB",
+            tds_deducted=Decimal("10000"), brought_forward_tds=Decimal("5000"),
+            tds_claimed=Decimal("15001"),
+        )
+
+
+def test_FORM_001_relief_89_claimed_emits_category_d_reminder():
+    inp = _base_input(relief_89=Decimal("5000"))
+    results = validate_itr2_input(inp)
+    matches = [r for r in results if r.rule_id == "ITR2-IN-FORM-001"]
+    assert matches and matches[0].passed
+
+
+def test_FORM_001_no_relief_89_emits_nothing():
+    inp = _base_input(relief_89=Decimal("0"))
+    results = validate_itr2_input(inp)
+    assert not [r for r in results if r.rule_id == "ITR2-IN-FORM-001"]
+
+
+def test_FORM_002_80gg_claimed_emits_category_d_reminder():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(amount_80gg=Decimal("30000")))
+    results = validate_itr2_input(inp)
+    matches = [r for r in results if r.rule_id == "ITR2-IN-FORM-002"]
+    assert matches and matches[0].passed
+
+
+def test_FORM_002_no_80gg_emits_nothing():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions())
+    results = validate_itr2_input(inp)
+    assert not [r for r in results if r.rule_id == "ITR2-IN-FORM-002"]

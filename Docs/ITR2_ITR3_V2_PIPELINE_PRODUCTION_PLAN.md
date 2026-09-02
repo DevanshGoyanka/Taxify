@@ -17,7 +17,7 @@ items point to, not a duplicate.
 | 2 | Extend `ReturnDraft`/`types.ts` — remaining ITR-2 fields | ✅ Delivered 2026-09-02 |
 | 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
-| 5 | Complete the ITR-2 CBDT validator suite (5A/5B/5C/5D ✅; 5E remaining) | In progress |
+| 5 | Complete the ITR-2 CBDT validator suite (5A–5E ✅ Delivered 2026-09-02; 5F/5G architecture gates still required before Phase 6) | ✅ Delivered 2026-09-02 |
 | 5F | Shared canonical personal-profile foundation | Not started — mandatory before frontend/ITR-3 |
 | 5G | Migrate ITR-2 to complete pre-calculation preparation | Not started |
 | 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | Blocked until 5G |
@@ -764,7 +764,7 @@ test per new rule, known-good and known-bad cases, same pattern as ITR-1's R145 
   `npx tsc -b` — 0 errors. `npx vitest run` — 167 passed. `npm run build` — clean (5D touched
   no frontend files; run for full-verification discipline).
 
-### Phase 5E — Remaining ITR-2 validation rules (not started)
+### Phase 5E — Remaining ITR-2 validation rules (✅ Delivered 2026-09-02)
 
 Phase 5E is the remaining part of the ITR-2 validator suite and must be completed before Phase 5F or any frontend/direct-submit work begins. It covers the rules that were intentionally left after Phases 5A–5D and must use the same disciplined rule-tracing method: implement only checks that are genuinely representable, user-suppliable, and not already guaranteed elsewhere in the pipeline.
 
@@ -822,6 +822,281 @@ Do not mechanically add validators for fields the calculator does not consume, d
 - Frontend type-check, Vitest, and production build remain green.
 
 **Tests:** extend `tests/test_itr2_input_validation.py` and `tests/test_itr2_calc_validation.py`; run the ITR-2 integration, builder, production-path, ITR-1/ITR-4 regression, frontend type/build, and applicable full suite before marking 5E delivered.
+
+**Delivered 2026-09-02.** Disposition record for every 5E-scope area considered, per the
+method above:
+
+**AMT/AMTC:**
+```text
+Official rule: AMT tax = adjusted total income × AMT rate (rule 428); AMT credit utilised ≤
+               brought forward (rules 426-429)
+Disposition: IMPLEMENTED (pre-existing, ITR2-IN-AMT-001/002 — predate Phase 5, not newly
+             added this phase)
+Reason: These validate AMTInput.amt_tax/.adjusted_total_income/.amt_credit_* directly.
+Test/evidence: tests/test_itr2_validators.py (pre-existing)
+```
+```text
+Official rule: (discovery, not a numbered catalog rule) — do AMT-001/002 validate fields the
+               calculator actually uses?
+Disposition: PENDING — documented, not fixed this phase
+Reason: Grepping app/engine/calculators/itr2.py's `amt_in.` usage confirms ONLY
+        `.deduction_10aa`/`.deduction_80ia_to_80rrb_except_80p`/
+        `.deduction_35ad_net_depreciation` are read; `.amt_tax`, `.adjusted_total_income`,
+        `.amt_rate_pct`, `.amt_credit_brought_forward`, `.amt_credit_utilised` are never
+        consumed, and `_map_amt_input` in draft_to_itr2_input.py never sets them (all sit at
+        Pydantic zero-defaults for every real draft). AMT-001/002 are therefore harmless in
+        production today (0 == 0×rate) but exercise nothing real. The genuinely computed AMT
+        figure is `result.amt_tax` (from `app/engine/schedules/amt.py::compute`, which
+        correctly applies the ₹20L threshold — verified by reading the module), already
+        covered by ITR2-CALC-009 (inclusion in total tax) and the nonnegative sweep in
+        ITR2-CALC-021. Removing/rewiring AMT-001/002 was judged out of this phase's scope
+        (a Phase 5-predating rule, not part of 5E's own additions) and is left for a future
+        pass rather than risk changing pre-existing, already-tested behavior in this commit.
+Test/evidence: grep evidence in app/engine/validators/itr2/input_rules.py's inline comment
+               above the AMT block; no test added (nothing to assert beyond documentation)
+```
+
+**Schedule EI (exempt income):**
+```text
+Official rule: ~47 near-duplicate rules (699-745) — "In Schedule EI, '10(x)...' drop-down
+               cannot be selected more than once under Other Exempt Income"
+Disposition: STRUCTURALLY_GUARANTEED
+Reason: `ExemptIncome` has one named field per exemption category (ppf_interest,
+        sukanya_samriddhi_interest, tax_free_bond_interest, nre_interest,
+        share_of_profit_from_firm, other_exempt) rather than a repeatable
+        dropdown-plus-amount row list — duplicate selection of the same category is not a
+        state the schema can represent at all, so there is nothing to reject.
+Test/evidence: schema inspection — no repeatable-row field exists to duplicate
+```
+```text
+Official rule: 436 — Net agricultural income = gross receipts − expenditure − unabsorbed loss
+Disposition: CALCULATOR_ENFORCED
+Reason: `result.net_agricultural_income = ag_result.total_net_agricultural_income`
+        (app/engine/calculators/itr2.py:615) — computed entirely by the agricultural-income
+        schedule module from `AgriculturalIncome`'s three raw fields; no user-suppliable
+        "net" field exists to independently violate the formula.
+Test/evidence: grep of app/engine/calculators/itr2.py confirms the assignment
+```
+```text
+Official rule: 433-435 — EI sub-totals (other exempt income total, DTAA-exempt total, overall
+               total) equal the sum of their components
+Disposition: BUILDER_GUARANTEED
+Reason: `build_itr2_json` constructs Schedule EI's totals programmatically from the typed
+        `ExemptIncome` fields; there is no raw editable total field for a user to enter
+        inconsistently.
+Test/evidence: itd/itr2.py Schedule-EI construction (existing, not modified this phase)
+```
+
+**PTI (pass-through income):**
+```text
+Official rule: 437-441 (Col 9 = Col7−Col8; iia = ai+aii; iib = bi+bii; iii = a+b; iv = a+b+c)
+Disposition: NOT_REPRESENTABLE
+Reason: The official Schedule PTI captures a per-entity sub-breakdown (separate STCG-15%/
+        STCG-30%/other columns per pass-through source) that `PTIEntry` does not model —
+        this codebase's PTIEntry is coarser (one `income_head` + one `income_amount` per
+        entity), so the columns these rules reconcile do not exist to check.
+Test/evidence: schema inspection — app/schemas/itr2.py PTIEntry field list
+```
+
+**FSI/TR (foreign tax relief):**
+```text
+Official rule: 442 — Tax relief available should be lower of tax paid outside India or tax
+               payable on such income in India
+Disposition: IMPLEMENTED (pre-existing, ITR2-IN-TR1-001 — predates Phase 5)
+Reason: `if tr.relief_claimed > min(tr.tax_paid_outside_india, tr.indian_tax_payable): error`
+        is exactly this rule, already shipped in an earlier phase.
+Test/evidence: tests/test_itr2_validators.py (pre-existing)
+```
+```text
+Official rule: 443/453 — Schedule FSI/TR not applicable if residential status is non-resident
+Disposition: PENDING — deliberately not touched this phase
+Reason: `ITR2Input.validate_cross_schedule_contract` already hard-blocks Schedule FA for a
+        non-resident, but the existing `ITR2-IN-FSI-002` rule takes the opposite stance for
+        Schedule FSI — it's a Category-D *warning* ("verify Indian taxability") that
+        deliberately *allows* FSI entries for a non-resident rather than rejecting them.
+        Reclassifying 443 as a Category-A block would change already-shipped Phase 3/4-era
+        behavior; doing that inside a phase whose own stated method is "implement only new,
+        genuinely representable gaps" risks an unreviewed behavior change smuggled into a
+        rule-completion phase. Left for a dedicated future review rather than resolved by
+        guessing which of the two existing signals is correct.
+Test/evidence: ITR2-IN-FSI-002 in input_rules.py; validate_cross_schedule_contract in
+               app/schemas/itr2.py
+```
+
+**FA (foreign assets):**
+```text
+Official rule: 746 — Schedule FA must be filled if Part B-TTI's foreign-asset flag is "Yes"
+Disposition: NOT_REPRESENTABLE
+Reason: `ITR2FilingProfile` has no standalone "do you hold foreign assets" boolean to cross-
+        check against `foreign_assets` — the only signal is the list's own presence, which is
+        self-consistent by construction (a non-empty list always produces Schedule FA rows;
+        an empty one never does). There is nothing separate to reconcile against.
+Test/evidence: schema inspection — ITR2FilingProfile field list (Phase 4 delivered note)
+```
+
+**Schedule 5A (Portuguese Civil Code):**
+```text
+Official rule: 449 — PAN of spouse mandatory when governed by Portuguese Civil Code
+Disposition: STRUCTURALLY_GUARANTEED
+Reason: `Schedule5AInput.spouse_pan` has no default (Pydantic-required) — constructing a
+        `Schedule5AInput` at all already forces spouse_pan to be supplied.
+Test/evidence: schema inspection — app/schemas/itr2.py Schedule5AInput
+```
+```text
+Official rule: 450 — Sl.No.4 total = sum of Sl.No.(1+2+3) for all columns
+Disposition: BUILDER_GUARANTEED
+Reason: `Schedule5AInput` has no separate "total" field — `build_itr2_json` derives the total
+        from hp/cg/os_amount_apportioned programmatically.
+Test/evidence: schema inspection — no total field exists on the input model to diverge
+
+Official rule: 657/658 (PTI Sl.No. iii/iv sums — filed here for completeness, functionally
+               part of the PTI NOT_REPRESENTABLE finding above)
+Disposition: NOT_REPRESENTABLE (see PTI section)
+```
+
+**Schedule AL (assets and liabilities):**
+```text
+Official rule: 456 — Schedule AL mandatory when total income exceeds ₹1 crore
+Disposition: IMPLEMENTED — new ITR2-CALC-027 in calc_rules.py
+Reason: "Total income" is `result.taxable_income`, a calculator output — not present on the
+        pre-compute ITR2Input — so this belongs in calc_rules.py, not input_rules.py, unlike
+        every other rule this phase.
+Test/evidence: tests/test_itr2_calc_validation.py (new file) — 3 tests
+```
+
+**TDS/TCS/advance-tax/self-assessment/IT reconciliation:**
+```text
+Official rule: 466/467 — TDS claimed cannot exceed TDS deducted plus TDS brought-forward
+               (not deducted alone)
+Disposition: IMPLEMENTED, with a real pre-existing bug fixed at two different layers
+Reason: The pre-existing ITR2-IN-TDS-001 (TDS2) checked `tds_claimed_this_year >
+        tds_deducted`, ignoring the model's own `brought_forward_tds` field entirely — a live
+        false-rejection risk, since `draft_to_itr1_input._map_tds` maps a real, user-editable
+        draft field (`TdsCredit.broughtFwdTDSAmt`) into it. Fixed to check against
+        `tds_deducted + brought_forward_tds`. The identical bug existed one layer deeper for
+        TDS3: `TDS3Entry`'s own `@model_validator` in app/schemas/itr1.py (shared with ITR-1)
+        checked `tds_claimed > tds_deducted` with the same omission — fixed at the schema
+        level, which is the correct location for a check on the type itself, and is strictly
+        permissive (loosening a `>` bound can only newly *allow* previously-rejected valid
+        states, never reject a previously-valid one, so it cannot regress ITR-1). A separate
+        ITR2-IN-TDS-002 was written first, then confirmed unreachable dead code once the
+        schema fix landed (a violating TDS3Entry can no longer be constructed at all) and
+        removed before shipping — same dead-code-before-shipping pattern as three earlier
+        findings this phase 5.
+Test/evidence: tests/test_itr2_input_validation.py (TDS_001 tests, tds3entry_schema tests);
+               full ITR-1 regression (tests/test_itr1_calculator.py,
+               tests/test_itr1_input_validation.py, tests/test_itr1_itd_builder.py,
+               tests/test_draft_to_itr1_input.py, tests/test_itr1_filing_gateway_profile.py)
+               and tests/test_itr4_calculator.py all still green after the shared-schema fix
+```
+```text
+Official rule: 458 — TCS "Amount claimed this year" cannot exceed "Tax collected"
+Disposition: IMPLEMENTED (pre-existing, ITR2-IN-TCS-001 — predates Phase 5)
+Reason: TCSEntry has no brought-forward field (unlike TDS2/TDS3), so the existing
+        `tcs_credit_claimed > tcs_collected` check was already correct as written — no fix
+        needed.
+Test/evidence: schema inspection — app/schemas/itr1.py TCSEntry field list
+```
+```text
+Official rule: 520/521 — Part B-TTI self-assessment tax / advance tax must equal the sum of
+               Schedule IT payments whose deposit date falls after/within the FY
+Disposition: CALCULATOR_ENFORCED
+Reason: `TaxPaymentDetail` rows are classified into advance-tax vs self-assessment-tax buckets
+        by the mapper/calculator from each row's own date, not from a user-editable bucket
+        total — there is no separate raw "self-assessment tax total" input field to diverge
+        from the date-based classification.
+Test/evidence: schema inspection — no independent total field on TaxPaymentDetail/ITR2Input
+```
+
+**Part B-TI/TTI final reconciliation:**
+```text
+Official rule: 486-541 (~35 rules) — GTI/deductions/taxable-income/tax-payable/refund
+               reconciliation across Part B-TI and B-TTI
+Disposition: Mostly CALCULATOR_ENFORCED / BUILDER_GUARANTEED, already covered by the general
+             reconciliation sweep ITR2-CALC-001 through 026 shipped in Phases 4-5D (gross
+             total income, deductions, taxable income, tax before/after rebate, surcharge,
+             cess, interest, TDS/TCS/advance/self-assessment totals, balance payable/refund
+             all already cross-checked against their component result fields).
+Reason: Part B-TI/TTI is exactly what `build_itr2_json` renders from `ITR2Result` — the
+        reconciliation catalog for it is a re-statement, field by field, of relationships the
+        existing calc_rules.py suite already checks generically off the result object rather
+        than the official form's exact field-naming.
+Test/evidence: app/engine/validators/itr2/calc_rules.py (existing, Phases 4-5D)
+```
+
+**Category B/D (26 rules):**
+```text
+Official rule: 5 — Form 10E required to claim relief u/s 89
+Disposition: IMPLEMENTED — new ITR2-IN-FORM-001 (Category D reminder)
+Reason: `relief_89` is genuinely calculator-consumed (r.relief_89 = input_data.relief_89,
+        confirmed by grep), so this is a real reminder on a live field, not noise.
+Test/evidence: tests/test_itr2_input_validation.py — 2 tests
+```
+```text
+Official rule: 6 — Form 10BA required to claim deduction u/s 80GG
+Disposition: IMPLEMENTED — new ITR2-IN-FORM-002 (Category D reminder)
+Reason: Same rationale — `amount_80gg` is a real, calculator-consumed field
+        (app/engine/schedules/deductions/section_80gg.py).
+Test/evidence: tests/test_itr2_input_validation.py — 2 tests
+```
+```text
+Official rule: 9/10 — TDS/TCS credited to another person allowed only if that person declares
+               it in their own return
+Disposition: EXTERNAL_CHECK
+Reason: Verifying another taxpayer's return content is outside this pipeline's data — no
+        local field can confirm or deny it.
+```
+```text
+Official rule: remaining 22 of 26 (Form 29C/3CFA/10EE/10F reminders, DTAA-for-residents
+               warnings, TDS-vs-income-not-offered checks, LEI-number-for-large-refund,
+               Aadhaar-PAN linkage)
+Disposition: PENDING — not implemented this phase
+Reason: Each would need either data this pipeline doesn't independently hold (Aadhaar-PAN
+        linkage status, LEI registry), or overlaps functionality already covered by an
+        implemented Category A rule (TDS-vs-income-not-offered is adjacent to the existing
+        FSI/TR reconciliation), or was judged lower-value relative to the two reminders
+        shipped. Left for a future pass rather than added speculatively.
+```
+
+**Exit-criteria check:**
+- Every 5E-scope area has a recorded disposition above. ✅
+- Each implemented rule (AMT — pre-existing; CALC-027; TDS-001 fix; FORM-001/002) has a
+  passing known-good and known-bad case. ✅ (`tests/test_itr2_input_validation.py`,
+  `tests/test_itr2_calc_validation.py`)
+- `run_input_validation`/`run_calc_validation` block invalid returns with specific messages —
+  verified via the new tests plus the existing
+  `test_filing_gateway_v2_itr2.py::test_generate_cbdt_json_itr2_passes_validators_and_schema`
+  (a known-good ITR-2 fixture still reaches `can_upload=True`). ✅
+- ITR-2 mapper/calculator/builder/production-path tests green:
+  `pytest tests/test_draft_to_itr2_input.py tests/test_filing_gateway_v2_itr2.py
+  tests/test_itr2_validators.py tests/test_itr2_integration.py tests/test_itr2_itd_builder.py
+  tests/test_itr2_production_path.py tests/test_itr2_input_validation.py
+  tests/test_itr2_calc_validation.py -q` — **110 passed.**
+- ITR-1/ITR-4 regression green (extra scrutiny — `app/schemas/itr1.py` is shared):
+  `pytest tests/test_itr1_calculator.py tests/test_itr1_input_validation.py
+  tests/test_itr1_itd_builder.py tests/test_draft_to_itr1_input.py
+  tests/test_itr1_filing_gateway_profile.py tests/test_itr4_calculator.py -q` —
+  **247 passed.**
+- Full suite (`pytest tests/ -q`, same deselect list as prior sub-phases' notes) —
+  **1387 passed, 3 failed.** The 3 failures (`test_tax_v2_compute.py::
+  test_compute_v2_returns_compatible_headline_keys`,
+  `::test_compute_v2_surfaces_per_row_capital_gains_for_simplified_112a`,
+  `::test_compute_v2_allows_confirmed_reconciliation_discrepancies`) are **confirmed
+  pre-existing** via `git stash` against the pre-Phase-5E commit — identical failures with
+  none of this phase's changes applied. Same "date-bomb" family as the Phase 4/5A finding
+  (ITR-1 fixtures relying on default/relative dates now failing real portal-address/due-date
+  gates as the system clock has advanced) — unrelated to this phase, not fixed here.
+- Frontend green: `npx tsc -b` — 0 errors. `npx vitest run` — 169 passed (22 files; +1 file/+2
+  tests vs the prior sub-phase's baseline, confirmed via `git status` to be pre-existing
+  drift unrelated to this phase — no frontend files were touched). `npm run build` — clean.
+
+**Note on scope vs. the original "5A-5E" split:** this document's Progress-at-a-glance table
+above still lists 5A-5D as separate delivered sub-phases from an earlier, less formal
+narrative-style tracking approach (before this detailed 5E/5F/5G specification existed in this
+file). 5E as delivered here supersedes that narrative style with the disposition-record method
+now established as the standard going forward — Phase 8 (ITR-3, reusing these same schedule
+types) should use this same method and record format from the start rather than the looser
+5A-5D narrative.
 
 ### Phase 5F — Shared canonical personal-profile foundation
 

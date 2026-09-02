@@ -1523,9 +1523,18 @@ class TDS3Entry(BaseModel):
 
     @model_validator(mode="after")
     def validate_claimed_does_not_exceed_deducted(self) -> "TDS3Entry":
-        """Reject claimed credit that exceeds the deducted credit."""
-        if self.tds_claimed > self.tds_deducted:
-            raise ValueError("TDS3 claimed credit cannot exceed deducted credit")
+        """Reject claimed credit that exceeds deducted plus brought-forward credit.
+
+        CBDT rule 466/467: claimed credit is checked against deducted credit
+        *plus* brought-forward credit, not deducted alone — this model has a
+        real ``brought_forward_tds`` field precisely for a taxpayer claiming
+        TDS carried forward from an earlier year alongside this year's
+        deduction, so excluding it here would reject that legitimate case.
+        """
+        if self.tds_claimed > self.tds_deducted + self.brought_forward_tds:
+            raise ValueError(
+                "TDS3 claimed credit cannot exceed deducted credit plus brought-forward credit"
+            )
         return self
 
 

@@ -564,6 +564,40 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 f"si_entries[{index}].deductions", _ZERO, str(si.deductions),
             ))
 
+    # Category D reminders (Category B/D rules 5/6 of 26): these are the
+    # non-blocking half of Phase 5E — CBDT flags the return as uploadable but
+    # warns that the claim may be disallowed unless the taxpayer separately
+    # files the named form. Both `relief_89` and `amount_80gg` are real,
+    # calculator-consumed fields (unlike the vestigial AMTInput ones below),
+    # so this is a genuine reminder, not noise on a dead field.
+    if inp.relief_89 > _ZERO:
+        results.append(_result(
+            "ITR2-IN-FORM-001", True,
+            "Relief u/s 89 is claimed — Form 10E must be filed separately to "
+            "sustain this claim.",
+            "relief_89", severity=Severity.D,
+        ))
+    if inp.deductions_chapter6a is not None and inp.deductions_chapter6a.amount_80gg > _ZERO:
+        results.append(_result(
+            "ITR2-IN-FORM-002", True,
+            "Deduction u/s 80GG (rent paid) is claimed — Form 10BA must be "
+            "filed separately to sustain this claim.",
+            "deductions_chapter6a.amount_80gg", severity=Severity.D,
+        ))
+
+    # AMT-001/002 below check `amt_tax`/`adjusted_total_income`/
+    # `amt_credit_*` — confirmed by grep of app/engine/calculators/itr2.py
+    # that NONE of these four `AMTInput` fields are ever read by the
+    # calculator (only `.deduction_10aa`/`.deduction_80ia_to_80rrb_except_80p`/
+    # `.deduction_35ad_net_depreciation` are); `_map_amt_input` in
+    # draft_to_itr2_input.py never sets them either, so they sit at their
+    # Pydantic zero-defaults for every real draft, which is why these two
+    # pre-existing rules are harmless in production (0 == 0*rate) rather
+    # than a landmine — but they are also not exercising anything real.
+    # Left as-is (pre-existing, not part of this phase's scope to remove);
+    # the genuinely computed AMT figure is `result.amt_tax`, already
+    # covered by ITR2-CALC-009 (total tax reconciliation) and the
+    # nonnegative-fields sweep in ITR2-CALC-021.
     if inp.amt_input is not None:
         amt = inp.amt_input
         expected_amt = amt.adjusted_total_income * amt.amt_rate_pct / Decimal("100")
@@ -581,13 +615,27 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 str(amt.amt_credit_utilised),
             ))
 
+    # CBDT rule 466/467: claimed cannot exceed deducted PLUS brought-forward —
+    # not deducted alone. `draft_to_itr1_input._map_tds` maps a real,
+    # user-editable draft field (`TdsCredit.broughtFwdTDSAmt`) into
+    # `brought_forward_tds`, so omitting it here would reject a taxpayer
+    # legitimately claiming brought-forward TDS credit alongside this year's
+    # deduction — a live false-rejection risk, not just a theoretical one.
+    # `TDS3Entry` carries the identical check as a schema-level
+    # `@model_validator` in app/schemas/itr1.py (shared with ITR-1) — that
+    # one had the exact same bug (ignored `brought_forward_tds`) and was
+    # fixed there instead, since a schema-level fix is the correct location.
+    # No separate rule is needed here for TDS3 as a result: a `TDS3Entry`
+    # violating the ceiling cannot be constructed at all, so a validator
+    # re-checking it here would be unreachable dead code.
     for index, entry in enumerate(inp.tds2_entries or []):
-        if entry.tds_claimed_this_year > entry.tds_deducted:
+        ceiling = entry.tds_deducted + entry.brought_forward_tds
+        if entry.tds_claimed_this_year > ceiling:
             results.append(_result(
                 "ITR2-IN-TDS-001", False,
-                "TDS claimed this year cannot exceed TDS deducted.",
+                "TDS claimed this year cannot exceed TDS deducted plus brought-forward TDS.",
                 f"tds2_entries[{index}].tds_claimed_this_year",
-                f"<= {entry.tds_deducted}", str(entry.tds_claimed_this_year),
+                f"<= {ceiling}", str(entry.tds_claimed_this_year),
             ))
     for index, entry in enumerate(inp.tcs_entries or []):
         if entry.tcs_credit_claimed > entry.tcs_collected:

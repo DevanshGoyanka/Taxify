@@ -258,6 +258,18 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
                 f"<= {max_capped_tax_at_15pct}", str(si.surcharge_cap_tax),
             ))
 
+    # CBDT rule 456: Schedule AL is mandatory once total income exceeds ₹1
+    # crore. Belongs here rather than input_rules.py — "total income" is a
+    # calculator output (`result.taxable_income`), not something present on
+    # the pre-compute ITR2Input.
+    if result.taxable_income > Decimal("10000000") and inp.asset_liability is None:
+        results.append(_result(
+            "ITR2-CALC-027",
+            "Schedule AL (assets and liabilities) is mandatory when total "
+            "income exceeds ₹1 crore.",
+            "asset_liability", "required", "not provided",
+        ))
+
     return results
 
 
