@@ -58,7 +58,6 @@ from app.schemas.itr1 import (
     AssesseeType,
     AgeBracket,
     BankAccount,
-    BankAccountType,
     CapitalGainsIncome,
     Chapter6ADeductions,
     DependentRelationship,
@@ -1029,31 +1028,26 @@ def _map_tax_payments(challans: list[TaxChallan]) -> tuple[list[TaxPaymentDetail
     return payment_entries, advance_total, sat_total, quarterly
 
 
-_BANK_TYPE_MAP = {
-    "SB": BankAccountType("savings"),
-    "CA": BankAccountType("current"),
-    "CC": BankAccountType("cash_credit"),
-    "OD": BankAccountType("overdraft"),
-    "NRO": BankAccountType("nro"),
-    "OTH": BankAccountType("other"),
-}
-
-
 def _map_bank_accounts(banks: list[DraftBankAccount]) -> list[BankAccount]:
-    mapped: list[BankAccount] = []
-    for idx, b in enumerate(banks):
-        # ``is_primary`` follows the explicit ``useForRefund`` flag only —
-        # ``build_itr1_json`` enforces "exactly one primary" so a defaulting
-        # fallback here would mask that validation.  The first account is no
-        # longer auto-primary when the flag is unset.
-        mapped.append(BankAccount(
-            bank_name=b.bankName or None,
-            account_number=b.accountNumber or None,
-            ifsc_code=b.ifscCode or None,
-            account_type=_BANK_TYPE_MAP.get(b.accountType, BankAccountType("savings")),
-            is_primary=b.useForRefund,
-        ))
-    return mapped
+    """Phase 5F: delegates to the shared ``app.engine.personal_profile``
+    normalizer/projection — this used to be a second, independent,
+    zero-validation bank-account mapping alongside the gateway's own
+    ``_itr4_bank_accounts``/(now) ``validate_bank_accounts_strict``. Kept as
+    a thin wrapper (same signature, same call sites in this file and in
+    ``draft_to_itr2_input.py``) so no caller needs to change.
+
+    ``is_primary`` follows the explicit ``useForRefund`` flag only —
+    ``build_itr1_json`` enforces "exactly one primary" so a defaulting
+    fallback here would mask that validation. No cleaning/validation is
+    applied here (raw, unstripped values) — matches this mapper's historical
+    behavior exactly; see ``project_bank_account_itr1``'s docstring.
+    """
+    from app.engine.personal_profile import normalize_bank_accounts, project_bank_account_itr1
+
+    return [
+        BankAccount(**project_bank_account_itr1(n))
+        for n in normalize_bank_accounts(banks)
+    ]
 
 
 def _map_dividend_quarterly_breakdown(draft: ReturnDraft) -> dict[str, Decimal]:

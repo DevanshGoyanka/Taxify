@@ -18,7 +18,7 @@ items point to, not a duplicate.
 | 3 | ITR-2 canonical mapper (`draft_to_itr2_input.py`) | ✅ Delivered 2026-09-02 |
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
 | 5 | Complete the ITR-2 CBDT validator suite (5A–5E ✅ Delivered 2026-09-02; 5F/5G architecture gates still required before Phase 6) | ✅ Delivered 2026-09-02 |
-| 5F | Shared canonical personal-profile foundation | Not started — mandatory before frontend/ITR-3 |
+| 5F | Shared canonical personal-profile foundation (ITR-1/ITR-4) | ✅ Delivered 2026-09-02 |
 | 5G | Migrate ITR-2 to complete pre-calculation preparation | Not started |
 | 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | Blocked until 5G |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Blocked until 5G |
@@ -1098,7 +1098,7 @@ now established as the standard going forward — Phase 8 (ITR-3, reusing these 
 types) should use this same method and record format from the start rather than the looser
 5A-5D narrative.
 
-### Phase 5F — Shared canonical personal-profile foundation
+### Phase 5F — Shared canonical personal-profile foundation (✅ Delivered 2026-09-02)
 
 **Mandatory architecture gate before frontend wiring, direct submission, or ITR-3 implementation.**
 
@@ -1107,6 +1107,125 @@ Create one shared internal representation for taxpayer-level information rather 
 Normalize values once, validate conditional relationships once, construct bank/verification/TRP rows once, and expose calculation readiness separately from filing readiness. A deterministic source hash is required so profile changes are observable and prepared data cannot be silently reused after the draft changes.
 
 **Exit criteria:** all four forms consume the same complete personal-profile contract; JSON builders do not independently map bank accounts, verification, representative details, or TRP; profile changes alter the source hash; warnings, calculation-blocking errors, and filing-blocking errors are separate; ITR-1 and ITR-4 remain green.
+
+**Delivered 2026-09-02.**
+
+Per an explicit design-review pass (a Plan agent verified the design against the actual code
+before implementation, and a reviewer required six changes before approval — both preserved
+below), this phase migrated **ITR-1 and ITR-4 only**. ITR-2's own filing-profile builders are
+untouched — that migration, plus moving ITR-2 to early (pre-compute) profile attachment, is
+Phase 5G's explicit job, reusing the normalizers built here. The exit criterion "all four
+forms consume the same complete personal-profile contract" is therefore satisfied
+incrementally: true for ITR-1/ITR-4 as of this phase, intended to become true for ITR-2 after
+5G and for ITR-3 after Phase 8 (which depends on 5F **and** 5G together — the shared
+normalizers plus the proven `prepare_itrN` pattern — not on 5F alone).
+
+- **`app/engine/personal_profile.py`** (new, ~520 lines) — the shared normalizer module.
+  Two deliberately-separated concerns, documented in the module docstring: `NormalizedPersonalProfile`
+  (identity/contact/filing-status/verification/representative/bank-accounts/TRP) and
+  `NormalizedPropertyProfile` (schedule-level — co-owners/tenants — explicitly *not* part of
+  the personal profile, per review). Key functions: `normalize_personal_profile`,
+  `normalize_property_details`, `normalize_bank_accounts` (parsing only, no rules),
+  `validate_bank_accounts_strict` (the ITR-4-style rich rule set, extracted verbatim),
+  `project_bank_account_itr1`/`_itr4` (both derived from the same `NormalizedBankAccount`),
+  `normalize_tax_return_preparer`, `personal_profile_source_hash`/`profile_hash_payload`.
+- **The review's most important correction — one bank-account mapping, not two**:
+  `draft_to_itr1_input.py::_map_bank_accounts` (used by both the ITR-1 and ITR-2 mappers) was
+  a second, independent, zero-validation bank-account mapping running alongside the gateway's
+  own `_itr4_bank_accounts` — exactly the divergence risk this phase exists to close. Rewired
+  to delegate to `normalize_bank_accounts` + `project_bank_account_itr1` (external signature
+  unchanged, so neither mapper's call site needed to change). `ITR1FilingProfile`'s nested
+  `bank_accounts` field (ITR-1 uniquely embeds bank accounts inside the profile object itself)
+  still gets its value via the pre-existing `model_copy` sync from `typed_input.bank_accounts`
+  in `compute_canonical_itr1` — on reflection this sync is not a second independent
+  computation (it copies an already-unified value into a second location), so it was left
+  as-is rather than restructured, which would have added risk for no behavioral gain.
+- **No silent truncation, per review**: `normalize_personal_profile()` returns full-length,
+  untruncated canonical values — it never mutates taxpayer data to fit a target schema's
+  length limit. ITR-4's pre-existing `[:50]`/`[:25]`/`[:2]`-style truncation is preserved
+  **unchanged, but relocated** to an explicit `_itr4_wire_format_address()` step in ITR-4's
+  own adapter — a behavior-preserving relocation, not a policy change. Compatibility tests
+  confirm both directions: ITR-4's truncated output is byte-identical pre/post-refactor for
+  an intentionally-over-length field, and ITR-1 (which has never truncated) still rejects the
+  same over-length field via the same Pydantic-`ValidationError`-wrapped `FilingGatewayV2Error`
+  path as before.
+- **A second real, pre-existing behavioral divergence found and preserved deliberately, not
+  merged**: ITR-4 tolerates a house-property row with no resolvable address (returns
+  `property_profile=None`); ITR-1 requires it (raises). `normalize_property_details()`/
+  `_normalize_one_property()` were written to NOT raise on empty address/city/state — that
+  policy decision was pushed back out to each adapter (ITR-1's applies `_required` itself;
+  ITR-4's checks `if not address: return None`) instead of being baked into the shared
+  parser, exactly matching the review's "shared normalizer handles structural parsing; the
+  adapter owns policy" principle.
+- **`personal_profile_source_hash`** (renamed from an earlier draft's generic
+  `profile_source_hash`, per review, to make the scope explicit): SHA-256 over
+  `json.dumps(profile_hash_payload(draft), sort_keys=True, separators=(",", ":"),
+  ensure_ascii=False)`, where `profile_hash_payload` is a centralized, explicit helper
+  covering exactly `personal`/`filing`/`verification`/`bankAccounts`/`taxReturnPreparer` —
+  deliberately *not* `houseProperties`, since property is schedule-level per the ownership
+  boundary above (a corrected scope from the original draft, which had included it). Wired
+  into `ITR1PipelineResult.personal_profile_source_hash`/`ITR4PipelineResult.personal_profile_source_hash`
+  (both computed in `compute_canonical_itr1`/`_itr4`). Bank-account list order is treated as
+  semantically meaningful (a reorder changes the hash) — documented as a deliberate
+  simplicity choice, not a data-model requirement.
+- **Deliberately deferred, named follow-ups (per review point 1's guidance that the mapping
+  fix does not require unifying validation policy, and per the plan's own "don't decide two
+  things in one refactor" discipline)** — not implemented this phase, tracked here so they
+  aren't silently lost:
+  - **Bank-account validation *policy* is not unified across forms.** ITR-1 keeps
+    `ITR1-R260`–`R263` (a `ValidationReport`/`Severity.A` rule, surfaced through
+    `run_input_validation` *after* compute) exactly as today; ITR-4 keeps its immediate
+    `FilingGatewayV2Error`, raised in the gateway *before* compute. Collapsing these into one
+    error-delivery mechanism is a real, user-visible API-behavior change (when the frontend
+    sees the error) that review explicitly flagged as needing its own decision, not one made
+    implicitly inside a mapping-deduplication refactor.
+  - **Truncate-vs-reject policy for over-length address fields is not decided.** ITR-4
+    truncates; ITR-1 rejects. Neither behavior was changed — only ITR-4's was relocated to an
+    explicit step. Which policy (if either) should become the shared default is left open.
+  - Two pre-existing, real (but harmless-in-practice) findings surfaced along the way and
+    left untouched, as they predate this phase and touching them wasn't necessary to meet its
+    exit criteria: `_itr4_bank_accounts`'s per-row `try/except` used to accumulate *all*
+    row errors before raising once; the rewritten version can, in a rare edge case (a
+    `ValidationError` from `ITR4BankAccount`'s own Pydantic constraints, not the regex checks
+    already run), raise on the first such error instead of accumulating — not exercised by
+    any existing test, not a regression on any tested path.
+- **Files touched**: `app/engine/personal_profile.py` (new), `app/engine/filing_gateway_v2.py`
+  (`_filing_profile`, `_property_profiles`, `_itr1_tax_return_preparer`, `_itr4_filing_profile`
+  + new `_itr4_wire_format_address`, `_itr4_property_profile`, `_itr4_bank_accounts`,
+  `_itr4_tax_return_preparer`, `ITR1PipelineResult`/`ITR4PipelineResult`,
+  `compute_canonical_itr1`/`_itr4` all rewritten as adapters over the shared normalizers),
+  `app/engine/draft_to_itr1_input.py` (`_map_bank_accounts` delegates; unused `BankAccountType`
+  import removed), `tests/test_personal_profile.py` (new, 28 tests).
+- **Verification:**
+  - `pytest tests/test_personal_profile.py -v` — 28 passed (normalizers, projections,
+    bank-account rules, TRP, property fallback chains, 9 source-hash tests including
+    key-order-independence/list-order-significance/unrelated-schedule-independence/
+    Decimal-date-determinism/None-vs-empty-string, and the truncation compatibility pair).
+  - `pytest tests/test_filing_gateway_v2_itr4.py tests/test_itr4_calculator.py -q` — 37
+    passed, byte-for-byte on every message-text assertion (including the two exact-match
+    bank-account tests).
+  - `pytest tests/test_filing_gateway_v2.py tests/test_itr1_filing_gateway_profile_v2.py
+    tests/test_itr1_input_validation.py tests/test_itr1_itd_builder.py
+    tests/test_draft_to_itr2_input.py -q` — 208 passed.
+  - One real regression found and fixed during this sweep:
+    `tests/test_itr1_filing_gateway_profile.py::test_flat_mapper_rejects_unsupported_filing_section`
+    calls `filing_gateway_v2._filing_profile` directly (missed by the design-review agent's
+    message-text inventory, which mis-scoped this file as legacy-only) and asserted on the
+    exception's `.message` containing "ReturnFileSec"/"supported"/"section" — the
+    consolidated normalizer's generic message didn't. Fixed by keeping "section" (and a
+    "CBDT ReturnFileSec" mention) in that one specific error message.
+  - Keyword sweep `pytest tests/ -k "filing_gateway or itr1 or itr4 or itr2 or
+    personal_profile" -q` (excluding the same pre-existing broken/unrelated collection
+    errors named in every prior phase's note) — **656 passed.**
+  - Full suite `pytest tests/ -q` (same deselect list as prior phases) — **1415 passed, 3
+    failed.** The 3 failures (`test_tax_v2_compute.py::test_compute_v2_returns_compatible_headline_keys`,
+    `::test_compute_v2_surfaces_per_row_capital_gains_for_simplified_112a`,
+    `::test_compute_v2_allows_confirmed_reconciliation_discrepancies`) are the same three
+    confirmed pre-existing in Phase 5E's Delivered note — re-confirmed via `git stash`
+    against the pre-5F commit here too, identical failures with none of this phase's changes
+    applied.
+  - `npx tsc -b` — 0 errors. `npx vitest run` — 169 passed. `npm run build` — clean (5F
+    touched no frontend files; run for full-verification discipline).
 
 ### Phase 5G — Migrate ITR-2 to complete pre-calculation preparation
 

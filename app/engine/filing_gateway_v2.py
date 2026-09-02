@@ -28,6 +28,18 @@ from app.engine.draft_to_itr1_input import (
 )
 from app.engine.draft_to_itr2_input import draft_to_itr2_input
 from app.engine.draft_to_itr4_input import draft_to_itr4_input
+from app.engine.personal_profile import (
+    NormalizedPropertyProfile,
+    PersonalProfileError,
+    normalize_bank_accounts,
+    normalize_personal_profile,
+    normalize_property_details,
+    normalize_tax_return_preparer,
+    personal_profile_source_hash,
+    project_bank_account_itr1,
+    project_bank_account_itr4,
+    validate_bank_accounts_strict,
+)
 from app.engine.itd.itr1 import build_itr1_json
 from app.engine.itd.itr1_schema import ITR1SchemaValidationError, validate_itr1_json
 from app.engine.itd.itr2 import build_itr2_json
@@ -133,6 +145,7 @@ class ITR1PipelineResult:
     computation: ITR1Result
     breakdown: dict[str, Any]
     summary: dict[str, Any]
+    personal_profile_source_hash: str = ""
 
 
 def _decimal_float(value: Decimal | int | float) -> float:
@@ -419,6 +432,7 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
         computation=result,
         breakdown=breakdown,
         summary=_summary_from_result(result, breakdown, draft),
+        personal_profile_source_hash=personal_profile_source_hash(draft),
     )
 
 
@@ -443,237 +457,171 @@ def _required(value: str | None, field: str) -> str:
 
 
 def _filing_profile(draft: ReturnDraft) -> ITR1FilingProfile:
-    """Construct the official typed filing profile from canonical fields."""
-    personal = draft.personal
-    try:
-        dob = datetime.date.fromisoformat(_required(personal.dateOfBirth, "dateOfBirth"))
-    except ValueError as exc:
-        if isinstance(exc, FilingGatewayV2Error):
-            raise
-        raise FilingGatewayV2Error(
-            "ITR-1 filing profile is invalid.",
-            ["personal.dateOfBirth must be a valid YYYY-MM-DD date."],
-        ) from exc
-    # CBDT FilingStatus.ReturnFileSec enum (min=11, max=20): the filing
-    # section codes the official ITR-1/ITR-4 schema accepts. The frontend
-    # FilingStatus.filingSection string codes map to these integers.
-    section_codes = {
-        "139(1)": 11,   # Before due date u/s 139(1)
-        "139(4)": 12,   # Belated/after due date u/s 139(4)
-        "142(1)": 13,   # Notice u/s 142(1)
-        "148": 14,      # Notice u/s 148
-        "153C": 16,     # Notice u/s 153C
-        "139(5)": 17,   # Revised return u/s 139(5)
-        "139(9)": 18,   # Defective return u/s 139(9)
-        "119(2)(b)": 20,  # Condonation of delay u/s 119(2)(b)
-    }
-    return_section = section_codes.get(draft.filing.filingSection)
-    if return_section is None:
-        raise FilingGatewayV2Error(
-            "The v2 pipeline could not map filingSection to a CBDT ReturnFileSec code.",
-            [
-                f"filingSection {draft.filing.filingSection!r} is not a supported "
-                "section code. Use one of: 139(1), 139(4), 142(1), 148, "
-                "153C, 139(5), 139(9), 119(2)(b)."
-            ],
-        )
-    _reject_section_after_due_date(draft)
-    # ReturnFileSec 17 IS "revised return u/s 139(5)", so the section alone makes
-    # a return revised. Deriving "revised" from filing.returnType instead left the
-    # two disagreeing: a draft with filingSection 139(5) and returnType ORIGINAL
-    # produced ReturnFileSec=17 while the original-acknowledgement fields were
-    # dropped, and ITR1FilingProfile then rejected it with "Revised return
-    # requires original acknowledgement number and filing date" — a message the
-    # operator could not act on, because entering the number changed nothing.
-    is_revised = draft.filing.returnType == "REVISED" or return_section == 17
+    """Construct the official typed filing profile from canonical fields.
 
-    if not draft.verification.declarationAccepted:
-        raise FilingGatewayV2Error(
-            "Verification declaration must be accepted for official ITR-1 JSON.",
-            ["verification.declarationAccepted must be true."],
-        )
-    if draft.verification.capacity not in {"SELF", "REPRESENTATIVE"}:
+    Phase 5F: a thin adapter over ``app.engine.personal_profile``'s shared
+    normalizer for the common-core fields; keeps ITR-1-specific policy here
+    — the SELF/REPRESENTATIVE-only capacity gate, the ``is_revised``-gated
+    ``original_acknowledgement_no``/``return_type`` fields (ITR-4 has no
+    such gating), and no address truncation (ITR-1 has never truncated).
+    """
+    personal = draft.personal
+    verification = draft.verification
+
+    try:
+        normalized = normalize_personal_profile(draft, form_error_prefix="ITR-1")
+    except PersonalProfileError as exc:
+        raise FilingGatewayV2Error(exc.message, exc.errors) from exc
+    _reject_section_after_due_date(draft)
+
+    if verification.capacity not in {"SELF", "REPRESENTATIVE"}:
         raise FilingGatewayV2Error(
             "ITR-1 verification capacity is invalid.",
             ["verification.capacity must be SELF or REPRESENTATIVE for ITR-1."],
         )
-    secondary_mobile = personal.secondaryMobile.strip() or None
-    secondary_email = personal.secondaryEmail.strip() or None
+
     try:
+        addr = normalized.primary_address
         address = FilingAddress(
-            residence_no=_required(personal.flatNo, "flatNo"),
-            residence_name=personal.residenceName.strip(),
-            road_or_street=personal.roadOrStreet.strip(),
-            locality_or_area=_required(personal.localityOrArea, "localityOrArea"),
-            city_or_town_or_district=_required(personal.city, "city"),
-            state_code=_required(personal.stateCode, "stateCode"),
-            country_code=personal.countryCode.strip() or "91",
-            pin_code=personal.pinCode.strip() or None,
-            zip_code=personal.zipCode.strip(),
-            mobile_country_code=int(personal.mobileCountryCode or "91"),
-            mobile_no=_required(personal.mobile, "mobile"),
-            email=_required(personal.email, "email"),
-            secondary_mobile_country_code=(
-                int(personal.secondaryMobileCountryCode or "91") if secondary_mobile else 0
-            ),
-            secondary_mobile_no=secondary_mobile,
-            secondary_email=secondary_email,
+            residence_no=addr.residence_no,
+            residence_name=addr.residence_name,
+            road_or_street=addr.road_or_street,
+            locality_or_area=addr.locality_or_area,
+            city_or_town_or_district=addr.city_or_town_or_district,
+            state_code=addr.state_code,
+            country_code=addr.country_code,
+            pin_code=addr.pin_code,
+            zip_code=addr.zip_code,
+            mobile_country_code=addr.mobile_country_code,
+            mobile_no=addr.mobile_no,
+            email=addr.email,
+            secondary_mobile_country_code=addr.secondary_mobile_country_code,
+            secondary_mobile_no=addr.secondary_mobile_no,
+            secondary_email=addr.secondary_email,
         )
         alternate_address = None
-        if personal.secondaryAddressDifferent:
-            alt = personal.alternateAddress
-            if alt is None:
-                raise FilingGatewayV2Error(
-                    "ITR-1 filing profile is incomplete.",
-                    ["personal.alternateAddress is required when secondaryAddressDifferent is true."],
-                )
+        if normalized.alternate_address is not None:
+            alt = normalized.alternate_address
             alternate_address = PostalAddress(
-                residence_no=_required(alt.residenceNo, "alternateAddress.residenceNo"),
-                residence_name=alt.residenceName.strip(),
-                road_or_street=alt.roadOrStreet.strip(),
-                locality_or_area=_required(
-                    alt.localityOrArea, "alternateAddress.localityOrArea"
-                ),
-                city_or_town_or_district=_required(
-                    alt.cityOrTownOrDistrict,
-                    "alternateAddress.cityOrTownOrDistrict",
-                ),
-                state_code=_required(alt.stateCode, "alternateAddress.stateCode"),
-                country_code=alt.countryCode.strip() or "91",
-                pin_code=alt.pinCode.strip() or None,
-                zip_code=alt.zipCode.strip(),
+                residence_no=alt.residence_no,
+                residence_name=alt.residence_name,
+                road_or_street=alt.road_or_street,
+                locality_or_area=alt.locality_or_area,
+                city_or_town_or_district=alt.city_or_town_or_district,
+                state_code=alt.state_code,
+                country_code=alt.country_code,
+                pin_code=alt.pin_code,
+                zip_code=alt.zip_code,
             )
         representative = None
-        if draft.verification.capacity == "REPRESENTATIVE":
-            rep = draft.filing.representative
-            if rep is None:
-                raise FilingGatewayV2Error(
-                    "ITR-1 representative details are incomplete.",
-                    ["filing.representative is required for representative verification."],
-                )
+        if normalized.representative is not None:
+            r = normalized.representative
             representative = AssesseeRepresentativeProfile(
-                name=_required(rep.name, "filing.representative.name"),
-                email=_required(rep.email, "filing.representative.email"),
-                mobile_country_code=int(
-                    _required(rep.mobileCountryCode, "filing.representative.mobileCountryCode")
-                ),
-                mobile_no=_required(rep.mobile, "filing.representative.mobile"),
+                name=r.name, email=r.email,
+                mobile_country_code=r.mobile_country_code, mobile_no=r.mobile_no,
             )
-        seventh = draft.filing.seventhProviso
-        surname = personal.surnameOrOrgName.strip() or personal.name.strip()
+        seventh = normalized.seventh_proviso
         return ITR1FilingProfile(
-            pan=_required(personal.pan, "pan").upper(),
-            first_name=personal.firstName.strip(),
-            middle_name=personal.middleName.strip(),
-            surname=_required(surname, "surnameOrOrgName"),
-            date_of_birth=dob,
-            employer_category=_required(
-                personal.employerCategory, "personal.employerCategory"
-            ),
-            aadhaar_number=personal.aadhaar.strip() or None,
+            pan=normalized.pan,
+            first_name=normalized.first_name,
+            middle_name=normalized.middle_name,
+            surname=normalized.surname,
+            date_of_birth=normalized.date_of_birth,
+            employer_category=normalized.employer_category,
+            aadhaar_number=normalized.aadhaar_number,
             primary_address=address,
             alternate_address=alternate_address,
-            father_name=_required(personal.fatherName, "fatherName"),
-            verification_place=_required(draft.verification.place, "verification.place"),
+            father_name=normalized.father_name,
+            verification_place=normalized.verification_place,
             verification_capacity=(
-                "R" if draft.verification.capacity == "REPRESENTATIVE" else "S"
+                "R" if verification.capacity == "REPRESENTATIVE" else "S"
             ),
-            return_file_section=return_section,
-            return_type="R" if is_revised else "O",
+            return_file_section=normalized.return_file_section,
+            return_type="R" if normalized.is_revised else "O",
             original_acknowledgement_no=(
-                draft.filing.originalAcknowledgementNumber.strip() or None
-                if is_revised else None
+                normalized.original_acknowledgement_no if normalized.is_revised else None
             ),
-            original_return_date=_to_date(draft.filing.originalFilingDate),
-            notice_number=draft.filing.noticeNumber.strip() or None,
-            notice_date=_to_date(draft.filing.noticeDate),
+            original_return_date=normalized.original_return_date,
+            notice_number=normalized.notice_number,
+            notice_date=normalized.notice_date,
             assessee_representative=representative,
-            opt_out_new_tax_regime=draft.regime == "old",
+            opt_out_new_tax_regime=normalized.regime_is_old,
             seventh_proviso=SeventhProvisoDetails(
-                foreign_travel_flag=seventh.foreignTravel,
-                foreign_travel_amount=seventh.foreignTravelAmount,
-                electricity_expenditure_flag=seventh.electricityExpenditure,
-                electricity_expenditure_amount=seventh.electricityExpenditureAmount,
-                other_clause_iv_flag=seventh.otherClauseIV,
+                foreign_travel_flag=seventh.foreign_travel,
+                foreign_travel_amount=seventh.foreign_travel_amount,
+                electricity_expenditure_flag=seventh.electricity_expenditure,
+                electricity_expenditure_amount=seventh.electricity_expenditure_amount,
+                other_clause_iv_flag=seventh.other_clause_iv,
                 clause_iv_details=[
-                    SeventhProvisoClauseDetail(nature=row.nature, amount=row.amount)
-                    for row in seventh.clauseIVDetails
+                    SeventhProvisoClauseDetail(nature=nature, amount=amount)
+                    for nature, amount in seventh.clause_iv_details
                 ],
             ),
         )
     except (ValidationError, ValueError) as exc:
-        if isinstance(exc, FilingGatewayV2Error):
-            raise
         raise FilingGatewayV2Error("ITR-1 filing profile is invalid.", [str(exc)]) from exc
 
 
 def _property_profiles(draft: ReturnDraft) -> list[PropertyFilingProfile]:
-    """Build property filing profiles in the same order as compute rows."""
+    """Build property filing profiles in the same order as compute rows.
+
+    Phase 5F: the "has rows" case uses the shared property normalizer
+    (``normalize_property_details``); the "no rows" synthetic single-row
+    fallback (using the taxpayer's own address) is ITR-1-specific policy,
+    kept here. Unlike ITR-4 (which tolerates a missing address by
+    returning no property profile at all), ITR-1 REQUIRES address/city/
+    state — that per-form policy is applied here via ``_required`` on the
+    shared normalizer's (deliberately non-raising) output.
+    """
     rows = draft.houseProperties
     if not rows:
         personal = draft.personal
-        rows_data = [{
-            "address_detail": personal.flatNo or personal.residenceName,
-            "city_or_town_or_district": personal.city,
-            "state_code": personal.stateCode,
-            "country_code": personal.countryCode,
-            "pin_code": personal.pinCode,
-            "zip_code": personal.zipCode,
-        }]
+        normalized_rows = [NormalizedPropertyProfile(
+            address_detail=personal.flatNo or personal.residenceName,
+            city_or_town_or_district=personal.city,
+            state_code=personal.stateCode,
+            country_code=personal.countryCode,
+            pin_code=personal.pinCode,
+            zip_code=personal.zipCode,
+            property_owner="SE",
+            property_owner_other=None,
+            is_co_owned=False,
+            assessee_share_percentage=Decimal("100"),
+            co_owners=[],
+            tenants=[],
+        )]
     else:
-        # Fall back to the property name, then the primary address; also fall
-        # back to the taxpayer's city/state/country/pin so a property row that
-        # omits those fields still produces a valid PropertyFilingProfile
-        # (mirrors the legacy mapper's fallback chain).
-        primary_address = draft.personal.flatNo or draft.personal.residenceName
-        rows_data = [{
-            "address_detail": row.address or row.premisesName or row.name or primary_address,
-            "city_or_town_or_district": row.city or draft.personal.city,
-            "state_code": row.state or draft.personal.stateCode,
-            "country_code": row.countryCode or draft.personal.countryCode,
-            "pin_code": row.pinCode or draft.personal.pinCode,
-            "zip_code": row.zipCode or draft.personal.zipCode,
-            "property_owner": row.propertyOwnerType,
-            "property_owner_other": row.propertyOwnerOther.strip() or None,
-            "is_co_owned": row.isCoOwned,
-            "assessee_share_percentage": (
-                row.ownershipShare if row.isCoOwned else Decimal("100")
-            ),
-            "co_owners": [
-                PropertyCoOwner(
-                    serial_number=index,
-                    name=_required(owner.name, f"property.coOwners[{index}].name"),
-                    pan=owner.pan.strip().upper() or None,
-                    aadhaar=owner.aadhaar.strip() or None,
-                    share_percentage=owner.share,
-                )
-                for index, owner in enumerate(row.coOwners, start=1)
-            ] if row.isCoOwned else [],
-            "tenants": [
-                PropertyTenant(
-                    serial_number=index,
-                    name=_required(tenant.name, f"property.tenantDetails[{index}].name"),
-                    pan=tenant.pan.strip().upper() or None,
-                    aadhaar=tenant.aadhaar.strip() or None,
-                    pan_or_tan=tenant.panOrTan.strip().upper() or None,
-                )
-                for index, tenant in enumerate(row.tenantDetails, start=1)
-            ],
-        } for row in rows]
+        try:
+            normalized_rows = normalize_property_details(draft, form_error_prefix="ITR-1")
+        except PersonalProfileError as exc:
+            raise FilingGatewayV2Error(exc.message, exc.errors) from exc
     try:
         return [PropertyFilingProfile(
-            **{
-                **row,
-                "address_detail": _required(row["address_detail"], "property.address"),
-                "city_or_town_or_district": _required(
-                    row["city_or_town_or_district"], "property.city"
-                ),
-                "state_code": _required(row["state_code"], "property.stateCode"),
-                "country_code": (row["country_code"] or "91").strip(),
-                "pin_code": (row["pin_code"] or "").strip() or None,
-                "zip_code": (row["zip_code"] or "").strip() or None,
-            }
-        ) for row in rows_data]
+            address_detail=_required(row.address_detail, "property.address"),
+            city_or_town_or_district=_required(row.city_or_town_or_district, "property.city"),
+            state_code=_required(row.state_code, "property.stateCode"),
+            country_code=(row.country_code or "91").strip(),
+            pin_code=(row.pin_code or "").strip() or None,
+            zip_code=(row.zip_code or "").strip() or None,
+            property_owner=row.property_owner,
+            property_owner_other=row.property_owner_other,
+            is_co_owned=row.is_co_owned,
+            assessee_share_percentage=row.assessee_share_percentage,
+            co_owners=[
+                PropertyCoOwner(
+                    serial_number=c.serial_number, name=c.name, pan=c.pan,
+                    aadhaar=c.aadhaar, share_percentage=c.share_percentage,
+                )
+                for c in row.co_owners
+            ],
+            tenants=[
+                PropertyTenant(
+                    serial_number=t.serial_number, name=t.name, pan=t.pan,
+                    aadhaar=t.aadhaar, pan_or_tan=t.pan_or_tan,
+                )
+                for t in row.tenants
+            ],
+        ) for row in normalized_rows]
     except (ValidationError, ValueError) as exc:
         if isinstance(exc, FilingGatewayV2Error):
             raise
@@ -692,81 +640,49 @@ class ITR4PipelineResult:
     computation: ITR4Result
     breakdown: dict[str, Any]
     summary: dict[str, Any]
+    personal_profile_source_hash: str = ""
+
+
+def _itr4_wire_format_address(addr) -> dict[str, Any]:
+    """CBDT schema length-truncation, relocated (not new) — ITR-4's own,
+    unchanged behavior, now an explicit step rather than inline in the
+    profile builder. Operates on an already-normalized address; never
+    mutates the canonical ``NormalizedAddress``/``NormalizedAlternateAddress``
+    itself.
+    """
+    return {
+        "residence_no": addr.residence_no[:50],
+        "residence_name": addr.residence_name[:50],
+        "road_or_street": addr.road_or_street[:50],
+        "locality_or_area": addr.locality_or_area[:50],
+        "city_or_town_or_district": addr.city_or_town_or_district[:50],
+        "state_code": addr.state_code[:2],
+        "country_code": addr.country_code,
+        "pin_code": addr.pin_code,
+        "zip_code": addr.zip_code,
+    }
 
 
 def _itr4_filing_profile(draft: ReturnDraft) -> ITR4FilingProfile:
     """Construct the official ITR-4 filing profile from canonical fields.
 
-    Mirrors the legacy ``_build_itr4_input_from_flat`` profile construction,
-    but reads the typed ``ReturnDraft`` personal/filing/verification fields
-    instead of flat-blob aliases. Enforces the same verification gate
-    (declaration accepted, SELF capacity) and required-field checks.
+    Phase 5F: a thin adapter over ``app.engine.personal_profile``'s shared
+    normalizer for the common-core fields (identity, address, filing
+    section, verification, representative, seventh proviso), plus ITR-4's
+    own wire-format truncation (an explicit, relocated step — see
+    ``_itr4_wire_format_address``) and ITR-4-specific fields: assessee
+    status (including FIRM), KARTA/PARTNER verification capacities, the
+    Form-10IEA regime-switching block, and landline.
     """
     personal = draft.personal
     filing = draft.filing
     verification = draft.verification
 
-    def _required(value: str | None, field: str) -> str:
-        cleaned = (value or "").strip()
-        if not cleaned:
-            raise FilingGatewayV2Error(
-                "ITR-4 filing profile is incomplete.",
-                [f"personal.{field} is required for official CBDT JSON."],
-            )
-        return cleaned
-
     try:
-        dob = datetime.date.fromisoformat(_required(personal.dateOfBirth, "dateOfBirth"))
-    except ValueError as exc:
-        if isinstance(exc, FilingGatewayV2Error):
-            raise
-        raise FilingGatewayV2Error(
-            "ITR-4 filing profile is invalid.",
-            ["personal.dateOfBirth must be a valid YYYY-MM-DD date."],
-        ) from exc
-
-    if not verification.declarationAccepted:
-        raise FilingGatewayV2Error(
-            "Verification declaration must be accepted for official ITR-4 JSON.",
-            ["verification.declarationAccepted must be true."],
-        )
-    # Filing-section code map (mirrors the legacy _filing_section_code).
-    section_map = {
-        "139(1)": 11, "139(4)": 12, "142(1)": 13, "148": 14,
-        "153C": 16, "139(5)": 17, "139(9)": 18, "119(2)(b)": 20,
-    }
-    return_section = section_map.get(filing.filingSection)
-    if return_section is None:
-        raise FilingGatewayV2Error(
-            "Official v2 ITR-4 generation supports filing sections 139(1), "
-            "139(4), 142(1), 148, 153C, 139(5), 139(9), 119(2)(b).",
-            [f"filingSection {filing.filingSection!r} is not supported."],
-        )
+        normalized = normalize_personal_profile(draft, form_error_prefix="ITR-4")
+    except PersonalProfileError as exc:
+        raise FilingGatewayV2Error(exc.message, exc.errors) from exc
     _reject_section_after_due_date(draft)
-
-    mobile_cc_raw = (personal.mobileCountryCode or "91").strip() or "91"
-    if not mobile_cc_raw.isdigit():
-        raise FilingGatewayV2Error(
-            "ITR-4 filing profile is invalid.",
-            ["personal.countryCode must be numeric."],
-        )
-
-    secondary_mobile_raw = (personal.secondaryMobile or "").strip()
-    secondary_mobile_cc_raw = (
-        (personal.secondaryMobileCountryCode or "").strip() or mobile_cc_raw
-    )
-    secondary_mobile_no: str | None = None
-    secondary_mobile_cc: int = 0
-    if secondary_mobile_raw:
-        if not secondary_mobile_cc_raw.isdigit():
-            raise FilingGatewayV2Error(
-                "ITR-4 filing profile is invalid.",
-                ["personal.secondaryMobileCountryCode must be numeric."],
-            )
-        secondary_mobile_cc = int(secondary_mobile_cc_raw)
-        secondary_mobile_no = secondary_mobile_raw
-
-    secondary_email = (personal.secondaryEmail or "").strip() or None
 
     landline_std = (personal.landlineStdCode or "0").strip() or "0"
     landline_phone = (personal.landlinePhoneNo or "0").strip() or "0"
@@ -784,66 +700,42 @@ def _itr4_filing_profile(draft: ReturnDraft) -> ITR4FilingProfile:
         personal.assesseeStatus, ITR4AssesseeStatus.INDIVIDUAL
     )
 
+    addr = normalized.primary_address
     try:
         primary_address = ITR4FilingAddress(
-            residence_no=_required(personal.flatNo, "flatNo")[:50],
-            residence_name=(personal.residenceName or "").strip()[:50],
-            road_or_street=(personal.roadOrStreet or "").strip()[:50],
-            locality_or_area=_required(personal.localityOrArea, "localityOrArea")[:50],
-            city_or_town_or_district=_required(personal.city, "city")[:50],
-            state_code=_required(personal.stateCode, "stateCode")[:2],
-            country_code=(personal.countryCode or "91").strip() or "91",
-            pin_code=(personal.pinCode or "").strip() or None,
-            zip_code=(personal.zipCode or "").strip(),
-            mobile_country_code=int(mobile_cc_raw),
-            mobile_no=_required(personal.mobile, "mobile")[:10],
-            email=_required(personal.email, "email")[:125],
-            secondary_mobile_country_code=secondary_mobile_cc,
-            secondary_mobile_no=secondary_mobile_no,
-            secondary_email=secondary_email,
+            **_itr4_wire_format_address(addr),
+            mobile_country_code=addr.mobile_country_code,
+            mobile_no=addr.mobile_no[:10],
+            email=addr.email[:125],
+            secondary_mobile_country_code=addr.secondary_mobile_country_code,
+            secondary_mobile_no=addr.secondary_mobile_no,
+            secondary_email=addr.secondary_email,
             landline_std_code=int(landline_std),
             landline_phone_no=landline_phone[:12],
         )
     except (ValidationError, ValueError) as exc:
-        if isinstance(exc, FilingGatewayV2Error):
-            raise
         raise FilingGatewayV2Error(
             "ITR-4 filing profile is invalid.", [str(exc)]
         ) from exc
 
     alternate_address: ITR4PostalAddress | None = None
-    if personal.secondaryAddressDifferent:
-        alt = personal.alternateAddress
-        if alt is None:
-            raise FilingGatewayV2Error(
-                "ITR-4 filing profile is incomplete.",
-                ["personal.alternateAddress is required when "
-                 "secondaryAddressDifferent is true."],
-            )
+    if normalized.alternate_address is not None:
         alternate_address = ITR4PostalAddress(
-            residence_no=(alt.residenceNo or "").strip()[:50],
-            residence_name=(alt.residenceName or "").strip()[:50],
-            road_or_street=(alt.roadOrStreet or "").strip()[:50],
-            locality_or_area=(alt.localityOrArea or "").strip()[:50],
-            city_or_town_or_district=(alt.cityOrTownOrDistrict or "").strip()[:50],
-            state_code=(alt.stateCode or "").strip()[:2],
-            country_code=(alt.countryCode or "91").strip() or "91",
-            pin_code=(alt.pinCode or "").strip() or None,
-            zip_code=(alt.zipCode or "").strip(),
+            **_itr4_wire_format_address(normalized.alternate_address)
         )
 
-    seventh = draft.filing.seventhProviso
+    seventh = normalized.seventh_proviso
     seventh_proviso = ITR4SeventhProvisoDetails(
-        deposit_exceeds_one_crore_flag=seventh.depositExceedsOneCrore,
-        deposit_amount=seventh.depositAmount,
-        foreign_travel_flag=seventh.foreignTravel,
-        foreign_travel_amount=seventh.foreignTravelAmount,
-        electricity_expenditure_flag=seventh.electricityExpenditure,
-        electricity_expenditure_amount=seventh.electricityExpenditureAmount,
-        other_clause_iv_flag=seventh.otherClauseIV,
+        deposit_exceeds_one_crore_flag=seventh.deposit_exceeds_one_crore,
+        deposit_amount=seventh.deposit_amount,
+        foreign_travel_flag=seventh.foreign_travel,
+        foreign_travel_amount=seventh.foreign_travel_amount,
+        electricity_expenditure_flag=seventh.electricity_expenditure,
+        electricity_expenditure_amount=seventh.electricity_expenditure_amount,
+        other_clause_iv_flag=seventh.other_clause_iv,
         clause_iv_details=[
-            ITR4SeventhProvisoClauseDetail(nature=row.nature, amount=row.amount)
-            for row in seventh.clauseIVDetails
+            ITR4SeventhProvisoClauseDetail(nature=nature, amount=amount)
+            for nature, amount in seventh.clause_iv_details
         ],
     )
 
@@ -852,7 +744,6 @@ def _itr4_filing_profile(draft: ReturnDraft) -> ITR4FilingProfile:
         parsed = _to_date(filing.form10IEADate)
         f10iea_date = parsed.isoformat() if parsed else ""
 
-    surname = (personal.surnameOrOrgName or "").strip() or (personal.name or "").strip()
     capacity_map = {
         "SELF": "S",
         "REPRESENTATIVE": "R",
@@ -860,43 +751,32 @@ def _itr4_filing_profile(draft: ReturnDraft) -> ITR4FilingProfile:
         "PARTNER": "P",
     }
     representative = None
-    if verification.capacity == "REPRESENTATIVE":
-        rep = filing.representative
-        if rep is None:
-            raise FilingGatewayV2Error(
-                "ITR-4 representative details are incomplete.",
-                ["filing.representative is required for representative verification."],
-            )
+    if normalized.representative is not None:
+        r = normalized.representative
         representative = AssesseeRepresentativeProfile(
-            name=_required(rep.name, "filing.representative.name"),
-            email=_required(rep.email, "filing.representative.email"),
-            mobile_country_code=int(
-                _required(rep.mobileCountryCode, "filing.representative.mobileCountryCode")
-            ),
-            mobile_no=_required(rep.mobile, "filing.representative.mobile"),
+            name=r.name, email=r.email,
+            mobile_country_code=r.mobile_country_code, mobile_no=r.mobile_no,
         )
     try:
         return ITR4FilingProfile(
-            pan=_required(personal.pan, "pan").upper(),
-            first_name=(personal.firstName or "").strip()[:25],
-            middle_name=(personal.middleName or "").strip()[:25],
-            surname=_required(surname, "surnameOrOrgName")[:75],
-            date_of_birth=dob,
-            employer_category=_required(
-                personal.employerCategory, "personal.employerCategory"
-            ),
-            aadhaar_number=(personal.aadhaar or "").strip() or None,
+            pan=normalized.pan,
+            first_name=normalized.first_name[:25],
+            middle_name=normalized.middle_name[:25],
+            surname=normalized.surname[:75],
+            date_of_birth=normalized.date_of_birth,
+            employer_category=normalized.employer_category,
+            aadhaar_number=normalized.aadhaar_number,
             assessee_status=assessee_status,
             primary_address=primary_address,
             alternate_address=alternate_address,
-            father_name=_required(personal.fatherName, "fatherName")[:125],
-            verification_place=_required(verification.place, "verification.place")[:50],
+            father_name=normalized.father_name[:125],
+            verification_place=normalized.verification_place[:50],
             verification_capacity=capacity_map[verification.capacity],
-            return_file_section=return_section,
-            receipt_number=filing.originalAcknowledgementNumber.strip() or None,
-            original_return_date=_to_date(filing.originalFilingDate),
-            notice_number=filing.noticeNumber.strip() or None,
-            notice_date=_to_date(filing.noticeDate),
+            return_file_section=normalized.return_file_section,
+            receipt_number=normalized.original_acknowledgement_no,
+            original_return_date=normalized.original_return_date,
+            notice_number=normalized.notice_number,
+            notice_date=normalized.notice_date,
             assessee_representative=representative,
             seventh_proviso=seventh_proviso,
             form_10iea_earlier_ay_old_regime=filing.form10IEAEarlierAYOldRegime,
@@ -944,41 +824,42 @@ def _itr4_property_profile(draft: ReturnDraft) -> ITR4PropertyProfile | None:
     """Build the single ITR-4 property profile (one house property allowed).
 
     Falls back to the taxpayer's primary address when no property row exists
-    (mirrors the legacy mapper's fallback chain).
+    (ITR-4-specific policy, kept in this adapter — not shared, since ITR-2's
+    contract requires an exact 1:1 count against ``draft.houseProperties``
+    instead of a single-row-or-fallback shape). Also ITR-4-specific: a
+    present-but-addressless row returns ``None`` rather than raising (ITR-1's
+    adapter, by contrast, requires the address) — a real, deliberate
+    per-form difference, not incidental duplication.
     """
     rows = draft.houseProperties
     if rows:
-        row = rows[0]
-        address = (row.address or row.premisesName or row.name
-                   or draft.personal.flatNo or draft.personal.residenceName).strip()
-        city = (row.city or draft.personal.city).strip()
-        state = (row.state or draft.personal.stateCode).strip()
-        country = (row.countryCode or draft.personal.countryCode or "91").strip()
-        pin = (row.pinCode or draft.personal.pinCode).strip() or None
-        zip_code = (row.zipCode or draft.personal.zipCode).strip() or None
-        owner = row.propertyOwnerType
-        owner_other = row.propertyOwnerOther.strip() or None
-        is_co_owned = row.isCoOwned
-        assessee_share = row.ownershipShare if is_co_owned else Decimal("100")
+        try:
+            normalized = normalize_property_details(draft, form_error_prefix="ITR-4")[0]
+        except PersonalProfileError as exc:
+            raise FilingGatewayV2Error(exc.message, exc.errors) from exc
+        address = normalized.address_detail
+        city = normalized.city_or_town_or_district
+        state = normalized.state_code
+        country = normalized.country_code
+        pin = normalized.pin_code
+        zip_code = normalized.zip_code
+        owner = normalized.property_owner
+        owner_other = normalized.property_owner_other
+        is_co_owned = normalized.is_co_owned
+        assessee_share = normalized.assessee_share_percentage
         co_owners = [
             PropertyCoOwner(
-                serial_number=index,
-                name=_required(co_owner.name, f"property.coOwners[{index}].name"),
-                pan=co_owner.pan.strip().upper() or None,
-                aadhaar=co_owner.aadhaar.strip() or None,
-                share_percentage=co_owner.share,
+                serial_number=c.serial_number, name=c.name, pan=c.pan,
+                aadhaar=c.aadhaar, share_percentage=c.share_percentage,
             )
-            for index, co_owner in enumerate(row.coOwners, start=1)
-        ] if is_co_owned else []
+            for c in normalized.co_owners
+        ]
         tenants = [
             PropertyTenant(
-                serial_number=index,
-                name=_required(tenant.name, f"property.tenantDetails[{index}].name"),
-                pan=tenant.pan.strip().upper() or None,
-                aadhaar=tenant.aadhaar.strip() or None,
-                pan_or_tan=tenant.panOrTan.strip().upper() or None,
+                serial_number=t.serial_number, name=t.name, pan=t.pan,
+                aadhaar=t.aadhaar, pan_or_tan=t.pan_or_tan,
             )
-            for index, tenant in enumerate(row.tenantDetails, start=1)
+            for t in normalized.tenants
         ]
     else:
         address = (draft.personal.flatNo or draft.personal.residenceName).strip()
@@ -1017,78 +898,47 @@ def _itr4_property_profile(draft: ReturnDraft) -> ITR4PropertyProfile | None:
 
 
 def _itr4_bank_accounts(draft: ReturnDraft) -> list[ITR4BankAccount]:
-    """Map canonical bank-account rows → the ITR-4 bank-account type."""
+    """Map canonical bank-account rows → the ITR-4 bank-account type.
+
+    Phase 5F: parsing (``normalize_bank_accounts``) and the rich ITR-4-style
+    rule set (``validate_bank_accounts_strict`` — IFSC/account-number
+    format, duplicates, exactly-one-refund-account) both now live in
+    ``app.engine.personal_profile``, extracted verbatim (identical message
+    text and ``bankAccounts[{index}].*`` prefix). This function still
+    decides *when* to raise — ITR-4 raises immediately, before compute,
+    exactly as before; that error-delivery timing is deliberately not
+    unified with ITR-1's different (``ValidationReport``-based) mechanism.
+    """
     if not draft.bankAccounts:
         raise FilingGatewayV2Error(
             "ITR-4 bank account details are invalid.",
             ["bankAccounts must contain at least one account."],
         )
-
-    accounts: list[ITR4BankAccount] = []
-    errors: list[str] = []
-    seen_accounts: set[tuple[str, str]] = set()
-    refund_count = sum(account.useForRefund for account in draft.bankAccounts)
-    if refund_count != 1:
-        errors.append("bankAccounts must select exactly one account for refund.")
-
-    for index, b in enumerate(draft.bankAccounts):
-        prefix = f"bankAccounts[{index}]"
-        account_number = (b.accountNumber or "").strip()
-        ifsc = (b.ifscCode or "").strip().upper()
-        bank_name = (b.bankName or "").strip()
-        if not bank_name:
-            errors.append(f"{prefix}.bankName is required.")
-        elif len(bank_name) > 125:
-            errors.append(f"{prefix}.bankName must not exceed 125 characters.")
-        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9/-]*[0-9])?", account_number) \
-                or not any(char in "123456789" for char in account_number):
-            errors.append(
-                f"{prefix}.accountNumber must be 1-20 valid characters, contain "
-                "a non-zero digit, and end in a digit."
-            )
-        elif len(account_number) > 20:
-            errors.append(f"{prefix}.accountNumber must not exceed 20 characters.")
-        if not re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", ifsc):
-            errors.append(
-                f"{prefix}.ifscCode must contain 4 letters, 0, and 6 "
-                "alphanumeric characters."
-            )
-        key = (ifsc, account_number.upper())
-        if ifsc and account_number:
-            if key in seen_accounts:
-                errors.append(f"{prefix} duplicates another bank account.")
-            seen_accounts.add(key)
-        if errors and any(error.startswith(prefix) for error in errors):
-            continue
-        try:
-            accounts.append(ITR4BankAccount(
-                account_number=account_number,
-                ifsc_code=ifsc,
-                bank_name=bank_name,
-                account_type=b.accountType,
-                is_primary=b.useForRefund,
-            ))
-        except (ValidationError, ValueError) as exc:
-            errors.append(f"{prefix}: {exc}")
-
+    normalized = normalize_bank_accounts(draft.bankAccounts)
+    errors, cleaned = validate_bank_accounts_strict(normalized, error_prefix="bankAccounts")
     if errors:
         raise FilingGatewayV2Error(
             "ITR-4 bank account details are invalid.",
             errors,
         )
-    return accounts
+    try:
+        return [ITR4BankAccount(**project_bank_account_itr4(a)) for a in cleaned]
+    except (ValidationError, ValueError) as exc:
+        raise FilingGatewayV2Error(
+            "ITR-4 bank account details are invalid.", [str(exc)]
+        ) from exc
 
 
 def _itr1_tax_return_preparer(draft: ReturnDraft) -> TaxReturnPreparer | None:
     """Map the optional canonical TRP block to the ITR-1 filing model."""
-    trp = draft.taxReturnPreparer
-    if not trp.used:
+    normalized = normalize_tax_return_preparer(draft)
+    if normalized is None:
         return None
     try:
         return TaxReturnPreparer(
-            identification_number=trp.identificationNumber.strip().upper(),
-            name=trp.name.strip(),
-            reimbursement_from_government=trp.reimbursementFromGovernment,
+            identification_number=normalized.identification_number,
+            name=normalized.name,
+            reimbursement_from_government=normalized.reimbursement_from_government,
         )
     except (ValidationError, ValueError) as exc:
         raise FilingGatewayV2Error(
@@ -1098,14 +948,14 @@ def _itr1_tax_return_preparer(draft: ReturnDraft) -> TaxReturnPreparer | None:
 
 def _itr4_tax_return_preparer(draft: ReturnDraft) -> ITR4TaxReturnPreparer | None:
     """Map the optional canonical TRP block to the ITR-4 filing model."""
-    trp = draft.taxReturnPreparer
-    if not trp.used:
+    normalized = normalize_tax_return_preparer(draft)
+    if normalized is None:
         return None
     try:
         return ITR4TaxReturnPreparer(
-            identification_number=trp.identificationNumber.strip().upper(),
-            name=trp.name.strip(),
-            reimbursement_from_government=trp.reimbursementFromGovernment,
+            identification_number=normalized.identification_number,
+            name=normalized.name,
+            reimbursement_from_government=normalized.reimbursement_from_government,
         )
     except (ValidationError, ValueError) as exc:
         raise FilingGatewayV2Error(
@@ -1182,6 +1032,7 @@ def compute_canonical_itr4(draft: ReturnDraft) -> ITR4PipelineResult:
         computation=result,
         breakdown=breakdown,
         summary=_summary_from_result(result, breakdown, draft),
+        personal_profile_source_hash=personal_profile_source_hash(draft),
     )
 
 
