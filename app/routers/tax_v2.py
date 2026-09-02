@@ -35,7 +35,8 @@ def compute_tax_summary_v2(
     5G, all three fully prepare the filing profile before compute, not
     just ITR-1/ITR-4). ITR-3 is not yet supported by the v2 pipeline and
     raises a clear 422 — the legacy compute path remains available for it
-    via ``/tax-summary/compute`` until Phase 9.
+    via ``/tax-summary/compute`` until Phase 8 builds ITR-3 on the shared
+    complete-preparation contract.
 
     Args:
         draft: Canonical typed return draft supplied as the direct JSON body.

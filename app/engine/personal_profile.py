@@ -89,12 +89,20 @@ class PersonalProfileError(ValueError):
         self.errors = errors or [message]
 
 
-def _required(value: str | None, field: str, *, form_error_prefix: str) -> str:
+def require_field(value: str | None, field: str, *, form_error_prefix: str) -> str:
     """Return stripped required text or raise an actionable error.
 
     ``field`` may be a bare key (prefixed with ``personal.``) or an
     already-qualified draft path (used as-is) — mirrors the convention the
     ITR-1 gateway already established, applied uniformly here.
+
+    Public (not ``_required``) because it is also the tool a form adapter
+    reaches for to enforce required-ness on a field that
+    ``normalize_personal_profile`` parses but leaves optional by default —
+    ``employer_category`` below is one such field: every form shares the
+    same *source* (``personal.employerCategory``), but only ITR-1/ITR-4's
+    filing-profile types have a field to receive it, so only their
+    adapters may treat it as required.
     """
     cleaned = (value or "").strip()
     if cleaned:
@@ -252,7 +260,7 @@ def normalize_personal_profile(
 
     try:
         dob = date.fromisoformat(
-            _required(personal.dateOfBirth, "dateOfBirth", form_error_prefix=form_error_prefix)
+            require_field(personal.dateOfBirth, "dateOfBirth", form_error_prefix=form_error_prefix)
         )
     except ValueError as exc:
         if isinstance(exc, PersonalProfileError):
@@ -303,22 +311,22 @@ def normalize_personal_profile(
         secondary_mobile_cc = int(secondary_mobile_cc_raw)
 
     address = NormalizedAddress(
-        residence_no=_required(personal.flatNo, "flatNo", form_error_prefix=form_error_prefix),
+        residence_no=require_field(personal.flatNo, "flatNo", form_error_prefix=form_error_prefix),
         residence_name=(personal.residenceName or "").strip(),
         road_or_street=(personal.roadOrStreet or "").strip(),
-        locality_or_area=_required(
+        locality_or_area=require_field(
             personal.localityOrArea, "localityOrArea", form_error_prefix=form_error_prefix
         ),
-        city_or_town_or_district=_required(
+        city_or_town_or_district=require_field(
             personal.city, "city", form_error_prefix=form_error_prefix
         ),
-        state_code=_required(personal.stateCode, "stateCode", form_error_prefix=form_error_prefix),
+        state_code=require_field(personal.stateCode, "stateCode", form_error_prefix=form_error_prefix),
         country_code=(personal.countryCode or "91").strip() or "91",
         pin_code=(personal.pinCode or "").strip() or None,
         zip_code=(personal.zipCode or "").strip(),
         mobile_country_code=int(mobile_cc_raw),
-        mobile_no=_required(personal.mobile, "mobile", form_error_prefix=form_error_prefix),
-        email=_required(personal.email, "email", form_error_prefix=form_error_prefix),
+        mobile_no=require_field(personal.mobile, "mobile", form_error_prefix=form_error_prefix),
+        email=require_field(personal.email, "email", form_error_prefix=form_error_prefix),
         secondary_mobile_country_code=secondary_mobile_cc,
         secondary_mobile_no=secondary_mobile,
         secondary_email=secondary_email,
@@ -353,16 +361,16 @@ def normalize_personal_profile(
                 ["filing.representative is required for representative verification."],
             )
         representative = NormalizedRepresentative(
-            name=_required(rep.name, "filing.representative.name", form_error_prefix=form_error_prefix),
-            email=_required(rep.email, "filing.representative.email", form_error_prefix=form_error_prefix),
+            name=require_field(rep.name, "filing.representative.name", form_error_prefix=form_error_prefix),
+            email=require_field(rep.email, "filing.representative.email", form_error_prefix=form_error_prefix),
             mobile_country_code=int(
-                _required(
+                require_field(
                     rep.mobileCountryCode,
                     "filing.representative.mobileCountryCode",
                     form_error_prefix=form_error_prefix,
                 )
             ),
-            mobile_no=_required(
+            mobile_no=require_field(
                 rep.mobile, "filing.representative.mobile", form_error_prefix=form_error_prefix
             ),
         )
@@ -382,19 +390,22 @@ def normalize_personal_profile(
     surname = (personal.surnameOrOrgName or "").strip() or (personal.name or "").strip()
 
     return NormalizedPersonalProfile(
-        pan=_required(personal.pan, "pan", form_error_prefix=form_error_prefix).upper(),
+        pan=require_field(personal.pan, "pan", form_error_prefix=form_error_prefix).upper(),
         first_name=(personal.firstName or "").strip(),
         middle_name=(personal.middleName or "").strip(),
-        surname=_required(surname, "surnameOrOrgName", form_error_prefix=form_error_prefix),
+        surname=require_field(surname, "surnameOrOrgName", form_error_prefix=form_error_prefix),
         date_of_birth=dob,
-        employer_category=_required(
-            personal.employerCategory, "employerCategory", form_error_prefix=form_error_prefix
-        ),
+        # Not required here: ITR-2's filing-profile type has no field to
+        # receive this at all, so this module cannot know whether it is
+        # required without knowing which form is calling — that decision
+        # belongs to the ITR-1/ITR-4 adapters (the only ones with a place to
+        # put it), via require_field() on this raw value.
+        employer_category=(personal.employerCategory or "").strip(),
         aadhaar_number=(personal.aadhaar or "").strip() or None,
-        father_name=_required(personal.fatherName, "fatherName", form_error_prefix=form_error_prefix),
+        father_name=require_field(personal.fatherName, "fatherName", form_error_prefix=form_error_prefix),
         primary_address=address,
         alternate_address=alternate_address,
-        verification_place=_required(
+        verification_place=require_field(
             verification.place, "verification.place", form_error_prefix=form_error_prefix
         ),
         verification_capacity_raw=verification.capacity,
@@ -590,7 +601,7 @@ def _normalize_one_property(row: Any, personal: Any, *, form_error_prefix: str) 
     co_owners = [
         NormalizedCoOwner(
             serial_number=index,
-            name=_required(
+            name=require_field(
                 owner.name, f"property.coOwners[{index}].name", form_error_prefix=form_error_prefix
             ),
             pan=owner.pan.strip().upper() or None,
@@ -602,7 +613,7 @@ def _normalize_one_property(row: Any, personal: Any, *, form_error_prefix: str) 
     tenants = [
         NormalizedTenant(
             serial_number=index,
-            name=_required(
+            name=require_field(
                 tenant.name, f"property.tenantDetails[{index}].name", form_error_prefix=form_error_prefix
             ),
             pan=tenant.pan.strip().upper() or None,

@@ -1329,6 +1329,73 @@ the plan text itself allows ("move into **or delegate to**").
   from "did `compute_canonical_itrN` raise or not" — inventing one for ITR-2 alone, ahead of
   ITR-1/ITR-4 having it, would be scope creep beyond "migrate ITR-2 to match its siblings."
 
+**Follow-up 2026-09-02 (external review, [P2]) — `_itr2_filing_profile` migrated onto the
+shared `personal_profile.py` normalizer.** An external review of commit `2259a92` confirmed
+the pre-calculation-timing work above was correct and appropriately scoped, but flagged that
+`_itr2_filing_profile()` still independently re-parsed `draft.personal`/`draft.filing`/
+`draft.verification` instead of calling `normalize_personal_profile()` — leaving Phase 5F's
+"one shared personal-profile normalization contract for all migrated forms" goal not actually
+met for ITR-2, contrary to what Phase 5F's own Delivered note had promised as "Phase 5G's
+explicit job." Fixed rather than re-deferred:
+
+- **`app/engine/filing_gateway_v2.py::_itr2_filing_profile`** — rewritten as a thin adapter
+  over `normalize_personal_profile()`, mirroring `_filing_profile` (ITR-1) and
+  `_itr4_filing_profile`. ITR-2-specific policy stays in the adapter: the SELF/KARTA-only
+  verification-capacity gate is checked **before** calling the shared normalizer (ITR-2,
+  unlike ITR-1/ITR-4, does not support REPRESENTATIVE at all, so the normalizer's
+  unconditional representative-required check must never run for it), plus ITR-2's own
+  assessee-status mapping, seventh-proviso flag collapsing, FII/FPI, and Portuguese Civil
+  Code fields. Removed now-dead code found while doing this: the `_ITR2_SECTION_CODES` dict
+  and the unused `ReturnFileSection as ITR2ReturnFileSection` import (both confirmed
+  zero-reference via grep before deletion).
+- **Real bug found and fixed while migrating, not merely worked around**: the shared
+  `normalize_personal_profile()` unconditionally required `personal.employerCategory` (via
+  what is now `require_field()`, renamed from the module-private `_required()` specifically
+  so form adapters could call it too) — correct for ITR-1/ITR-4, whose `ITR1FilingProfile`/
+  `ITR4FilingProfile` both have an `employer_category` field, but wrong for ITR-2:
+  `ITR2FilingProfile` has no such field at all (confirmed by reading `app/schemas/itr2.py`),
+  so a filing-ready ITR-2 draft that simply never sets `employerCategory` (correctly, since
+  ITR-2 never asks for it) was rejected with a generic "ITR-2 filing profile is incomplete."
+  error the moment `_itr2_filing_profile` started calling the shared normalizer — caught by
+  7 of 11 tests in `tests/test_filing_gateway_v2_itr2.py` failing immediately, not discovered
+  by inspection. Root-caused by isolating the exact `PersonalProfileError.errors` value via a
+  standalone repro script (`personal.employerCategory is required for official CBDT JSON.`)
+  rather than guessing from the generic wrapped message. Fixed per the established "shared
+  normalizer does structural parsing; per-form adapter owns required-ness policy" principle:
+  `normalize_personal_profile()` now parses `employer_category` without raising
+  (`(personal.employerCategory or "").strip()`), and only the ITR-1 and ITR-4 adapters call
+  `require_field()` on it explicitly (each wrapped in its own `except PersonalProfileError`
+  → `FilingGatewayV2Error` re-raise, placed immediately after their capacity gate, so the
+  message/errors text is byte-identical to what raising inside the shared normalizer would
+  have produced). Verified no other `require_field()`-guarded common-core field has the same
+  asymmetry: `pan`, `surnameOrOrgName`, `fatherName`, `dateOfBirth`, the primary-address
+  fields, and `verification.place` are all present on `ITR2FilingProfile` too (read directly
+  from `app/schemas/itr2.py`), so `employer_category` was the only field needing this split.
+- **`app/routers/tax_v2.py`** — separately, corrected `compute_tax_summary_v2`'s docstring,
+  which said the ITR-3 legacy fallback remains "until Phase 9" — the production plan
+  describes ITR-3's build-out under Phase 8, not Phase 9 (Phase 9 is the later deletion of
+  the dead legacy ITR-2 path); changed to "until Phase 8 builds ITR-3 on the shared
+  complete-preparation contract."
+- **Verification:**
+  - `pytest tests/test_filing_gateway_v2_itr2.py tests/test_filing_gateway_v2.py
+    tests/test_filing_gateway_v2_itr4.py tests/test_personal_profile.py -q` — 86 passed
+    (confirms the fix and that ITR-1/ITR-4's `require_field()` enforcement of
+    `employer_category` still produces the same errors as before the rename).
+  - `pytest tests/ -k "filing_gateway or itr1 or itr4 or itr2 or personal_profile" -q`
+    (excluding the 8 pre-existing null-byte-source collection-error files noted in
+    `CLAUDE.md`) — 660 passed, zero regressions.
+  - Full suite `pytest tests/ -q` (same exclusion list) — 1446 passed, 3 failed, 1 error;
+    confirmed via `git stash` against the pre-fix commit that all 3 `test_tax_v2_compute.py`
+    failures and the 1 `test_26as_batch.py::test_single_file` collection error are
+    pre-existing and unrelated (identical failures with the fix stashed out).
+  - `npm run build` (`tsc -b && vite build`) — clean; this follow-up touches no frontend
+    files, run for full-verification discipline.
+
+The three externally-modified documentation files this review's diff also flagged
+(`CLAUDE.md`, `README.md`, `Docs/ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md`) were left
+untouched and excluded from this follow-up's commit, per the review's own recommendation that
+they be reviewed/committed separately — not this phase's concern.
+
 ### Phase 6 ? Frontend: wire ITR-2 onto the canonical `ReturnDraft`
 
 Starts only after Phases 5E, 5F, and 5G pass. The editor persists one `ReturnDraft`, and the generic v2 gateway consumes the same complete prepared input for computation and JSON. Personal/profile/verification/refund/TRP fields remain personal-profile concerns; property/employer/TDS3 details remain schedule concerns.
