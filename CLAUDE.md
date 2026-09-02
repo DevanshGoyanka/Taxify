@@ -100,32 +100,33 @@ app/schemas/itr*.py  →   app/engine/calculators/itr*.py  →  app/engine/itd/i
    CBDT JSON schema (`additionalProperties: false`), including the `CreationInfo.Digest` —
    SHA-256 over the sorted JSON, computed after all schedules are built.
 
-Full verified end-to-end architecture reference (every route, the v2 canonical pipeline,
+Full verified end-to-end architecture reference (every route, the canonical pipeline,
 Type-3 submission, DB persistence): `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`. ITR-2/
-ITR-3's build-out onto that same v2 pipeline is tracked phase-by-phase, including a
-"Delivered" note per completed phase (files touched, gaps found, verification), in
-`Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` — read that first before assuming ITR-2/3
-architecture from this file or from `README.md`, both of which describe the legacy
-per-form schema pipeline below, not the newer draft-based one.
+ITR-3's build-out onto the same complete-preparation contract is tracked phase-by-phase,
+including a "Delivered" note per completed phase, in
+`Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` — read that first for their current status.
 
 ### v2 canonical pipeline (`ReturnDraft`)
 
 The production compute/filing path for the frontend's single multi-form editor. One
-canonical `ReturnDraft` (`app/schemas/return_draft.py`) covers every form; per-form pipeline:
+canonical `ReturnDraft` (`app/schemas/return_draft.py`) covers every form. ITR-1 and ITR-4
+use the complete-preparation lifecycle:
 
 ```
-ReturnDraft → draft_to_itr{N}_input.py → calculator → validators/itr{N}/ → itd/itr{N}.py
+ReturnDraft → form-specific preparation
+            → complete typed input → input validation
+            → calculator → calculation validation
+            → summary and CBDT JSON from the prepared input
+            → official schema validation
 ```
 
-`app/engine/filing_gateway_v2.py` is the single dispatch point — `compute_canonical(draft)`
-and `generate_cbdt_json(draft)` switch on `draft.form` to per-form
-`compute_canonical_itr{N}()` / `_generate_cbdt_json_itr{N}()` functions, each of which: maps
-the draft to the form's typed `Input` model, runs the calculator, then (for JSON generation)
-constructs the official-JSON-only filing profile/property/bank-account objects, runs the CBDT
-Category A/B/D validators (`app/engine/validators/itr{N}/`) so blocking errors stop generation
-before it reaches the portal, then builds and schema-validates the CBDT JSON. Live for ITR-1,
-ITR-2, and ITR-4 as of this writing; ITR-3 is not yet wired (still legacy-only) — check the
-production plan doc above for current status before assuming either way.
+Preparation includes the filing profile and eligibility, property profile, bank accounts,
+verification and representative details, and optional TRP data. `app/engine/filing_gateway_v2.py`
+is the single dispatch point: `compute_canonical(draft)` and `generate_cbdt_json(draft)` switch
+on `draft.form` to the per-form preparers and serializers. JSON generation reuses the prepared
+typed input; it must not perform late `model_copy(update={...})` enrichment or reconstruct
+filing data from `ReturnDraft`. ITR-2/ITR-3 migration status is governed by the production
+plan above; do not infer their readiness from this ITR-1/ITR-4 contract.
 
 ### Routers → engine wiring
 
