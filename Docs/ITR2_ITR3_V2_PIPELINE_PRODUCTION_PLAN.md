@@ -20,7 +20,7 @@ items point to, not a duplicate.
 | 5 | Complete the ITR-2 CBDT validator suite (5A–5E ✅ Delivered 2026-09-02; 5F/5G architecture gates still required before Phase 6) | ✅ Delivered 2026-09-02 |
 | 5F | Shared canonical personal-profile foundation (ITR-1/ITR-4) | ✅ Delivered 2026-09-02 |
 | 5G | Migrate ITR-2 to complete pre-calculation preparation | ✅ Delivered 2026-09-02 |
-| 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | Not started — now unblocked |
+| 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | ⏳ Canonical data contract delivered 2026-09-02; capture UI not started |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started — now unblocked |
 | 8 | ITR-3 on the shared complete-preparation contract | Not started |
 | 9 | Delete the dead ITR-2 legacy path | Not started |
@@ -1418,13 +1418,58 @@ The three externally-modified documentation files this review's diff also flagge
 untouched and excluded from this follow-up's commit, per the review's own recommendation that
 they be reviewed/committed separately — not this phase's concern.
 
-### Phase 6 ? Frontend: wire ITR-2 onto the canonical `ReturnDraft`
+### Phase 6 ? Frontend: wire ITR-2 onto the canonical `ReturnDraft` (canonical data contract ✅ Delivered 2026-09-02; capture UI not started)
 
 Starts only after Phases 5E, 5F, and 5G pass. The editor persists one `ReturnDraft`, and the generic v2 gateway consumes the same complete prepared input for computation and JSON. Personal/profile/verification/refund/TRP fields remain personal-profile concerns; property/employer/TDS3 details remain schedule concerns.
 
 `itrV2.ts`/`canonicalRepository.ts` already handle generic `ReturnDraft` operations. Form-aware UI work includes `PersonalInfoTab`, `CapitalGainsTab`/`CapitalGainsEntryManager`, and capture tabs for FSI/TR/FA/SPI/PTI/AMT/AL/5A/ESOP. The schedule registry must not mark fields as supported until the corresponding mapper, preparer, validator, and JSON path are complete.
 
 **Scope note:** polished capture UI for missing schedules may require sub-phases after the canonical data contract is locked; no UI phase may introduce a second filing/computation representation.
+
+**Delivered 2026-09-02 — canonical data contract only (the scope note's prerequisite
+sub-phase, not the UI capture work itself).** Landed exactly the additive-field foundation
+the scope note calls for, with no UI editors: every ITR-2/3 additive schedule (CFL opening +
+carried-forward loss entries, Schedule SI, FSI, TR, FA, SPI, PTI, AMT, AL, 5A, ESOP) now has
+an immutable `editorModelV2.ts` updater and is backfilled from factory defaults by
+`normalizeLoadedDraft()` in `canonicalRepository.ts` when loading an older saved draft that
+predates these fields — while preserving any value already present, explicit `null`s
+included (verified by inspection: each field uses `draft.field !== undefined ? draft.field :
+defaults.field`, not `??`, so a legitimate `null` on `amt`/`assetLiability`/
+`portugueseCivilCode` is not overwritten by the default).
+
+- **Verified independently before accepting the report that proposed this work** (do not
+  take a "changes complete" report at face value — check the diff against the actual type
+  definitions and callers):
+  - Every new field name in the `canonicalRepository.ts`/`editorModelV2.ts` diffs
+    (`broughtForwardLossEntries`, `carriedForwardLossEntries`, `scheduleSIEntries`,
+    `foreignSourceIncome`, `foreignTaxRelief`, `foreignAssets`, `clubbedIncome`,
+    `passThroughIncomeEntries`, `amt`, `assetLiability`, `portugueseCivilCode`,
+    `esopDeferrals`) was grepped against `frontend/src/domain/returns/types.ts`'s actual
+    `ReturnDraft` interface — all twelve exist there with matching types; none invented.
+  - The `ITRComputationPage.tsx` comment change (replacing a stale claim that "the backend
+    maps the flat payload" with "the canonical draft is sent directly to the v2 compute
+    endpoint") was checked against the actual network call a few lines below it —
+    `itrV2.compute(stripCompatibility({ ...currentDraft, ... }))` on `editorRef.current.draft`
+    — confirming the new comment, not the old one, matches what the code does.
+  - The claim that `frontend/src/api/itr2Mapper.ts` "has no live callers" was checked
+    independently via `grep -rn "from.*itr2Mapper"` across `frontend/src` — zero import
+    sites found anywhere; the claim holds and the file is correctly left undeleted pending
+    Phase 9 (legacy-path deletion), not this phase's concern.
+  - Fixed one cosmetic nit before accepting (missing blank line between
+    `updateEsopDeferrals` and the next, pre-existing `updateBpNetProfit` function) — no
+    functional change.
+- **Verification (re-run directly, not trusted from the incoming report):**
+  `npx tsc -b` clean; `npx vitest run` — 172 passed across 22 files (up from the 169 noted in
+  the Phase 5G entry above, consistent with the new tests added here); `npm run build` clean
+  (same pre-existing large-chunk-size warning as every prior phase's build, nothing new).
+- **Explicitly not done, per the incoming report's own disclosure (verified accurate, not
+  taken on faith) and per this doc's scope note above**: no dedicated capture-UI schedule
+  workspace exists yet for FSI/TR/FA/SPI/PTI/AMT/AL/5A/ESOP/CFL — a taxpayer cannot enter
+  these values through the editor today, only through direct `ReturnDraft` manipulation (e.g.
+  import/prefill). `PersonalInfoTab`/`CapitalGainsTab` UI work and the schedule-registry
+  "supported" gating are also not started. This delivery is the canonical-storage
+  prerequisite the scope note anticipated, not Phase 6's full frontend scope — do not infer
+  ITR-2 UI-editing completeness from this entry alone.
 
 ### Phase 7 ? ITR-2 v2 endpoints + Direct Submit extension
 

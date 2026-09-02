@@ -348,9 +348,9 @@ export default function ITRComputationPage() {
 
   // Fetch backend-computed tax summary - replaces local computeTax()
   // All ITR forms (ITR-1, ITR-2, ITR-3, ITR-4) use the same endpoint.
-  // The backend maps the flat payload to the correct canonical model
-  // (ITR1Input / ITR2Input / ITR4Input) based on the `form` field and
-  // runs the appropriate engine.  The frontend never needs a mapper.
+  // The canonical draft is sent directly to the v2 compute endpoint; the
+  // backend consumes the already-typed ReturnDraft and dispatches by form.
+  // The frontend never projects it through a legacy flat-payload mapper.
   //
   // Debounced: only fires 500ms after user stops typing.
   useEffect(() => {

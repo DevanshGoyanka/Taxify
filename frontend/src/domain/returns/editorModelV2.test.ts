@@ -3,6 +3,18 @@ import { createEmptyReturnDraft } from './factory';
 import {
   replaceDraft,
   updateCapitalGainsSchedule,
+  updateAmt,
+  updateAssetLiability,
+  updateBroughtForwardLossEntries,
+  updateCarriedForwardLossEntries,
+  updateClubbedIncome,
+  updateEsopDeferrals,
+  updateForeignAssets,
+  updateForeignSourceIncome,
+  updateForeignTaxRelief,
+  updatePassThroughIncomeEntries,
+  updatePortugueseCivilCode,
+  updateScheduleSIEntries,
   updateDeductionLoansFromManager,
   updateDraft,
   updateEmployers,
@@ -118,6 +130,77 @@ describe('ReturnEditorModelV2', () => {
     // Detached: mutating the input after the call does not affect the model
     newSchedule.schedule112A[0].isin = 'MUTATED';
     expect(updated.draft.capitalGainsSchedule.schedule112A[0].isin).toBe('INE123456789');
+  });
+
+  it('updates all ITR-2 additive schedules immutably', () => {
+    const model = replaceDraft(createEmptyReturnDraft('2026-27', 'ITR-2', 'new'));
+    const broughtForwardLossEntries = [{ id: 'bf-1', assessmentYear: '2025-26', head: 'HP' as const, subCategory: 'SELF', originalLoss: 1000, broughtForward: 500 }];
+    const carriedForwardLossEntries = [{ id: 'cf-1', assessmentYearOfLoss: '2024-25', head: 'LTCG' as const, originalLoss: 2000, lossRemaining: 1500 }];
+    const scheduleSIEntries = [{ id: 'si-1', section: '111' as const, description: 'Gain', grossIncome: 1000, deductions: 0, taxRatePct: 10 }];
+    const foreignSourceIncome = [{ id: 'fsi-1', countryCode: 'US', taxIdentificationNo: 'TIN', salaryIncome: 100, hpIncome: 0, cgIncome: 0, osIncome: 0, taxPaidOutsideIndia: 10, taxPayableInIndia: 12, reliefSection: '90' as const }];
+    const foreignTaxRelief = [{ id: 'tr-1', countryCode: 'US', taxIdentificationNo: 'TIN', incomeIncludedInThisReturn: 100, taxPaidOutsideIndia: 10, indianTaxPayable: 12, reliefClaimed: 10, reliefSection: '90' as const, form67Filed: true }];
+    const foreignAssets = [{ id: 'fa-1', assetType: 'BANK_ACCOUNT' as const, countryCode: 'US', institutionOrEntityName: 'Bank', address: 'A', accountOrAssetIdentifier: '1', ownershipStatus: 'OWNER', openingOrAcquisitionDate: '2025-04-01', peakValue: 10, closingValue: 8, grossIncome: 0, incomeOffered: 0 }];
+    const clubbedIncome = [{ id: 'spi-1', specifiedPersonName: 'Spouse', pan: 'ABCDE1234F', relationship: 'SPOUSE', amountIncluded: 100, headOfIncome: 'OS' as const }];
+    const passThroughIncomeEntries = [{ id: 'pti-1', entityName: 'Trust', entityPAN: 'ABCDE1234F', incomeHead: 'OS' as const, section: '115UA', incomeAmount: 100, tdsCredit: 5 }];
+    const amt = { deduction10AA: 1, deduction80IAto80RRBExcept80P: 2, deduction35ADNetDepreciation: 3, creditsBroughtForward: [{ id: 'amt-1', assessmentYear: '2025-26', creditBroughtForward: 4 }] };
+    const assetLiability = { immovableProperty: 1, cashInHand: 2, bankDeposits: 3, sharesAndSecurities: 4, insurancePolicies: 5, loansAndAdvances: 6, jewellery: 7, art: 8, vehiclesBoatsAircraft: 9, relatedLiabilities: 10 };
+    const portugueseCivilCode = { spouseName: 'Spouse', spousePAN: 'ABCDE1234F', spouseAadhaar: '', hpAmountApportioned: 1, cgAmountApportioned: 2, osAmountApportioned: 3, tdsApportioned: 4 };
+    const esopDeferrals = [{ id: 'esop-1', employerPAN: 'ABCDE1234F', dpiitRegistrationNumber: 'DPIIT-1', assessmentYear: '2025-26', taxDeferredBroughtForward: 10, taxPayableCurrentYear: 5, balanceTaxCarriedForward: 5 }];
+
+    const updated = updateEsopDeferrals(
+      updatePortugueseCivilCode(
+        updateAssetLiability(
+          updateAmt(
+            updatePassThroughIncomeEntries(
+              updateClubbedIncome(
+                updateForeignAssets(
+                  updateForeignTaxRelief(
+                    updateForeignSourceIncome(
+                      updateScheduleSIEntries(
+                        updateCarriedForwardLossEntries(
+                          updateBroughtForwardLossEntries(model, broughtForwardLossEntries),
+                          carriedForwardLossEntries,
+                        ),
+                        scheduleSIEntries,
+                      ),
+                      foreignSourceIncome,
+                    ),
+                    foreignTaxRelief,
+                  ),
+                  foreignAssets,
+                ),
+                clubbedIncome,
+              ),
+              passThroughIncomeEntries,
+            ),
+            amt,
+          ),
+          assetLiability,
+        ),
+        portugueseCivilCode,
+      ),
+      esopDeferrals,
+    );
+
+    expect(updated.draft.broughtForwardLossEntries).toEqual(broughtForwardLossEntries);
+    expect(updated.draft.carriedForwardLossEntries).toEqual(carriedForwardLossEntries);
+    expect(updated.draft.scheduleSIEntries).toEqual(scheduleSIEntries);
+    expect(updated.draft.foreignSourceIncome).toEqual(foreignSourceIncome);
+    expect(updated.draft.foreignTaxRelief).toEqual(foreignTaxRelief);
+    expect(updated.draft.foreignAssets).toEqual(foreignAssets);
+    expect(updated.draft.clubbedIncome).toEqual(clubbedIncome);
+    expect(updated.draft.passThroughIncomeEntries).toEqual(passThroughIncomeEntries);
+    expect(updated.draft.amt).toEqual(amt);
+    expect(updated.draft.assetLiability).toEqual(assetLiability);
+    expect(updated.draft.portugueseCivilCode).toEqual(portugueseCivilCode);
+    expect(updated.draft.esopDeferrals).toEqual(esopDeferrals);
+    expect(model.draft.broughtForwardLossEntries).toEqual([]);
+    expect(model.draft.amt).toBeNull();
+
+    broughtForwardLossEntries[0].broughtForward = 999;
+    amt.creditsBroughtForward[0].creditBroughtForward = 999;
+    expect(updated.draft.broughtForwardLossEntries[0].broughtForward).toBe(500);
+    expect(updated.draft.amt?.creditsBroughtForward[0].creditBroughtForward).toBe(4);
   });
 
   it('synchronizes loan detail interest into Chapter VI-A scalar claims', () => {

@@ -1,13 +1,20 @@
 import { classifyTdsSchedule, toSchemaSectionCode } from './tdsSections';
 import type {
   BankAccount,
+  BroughtForwardLossEntry,
+  CarriedForwardLossEntry,
   CapitalGainsSchedule,
   ChapterVIA,
+  ClubbedIncomeEntry,
   DeductionLoan,
   DividendIncome,
   Donation80G,
   Employer,
+  ESOPDeferralEntry,
   FamilyPension,
+  ForeignAssetEntry,
+  ForeignSourceIncomeEntry,
+  ForeignTaxReliefEntry,
   GiftConsiderationKind,
   GiftIncome,
   HouseProperty,
@@ -15,10 +22,15 @@ import type {
   InterestKind,
   Investment80C,
   LoanDeductions,
+  AMTDetails,
+  AssetLiabilityDetails,
+  PortugueseCivilCodeDetails,
+  PassThroughIncomeEntry,
   Policy80D,
   ReturnDraft,
   Schedule80GGAEntry,
   Schedule80GGCEntry,
+  ScheduleSIEntry,
   Section80D,
   TaxChallan,
   TcsCredit,
@@ -281,6 +293,66 @@ export function updateChapterVIA(model: ReturnEditorModelV2, value: ChapterVIA):
 /** Replaces Schedule CYLA brought-forward losses immutably. */
 export function updateLossesBroughtForward(model: ReturnEditorModelV2, value: ReturnDraft['lossesBroughtForward']): ReturnEditorModelV2 {
   return withDraft(model, { ...model.draft, lossesBroughtForward: clone(value) });
+}
+
+/** Replaces ITR-2/3 Schedule CFL opening loss rows immutably. */
+export function updateBroughtForwardLossEntries(model: ReturnEditorModelV2, entries: readonly BroughtForwardLossEntry[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, broughtForwardLossEntries: cloneArray(entries) });
+}
+
+/** Replaces ITR-2/3 carried-forward loss ledger rows immutably. */
+export function updateCarriedForwardLossEntries(model: ReturnEditorModelV2, entries: readonly CarriedForwardLossEntry[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, carriedForwardLossEntries: cloneArray(entries) });
+}
+
+/** Replaces Schedule SI rows immutably. */
+export function updateScheduleSIEntries(model: ReturnEditorModelV2, entries: readonly ScheduleSIEntry[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, scheduleSIEntries: cloneArray(entries) });
+}
+
+/** Replaces Schedule FSI rows immutably. */
+export function updateForeignSourceIncome(model: ReturnEditorModelV2, entries: readonly ForeignSourceIncomeEntry[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, foreignSourceIncome: cloneArray(entries) });
+}
+
+/** Replaces Schedule TR rows immutably. */
+export function updateForeignTaxRelief(model: ReturnEditorModelV2, entries: readonly ForeignTaxReliefEntry[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, foreignTaxRelief: cloneArray(entries) });
+}
+
+/** Replaces Schedule FA rows immutably. */
+export function updateForeignAssets(model: ReturnEditorModelV2, entries: readonly ForeignAssetEntry[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, foreignAssets: cloneArray(entries) });
+}
+
+/** Replaces Schedule SPI rows immutably. */
+export function updateClubbedIncome(model: ReturnEditorModelV2, entries: readonly ClubbedIncomeEntry[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, clubbedIncome: cloneArray(entries) });
+}
+
+/** Replaces Schedule PTI rows immutably. */
+export function updatePassThroughIncomeEntries(model: ReturnEditorModelV2, entries: readonly PassThroughIncomeEntry[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, passThroughIncomeEntries: cloneArray(entries) });
+}
+
+/** Replaces Schedule AMT details immutably. */
+export function updateAmt(model: ReturnEditorModelV2, value: AMTDetails | null): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, amt: value === null ? null : clone(value) });
+}
+
+/** Replaces Schedule AL details immutably. */
+export function updateAssetLiability(model: ReturnEditorModelV2, value: AssetLiabilityDetails | null): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, assetLiability: value === null ? null : clone(value) });
+}
+
+/** Replaces Schedule 5A details immutably. */
+export function updatePortugueseCivilCode(model: ReturnEditorModelV2, value: PortugueseCivilCodeDetails | null): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, portugueseCivilCode: value === null ? null : clone(value) });
+}
+
+/** Replaces Schedule ESOP rows immutably. */
+export function updateEsopDeferrals(model: ReturnEditorModelV2, entries: readonly ESOPDeferralEntry[]): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, esopDeferrals: cloneArray(entries) });
 }
 
 /** Updates the non-presumptive PGBP net-profit figure immutably. */
