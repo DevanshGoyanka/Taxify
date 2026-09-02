@@ -1797,3 +1797,194 @@ def test_r119_collision_resolved_80gg_hra_exclusion_uses_unique_id():
     )
     results = validate_itr1_input(inp)
     assert failed(results, "ITR1-R119b")
+
+
+# ── nature_of_employment keyword-matching fixes (2026-09-03) ──────────────
+#
+# Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §14: every rule
+# below used to match keywords ("central government", "pension", "cg-") that
+# never appear in the raw official employment code (CGOV/SGOV/PSU/PE/PESG/
+# PEPS/PEO/OTH) `nature_of_employment` actually carries -- the same bug
+# already fixed for ITR1-R142. Each was either permanently dormant (never
+# caught a real invalid claim) or permanently blocking (fired regardless of
+# actual employment, hard-blocking legitimate CG/SG/pensioner/judge filers).
+
+def test_R120_real_cgov_employee_gets_14pct_cap_not_10pct():
+    """A genuine CGOV employee claiming 12% of salary as 80CCD(2) is legitimate
+    (within the 14% government cap) but was previously always routed to the
+    10% non-government cap check (ITR1-R119), since "central"/"government"
+    never matched the raw "CGOV" code -- a false-positive block."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("120000")),  # 12%
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R119")
+    assert not failed(results, "ITR1-R120")
+
+
+def test_R120_real_non_govt_employee_still_capped_at_10pct():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="OTH",
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("120000")),  # 12% > 10%
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R119")
+
+
+def test_R116_pensioner_blocked_from_80ccd2():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.SIXTY_TO_80, tax_regime=TaxRegime.OLD,
+        nature_of_employment="PE",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("10000")),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R116")
+
+
+def test_R002_pensioner_80ccd1_checked_against_20pct_gti_not_10pct_salary():
+    """A pensioner's 80CCD(1) claim must be checked against 20% of estimated
+    GTI (ITR1-R002), not the non-pensioner 10%-of-salary rule (ITR1-R003)."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.SIXTY_TO_80, tax_regime=TaxRegime.OLD,
+        nature_of_employment="PESG",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("60000")),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R003")
+
+
+def test_R187_real_cgov_agniveer_not_blocked():
+    """A genuine Central Government (Agniveer) employee claiming 80CCH was
+    previously always blocked, since "central government" never matched the
+    raw "CGOV" code."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("50000")),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R187")
+
+
+def test_R187_non_cgov_employee_still_blocked_from_80cch():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="PSU",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("50000")),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R187")
+
+
+def test_judges_exemption_not_blocked_for_real_cgov_employee():
+    """R270/R301: a genuine CGOV employee (e.g. a Supreme/High Court judge)
+    claiming the Judge Salaries Act exemption was previously always
+    blocked -- the keyword check never matched the raw "CGOV" code."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        exempt_income_dropdowns=["Judge Salaries Act"],
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R270")
+    assert not failed(results, "ITR1-R301")
+
+
+def test_judges_exemption_still_blocked_for_non_govt_employee():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="OTH",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        exempt_income_dropdowns=["Judge Salaries Act"],
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R270")
+    assert failed(results, "ITR1-R301")
+
+
+def test_R267_cgov_gratuity_checked_against_25l_cap():
+    """A genuine CGOV employee's gratuity claim above Rs 25L was previously
+    never checked (dormant) since the keyword match never matched "CGOV"."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R267")
+    assert not failed(results, "ITR1-R067")
+
+
+def test_R267_non_govt_gratuity_checked_against_20l_cap_not_25l():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="OTH",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2100000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R067")
+    assert not failed(results, "ITR1-R267")
+
+
+def test_R185_retrenchment_10_10b_blocked_for_cgov_and_pensioner():
+    """10(10B) is only for industrial workers under the ID Act -- never
+    allowed for CG/SG employees or pensioners. Previously always dormant
+    (never caught this) since the keywords never matched the raw codes."""
+    for code in ("CGOV", "PE"):
+        inp = ITR1Input(
+            age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+            nature_of_employment=code,
+            salary_income=SalaryIncome(gross_salary=Decimal("500000"), retrenchment_compensation=Decimal("100000")),
+            house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+            other_sources_income=OtherSourcesIncome(),
+            deductions_chapter6a=Chapter6ADeductions(),
+        )
+        results = validate_itr1_input(inp)
+        assert failed(results, "ITR1-R185"), f"expected R185 to fire for {code}"
+
+
+def test_R185_retrenchment_10_10b_not_blocked_for_non_govt_non_pensioner():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="OTH",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), retrenchment_compensation=Decimal("100000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R185")

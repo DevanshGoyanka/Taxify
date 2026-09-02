@@ -1105,3 +1105,170 @@ session) to complete the browser verification.
   3 pre-existing failures + 1 collection error as every prior run this session, confirmed
   unrelated by inspection (unchanged failure set, `test_tax_v2_compute.py`/`test_26as_batch.py`,
   nothing this change touches).
+
+---
+
+## 14. Deep audit of the remaining schedules and the validator suite (2026-09-03)
+
+§9 named three things this audit had explicitly not verified at Salary's depth: validators
+beyond the specific regressions this work caused, House Property/Other Sources/Capital Gains/
+Chapter VI-A's formula completeness, and filing-profile/bank-account/TDS-TCS depth. This section
+covers the first three; filing profile/bank accounts/TDS-TCS were not reached in this pass (see
+§14.5).
+
+### 14.1 House Property (`app/engine/schedules/house_property.py`) — read end to end
+
+Structurally sound. Multi-property intra-head netting happens before the inter-head Section
+71(3A) ₹2L loss-setoff cap is applied, correctly permitting one property's profit to offset
+another's loss before the cross-head limit bites — matches the module's own documented design
+and the real statutory sequencing. Section 25A arrears (70% taxable), the old/new-regime
+self-occupied interest treatment, and `ownership_share_percentage`'s documented scope (GAV only,
+not interest/arrears — a deliberate, stated design given co-owners typically already report
+their own share of loan interest) all check out.
+
+One genuine but near-zero-population gap: `HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED` is a
+flat ₹2,00,000 for every self-occupied loan regardless of sanction date, when the correct rule
+caps loans sanctioned before 1 April 1999 at ₹30,000 instead. `LoanDetail.sanction_date` is
+captured and reaches the JSON output, but `schedules/house_property.py::compute()` never reads
+it. Not fixed — a loan from before April 1999 would need a still-active 25+ year tenure to
+appear in an AY 2026-27 filing, an vanishingly rare population; noted for completeness, not
+escalated.
+
+### 14.2 Other Sources (`app/engine/schedules/other_sources.py`) — read end to end
+
+Correct. Section 57(iia) family-pension deduction (1/3rd of pension or a statutory cap) 
+correctly reflects the Finance Act 2024 new-regime enhancement (₹25,000 vs the old regime's
+₹15,000). Found one piece of genuinely dead code while tracing 80TTA/80TTB eligibility: a local
+`interest_sb` computed inside `_map_deductions` (`app/engine/draft_to_itr1_input.py`, using a
+`_SAVINGS_KINDS` set that inconsistently includes `POST_OFFICE` interest as savings-type,
+diverging from the Schedule-OS categorization) is computed but never read anywhere in the
+function — harmless (the real 80TTA/80TTB deduction is computed correctly, see §14.3), just
+confusing leftover code. Not fixed — no behavioral effect, flagged for a future cleanup pass
+only.
+
+### 14.3 Chapter VI-A Deductions (`app/engine/schedules/deductions/`) — spot-checked in depth
+
+This is a materially more mature module than a first read of `Chapter6ADeductions` (a flat data
+container) suggests: 22 dedicated per-section files (`section_80c.py`, `section_80d.py`,
+`section_80tta.py`, `section_80ttb.py`, `section_80g.py`, `section_80gg.py`, etc.), aggregated by
+`app/engine/schedules/deductions/__init__.py::compute_all`. Verified directly:
+
+- **80CCE combined pool** (80C+80CCC+80CCD(1), ₹1.5L cap): correctly enforced with proportional
+  allocation across the three components when the raw total exceeds the cap, and per-row
+  allocation within Schedule 80C's own detail rows.
+- **80TTA/80TTB**: correctly capped at `min(user_claim, actual_savings_interest,
+  statutory_limit)`, correctly zeroed for the wrong age bracket or new regime. (The frontend
+  lets a user type any 80TTA/80TTB figure with no client-side cap — but the backend
+  `compute_all` pipeline independently re-derives and caps the real deduction from actual
+  Other-Sources interest, so a spoofed frontend claim cannot inflate the computed tax
+  liability — consistent with this codebase's "never trust an unverified frontend figure"
+  convention.)
+- **80G/80GG/80GGA/80GGC cascade**: correctly computed in dependency order (80GG's adjusted-GTI
+  excludes deductions-before-80G and CG-112A/111A income per CBDT rules; 80G's own adjusted GTI
+  further excludes the just-computed 80GG; 80GGA/80GGC each recompute available headroom from
+  what's already been consumed) — this ordering matters and is correctly sequenced.
+- A `calculators/itr1.py` warning block (`"80TTB is only available for senior citizens... Deduction
+  set to Rs 0"`) reads as if it performs the zeroing itself; it does not — it is a separate,
+  purely informational warning layer, and the actual zeroing already happens correctly inside
+  `section_80ttb.compute_details()`. Confirmed this is not a bug (the message is misleading
+  about *where* the zeroing happens, not about whether it happens) — not fixed, a documentation/
+  clarity nit only.
+
+No bugs found or fixed in this module.
+
+### 14.4 Capital Gains — restricted Section 112A (`app/engine/schedules/restricted_112a.py`) — read end to end
+
+Also more mature than expected: the file's own inline comments reference specific past bugs and
+their fixes (a "purchase-only evidence row misread as a ₹0 sale, fabricating a fake loss" bug;
+an evidence-vs-completed-sale disambiguation bug), suggesting this module has already been
+through real iteration. Verified directly: the grandfathering formula
+(`max(actual_cost, min(fmv_31_jan_2018, sale_value))`) is the correct Section 112A/Finance Act
+2018 proviso; the 12-month long-term threshold uses calendar-anniversary date arithmetic (not a
+naive `days/365`), correctly handling variable month lengths; STT/recognized-exchange
+confirmations are correctly required only for listed equity, not equity-oriented mutual funds or
+business-trust units (which are not subject to STT on acquisition the same way); the ₹1,25,000
+aggregate-gain ITR-1/ITR-4 eligibility threshold is applied exactly once
+(`special_rates.py`'s `pre_exempted` parameter exists specifically to prevent double-applying
+it). No bugs found or fixed in this module.
+
+### 14.5 Validators — systematic review found and fixed a severe, pre-existing, recurring bug
+class (not part of §5/§11/§12/§13; not introduced by any fix in this document)
+
+§9's caveat specifically named this as the least-verified area. A systematic sweep for the same
+root cause as the already-fixed ITR1-R142 (§12.4) — matching human-readable keywords like
+`"central government"`/`"pension"`/`"cg-"` against `nature_of_employment`, which actually
+carries the raw official code `CGOV`/`SGOV`/`PSU`/`PE`/`PESG`/`PEPS`/`PEO`/`OTH` (see
+`frontend/src/domain/returns/cbdtEnums.ts`'s `NATURE_OF_EMPLOYMENT_OPTIONS`) — found **9 more
+occurrences** of the identical bug in `app/engine/validators/itr1/input_rules.py`, none of them
+caused by this session's earlier fixes (`nature_of_employment` has carried the raw code since
+before this session started; these are pre-existing, currently-shipped defects). Unlike
+R100-102/R142 (exposed only after this session wired previously-always-zero salary fields),
+these were live and broken from the moment the fields they check (`amount_80ccd2`,
+`amount_80cch`, `gratuity_received`, `exempt_income_dropdowns`, etc.) were ever populated by any
+real filer — i.e., potentially in production already, for any actual CG/SG employee, pensioner,
+or judge who used ITR-1.
+
+Two failure directions, both real:
+
+- **False-positive blocking** (fires when it should not, hard-blocking a legitimate filer):
+  - **ITR1-R119/R120**: a genuine CGOV/SGOV employee claiming Section 80CCD(2) between 10% and
+    14% of salary (legitimate under the government-employee 14% cap) was always routed to the
+    stricter 10% non-government check and blocked, since `"central"/"state"/"government"` never
+    matched `"CGOV"`/`"SGOV"`.
+  - **ITR1-R187**: 80CCH (Agniveer Corpus Fund) always blocked, even for a genuine Central
+    Government employee, since `"central government" not in emp_lower` was always `True`.
+  - **ITR1-R301/R270** (two independent copies of the same check, different rule IDs — a
+    pre-existing ID collision, not touched here): the Judge Salaries Act exemption always
+    blocked, even for a genuine CGOV/SGOV employee (e.g. a Supreme/High Court judge).
+- **Silently dormant** (never fires when it should, letting an invalid claim through unchecked
+  — the calculator's own statutory formulas remain correct regardless per §12, since they
+  derive `is_govt` independently and correctly; only this validator-layer sanity check was
+  inert):
+  - **ITR1-R116**: pensioners claiming Section 80CCD(2) (which requires a live employer, and a
+    pensioner has none) were never flagged.
+  - **ITR1-R002/R003**: a pensioner's Section 80CCD(1) claim was always checked against the
+    non-pensioner 10%-of-salary rule instead of the correct 20%-of-estimated-GTI rule, since
+    `"pension"` never matched `PE`/`PESG`/`PEPS`/`PEO`.
+  - **ITR1-R185**: Section 10(10B) retrenchment-compensation exemption (only for industrial
+    workers under the ID Act) was never checked against government-employee/pensioner status.
+  - **ITR1-R267**: a genuine CGOV/SGOV employee's gratuity claim was never checked against the
+    ₹25L government-employee ceiling (fell through uncaught rather than being compared against
+    the correct, more generous limit).
+
+**Fix:** two shared helpers, `_is_cg_sg_employee()` and `_is_pensioner()`, added once near the
+top of `input_rules.py`, checking `nature_of_employment` against the correct code sets
+(`{"CGOV","SGOV"}` and `{"PE","PESG","PEPS","PEO"}` respectively, taken directly from the
+frontend's own enum definition) — used at all 9 sites plus the pre-existing R142 fix, replacing
+every ad hoc keyword-matching expression. R267's companion check (`is_psu_private`, the ₹20L
+non-government cap) was corrected from an independent, equally-broken keyword guess to the
+logical complement of `is_cg_sg` — everyone who isn't CG/SG is capped at ₹20L, which is what
+the statute and the calculator's own `is_govt` logic already say.
+
+No other instance of this keyword-vs-raw-code pattern was found against any other field — a full
+`.lower()` sweep of both `input_rules.py` and `calc_rules.py` found only legitimate uses
+(attribute-name construction, case-insensitive email comparison) elsewhere. `calc_rules.py`
+(post-computation arithmetic cross-checks — GTI/deduction/tax-liability self-consistency) was
+read in full separately; it does not reference `nature_of_employment` at all and shows no
+comparable defect.
+
+### 14.6 Verification
+
+- 12 new tests in `tests/test_itr1_input_validation.py`, each asserting both directions (a real
+  CG/SG/pensioner/judge case that must now pass, and a real non-CG/SG/non-pensioner case that
+  must still correctly fail) for R119/R120, R116, R002/R003, R187, R270/R301, R267, and R185.
+- `pytest tests/test_itr1_input_validation.py -v` — 113 passed (101 pre-existing + 12 new).
+- `pytest tests/ -k "itr1 or itr2 or itr4"` — 688 passed, no regressions.
+- Full backend suite — 1544 passed, same 3 pre-existing failures (`test_tax_v2_compute.py`) and
+  1 pre-existing collection error (`test_26as_batch.py`) as every prior run this session — no
+  new failures.
+
+### 14.7 What this pass still did not cover
+
+Filing profile / verification / bank accounts / TDS-TCS structural depth (§9's third named gap)
+was not reached in this pass — §9's caveat about it still stands. The three schedules covered
+here (§14.1-§14.4) and the validator sweep (§14.5) were chosen because they were the most likely
+locations for a Salary-shaped bug (a formula gap or a systematic miscalibration) and because the
+validator sweep's method — searching for a recurrence of an already-confirmed bug pattern — is
+concrete and repeatable, unlike an open-ended "read everything" pass. A future session
+continuing this work should start with filing profile/bank accounts/TDS-TCS before considering
+ITR-1 exhaustively covered.

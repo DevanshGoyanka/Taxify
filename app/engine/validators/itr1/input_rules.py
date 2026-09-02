@@ -27,6 +27,31 @@ from app.engine.validators.base import ValidationResult, Severity
 
 _z = Decimal("0")
 
+# nature_of_employment (ITR1Input.nature_of_employment) carries the raw
+# official code -- CGOV/SGOV/PSU/PE/PESG/PEPS/PEO/OTH (see
+# app/engine/draft_to_itr1_input.py's ITR1Input construction and
+# frontend/src/domain/returns/cbdtEnums.ts's NATURE_OF_EMPLOYMENT_OPTIONS)
+# -- never a human-readable label. Every rule below that used to match
+# keywords like "central government"/"pension"/"cg-" against it (found
+# 2026-09-03 while auditing the validator suite for the same pattern that
+# produced the already-fixed ITR1-R142; see
+# Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §14) never
+# matched any real code, so each rule was either permanently dormant (never
+# catches a real invalid claim) or permanently blocking (fires for every
+# claim regardless of actual employment, hard-blocking legitimate
+# government-employee/pensioner/judge filers). These two sets are the
+# single source of truth for that classification going forward.
+_CG_SG_EMPLOYMENT_CODES = frozenset({"CGOV", "SGOV"})
+_PENSIONER_EMPLOYMENT_CODES = frozenset({"PE", "PESG", "PEPS", "PEO"})
+
+
+def _is_cg_sg_employee(nature_of_employment: str | None) -> bool:
+    return (nature_of_employment or "") in _CG_SG_EMPLOYMENT_CODES
+
+
+def _is_pensioner(nature_of_employment: str | None) -> bool:
+    return (nature_of_employment or "") in _PENSIONER_EMPLOYMENT_CODES
+
 
 def _norm_token(value: object) -> str:
     """Normalize a dropdown/list token for official duplicate-selection checks."""
@@ -497,7 +522,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             ))
         else:
             # Rule 116: Pensioners cannot claim 80CCD(2)
-            if "pension" in emp.lower():
+            if _is_pensioner(emp):
                 results.append(_make(
                     "ITR1-R116", False,
                     f"80CCD(2) claimed (Rs {ch6a.amount_80ccd2}) but assessee is a pensioner "
@@ -507,7 +532,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
             # Rule 120: Old regime, CG/SG employer => 14% salary
             if is_old:
-                is_cg_sg = any(kw in emp.lower() for kw in ("central", "state", "government"))
+                is_cg_sg = _is_cg_sg_employee(emp)
                 if is_cg_sg:
                     max_ccd2 = sal.gross_salary * Decimal("0.14")
                     if ch6a.amount_80ccd2 > max_ccd2:
@@ -555,7 +580,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # Rule 3: 80CCD(1) <= 10% salary non-pensioner
     if ch6a and ch6a.amount_80ccd1 > 0 and is_old:
         emp = inp.nature_of_employment or ""
-        if "pension" not in emp.lower():
+        if not _is_pensioner(emp):
             max_ccd1 = sal.gross_salary * Decimal("0.10")
             if ch6a.amount_80ccd1 > max_ccd1:
                 results.append(_make(
@@ -568,7 +593,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # Rule 2: 80CCD(1) pensioner <= 20% GTI (pre-check with estimated GTI)
     if ch6a and ch6a.amount_80ccd1 > 0 and is_old:
         emp = inp.nature_of_employment or ""
-        if "pension" in emp.lower():
+        if _is_pensioner(emp):
             # Estimate GTI as sum of income heads (actual GTI comes post-computation)
             estimated_gti = (sal.gross_salary - sal.standard_deduction_claimed - sal.professional_tax_paid
                              + osi.savings_bank_interest + osi.fixed_deposit_interest
@@ -1181,8 +1206,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     ))
         # R187: 80CCH CG employee age 17-27 at joining
         if ch6a.amount_80cch > _z and inp.nature_of_employment:
-            emp_lower = inp.nature_of_employment.lower()
-            if "central government" not in emp_lower:
+            if inp.nature_of_employment != "CGOV":
                 results.append(_make(
                     "ITR1-R187", False,
                     f"80CCH Agniveer Corpus Fund claimed but assessee is not a Central "
@@ -2647,7 +2671,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     if judges_key in inp.exempt_income_dropdowns:
         # Only judges covered under SC/HC Judges Act can claim this
         emp = inp.nature_of_employment or ""
-        if "central government" not in emp.lower() and "state government" not in emp.lower():
+        if not _is_cg_sg_employee(emp):
             results.append(_make(
                 "ITR1-R301", False,
                 f"Exempt income under 'Judge Salaries Act' selected but nature of "
@@ -3014,8 +3038,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
     # --- R185: 10(10B) not allowed for CG/SG/pensioners ---
     if sal and sal.retrenchment_compensation > _z and inp.nature_of_employment:
-        emp_lower = inp.nature_of_employment.lower()
-        if any(kw in emp_lower for kw in ("central", "state", "pension", "cg-", "sg-")):
+        if _is_cg_sg_employee(inp.nature_of_employment) or _is_pensioner(inp.nature_of_employment):
             results.append(_make(
                 "ITR1-R185", False,
                 f"10(10B) retrenchment compensation of Rs {sal.retrenchment_compensation} "
@@ -3244,8 +3267,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
     # --- R267: Gratuity ≤ ₹25L for CG/SG employees ---
     if sal and sal.gratuity_received > _z and inp.nature_of_employment:
-        emp_lower = inp.nature_of_employment.lower()
-        is_cg_sg = any(kw in emp_lower for kw in ("central", "state")) and "government" in emp_lower
+        is_cg_sg = _is_cg_sg_employee(inp.nature_of_employment)
         if is_cg_sg and sal.gratuity_received > 2_500_000:
             results.append(_make(
                 "ITR1-R267", False,
@@ -3253,7 +3275,13 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 f"Central/State Government employees.",
                 "salary_income.gratuity_received",
             ))
-        is_psu_private = any(kw in emp_lower for kw in ("psu", "private", "other", "pension"))
+        # Everyone not CG/SG (PSU, other private, pensioners) is capped at
+        # Rs 20L per Section 10(10) -- the complement of is_cg_sg, not a
+        # separate keyword guess (govt employees are fully exempt and never
+        # reach this branch; the calculator's own is_govt logic in
+        # app/engine/schedules/salary.py already applies this same CG/SG
+        # vs. non-CG/SG split for the actual exemption computation).
+        is_psu_private = not is_cg_sg
         if is_psu_private and sal.gratuity_received > 2_000_000:
             results.append(_make(
                 "ITR1-R067", False,
@@ -3504,8 +3532,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # --- R270: Judges exemption — only CG/SG employees ---
     judges_key = "Judge Salaries Act"
     if judges_key in inp.exempt_income_dropdowns:
-        emp_lower = (inp.nature_of_employment or "").lower()
-        if not any(govt in emp_lower for govt in ("central government", "state government", "cg-", "sg-")):
+        if not _is_cg_sg_employee(inp.nature_of_employment):
             results.append(_make(
                 "ITR1-R270", False,
                 f"Judge Salaries Act exemption claimed but nature of employment is "
