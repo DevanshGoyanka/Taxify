@@ -57,6 +57,32 @@ traveled and is entitled to LTA exemption, and an actual government/PSU employee
 two P0 items below are fixed. Everything else surveyed is either complete or a low-severity
 cleanup item.
 
+> **Fix status (2026-09-03): both P0 findings fixed and verified**, in
+> `app/engine/draft_to_itr1_input.py::_map_salary` — the single mapper function shared by
+> ITR-1, ITR-2, and ITR-4 (confirmed via grep before fixing; both forms benefit). Fixing the
+> LTA finding correctly required tracing `SalaryIncome.gross_salary` end to end, which
+> surfaced **two additional, more severe, previously-undocumented bugs in the exact same
+> function** — both fixed alongside the two audited P0s, since they are the same root-cause
+> class (salary components silently mishandled between the mapper and
+> `app/engine/schedules/salary.py`) and were found while directly investigating this section:
+> - `employer.lta` (LTA/LTC received), `employer.otherAllowance` ("Other Taxable Salary"), and
+>   `employer.arrearSalary` (arrears/advance salary) were **never summed into gross salary at
+>   all** — not merely un-exempted, genuinely absent from taxable income. Confirmed via
+>   `grep -rn "\.lta\b|\.otherAllowance\b|\.arrearSalary\b" app/` returning zero hits anywhere
+>   in the canonical pipeline before the fix.
+> - `perquisites_value` and `profits_in_lieu_of_salary` were **double-counted**:
+>   `SalaryIncome.gross_salary`'s own docstring in `app/schemas/itr1.py` documents it as the
+>   Section 17(1) portion only, but the mapper was passing the already-combined
+>   17(1)+17(2)+17(3) total into it, and `app/engine/schedules/salary.py:131` then added
+>   17(2)/17(3) on top again. Confirmed empirically with an isolated repro before touching any
+>   code (basic=500000, perquisites=50000 → computed gross of 600000 instead of the correct
+>   550000), and confirmed a live test,
+>   `tests/test_draft_to_itr1_input.py::test_mapper_produces_valid_itr1_input`, literally
+>   asserted the double-counted figure as "expected" before the fix.
+>
+> See §10 for the full fix write-up, verification detail, and the ten new regression tests
+> added.
+
 ---
 
 ## 2. Scope and methodology
@@ -373,3 +399,93 @@ government/PSU employee). Until both are fixed, ITR-1 should be classified as:
 **Broadly complete and structurally sound, but not yet correct for taxpayers who claim LTA
 exemption or who are government/PSU employees — fix the two P0 items, verify with an
 end-to-end test for each, then re-audit before calling ITR-1 production-ready.**
+
+---
+
+## 10. P0 fix write-up (2026-09-03)
+
+Both P0 findings, plus two additional bugs discovered while fixing them, were resolved in a
+single change to `app/engine/draft_to_itr1_input.py::_map_salary` — the one shared mapper
+function ITR-1, ITR-2, and ITR-4 all call (confirmed via `grep -n "_map_salary"` across
+`app/engine/draft_to_itr2_input.py` and `app/engine/draft_to_itr4_input.py` before touching
+anything), so the fix benefits all three forms, not just ITR-1.
+
+### 10.1 LTA exemption (§5.1) — fixed by computing it from evidence, not `employer.ltaExempt`
+
+`_map_salary` now recomputes the Section 10(5) exemption per employer row as
+`min(lta_received, max(0, actual_fare))`, zeroed for non-domestic travel, mirroring the
+existing HRA pattern in the same function exactly. `employer.ltaExempt` is no longer read —
+consistent with this codebase's own stated philosophy elsewhere in the function ("the engine
+never trusts a frontend-supplied exempt amount"). No frontend change was needed: the evidence
+fields (`actualLtaFare`, `isDomesticTravel`) were already live, editable UI controls in
+`EmployerEntryManager.tsx` — they were simply never read by the backend before this fix.
+
+### 10.2 `isGovernmentEmployee` (§5.2) — fixed by deriving it from `natureOfEmployment`, not a
+separate unwired field
+
+Rather than adding a new, redundant UI control (the originally-sketched fix), `_map_salary`
+now derives `is_government_employee` from the `natureOfEmployment` value already required on
+every employer row: `any(e.natureOfEmployment in {"CGOV", "SGOV"} for e in employers)`. This
+is a materially better fix than "add a checkbox" would have been — `natureOfEmployment` is a
+required field every taxpayer already fills in, so the fix applies immediately to existing
+saved drafts with no re-entry needed, and there is no risk of the two fields (a hypothetical
+new checkbox vs. the existing dropdown) silently disagreeing. The Central/State-only scope
+(excluding PSU and the pensioner codes PE/PESG/PEPS/PEO) matches this codebase's own existing
+definition in `app/engine/schedules/deductions/section_80ccd2.py`'s docstring, verified before
+writing the fix — PSU employees do not get the 14% NPS cap or the Section 16(ii) deduction
+under the actual Income-tax Act, so including PSU would have been a new, wrong behavior, not a
+fix. `employer.isGovernmentEmployee` (the scalar field the mapper previously read) is no
+longer referenced.
+
+### 10.3 Additional bugs found and fixed in the same function (not in the original audit)
+
+Tracing `SalaryIncome.gross_salary` to fix §5.1 correctly required understanding exactly how
+gross salary is assembled, which surfaced two further, more severe bugs in the identical
+code path:
+
+- **Income omission**: `employer.lta`, `employer.otherAllowance`, and `employer.arrearSalary`
+  were never summed into `section_17_1` at all (confirmed via
+  `grep -rn "\.lta\b|\.otherAllowance\b|\.arrearSalary\b" app/` returning zero hits before the
+  fix) — not merely un-exempted, genuinely dropped from taxable income. All three are now
+  included.
+- **Double-counting**: `SalaryIncome.gross_salary` was being set to the already-combined
+  17(1)+17(2)+17(3) total, but `app/schemas/itr1.py`'s own field docstring documents it as the
+  17(1) portion only, and `app/engine/schedules/salary.py:131` separately adds
+  `perquisites_value`/`profits_in_lieu_of_salary` on top — so both were counted twice whenever
+  either was nonzero. `_map_salary` now sets `SalaryIncome.gross_salary=section_17_1` (17(1)
+  only), matching the schema's documented contract; the mapper's own `gross_salary` return
+  value (used for the compute-response breakdown, not the schema field) still correctly holds
+  the full combined total.
+
+### 10.4 Verification
+
+- **Regression tests**: 10 new tests added to `tests/test_draft_to_itr1_input.py` — LTA
+  recomputed from evidence, capped at amount received, zeroed for foreign travel, and (with no
+  exemption evidence at all) still reaching gross salary as taxable income;
+  otherAllowance/arrearSalary reaching gross salary; perquisites/profits-in-lieu no longer
+  double-counted; `is_government_employee` correctly derived as `True` for CGOV and `False` for
+  PSU. Two pre-existing tests
+  (`test_mapper_produces_valid_itr1_input`, `test_compute_runs_cleanly_on_mapped_input`) had
+  their assertions corrected from the double-counted figures they previously encoded as
+  "expected" to the verified-correct ones, with an explanatory comment on each.
+- `pytest tests/test_draft_to_itr1_input.py -v` — 35 passed (25 pre-existing + 10 new).
+- `pytest tests/ -k "itr1 or itr4"` (same pre-existing-exclusion list as prior phase notes in
+  this repository) — 514 passed, no regressions.
+- `pytest tests/ -k "itr2"` — 166 passed, no regressions (confirms the shared `_map_salary` fix
+  did not disturb ITR-2, which is intentionally out of scope for active work right now per the
+  user's own stated sequencing — ITR-1, then ITR-4, then ITR-2, then ITR-3).
+- Full backend suite `pytest tests/ -q` (same exclusion list) — 1505 passed, 3 failed, 1 error;
+  the 3 `test_tax_v2_compute.py` failures and the 1 `test_26as_batch.py::test_single_file`
+  collection error are the identical pre-existing baseline seen throughout this session's work
+  — zero new failures from this fix.
+- `tests/check_schema_compliance.py` and 3 of `tests/validate_schemas.py`'s form checks fail
+  both before and after this change (bank-account and CG112AScrip schema-drift issues
+  unrelated to salary, confirmed via `git stash` comparison) — pre-existing, not introduced by
+  this fix.
+- End-to-end script verification (not part of the automated suite): built a Central Government
+  employee draft with LTA received ₹30,000 / actual fare ₹22,000 / domestic travel, and an
+  entertainment allowance of ₹5,000. Confirmed `gross_salary` includes the LTA received
+  (1,030,000, not 1,000,000), `lta_exempt_amount` correctly resolves to ₹22,000 (the lesser of
+  the two), and the entertainment-allowance deduction is correctly nonzero (₹5,000). A parallel
+  PSU-employer control case confirmed `is_government_employee` resolves to `False` and the
+  entertainment-allowance deduction correctly stays zero for that case.

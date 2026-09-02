@@ -87,7 +87,13 @@ def test_mapper_produces_valid_itr1_input():
     draft = _sample_draft()
     itr1_input, breakdown = draft_to_itr1_input(draft)
 
-    assert itr1_input.salary_income.gross_salary == Decimal("1277000")  # 1.2M+12k+60k+5k
+    # SalaryIncome.gross_salary is the Section 17(1) portion only (basic+da+hra);
+    # perquisites are tracked separately on perquisites_value and added by the
+    # calculator, not summed in here -- see _map_salary's docstring. Previously
+    # this field held the combined 17(1)+17(2)+17(3) total (1277000, including
+    # the 5000 perquisites), which the calculator then added perquisites_value
+    # on top of again, double-counting it.
+    assert itr1_input.salary_income.gross_salary == Decimal("1272000")  # 1.2M+12k+60k
     assert itr1_input.other_sources_income.savings_bank_interest == Decimal("15000")
     assert itr1_input.other_sources_income.dividend_income == Decimal("10000")
     assert itr1_input.dividend_quarterly_breakdown == {
@@ -188,9 +194,15 @@ def test_compute_runs_cleanly_on_mapped_input():
     itr1_input, _ = draft_to_itr1_input(draft)
     result = compute_itr1(itr1_input)
     assert result.errors == []
-    assert result.salary_income == Decimal("1207000")  # gross - profTax - std ded
-    assert result.gross_total_income == Decimal("1232000")  # salary + interest + dividend
-    assert result.net_tax_liability == Decimal("33280.0")
+    # gross(1272000 s.17(1) + 5000 perquisites = 1277000) - std ded(75000, new
+    # regime); prof_tax is 0 in the new regime. Regression fence for a fixed
+    # double-counting bug: perquisites_value/profits_in_lieu_of_salary were
+    # previously summed into SalaryIncome.gross_salary *and* added again by
+    # the calculator (app/engine/schedules/salary.py), inflating this figure
+    # by the perquisites amount (previously asserted 1207000 here).
+    assert result.salary_income == Decimal("1202000")
+    assert result.gross_total_income == Decimal("1227000")  # salary + interest + dividend
+    assert result.net_tax_liability == Decimal("28080.0")
     assert result.total_tds == Decimal("80000")
 
 
@@ -243,6 +255,138 @@ def test_hra_mixed_metro_evidence_is_rejected() -> None:
 
     with pytest.raises(DraftMappingError, match="mixed metro"):
         draft_to_itr1_input(draft)
+
+
+def test_lta_exempt_recomputed_from_employer_evidence() -> None:
+    """LTA/LTC exemption u/s 10(5) must be recomputed from actual fare +
+    domestic-travel evidence, capped at the amount received -- never
+    trusted from employer.ltaExempt, which no frontend control ever sets.
+
+    Employer: lta=20,000 received, actualLtaFare=15,000, domestic travel.
+    Exempt = min(20,000, 15,000) = 15,000.
+    """
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        lta=Decimal("20000"), actualLtaFare=Decimal("15000"),
+        isDomesticTravel=True,
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.lta_exempt_amount == Decimal("15000")
+
+
+def test_lta_exempt_capped_at_amount_received() -> None:
+    """The exemption cannot exceed the LTA actually received, even if the
+    eligible fare evidence is larger."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        lta=Decimal("10000"), actualLtaFare=Decimal("15000"),
+        isDomesticTravel=True,
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.lta_exempt_amount == Decimal("10000")
+
+
+def test_lta_exempt_zero_for_foreign_travel() -> None:
+    """Foreign travel is never exempt under Section 10(5), regardless of
+    fare evidence entered."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        lta=Decimal("20000"), actualLtaFare=Decimal("15000"),
+        isDomesticTravel=False,
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.lta_exempt_amount == Decimal("0")
+
+
+def test_lta_received_is_taxable_income_regardless_of_exemption() -> None:
+    """LTA received must reach gross salary as taxable income even when no
+    exemption evidence is entered -- previously employer.lta was never
+    summed into gross_salary at all, silently dropping it from income."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        lta=Decimal("20000"),
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.gross_salary == Decimal("520000")
+    assert itr1_input.salary_income.lta_exempt_amount == Decimal("0")
+
+
+def test_other_taxable_salary_and_arrears_reach_gross_salary() -> None:
+    """Other taxable salary and arrears/advance salary must be counted as
+    income -- previously employer.otherAllowance/.arrearSalary were never
+    summed into gross_salary at all."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        otherAllowance=Decimal("30000"), arrearSalary=Decimal("40000"),
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.gross_salary == Decimal("570000")
+
+
+def test_perquisites_not_double_counted_in_gross_salary() -> None:
+    """SalaryIncome.gross_salary must hold only the Section 17(1) portion --
+    perquisites_value and profits_in_lieu_of_salary are tracked separately
+    and added by the calculator (app/engine/schedules/salary.py). Passing
+    the already-combined total here previously caused the calculator to
+    double-count both."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        perquisites=Decimal("50000"), profitsInLieu=Decimal("25000"),
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.gross_salary == Decimal("500000")
+    assert itr1_input.salary_income.perquisites_value == Decimal("50000")
+    assert itr1_input.salary_income.profits_in_lieu_of_salary == Decimal("25000")
+
+
+def test_government_employee_derived_from_nature_of_employment() -> None:
+    """is_government_employee must be derived from natureOfEmployment
+    (CGOV/SGOV specifically) -- the separate employer.isGovernmentEmployee
+    scalar has no live frontend control anywhere in the product and was
+    always False."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Ministry of X", basic=Decimal("500000"),
+        natureOfEmployment="CGOV",
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.is_government_employee is True
+
+
+def test_psu_employee_is_not_government_employee_for_16ii_or_80ccd2() -> None:
+    """PSU and the pensioner nature-of-employment codes do not qualify as
+    'Government employee' for Section 16(ii) / Section 80CCD(2) purposes --
+    matches this codebase's own Central/State-only definition in
+    section_80ccd2.py."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Some PSU", basic=Decimal("500000"),
+        natureOfEmployment="PSU",
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.is_government_employee is False
 
 
 def test_mapper_preserves_section_24b_loan_rows() -> None:

@@ -148,13 +148,20 @@ def _map_salary(employers: list[Employer]) -> tuple[SalaryIncome, Decimal, Decim
 
     Returns ``(salary_input, section_17_1_salary, gross_salary)`` so the
     caller can surface the breakdown in the compute response without
-    re-walking the rows.
+    re-walking the rows. ``gross_salary`` here is the full combined total
+    (17(1)+17(2)+17(3)); ``SalaryIncome.gross_salary`` itself is the 17(1)
+    portion only — see the field's own docstring in ``app/schemas/itr1.py``
+    — because ``app/engine/schedules/salary.py::compute`` adds
+    ``perquisites_value``/``profits_in_lieu_of_salary`` on top of it to
+    build the calculator's own gross-salary total. Passing the already-
+    combined total into ``gross_salary`` here would double-count both.
 
-    HRA exemption is recomputed per-employer u/s 10(13A) from the three-
-    condition test (actual HRA, rent − 10% salary, 50%/40% salary) —
-    the engine never trusts a frontend-supplied exempt amount.  When an
-    employer has HRA but no rent/metro facts, the exemption for that row
-    is zero (mirrors the legacy per-employer recompute in tax.py).
+    HRA and LTA exemptions are each recomputed per-employer (u/s 10(13A)
+    and 10(5) respectively) from the underlying evidence — the engine
+    never trusts a frontend-supplied exempt amount. When an employer has
+    HRA but no rent/metro facts, or LTA but no fare/domestic-travel
+    evidence, the exemption for that row is zero (mirrors the legacy
+    per-employer recompute in tax.py for HRA).
     """
     from app.engine.common.hra import compute_hra_exemption
 
@@ -163,11 +170,24 @@ def _map_salary(employers: list[Employer]) -> tuple[SalaryIncome, Decimal, Decim
     bonus = sum((e.bonus for e in employers), Decimal("0"))
     commission = sum((e.commission for e in employers), Decimal("0"))
     hra_received = sum((e.hra for e in employers), Decimal("0"))
+    lta_received = sum((e.lta for e in employers), Decimal("0"))
     other_allowance = sum((e.allowances for e in employers), Decimal("0"))
+    other_taxable_salary = sum((e.otherAllowance for e in employers), Decimal("0"))
+    arrear_salary = sum((e.arrearSalary for e in employers), Decimal("0"))
     perquisites = sum((e.perquisites for e in employers), Decimal("0"))
     profits_in_lieu = sum((e.profitsInLieu for e in employers), Decimal("0"))
 
-    section_17_1 = basic + da + bonus + commission + hra_received + other_allowance
+    # Section 17(1) salary: every taxable cash-salary component captured on
+    # the Employer row except perquisites (17(2)) and profits in lieu
+    # (17(3)), which are tracked separately below. LTA received, "other
+    # taxable salary", and arrears/advance salary were previously omitted
+    # here entirely — a real income-understatement bug, not just a missing
+    # exemption — confirmed by grep: none of employer.lta/.otherAllowance/
+    # .arrearSalary was read anywhere else in the canonical pipeline.
+    section_17_1 = (
+        basic + da + bonus + commission + hra_received + lta_received
+        + other_allowance + other_taxable_salary + arrear_salary
+    )
     gross_salary = section_17_1 + perquisites + profits_in_lieu
 
     # Statutorily recompute the HRA exemption per employer (u/s 10(13A)).
@@ -187,13 +207,35 @@ def _map_salary(employers: list[Employer]) -> tuple[SalaryIncome, Decimal, Decim
         # When HRA > 0 but rent/metro facts are missing, exemption is zero
         # for that row — surfaced later as a validation issue, not trusted.
 
-    lta_exempt = sum((e.ltaExempt for e in employers), Decimal("0"))
+    # Statutorily recompute the LTA/LTC exemption per employer (u/s 10(5)):
+    # least of the amount received and the actual eligible fare incurred,
+    # for domestic travel only (foreign travel is never exempt). Previously
+    # this summed employer.ltaExempt directly — a raw scalar with no live
+    # frontend writer anywhere in the product, so the exemption was always
+    # zero regardless of what the taxpayer entered as travel evidence.
+    lta_exempt = Decimal("0")
+    for e in employers:
+        if e.lta > 0 and e.isDomesticTravel:
+            lta_exempt += min(e.lta, max(Decimal("0"), e.actualLtaFare))
+        # Foreign travel, or LTA with no fare evidence entered, is not
+        # exempt for that row — surfaced later as a validation issue.
+
     prof_tax = sum((e.professionalTax for e in employers), Decimal("0"))
     ent_allowance = sum((e.entertainmentAllowance for e in employers), Decimal("0"))
-    is_govt = any(e.isGovernmentEmployee for e in employers)
+    # Derived from natureOfEmployment (a required, already-wired field on
+    # every employer row) rather than the separate employer.isGovernmentEmployee
+    # scalar, which has no live frontend control anywhere in the product and
+    # was therefore always False — silently disallowing the Section 16(ii)
+    # entertainment-allowance deduction and forcing the lower 10% (rather
+    # than 14%) Section 80CCD(2) NPS cap for every actual government
+    # employee. "Government employee" for both of those sections means
+    # specifically Central/State Government (CGOV/SGOV) per this codebase's
+    # own definition in section_80ccd2.py -- PSU and the pensioner codes
+    # (PE/PESG/PEPS/PEO) do not qualify.
+    is_govt = any(e.natureOfEmployment in {"CGOV", "SGOV"} for e in employers)
 
     salary_input = SalaryIncome(
-        gross_salary=gross_salary,
+        gross_salary=section_17_1,
         perquisites_value=perquisites,
         profits_in_lieu_of_salary=profits_in_lieu,
         hra_exempt_amount=hra_exempt,
