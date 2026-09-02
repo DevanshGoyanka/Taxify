@@ -134,3 +134,46 @@ def test_generate_cbdt_json_itr2_property_details_match_house_property_count() -
     official_json, _summary = generate_cbdt_json(draft)
     schedule_hp = official_json["ITR"]["ITR2"].get("ScheduleHP")
     assert schedule_hp is not None
+
+
+# ── Phase 5G: complete pre-calculation preparation ──────────────────────────
+
+def test_compute_canonical_itr2_prepares_filing_data_before_calculation() -> None:
+    """compute_canonical_itr2 attaches the filing profile before compute,
+    matching compute_canonical_itr1/_itr4 — ITR-2 was the outlier deferring
+    this to JSON-generation time; Phase 5G closes that gap."""
+    draft = _filing_ready_itr2_draft()
+    pipeline = compute_canonical_itr2(draft)
+    assert pipeline.typed_input.filing_profile is not None
+    assert pipeline.typed_input.filing_profile.pan == "ABCPN1234F"
+    assert pipeline.typed_input.property_filing_details
+    assert pipeline.typed_input.employer_filing_details
+
+
+def test_compute_canonical_itr2_rejects_incomplete_filing_profile() -> None:
+    """An incomplete filing profile (missing father's name) is now rejected
+    at compute time, not only at JSON-generation time — the same behavior
+    ITR-1/ITR-4 already have."""
+    draft = _filing_ready_itr2_draft()
+    draft.personal.fatherName = ""
+    with pytest.raises(FilingGatewayV2Error):
+        compute_canonical_itr2(draft)
+
+
+def test_itr2_json_reuses_prepared_input_without_late_enrichment() -> None:
+    """_generate_cbdt_json_itr2 must not re-derive filing data from the
+    draft — it reuses pipeline.typed_input as-is."""
+    draft = _filing_ready_itr2_draft()
+    pipeline = compute_canonical_itr2(draft)
+    official_json, summary = generate_cbdt_json(draft)
+    assert official_json["ITR"]["ITR2"] is not None
+    assert summary["gti"] == pipeline.summary["gti"]
+
+
+def test_itr2_pipeline_result_carries_personal_profile_source_hash() -> None:
+    from app.engine.personal_profile import personal_profile_source_hash
+
+    draft = _filing_ready_itr2_draft()
+    pipeline = compute_canonical_itr2(draft)
+    assert pipeline.personal_profile_source_hash == personal_profile_source_hash(draft)
+    assert pipeline.personal_profile_source_hash != ""

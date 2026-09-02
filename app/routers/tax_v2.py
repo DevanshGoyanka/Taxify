@@ -29,11 +29,13 @@ def compute_tax_summary_v2(
     """Compute a tax summary directly from a canonical ReturnDraft.
 
     Routes the draft through the single canonical compute dispatcher
-    (:func:`compute_canonical`), which sends ITR-1 and ITR-4 through
-    their v2 pipelines (``compute_canonical_itr1`` /
-    ``compute_canonical_itr4``). ITR-2/3 are not yet supported by the v2
-    pipeline and raise a clear 422 — the legacy compute path remains
-    available for them via ``/tax-summary/compute`` until Phase 7.
+    (:func:`compute_canonical`), which sends ITR-1, ITR-2, and ITR-4
+    through their v2 pipelines (``compute_canonical_itr1`` /
+    ``compute_canonical_itr2`` / ``compute_canonical_itr4`` — as of Phase
+    5G, all three fully prepare the filing profile before compute, not
+    just ITR-1/ITR-4). ITR-3 is not yet supported by the v2 pipeline and
+    raises a clear 422 — the legacy compute path remains available for it
+    via ``/tax-summary/compute`` until Phase 9.
 
     Args:
         draft: Canonical typed return draft supplied as the direct JSON body.

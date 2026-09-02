@@ -1090,6 +1090,7 @@ class ITR2PipelineResult:
     computation: ITR2Result
     breakdown: dict[str, Any]
     summary: dict[str, Any]
+    personal_profile_source_hash: str = ""
 
 
 _ITR2_SECTION_CODES: dict[str, ITR2ReturnFileSection] = {
@@ -1512,17 +1513,27 @@ def _itr2_summary_from_result(
 def compute_canonical_itr2(draft: ReturnDraft) -> ITR2PipelineResult:
     """Map and compute a canonical ITR-2 draft exactly once.
 
+    Phase 5G: prepares the *complete* ``ITR2Input`` — filing profile,
+    property/employer/TDS3 filing details all attached — before calling
+    ``compute_itr2``, mirroring ``compute_canonical_itr1``/``_itr4``
+    exactly (both already do this; ITR-2 was the outlier, deferring this
+    construction to JSON-generation time). CBDT Category A/B/D *validation*
+    stays where it already is for every form — ``_generate_cbdt_json_itr2``
+    — this phase only moves *construction*, not validation.
+
     Args:
         draft: Validated canonical return draft (``form == "ITR-2"``).
 
     Returns:
-        Typed input, computation, mapping breakdown, and response summary.
+        Typed input (complete, with filing profile attached), computation,
+        mapping breakdown, and response summary.
 
     Raises:
-        FilingGatewayV2Error: If mapping or computation fails, or pending
-            reconciliation discrepancies block compute. Unlike ITR-1/4,
-            ITR-2 has no "out of scope" evidence rejection — it is itself
-            the form that scope-escalation routes *to*.
+        FilingGatewayV2Error: If mapping, filing-profile construction, or
+            computation fails, or pending reconciliation discrepancies
+            block compute. Unlike ITR-1/4, ITR-2 has no "out of scope"
+            evidence rejection — it is itself the form that
+            scope-escalation routes *to*.
     """
     if draft.form != "ITR-2":
         raise FilingGatewayV2Error(
@@ -1541,7 +1552,20 @@ def compute_canonical_itr2(draft: ReturnDraft) -> ITR2PipelineResult:
         )
     try:
         typed_input, breakdown = draft_to_itr2_input(draft)
+        filing_profile = _itr2_filing_profile(draft)
+        property_filing_details = _itr2_property_filing_details(draft)
+        employer_filing_details = _itr2_employer_filing_details(draft)
+        tds3_filing_details = _itr2_tds3_filing_details(draft)
+        typed_input = typed_input.model_copy(update={
+            "filing_profile": filing_profile,
+            "filing_section": filing_profile.return_file_section,
+            "property_filing_details": property_filing_details,
+            "employer_filing_details": employer_filing_details,
+            "tds3_filing_details": tds3_filing_details,
+        })
         result = compute_itr2(typed_input)
+    except FilingGatewayV2Error:
+        raise
     except (DraftMappingError, ValidationError, ValueError) as exc:
         raise FilingGatewayV2Error(
             "ITR-2 mapping or computation failed.", [str(exc)]
@@ -1556,28 +1580,23 @@ def compute_canonical_itr2(draft: ReturnDraft) -> ITR2PipelineResult:
         computation=result,
         breakdown=breakdown,
         summary=_itr2_summary_from_result(result, breakdown, draft),
+        personal_profile_source_hash=personal_profile_source_hash(draft),
     )
 
 
 def _generate_cbdt_json_itr2(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, Any]]:
     """Build + validate the official ITR-2 CBDT JSON from a canonical draft.
 
-    Runs the full CBDT Category A/B/D rule validators before JSON emission —
-    ``app/engine/validators/itr2/`` is a thin suite today (Phase 5 completes
-    it); whatever it does check still runs here, same as every other form.
+    Phase 5G: reuses ``pipeline.typed_input`` — already complete, filing
+    profile and all — with no late ``model_copy(update={...})`` enrichment
+    and no direct ``ReturnDraft`` reads, matching ITR-1/ITR-4. Runs the full
+    CBDT Category A/B/D rule validators before JSON emission —
+    ``app/engine/validators/itr2/`` is a thin suite today (Phase 5
+    completes it); whatever it does check still runs here, same as every
+    other form.
     """
     pipeline = compute_canonical_itr2(draft)
-    filing_profile = _itr2_filing_profile(draft)
-    property_filing_details = _itr2_property_filing_details(draft)
-    employer_filing_details = _itr2_employer_filing_details(draft)
-    tds3_filing_details = _itr2_tds3_filing_details(draft)
-    typed_input = pipeline.typed_input.model_copy(update={
-        "filing_profile": filing_profile,
-        "filing_section": filing_profile.return_file_section,
-        "property_filing_details": property_filing_details,
-        "employer_filing_details": employer_filing_details,
-        "tds3_filing_details": tds3_filing_details,
-    })
+    typed_input = pipeline.typed_input
 
     from app.engine.validators.itr2 import run_input_validation, run_calc_validation
 

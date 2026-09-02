@@ -19,9 +19,9 @@ items point to, not a duplicate.
 | 4 | Wire ITR-2 into `filing_gateway_v2.py` | ✅ Delivered 2026-09-02 |
 | 5 | Complete the ITR-2 CBDT validator suite (5A–5E ✅ Delivered 2026-09-02; 5F/5G architecture gates still required before Phase 6) | ✅ Delivered 2026-09-02 |
 | 5F | Shared canonical personal-profile foundation (ITR-1/ITR-4) | ✅ Delivered 2026-09-02 |
-| 5G | Migrate ITR-2 to complete pre-calculation preparation | Not started |
-| 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | Blocked until 5G |
-| 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Blocked until 5G |
+| 5G | Migrate ITR-2 to complete pre-calculation preparation | ✅ Delivered 2026-09-02 |
+| 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | Not started — now unblocked |
+| 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started — now unblocked |
 | 8 | ITR-3 on the shared complete-preparation contract | Not started |
 | 9 | Delete the dead ITR-2 legacy path | Not started |
 | 10 | Production hardening + final verification | Not started |
@@ -1227,7 +1227,7 @@ normalizers plus the proven `prepare_itrN` pattern — not on 5F alone).
   - `npx tsc -b` — 0 errors. `npx vitest run` — 169 passed. `npm run build` — clean (5F
     touched no frontend files; run for full-verification discipline).
 
-### Phase 5G — Migrate ITR-2 to complete pre-calculation preparation
+### Phase 5G — Migrate ITR-2 to complete pre-calculation preparation (✅ Delivered 2026-09-02)
 
 Replace the current ITR-2 split flow:
 
@@ -1249,6 +1249,85 @@ The existing `_itr2_filing_profile()`, `_itr2_property_filing_details()`, `_itr2
 
 **Production-status rule:** ITR-2 is not filing-ready merely because Phase 5E validators pass. Phases 5F and 5G must pass before frontend or Direct Submit is enabled.
 
+**Delivered 2026-09-02.**
+
+Neither a generic `PreparedReturn[T, R]` type nor a literally-named `prepare_itr2` function
+exists anywhere in the codebase for ITR-1/ITR-4 either — grepped and confirmed before writing
+any code. What "the completed ITR-1/ITR-4 lifecycle" actually means, concretely, is that
+`compute_canonical_itr1`/`compute_canonical_itr4` already attach the complete filing profile
+(via `model_copy`) *before* calling their respective calculators — `ITR2PipelineResult` (from
+Phase 4) already mirrors `ITR1PipelineResult`/`ITR4PipelineResult`'s shape. So rather than
+introduce a new, speculative `PreparedReturn` abstraction that has no precedent anywhere else
+in this codebase, `compute_canonical_itr2` was rewritten to do exactly what its two siblings
+already do — the literal, minimal reading of "move into or delegate to this preparer" that
+the plan text itself allows ("move into **or delegate to**").
+
+- **Verified before changing anything**: grepped every `run_input_validation`/
+  `run_calc_validation` call site across `filing_gateway_v2.py` — all three forms (ITR-1,
+  ITR-2, ITR-4) run CBDT Category A/B/D *validation* only inside `_generate_cbdt_json_itr{N}`,
+  never inside `compute_canonical_itr{N}`, even for ITR-1/ITR-4 which already do early
+  *profile-construction*. This is the precise, already-consistent split this phase needed to
+  preserve: 5G moves filing-profile/property/employer/TDS3 **construction** into
+  `compute_canonical_itr2` (matching ITR-1/ITR-4), but leaves CBDT rule **validation** exactly
+  where it already was for every form.
+- **Verified the behavior-change risk before accepting it**: moving filing-profile
+  construction into `compute_canonical_itr2` means an incomplete draft (missing PAN/DOB/
+  address/bank details) now fails at *compute* time, not only at JSON-generation time — a
+  real, user-visible timing change for anyone calling `compute_canonical_itr2` (or the
+  `/v2/tax-summary/compute` router) without complete personal data. Checked: (a) ITR-1/ITR-4
+  already have this exact behavior, proven intentional by a named test
+  (`test_itr1_compute_prepares_profile_before_calculation`), so this is bringing ITR-2 in
+  line with an established, accepted pattern, not introducing a new one; (b) grepped every
+  caller of `compute_canonical_itr2`/`compute_canonical` outside the gateway itself — the only
+  one is `app/routers/tax_v2.py::compute_tax_summary_v2`, which already routes ITR-1/ITR-4
+  through the same early-requirement path today with no separate "lightweight preview"
+  pathway, so ITR-2 gains no new class of risk; (c) `tests/test_filing_gateway_v2_itr2.py`'s
+  existing `_filing_ready_itr2_draft()` fixture (used by every existing `compute_canonical_itr2`
+  test) was *already* a complete draft, confirming the test suite's own expectations already
+  matched this target shape.
+- **`app/engine/filing_gateway_v2.py`** — `compute_canonical_itr2` now builds `filing_profile`/
+  `property_filing_details`/`employer_filing_details`/`tds3_filing_details` (calling the
+  existing `_itr2_filing_profile()` etc. functions — delegated to, not moved, per the plan
+  text's own allowance) and attaches them via `model_copy` before calling `compute_itr2`,
+  exactly mirroring `compute_canonical_itr1`/`_itr4`. `_generate_cbdt_json_itr2` now only
+  reads `pipeline.typed_input` — no `model_copy(update={...})` enrichment, no direct
+  `ReturnDraft` reads — matching the plan's literal exit requirement. `ITR2PipelineResult`
+  gained `personal_profile_source_hash: str = ""`, wired from
+  `app.engine.personal_profile.personal_profile_source_hash(draft)` exactly as ITR-1/ITR-4
+  already do (Phase 5F had explicitly deferred this one field to "Phase 5G's job").
+- **`app/routers/tax_v2.py`** — fixed a stale docstring on `compute_tax_summary_v2` claiming
+  "ITR-2/3 are not yet supported by the v2 pipeline" (true when written, in Phase 2; false
+  since Phase 4 for ITR-2, and now doubly so after this phase's complete-preparation
+  migration) — noticed while verifying this was the only caller of the functions being
+  changed, fixed as a small, directly-related, low-risk correction rather than left to drift
+  further.
+- **`tests/test_filing_gateway_v2_itr2.py`** — added 4 tests under a new "Phase 5G" section:
+  `test_compute_canonical_itr2_prepares_filing_data_before_calculation` (the direct analogue
+  of ITR-1's named proof test), `test_compute_canonical_itr2_rejects_incomplete_filing_profile`
+  (an incomplete profile now fails at compute time), `test_itr2_json_reuses_prepared_input_without_late_enrichment`,
+  and `test_itr2_pipeline_result_carries_personal_profile_source_hash`.
+- **Verification:**
+  - `pytest tests/test_filing_gateway_v2_itr2.py -v` — 11 passed (7 pre-existing + 4 new),
+    all green on the first run — no fixture changes needed, confirming the pre-flight risk
+    check above was accurate.
+  - `pytest tests/test_draft_to_itr2_input.py tests/test_filing_gateway_v2_itr2.py
+    tests/test_itr2_validators.py tests/test_itr2_integration.py tests/test_itr2_itd_builder.py
+    tests/test_itr2_production_path.py tests/test_itr2_input_validation.py
+    tests/test_itr2_calc_validation.py -q` — 110 passed, zero regressions.
+  - `pytest tests/test_tax_v2_compute.py -q` — same 3 pre-existing failures as every prior
+    phase's note (unrelated; re-confirmed present identically before this phase's changes).
+  - Full suite `pytest tests/ -q` (same pre-existing-exclusion list as prior phases) —
+    **1446 passed, 3 failed** (the same 3 pre-existing `test_tax_v2_compute.py` failures).
+    `test_filing_gateway_v2_itr4.py`'s previously-flagged date-bomb failures are not
+    currently manifesting (27/27 passed standalone) — noted, not re-litigated here.
+  - `npx tsc -b` — 0 errors. `npx vitest run` — 169 passed. `npm run build` — clean (5G
+    touched no frontend files; run for full-verification discipline).
+- **Not done in this phase** (genuinely out of scope, not deferred-and-forgotten): "filing
+  readiness" as a distinct, separately-exposed concept from "calculation succeeded" — the
+  plan's preparation-order text mentions "compute filing readiness" as a return value, but no
+  form's existing pipeline (ITR-1/ITR-4 included) currently exposes such a field distinct
+  from "did `compute_canonical_itrN` raise or not" — inventing one for ITR-2 alone, ahead of
+  ITR-1/ITR-4 having it, would be scope creep beyond "migrate ITR-2 to match its siblings."
 
 ### Phase 6 ? Frontend: wire ITR-2 onto the canonical `ReturnDraft`
 
