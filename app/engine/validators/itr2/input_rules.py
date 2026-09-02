@@ -14,7 +14,7 @@ from typing import Any
 
 from app.engine.validators.base import Severity, ValidationResult
 from app.schemas.itr1 import PropertyType, TaxRegime
-from app.schemas.itr2 import AssesseeStatus, CGAssetType, ITR2Input, ResidentialStatus
+from app.schemas.itr2 import AssesseeStatus, CGAssetType, ITR2Input, ResidentialStatus, ReturnFileSection
 
 _ZERO = Decimal("0")
 _AY_PATTERN = re.compile(r"^(\d{4})-(\d{2})$")
@@ -87,6 +87,36 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
     """
     results: list[ValidationResult] = []
 
+    # Official rules 20/21 and 9 from the 1-100 audit window.
+    if inp.filing_section == ReturnFileSection.ON_TIME_139_1 and inp.tax_regime == TaxRegime.OLD:
+        if inp.filing_date is not None and inp.due_date is not None and inp.filing_date > inp.due_date:
+            results.append(_result(
+                "ITR2-IN-REGIME-001", False,
+                "The old tax regime cannot be selected after the due date for a section 139(1) return.",
+                "tax_regime", "new after due date", inp.tax_regime.value,
+            ))
+
+    if inp.filing_profile is not None:
+        profile = inp.filing_profile
+        if profile.is_fii_fpi and profile.residential_status in {
+            ResidentialStatus.RESIDENT, ResidentialStatus.NOT_ORDINARILY_RESIDENT,
+        }:
+            results.append(_result(
+                "ITR2-IN-PROFILE-002", False,
+                "Residents and not ordinarily resident taxpayers cannot be FII/FPIs.",
+                "filing_profile.is_fii_fpi", False, str(profile.is_fii_fpi),
+            ))
+        if profile.seventh_proviso_139 and not any((
+            profile.foreign_travel_expenditure > _ZERO,
+            profile.electricity_expenditure > _ZERO,
+            profile.current_account_deposits > _ZERO,
+        )):
+            results.append(_result(
+                "ITR2-IN-PROFILE-003", False,
+                "Seventh-proviso filing requires at least one corresponding amount detail.",
+                "filing_profile", "one seventh-proviso amount > 0", "all amounts are zero",
+            ))
+
     # ── Schedule S (Salary) — Phase 5A ─────────────────────────────────────
     # Only checks pass-through exemption claims the engine does NOT itself cap
     # or compute from a statutory formula (gratuity/leave-encashment/VRS/
@@ -100,6 +130,22 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
     sal = inp.salary_income
     if sal is not None:
         gross_salary_total = sal.gross_salary + sal.perquisites_value + sal.profits_in_lieu_of_salary
+        if inp.tax_regime == TaxRegime.OLD:
+            net_salary = max(_ZERO, gross_salary_total - sal.hra_exempt_amount - sal.lta_exempt_amount)
+            allowed_standard = min(Decimal("50000"), net_salary)
+            if sal.standard_deduction_claimed > allowed_standard:
+                results.append(_result(
+                    "ITR2-IN-SAL-009", False,
+                    "Old-regime standard deduction cannot exceed ₹50,000 or net salary, whichever is lower.",
+                    "salary_income.standard_deduction_claimed", str(allowed_standard),
+                    str(sal.standard_deduction_claimed),
+                ))
+        if sal.professional_tax_paid > Decimal("2500"):
+            results.append(_result(
+                "ITR2-IN-SAL-010", False,
+                "Professional tax deduction cannot exceed ₹2,500.",
+                "salary_income.professional_tax_paid", "<= 2500", str(sal.professional_tax_paid),
+            ))
         if sal.lta_exempt_amount > sal.lta_amount_received:
             results.append(_result(
                 "ITR2-IN-SAL-001", False,
@@ -164,6 +210,12 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
         path = f"house_properties[{index}]"
         if hp.property_type == PropertyType.SELF_OCCUPIED:
             self_occupied_count += 1
+            if inp.tax_regime == TaxRegime.NEW and hp.home_loan_interest_paid > _ZERO:
+                results.append(_result(
+                    "ITR2-IN-HP-009", False,
+                    "Interest on borrowed capital cannot be claimed for a self-occupied property under the new tax regime.",
+                    f"{path}.home_loan_interest_paid", _ZERO, str(hp.home_loan_interest_paid),
+                ))
         if hp.annual_rent_received == _ZERO and hp.municipal_taxes_paid > _ZERO:
             results.append(_result(
                 "ITR2-IN-HP-001", False,
@@ -197,6 +249,29 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "ITR2-IN-HP-005", False,
                 "A non-co-owned property's assessee share must equal 100%.",
                 f"{path}.assessee_share_percent", "== 100", str(detail.assessee_share_percent),
+            ))
+        if index < len(hp_rows):
+            hp = hp_rows[index]
+            if detail.assessee_share_percent == _ZERO and hp.home_loan_interest_paid > _ZERO:
+                results.append(_result(
+                    "ITR2-IN-HP-007", False,
+                    "Interest on borrowed capital cannot be claimed when the "
+                    "assessee's co-owned property share is zero.",
+                    f"{path}.assessee_share_percent", "> 0 when interest is claimed",
+                    f"share={detail.assessee_share_percent}, interest={hp.home_loan_interest_paid}",
+                ))
+
+    # CBDT rule 757: unrealised rent cannot exceed the gross rent/lettable
+    # value reported for the property. This is independently user-suppliable
+    # in HousePropertyIncome and is consumed by the house-property schedule.
+    for index, hp in enumerate(hp_rows):
+        if hp.rent_not_realized > hp.annual_rent_received:
+            results.append(_result(
+                "ITR2-IN-HP-006", False,
+                "Unrealised rent cannot exceed gross rent received, receivable, "
+                "or lettable value.",
+                f"house_properties[{index}].rent_not_realized",
+                f"<= {hp.annual_rent_received}", str(hp.rent_not_realized),
             ))
 
     # ── Chapter VI-A Deductions — Phase 5C ─────────────────────────────────
@@ -263,6 +338,14 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "deductions_chapter6a", "all listed sections == 0",
                 ", ".join(f"{k}={v}" for k, v in sorted(claimed_huf.items())),
             ))
+    if ch6a is not None and inp.tax_regime == TaxRegime.OLD and ch6a.amount_80ee > _ZERO and ch6a.amount_80eea > _ZERO:
+        results.append(_result(
+            "ITR2-IN-VIA-004", False,
+            "Deductions under sections 80EE and 80EEA cannot both be claimed "
+            "under the old tax regime.",
+            "deductions_chapter6a", "80EE == 0 or 80EEA == 0",
+            f"80EE={ch6a.amount_80ee}, 80EEA={ch6a.amount_80eea}",
+        ))
     if ch6a is not None and inp.residential_status == ResidentialStatus.NON_RESIDENT:
         _nri_disallowed = {
             "80DD": ch6a.amount_80dd,
@@ -314,6 +397,47 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "ITR2-IN-CG-003", False,
                 "A reported transfer must have positive full consideration.",
                 f"{path}.full_consideration", "> 0", str(tx.full_consideration),
+            ))
+        if tx.full_consideration <= _ZERO and tx.expenditure_on_transfer > _ZERO:
+            results.append(_result(
+                "ITR2-IN-CG-101", False,
+                "Transfer expenses cannot be claimed when full consideration is zero.",
+                f"{path}.expenditure_on_transfer", _ZERO, str(tx.expenditure_on_transfer),
+            ))
+            results.append(_result(
+                "ITR2-IN-CG-102", False,
+                "Transfer expenses cannot be claimed against a zero-consideration capital-gain row.",
+                f"{path}.expenditure_on_transfer", _ZERO, str(tx.expenditure_on_transfer),
+            ))
+            results.append(_result(
+                "ITR2-IN-CG-103", False,
+                "Transfer expenses cannot be claimed against a zero-consideration capital-gain row.",
+                f"{path}.expenditure_on_transfer", _ZERO, str(tx.expenditure_on_transfer),
+            ))
+            results.append(_result(
+                "ITR2-IN-CG-104", False,
+                "Transfer expenses cannot be claimed against a zero-consideration capital-gain row.",
+                f"{path}.expenditure_on_transfer", _ZERO, str(tx.expenditure_on_transfer),
+            ))
+            results.append(_result(
+                "ITR2-IN-CG-105", False,
+                "Transfer expenses cannot be claimed against a zero-consideration capital-gain row.",
+                f"{path}.expenditure_on_transfer", _ZERO, str(tx.expenditure_on_transfer),
+            ))
+            results.append(_result(
+                "ITR2-IN-CG-106", False,
+                "Transfer expenses cannot be claimed against a zero-consideration capital-gain row.",
+                f"{path}.expenditure_on_transfer", _ZERO, str(tx.expenditure_on_transfer),
+            ))
+            results.append(_result(
+                "ITR2-IN-CG-107", False,
+                "Transfer expenses cannot be claimed against a zero-consideration capital-gain row.",
+                f"{path}.expenditure_on_transfer", _ZERO, str(tx.expenditure_on_transfer),
+            ))
+            results.append(_result(
+                "ITR2-IN-CG-108", False,
+                "Transfer expenses cannot be claimed against a zero-consideration capital-gain row.",
+                f"{path}.expenditure_on_transfer", _ZERO, str(tx.expenditure_on_transfer),
             ))
         total_exemptions = (
             tx.deduction_us54 + tx.deduction_us54b + tx.deduction_us54ec + tx.deduction_us54f
@@ -484,6 +608,7 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             ))
 
     fsi_by_country: dict[str, tuple[Decimal, Decimal]] = {}
+    fsi_by_identity: dict[tuple[str, str], tuple[Decimal, Decimal, Decimal]] = {}
     for index, fsi in enumerate(inp.fsi_entries or []):
         path = f"fsi_entries[{index}]"
         expected_total = fsi.salary_income + fsi.hp_income + fsi.cg_income + fsi.os_income
@@ -493,16 +618,28 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "FSI total income must equal the sum of its income heads.",
                 f"{path}.total_income", str(expected_total), str(fsi.total_income),
             ))
+        identity = (fsi.country_code.upper(), fsi.tax_identification_no.strip())
+        prior_income, prior_tax, prior_relief = fsi_by_identity.get(
+            identity, (_ZERO, _ZERO, _ZERO)
+        )
+        fsi_income = fsi.total_income or _ZERO
+        fsi_relief = min(fsi.tax_paid_outside_india, fsi.tax_payable_in_india)
+        fsi_by_identity[identity] = (
+            prior_income + fsi_income,
+            prior_tax + fsi.tax_paid_outside_india,
+            prior_relief + fsi_relief,
+        )
         income, tax = fsi_by_country.get(fsi.country_code.upper(), (_ZERO, _ZERO))
-        fsi_by_country[fsi.country_code.upper()] = (income + fsi.total_income, tax + fsi.tax_paid_outside_india)
-    if inp.fsi_entries and inp.residential_status == ResidentialStatus.NRI:
+        fsi_by_country[fsi.country_code.upper()] = (income + fsi_income, tax + fsi.tax_paid_outside_india)
+    if inp.fsi_entries and inp.residential_status == ResidentialStatus.NON_RESIDENT:
         results.append(_result(
-            "ITR2-IN-FSI-002", True,
-            "Foreign-source income is present for a non-resident; verify Indian taxability.",
-            "fsi_entries", severity=Severity.D,
+            "ITR2-IN-FSI-003", False,
+            "Schedule FSI is not applicable when residential status is non-resident.",
+            "fsi_entries", "empty", f"{len(inp.fsi_entries)} entries",
         ))
 
     tr_by_country: dict[str, tuple[Decimal, Decimal]] = {}
+    tr_by_identity: dict[tuple[str, str], tuple[Decimal, Decimal, Decimal]] = {}
     for index, tr in enumerate(inp.tr1_entries or []):
         path = f"tr1_entries[{index}]"
         if tr.relief_claimed > min(tr.tax_paid_outside_india, tr.indian_tax_payable):
@@ -512,11 +649,41 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 f"{path}.relief_claimed",
                 f"<= {min(tr.tax_paid_outside_india, tr.indian_tax_payable)}", str(tr.relief_claimed),
             ))
+        if inp.residential_status == ResidentialStatus.NON_RESIDENT:
+            results.append(_result(
+                "ITR2-IN-TR1-003", False,
+                "Schedule TR is not applicable when residential status is non-resident.",
+                "tr1_entries", "empty", f"{len(inp.tr1_entries)} entries",
+            ))
+        identity = (tr.country_code.upper(), tr.tax_identification_no.strip())
+        prior_income, prior_tax, prior_relief = tr_by_identity.get(
+            identity, (_ZERO, _ZERO, _ZERO)
+        )
+        tr_by_identity[identity] = (
+            prior_income + tr.income_included_in_this_return,
+            prior_tax + tr.tax_paid_outside_india,
+            prior_relief + tr.relief_claimed,
+        )
         income, tax = tr_by_country.get(tr.country_code.upper(), (_ZERO, _ZERO))
         tr_by_country[tr.country_code.upper()] = (
             income + tr.income_included_in_this_return,
             tax + tr.tax_paid_outside_india,
         )
+    for identity in sorted(set(fsi_by_identity) | set(tr_by_identity)):
+        fsi_values = fsi_by_identity.get(identity, (_ZERO, _ZERO, _ZERO))
+        tr_values = tr_by_identity.get(identity, (_ZERO, _ZERO, _ZERO))
+        if fsi_values[1] != tr_values[1]:
+            results.append(_result(
+                "ITR2-IN-TR1-004", False,
+                "Schedule TR tax paid outside India must match Schedule FSI for each country and TIN.",
+                "tr1_entries", str(fsi_values[1]), str(tr_values[1]),
+            ))
+        if fsi_values[2] != tr_values[2]:
+            results.append(_result(
+                "ITR2-IN-TR1-005", False,
+                "Schedule TR relief must match relief available in Schedule FSI for each country and TIN.",
+                "tr1_entries", str(fsi_values[2]), str(tr_values[2]),
+            ))
     for country in sorted(set(fsi_by_country) | set(tr_by_country)):
         if fsi_by_country.get(country, (_ZERO, _ZERO)) != tr_by_country.get(country, (_ZERO, _ZERO)):
             results.append(_result(
@@ -525,6 +692,14 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "tr1_entries", str(fsi_by_country.get(country, (_ZERO, _ZERO))),
                 str(tr_by_country.get(country, (_ZERO, _ZERO))),
             ))
+
+    # Schedule TR must not claim relief for a non-resident return.
+    if inp.tr1_entries and inp.residential_status == ResidentialStatus.NON_RESIDENT:
+        results.append(_result(
+            "ITR2-IN-TR1-003", False,
+            "Schedule TR is not applicable when residential status is non-resident.",
+            "tr1_entries", "empty", f"{len(inp.tr1_entries)} entries",
+        ))
 
     # ── Schedule OS / Schedule SI / CYLA-BFLA-CFL — Phase 5D ───────────────
     # Schedule OS (`OtherSourcesIncome`) has almost nothing left to validate:
@@ -563,6 +738,267 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "under section 115BBJ (winnings from online games) — section 58(4).",
                 f"si_entries[{index}].deductions", _ZERO, str(si.deductions),
             ))
+
+    # CBDT rules 463, 471 and 472: withholding credits require corresponding
+    # income in the schedule from which the credit is claimed.
+    for index, entry in enumerate(inp.tds2_entries or []):
+        if entry.tds_claimed_this_year > entry.gross_amount:
+            results.append(_result(
+                "ITR2-IN-TDS-002", False,
+                "TDS claimed under Schedule TDS2 cannot exceed the corresponding gross income disclosed.",
+                f"tds2_entries[{index}].tds_claimed_this_year",
+                f"<= {entry.gross_amount}", str(entry.tds_claimed_this_year),
+            ))
+    total_salary_tds = sum((entry.tds_deducted for entry in inp.tds1_entries), _ZERO)
+    if inp.tds1_entries and inp.salary_income is None:
+        results.append(_result(
+            "ITR2-IN-TDS-003", False,
+            "Salary TDS can be claimed only when salary income is disclosed.",
+            "salary_income", "present", "absent",
+        ))
+    elif inp.tds1_entries and inp.salary_income is not None:
+        salary_income = (
+            inp.salary_income.gross_salary
+            + inp.salary_income.perquisites_value
+            + inp.salary_income.profits_in_lieu_of_salary
+        )
+        if total_salary_tds > salary_income:
+            results.append(_result(
+                "ITR2-IN-TDS-004", False,
+                "Total tax deducted from salary cannot exceed income chargeable under Salaries.",
+                "tds1_entries", f"<= {salary_income}", str(total_salary_tds),
+            ))
+
+    # CBDT rule 542: relief u/s 89 requires salary details.
+    if inp.relief_89 > _ZERO and (
+        inp.salary_income is None
+        or inp.salary_income.gross_salary
+        + inp.salary_income.perquisites_value
+        + inp.salary_income.profits_in_lieu_of_salary <= _ZERO
+    ):
+        results.append(_result(
+            "ITR2-IN-FORM-003", False,
+            "Relief u/s 89 cannot be claimed when salary details are zero or blank.",
+            "relief_89", _ZERO, str(inp.relief_89),
+        ))
+
+    # CBDT rules 548, 763 and 764: disability claims require their official
+    # supporting schedules.  These fields are canonical and calculator-used.
+    if ch6a is not None and ch6a.amount_80u > _ZERO and ch6a.schedule_80u is None:
+        results.append(_result(
+            "ITR2-IN-VIA-005", False,
+            "A positive Section 80U deduction requires Schedule 80U disability details.",
+            "deductions_chapter6a.schedule_80u", "present", "absent",
+        ))
+    if ch6a is not None and ch6a.amount_80dd > _ZERO and ch6a.schedule_80dd is None:
+        results.append(_result(
+            "ITR2-IN-VIA-006", False,
+            "A positive Section 80DD deduction requires Schedule 80DD disability details.",
+            "deductions_chapter6a.schedule_80dd", "present", "absent",
+        ))
+    if (
+        ch6a is not None
+        and ch6a.amount_80dd > _ZERO
+        and ch6a.schedule_80dd is not None
+        and inp.filing_profile is not None
+        and inp.filing_profile.assessee_status == AssesseeStatus.HUF
+        and ch6a.schedule_80dd.dependent_relationship is None
+    ):
+        results.append(_result(
+            "ITR2-IN-VIA-007", False,
+            "An HUF claiming Section 80DD must identify the dependent as a Member of HUF.",
+            "deductions_chapter6a.schedule_80dd.dependent_relationship",
+            "MEMBER_OF_HUF", "missing",
+        ))
+
+    # CBDT rules 462, 464, 465, 468 and 479: withholding schedules must
+    # preserve the distinction between current-year and brought-forward credit,
+    # carry the corresponding income, and respect assessee eligibility.
+    for index, entry in enumerate(inp.tds2_entries or []):
+        path = f"tds2_entries[{index}]"
+        if entry.tds_claimed_this_year > _ZERO and entry.gross_amount <= _ZERO:
+            results.append(_result(
+                "ITR2-IN-TDS-005", False,
+                "TDS2 gross income must be disclosed when TDS is claimed.",
+                f"{path}.gross_amount", "> 0", str(entry.gross_amount),
+            ))
+        if entry.brought_forward_tds > _ZERO and entry.tds_deducted > _ZERO:
+            results.append(_result(
+                "ITR2-IN-TDS-006", False,
+                "Current-year TDS and brought-forward TDS must be reported in separate TDS2 rows.",
+                path, "not both current-year and brought-forward credit",
+                f"brought_forward={entry.brought_forward_tds}, deducted={entry.tds_deducted}",
+            ))
+        expected_carry_forward = max(
+            _ZERO,
+            entry.tds_deducted + entry.brought_forward_tds - entry.tds_claimed_this_year,
+        )
+        if entry.tds_credit_carried_forward != expected_carry_forward:
+            results.append(_result(
+                "ITR2-IN-TDS-007", False,
+                "TDS2 credit carried forward must equal deducted plus brought-forward TDS less claimed TDS.",
+                f"{path}.tds_credit_carried_forward", str(expected_carry_forward),
+                str(entry.tds_credit_carried_forward),
+            ))
+    if inp.filing_profile is not None and inp.filing_profile.assessee_status == AssesseeStatus.HUF:
+        salary_tds = sum((entry.tds_deducted for entry in inp.tds1_entries), _ZERO)
+        if salary_tds > _ZERO:
+            results.append(_result(
+                "ITR2-IN-TDS-008", False,
+                "An HUF cannot claim TDS on salary.",
+                "tds1_entries", _ZERO, str(salary_tds),
+            ))
+    for index, entry in enumerate(inp.tds3_entries or []):
+        if entry.tds_claimed > _ZERO and entry.gross_receipt <= _ZERO:
+            results.append(_result(
+                "ITR2-IN-TDS-009", False,
+                "TDS3 gross receipt must be disclosed when TDS is claimed.",
+                f"tds3_entries[{index}].gross_receipt", "> 0", str(entry.gross_receipt),
+            ))
+    # TDS3 carry-forward arithmetic mirrors the TDS2 ledger check.
+    for index, entry in enumerate(inp.tds3_entries or []):
+        expected_carry = max(_ZERO, entry.tds_deducted + entry.brought_forward_tds - entry.tds_claimed)
+        if entry.tds_credit_carried_forward != expected_carry:
+            results.append(_result(
+                "ITR2-IN-TDS-012", False,
+                "TDS3 credit carried forward must equal deducted plus brought-forward TDS less claimed TDS.",
+                f"tds3_entries[{index}].tds_credit_carried_forward",
+                str(expected_carry), str(entry.tds_credit_carried_forward),
+            ))
+
+    # CBDT rule 480: the ESOP deferred-tax ledger has an explicit balance
+    # carried-forward field, so its arithmetic can be validated independently
+    # of the unavailable Part B-TTI aggregate.
+    for index, esop in enumerate(inp.esop_deferrals or []):
+        expected_balance = max(
+            _ZERO, esop.tax_deferred_brought_forward - esop.tax_payable_current_year,
+        )
+        if esop.balance_tax_carried_forward != expected_balance:
+            results.append(_result(
+                "ITR2-IN-ESOP-001", False,
+                "ESOP deferred-tax balance carried forward must equal brought-forward tax less current-year tax payable.",
+                f"esop_deferrals[{index}].balance_tax_carried_forward",
+                str(expected_balance), str(esop.balance_tax_carried_forward),
+            ))
+
+    # CBDT rule 754: Section 115F investment must be made within six months
+    # after the transfer of the original foreign-exchange asset.
+    for index, tx in enumerate(inp.cg_transactions or []):
+        for claim_index, claim in enumerate(tx.exemptions):
+            if claim.section == "115F" and claim.investment_date is not None:
+                if claim.investment_date < claim.transfer_date or (
+                    claim.investment_date - claim.transfer_date
+                ).days > 183:
+                    results.append(_result(
+                        "ITR2-IN-CG-009", False,
+                        "Section 115F investment must be made within six months after the transfer date.",
+                        f"cg_transactions[{index}].exemptions[{claim_index}].investment_date",
+                        "within six months after transfer", str(claim.investment_date),
+                    ))
+
+    # Canonical exemption rows must not exceed the gain they purport to shelter.
+    for index, tx in enumerate(inp.cg_transactions or []):
+        for claim_index, claim in enumerate(tx.exemptions):
+            claimed = claim.investment_amount + claim.cgas_deposit_amount
+            if claimed > claim.eligible_gain:
+                results.append(_result(
+                    "ITR2-IN-CG-011", False,
+                    "A capital-gain exemption investment cannot exceed the eligible gain.",
+                    f"cg_transactions[{index}].exemptions[{claim_index}]",
+                    f"investment plus CGAS <= {claim.eligible_gain}", str(claimed),
+                ))
+
+    # CBDT rule 650: section 192 is salary withholding and cannot be selected
+    # on the non-salary TDS schedules.
+    for index, entry in enumerate(inp.tds2_entries or []):
+        if entry.tds_section.strip().upper() == "192":
+            results.append(_result(
+                "ITR2-IN-TDS-010", False,
+                "Section 192 TDS must be reported in Schedule TDS1, not TDS2.",
+                f"tds2_entries[{index}].tds_section", "not 192", entry.tds_section,
+            ))
+    for index, entry in enumerate(inp.tds3_entries or []):
+        if entry.tds_section.strip().upper() == "192":
+            results.append(_result(
+                "ITR2-IN-TDS-011", False,
+                "Section 192 TDS must be reported in Schedule TDS1, not TDS3.",
+                f"tds3_entries[{index}].tds_section", "not 192", entry.tds_section,
+            ))
+
+    # CBDT rule 647: Section 80DDB claims require the specified-disease
+    # evidence object that is carried by the canonical deduction model.
+    if ch6a is not None and ch6a.amount_80ddb > _ZERO and ch6a.details_80ddb is None:
+        results.append(_result(
+            "ITR2-IN-VIA-012", False,
+            "A Section 80DDB claim requires specified-disease details.",
+            "deductions_chapter6a.details_80ddb", "present", "absent",
+        ))
+
+    # CBDT rule 652: the identity date must precede the financial year start
+    # for AY 2026-27 (1 April 2025).
+    profile_date = getattr(inp.filing_profile, "date_of_birth_or_formation", None) if inp.filing_profile is not None else None
+    if profile_date is not None and profile_date >= date(2025, 4, 1):
+        results.append(_result(
+            "ITR2-IN-PROFILE-001", False,
+            "Date of birth or formation must precede 1 April of the assessment year's financial year.",
+            "filing_profile.date_of_birth_or_formation", "< 2025-04-01",
+            str(profile_date),
+        ))
+
+    # CBDT rule 653: Schedule HP interest claims require corresponding filing
+    # detail, preventing an interest amount from being emitted without the
+    # property identity/address row required by the official return.
+    if any(hp.home_loan_interest_paid > _ZERO for hp in hp_rows):
+        if len(inp.property_filing_details) < len(hp_rows):
+            results.append(_result(
+                "ITR2-IN-HP-008", False,
+                "House-property interest claims require corresponding property filing details.",
+                "property_filing_details", f"at least {len(hp_rows)} rows",
+                str(len(inp.property_filing_details)),
+            ))
+
+    # CBDT rules 658/659: 80CCH is restricted to eligible Central Government
+    # employment and the AY-specific age band.
+    if ch6a is not None and ch6a.amount_80cch > _ZERO:
+        central_employment = any(
+            detail.nature_of_employment == "CGOV"
+            for detail in inp.employer_filing_details
+        )
+        if not central_employment:
+            results.append(_result(
+                "ITR2-IN-VIA-010", False,
+                "Section 80CCH requires Central Government employment details.",
+                "employer_filing_details", "one nature_of_employment == CGOV", "none",
+            ))
+        if profile_date is not None:
+            dob = profile_date
+            as_of = date(2025, 4, 1)
+            age = as_of.year - dob.year - ((as_of.month, as_of.day) < (dob.month, dob.day))
+            if age < 17 or age > 27:
+                results.append(_result(
+                    "ITR2-IN-VIA-011", False,
+                    "Section 80CCH is available only for age 17 through 27 on 1 April 2025.",
+                    "filing_profile.date_of_birth_or_formation", "age 17..27", str(age),
+                ))
+
+    # CBDT rule 662: every CGAS claim must point to a disclosed CGAS bank
+    # account, matched by account number and account type.
+    for index, tx in enumerate(inp.cg_transactions or []):
+        for claim_index, claim in enumerate(tx.exemptions):
+            if claim.cgas_deposit_amount > _ZERO:
+                matched = any(
+                    account.account_number == claim.cgas_account_number
+                    and account.account_type.strip().upper() == "CGAS"
+                    and account.ifsc_code.strip().upper() == (claim.cgas_ifsc or "").strip().upper()
+                    for account in inp.bank_accounts
+                )
+                if not matched:
+                    results.append(_result(
+                        "ITR2-IN-CG-010", False,
+                        "CGAS deposit details must match a disclosed CGAS bank account.",
+                        f"cg_transactions[{index}].exemptions[{claim_index}].cgas_account_number",
+                        "matching CGAS bank account", claim.cgas_account_number,
+                    ))
 
     # Category D reminders (Category B/D rules 5/6 of 26): these are the
     # non-blocking half of Phase 5E — CBDT flags the return as uploadable but

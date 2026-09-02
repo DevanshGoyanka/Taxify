@@ -18,7 +18,9 @@ import pytest
 
 from app.engine.validators.itr2.input_rules import validate_itr2_input
 from app.schemas.itr1 import (
+    BankAccount,
     Chapter6ADeductions,
+    DependentRelationship,
     FilingAddress,
     HousePropertyIncome,
     PropertyType,
@@ -35,8 +37,13 @@ from app.schemas.itr2 import (
     CGTransaction,
     ITR2FilingProfile,
     ITR2Input,
+    ESOPDeferralInput,
+    CapitalGainExemptionClaim,
     PropertyFilingDetail,
+    ReturnFileSection,
     ResidentialStatus,
+    FSICountryEntry,
+    TR1Entry,
     ScheduleSIEntry,
     VDATransaction,
 )
@@ -269,7 +276,378 @@ def test_HP_005_non_co_owned_share_below_100_fails():
     assert failed(validate_itr2_input(inp), "ITR2-IN-HP-005")
 
 
+def test_HP_006_unrealised_rent_within_gross_rent_passes():
+    inp = _base_input(house_property_income=HousePropertyIncome(
+        property_type=PropertyType.LET_OUT,
+        annual_rent_received=Decimal("240000"),
+        rent_not_realized=Decimal("50000"),
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-006")
+
+
+def test_HP_006_unrealised_rent_exceeding_gross_rent_fails():
+    inp = _base_input(house_property_income=HousePropertyIncome(
+        property_type=PropertyType.LET_OUT,
+        annual_rent_received=Decimal("240000"),
+        rent_not_realized=Decimal("250000"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-006")
+
+
+def test_HP_007_zero_share_without_interest_passes():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            ownership_share_percentage=Decimal("0.01"),
+        ),
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("0.01"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-007")
+
+
+def test_HP_007_zero_share_with_interest_fails():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            ownership_share_percentage=Decimal("0.01"),
+            home_loan_interest_paid=Decimal("100000"),
+        ),
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("0"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-007")
+
+
+
+
+def test_FSI_003_nonresident_fsi_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        fsi_entries=[FSICountryEntry(country_code="US", tax_identification_no="TIN", salary_income=Decimal("100"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-FSI-003")
+
+
+def test_FSI_003_resident_fsi_passes():
+    inp = _base_input(
+        fsi_entries=[FSICountryEntry(country_code="US", tax_identification_no="TIN", salary_income=Decimal("100"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-FSI-003")
+
+
+def test_TR1_003_nonresident_tr_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        fsi_entries=[FSICountryEntry(country_code="US", tax_identification_no="TIN", salary_income=Decimal("1"))],
+        tr1_entries=[TR1Entry(country_code="US", tax_identification_no="TIN", tax_paid_outside_india=Decimal("10"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TR1-003")
+
+
+def test_TR1_004_and_005_tin_reconciliation_fails():
+    inp = _base_input(
+        fsi_entries=[FSICountryEntry(country_code="US", tax_identification_no="TIN", salary_income=Decimal("100"), tax_paid_outside_india=Decimal("10"), tax_payable_in_india=Decimal("8"))],
+        tr1_entries=[TR1Entry(country_code="US", tax_identification_no="TIN", income_included_in_this_return=Decimal("100"), tax_paid_outside_india=Decimal("9"), relief_claimed=Decimal("7"), indian_tax_payable=Decimal("7"))],
+    )
+    ids = {r.rule_id for r in validate_itr2_input(inp) if not r.passed}
+    assert {"ITR2-IN-TR1-004", "ITR2-IN-TR1-005"} <= ids
+
+
+def test_TDS_002_claim_exceeding_gross_income_fails():
+    inp = _base_input(tds2_entries=[TDS2Entry(
+        deductor_tan="MUMA12345B", tds_section="194A", gross_amount=Decimal("1000"),
+        tds_deducted=Decimal("100"), tds_claimed_this_year=Decimal("1001"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-002")
+
+
+def test_TDS_003_salary_tds_without_salary_fails():
+    inp = _base_input(tds1_entries=[{"employer_tan": "MUMA12345B", "tds_deducted": Decimal("10")}])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-003")
+
+
+def test_TDS_004_salary_tds_over_salary_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("1000")),
+        tds1_entries=[{"employer_tan": "MUMA12345B", "tds_deducted": Decimal("1001")}],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-004")
+
+
+def test_FORM_003_relief_89_without_salary_fails():
+    assert failed(validate_itr2_input(_base_input(relief_89=Decimal("100"))), "ITR2-IN-FORM-003")
+
+
+def test_VIA_005_and_006_missing_disability_schedules_fail():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("1"), amount_80dd=Decimal("1")))
+    ids = {r.rule_id for r in validate_itr2_input(inp) if not r.passed}
+    assert {"ITR2-IN-VIA-005", "ITR2-IN-VIA-006"} <= ids
+
+
+def test_VIA_007_huf_80dd_requires_member_relationship():
+    profile = ITR2FilingProfile.model_construct(
+        assessee_status=AssesseeStatus.HUF,
+        residential_status=ResidentialStatus.RESIDENT,
+        return_file_section=ReturnFileSection.ON_TIME_139_1,
+        portuguese_civil_code_applies=False,
+    )
+    inp = _base_input(
+        filing_profile=profile,
+        deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("1"), schedule_80dd={}),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-007")
+
+
+
+
+def test_TDS_005_claim_without_gross_income_fails():
+    inp = _base_input(tds2_entries=[TDS2Entry(
+        deductor_tan="MUMA12345B", tds_section="194A", tds_claimed_this_year=Decimal("1"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-005")
+
+
+def test_TDS_006_current_and_brought_forward_same_row_fails():
+    inp = _base_input(tds2_entries=[TDS2Entry(
+        deductor_tan="MUMA12345B", tds_section="194A", gross_amount=Decimal("100"),
+        tds_deducted=Decimal("10"), brought_forward_tds=Decimal("5"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-006")
+
+
+def test_TDS_007_carry_forward_arithmetic_fails():
+    inp = _base_input(tds2_entries=[TDS2Entry(
+        deductor_tan="MUMA12345B", tds_section="194A", tds_deducted=Decimal("10"),
+        tds_credit_carried_forward=Decimal("9"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-007")
+
+
+def test_TDS_008_huf_salary_tds_fails():
+    profile = ITR2FilingProfile.model_construct(
+        assessee_status=AssesseeStatus.HUF,
+        date_of_birth_or_formation=date(1990, 1, 1),
+    )
+    inp = _base_input(filing_profile=profile, tds1_entries=[{"tds_deducted": Decimal("1")}])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-008")
+
+
+def test_TDS_009_claim_without_tds3_receipt_fails():
+    inp = _base_input(tds3_entries=[{
+        "tenant_pan": "ABCPN1234F", "tenant_name": "Tenant", "tds_section": "194IB",
+        "tds_claimed": Decimal("1"), "tds_deducted": Decimal("1"),
+    }])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-009")
+
+
+def test_ESOP_001_balance_arithmetic_fails():
+    inp = _base_input(esop_deferrals=[ESOPDeferralInput(
+        employer_pan="ABCDE1234F", dpiit_registration_number="DPIIT1",
+        assessment_year="2025-26", tax_deferred_brought_forward=Decimal("100"),
+        tax_payable_current_year=Decimal("20"), balance_tax_carried_forward=Decimal("90"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-ESOP-001")
+
+
+def test_CG_009_late_115f_investment_fails():
+    claim = CapitalGainExemptionClaim(
+        section="115F", transfer_date=date(2025, 4, 1), eligible_gain=Decimal("100"),
+        investment_amount=Decimal("100"), investment_date=date(2025, 11, 1),
+    )
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.FOREIGN_ASSET, date_of_acquisition=date(2020, 1, 1),
+        date_of_transfer=date(2025, 4, 1), full_consideration=Decimal("100"), exemptions=[claim],
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-009")
+
+
+
+
+def test_TDS_010_and_011_section_192_non_salary_rows_fail():
+    inp = _base_input(
+        tds2_entries=[TDS2Entry(deductor_tan="MUMA12345B", tds_section="192")],
+        tds3_entries=[{"tenant_pan": "ABCPN1234F", "tenant_name": "Tenant", "tds_section": "192"}],
+    )
+    ids = {r.rule_id for r in validate_itr2_input(inp) if not r.passed}
+    assert {"ITR2-IN-TDS-010", "ITR2-IN-TDS-011"} <= ids
+
+
+def test_PROFILE_001_birth_date_before_fy_passes():
+    profile = ITR2FilingProfile.model_construct(date_of_birth_or_formation=date(1990, 1, 1))
+    assert not failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-001")
+
+
+def test_PROFILE_001_birth_date_in_fy_fails():
+    profile = ITR2FilingProfile.model_construct(date_of_birth_or_formation=date(2025, 4, 1))
+    assert failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-001")
+
+
+def test_HP_008_interest_without_property_details_fails():
+    inp = _base_input(house_properties=[HousePropertyIncome(
+        property_type=PropertyType.SELF_OCCUPIED, home_loan_interest_paid=Decimal("1"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-008")
+
+
+def test_VIA_010_and_011_80cch_ineligible_fails():
+    profile = ITR2FilingProfile.model_construct(date_of_birth_or_formation=date(1990, 1, 1))
+    inp = _base_input(
+        filing_profile=profile,
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("1")),
+    )
+    ids = {r.rule_id for r in validate_itr2_input(inp) if not r.passed}
+    assert {"ITR2-IN-VIA-010", "ITR2-IN-VIA-011"} <= ids
+
+
+def test_CG_010_cgas_without_matching_account_fails():
+    claim = CapitalGainExemptionClaim(
+        section="54", transfer_date=date(2025, 4, 1), eligible_gain=Decimal("10"),
+        investment_amount=Decimal("0"), cgas_deposit_amount=Decimal("10"),
+        cgas_deposit_date=date(2025, 5, 1), cgas_account_number="123", cgas_ifsc="ABCD0123456",
+    )
+    tx = CGTransaction(asset_type=CGAssetType.LAND_BUILDING, date_of_acquisition=date(2020, 1, 1),
+                       date_of_transfer=date(2025, 4, 1), full_consideration=Decimal("20"), exemptions=[claim])
+    assert failed(validate_itr2_input(_base_input(cg_transactions=[tx])), "ITR2-IN-CG-010")
+
+
+def test_CG_010_cgas_matching_account_passes():
+    claim = CapitalGainExemptionClaim(
+        section="54", transfer_date=date(2025, 4, 1), eligible_gain=Decimal("10"),
+        investment_amount=Decimal("0"), cgas_deposit_amount=Decimal("10"),
+        cgas_deposit_date=date(2025, 5, 1), cgas_account_number="123", cgas_ifsc="ABCD0123456",
+    )
+    tx = CGTransaction(asset_type=CGAssetType.LAND_BUILDING, date_of_acquisition=date(2020, 1, 1),
+                       date_of_transfer=date(2025, 4, 1), full_consideration=Decimal("20"), exemptions=[claim])
+    account = BankAccount(account_number="123", ifsc_code="ABCD0123456", account_type="CGAS")
+    assert not failed(validate_itr2_input(_base_input(cg_transactions=[tx], bank_accounts=[account])), "ITR2-IN-CG-010")
+
+
+
+
+def test_VIA_012_80ddb_without_disease_details_fails():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(amount_80ddb=Decimal("1")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-012")
+
+
+def test_VIA_012_zero_80ddb_without_details_passes():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions())
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-012")
+
+
+
+
+def test_HP_009_new_regime_self_occupied_interest_fails():
+    inp = _base_input(
+        tax_regime=TaxRegime.NEW,
+        house_properties=[HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("1"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-009")
+
+
+def test_CG_011_exemption_exceeding_eligible_gain_fails():
+    claim = CapitalGainExemptionClaim(
+        section="54", transfer_date=date(2025, 4, 1), eligible_gain=Decimal("10"),
+        investment_amount=Decimal("11"), investment_date=date(2025, 5, 1),
+    )
+    tx = CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, date_of_acquisition=date(2020, 1, 1),
+        date_of_transfer=date(2025, 4, 1), full_consideration=Decimal("20"), exemptions=[claim],
+    )
+    assert failed(validate_itr2_input(_base_input(cg_transactions=[tx])), "ITR2-IN-CG-011")
+
+
+def test_CG_010_cgas_ifsc_mismatch_fails():
+    claim = CapitalGainExemptionClaim(
+        section="54", transfer_date=date(2025, 4, 1), eligible_gain=Decimal("20"),
+        investment_amount=Decimal("0"), cgas_deposit_amount=Decimal("10"), cgas_deposit_date=date(2025, 5, 1),
+        cgas_account_number="123", cgas_ifsc="ABCD0123456",
+    )
+    tx = CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, date_of_acquisition=date(2020, 1, 1),
+        date_of_transfer=date(2025, 4, 1), full_consideration=Decimal("20"), exemptions=[claim],
+    )
+    account = BankAccount(account_number="123", ifsc_code="EFGH0123456", account_type="CGAS")
+    assert failed(validate_itr2_input(_base_input(cg_transactions=[tx], bank_accounts=[account])), "ITR2-IN-CG-010")
+
+
+def test_TDS_012_tds3_carry_forward_arithmetic_fails():
+    inp = _base_input(tds3_entries=[{
+        "tenant_pan": "ABCPN1234F", "tenant_name": "Tenant", "tds_section": "194IB",
+        "tds_deducted": Decimal("10"), "tds_claimed": Decimal("2"),
+        "tds_credit_carried_forward": Decimal("9"),
+    }])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-012")
+
+
+
+
+def test_PROFILE_002_resident_fpi_fails():
+    profile = ITR2FilingProfile.model_construct(
+        residential_status=ResidentialStatus.RESIDENT, is_fii_fpi=True,
+        sebi_registration_number="INABFP123456",
+    )
+    assert failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-002")
+
+
+def test_PROFILE_003_seventh_proviso_without_amounts_fails():
+    profile = ITR2FilingProfile.model_construct(seventh_proviso_139=True)
+    assert failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-003")
+
+
+def test_REGIME_001_old_regime_after_due_date_fails():
+    assert failed(validate_itr2_input(_base_input(
+        filing_date=date(2026, 8, 1), due_date=date(2026, 7, 31),
+    )), "ITR2-IN-REGIME-001")
+
+
+def test_SAL_009_old_regime_standard_deduction_over_cap_fails():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("1000000"), standard_deduction_claimed=Decimal("50001"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-009")
+
+
+def test_SAL_010_professional_tax_over_cap_fails():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("1000000"), professional_tax_paid=Decimal("2501"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-010")
+
+
+
+
+def test_CG_101_to_108_zero_consideration_expense_fails():
+    tx = CGTransaction.model_construct(
+        asset_type=CGAssetType.LAND_BUILDING,
+        date_of_transfer=date(2025, 4, 1),
+        full_consideration=Decimal("0"),
+        expenditure_on_transfer=Decimal("1"),
+    )
+    ids = {r.rule_id for r in validate_itr2_input(_base_input(cg_transactions=[tx])) if not r.passed}
+    assert {f"ITR2-IN-CG-{number}" for number in range(101, 109)} <= ids
+
+
+def test_CG_101_to_108_positive_consideration_expense_passes():
+    tx = CGTransaction.model_construct(
+        asset_type=CGAssetType.LAND_BUILDING,
+        date_of_transfer=date(2025, 4, 1),
+        full_consideration=Decimal("10"),
+        expenditure_on_transfer=Decimal("1"),
+    )
+    ids = {r.rule_id for r in validate_itr2_input(_base_input(cg_transactions=[tx])) if not r.passed}
+    assert not ({f"ITR2-IN-CG-{number}" for number in range(101, 109)} & ids)
+
+
 # ── Phase 5B: Schedule CG / 112A / VDA ──────────────────────────────────────
+
 
 def test_CG_007_land_building_transfer_within_financial_year_passes():
     inp = _base_input(cg_transactions=[CGTransaction(
@@ -404,6 +782,24 @@ def test_VIA_003_non_resident_with_80dd_claim_fails():
         deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("75000")),
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-003")
+
+
+def test_VIA_004_old_regime_80ee_and_80eea_are_mutually_exclusive():
+    inp = _base_input(
+        tax_regime=TaxRegime.OLD,
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80ee=Decimal("50000"), amount_80eea=Decimal("50000"),
+        ),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-004")
+
+
+def test_VIA_004_old_regime_allows_either_80ee_deduction():
+    inp = _base_input(
+        tax_regime=TaxRegime.OLD,
+        deductions_chapter6a=Chapter6ADeductions(amount_80eea=Decimal("50000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-004")
 
 
 # ── Phase 5D: Schedule OS / Schedule SI / CYLA-BFLA-CFL ─────────────────────
