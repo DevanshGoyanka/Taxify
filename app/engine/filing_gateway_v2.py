@@ -1216,7 +1216,23 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
             held_unlisted_equity=personal.holdsUnlistedShares,
             is_fii_fpi=filing.isFiiFpi,
             sebi_registration_number=filing.sebiRegistrationNumber.strip() or None,
-            portuguese_civil_code_applies=filing.portugueseCivilCodeApplies,
+            # ITR2Input's cross-schedule validator requires this to equal
+            # (schedule_5a is not None). Mirror draft_to_itr2_input.py's
+            # _map_schedule_5a guard exactly (spouseName + spousePAN both
+            # present) rather than just "object exists", so an in-progress,
+            # incomplete Schedule 5A row (mapped to schedule_5a=None) does
+            # not falsely claim the schedule applies. The frontend has no
+            # control that sets filing.portugueseCivilCodeApplies
+            # independently of filling in the schedule itself, so that flag
+            # alone cannot be trusted.
+            portuguese_civil_code_applies=bool(
+                filing.portugueseCivilCodeApplies
+                or (
+                    draft.portugueseCivilCode is not None
+                    and draft.portugueseCivilCode.spouseName
+                    and draft.portugueseCivilCode.spousePAN
+                )
+            ),
             father_name=normalized.father_name,
             verification_place=normalized.verification_place,
             verification_capacity="K" if verification.capacity == "KARTA" else "S",

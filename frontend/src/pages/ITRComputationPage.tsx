@@ -19,6 +19,7 @@ import { HousePropertyEntryManager } from '../components/HousePropertyEntryManag
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import ExemptIncomeWorkspace from '../components/exemptincome/ExemptIncomeWorkspace';
+import ITR2SchedulesWorkspace from '../components/itr2/ITR2SchedulesWorkspace';
 import {
   createReturnRepository, stripCompatibility,
 } from '../domain/returns';
@@ -29,7 +30,10 @@ import {
   updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
   updateHouseProperties, updateInterestFromManager, updateLossesBroughtForward, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
   updateChapterVIA, updateTaxCreditsFromManager, updateTcsCredits, updateWinningsFromManager,
-  updatePensionContribution80CCC, updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
+  updateBroughtForwardLossEntries, updateScheduleSIEntries,
+  updateForeignSourceIncome, updateForeignTaxRelief, updateForeignAssets, updateClubbedIncome,
+  updatePassThroughIncomeEntries, updateAmt, updateAssetLiability, updatePortugueseCivilCode,
+  updateEsopDeferrals, updatePensionContribution80CCC, updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
   replaceDraft, type ReturnEditorModelV2,
 } from '../domain/returns/editorModelV2';
 import { createEmptyReturnDraft } from '../domain/returns/factory';
@@ -1312,8 +1316,12 @@ export default function ITRComputationPage() {
     '📋 Exempt Income',  // VR1-027, VR1-028 - CBDT mandatory
     '➖ Deductions',
     '🧾 TDS & Advance Tax',
+    ...(itrForm === 'ITR-2' ? ['🗂️ ITR-2 Schedules'] : []),
     '🧮 Tax Computation'
   ];
+
+  // Form changes can remove the conditional tab; keep the selected index valid.
+  const safeActiveTab = Math.min(activeTab, tabs.length - 1);
 
   return (
     <div>
@@ -1973,12 +1981,12 @@ export default function ITRComputationPage() {
             onClick={() => setActiveTab(idx)}
             style={{
               padding: '12px 16px',
-              background: activeTab === idx ? 'rgba(201, 148, 58, 0.15)' : 'transparent',
-              color: activeTab === idx ? 'var(--gold)' : 'var(--text-muted)',
+              background: safeActiveTab === idx ? 'rgba(201, 148, 58, 0.15)' : 'transparent',
+              color: safeActiveTab === idx ? 'var(--gold)' : 'var(--text-muted)',
               border: 'none',
-              borderBottom: activeTab === idx ? '3px solid var(--gold)' : '3px solid transparent',
+              borderBottom: safeActiveTab === idx ? '3px solid var(--gold)' : '3px solid transparent',
               fontSize: 13,
-              fontWeight: activeTab === idx ? 600 : 400,
+              fontWeight: safeActiveTab === idx ? 600 : 400,
               cursor: 'pointer',
               whiteSpace: 'nowrap'
             }}
@@ -2013,7 +2021,21 @@ export default function ITRComputationPage() {
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
         {activeTab === 7 && editorModel && <DeductionsTab regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
         {activeTab === 8 && editorModel && <TDSTab taxResult={taxResult} managers={managers} editorModel={editorModel as any} />}
-        {activeTab === 9 && (!backendTaxResult && taxResultError
+        {itrForm === 'ITR-2' && safeActiveTab === 9 && editorModel && <ITR2SchedulesWorkspace
+          assessmentYear={effectiveAssessmentYear}
+          broughtForwardLossEntries={editorModel.draft.broughtForwardLossEntries} onBroughtForwardLossEntriesChange={(v) => updateEditor((m) => updateBroughtForwardLossEntries(m, v))}
+          scheduleSIEntries={editorModel.draft.scheduleSIEntries} onScheduleSIEntriesChange={(v) => updateEditor((m) => updateScheduleSIEntries(m, v))}
+          foreignSourceIncome={editorModel.draft.foreignSourceIncome} onForeignSourceIncomeChange={(v) => updateEditor((m) => updateForeignSourceIncome(m, v))}
+          foreignTaxRelief={editorModel.draft.foreignTaxRelief} onForeignTaxReliefChange={(v) => updateEditor((m) => updateForeignTaxRelief(m, v))}
+          foreignAssets={editorModel.draft.foreignAssets} onForeignAssetsChange={(v) => updateEditor((m) => updateForeignAssets(m, v))}
+          clubbedIncome={editorModel.draft.clubbedIncome} onClubbedIncomeChange={(v) => updateEditor((m) => updateClubbedIncome(m, v))}
+          passThroughIncomeEntries={editorModel.draft.passThroughIncomeEntries} onPassThroughIncomeEntriesChange={(v) => updateEditor((m) => updatePassThroughIncomeEntries(m, v))}
+          amt={editorModel.draft.amt} onAmtChange={(v) => updateEditor((m) => updateAmt(m, v))}
+          assetLiability={editorModel.draft.assetLiability} onAssetLiabilityChange={(v) => updateEditor((m) => updateAssetLiability(m, v))}
+          portugueseCivilCode={editorModel.draft.portugueseCivilCode} onPortugueseCivilCodeChange={(v) => updateEditor((m) => updatePortugueseCivilCode(m, v))}
+          esopDeferrals={editorModel.draft.esopDeferrals} onEsopDeferralsChange={(v) => updateEditor((m) => updateEsopDeferrals(m, v))}
+        />}
+        {safeActiveTab === (itrForm === 'ITR-2' ? 10 : 9) && (!backendTaxResult && taxResultError
           ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until the first computation succeeds.</div>
           : <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />)}
       </div>

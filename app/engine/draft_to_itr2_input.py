@@ -27,9 +27,13 @@ already implemented and tested in :mod:`app.engine.draft_to_itr1_input`.
 One implementation per shared head — no second copy to drift.
 
 ITR-2-specific heads (capital gains beyond 112A, VDA, brought-forward
-losses, Schedule SI, agricultural/exempt income, FSI/TR/FA/SPI/PTI/AMT) have
-no ITR-1/4 equivalent and are mapped fresh here from the Phase 1/2 additive
-``ReturnDraft`` fields.
+losses, Schedule SI, agricultural/exempt income, FSI/TR/FA/SPI/PTI/AMT/AL/
+5A/ESOP) have no ITR-1/4 equivalent and are mapped fresh here from the
+Phase 1/2 additive ``ReturnDraft`` fields. ``carriedForwardLossEntries``
+(Schedule CFL) is deliberately NOT mapped here — its own type is documented
+as "retained for reconciliation only" and ``ITR2Input`` has no field to
+receive it; the CBDT JSON's carried-forward figures come from the
+calculator's own set-off arithmetic, not user input.
 
 Known, explicitly-scoped gaps (not silently papered over):
 
@@ -63,10 +67,12 @@ from app.schemas.itr2 import (
     AgriculturalIncome,
     AMTCreditItem,
     AMTInput,
+    AssetLiabilityInput,
     BFLossItem,
     CG112AScrip,
     CGAssetType,
     CGTransaction,
+    ESOPDeferralInput,
     ExemptIncome,
     ForeignAssetEntry as ITR2ForeignAssetEntry,
     ForeignAssetType as ITR2ForeignAssetType,
@@ -75,6 +81,7 @@ from app.schemas.itr2 import (
     LossHead as ITR2LossHead,
     PTIEntry,
     ResidentialStatus as ITR2ResidentialStatus,
+    Schedule5AInput,
     ScheduleSIEntry as ITR2ScheduleSIEntry,
     SPIEntry,
     TR1Entry,
@@ -405,6 +412,60 @@ def _map_amt_input(draft: ReturnDraft) -> Optional[AMTInput]:
     )
 
 
+def _map_asset_liability(draft: ReturnDraft) -> Optional[AssetLiabilityInput]:
+    """Map ``assetLiability`` (Schedule AL) — required by ITR2-CALC-027 once
+    taxable income exceeds ₹1 crore; previously never wired from the draft,
+    so that calc-validation rule could never actually be satisfied."""
+    al = draft.assetLiability
+    if al is None:
+        return None
+    return AssetLiabilityInput(
+        immovable_property=al.immovableProperty,
+        cash_in_hand=al.cashInHand,
+        bank_deposits=al.bankDeposits,
+        shares_and_securities=al.sharesAndSecurities,
+        insurance_policies=al.insurancePolicies,
+        loans_and_advances=al.loansAndAdvances,
+        jewellery=al.jewellery,
+        art=al.art,
+        vehicles_boats_aircraft=al.vehiclesBoatsAircraft,
+        related_liabilities=al.relatedLiabilities,
+    )
+
+
+def _map_schedule_5a(draft: ReturnDraft) -> Optional[Schedule5AInput]:
+    """Map ``portugueseCivilCode`` (Schedule 5A). Requires spouse name and
+    PAN — rows missing either are dropped rather than raising, mirroring
+    the guard-clause pattern the other optional schedules already use."""
+    pcc = draft.portugueseCivilCode
+    if pcc is None or not pcc.spouseName or not pcc.spousePAN:
+        return None
+    return Schedule5AInput(
+        spouse_name=pcc.spouseName,
+        spouse_pan=pcc.spousePAN,
+        spouse_aadhaar=pcc.spouseAadhaar or None,
+        hp_amount_apportioned=pcc.hpAmountApportioned,
+        cg_amount_apportioned=pcc.cgAmountApportioned,
+        os_amount_apportioned=pcc.osAmountApportioned,
+        tds_apportioned=pcc.tdsApportioned,
+    )
+
+
+def _map_esop_deferrals(draft: ReturnDraft) -> list[ESOPDeferralInput]:
+    return [
+        ESOPDeferralInput(
+            employer_pan=row.employerPAN,
+            dpiit_registration_number=row.dpiitRegistrationNumber,
+            assessment_year=row.assessmentYear,
+            tax_deferred_brought_forward=row.taxDeferredBroughtForward,
+            tax_payable_current_year=row.taxPayableCurrentYear,
+            balance_tax_carried_forward=row.balanceTaxCarriedForward,
+        )
+        for row in draft.esopDeferrals
+        if row.employerPAN and row.dpiitRegistrationNumber and row.assessmentYear
+    ]
+
+
 _SI_SECTION_MAP: dict[str, str] = {
     "115BB": "115BB", "115BBE": "115BBE", "115BBF": "115BBF",
     "115BBG": "115BBG", "115BBJ": "115BBJ", "115BBA": "115BBA", "111": "111",
@@ -485,6 +546,9 @@ def draft_to_itr2_input(
     spi_entries = _map_spi_entries(draft)
     pti_entries = _map_pti_entries(draft)
     amt_input = _map_amt_input(draft)
+    asset_liability = _map_asset_liability(draft)
+    schedule_5a = _map_schedule_5a(draft)
+    esop_deferrals = _map_esop_deferrals(draft)
     bank_accounts = _map_bank_accounts(draft.bankAccounts)
 
     itr2_input = ITR2Input(
@@ -508,6 +572,9 @@ def draft_to_itr2_input(
         spi_entries=spi_entries,
         pti_entries=pti_entries,
         amt_input=amt_input,
+        asset_liability=asset_liability,
+        schedule_5a=schedule_5a,
+        esop_deferrals=esop_deferrals,
         deductions_chapter6a=ded_input,
         tds1_entries=tds1,
         tds2_entries=tds2,

@@ -20,7 +20,7 @@ items point to, not a duplicate.
 | 5 | Complete the ITR-2 CBDT validator suite (5A–5E ✅ Delivered 2026-09-02; 5F/5G architecture gates still required before Phase 6) | ✅ Delivered 2026-09-02 |
 | 5F | Shared canonical personal-profile foundation (ITR-1/ITR-4) | ✅ Delivered 2026-09-02 |
 | 5G | Migrate ITR-2 to complete pre-calculation preparation | ✅ Delivered 2026-09-02 |
-| 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | ⏳ Canonical data contract delivered 2026-09-02; capture UI not started |
+| 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | ✅ Delivered 2026-09-02 |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started — now unblocked |
 | 8 | ITR-3 on the shared complete-preparation contract | Not started |
 | 9 | Delete the dead ITR-2 legacy path | Not started |
@@ -1418,7 +1418,7 @@ The three externally-modified documentation files this review's diff also flagge
 untouched and excluded from this follow-up's commit, per the review's own recommendation that
 they be reviewed/committed separately — not this phase's concern.
 
-### Phase 6 ? Frontend: wire ITR-2 onto the canonical `ReturnDraft` (canonical data contract ✅ Delivered 2026-09-02; capture UI not started)
+### Phase 6 ? Frontend: wire ITR-2 onto the canonical `ReturnDraft` (✅ Delivered 2026-09-02)
 
 Starts only after Phases 5E, 5F, and 5G pass. The editor persists one `ReturnDraft`, and the generic v2 gateway consumes the same complete prepared input for computation and JSON. Personal/profile/verification/refund/TRP fields remain personal-profile concerns; property/employer/TDS3 details remain schedule concerns.
 
@@ -1462,14 +1462,113 @@ defaults.field`, not `??`, so a legitimate `null` on `amt`/`assetLiability`/
   `npx tsc -b` clean; `npx vitest run` — 172 passed across 22 files (up from the 169 noted in
   the Phase 5G entry above, consistent with the new tests added here); `npm run build` clean
   (same pre-existing large-chunk-size warning as every prior phase's build, nothing new).
-- **Explicitly not done, per the incoming report's own disclosure (verified accurate, not
-  taken on faith) and per this doc's scope note above**: no dedicated capture-UI schedule
-  workspace exists yet for FSI/TR/FA/SPI/PTI/AMT/AL/5A/ESOP/CFL — a taxpayer cannot enter
-  these values through the editor today, only through direct `ReturnDraft` manipulation (e.g.
-  import/prefill). `PersonalInfoTab`/`CapitalGainsTab` UI work and the schedule-registry
-  "supported" gating are also not started. This delivery is the canonical-storage
-  prerequisite the scope note anticipated, not Phase 6's full frontend scope — do not infer
-  ITR-2 UI-editing completeness from this entry alone.
+- **Explicitly not done in this sub-phase** (closed by the follow-up below): no dedicated
+  capture-UI schedule workspace, and `PersonalInfoTab`/`CapitalGainsTab` UI work remained
+  separate, not-yet-started items.
+
+**Follow-up 2026-09-02 — capture-UI workspace for the additive schedules
+(`ITR2SchedulesWorkspace.tsx`), plus two real bugs found and fixed while verifying it.** A
+second incoming report claimed the remaining Phase 6 scope — a schedule-capture workspace
+with inline validation, wired into a new ITR-2-only tab — was "implemented end-to-end" and
+"functionally complete." Per this project's standing rule (verify every incoming report
+against actual code before accepting it, not just re-running whatever commands the report
+says it ran), the diff was read in full and checked line-by-line against the real type
+definitions and the actual backend mapper/calculator/validator/JSON-builder code before being
+accepted. Two genuine defects were found this way — not stylistic nitpicks, both would have
+shipped taxpayer-facing incorrect behavior — and fixed before commit, alongside two
+mapper-completeness gaps the report didn't claim to check.
+
+- **[Bug 1 — confirmed via Node, not just inspection] Aadhaar validation could never pass.**
+  Schedule 5A's spouse-Aadhaar check used the regex literal `/^\\d{12}$/` (two backslashes).
+  Inside a JS regex literal that is an *escaped literal backslash* followed by the literal
+  character `d` repeated 12 times — not "12 digits" — so it rejected every real 12-digit
+  Aadhaar number and could only ever be satisfied by leaving the field empty. Verified the
+  failure mode directly: `node -e "console.log(/^\\\\d{12}$/.test('123456789012'))"` prints
+  `false`. Fixed to `/^\d{12}$/` (single backslash) — confirmed to match a real Aadhaar
+  number via the same isolated Node check, then covered by a new regression test.
+- **[Bug 2 — contradicted the schedule registry's own status] Schedule CFL was given a live,
+  freely-editable Add/Edit/Remove capture section**, despite: (a) `CarriedForwardLossEntry`'s
+  own type docstring in `frontend/src/domain/returns/types.ts` reading "Legacy CFL control
+  total retained for reconciliation only"; (b) `scheduleRegistry.ts`'s `ScheduleCFL` entry
+  already correctly classified as `status: 'derived'` ("computed by backend, no input
+  needed"), left untouched by this report's own registry diff; (c) confirmed via
+  `grep -rn "carriedForwardLossEntries" app/` that **zero backend code reads this field at
+  all** — not the mapper, not the calculator, not the JSON builder. A taxpayer filling in
+  "CFL control ledger" rows would have their data silently discarded on every save, with
+  nothing in the UI indicating that. Fixed by removing the CFL capture section, its factory,
+  its per-row validation rule, and its prop/wiring from both
+  `ITR2SchedulesWorkspace.tsx` and `ITRComputationPage.tsx` (the general-purpose
+  `updateCarriedForwardLossEntries` editorModelV2 updater from the prior sub-phase was left
+  in place — it is still valid, tested infrastructure, just not wired to a capture control
+  today) — replaced with an explanatory note that CFL is backend-derived from the BFLA rows
+  above plus current-year set-off, so there is nothing to enter.
+- **[Gap — the report's own registry diff claimed something backend code didn't yet
+  support] Schedule AL / 5A / ESOP were marked `status: 'available'` for ITR-2 and given full
+  capture UI, but `app/engine/draft_to_itr2_input.py` never mapped `draft.assetLiability` /
+  `draft.portugueseCivilCode` / `draft.esopDeferrals` into `ITR2Input.asset_liability` /
+  `.schedule_5a` / `.esop_deferrals` at all — confirmed via grep before writing anything.
+  Unlike the CFL case, this was NOT a dead end: `ITR2Input` already has the three fields, and
+  `app/engine/itd/itr2.py`'s JSON builder already reads and serializes all three
+  (`_schedule_5a`, the `ScheduleAL`/`ScheduleESOP` emitters) — the only missing link was the
+  draft→input mapping step, plus (independently confirmed by reading
+  `app/engine/validators/itr2/calc_rules.py`'s pre-existing `ITR2-CALC-027`) Schedule AL was
+  *already* a mandatory-above-₹1-crore calc-validation rule that could never have been
+  satisfied by any user before this fix, since nothing could ever populate `asset_liability`.
+  Added `_map_asset_liability`, `_map_schedule_5a`, `_map_esop_deferrals` to
+  `draft_to_itr2_input.py`, following the file's own established per-row guard-clause
+  pattern (skip incomplete rows rather than raise; let Pydantic raise on a genuinely malformed
+  present value, same as every other mapper function in the file), and wired all three into
+  the `ITR2Input(...)` construction.
+- **Related fix, found while wiring Schedule 5A**: `ITR2Input`'s own cross-schedule validator
+  (`validate_cross_schedule_contract`) requires `filing_profile.portuguese_civil_code_applies
+  == (schedule_5a is not None)`, but the frontend has no control that sets
+  `draft.filing.portugueseCivilCodeApplies` — confirmed via grep it has exactly one consumer
+  (`_itr2_filing_profile`) and no UI writes to it anywhere. Changed
+  `_itr2_filing_profile()` in `filing_gateway_v2.py` to derive that flag as `True` whenever
+  Schedule 5A's own required fields (spouse name + PAN) are present, mirroring
+  `_map_schedule_5a`'s exact guard — checked (and confirmed via a standalone Pydantic repro)
+  that `model_copy(update=...)` does not re-run validators in this Pydantic version, so this
+  specific inconsistency was not actually reachable as a runtime error through
+  `compute_canonical_itr2`'s existing attach-after-construct flow, but the derivation is the
+  correct fix regardless — data should not describe itself inconsistently in the typed input,
+  reachable or not.
+- **Gap — inline validation the report claimed but didn't actually add**: added a
+  DPIIT-registration-number format check to Schedule ESOP
+  (`/^DIPP[0-9]{3,5}$/`, matching `Docs`/`Official JSON Schema`'s
+  `ScheduleESOP.DPIITRegNo` pattern, confirmed by an end-to-end repro that initially failed
+  official-schema validation with test data shaped like `DPIIT12345` instead of the real
+  `DIPP12345` format) and a required-valid-employer-PAN check, since neither existed despite
+  the report's "AMT/AL/5A/ESOP fields" validation-coverage claim.
+- **End-to-end verification the report did not perform**: wrote a standalone script
+  constructing a filing-ready ITR-2 draft with Schedule AL/5A/ESOP data populated and ran it
+  through `compute_canonical_itr2` and `generate_cbdt_json` — confirmed `ScheduleAL`,
+  `Schedule5A2014`, and `ScheduleESOP` all appear in the official CBDT JSON and
+  `filing_profile.portuguese_civil_code_applies` resolves to `True`, i.e. data entered
+  through the new UI now genuinely reaches the filed return, not just the draft.
+- **New test coverage** (the incoming file had none): exported `validationFor`/`Row` from
+  `ITR2SchedulesWorkspace.tsx` and added `ITR2SchedulesWorkspace.test.ts` (13 tests) covering
+  both bugs as regressions (valid Aadhaar now passes, malformed one still correctly fails),
+  the two new ESOP checks, and the pre-existing BFLA/SI/TR/negative-amount rules — matching
+  this codebase's established convention of pure-logic `.test.ts` files (no
+  `@testing-library/react`/component-rendering tooling exists anywhere in this frontend, so
+  none was introduced for this one file).
+- **Verified independently, not taken on faith**: the `ITRComputationPage.tsx` conditional-tab
+  wiring (`safeActiveTab` clamp, tab-index arithmetic shifting the Tax Computation tab from 9
+  to 10 when the ITR-2 tab is present) was read in full and is correct as delivered — no
+  changes needed there beyond removing the CFL prop pair.
+- **Verification:**
+  - Backend: `pytest tests/test_draft_to_itr2_input.py tests/test_filing_gateway_v2_itr2.py
+    tests/test_itr2_calc_validation.py tests/test_itr2_input_validation.py
+    tests/test_itr2_validators.py tests/test_itr2_integration.py tests/test_itr2_itd_builder.py
+    tests/test_itr2_production_path.py tests/test_filing_gateway_v2.py
+    tests/test_filing_gateway_v2_itr4.py tests/test_personal_profile.py -q` — 191 passed.
+  - Full backend suite `pytest tests/ -q` (same pre-existing-exclusion list as every prior
+    phase) — 1448 passed, 3 failed, 1 error; the 3 `test_tax_v2_compute.py` failures and the
+    1 `test_26as_batch.py::test_single_file` collection error are the identical pre-existing
+    baseline confirmed via `git stash` in the Phase 5G follow-up entry above — zero new
+    failures from this delivery.
+  - Frontend: `npx tsc -b` clean; `npx vitest run` — 185 passed across 23 files (172 prior +
+    13 new); `npm run build` clean (same pre-existing large-chunk warning, nothing new).
 
 ### Phase 7 ? ITR-2 v2 endpoints + Direct Submit extension
 
