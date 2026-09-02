@@ -398,7 +398,9 @@ All **error** responses share a unified shape regardless of status code:
 | Rounding | `ROUND_HALF_EVEN` per slab; 288A/288B rounding on final figures |
 | ITD JSON | All four forms have CBDT-compliant ITD JSON builders in `app/engine/itd/` |
 
-**Three-layer compute pipeline:** Input schemas (Pydantic) → Calculator (dataclass result) → ITD JSON Builder (CBDT-compliant output)
+**Canonical draft compute pipeline:** `ReturnDraft` → complete form-specific preparation (filing profile, property profile, bank accounts, verification/representative details, and optional TRP) → complete typed input → input validation → calculator → calculation validation → summary and CBDT JSON → official schema validation. The prepared typed input is reused for both summary and JSON generation; JSON generation does not perform late profile enrichment from `ReturnDraft`.
+
+The lower-level form components remain: schema models (`app/schemas/`) → calculator result (`app/engine/calculators/`) → CBDT builder (`app/engine/itd/`). See [`Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`](Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md) for the verified route-level architecture and the ITR-2/ITR-3 production plan for migration status.
 
 ---
 

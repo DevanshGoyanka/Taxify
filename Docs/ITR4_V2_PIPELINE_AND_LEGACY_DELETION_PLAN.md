@@ -1,15 +1,42 @@
 # ITR-4 v2 Canonical Pipeline + Legacy Flat-Blob Deletion — Implementation Plan
 
-**Status:** Active implementation tracker. Phase status updated as each phase completes testing.
-**Scope:** Build the canonical (v2) ITR-4 pipeline mirroring the working ITR-1 v2 pipeline, then delete every legacy flat-blob path now that both ITR-1 and ITR-4 run on the single canonical `ReturnDraft`.
-**Authority:** This file is the single source of truth for the ITR-4 build + legacy deletion.
-The original simplification plan is in `ITR1_DATA_FLOW_SIMPLIFICATION_PLAN.md`; the audit that
-motivated it is superseded and removed — see `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`
-for the current, verified architecture (including where this plan's own Phase 7 "files to
-delete" claim turned out to be inaccurate — `filing_gateway.py` was not fully deleted).
-**Final deliverable:** Production-ready ITR-1 **and** ITR-4 — both on one canonical `ReturnDraft`, one mapper per form, no flat-blob duplication, no dead files.
+**Status:** Historical implementation and legacy-deletion record. Phases 1–8 are complete; the status and implementation notes below preserve the delivery history.
+**Scope:** Record how the canonical (v2) ITR-4 pipeline was built and how legacy paths were retired or retained pending the ITR-2/ITR-3 migration.
+**Authority:** For the current cross-form architecture, use `Docs/design/CANONICAL_RETURN_PIPELINE_MIGRATION_PLAN.md` and `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md`. This file is authoritative only for its historical ITR-4 implementation record.
+**Final result:** Production-ready ITR-1 **and** ITR-4 use the canonical `ReturnDraft` pipeline. Remaining legacy files are retained only where explicitly documented below.
+
+> **CURRENT ARCHITECTURE — READ BEFORE THE HISTORICAL PHASE NOTES**
+>
+> ITR-1 and ITR-4 complete all form-specific preparation before calculation:
+>
+> ```text
+> ReturnDraft
+>   → filing profile + eligibility
+>   → property profile + bank accounts
+>   → verification/representative details + optional TRP
+>   → complete typed input
+>   → input validation → calculator → calculation validation
+>   → summary and CBDT JSON from the prepared typed input
+>   → official schema validation → digest/submission
+> ```
+>
+> `compute_canonical_itr1()` and `compute_canonical_itr4()` prepare and attach the
+> form-specific profile data before calculation. `_generate_cbdt_json_itr1()` and
+> `_generate_cbdt_json_itr4()` reuse the prepared `pipeline.typed_input`; JSON generation
+> does not perform late `model_copy(update={...})` enrichment or reconstruct profile data
+> from `ReturnDraft`.
+>
+> Any historical statement below that ITR-4 is legacy-only, has no v2 path, or performs
+> filing/profile enrichment during JSON generation is superseded and must not guide new work.
+
 
 ---
+
+## Historical implementation record
+
+The sections below preserve the original phase-by-phase implementation plan and delivery notes.
+Their historical descriptions may intentionally describe an earlier state of the repository; the
+current architecture is defined by the notice above and the cross-form migration plans.
 
 ## Background — why this plan exists
 
