@@ -1013,8 +1013,19 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
             continue
         tax = row.taxDeducted
         gross = row.grossAmount
-        claimed_total += tax
         section = (row.section or "").strip().upper()
+        is_salary_section = section in _SALARY_SECTIONS
+        # A TDS2 (non-salary) row's credit for THIS year is
+        # claimOutOfTotTDSOnAmtPaid, not the full amount deducted (Rule
+        # 37BA(3) lets a taxpayer spread TDS credit across years matching
+        # when the corresponding income is offered to tax) -- defaults to
+        # the full tax when the user doesn't specify a partial claim.
+        # claimed_total (-> ITR1Input.total_tds_claimed) is computed for
+        # every row here, including one later skipped below for an invalid
+        # TAN, matching this field's original scope: it reflects the
+        # taxpayer's total intended claim, not just what could be typed.
+        claimed_this_year = tax if is_salary_section else (row.claimOutOfTotTDSOnAmtPaid or tax)
+        claimed_total += claimed_this_year
         tan = (row.deductorTAN or "").strip().upper()
         # Strict engine models receive only filing-valid identifiers. The
         # raw malformed value remains untouched in the editable draft and
@@ -1038,7 +1049,7 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
                 "message": "TAN must contain 4 letters, 5 digits and 1 letter (e.g. ABCD12345E).",
             })
             continue
-        if section in _SALARY_SECTIONS:
+        if is_salary_section:
             tds1.append(TDS1Entry(
                 employer_tan=tan,
                 employer_name=row.deductorName or None,
@@ -1053,7 +1064,7 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
                 tds_section=section or "194A",
                 gross_amount=gross,
                 tds_deducted=tax,
-                tds_claimed_this_year=row.claimOutOfTotTDSOnAmtPaid or tax,
+                tds_claimed_this_year=claimed_this_year,
                 financial_year=row.financialYear or (
                     f"{row.deductedYr}-{str(int(row.deductedYr) + 1)[-2:]}"
                     if row.deductedYr else None

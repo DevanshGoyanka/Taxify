@@ -700,6 +700,38 @@ def test_unclaimed_tds_excluded():
     assert breakdown["claimed_tds"] == Decimal("80000")  # only the claimed row
 
 
+def test_tds2_partial_claim_reaches_claimed_total_not_full_deducted():
+    """A TDS2 row's claimOutOfTotTDSOnAmtPaid (Rule 37BA(3) partial-year
+    claim) must reach both TDS2Entry.tds_claimed_this_year and the mapper's
+    aggregate claimed_tds -- previously claimed_tds always summed the full
+    taxDeducted regardless of a genuine partial claim (§15)."""
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1")
+    draft.taxes.tds = [TdsCredit(
+        id="t1", section="194A", deductorTAN="ABCD12345E",
+        taxDeducted=Decimal("10000"), claimOutOfTotTDSOnAmtPaid=Decimal("3000"),
+        claimedInReturn=True,
+    )]
+    itr1_input, breakdown = draft_to_itr1_input(draft)
+    entry = itr1_input.tds2_entries[0]
+    assert entry.tds_deducted == Decimal("10000")
+    assert entry.tds_claimed_this_year == Decimal("3000")
+    assert breakdown["claimed_tds"] == Decimal("3000")
+
+
+def test_tds2_full_claim_when_partial_amount_not_specified():
+    """When claimOutOfTotTDSOnAmtPaid is unset, the full amount deducted is
+    claimed this year -- the common case."""
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1")
+    draft.taxes.tds = [TdsCredit(
+        id="t1", section="194A", deductorTAN="ABCD12345E",
+        taxDeducted=Decimal("10000"), claimedInReturn=True,
+    )]
+    itr1_input, breakdown = draft_to_itr1_input(draft)
+    entry = itr1_input.tds2_entries[0]
+    assert entry.tds_claimed_this_year == Decimal("10000")
+    assert breakdown["claimed_tds"] == Decimal("10000")
+
+
 def test_invalid_tan_row_skipped_and_surfaced():
     """A TDS row with an invalid TAN is excluded from the typed engine input
     (which enforces the TAN pattern) but surfaced as a structured issue in
@@ -934,6 +966,31 @@ def test_mapper_preserves_tds3_and_all_tax_challans():
     assert {row.payment_type for row in itr1_input.tax_payment_entries} == {
         "advance", "self_assessment",
     }
+
+
+def test_tds3_credit_reaches_computed_tax_liability() -> None:
+    """TDS3 (Section 195, e.g. TDS withheld on rent paid to an NRI landlord)
+    was mapped correctly (test_mapper_preserves_tds3_and_all_tax_challans
+    above) but the calculator never passed tds3_entries to
+    app/engine/schedules/tds_tcs's compute_all(), so it never reduced
+    computed tax payable at all -- confirmed by an isolated repro before
+    the fix (§15). Asserts the fix end to end via the real calculator."""
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1980-01-15")
+    draft.employers = [Employer(id="e1", employerName="Acme", basic=Decimal("1500000"))]
+    draft.taxes.tds = [TdsCredit(
+        id="tds3-1", schedule="TDS3", section="194IB",
+        tdsSectionCode="194IB", nameOfTenant="Tenant",
+        panOfTenant="ABCDE1234F", grsRcptToTaxDeduct=Decimal("100000"),
+        taxDeducted=Decimal("5000"), tdsClaimed=Decimal("5000"),
+        deductedYr=2025,
+    )]
+
+    itr1_input, _ = draft_to_itr1_input(draft)
+    result = compute_itr1(itr1_input)
+
+    assert result.total_tds == Decimal("5000")
+    assert result.total_taxes_paid >= Decimal("5000")
 
 
 def test_mapper_derives_detail_backed_deductions_and_form_10ia_flag():

@@ -562,6 +562,7 @@ def compute(input_data: ITR4Input) -> ITR4Result:
         tds1_entries=input_data.tds1_entries,
         tds2_entries=input_data.tds2_entries,
         tcs_entries=input_data.tcs_entries,
+        tds3_entries=input_data.tds3_entries,
     )
     result.total_tds = tds_tcs.total_tds
     result.total_tcs = tds_tcs.total_tcs

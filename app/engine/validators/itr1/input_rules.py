@@ -1690,8 +1690,14 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # ========================================================================
 
     tds1_total = sum(e.tds_deducted for e in (inp.tds1_entries or []))
-    tds2_total = sum(e.tds_deducted for e in (inp.tds2_entries or []))
-    tds3_total = sum(e.tds_deducted for e in (inp.tds3_entries or []))
+    # total_tds must match what the calculator actually credits (§14: TDS2's
+    # tds_claimed_this_year, TDS3's tds_claimed -- both fall back to the full
+    # deducted amount when unset, mirroring app/engine/schedules/tds_tcs's
+    # compute_all()), not the raw deducted amount -- otherwise this cross-
+    # check would fire (or fail to fire) based on the wrong basis for any
+    # taxpayer with a genuine partial-year TDS claim.
+    tds2_total = sum((e.tds_claimed_this_year or e.tds_deducted) for e in (inp.tds2_entries or []))
+    tds3_total = sum((e.tds_claimed or e.tds_deducted) for e in (inp.tds3_entries or []))
     tcs_total = sum(e.tcs_collected for e in (inp.tcs_entries or []))
     total_tds = tds1_total + tds2_total + tds3_total
 
@@ -1791,8 +1797,12 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             ))
 
     # R102: TDS3 col 7 total claimed = sum of individual values
+    # TDS3Entry's field is `tds_claimed`, not `tds_claimed_this_year` (that
+    # name belongs to TDS2Entry) -- the previous getattr always missed and
+    # silently defaulted to 0, permanently disabling this check regardless
+    # of any real TDS3 claim mismatch.
     tds3_claimed_sum = sum(
-        getattr(e, 'tds_claimed_this_year', _z)
+        getattr(e, 'tds_claimed', _z)
         for e in (inp.tds3_entries or [])
     )
     if inp.schedule_tds3_total_claimed and inp.schedule_tds3_total_claimed > _z and tds3_claimed_sum > _z:

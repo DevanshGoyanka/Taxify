@@ -1272,3 +1272,179 @@ validator sweep's method — searching for a recurrence of an already-confirmed 
 concrete and repeatable, unlike an open-ended "read everything" pass. A future session
 continuing this work should start with filing profile/bank accounts/TDS-TCS before considering
 ITR-1 exhaustively covered.
+
+**Update (2026-09-03): §9's third named gap has now been covered — see §15.**
+
+---
+
+## 15. Tax-core, filing-profile/bank-account architecture, and TDS/TCS credit audit (2026-09-03)
+
+Continues §14, covering the remaining named gap (filing profile/verification/bank accounts/
+TDS-TCS) plus the core tax-computation modules every schedule ultimately feeds into
+(`app/engine/common/`), which no prior pass in this document had read.
+
+### 15.1 Core tax computation (`app/engine/common/`) — read end to end
+
+All six modules (`slab_tax.py`, `rebate.py`, `surcharge.py`, `cess.py`, `interest.py`,
+`rounding.py`) verified correct against current statute and Finance Act 2025 (AY 2026-27)
+changes:
+
+- **Slabs**: both regimes' rate tables match Budget 2025 exactly, including the new regime's
+  revised 0/5/10/15/20/25/30% bands up to ₹24L.
+- **Rebate 87A**: ₹5L/₹12,500 (old) and ₹12L/₹60,000 (new) thresholds correct; both regimes'
+  marginal-relief formula correctly caps tax-after-rebate at the income excess over the
+  threshold (never lets tax increase by more than income does, crossing the cliff); correctly
+  computed against slab (normal-rate) tax only, never special-rate income — matches the
+  statutory restriction on 87A against 112A/111A income.
+- **Surcharge**: the 15% cap on capital-gains/dividend-income surcharge (a frequently-missed
+  provision) is correctly applied only to that income basket, not the whole tax; the new
+  regime's 25% surcharge ceiling above ₹5Cr (vs. the old regime's 37%) is correctly modeled as
+  a separate slab table; marginal relief uses the correct "tax cannot increase by more than
+  income does" principle across the actual threshold. (For ITR-1 specifically, only the lowest
+  surcharge slab — 10%, ₹50L-₹1Cr — is ever reachable in practice, since ITR-1 eligibility caps
+  total income at ₹50L; the higher slabs and their marginal relief are exercised only by the
+  other forms sharing this module.)
+- **234A/234B/234C interest**: the "part of a month counts as a full month" rule was traced
+  through several boundary cases (exactly one month later, one day into a second month, etc.)
+  and computes correctly in each. 234B's date-ordered self-assessment-payment reconciliation
+  (interest accrues on the outstanding balance, reducing from each payment's actual deposit
+  date) and 234C's presumptive-taxpayer single-installment carve-out both check out.
+  234F/234-I late-fee thresholds match the statutory ₹1,000/₹5,000/₹10,000 tiers.
+- **Rounding**: `round_to_nearest_10` correctly implements Sections 288A/288B (₹5 rounds up);
+  `round_to_nearest_rupee`/`vba_round` correctly use half-up rounding — the module's own
+  comment documents a prior fix (banker's rounding was wrong, already corrected before this
+  audit).
+
+No bugs found in this module.
+
+### 15.2 AMT — correctly not wired into ITR-1
+
+`app/engine/schedules/amt.py` (Section 115JC Alternative Minimum Tax) is not imported anywhere
+in `app/engine/calculators/itr1.py`. Correct: AMT applies only to non-corporate assessees
+claiming deductions like 80-IA/10AA, all of which `Chapter6ADeductions`' own field docstrings
+already mark "ITR-3 only" (confirmed structurally inapplicable in §11.9). No gap.
+
+### 15.3 Filing profile / bank accounts — already resolved by a prior "Phase 5F" refactor
+
+The Phase 5F architecture concern on file for this codebase (a shared `personal_profile.py`
+normalizer to close the risk of ITR-1's filing-profile/bank-account construction silently
+diverging from its own compute-input construction) has **already been implemented** —
+confirmed directly in code, not assumed from a plan document: `app/engine/filing_gateway_v2.py`'s
+`_filing_profile()` is now "a thin adapter over `app.engine.personal_profile`'s shared
+normalizer," and `app/engine/draft_to_itr1_input.py::_map_bank_accounts()`'s own docstring
+states it now "delegates to the shared `app.engine.personal_profile` normalizer/projection —
+this **used to be** a second, independent, zero-validation bank-account mapping." The specific
+divergence risk that plan flagged as "the sharpest existing asymmetry" is closed. No further
+action taken here — this is a report of a pre-existing fix, not a fix made by this session.
+
+### 15.4 TDS/TCS credit computation — a severe, pre-existing, live bug affecting ITR-1 and ITR-4
+(not ITR-2, not introduced by any fix in this document)
+
+`app/schemas/itr1.py`'s `TDS2Entry` and `TDS3Entry` each carry a "claimed this year" field
+distinct from the full amount deducted (`tds_claimed_this_year` / `tds_claimed`), reflecting
+Rule 37BA(3) — a taxpayer may spread TDS credit across the years in which the corresponding
+income is actually offered to tax (the common case: bank FD interest, TDS'd on accrual by the
+bank, but income declared by the taxpayer on receipt/maturity). The frontend has a real,
+rendered "Claim out of Total TDS" input for exactly this
+(`frontend/src/pages/ITRComputationTabs.tsx`, confirmed in §13.1's money-input work), and the
+ITD JSON builder (`app/engine/itd/itr1.py`) already correctly emits both figures per row
+(`ClaimOutOfTotTDSOnAmtPaid`, `TDSClaimed`).
+
+**The actual computed tax liability never used either field.**
+`app/engine/schedules/tds_tcs/__init__.py::compute_all()` — the function every ITR-1/ITR-3/
+ITR-4 calculator calls to determine `total_tds`, which feeds `total_taxes_paid`, which
+determines 234A/B/C interest and the final payable/refund shown to the user — summed the raw
+`tds_deducted` for every TDS2 row, ignoring `tds_claimed_this_year` entirely. **TDS3 (Section
+195, TDS on payments to non-residents — e.g. rent withheld on payments to an NRI landlord, or
+an NRI property purchase) was not passed to `compute_all()` at all by any ITR-1/ITR-3/ITR-4
+caller**, so a genuine TDS3 credit reduced the computed tax liability by **zero**, regardless of
+amount, even though the mapper correctly captured it and the JSON correctly reported it in the
+TDS3 schedule. Confirmed via `grep` across every calculator: ITR-2 is unaffected — its
+calculator (`app/engine/calculators/itr2.py`) has its own separate, already-correct TDS
+aggregation that does use `tds_claimed_this_year` for both TDS2 and TDS3 — this bug is specific
+to the three calculators sharing `compute_all()`. Neither of these defects was introduced by any
+fix in this document; `tds_claimed_this_year` predates this session, and this is a pre-existing,
+currently-shipped defect for any real ITR-1/ITR-4 filer with a genuine Rule 37BA(3) partial
+claim or any TDS3 credit at all.
+
+**Consequence:** in both directions —
+
+- A taxpayer entering a legitimate partial current-year TDS2 claim (carrying the rest forward)
+  had the *full* deducted amount credited against this year's liability instead — an
+  over-claimed refund / under-stated payable, inconsistent with what the same taxpayer's filed
+  JSON correctly showed on the row.
+- A taxpayer with any TDS3 credit (Section 195 non-resident-payment withholding) had **none of
+  it** applied to their computed liability — an under-claimed refund / over-stated payable, for
+  the full deducted amount, every time.
+
+**Fix:**
+
+- `compute_all()` now accepts `tds3_entries` and aggregates them (using `tds_claimed`, the
+  correct field name — see below), and its TDS2 loop now uses `tds_claimed_this_year` when it's
+  meaningfully set (`> 0`), falling back to `tds_deducted` only when unset — preserving
+  behavior for the one caller that never populates it (`app/routers/tax.py`'s legacy flat-blob
+  path), while correctly honoring a real partial claim from the canonical v2 mapper (which
+  always defaults `tds_claimed_this_year` to the full tax when the user doesn't specify a
+  partial amount, so this fallback never masks a real 0-vs-unset ambiguity for that path).
+- `app/engine/calculators/itr1.py` and `app/engine/calculators/itr4.py` now pass
+  `tds3_entries=input_data.tds3_entries` to `compute_all()`. (ITR-3 has no `tds3_entries` field
+  on its input schema at all — not touched, not applicable.)
+- `app/engine/draft_to_itr1_input.py::_map_tds`'s own `claimed_total` (→
+  `ITR1Input.total_tds_claimed`, read only by a validator cross-check, never by the
+  calculator) had the identical bug — always summed the full `tax` regardless of a genuine
+  partial TDS2 claim — fixed to match, computed before the per-row TAN-validity check so an
+  invalid-TAN row's intended claim still counts toward the total (its original scope).
+- **ITR1-R102** (`app/engine/validators/itr1/input_rules.py`): a second, independent bug in the
+  same area — its TDS3 claimed-sum cross-check read `getattr(e, 'tds_claimed_this_year', _z)`,
+  but `TDS3Entry`'s actual field is `tds_claimed` (a different name than TDS2Entry's), so the
+  `getattr` always missed and silently defaulted to zero, permanently disabling this check
+  regardless of any real mismatch. Fixed to read the correct field name.
+- The same section's `tds2_total`/`tds3_total` locals (feeding ITR1-R103/R108's cross-checks)
+  were also switched from raw `tds_deducted` sums to the same claimed-amount basis as the fix
+  above, so these cross-checks now validate against what the calculator actually credits,
+  instead of quietly comparing two independently-wrong numbers to each other and always passing.
+- **Not fixed, explicitly deferred**: `app/engine/validators/itr4/input_rules.py` has the
+  identical `tds_claimed_this_year`-vs-`tds_claimed` field-name bug independently, at two more
+  sites (lines ~1951, ~1963) — confirmed by grep, not fixed here since it is ITR-4-specific
+  validator code, not shared with ITR-1, and this document's scope (per the user's own stated
+  form sequencing) is ITR-1 first. Flagged here so the ITR-4 phase does not have to
+  re-discover it.
+
+The fix required no changes anywhere downstream of `result.total_tds`/`result.total_taxes_paid`
+— every consumer (234A/B/C interest, the JSON's `TaxesPaid`/`BalTaxPayable`/`Refund` sections)
+already reads those fields rather than recomputing independently, so the single fix at the
+shared aggregation point correctly propagates through the entire pipeline.
+
+### 15.5 Verification
+
+- New `tests/test_tds_tcs_schedule.py` (5 tests): TDS2 credit uses `tds_claimed_this_year` when
+  set and falls back to full `tds_deducted` when unset (both directions); TDS3 credit reaches
+  `total_tds` and correctly uses the claimed (not full deducted) amount; all four credit types
+  (TDS1/TDS2/TDS3/TCS) aggregate correctly together.
+- 3 new tests in `tests/test_draft_to_itr1_input.py`: a TDS2 partial claim reaches both
+  `TDS2Entry.tds_claimed_this_year` and the mapper's `claimed_tds` aggregate (not the full
+  deducted amount); the full-claim default case still works when no partial amount is
+  specified; TDS3 credit reaches the real computed tax liability end to end through the actual
+  `compute_itr1` calculator, not just a unit-level mock.
+- `pytest tests/test_tds_tcs_schedule.py tests/test_draft_to_itr1_input.py
+  tests/test_itr1_input_validation.py -v` — 165 passed.
+- `pytest tests/ -k "itr1 or itr2 or itr3 or itr4 or tds"` — 789 passed, no regressions across
+  any of the four forms (confirms the shared `compute_all()` fix is safe for ITR-2, which has
+  its own separate, unaffected TDS aggregation, and for ITR-3, which doesn't reach the changed
+  TDS3 parameter at all).
+- Full backend suite — 1552 passed, same 3 pre-existing failures (`test_tax_v2_compute.py`) and
+  1 pre-existing collection error (`test_26as_batch.py`) as every prior run this session — no
+  new failures.
+
+### 15.6 What remains after this pass
+
+§9's three named gaps are now all covered (§14 for validators/House Property/Other Sources/
+Capital Gains/Chapter VI-A; §15 for tax-core and filing-profile/bank-account architecture). The
+TDS/TCS credit bug found in §15.4 was not part of any of §9's three named gaps — it surfaced
+while investigating the filing-profile/bank-account gap and following a "what else reads
+`tds_claimed_this_year`" trail, the same investigative method (follow a confirmed defect's
+exact field/pattern to its other occurrences) that found the validator bugs in §14.5. This
+suggests the productive next step for further depth, if wanted, is the same method applied to
+other "two similarly-named fields, only one of which the actual computation reads" pairs
+elsewhere in the schema — not named here, since none were found, only the general pattern that
+found real bugs twice in this document.
