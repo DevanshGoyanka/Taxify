@@ -1,0 +1,1026 @@
+# Taxify ITR-2 AY 2026–27 Frontend and Serialization Audit
+
+**Audit type:** Read-only frontend and filing-pipeline audit  
+**Assessment year:** AY 2026–27  
+**Scope:** Frontend capture, canonical `ReturnDraft`, preparation, CBDT/ITD JSON serialization, and official-form coverage  
+**Excluded:** Validators and validator-related working-tree changes  
+**Status:** Not production-ready for complete real-world ITR-2 filing
+
+## Executive conclusion
+
+Taxify has broad ITR-2 frontend coverage and a substantial canonical data model, but it should not yet be considered production-ready for preparing or filing all AY 2026–27 ITR-2 returns.
+
+The principal risk is the gap between:
+
+1. a field existing in a TypeScript or Pydantic model;
+2. a field being rendered and editable in the frontend;
+3. that field being included in the canonical preparation path;
+4. the calculator consuming it correctly; and
+5. the official CBDT/ITD JSON serializer emitting it in the correct schedule and classification.
+
+Several fields pass the first two stages but fail at later stages. A schema-valid JSON document is therefore not sufficient evidence of filing correctness.
+
+The highest-priority areas are:
+
+- Schedule 115AD and complete capital-gains serialization;
+- Schedule OS category-by-category serialization;
+- TDS-2, TDS-3, and TCS ownership/credit handling;
+- filing-profile and Part A-GEN completeness;
+- detailed Schedule S and Schedule HP capture;
+- Schedule FA and foreign-income disclosures;
+- AMT, AMTC, CFL, and loss reconciliation;
+- exempt-income and deduction detail; and
+- exact monetary representation and serialization.
+
+---
+
+## 1. Methodology and evidence
+
+### Reviewed
+
+- AY 2026–27 official ITR-2 JSON schema;
+- official ITR-2 PDF;
+- applicable ITR-2 form and tax-rule requirements;
+- canonical frontend `ReturnDraft` model;
+- React/TypeScript filing and schedule editors;
+- canonical preparation and serializer path;
+- legacy `frontend/src/api/itr2Mapper.ts` path;
+- CBDT JSON schedule construction;
+- backend monetary types and frontend money handling; and
+- frontend production-build integrity.
+
+### Explicitly excluded
+
+Validators were excluded from this audit. The following pre-existing or unrelated working-tree changes were not assessed as part of the frontend/serialization findings:
+
+```text
+M  app/engine/validators/itr2/input_rules.py
+M  tests/test_itr2_input_validation.py
+?? Docs/ITR2_CBDT_VALIDATION_RULE_MATRIX.md
+?? scripts/generate_itr2_rule_matrix.py
+```
+
+### Evidence paths
+
+Representative evidence is cited using repository paths and line regions. Exact line numbers may move as the repository changes.
+
+- Canonical model: `app/schemas/return_draft.py`
+- Live ITR-2 serializer: `app/engine/itd/itr2.py`
+- Legacy mapper: `frontend/src/api/itr2Mapper.ts`
+- Personal information UI: `frontend/src/components/PersonalInfoTab.tsx`
+- ITR-2 schedule workspace: `frontend/src/components/itr2/ITR2SchedulesWorkspace.tsx`
+- Schedule OS UI: `frontend/src/components/othersources/ScheduleOSWorkspace.tsx`
+
+---
+
+## 2. Architecture assessment
+
+### 2.1 Canonical v2 representation
+
+The canonical model in `app/schemas/return_draft.py` contains dedicated structures for salary, house property, capital gains, other sources, exempt income, deductions, losses, SI, FSI, TR, FA, SPI, PTI, AMT, AL, Schedule 5A, ESOP, TDS/TCS, and tax challans.
+
+Representative definitions include:
+
+```text
+return_draft.py:626      CapitalGainsSchedule
+return_draft.py:725      ScheduleSIEntry
+return_draft.py:744      ForeignSourceIncomeEntry
+return_draft.py:758      ForeignTaxReliefEntry
+return_draft.py:771      ForeignAssetEntry
+return_draft.py:1238     Schedule80GGAEntry
+return_draft.py:1250     Schedule80GGCEntry
+return_draft.py:1315     TCS ownership fields
+return_draft.py:1349     Taxes
+return_draft.py:1586     capitalGainsSchedule
+return_draft.py:1601     foreignSourceIncome
+return_draft.py:1603     foreignAssets
+return_draft.py:1606     amt
+return_draft.py:1609     esopDeferrals
+```
+
+This is the correct architectural direction, but the presence of a typed model does not establish complete downstream support.
+
+### 2.2 Legacy flat mapper
+
+`frontend/src/api/itr2Mapper.ts` defines a substantially smaller `ITR2FormPayload` and assembles only a partial backend payload. It exposes simplified values such as:
+
+```text
+grossSalary
+perquisitesValue
+profitsInLieuOfSalary
+hraExemptAmount
+houseProperties
+savingsBankInterest
+fixedDepositInterest
+familyPensionReceived
+dividendIncome
+cgTransactions
+cg112aScrips
+vdaTransactions
+deductions
+tds1Entries
+tds2Entries
+tcsEntries
+taxPaymentEntries
+```
+
+It does not represent the breadth of the canonical model and drops substantial official detail. Any route still using it is not equivalent to the canonical v2 path.
+
+**Severity: High**
+
+**Required action:** establish one supported ITR-2 path. Remove, disable, or strictly adapt the legacy mapper to `ReturnDraft`; do not maintain two semantically different filing representations.
+
+---
+
+# 3. Critical findings
+
+## 3.1 Schedule 115AD is not emitted as a distinct official schedule
+
+### Evidence
+
+The serializer registers:
+
+```text
+ScheduleCGFor23
+Schedule112A
+ScheduleVDA
+```
+
+in `app/engine/itd/itr2.py` around lines 1643–1669. The capital-gains serializer contains a block named `NRISecur115AD`, but it is a zero-valued generic placeholder within Schedule CG rather than a complete dedicated Schedule 115AD mapping.
+
+`_schedule_112a()` begins around line 789 and serializes `cg_112a_scrips`; it does not provide a complete independent 115AD representation.
+
+### Impact
+
+Applicable non-resident securities or units under section 115AD may be:
+
+- placed in the wrong schedule;
+- emitted as zero-valued placeholder data; or
+- omitted from the generated return.
+
+### Severity
+
+**Critical**
+
+### Remediation
+
+- Obtain the exact AY 2026–27 schema structures for the 115AD data.
+- Add a dedicated canonical input type.
+- Add a dedicated conditional frontend editor.
+- Map every official field, including security/unit classification, consideration, cost, STT status, loss, and relevant non-resident details.
+- Add schema and fixture tests for NRI 115AD securities, units, losses, and DTAA cases.
+
+---
+
+## 3.2 Generic capital-gains rows are captured but not fully mapped
+
+### Evidence
+
+The canonical model contains `CapitalGainsSchedule` at `return_draft.py:626`. `_schedule_cg()` begins around `itr2.py:590` and explicitly handles only selected categories, including land/building and a narrow 111A path:
+
+```python
+if tx.asset_type.value in (
+    "listed_equity_111a",
+    "equity_oriented_fund_111a",
+):
+```
+
+The serializer also emits zero-valued or placeholder structures for multiple categories, including:
+
+```text
+NRISecur115AD
+SaleOnOtherAssets
+SaleOfEquityShareUs112A
+NRISaleOfEquityShareUs112A
+NRISaleofForeignAsset
+SaleofAssetNADtls
+```
+
+### Potentially affected categories
+
+- land/building STCG and LTCG detail;
+- listed securities outside the narrow 111A path;
+- mutual funds and units;
+- foreign assets;
+- unlisted equity;
+- other capital assets;
+- section 50CA and deemed-consideration cases;
+- non-resident classifications;
+- DTAA-rate capital gains;
+- buyback-related capital losses;
+- exemptions under sections 54, 54B, 54EC, 54F, and 115F; and
+- current-year and brought-forward capital-loss set-off.
+
+### Loss and sign risk
+
+The serializer calculates gains using expressions such as:
+
+```python
+gain = tx.full_consideration - tx.cost_of_acquisition - tx.expenditure_on_transfer
+```
+
+but uses `max(0, ...)` in other paths, including the 112A summary. This creates a risk that a loss becomes zero or is placed in a positive-income field instead of entering the loss matrix.
+
+### Severity
+
+**Critical**
+
+### Remediation
+
+Create a verified mapping matrix from every canonical capital-gains category to the exact official Schedule CG field. A populated category must either serialize fully or cause an explicit unsupported-case error before JSON generation. Do not silently emit zero placeholders for populated data.
+
+---
+
+## 3.3 VDA business-income classification is serialized as capital gains
+
+### Evidence
+
+The VDA serializer at `itr2.py:876` emits:
+
+```python
+"HeadUndIncTaxed": "CG"
+```
+
+around lines 883–889. The generated VDA amount is also added to capital gains in Part B-TI around line 1471 and appears under `CapGains30Per115BBH` around line 1500.
+
+### Impact
+
+A VDA transaction selected or intended as business income can be filed as capital gains and taxed under the wrong head.
+
+### Severity
+
+**Critical**
+
+### Remediation
+
+- Add explicit VDA head classification to the canonical input.
+- Reject unsupported head/form combinations before calculation.
+- Serialize `CG` or `BP` from the actual selection.
+- Ensure calculator, Schedule VDA, Part B-TI, and tax computation use the same classification.
+- Add capital-gains VDA, business-income VDA, mixed, zero-profit, and invalid-expense tests.
+
+---
+
+## 3.4 Schedule OS has broad UI coverage but incomplete live serialization
+
+### Evidence
+
+`ScheduleOSWorkspace.tsx` supports categories including interest, dividends, gifts, lottery, online gaming, race-horse activity, unexplained income, DTAA income, section 89A, accumulated PF, deductions, pass-through income, and special-rate income. The category set is visible around lines 113–135, with entry creation and editing around lines 255–295.
+
+The backend `_schedule_os()` begins at `itr2.py:482`. It initializes many fields to zero, including:
+
+```text
+IncomeNotified89AOS
+IncomeNotifiedOther89AOS
+IncomeNotifiedPrYr89AOS
+TaxAccumulatedBalRecPF
+OthersGross
+PTIOthersGrossDtls
+IncChargblSplRateOS
+```
+
+It then maps only selected aggregate values:
+
+```python
+block["DividendGross"] = ...
+block["InterestGross"] = ...
+block["IntrstFrmSavingBank"] = ...
+block["IntrstFrmTermDeposit"] = ...
+block["IntrstFrmIncmTaxRefund"] = ...
+block["FamilyPension"] = ...
+```
+
+and handles only selected SI sections such as `115BB` and `115BBE`.
+
+### Affected categories
+
+- winnings;
+- gifts under section 56(2)(x);
+- DTAA income;
+- section 89A income;
+- accumulated PF;
+- special-rate income;
+- unexplained income categories;
+- other-source deductions;
+- pass-through income;
+- race-horse income;
+- dividend category distinctions; and
+- date/quarter-specific information.
+
+### Impact
+
+A value can be entered in the frontend but not appear in the official JSON.
+
+### Severity
+
+**Critical**
+
+### Remediation
+
+Map each canonical `OtherSources` entry to the exact official field, including category code, gross amount, deductions, rate, dates/quarters, payer/donor information, TDS linkage, and source schedule. Add a populated-category preservation test for every OS category.
+
+---
+
+## 3.5 Negative house-property income is forced to zero in Part B-TI
+
+### Evidence
+
+`_partb_ti()` emits:
+
+```python
+"IncomeFromHP": _to_rupees(max(_ZERO, result.house_property_income))
+```
+
+at `itr2.py:1474`.
+
+The Schedule HP serializer separately emits the signed result around `itr2.py:471`.
+
+### Impact
+
+A legitimate house-property loss can appear as zero in Part B-TI while the calculation engine and Schedule HP contain a negative amount. This can create inconsistencies in current-year set-off, BFLA, CFL, and total-income reporting.
+
+### Severity
+
+**Critical**
+
+### Remediation
+
+Preserve signed HP values where the official field permits them and use separate fields for current-year loss, set-off, remaining loss, and income after set-off. Add self-occupied, let-out, multiple-property, interest-limitation, and carried-forward-loss tests.
+
+---
+
+## 3.6 TDS-2 and TDS-3 details are hardcoded or incomplete
+
+### Evidence
+
+`_schedule_tds2()` is around `itr2.py:1383–1411`. It hardcodes:
+
+```python
+"TDSCreditName": "S"
+"BroughtFwdTDSAmt": 0
+"HeadOfIncome": "OS"
+```
+
+`_schedule_tds3()` is around `itr2.py:1414–1435` and hardcodes ownership and brought-forward values similarly. TDS-3 uses buyer/tenant PAN and head-of-income details, but the full official data set remains incomplete.
+
+### Impact
+
+The return cannot correctly represent:
+
+- TDS belonging to another person;
+- brought-forward credit;
+- credit carried forward;
+- heads other than OS;
+- partial claims;
+- buyer/tenant details; and
+- full TDS-3 classification.
+
+### Severity
+
+**High to Critical**
+
+### Remediation
+
+Map canonical TDS ownership, spouse/other-person PAN, deducted year, brought-forward credit, current-year deduction, claim, carry-forward, head of income, gross amount, and buyer/tenant fields. Do not substitute `S` or `OS` unless that is the actual selected value.
+
+---
+
+## 3.7 TCS ownership and claim amounts are hardcoded to self
+
+### Evidence
+
+The canonical model has ownership fields around `return_draft.py:1315–1337`. The serializer at `itr2.py:1438–1460` emits:
+
+```python
+"TCSCreditOwner": "1"
+```
+
+and sets spouse/other-person collection and claim values to zero.
+
+### Impact
+
+TCS belonging to a spouse or another person cannot be represented. The credit may be attributed to the wrong taxpayer or omitted.
+
+### Severity
+
+**Critical**
+
+### Remediation
+
+Map current-year ownership, spouse/other-person PAN, own-hand and other-person collection, own-hand and other-person claim, brought-forward, and carried-forward values. Add tests for self, spouse, other-person, and partial claims.
+
+---
+
+## 3.8 Schedule IT can omit tax-payment challans
+
+### Evidence
+
+`_schedule_it()` requires BSR code, payment date, and challan serial number and raises when any is absent, around `itr2.py:1350–1365`.
+
+### Impact
+
+A tax payment can exist in canonical data but fail to appear in Schedule IT if the frontend does not capture all required challan details or if the entry is not routed into `tax_payment_entries`.
+
+### Severity
+
+**High**
+
+### Remediation
+
+Use a complete Schedule IT editor, block JSON generation with field-specific errors for incomplete challans, and reconcile Schedule IT totals with Part B-TTI taxes paid.
+
+---
+
+# 4. Part A-GEN and filing profile
+
+## 4.1 Residential-status facts are incomplete
+
+The serializer emits only the status classification:
+
+```python
+"ResidentialStatus": profile.residential_status.value
+```
+
+at `itr2.py:111–137`. The frontend does not visibly capture the complete supporting facts, including current/prior India stay, foreign jurisdiction, foreign TIN, and the basis for NRI/NOR classification.
+
+**Severity: High**
+
+**Remediation:** add a conditional residential-status questionnaire and retain the supporting facts in the canonical profile.
+
+## 4.2 FII/FPI and SEBI information is incomplete
+
+The backend emits `FiiFpiFlag` and optionally `SEBIRegNo` around `itr2.py:132–137`, but the frontend does not provide a complete workflow for all associated information and income classification.
+
+**Severity: High**
+
+## 4.3 Director and unlisted-equity disclosures are reduced to flags
+
+The model has `isDirector` and `holdsUnlistedShares` around `return_draft.py:1492–1502`, but the frontend does not provide the complete official detail tables, such as company identity, DIN/directorship details, ISIN, acquisition/disposal, share count, face value, and cost.
+
+**Severity: High**
+
+## 4.4 Section 115H is missing
+
+The frontend filing-profile workflow does not expose section 115H applicability and supporting information.
+
+**Severity: High**
+
+## 4.5 Section 92CD is missing from the filing-section dropdown
+
+`PersonalInfoTab.tsx:205–211` exposes filing sections including 139(1), 139(4), 142(1), 148, 153C, 139(5), 139(9), and 119(2)(b), but not 92CD, despite backend support.
+
+**Severity: High**
+
+## 4.6 Current-account deposits are incorrectly gated to ITR-4
+
+At `PersonalInfoTab.tsx:215`, the current-account deposit threshold controls are rendered only when `itrForm === 'ITR-4'`. The canonical model documentation at `return_draft.py:1399–1403` states that the seventh-proviso block is shared by ITR-2 and ITR-4.
+
+**Severity: Critical**
+
+**Remediation:** render the control for ITR-2 with the correct form-specific clauses and thresholds.
+
+## 4.7 LEI fields are missing or incomplete
+
+Applicable LEI information is not represented through a complete frontend workflow.
+
+**Severity: Medium to High**, depending on taxpayer and transaction applicability.
+
+---
+
+# 5. Schedule S — Salary
+
+## 5.1 Salary detail rows are modeled but not fully rendered
+
+The canonical model contains salary nature, perquisite nature, and section 10 exemption rows around `return_draft.py:208–210`. The frontend does not provide a complete official detail-table experience for all categories.
+
+Missing or incomplete areas include:
+
+- nature of salary;
+- employer-specific breakdown;
+- perquisite categories;
+- profits in lieu of salary;
+- section 10 exemption classifications;
+- retirement benefits;
+- section 89A;
+- employer address and TAN completeness;
+- arrears and salary-period details; and
+- relief linkage.
+
+**Severity: High**
+
+## 5.2 HRA is simplified
+
+HRA captures simplified facts but does not expose the complete section 10(13A) structure, including rent, period, landlord details/PAN where applicable, city classification, and computation inputs.
+
+**Severity: High**
+
+## 5.3 Retirement and section 89A fields are incomplete
+
+Retirement-benefit and section 89A data are not consistently represented with the full assessment-year-specific official structure.
+
+**Severity: High**
+
+---
+
+# 6. Schedule HP — House Property
+
+## 6.1 Loan and property details are incomplete
+
+`_schedule_hp()` begins around `itr2.py:424` and emits an empty section 24(b) detail array:
+
+```python
+"Section24BDtls": []
+```
+
+around `itr2.py:454–465`.
+
+Missing or incomplete details include:
+
+- lender identity, PAN, and address;
+- loan sanction date and amount;
+- property completion date;
+- pre-construction interest;
+- current-year interest;
+- ownership percentage and co-owner data;
+- tenant identity/details;
+- unrealized rent and arrears;
+- municipal tax detail;
+- property completion status; and
+- complete property address information.
+
+**Severity: Critical for affected cases**
+
+## 6.2 Self-occupied property is over-simplified
+
+The serializer calculates ALV and standard deduction using simplified logic around `itr2.py:434–438`, which does not guarantee that the official self-occupied-property and loan fields are correctly represented.
+
+**Severity: High**
+
+## 6.3 Schedule HP and Part B-TI can disagree
+
+Schedule HP emits `result.house_property_income`, while Part B-TI clamps negative HP income to zero. This is an internal consistency defect.
+
+**Severity: Critical**
+
+---
+
+# 7. Schedule OS and exempt income
+
+## 7.1 UI breadth exceeds backend coverage
+
+The frontend supports categories that are initialized but not equivalently serialized. This is especially material for winnings, gifts, DTAA, 89A, PF, unexplained income, special-rate income, PTI, and deductions.
+
+**Severity: Critical**
+
+## 7.2 Exempt-income rows default to a misleading category
+
+New exempt-income rows default to provident-fund income under section 10(11), even if the taxpayer has not selected that source.
+
+**Severity: Medium to High**
+
+**Remediation:** use an explicit unselected state and require the exemption category.
+
+## 7.3 Agricultural-income details are not fully gated
+
+Agricultural-income fields are not consistently gated by the official income threshold and applicable category conditions.
+
+**Severity: Medium**
+
+## 7.4 Legacy mapper has no complete Schedule EI mapping
+
+`frontend/src/api/itr2Mapper.ts` has no complete Schedule EI mapping and therefore drops exempt-income detail on that path.
+
+**Severity: High**
+
+---
+
+# 8. Deductions
+
+## 8.1 Detail schedules are frequently reduced to aggregates
+
+The canonical model contains detailed structures such as `Schedule80GGAEntry` and `Schedule80GGCEntry`, but several frontend and legacy-mapper paths expose aggregate amounts rather than complete official detail rows.
+
+Affected areas include 80C, 80D, 80G, 80GGA, 80GGC, 80GG, 80CCD, 80DD, 80DDB, 80E, 80EE, 80EEA, 80EEB, and 80U.
+
+**Severity: High**
+
+## 8.2 Cash contributions remain editable where restricted
+
+The canonical 80GGA and 80GGC entries contain `cashAmount` and `otherModeAmount`, and the frontend allows cash values to remain editable even where statutory rules restrict or disallow them.
+
+**Severity: High**
+
+The UI should remove the prohibited mode, render it as fixed zero, or clearly block it before submission.
+
+## 8.3 Monetary limits and integer semantics are inconsistent
+
+Preventive-health-checkup limits and other statutory monetary semantics are not enforced consistently in the UI. These concerns are separate from the excluded validator audit because they relate to frontend input design and user-visible state.
+
+---
+
+# 9. Schedule SI, AMT, AMTC, and CFL
+
+## 9.1 Schedule SI is too generic and narrow
+
+`ITR2SchedulesWorkspace.tsx:35` creates a generic Schedule SI entry with default section `115BB`. The list is rendered using generic fields around line 117. The official form has substantially more special-rate classifications and category-specific structures.
+
+**Severity: High**
+
+**Remediation:** use the complete AY 2026–27 official section-code enumeration and render category-specific fields.
+
+## 9.2 AMT and AMTC are combined in the frontend
+
+The frontend presents `Schedule AMT / AMTC` as one nullable generic section around `ITR2SchedulesWorkspace.tsx:123`, while the backend has separate `_schedule_amt()` and `_schedule_amtc()` functions at `itr2.py:1171` and `itr2.py:1184`.
+
+**Severity: High**
+
+## 9.3 AMTC historical credit ledger is absent
+
+The frontend exposes only a few AMT deduction fields and no year-by-year AMTC ledger for brought-forward credit, utilization, and carry-forward.
+
+**Severity: High**
+
+## 9.4 CFL is backend-only with no reconciliation display
+
+The frontend states around `ITR2SchedulesWorkspace.tsx:116` that Schedule CFL is computed by the backend and has nothing to enter. Computation can remain backend-authoritative, but the preparer needs a read-only year-by-year reconciliation showing current-year losses, set-off, and carry-forward.
+
+**Severity: Medium to High**
+
+---
+
+# 10. Foreign schedules
+
+## 10.1 FSI and TR are compressed generic rows
+
+The frontend renders FSI and TR with generic lists around `ITR2SchedulesWorkspace.tsx:118–119`.
+
+FSI fields include country code, TIN, salary/HP/CG/OS income, foreign tax, Indian tax, and relief section. TR adds income included, tax paid, Indian tax, relief, section, and Form 67 flag.
+
+This is useful baseline coverage but does not fully expose official category, treaty, conversion, Form 67, timing, and limitation information.
+
+**Severity: High**
+
+## 10.2 Schedule FA is substantially under-modeled
+
+The frontend creates a generic foreign asset row around `ITR2SchedulesWorkspace.tsx:38` with:
+
+```text
+assetType
+countryCode
+institutionOrEntityName
+address
+accountOrAssetIdentifier
+ownershipStatus
+openingOrAcquisitionDate
+peakValue
+closingValue
+grossIncome
+incomeOffered
+incomeHead
+```
+
+The official Schedule FA requires different structures for foreign bank accounts, custodial accounts, equity/debt interests, insurance, trusts, signing authority, immovable property, and other assets.
+
+Missing category-specific data includes account type, institution details, peak/closing values, acquisition and ownership facts, entity interest, policy/trust information, signing-authority reason, income, and tax-offering linkage.
+
+**Severity: Critical for foreign-asset taxpayers**
+
+---
+
+# 11. Schedule SPI and PTI
+
+## 11.1 SPI is compressed to a generic clubbing row
+
+The frontend exposes name, PAN, relationship, amount, and head around `ITR2SchedulesWorkspace.tsx:121`, but not the complete section 64 clause, source-income, loss, and schedule-linkage structure.
+
+**Severity: Medium to High**
+
+## 11.2 PTI is compressed
+
+The frontend exposes entity name/PAN, income head, section, income amount, and TDS credit around line 122, but this is insufficient for all pass-through income distinctions and credit linkage.
+
+**Severity: High for affected taxpayers**
+
+---
+
+# 12. Schedule 5A — Portuguese Civil Code
+
+## 12.1 Independent applicability state can diverge
+
+The canonical model has both `portugueseCivilCodeApplies` and `portugueseCivilCode` around `return_draft.py:1416–1419` and `return_draft.py:1608`. The frontend presents Schedule 5A as an independently nullable generic section around `ITR2SchedulesWorkspace.tsx:125`.
+
+This can permit contradictory states: Schedule 5A enabled without the filing-profile condition, or the filing-profile condition enabled without complete schedule data.
+
+**Severity: High**
+
+**Remediation:** use one authoritative applicability state derived from the filing profile and conditionally render the schedule.
+
+## 12.2 Schedule 5A is reduced to a compact row
+
+The UI exposes spouse name/PAN/Aadhaar and apportioned HP, CG, OS, and TDS values, but not the complete official apportionment structure.
+
+**Severity: Medium to High**
+
+---
+
+# 13. Schedule ESOP
+
+## 13.1 Generic ledger is insufficient for official events
+
+The frontend renders ESOP entries around `ITR2SchedulesWorkspace.tsx:126` with employer PAN, DPIIT registration number, AY, brought-forward deferred tax, current-year payable tax, and carried-forward balance.
+
+The serializer begins around `itr2.py:1316` and serializes from the first entry. This is not sufficient for complete assessment-year-specific event structures and multiple employer/event cases.
+
+**Severity: High**
+
+**Remediation:** model employer-level data, grant/event-level information, and a complete AY ledger with brought-forward, current-year, payable, and carried-forward amounts.
+
+---
+
+# 14. Precision and monetary representation
+
+## 14.1 Backend Decimal versus frontend number
+
+The backend uses `Decimal` by project convention, but the frontend and legacy mapper extensively use JavaScript `number`, `Number(value)`, and `parseFloat`.
+
+Representative locations include:
+
+```text
+frontend/src/api/itr2Mapper.ts
+frontend/src/utils/prefillTypes.ts
+frontend/src/utils/mapTisToDraftPatch.ts
+```
+
+### Risks
+
+- IEEE-754 precision loss for large amounts;
+- inconsistent rounding;
+- blank values becoming zero;
+- loss of negative/empty distinctions;
+- inaccurate statutory caps;
+- mismatch between displayed totals and submitted totals; and
+- inaccurate exact CBDT integer serialization.
+
+**Severity: High**
+
+### Remediation
+
+Represent editable money as decimal strings in the frontend, normalize only at the API boundary, avoid JavaScript arithmetic for authoritative totals, reject malformed values rather than coercing them to zero, and preserve blank, zero, and negative states distinctly.
+
+---
+
+# 15. Legacy mapper detail
+
+`frontend/src/api/itr2Mapper.ts` is unsuitable as a complete ITR-2 filing mapper.
+
+### Filing profile
+
+It captures a narrow identity/address/status subset but does not fully map alternate addresses, conditional filing sections, seventh-proviso details, representatives, TRP data, director/unlisted-share detail, FII/FPI/SEBI information, 115H, 92CD, and LEI data.
+
+### Salary
+
+It maps aggregate salary, perquisites, profits in lieu, and HRA exemption but not complete employer, salary-nature, perquisite, section 10, retirement, and section 89A records.
+
+### House property
+
+It maps property type, rent, municipal taxes, loan interest, and limited address data but not complete loan, ownership, tenant, property, and address structures.
+
+### Other sources
+
+It maps selected savings-bank interest, term-deposit interest, family pension, and dividends but not the complete Schedule OS category set.
+
+### Capital gains
+
+It exposes transaction and 112A arrays but does not fully map all official CG categories, non-resident classifications, DTAA rates, losses, deemed consideration, and exemption rows.
+
+### Deductions
+
+It uses aggregate deduction fields and does not preserve all detail schedules.
+
+### TDS/TCS
+
+It uses simplified credit arrays and lacks the complete ownership, brought-forward, carry-forward, spouse/other-person, and head-of-income model.
+
+**Conclusion:** the legacy mapper must be removed, made unreachable, or replaced by a strict adapter that preserves canonical data.
+
+---
+
+# 16. Schema-validity versus semantic completeness
+
+The serializer intentionally emits many zero-valued structures. Some are required by the schema, but zero placeholders are unsafe when they stand in for populated canonical data.
+
+Examples include:
+
+- `NRISecur115AD` and other Schedule CG placeholders;
+- many Schedule OS category fields;
+- empty `Section24BDtls` in Schedule HP;
+- hardcoded loss and special-rate fields in Part B-TI;
+- hardcoded TDS/TCS ownership and head values.
+
+`additionalProperties: false` protects the structure but cannot detect that a taxpayer-entered field was dropped or misclassified. Official schema validation is necessary but not sufficient.
+
+---
+
+# 17. Production-readiness classification
+
+## Not safe for broad production use today
+
+The current implementation is not safe for complete returns involving:
+
+- NRI/NOR status;
+- foreign assets or foreign income;
+- foreign tax relief;
+- section 115AD;
+- complex capital gains;
+- VDA business income;
+- detailed Schedule OS categories;
+- AMT/AMTC history;
+- ESOP deferrals;
+- Portuguese Civil Code apportionment;
+- spouse/other-person TDS/TCS credits;
+- complex house-property loans;
+- director/unlisted-share disclosures; or
+- detailed prior-year loss reconciliation.
+
+## Narrow cases with possible limited utility
+
+The system may serve as a calculation aid for a simple resident taxpayer with salary and simple interest, no foreign matters, no complex capital gains, no special-rate OS income, no AMT/AMTC, no complex credits, and no complex HP loan.
+
+Even those cases require independent review of the generated JSON against the official utility/schema before filing.
+
+---
+
+# 18. Prioritized remediation plan
+
+## P0 — Required before production filing
+
+1. **Establish one canonical path**
+   - remove or disable the legacy mapper;
+   - ensure every ITR-2 route uses `ReturnDraft`;
+   - assert the active route at the API boundary;
+   - add serialized-field coverage tests.
+
+2. **Complete capital-gains serialization**
+   - dedicated Schedule 115AD;
+   - all CG categories;
+   - section-specific exemptions;
+   - signed loss handling;
+   - CYLA/BFLA/CFL reconciliation;
+   - no silent zero placeholders for populated data.
+
+3. **Complete Schedule OS**
+   - winnings, gifts, DTAA, 89A, PF, unexplained, special-rate, PTI, deductions, and dividend categories;
+   - category-specific detail and TDS linkage;
+   - populated-category preservation tests.
+
+4. **Correct TDS/TCS credits**
+   - ownership;
+   - spouse/other-person PAN;
+   - brought-forward and carry-forward;
+   - partial claims;
+   - correct head of income;
+   - buyer/tenant fields;
+   - total reconciliation.
+
+5. **Correct negative HP handling**
+   - preserve signed values;
+   - align Schedule HP and Part B-TI;
+   - test current-year and carried-forward losses.
+
+6. **Complete filing profile**
+   - current-account deposit seventh-proviso field for ITR-2;
+   - 92CD;
+   - 115H;
+   - residential-status facts;
+   - FII/FPI and SEBI;
+   - director details;
+   - unlisted-equity details;
+   - LEI.
+
+## P1 — Required for broad taxpayer coverage
+
+7. Expand Schedule HP with section 24(b), pre-construction interest, ownership, co-owner, tenant, unrealized-rent, and complete property details.
+
+8. Replace generic Schedule FA rows with category-specific foreign bank, custodial, equity/debt, insurance, trust, signing-authority, property, and other-asset editors and serializers.
+
+9. Separate AMT and AMTC in the UI and add the historical AMTC ledger.
+
+10. Add a read-only Schedule CFL year-by-year reconciliation.
+
+11. Expand Schedule S with employer, salary nature, perquisite, section 10, HRA, retirement, arrears, and section 89A structures.
+
+## P2 — Quality and maintainability
+
+12. Replace frontend monetary `number` values with decimal strings.
+
+13. Add populated-data preservation tests for every canonical category.
+
+14. Add semantic reconciliation between canonical input, prepared input, calculator result, and CBDT JSON.
+
+15. Add explicit unsupported-case errors instead of silently omitting data.
+
+---
+
+# 19. Recommended test matrix
+
+## Filing profile
+
+- resident, NRI, and NOR;
+- seventh-proviso current-account deposit;
+- foreign travel and electricity thresholds;
+- 92CD and 115H;
+- FII/FPI;
+- director;
+- unlisted shares;
+- LEI.
+
+## Salary
+
+- multiple employers;
+- perquisites;
+- profits in lieu;
+- HRA;
+- retirement benefits;
+- arrears and section 89;
+- section 89A.
+
+## House property
+
+- self-occupied loss;
+- let-out property;
+- multiple properties;
+- pre-construction interest;
+- co-owned property;
+- unrealized rent;
+- tenant details;
+- section 24(b) loan records.
+
+## Capital gains
+
+- land/building STCG and LTCG;
+- 111A;
+- 112A;
+- 115AD;
+- foreign asset;
+- other asset;
+- DTAA rate;
+- sections 54, 54B, 54EC, 54F, and 115F;
+- current-year loss;
+- brought-forward loss;
+- buyback-related loss;
+- deemed consideration.
+
+## Other sources
+
+- all interest categories;
+- dividend classifications;
+- gifts;
+- lottery;
+- online games;
+- racehorse activity;
+- unexplained income;
+- DTAA income;
+- 89A;
+- accumulated PF;
+- special-rate income;
+- OS deductions;
+- PTI.
+
+## Foreign schedules
+
+- FSI;
+- TR under sections 90, 90A, and 91;
+- Form 67;
+- each Schedule FA asset category.
+
+## Credits
+
+- TDS self;
+- TDS spouse/other person;
+- brought-forward TDS;
+- partial claims;
+- carry-forward;
+- TDS-3 buyer/tenant;
+- TCS spouse/other person;
+- complete Schedule IT challans.
+
+## Precision and boundaries
+
+- zero;
+- permitted negative values;
+- large values above ₹1 crore;
+- decimal input;
+- blank versus zero;
+- duplicate rows;
+- one-row and multi-row schedules;
+- malformed and incomplete entries.
+
+---
+
+# 20. Final assessment
+
+Taxify has meaningful architecture and broad UI coverage, including a strong canonical model and a structured CBDT serializer. The frontend build succeeds, confirming build integrity.
+
+That success does not establish ITR-2 filing completeness. The implementation currently has a material gap between UI/model coverage and official JSON output. Before real ITR-2 filing, the project must complete the canonical serialization path and resolve the P0 findings, especially Schedule 115AD, capital gains, Schedule OS, TDS/TCS, filing profile, and negative house-property handling.
+
+> **Final classification: broadly implemented but not production-ready for complete AY 2026–27 ITR-2 filing.**
