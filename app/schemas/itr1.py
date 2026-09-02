@@ -240,6 +240,51 @@ class SalaryIncome(BaseModel):
     sec10_10cc_perquisite_tax: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14i_prescribed_allowance: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14ii_personal_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    is_disabled_employee: bool = Field(
+        default=False,
+        description=(
+            "True if the employee has a disability recognised under the "
+            "Persons with Disabilities Act. Required for the Section 10(14) "
+            "disabled-employee transport allowance exemption (Rule 2BB)."
+        ),
+    )
+    number_of_children: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Number of children for whom Children Education Allowance / "
+            "Hostel Expenditure Allowance is claimed u/s 10(14). The "
+            "computation engine caps the statutory per-child rate at 2 "
+            "children regardless of the value supplied here."
+        ),
+    )
+    average_monthly_salary: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Average monthly salary over the last 10 months of service, "
+            "used as the base for the Section 10(10) gratuity and Section "
+            "10(10AA) leave-encashment statutory sub-limit tests."
+        ),
+    )
+    years_of_service: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Completed years of service at retirement/separation, used for "
+            "the Section 10(10) gratuity and Section 10(10AA) leave-"
+            "encashment statutory sub-limit tests."
+        ),
+    )
+    unavailed_leave_days: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Earned leave standing to the employee's credit (in days) at "
+            "retirement/separation, used for the Section 10(10AA) leave-"
+            "encashment cash-equivalent sub-limit test."
+        ),
+    )
 
 
 

@@ -323,6 +323,151 @@ def test_lta_received_is_taxable_income_regardless_of_exemption() -> None:
     assert itr1_input.salary_income.lta_exempt_amount == Decimal("0")
 
 
+def test_lta_amount_received_mapped_for_validator_cross_check() -> None:
+    """SalaryIncome.lta_amount_received (distinct from lta_exempt_amount)
+    must be populated -- previously it stayed 0, which after the LTA-exempt
+    fix above made ITR1-R0xx's "exempt cannot exceed received" validator
+    fire for every genuine LTA claim (see
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §11.5)."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        lta=Decimal("20000"), actualLtaFare=Decimal("15000"),
+        isDomesticTravel=True,
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.lta_amount_received == Decimal("20000")
+    assert itr1_input.salary_income.lta_exempt_amount <= itr1_input.salary_income.lta_amount_received
+
+
+def test_retirement_receipts_reach_salary_income_and_gross_salary() -> None:
+    """Gratuity/commuted-pension/leave-encashment/VRS/retrenchment amounts
+    must reach both SalaryIncome's raw *_received fields (for the Section
+    10 exemption test) and gross_salary (as taxable income) -- previously
+    none of these five fields was ever set by the mapper at all, so the
+    taxable residual of a real retirement payout silently vanished from
+    computed income entirely (§11.1)."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", natureOfEmployment="OTH",
+        basic=Decimal("500000"),
+        gratuity=Decimal("300000"), commutedPension=Decimal("100000"),
+        leaveEncashment=Decimal("200000"), vrsCompensation=Decimal("50000"),
+        retrenchmentCompensation=Decimal("0"),
+        averageMonthlySalary=Decimal("40000"), yearsOfService=10,
+        unavailedLeaveDays=120,
+    )]
+    itr1_input, breakdown = draft_to_itr1_input(draft)
+    sal = itr1_input.salary_income
+    assert sal.gratuity_received == Decimal("300000")
+    assert sal.commuted_pension_received == Decimal("100000")
+    assert sal.leave_encashment_received == Decimal("200000")
+    assert sal.vrs_compensation == Decimal("50000")
+    assert sal.average_monthly_salary == Decimal("40000")
+    assert sal.years_of_service == 10
+    assert sal.unavailed_leave_days == 120
+    # gross_salary (Section 17(1)) itself is unaffected -- retirement
+    # receipts are added to *gross* by schedules/salary.py, not to 17(1).
+    assert sal.gross_salary == Decimal("500000")
+    result = compute_itr1(itr1_input)
+    # The taxable residual must reach computed salary income, not vanish:
+    # basic 500000 + 4 retirement receipts (650000) - std ded (50000)
+    # - whatever portion is exempt. At minimum, chargeable income must
+    # exceed basic salary alone (proving the receipts were not dropped).
+    assert result.salary_income > Decimal("450000")
+
+
+def test_transport_and_child_allowances_reach_salary_income() -> None:
+    """Transport allowance and the two Section 10(14) child allowances
+    must reach SalaryIncome -- previously dropped entirely (§11.2)."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        transportAllowance=Decimal("19200"), isDisabledEmployee=True,
+        childrenEducationAllowance=Decimal("2400"),
+        hostelExpenditureAllowance=Decimal("7200"), numberOfChildren=2,
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    sal = itr1_input.salary_income
+    assert sal.transport_allowance == Decimal("19200")
+    assert sal.is_disabled_employee is True
+    assert sal.number_of_children == 2
+    assert sal.sec10_14i_prescribed_allowance == Decimal("2400")
+    assert sal.sec10_14ii_personal_allowance == Decimal("7200")
+    result = compute_itr1(itr1_input)
+    # Disabled-employee transport exemption (Rs 19,200 cap) + full CEA (Rs
+    # 1,200/child x 2 = Rs 2,400, matches allowance exactly) + full hostel
+    # (Rs 3,600/child x 2 = Rs 7,200, matches allowance exactly) must all
+    # apply -- previously num_children was hardcoded to 0, forcing both
+    # child-allowance exemptions to zero regardless of input.
+    assert result.salary_transport_exempt == Decimal("19200")
+    assert result.salary_children_education_exempt == Decimal("2400")
+    assert result.salary_hostel_exempt == Decimal("7200")
+
+
+def test_children_allowance_exemption_zero_without_number_of_children() -> None:
+    """Explicit control: with numberOfChildren=0 (the schema default), the
+    CEA/hostel exemptions are correctly zero -- confirms the fix reads the
+    real field rather than always granting the 2-child statutory max."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        childrenEducationAllowance=Decimal("2400"),
+        hostelExpenditureAllowance=Decimal("7200"), numberOfChildren=0,
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.number_of_children == 0
+
+
+def test_section10_exemption_rows_mapped() -> None:
+    """employer.section10ExemptionRows (10(6)/10(7)/10(10CC), a structured
+    dropdown+amount list with a real rendered UI) must reach the matching
+    SalaryIncome scalar fields -- previously never read at all (§11.4)."""
+    from app.schemas.return_draft import Employer as EmployerT, SalaryNatureRow
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        section10ExemptionRows=[
+            SalaryNatureRow(id="r1", natureCode="10(6)", amount=Decimal("10000")),
+            SalaryNatureRow(id="r2", natureCode="10(7)", amount=Decimal("20000")),
+            SalaryNatureRow(id="r3", natureCode="10(10CC)", amount=Decimal("5000")),
+        ],
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    sal = itr1_input.salary_income
+    assert sal.sec10_6_embassy_exempt == Decimal("10000")
+    assert sal.sec10_7_foreign_allowance == Decimal("20000")
+    assert sal.sec10_10cc_perquisite_tax == Decimal("5000")
+
+
+def test_standard_deduction_claimed_mapped_to_regime_cap() -> None:
+    """SalaryIncome.standard_deduction_claimed must report the regime
+    statutory cap when there is salary -- previously always 0, which fired
+    ITR1-B004's "did you mean to claim standard deduction?" warning on
+    every single salaried return (§11.6)."""
+    from app.schemas.return_draft import Employer as EmployerT
+    old_draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    old_draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    old_draft.employers = [EmployerT(id="e1", employerName="Acme", basic=Decimal("500000"))]
+    old_input, _ = draft_to_itr1_input(old_draft)
+    assert old_input.salary_income.standard_deduction_claimed == Decimal("50000")
+
+    new_draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="new")
+    new_draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    new_draft.employers = [EmployerT(id="e1", employerName="Acme", basic=Decimal("500000"))]
+    new_input, _ = draft_to_itr1_input(new_draft)
+    assert new_input.salary_income.standard_deduction_claimed == Decimal("75000")
+
+
 def test_other_taxable_salary_and_arrears_reach_gross_salary() -> None:
     """Other taxable salary and arrears/advance salary must be counted as
     income -- previously employer.otherAllowance/.arrearSalary were never

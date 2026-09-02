@@ -514,7 +514,7 @@ def draft_to_itr2_input(
     residential_status = _map_residential_status(draft.personal.residentialStatus)
 
     # Shared heads — one implementation, reused (audit Finding 14 fix).
-    salary_input, section_17_1, gross_salary = _map_salary(draft.employers)
+    salary_input, section_17_1, gross_salary = _map_salary(draft.employers, tax_regime)
     hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
     os_input, total_interest, total_dividend, family_pension, total_winnings = (
         _map_other_sources(draft)

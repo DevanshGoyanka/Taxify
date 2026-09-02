@@ -1,0 +1,155 @@
+"""
+Unit tests for app/engine/schedules/salary.py's Section 10(10)/10(10AA)
+exemption formulas -- added while fixing
+Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §11.1/§11.8.
+
+Run: pytest tests/test_salary_schedule.py -v
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+from app.engine.schedules.salary import (
+    _exempt_gratuity,
+    _exempt_leave_encashment,
+    compute,
+)
+from app.schemas.itr1 import SalaryIncome, TaxRegime
+
+
+# ── Gratuity (Section 10(10)) ──────────────────────────────────────────────
+
+def test_gratuity_govt_employee_fully_exempt_regardless_of_amount():
+    assert _exempt_gratuity(Decimal("9999999"), True) == Decimal("9999999")
+
+
+def test_gratuity_non_govt_capped_by_statutory_ceiling():
+    """Received exceeds both the Rs 20L ceiling and the salary sub-limit;
+    the salary sub-limit (0.5 x 200000 x 30 = 3,000,000) is looser than the
+    Rs 20L ceiling here, so the ceiling binds."""
+    result = _exempt_gratuity(
+        Decimal("30000000"), False,
+        average_monthly_salary=Decimal("200000"), years_of_service=30,
+    )
+    assert result == Decimal("2000000")
+
+
+def test_gratuity_non_govt_capped_by_salary_sub_limit():
+    """0.5 x average_monthly_salary x years_of_service is the tightest cap
+    here (625,000), tighter than both the Rs 20L ceiling and the amount
+    received."""
+    result = _exempt_gratuity(
+        Decimal("2500000"), False,
+        average_monthly_salary=Decimal("50000"), years_of_service=25,
+    )
+    assert result == Decimal("625000")
+
+
+def test_gratuity_non_govt_capped_by_amount_received():
+    """Amount received is smaller than either statutory sub-limit."""
+    result = _exempt_gratuity(
+        Decimal("100000"), False,
+        average_monthly_salary=Decimal("50000"), years_of_service=25,
+    )
+    assert result == Decimal("100000")
+
+
+def test_gratuity_zero_without_average_salary_or_years_of_service():
+    """No evidence of the salary sub-limit inputs -> exemption is zero,
+    not an unbounded default. Mirrors this codebase's established
+    recompute-from-evidence philosophy (HRA/LTA)."""
+    result = _exempt_gratuity(Decimal("500000"), False)
+    assert result == Decimal("0")
+
+
+# ── Leave encashment (Section 10(10AA)) ────────────────────────────────────
+
+def test_leave_encashment_govt_employee_fully_exempt():
+    assert _exempt_leave_encashment(Decimal("9999999"), True) == Decimal("9999999")
+
+
+def test_leave_encashment_non_govt_capped_by_cash_equivalent_of_leave():
+    """unavailed_leave_days (200) is within the 30-days-per-year statutory
+    cap (30*25=750), so cash equivalent = 200/30 * 40000 = 266,666.67,
+    tighter than both the Rs 25L ceiling and the 10-months' average
+    salary sub-limit (400,000)."""
+    result = _exempt_leave_encashment(
+        Decimal("2500000"), False,
+        average_monthly_salary=Decimal("40000"), years_of_service=25,
+        unavailed_leave_days=200,
+    )
+    assert result == (Decimal("200") / Decimal("30")) * Decimal("40000")
+
+
+def test_leave_encashment_unavailed_days_capped_at_30_per_year_of_service():
+    """unavailed_leave_days (750) exceeds the statutory 30-days-per-year
+    cap for 10 years of service (300 days) -- the excess must not inflate
+    the cash-equivalent sub-limit."""
+    uncapped = _exempt_leave_encashment(
+        Decimal("2500000"), False,
+        average_monthly_salary=Decimal("40000"), years_of_service=10,
+        unavailed_leave_days=750,
+    )
+    capped_at_statutory_max = _exempt_leave_encashment(
+        Decimal("2500000"), False,
+        average_monthly_salary=Decimal("40000"), years_of_service=10,
+        unavailed_leave_days=300,
+    )
+    assert uncapped == capped_at_statutory_max
+
+
+def test_leave_encashment_non_govt_capped_by_ten_months_average_salary():
+    result = _exempt_leave_encashment(
+        Decimal("2500000"), False,
+        average_monthly_salary=Decimal("30000"), years_of_service=40,
+        unavailed_leave_days=1200,
+    )
+    assert result == Decimal("300000")  # 10 * 30000
+
+
+def test_leave_encashment_zero_without_evidence():
+    result = _exempt_leave_encashment(Decimal("500000"), False)
+    assert result == Decimal("0")
+
+
+# ── End-to-end compute() wiring ────────────────────────────────────────────
+
+def test_retrenchment_compensation_capped_and_exposed_on_result():
+    """retrenchment_exempt must be exposed on SalaryResult (it was
+    previously computed and folded into exempt_allowances but never
+    exposed -- app/engine/itd/itr1.py's JSON row fell back to the raw,
+    uncapped received amount as a result; §11.7)."""
+    salary_input = SalaryIncome(
+        gross_salary=Decimal("500000"),
+        retrenchment_compensation=Decimal("800000"),
+    )
+    result = compute(salary_input, TaxRegime.OLD)
+    assert result.retrenchment_exempt == Decimal("500000")  # Rs 5L ceiling
+
+
+def test_disabled_employee_transport_exemption_reads_real_field():
+    """is_disabled_employee is a real, declared SalaryIncome field now --
+    previously getattr(..., False) always returned False since the field
+    did not exist (§11.3)."""
+    salary_input = SalaryIncome(
+        gross_salary=Decimal("500000"),
+        transport_allowance=Decimal("25000"),
+        is_disabled_employee=True,
+    )
+    result = compute(salary_input, TaxRegime.OLD)
+    assert result.transport_exempt == Decimal("19200")
+
+
+def test_children_allowances_use_real_number_of_children():
+    """number_of_children is read from the schema, not hardcoded to 0
+    (§11.2)."""
+    salary_input = SalaryIncome(
+        gross_salary=Decimal("500000"),
+        sec10_14i_prescribed_allowance=Decimal("5000"),
+        sec10_14ii_personal_allowance=Decimal("10000"),
+        number_of_children=2,
+    )
+    result = compute(salary_input, TaxRegime.OLD)
+    assert result.children_education_exempt == Decimal("2400")  # 100*12*2
+    assert result.hostel_exempt == Decimal("7200")  # 300*12*2

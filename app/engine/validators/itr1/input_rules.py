@@ -190,35 +190,38 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # ========================================================================
 
     if sal:
-        # R100: Gratuity exempt amount cannot exceed gross salary
-        if sal.gratuity_received > _z and sal.gratuity_received > sal.gross_salary:
-            results.append(_make(
-                "ITR1-R100", False,
-                f"Gratuity exempt amount (Rs {sal.gratuity_received}) exceeds "
-                f"gross salary (Rs {sal.gross_salary}). "
-                f"Exempt gratuity cannot be more than total salary earned.",
-                "salary_income.gratuity_received",
-            ))
-        # R101: Commuted pension cannot exceed gross salary
-        if sal.commuted_pension_received > _z and sal.commuted_pension_received > sal.gross_salary:
-            results.append(_make(
-                "ITR1-R101", False,
-                f"Commuted pension (Rs {sal.commuted_pension_received}) exceeds "
-                f"gross salary (Rs {sal.gross_salary}).",
-                "salary_income.commuted_pension_received",
-            ))
-        # R102: Leave encashment exempt cannot exceed gross salary
-        if sal.leave_encashment_received > _z and sal.leave_encashment_received > sal.gross_salary:
-            results.append(_make(
-                "ITR1-R102", False,
-                f"Leave encashment (Rs {sal.leave_encashment_received}) exceeds "
-                f"gross salary (Rs {sal.gross_salary}).",
-                "salary_income.leave_encashment_received",
-            ))
+        # R100/R101/R102 (removed 2026-09-03): these previously compared
+        # gratuity/commuted-pension/leave-encashment *received* against the
+        # CURRENT YEAR's Section 17(1) salary_income.gross_salary and
+        # blocked filing if the payout was larger. There is no such
+        # statutory test anywhere in the Income Tax Act — these are
+        # career-end lump sums that routinely and correctly exceed one
+        # year's running salary (e.g. 25 years of service commonly
+        # produces a gratuity several times the final year's salary). The
+        # check was dormant (these three SalaryIncome fields were never
+        # populated by any mapper) until this session wired them
+        # (Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §11.1),
+        # at which point it started hard-blocking the exact realistic
+        # retirement claims that fix exists to correctly tax. The real
+        # statutory caps (Rs 20L / 25L / proportional-to-average-salary
+        # formulas) are already enforced in app/engine/schedules/salary.py;
+        # removed rather than "corrected" since no valid replacement
+        # comparison exists.
         # R142: 10(10AA) > ₹25L for non-govt employees
         if sal.leave_encashment_received > 2_500_000 and inp.nature_of_employment:
-            emp_lower = inp.nature_of_employment.lower()
-            is_govt = any(kw in emp_lower for kw in ("central government", "state government", "cg-", "sg-"))
+            # inp.nature_of_employment carries the raw official code
+            # (CGOV/SGOV/PSU/PE/PESG/PEPS/PEO/OTH — see
+            # app/engine/draft_to_itr1_input.py's ITR1Input construction),
+            # not a human-readable label. The keyword match below against
+            # "central government"/"cg-" never matched any real code, so
+            # this rule always treated every employee as non-government —
+            # dormant until leave_encashment_received was wired (this
+            # session), which would have turned it into a live false block
+            # for real CGOV/SGOV employees. "Government employee" here
+            # means specifically CGOV/SGOV, matching the definition already
+            # established in section_80ccd2.py and this mapper's own
+            # is_government_employee derivation.
+            is_govt = inp.nature_of_employment in {"CGOV", "SGOV"}
             if not is_govt:
                 results.append(_make(
                     "ITR1-R142", False,

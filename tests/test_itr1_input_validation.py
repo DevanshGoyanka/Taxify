@@ -1209,8 +1209,12 @@ def test_new_regime_no_hp_loss_allowed():
 # Phase 2.5 — Section 10 Exempt Allowance Tests (R100-R112)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def test_R100_gratuity_exceeds_gross_salary():
-    '''Rule 100: Gratuity exempt > gross salary → blocked.'''
+def test_R100_gratuity_exceeding_current_year_salary_is_not_blocked():
+    '''ITR1-R100 (removed 2026-09-03, see Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §11.1's validator note): a career-end gratuity lump sum routinely and
+    correctly exceeds one year's running salary (e.g. 25 years of service),
+    so comparing it against salary_income.gross_salary has no statutory
+    basis and must not block filing.'''
     inp = ITR1Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
@@ -1220,7 +1224,7 @@ def test_R100_gratuity_exceeds_gross_salary():
         deductions_chapter6a=Chapter6ADeductions(),
     )
     results = validate_itr1_input(inp)
-    assert failed(results, "ITR1-R100")
+    assert not failed(results, "ITR1-R100")
 
 
 def test_R100_gratuity_within_salary_passes():
@@ -1235,7 +1239,8 @@ def test_R100_gratuity_within_salary_passes():
     assert not failed(results, "ITR1-R100")
 
 
-def test_R101_commuted_pension_exceeds_salary():
+def test_R101_commuted_pension_exceeding_current_year_salary_is_not_blocked():
+    '''ITR1-R101 removed for the same reason as R100 above.'''
     inp = ITR1Input(
         age_bracket=AgeBracket.SIXTY_TO_80,
         tax_regime=TaxRegime.OLD,
@@ -1245,10 +1250,11 @@ def test_R101_commuted_pension_exceeds_salary():
         deductions_chapter6a=Chapter6ADeductions(),
     )
     results = validate_itr1_input(inp)
-    assert failed(results, "ITR1-R101")
+    assert not failed(results, "ITR1-R101")
 
 
-def test_R102_leave_encashment_exceeds_salary():
+def test_R102_leave_encashment_exceeding_current_year_salary_is_not_blocked():
+    '''ITR1-R102 removed for the same reason as R100 above.'''
     inp = ITR1Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
@@ -1258,7 +1264,7 @@ def test_R102_leave_encashment_exceeds_salary():
         deductions_chapter6a=Chapter6ADeductions(),
     )
     results = validate_itr1_input(inp)
-    assert failed(results, "ITR1-R102")
+    assert not failed(results, "ITR1-R102")
 
 
 def test_R103_vrs_exceeds_5l():

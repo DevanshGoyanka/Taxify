@@ -1301,6 +1301,7 @@ def _allowance_rows(input_data: Optional[ITR1Input], result: ITR1Result) -> list
     leave_encashment_exempt = getattr(sal_sched, "leave_encashment_exempt", salary.leave_encashment_received) if sal_sched else salary.leave_encashment_received
     vrs_exempt = getattr(sal_sched, "vrs_exempt", salary.vrs_compensation) if sal_sched else salary.vrs_compensation
     commuted_pension_exempt = getattr(sal_sched, "commuted_pension_exempt", salary.commuted_pension_received) if sal_sched else salary.commuted_pension_received
+    retrenchment_exempt = getattr(sal_sched, "retrenchment_exempt", salary.retrenchment_compensation) if sal_sched else salary.retrenchment_compensation
     transport_exempt = getattr(sal_sched, "transport_exempt", Decimal("0")) if sal_sched else Decimal("0")
     cea_exempt = getattr(sal_sched, "children_education_exempt", Decimal("0")) if sal_sched else Decimal("0")
     hostel_exempt = getattr(sal_sched, "hostel_exempt", Decimal("0")) if sal_sched else Decimal("0")
@@ -1313,7 +1314,7 @@ def _allowance_rows(input_data: Optional[ITR1Input], result: ITR1Result) -> list
         "10(10)": gratuity_exempt,
         "10(10A)": commuted_pension_exempt,
         "10(10AA)": leave_encashment_exempt,
-        "10(10B)(i)": salary.retrenchment_compensation,
+        "10(10B)(i)": retrenchment_exempt,
         "10(10C)": vrs_exempt,
         "10(10CC)": salary.sec10_10cc_perquisite_tax,
         "10(13A)": hra_exempt,

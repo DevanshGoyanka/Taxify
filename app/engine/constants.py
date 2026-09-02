@@ -78,6 +78,22 @@ HOSTEL_ALLOWANCE_PER_CHILD: Final[Decimal] = Decimal("300")
 # Sec 10(10A) — Commuted pension: 1/3rd non-commuted portion for non-govt.
 COMMUTED_PENSION_NON_GOV_T_PCT: Final[Decimal] = Decimal("1") / Decimal("3")
 
+# Sec 10(10) — Gratuity, non-govt, employees NOT covered under the Payment of
+# Gratuity Act 1972: half a month's average salary (last 10 months) per
+# completed year of service. (Employees covered under the Act instead use
+# 15/26 x last-drawn salary x years — a more generous multiple — but that
+# needs a "covered under the Act" fact this product does not capture; using
+# the lower non-covered multiple is the conservative choice when that fact
+# is unknown, matching this codebase's "never over-grant an exemption
+# without evidence" convention.)
+GRATUITY_NON_COVERED_SALARY_MULTIPLE: Final[Decimal] = Decimal("0.5")
+
+# Sec 10(10AA) — Leave encashment, non-govt: cash equivalent of leave capped
+# at 30 days earned per completed year of service, and separately capped at
+# 10 months' average salary.
+LEAVE_ENCASHMENT_MAX_DAYS_PER_YEAR: Final[int] = 30
+LEAVE_ENCASHMENT_MAX_MONTHS_AVERAGE_SALARY: Final[Decimal] = Decimal("10")
+
 # Sec 10(5) — LTA exemption: two journeys per block of four calendar years.
 # No per-journey statutory cap; the exemption is the actual fare cost (economy air / AC rail).
 # The cap is structural (block-year carry-forward), not a rupee ceiling.

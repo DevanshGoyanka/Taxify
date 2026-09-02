@@ -290,7 +290,7 @@ def draft_to_itr4_input(
     age_bracket = _age_bracket_from_age(draft.personal.age)
 
     # Shared heads — one implementation, reused (audit Finding 14 fix).
-    salary_input, section_17_1, gross_salary = _map_salary(draft.employers)
+    salary_input, section_17_1, gross_salary = _map_salary(draft.employers, tax_regime)
     hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
     loan_details_24b_list = _map_24b_loans(draft.houseProperties)
     os_input, total_interest, total_dividend, family_pension, total_winnings = (

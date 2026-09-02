@@ -34,6 +34,9 @@ from app.engine.constants import (
     HOSTEL_ALLOWANCE_LIMIT,
     HOSTEL_ALLOWANCE_PER_CHILD,
     COMMUTED_PENSION_NON_GOV_T_PCT,
+    GRATUITY_NON_COVERED_SALARY_MULTIPLE,
+    LEAVE_ENCASHMENT_MAX_DAYS_PER_YEAR,
+    LEAVE_ENCASHMENT_MAX_MONTHS_AVERAGE_SALARY,
 )
 from app.schemas.itr1 import SalaryIncome, TaxRegime
 
@@ -56,6 +59,7 @@ class SalaryResult:
     gratuity_exempt: Decimal = Decimal("0")
     leave_encashment_exempt: Decimal = Decimal("0")
     vrs_exempt: Decimal = Decimal("0")
+    retrenchment_exempt: Decimal = Decimal("0")
     commuted_pension_exempt: Decimal = Decimal("0")
     transport_exempt: Decimal = Decimal("0")
     children_education_exempt: Decimal = Decimal("0")
@@ -64,18 +68,56 @@ class SalaryResult:
     lta_exempt: Decimal = Decimal("0")
 
 
-def _exempt_gratuity(received: Decimal, is_govt: bool) -> Decimal:
-    """Exempt gratuity u/s 10(10): govt fully exempt; others capped at Rs 20L."""
+def _exempt_gratuity(
+    received: Decimal,
+    is_govt: bool,
+    average_monthly_salary: Decimal = _ZERO,
+    years_of_service: int = 0,
+) -> Decimal:
+    """Exempt gratuity u/s 10(10): govt fully exempt.
+
+    Non-govt is the least of: amount received, Rs 20L, and half a month's
+    average salary (last 10 months) per completed year of service —
+    the formula for employees NOT covered under the Payment of Gratuity
+    Act 1972 (see ``GRATUITY_NON_COVERED_SALARY_MULTIPLE``'s docstring for
+    why this, rather than the more generous covered-employee formula, is
+    used when coverage status is unknown).
+    """
     if is_govt:
         return max(_ZERO, received)
-    return min(max(_ZERO, received), GRATUITY_EXEMPTION_LIMIT)
+    salary_sub_limit = (
+        GRATUITY_NON_COVERED_SALARY_MULTIPLE
+        * max(_ZERO, average_monthly_salary)
+        * Decimal(max(0, years_of_service))
+    )
+    return min(max(_ZERO, received), GRATUITY_EXEMPTION_LIMIT, salary_sub_limit)
 
 
-def _exempt_leave_encashment(received: Decimal, is_govt: bool) -> Decimal:
-    """Exempt leave encashment u/s 10(10AA): govt fully; others capped at Rs 25L."""
+def _exempt_leave_encashment(
+    received: Decimal,
+    is_govt: bool,
+    average_monthly_salary: Decimal = _ZERO,
+    years_of_service: int = 0,
+    unavailed_leave_days: int = 0,
+) -> Decimal:
+    """Exempt leave encashment u/s 10(10AA): govt fully exempt.
+
+    Non-govt is the least of: amount received, Rs 25L, the cash equivalent
+    of unavailed leave (capped at 30 days per completed year of service,
+    valued at the average monthly salary), and 10 months' average salary.
+    """
     if is_govt:
         return max(_ZERO, received)
-    return min(max(_ZERO, received), LEAVE_ENCASHMENT_EXEMPTION_LIMIT)
+    avg_salary = max(_ZERO, average_monthly_salary)
+    capped_days = min(max(0, unavailed_leave_days), LEAVE_ENCASHMENT_MAX_DAYS_PER_YEAR * max(0, years_of_service))
+    cash_equivalent_of_leave = (Decimal(capped_days) / Decimal(30)) * avg_salary
+    ten_months_average_salary = avg_salary * LEAVE_ENCASHMENT_MAX_MONTHS_AVERAGE_SALARY
+    return min(
+        max(_ZERO, received),
+        LEAVE_ENCASHMENT_EXEMPTION_LIMIT,
+        cash_equivalent_of_leave,
+        ten_months_average_salary,
+    )
 
 
 def _exempt_vrs(received: Decimal) -> Decimal:
@@ -128,16 +170,32 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         return SalaryResult()
 
     is_govt = getattr(input_data, "is_government_employee", False)
-    gross = input_data.gross_salary + input_data.perquisites_value + input_data.profits_in_lieu_of_salary
+    # Retirement/severance receipts (gratuity, leave encashment, commuted
+    # pension, VRS, retrenchment compensation) are received in addition to
+    # regular Section 17(1) salary and are not part of it — the *received*
+    # amount must be added to gross before the Section 10 exempt portion is
+    # subtracted below, or the taxable residual silently disappears from
+    # income entirely rather than merely losing its exemption.
+    gross = (
+        input_data.gross_salary + input_data.perquisites_value
+        + input_data.profits_in_lieu_of_salary + input_data.gratuity_received
+        + input_data.commuted_pension_received + input_data.leave_encashment_received
+        + input_data.vrs_compensation + input_data.retrenchment_compensation
+    )
 
     # Apply statutory exemption ceilings to each Section 10 component.
     # The schema captures *gross received* amounts; the engine computes the
     # *exempt portion* subject to CBDT ceilings.
     hra_exempt = input_data.hra_exempt_amount
     lta_exempt = input_data.lta_exempt_amount
-    gratuity_exempt = _exempt_gratuity(input_data.gratuity_received, is_govt)
+    gratuity_exempt = _exempt_gratuity(
+        input_data.gratuity_received, is_govt,
+        input_data.average_monthly_salary, input_data.years_of_service,
+    )
     leave_encashment_exempt = _exempt_leave_encashment(
         input_data.leave_encashment_received, is_govt,
+        input_data.average_monthly_salary, input_data.years_of_service,
+        input_data.unavailed_leave_days,
     )
     commuted_pension_exempt = _exempt_commutted_pension(
         input_data.commuted_pension_received, is_govt,
@@ -146,16 +204,14 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
     # Retrenchment compensation uses the same Rs 5L ceiling as VRS (10(10C)).
     retrenchment_exempt = _exempt_vrs(input_data.retrenchment_compensation)
     transport_exempt = _exempt_transport(
-        input_data.transport_allowance,
-        getattr(input_data, "is_disabled_employee", False),
+        input_data.transport_allowance, input_data.is_disabled_employee,
     )
-    # Children education and hostel allowances require number of children;
-    # the schema does not yet have a dedicated field, so default to 0 children
-    # (i.e., exemption = 0) unless the caller populates sec10_14i/14ii directly.
     children_education_exempt = _exempt_children_education(
-        input_data.sec10_14i_prescribed_allowance, 0,
+        input_data.sec10_14i_prescribed_allowance, input_data.number_of_children,
     )
-    hostel_exempt = _exempt_hostel(input_data.sec10_14ii_personal_allowance, 0)
+    hostel_exempt = _exempt_hostel(
+        input_data.sec10_14ii_personal_allowance, input_data.number_of_children,
+    )
 
     exempt_allowances = sum((
         hra_exempt,
@@ -229,6 +285,7 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         gratuity_exempt=gratuity_exempt,
         leave_encashment_exempt=leave_encashment_exempt,
         vrs_exempt=vrs_exempt,
+        retrenchment_exempt=retrenchment_exempt,
         commuted_pension_exempt=commuted_pension_exempt,
         transport_exempt=transport_exempt,
         children_education_exempt=children_education_exempt,

@@ -535,3 +535,392 @@ code path:
   the two), and the entertainment-allowance deduction is correctly nonzero (₹5,000). A parallel
   PSU-employer control case confirmed `is_government_employee` resolves to `False` and the
   entertainment-allowance deduction correctly stays zero for that case.
+
+---
+
+## 11. Full schedule-by-schedule re-audit (2026-09-03): mapper-level income/exemption omissions
+
+**Trigger:** while implementing §6.3 (originally scoped as "the leave-encashment/gratuity
+exemption formulas are missing a sub-limit"), tracing `_exempt_gratuity()`/
+`_exempt_leave_encashment()`'s inputs upward revealed that `gratuity_received` and
+`leave_encashment_received` are never set by any mapper anywhere in the codebase — the
+finding was not "formula incomplete," it was "the input never arrives." That is the exact
+shape of bug §5.1 (LTA) already fixed, so the user asked for a full re-audit of every ITR-1
+schedule for the same pattern before implementing anything, not just the two fields §6.3
+originally named.
+
+**Method:** a script (`ast`-parsed, not text-matched) extracted every field declared on every
+Pydantic model in `app/schemas/itr1.py`, then cross-referenced each field against every keyword
+argument actually passed when that model is constructed in `app/engine/draft_to_itr1_input.py`
+— the ITR-1 mapper is the *only* place any of these models are constructed (verified by
+`grep -rn "SalaryIncome(\|OtherSourcesIncome(\|HousePropertyIncome(\|CapitalGainsIncome(\|Chapter6ADeductions("`
+across `app/engine/`). Every field the script flagged as "declared but never assigned" was then
+checked by hand for two things: (1) is it genuinely read downstream (calculator, schedule
+module, ITD JSON builder, or a validator) — a flagged-but-never-read field is dead schema
+surface, not a bug; (2) does the frontend actually capture the data that would populate it — a
+field with no frontend source isn't a mapper-omission bug, it's a (much lower-severity)
+missing-input gap. Every finding below cites the exact grep/read evidence for both checks; nothing
+here is inferred from the script's output alone.
+
+### 11.1 Six retirement/severance payout categories are captured on the frontend, typed on the
+schema, read by the calculator and the ITD JSON builder — and completely absent from the mapper
+
+`EmployerEntryManager.tsx:524-528` has a live, rendered input for each of: Commuted Pension,
+Gratuity, Leave Encashment, VRS Compensation, Retrenchment Compensation
+(`frontend/src/components/EmployerEntryManager.tsx:524-528` — confirmed these are real
+`<AmountInput>` JSX, not dead code, unlike §6.1's deleted component). The frontend even computes
+its own "gross including these" total for on-screen display
+(`EmployerEntryManager.tsx:380-381`: `profitsInLieu + commutedPension + gratuity +
+leaveEncashment + vrsCompensation + retrenchmentCompensation`). Each has a corresponding
+`SalaryIncome` field (`gratuity_received`, `commuted_pension_received`,
+`leave_encashment_received`, `vrs_compensation`, `retrenchment_compensation` —
+`app/schemas/itr1.py:231-235`), and each is genuinely read: by `app/engine/schedules/salary.py`
+(`_exempt_gratuity`, `_exempt_leave_encashment`, `_exempt_commutted_pension`, `_exempt_vrs`
+applied to both `vrs_compensation` and `retrenchment_compensation`), and by
+`app/engine/itd/itr1.py:1300-1318`'s `_allowance_rows()`, which builds the official Schedule S
+`10(10)`/`10(10A)`/`10(10AA)`/`10(10B)(i)`/`10(10C)` exemption rows directly from them.
+
+`app/engine/draft_to_itr1_input.py::_map_salary` never reads `e.gratuity`, `e.commutedPension`,
+`e.leaveEncashment`, `e.vrsCompensation`, or `e.retrenchmentCompensation` for any employer row
+(confirmed: zero hits for any of those five attribute names anywhere in the file before this
+audit). Every one of these fields reaches `SalaryIncome` as its schema default of `Decimal("0")`.
+
+This is more severe than a missing-exemption bug. `app/engine/schedules/salary.py:131`'s
+`gross = input_data.gross_salary + input_data.perquisites_value +
+input_data.profits_in_lieu_of_salary` never independently adds these five received amounts —
+the design (correctly) expects the *exempt* portion to be subtracted from an already-inclusive
+gross, not for the received amount to be added and then partially exempted. Since the mapper
+never puts any of these amounts into `gross_salary`/17(1) either, **the taxable (non-exempt)
+residual of a real gratuity, leave-encashment, commuted-pension, VRS, or retrenchment payout
+never enters computed income at all** — not merely under-exempted, but entirely invisible to
+the calculator. These are frequently large, one-time amounts (retirement/severance payouts),
+making this the most severe correctness gap found in this audit, ITR-1 P0 findings included.
+
+### 11.2 Transport allowance and the two Section 10(14) child-related allowances: same
+omission, plus a second, independent bug even after the omission is fixed
+
+`employer.transportAllowance`, `employer.childrenEducationAllowance`,
+`employer.hostelExpenditureAllowance` are captured (`EmployerEntryManager.tsx:505-507`) and have
+corresponding `SalaryIncome` fields (`transport_allowance`, `sec10_14i_prescribed_allowance`,
+`sec10_14ii_personal_allowance`), each read by `salary.py`'s `_exempt_transport`/
+`_exempt_children_education`/`_exempt_hostel` — but, like §11.1, never mapped
+(`_map_salary` has zero references to any of the three `Employer` attribute names).
+
+Even fixing that mapping is not sufficient on its own for the two child-allowance exemptions:
+`app/engine/schedules/salary.py:155-158` calls
+`_exempt_children_education(input_data.sec10_14i_prescribed_allowance, 0)` and
+`_exempt_hostel(input_data.sec10_14ii_personal_allowance, 0)` with the child-count parameter
+**hardcoded to `0`**, with a comment acknowledging it: *"the schema does not yet have a
+dedicated field, so default to 0 children."* Since both exemption formulas are
+`min(allowance, per_child_statutory_rate * 12 * num_children)`, a hardcoded `num_children=0`
+caps the statutory limit at ₹0 regardless of the allowance amount — these two exemptions are
+**structurally zero no matter what the mapper passes**, until `salary.py` itself is changed to
+accept a real child count. `employer.numberOfChildren` is captured on the frontend
+(`EmployerEntryManager.tsx:510`) and has nowhere to go — `SalaryIncome` has no field for it.
+
+### 11.3 `is_disabled_employee` is read by the calculator but was never a declared schema field
+
+`app/engine/schedules/salary.py:150` calls
+`getattr(input_data, "is_disabled_employee", False)` — a defensive-`getattr` pattern that,
+per this codebase's own established convention (compare the already-fixed
+`is_government_employee`/`agriculture_income`, which *are* declared fields where `getattr` is
+purely stylistic), signals an attribute that may not exist. Confirmed by grep: `SalaryIncome`
+in `app/schemas/itr1.py` has **no `is_disabled_employee` field at all**. The `getattr` default
+therefore always returns `False`, permanently disabling the ₹19,200 disabled-employee transport
+allowance exemption (Section 10(14), Rule 2BB) regardless of input. `employer.isDisabledEmployee`
+is captured on the frontend (`EmployerEntryManager.tsx:513`) with a real Y/N control — the data
+exists, there is simply no schema field to carry it to the calculator. (This is a different,
+more fundamental gap than §11.2: adding the mapping alone cannot fix it — the schema itself
+needs the field first.)
+
+### 11.4 Three more Section 10 exemption categories, captured via a real dropdown+amount UI,
+never read by the mapper at all
+
+Distinct from the scalar per-category fields above: `EmployerEntryManager.tsx` has a live
+`Section10Rows` sub-component (`EmployerEntryManager.tsx:203-238`, rendered at line 545) letting
+a taxpayer add rows tagged `10(6)` (foreign diplomatic remuneration), `10(7)` (government
+service outside India), or `10(10CC)` (employer-paid tax on a non-monetary perquisite), each
+with an amount. These are stored on `employer.section10ExemptionRows`
+(`app/schemas/return_draft.py:210`) and have corresponding `SalaryIncome` fields
+(`sec10_6_embassy_exempt`, `sec10_7_foreign_allowance`, `sec10_10cc_perquisite_tax`), each read
+by both `salary.py`'s `exempt_allowances` sum and `itd/itr1.py:1311-1312,1318`'s JSON row
+builder. `_map_salary` never reads `e.section10ExemptionRows` at all (zero hits) — these three
+exemption categories are dropped identically to §11.1/§11.2, just via a structured-row input
+rather than a flat scalar.
+
+By contrast, `employer.salaryNatureRows` and `employer.perquisiteNatureRows` — two structurally
+similar per-employer row lists — are genuinely **not** a bug: confirmed via
+`grep -rn "salaryNatureRows|perquisiteNatureRows" frontend/src/` that every occurrence outside
+type declarations and test fixtures is a `[]` default (26AS/AIS/TIS/reconciled importers, and
+the manual-entry default-Employer object) — unlike `section10ExemptionRows`, no live UI
+component ever renders or writes a non-empty row into either list. They are vestigial schema
+surface, the same class of issue as the already-fixed `employerNPS` (§6.2), not a live bug.
+
+### 11.5 `lta_amount_received` — never mapped, and now a live regression from the §5.1 P0 fix
+
+`SalaryIncome.lta_amount_received` (`app/schemas/itr1.py:237`) is a field distinct from
+`lta_exempt_amount` — it exists specifically so `app/engine/validators/itr1/input_rules.py:306-320`
+can cross-check the claimed exemption against the amount actually received:
+
+```python
+if sal.lta_amount_received > _z and sal.lta_exempt_amount == _z:
+    ... # "LTA received but exempt amount is 0"
+if sal.lta_exempt_amount > sal.lta_amount_received:
+    ... # "exempt amount cannot be more than LTA received"
+```
+
+Both are `Severity.A` rules (`app/engine/validators/base.py:17`: *"Return WILL NOT be allowed
+to upload"* — a hard filing block, not a warning). `lta_amount_received` is never set by
+`_map_salary` and stays at its schema default of `0`. Before the §5.1 fix, this was harmless by
+coincidence: `lta_exempt_amount` was also always `0`, so `0 > 0` never fired. **After the §5.1
+fix (this session, commit `3ae3c47`), `lta_exempt_amount` is correctly computed as nonzero for
+any real LTA claim — which means the second rule (`lta_exempt_amount > lta_amount_received`,
+i.e. `nonzero > 0`) now fires for every genuine LTA claimant, hard-blocking their filing with
+"exempt amount cannot be more than LTA received."** This is a live, currently-shipped
+regression, not a latent one — it needs to be closed in the same change that finishes wiring
+the mapper, not deferred with the rest of §11's lower-severity items.
+
+### 11.6 `standard_deduction_claimed` — never mapped, produces a universal false warning
+
+`SalaryIncome.standard_deduction_claimed` is never set by `_map_salary`. The engine does not
+need it for computation — `salary.py`'s `compute()` derives the standard deduction itself
+(`std_ded = min(OLD_REGIME_STANDARD_DEDUCTION, ...)`) and never reads
+`input_data.standard_deduction_claimed`. But `input_rules.py:2776-2783`'s Rule `ITR1-B004`
+(`Severity.B`, non-blocking) fires whenever `gross_salary > 0 and standard_deduction_claimed ==
+0` — which, since the field is never populated, is **every salaried ITR-1 return, unconditionally**,
+producing "Did you mean to claim the standard deduction?" on every filing regardless of whether
+the deduction was in fact correctly auto-applied. Lower severity than §11.1-§11.5 (non-blocking,
+cosmetic), but free to fix alongside them since the mapper already computes the regime-
+appropriate statutory cap it should report here.
+
+### 11.7 Secondary bug found while tracing §11.1: the ITD JSON's `10(10B)(i)` row uses the raw
+received amount, not the capped exempt amount
+
+`app/engine/schedules/salary.py`'s `SalaryResult` dataclass has a `vrs_exempt` field but **no
+`retrenchment_exempt` field**, even though `compute()` does calculate
+`retrenchment_exempt = _exempt_vrs(input_data.retrenchment_compensation)` (line 147) — a real
+Rs 5-lakh-capped value — and folds it correctly into `exempt_allowances` (so the *aggregate* tax
+computation is right). It is simply never exposed on the result object. Consequently
+`app/engine/itd/itr1.py:1316` falls back to the raw, uncapped
+`salary.retrenchment_compensation` for the official `10(10B)(i)` JSON row instead of the capped
+exempt amount every other row in the same table uses (compare line 1313's `gratuity_exempt`,
+line 1317's `vrs_exempt` — both pulled from `sal_sched`, not the raw input). For any retrenchment
+compensation exceeding ₹5,00,000, the emitted JSON would overstate the Section 10(10B)(i)
+exemption row even though the computed tax liability behind it is correct — a JSON-consistency
+bug, not a tax-liability bug, but still a mismatch CBDT/ITD validation could reasonably reject.
+
+### 11.8 §6.3's original finding, now understood in full context
+
+The three fields §6.3 originally named — `averageMonthlySalary`, `yearsOfService`,
+`unavailedLeaveDays` — are captured on the frontend (`EmployerEntryManager.tsx:529-531`) but,
+unlike every field above, **`SalaryIncome` has no corresponding fields for them at all** — they
+would need to be added, not just wired. They are the inputs the real Section 10(10)/10(10AA)
+statutory tests need beyond the flat ceiling `_exempt_gratuity()`/`_exempt_leave_encashment()`
+currently apply (10 months'/completed-years'-of-service average-salary sub-limits; the cash
+equivalent of unavailed leave, capped at 30 days per completed year of service). This finding
+stands as originally scoped — it is the reason the deeper audit above happened, not superseded
+by it — but is now understood as one piece of a much larger, connected cluster: fixing it in
+isolation (adding the two sub-limit formulas) would have been pointless while
+`gratuity_received`/`leave_encashment_received` themselves never reached the calculator (§11.1).
+
+### 11.9 Verified clean, or correctly out of scope — checked and ruled out, not merely unchecked
+
+- **`HousePropertyIncome`** — every declared field is set by `_map_house_property`/
+  `_map_house_properties`; the cross-reference script found zero unset fields. No `getattr`-
+  with-default pattern in `app/engine/schedules/house_property.py` (checked directly — the only
+  place such a pattern would hide a phantom field the way §11.3 did for salary).
+- **`OtherSourcesIncome.income_56_2_x` / `.income_56_2_vib`** (Section 56(2)(x)/(vib) — gifts and
+  under-value property transfers) — flagged by the script, but correctly unset: ITR-1 has no
+  gift-income path at all. `_map_other_sources` explicitly rejects any `draft.otherSources.gifts`
+  entry for ITR-1/ITR-4 with `DraftMappingError("... taxable gifts are outside ITR-1/ITR-4")`
+  (`app/engine/draft_to_itr1_input.py`, in `_map_other_sources`) — these two fields are
+  structurally inapplicable to ITR-1, not an omission.
+- **`CapitalGainsIncome.transactions`** — flagged by the script, but it is a legitimate optional
+  alternate input path (canonical transaction-evidence rows), populated by
+  `_map_capital_gains` precisely when such evidence exists; not a gap.
+- **`Chapter6ADeductions.amount_80ia`/`.amount_80ib`/`.amount_80ic`/`.amount_10aa`/`.amount_80ra`**
+  — flagged by the script, but each field's own docstring says "ITR-3 only" / "SEZ units, ITR-3
+  only"; genuinely inapplicable to ITR-1.
+- **`Chapter6ADeductions.schedule_80dd` / `.schedule_80u`** — flagged by the script as unset
+  *on the nested `Chapter6ADeductions` construction call* — a false positive. Both are correctly
+  populated as **top-level `ITR1Input` fields** instead
+  (`app/engine/draft_to_itr1_input.py:1288-1289`, sourced from `_map_disability_schedules`), and
+  consumed via `ITR1Input.disability_schedule_80dd()`/`.disability_schedule_80u()`, which read
+  `self.schedule_80dd or nested` — the mechanical script cannot distinguish the two classes'
+  same-named fields; manual verification confirmed this is correctly wired, just not through the
+  nested copy.
+- **`Section80DDBDetails.reimbursement_amount`** — flagged and genuinely unset, but there is no
+  frontend field anywhere to source it from (`ChapterVIA` in `app/schemas/return_draft.py` has
+  no 80DDB-reimbursement input, confirmed by grep). Defaulting to `0` (no insurance/employer
+  reimbursement received) is the correct behavior for the common case; this is a minor, rare-
+  case **missing frontend input**, not a mapper omission like the rest of this section — noted
+  here for completeness, not escalated to §11.1-§11.7's severity.
+- **`PoliticalContribution.contribution_mode`** — flagged and genuinely unset with no live
+  reader; the same class of vestigial field as the already-fixed `employerNPS` (§6.2). Low
+  priority, optional cleanup only.
+- **`employer.uniformAllowance`** (found while implementing the fix below, not by the script —
+  it has no corresponding scalar `SalaryIncome` field at all, so the AST cross-reference could
+  not flag it) — a real, rendered frontend input (`EmployerEntryManager.tsx:508`) with no live
+  mapper path. Deliberately **not folded into `sec10_14i_prescribed_allowance`** during the
+  §11.1-§11.8 fix below: uniform allowance's Section 10(14)(i)/Rule 2BB exemption is "actual
+  expenditure incurred," not the fixed ₹100/month/child CEA rate `_exempt_children_education()`
+  applies — mixing the two inputs would silently apply the wrong cap to uniform allowance rather
+  than fix it. Left as an open, documented gap; needs its own `SalaryIncome` field and exemption
+  function (actual-expenditure-based, uncapped by statute) before it can be wired correctly.
+- **`employer.otherExempt`** — has a `SalaryIncome`-shaped intent but, unlike `uniformAllowance`,
+  has **no rendered UI at all** in `EmployerEntryManager.tsx` (confirmed by grep — no JSX
+  reference); vestigial, same class as `employerNPS`/`salaryNatureRows`/`perquisiteNatureRows`.
+
+### 11.10 Updated severity ranking
+
+§11.1 (six retirement/severance categories: complete income *and* exemption omission, large
+one-time amounts) and §11.5 (`lta_amount_received`: live Severity-A filing-blocking regression
+for real LTA claimants, shipped in commit `3ae3c47`) are **P0** — both cause either understated
+tax liability or an outright inability to file for identifiable, non-rare taxpayer populations.
+§11.2-§11.4 and §11.8 (transport/CEA/hostel allowances, disabled-employee exemption, the three
+`section10ExemptionRows` categories, and the original average-salary/years-of-service/unavailed-
+leave sub-limits) are **P1** — real omissions, smaller and rarer-population than §11.1, but
+still genuine under-taxation-relief bugs that need the same class of fix. §11.6 (standard
+deduction warning) and §11.7 (JSON row uses raw vs. capped retrenchment amount) are **P2** —
+cosmetic/consistency issues with no effect on computed tax liability.
+
+---
+
+## 12. §11 fix write-up (2026-09-03)
+
+Every finding in §11.1-§11.8 was implemented in the same change; §11.9's items were
+deliberately left alone (confirmed correctly out of scope) except for the two additional gaps
+(`uniformAllowance`, `otherExempt`) documented, not fixed, in §11.9's updated list.
+
+### 12.1 New `SalaryIncome` fields
+
+`app/schemas/itr1.py` gained five fields with no prior schema representation:
+`is_disabled_employee`, `number_of_children`, `average_monthly_salary`, `years_of_service`,
+`unavailed_leave_days`. Every other field this section wires (`gratuity_received`,
+`commuted_pension_received`, `leave_encashment_received`, `vrs_compensation`,
+`retrenchment_compensation`, `transport_allowance`, `sec10_14i_prescribed_allowance`,
+`sec10_14ii_personal_allowance`, `sec10_6_embassy_exempt`, `sec10_7_foreign_allowance`,
+`sec10_10cc_perquisite_tax`, `lta_amount_received`, `standard_deduction_claimed`) already
+existed on the schema — only the mapper was missing.
+
+### 12.2 `app/engine/schedules/salary.py` — real statutory sub-limit formulas (§11.8)
+
+`_exempt_gratuity()` now takes `average_monthly_salary`/`years_of_service` and applies a third
+sub-limit, `0.5 × average_monthly_salary × years_of_service` — the formula for employees **not**
+covered under the Payment of Gratuity Act 1972. Employees covered under the Act get a more
+generous formula (`15/26 × last-drawn salary × years`), but this product does not capture
+coverage status; using the lower non-covered multiple is the documented conservative choice
+when that fact is unknown (`GRATUITY_NON_COVERED_SALARY_MULTIPLE`'s docstring in
+`app/engine/constants.py`).
+
+`_exempt_leave_encashment()` now takes the same two inputs plus `unavailed_leave_days`, and
+applies two further sub-limits: the cash equivalent of unavailed leave (days capped at 30 per
+completed year of service, valued at the average monthly salary) and 10 months' average salary
+— both real Section 10(10AA) statutory tests, not present before.
+
+Both functions return `0` (not an unbounded pass-through) when the salary-sub-limit evidence is
+absent, matching this codebase's established HRA/LTA "never grant an exemption the engine
+cannot verify" convention — a taxpayer whose employer form is filled in completely gets the
+correct exemption; one who is not still gets the received amount taxed (§12.3), never silently
+dropped.
+
+`SalaryResult` gained a `retrenchment_exempt` field (§11.7) — `compute()` was already computing
+this value and folding it into `exempt_allowances` correctly, just never exposing it;
+`app/engine/itd/itr1.py`'s `10(10B)(i)` JSON row now reads it instead of the raw, uncapped
+`retrenchment_compensation`.
+
+`compute()`'s `gross` local now also adds `gratuity_received`, `commuted_pension_received`,
+`leave_encashment_received`, `vrs_compensation`, and `retrenchment_compensation` — closing
+§11.1's core bug: previously the exempt *portion* of these was computed correctly (once the
+mapper started supplying them) but the taxable *residual* never entered gross salary at all,
+since `gross` never independently added the received amounts.
+
+### 12.3 `app/engine/draft_to_itr1_input.py::_map_salary` — the mapper rewrite
+
+Gained a `tax_regime: TaxRegime` parameter (needed for §12.5's standard-deduction fix) — the
+three call sites (`draft_to_itr1_input.py`, and the shared function's other two callers,
+`draft_to_itr2_input.py` and `draft_to_itr4_input.py`) already compute `tax_regime` before
+calling `_map_salary`, so no reordering was needed, just passing it through.
+
+Every field named in §12.1 is now summed/derived from the `Employer` rows and wired into
+`SalaryIncome`. Two design notes:
+
+- `average_monthly_salary`/`years_of_service`/`unavailed_leave_days` are facts about a single
+  retirement event, not independently additive across employer rows (unlike `basic`/`da`/etc.,
+  which genuinely are sums across concurrent employers). They are taken from whichever employer
+  row reports the largest combined retirement payout (`gratuity + leaveEncashment +
+  commutedPension + vrsCompensation + retrenchmentCompensation`) — correct for the overwhelming
+  common case of one retiring employer; a taxpayer with two genuinely separate retirement events
+  in the same year is an edge case this aggregate `SalaryIncome` shape cannot represent
+  precisely, noted rather than silently mishandled.
+- `number_of_children` and `is_disabled_employee` are per-taxpayer facts captured per-employer-row
+  on the draft; taken as `max()` and `any()` respectively across employers (not summed) to avoid
+  double-counting the same real-world fact.
+
+`section10ExemptionRows` (the `10(6)`/`10(7)`/`10(10CC)` dropdown+amount list) is now iterated
+per employer and routed by `natureCode` to the three matching `SalaryIncome` scalars.
+
+`standard_deduction_claimed` is now set to the regime-appropriate statutory cap
+(`OLD_REGIME_STANDARD_DEDUCTION`/`NEW_REGIME_STANDARD_DEDUCTION`) whenever `section_17_1 > 0` —
+silencing ITR1-B004's previously-universal false warning (§11.6). This does not change computed
+tax: `schedules/salary.py::compute()` still derives the actual standard deduction itself.
+
+### 12.4 Live validator regressions found and fixed while verifying §12.3 end-to-end
+
+Building a realistic test case (a 25-year government employee with a ₹25L gratuity and LTA
+claim) surfaced two more dormant-until-now `Severity.A` (filing-blocking) validator bugs in
+`app/engine/validators/itr1/input_rules.py`, on top of §11.5's `lta_amount_received` regression
+— all three share the same root cause: a check written against a field that was always `0`
+before this session's fixes, activated for the first time once the mapper started supplying
+real values.
+
+- **ITR1-R100/R101/R102 (removed):** compared `gratuity_received`/`commuted_pension_received`/
+  `leave_encashment_received` against `salary_income.gross_salary` — the *current year's*
+  Section 17(1) salary — and blocked filing if the retirement payout was larger. There is no
+  such test anywhere in the Income Tax Act; a career-end lump sum routinely and correctly
+  exceeds one year's running salary (25 years of service commonly produces gratuity several
+  times the final year's salary — exactly the realistic case that triggered this). Removed
+  rather than "corrected," since no valid replacement comparison exists; the real statutory caps
+  are already enforced in `schedules/salary.py`.
+- **ITR1-R142 (fixed):** its non-government-employee detection matched keywords like
+  `"central government"`/`"cg-"` against `inp.nature_of_employment`, which actually carries the
+  raw official code (`CGOV`/`SGOV`/`PSU`/...) — a string that never contains those keywords. The
+  rule therefore treated every employee as non-government, unconditionally. Fixed to check
+  `nature_of_employment in {"CGOV", "SGOV"}`, matching the definition already established
+  elsewhere in this codebase (`section_80ccd2.py`, and this same mapper's
+  `is_government_employee` derivation).
+
+Both fixes are documented inline at the removal/change site with the same reasoning as here.
+
+### 12.5 Verification
+
+- **New test file `tests/test_salary_schedule.py`** (13 tests): direct unit coverage of
+  `_exempt_gratuity`/`_exempt_leave_encashment`'s new sub-limit formulas (statutory-ceiling-
+  binds, salary-sub-limit-binds, received-amount-binds, and zero-without-evidence cases for
+  each), plus `compute()`-level coverage of `retrenchment_exempt` exposure, the disabled-
+  employee transport exemption, and the two child-allowance exemptions reading real
+  `number_of_children` instead of a hardcoded `0`.
+- **`tests/test_draft_to_itr1_input.py`**: 7 new tests — `lta_amount_received` mapped
+  (§11.5's regression-prevention test), retirement receipts reaching both `SalaryIncome` and
+  taxable `gross_salary`, transport/CEA/hostel allowances reaching `SalaryIncome` and producing
+  correct calculator exemptions, a control case confirming CEA/hostel are correctly zero without
+  `numberOfChildren`, `section10ExemptionRows` routing to the three matching scalars, and
+  `standard_deduction_claimed` resolving to the regime-appropriate cap in both regimes.
+- **`tests/test_itr1_input_validation.py`**: the 3 tests asserting the now-removed
+  `ITR1-R100`/`R101`/`R102` rules were rewritten to assert the corrected (non-blocking) behavior
+  instead, with each documenting why.
+- `pytest tests/test_salary_schedule.py tests/test_draft_to_itr1_input.py tests/test_itr1_input_validation.py -v` — 155 passed (13 + 41 + 101).
+- `pytest tests/ -k "itr1 or itr2 or itr4"` (same pre-existing-exclusion list as prior phase
+  notes) — 679 passed before adding the new tests above, re-verified green after.
+- End-to-end script verification (not part of the automated suite): a realistic CGOV employee
+  draft with LTA (received ₹30,000 / fare ₹22,000), gratuity ₹25,00,000 (25 years of service,
+  ₹50,000 average monthly salary), leave encashment ₹4,00,000 (300 unavailed days), disabled-
+  employee transport allowance ₹30,000, and 2 children's education/hostel allowances — confirmed
+  every field reaches `SalaryIncome`, the calculator produces a nonzero chargeable salary income
+  that includes the retirement receipts, and `validate_itr1_input()` produces **zero**
+  `Severity.A` failures (previously the LTA claim alone would have hard-blocked filing via the
+  §11.5 regression, before either the mapper or validator fixes in this section).
+- Formula-correctness spot checks (direct calls to `_exempt_gratuity`/`_exempt_leave_encashment`
+  outside pytest): confirmed the gratuity salary sub-limit (`0.5 × avg × years`), the leave-
+  encashment cash-equivalent-of-leave sub-limit with the 30-days-per-year cap actually binding,
+  and full exemption for government employees regardless of amount.

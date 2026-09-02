@@ -143,7 +143,9 @@ def _age_bracket_from_dob(dob: str | None) -> AgeBracket:
 # Salary
 # ---------------------------------------------------------------------------
 
-def _map_salary(employers: list[Employer]) -> tuple[SalaryIncome, Decimal, Decimal]:
+def _map_salary(
+    employers: list[Employer], tax_regime: TaxRegime = TaxRegime.OLD,
+) -> tuple[SalaryIncome, Decimal, Decimal]:
     """Map canonical employer rows → ``SalaryIncome`` (aggregate).
 
     Returns ``(salary_input, section_17_1_salary, gross_salary)`` so the
@@ -162,8 +164,19 @@ def _map_salary(employers: list[Employer]) -> tuple[SalaryIncome, Decimal, Decim
     HRA but no rent/metro facts, or LTA but no fare/domestic-travel
     evidence, the exemption for that row is zero (mirrors the legacy
     per-employer recompute in tax.py for HRA).
+
+    Retirement/severance receipts (gratuity, leave encashment, commuted
+    pension, VRS, retrenchment compensation), the disabled-employee
+    transport exemption, the two Section 10(14) child-related allowances,
+    and the Section 10(6)/10(7)/10(10CC) exemption rows were previously
+    dropped here entirely — captured on ``EmployerEntryManager.tsx`` with a
+    real, rendered UI, but never read by this function, so the taxable
+    residual of a real gratuity/leave-encashment/VRS/retrenchment payout
+    never reached computed income at all (see
+    ``Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`` §11.1-§11.4).
     """
     from app.engine.common.hra import compute_hra_exemption
+    from app.engine.constants import OLD_REGIME_STANDARD_DEDUCTION, NEW_REGIME_STANDARD_DEDUCTION
 
     basic = sum((e.basic for e in employers), Decimal("0"))
     da = sum((e.da for e in employers), Decimal("0"))
@@ -234,15 +247,101 @@ def _map_salary(employers: list[Employer]) -> tuple[SalaryIncome, Decimal, Decim
     # (PE/PESG/PEPS/PEO) do not qualify.
     is_govt = any(e.natureOfEmployment in {"CGOV", "SGOV"} for e in employers)
 
+    # Retirement/severance payouts (10(10), 10(10A), 10(10AA), 10(10B), 10(10C)).
+    gratuity_received = sum((e.gratuity for e in employers), Decimal("0"))
+    commuted_pension_received = sum((e.commutedPension for e in employers), Decimal("0"))
+    leave_encashment_received = sum((e.leaveEncashment for e in employers), Decimal("0"))
+    vrs_compensation = sum((e.vrsCompensation for e in employers), Decimal("0"))
+    retrenchment_compensation = sum((e.retrenchmentCompensation for e in employers), Decimal("0"))
+
+    # average_monthly_salary/years_of_service/unavailed_leave_days are facts
+    # about a single retirement event, not independently additive across
+    # employer rows. Take them from whichever employer row reports the
+    # largest combined retirement payout (the common case is exactly one
+    # such row); a taxpayer with two genuinely separate retirement events in
+    # the same year is an edge case this aggregate SalaryIncome shape cannot
+    # represent precisely.
+    def _retirement_total(e: Employer) -> Decimal:
+        return e.gratuity + e.leaveEncashment + e.commutedPension + e.vrsCompensation + e.retrenchmentCompensation
+
+    primary_retirement_employer = max(employers, key=_retirement_total, default=None)
+    if primary_retirement_employer is not None and _retirement_total(primary_retirement_employer) <= 0:
+        primary_retirement_employer = None
+    average_monthly_salary = (
+        primary_retirement_employer.averageMonthlySalary if primary_retirement_employer else Decimal("0")
+    )
+    years_of_service = primary_retirement_employer.yearsOfService if primary_retirement_employer else 0
+    unavailed_leave_days = (
+        primary_retirement_employer.unavailedLeaveDays if primary_retirement_employer else 0
+    )
+
+    # Transport allowance (10(14), disabled employees) and the two
+    # per-child Section 10(14) allowances.
+    transport_allowance = sum((e.transportAllowance for e in employers), Decimal("0"))
+    cea_allowance = sum((e.childrenEducationAllowance for e in employers), Decimal("0"))
+    hostel_allowance = sum((e.hostelExpenditureAllowance for e in employers), Decimal("0"))
+    is_disabled_employee = any(e.isDisabledEmployee for e in employers)
+    number_of_children = max((e.numberOfChildren for e in employers), default=0)
+
+    # Section 10(6)/10(7)/10(10CC) exemption rows: a structured
+    # dropdown+amount list per employer, distinct from the scalar fields
+    # above.
+    sec10_6_embassy_exempt = Decimal("0")
+    sec10_7_foreign_allowance = Decimal("0")
+    sec10_10cc_perquisite_tax = Decimal("0")
+    for e in employers:
+        for row in e.section10ExemptionRows:
+            if row.natureCode == "10(6)":
+                sec10_6_embassy_exempt += row.amount
+            elif row.natureCode == "10(7)":
+                sec10_7_foreign_allowance += row.amount
+            elif row.natureCode == "10(10CC)":
+                sec10_10cc_perquisite_tax += row.amount
+
+    # standard_deduction_claimed: the engine computes the actual Section
+    # 16(ia) standard deduction itself (schedules/salary.py); this field
+    # exists only so ITR1-B004 can cross-check that a claim was made, and
+    # was previously left at 0, which fired that warning on every salaried
+    # return regardless of whether the deduction was correctly auto-applied.
+    standard_deduction_claimed = (
+        (OLD_REGIME_STANDARD_DEDUCTION if tax_regime == TaxRegime.OLD else NEW_REGIME_STANDARD_DEDUCTION)
+        if section_17_1 > 0 else Decimal("0")
+    )
+
     salary_input = SalaryIncome(
         gross_salary=section_17_1,
         perquisites_value=perquisites,
         profits_in_lieu_of_salary=profits_in_lieu,
         hra_exempt_amount=hra_exempt,
         lta_exempt_amount=lta_exempt,
+        lta_amount_received=lta_received,
+        standard_deduction_claimed=standard_deduction_claimed,
         professional_tax_paid=prof_tax,
         entertainment_allowance=ent_allowance,
         is_government_employee=is_govt,
+        gratuity_received=gratuity_received,
+        commuted_pension_received=commuted_pension_received,
+        leave_encashment_received=leave_encashment_received,
+        vrs_compensation=vrs_compensation,
+        retrenchment_compensation=retrenchment_compensation,
+        transport_allowance=transport_allowance,
+        sec10_14i_prescribed_allowance=cea_allowance,
+        sec10_14ii_personal_allowance=hostel_allowance,
+        sec10_6_embassy_exempt=sec10_6_embassy_exempt,
+        sec10_7_foreign_allowance=sec10_7_foreign_allowance,
+        sec10_10cc_perquisite_tax=sec10_10cc_perquisite_tax,
+        is_disabled_employee=is_disabled_employee,
+        number_of_children=number_of_children,
+        average_monthly_salary=average_monthly_salary,
+        years_of_service=years_of_service,
+        unavailed_leave_days=unavailed_leave_days,
+    )
+    # Keep the breakdown total consistent with what schedules/salary.py now
+    # treats as gross (see the retirement-receipts comment on the ``gross``
+    # local in that module's compute()).
+    gross_salary += (
+        gratuity_received + commuted_pension_received + leave_encashment_received
+        + vrs_compensation + retrenchment_compensation
     )
     return salary_input, section_17_1, gross_salary
 
@@ -1136,7 +1235,7 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
     tax_regime = TaxRegime.OLD if draft.regime == "old" else TaxRegime.NEW
     age_bracket = _age_bracket_from_dob(draft.personal.dateOfBirth)
 
-    salary_input, section_17_1, gross_salary = _map_salary(draft.employers)
+    salary_input, section_17_1, gross_salary = _map_salary(draft.employers, tax_regime)
     hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
     loan_details_24b_list = _map_24b_loans(draft.houseProperties)
     os_input, total_interest, total_dividend, family_pension, total_winnings = _map_other_sources(draft)
