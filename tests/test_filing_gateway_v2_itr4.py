@@ -736,6 +736,18 @@ def test_generate_cbdt_json_itr4_rejects_missing_profile():
     assert "filing profile" in caught.value.message.lower()
 
 
+def test_compute_canonical_itr4_rejects_empty_employer_category() -> None:
+    """ITR4FilingProfile.employer_category must not silently fall back —
+    the adapter enforces this itself via require_field(), since the shared
+    personal_profile normalizer now leaves employer_category optional (it
+    is not a field ITR2FilingProfile has at all)."""
+    draft = _filing_ready_itr4("44AD")
+    draft.personal.employerCategory = ""
+    with pytest.raises(FilingGatewayV2Error) as caught:
+        compute_canonical_itr4(draft)
+    assert "personal.employerCategory" in " ".join(caught.value.errors)
+
+
 # ── ITR-1 unchanged (regression) ─────────────────────────────────────────────
 
 def test_generate_cbdt_json_itr1_still_works():

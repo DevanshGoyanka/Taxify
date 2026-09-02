@@ -1376,14 +1376,36 @@ explicit job." Fixed rather than re-deferred:
   describes ITR-3's build-out under Phase 8, not Phase 9 (Phase 9 is the later deletion of
   the dead legacy ITR-2 path); changed to "until Phase 8 builds ITR-3 on the shared
   complete-preparation contract."
+A second external review recommended three explicit regression tests documenting the
+`employer_category` split by name rather than relying on incidental coverage. Checked what
+already existed before adding anything: ITR-1 already had
+`test_generation_requires_explicit_personal_employer_category` in
+`tests/test_filing_gateway_v2.py` (predates this follow-up, exercises `_filing_profile`'s
+`require_field()` call through `generate_cbdt_json`) — no gap there. ITR-4 had no equivalent
+and ITR-2 had no test asserting by name that an empty `employerCategory` is fine — both
+added:
+
+- **`tests/test_filing_gateway_v2_itr4.py::test_compute_canonical_itr4_rejects_empty_employer_category`**
+  (new) — mirrors the existing ITR-1 test; asserts `compute_canonical_itr4` raises
+  `FilingGatewayV2Error` with `"personal.employerCategory"` in `.errors` when
+  `draft.personal.employerCategory = ""`.
+- **`tests/test_filing_gateway_v2_itr2.py::test_compute_canonical_itr2_succeeds_with_no_employer_category`**
+  (new) — asserts `_filing_ready_itr2_draft()`'s default empty `employerCategory` is correct,
+  not an oversight: `compute_canonical_itr2` succeeds, and
+  `pipeline.typed_input.filing_profile` genuinely has no `employer_category` attribute at all
+  (`hasattr` check), not merely an empty one.
+
 - **Verification:**
+  - `pytest tests/test_filing_gateway_v2_itr4.py::test_compute_canonical_itr4_rejects_empty_employer_category
+    tests/test_filing_gateway_v2_itr2.py::test_compute_canonical_itr2_succeeds_with_no_employer_category -v`
+    — both new tests pass.
   - `pytest tests/test_filing_gateway_v2_itr2.py tests/test_filing_gateway_v2.py
-    tests/test_filing_gateway_v2_itr4.py tests/test_personal_profile.py -q` — 86 passed
-    (confirms the fix and that ITR-1/ITR-4's `require_field()` enforcement of
-    `employer_category` still produces the same errors as before the rename).
+    tests/test_filing_gateway_v2_itr4.py tests/test_personal_profile.py -q` — 88 passed
+    (86 prior + 2 new; confirms the fix and that ITR-1/ITR-4's `require_field()` enforcement
+    of `employer_category` still produces the same errors as before the rename).
   - `pytest tests/ -k "filing_gateway or itr1 or itr4 or itr2 or personal_profile" -q`
     (excluding the 8 pre-existing null-byte-source collection-error files noted in
-    `CLAUDE.md`) — 660 passed, zero regressions.
+    `CLAUDE.md`) — 662 passed (660 + 2 new), zero regressions.
   - Full suite `pytest tests/ -q` (same exclusion list) — 1446 passed, 3 failed, 1 error;
     confirmed via `git stash` against the pre-fix commit that all 3 `test_tax_v2_compute.py`
     failures and the 1 `test_26as_batch.py::test_single_file` collection error are

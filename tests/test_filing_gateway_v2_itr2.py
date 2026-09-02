@@ -177,3 +177,18 @@ def test_itr2_pipeline_result_carries_personal_profile_source_hash() -> None:
     pipeline = compute_canonical_itr2(draft)
     assert pipeline.personal_profile_source_hash == personal_profile_source_hash(draft)
     assert pipeline.personal_profile_source_hash != ""
+
+
+# ── Phase 5G follow-up: _itr2_filing_profile on the shared normalizer ───────
+
+def test_compute_canonical_itr2_succeeds_with_no_employer_category() -> None:
+    """ITR2FilingProfile has no employer_category field at all — unlike
+    ITR1FilingProfile/ITR4FilingProfile, ITR-2 must not require
+    personal.employerCategory just because the shared normalizer parses it.
+    _filing_ready_itr2_draft() never sets it; this asserts that omission is
+    correct, not an oversight."""
+    draft = _filing_ready_itr2_draft()
+    assert draft.personal.employerCategory == ""
+    pipeline = compute_canonical_itr2(draft)
+    assert not hasattr(pipeline.typed_input.filing_profile, "employer_category")
+    assert not pipeline.computation.errors
