@@ -83,6 +83,18 @@ cleanup item.
 > See §10 for the full fix write-up, verification detail, and the ten new regression tests
 > added.
 
+> **Update (2026-09-03): the LTA fix's own investigation led to a full schedule-by-schedule
+> re-audit (§11), which found this executive summary's "beyond these two, the remaining
+> findings are minor" framing was wrong.** Tracing why §6.3's gratuity/leave-encashment
+> sub-limit formulas were incomplete revealed the inputs those formulas needed
+> (`gratuity_received`, `leave_encashment_received`, and four more fields) were never mapped
+> at all — the same shape of bug as the two P0s above, just for six more retirement/exemption
+> categories, some involving large one-time payouts. That re-audit (§11), its fixes (§12), and
+> a further pass closing every remaining open item including money-input parsing (§13) are all
+> now complete and verified. **§9's "Final assessment" and §8's remediation plan below are
+> updated accordingly — read those two sections for the current bottom line, not the
+> paragraphs immediately above, which describe this audit's state as of its first pass only.**
+
 ---
 
 ## 2. Scope and methodology
@@ -407,46 +419,104 @@ No gap found in this category.
 
 ## 8. Prioritized remediation plan
 
+**Status (2026-09-03): every item below is fixed.** Left in its original form as the historical
+record of what was found and prioritized; see §10/§12/§13 for what actually shipped for each
+line (in a few cases — item 1's exemption-from-evidence approach, item 3's outright deletion
+rather than deprecation — the shipped fix took the first option listed, not a blend).
+
 ### P0 — must fix before claiming ITR-1 is correct for real filers
 1. **Wire Section 10(5) LTA exemption end-to-end** (§5.1). Either compute it from the existing
    evidence fields (mirroring the HRA pattern) or add an explicit exempt-amount input and read
    it in the mapper. Add a regression test asserting a nonzero `actualLtaFare`/`journeysInBlock`
-   combination produces a nonzero `lta_exempt_amount` reaching `ITR1Input`.
+   combination produces a nonzero `lta_exempt_amount` reaching `ITR1Input`. — **Fixed, §10.1.**
 2. **Add a UI control for `isGovernmentEmployee`** (§5.2) and confirm it changes both the
    Section 16(ii) entertainment-allowance eligibility and the Section 80CCD(2) NPS cap in an
-   end-to-end test (draft → `compute_canonical_itr1` → result).
+   end-to-end test (draft → `compute_canonical_itr1` → result). — **Fixed, §10.2.**
 
 ### P1 — cleanup, no known live bug
-3. Delete or clearly deprecate `BankInterestEntryManager.tsx` (§6.1).
-4. Remove or document `Employer.employerNPS` (§6.2).
+3. Delete or clearly deprecate `BankInterestEntryManager.tsx` (§6.1). — **Fixed (deleted), §6.1.**
+4. Remove or document `Employer.employerNPS` (§6.2). — **Fixed (removed, with a stored-payload
+   migration), §6.2.**
 5. Decide, as a calculator-scope follow-up (not this audit's remit), whether
    `_exempt_leave_encashment`/`_exempt_gratuity` should incorporate the average-salary and
-   unavailed-leave evidence already captured (§6.3).
+   unavailed-leave evidence already captured (§6.3). — **Fixed, §12.2** — and this specific
+   question turned out to be entry point into the much larger §11 re-audit, not a standalone
+   item.
 
 ### P2 — architecture-level, shared with other forms
 6. Consolidate money-field parsing onto one shared component using integer-rupee semantics
    (§6.4) — **not** a decimal-string migration; CBDT's own wire format is integer rupees
    throughout, confirmed against the official schema. The fix is standardizing away from
    `Number(x) || 0`/`parseFloat(x) || 0`'s silent-zero-coercion, not preserving paise precision.
+   — **Fixed, §13.1** (a suitable shared component, `IndianNumberInput`, already existed and
+   only needed adoption).
+
+### P3 — found during §11's re-audit and §13's verification, not in the original six items above
+7. Six retirement/severance payout categories, transport/CEA/hostel allowances, the disabled-
+   employee exemption, three Section 10(6)/10(7)/10(10CC) rows, `lta_amount_received`, and
+   `standard_deduction_claimed` (§11.1-§11.6) — **Fixed, §12.**
+8. The ITD JSON's `10(10B)(i)` row using the raw instead of capped retrenchment amount (§11.7)
+   — **Fixed, §12.2.**
+9. `uniformAllowance` reaching income, `gratuityAlsoReceived` affecting the commuted-pension
+   fraction, the 80DDB reimbursement gap, and four vestigial `Employer` fields (§11.9's
+   follow-ups) — **Fixed, §13.2.**
 
 ---
 
 ## 9. Final assessment
 
-Verified directly against the current codebase, not against any prior audit document: ITR-1's
-canonical pipeline has one mapping path, a serializer that fails loudly rather than fabricating
-data, and — with the two exceptions in §5 — genuine, complete frontend coverage of the official
-AY 2026-27 schema's fields, including the less commonly implemented ones (Section 24(b)
-per-loan detail, per-donee 80G address, disability-schedule Form 10-IA/UDID detail, TDS3
-non-resident tenant rows, spouse/other-person TCS ownership split).
+**Superseded (2026-09-03) — this section originally described the state after only the two P0
+findings of §5 were known.** §11's re-audit found the actual defect surface was considerably
+larger (§11.1-§11.9), all now fixed (§12, §13). The assessment below reflects the state after
+all of it.
 
-The two P0 findings are real and will produce an incorrect computed tax liability for two
-identifiable, non-rare taxpayer populations (anyone with a genuine LTA claim; any actual
-government/PSU employee). Until both are fixed, ITR-1 should be classified as:
+Verified directly against the current codebase, not against any prior audit document or this
+document's own earlier drafts: ITR-1's canonical pipeline has one mapping path, a serializer
+that fails loudly rather than fabricating data, and — with the exceptions found and fixed in
+§5 and §11 — genuine, complete frontend coverage of the official AY 2026-27 schema's fields,
+including the less commonly implemented ones (Section 24(b) per-loan detail, per-donee 80G
+address, disability-schedule Form 10-IA/UDID detail, TDS3 non-resident tenant rows,
+spouse/other-person TCS ownership split).
 
-**Broadly complete and structurally sound, but not yet correct for taxpayers who claim LTA
-exemption or who are government/PSU employees — fix the two P0 items, verify with an
-end-to-end test for each, then re-audit before calling ITR-1 production-ready.**
+Every P0/P1 finding this audit surfaced across §5 and §11 is fixed and verified (§10, §12,
+§13): the Section 10(5) LTA exemption, the government-employee derivation, six retirement/
+severance payout categories that previously never reached computed income, transport/CEA/
+hostel allowances, the disabled-employee exemption, three Section 10(6)/10(7)/10(10CC)
+exemption rows, the real Section 10(10)/10(10AA) statutory sub-limit formulas, the commuted-
+pension gratuity-also-received fraction, uniform allowance, 80DDB reimbursement, money-input
+parsing, and every live filing-blocking validator regression these fixes exposed along the way
+(§12.4). What remains, precisely, and why it is **not** covered by this "fixed" claim:
+
+- **Validators beyond the specific regressions this work caused were never audited.** This
+  audit's own scope statement (§2) excludes `app/engine/validators/itr1/` from review. Every
+  validator bug actually found and fixed here (ITR1-R100/R101/R102/R142, the `lta_amount_received`
+  cross-check) was found *reactively* — by populating a field that had always been `0` and
+  discovering a dormant rule fire — not by a systematic pass over the ~2,800-line validator
+  file. Other rules with the same "written against a field nothing ever populated" latent-bug
+  shape may exist unfound in areas this work never touched (House Property, Other Sources,
+  Capital Gains, Chapter VI-A validators specifically).
+- **House Property, Other Sources, Capital Gains (112A), and Chapter VI-A got a lighter-touch
+  check than Salary.** §11's AST cross-reference script (declared-field vs. constructor-kwarg)
+  found zero unset-but-read fields in any of them, and a manual `getattr(..., default)`
+  phantom-field sweep across every schedule module found nothing outside `salary.py`. Neither
+  check would have caught the *other* bug shapes found in Salary purely by chance during this
+  work: a real input parameter silently hardcoded to a constant regardless of what's passed in
+  (§11.2's `num_children=0`), or a statutory sub-formula the calculator simply never
+  implements (§11.8's average-salary/unavailed-leave sub-limits). Those schedules were not
+  read function-by-function hunting for either pattern the way Salary was.
+- **Filing-profile/verification/bank-account/TDS-TCS structural correctness** was checked in §4
+  as field-*presence* completeness (every schema field has a frontend control), which is a
+  different, shallower claim than "the data that reaches the calculator through this path is
+  correct" — the depth applied to Salary in §11.
+- **ITR-2 and ITR-4** share the fixed `_map_salary`/`schedules/salary.py` code and therefore
+  inherit every fix in this document, but their own non-shared mapper code was not reviewed as
+  part of this ITR-1-scoped audit.
+
+**Bottom line:** every finding this audit actually looked for and found is fixed, tested, and
+documented. That is a materially stronger position than before this work started, but it is
+not the same claim as "every field, formula, and validator in ITR-1 is correct" — the salary
+schedule specifically earned that level of scrutiny; the rest earned presence-and-wiring
+verification, which is the level the original audit's own methodology (§2) set out to check.
 
 ---
 
