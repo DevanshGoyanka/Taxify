@@ -11,7 +11,7 @@ from datetime import date
 
 from app.schemas.itr1 import (
     ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
-    Chapter6ADeductions, CapitalGainsIncome, Donation80G,
+    Chapter6ADeductions, CapitalGainsIncome, Donation80G, Schedule80G,
     AgeBracket, TaxRegime, PropertyType, TDS1Entry, TDS2Entry, TCSEntry,
     BankAccount, Schedule80D, Section80DDBDetails, Section80DDBUserType,
     SpecifiedDisease80DDB, Schedule80CEntry, Schedule80EEntry, Schedule80DD,
@@ -1240,7 +1240,15 @@ def test_R100_gratuity_within_salary_passes():
 
 
 def test_R101_commuted_pension_exceeding_current_year_salary_is_not_blocked():
-    '''ITR1-R101 removed for the same reason as R100 above.'''
+    '''ITR1-R101 (the locally-numbered check) stays removed -- but this exact
+    scenario is correctly caught under the official CBDT rule number instead:
+    see test_R068_commuted_pension_exceeds_gross_salary_blocked below. The
+    official Category A rules 68/69 (commuted pension / leave encashment
+    "cannot be more than Salary as per sec 17(1)") were reinstated as
+    ITR1-R068/R069 after the audit found them to be genuine, non-trivial
+    portal-upload gates -- distinct from the still-correctly-removed R100
+    (gratuity has no such CBDT rule) -- see
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §16.3.'''
     inp = ITR1Input(
         age_bracket=AgeBracket.SIXTY_TO_80,
         tax_regime=TaxRegime.OLD,
@@ -1254,7 +1262,10 @@ def test_R101_commuted_pension_exceeding_current_year_salary_is_not_blocked():
 
 
 def test_R102_leave_encashment_exceeding_current_year_salary_is_not_blocked():
-    '''ITR1-R102 removed for the same reason as R100 above.'''
+    '''ITR1-R102 (the locally-numbered check) stays removed -- see
+    test_R101_commuted_pension_exceeding_current_year_salary_is_not_blocked's
+    docstring above; this scenario is correctly caught as ITR1-R069 instead,
+    see test_R069_leave_encashment_exceeds_gross_salary_blocked below.'''
     inp = ITR1Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
@@ -1265,6 +1276,94 @@ def test_R102_leave_encashment_exceeding_current_year_salary_is_not_blocked():
     )
     results = validate_itr1_input(inp)
     assert not failed(results, "ITR1-R102")
+
+
+def test_R068_commuted_pension_exceeds_gross_salary_blocked():
+    '''CBDT official rule 68: commuted pension received cannot exceed Salary
+    u/s 17(1). sal.gross_salary is section_17_1 only (see
+    app/engine/draft_to_itr1_input.py's salary mapper), a genuinely
+    independent quantity from commuted_pension_received, so this is a real
+    Category A portal-upload gate.'''
+    inp = ITR1Input(
+        age_bracket=AgeBracket.SIXTY_TO_80,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("300000"), commuted_pension_received=Decimal("400000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R068")
+
+
+def test_R068_commuted_pension_within_gross_salary_passes():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.SIXTY_TO_80,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), commuted_pension_received=Decimal("400000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R068")
+
+
+def test_R069_leave_encashment_exceeds_gross_salary_blocked():
+    '''CBDT official rule 69: earned leave encashment on retirement cannot
+    exceed Salary u/s 17(1) (separate from the ₹25L absolute cap in R142).'''
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("400000"), leave_encashment_received=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R069")
+
+
+def test_R069_leave_encashment_within_gross_salary_passes():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000"), leave_encashment_received=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R069")
+
+
+def test_R080_82_85_87_80g_table_bcd_use_official_rule_ids_not_table_a():
+    '''CBDT official rules 80-82 (table B/C/D cash-or-noncash mandatory) and
+    85-87 (table B/C/D cash+noncash cross-foot) were functionally applied to
+    all four donation tables but always reported under table A's rule IDs
+    (R079/R084) -- see Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §16.5. A Table B violation must now report as R080/R085, not R079/R084.'''
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80g=Decimal("5000"),
+            donations_80g=[Donation80G(donation_category="B", non_cash_amount=Decimal("5000"))],
+        ),
+        schedule_80g=Schedule80G(
+            donations=[Donation80G(
+                donation_category="B", total_donation=Decimal("5000"),
+                cash_amount=Decimal("0"), non_cash_amount=Decimal("0"),
+            )],
+            total_eligible_amount=Decimal("2500"),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R080")
+    assert not failed(results, "ITR1-R079")
 
 
 def test_R103_vrs_exceeds_5l():

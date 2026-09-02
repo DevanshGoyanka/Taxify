@@ -1448,3 +1448,309 @@ suggests the productive next step for further depth, if wanted, is the same meth
 other "two similarly-named fields, only one of which the actual computation reads" pairs
 elsewhere in the schema — not named here, since none were found, only the general pattern that
 found real bugs twice in this document.
+
+## 16. Official CBDT ITR-1 Validation Rules cross-reference (AY 2026-27)
+
+§16.1-16.5 are the findings, gathered and documented before any code was touched, per the
+explicit "findings first" instruction. §16.3's decision was then resolved (by tracing the
+mapper, not guessed) and implemented; §16.5's fix was implemented too. Both are recorded as
+done at the point they were resolved, so this section reads as a findings-then-fix log rather
+than a pure findings snapshot.
+
+### 16.1 Methodology
+
+Source document: `Reference Docs by CBDT & ITD/Official Validations/CBDT_e-Filing_ITR
+1_Validation Rules_AY 2026-27 (1).pdf` (22 pages, read in full via the `Read` tool's PDF
+support). It catalogs 339 Category A rules (blocking — "Return will not be allowed to be
+uploaded"), 9 Category B rules (upload allowed, defect flagged, possible 139(9) notice), and 1
+Category D rule (deduction/claim not entertained without the supporting form).
+
+Every rule was transcribed into a standalone catalog
+(`scratchpad/official_rules.py`, not committed — scratch only) keyed by its official serial
+number, then cross-referenced by script against every `"ITR1-R..."`-style literal in
+`app/engine/validators/itr1/input_rules.py` and `calc_rules.py` (4,516 combined lines). The
+script flagged 14 Category A rules with no matching literal. Each of the 14 was then
+individually re-verified by reading the actual implementing code (not just re-grepping) — per
+the same three-question method this repo already documents for ITR-2's validator build-out
+(CLAUDE.md: is the field genuinely user-suppliable and calculator-consumed; does the schema
+already structurally guarantee it; is there an equivalent check elsewhere under a different
+ID) — because a bare regex miss conflates four very different situations: a true gap, a
+same-check-different-ID case, a structurally-guaranteed-by-construction case, and a
+false-negative from the regex itself (e.g. a rule cited only in a code *comment*, or built via
+an f-string the regex can't expand).
+
+### 16.2 Result: 347 of 349 rules implemented; one substantive gap
+
+- **Category A: 337 of 339 implemented or structurally covered.** Of the 14 initial
+  regex-misses: 1 is the same check as an existing rule under a different ID (10, dual
+  direction of R139/R242 — see §16.4); 1 is a literal duplicate of an already-implemented rule
+  (71, same ₹5L VRS cap as R103); 6 are functionally implemented but ID-mislabeled (80/81/82/
+  85/86/87 — see §16.5); 3 are structurally guaranteed by direct-formula construction and
+  cannot diverge (296/298/299 — see §16.4); 1 is implemented but the regex missed it because
+  the rule number appears only in a docstring, not an `"ITR1-R328"` literal (328, confirmed
+  live in `app/engine/common/interest.py::compute_234i` — see §16.4). **That left exactly 2
+  genuine gaps: rules 68 and 69** (§16.3) — both now implemented.
+- **Category B: 9 of 9 implemented** — `app/engine/validators/itr1/input_rules.py` lines
+  3587-3700, under an `"ITR1-B_..."` naming scheme (not the `"ITR1-RB#"` pattern the diff
+  script initially searched for, hence needing manual confirmation) with explicit `CBDT B1`.."B9"`
+  comment citations for every one: Aadhaar-PAN link (B1), Aadhaar quoting u/s 139AA (B2), the
+  three TDS-section-code ineligibility groups for both TDS2 and TDS3 (B3/B4 special-rate, B5/B6
+  non-resident, B7/B8 business-income), and TDS1-exceeds-gross-salary (B9).
+- **Category D: 1 of 1 implemented** — `"ITR1-RD1"` (89(1) relief without Form 10E).
+
+### 16.3 The one substantive gap — rules 68 and 69, and a direct conflict with today's earlier fix
+
+Official rules 68/69 (PDF page 8):
+
+> 68. Exempt Allowance u/Sec 10(10A)-Commuted value of pension received cannot be more than
+> Salary as per sec 17(1)
+>
+> 69. Exempt Allowance u/s 10(10AA)-Earned leave encashment on retirement cannot more than
+> Salary as per sec 17(1) (Message to be shown... maximum deduction for a non-Government
+> employee including PSU is only Rs 25 lakh)
+
+These are **Category A — blocking at portal upload**, not advisory. Earlier in *this same
+session* (§14, before this document's most recent findings), `app/engine/validators/itr1/
+input_rules.py` lines 218-234 record removing what were then locally-numbered `ITR1-R100/
+R101/R102` — checks that compared `gratuity_received`/`commuted_pension_received`/
+`leave_encashment_received` against `salary_income.gross_salary` — with this reasoning:
+
+> "There is no such statutory test anywhere in the Income Tax Act — these are career-end lump
+> sums that routinely and correctly exceed one year's running salary... removed rather than
+> 'corrected' since no valid replacement comparison exists."
+
+That reasoning is sound **as a question about the Income Tax Act**, but rules 68/69 are not
+statutory tests — they are the ITD e-Filing portal's own upload-time gate, independent of
+whether the comparison is economically sensible for a multi-decade lump-sum payout. The
+"Purpose" section of the validation-rules PDF itself is explicit about this: the rules exist so
+"the data which is being uploaded are accurate and compliant to the validation rules... to
+avoid rejection of return." A JSON that Taxify's own validators pass but that fails this
+specific portal gate is exactly the failure mode CLAUDE.md's instruction was warning about
+("the same JSON is to be uploaded to the portal").
+
+Concretely, whether this matters depends on what the field actually represents. Given the
+sibling fields in the same schema are already treated as *exempt claim amounts* under Section
+10 (not gross receipts) — e.g. `retrenchment_compensation`/`vrs_compensation` are matched
+directly against the flat ₹5,00,000 caps in R070/R103/R104, and `leave_encashment_received`
+is matched directly against the ₹25,00,000 cap in the still-live R142 — `commuted_pension_received`
+and `leave_encashment_received` most likely carry the same meaning here (the amount being
+claimed exempt, not the gross lump sum received). Under that reading, rules 68/69 are a genuine
+sanity bound the portal enforces (an exempt claim cannot exceed the very salary figure it's
+computed against) and are unrelated to the "career-end lump sum exceeds one year's salary"
+argument that justified removing R100-R102 — that argument is about comparing a lump sum's
+*face value* to one year's pay, not about an *exemption claim* exceeding it.
+
+**Resolved by tracing the mapper.** `app/engine/draft_to_itr1_input.py`'s salary mapper (the
+function building `SalaryIncome`) settles the field-semantics question directly: `salary_input
+= SalaryIncome(gross_salary=section_17_1, ...)` (line 334) — `sal.gross_salary`, the exact
+field every validator reads, is set to `section_17_1` alone (basic+DA+bonus+commission+HRA
+received+LTA received+other allowance+other taxable salary+arrears+uniform allowance — line
+209-212), which deliberately **excludes** gratuity/commuted-pension/leave-encashment/VRS/
+retrenchment. Those five are gross retirement/severance receipts (`e.commutedPension`,
+`e.leaveEncashment`, etc., summed at lines 260-264) — a materially different, non-overlapping
+quantity from `sal.gross_salary`. (The function does compute a *second*, separately-scoped
+local also named `gross_salary` — reused for its own returned tuple, augmented with these five
+receipts at lines 365-368 — but that local is never stored on `SalaryIncome` and is not what
+`sal.gross_salary` means anywhere a validator reads it.) So `commuted_pension_received` and
+`leave_encashment_received` are genuinely independent of `sal.gross_salary`, not a subset of
+it — the comparison is not trivial or structurally guaranteed, and a taxpayer with a modest
+running salary but a large one-time commuted-pension or leave-encashment payout at retirement
+is a real, reachable case this schema can represent. **Conclusion: option (a)** — rules 68/69
+are genuine, currently-missing Category A portal gates and should be re-implemented,
+independent of the (still-correct, for its own narrower question) statutory reasoning that
+removed R100-R102. Implemented in this pass as `ITR1-R068`/`ITR1-R069`, mirroring the existing
+`ITR1-R064` LTA-vs-gross-salary pattern — see `app/engine/validators/itr1/input_rules.py`.
+
+### 16.4 The 13 apparent gaps that are not real gaps (verified by reading the implementing code)
+
+- **Rule 10** ("Schedule VIA 80G claimed > eligible donation per Schedule 80G"): implemented in
+  the opposite comparison direction under a different ID —
+  `calc_rules.py`'s `ITR1-R242` (`ch6a.amount_80g > eng_80g` against the engine-computed
+  eligible amount) covers the same relationship `input_rules.py`'s `ITR1-R139` covers from the
+  Schedule-80G-eligible side. Same relationship, two IDs, no gap.
+- **Rule 71** ("10(10C) VRS amount cannot exceed ₹5,00,000"): a literal duplicate of the
+  already-implemented `ITR1-R103` (same cap, same field, same regime gate).
+- **Rules 296/298/299** (HP co-owned annual-value-owned = %share × AV; Schedule HP internal
+  subtotal cross-foots Sl.1d = 1b+1c and Sl.1i = 1g+1h): all three are computed by direct
+  formula, not by independent re-entry, so they cannot diverge — confirmed by reading both the
+  calculator and the JSON builder. `app/engine/schedules/house_property.py`'s
+  `compute_house_property()` computes `annual_value_owned = balance_alv *
+  ownership_share_percentage / 100` (line ~114) directly from the percentage parameter (which
+  `app/engine/itd/itr1.py` line 176 cross-checks against the filing profile's
+  `assessee_share_percentage` and raises `ValueError` on mismatch before this formula ever
+  runs) — rule 296 by construction. `app/engine/itd/itr1.py`'s `_property_schedule()` computes
+  `total_deduction = standard_deduction + interest` (line 234, feeding `"TotalDeduct"` — rule
+  298's Sl.1d) and derives `standard_deduction` itself from a formula that the same function
+  asserts cross-foots via an explicit `raise ValueError(...)` if it doesn't (lines 229-233) —
+  rule 299's Sl.1i relationship is the same class of direct-formula construction. A dedicated
+  validator rule would be redundant with an assertion that already exists closer to the
+  computation.
+- **Rule 328** (₹5,000 late-fee tier for 234-I on revised returns with income > ₹5L, vs. ₹1,000
+  otherwise): implemented and live — `app/engine/common/interest.py::compute_234i()` (lines
+  158-182) computes both tiers exactly, and its own docstring cites `"CBDT Rule R328"`
+  explicitly. The cross-reference script missed it because the literal string `"ITR1-R328"`
+  never appears — only `"R328"` inside a docstring comment, and the enforcement lives in the
+  fee calculator, not in `input_rules.py`/`calc_rules.py`, which is why `input_rules.py`'s own
+  `ITR1-R324` is deliberately informational ("computed by the engine and verified in
+  calc_rules"). Confirmed correct; nothing to do.
+
+### 16.5 Rules 80/81/82/85/86/87 were functionally correct but ID-mislabeled — fixed
+
+`input_rules.py` had **two** separate blocks implementing "each 80G table (A/B/C/D) needs
+cash-or-noncash before a total" / "each row's total must cross-foot to cash+noncash", both
+correctly looping over all four tables but both always reporting every violation under table
+A's literal ID (`"ITR1-R079"`/`"ITR1-R084"`) regardless of which table actually failed — so a
+Table-C violation reported as `"ITR1-R079"` instead of the official `"ITR1-R081"`. This never
+affected blocking behavior (the check fired correctly and the return was correctly blocked in
+every table), only rule-ID fidelity in the validation report. Fixed in both blocks by mapping
+`donation_category` to its own official ID (`{"A": "ITR1-R079", "B": "ITR1-R080", "C":
+"ITR1-R081", "D": "ITR1-R082"}` and the equivalent 084-087 map) instead of the literal.
+Verified with a new test asserting a Table-B violation now reports `ITR1-R080`, not `ITR1-R079`
+(`tests/test_itr1_input_validation.py::test_R080_82_85_87_80g_table_bcd_use_official_rule_ids_not_table_a`).
+
+## 17. Official ITR-1 JSON schema constraint compliance (type/required/min-max/pattern/enum)
+
+### 17.1 Methodology
+
+Source: `Reference Docs by CBDT & ITD/Official JSON Schema/ITR-1_2026_Main_V1.1 (2).json`
+(JSON Schema Draft-04, `additionalProperties: false` at every object level). Verified against
+the actual **production** JSON-generation entrypoint — `app.engine.filing_gateway_v2.
+generate_cbdt_json(draft)` — rather than hand-constructing a minimal `ITR1Input` directly (the
+approach both pre-existing test files, `tests/check_schema_compliance.py` and
+`tests/validate_schemas.py`, take; the latter additionally has stale hardcoded schema paths
+pointing at a `Downloads\...(1).json` file that no longer exists on this machine, so it
+currently cannot run at all — not fixed in this pass, noted as a low-priority pre-existing test
+tooling defect). Using the real production entrypoint means every generated JSON in this check
+also passed through the full mapper, the Category A input/calc validators, and the complete
+filing-profile/property-profile/bank-account/TRP construction — not just the calculator core.
+
+Two scripts (scratch only, not committed): `schema_catalog.py` walks the schema (resolving
+every `$ref`) into a flat catalog of all 479 leaf properties with path, required-ness, and
+every constraint keyword (`type`, `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`,
+`pattern`, `enum`, `minLength`/`maxLength`, `default`, `minItems`/`maxItems`, `format`,
+`multipleOf`) — 362 required, 80 with a pattern, 246 with a min/max bound, 46 with an enum.
+`coverage_check.py` cross-references that catalog against the keys actually present in each
+generated JSON sample to report which schema paths were never exercised.
+
+Four deliberately diverse `ReturnDraft` fixtures were built to maximize real-pipeline coverage
+in one pass, each validated with `jsonschema.Draft4Validator(schema).iter_errors(...)`:
+
+1. Self-occupied HP + home loan, old regime, 80C/80D(flat)/80TTA/80CCD(1B), TDS1+TDS2, Section
+   10 exempt-allowance rows.
+2. Let-out HP with tenant, LTCG 112A via `simplified112A`, 80DD+80U disability with
+   `Form10IAFiling`, TDS3, TCS, new regime, PSU employer.
+3. HRA via employer `hra`+`rentPaid`, 80G donation (`100_NO_APPROVAL`, non-cash with
+   IFSC+transaction ref), 80GGA, 80GGC, 80E education loan, a Tax Return Preparer.
+4. Structured `Section80D`/`Category80D`/`Policy80D` for self and parents, 80EE matched to a
+   `HouseProperty.HomeLoan` by lender/account number with interest at exactly ₹2,00,000 (to
+   simultaneously satisfy the self-occupied cap and the "must exhaust 24(b) before claiming
+   80EE" rule), 80EEB EV loan.
+
+Every real `FilingGatewayV2Error` hit while building these four (missing loan/PRAN/80C-identifier
+evidence, HRA-vs-schedule mismatch, new-regime professional-tax rejection, TRP identification-number
+pattern, 80G both-cash-and-noncash, 80G eligible-amount-exceeded, 80EE/80EEA mutual exclusivity,
+80EE-before-24(b)-exhausted) was a **correct rejection of an invalid fixture**, fixed by
+correcting the fixture — not a product bug. Each confirms the production Category A validators
+are actually wired and firing on the real pipeline, not bypassed by this test approach.
+
+### 17.2 Result: zero schema violations across all four scenarios
+
+`Draft4Validator(schema).iter_errors(official_json)` returned **zero errors** for all four
+generated JSONs — every type, required/optional, min/max, exclusiveMinimum/exclusiveMaximum,
+pattern, and enum constraint the official schema declares was satisfied in every scenario
+tested. This is a strong, positive, well-evidenced finding for the specific fields these four
+drafts exercised (roughly two-thirds of the schema's 479 leaf paths — see §17.3 for the rest).
+
+### 17.3 Honest scope caveat — paths not exercised by any of the four drafts
+
+`coverage_check.py` against the combined four samples found 186 of 479 catalog paths never
+touched. The large majority are fields that are structurally "required" only *inside* an
+optional parent object none of the four drafts happened to populate (e.g. Schedule 80G's
+internal per-row structure wasn't touched until draft 3; 80EE/80EEA's structure needed draft
+4) — a property of how the catalog script counts required-ness, not a real gap; each such
+parent object *was* exercised in at least one draft, satisfying its own internal
+required-fields. The paths that are genuinely never exercised by any draft, and so remain an
+honest unverified gap in this specific schema-compliance check (though several are already
+covered by dedicated non-schema tests elsewhere in the suite):
+
+- `PersonalInfo.AlternateAddress` (secondary/alternate address block)
+- `FilingStatus.AssesseeRep` (representative/KARTA filing details — R293/R294/R331 already
+  exercise the *validator* side of this; the JSON shape itself wasn't schema-checked)
+- Revised-return / notice fields: `OrigRetFiledDate`, `NoticeNo`, `NoticeDateUnderSec`,
+  `ReceiptNo`, and the seventh-proviso clause-(iv) detail rows
+- `PropertyDetails[].CoOwners` / `.TenantDetails` (co-ownership and tenant rows — the *code
+  path* was directly read in §16.4's rule-296/298/299 check, but no draft in this pass actually
+  populated `co_owners`/`tenants`, so the schema-shape itself is unverified here)
+- `Schedule80EEA` specifically (80EE and 80EEA are mutually exclusive per R123, so no single
+  draft can exercise both; draft 4 isolated 80EE only)
+- `PensionContribution80CCC` identifier rows (Schedule 80CCC's per-row identifier/amount
+  structure, relevant to R337)
+- `ExemptIncAgriOthUs10Dtls` category/subcategory fields
+- `ScheduleTDS3Dtls.AadhaarofTenant`
+
+None of these produced a violation in any test that did reach them (the drafts that read
+adjacent parts of the same objects passed cleanly) — they are simply untested by this specific
+check, not known-broken. Recorded here rather than silently omitted, matching this document's
+established practice of stating scope honestly (§9).
+
+## 18. Continued "two similarly-named fields" pattern hunt
+
+Per the explicit instruction to keep pushing on this method after it found the TDS2/TDS3 bug
+(§15.4) and the validator keyword-matching bug (§14): a second pass searched
+`app/schemas/itr1.py`'s full 349-field list programmatically for near-duplicate name pairs
+(shared prefix ≥ 12 characters, similar length) as candidates, then manually verified each
+plausible hit against the calculator/mapper.
+
+The one genuinely suspicious candidate — `loan_details_80ee`/`loan_details_80eea`/
+`loan_details_80eeb` (singular, `Optional["LoanDetails"]`) alongside `loan_details_80ee_list`/
+`_80eea_list`/`_80eeb_list` (the canonical `List[...]` fields the mapper actually populates,
+confirmed via `app/engine/draft_to_itr1_input.py` lines 1307-1442, which explicitly sets the
+singular fields to `None`) — turned out to already be guarded against exactly this bug class.
+`ITR1Input.loan_schedule_rows(section)` (`app/schemas/itr1.py` lines 1224-1242) is the sole
+accessor every caller uses, and it explicitly `raise ValueError(...)` if the legacy singular
+field is non-`None` rather than silently preferring one field over the other — the same
+protective pattern `reconciled_house_properties()`/`reconciled_property_profiles()` already use
+for the analogous scalar-vs-list staleness risk documented in those methods' own docstrings.
+Not a bug: this is the fix pattern from §15.4 already applied proactively elsewhere in the
+schema, confirming §15.4's fix was in the right spirit for future authors adding similar
+legacy/canonical field pairs.
+
+No new defect found in this pass. The other near-duplicate pairs found by the same search
+(`advance_tax_paid`/`advance_tax_q1-4`, `amount_80d_preventive_self`/`_parents`,
+`interest_paid_let_out`/`_self_occupied`, `medical_expense_self_senior`/`_parents_senior`,
+`political_party_name`/`_pan`, `representative_email`/`_phone`, `schedule_tds2_total_claimed`/
+`schedule_tds3_total_claimed`, etc.) were all confirmed to be legitimately distinct fields
+(different schedules, different beneficiary categories, or a genuine self/parent or self/other
+split) rather than duplicate-purpose pairs — no further action.
+
+## 19. Summary of §16-§18 items and their disposition
+
+1. **Rules 68/69 (§16.3) — implemented.** Resolved by tracing the mapper (not left as an open
+   decision): `sal.gross_salary` is Section 17(1) only, a genuinely independent quantity from
+   `commuted_pension_received`/`leave_encashment_received`, so these are real Category A
+   checks. Added as `ITR1-R068`/`ITR1-R069` in `app/engine/validators/itr1/input_rules.py`,
+   mirroring the existing `ITR1-R064` LTA-vs-gross-salary pattern. 4 new tests
+   (`test_R068_*`, `test_R069_*`), plus the pre-existing `test_R101_*`/`test_R102_*` tests'
+   docstrings updated to point at the new rule IDs that now correctly catch those exact
+   scenarios.
+2. **Rule-ID mislabeling for 80G tables B/C/D (§16.5) — fixed.** Both implementing blocks now
+   map `donation_category` to its own official rule ID instead of always using table A's. 1 new
+   test.
+3. **Low priority, pre-existing, not fixed**: `tests/validate_schemas.py` has stale hardcoded
+   schema paths and cannot currently run (§17.1) — not part of this session's scope, flagged so
+   it isn't lost.
+4. No action needed on §17.3's unexercised schema paths beyond the honest record already made —
+   revisit only if a future draft naturally exercises them (e.g. ITR-2/3 work reusing the same
+   co-owner/representative schemas).
+
+### 19.1 Verification
+
+- `pytest tests/test_itr1_input_validation.py -v -k "R068 or R069 or R080_82 or R100 or R101 or
+  R102 or R103 or R064 or R142"` — 10 passed (the 6 new tests plus the 4 pre-existing tests
+  whose scenarios are now also covered under the new IDs, confirmed non-conflicting).
+- `pytest tests/ -k "itr1"` (excluding the pre-existing unrelated collection-error files — see
+  CLAUDE.md's documented baseline) — 343 passed, no regressions.
+- All four §17 schema-audit draft scripts re-run after the R068/R069/R080-082/085-087 changes:
+  `Draft4Validator` — 0 schema violations in every draft, confirming the new validator checks
+  don't alter the JSON shape (they're pre-compute gates, as expected) and none of the four
+  fixtures happens to trip the newly-reinstated R068/R069 gates.

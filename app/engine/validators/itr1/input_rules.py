@@ -372,6 +372,32 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 f"exceeds gross salary (Rs {sal.gross_salary})",
                 "salary_income.sec10_7_foreign_allowance",
             ))
+        # R068: 10(10A) commuted pension received ≤ gross salary 17(1).
+        # sal.gross_salary is section_17_1 only (app/engine/draft_to_itr1_input.py's
+        # salary mapper deliberately excludes gratuity/commuted-pension/leave-
+        # encashment/VRS/retrenchment from it) -- a genuinely independent quantity
+        # from commuted_pension_received, not a subset of it, so this is a real
+        # constraint the CBDT e-Filing portal enforces at upload (Category A),
+        # not a trivial always-true check. See
+        # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §16.3.
+        if sal.commuted_pension_received > _z and sal.commuted_pension_received > sal.gross_salary:
+            results.append(_make(
+                "ITR1-R068", False,
+                f"Commuted pension received (Rs {sal.commuted_pension_received}) exceeds "
+                f"salary u/s 17(1) (Rs {sal.gross_salary}). Exemption u/s 10(10A) cannot "
+                f"exceed salary earned.",
+                "salary_income.commuted_pension_received",
+            ))
+        # R069: 10(10AA) earned leave encashment on retirement ≤ gross salary 17(1).
+        if sal.leave_encashment_received > _z and sal.leave_encashment_received > sal.gross_salary:
+            results.append(_make(
+                "ITR1-R069", False,
+                f"Earned leave encashment on retirement (Rs {sal.leave_encashment_received}) "
+                f"exceeds salary u/s 17(1) (Rs {sal.gross_salary}). Exemption u/s 10(10AA) "
+                f"cannot exceed salary earned (maximum deduction for a non-Government "
+                f"employee, including PSU, is separately capped at Rs 25,00,000 — see R142).",
+                "salary_income.leave_encashment_received",
+            ))
         # R073: Sec 10(10CC) ≤ perquisites u/s 17(2)
         if sal.sec10_10cc_perquisite_tax > _z and sal.sec10_10cc_perquisite_tax > sal.perquisites_value:
             results.append(_make(
@@ -2912,6 +2938,10 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     if ch6a and ch6a.donations_80g and inp.schedule_80g:
         cat_label = {"A": "100% without qualifying limit", "B": "50% without qualifying limit",
                      "C": "100% subject to qualifying limit", "D": "50% subject to qualifying limit"}
+        # R079-R082: per-table "cash or non-cash mandatory before total" rule ID,
+        # by table. R084-R087: per-table cash+non-cash cross-foot rule ID.
+        mandatory_rule_id = {"A": "ITR1-R079", "B": "ITR1-R080", "C": "ITR1-R081", "D": "ITR1-R082"}
+        crossfoot_rule_id = {"A": "ITR1-R084", "B": "ITR1-R085", "C": "ITR1-R086", "D": "ITR1-R087"}
         for cat in ("A", "B", "C", "D"):
             cat_donations = [d for d in inp.schedule_80g.donations if d.donation_category == cat]
             if cat_donations:
@@ -2923,7 +2953,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     if d.total_donation and d.total_donation > _z:
                         if d.cash_amount == _z and d.non_cash_amount == _z:
                             results.append(_make(
-                                "ITR1-R079", False,
+                                mandatory_rule_id[cat], False,
                                 f"80G Table {cat}: total donation of Rs {d.total_donation} entered "
                                 f"but neither cash nor non-cash amount provided",
                                 f"schedule_80g.donations",
@@ -2931,7 +2961,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     # R084-R087: per-row total = cash + non-cash
                     if d.total_donation and abs(d.cash_amount + d.non_cash_amount - d.total_donation) > Decimal("1"):
                         results.append(_make(
-                            f"ITR1-R084", False,
+                            crossfoot_rule_id[cat], False,
                             f"80G Table {cat}: total donation (Rs {d.total_donation}) != "
                             f"cash (Rs {d.cash_amount}) + non-cash (Rs {d.non_cash_amount}) "
                             f"= Rs {d.cash_amount + d.non_cash_amount}",
@@ -3389,11 +3419,12 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
         ))
 
     # --- R079-R082: 80G per-table cash/noncash mandatory for total deduction column ---
+    _r079_082_by_cat = {"A": "ITR1-R079", "B": "ITR1-R080", "C": "ITR1-R081", "D": "ITR1-R082"}
     if inp.schedule_80g:
         for i, d in enumerate(inp.schedule_80g.donations):
             if d.cash_amount == _z and d.non_cash_amount == _z and ch6a and ch6a.amount_80g > _z:
                 results.append(_make(
-                    "ITR1-R079", False,
+                    _r079_082_by_cat.get(d.donation_category, "ITR1-R079"), False,
                     f"80G donation row {i+1}: neither cash nor non-cash amount entered "
                     f"but 80G deduction claimed. Each donation row must have an amount.",
                     f"schedule_80g.donations[{i}]",
