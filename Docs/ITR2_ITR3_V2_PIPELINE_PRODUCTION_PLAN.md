@@ -21,7 +21,7 @@ items point to, not a duplicate.
 | 5F | Shared canonical personal-profile foundation (ITR-1/ITR-4) | ✅ Delivered 2026-09-02 |
 | 5G | Migrate ITR-2 to complete pre-calculation preparation | ✅ Delivered 2026-09-02 |
 | 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | ✅ Delivered 2026-09-02 |
-| 7 | ITR-2 v2 endpoints + Direct Submit allowlist | Not started — now unblocked |
+| 7 | ITR-2 v2 endpoints + Direct Submit allowlist | ✅ Delivered 2026-09-02 |
 | 8 | ITR-3 on the shared complete-preparation contract | Not started |
 | 9 | Delete the dead ITR-2 legacy path | Not started |
 | 10 | Production hardening + final verification | Not started |
@@ -1570,13 +1570,79 @@ mapper-completeness gaps the report didn't claim to check.
   - Frontend: `npx tsc -b` clean; `npx vitest run` — 185 passed across 23 files (172 prior +
     13 new); `npm run build` clean (same pre-existing large-chunk warning, nothing new).
 
-### Phase 7 ? ITR-2 v2 endpoints + Direct Submit extension
+### Phase 7 ? ITR-2 v2 endpoints + Direct Submit extension (✅ Delivered 2026-09-02)
 
 - Confirm `client_itr_v2.py` routes consume the complete prepared pipeline without ITR-2-specific enrichment.
 - Extend `app/routers/filing.py::_normalize_form` to ITR-2 only after Phases 5E?5G and frontend tests pass.
 - Remove the frontend ITR-2 Direct Submit gate only after backend and UAT integration tests pass.
 
 **Tests:** integration test a full ITR-2 draft through generation, UAT submission, polling, and acknowledgement.
+
+**Delivered 2026-09-02.** An incoming report claimed this phase — routing ITR-2 through the
+canonical pipeline everywhere the season's filing surface touches it, plus enabling frontend
+Direct Submit — was complete, with 20 passing backend tests. Verified against actual code
+before accepting, per this project's standing practice.
+
+- **`app/engine/filing_orchestrator.py`** — the shared FilingCore both ERI modes call. Removed
+  the legacy flat-blob `app.engine.filing_gateway.generate_filing_artifact` branch entirely
+  (previously ITR-2/3's only path here); ITR-3 now raises an explicit
+  `FilingOrchestratorError` up front, and ITR-1/2/4 all flow through
+  `filing_gateway_v2.generate_cbdt_json`, unified into a single branch. **Confirmed via grep
+  that `app.engine.filing_gateway` now has zero callers anywhere in `app/`** — this change
+  fully orphans the legacy module, not just this one call site; it is not deleted here
+  (Phase 9's job per this doc), but nothing reachable imports it any more.
+- **`app/routers/filing.py::_normalize_form`** — ITR-2 added to the accepted form set for
+  Type-3 filing, with an accurate updated rejection message for ITR-3.
+- **`app/eri/type3/json_exporter.py::load_saved_filing_draft`** — the canonical-`schemaVersion`
+  requirement (previously ITR-1-only) extended to ITR-2, with the error message
+  parameterized on the actual form instead of hardcoded to "ITR-1".
+- **`app/routers/client_itr_v2.py::generate_client_cbdt_json_v2`** — fixed a real bug the
+  report didn't call out as a fix, only as routine dynamism: the downloaded CBDT JSON's
+  `Content-Disposition` filename was hardcoded `CBDT-ITR1_...` regardless of the draft's
+  actual form, so every ITR-2 (and ITR-4) download through this endpoint was mislabeled
+  `CBDT-ITR1_...`. Now built from `draft.form`. This endpoint had **zero existing test
+  coverage** for its filename (before or after this change) — added
+  `test_generate_cbdt_json_v2_filename_matches_actual_form` to
+  `tests/test_client_itr_v2_download.py`, reusing that file's existing `_Fake*` helper
+  pattern, asserting an ITR-2 draft produces a `CBDT-ITR2_...` filename and never
+  `CBDT-ITR1_...`.
+- **`frontend/src/pages/ITRComputationPage.tsx`** — `handleDirectSubmit`'s form guard now
+  blocks only ITR-3, not ITR-2. The rest of the function was already fully form-generic
+  (uses `itrForm` throughout, calls `filingSubmitApi.submit(clientId, ay, itrForm, ...)`) —
+  confirmed by reading it in full, no ITR-1/4-specific hardcoding remained to find.
+- **Stale doc fixed while touching this file**: `filing_orchestrator.py`'s module docstring
+  still described the file as delegating to `app.engine.filing_gateway.generate_filing_artifact`
+  — corrected to describe the actual `filing_gateway_v2.generate_cbdt_json` dispatch and the
+  now-explicit ITR-3 rejection.
+- **Checked but deliberately left alone — real, but pre-existing and unrelated to this
+  diff**: `frontend/src/domain/returns/filingPreflight.ts::validateCbdtFrontendFields` has an
+  unconditional (not form-gated) check requiring `personal.employerCategory` to be a valid
+  CBDT code, even though — per this session's own earlier Phase 5G [P2] follow-up —
+  `ITR2FilingProfile` has no `employer_category` field at all and the backend does not
+  require it for ITR-2. Traced every call site of this function (`handleValidate`,
+  `handleGenerateJson`-equivalent, `handleDirectSubmit`) and confirmed
+  `handleValidate`'s "Validate" button already reaches this same check for ITR-2 **today,
+  independent of this diff** (it has no form gate at all) — so this is a pre-existing
+  inconsistency this diff does not introduce or worsen, not a new regression from enabling
+  Direct Submit. It does not actually block a determined user (the field is shown and
+  editable on `PersonalInfoTab` for every form, including ITR-2 — a value can be picked even
+  though it is never consumed), so the impact is UI friction, not incorrect filed data.
+  Left unfixed as out-of-scope for this specific verification pass — flagged here as a
+  known, real gap for whoever next touches `filingPreflight.ts` to form-gate that check
+  alongside the existing `draft.form === 'ITR-1'` capacity check already in the same file.
+- **Verification:**
+  - `pytest tests/test_filing_orchestrator.py tests/test_filing_router_contract.py
+    tests/test_type3_json_exporter.py -v` — 20 passed, matching the incoming report exactly.
+  - `pytest tests/test_client_itr_v2_download.py -v` — 12 passed (11 prior + 1 new filename
+    regression test).
+  - Full backend suite `pytest tests/ -q` (same pre-existing-exclusion list as every prior
+    phase) — 1448 passed, 3 failed, 1 error; identical pre-existing baseline (the 3
+    `test_tax_v2_compute.py` failures, the 1 `test_26as_batch.py::test_single_file`
+    collection error), zero new failures.
+  - Frontend: `npx tsc -b` clean; `npx vitest run` — 185 passed across 23 files (unchanged —
+    the 2-line guard change needed no new frontend test given this file has no existing
+    component-test coverage to extend); `npm run build` clean (same pre-existing large-chunk
+    warning).
 
 ### Phase 8 ? ITR-3: build on the shared complete-preparation contract
 

@@ -691,8 +691,8 @@ export default function ITRComputationPage() {
   }, [filingJobId]);
 
   const handleDirectSubmit = async () => {
-    if (itrForm === 'ITR-3' || itrForm === 'ITR-2') {
-      toast.error('Direct Submit is available for ITR-1 and ITR-4 only this season.');
+    if (itrForm === 'ITR-3') {
+      toast.error('Direct Submit is not available for ITR-3 this season.');
       return;
     }
     if (!clientId || filingSubmitting || filingJobId !== null) return;

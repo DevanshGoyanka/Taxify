@@ -287,7 +287,7 @@ def generate_client_cbdt_json_v2(
         content=content,
         media_type="application/json",
         headers={
-            "Content-Disposition": f"attachment; filename=CBDT-ITR1_{client.pan}_{year}.json",
+            "Content-Disposition": f"attachment; filename=CBDT-{draft.form.replace('-', '')}_{client.pan}_{year}.json",
             "X-CBDT-Computation-Status": "FORM_COMPUTATION",
             "X-CBDT-Schema-Valid": "true",
         },

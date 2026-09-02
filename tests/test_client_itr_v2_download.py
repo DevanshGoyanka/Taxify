@@ -15,6 +15,7 @@ import json
 import pytest
 
 from app.routers.client_itr_v2 import (
+    generate_client_cbdt_json_v2,
     get_client_itr_v2,
     _load_saved_draft,
     _migrate_stored_canonical_payload,
@@ -227,3 +228,29 @@ def test_load_saved_draft_rejects_invalid_json(monkeypatch) -> None:
     with pytest.raises(HTTPException) as caught:
         _load_saved_draft("c1", "2026-27", _FakeUser(), _FakeDb(itr_row))
     assert caught.value.status_code == 500
+
+
+# ── generate-cbdt-json filename ─────────────────────────────────────────────
+
+
+def test_generate_cbdt_json_v2_filename_matches_actual_form(monkeypatch) -> None:
+    """The downloaded filename must reflect the draft's own form, not a
+    hardcoded ITR-1 — regression for a bug where every downloaded CBDT JSON
+    (ITR-2 included) was named CBDT-ITR1_... regardless of the real form."""
+    monkeypatch.setattr(
+        "app.routers.client_itr_v2.resolve_owned_client",
+        lambda client_id, user_id, db: _FakeClient(),
+    )
+    monkeypatch.setattr(
+        "app.engine.filing_gateway_v2.generate_cbdt_json",
+        lambda draft: ({"ITR": {"ITR2": {}}}, {}),
+    )
+    payload = _canonical_draft_json(form="ITR-2")
+    itr_row = _FakeITR(payload, "ITR2")
+
+    response = generate_client_cbdt_json_v2(
+        "c1", "2026-27", _FakeUser(), _FakeDb(itr_row)
+    )
+
+    assert "CBDT-ITR2_" in response.headers["content-disposition"]
+    assert "CBDT-ITR1_" not in response.headers["content-disposition"]

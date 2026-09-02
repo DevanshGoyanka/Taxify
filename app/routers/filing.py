@@ -53,10 +53,10 @@ def _normalize_form(itr_type: str) -> str:
     value = itr_type.strip().upper().replace("_", "-")
     if value in {"ITR1", "ITR2", "ITR3", "ITR4"}:
         value = f"ITR-{value[-1]}"
-    if value not in {"ITR-1", "ITR-4"}:
+    if value not in {"ITR-1", "ITR-2", "ITR-4"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="This season's Type-3 filing supports ITR-1 and ITR-4 only.",
+            detail="This season's Type-3 filing supports ITR-1, ITR-2, and ITR-4 only; ITR-3 is not supported.",
         )
     return value
 

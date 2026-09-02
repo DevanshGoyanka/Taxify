@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from app.automation import job_worker
 from app.db.models import AutomationJob, FilingJob
 from app.filing_automation import worker as filing_worker
 from app.main import app
+from app.routers.filing import _normalize_form
+from fastapi import HTTPException
+
+
+def test_itr2_form_normalizes_and_itr3_is_rejected() -> None:
+    assert _normalize_form("itr2") == "ITR-2"
+    with pytest.raises(HTTPException) as caught:
+        _normalize_form("ITR-3")
+    assert caught.value.status_code == 422
+    assert "ITR-3" in str(caught.value.detail)
 
 
 def _registered_paths(router) -> set[str]:
