@@ -18,10 +18,10 @@ from app.routers.client_itr_v2 import (
     generate_client_cbdt_json_v2,
     get_client_itr_v2,
     _load_saved_draft,
-    _migrate_stored_canonical_payload,
     router as v2_router,
 )
 from app.routers.client_itr import router as legacy_router
+from app.schemas.return_draft import migrate_stored_draft_payload
 
 
 def _router_paths(router) -> set[str]:
@@ -176,7 +176,7 @@ def test_stored_draft_migration_preserves_nonempty_legacy_clause_iv_detail() -> 
     seventh = payload["filing"]["seventhProviso"]
     seventh["otherClauseIVDetail"] = "Historical taxpayer disclosure"
 
-    migrated = _migrate_stored_canonical_payload(payload)
+    migrated = migrate_stored_draft_payload(payload)
 
     assert (
         migrated["filing"]["seventhProviso"]["otherClauseIVDetail"]

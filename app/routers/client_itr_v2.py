@@ -29,7 +29,12 @@ from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.db.models import Client, ClientITR, User
 from app.routers.clients import ensure_client_active, resolve_owned_client
-from app.schemas.return_draft import ReturnDraft, create_empty_draft, draft_from_client_seed
+from app.schemas.return_draft import (
+    ReturnDraft,
+    create_empty_draft,
+    draft_from_client_seed,
+    migrate_stored_draft_payload,
+)
 
 logger = logging.getLogger("taxify.routers.client_itr_v2")
 
@@ -45,34 +50,6 @@ def _normalize_itr_type(form: str) -> str:
     list/filter queries that read ``itr_type``.
     """
     return form.replace("-", "")
-
-
-def _migrate_stored_canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Remove obsolete empty placeholders from previously valid v2 drafts.
-
-    ``otherClauseIVDetail`` was an optional free-text placeholder before the
-    official clause-(iv) row structure was introduced as ``clauseIVDetails``.
-    An empty legacy value carries no taxpayer data, so it can be removed
-    losslessly. A non-empty value is deliberately retained and will fail the
-    strict canonical validation rather than being silently discarded.
-    """
-    filing = payload.get("filing")
-    if not isinstance(filing, dict):
-        return payload
-    seventh_proviso = filing.get("seventhProviso")
-    if not isinstance(seventh_proviso, dict):
-        return payload
-    legacy_detail = seventh_proviso.get("otherClauseIVDetail")
-    if not isinstance(legacy_detail, str) or legacy_detail.strip():
-        return payload
-
-    migrated = dict(payload)
-    migrated_filing = dict(filing)
-    migrated_seventh_proviso = dict(seventh_proviso)
-    migrated_seventh_proviso.pop("otherClauseIVDetail", None)
-    migrated_filing["seventhProviso"] = migrated_seventh_proviso
-    migrated["filing"] = migrated_filing
-    return migrated
 
 
 @router.get("/{year}")
@@ -116,7 +93,7 @@ def get_client_itr_v2(
         draft = draft_from_client_seed(client, year)
         return json.loads(draft.model_dump_json())
 
-    payload = _migrate_stored_canonical_payload(payload)
+    payload = migrate_stored_draft_payload(payload)
     try:
         draft = ReturnDraft.model_validate(payload)
     except ValidationError as exc:
@@ -248,7 +225,7 @@ def generate_client_cbdt_json_v2(
                 ],
             },
         )
-    payload = _migrate_stored_canonical_payload(payload)
+    payload = migrate_stored_draft_payload(payload)
     try:
         draft = ReturnDraft.model_validate(payload)
     except ValidationError as exc:
@@ -347,7 +324,7 @@ def _load_saved_draft(
                 ],
             },
         )
-    payload = _migrate_stored_canonical_payload(payload)
+    payload = migrate_stored_draft_payload(payload)
     try:
         draft = ReturnDraft.model_validate(payload)
     except ValidationError as exc:

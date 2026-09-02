@@ -39,7 +39,7 @@ function employer(): Employer {
     unavailedLeaveDays: 0, actualLtaFare: 0, isDomesticTravel: true, journeysInBlock: 0, ltaExempt: 0,
     numberOfChildren: 0, gratuityAlsoReceived: false, transportAllowance: 0, childrenEducationAllowance: 0,
     hostelExpenditureAllowance: 0, uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
-    vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0, tdsDeducted: 0, employerNPS: 0,
+    vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0, tdsDeducted: 0,
   };
 }
 

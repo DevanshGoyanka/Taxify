@@ -104,7 +104,7 @@ def produce_itd_json(
             FilingGatewayV2Error,
             generate_cbdt_json,
         )
-        from app.schemas.return_draft import ReturnDraft
+        from app.schemas.return_draft import ReturnDraft, migrate_stored_draft_payload
         try:
             if "schemaVersion" not in payload:
                 raise FilingOrchestratorError(
@@ -112,7 +112,11 @@ def produce_itd_json(
                     "Save the return through /v2/clients/{client_id}/itr/{year} "
                     "before generating or submitting it."
                 )
-            draft = ReturnDraft.model_validate(payload)
+            # This payload may come straight from ClientITR.form_data (the
+            # Type-3 export/submission path in app/eri/type3/json_exporter.py
+            # loads it without going through the /v2 router's own migration),
+            # so the same stored-payload migration must run here too.
+            draft = ReturnDraft.model_validate(migrate_stored_draft_payload(payload))
             if draft.form != form:
                 raise FilingOrchestratorError(
                     f"Saved canonical draft form is {draft.form}, not {form}."

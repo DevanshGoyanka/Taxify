@@ -13,7 +13,6 @@ import { BankAccountManager } from '../components/BankAccountManager';
 import { PersonalInfoTab } from '../components/PersonalInfoTab';
 import { hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
 import { BusinessProfessionEntryManager, type BusinessProfessionScheduleData } from '../components/BusinessProfessionEntryManager';
-import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
@@ -1112,7 +1111,6 @@ export default function ITRComputationPage() {
             transportAllowance: 0, childrenEducationAllowance: 0, hostelExpenditureAllowance: 0,
             uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
             vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0, tdsDeducted: 0,
-            employerNPS: 0,
           };
           const patched = {
             ...first,

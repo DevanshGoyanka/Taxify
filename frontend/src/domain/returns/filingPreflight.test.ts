@@ -72,7 +72,7 @@ describe('validateCbdtFrontendFields', () => {
       childrenEducationAllowance: 0, hostelExpenditureAllowance: 0,
       uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
       vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0,
-      tdsDeducted: 0, employerNPS: 0,
+      tdsDeducted: 0,
     }];
 
     expect(validateCbdtFrontendFields(draft)).toEqual([
@@ -249,7 +249,7 @@ describe('validateCbdtFrontendFields', () => {
       childrenEducationAllowance: 0, hostelExpenditureAllowance: 0,
       uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
       vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0,
-      tdsDeducted: 0, employerNPS: 0,
+      tdsDeducted: 0,
     };
     draft.employers = [
       { ...base, id: 'e1', employerName: 'Metro Employer', isMetroCity: true },

@@ -4,7 +4,6 @@ import ScheduleOSWorkspace from '../components/othersources/ScheduleOSWorkspace'
 import DeductionsWorkspace from '../components/deductions/DeductionsWorkspace';
 import type { ReturnDraft } from '../domain/returns/types';
 import type { ItrForm } from '../domain/eligibility';
-import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DividendEntryManager } from '../components/dividend/DividendEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
 import { InterestEntryManager } from '../components/interest/InterestEntryManager';

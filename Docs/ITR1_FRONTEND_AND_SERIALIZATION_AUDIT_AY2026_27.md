@@ -279,7 +279,13 @@ an explicit per-employer "Is this a government/PSU employer?" toggle in
 
 ## 6. P1 / lower-severity findings
 
-### 6.1 `BankInterestEntryManager.tsx` is dead, orphaned code with a mismatched schema
+### 6.1 `BankInterestEntryManager.tsx` is dead, orphaned code with a mismatched schema — **Fixed (2026-09-03)**
+
+**Fix:** deleted `frontend/src/components/BankInterestEntryManager.tsx` outright (confirmed
+zero JSX render sites before deletion, per the original finding), and removed its now-dangling
+imports from `ITRComputationPage.tsx` and `ITRComputationTabs.tsx`. The live interest-entry
+surface (`ScheduleOSWorkspace.tsx` via `OtherSourcesTab`) is untouched. Verified: `npx tsc -b`,
+`npx vitest run` (185 passed), and `npm run build` all clean.
 
 `frontend/src/components/BankInterestEntryManager.tsx` defines its own `BankInterestEntry`
 shape (`bankName`, `accountType: string` with values `SAVINGS`/`FD`/`RD`/`CURRENT`,
@@ -297,7 +303,32 @@ stale, schema-mismatched component the ITR-2 audit flagged as a risk class (`itr
 if anyone ever wires it back in, it would silently write data no backend mapper reads.
 **Recommendation:** delete it, or mark it clearly deprecated/unreachable.
 
-### 6.2 `Employer.employerNPS` is a vestigial field
+### 6.2 `Employer.employerNPS` is a vestigial field — **Fixed (2026-09-03)**
+
+**Fix:** removed `employerNPS` from the `Employer` schema (`app/schemas/return_draft.py`) and
+every place that set or read it — the legacy `flat_to_draft.py` converter, the TS `Employer`
+type, all frontend default-Employer-construction sites (`ITRComputationPage.tsx`,
+`map26asToDraftPatch.ts`, `mapAisToDraftPatch.ts`, `mapReconciledToDraftPatch.ts`,
+`mapTisToDraftPatch.ts`), and the corresponding test fixtures.
+
+Because `Employer` is a `_StrictModel` (`extra="forbid"`), and `employerNPS` was always
+serialized (defaulting to `0`), removing the field would break loading of any previously-saved
+draft whose stored JSON still carries the old key. Rather than risk that, a migration step was
+added: `_migrate_employer_nps()` strips `employerNPS` from every stored employer row before
+`ReturnDraft.model_validate()`. This was folded into a single shared entry point,
+`migrate_stored_draft_payload()` (moved from a `client_itr_v2.py`-local helper to
+`app/schemas/return_draft.py`), alongside the pre-existing `otherClauseIVDetail` migration.
+
+That consolidation surfaced a real, previously-undiscovered gap: the old migration helper was
+only called from the 3 `client_itr_v2.py` sites — `app/engine/filing_orchestrator.py` (the
+Type-3 export/filing path) and `app/routers/client_itr.py` (the legacy router's stored-draft
+fallback) both validate stored payloads too, and neither had migration applied. Both now call
+`migrate_stored_draft_payload()` as well, so the pre-existing `otherClauseIVDetail` migration's
+coverage gap is also closed, not just the new `employerNPS` one.
+
+Verified: full backend suite scoped to `itr1`/`client_itr`/`filing_gateway`/`return_draft`/
+`flat_to_draft` (400 passed), plus `npx tsc -b`, `npx vitest run` (185 passed), and
+`npm run build`, all clean.
 
 `app/schemas/return_draft.py:249` declares `employerNPS: Money`, and it is read by the legacy
 `app/engine/flat_to_draft.py:234` converter, but **not** by the live
@@ -306,8 +337,7 @@ entered as a single aggregate directly on `ChapterVIA.section80CCDEmployer` via
 `DeductionsWorkspace.tsx:266`. No frontend component sets `employer.employerNPS` to a non-zero
 value (confirmed: it only appears as a `0` default in the same import-mapper files as
 §5.1/§5.2). Unlike the two P0 findings, nothing computationally depends on this field being
-populated — it's dead schema surface, not a live bug. **Recommendation:** remove it, or
-document why it's retained.
+populated — it's dead schema surface, not a live bug.
 
 ### 6.3 Retirement-benefit evidence fields (`averageMonthlySalary`, `yearsOfService`,
 `unavailedLeaveDays`) are captured but not used by the current simplified exemption formulas
@@ -324,19 +354,33 @@ visibility since it was discovered while tracing the same code path as §5.1, bu
 to (not inside) this audit's field-presence scope and may already be a known, deliberate
 simplification.
 
-### 6.4 Money precision: frontend uses JavaScript `number`, backend uses `Decimal`
+### 6.4 Money input parsing: `Number(x) || 0` silently coerces invalid entries to zero — not a
+decimal/paise precision problem
 
-Structurally identical to finding §14.1 in the ITR-2 audit and not ITR-1-specific — every ITR-1
-component surveyed (`EmployerEntryManager.tsx`, `HousePropertyEntryManager.tsx`,
-`DeductionsWorkspace.tsx` and its sub-managers, `ScheduleOSWorkspace.tsx`, `TDSTab`) represents
-monetary values as JS `number` and parses user input with `parseFloat`/`Number(...) || 0`,
-while the backend schema is `Decimal` throughout per this repository's own convention (CLAUDE.md).
-The backend remains authoritative for the final computed figures (the frontend never computes
-tax itself), which limits the practical severity versus the ITR-2 finding, but the same risks
-apply to raw entered amounts: precision loss on very large values, inability to distinguish
-blank from zero in a few components, and `Number(x) || 0` silently coercing an invalid entry to
-zero rather than rejecting it. Not re-scored as critical here since it's a pre-existing,
-shared-architecture pattern rather than something specific to ITR-1's field coverage.
+**Correction (2026-09-03):** this finding was originally written as "frontend uses JS `number`,
+backend uses `Decimal`," implying the fix was a decimal-string state migration to preserve paise
+precision, mirroring finding §14.1 in the ITR-2 audit. That framing is wrong for ITR-1 and was
+corrected after directly checking the official schema rather than assuming CBDT wire-format
+semantics: **every monetary field in the official AY 2026-27 ITR-1 JSON schema is
+`"type": "integer"`.** Confirmed by walking the entire schema tree programmatically — the only
+two `"type": "number"` (fractional) fields anywhere in it are `PropertyDetails.AsseseeShareProperty`
+and `CoOwners.PercentShareProperty`, both ownership-*percentage* fields (`multipleOf: 0.01`), not
+currency. `app/engine/itd/common.py::_to_rupees()` already enforces this at the JSON boundary —
+it returns a Python `int`, half-up rounded to the nearest whole rupee — so no monetary figure this
+product emits ever carries paise. JS `Number` exactly represents every integer up to 2^53
+(~9×10¹⁵), and CBDT's own field cap is `99999999999999` (~10¹⁴) — well inside that range. As long
+as a money field only ever stores whole numbers, there is **no floating-point precision-loss
+risk at all**; a decimal-string migration would be solving a problem that does not exist here.
+
+The real (much narrower) issue is `Number(x) || 0` / `parseFloat(x) || 0` on entry: this pattern,
+found across `EmployerEntryManager.tsx`, `DeductionsWorkspace.tsx` and its sub-managers,
+`ScheduleOSWorkspace.tsx`, and `ITRComputationTabs.tsx::TDSTab`, silently coerces a garbled or
+non-numeric entry to `0` rather than rejecting it or flagging it. Some money inputs already do
+the right thing — `HousePropertyEntryManager.tsx`'s `Money()` helper already uses `step="1"`
+integer semantics. The fix is to standardize every money input on one shared component using an
+integer parser (`Math.round(Number(raw))`, rejecting non-finite/negative results instead of
+defaulting to `0`) rather than each component's own ad hoc `parseFloat`/`Number` call — a small,
+low-risk, mechanical consolidation, not an architecture change.
 
 ---
 
@@ -378,8 +422,10 @@ No gap found in this category.
    unavailed-leave evidence already captured (§6.3).
 
 ### P2 — architecture-level, shared with other forms
-6. Consider a systematic decimal-string money representation across the frontend, as already
-   noted for ITR-2 (§6.4) — not ITR-1-specific and not blocking.
+6. Consolidate money-field parsing onto one shared component using integer-rupee semantics
+   (§6.4) — **not** a decimal-string migration; CBDT's own wire format is integer rupees
+   throughout, confirmed against the official schema. The fix is standardizing away from
+   `Number(x) || 0`/`parseFloat(x) || 0`'s silent-zero-coercion, not preserving paise precision.
 
 ---
 

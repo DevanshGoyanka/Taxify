@@ -231,7 +231,6 @@ def _employer(item: JsonRecord, index: int) -> Employer:
         vrsCompensation=m("vrsCompensation"),
         retrenchmentCompensation=m("retrenchmentCompensation"),
         otherExempt=m("otherExempt"), tdsDeducted=m("tdsDeducted"),
-        employerNPS=m("employerNPS"),
     )
 
 

@@ -192,8 +192,9 @@ def generate_client_cbdt_json(
     # flat blob is routed through ``flat_to_draft`` so the v2 pipeline never
     # sees alias keys.
     if isinstance(flat_draft, dict) and "schemaVersion" in flat_draft:
+        from app.schemas.return_draft import migrate_stored_draft_payload
         try:
-            draft = ReturnDraft.model_validate(flat_draft)
+            draft = ReturnDraft.model_validate(migrate_stored_draft_payload(flat_draft))
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

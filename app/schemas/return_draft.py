@@ -246,7 +246,6 @@ class Employer(Identified):
     retrenchmentCompensation: Money = Field(default=Decimal("0"))
     otherExempt: Money = Field(default=Decimal("0"))
     tdsDeducted: Money = Field(default=Decimal("0"))
-    employerNPS: Money = Field(default=Decimal("0"))
 
 
 # ---------------------------------------------------------------------------
@@ -1646,3 +1645,82 @@ def draft_from_client_seed(client: object, assessment_year: str) -> ReturnDraft:
         dateOfBirth=getattr(client, "dob", None),
     )
     return draft
+
+
+# ---------------------------------------------------------------------------
+# Stored-payload migration — obsolete keys removed from this schema over
+# time still exist in previously-saved draft JSON. Since every model here
+# uses ``extra="forbid"``, ``ReturnDraft.model_validate()`` on a stored
+# payload that still carries a since-removed key raises immediately. This
+# is the SINGLE shared migration entry point every stored-payload reader
+# must call before validating — both the /v2 client-draft router
+# (``app/routers/client_itr_v2.py``) and the Type-3 filing/export path
+# (``app/eri/type3/json_exporter.py`` → ``app/engine/filing_orchestrator.py``)
+# load the exact same stored ``ClientITR.form_data`` shape, so a migration
+# added for one and not the other would silently break saved-draft filing
+# for the other path.
+# ---------------------------------------------------------------------------
+
+def migrate_stored_draft_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove obsolete keys/placeholders from previously valid v2 drafts.
+
+    Each step below is independent -- a stored payload may need any
+    combination of them -- and each is a no-op unless its specific obsolete
+    shape is actually present. Safe to call unconditionally on any payload,
+    stored or freshly constructed.
+    """
+    payload = _migrate_other_clause_iv_detail(payload)
+    payload = _migrate_employer_nps(payload)
+    return payload
+
+
+def _migrate_other_clause_iv_detail(payload: dict[str, Any]) -> dict[str, Any]:
+    """``otherClauseIVDetail`` was an optional free-text placeholder before the
+    official clause-(iv) row structure was introduced as ``clauseIVDetails``.
+    An empty legacy value carries no taxpayer data, so it can be removed
+    losslessly. A non-empty value is deliberately retained and will fail the
+    strict canonical validation rather than being silently discarded.
+    """
+    filing = payload.get("filing")
+    if not isinstance(filing, dict):
+        return payload
+    seventh_proviso = filing.get("seventhProviso")
+    if not isinstance(seventh_proviso, dict):
+        return payload
+    legacy_detail = seventh_proviso.get("otherClauseIVDetail")
+    if not isinstance(legacy_detail, str) or legacy_detail.strip():
+        return payload
+
+    migrated = dict(payload)
+    migrated_filing = dict(filing)
+    migrated_seventh_proviso = dict(seventh_proviso)
+    migrated_seventh_proviso.pop("otherClauseIVDetail", None)
+    migrated_filing["seventhProviso"] = migrated_seventh_proviso
+    migrated["filing"] = migrated_filing
+    return migrated
+
+
+def _migrate_employer_nps(payload: dict[str, Any]) -> dict[str, Any]:
+    """``employerNPS`` was a per-employer field with no live reader anywhere
+    in the canonical pipeline (Section 80CCD(2) employer-NPS contribution is
+    entered as a single return-level aggregate on
+    ``deductions.chapterVIA.section80CCDEmployer`` instead) -- removed from
+    the ``Employer`` schema entirely (Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §6.2). Strip it from every stored employer row unconditionally; it never
+    carried a value that reached any computation even when populated, so
+    there is no taxpayer data to preserve here (unlike ``otherClauseIVDetail``
+    above, which is a real free-text disclosure).
+    """
+    employers = payload.get("employers")
+    if not isinstance(employers, list) or not any(
+        isinstance(row, dict) and "employerNPS" in row for row in employers
+    ):
+        return payload
+
+    migrated = dict(payload)
+    migrated["employers"] = [
+        {key: value for key, value in row.items() if key != "employerNPS"}
+        if isinstance(row, dict) else row
+        for row in employers
+    ]
+    return migrated

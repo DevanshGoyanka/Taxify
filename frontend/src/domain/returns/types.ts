@@ -18,7 +18,7 @@ export interface Employer extends Identified {
   unavailedLeaveDays: number; actualLtaFare: Money; isDomesticTravel: boolean; journeysInBlock: number; ltaExempt: Money;
   numberOfChildren: number; gratuityAlsoReceived: boolean; transportAllowance: Money; childrenEducationAllowance: Money;
   hostelExpenditureAllowance: Money; uniformAllowance: Money; entertainmentAllowance: Money; professionalTax: Money;
-  vrsCompensation: Money; retrenchmentCompensation: Money; otherExempt: Money; tdsDeducted: Money; employerNPS: Money;
+  vrsCompensation: Money; retrenchmentCompensation: Money; otherExempt: Money; tdsDeducted: Money;
 }
 export interface CoOwner { coOwnerSNo: number; name: string; pan: string; aadhaar: string; share: number; }
 export interface TenantDetail { tenantSNo: number; name: string; pan: string; aadhaar: string; panOrTan: string; }
