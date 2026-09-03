@@ -807,6 +807,31 @@ re-checking the same ground:
   age brackets.
 - Chapter VI-A's overall Rs-GTI cap (`result.total = min(total, gti)`) is applied for the old
   regime path too, not just the new-regime early-return path.
+- Section 80EE/80EEA/80EEB's date-range loan-sanction eligibility windows are enforced by the
+  validators (`R301` etc., date-range checks already confirmed present), not the calculator —
+  matching this codebase's established "calculator trusts within schema bounds, validator gates
+  eligibility" split, consistent with how 44AD's floor checks are architected (CLAUDE.md).
+
+### 11.2 Minor, low-priority gap found and recorded (not fixed): self-occupied interest
+validators never account for the pre-1999 loan's lower Rs 30,000 cap
+
+`app/engine/schedules/house_property.py`'s `apply`/`compute()` correctly applies the lower
+Rs 30,000 Section 24(b) interest cap (instead of the standard Rs 2,00,000) when a self-occupied
+property's loan was sanctioned before 1 April 1999 (confirmed intact from an earlier session's
+fix, re-verified this pass). **No validator in either form's `input_rules.py`/`calc_rules.py`
+checks against this lower cap** — every self-occupied-interest excess check
+(`ITR1`/`ITR4`'s equivalents of "self-occupied interest exceeds Rs 2,00,000") compares only
+against the standard Rs 2,00,000 figure, never the pre-1999 Rs 30,000 one.
+
+**Practical impact is very low, which is why this was recorded rather than fixed**: a loan
+sanctioned before 1 April 1999 would be at least 27 years old for an AY 2026-27 return — an
+extremely rare, likely near-extinct scenario in current filings. The *calculation* itself is
+correct regardless (the calculator silently and correctly caps the deduction at Rs 30,000); the
+gap is only that a taxpayer who mistakenly entered, say, Rs 1,50,000 of interest against such a
+loan would get no validator warning explaining why their computed HP loss is only Rs 30,000
+rather than the Rs 1,50,000 (or up to Rs 2,00,000) they might expect — a UX/clarity gap, not a
+correctness one. Flagged here per this document's "record scope honestly" practice rather than
+silently left for a future pass to rediscover.
 
 ## 12. Summary of open items after this pass
 
