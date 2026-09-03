@@ -1743,6 +1743,18 @@ split) rather than duplicate-purpose pairs — no further action.
    broader, newly-visible set was found while closing them and is recorded honestly, not
    fixed, in the same subsection.
 
+### 19.1 Verification
+
+- `pytest tests/test_itr1_input_validation.py -v -k "R068 or R069 or R080_82 or R100 or R101 or
+  R102 or R103 or R064 or R142"` — 10 passed (the 6 new tests plus the 4 pre-existing tests
+  whose scenarios are now also covered under the new IDs, confirmed non-conflicting).
+- `pytest tests/ -k "itr1"` (excluding the pre-existing unrelated collection-error files — see
+  CLAUDE.md's documented baseline) — 343 passed, no regressions.
+- All four §17 schema-audit draft scripts re-run after the R068/R069/R080-082/085-087 changes:
+  `Draft4Validator` — 0 schema violations in every draft, confirming the new validator checks
+  don't alter the JSON shape (they're pre-compute gates, as expected) and none of the four
+  fixtures happens to trip the newly-reinstated R068/R069 gates.
+
 ## 20. Remaining §11.9/§14/§17 items closed (2026-09-03, same-day follow-up)
 
 Continuing directly from §16-19's validation-rule/schema work in this same pass: every item
@@ -1940,14 +1952,56 @@ verified via `compute_itr1`).
    (`app/eri/`, `app/automation/`, `app/filing_automation/`) remains outside this document's
    scope entirely, as stated when this question was last asked directly.
 
-### 19.1 Verification
+## 22. `ITR1-R246` multi-property false positive — fixed (2026-09-03)
 
-- `pytest tests/test_itr1_input_validation.py -v -k "R068 or R069 or R080_82 or R100 or R101 or
-  R102 or R103 or R064 or R142"` — 10 passed (the 6 new tests plus the 4 pre-existing tests
-  whose scenarios are now also covered under the new IDs, confirmed non-conflicting).
-- `pytest tests/ -k "itr1"` (excluding the pre-existing unrelated collection-error files — see
-  CLAUDE.md's documented baseline) — 343 passed, no regressions.
-- All four §17 schema-audit draft scripts re-run after the R068/R069/R080-082/085-087 changes:
-  `Draft4Validator` — 0 schema violations in every draft, confirming the new validator checks
-  don't alter the JSON shape (they're pre-compute gates, as expected) and none of the four
-  fixtures happens to trip the newly-reinstated R068/R069 gates.
+§20.5/§21 flagged this the same day it was found rather than fixing it immediately, since it
+surfaced mid-way through an unrelated schema-coverage exercise; fixed in this same session's
+next turn.
+
+**Fix**: `app/engine/validators/itr1/input_rules.py`'s R246 block now iterates
+`inp.reconciled_house_properties()` (the same authoritative multi-property accessor already
+used by `ITR1-R336` a few hundred lines below it, and by the calculator itself) and, for each
+property, filters `inp.loan_details_24b_list` to only that property's rows by
+`property_sequence_no` (1-indexed, matching the calculator's own convention in
+`app/engine/calculators/itr1.py`'s `hp_results` comprehension) before cross-footing. A
+single-property filer sees identical behavior to before (`reconciled_house_properties()` falls
+back to `[house_property_income]` when the typed list isn't used). The failure message and
+`field_path` now identify which property failed (`"Property 2: ..."`,
+`house_properties[1].home_loan_interest_paid`) instead of only ever referencing the legacy
+single-property field name.
+
+4 new tests in `tests/test_itr1_input_validation.py`: single property with a matching loan
+passes; single property with a genuine mismatch still fails (regression fence for existing
+behavior); the exact two-property bug scenario from §20.5 (property 1: Rs 50,000 interest
+against its own Rs 50,000 loan; property 2: Rs 2,00,000 against its own Rs 2,00,000 loan) no
+longer false-positives; a genuine mismatch on the *second* property is still caught and
+correctly attributed to "Property 2", not masked by the first property's correct loan.
+
+**Not fixed in this pass**: `app/engine/validators/itr4/input_rules.py`'s `ITR4-R295` has the
+identical single-property-vs-all-properties-summed pattern (confirmed by re-reading it while
+fixing R246) — left alone per the established ITR-1-first sequencing; flagged here so the ITR-4
+phase doesn't have to re-discover it, matching how the analogous ITR-4 TDS bug was flagged in
+§15.4.
+
+### 22.1 Verification
+
+- `pytest tests/test_itr1_input_validation.py -v -k "R246"` — 4 passed.
+- Full backend suite (same pre-existing-exclusion list as every prior run this session) — 1574
+  passed, same 3 pre-existing failures (`test_tax_v2_compute.py`) — no new failures (net +4 vs.
+  the prior run, matching the 4 new tests).
+- `schema_audit5.py` (the draft that originally surfaced this bug, restructured to a single
+  property to route around it) re-run after the fix: still 0 schema violations — confirms the
+  fix doesn't change the JSON shape, only which property-level comparison the validator makes.
+
+## 23. Summary of open items after §22
+
+1. **Not fixed, deliberately out of scope**: ITR-4's identical `ITR4-R295` (§22) and
+   `tds_claimed_this_year`-vs-`tds_claimed` (§15.4) bugs — both flagged for the ITR-4 phase,
+   matching the established ITR-1-first sequencing.
+2. **Not fixed, deliberately out of scope**: ITR-2/ITR-3's stale fixtures in
+   `tests/validate_schemas.py` (§20.4) — same sequencing reason.
+3. **Recorded, not chased**: the ~93-path broader schema-coverage gap (§20.5) — structured
+   80G/80D/80DD/80U detail blocks untested by any current draft; no known defect, just
+   unverified by this specific check.
+4. **No other open items remain** from §1-§22 that represent a known, live defect in ITR-1's
+   compute-and-generate-JSON pipeline.

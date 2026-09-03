@@ -3210,20 +3210,41 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "loan_details_80eea",
             ))
 
-    # --- R246: 24(b) sum of individual rows = total interest ---
-    if inp.loan_details_24b_list and hp.home_loan_interest_paid > _z:
-        total_24b_interest = sum(
-            ld.interest_paid_self_occupied + ld.interest_paid_let_out
-            for ld in inp.loan_details_24b_list
-        )
-        if total_24b_interest > _z:
-            if abs(hp.home_loan_interest_paid - total_24b_interest) > Decimal("1"):
-                results.append(_make(
-                    "ITR1-R246", False,
-                    f"24(b) total interest claimed (Rs {hp.home_loan_interest_paid}) does not "
-                    f"equal sum of individual loan interest amounts (Rs {total_24b_interest})",
-                    "house_property_income.home_loan_interest_paid",
-                ))
+    # --- R246: 24(b) sum of individual rows = total interest, per property ---
+    # Each property's claimed home_loan_interest_paid must match only its OWN
+    # Section 24(b) loan rows (matched by property_sequence_no, 1-indexed --
+    # the same convention the calculator uses in
+    # app/engine/calculators/itr1.py's hp_results comprehension). Comparing
+    # a single property's interest against the sum across ALL properties'
+    # loans (the previous behavior here) produced a false-positive Category A
+    # block for any genuine multi-property filer where each property carries
+    # its own loan -- found while auditing schema coverage for multi-property
+    # drafts; see
+    # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §20.5/§21.
+    if inp.loan_details_24b_list:
+        for index, hp_row in enumerate(inp.reconciled_house_properties()):
+            if hp_row.home_loan_interest_paid <= _z:
+                continue
+            property_loans = [
+                ld for ld in inp.loan_details_24b_list
+                if ld.property_sequence_no == index + 1
+            ]
+            if not property_loans:
+                continue
+            total_24b_interest = sum(
+                ld.interest_paid_self_occupied + ld.interest_paid_let_out
+                for ld in property_loans
+            )
+            if total_24b_interest > _z:
+                if abs(hp_row.home_loan_interest_paid - total_24b_interest) > Decimal("1"):
+                    results.append(_make(
+                        "ITR1-R246", False,
+                        f"Property {index + 1}: 24(b) total interest claimed "
+                        f"(Rs {hp_row.home_loan_interest_paid}) does not equal sum of "
+                        f"individual loan interest amounts for this property "
+                        f"(Rs {total_24b_interest})",
+                        f"house_properties[{index}].home_loan_interest_paid",
+                    ))
 
     # --- R249-R251: 80EE/80EEA/80EEB per-row sum = VIA total ---
     if ch6a and ch6a.amount_80ee > _z and inp.loan_details_80ee_list:

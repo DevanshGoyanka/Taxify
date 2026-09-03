@@ -18,6 +18,7 @@ from app.schemas.itr1 import (
     Schedule80U, DisabilitySeverity, DependentRelationship,
     EducationLoanLenderType,
     TDS3Entry,
+    LoanDetail,
 )
 from app.engine.validators.itr1.input_rules import validate_itr1_input
 from app.engine.validators.base import Severity
@@ -2087,3 +2088,136 @@ def test_R185_retrenchment_10_10b_not_blocked_for_non_govt_non_pensioner():
     )
     results = validate_itr1_input(inp)
     assert not failed(results, "ITR1-R185")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ITR1-R246 — 24(b) per-property interest cross-foot (multi-property fix)
+# ═══════════════════════════════════════════════════════════════════════════
+# Previously compared the legacy single-property scalar's interest against
+# the SUM of loan_details_24b_list across every property, producing a false
+# positive for any genuine multi-property filer. See
+# Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §20.5/§21.
+
+def test_R246_single_property_matching_loan_passes():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="HDFC Bank",
+            loan_amount=Decimal("2000000"),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R246")
+
+
+def test_R246_single_property_mismatched_loan_fails():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="HDFC Bank",
+            loan_amount=Decimal("2000000"),
+            interest_paid_self_occupied=Decimal("100000"),
+        )],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R246")
+
+
+def test_R246_two_properties_each_matching_own_loan_no_longer_false_positive():
+    """The exact bug scenario: two properties, each with its own correctly
+    matching 24(b) loan. Previously blocked because property 1's interest
+    (Rs 50,000) was compared against the SUM of both properties' loans
+    (Rs 2,50,000) instead of just its own."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("1500000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("300000"),
+            home_loan_interest_paid=Decimal("50000"),
+        ),
+        house_properties=[
+            HousePropertyIncome(
+                property_type=PropertyType.LET_OUT,
+                annual_rent_received=Decimal("300000"),
+                home_loan_interest_paid=Decimal("50000"),
+            ),
+            HousePropertyIncome(
+                property_type=PropertyType.SELF_OCCUPIED,
+                home_loan_interest_paid=Decimal("200000"),
+            ),
+        ],
+        loan_details_24b_list=[
+            LoanDetail(
+                property_sequence_no=1, lender_name="Axis Bank",
+                loan_amount=Decimal("1500000"),
+                interest_paid_let_out=Decimal("50000"),
+            ),
+            LoanDetail(
+                property_sequence_no=2, lender_name="HDFC Bank",
+                loan_amount=Decimal("4000000"),
+                interest_paid_self_occupied=Decimal("200000"),
+            ),
+        ],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R246")
+
+
+def test_R246_two_properties_second_property_mismatch_still_caught():
+    """A genuine mismatch on the SECOND property must still be caught, and
+    must not be masked by the first property's correct loan."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("1500000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("300000"),
+            home_loan_interest_paid=Decimal("50000"),
+        ),
+        house_properties=[
+            HousePropertyIncome(
+                property_type=PropertyType.LET_OUT,
+                annual_rent_received=Decimal("300000"),
+                home_loan_interest_paid=Decimal("50000"),
+            ),
+            HousePropertyIncome(
+                property_type=PropertyType.SELF_OCCUPIED,
+                home_loan_interest_paid=Decimal("200000"),
+            ),
+        ],
+        loan_details_24b_list=[
+            LoanDetail(
+                property_sequence_no=1, lender_name="Axis Bank",
+                loan_amount=Decimal("1500000"),
+                interest_paid_let_out=Decimal("50000"),
+            ),
+            LoanDetail(
+                property_sequence_no=2, lender_name="HDFC Bank",
+                loan_amount=Decimal("4000000"),
+                interest_paid_self_occupied=Decimal("120000"),
+            ),
+        ],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    result = next(r for r in results if r.rule_id == "ITR1-R246" and not r.passed)
+    assert "Property 2" in result.message
