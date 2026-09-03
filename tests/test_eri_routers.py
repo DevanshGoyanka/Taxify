@@ -24,6 +24,10 @@ from app.routers.integration import (
     eri_validate_reg_otp_route,
     eri_validate_itr_route,
     eri_submit_itr_route,
+    eri_update_ver_mode_route,
+    eri_generate_evc_route,
+    eri_verify_evc_route,
+    eri_get_acknowledgement_route,
     login_eri,
     logout_eri,
     eri_register_client_route,
@@ -33,6 +37,10 @@ from app.schemas.eri import (
     ERIRegisterClientRequest,
     ERIValidateClientOtpRequest,
     ERIValidateRegOtpRequest,
+    ERIUpdateVerModeRequest,
+    ERIGenerateEvcRequest,
+    ERIVerifyEvcRequest,
+    ERIAcknowledgementRequest,
     ERIValidateItrRequest,
     ERISubmitItrRequest,
 )
@@ -302,6 +310,134 @@ def test_eri_submit_itr_route_missing_auth(mock_user) -> None:
     with pytest.raises(HTTPException) as exc_info:
         eri_submit_itr_route(req=mock_req, request=req, current_user=mock_user)
     assert exc_info.value.status_code == 401
+
+
+# ── E-verify and acknowledgement routes: wired but previously untested ─────
+# (found while continuing the ITR-4 Type-2 UAT implementation -- these
+# routes existed in app/routers/integration.py with zero test coverage.)
+
+
+@patch("app.eri.type2.everify.update_ver_mode")
+def test_eri_update_ver_mode_route(mock_update_ver_mode, mock_user) -> None:
+    """Update-ver-mode route forwards the patched payload."""
+    mock_update_ver_mode.return_value = {"successFlag": True, "httpStatus": "ACCEPTED"}
+    req = ERIUpdateVerModeRequest(pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4", verMode="LATER")
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_update_ver_mode_route(req=mock_req, request=req, current_user=mock_user)
+    assert res["successFlag"] is True
+    mock_update_ver_mode.assert_called_once()
+    kwargs = mock_update_ver_mode.call_args.kwargs
+    assert kwargs["pan"] == "ABCDE1234F"
+    assert kwargs["ack_num"] == "123456789012345"
+    assert kwargs["ver_mode"] == "LATER"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_update_ver_mode_route_missing_auth(mock_user) -> None:
+    req = ERIUpdateVerModeRequest(pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4", verMode="LATER")
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_update_ver_mode_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+@patch("app.eri.type2.everify.generate_evc")
+def test_eri_generate_evc_route(mock_generate_evc, mock_user) -> None:
+    """Generate-EVC route forwards the patched payload."""
+    mock_generate_evc.return_value = {"successFlag": True, "transactionId": "tx1"}
+    req = ERIGenerateEvcRequest(pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4", verMode="AADHAAR")
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_generate_evc_route(req=mock_req, request=req, current_user=mock_user)
+    assert res["transactionId"] == "tx1"
+    kwargs = mock_generate_evc.call_args.kwargs
+    assert kwargs["ver_mode"] == "AADHAAR"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_generate_evc_route_missing_auth(mock_user) -> None:
+    req = ERIGenerateEvcRequest(pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4", verMode="AADHAAR")
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_generate_evc_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+@patch("app.eri.type2.everify.verify_evc")
+def test_eri_verify_evc_route(mock_verify_evc, mock_user) -> None:
+    """Verify-EVC route forwards the patched payload, including OTP/EVC values."""
+    mock_verify_evc.return_value = {"successFlag": True, "httpStatus": "SUCCESS"}
+    req = ERIVerifyEvcRequest(
+        pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4",
+        verMode="AADHAAR", transactionId="tx1", otpValue="123456",
+    )
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_verify_evc_route(req=mock_req, request=req, current_user=mock_user)
+    assert res["successFlag"] is True
+    kwargs = mock_verify_evc.call_args.kwargs
+    assert kwargs["transaction_id"] == "tx1"
+    assert kwargs["otp_value"] == "123456"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_verify_evc_route_missing_auth(mock_user) -> None:
+    req = ERIVerifyEvcRequest(
+        pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4",
+        verMode="AADHAAR", transactionId="tx1", otpValue="123456",
+    )
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_verify_evc_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+@patch("app.eri.type2.acknowledgement.get_acknowledgement")
+def test_eri_get_acknowledgement_route(mock_get_ack, mock_user) -> None:
+    """Get-acknowledgement route returns raw PDF bytes as a Response, unlike
+    every other Type-2 route (which return JSON dicts)."""
+    mock_get_ack.return_value = b"%PDF-1.4 fake pdf bytes"
+    req = ERIAcknowledgementRequest(pan="ABCDE1234F", ackNumber="111202010240326")
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_get_acknowledgement_route(req=mock_req, request=req, current_user=mock_user)
+    assert res.body == b"%PDF-1.4 fake pdf bytes"
+    assert res.media_type == "application/pdf"
+    kwargs = mock_get_ack.call_args.kwargs
+    assert kwargs["pan"] == "ABCDE1234F"
+    assert kwargs["ack_number"] == "111202010240326"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_get_acknowledgement_route_missing_auth(mock_user) -> None:
+    req = ERIAcknowledgementRequest(pan="ABCDE1234F", ackNumber="111202010240326")
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_get_acknowledgement_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+@patch("app.eri.type2.acknowledgement.get_acknowledgement")
+def test_eri_get_acknowledgement_route_surfaces_eri_api_error(mock_get_ack, mock_user) -> None:
+    """A JSON error response (not a PDF) from get_acknowledgement() surfaces
+    as a clean 400, not an unhandled exception -- exercises the same
+    ERIApiError import this whole route family depends on (see SS12.6 of
+    Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md for the bug this class of test
+    already caught once)."""
+    from app.eri.exceptions import ERIApiError
+    mock_get_ack.side_effect = ERIApiError(code="EF00047", desc="The PAN does not exist.")
+    req = ERIAcknowledgementRequest(pan="ABCDE1234F", ackNumber="111202010240326")
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_get_acknowledgement_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 400
+    assert "EF00047" in exc_info.value.detail
 
 
 # ── Mode-guard (Phase 1 B2): Type-2 routes return 503 in Type-3 mode ───────

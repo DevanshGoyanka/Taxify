@@ -751,6 +751,30 @@ for both modes.
 17→"R" case), the ITR-2 rejection, and — importantly — that a `validateItr` rejection stops the
 flow before `submitItr` is ever called, so an invalid return can never actually be filed.
 
+### 13.6 `everify.py`/`acknowledgement.py` desk-audited against their specs
+— no discrepancies found
+
+Given §13.2 found real spec-vs-reality gaps in `prefill.py`, the two remaining unverified Type-2
+modules touching the rest of the flow (`everify.py` — `EriUpdateVerMode`/`EriGenerateEvcService`/
+`EriVerifyEvcService`; `acknowledgement.py` — `EriGetAckowledgement`, including matching ITD's
+own spelling typo exactly) were checked field-by-field against `API_Everify_Return_v1.1.pdf` and
+`API_AcknowledgementFlow.pdf`'s request tables *and* sample-request JSON (not the table alone,
+since the table alone is exactly what misled §13.2's `prefill.py` fixes at first). Every
+`serviceName` and field name already in the code matches the spec exactly, including the
+per-endpoint inconsistency of whether `eriUserId` appears a second time inside the signed data
+payload (`generateEvc`/`verifyEvc` include it; `updateVerMode`/`getAckowledgement` don't) — this
+already-correct code was left unchanged. **Not the same as a live-call verification** — §13.2's
+`prefill.py` fixes were only trusted after being proven against a real HTTP response, and these
+two modules have not yet been exercised against a live e-verify/acknowledgement call (that
+requires an already-submitted return with a real ARN, which doesn't exist yet — see §13.5). Treat
+this as "no known issue," not "proven correct."
+
+Also added this session: `tests/test_eri_routers.py` gained coverage for the four e-verify/
+acknowledgement routes (`update-ver-mode`, `generate-evc`, `verify-evc`, `get-acknowledgement`)
+wired in §12.5 — they existed with zero test coverage until now, including the
+`get-acknowledgement` route's distinct raw-PDF-`Response` return shape (every other Type-2 route
+returns a JSON dict).
+
 ## 14. References
 
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/ERI API Specification_v1.1 (4).pdf`

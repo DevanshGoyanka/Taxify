@@ -147,6 +147,15 @@ Two background workers start in `app/main.py`'s lifespan and stop on shutdown:
 Note: `README.md`'s claim that `app/automation/` is "NOT wired to any FastAPI router" is
 stale — `app/routers/automation.py` and the job worker wire it in.
 
+`filing.py`'s `POST /api/v1/filing/{client}/{ay}/{form}/submit` dispatches on the active
+`ERI_MODE`: Type-3 queues a `FilingJob` for the existing Playwright automation worker (async,
+polled via `GET /jobs/{job_id}`); Type-2 calls `_submit_via_type2_api()` synchronously (ordinary
+HTTPS `validateItr`/`submitItr` calls, no job queue) and returns the ARN directly in the
+response. Both branches share the same `produce_itd_json()` JSON-generation call — there is one
+JSON-generation path for both modes, not two that could drift. Type-2's e-verification is
+deliberately a separate step (`/api/v1/eri/generate-evc` + `/verify-evc`), since it needs the
+taxpayer's live OTP consent, which can't happen inside the synchronous submit call.
+
 ### Browser automation
 
 `app/automation/browser.py`'s `BrowserManager` is a singleton owning one Playwright browser
