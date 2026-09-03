@@ -87,6 +87,8 @@ The production JSON-build path (`filing_gateway_v2.generate_cbdt_json` for ITR-1
 
 **Also corrected:** Phase 1's `filing_orchestrator.py` originally routed ALL forms through the legacy `filing_gateway.generate_filing_artifact`. The user pointed out that `filing_gateway.py` is effectively dead for ITR-1 (the v2 gateway `filing_gateway_v2.py` is the live path called by `client_itr_v2.py` and `tax_v2.py`). The orchestrator has been corrected to route ITR-1 → v2 and ITR-4 → legacy.
 
+> **Correction (found during the 2026-09-03 filing/submission pipeline audit): this "ITR-4 → legacy" routing is stale.** Current `app/engine/filing_orchestrator.py` routes ITR-1, ITR-2, *and* ITR-4 through the single unified `generate_cbdt_json` branch — there is no legacy-gateway branch left at all. ITR-4 was migrated onto the same v2 canonical pipeline as ITR-1 in a later, undocumented pass (consistent with `CLAUDE.md`'s current architecture description, and with this whole session's ITR-4 compute audit, which worked exclusively against `filing_gateway_v2.py`'s ITR-4 functions). Left here rather than silently edited, per this document's own practice elsewhere of recording a correction instead of erasing a prior claim.
+
 **Work items delivered:**
 
 | Step | Work Item | Status | Verification |

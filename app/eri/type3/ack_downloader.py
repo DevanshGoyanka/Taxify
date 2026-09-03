@@ -227,16 +227,29 @@ async def download_acknowledgement(
         try:
             await row_locator.wait_for(state="visible", timeout=10_000)
         except Exception:
-            # No row shows this assessment year → not filed.
-            _emit(f"[ACK] No filed return found for AY {assessment_year}.")
-            return AcknowledgementDownloadResult(
-                success=False,
-                assessment_year=assessment_year,
-                not_filed=True,
-                error=f"No filed return exists on the portal for AY "
-                f"{assessment_year}. File the ITR first, then download "
-                "the acknowledgement.",
-            )
+            # The hyphenated form ("2026-27") didn't match — some portal
+            # variants render the compact form ("202627") instead. Retry
+            # before concluding the return was never filed; otherwise a
+            # genuinely filed return would be misreported as not_filed
+            # purely because of which AY format this portal render uses.
+            if ay_compact != ay_text:
+                row_locator = page.get_by_text(ay_compact, exact=False).first
+                try:
+                    await row_locator.wait_for(state="visible", timeout=5_000)
+                except Exception:
+                    row_locator = None
+            else:
+                row_locator = None
+            if row_locator is None:
+                _emit(f"[ACK] No filed return found for AY {assessment_year}.")
+                return AcknowledgementDownloadResult(
+                    success=False,
+                    assessment_year=assessment_year,
+                    not_filed=True,
+                    error=f"No filed return exists on the portal for AY "
+                    f"{assessment_year}. File the ITR first, then download "
+                    "the acknowledgement.",
+                )
 
         # Capture the row's card (mat-card or table row) so we can both
         # extract the ARN and click the download control within it.

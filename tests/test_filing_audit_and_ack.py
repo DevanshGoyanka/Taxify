@@ -186,3 +186,119 @@ def test_ack_result_dataclass_round_trips() -> None:
 def test_ack_download_error_is_runtime_subclass() -> None:
     """AcknowledgementDownloadError is a RuntimeError subclass."""
     assert issubclass(AcknowledgementDownloadError, RuntimeError)
+
+
+# ---------------------------------------------------------------------------
+# AY-format fallback in download_acknowledgement (compact "202627" vs
+# hyphenated "2026-27") -- the portal may render either, and the compact
+# form was previously computed (``ay_compact``) but never actually used to
+# retry the lookup, so a filed return would be misreported as not_filed
+# whenever the portal happened to render the compact form.
+# ---------------------------------------------------------------------------
+
+class _Sentinel(RuntimeError):
+    """Marks that the row-location fallback succeeded and code moved past it."""
+
+
+class _FakeAckLocator:
+    def __init__(self, visible: bool) -> None:
+        self._visible = visible
+
+    @property
+    def first(self) -> "_FakeAckLocator":
+        return self
+
+    async def wait_for(self, state: str = "visible", timeout: int = 0) -> None:
+        del state, timeout
+        if not self._visible:
+            raise TimeoutError("not visible")
+
+    async def click(self, timeout: int = 0) -> None:
+        del timeout
+
+    def locator(self, selector: str) -> "_FakeAckLocator":
+        del selector
+        # Reaching this means the AY-matching gate was passed -- raise a
+        # sentinel so the test doesn't need to mock the entire download chain.
+        raise _Sentinel("reached card extraction")
+
+
+class _FakeAckPage:
+    """Page double exposing only what download_acknowledgement's AY-match
+    step calls: get_by_text(...).first.wait_for(...)."""
+
+    def __init__(self, visible_for: set[str]) -> None:
+        self._visible_for = visible_for
+
+    def get_by_text(self, text: str, exact: bool = False) -> _FakeAckLocator:
+        del exact
+        return _FakeAckLocator(visible=text in self._visible_for)
+
+
+async def _run_download_with_fake_page(fake_page: _FakeAckPage):
+    import app.eri.type3.ack_downloader as ack_mod
+
+    class _FakeContext:
+        pass
+
+    async def _fake_login_itd(**kwargs):
+        del kwargs
+        return fake_page
+
+    async def _noop(*args, **kwargs):
+        del args, kwargs
+
+    with patch.object(ack_mod, "decrypt_portal_password", return_value="pw"), \
+         patch.object(ack_mod.browser_manager, "get_context", side_effect=_noop), \
+         patch.object(ack_mod, "login_itd", side_effect=_fake_login_itd), \
+         patch.object(ack_mod, "dismiss_portal_modals", side_effect=_noop), \
+         patch.object(ack_mod, "navigate_income_tax_returns", side_effect=_noop), \
+         patch.object(ack_mod, "logout_itd", side_effect=_noop), \
+         patch.object(
+             ack_mod, "_find_text_action",
+             return_value=_FakeAckLocator(visible=True),
+         ):
+        return await ack_mod.download_acknowledgement(
+            pan="ABCDE1234F",
+            portal_password_cipher="cipher",
+            assessment_year="2026-27",
+            output_dir="/tmp/does-not-matter",
+            interactive=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ack_ay_lookup_matches_hyphenated_form() -> None:
+    """The straightforward case: the portal renders '2026-27' directly."""
+    result = await _run_download_with_fake_page(
+        _FakeAckPage(visible_for={"2026-27"})
+    )
+    # The sentinel fires once the AY row is located (proving we did not
+    # short-circuit to not_filed=True) -- the code wraps it into a generic
+    # "could not read the row" AcknowledgementDownloadError, which is fine:
+    # what matters is that we got PAST the not_filed gate, not the wrapped
+    # message's exact text.
+    assert result.not_filed is False
+    assert result.success is False
+
+
+@pytest.mark.asyncio
+async def test_ack_ay_lookup_falls_back_to_compact_form() -> None:
+    """The bug scenario: only the compact '202627' form is visible on the
+    portal. Before the fix, ay_compact was computed but never used, so this
+    filed return would have been misreported as not_filed."""
+    result = await _run_download_with_fake_page(
+        _FakeAckPage(visible_for={"202627"})
+    )
+    assert result.not_filed is False, (
+        "A filed return rendered under the compact AY format must not be "
+        "misreported as not_filed."
+    )
+
+
+@pytest.mark.asyncio
+async def test_ack_ay_lookup_neither_format_present_is_not_filed() -> None:
+    """Genuinely no filed return for this AY: neither format matches."""
+    result = await _run_download_with_fake_page(_FakeAckPage(visible_for=set()))
+    assert result.not_filed is True
+    assert result.success is False

@@ -98,7 +98,10 @@ app/schemas/itr*.py  →   app/engine/calculators/itr*.py  →  app/engine/itd/i
    constants (slabs, deduction caps, CII table) in `app/engine/constants.py`.
 3. **ITD Builder** (`app/engine/itd/`): assembles the calculator result into the exact nested
    CBDT JSON schema (`additionalProperties: false`), including the `CreationInfo.Digest` —
-   SHA-256 over the sorted JSON, computed after all schedules are built.
+   delegated to `app/eri/digest.py` (the single canonical Digest computation), which implements
+   the ERI onboarding SOP exactly: iterated HMAC-SHA256 (keyed with the active `(ERI_MODE,
+   ERI_ENV)` credential bundle's secret + iteration count, not a bare hash) over the sorted,
+   whitespace-free JSON with `Digest` replaced by the placeholder `"-"`, then Base64-encoded.
 
 Full verified end-to-end architecture reference (every route, the canonical pipeline,
 Type-3 submission, DB persistence): `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`. ITR-2/

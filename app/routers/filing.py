@@ -182,13 +182,29 @@ def submit_via_portal(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Type-2 submission is deferred until the next implementation phase.",
         )
+    form = _normalize_form(itr_type)
+    # _normalize_form() accepts ITR-1/ITR-2/ITR-4 for /generate and /download
+    # (JSON preparation is fine for a form still under active build-out), but
+    # this endpoint triggers a REAL, automated Playwright submission to the
+    # live ITD portal. The frontend already hides the Direct Submit button
+    # for ITR-2 (Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md Phase 3 Addendum-3)
+    # because ITR-2's compute/validation pipeline has not been through the
+    # same production-readiness audit as ITR-1/ITR-4 -- that restriction
+    # must also be enforced here, not just at the UI layer, or a direct API
+    # call could submit a real, under-audited ITR-2 return.
+    if form not in {"ITR-1", "ITR-4"}:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Automated Type-3 portal submission is available for "
+            "ITR-1 and ITR-4 only this season. Use the JSON download "
+            "for manual upload of other forms.",
+        )
     client = resolve_owned_client(client_id, current_user.id, db)
     if not client.portal_password:
         raise HTTPException(
             status_code=400,
             detail="Client does not have an ITD portal password.",
         )
-    form = _normalize_form(itr_type)
     try:
         path = export_itd_json_file(
             client_id=client.id,

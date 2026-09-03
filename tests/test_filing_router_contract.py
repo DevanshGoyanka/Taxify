@@ -73,3 +73,72 @@ def test_filing_worker_has_no_prefill_or_import_downloads() -> None:
     assert "download_prefill" not in source
     assert "download_26as" not in source
     assert "run_request_ais" not in source
+
+
+def _force_type3_uat_mode(monkeypatch) -> None:
+    """Pin (ERI_MODE, ERI_ENV) to type3/uat for this test regardless of
+    what an earlier-imported test module left in os.environ.
+
+    test_eri_routers.py sets os.environ["ERI_MODE"] = "type2" at MODULE
+    IMPORT time (not via monkeypatch), so it never reverts within a test
+    session -- any test relying on submit_via_portal's own mode check
+    (which runs before the ITR-2 guard) must pin the mode itself rather
+    than assume ERI_MODE=type3, or its outcome depends on collection order.
+    """
+    monkeypatch.setenv("ERI_MODE", "type3")
+    monkeypatch.setenv("ERI_ENV", "uat")
+
+
+def test_submit_via_portal_rejects_itr2_even_though_normalize_form_allows_it(
+    monkeypatch,
+) -> None:
+    """_normalize_form() allows ITR-2 (for /generate and /download, where a
+    still-under-build-out form's JSON preparation is fine), but the
+    frontend deliberately hides Direct Submit for ITR-2 because its
+    compute/validation pipeline has not been through the same
+    production-readiness audit as ITR-1/ITR-4. /submit triggers a REAL
+    automated Playwright portal submission, so that restriction must be
+    enforced server-side too, not left to the UI alone."""
+    from app.routers.filing import SubmitFilingRequest, submit_via_portal
+
+    _force_type3_uat_mode(monkeypatch)
+    with pytest.raises(HTTPException) as caught:
+        submit_via_portal(
+            client_id="1",
+            ay="2026-27",
+            itr_type="ITR-2",
+            request=SubmitFilingRequest(verification_mode="LATER"),
+            current_user=None,  # never reached — rejected before use
+            db=None,  # never reached — rejected before use
+        )
+    assert caught.value.status_code == 501
+    assert "ITR-1 and ITR-4" in str(caught.value.detail)
+
+
+def test_submit_via_portal_still_accepts_itr1_and_itr4_at_the_form_check(
+    monkeypatch,
+) -> None:
+    """The new ITR-2 guard must not over-broaden and also reject ITR-1/ITR-4
+    — confirmed by checking the guard passes and the function proceeds to
+    the next step (resolve_owned_client), which fails on the fake client_id
+    instead, proving the form check itself did not raise."""
+    from app.routers.filing import SubmitFilingRequest, submit_via_portal
+
+    _force_type3_uat_mode(monkeypatch)
+    for form in ("itr1", "ITR-4"):
+        with pytest.raises(Exception) as caught:
+            submit_via_portal(
+                client_id="not-a-real-id",
+                ay="2026-27",
+                itr_type=form,
+                request=SubmitFilingRequest(verification_mode="LATER"),
+                current_user=None,
+                db=None,
+            )
+        # Must NOT be the 501 "ITR-1 and ITR-4 only" guard — any other
+        # failure (e.g. AttributeError resolving current_user.id on None)
+        # proves the form check was passed.
+        if isinstance(caught.value, HTTPException):
+            assert caught.value.status_code != 501 or "ITR-1 and ITR-4" not in str(
+                caught.value.detail
+            )
