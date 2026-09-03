@@ -124,6 +124,14 @@ def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
 
     Shortfall is computed cumulatively: if cumulative paid < cumulative required,
     interest is levied at 1% on the shortfall for 3 months (one quarter).
+
+    Section 234C(1)(b) proviso: no interest is charged for the 15 June or
+    15 September installment specifically if cumulative advance tax paid by
+    that date is at least 12% (June) or 36% (September) of the tax due on
+    returned income -- lower "safe harbor" thresholds than the 15%/45%
+    otherwise required for those two installments. This proviso applies
+    only to the June and September installments; December (75%) and March
+    (100%) have no such safe harbor and are enforced strictly.
     """
     if total_assessed_tax < Decimal("10000") or total_assessed_tax <= 0:
         return Decimal("0")
@@ -132,9 +140,11 @@ def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
 
     if is_presumptive_44ad_44ada:
         required_pcts = [Decimal("1.00")]
+        safe_harbor_pcts = [None]
         advance_tax_paid = [sum(advance_tax_paid, Decimal("0"))]
     else:
         required_pcts = [Decimal("0.15"), Decimal("0.45"), Decimal("0.75"), Decimal("1.00")]
+        safe_harbor_pcts = [Decimal("0.12"), Decimal("0.36"), None, None]
 
     total_interest = Decimal("0")
     cumulative_paid = Decimal("0")
@@ -142,6 +152,9 @@ def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
     for i, req_pct in enumerate(required_pcts):
         paid = advance_tax_paid[i] if i < len(advance_tax_paid) else Decimal("0")
         cumulative_paid += paid
+        safe_harbor_pct = safe_harbor_pcts[i]
+        if safe_harbor_pct is not None and cumulative_paid >= total_assessed_tax * safe_harbor_pct:
+            continue
         required = total_assessed_tax * req_pct
         shortfall = required - cumulative_paid
         if shortfall > 0:

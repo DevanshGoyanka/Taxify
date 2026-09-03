@@ -2027,6 +2027,11 @@ phase doesn't have to re-discover it, matching how the analogous ITR-4 TDS bug w
    taxpayer profile. Found during an exhaustive re-verification of the tax-calculation flow
    (explicitly prioritized ahead of the validator-by-validator recheck). See §27 for the full
    write-up.
+8. **Correction, superseded by §28**: a fifth, independent live defect (fixed), shared by ITR-1
+   and ITR-4 — Section 234C never implemented the 12%/36% "safe harbor" proviso for the
+   June/September advance-tax installments, over-charging statutory interest a compliant taxpayer
+   does not legally owe (the opposite direction from most findings in this document, which
+   understate deductions rather than overstate a charge). See §28.
 
 ## 24. CRITICAL: `filing_date` never reached the real compute pipeline — 234A/B/C interest and
 234F/234-I late fees were silently zero for every ITR-1 and ITR-4 return (2026-09-03)
@@ -2295,3 +2300,48 @@ ceiling and full Rs 1,30,000 allowance) and
 `test_80ccd2_non_govt_employer_old_regime_stays_at_10pct` (asserts the old regime's 10% ceiling
 is unchanged, same claim capped at Rs 1,00,000). Full backend suite: 1605 passed, same 3
 pre-existing unrelated failures, no regressions.
+
+## 28. Real, taxpayer-unfavorable bug found and fixed: Section 234C never implemented the
+12%/36% "safe harbor" proviso for the June/September advance-tax installments — shared by ITR-1
+and ITR-4 (2026-09-03)
+
+**Found continuing the same exhaustive tax-calculation-flow re-verification** as §27, this time
+tracing `app/engine/common/interest.py` (shared by both forms' calculators) formula-by-formula
+against the statutory text of Sections 234A/B/C/F/234-I rather than just their headline
+percentages/thresholds.
+
+**The law**: Section 234C(1)(b)'s main clause requires cumulative advance tax of 15% by 15 June
+and 45% by 15 September (for non-corporate assessees); its **proviso** grants a lower "safe
+harbor": no interest is charged for the June installment specifically if at least 12% was paid by
+then, nor for the September installment specifically if at least 36% was paid by then — even
+though the headline requirement for those two dates is higher (15%/45%). This proviso applies
+*only* to the June and September installments; December (75%) and March (100%) have no such
+exception and are strictly enforced.
+
+**The bug**: `compute_234c()` computed the shortfall against the strict 15%/45%/75%/100% cumulative
+requirements at every installment, with no safe-harbor exception at all. A taxpayer who paid, say,
+13% of assessed tax by 15 June — fully compliant with the law, owing zero interest for that
+installment — was charged interest on the (illusory) 2% shortfall against the 15% headline figure
+this code enforced instead. **This is the opposite direction from most of this document's other
+findings**: it overstates a statutory interest charge the taxpayer does not legally owe, rather
+than understating a deduction.
+
+**Confirmed empirically**: paying exactly 13% by June (safe-harbor-compliant) previously produced
+Rs 60 of spurious 234C interest; after the fix, Rs 0. A taxpayer one rupee short of the 12% safe
+harbor is still correctly charged interest on the full 15%-headline shortfall (not just the
+1-rupee gap to the safe harbor) — the proviso is a binary "did you clear the lower bar," not a
+second, lower requirement level.
+
+**Fix**: `compute_234c()` now checks, for the June and September installments only, whether
+cumulative paid already clears the 12%/36% safe harbor before falling back to the strict
+15%/45% shortfall calculation; December and March are unchanged (no safe harbor exists for them
+in the statute).
+
+**Tests added** (`tests/test_itr4_statutory_formula_known_answers.py`,
+`test_interest_234c_section_1b_proviso_safe_harbor`): exact safe-harbor compliance (zero
+interest), one rupee short of the safe harbor (full shortfall interest, not just the gap),
+independent per-installment evaluation (Q1 charged even when cumulative smoothing would clear a
+later quarter's safe harbor), and confirmation December has no equivalent exception. Full backend
+suite: 1606 passed, same 3 pre-existing unrelated failures, no regressions. Shared module with
+ITR-4 (`app/engine/calculators/itr4.py` calls the same `compute_234c`) — no ITR-4-specific
+write-up needed since the fix and its correctness apply identically to both forms.
