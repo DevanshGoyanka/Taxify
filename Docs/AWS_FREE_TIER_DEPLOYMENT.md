@@ -31,24 +31,47 @@ CI/CD via GitHub Actions (§10) — not an AWS resource, does not touch the free
 > fresh EC2 instance with any public IP can reach them. No paperwork dependency, no jump-host
 > egress requirement, no provisioning order constraint.
 
-### 2.1 Stale Type-2 startup guard will block boot
-The *network* reason for the SSH jump host is gone, but the **code guard remains**.
-`app/eri/config.py:197-201` raises `RuntimeError` at app startup (called from the
-`app/main.py` lifespan) whenever `ERI_ENV=production` **and** `ERI_MODE=type2`:
+> **Correction (2026-09-04, ERI Type-2 UAT implementation work).** The claim above is wrong
+> and must not be acted on. IP whitelisting was **not** eliminated — confirmed directly by the
+> user (who holds real Type-2 UAT/production credentials and operational experience with this
+> exact requirement) and by the official ITD `List of UAT/Production URLs for Type 2` PDFs,
+> both of which list "IP address... whitelisted at our end" as precondition #1. See
+> `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §12.3 for the corrected architecture: Type-2 calls
+> (UAT and production) must egress through a whitelisted IP — regardless of where signing
+> happens.
+>
+> **Critical account distinction, confirmed directly by the user (2026-09-04): the AWS account
+> this entire document provisions is NOT and never was the whitelisted one, and never will be
+> without a separate, deliberate onboarding step.** This document's AWS account exists purely
+> to host Taxify's own backend/frontend for testing — it has **no IP whitelisted with ITD** and
+> has **nothing to do with ERI API calls**. The account whose IP *is* whitelisted with ITD (used
+> for the ITR-1 Type-2 UAT/production work, and the jump-box referenced throughout
+> `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md`) is a **completely separate AWS account** — different
+> credentials, different console, no relationship to this deployment beyond both happening to be
+> "an AWS account." Do not assume provisioning an EC2 instance under *this* document gets you
+> anywhere toward Type-2 whitelisting, and do not assume the two can be merged casually — treat
+> them as two unrelated pieces of infrastructure that happen to share a cloud vendor. What *was*
+> accurately dead was the specific SSH-jump-host **code guard** described below
+> (`ERI_AWS_SSH_HOST_TYPE2_PRODUCTION`) — that mechanism was never wired up (no `paramiko`
+> import exists anywhere in this codebase) and has since been removed from `app/eri/config.py`,
+> but its removal reflects dead scaffolding being cleaned up, not IP whitelisting itself going
+> away, and it never referred to *this* document's AWS account regardless.
 
-```
-ERI_AWS_SSH_HOST_TYPE2_PRODUCTION is required for Type-2 production (whitelisted-IP egress).
-```
-
-The app will refuse to start. Three options, best first:
-
-1. **Remove the now-obsolete guard** at `app/eri/config.py:197-201` — its stated rationale
-   ("whitelisted-IP egress") no longer applies. Cleanest, and costs nothing.
-2. Run `ERI_MODE=type3` — that branch has no SSH requirement at all.
-3. Set a dummy `ERI_AWS_SSH_HOST_TYPE2_PRODUCTION` value. **Not recommended** — it leaves a
-   misleading config key implying an egress path that isn't used.
-
-Note the guard only fires for Type-2 **production**. Type-2 UAT and all Type-3 modes start fine.
+### 2.1 Stale Type-2 startup guard (historical — already removed from the code)
+This section originally described a `RuntimeError` that `app/eri/config.py:197-201` raised at
+app startup whenever `ERI_ENV=production` **and** `ERI_MODE=type2`, demanding
+`ERI_AWS_SSH_HOST_TYPE2_PRODUCTION`. That guard has since been removed entirely — the
+`aws_ssh_host`/`aws_ssh_user`/`aws_ssh_key_path` fields still exist on `ERICredentials` (read
+from `.env`) but have zero consumers, and `assert_credentials_at_startup()` no longer checks
+them. **This does not mean egress can come from an unwhitelisted IP** (see the correction
+above) — it means the enforcement that used to exist in code is gone, and a Type-2
+production/UAT deployment on an unwhitelisted host (which includes the AWS account *this
+document* provisions — see the account-distinction correction above) will simply get its calls
+rejected by ITD at request time rather than failing fast at startup. If the box provisioned
+here is ever run with `ERI_MODE=type2`, either set it up to relay through the separate,
+already-whitelisted AWS account (see `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §12.3's
+WireGuard/NAT relay plan), or run `ERI_MODE=type3` instead, which makes no live API calls at
+all and so has no whitelisting dependency.
 
 ### 2.2 Interactive browser flows need a virtual display
 `app/automation/browser.py:216` launches a *visible* Chrome for interactive jobs
@@ -517,7 +540,7 @@ Otherwise tables auto-create on first run.
 | 8.4 | `sudo reboot`, wait 60 s, re-check 8.1 | confirms restart survival |
 | 8.5 | `free -h` | swap in use, not exhausted |
 | 8.6 | Trigger one import job; `journalctl -u taxify -f` | Playwright launches, job completes |
-| 8.7 | One live ERI call in the target `ERI_MODE`/`ERI_ENV` | succeeds — no IP whitelisting needed |
+| 8.7 | One live ERI call in the target `ERI_MODE`/`ERI_ENV` | For `ERI_MODE=type3`: succeeds, no whitelisting involved (Type-3 makes no live API calls at all). For `ERI_MODE=type2`: **will fail** on this account's egress IP — it is not whitelisted with ITD and this document does not provision that (see §2's account-distinction correction); a Type-2 call only succeeds when relayed through the separate, already-whitelisted AWS account. |
 | 8.8 | Day 2: Billing → Free Tier page | all lines <100% |
 
 ---
@@ -808,5 +831,9 @@ One item could not be made free:
 
 Everything else sits inside the free tier as listed in §3.
 
-*(The ITD IP-whitelisting dependency previously listed here has been eliminated — see the note
-at the top of §2.)*
+*(The ITD IP-whitelisting dependency previously claimed eliminated here has NOT actually been
+eliminated — see the 2026-09-04 correction at the top of §2. A whitelisted IP is still required
+for Type-2 traffic, but that whitelisted infrastructure is a **separate AWS account entirely**,
+not something this deployment provisions, pays for, or needs to account for in its own free-tier
+budget. This document's account stays $0 and unwhitelisted; the whitelisting cost/effort, if
+any, lives entirely in the other account's own history and is out of scope here.)*

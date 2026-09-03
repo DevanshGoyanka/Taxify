@@ -1,12 +1,14 @@
 # ERI Type-2 & Type-3 — UAT/Production Reference and Findings (AY 2026-27)
 
-**Date:** 2026-09-03
+**Date:** 2026-09-03 (§1-11); **Updated:** 2026-09-04 (§12-13 — ITR-4 Type-2 UAT signing
+architecture and `validate`/`submit` implementation)
 **Purpose:** one authoritative document for everything ERI-operational — how Type-2 and Type-3
 actually get from UAT to production (corrected here from an earlier wrong assumption, with the
 real process below), credential architecture, Digest computation, login/session mechanics,
-the Type-3 submission automation, acknowledgement retrieval, and every finding from the
-filing/submission pipeline audit. Complements, and where the two disagree corrects,
-`Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md` (original architecture plan) and
+the Type-3 submission automation, acknowledgement retrieval, every finding from the
+filing/submission pipeline audit, and (§12) the ITR-4 Type-2 UAT signing-architecture
+investigation and `validate`/`submit` implementation. Complements, and where the two disagree
+corrects, `Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md` (original architecture plan) and
 `Docs/ERI_UAT_EXPANSION_PLAN.md` (multi-form UAT-pack rollout plan) rather than replacing
 either — both remain the record of *how the system was built*; this document is the record of
 *how it actually operates* and *what has been verified*.
@@ -371,7 +373,242 @@ separate `errors[]` array, per a comment noting the latter "seen in some Type-2 
 and `eri_post()` in `client.py` (the generic Type-2 HTTP dispatcher) were both read and found
 structurally sound — no defect found in either.
 
-## 11. References
+## 12. ITR-4 Type-2 UAT enablement — signing architecture investigation and
+implementation (2026-09-04)
+
+**Goal:** Taxify already holds Type-2 **production** credentials for ITR-1 (earned by passing
+Type-2 UAT for ITR-1 previously). To get ITR-4 production-enabled the same way, the full
+Type-2 API flow (login → client onboarding → prefill → **validate** → **submit** → e-verify →
+acknowledgement) must be exercised against Type-2 UAT credentials for a dummy-PAN ITR-4 return,
+the results captured into ITD's Test Scenario Sheet, and ITD emailed requesting ITR-4
+enablement. `validate`/`submit` did not exist in this codebase before this session (§10 already
+covered `login`/`add_client`/`everify`/`acknowledgement`/`prefill`) — this section covers
+building them, and a real signing-architecture problem that had to be solved first.
+
+### 12.1 The starting problem: how to sign UAT calls without a 24/7 machine
+
+Type-2 calls must (a) egress from an IP ITD has whitelisted, and (b) carry every payload signed
+with the ERI's own DSC private key. The user's DSC is a **physical USB hardware token**
+(HyperPKI HYP2003, cert holder Sunit Ramashankar Goyanka, issuer Verasys Sub CA 2022) that only
+their local Windows machine can access — it cannot run on a always-on cloud box unless the key
+itself is exported to a portable form.
+
+**Read-only investigation (per explicit instruction: inspect only, never export or mutate the
+key) ruled that out.** `certutil -store -user My <thumbprint>` reported `Private key is NOT
+exportable`; the vendor's own HyperPKI Token Manager GUI's Export function offers only `.cer`
+(public certificate) with no PFX/P12 option. Confirmed via two independent authoritative
+sources: the private key genuinely cannot leave this specific token, by any means.
+
+**Decision:** the real long-term fix is a new file-based or cloud-HSM DSC, re-registered with
+ITD's public-key whitelisting process — a separate, longer effort, explicitly deferred. The
+immediate, narrower goal became: pass ITR-4 UAT now, signing on the user's own local machine
+during attended sessions (no 24/7 infrastructure, no unattended-operation hardening) — the
+existing ngrok-based bridge (§10.3) had already proven this pattern works for ITR-1 UAT; this
+work replaces its unsafe bits and fills the `validate`/`submit` gap.
+
+### 12.2 Step 0 discovery: Python CryptoAPI signing works, once two structural
+bugs are fixed
+
+`envelope.py::sign_data()`'s `"token"` mode (`win32crypt`) was already-written but never
+actually exercised — `pywin32` was commented out of `requirements.txt`. Installing it and
+smoke-testing directly against the plugged-in token **worked immediately**, and ASN.1 inspection
+confirmed it produced a genuine `pkcs7-signedData` (CMS `SignedData`) structure — not dead code.
+But comparing it byte-for-byte against a real, already-ITD-whitelisted captured signature (from
+a prior successful ITR-1 UAT login, `data` length 172, `sign` length 8984) surfaced two real
+defects in the existing implementation:
+
+1. **Attached vs. detached — the code's own comment was backwards.** The original code called
+   `CryptSignMessage(sign_para, (data_bytes,), False)` with the comment *"Set to False to
+   generate an ATTACHED signature (which the Java app uses)"*. ASN.1 inspection of both the real
+   captured sample and a fresh call to the actual working Java `local-dsc-signer` reference
+   (`API_Testing/local-dsc-signer/` — read for reference only, per explicit instruction not to
+   modify or depend on it; its `CmsTokenSigningService.java` calls BouncyCastle's
+   `cmsGenerator.generate(cmsData, false)`, where `false` means **don't encapsulate** = detached)
+   showed the real, working signature is **detached** — the JSON payload is *not* embedded in
+   the CMS blob (it's sent separately via the envelope's own `data` field). The comment had the
+   boolean backwards. **Fixed**: `fDetachedSignature=True`.
+
+2. **Leaf cert only vs. full chain.** The real captured sample embeds **4 certificates** (leaf →
+   issuing sub-CA "Verasys Sub CA 2022" → intermediate CA → root "CCA India 2022"), confirmed by
+   counting distinct `Certificate` SEQUENCEs in the ASN.1 dump. The original code passed only the
+   signing cert with no `MsgCert` chain at all. The intermediate/root certs aren't in the token's
+   own `CurrentUser\My` store — only Windows's system-wide `CA`/`Root`/`AuthRoot` stores carry
+   them, since Windows downloads/caches those separately as part of normal chain-building.
+   **Fixed**: a new `_build_cert_chain()` helper walks Issuer-DN → Subject-DN matches up through
+   those stores (both `CurrentUser` and `LocalMachine` locations) until reaching a self-signed
+   root, and the full chain is passed via `MsgCert`.
+
+With both fixes, the base64 signature length came to 8788 chars — close to the real 8984, but
+not exact. The remaining ~150-byte gap was a **CMS authenticated-attributes block**
+(`contentType`, `signingTime`, `messageDigest`, and an `id-aa-CMSAlgorithmProtection` attribute)
+that BouncyCastle's `JcaSignerInfoGeneratorBuilder` adds by default and Windows
+`CryptSignMessage` does not, unless explicitly told to via its `AuthAttr` parameter.
+
+**Attempting to add these via `CryptSignMessage(..., AuthAttr=[...])` segfaulted** — a hard
+native crash, not a Python exception, while touching the live hardware token. `pywin32` exposes
+no lower-level `CryptSignHash` primitive to work around it (confirmed by reading pywin32's own
+C++ source, `PyCRYPTKEY.cpp`); the only clean workaround would be a from-scratch `ctypes`
+binding to classic CryptoAPI (`CryptAcquireCertificatePrivateKey` → `CryptCreateHash` →
+`CryptSetHashParam` → `CryptSignHash`) plus hand-built CMS assembly. Before building that,
+the no-attributes, detached, full-chain signature was tested directly against a **real ITD
+Type-2 UAT login call** — and it worked:
+
+```
+HTTP 200
+{"messages":[{"code":"EF00000","type":"INFO","desc":"OK","fieldName":null}],
+ "entity":"ERIP013181","transactionId":"FOS000005955097","autkn":"83a8099897de4d06b0090633bbddd80b"}
+```
+
+This confirms ITD's verifier does **not** require the authenticated-attributes block — the
+ctypes/ from-scratch-CMS path was dropped as unnecessary. `envelope.py::sign_data()`'s `"token"`
+mode now: detached signature, full chain, no signed attributes — verified working, not merely
+theorized.
+
+### 12.3 IP whitelisting reality check — why `assert_credentials_at_startup()`
+and `AWS_FREE_TIER_DEPLOYMENT.md` were wrong
+
+The login call above succeeded directly from the user's **local machine's own IP** — no AWS
+relay involved. This does *not* mean IP whitelisting stopped mattering (see §10's own docstring
+fix and the correction below) — the user confirmed their **current local IP happens to already
+be whitelisted for UAT specifically, but not for production**; the AWS jump-box IP (used for
+the original ITR-1 UAT/production work) is whitelisted for **both**. Two real doc/code
+inaccuracies were found and fixed as a result, both of which predate this session and both of
+which actively claimed IP whitelisting was no longer necessary:
+
+> **Account distinction, confirmed directly by the user (2026-09-04) — do not conflate these.**
+> "The AWS jump-box" throughout this section (and §12.4/§12.8's Phase B) refers to a **specific
+> AWS account whose IP is whitelisted with ITD**, used for the original ITR-1 Type-2 UAT/
+> production work. `Docs/AWS_FREE_TIER_DEPLOYMENT.md` describes provisioning an **entirely
+> different, unrelated AWS account** purely to host Taxify's own backend/frontend for testing —
+> that account has no IP whitelisted with ITD and no relationship to ERI API calls at all. The
+> two are separate AWS accounts, separate credentials, separate purposes; Phase B's jump-box
+> work below is scoped exclusively to the whitelisted account, never to the free-tier hosting
+> one.
+
+- `app/eri/config.py::assert_credentials_at_startup()`'s docstring claimed *"That whitelisting
+  requirement no longer applies — ERI endpoints accept the deployment IP directly"*. Wrong —
+  confirmed by both the user directly and the official ITD `List of UAT/Production URLs for
+  Type 2` PDFs (precondition #1 on both). What actually happened: an earlier session removed a
+  dead SSH-jump-host startup guard (`ERI_AWS_SSH_HOST_TYPE2_PRODUCTION` — never wired to any
+  real relay, no `paramiko` import exists anywhere in this codebase) and the docstring
+  conflated "the code guard is gone" with "the requirement it checked is gone." Fixed: the
+  docstring now states plainly that whitelisting is still required, the guard's removal was
+  about dead scaffolding, not the requirement.
+- `Docs/AWS_FREE_TIER_DEPLOYMENT.md` §2 had a **"RESOLVED — ITD IP whitelisting"** callout
+  making the same wrong claim, plus downstream advice (§2.1) recommending removing the (already
+  since-removed) startup guard as "safe," and two more references (§8, §11) repeating the
+  claim. All four corrected in place with dated `> **Correction**` blocks per this repo's
+  established convention — not silently rewritten, so anyone who already acted on the original
+  claim can see exactly what changed and why.
+
+**Resulting two-phase plan, agreed with the user:**
+
+- **Phase A (now, in progress):** build and test `validate.py`/`submit.py` and the rest of the
+  flow directly from the local machine — the current local IP is whitelisted for UAT, and the
+  backend running locally means signing is simply in-process (no network hop to a separate
+  signer needed at all, eliminating an entire planned `remote_signer` `sign_data()` mode and the
+  Java `local-dsc-signer` service from scope — see §12.5).
+- **Phase B (before the real, ITD-reviewed ITR-4 UAT run):** route outbound traffic to ITD
+  through the AWS jump-box (WireGuard tunnel + NAT/MASQUERADE for the specific ITD destination
+  IP), since that IP is whitelisted for production too and the final UAT run that gets reported
+  to ITD should go through production-representative infrastructure. **Not yet built** — the
+  jump-box/WireGuard/NAT setup is the one piece of this plan still outstanding, requiring the
+  user's own AWS access.
+
+### 12.4 Architecture simplifications versus the original plan
+
+Two components originally planned were dropped once the above was confirmed, both by explicit
+user decision after empirical verification, not by default:
+
+- **The Java `local-dsc-signer` service** (`API_Testing/local-dsc-signer/`, a working
+  Spring Boot + BouncyCastle reference the user had used to pass ITR-1 UAT previously). Explicit
+  instruction: *"do not touch it at all, just refer its implementation and implement it
+  independently in python in taxify"* — it was read in full for reference (confirming the
+  detached-signature/full-chain/signed-attributes structure documented in §12.2) but never
+  modified, and is not depended on by the running system. `app/eri/envelope.py`'s Python
+  `"token"` mode is now the sole, independent implementation.
+- **The `remote_signer` `sign_data()` mode** (planned: POST to a `SIGNER_URL` on a WireGuard
+  private address, mirroring the `"ngrok"` mode's `{success, data, sign}` contract). Made moot
+  once the backend itself runs on the same local machine as the DSC token — signing happens
+  in-process via the `"token"` mode, no network hop or separate signer process required. Only
+  Phase B's outbound *network route* to ITD needs a relay; signing itself does not.
+
+### 12.5 New code: `validate.py` / `submit.py` and the routes
+
+Built from `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/
+API_SubmitFlow_v1.1.pdf` (read in full). Both endpoints share an identical request/response
+shape (`app/eri/type2/validate.py::build_itr_payload()` builds it once; `submit.py` imports and
+reuses it), differing only in `serviceName` (`"EriValidateItr"`/`"EriItrSubmit"`) and URL suffix
+(`/validate`/`/submit`, appended to `get_eri_base_url()` the same way every other Type-2 module
+does — the spec PDF's own "API URL" field shows a stale, non-matching path fragment,
+correctly ignored). Both include the mandatory `timeStamp` field (§2/§10), matching the pattern
+every other Type-2 module already uses.
+
+Two new routes, following the existing `_require_type2_mode()` guard pattern exactly:
+`POST /api/v1/eri/validate-itr` and `POST /api/v1/eri/submit-itr`
+(`app/routers/integration.py`), with request schemas `ERIValidateItrRequest`/
+`ERISubmitItrRequest` (`app/schemas/eri.py`).
+
+`app/eri/envelope.py::parse_response_envelope()` was extended to recognize the `errCd`/
+`errFld`/`errCtg`/`asPerItr`/`asComputed`/`variance`/`schId` error shape these two endpoints use
+in their `errors[]` array — distinct from the `{code, desc, fieldName}` shape
+login/addClient/everify use. Without this, every validate/submit-side validation error would
+have collapsed into a generic `ERIApiError(code="UNKNOWN", desc="Unknown Error")`, discarding
+exactly the per-field arithmetic-mismatch detail (`asPerItr` vs. `asComputed` vs. `variance`)
+these endpoints exist to surface. `ERIApiError` (`app/eri/exceptions.py`) gained matching
+optional fields (`category`, `as_per_itr`, `as_computed`, `variance`, `sch_id`) to carry this
+through to callers.
+
+Also confirmed from the spec: even the documented **"Validated Successfully"** sample response
+carries `successFlag: false` (with empty `messages`/`errors` and a real `transactionNo`) — a
+spec documentation anomaly, not something to treat as failure. `parse_response_envelope()`
+deliberately does not key off `successFlag` for this reason; only non-empty `errors[]`/
+`ERROR`-typed `messages[]` entries raise.
+
+### 12.6 A real pre-existing bug found via testing, unrelated to this session's
+own changes
+
+Writing a test that actually exercises the `except ERIApiError as exc:` branch of the new
+`/validate-itr` route immediately failed with `NameError: name 'ERIApiError' is not defined`.
+`app/routers/integration.py` uses `ERIApiError` in **eight** `except` clauses (every Type-2
+route: login, logout, add-client, validate-client-otp, register-client, validate-reg-otp, and
+now validate-itr/submit-itr) but never imported it at module scope. Every existing Type-2 route
+would have crashed with an unhandled `NameError` → 500 instead of a clean 400 the moment any of
+them actually raised an `ERIApiError` in production — none of the pre-existing router tests
+happened to exercise that branch, so it went uncaught until this session's new test did.
+**Fixed:** `from app.eri.exceptions import ERIApiError` added to `app/routers/integration.py`'s
+imports.
+
+### 12.7 Test coverage
+
+- `tests/test_eri_envelope.py` — `parse_response_envelope()`'s new errCd/errFld branch, the
+  legacy shape's continued correctness (regression fence), and the `successFlag: false`
+  "validated successfully" anomaly.
+- `tests/test_eri_type2_validate_submit.py` (new) — `build_itr_payload()`'s field mapping
+  (including the mandatory `timeStamp` and `createdBy` default/override), and
+  `validate_itr()`/`submit_itr()` hitting the correct URL suffix and `serviceName`, with a
+  mocked `requests.post` (no live network call in unit tests).
+- `tests/test_eri_routers.py` — the two new routes' happy path, missing-auth-token 401, and the
+  `ERIApiError` field-detail surfacing (the test that caught §12.6's bug).
+- All fix-dependent tests confirmed via `git stash` to genuinely fail against the pre-fix code
+  before trusting them (this repo's established verification convention) — e.g.
+  `test_parse_response_envelope_validate_submit_error_shape` fails with
+  `code == 'UNKNOWN'` (not `'AssesseeName_001'`) when `envelope.py`'s fix is stashed out.
+- Signing itself (`"token"` mode, the chain-walk, live hardware) is **not** unit-tested — it
+  depends on physical token access and was verified manually this session (§12.2/§12.5) rather
+  than in the automated suite, consistent with how DSC signing has never been part of the
+  regular test run.
+
+### 12.8 What's left before ITR-4 can go to production
+
+1. Phase B: WireGuard + AWS jump-box NAT-routing (§12.3) — not yet built, needs the user's AWS
+   access, targeted for just before the real UAT run below.
+2. A full ITR-4 dummy-PAN UAT run end-to-end (login → client onboarding → prefill if applicable
+   → validate → submit → e-verify → acknowledgement) through Phase B's production-representative
+   path, captured into ITD's Test Scenario Sheet format (mirroring the ITR-1 precedent exactly).
+3. Email ITD requesting ITR-4 production enablement once the sheet is clean.
+
+## 13. References
 
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/ERI API Specification_v1.1 (4).pdf`
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/Digest_generation_ERI 2 (2).pdf`
@@ -382,3 +619,17 @@ structurally sound — no defect found in either.
 - `Docs/ITR1_ITR4_FILING_SUBMISSION_PIPELINE_AUDIT_AY2026_27.md` — the full pipeline audit this
   document's findings were drawn from, with additional detail (e.g. `_personal_info_base`'s
   unreachable PII fallback defaults, the test-isolation fix) not repeated here
+- `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/API_SubmitFlow_v1.1 (1).pdf`
+  — §12.5's source for `validate.py`/`submit.py`'s request/response shape and the errCd/errFld
+  error format
+- `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/ERI Data Signature process
+  guide V0.2 2 1 1 (3).pdf` — ITD's own reference Java/BouncyCastle signing implementation;
+  §12.2's confirmation that CMS/PKCS#7 SignedData (not a bare RSA signature) is the expected
+  format
+- `List of UAT/Production URLs for Type 2` PDFs (same folder) — §12.3's source for the IP
+  whitelisting precondition
+- `Docs/AWS_FREE_TIER_DEPLOYMENT.md` — §12.3 corrects its "RESOLVED — ITD IP whitelisting" claim
+- `app/eri/type2/validate.py`, `app/eri/type2/submit.py`, `tests/test_eri_type2_validate_submit.py`
+  — §12.5's new code and tests
+- `API_Testing/local-dsc-signer/` — the working Java reference read (not modified, not
+  depended on) to confirm §12.2's signature structure findings

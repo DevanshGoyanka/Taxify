@@ -159,11 +159,33 @@ endpoint's parsing step.
 
 ### ERI integration
 
-`app/eri/` is the low-level ITD e-Return Intermediary API client: `envelope.py` (XML envelope
-+ password encryption), `digest.py`, `config.py` (credential/mode resolution — Type-2 API
-gateway vs Type-3 offline utility, switched by env var, validated at startup via
-`assert_credentials_at_startup()`). DSC signing is Windows-only (`win32crypt`); the Linux
-deployment runs Type-3, which needs no DSC.
+`app/eri/` is the low-level ITD e-Return Intermediary API client: `envelope.py` (request
+envelope — `{data, sign, eriUserId}`, `data` a Base64 JSON payload, not XML — + DSC signing +
+password encryption), `digest.py`, `config.py` (credential/mode resolution — Type-2 API
+gateway vs Type-3 offline utility, switched by `(ERI_MODE, ERI_ENV)`, validated at startup via
+`assert_credentials_at_startup()`). `app/eri/type2/` holds the Type-2 REST API modules —
+`login.py`, `add_client.py`, `everify.py`, `acknowledgement.py`, `prefill.py`, `client.py`
+(generic dispatcher), and `validate.py`/`submit.py` (validateItr/submitItr — identical request
+shape, differ only in `serviceName` and URL suffix). Every Type-2 call carries a mandatory
+`timeStamp` field (IST, `yyyy-MM-dd'T'HH:mm:ss.SSS'Z'`) inside the signed payload and must
+egress from an IP ITD has whitelisted — this is still required for both UAT and production;
+do not trust any doc claiming otherwise without checking
+`Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §2/§12 first, which corrects two earlier wrong
+claims to that effect (one in this file's own history, one in `Docs/AWS_FREE_TIER_DEPLOYMENT.md`).
+
+DSC signing (`envelope.py::sign_data()`, `ERI_DSC_SIGNING_MODE`) is Windows-only for the
+`"token"` mode (`win32crypt`, physical USB hardware token via legacy CryptoAPI
+`AT_KEYEXCHANGE`) — verified end-to-end against a live ITD Type-2 UAT call: a **detached** CMS
+(PKCS#7) `SignedData` structure with the **full certificate chain** embedded (leaf + every
+issuer up to the root, walked through the Windows CA/Root/AuthRoot stores — the token itself
+only holds the leaf cert). Do not reintroduce an *attached* signature or a leaf-only chain; both
+were the original (wrong) implementation and are now documented as incorrect in
+`Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §12. CMS authenticated attributes
+(`contentType`/`signingTime`/`messageDigest`/CMS-algorithm-protection, which BouncyCastle adds
+by default) are deliberately *not* included — adding them via `win32crypt.CryptSignMessage`'s
+`AuthAttr` parameter segfaults against this specific hardware CSP, and a live login call
+confirmed ITD's verifier does not require them. The Linux deployment runs Type-3, which needs
+no DSC signing at all.
 
 ### CBDT/ITD source material
 
