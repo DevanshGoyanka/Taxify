@@ -1240,16 +1240,23 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     f"80CCH is only for Agniveer soldiers.",
                     "nature_of_employment",
                 ))
-            if inp.agniveer_date_of_joining:
-                from datetime import date as dt_date
-                age_years = (inp.agniveer_date_of_joining - date(2000, 1, 1)).days / 365.25
-                if age_years < 17 or age_years > 27:
-                    results.append(_make(
-                        "ITR1-R187b", False,
-                        f"80CCH: joining age ~{int(age_years)} years. "
-                        f"Must be between 17 and 27 years at joining.",
-                        "agniveer_date_of_joining",
-                    ))
+            # Age at joining must use the taxpayer's real date of birth, not
+            # a hardcoded reference date -- this previously computed
+            # (joining_date - 2000-01-01).days/365.25, a meaningless
+            # placeholder-date computation rather than an actual age (the
+            # same class of bug as the filing_date=date_of_birth wiring bug
+            # documented earlier in this audit).
+            if inp.agniveer_date_of_joining and inp.filing_profile:
+                dob = inp.filing_profile.date_of_birth
+                if dob:
+                    age_years = inp.agniveer_date_of_joining.year - dob.year
+                    if age_years < 17 or age_years > 27:
+                        results.append(_make(
+                            "ITR1-R187b", False,
+                            f"80CCH: joining age ~{age_years} years. "
+                            f"Must be between 17 and 27 years at joining.",
+                            "agniveer_date_of_joining",
+                        ))
 
     # ========================================================================
     # SECTION: 80EE / 80EEA / 80EEB (Home Loan / EV Loan)

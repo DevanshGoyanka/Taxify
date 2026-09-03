@@ -932,6 +932,26 @@ def test_R041_80ttb_exceeds_os_interest():
     assert failed(results, "ITR4-R041")
 
 
+def test_R041_dividend_income_does_not_pad_80ttb_interest_base():
+    """CBDT Sl 41: 80TTB is restricted to interest (savings+deposits), never
+    dividend income -- section_80ttb.py's calculator already correctly
+    excludes dividend from the interest base, but this validator's
+    cross-check previously included it, silently allowing a claim inflated
+    by dividend income to pass without a warning. Savings interest of
+    Rs 10,000 + dividend of Rs 40,000 must NOT license an Rs 50,000 80TTB
+    claim -- only Rs 10,000 of real interest exists."""
+    inp = _base_input(
+        age_bracket=AgeBracket.SIXTY_TO_80,
+        other_sources_income=OtherSourcesIncome(
+            savings_bank_interest=Decimal("10000"),
+            dividend_income=Decimal("40000"),
+        ),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ttb=Decimal("50000")),
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R041")
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 80G / 80GG
 # ═══════════════════════════════════════════════════════════════════════════════

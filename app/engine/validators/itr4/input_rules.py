@@ -1426,11 +1426,18 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "deductions_chapter6a.amount_80ttb",
                 expected="0 for non-senior", actual=str(ch6a.amount_80ttb)))
 
-        # Rule 41: 80TTB restricted to interest income — enforce cross-check
+        # Rule 41: 80TTB restricted to interest income — enforce cross-check.
+        # CBDT Sl 41's own text: "restricted to interest (savings+deposits)
+        # from OS" -- dividend income is never eligible for 80TTA/80TTB and
+        # must not pad this base. section_80ttb.py's actual calculator
+        # already correctly excludes it (sums only savings_bank_interest +
+        # fixed_deposit_interest), so the final computed deduction was never
+        # wrong; this validator's own cross-check was more permissive than
+        # it should be, silently allowing an inflated amount_80ttb claim
+        # (padded by dividend income) to pass without a warning.
         if ch6a.amount_80ttb > z:
             total_osi_interest = (
                 os_.savings_bank_interest + os_.fixed_deposit_interest
-                + os_.dividend_income
             ) if os_ else z
             if ch6a.amount_80ttb > total_osi_interest:
                 results.append(_make(
@@ -2448,16 +2455,13 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "80D 2b: Senior parent premium entered but 'Parents senior' flag is No",
                 "schedule_80d.has_parents_senior"))
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SUB-SECTION: 80CCH Age at Joining (CBDT Sl 225)
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    if ch6a and ch6a.amount_80cch > z and inp.agniveer_date_of_joining:
-        age_years = (inp.agniveer_date_of_joining - date(2000, 1, 1)).days / 365.25
-        if age_years < 17 or age_years > 27:
-            results.append(_make("ITR4-R225b", False,
-                f"80CCH: joining age ~{int(age_years)}. Must be 17-27.",
-                "agniveer_date_of_joining"))
+    # NOTE: 80CCH age-at-joining (CBDT Sl 225) was previously duplicated here as
+    # ITR4-R225b, computing age as (joining_date - 2000-01-01).days/365.25 -- a
+    # meaningless placeholder-date computation, not the taxpayer's real age
+    # (the exact class of bug already found and fixed elsewhere this session:
+    # a hardcoded reference date substituting for a real field). Removed as a
+    # broken, redundant duplicate of the correctly-implemented ITR4-R226 below,
+    # which already computes this using the real inp.filing_profile.date_of_birth.
 
     # ═══════════════════════════════════════════════════════════════════════════
     # SUB-SECTION: 80GGC Detailed Cross-Foots (CBDT Sl 241-247, 256, 398)

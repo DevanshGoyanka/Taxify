@@ -970,8 +970,32 @@ claimant is no longer blocked), `test_R225_80cch_non_cgov_employee_still_blocked
 claimant is still correctly blocked). No prior test coverage existed for R225/80CCH at all. Full
 backend suite: 1617 passed, same 3 pre-existing unrelated failures, no regressions.
 
+## 15a. Two smaller findings from the same continued sweep
+
+**`ITR4-R041` (80TTB restricted to interest income) padded its cross-check base with
+`dividend_income`**, which is never eligible for 80TTA/80TTB (confirmed against CBDT Sl 41's own
+text: "restricted to interest (savings+deposits) from OS"). `section_80ttb.py`'s actual
+calculator already correctly excludes dividend from the interest base, so the final computed
+deduction was never wrong — only this validator's own cross-check was more permissive than it
+should be, silently allowing an `amount_80ttb` claim inflated by dividend income to pass without
+a warning. Fixed by removing `+ os_.dividend_income` from the check's sum. Test added:
+`test_R041_dividend_income_does_not_pad_80ttb_interest_base`.
+
+**`ITR1-R187b`/`ITR4-R225b` (80CCH Agniveer age-at-joining) used a hardcoded placeholder date**
+(`date(2000, 1, 1)`) instead of the taxpayer's real date of birth — the same class of defect as
+the session's most severe earlier finding (§2's `filing_date` wired to `date_of_birth`). Full
+write-up, including the empirical false-negative proof, is in
+`ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §30 — ITR-4's site was a broken, redundant
+duplicate of the already-correct `ITR4-R226` and was simply removed; ITR-1 had no correct
+duplicate to fall back on, so its computation itself was fixed.
+
 ## 16. Summary of open items after this pass
 
+0g. **Fixed continuing the exhaustive rule-by-rule sweep, shared with ITR-1**: `ITR1-R187b`/
+   `ITR4-R225b` (80CCH Agniveer age-at-joining) used a hardcoded `date(2000, 1, 1)` placeholder
+   instead of the real date of birth — same defect class as §2's `filing_date` bug. Also:
+   `ITR4-R041` (80TTB) padded its interest-income cross-check with dividend income (validator-only,
+   the calculator was already correct). Full write-up: §15a.
 0f. **Fixed continuing the exhaustive rule-by-rule sweep**: `ITR4-R225` (80CCH) compared the raw
    `nature_of_employment` code against the human-readable label `"Central Government"` instead of
    the raw code `"CGOV"` — the exact bug pattern already fixed at 18 other sites this session,

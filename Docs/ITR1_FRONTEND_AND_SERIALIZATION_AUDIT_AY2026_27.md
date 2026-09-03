@@ -2380,3 +2380,39 @@ wrong Rs 19,200-capped result was corrected to the right Rs 25,000 (below the tr
 capping should occur); a new test claims Rs 50,000 and confirms the cap now correctly bites at
 Rs 38,400. Full backend suite: 1613 passed, same 3 pre-existing unrelated failures, no
 regressions. Full detail: `ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §13.
+
+## 30. Real bug found and fixed: `ITR1-R187b`/`ITR4-R225b` (80CCH Agniveer age-at-joining) used a
+hardcoded placeholder date instead of the real date of birth (2026-09-03)
+
+**Found continuing the exhaustive rule-by-rule sweep of ITR-4's `input_rules.py`**, which
+surfaced the identical bug in ITR-1's own equivalent check on inspection. Both computed the
+Agniveer's age at joining as `(joining_date - date(2000, 1, 1)).days / 365.25` — measuring years
+elapsed since an arbitrary fixed date, not the taxpayer's actual age. This is the same *class* of
+defect as the session's most severe earlier finding (§24's `filing_date` wired to `date_of_birth`
+instead of a real filing date) — a hardcoded stand-in silently substituting for a field that
+should have been read from the real taxpayer data (`filing_profile.date_of_birth`, present on
+both `ITR1Input` and `ITR4Input` and already correctly used elsewhere in each file).
+
+**Impact**: for any joining date in the plausible AY 2026-27 range (the Agniveer scheme having
+started in 2022), `date(2000, 1, 1)` as a reference point happens to produce numbers that land in
+roughly the right ballpark as a real age *would* for someone actually eligible — which is exactly
+why this went unnoticed rather than producing an obviously-wrong number every time. But it is
+still a materially wrong computation for any taxpayer whose real date of birth differs meaningfully
+from 1 January 2000: **confirmed empirically**, a taxpayer born in 1975 joining in 2023 (real age
+~48, clearly outside the statutory 17–27 window) was **not flagged** by the old formula (which
+computed ≈23 years, falsely appearing eligible) — a false negative that would let an ineligible
+80CCH claim through undetected.
+
+**Fix, ITR-4 (`ITR4-R225b`)**: this exact site already had a *correct*, redundant duplicate
+elsewhere in the same file (`ITR4-R226`, already using `inp.filing_profile.date_of_birth`
+correctly) — the broken `R225b` block was simply removed as dead, incorrect, and unnecessary.
+**Fix, ITR-1 (`ITR1-R187b`)**: no correct duplicate existed here, so the computation itself was
+fixed to use `inp.filing_profile.date_of_birth`, matching ITR-4's `R226` pattern exactly.
+
+**Tests added** (`tests/test_itr1_input_validation.py`):
+`test_R187b_agniveer_age_uses_real_date_of_birth_not_placeholder` (the 1975-born/2023-joining
+false-negative scenario, now correctly flagged) and
+`test_R187b_agniveer_real_age_within_range_not_blocked` (a genuinely eligible Agniveer, born 2002,
+still passes). No test coverage existed for `ITR4-R225b` (it was simply removed; `ITR4-R226`'s
+existing correctness was unaffected). Full backend suite: 1620 passed, same 3 pre-existing
+unrelated failures, no regressions.

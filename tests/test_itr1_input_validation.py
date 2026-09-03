@@ -1997,6 +1997,63 @@ def test_R187_non_cgov_employee_still_blocked_from_80cch():
     assert failed(results, "ITR1-R187")
 
 
+def test_R187b_agniveer_age_uses_real_date_of_birth_not_placeholder():
+    """ITR1-R187b (80CCH: age 17-27 at joining) previously computed age as
+    (joining_date - 2000-01-01).days/365.25 -- a meaningless placeholder-date
+    computation, not the taxpayer's real age. A taxpayer born in 1975
+    joining in 2023 (real age ~48, clearly ineligible) was NOT flagged by
+    the old formula (~23 years, which falsely appeared within 17-27)."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("200000")),
+        agniveer_date_of_joining=date(2023, 1, 1),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(1975, 1, 1),
+            employer_category="CGOV", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R187b")
+
+
+def test_R187b_agniveer_real_age_within_range_not_blocked():
+    """A genuine Agniveer joining at a real age within 17-27 must not be
+    flagged."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("200000")),
+        agniveer_date_of_joining=date(2023, 1, 1),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(2002, 1, 1),
+            employer_category="CGOV", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R187b")
+
+
 def test_judges_exemption_not_blocked_for_real_cgov_employee():
     """R270/R301: a genuine CGOV employee (e.g. a Supreme/High Court judge)
     claiming the Judge Salaries Act exemption was previously always
