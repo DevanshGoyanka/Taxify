@@ -169,8 +169,15 @@ flagging as a defect" discipline already established in the compute audits' meth
 The bulk of the file (locator strategies, mat-select/mat-option handling, multi-fallback click
 helpers) is UI-automation glue code inherently coupled to the live portal's current markup —
 a real, acknowledged fragility class (portal UI changes could break any of these selectors), but
-one the team has clearly already iterated against a real UAT portal repeatedly (comments cite
-specific prior failure modes and their fixes throughout), not a static-analysis-catchable defect.
+one the code's own comments show real iteration against, citing specific prior failure modes and
+their fixes throughout (anti-automation navigation protection, rate-limit recovery, the
+Filing-Type-dropdown due-date gating). **Correction**: this was originally attributed to
+iteration "against a real UAT portal" — per §11a, no live Type-3 UAT portal exists, so that
+attribution was wrong. The iteration evidenced in these comments must instead be against either
+the **production** portal (Type-3 production credentials for ITR-1/ITR-4 are already
+ITD-enabled per `Docs/ERI_UAT_EXPANSION_PLAN.md`'s status table) or carried over from the
+referenced "NRITAX" prior implementation the code explicitly credits several helpers to — which
+one wasn't determined in this pass. Either way, not a static-analysis-catchable defect.
 
 ## 7. `app/routers/filing.py` — real defense-in-depth gap found and fixed
 
@@ -274,6 +281,61 @@ full re-audit of the shared download-automation infrastructure:
 - `app/automation/downloader*.py`, `ais_converter.py`, `as26_converter.py`,
   `pdf_unlocker.py` (the AIS/TIS/26AS import pipeline) — a separate subsystem from filing
   entirely, out of scope for a *filing/submission* pipeline audit specifically.
+
+## 11a. Filing-type coverage (original/belated/revised/notice-response) — mapping verified,
+extra-field handling unverified and *unverifiable* before production, by design of Type-3 UAT
+
+**What's confirmed correct**: `app/filing_automation/uploader.py`'s `_RETURN_FILE_SEC_TO_SECTION`
+dropdown-selection table was checked against the official ITR-1 JSON schema's own
+`FilingStatus.ReturnFileSec` enum description (`"11 : 139(1)-On or before due date, 12 :
+139(4)-After due date, 13 : 142(1), 14 : 148, 16 : 153C, 17 : 139(5)-Revised, 18 : 139(9), 20 :
+119(2)(b)-After condonation of delay"`) — all 8 codes match exactly, and the filing section is
+read from the generated JSON itself (`_filing_section_from_json`) rather than a separately-passed
+argument that could drift out of step with the artifact. The compute side also correctly
+populates the revised-return/notice-response metadata fields
+(`OrigRetFiledDate`/`ReceiptNo`/`NoticeNo`/`NoticeDateUnderSec`) in the JSON when the filing
+profile carries them, confirmed directly in `app/engine/itd/itr1.py`/`itr4.py`.
+
+**What's not confirmed, and — this is the important correction — cannot be confirmed by a
+pre-production test for Type-3**: grepping the entire uploader for any handling of these same
+fields as *portal UI* elements (as opposed to JSON content) returns zero matches. If the ITD
+portal's real upload wizard shows a separate on-screen field for the original acknowledgement
+number or notice number when "Revised" or "Response to Notice" is selected in the Filing Type
+dropdown (a common pattern — dropdown selection plus a confirmation field, independent of what's
+embedded in the uploaded JSON), the automation has no code to fill it.
+
+Initially this was framed as "verify with a UAT dry run before trusting it in production" — that
+framing was **wrong for Type-3**, corrected directly by the user with real operational knowledge
+of the ITD onboarding process: **Type-3 UAT has no live portal to test the automation against at
+all.** The UAT step is a paperwork gate — generate a JSON on dummy PAN data with Type-3 UAT
+credentials, email it to `erihelp@incometax.gov.in`, ITD performs an offline sanity check
+(schema/structure/mandatory fields per the onboarding SOP), and only after that approval does ITD
+issue Type-3 *production* credentials — the first credential set that is ever actually usable
+against a live portal session. (Type-2's process is structurally different and does have a live
+UAT API to exercise: submit dummy PAN data via the Type-2 UAT API, compile the required results
+into an Excel sheet, email that sheet to ITD, and only then receive Type-2 production
+credentials.) `Docs/ERI_UAT_EXPANSION_PLAN.md`'s Phase 12/13 wording — *"Manually upload one
+generated JSON per form to the ITD Type-3 UAT portal as the control step"* — assumed exactly
+this nonexistent capability, confirmed by the user (not a self-resolved ambiguity) and now fixed
+at every occurrence across that document and `Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md` (which had
+the same wrong assumption baked into its Phase 3 "Required user UAT before commit" checklist,
+its A2/A6 validation notes, and its §9.1 Type-3 Testing section) — see
+`Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §2.3 for the consolidated list of what was corrected
+where.
+
+**Consequence for what "production ready" can mean here**: since no rehearsal environment
+exists, the *first* real Type-3 production filing of each less-common filing-type variant
+(revised, notice-response) is inherently also the first live exercise of that specific code path
+— there is no way to de-risk this in advance the way the compute/JSON side can be de-risked with
+local schema validation. The one deliberate mitigation already built into the code, not added by
+this audit: `worker.py`'s Playwright context runs in **visible, interactive mode**, specifically
+(per its own comment) *"so the operator can watch the portal upload and intervene if the portal
+throws an unexpected prompt."* That is the real safety net for this specific class of risk, given
+a sandboxed dry run is structurally unavailable for Type-3. The practical recommendation, not a
+code change: treat the first production filing of each filing-type variant (original, belated,
+revised, notice-response) as requiring close, attentive operator supervision — not the passive
+"click submit and check back later" posture that a well-rehearsed automation would otherwise
+justify — until each variant has been observed to complete cleanly at least once.
 
 ## 12. Verification
 

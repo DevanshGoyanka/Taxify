@@ -1680,8 +1680,16 @@ Mirrors `ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md` Phase 8: sweep for debug 
 no `getattr`-silent-default masks a real validation gap, run the full ITR-1/2/3/4 regression
 suite together, generate a Type-3 UAT sample for ITR-2 and ITR-3 via
 `scripts/eri_uat_sanity.py` (registering both forms' draft builders per
-`Docs/ERI_UAT_EXPANSION_PLAN.md` Phases 6/11), and manually upload one sample per form to the
-ITD UAT portal as the control step before any UAT pack is emailed.
+`Docs/ERI_UAT_EXPANSION_PLAN.md` Phases 6/11), and email the sample(s) to
+`erihelp@incometax.gov.in` for ITD's offline sanity check as the control step before the rest of
+that UAT pack is emailed.
+
+> **Correction (2026-09-03, confirmed by the user with real onboarding experience — see
+> `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §2.1): there is no live Type-3 UAT portal to
+> manually upload to.** Type-3 has zero ITD API access by definition; the only Type-3 UAT
+> deliverable is the emailed JSON, and ITD's offline sanity check is the actual control step —
+> not a portal upload the ERI performs. The line above previously said "manually upload one
+> sample per form to the ITD UAT portal," which described a capability that does not exist.
 
 ---
 

@@ -194,13 +194,36 @@ The two deselected tests are pre-existing repository contradictions unrelated to
 1. Restart the backend and confirm both workers start without affecting `DOWNLOAD_ALL`.
 2. Run one existing Prefill/download automation job and confirm behavior is unchanged.
 3. Generate and manually download a known-good ITR-1 JSON; confirm SWCreatedBy and 44-character Digest.
-4. Upload the same JSON manually to the Type-3 UAT portal as the control.
-5. Queue `/submit` with `verification_mode="LATER"` first; confirm the portal returns an acknowledgement and filing status becomes `submitted`.
-6. After Verify Later works, test Aadhaar OTP or Bank EVC through the ephemeral `/jobs/{job_id}/otp` endpoint.
-7. Confirm the acknowledgement PDF becomes available after successful e-verification.
-8. **NEW** — Click the **Direct Submit** button in the ITR Computation header (beside **PDF**) and confirm the full flow (generate → queue → visible-browser upload → acknowledgement pill) works end-to-end from the frontend, with no manual JSON download required.
 
-**Awaiting:** User Type-3 UAT approval. Do not commit or push Phase 3 until approval.
+> **Correction (2026-09-03, confirmed by the user with real onboarding experience — see
+> `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §2.1): items 4–8 below described testing against a
+> live Type-3 UAT portal. No such environment exists** — Type-3 has zero ITD API access by
+> definition, and its UAT step is a paperwork gate (email a UAT-credential-stamped JSON on dummy
+> PAN data to `erihelp@incometax.gov.in`, ITD performs an offline sanity check, only then are
+> Type-3 *production* credentials issued). This is almost certainly why Phase 3 has sat at
+> "AWAITING UAT" without resolving — the checklist asked for a step that was never possible to
+> complete. The corrected picture:
+>
+> - Items 1–3 above remain valid and can be verified locally, with no live portal needed.
+> - The Type-3 UAT sanity-check deliverable is simply the emailed JSON itself (§2.1) — there is
+>   no separate "upload to a UAT portal" action for the ERI to perform.
+> - **Items 4–8 (portal upload, `/submit`, OTP/EVC verification, acknowledgement download, the
+>   Direct Submit button's full end-to-end flow) can only be exercised once Type-3 *production*
+>   credentials are issued** — the first credential bundle ever actually usable against a live
+>   portal session. There is no pre-production rehearsal environment for these steps.
+> - Practical consequence: the submission automation's first live exercise is inherently the
+>   first real production filing. The mitigation already built into the code — a visible,
+>   interactive (non-headless) browser specifically so the operator can watch and intervene on
+>   an unexpected prompt — is the load-bearing safety net for this, not a nice-to-have. Treat the
+>   first production filing of each filing-type variant (original, belated, revised,
+>   notice-response) as requiring close operator supervision until it has been observed to
+>   complete cleanly at least once. Full detail:
+>   `Docs/ITR1_ITR4_FILING_SUBMISSION_PIPELINE_AUDIT_AY2026_27.md` §11a,
+>   `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §9.
+
+**Awaiting:** Type-3 production credentials (via the ITD email sanity-check process, §2.1)
+before items 4–8 above can be exercised at all. Do not commit or push Phase 3 pending on a
+UAT-portal test that cannot happen — commit readiness for items 1–3 is independent of this.
 
 ---
 
@@ -672,9 +695,12 @@ raises `ERIConfigurationError` if the resolver cannot supply the SW_ID).
 - 12 regression tests in `tests/test_eri_creation_info_invariant.py`
   lock the invariant (no placeholder SW_ID, no placeholder Digest,
   same-bundle rule, full-document scope, reference byte-identity).
-- Generate an ITR-1 JSON with Type-3 UAT creds → submit manually to ITD
-  UAT portal → passes validation. Repeat with Type-3 prod creds → passes
-  on prod portal.
+- Generate an ITR-1 JSON with Type-3 UAT creds → email to ITD for the
+  offline sanity check (§2.1 of `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md`
+  — there is no live Type-3 UAT portal to submit to) → ITD confirms it
+  passes. Repeat once Type-3 prod creds are issued, this time against the
+  real production portal — the first live portal exercise possible for
+  Type-3 (corrected 2026-09-03).
 
 ### A3: Local CBDT Validation Layer (CRITICAL for Type-3)
 
@@ -845,7 +871,10 @@ class PortalUploader:
 - **A6.6:** ARN extraction — the portal shows `Acknowledgement No. XXXXXXXXXXXXX` on the confirmation page; parse it.
 - **A6.7:** Failure modes — portal-side validation errors (the JSON passed local validation but portal still rejects): capture the error banner text, return as structured failure.
 
-**Validation:** E2E test with a UAT test PAN on the ITD UAT portal. Manual upload of the same JSON as a control.
+**Validation:** E2E test with a real test PAN, on the **production** ITD portal once Type-3
+production credentials are issued — no live Type-3 UAT portal exists to test against beforehand
+(corrected 2026-09-03; see `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §2.1). Pre-production
+validation is limited to local schema/digest/rule checks (A2/A3/A5).
 
 ### A7: Type-3 Acknowledgement Downloader (Playwright)
 
@@ -1128,7 +1157,7 @@ Every filing action (generate, validate, upload, everify, ack) is audit-logged w
 | Step | Work Item | Deliverable |
 |---|---|---|
 | 3.1 | A5: JSON exporter | `.json` file download works |
-| 3.2 | A6: Portal uploader (Playwright) | Upload to UAT portal returns ARN |
+| 3.2 | A6: Portal uploader (Playwright) | Upload to the production portal returns an ARN (no Type-3 UAT portal exists to test this against pre-production — corrected 2026-09-03) |
 | 3.3 | A7: Acknowledgement downloader | PDF downloaded from portal |
 | 3.4 | A8: e-Verify on portal | Aadhaar OTP / Bank EVC / Verify Later |
 | 3.5 | A9: Unified filing router | All `/api/v1/filing/*` endpoints live |
@@ -1168,8 +1197,13 @@ Every filing action (generate, validate, upload, everify, ack) is audit-logged w
 
 - **Unit:** `test_digest.py` (known-vector), `test_validators_itr1..4.py` (known-good and known-bad JSONs from ITD UAT test data).
 - **Integration:** `test_filing_orchestrator.py` (produces valid JSON for each form).
-- **E2E (UAT):** `test_portal_upload_itr1.py` — Playwright uploads to ITD UAT portal, asserts ARN returned.
-- **Manual control:** Same JSON uploaded manually to portal must also succeed (validates that automation isn't masking a JSON defect).
+- **E2E (production only — no Type-3 UAT portal exists to test against beforehand, corrected
+  2026-09-03):** `test_portal_upload_itr1.py` — Playwright uploads to the real ITD portal once
+  Type-3 production credentials are issued, asserts ARN returned. Section 9.4's UAT-certification
+  process is the actual pre-production gate for Type-3, not a portal test.
+- **Manual control (production only, same reason):** the first production upload should also be
+  performed manually once, as a control, to validate the automation isn't masking a JSON defect
+  — since there is no UAT-stage opportunity to run this control earlier.
 
 ### 9.2 Type-2 Testing (Next Season)
 

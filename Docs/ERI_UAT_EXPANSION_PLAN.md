@@ -170,17 +170,32 @@ the real ITD test-data sheet where it has matching scenarios, registered into
 ## Phase 12 — Generate + verify the Type-3 UAT pack (ITR-2, ITR-3)
 
 Run `scripts/eri_uat_sanity.py --mode type3 --forms ITR-2 ITR-3 --output-dir
-downloads/type3_uat_sanity`. Verify per the Verification section below. Manually upload one
-generated JSON per form to the ITD Type-3 UAT portal as the control step (same control the
-original DUAL_MODE plan's Phase 3 UAT required) before anything is mailed.
+downloads/type3_uat_sanity`. Verify per the Verification section below, then **email the
+generated JSON(s) directly to `erihelp@incometax.gov.in`** for ITD's offline sanity check
+(schema/structure/mandatory fields, 1–2 working days' turnaround per the onboarding SOP).
+
+> **Correction (2026-09-03, confirmed by the user with real onboarding experience — see
+> `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §2.1): there is no live Type-3 UAT portal to
+> manually upload to.** Type-3 has zero ITD API access by definition, and the UAT step is a
+> paperwork gate, not a rehearsal environment — the earlier wording above ("manually upload...
+> to the ITD Type-3 UAT portal as the control step") described a capability that does not
+> exist and has been removed. The only Type-3 UAT deliverable is the emailed JSON itself; ITD's
+> sanity check *is* the verification step, not a portal upload the ERI performs.
 
 ## Phase 13 — Generate + verify the Type-2 UAT pack (ITR-2, ITR-3, ITR-4)
 
 Run `scripts/eri_uat_sanity.py --mode type2 --forms ITR-2 ITR-3 ITR-4 --output-dir
 downloads/type2_uat_sanity`. ITR-4 is included here because Type-2 production enablement is
 only done for ITR-1 so far — ITR-4 needs a Type-2 UAT sample too, even though its Type-3
-sample already shipped. Same verification + manual-upload control as Phase 12, against the
-Type-2 UAT portal.
+sample already shipped.
+
+> **Correction (2026-09-03): Type-2's UAT step is not a portal upload either — it is a live
+> API rehearsal.** Submit the dummy/test PAN data through the real Type-2 UAT API (this *is* a
+> genuine sandbox, unlike Type-3's), compile the required output from those API calls into
+> ITD's prescribed Excel sheet ("UAT Test Scenario Sheet"), and email that sheet to ITD for
+> review. Production credentials are issued after ITD approves the sheet — there is no separate
+> "upload to a UAT portal" step for Type-2 either. See
+> `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §2.2 for the full process.
 
 ---
 
@@ -219,8 +234,10 @@ started.
   `can_upload=True`, zero Category-A blocking errors.
 - **Regression:** `pytest tests/test_itr1_*.py tests/test_itr4_*.py -v` stays green through
   every phase — ITR-1/ITR-4 must never regress while ITR-2/3/5/6/7 are built.
-- **Manual control:** one generated JSON per form, Type-3 flavor, manually uploaded to the
-  ITD UAT portal before that form's pack is emailed.
+- **ITD sanity-check control:** one generated JSON per form, Type-3 flavor, emailed to
+  `erihelp@incometax.gov.in` for ITD's offline sanity check before the rest of that mode's pack
+  is emailed. (Corrected 2026-09-03 — there is no live Type-3 UAT portal to manually upload to;
+  see `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §2.1. The email *is* the control step.)
 
 ## Update discipline
 
