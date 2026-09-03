@@ -192,6 +192,33 @@ for genuine pre-compute gates, not a transcription of the PDF. ITR-2's validator
 tracked rule-by-rule (implemented vs. structurally-covered vs. genuinely out of scope, each
 cited by its official rule number) in `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` §Phase 5.
 
+The three official source-document types check *different* things, and passing one says nothing
+about the others: `Official JSON Schema/` only verifies type/required/min-max/pattern/enum shape;
+`Official Validations/` (the rules PDFs) verify business-rule consistency of already-computed
+values; only `Official ITR FORMS/` (the plain gazetted form PDFs, Parts A–D) shows the actual
+arithmetic sequence a value is supposed to go through (e.g. Part D's D1→D17-style tax-computation
+chain) — a JSON field can be schema-valid and pass every rule in the Validation Rules PDF while
+still holding the *wrong number*, if the ITD builder maps the wrong calculator field into it.
+This class of bug is real and has happened: the official schema's own `description` for a JSON
+field does not necessarily match what a same/similarly-named internal calculator variable holds
+— `ITR{N}_TaxComputation.NetTaxLiability` is documented as "Balance Tax After Relief" (pre-
+interest/fees) but was wired to the calculator's `net_tax_liability`, which is a *different,
+larger* quantity (the fully-final total, interest and fees included) that only happens to share
+the name. Always check the schema's `description` field for a JSON key before assuming a
+similarly-named calculator field is the right source: the two vocabularies are independently
+chosen and only coincidentally overlap.
+
+When transcribing a Validation Rules PDF for a cross-reference audit, save the transcription as a
+permanent file next to that form's validators (e.g.
+`app/engine/validators/itr4/official_rules_reference.py`) rather than a scratch file, so a future
+audit pass doesn't have to re-read the PDF from scratch. Rule IDs inside a form's validators
+should be unique and namespaced by what they check: `input_rules.py`'s CBDT-numbered pre-compute
+gates use `ITR{N}-R###` (tracking the PDF's own numbering where a clean 1:1 mapping exists);
+`calc_rules.py`'s post-computation arithmetic/cross-schedule-consistency checks are *not*
+CBDT-numbered rules and must not share that namespace — ITR-4's `calc_rules.py` uses
+`ITR{N}-C###` for exactly this reason, after a duplicate-ID audit found ~90 accidental collisions
+between the two files' independently-sequenced numbering.
+
 ### Database
 
 SQLite via SQLAlchemy (`app/db/`). Core tables: `user`, `client` (PAN, encrypted
