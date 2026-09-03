@@ -863,8 +863,56 @@ unchanged; HUF is now correctly blocked too.
 unaffected — SAHAJ is individual-only, with no Firm/HUF assessee-type concept at all. Full backend
 suite: 1611 passed (3 new tests), same 3 pre-existing unrelated failures, no regressions.
 
-## 13. Summary of open items after this pass
+## 13. Real, financially material bug found and fixed: disabled-employee transport allowance
+exemption was capped at half the correct statutory amount — shared with ITR-1 (2026-09-03)
 
+**Found continuing the exhaustive rule-by-rule sweep**, cross-checking `ITR4-R105`'s hardcoded
+transport-allowance ceiling (`38_400`) against the constant the *calculator* actually uses for
+the same figure, `app/engine/constants.py::TRANSPORT_ALLOWANCE_DISABLED_LIMIT` — and finding they
+disagreed (`38400` in the validator vs. `19200` in the constant).
+
+**The rule**: Section 10(14)(ii) read with Rule 2BB(1)(f) exempts transport allowance paid to a
+blind, deaf-and-dumb, or orthopedically-handicapped employee to meet commuting expenses, up to
+Rs 3,200/month = **Rs 38,400/year**. Confirmed against the primary source: CBDT ITR-4 Validation
+Rules rule 186, *"10(14)(ii) transport allowance for physically handicapped should not exceed
+Rs 38,400"*. (The *general*, non-disability transport allowance — historically Rs 1,600/month —
+was withdrawn entirely by Finance Act 2018, folded into the standard deduction; it is not a live
+exemption for AY 2026-27 at all.)
+
+**The bug**: `TRANSPORT_ALLOWANCE_DISABLED_LIMIT`'s own comment read *"Transport allowance for
+disabled: Rs 1,600/month = Rs 19,200/year"* — it had taken the withdrawn *general* allowance's
+old rate and mislabeled/misapplied it as if it were the disability-specific figure, which is
+actually double that (Rs 3,200/month). Since `app/engine/schedules/salary.py::_exempt_transport()`
+is the sole consumer of this constant (confirmed via a full-repo grep — no other call site would
+be affected), every disabled employee's transport allowance exemption was silently capped at
+**half** its correct statutory ceiling, directly overstating taxable salary income and tax
+payable. This constant is shared infrastructure — `app/engine/draft_to_itr4_input.py` reuses
+ITR-1's `_map_salary`/salary schedule wholesale, so the bug affected both forms identically, not
+just the one where it was found (this pattern — a rule the validator gets right while the
+calculator's *separately-sourced* constant is wrong — is now the fourth confirmed instance this
+session: 80CCD(2)'s regime rate, the 57(iia) new-regime cap, and this).
+
+**Fix**: `TRANSPORT_ALLOWANCE_DISABLED_LIMIT` corrected from `19200` to `38400`, with the comment
+rewritten to cite the correct rule and the primary-source confirmation.
+
+**Tests updated/added** (`tests/test_salary_schedule.py`): the pre-existing
+`test_disabled_employee_transport_exemption_reads_real_field` claimed Rs 25,000 and asserted the
+(now-understood-to-be-wrong) capped result of Rs 19,200 — updated to assert the correct Rs 25,000
+(under the real Rs 38,400 cap, so no capping should occur at that claim level). New test
+`test_disabled_employee_transport_exemption_capped_at_38400` claims Rs 50,000 and asserts the cap
+now correctly bites at Rs 38,400, not Rs 19,200. `tests/test_draft_to_itr1_input.py`'s existing
+end-to-end test claimed exactly Rs 19,200 (a value that happens to be within *both* the old and
+new caps, so its assertion was unaffected) — only its comment was corrected to stop implying
+19,200 is the statutory ceiling. Full backend suite: 1613 passed, same 3 pre-existing unrelated
+failures, no regressions.
+
+## 14. Summary of open items after this pass
+
+0d. **Fixed continuing the exhaustive rule-by-rule sweep, shared with ITR-1, live in production**:
+   `TRANSPORT_ALLOWANCE_DISABLED_LIMIT` was Rs 19,200 (half the correct Rs 38,400 statutory
+   ceiling for a disabled employee's Section 10(14)(ii) transport allowance exemption) —
+   confirmed against the primary CBDT source and the codebase's own already-correct validator
+   figure. Full write-up: §13 above.
 0c. **Fixed starting the exhaustive rule-by-rule sweep, ITR-4-only**: `ITR4-R043` (Section 80U)
    was nested inside the Firm-only assessee-type block, so an HUF filer was never blocked from
    claiming 80U (an individual's-own-disability deduction) even though the calculator itself has

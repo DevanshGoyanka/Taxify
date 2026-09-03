@@ -140,7 +140,23 @@ def test_disabled_employee_transport_exemption_reads_real_field():
         is_disabled_employee=True,
     )
     result = compute(salary_input, TaxRegime.OLD)
-    assert result.transport_exempt == Decimal("19200")
+    assert result.transport_exempt == Decimal("25000")
+
+
+def test_disabled_employee_transport_exemption_capped_at_38400():
+    """Sec 10(14)(ii) read with Rule 2BB(1)(f): transport allowance for a
+    blind/deaf-and-dumb/orthopedically-handicapped employee is exempt up
+    to Rs 3,200/month = Rs 38,400/year -- confirmed against the primary
+    source (CBDT ITR-4 Validation Rules rule 186). A prior bug capped this
+    at Rs 19,200 (half the correct figure, the withdrawn general
+    non-disability allowance's old rate) for every disabled employee."""
+    salary_input = SalaryIncome(
+        gross_salary=Decimal("500000"),
+        transport_allowance=Decimal("50000"),
+        is_disabled_employee=True,
+    )
+    result = compute(salary_input, TaxRegime.OLD)
+    assert result.transport_exempt == Decimal("38400")
 
 
 def test_children_allowances_use_real_number_of_children():

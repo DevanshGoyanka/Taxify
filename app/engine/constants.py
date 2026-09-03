@@ -63,8 +63,19 @@ LEAVE_ENCASHMENT_EXEMPTION_LIMIT: Final[Decimal] = Decimal("2500000")
 # Sec 10(10C) — VRS / retrenchment compensation: capped at Rs 5 lakh.
 VRS_COMPENSATION_EXEMPTION_LIMIT: Final[Decimal] = Decimal("500000")
 
-# Sec 10(14)(i) — Transport allowance for disabled: Rs 1,600/month = Rs 19,200/year.
-TRANSPORT_ALLOWANCE_DISABLED_LIMIT: Final[Decimal] = Decimal("19200")
+# Sec 10(14)(ii) read with Rule 2BB(1)(f) -- transport allowance for a
+# blind/deaf-and-dumb/orthopedically-handicapped employee to meet commuting
+# expenses: Rs 3,200/month = Rs 38,400/year. (The general, non-disability
+# transport allowance this constant's old Rs 1,600/month figure actually
+# described was withdrawn by Finance Act 2018, folded into the standard
+# deduction -- it is not a live exemption for AY 2026-27 at all. Confirmed
+# against the primary source: CBDT ITR-4 Validation Rules rule 186, "10(14)
+# (ii) transport allowance for physically handicapped should not exceed
+# Rs 38,400" -- this codebase's own validator (ITR4-R105/ITR1 equivalent)
+# already hardcoded the correct 38,400 figure directly, while this
+# constant -- the one the calculator actually used -- was wrong, silently
+# halving the exemption for every disabled employee claiming it.)
+TRANSPORT_ALLOWANCE_DISABLED_LIMIT: Final[Decimal] = Decimal("38400")
 
 # Sec 10(14) — Children Education Allowance: Rs 100/month per child (max 2) = Rs 1,200/year.
 CHILDREN_EDUCATION_ALLOWANCE_LIMIT: Final[Decimal] = Decimal("1200")

@@ -2345,3 +2345,38 @@ later quarter's safe harbor), and confirmation December has no equivalent except
 suite: 1606 passed, same 3 pre-existing unrelated failures, no regressions. Shared module with
 ITR-4 (`app/engine/calculators/itr4.py` calls the same `compute_234c`) — no ITR-4-specific
 write-up needed since the fix and its correctness apply identically to both forms.
+
+## 29. Real bug found and fixed: disabled-employee transport allowance exemption capped at half
+the correct statutory amount — found during ITR-4's exhaustive rule-by-rule sweep, shared with
+ITR-1 (2026-09-03)
+
+**Found while sweeping ITR-4's `input_rules.py` rule-by-rule** (continuing after the
+tax-calculation-flow priority) by cross-checking `ITR4-R105`'s hardcoded transport-allowance
+ceiling (`38_400`, matching the official CBDT rule text) against
+`app/engine/constants.py::TRANSPORT_ALLOWANCE_DISABLED_LIMIT` — the constant the *calculator*
+actually uses for the same figure — and finding they disagreed: the constant was `19200`, exactly
+half.
+
+**The law**: Section 10(14)(ii) read with Rule 2BB(1)(f) exempts transport allowance paid to a
+blind, deaf-and-dumb, or orthopedically-handicapped employee up to Rs 3,200/month = **Rs
+38,400/year**. (The unrelated *general* transport allowance, historically Rs 1,600/month, was
+withdrawn entirely by Finance Act 2018 and folded into the standard deduction — not a live
+exemption today.) The constant's own comment had mislabeled/misapplied that withdrawn general
+rate as if it were the disability-specific figure.
+
+**Impact**: `app/engine/schedules/salary.py::_exempt_transport()` is this constant's sole
+consumer (confirmed by a full-repo grep), so every disabled employee's transport allowance
+exemption was silently capped at half its correct ceiling — directly overstating taxable salary
+income and tax payable. Since ITR-4's mapper reuses ITR-1's `_map_salary`/salary schedule
+wholesale, both forms were affected identically. This is the same pattern as §27's 80CCD(2) fix
+and the ITR-4 doc's §11 57(iia) fix — a validator citing the correct figure while the
+calculator's separately-sourced constant is wrong.
+
+**Fix**: `TRANSPORT_ALLOWANCE_DISABLED_LIMIT` corrected `19200` → `38400`.
+
+**Tests updated/added** (`tests/test_salary_schedule.py`,
+`tests/test_draft_to_itr1_input.py`): a pre-existing test claiming Rs 25,000 and asserting the
+wrong Rs 19,200-capped result was corrected to the right Rs 25,000 (below the true cap, no
+capping should occur); a new test claims Rs 50,000 and confirms the cap now correctly bites at
+Rs 38,400. Full backend suite: 1613 passed, same 3 pre-existing unrelated failures, no
+regressions. Full detail: `ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §13.

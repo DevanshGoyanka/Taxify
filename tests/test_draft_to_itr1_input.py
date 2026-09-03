@@ -401,7 +401,8 @@ def test_transport_and_child_allowances_reach_salary_income() -> None:
     assert sal.sec10_14i_prescribed_allowance == Decimal("2400")
     assert sal.sec10_14ii_personal_allowance == Decimal("7200")
     result = compute_itr1(itr1_input)
-    # Disabled-employee transport exemption (Rs 19,200 cap) + full CEA (Rs
+    # Disabled-employee transport exemption (Rs 19,200 claimed, well within
+    # the Rs 38,400/year statutory cap, so allowed in full) + full CEA (Rs
     # 1,200/child x 2 = Rs 2,400, matches allowance exactly) + full hostel
     # (Rs 3,600/child x 2 = Rs 7,200, matches allowance exactly) must all
     # apply -- previously num_children was hardcoded to 0, forcing both
