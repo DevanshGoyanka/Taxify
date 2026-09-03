@@ -71,7 +71,9 @@ def _compute_44ada(ada: PresumptiveProfessionalIncome44ADA) -> tuple[Decimal, bo
 
 
 def _compute_44ae(ae: PresumptiveGoodsCarriage44AE) -> tuple[Decimal, bool]:
-    """44AE: 7,500/ton/month for heavy, 7,500/month for light, or higher."""
+    """44AE: Rs 1,000/ton/month for heavy goods vehicles (>12,000 kg gross
+    vehicle weight), Rs 7,500/month for other (light/medium) vehicles, or
+    the declared amount if higher."""
     total = Decimal("0")
     higher = False
     for v in ae.vehicles:

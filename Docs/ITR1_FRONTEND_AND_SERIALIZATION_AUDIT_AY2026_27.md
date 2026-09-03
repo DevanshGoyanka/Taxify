@@ -2019,6 +2019,14 @@ phase doesn't have to re-discover it, matching how the analogous ITR-4 TDS bug w
    (far more common than a Section-89-relief edge case). Found during ITR-4's official FORM-flow
    verification against the gazette PDF; affected ITR-1's identical builder pattern. See §26 for
    the full write-up.
+7. **Correction, superseded by §27**: a fourth, independent live defect (fixed), and the most
+   directly financially material one in this document — `section_80ccd2.py`'s engine computation
+   ignored the tax regime entirely, capping employer NPS contributions at the old regime's 10%
+   for every non-government-employed new-regime filer instead of Finance (No. 2) Act 2024's
+   correct 14% ceiling, silently denying up to 4% of salary in legitimate deduction for a common
+   taxpayer profile. Found during an exhaustive re-verification of the tax-calculation flow
+   (explicitly prioritized ahead of the validator-by-validator recheck). See §27 for the full
+   write-up.
 
 ## 24. CRITICAL: `filing_date` never reached the real compute pipeline — 234A/B/C interest and
 234F/234-I late fees were silently zero for every ITR-1 and ITR-4 return (2026-09-03)
@@ -2229,3 +2237,61 @@ TotalIntrstPay`, and `TotTaxPlusIntrstPay > NetTaxLiability` (the inequality the
 Full backend suite: 1603 passed, same 3 pre-existing unrelated failures, no regressions. Full
 detail, including the ITR-4-side fix and the (currently-dormant) related `TotalTaxPayable`
 finding, is in `ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §9.2–9.3.
+
+## 27. Real, financially material bug found and fixed: Section 80CCD(2) engine computation never
+applied Finance (No. 2) Act 2024's 14% new-regime rate for non-government employers (2026-09-03)
+
+**Found during a dedicated, exhaustive re-verification of the tax-calculation flow** (requested
+explicitly, prioritized above the validator-by-validator recheck) by tracing every statutory cap
+in `app/engine/constants.py` and each `app/engine/schedules/deductions/section_*.py` module for
+regime- or category-dependent logic the *calculator* (not just the validator) might be missing —
+the exact pattern the ITR-4 audit's §9 findings had already shown can hide undetected by
+schema/rules validation.
+
+**The law**: Section 80CCD(2)'s statutory ceiling on the employer's NPS contribution deduction
+was 10% of salary for private-sector employers and 14% for Central/State Government employers,
+under both regimes, until Finance (No. 2) Act 2024 raised the ceiling to **14% of salary for
+ALL employers** — but only for assessees who have opted for the **new regime** u/s 115BAC.
+Non-government employers under the **old** regime remain at 10%.
+
+**The bug**: `app/engine/schedules/deductions/section_80ccd2.py::compute_details()` selected the
+rate using only `is_government_employee` (`14%` if true, else a flat `10%`), never consulting the
+`regime` parameter it already received — despite this codebase's *own* ITR-1 (`ITR1-R216`) and
+ITR-4 (`ITR4-R263`) validators independently, correctly encoding the FA-2024 rule (`if is_new:
+cap = salary * 0.14`, unconditionally, no employer-category check at all). This is the same class
+of defect as ITR-4's `TotalTaxPayable` finding (§9.3 in the ITR-4 doc) — a validator correctly
+implements a rule the calculator's own engine does not — except this one is **not dormant**:
+`app/engine/calculators/itr1.py` passes real `salary`/`is_cg_sg_employee` values into
+`compute_deductions()`, so the wrong 10% ceiling was **actively capping the real computed
+deduction**, not just an informational check, for every non-government-employed ITR-1 filer under
+the new regime with an employer NPS contribution between 10% and 14% of salary — a common
+private-sector taxpayer profile.
+
+**Confirmed empirically**: a non-government employee, salary Rs 10,00,000, employer NPS
+contribution declared at Rs 1,30,000 (13% of salary, i.e. a legitimate claim under the correct
+14% new-regime ceiling). Before the fix: `statutory_ceiling=100000` (old regime's 10% rate,
+wrongly applied), `allowed_deduction=100000` — Rs 30,000 of a legitimate deduction silently
+denied, directly overstating taxable income and tax payable. After the fix:
+`statutory_ceiling=140000`, `allowed_deduction=130000` — the full legitimate claim allowed. The
+old regime's 10% ceiling is confirmed unchanged and still correctly applied for old-regime
+non-government filers.
+
+ITR-4 is **not** affected in practice: its calculator never threads `salary`/
+`is_government_employee` into `compute_deductions()` at all (confirmed in the ITR-4 audit's §9.3
+investigation), so 80CCD(2)'s actual deduction amount for ITR-4 always came from the user-declared
+figure directly, gated only by the validator (`ITR4-R263`), which was already correct. This fix
+is purely an ITR-1 (and any other future caller of `section_80ccd2.compute_details` that threads
+real salary/regime, e.g. a future ITR-2) correctness fix.
+
+**Fix**: `section_80ccd2.compute_details()` now selects the rate as: `14%` if
+`is_government_employee` (CG/SG, either regime); else `14%` under the new regime, `10%` under the
+old regime (was: `14%`/`10%` with no regime distinction for non-government employers). Module
+docstring and parameter docs updated to state the regime-dependent rule explicitly, citing the
+two validators that already had it right.
+
+**Tests added** (`tests/test_itr1_calculator.py`):
+`test_80ccd2_non_govt_employer_new_regime_gets_14pct_not_10pct` (asserts the corrected 14%
+ceiling and full Rs 1,30,000 allowance) and
+`test_80ccd2_non_govt_employer_old_regime_stays_at_10pct` (asserts the old regime's 10% ceiling
+is unchanged, same claim capped at Rs 1,00,000). Full backend suite: 1605 passed, same 3
+pre-existing unrelated failures, no regressions.

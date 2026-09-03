@@ -398,6 +398,60 @@ def test_entertainment_allowance_psu_employee_gets_deduction():
     # Salary = 200k - 50k (std ded) - 5k (entertainment, capped) = 145k
     assert res.salary_income == Decimal("145000")
 
+
+def test_80ccd2_non_govt_employer_new_regime_gets_14pct_not_10pct():
+    """Finance (No. 2) Act 2024 raised the Section 80CCD(2) ceiling to 14%
+    of salary for ALL employers (not just Central/State Government) under
+    the new regime -- confirmed independently by this codebase's own
+    ITR1-R216/ITR4-R263 validators, which apply a flat 14% new-regime cap
+    with no employer-category distinction. A non-government employee with
+    a legitimate 13%-of-salary employer NPS contribution must get the full
+    amount under the new regime, not be capped at the old regime's 10%."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("1000000"),
+            is_government_employee=False,
+            is_cg_sg_employee=False,
+        ),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("130000")),  # 13% of 10L
+    )
+    res = compute_itr1(itr_input)
+    ccd2 = res.schedules["deductions"].section_details["80CCD(2)"]
+    assert ccd2.statutory_ceiling == Decimal("140000")  # 14% of 10L, not 10% (100000)
+    assert ccd2.allowed_deduction == Decimal("130000")  # full claim, within the 14% ceiling
+
+
+def test_80ccd2_non_govt_employer_old_regime_stays_at_10pct():
+    """Old regime keeps the pre-FA-2024 10% ceiling for non-government
+    employers -- only the new regime got the 14% increase."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("1000000"),
+            is_government_employee=False,
+            is_cg_sg_employee=False,
+        ),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("130000")),  # 13% of 10L
+    )
+    res = compute_itr1(itr_input)
+    ccd2 = res.schedules["deductions"].section_details["80CCD(2)"]
+    assert ccd2.statutory_ceiling == Decimal("100000")  # 10% of 10L
+    assert ccd2.allowed_deduction == Decimal("100000")  # capped, not the full 130000 claim
+
+
 def test_80ccd1b_limit():
     """80CCD1B claimed = ₹70,000 (exceeds ₹50,000 limit). Expected: Only ₹50,000 allowed."""
     itr_input = ITR1Input(

@@ -732,6 +732,13 @@ details would be a reasonable next increment if further FORM-flow verification i
 
 ## 10. Summary of open items after this pass
 
+0. **Fixed in a follow-up pass, ITR-1-only in practice (ITR-4 already correct)**:
+   `section_80ccd2.py`'s engine computation ignored tax regime entirely, never applying Finance
+   (No. 2) Act 2024's 14% new-regime rate for non-government employers. ITR-4's own validator
+   (`ITR4-R263`) already had this exactly right and was the corroborating evidence that confirmed
+   the calculator was wrong — but ITR-4's calculator never threads real salary/employer-category
+   into this function at all (relies on the validator alone for 80CCD(2)), so ITR-4 itself was
+   never live-affected. Full write-up: `ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §27.
 1. **Fixed this pass, shared with ITR-1, live in production**: `NetTaxLiability`/
    `TotTaxPlusIntrstPay` JSON fields swapped in substance for any return with nonzero
    interest/late fees — a real compliance defect in the submitted JSON, not just the underlying
