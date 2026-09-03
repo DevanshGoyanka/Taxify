@@ -773,6 +773,41 @@ the 25,000 cap not falsely flagged, new-regime deduction correctly capped at exa
 falsely flagged, old-regime 15,000 cap still enforced unchanged. Full backend suite: 1609 passed,
 same 3 pre-existing unrelated failures, no regressions.
 
+### 11.1 Other areas verified correct this pass (recorded so a future pass doesn't re-derive them)
+
+Continuing the exhaustive tax-calculation-flow re-verification, the following were traced against
+statute/official-form text and confirmed correct, with no defect found — recorded explicitly per
+this document's own "record scope honestly" practice, so a future audit doesn't spend time
+re-checking the same ground:
+
+- **Section 80D preventive-checkup Rs 5,000 cap is a single pool shared across self AND parents**
+  combined, not two independent Rs 5,000 pools — confirmed against the primary source (CBDT
+  Validation Rules rule 170's exact wording: "the amount of preventive health checkup of all the
+  fields combined should not exceed Rs. 5000") after an initial hunch (from general tax knowledge)
+  that it might be two separate pools turned out to be wrong. `section_80d.py`'s existing
+  implementation (shared pool) was already correct.
+- Section 80D's Rs 1,00,000 aggregate self+parents cap is structurally guaranteed (each bucket's
+  own senior-citizen ceiling is Rs 50,000, so the sum can never exceed Rs 1,00,000) — no explicit
+  enforcement needed or missing.
+- Sections 80DD (flat Rs 75,000/1,25,000 by severity), 80U (same), and 80DDB (Rs 40,000/1,00,000
+  by the *beneficiary's* age, correctly distinguished from the assessee's own age when structured
+  details are available) all correctly implement their statutory caps.
+- Sections 80TTA/80TTB correctly self-zero based on age bracket, enforcing mutual exclusivity
+  (senior citizens get only 80TTB, non-seniors only 80TTA) without needing an explicit
+  cross-section check.
+- The combined 80C+80CCC+80CCD(1) Rs 1,50,000 pool (`section_80c.py`) is correctly capped once
+  and the per-section breakdown figures (for the JSON's separate C1/C2/C3 boxes) are proportional
+  allocations of that same capped total, not independently re-capped or double-counted into the
+  overall deduction sum.
+- Section 80G's "with qualifying limit" categories (100%-with-limit, 50%-with-limit) correctly
+  share a single 10%-of-adjusted-GTI pool, with 100%-rate donations allocated first — standard
+  Section 80G computation order, correctly implemented.
+- `compute_slab_tax`'s new-regime table is correctly age-blind (no age-based new-regime slabs
+  exist in the statute, matching Section 115BAC); old-regime slabs correctly vary by the three
+  age brackets.
+- Chapter VI-A's overall Rs-GTI cap (`result.total = min(total, gti)`) is applied for the old
+  regime path too, not just the new-regime early-return path.
+
 ## 12. Summary of open items after this pass
 
 0. **Fixed in a follow-up pass, ITR-1-only in practice (ITR-4 already correct)**:
@@ -782,6 +817,16 @@ same 3 pre-existing unrelated failures, no regressions.
    the calculator was wrong — but ITR-4's calculator never threads real salary/employer-category
    into this function at all (relies on the validator alone for 80CCD(2)), so ITR-4 itself was
    never live-affected. Full write-up: `ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §27.
+0a. **Fixed in a follow-up pass, shared with ITR-1, taxpayer-unfavorable**: `compute_234c()`
+   (shared `app/engine/common/interest.py`) never implemented Section 234C(1)(b)'s 12%/36%
+   safe-harbor proviso for the June/September advance-tax installments, over-charging statutory
+   interest a compliant taxpayer does not legally owe. Full write-up:
+   `ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §28.
+0b. **Fixed in a follow-up pass, ITR-4-only (ITR-1 already correct)**: `calc_rules.py`'s
+   `ITR4-C096` (57(iia) family-pension check) used a flat, unconditional Rs 15,000 cap for both
+   regimes instead of the correct Rs 25,000 new-regime cap, falsely blocking legitimate
+   new-regime deductions between Rs 15,001–25,000 as a hard (Severity A) validation failure.
+   Full write-up: §11 above.
 1. **Fixed this pass, shared with ITR-1, live in production**: `NetTaxLiability`/
    `TotTaxPlusIntrstPay` JSON fields swapped in substance for any return with nonzero
    interest/late fees — a real compliance defect in the submitted JSON, not just the underlying
