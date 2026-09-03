@@ -38,7 +38,7 @@ function employer(): Employer {
     commutedPension: 0, gratuity: 0, leaveEncashment: 0, averageMonthlySalary: 0, yearsOfService: 0,
     unavailedLeaveDays: 0, actualLtaFare: 0, isDomesticTravel: true, journeysInBlock: 0,
     numberOfChildren: 0, gratuityAlsoReceived: false, transportAllowance: 0, childrenEducationAllowance: 0,
-    hostelExpenditureAllowance: 0, uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
+    hostelExpenditureAllowance: 0, uniformAllowance: 0, uniformAllowanceExpenditure: 0, entertainmentAllowance: 0, professionalTax: 0,
     vrsCompensation: 0, retrenchmentCompensation: 0, tdsDeducted: 0,
   };
 }

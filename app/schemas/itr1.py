@@ -240,6 +240,13 @@ class SalaryIncome(BaseModel):
     sec10_10cc_perquisite_tax: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14i_prescribed_allowance: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14ii_personal_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    # Uniform allowance u/s 10(14)(i) / Rule 2BB(1)(f): exempt only to the
+    # extent of actual expenditure incurred, not a fixed statutory rate like
+    # CEA/hostel above -- kept as its own received/expenditure pair rather
+    # than folded into sec10_14i_prescribed_allowance so the engine cannot
+    # accidentally apply the wrong (fixed-rate) cap to it.
+    uniform_allowance_received: Decimal = Field(default=Decimal("0"), ge=0)
+    uniform_allowance_actual_expenditure: Decimal = Field(default=Decimal("0"), ge=0)
     is_disabled_employee: bool = Field(
         default=False,
         description=(

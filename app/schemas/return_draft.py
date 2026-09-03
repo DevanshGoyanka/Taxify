@@ -237,6 +237,11 @@ class Employer(Identified):
     childrenEducationAllowance: Money = Field(default=Decimal("0"))
     hostelExpenditureAllowance: Money = Field(default=Decimal("0"))
     uniformAllowance: Money = Field(default=Decimal("0"))
+    # Actual amount spent on uniform, needed to substantiate the Sec 10(14)(i)/
+    # Rule 2BB(1)(f) exemption -- unlike CEA/hostel above, uniform allowance
+    # has no fixed statutory exemption rate; only actual expenditure incurred
+    # is exempt, so the exemption cannot be computed from uniformAllowance alone.
+    uniformAllowanceExpenditure: Money = Field(default=Decimal("0"))
     entertainmentAllowance: Money = Field(default=Decimal("0"))
     professionalTax: Money = Field(default=Decimal("0"))
     vrsCompensation: Money = Field(default=Decimal("0"))

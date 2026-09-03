@@ -110,6 +110,7 @@ class ITR1Result:
     salary_hostel_exempt: Decimal = Decimal("0")
     salary_hra_exempt: Decimal = Decimal("0")
     salary_lta_exempt: Decimal = Decimal("0")
+    salary_uniform_allowance_exempt: Decimal = Decimal("0")
 
     # Tax payment detail (for ITD JSON output)
     advance_tax_paid: Decimal = Decimal("0")
@@ -240,8 +241,13 @@ def compute(input_data: ITR1Input) -> ITR1Result:
             hp_input,
             regime,
             hp_input.ownership_share_percentage,
+            loan_sanction_dates=[
+                loan.sanction_date
+                for loan in input_data.loan_details_24b_list
+                if loan.property_sequence_no == idx + 1
+            ],
         )
-        for hp_input in hp_inputs
+        for idx, hp_input in enumerate(hp_inputs)
     ]
     # Aggregate intra-head income BEFORE applying the inter-head loss limit
     # (Section 24(b) self-occupied interest cap and Section 71B set-off).
@@ -283,6 +289,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.salary_hostel_exempt = getattr(sal, 'hostel_exempt', Decimal("0"))
     result.salary_hra_exempt = getattr(sal, 'hra_exempt', Decimal("0"))
     result.salary_lta_exempt = getattr(sal, 'lta_exempt', Decimal("0"))
+    result.salary_uniform_allowance_exempt = getattr(sal, 'uniform_allowance_exempt', Decimal("0"))
 
     result.advance_tax_paid = input_data.advance_tax_paid
     result.self_assessment_tax_paid = input_data.self_assessment_tax_paid
@@ -407,12 +414,16 @@ def compute(input_data: ITR1Input) -> ITR1Result:
                 )
 
     # ── Statutory validation warnings ──
+    # These warnings are advisory only -- the actual zeroing/capping for each
+    # section already happens inside its own compute_details() in
+    # app/engine/schedules/deductions/ (e.g. section_80ttb.py for the case
+    # below), independent of whether this block runs.
     if ded_input:
         # 80TTB only for senior citizens (age >= 60)
         if ded_input.amount_80ttb > 0 and age not in (AgeBracket.SIXTY_TO_80, AgeBracket.ABOVE_80):
             result.warnings.append(
                 "80TTB is only available for senior citizens (age >= 60). "
-                "Deduction set to Rs 0."
+                "This deduction will not be allowed."
             )
         # 80TTA and 80TTB are mutually exclusive
         if ded_input.amount_80tta > 0 and ded_input.amount_80ttb > 0:

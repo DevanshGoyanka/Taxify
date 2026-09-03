@@ -15,7 +15,7 @@ export interface Employer extends Identified {
   commutedPension: Money; gratuity: Money; leaveEncashment: Money; averageMonthlySalary: Money; yearsOfService: number;
   unavailedLeaveDays: number; actualLtaFare: Money; isDomesticTravel: boolean; journeysInBlock: number;
   numberOfChildren: number; gratuityAlsoReceived: boolean; transportAllowance: Money; childrenEducationAllowance: Money;
-  hostelExpenditureAllowance: Money; uniformAllowance: Money; entertainmentAllowance: Money; professionalTax: Money;
+  hostelExpenditureAllowance: Money; uniformAllowance: Money; uniformAllowanceExpenditure: Money; entertainmentAllowance: Money; professionalTax: Money;
   vrsCompensation: Money; retrenchmentCompensation: Money; tdsDeducted: Money;
 }
 export interface CoOwner { coOwnerSNo: number; name: string; pan: string; aadhaar: string; share: number; }

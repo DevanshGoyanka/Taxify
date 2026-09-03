@@ -48,6 +48,7 @@ interface EmployerEntry {
   childrenEducationAllowance?: number;
   hostelExpenditureAllowance?: number;
   uniformAllowance?: number;
+  uniformAllowanceExpenditure?: number;
   entertainmentAllowance?: number;
   professionalTax?: number;
   vrsCompensation?: number;
@@ -504,6 +505,9 @@ function EmployerForm({
         <Field label="Children Education Allowance"><AmountInput value={entry.childrenEducationAllowance} onChange={(v) => onChange({ childrenEducationAllowance: v })} /></Field>
         <Field label="Hostel Expenditure Allowance"><AmountInput value={entry.hostelExpenditureAllowance} onChange={(v) => onChange({ hostelExpenditureAllowance: v })} /></Field>
         <Field label="Uniform Allowance"><AmountInput value={entry.uniformAllowance} onChange={(v) => onChange({ uniformAllowance: v })} /></Field>
+        <Field label="Uniform Allowance — Actual Amount Spent" help="Exempt u/s 10(14)(i) only up to actual expenditure incurred, not a fixed rate. Leave 0 if you have no expenditure evidence — the allowance will still be taxed in full either way.">
+          <AmountInput value={entry.uniformAllowanceExpenditure} onChange={(v) => onChange({ uniformAllowanceExpenditure: v })} />
+        </Field>
         <Field label="Eligible Children Count" help="Maximum two children for CEA / hostel allowance.">
           <AmountInput value={entry.numberOfChildren} onChange={(v) => onChange({ numberOfChildren: v })} />
         </Field>

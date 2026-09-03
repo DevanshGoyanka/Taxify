@@ -13,21 +13,37 @@ if _PROJECT_ROOT not in sys.path:
 import jsonschema
 from jsonschema import validate, Draft4Validator, ValidationError
 
-from app.engine.itd import build_itr1_json, build_itr2_json, build_itr3_json, build_itr4_json
-from app.engine.calculators.itr1 import compute as c1
+from app.engine.itd import build_itr2_json, build_itr3_json, build_itr4_json
 from app.engine.calculators.itr2 import compute as c2
 from app.engine.calculators.itr3 import compute as c3
 from app.engine.calculators.itr4 import compute as c4
-from app.schemas.itr1 import (ITR1Input, AgeBracket, TaxRegime, SalaryIncome,
-                               HousePropertyIncome, OtherSourcesIncome,
-                               Chapter6ADeductions, PropertyType)
+from app.schemas.itr1 import (SalaryIncome, HousePropertyIncome,
+                               OtherSourcesIncome, Chapter6ADeductions,
+                               PropertyType, AgeBracket, TaxRegime)
 from app.schemas.itr2 import (ITR2Input, CGTransaction, CGAssetType,
                                CG112AScrip, VDATransaction, BFLossItem)
 from app.schemas.itr4 import (ITR4Input, PresumptiveScheme,
                                PresumptiveBusinessIncome44AD)
 
+# ITR-1 is validated through the real production pipeline (draft -> mapper ->
+# calculator -> JSON builder, via filing_gateway_v2.generate_cbdt_json) below,
+# against the schema shipped in this repo -- not a hand-built minimal
+# ITR1Input against a hardcoded local Downloads path, which is what this file
+# used to do for all four forms and why it previously could not run: the
+# hardcoded Downloads paths for ITR-2/3/4 are this machine's, not portable,
+# and the minimal ITR1Input never carried the filing_profile/bank_accounts
+# now required to build the official JSON (see
+# Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §17.1). ITR-2/3/4
+# are left on their original hand-built-minimal-input approach and hardcoded
+# paths -- out of scope for the current ITR-1 audit pass; each fixture would
+# need its own update to current schema field names to run again (see the
+# module docstring's "not part of this pass" note below).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCHEMAS = {
-    "ITR-1": r"C:\Users\Devansh\Downloads\ITR-1_2026_Main_V1.1 (1).json",
+    "ITR-1": os.path.join(
+        _REPO_ROOT, "Reference Docs by CBDT & ITD", "Official JSON Schema",
+        "ITR-1_2026_Main_V1.1 (2).json",
+    ),
     "ITR-2": r"C:\Users\Devansh\Downloads\ITR-2_2026_Main_V1.1 (1).json",
     "ITR-3": r"C:\Users\Devansh\Downloads\ITR-3_2026_Main_V1.1 (1).json",
     "ITR-4": r"C:\Users\Devansh\Downloads\ITR-4_2026_Main_V1.1 (1).json",
@@ -52,23 +68,73 @@ def error_summary(errors, label):
 
 
 def test_itr1():
-    si = SalaryIncome(gross_salary=Decimal("1000000"), perquisites_value=Decimal("50000"),
-                       profits_in_lieu_of_salary=Decimal("25000"), professional_tax_paid=Decimal("2500"))
-    hpi = HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED,
-                               home_loan_interest_paid=Decimal("150000"))
-    osi = OtherSourcesIncome(savings_bank_interest=Decimal("15000"),
-                              fixed_deposit_interest=Decimal("35000"))
-    ded = Chapter6ADeductions(amount_80c=Decimal("150000"),
-                               amount_80d_self_family=Decimal("25000"),
-                               amount_80tta=Decimal("10000"))
-    inp = ITR1Input(age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
-                    salary_income=si, house_property_income=hpi,
-                    other_sources_income=osi, deductions_chapter6a=ded,
-                    advance_tax_paid=Decimal("50000"),
-                    self_assessment_tax_paid=Decimal("10000"))
-    r = c1(inp)
-    j = build_itr1_json(r)
-    return validate_json(j, SCHEMAS["ITR-1"])
+    """Exercise the real production pipeline (draft -> mapper -> calculator ->
+    JSON builder via filing_gateway_v2.generate_cbdt_json), not a hand-built
+    minimal ITR1Input -- see the SCHEMAS comment above for why."""
+    from decimal import Decimal as _D
+    from app.schemas.return_draft import (
+        ReturnDraft, create_empty_draft, Employer, HouseProperty, BankAccount,
+        InterestIncome, Investment80C, HomeLoan,
+    )
+    from app.engine import filing_gateway_v2 as gateway
+
+    draft = create_empty_draft("2026-27", "ITR-1", "old")
+    p = draft.personal
+    p.name = "Rahul Kumar Sharma"
+    p.firstName = "Rahul"
+    p.surnameOrOrgName = "Sharma"
+    p.fatherName = "Mohan Sharma"
+    p.pan = "ABCDE1234F"
+    p.email = "rahul@example.com"
+    p.mobile = "9876543210"
+    p.dateOfBirth = "1980-01-15"
+    p.flatNo = "12A"
+    p.localityOrArea = "Central Delhi"
+    p.city = "Delhi"
+    p.stateCode = "07"
+    p.countryCode = "91"
+    p.pinCode = "110001"
+    p.employerCategory = "OTH"
+
+    draft.verification.place = "Delhi"
+    draft.verification.date = "2026-07-25"
+    draft.verification.declarationAccepted = True
+    draft.verification.capacity = "SELF"
+
+    draft.employers = [Employer(
+        id="e1", employerName="Acme Corp", employerTAN="MUMA12345B",
+        natureOfEmployment="OTH", employerAddress="123 Business Park",
+        employerCity="Mumbai", employerStateCode="27", employerPinCode="400001",
+        basic=_D("900000"), da=_D("50000"),
+        tdsDeducted=_D("80000"), professionalTax=_D("2500"),
+    )]
+    draft.houseProperties = [HouseProperty(
+        id="hp1", name="Flat 401", propertyType="SELF_OCCUPIED",
+        address="401, Sunrise Apartments", city="Mumbai", state="27",
+        pinCode="400001", interestOnLoan=_D("150000"),
+        homeLoans=[HomeLoan(
+            lenderType="B", lenderName="HDFC Bank", loanAccountNo="HL123456",
+            dateOfLoan="2019-06-01", totalLoanAmount=_D("2000000"),
+            loanOutstandingAmount=_D("1500000"), interestUs24B=_D("150000"),
+        )],
+    )]
+    draft.otherSources.interest = [
+        InterestIncome(id="i1", kind="SAVINGS_BANK", grossAmount=_D("15000")),
+        InterestIncome(id="i2", kind="TERM_DEPOSIT", grossAmount=_D("35000")),
+    ]
+    draft.deductions.section80C = [Investment80C(
+        id="c1", investmentType="EPF", amount=_D("150000"),
+        identificationNo="PF1234567",
+    )]
+    draft.deductions.chapterVIA.section80D = _D("25000")
+    draft.deductions.chapterVIA.section80TTA = _D("10000")
+    draft.bankAccounts = [BankAccount(
+        id="b1", bankName="State Bank of India", accountNumber="1234567890123",
+        ifscCode="SBIN0001234", accountType="SB", useForRefund=True,
+    )]
+
+    official, _summary = gateway.generate_cbdt_json(draft)
+    return validate_json(official, SCHEMAS["ITR-1"])
 
 
 def test_itr4():

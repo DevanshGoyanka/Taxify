@@ -67,6 +67,7 @@ class SalaryResult:
     hostel_exempt: Decimal = Decimal("0")
     hra_exempt: Decimal = Decimal("0")
     lta_exempt: Decimal = Decimal("0")
+    uniform_allowance_exempt: Decimal = Decimal("0")
 
 
 def _exempt_gratuity(
@@ -163,6 +164,15 @@ def _exempt_hostel(allowance: Decimal, num_children: int) -> Decimal:
     return min(max(_ZERO, allowance), statutory)
 
 
+def _exempt_uniform_allowance(received: Decimal, actual_expenditure: Decimal) -> Decimal:
+    """Exempt uniform allowance u/s 10(14)(i) / Rule 2BB(1)(f): unlike CEA/hostel
+    (a fixed per-child/month statutory rate), this allowance is exempt only to
+    the extent of actual expenditure incurred -- there is no fixed ceiling, so
+    the received amount cannot be assumed exempt without substantiating
+    evidence."""
+    return min(max(_ZERO, received), max(_ZERO, actual_expenditure))
+
+
 def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResult:
     """Compute salary income chargeable u/s 15-17 with Section 10 exemptions and Section 16 deductions.
 
@@ -223,6 +233,10 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
     hostel_exempt = _exempt_hostel(
         input_data.sec10_14ii_personal_allowance, input_data.number_of_children,
     )
+    uniform_allowance_exempt = _exempt_uniform_allowance(
+        input_data.uniform_allowance_received,
+        input_data.uniform_allowance_actual_expenditure,
+    )
 
     exempt_allowances = sum((
         hra_exempt,
@@ -238,6 +252,7 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         transport_exempt,
         children_education_exempt,
         hostel_exempt,
+        uniform_allowance_exempt,
     ), Decimal("0"))
 
     if regime == TaxRegime.OLD:
@@ -272,12 +287,15 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         )
         chargeable = net_before_std - std_ded - prof_tax - ent_allowance
     else:
-        # New-regime HRA and LTA exemptions are disallowed before calculating
-        # the available salary against which Section 16(ia) can be claimed.
-        disallowed_hra_lta = hra_exempt + lta_exempt
+        # New-regime HRA, LTA, and the uniform-allowance exemption (Sec
+        # 10(14)(i) / Rule 2BB(1)(f), same disallowed category as HRA/LTA
+        # under Rule 149) are disallowed before calculating the available
+        # salary against which Section 16(ia) can be claimed.
+        disallowed_new_regime = hra_exempt + lta_exempt + uniform_allowance_exempt
         hra_exempt = Decimal("0")
         lta_exempt = Decimal("0")
-        exempt_allowances = max(Decimal("0"), exempt_allowances - disallowed_hra_lta)
+        uniform_allowance_exempt = Decimal("0")
+        exempt_allowances = max(Decimal("0"), exempt_allowances - disallowed_new_regime)
         net_before_std = max(Decimal("0"), gross - exempt_allowances)
         std_ded = min(NEW_REGIME_STANDARD_DEDUCTION, net_before_std)
         chargeable = net_before_std - std_ded
@@ -303,4 +321,5 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         hostel_exempt=hostel_exempt,
         hra_exempt=hra_exempt,
         lta_exempt=lta_exempt,
+        uniform_allowance_exempt=uniform_allowance_exempt,
     )

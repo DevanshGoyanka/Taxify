@@ -34,7 +34,7 @@ function employer(entry: ReconciledEntry): Employer {
     journeysInBlock: 0, numberOfChildren: 0,
     gratuityAlsoReceived: false, transportAllowance: 0,
     childrenEducationAllowance: 0, hostelExpenditureAllowance: 0,
-    uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
+    uniformAllowance: 0, uniformAllowanceExpenditure: 0, entertainmentAllowance: 0, professionalTax: 0,
     vrsCompensation: 0, retrenchmentCompensation: 0,
     tdsDeducted: entry.as26_tds || 0,
   };

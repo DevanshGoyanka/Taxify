@@ -1304,6 +1304,14 @@ def _allowance_rows(input_data: Optional[ITR1Input], result: ITR1Result) -> list
     retrenchment_exempt = getattr(sal_sched, "retrenchment_exempt", salary.retrenchment_compensation) if sal_sched else salary.retrenchment_compensation
     transport_exempt = getattr(sal_sched, "transport_exempt", Decimal("0")) if sal_sched else Decimal("0")
     cea_exempt = getattr(sal_sched, "children_education_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    # Uniform allowance is also a 10(14)(i)/Rule 2BB(1) allowance and shares
+    # that single official JSON bucket with CEA -- the calculator keeps them
+    # on separate input fields and exemption formulas (see SalaryIncome's
+    # uniform_allowance_* fields), but the official schema has no separate
+    # code for it, so their computed-exempt amounts are combined here, at
+    # the output side, not the input side.
+    uniform_allowance_exempt = getattr(sal_sched, "uniform_allowance_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    cea_exempt += uniform_allowance_exempt
     hostel_exempt = getattr(sal_sched, "hostel_exempt", Decimal("0")) if sal_sched else Decimal("0")
     hra_exempt = getattr(sal_sched, "hra_exempt", salary.hra_exempt_amount) if sal_sched else salary.hra_exempt_amount
     lta_exempt = getattr(sal_sched, "lta_exempt", salary.lta_exempt_amount) if sal_sched else salary.lta_exempt_amount

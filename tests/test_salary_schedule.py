@@ -14,6 +14,7 @@ from app.engine.schedules.salary import (
     _exempt_commutted_pension,
     _exempt_gratuity,
     _exempt_leave_encashment,
+    _exempt_uniform_allowance,
     compute,
 )
 from app.schemas.itr1 import SalaryIncome, TaxRegime
@@ -181,3 +182,55 @@ def test_commuted_pension_defaults_to_conservative_one_third():
     generous (1/2), fraction -- never over-grant without evidence."""
     result = _exempt_commutted_pension(Decimal("300000"), False)
     assert round(result, 2) == Decimal("100000.00")
+
+
+# ── Uniform allowance (Section 10(14)(i) / Rule 2BB(1)(f)) ─────────────────
+# Added closing Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+# §11.9/§19's documented-but-deferred gap: unlike CEA/hostel (a fixed
+# per-child/month statutory rate), this allowance is exempt only to the
+# extent of actual expenditure incurred, so it needed its own
+# received/expenditure evidence pair rather than reusing
+# sec10_14i_prescribed_allowance's fixed-rate formula.
+
+def test_uniform_allowance_exempt_is_lesser_of_received_and_actual_expenditure():
+    assert _exempt_uniform_allowance(Decimal("12000"), Decimal("8000")) == Decimal("8000")
+
+
+def test_uniform_allowance_exempt_capped_at_amount_received():
+    """Substantiated expenditure exceeding the received allowance cannot make
+    the exemption bigger than what was actually received."""
+    assert _exempt_uniform_allowance(Decimal("5000"), Decimal("9000")) == Decimal("5000")
+
+
+def test_uniform_allowance_no_exemption_without_expenditure_evidence():
+    """No expenditure evidence -> no exemption, matching the conservative
+    default already used elsewhere: the received amount still reaches
+    taxable income (via the mapper), it just isn't exempted."""
+    assert _exempt_uniform_allowance(Decimal("12000"), Decimal("0")) == Decimal("0")
+
+
+def test_uniform_allowance_exempt_reduces_old_regime_chargeable_income():
+    si = SalaryIncome(
+        gross_salary=Decimal("600000"),
+        uniform_allowance_received=Decimal("10000"),
+        uniform_allowance_actual_expenditure=Decimal("7000"),
+    )
+    result = compute(si, TaxRegime.OLD)
+    assert result.uniform_allowance_exempt == Decimal("7000")
+    # gross_salary includes the received amount (already taxed as income
+    # elsewhere in the mapper); the exemption reduces net_salary by the
+    # substantiated 7,000, not the full 10,000 received.
+    assert result.exempt_allowances >= Decimal("7000")
+
+
+def test_uniform_allowance_exempt_disallowed_under_new_regime():
+    """Section 10(14)(i)/Rule 2BB(1) general allowances (uniform allowance
+    included) are disallowed under the new regime, same category as HRA/LTA
+    per CBDT Rule 149."""
+    si = SalaryIncome(
+        gross_salary=Decimal("600000"),
+        uniform_allowance_received=Decimal("10000"),
+        uniform_allowance_actual_expenditure=Decimal("7000"),
+    )
+    result = compute(si, TaxRegime.NEW)
+    assert result.uniform_allowance_exempt == Decimal("0")

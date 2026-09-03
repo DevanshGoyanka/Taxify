@@ -255,6 +255,10 @@ SECTION_80U_SEVERE_LIMIT: Final[Decimal] = Decimal("125000")     # Severely disa
 
 HOUSE_PROPERTY_STANDARD_DEDUCTION: Final[Decimal] = Decimal("0.30") # 30% of NAV (Sec 24(a))
 HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED: Final[Decimal] = Decimal("200000")  # Sec 24(b) - Self-occupied
+# Sec 24(b) proviso: the Rs 2,00,000 self-occupied cap applies only to loans
+# sanctioned on/after 1 April 1999 for purchase or construction; a loan
+# sanctioned before that date is capped at Rs 30,000 instead.
+HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED_PRE_1999: Final[Decimal] = Decimal("30000")
 
 # =============================================================================
 # CAPITAL GAINS - Special Rates (AY 2026-27)

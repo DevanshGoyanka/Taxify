@@ -1736,12 +1736,209 @@ split) rather than duplicate-purpose pairs — no further action.
 2. **Rule-ID mislabeling for 80G tables B/C/D (§16.5) — fixed.** Both implementing blocks now
    map `donation_category` to its own official rule ID instead of always using table A's. 1 new
    test.
-3. **Low priority, pre-existing, not fixed**: `tests/validate_schemas.py` has stale hardcoded
-   schema paths and cannot currently run (§17.1) — not part of this session's scope, flagged so
-   it isn't lost.
-4. No action needed on §17.3's unexercised schema paths beyond the honest record already made —
-   revisit only if a future draft naturally exercises them (e.g. ITR-2/3 work reusing the same
-   co-owner/representative schemas).
+3. **`tests/validate_schemas.py` — fixed for ITR-1** (§17.1, §20.4). ITR-2/3 remain on their
+   original hand-built-minimal-input approach and hardcoded paths — explicitly out of scope,
+   see §20.4.
+4. **§17.3's unexercised schema paths — the original 8 areas are now closed** (§20.5); a
+   broader, newly-visible set was found while closing them and is recorded honestly, not
+   fixed, in the same subsection.
+
+## 20. Remaining §11.9/§14/§17 items closed (2026-09-03, same-day follow-up)
+
+Continuing directly from §16-19's validation-rule/schema work in this same pass: every item
+§19 had left open (or newly found while closing another) was itself either fixed or explicitly,
+honestly recorded as still open, per instruction to close every leftover finding.
+
+### 20.1 Rules 68/69 already covered §16.3's gap; this subsection covers the rest
+
+§16.3/§19 already closed the one substantive *validation-rule* gap. This section covers the
+remaining *computation/architecture* gaps §14 and §11.9 had left open with reasoning on file,
+plus the two low-priority test-tooling items from §17.
+
+### 20.2 §14.1 — self-occupied interest correctly capped at Rs 30,000 for pre-1999 loans
+
+`app/engine/schedules/house_property.py::compute()` now accepts an optional
+`loan_sanction_dates: list[date | None]` parameter; if any date in the list predates 1 April
+1999, the self-occupied interest cap switches from the usual
+`HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED` (Rs 2,00,000) to the new
+`HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED_PRE_1999` (Rs 30,000) constant
+(`app/engine/constants.py`). `app/engine/calculators/itr1.py`'s call site resolves the relevant
+loans per property from `input_data.loan_details_24b_list` (filtered by
+`property_sequence_no`) and passes their `sanction_date`s through — the field was already
+captured end-to-end (`HouseProperty.homeLoans[].dateOfLoan` → `LoanDetail.sanction_date`), just
+never read by the calculator. A conservative choice for the near-impossible multi-loan case: if
+*any* loan on the property predates the cutoff, the stricter cap applies to the property's
+total interest rather than attempting a per-loan split the schema doesn't represent.
+
+New `tests/test_house_property_schedule.py` (6 tests): default 2L cap; explicit post-1999 date
+still 2L; pre-1999 date drops to 30k; an amount already under 30k is unaffected either way; the
+conservative multi-loan choice; new-regime disallowance is unaffected by sanction date. Plus one
+mapper-to-calculator integration test in `test_draft_to_itr1_input.py` confirming a
+1998-sanctioned loan reaches the real computed `house_property_income`.
+
+### 20.3 §14.2/§14.3 — dead code removed, warning message corrected
+
+- `app/engine/draft_to_itr1_input.py::_map_deductions`'s dead `interest_sb` local (computed,
+  never read) and its now-also-dead `_SAVINGS_KINDS` module constant (that local's only
+  consumer) are removed. No behavior change — confirmed by grep that neither had any other
+  reader in the function or file.
+- `app/engine/calculators/itr1.py`'s 80TTB age-mismatch warning no longer reads as if it
+  performs the zeroing itself ("Deduction set to Rs 0"); reworded to "This deduction will not be
+  allowed," with a new comment pointing at where the real zeroing happens
+  (`section_80ttb.compute_details()`). No test asserted the old exact string (checked before
+  changing it).
+
+### 20.4 §17.1 — `tests/validate_schemas.py` fixed for ITR-1
+
+The file's ITR-1 fixture was rewritten to use the real production pipeline
+(`ReturnDraft` → `filing_gateway_v2.generate_cbdt_json`) — the same methodology §17 established
+— instead of a hand-built minimal `ITR1Input` fed directly to `build_itr1_json`, which had
+started raising `ValueError("Bank account details are required for ITD JSON")` once the JSON
+builder began requiring `filing_profile`/bank accounts that this file's original fixture never
+supplied. The `SCHEMAS["ITR-1"]` path was also switched from a hardcoded
+`C:\Users\Devansh\Downloads\...` path to a repo-relative one resolving into `Reference Docs by
+CBDT & ITD/Official JSON Schema/`, so it no longer depends on this machine's Downloads folder
+contents. **Correction to §17.1's own earlier claim**: that claim ("hardcoded schema paths...
+that no longer exist on this machine, so it currently cannot run at all") was checked again
+while doing this fix and found to be inaccurate — the Downloads-folder schema files do
+currently exist on this machine; the actual failure was the stale fixture/JSON-builder mismatch
+above, unrelated to file existence. Recorded here so a future reader trusts what was actually
+verified over what an earlier pass assumed.
+
+ITR-2/ITR-3 remain on their original hand-built-minimal-input fixtures and hardcoded Downloads
+paths — both were already failing before this fix (stale `BFLossItem` field/enum values,
+confirmed by re-running before touching anything) and are unrelated to ITR-1's scope per the
+established form sequencing; a comment in the file now explains this explicitly so it isn't
+mistaken for an oversight. `pytest tests/validate_schemas.py -v`: `test_itr1` and `test_itr4`
+pass; `test_itr2`/`test_itr3` fail exactly as before (not a regression — same two tests, same
+reason, unchanged by this fix).
+
+### 20.5 §17.3 — the original 8 unexercised areas closed; a broader, newly-visible set recorded
+
+A fifth `ReturnDraft` scenario (`schema_audit5.py`, scratch only) was built specifically to
+exercise every area §17.3 had listed as untested: alternate/secondary address
+(`PersonalInfo.AlternateAddress`), representative-assessee filing (`Verification.capacity =
+"REPRESENTATIVE"` + `FilingStatus.AssesseeRep`), a revised return (`139(5)` +
+`OrigRetFiledDate`/original acknowledgement), a co-owned let-out property with both a co-owner
+and a tenant row (`PropertyDetails[].CoOwners`/`.TenantDetails`), Section 80EEA claimed in
+isolation from 80EE (`Schedule80EEA`, satisfied by the same property's loan since 80EEA — unlike
+the self-occupied-only Rs 2L cap under 24(b) — applies to any residential property),
+`PensionContribution80CCC` identifier rows, agricultural exempt income
+(`ExemptIncAgriOthUs10Dtls`), and a TDS3 row with `AadhaarofTenant` set. Re-running the coverage
+check across all five samples confirms **all 8 originally-listed paths are now exercised**, with
+zero schema violations in the new draft.
+
+**One new, real validator bug surfaced while building this draft, not fixed here — flagged for
+a future pass**: `ITR1-R246` (24(b) per-property interest cross-foot,
+`app/engine/validators/itr1/input_rules.py` ~line 3213) compares the *legacy single-property*
+`inp.house_property_income.home_loan_interest_paid` against the **sum of `loan_details_24b_list`
+across every property**, not just the one it's nominally checking. For a genuine two-property
+filer where each property has its own Section 24(b) loan, this fires a false-positive Category A
+block (the check demands the *first* property's interest alone equal the *combined* total of
+both properties' loans) — confirmed directly: the original two-property version of this draft
+failed with exactly this mismatch (Rs 50,000 vs Rs 2,50,000) before being restructured to a
+single property to route around it. `app/engine/validators/itr4/input_rules.py`'s `ITR4-R295` is
+the same pattern, same bug, same fix needed, confirmed by reading its neighboring code (not
+fixed here, ITR-4 is out of current scope per the established sequencing). This was not part of
+§16's rule-by-rule cross-reference (which checks rule *coverage*, not per-rule *correctness for
+multi-property inputs* — a different kind of defect) — recorded here rather than silently
+worked around, matching this document's practice of surfacing what a fix's own test-building
+process happens to uncover (the same way §15.4's TDS bug surfaced while chasing a different
+trail).
+
+Re-running the coverage check across all five samples together also surfaces a **broader,
+previously-invisible set of ~93 still-uncovered schema paths** — not part of the original 8, and
+not chased down in this pass (a materially larger undertaking than closing 8 named items):
+structured per-donee-PAN blocks for all three approval categories of Schedule 80G
+(`Don50PercentNoApprReqd`/`Don100PercentApprReqd`/`Don50PercentApprReqd`, each with donee
+name/PAN/address/IFSC/transaction-ref sub-fields), Schedule 80D's structured per-policy
+insurer/policy-number rows for senior-citizen self/family and parents categories, and Schedule
+80DD/80U's structured nature-of-disability/type/dependent-type/amount blocks. None of these
+produced a violation in any test that reached adjacent parts of the same objects — they are
+untested by this specific check, not known-broken — recorded honestly rather than omitted,
+same convention as the original 8.
+
+### 20.6 §11.9 — uniform allowance now correctly exempted from actual-expenditure evidence
+
+§11.9/§13.2 left this as an intentionally deferred gap: `employer.uniformAllowance` reached
+taxable income (correct, not a bug) but could never be partially exempted, because Section
+10(14)(i)/Rule 2BB(1)(f)'s exemption basis is *actual expenditure incurred* — a fundamentally
+different formula from CEA/hostel's fixed per-child/month statutory rate immediately above it in
+the same schema, so it could not be safely folded into `sec10_14i_prescribed_allowance` without
+risking the wrong cap being applied.
+
+**Fix**: a genuinely separate received/expenditure evidence pair, keeping the fixed-rate and
+actual-expenditure formulas from ever touching the same input field:
+
+- New `Employer.uniformAllowanceExpenditure` (backend `return_draft.py` and frontend
+  `types.ts`/the component-local `EmployerEntry` type), with a new
+  `IndianNumberInput`-backed UI field in `EmployerEntryManager.tsx` right next to the existing
+  "Uniform Allowance" field, labeled "Uniform Allowance — Actual Amount Spent" with inline help
+  explaining the exemption basis and that leaving it at 0 still taxes the allowance in full
+  (never silently drops it). All 8 `Employer`-construction default-value sites across the
+  frontend (import mappers, tests, the computation page) updated with the new field's default.
+- New `SalaryIncome.uniform_allowance_received`/`.uniform_allowance_actual_expenditure` fields
+  and `schedules/salary.py::_exempt_uniform_allowance(received, expenditure) ->
+  min(received, expenditure)` — the actual-expenditure formula, structurally incapable of
+  exceeding either bound. Included in `exempt_allowances`, and — per CBDT Rule 149, the same
+  disallowed category as HRA/LTA — zeroed under the new regime alongside them (not previously
+  true for CEA/hostel's *existing* exemptions, which is a separate, pre-existing, unrelated gap
+  not introduced or fixed here — flagged only so it isn't mistaken for something this change
+  touched).
+- The mapper (`draft_to_itr1_input.py`) sums both fields across employers and wires them onto
+  `SalaryIncome`, unchanged from the existing (correct) behavior of always adding the *received*
+  amount to taxable income regardless of expenditure evidence.
+- The JSON builder (`itd/itr1.py::_allowance_rows`) adds the computed
+  `uniform_allowance_exempt` into the same official `"10(14)(i)"` bucket as `cea_exempt` — the
+  official schema has one combined code for all Rule 2BB(1) allowances, so the calculator-side
+  separation (needed to keep the formulas apart) correctly collapses back to one JSON figure at
+  the output side, not the input side.
+- New `SalaryResult.uniform_allowance_exempt` and `ITR1Result.salary_uniform_allowance_exempt`
+  fields, mirroring every sibling exemption type already exposed this way.
+
+New tests: 5 in `tests/test_salary_schedule.py` (lesser-of-received-and-expenditure; capped at
+received even if more was spent; zero exemption without evidence — the received amount still
+reaches income; reduces old-regime chargeable income; correctly zeroed under new regime). 2 in
+`tests/test_draft_to_itr1_input.py` (received-only reaches gross salary fully taxable, matching
+existing behavior; received+expenditure together reach the calculator as a real exemption,
+verified via `compute_itr1`).
+
+### 20.7 Verification
+
+- `pytest tests/test_house_property_schedule.py tests/test_salary_schedule.py -v` — 28 passed
+  (new files/additions).
+- `pytest tests/test_draft_to_itr1_input.py -v -k "uniform or pre_1999"` — 3 passed.
+- `pytest tests/ -k "itr1"` (same pre-existing-collection-error exclusions as every prior run) —
+  345 passed (the two mapper-level tests; the schedule-level test files don't match the `itr1`
+  keyword filter, hence the smaller delta here than in the full-suite number below).
+- Full backend suite (same exclusion list) — 1570 passed, same 3 pre-existing failures
+  (`test_tax_v2_compute.py`) as every prior run this session — no new failures.
+- `npx tsc -b`, `npx vitest run` (185 passed) — both clean after the frontend field addition.
+- **Browser-verified** (not just compiled): started the real backend (`run.py`) and frontend dev
+  servers, signed in, opened a real ITR-1 client's Salary Income schedule, and confirmed the new
+  "Uniform Allowance — Actual Amount Spent" field renders correctly next to "Uniform Allowance"
+  with its help text, accepts typed input, and behaves identically to the pre-existing "Transport
+  Allowance" field beside it (including the shared `IndianNumberInput` comma-formatting behavior
+  on blur). No unsaved changes were submitted against the real client record. Both servers were
+  stopped after verification.
+
+## 21. Summary of open items after §20
+
+1. **New, flagged, not fixed**: `ITR1-R246`'s (and ITR-4's identical `ITR4-R295`'s)
+   single-property assumption breaks for genuine multi-property 24(b) filers (§20.5) — a real
+   Category A false-positive block for an identifiable, non-rare population (any ITR-1 filer
+   with two mortgaged properties). Worth prioritizing in the next validator pass.
+2. **Not fixed, deliberately out of scope**: ITR-2/ITR-3's stale fixtures in
+   `tests/validate_schemas.py` (§20.4) — matches the established ITR-1-first sequencing.
+3. **Not fixed, deliberately out of scope**: ITR-4's identical `tds_claimed_this_year`-vs-
+   `tds_claimed` validator bug (§15.4) — same sequencing reason.
+4. **Recorded, not chased**: the newly-visible ~93-path broader schema-coverage gap (§20.5) —
+   structured 80G/80D/80DD/80U detail blocks untested by any current draft; no known defect,
+   just unverified by this specific check.
+5. **No other open items remain** from §1-§20 that represent a known, live defect in ITR-1's
+   compute-and-generate-JSON pipeline. The ERI portal-submission pipeline
+   (`app/eri/`, `app/automation/`, `app/filing_automation/`) remains outside this document's
+   scope entirely, as stated when this question was last asked directly.
 
 ### 19.1 Verification
 

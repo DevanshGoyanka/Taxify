@@ -469,10 +469,10 @@ def test_standard_deduction_claimed_mapped_to_regime_cap() -> None:
 
 
 def test_uniform_allowance_reaches_gross_salary_fully_taxable() -> None:
-    """employer.uniformAllowance must reach taxable income -- there is no
-    evidence field for "actual expenditure incurred" (the real Section
-    10(14)(i)/Rule 2BB exemption basis), so it is taxed fully rather than
-    exempted without evidence or silently dropped (§11.9 follow-up)."""
+    """employer.uniformAllowance must reach taxable income regardless of
+    whether expenditure evidence is supplied -- the received amount is part
+    of Section 17(1) salary either way; only the *exemption* (a separate
+    concern, see the evidence test below) depends on evidence."""
     from app.schemas.return_draft import Employer as EmployerT
     draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
     draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
@@ -482,6 +482,28 @@ def test_uniform_allowance_reaches_gross_salary_fully_taxable() -> None:
     )]
     itr1_input, _ = draft_to_itr1_input(draft)
     assert itr1_input.salary_income.gross_salary == Decimal("515000")
+
+
+def test_uniform_allowance_expenditure_reaches_calculator_as_exemption() -> None:
+    """employer.uniformAllowanceExpenditure -- actual-expenditure evidence
+    for the Section 10(14)(i)/Rule 2BB exemption -- must reach SalaryIncome
+    and reduce taxable income via schedules/salary.py's
+    _exempt_uniform_allowance, closing the gap
+    test_uniform_allowance_reaches_gross_salary_fully_taxable documented as
+    open (§11.9/§19)."""
+    from app.schemas.return_draft import Employer as EmployerT
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        uniformAllowance=Decimal("15000"),
+        uniformAllowanceExpenditure=Decimal("11000"),
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    assert itr1_input.salary_income.uniform_allowance_received == Decimal("15000")
+    assert itr1_input.salary_income.uniform_allowance_actual_expenditure == Decimal("11000")
+    result = compute_itr1(itr1_input)
+    assert result.salary_uniform_allowance_exempt == Decimal("11000")
 
 
 def test_gratuity_also_received_flag_reaches_salary_income() -> None:
@@ -501,6 +523,34 @@ def test_gratuity_also_received_flag_reaches_salary_income() -> None:
     assert itr1_input.salary_income.is_gratuity_also_received is False
     result = compute_itr1(itr1_input)
     assert result.salary_commutted_pension_exempt == Decimal("150000")  # 1/2, not 1/3
+
+
+def test_pre_1999_home_loan_sanction_date_caps_self_occupied_interest_at_30000() -> None:
+    """LoanDetail.sanction_date (from HouseProperty.homeLoans[].dateOfLoan)
+    must reach the calculator and cap self-occupied interest at Rs 30,000,
+    not the usual Rs 2,00,000, per CBDT's pre-1-April-1999 proviso to Sec
+    24(b) -- closes Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §14.1/§19's documented-but-deferred gap."""
+    from app.schemas.return_draft import (
+        Employer as EmployerT, HouseProperty as HousePropertyT, HomeLoan,
+    )
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+    )]
+    draft.houseProperties = [HousePropertyT(
+        id="hp1", name="Old Flat", propertyType="SELF_OCCUPIED",
+        interestOnLoan=Decimal("60000"),
+        homeLoans=[HomeLoan(
+            lenderType="B", lenderName="SBI", loanAccountNo="OLD123",
+            dateOfLoan="1998-05-01", totalLoanAmount=Decimal("400000"),
+            loanOutstandingAmount=Decimal("100000"), interestUs24B=Decimal("60000"),
+        )],
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    result = compute_itr1(itr1_input)
+    assert result.house_property_income == Decimal("-30000")
 
 
 def test_other_taxable_salary_and_arrears_reach_gross_salary() -> None:

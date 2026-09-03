@@ -190,13 +190,17 @@ def _map_salary(
     perquisites = sum((e.perquisites for e in employers), Decimal("0"))
     profits_in_lieu = sum((e.profitsInLieu for e in employers), Decimal("0"))
     # Uniform allowance's Section 10(14)(i)/Rule 2BB exemption is "actual
-    # expenditure incurred," not a fixed statutory rate -- this product
-    # captures no such evidence field (see
-    # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §11.9), so no
-    # exemption can be verified. Taxing it fully (like other_taxable_salary)
-    # is the conservative default: it still reaches income rather than
-    # silently vanishing, and claims no unverifiable exemption.
+    # expenditure incurred," not a fixed statutory rate. The received amount
+    # always reaches taxable income below (uniform_allowance folds into
+    # section_17_1, same as other_taxable_salary); the exemption itself is
+    # granted only up to whatever actual-expenditure evidence the taxpayer
+    # supplies (Employer.uniformAllowanceExpenditure), computed separately by
+    # schedules/salary.py::_exempt_uniform_allowance -- see
+    # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §11.9/§19.
     uniform_allowance = sum((e.uniformAllowance for e in employers), Decimal("0"))
+    uniform_allowance_expenditure = sum(
+        (e.uniformAllowanceExpenditure for e in employers), Decimal("0"),
+    )
 
     # Section 17(1) salary: every taxable cash-salary component captured on
     # the Employer row except perquisites (17(2)) and profits in lieu
@@ -349,6 +353,8 @@ def _map_salary(
         transport_allowance=transport_allowance,
         sec10_14i_prescribed_allowance=cea_allowance,
         sec10_14ii_personal_allowance=hostel_allowance,
+        uniform_allowance_received=uniform_allowance,
+        uniform_allowance_actual_expenditure=uniform_allowance_expenditure,
         sec10_6_embassy_exempt=sec10_6_embassy_exempt,
         sec10_7_foreign_allowance=sec10_7_foreign_allowance,
         sec10_10cc_perquisite_tax=sec10_10cc_perquisite_tax,
@@ -461,7 +467,6 @@ _INTEREST_NATURES = {
     "SECURITIES": "OTH",
     "OTHER": "OTH",
 }
-_SAVINGS_KINDS = {"SAVINGS_BANK", "POST_OFFICE"}
 
 _OTHER_INTEREST_DESCRIPTIONS = {
     "NSC": "NSC accrued interest",
@@ -835,10 +840,6 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
     donations, structured_80g = _map_donations(draft.deductions.section80G)
 
     via: ChapterVIA = draft.deductions.chapterVIA
-    interest_sb = sum(
-        (i.grossAmount for i in draft.otherSources.interest if i.kind in _SAVINGS_KINDS),
-        Decimal("0"),
-    )
 
     # New regime (u/s 115BAC) excludes almost all Chapter VI-A deductions
     # except employer NPS (80CCD(2)) and the new-regime-specific 80TTA/80TTB
