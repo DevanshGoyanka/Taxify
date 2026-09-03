@@ -153,6 +153,92 @@ def test_ngrok_dsc_mode_is_forbidden_in_type2_production(monkeypatch):
         assert_credentials_at_startup()
 
 
+# ---------------------------------------------------------------------------
+# validate/submit error shape (found while implementing app/eri/type2/
+# validate.py and submit.py): these endpoints' errors[] entries use
+# {errCd, errFld, errCtg, asPerItr, asComputed, variance, schId}, not the
+# {code, desc, fieldName} shape login/addClient/everify use. Before this
+# fix, every validate/submit error collapsed into a generic
+# ERIApiError(code="UNKNOWN", desc="Unknown Error"), discarding the
+# per-field detail these endpoints exist to surface.
+# Cites: API_SubmitFlow_v1.1.pdf Section 4.6 "Response 2: When error in
+# validation".
+# ---------------------------------------------------------------------------
+
+def test_parse_response_envelope_validate_submit_error_shape():
+    response = {
+        "serviceName": "EriValidateItr",
+        "pan": "ACEPR7859X",
+        "header": {"formName": None},
+        "messages": [],
+        "errors": [
+            {
+                "errCd": "AssesseeName_001",
+                "errFld": "ITR.ITR1.PersonalInfo.AssesseeName",
+                "errCtg": "OTH",
+                "asPerItr": 0,
+                "asComputed": 0,
+                "variance": 0,
+                "schId": None,
+            }
+        ],
+        "arnNumber": None,
+        "id": None,
+        "successFlag": False,
+        "transactionNo": None,
+        "formPath": None,
+        "httpStatus": None,
+    }
+
+    with pytest.raises(ERIApiError) as exc_info:
+        parse_response_envelope(response)
+
+    assert exc_info.value.code == "AssesseeName_001"
+    assert exc_info.value.field_name == "ITR.ITR1.PersonalInfo.AssesseeName"
+    assert exc_info.value.category == "OTH"
+    assert exc_info.value.variance == 0
+
+
+def test_parse_response_envelope_validate_success_with_false_success_flag():
+    """The spec's own 'Validated Successfully' sample carries
+    successFlag: false with empty messages/errors -- a documented anomaly,
+    not something parse_response_envelope should treat as failure. Only
+    non-empty errors[]/ERROR-typed messages[] entries should raise."""
+    response = {
+        "serviceName": "EriValidateItr",
+        "pan": "ACEPR7859X",
+        "header": {"formName": None},
+        "messages": [],
+        "errors": [],
+        "arnNumber": None,
+        "id": None,
+        "successFlag": False,
+        "transactionNo": "ITR000000004862",
+        "httpStatus": None,
+    }
+
+    parsed = parse_response_envelope(response)
+    assert parsed == response
+
+
+def test_parse_response_envelope_legacy_error_shape_still_works():
+    """Regression fence: the login/addClient/everify {code,desc,fieldName}
+    errors[] shape must still be recognized after adding the errCd/errFld
+    branch."""
+    response = {
+        "messages": [],
+        "errors": [
+            {"code": "EF500060", "desc": "Invalid UserId/Password", "fieldName": "pass"}
+        ],
+    }
+
+    with pytest.raises(ERIApiError) as exc_info:
+        parse_response_envelope(response)
+
+    assert exc_info.value.code == "EF500060"
+    assert exc_info.value.field_name == "pass"
+
+
 def test_mock_dsc_mode_still_forbidden_in_type2_production(monkeypatch) -> None:
     """Regression fence: the new ngrok check must not have disturbed the
     existing mock-mode production guard."""

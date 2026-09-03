@@ -275,10 +275,19 @@ def assert_credentials_at_startup() -> None:
     missing digest secret in production).
 
     Note: this previously also required ``ERI_AWS_SSH_HOST_TYPE2_PRODUCTION``
-    for Type-2 production, because egress had to leave from an IP that ITD had
-    whitelisted, via an SSH jump host. That whitelisting requirement no longer
-    applies — ERI endpoints accept the deployment IP directly — so the check
-    was removed rather than left demanding a jump host that is never used.
+    for Type-2 production. That check was removed because the SSH-jump-host
+    mechanism it validated was never actually wired up (no ``paramiko``
+    import exists anywhere in this codebase; ``aws_ssh_host``/``aws_ssh_user``/
+    ``aws_ssh_key_path`` are read from ``.env`` but have zero consumers) --
+    NOT because IP whitelisting itself stopped applying. It still does: the
+    official ITD ``List of UAT/Production URLs for Type 2`` PDFs both state
+    "IP address... whitelisted at our end" as precondition #1, and every
+    Type-2 UAT call this project has actually made against ITD was routed
+    through a whitelisted egress IP for exactly this reason. This docstring
+    previously claimed the opposite ("no longer applies... accept the
+    deployment IP directly") -- that was wrong; see
+    ``Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md`` for the corrected
+    whitelisting/relay architecture.
     """
     creds = get_eri_credentials()
 

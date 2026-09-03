@@ -23,7 +23,7 @@ import os
 import tempfile
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
@@ -843,11 +843,18 @@ from app.schemas.eri import (
     ERIAddClientRequest,
     ERIValidateClientOtpRequest,
     ERIRegisterClientRequest,
-    ERIValidateRegOtpRequest
+    ERIValidateRegOtpRequest,
+    ERIValidateItrRequest,
+    ERISubmitItrRequest,
+    ERIUpdateVerModeRequest,
+    ERIGenerateEvcRequest,
+    ERIVerifyEvcRequest,
+    ERIAcknowledgementRequest,
 )
 from app.eri.config import get_eri_credentials
 from app.eri.type2.client import eri_post
 from app.eri.envelope import encrypt_password
+from app.eri.exceptions import ERIApiError
 
 
 def _require_type2_mode() -> None:
@@ -1068,6 +1075,215 @@ def eri_validate_reg_otp_route(
             auth_token=auth_token
         )
         return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+
+
+@router.post("/api/v1/eri/validate-itr")
+def eri_validate_itr_route(
+    req: Request,
+    request: ERIValidateItrRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Validates an ITR against the eFiling system without submitting it.
+
+    Cites: Docs/API_SubmitFlow_v1.1.pdf Section 4 (validateItr API).
+    """
+    _require_type2_mode()
+    from app.eri.type2.validate import validate_itr
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+
+    try:
+        res = validate_itr(
+            pan=request.pan,
+            form_name=request.formName,
+            form_code=request.formCode,
+            ay=request.ay,
+            filing_type_cd=request.filingTypeCd,
+            filing_mode=request.filingMode,
+            income_tax_sec_cd=request.incomeTaxSecCd,
+            submitted_by=request.submittedBy,
+            form_data_json=request.formData,
+            auth_token=auth_token,
+            created_by=request.createdBy,
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"ITD ERI Error [{exc.code}]: {exc.desc}" + (f" (Field: {exc.field_name})" if exc.field_name else ""),
+        )
+
+
+@router.post("/api/v1/eri/submit-itr")
+def eri_submit_itr_route(
+    req: Request,
+    request: ERISubmitItrRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Validates and submits an ITR to the eFiling system.
+
+    Cites: Docs/API_SubmitFlow_v1.1.pdf Section 4 (submitItr API).
+    """
+    _require_type2_mode()
+    from app.eri.type2.submit import submit_itr
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+
+    try:
+        res = submit_itr(
+            pan=request.pan,
+            form_name=request.formName,
+            form_code=request.formCode,
+            ay=request.ay,
+            filing_type_cd=request.filingTypeCd,
+            filing_mode=request.filingMode,
+            income_tax_sec_cd=request.incomeTaxSecCd,
+            submitted_by=request.submittedBy,
+            form_data_json=request.formData,
+            auth_token=auth_token,
+            created_by=request.createdBy,
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"ITD ERI Error [{exc.code}]: {exc.desc}" + (f" (Field: {exc.field_name})" if exc.field_name else ""),
+        )
+
+
+@router.post("/api/v1/eri/update-ver-mode")
+def eri_update_ver_mode_route(
+    req: Request,
+    request: ERIUpdateVerModeRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Sets the verification mode ("LATER" or "ITRV") for a submitted ITR.
+
+    Cites: Docs/API_Everify_Return_v1.1.pdf Section 4.
+    """
+    _require_type2_mode()
+    from app.eri.type2.everify import update_ver_mode
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+
+    try:
+        return update_ver_mode(
+            pan=request.pan,
+            ack_num=request.ackNum,
+            ay=request.ay,
+            form_code=request.formCode,
+            ver_mode=request.verMode,
+            auth_token=auth_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+
+
+@router.post("/api/v1/eri/generate-evc")
+def eri_generate_evc_route(
+    req: Request,
+    request: ERIGenerateEvcRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Generates an EVC/OTP for e-verifying a submitted ITR.
+
+    Cites: Docs/API_Everify_Return_v1.1.pdf Section 5.
+    """
+    _require_type2_mode()
+    from app.eri.type2.everify import generate_evc
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+
+    try:
+        return generate_evc(
+            pan=request.pan,
+            ack_num=request.ackNum,
+            ay=request.ay,
+            form_code=request.formCode,
+            ver_mode=request.verMode,
+            auth_token=auth_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+
+
+@router.post("/api/v1/eri/verify-evc")
+def eri_verify_evc_route(
+    req: Request,
+    request: ERIVerifyEvcRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Verifies a submitted ITR using Aadhaar OTP or Bank/Demat EVC.
+
+    Cites: Docs/API_Everify_Return_v1.1.pdf Section 6.
+    """
+    _require_type2_mode()
+    from app.eri.type2.everify import verify_evc
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+
+    try:
+        return verify_evc(
+            pan=request.pan,
+            ack_num=request.ackNum,
+            ay=request.ay,
+            form_code=request.formCode,
+            ver_mode=request.verMode,
+            transaction_id=request.transactionId,
+            auth_token=auth_token,
+            otp_value=request.otpValue,
+            evc_value=request.evcValue,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ERIApiError as exc:
+        raise HTTPException(status_code=400, detail=f"ITD ERI Error [{exc.code}]: {exc.desc}")
+
+
+@router.post("/api/v1/eri/get-acknowledgement")
+def eri_get_acknowledgement_route(
+    req: Request,
+    request: ERIAcknowledgementRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Retrieves the acknowledgement PDF for a submitted/e-verified ITR.
+
+    Cites: Docs/API_AcknowledgementFlow.pdf Section 4. Unlike every other
+    Type-2 route, a successful response body is a raw PDF binary, not JSON
+    (``app/eri/type2/acknowledgement.py::get_acknowledgement()`` already
+    distinguishes the JSON-error-response case from the PDF-success case
+    via Content-Type and raises ERIApiError for the former).
+    """
+    _require_type2_mode()
+    from app.eri.type2.acknowledgement import get_acknowledgement
+    auth_token = extract_auth_token(req)
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="authToken or Authorization header is required.")
+
+    try:
+        pdf_bytes = get_acknowledgement(
+            pan=request.pan,
+            ack_number=request.ackNumber,
+            auth_token=auth_token,
+        )
+        return Response(content=pdf_bytes, media_type="application/pdf")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ERIApiError as exc:

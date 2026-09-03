@@ -94,3 +94,18 @@ class ERIVerifyEvcRequest(BaseModel):
 class ERIAcknowledgementRequest(BaseModel):
     pan: str = Field(..., max_length=10)
     ackNumber: str = Field(...)
+
+class ERIValidateItrRequest(BaseModel):
+    pan: str = Field(..., max_length=10)
+    formName: str = Field(..., description="e.g. 'ITR-1', 'ITR-4'")
+    formCode: str = Field(..., description="ITR form number as a string, e.g. '1', '4'")
+    ay: str = Field(..., description="Assessment year, e.g. '2026'")
+    filingTypeCd: str = Field(..., description="'O' Original or 'R' Revised")
+    filingMode: str = Field("OF", description="Always 'OF' per the ITD spec")
+    incomeTaxSecCd: str = Field(..., description="ReturnFileSec code, e.g. '11' (139(1)), '12' (belated), '17' (revised)")
+    submittedBy: str = Field("ERI", description="'ERI' for Type-2, 'SLF' for Type-3")
+    formData: str = Field(..., description="Serialized CBDT ITD JSON string for this form")
+    createdBy: Optional[str] = Field(None, description="Defaults to the configured ERI user ID")
+
+class ERISubmitItrRequest(ERIValidateItrRequest):
+    pass

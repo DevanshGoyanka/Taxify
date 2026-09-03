@@ -1,14 +1,16 @@
 # ERI Type-2 & Type-3 — UAT/Production Reference and Findings (AY 2026-27)
 
-**Date:** 2026-09-03 (§1-11); **Updated:** 2026-09-04 (§12-13 — ITR-4 Type-2 UAT signing
-architecture and `validate`/`submit` implementation)
+**Date:** 2026-09-03 (§1-11); **Updated:** 2026-09-04 (§12 — ITR-4 Type-2 UAT signing
+architecture and `validate`/`submit` implementation; §13 — live prefill flow verification and
+four bugs found/fixed in `app/eri/type2/prefill.py`)
 **Purpose:** one authoritative document for everything ERI-operational — how Type-2 and Type-3
 actually get from UAT to production (corrected here from an earlier wrong assumption, with the
 real process below), credential architecture, Digest computation, login/session mechanics,
 the Type-3 submission automation, acknowledgement retrieval, every finding from the
-filing/submission pipeline audit, and (§12) the ITR-4 Type-2 UAT signing-architecture
-investigation and `validate`/`submit` implementation. Complements, and where the two disagree
-corrects, `Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md` (original architecture plan) and
+filing/submission pipeline audit, and (§12-13) the ITR-4 Type-2 UAT signing-architecture
+investigation, `validate`/`submit` implementation, and live prefill-flow verification.
+Complements, and where the two disagree corrects, `Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md`
+(original architecture plan) and
 `Docs/ERI_UAT_EXPANSION_PLAN.md` (multi-form UAT-pack rollout plan) rather than replacing
 either — both remain the record of *how the system was built*; this document is the record of
 *how it actually operates* and *what has been verified*.
@@ -606,9 +608,105 @@ imports.
 2. A full ITR-4 dummy-PAN UAT run end-to-end (login → client onboarding → prefill if applicable
    → validate → submit → e-verify → acknowledgement) through Phase B's production-representative
    path, captured into ITD's Test Scenario Sheet format (mirroring the ITR-1 precedent exactly).
+   **Update (2026-09-04, §13): login, add-client-already-added confirmation, and the full
+   prefill flow are now verified working end-to-end against live Type-2 UAT** (from the local
+   machine, Phase A) — validate/submit/e-verify/acknowledgement remain to be exercised live.
 3. Email ITD requesting ITR-4 production enablement once the sheet is clean.
 
-## 13. References
+## 13. Prefill flow — live UAT verification and four real bugs found and
+fixed (2026-09-04)
+
+Continuing directly from §12: with `validate.py`/`submit.py` built and the signing/whitelisting
+questions resolved, the next step toward "a full ITR-4 dummy-PAN UAT run" was exercising the
+rest of the flow live. Per the user's guidance, the correct sequence is: **login → confirm the
+dummy-PAN client is already added → request prefill → use the real prefill data (not fabricated
+values) to build the ITR JSON.** This section covers that work, run against the same dummy PAN
+used for the original ITR-1 UAT precedent, `GOYPT2026A`.
+
+### 13.1 Login re-verified; client confirmed already added
+
+A fresh live login (using the same token-mode signing verified in §12) succeeded again,
+confirming §12.2's fix is stable across sessions. `request_prefill_otp("GOYPT2026A", ...)` was
+then called directly (no `addClient` call first) and succeeded immediately — ITD's gateway would
+reject a prefill OTP request for a PAN not already an authorized client, so success itself
+*is* the "already added" confirmation the user asked for. `GOYPT2026A` was added as a client
+during the original ITR-1 UAT work and remains valid.
+
+### 13.2 Four real bugs found in `app/eri/type2/prefill.py`, all confirmed
+against live calls (not guessed from the spec alone)
+
+`API_Prefill_v1.1.pdf`'s own request-body tables turned out to be an unreliable source of truth
+in two places — matching this repo's established finding (CLAUDE.md, §"CBDT/ITD source
+material") that a spec document's stated shape doesn't always match what the live gateway
+actually accepts. Each fix below was verified against a real HTTP response, not inferred from
+the PDF alone; where the fix needed the ACTUAL request shape rather than the documented one, the
+user's own prior `uat-login-test/get_prefill_goypt2026a.sh` script (which has a saved
+`get_prefill_response_goypt2026a.json` showing `"successFlag":true` with real encrypted prefill
+data) was the authoritative reference, not the spec PDF.
+
+1. **`requestPrefillOTP`'s `serviceName`.** The spec's Section 4.4.3 table claims the mandatory
+   value is `"EriGetPrefill"`. The *live* gateway rejects that with
+   `errCd=EF40000, fieldName=serviceName, desc="JSON data invalid"` — confirmed by first
+   "fixing" the code to match the spec (making it worse) and getting this exact field-level
+   error back, then reverting to the code's original `"EriPrefill"`, which had been correct all
+   along. **No fix needed here in the end** — but worth recording, since the spec's own table
+   would lead a future reader to "fix" this into a real regression.
+2. **`getPrefill`'s transaction ID field.** The spec's Section 5.3.3 table documents a single
+   `"transactionId"` field. The live gateway rejects this shape with a generic
+   `errCd=EF40000, desc="JSON data invalid"` (no `fieldName`) regardless of which of
+   `requestPrefillOTP`'s two returned IDs (`smsTransactionId`/`emailTransactionId`) is used for
+   it. The real, working shape (confirmed via the referenced `.sh` script's saved successful
+   response, then independently reproduced live) sends **both** as separate fields:
+   `"smsTransactionId"` and `"emailTransactionId"`, matching the exact keys
+   `requestPrefillOTP`'s own response uses. **Fixed**: `get_prefill_data()`'s signature changed
+   from a single `transaction_id: str` to `sms_transaction_id: str` +
+   `email_transaction_id: Optional[str]`.
+3. **Response key casing: `"Prefill"` vs `"prefill"`.** The code read
+   `validated_envelope.get("Prefill")` (capital P); the real response key is lowercase
+   `"prefill"`. This one is severe: it would silently treat even a **fully successful** response
+   as an error (`"Prefill attribute is missing from the success response"`), discarding real
+   decrypted taxpayer data. **Fixed**: reads `"prefill"`.
+4. **Schema-file path off by one directory level.** `validate_prefill_schema()`'s
+   `schema_path` used two `".."` segments from `app/eri/type2/prefill.py`, resolving to
+   `app/Docs/PreFillSchemaJSON_V6.5/...` — which never existed (the real file is at repo-root
+   `Docs/PreFillSchemaJSON_V6.5/...`, three levels up: `type2 → eri → app → root`). This raised
+   `FileNotFoundError` on every single call, including the very first genuinely successful
+   `getPrefill` response this session obtained. **Fixed**: added the missing `".."` level.
+
+### 13.3 A fifth issue: the published prefill schema is stricter than ITD's
+own live server
+
+After fixing #1–4, a live call for `GOYPT2026A`/AY 2025 returned **real, fully decrypted**
+prefill data — 55 top-level sections (`personalInfo`, `verification`, `bankAccountDtls`,
+`filingStatus`, `ais`, `scheduleCFL`, and so on). Of those 55, only `personalInfo` and
+`verification` were populated; the other 53 (covering audit reports, ESOP schedules, foreign
+remittance forms, carried-forward losses, etc. — all genuinely inapplicable to this simple dummy
+taxpayer) were `null`. `validate_prefill_schema()` then raised
+`jsonschema.exceptions.ValidationError` at `scheduleCFL`: `"None is not of type 'object'"` — the
+published `PreFillSchemaJSON_V6.5.json` declares that field (and, by the same pattern, likely
+most of the other 52) as a required `"type": "object"` with no `null` allowed, but ITD's own
+live server legitimately sends `null` for any section that doesn't apply to the taxpayer. This
+is not malformed data; it's the schema being out of sync with the server's real, ordinary
+behavior — and since **most real taxpayers will have many inapplicable null sections** (this
+was not a dummy-data quirk unique to `GOYPT2026A`), treating this as fatal would make
+`get_prefill_data()` unusable for its actual purpose against any normal return. **Fixed**: a
+schema validation failure is now logged as a warning (`_log.warning(...)`, naming the exact
+field path and message) rather than raised — the successfully decrypted-and-parsed data is
+still returned. A genuinely corrupted/undecryptable response still fails earlier and loudly (bug
+#3's fix, and the existing `DECRYPT_ERROR`/`JSONDecodeError` handling, are unaffected).
+
+### 13.4 Verification
+
+All five fixes were confirmed against live HTTP calls before being written into the source
+(not merely inferred), and `tests/test_eri_type2_prefill.py` (new) covers all of them with
+mocked `requests.post`/`build_request_envelope`, each `git stash`-verified to fail against the
+pre-fix code (four of five did; the `serviceName` test correctly does **not** regress, since #1
+above concluded no code change was needed there — recorded as a regression fence instead). The
+real encrypted-then-decrypted round trip in the schema-mismatch test uses the actual
+`ERI_SYMMETRIC_KEY` AES-128-ECB/PKCS7 scheme `decrypt_prefill()` implements, not a stub, so a
+future accidental change to that decryption logic would also be caught here.
+
+## 14. References
 
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/ERI API Specification_v1.1 (4).pdf`
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/Digest_generation_ERI 2 (2).pdf`
@@ -633,3 +731,11 @@ imports.
   — §12.5's new code and tests
 - `API_Testing/local-dsc-signer/` — the working Java reference read (not modified, not
   depended on) to confirm §12.2's signature structure findings
+- `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/API_Prefill_v1.1 (3).pdf`
+  — §13's source, and the origin of two of §13.2's spec-vs-reality mismatches
+- `Docs/PreFillSchemaJSON_V6.5/PreFillSchemaJSON_V6.5.json` — the official prefill JSON schema;
+  §13.3's source of the `scheduleCFL`-type mismatch against live server behavior
+- `app/eri/type2/prefill.py`, `tests/test_eri_type2_prefill.py` — §13's fixed code and its tests
+- `uat-login-test/get_prefill_goypt2026a.sh` and its saved
+  `get_prefill_response_goypt2026a.json` (outside this repo, on the user's machine) — the
+  authoritative reference for §13.2 finding #2's real working request shape

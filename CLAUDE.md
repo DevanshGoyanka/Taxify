@@ -187,6 +187,18 @@ by default) are deliberately *not* included — adding them via `win32crypt.Cryp
 confirmed ITD's verifier does not require them. The Linux deployment runs Type-3, which needs
 no DSC signing at all.
 
+`prefill.py`'s two-step flow (`request_prefill_otp()` then `get_prefill_data()`) has three
+non-obvious, live-call-verified quirks that contradict `API_Prefill_v1.1.pdf`'s own request
+tables — don't "fix" these back to match the spec PDF without re-verifying against a live call
+first (see `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §13.2 for the full trace): (1)
+`requestPrefillOTP`'s `serviceName` really is `"EriPrefill"`, not the spec's claimed
+`"EriGetPrefill"`; (2) `getPrefill` needs the two IDs `requestPrefillOTP` returns
+(`smsTransactionId`/`emailTransactionId`) sent as separate fields, not the spec's single
+`"transactionId"`; (3) a schema-validation mismatch against `PreFillSchemaJSON_V6.5.json` is
+logged, not raised — ITD's live server routinely sends `null` for inapplicable optional form
+sections (audit reports, ESOP, carried-forward losses, etc.) where the published schema
+requires an object, and most real taxpayers will have many such sections.
+
 ### CBDT/ITD source material
 
 `Reference Docs by CBDT & ITD/` holds the official source documents CBDT rule citations and

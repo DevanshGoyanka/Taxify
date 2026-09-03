@@ -38,6 +38,73 @@ except ImportError:
     HAS_WIN32 = False
 
 
+_CERT_STORE_PROV_SYSTEM = 10
+_CERT_SYSTEM_STORE_CURRENT_USER = 0x00010000
+_CERT_SYSTEM_STORE_LOCAL_MACHINE = 0x00020000
+
+
+def _open_cert_store(name: str, location: int):
+    return win32crypt.CertOpenStore(_CERT_STORE_PROV_SYSTEM, 0, None, location, name)
+
+
+def _find_dsc_cert(subject_filter: str):
+    """Finds the DSC signing certificate in the CurrentUser\\My store by
+    subject substring match, preferring one with a Digital Signature key
+    usage bit if that check is available."""
+    store = _open_cert_store("My", _CERT_SYSTEM_STORE_CURRENT_USER)
+    for cert in store.CertEnumCertificatesInStore():
+        subject = win32crypt.CertNameToStr(cert.Subject)
+        if subject_filter not in subject:
+            continue
+        try:
+            usage = cert.CertGetIntendedKeyUsage()
+            if usage & 128:  # Digital Signature
+                return cert
+        except Exception:
+            return cert
+    return None
+
+
+def _build_cert_chain(leaf_cert, max_depth: int = 10) -> list:
+    """Walks the issuer chain from ``leaf_cert`` up to its root by matching
+    each certificate's Issuer DN against candidate Subject DNs in the
+    Windows CA/Root/AuthRoot system stores (CurrentUser and LocalMachine).
+
+    Cites: this token's intermediate/root certs are not present in the
+    CurrentUser\\My store alongside the leaf -- only Windows's system-wide
+    public CA stores carry them. A real ITD-whitelisted signature was
+    confirmed (via direct ASN.1 inspection) to embed the full 4-certificate
+    chain (leaf, issuing sub-CA, intermediate CA, root), not just the leaf;
+    this reproduces that chain for the ``MsgCert`` parameter of
+    ``CryptSignMessage``.
+    """
+    chain = [leaf_cert]
+    current = leaf_cert
+    for _ in range(max_depth):
+        if current.Subject == current.Issuer:
+            break  # self-signed root reached
+        parent = None
+        for store_name in ("CA", "Root", "AuthRoot"):
+            for location in (_CERT_SYSTEM_STORE_CURRENT_USER, _CERT_SYSTEM_STORE_LOCAL_MACHINE):
+                try:
+                    store = _open_cert_store(store_name, location)
+                except Exception:
+                    continue
+                for cert in store.CertEnumCertificatesInStore():
+                    if cert.Subject == current.Issuer:
+                        parent = cert
+                        break
+                if parent:
+                    break
+            if parent:
+                break
+        if parent is None:
+            break
+        chain.append(parent)
+        current = parent
+    return chain
+
+
 def sign_data(plain_json: str) -> tuple[str, str]:
     """Signs the plain JSON data string using the ERI DSC private key.
     
@@ -72,57 +139,45 @@ def sign_data(plain_json: str) -> tuple[str, str]:
     elif mode == "token":
         if not HAS_WIN32:
             raise RuntimeError("win32crypt is not available for token signing.")
-            
+
         subject_filter = os.getenv("ERI_DSC_CERT_SUBJECT", "SUNIT RAMASHANKAR GOYANKA")
-        
-        # Open "My" System Store
-        CERT_STORE_PROV_SYSTEM = 10
-        CERT_SYSTEM_STORE_CURRENT_USER = 0x00010000
-        
-        store = win32crypt.CertOpenStore(
-            CERT_STORE_PROV_SYSTEM,
-            0,
-            None,
-            CERT_SYSTEM_STORE_CURRENT_USER,
-            "My"
-        )
-        
-        cert_context = None
-        try:
-            for cert in store.CertEnumCertificatesInStore():
-                subject = win32crypt.CertNameToStr(cert.Subject)
-                if subject_filter in subject:
-                    try:
-                        usage = cert.CertGetIntendedKeyUsage()
-                        # 192 = Digital Signature (128) | Non-Repudiation (64)
-                        # We just check if Digital Signature (128) is present
-                        if usage & 128:
-                            cert_context = cert
-                            break
-                    except Exception:
-                        # Fallback if CertGetIntendedKeyUsage fails
-                        cert_context = cert
-                        break
-        finally:
-            pass
-            
+        cert_context = _find_dsc_cert(subject_filter)
         if not cert_context:
             raise RuntimeError(f"DSC Certificate matching '{subject_filter}' not found in Windows User MY Store.")
-            
-        try:
-            # Sign message using CryptoAPI
-            sign_para = {
-                "SigningCert": cert_context,
-                "HashAlgorithm": {"ObjId": "2.16.840.1.101.3.4.2.1", "Parameters": None}, # SHA-256
-            }
-            # CryptSignMessage expects a sequence of bytes
-            data_bytes = plain_json.encode("utf-8")
-            # Set to False to generate an ATTACHED signature (which the Java app uses)
-            signed_blob = win32crypt.CryptSignMessage(sign_para, (data_bytes,), False)
-            base64_data = base64.b64encode(data_bytes).decode("utf-8")
-            return base64.b64encode(signed_blob).decode("utf-8"), base64_data
-        finally:
-            pass
+
+        chain = _build_cert_chain(cert_context)
+
+        # Sign message using CryptoAPI. Empirically verified against a real
+        # ITD Type-2 UAT login call (2026-09-04): a DETACHED signature
+        # (fDetachedSignature=True) with the FULL certificate chain embedded
+        # via MsgCert is what ITD's verifier accepts -- confirmed by
+        # comparing byte-for-byte against a prior successfully-whitelisted
+        # capture (data length 172, sign length 8984) and by a live login
+        # call returning EF00000/OK. An earlier version of this function
+        # passed fDetachedSignature=False (attached, content embedded in the
+        # CMS blob) with only the leaf cert and no chain -- that comment
+        # ("False = ATTACHED ... which the Java app uses") was simply wrong;
+        # the working Java local-dsc-signer reference (BouncyCastle,
+        # generate(cmsData, false) where false=don't encapsulate) produces a
+        # DETACHED signature with the full chain, not an attached one.
+        #
+        # Note: the real captured sample also carries a CMS authenticated-
+        # attributes block (contentType/signingTime/messageDigest/
+        # CMSAlgorithmProtection) that this implementation omits --
+        # attempting to add it via CryptSignMessage's AuthAttr parameter
+        # segfaulted against this specific hardware CSP (HyperPKI HYP2003).
+        # The live login call above confirms ITD's verifier does not require
+        # that block: a detached signature with the full chain and no signed
+        # attributes is sufficient.
+        sign_para = {
+            "SigningCert": cert_context,
+            "HashAlgorithm": {"ObjId": "2.16.840.1.101.3.4.2.1", "Parameters": None},  # SHA-256
+            "MsgCert": chain,
+        }
+        data_bytes = plain_json.encode("utf-8")
+        signed_blob = win32crypt.CryptSignMessage(sign_para, (data_bytes,), True)
+        base64_data = base64.b64encode(data_bytes).decode("utf-8")
+        return base64.b64encode(signed_blob).decode("utf-8"), base64_data
             
     elif mode == "ngrok":
         # No default: this mode transmits the FULL plain ITR/API payload
@@ -211,13 +266,33 @@ def parse_response_envelope(response_json: dict) -> dict:
             field_name = msg.get("fieldName")
             raise ERIApiError(code=code, desc=desc, field_name=field_name)
             
-    # Also check the 'errors' array if present (seen in some Type-2 API responses)
+    # Also check the 'errors' array if present. Two distinct shapes exist
+    # across Type-2 endpoints:
+    #  - login/addClient/everify: {code, desc, fieldName}
+    #  - validate/submit:         {errCd, errFld, errCtg, asPerItr,
+    #                               asComputed, variance, schId}
+    # Cites: API_SubmitFlow_v1.1.pdf Section 4.6 "Response 2: When error in
+    # validation" -- without this branch, every validate/submit error
+    # collapsed into a generic ERIApiError(code="UNKNOWN", desc="Unknown
+    # Error"), discarding exactly the per-field arithmetic-mismatch detail
+    # these endpoints exist to surface.
     for err in response_json.get("errors", []):
+        if "errCd" in err or "errFld" in err:
+            raise ERIApiError(
+                code=err.get("errCd", "UNKNOWN"),
+                desc=err.get("errCtg") or "Validation Error",
+                field_name=err.get("errFld"),
+                category=err.get("errCtg"),
+                as_per_itr=err.get("asPerItr"),
+                as_computed=err.get("asComputed"),
+                variance=err.get("variance"),
+                sch_id=err.get("schId"),
+            )
         code = err.get("code", "UNKNOWN")
         desc = err.get("desc", "Unknown Error")
         field_name = err.get("fieldName")
         raise ERIApiError(code=code, desc=desc, field_name=field_name)
-        
+
     return response_json
 
 
