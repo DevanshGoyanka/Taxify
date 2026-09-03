@@ -730,7 +730,50 @@ consistency checks validate the *calculator's* internal state, never the ITD JSO
 output against itself), a similar targeted trace of Part B1's salary breakdown and Part E's bank
 details would be a reasonable next increment if further FORM-flow verification is wanted.
 
-## 10. Summary of open items after this pass
+## 11. Real bug found and fixed: `calc_rules.py`'s 57(iia) family-pension check used a flat,
+unconditional Rs 15,000 cap for both regimes, falsely blocking legitimate new-regime deductions
+up to Rs 25,000 (2026-09-03)
+
+**Found continuing the exhaustive tax-calculation-flow re-verification** (§27 in the ITR-1 doc's
+80CCD(2) fix, §28's 234C safe-harbor fix) by cross-checking every post-computation consistency
+check in `calc_rules.py` against the actual formula in the schedule module it's supposed to be
+verifying — in this case, `app/engine/schedules/other_sources.py`'s Section 57(iia) family-pension
+deduction, which correctly computes `min(1/3 of family pension, cap)` with `cap = Rs 15,000`
+(old regime) or `Rs 25,000` (new regime, per the FA 2023 amendment).
+
+**The bug**: `calc_rules.py`'s `ITR4-C096` (Rule 96) computed `max_fp_ded = Decimal("15000")`
+unconditionally, only overriding it to the correct `min(fp/3, 15000)` formula for the *old*
+regime — the new-regime branch never ran the `fp/3` computation at all and stayed at the flat,
+too-low Rs 15,000 figure. This is a **Severity A, blocking** check (`_make(..., False, ...)`),
+not informational: any new-regime return with a legitimate family-pension deduction between
+Rs 15,001 and Rs 25,000 — fully correct per the calculator's own arithmetic — was flagged as a
+hard validation failure.
+
+**Confirmed empirically, including a stash-comparison proof**: a new-regime filer with
+Rs 60,000 family pension received correctly computes a Rs 20,000 deduction (1/3 of 60,000, within
+the 25,000 cap). Running the pre-fix `calc_rules.py` against this exact scenario produced a
+blocking `ITR4-C096` error (`"...exceeds limit: min(1/3 of FP, 15000)"`, `expected: "<= 15000"`,
+`actual: "25000"` for the even-larger Rs 2,00,000-pension case) — confirmed by `git stash`-ing
+just this file and re-running the new tests, 2 of 3 failed exactly as predicted before the fix,
+none after.
+
+**Contrast with ITR-1**: `app/engine/validators/itr1/calc_rules.py` already had this correct —
+two *separate* rules (`ITR1-R054` for old regime, `ITR1-R214` for new regime with the right
+`min(fp/3, 25000)` formula), rather than ITR-4's single unified-but-incomplete check. `ITR1-R214`
+carried a stale comment claiming the new-regime computation "doesn't currently apply 57(iia)",
+which this pass confirmed is no longer true (and the check itself was already correct regardless)
+— updated the comment rather than the logic.
+
+**Fix**: `calc_rules.py`'s `ITR4-C096` now computes `fp_cap = 15000 if is_old else 25000` and
+applies `min(fp/3, fp_cap)` in both regimes, matching `other_sources.py` exactly.
+
+**Tests added** (`tests/test_itr4_calc_validation.py`, new file — no prior test coverage existed
+for `calc_rules.py` via its actual `run_calc_validation` entry point): new-regime deduction within
+the 25,000 cap not falsely flagged, new-regime deduction correctly capped at exactly 25,000 not
+falsely flagged, old-regime 15,000 cap still enforced unchanged. Full backend suite: 1609 passed,
+same 3 pre-existing unrelated failures, no regressions.
+
+## 12. Summary of open items after this pass
 
 0. **Fixed in a follow-up pass, ITR-1-only in practice (ITR-4 already correct)**:
    `section_80ccd2.py`'s engine computation ignored tax regime entirely, never applying Finance

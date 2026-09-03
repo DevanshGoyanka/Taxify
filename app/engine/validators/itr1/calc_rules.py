@@ -489,9 +489,13 @@ def validate_itr1_calculation(inp: ITR1Input, result: ITR1Result) -> list[Valida
                     "other_sources_income.family_pension_received",
                 ))
 
-    # Rule 214: New regime 57(iia) up to min(1/3rd FP, 25,000)
-    # Note: current OS schedule only applies 57(iia) in old regime.
-    # If new regime computation adds support, this check becomes relevant.
+    # Rule 214: New regime 57(iia) up to min(1/3rd FP, 25,000). This
+    # correctly matches app/engine/schedules/other_sources.py's own
+    # regime-dependent cap (Rs 15,000 old / Rs 25,000 new, both as
+    # min(1/3 of FP, cap)) -- confirmed during the ITR-1/ITR-4 tax-
+    # calculation-flow audit, which found and fixed a stale version of this
+    # same check in ITR-4's calc_rules.py that had NOT kept up with that
+    # regime-dependent cap (see ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md).
     if is_new and os_sched and hasattr(os_sched, "deduction_57iia") and os_sched.deduction_57iia > 0:
         if fp > 0:
             max_fp_new = min(fp / Decimal("3"), Decimal("25000"))

@@ -543,12 +543,19 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
 
     op = inp.other_sources_income
     if op and os_sched:
-        # Rule 96: 57(iia) family pension deduction: 1/3 of FP or 15,000/25,000
+        # Rule 96: 57(iia) family pension deduction = min(1/3 of FP, statutory
+        # cap) in BOTH regimes -- old regime cap Rs 15,000, new regime cap
+        # Rs 25,000 (FA 2023 amendment). This must match
+        # app/engine/schedules/other_sources.py's actual computation exactly
+        # (that module already gets this right); previously this check used
+        # a flat, unconditional Rs 15,000 ceiling for the new regime with no
+        # 1/3-of-FP computation at all, so it would have falsely flagged any
+        # correct new-regime deduction between Rs 15,001 and Rs 25,000 as an
+        # error.
         fp = op.family_pension_received
         if fp > z:
-            max_fp_ded = Decimal("15000")
-            if is_old:
-                max_fp_ded = min(fp / Decimal("3"), Decimal("15000"))
+            fp_cap = Decimal("15000") if is_old else Decimal("25000")
+            max_fp_ded = min(fp / Decimal("3"), fp_cap)
             if os_sched.deduction_57iia > max_fp_ded + Decimal("1"):
                 results.append(_make(
                     "ITR4-C096", False,
