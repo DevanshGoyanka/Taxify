@@ -118,6 +118,36 @@ def test_R043_individual_claiming_80u_not_blocked():
     assert not failed(results, "ITR4-R043")
 
 
+def test_R225_80cch_cgov_employee_not_falsely_blocked():
+    """R225 (80CCH Agniveer Corpus Fund requires Central Government
+    employment) compared nature_of_employment against the literal string
+    "Central Government" -- but that field carries the raw official code
+    (CGOV/SGOV/PSU/...), never a human-readable label, so this never
+    matched any real code and unconditionally blocked every 80CCH claim,
+    including genuine CGOV employees. Same bug pattern as the 18 sites
+    already fixed this session (§5 of the ITR-4 audit doc); this one
+    escaped that sweep. ITR-1's equivalent (ITR1-R187) already compared
+    against "CGOV" correctly."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        nature_of_employment="CGOV",
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("200000")),
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R225")
+
+
+def test_R225_80cch_non_cgov_employee_still_blocked():
+    """Non-CGOV employment must still be blocked from claiming 80CCH."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        nature_of_employment="SGOV",
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("200000")),
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R225")
+
+
 def test_R270_80eea_requires_exhausted_section_24b_limit():
     """80EEA is available only after the self-occupied 24(b) cap is used."""
     deduction_row = ITR1Schedule80EEALoanEntry(

@@ -945,8 +945,38 @@ passed, same 3 pre-existing unrelated failures, no regressions (one run showed a
 failure in two unrelated tests — both pass in isolation and on a clean rerun; confirmed
 transient/order-dependent, not caused by this pass's changes).
 
-## 15. Summary of open items after this pass
+## 15. Real bug found and fixed: `ITR4-R225` (80CCH) compared the raw employment code against a
+human-readable label, unconditionally blocking every 80CCH claim including genuine ones
+(2026-09-03)
 
+**Found continuing the rule-by-rule sweep**, reading `ITR4-R225`'s condition directly:
+`if inp.nature_of_employment != "Central Government":`. This is the exact bug pattern already
+found and fixed at 18 other sites this session (§5) — `inp.nature_of_employment` carries the raw
+official code (`CGOV`/`SGOV`/`PSU`/`PE`/`PESG`/`PEPS`/`PEO`/`OTH`), never a human-readable label —
+but this specific site was apparently added or left untouched during that earlier sweep and
+retained the broken comparison.
+
+**Impact**: since `nature_of_employment` is never literally the string `"Central Government"`,
+this condition was **always true**, unconditionally blocking every 80CCH (Agniveer Corpus Fund)
+claim regardless of actual employment — including genuine `CGOV` (Central Government/Agniveer)
+claimants who are exactly who Section 80CCH is *for*. Confirmed against ITR-1's own equivalent
+check (`ITR1-R187`), which already correctly compares against `"CGOV"` — proving the correct
+pattern was already established and known elsewhere in this codebase, just not applied here.
+
+**Fix**: `ITR4-R225` now compares against `"CGOV"`, matching `ITR1-R187` exactly.
+
+**Tests added**: `test_R225_80cch_cgov_employee_not_falsely_blocked` (a genuine CGOV Agniveer
+claimant is no longer blocked), `test_R225_80cch_non_cgov_employee_still_blocked` (a non-CGOV
+claimant is still correctly blocked). No prior test coverage existed for R225/80CCH at all. Full
+backend suite: 1617 passed, same 3 pre-existing unrelated failures, no regressions.
+
+## 16. Summary of open items after this pass
+
+0f. **Fixed continuing the exhaustive rule-by-rule sweep**: `ITR4-R225` (80CCH) compared the raw
+   `nature_of_employment` code against the human-readable label `"Central Government"` instead of
+   the raw code `"CGOV"` — the exact bug pattern already fixed at 18 other sites this session,
+   which this one site escaped — unconditionally blocking every 80CCH claim, including genuine
+   CGOV/Agniveer ones. Full write-up: §15.
 0e. **Fixed continuing the exhaustive rule-by-rule sweep**: `ITR4-R239`/`ITR4-R240` cross-labeled
    relative to the official catalog (pure citation fix, both checks were already correct); a
    genuine input-validation gap closed with a new `ITR4-C022` in `calc_rules.py` — non-salaried

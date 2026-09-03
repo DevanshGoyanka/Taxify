@@ -1113,14 +1113,24 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                     f"salary u/s 17(1) capped at Rs 2,88,000. Maximum allowed: Rs {max_80cch}",
                     "deductions_chapter6a.amount_80cch",
                     expected=f"<= {max_80cch}", actual=str(ch6a.amount_80cch)))
-            # Rule 225: 80CCH requires Central Government employment — enforce
-            if inp.nature_of_employment != "Central Government":
+            # Rule 225: 80CCH requires Central Government employment — enforce.
+            # inp.nature_of_employment carries the raw official code (CGOV/
+            # SGOV/PSU/PE/PESG/PEPS/PEO/OTH), never a human-readable label --
+            # comparing against the literal string "Central Government" (as
+            # this check previously did) never matched any real code, so it
+            # unconditionally blocked every 80CCH claim regardless of actual
+            # employment, including genuine CGOV (Agniveer/Central Government)
+            # claimants. The identical bug already found and fixed at 18
+            # other sites this session (§5 of the ITR-4 audit doc) and
+            # correctly avoided by ITR-1's own equivalent check (ITR1-R187,
+            # which already compares against "CGOV").
+            if inp.nature_of_employment != "CGOV":
                 results.append(_make(
                     "ITR4-R225", False,
                     "80CCH (Agniveer Corpus Fund) is only available to Central Government "
                     f"employees. Current nature of employment: {inp.nature_of_employment or 'Not specified'}",
                     "nature_of_employment",
-                    expected="Central Government", actual=str(inp.nature_of_employment or "None")))
+                    expected="CGOV", actual=str(inp.nature_of_employment or "None")))
 
     # ═══════════════════════════════════════════════════════════════════════
     # SECTION: New Regime Restrictions
