@@ -2,13 +2,15 @@
 
 **Date:** 2026-09-03 (§1-11); **Updated:** 2026-09-04 (§12 — ITR-4 Type-2 UAT signing
 architecture and `validate`/`submit` implementation; §13 — live prefill flow verification and
-four bugs found/fixed in `app/eri/type2/prefill.py`)
+four bugs found/fixed in `app/eri/type2/prefill.py`; §14 — Phase B, the WireGuard
+whitelisted-egress relay, built and verified)
 **Purpose:** one authoritative document for everything ERI-operational — how Type-2 and Type-3
 actually get from UAT to production (corrected here from an earlier wrong assumption, with the
 real process below), credential architecture, Digest computation, login/session mechanics,
 the Type-3 submission automation, acknowledgement retrieval, every finding from the
-filing/submission pipeline audit, and (§12-13) the ITR-4 Type-2 UAT signing-architecture
-investigation, `validate`/`submit` implementation, and live prefill-flow verification.
+filing/submission pipeline audit, and (§12-14) the ITR-4 Type-2 UAT signing-architecture
+investigation, `validate`/`submit` implementation, live prefill-flow verification, and the
+WireGuard whitelisted-egress relay.
 Complements, and where the two disagree corrects, `Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md`
 (original architecture plan) and
 `Docs/ERI_UAT_EXPANSION_PLAN.md` (multi-form UAT-pack rollout plan) rather than replacing
@@ -603,14 +605,14 @@ imports.
 
 ### 12.8 What's left before ITR-4 can go to production
 
-1. Phase B: WireGuard + AWS jump-box NAT-routing (§12.3) — not yet built, needs the user's AWS
-   access, targeted for just before the real UAT run below.
+1. ~~Phase B: WireGuard + AWS jump-box NAT-routing~~ — **done, see §14.**
 2. A full ITR-4 dummy-PAN UAT run end-to-end (login → client onboarding → prefill if applicable
    → validate → submit → e-verify → acknowledgement) through Phase B's production-representative
    path, captured into ITD's Test Scenario Sheet format (mirroring the ITR-1 precedent exactly).
    **Update (2026-09-04, §13): login, add-client-already-added confirmation, and the full
    prefill flow are now verified working end-to-end against live Type-2 UAT** (from the local
-   machine, Phase A) — validate/submit/e-verify/acknowledgement remain to be exercised live.
+   machine, Phase A) — validate/submit/e-verify/acknowledgement remain to be exercised live, now
+   with Phase B's whitelisted-egress path available to run them through.
 3. Email ITD requesting ITR-4 production enablement once the sheet is clean.
 
 ## 13. Prefill flow — live UAT verification and four real bugs found and
@@ -775,7 +777,120 @@ wired in §12.5 — they existed with zero test coverage until now, including th
 `get-acknowledgement` route's distinct raw-PDF-`Response` return shape (every other Type-2 route
 returns a JSON dict).
 
-## 14. References
+## 14. Phase B — WireGuard whitelisted-egress relay: built and verified
+(2026-09-04)
+
+The one piece §12.3 deferred: routing Type-2 outbound traffic through the AWS jump-box
+(`ERI-UAT-Server`, instance `i-03efbd3dbd1cc35eb`, public IP `13.204.49.125`, the account
+whitelisted with ITD for both UAT and production — **not** the separate, unrelated free-tier
+account `Docs/AWS_FREE_TIER_DEPLOYMENT.md` provisions) so signing can stay in-process on the
+local machine (§12) while egress still appears to come from the whitelisted IP.
+
+### 15.1 Architecture actually built
+
+```
+Local Windows machine (backend + DSC signing, in-process, §12)
+        │  WireGuard tunnel, client AllowedIPs scoped to 43.239.60.30/32 ONLY
+        │  (all other traffic -- browsing, other apps -- bypasses the tunnel entirely)
+        ▼
+AWS jump-box (ERI-UAT-Server, 13.204.49.125) — WireGuard peer at 10.66.0.1,
+  local machine at 10.66.0.2, UDP 51820
+        │  iptables: MASQUERADE + FORWARD ACCEPT scoped to
+        │  (10.66.0.2 → 43.239.60.30) and its return traffic ONLY;
+        │  explicit catch-all DROP for any other wg0-sourced traffic
+        │  (the box's baseline FORWARD policy is ACCEPT, so this catch-all
+        │  is what actually keeps the box from becoming a general relay,
+        │  not the MASQUERADE rule's own destination scoping alone)
+        ▼
+ITD Type-2 UAT gateway (43.239.60.30, uatocpservices.incometax.gov.in)
+```
+
+No nginx relay, no HTTP-level proxy — WireGuard operates below TLS entirely, so the jump-box
+never terminates or sees the decrypted PII/OTP-bearing HTTPS session; it only forwards IP
+packets between the two fixed endpoints. This was a deliberate choice over configuring the
+box's pre-existing (but otherwise unrelated) default nginx install as a reverse proxy, which
+would require either TLS termination (the jump-box would see plaintext) or `stream`-level SNI
+passthrough (still a needless dependency on nginx behaving correctly for this narrow purpose).
+
+### 15.2 What was found and fixed on the jump-box before WireGuard could
+even install
+
+- **Disk 97% full** (only 221 MB free) — blocked nothing yet, but would have blocked the
+  WireGuard package download. Fixed: `apt-get clean` freed 423 MB of cached `.deb` files
+  (safe — fully re-downloadable).
+- **Broken package state**: `openjdk-17-jre-headless` was stuck mid-upgrade (installed
+  `17.0.18+8-1~24.04.1`, needed `17.0.19+10-1~24.04.2` per stale package lists), which blocked
+  `apt-get install wireguard` entirely with an unmet-dependencies error — unrelated to WireGuard
+  itself, but any `apt install` on this box would have hit it. Confirmed via `apt-get
+  --fix-broken install -s` (simulate first) that the fix was a clean upgrade of exactly that one
+  package with zero removals, then applied it for real after `apt-get update` refreshed the
+  stale package lists that caused the first fetch attempt to 404.
+- **No AWS CLI, no IAM instance role** on this box — confirmed via the EC2 instance-metadata
+  endpoint returning nothing for `iam/security-credentials/`. This meant the Security Group
+  change (§14.3) could not be made from the box itself and needed the user's own AWS Console
+  access — noted here since a future session might otherwise assume `aws ec2` commands would
+  work from an SSH session on this box.
+- `/etc/hosts` on the jump-box **already** had `43.239.60.30 uatocpservices.incometax.gov.in`
+  (from the original ITR-1 UAT setup) — nothing to add there. The local Windows machine did
+  *not* have this pin and public DNS happened to already resolve to the correct IP, but ITD's
+  own onboarding email states the hosts-file pin as a requirement, not a fallback for when DNS
+  is wrong — added it to the local machine's hosts file too rather than relying on DNS
+  continuing to resolve correctly.
+- The box's `/home/ubuntu/uat-login-test` directory (the source of §12's `.sh` reference
+  scripts) was checked and found small (1.9 MB, 280 files) — **not** the disk-space source, in
+  case a future session assumes otherwise; the real space was system-level (apt cache, as
+  above) plus an unrelated 173 MB Maven `.m2` cache and a 32 MB `tax-erp-complete` directory,
+  neither touched (unclear purpose, not blocking, left for the user to review separately).
+
+### 15.3 Setup performed
+
+1. WireGuard installed on both ends (`apt-get install wireguard` on the jump-box; `winget
+   install WireGuard.WireGuard` locally).
+2. Keypairs generated on both ends (`wg genkey`/`wg pubkey`) — note for future reference: piping
+   a key from PowerShell into `wg.exe pubkey` directly corrupts it ("Trailing characters found
+   after key") because PowerShell's native-process pipe re-encodes text; routing the same pipe
+   through `cmd /c "type file | wg.exe pubkey"` avoids this by passing raw bytes.
+3. Jump-box `/etc/wireguard/wg0.conf`: `Address = 10.66.0.1/24`, `ListenPort = 51820`, one peer
+   (the local machine) with `AllowedIPs = 10.66.0.2/32`, plus `PostUp`/`PostDown` directives for
+   the scoped MASQUERADE + FORWARD ACCEPT + catch-all DROP described in §14.1. Brought up via
+   `wg-quick up wg0` and enabled at boot via `systemctl enable wg-quick@wg0`.
+4. `net.ipv4.ip_forward=1` set persistently via `/etc/sysctl.d/99-wireguard-forward.conf`
+   (previously `0`; the jump-box was not routing any traffic before this).
+5. Local machine: `.conf` with `Address = 10.66.0.2/24`, one peer (the jump-box) with
+   `Endpoint = 13.204.49.125:51820` and, critically, **`AllowedIPs = 43.239.60.30/32`** — this
+   is what keeps the tunnel scoped to ITD traffic only on the client side, the same way the
+   jump-box's catch-all DROP scopes it on the server side. Installed as a Windows service via
+   `wireguard.exe /installtunnelservice <path>` (requires elevation — triggered a UAC prompt the
+   user approved) so it survives reboots (`StartType: Automatic`, confirmed).
+6. AWS Security Group `sg-0158cdd49be870e7d` (`launch-wizard-1`, attached to the `ERI-UAT-Server`
+   instance — confirmed via the EC2 console before editing, not assumed) needed a new inbound
+   rule: Custom UDP, port 51820, source scoped to the local machine's current public IP
+   (`116.73.108.245/32`, via `api.ipify.org`) rather than `0.0.0.0/0` — WireGuard's own
+   public-key auth makes a wide-open UDP port low-risk regardless, but there was no reason not
+   to scope it. **This will need updating if the local machine's public IP changes** (e.g. ISP
+   reassignment, router restart) — the tunnel will otherwise silently stop handshaking with no
+   obvious error beyond connection timeouts.
+
+### 15.4 Verification
+
+- `wg show wg0` on the jump-box after a test connection: `latest handshake: 42 seconds ago`,
+  `endpoint: 116.73.108.245:...` (the local machine's real public IP) — confirms the peer is who
+  it should be.
+- `iptables -t nat -L POSTROUTING -n -v` and `iptables -L FORWARD -n -v` packet/byte counters
+  after the same test: the MASQUERADE rule and both scoped ACCEPT rules incremented; **the
+  catch-all DROP rule stayed at 0 packets** — proof no other traffic attempted to transit the
+  tunnel, not just that the scoping rules exist.
+- `Test-NetConnection 43.239.60.30 -Port 443` from the local machine succeeded (this IP is not
+  reachable at all without the tunnel, since it is whitelisted-only) — and a control test to an
+  unrelated host (`www.google.com:443`) also succeeded normally, confirming the
+  `AllowedIPs = 43.239.60.30/32` scoping did not accidentally capture other local traffic.
+- Not yet re-run: an actual Type-2 API call (login/validate/submit) through this path. §14's
+  testing so far is transport-level (TCP reachability) only; the next live UAT step should
+  confirm a real `eri_login()` call succeeds when routed through this tunnel rather than
+  directly from the local IP, closing the loop with §12.5's live login proof (which ran before
+  this tunnel existed, directly from the local IP, which happened to also be UAT-whitelisted).
+
+## 15. References
 
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/ERI API Specification_v1.1 (4).pdf`
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/Digest_generation_ERI 2 (2).pdf`

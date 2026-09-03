@@ -208,6 +208,18 @@ logged, not raised — ITD's live server routinely sends `null` for inapplicable
 sections (audit reports, ESOP, carried-forward losses, etc.) where the published schema
 requires an object, and most real taxpayers will have many such sections.
 
+Type-2 egress runs through a WireGuard tunnel to a dedicated AWS jump-box
+(`ERI-UAT-Server`/`13.204.49.125`, whitelisted with ITD for both UAT and production — a
+completely different AWS account from the one `Docs/AWS_FREE_TIER_DEPLOYMENT.md` provisions for
+hosting Taxify itself, never conflate the two) so signing can stay in-process on the local
+machine while the connection still appears to originate from the whitelisted IP. The tunnel is
+scoped tightly on both ends — the local client's `AllowedIPs` and the jump-box's iptables rules
+both restrict traffic to exactly `43.239.60.30` (ITD's gateway), with an explicit catch-all
+`DROP` on the jump-box since its baseline `FORWARD` policy is `ACCEPT`; nothing else can transit
+this tunnel, and nothing else on either machine is affected by it. Full setup details, what was
+verified, and what wasn't (an actual Type-2 API call through the tunnel is still pending) are in
+`Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §14.
+
 ### CBDT/ITD source material
 
 `Reference Docs by CBDT & ITD/` holds the official source documents CBDT rule citations and
