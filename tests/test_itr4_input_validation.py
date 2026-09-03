@@ -287,8 +287,8 @@ def test_R237_44ad_cash_within_5pct_passes():
     assert not failed(results, "ITR4-R237")
 
 
-def test_R239_44ad_turnover_split_mismatch():
-    """Rule 239: 44AD digital + cash != total."""
+def test_R240_44ad_turnover_split_mismatch():
+    """Rule 240: 44AD digital + cash != total."""
     inp = _base_input(
         business_income_44ad=PresumptiveBusinessIncome44AD(
             total_turnover=Decimal("500000"),
@@ -297,10 +297,10 @@ def test_R239_44ad_turnover_split_mismatch():
         ),
     )
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R239")
+    assert failed(results, "ITR4-R240")
 
 
-def test_R239_44ad_turnover_split_matches():
+def test_R240_44ad_turnover_split_matches():
     """44AD digital + cash == total passes."""
     inp = _base_input(
         business_income_44ad=PresumptiveBusinessIncome44AD(
@@ -310,7 +310,7 @@ def test_R239_44ad_turnover_split_matches():
         ),
     )
     results = validate_itr4_input(inp)
-    assert not failed(results, "ITR4-R239")
+    assert not failed(results, "ITR4-R240")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -369,8 +369,8 @@ def test_R238_44ada_cash_gt_5pct_above_50l():
     assert failed(results, "ITR4-R238")
 
 
-def test_R240_44ada_receipts_split_mismatch():
-    """Rule 240: 44ADA digital + cash != total."""
+def test_R239_44ada_receipts_split_mismatch():
+    """Rule 239: 44ADA digital + cash != total."""
     inp = ITR4Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
@@ -385,7 +385,7 @@ def test_R240_44ada_receipts_split_mismatch():
         other_sources_income=OtherSourcesIncome(),
     )
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R240")
+    assert failed(results, "ITR4-R239")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -473,7 +473,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                     "business_income_44ad",
                     expected="Cash <= 5% of turnover", actual=f"Cash ratio {cash_ratio}"))
 
-    # Rule 239: 44AD turnover split check — bank + cash + other mode == total
+    # Rule 240: 44AD turnover split check — bank + cash + other mode == total
     if inp.business_income_44ad:
         ad = inp.business_income_44ad
         split_turnover = (
@@ -481,7 +481,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         )
         if split_turnover != ad.total_turnover:
             results.append(_make(
-                "ITR4-R239", False,
+                "ITR4-R240", False,
                 f"44AD turnover split mismatch: digital ({ad.digital_turnover}) + "
                 f"cash ({ad.cash_turnover}) + other mode ({ad.other_mode_turnover}) "
                 f"!= total ({ad.total_turnover})",
@@ -557,7 +557,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                     "professional_income_44ada",
                     expected="Cash <= 5% of gross receipts", actual=f"Cash ratio {cash_ratio}"))
 
-    # Rule 240: 44ADA gross receipts split check
+    # Rule 239: 44ADA gross receipts split check
     if inp.professional_income_44ada:
         ada = inp.professional_income_44ada
         split_receipts = (
@@ -565,7 +565,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         )
         if split_receipts != ada.gross_receipts:
             results.append(_make(
-                "ITR4-R240", False,
+                "ITR4-R239", False,
                 f"44ADA receipts split mismatch: digital ({ada.digital_receipts}) + "
                 f"cash ({ada.cash_receipts}) + other mode ({ada.other_mode_receipts}) "
                 f"!= total ({ada.gross_receipts})",

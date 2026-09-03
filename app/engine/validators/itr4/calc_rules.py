@@ -611,6 +611,32 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                 "deductions_chapter6a",
                 expected="<= 150000", actual=str(ded_80c_actual)))
 
+        # Rule 22 (CBDT Sl 22): pensioner OR "Not Applicable" (no salary at
+        # all) employer category -> 80CCD(1) capped at 20% of GTI, not the
+        # 10%-of-salary cap Rule 155 applies to salaried non-pensioners.
+        # input_rules.py's ITR4-R022a only fires for pensioners (real GTI
+        # isn't known yet at pre-compute time, so it approximates with
+        # gross_salary there); the "Not Applicable" case -- a non-salaried
+        # presumptive-income filer with no employer category at all -- was
+        # never checked by either R022a (requires a pensioner code) or R155
+        # (its 10%-of-salary cap silently no-ops when there is no salary to
+        # be 10% of), even though it's explicitly named in Sl 22's own text.
+        # Checked here post-computation, against the real GTI.
+        if ch6a.amount_80ccd1 > z:
+            emp = inp.nature_of_employment or ""
+            is_pensioner = emp in {"PE", "PESG", "PEPS", "PEO"}
+            is_not_applicable = not emp and (not sal or sal.gross_salary == z)
+            if is_pensioner or is_not_applicable:
+                cap_20pct_gti = result.gross_total_income * Decimal("0.20")
+                if ch6a.amount_80ccd1 > cap_20pct_gti:
+                    results.append(_make(
+                        "ITR4-C022", False,
+                        f"80CCD(1) for pensioner/not-applicable employer category "
+                        f"capped at 20% of GTI (Rs {cap_20pct_gti}). "
+                        f"Claimed: Rs {ch6a.amount_80ccd1}",
+                        "deductions_chapter6a.amount_80ccd1",
+                        expected=f"<= {cap_20pct_gti}", actual=str(ch6a.amount_80ccd1)))
+
         # Rule 17: VI-A deductions should not exceed sum of individual heads
         if ded_sched and ded_sched.breakdown:
             bd_sum = sum(

@@ -906,8 +906,51 @@ new caps, so its assertion was unaffected) — only its comment was corrected to
 19,200 is the statutory ceiling. Full backend suite: 1613 passed, same 3 pre-existing unrelated
 failures, no regressions.
 
-## 14. Summary of open items after this pass
+## 14. Two more findings from the sweep: a pure ID-citation mislabel fixed, and a genuine
+input-validation gap closed at the calc-rules layer
 
+**`ITR4-R239`/`ITR4-R240` were cross-labeled relative to the official catalog** (found by
+comparing each rule's own comment against the catalog text): the code's `R239` implemented
+44AD's turnover-split check while the catalog's rule 239 is actually 44ADA's receipts-split
+check (and vice versa for `R240`). Both underlying checks were already correctly implemented and
+firing appropriately — this was a pure citation/labeling swap, not a functional defect, but
+worth correcting since a reader cross-referencing "rule 239" against the official PDF would see
+the wrong scheme. Fixed by swapping the two IDs (and the three existing tests that named them) so
+`R239` = 44ADA, `R240` = 44AD, matching the catalog exactly.
+
+**A genuine gap in `ITR4-R022a`/`ITR4-R155`'s coverage of CBDT Sl 22**: Sl 22's own text is
+*"Old regime, employer category CG/SG/PSU/Others-Pensioners **or NA**: 80CCD(1) should not
+exceed 20% of GTI"* — the "or NA" clause covers a **non-salaried** filer (a pure presumptive-income
+ITR-4 assessee with no salary at all, hence no employer category). `ITR4-R022a` only fires for a
+pensioner nature-of-employment code (it can't check the true 20%-of-GTI figure at pre-compute
+time, so it approximates with `gross_salary`, which is exactly why it's limited to the case where
+a salary figure exists at all); `ITR4-R155`'s 10%-of-salary check silently no-ops when there is
+no salary (`cap_10pct` computes to zero, and its own `> z` guard skips the check entirely). The
+result: a non-salaried filer's 80CCD(1) claim was checked against nothing beyond the combined
+Rs 1,50,000 80CCE ceiling — even though the statute's true cap for this profile (20% of GTI) is
+often much lower for a lower-income presumptive filer (e.g. GTI Rs 1,20,000 → true cap
+Rs 24,000, not Rs 1,50,000).
+
+**Fix**: added `ITR4-C022` in `calc_rules.py`, where the real post-computation
+`result.gross_total_income` is available — fires for a pensioner *or* a non-salaried ("Not
+Applicable") employer-category claimant, capping at 20% of the real GTI. Deliberately placed at
+the calc-rules layer rather than forcing an approximation into `input_rules.py`, matching this
+codebase's established split (pre-compute gates trust schema-bound input; post-compute checks
+verify against real computed values once available).
+
+**Tests added** (`tests/test_itr4_calc_validation.py`): a non-salaried 44AD filer with GTI
+Rs 1,20,000 claiming Rs 30,000 of 80CCD(1) (exceeds the Rs 24,000 true cap) is now correctly
+flagged; the same profile claiming Rs 20,000 (within cap) is not. Full backend suite: 1615
+passed, same 3 pre-existing unrelated failures, no regressions (one run showed a 4th, flaky
+failure in two unrelated tests — both pass in isolation and on a clean rerun; confirmed
+transient/order-dependent, not caused by this pass's changes).
+
+## 15. Summary of open items after this pass
+
+0e. **Fixed continuing the exhaustive rule-by-rule sweep**: `ITR4-R239`/`ITR4-R240` cross-labeled
+   relative to the official catalog (pure citation fix, both checks were already correct); a
+   genuine input-validation gap closed with a new `ITR4-C022` in `calc_rules.py` — non-salaried
+   80CCD(1) claimants were never checked against CBDT Sl 22's 20%-of-GTI cap. Full write-up: §14.
 0d. **Fixed continuing the exhaustive rule-by-rule sweep, shared with ITR-1, live in production**:
    `TRANSPORT_ALLOWANCE_DISABLED_LIMIT` was Rs 19,200 (half the correct Rs 38,400 statutory
    ceiling for a disabled employee's Section 10(14)(ii) transport allowance exemption) —

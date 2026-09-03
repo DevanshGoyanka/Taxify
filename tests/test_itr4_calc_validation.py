@@ -3,7 +3,7 @@
 from decimal import Decimal
 
 from app.schemas.itr1 import (
-    AgeBracket, TaxRegime, PropertyType, OtherSourcesIncome,
+    AgeBracket, TaxRegime, PropertyType, OtherSourcesIncome, Chapter6ADeductions,
 )
 from app.schemas.itr4 import (
     ITR4Input, PresumptiveScheme, PresumptiveBusinessIncome44AD,
@@ -74,3 +74,45 @@ def test_C096_old_regime_57iia_15000_cap_still_enforced():
     assert result.schedules["os"].deduction_57iia == Decimal("15000")
     report = run_calc_validation(inp, result)
     assert not failed(report.results, "ITR4-C096")
+
+
+def test_C022_non_salaried_80ccd1_capped_at_20pct_gti_now_checked():
+    """CBDT Sl 22: pensioner OR "Not Applicable" (no salary at all) employer
+    category caps 80CCD(1) at 20% of GTI, not the 10%-of-salary cap Sl 155
+    covers for salaried non-pensioners. A non-salaried presumptive-income
+    filer (nature_of_employment unset, no salary income) was previously
+    never checked against this cap at all -- ITR4-R022a only fires for a
+    pensioner code, and ITR4-R155's 10%-of-salary cap silently no-ops when
+    there is no salary to be 10% of."""
+    inp = _base_input(
+        tax_regime=TaxRegime.OLD,
+        nature_of_employment=None,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("2000000"),
+            digital_turnover=Decimal("2000000"),
+            cash_turnover=Decimal("0"),
+        ),
+        # GTI = 2,000,000 * 6% = 120,000; 20% of GTI = 24,000.
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("30000")),
+    )
+    result = compute_itr4(inp)
+    assert result.gross_total_income == Decimal("120000")
+    report = run_calc_validation(inp, result)
+    assert failed(report.results, "ITR4-C022")
+
+
+def test_C022_non_salaried_80ccd1_within_20pct_gti_not_flagged():
+    """Same non-salaried scenario, claim within the 20%-of-GTI cap."""
+    inp = _base_input(
+        tax_regime=TaxRegime.OLD,
+        nature_of_employment=None,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("2000000"),
+            digital_turnover=Decimal("2000000"),
+            cash_turnover=Decimal("0"),
+        ),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("20000")),
+    )
+    result = compute_itr4(inp)
+    report = run_calc_validation(inp, result)
+    assert not failed(report.results, "ITR4-C022")
