@@ -1588,6 +1588,37 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "house_property_income.home_loan_interest_paid",
             ))
 
+    # Rule 48b: a self-occupied loan sanctioned before 01/04/1999 is capped
+    # at Rs 30,000 under the Sec 24(b) proviso, not the usual Rs 2,00,000 --
+    # schedules/house_property.py::compute() already applies this correctly
+    # via HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED_PRE_1999, but no
+    # validator previously surfaced *why* a taxpayer's claimed interest above
+    # Rs 30,000 gets silently capped lower than the Rs 2,00,000 they might
+    # expect. Informational only -- the computed result is already correct
+    # regardless of whether this fires.
+    if is_old and inp.loan_details_24b_list:
+        for index, hp_row in enumerate(inp.reconciled_house_properties()):
+            if hp_row.property_type != PropertyType.SELF_OCCUPIED:
+                continue
+            if hp_row.home_loan_interest_paid <= Decimal("30000"):
+                continue
+            property_loans = [
+                ld for ld in inp.loan_details_24b_list
+                if ld.property_sequence_no == index + 1
+            ]
+            if any(
+                ld.sanction_date and ld.sanction_date < date(1999, 4, 1)
+                for ld in property_loans
+            ):
+                results.append(_info(
+                    "ITR1-R048b",
+                    f"Property {index + 1}: self-occupied loan was sanctioned before "
+                    f"01/04/1999. Section 24(b)'s interest deduction for such loans is "
+                    f"capped at Rs 30,000, not the usual Rs 2,00,000 -- the computed "
+                    f"house property loss already reflects this lower cap correctly.",
+                    f"house_properties[{index}].home_loan_interest_paid",
+                ))
+
     # ========================================================================
     # SECTION: LTCG 112A
     # ========================================================================

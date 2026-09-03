@@ -250,3 +250,40 @@ def test_uniform_allowance_exempt_disallowed_under_new_regime():
     )
     result = compute(si, TaxRegime.NEW)
     assert result.uniform_allowance_exempt == Decimal("0")
+
+
+# ── Children education / hostel allowance (Section 10(14)(i)/(ii)) ─────────
+# Added closing Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §20.6's
+# flagged-but-unfixed gap: unlike HRA/LTA/uniform allowance, CEA and hostel
+# exemptions were never zeroed under the new regime here, even though both
+# ITR1-R166/R167 and ITR4-R200/R201 already hard-block a positive claim at
+# the input-validation layer -- the calculator must independently agree.
+
+def test_cea_and_hostel_exempt_apply_under_old_regime():
+    si = SalaryIncome(
+        gross_salary=Decimal("600000"),
+        sec10_14i_prescribed_allowance=Decimal("2400"),
+        sec10_14ii_personal_allowance=Decimal("7200"),
+        number_of_children=2,
+    )
+    result = compute(si, TaxRegime.OLD)
+    assert result.children_education_exempt == Decimal("2400")
+    assert result.hostel_exempt == Decimal("7200")
+
+
+def test_cea_and_hostel_exempt_disallowed_under_new_regime():
+    """Rule 2BB(1)(f) personal allowances (children education, hostel
+    expenditure) are disallowed under the new regime, same category as
+    HRA/LTA/uniform allowance per CBDT Rule 149 -- confirmed by both forms'
+    validators (ITR1-R166/R167, ITR4-R200/R201) already hard-blocking a
+    positive sec10_14i/sec10_14ii claim under the new regime."""
+    si = SalaryIncome(
+        gross_salary=Decimal("600000"),
+        sec10_14i_prescribed_allowance=Decimal("2400"),
+        sec10_14ii_personal_allowance=Decimal("7200"),
+        number_of_children=2,
+    )
+    result = compute(si, TaxRegime.NEW)
+    assert result.children_education_exempt == Decimal("0")
+    assert result.hostel_exempt == Decimal("0")
+    assert result.exempt_allowances == Decimal("0")

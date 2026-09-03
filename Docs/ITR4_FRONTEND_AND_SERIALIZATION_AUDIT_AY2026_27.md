@@ -1099,3 +1099,30 @@ increment once ITR-1/ITR-4 work is otherwise complete.
     originally-carried-over items (§3), the Schedule BP frontend adapter review (§4, one real gap
     found and flagged, not fixed), the 18-site `nature_of_employment` bug (§5), and JSON schema
     compliance (§6).
+
+## 17. Full recheck of every open/not-fixed item in this document and the ITR-1 one — one real
+bug found and fixed here (shared with ITR-1), one UX gap closed, stale claims corrected
+(2026-09-03)
+
+Per explicit instruction to re-audit both documents for every item still marked open and fix
+what's fixable. Full write-up of the real bug (new-regime salary computation never zeroed the
+children-education/hostel-expenditure exemptions — a defect in shared code, `app/engine/
+schedules/salary.py`, so it affected ITR-4 identically to ITR-1) and the pre-1999 loan-cap UX gap
+closure (`ITR4-R154b`, mirroring `ITR1-R048b`) is in
+`ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §32.1/§32.2 — not duplicated here since the
+fix and its reasoning are identical for both forms.
+
+**Items specific to this document, re-verified**:
+
+- **§3.1/§3.2/§3.3's "not fixed" carryover items** — already resolved by §3.4 the same day these
+  were first flagged; §3.4 itself already documents this correctly, so no correction was needed
+  here (unlike the ITR-1 doc's §21/§23, which were never revisited after §3.4 landed and needed
+  an explicit correction note — see the ITR-1 doc §32.3).
+- **§4's 44AD UI editable-override-income gap, item 7, item 9's ~104-path schema gap, item 8's
+  ITR-2/ITR-3 scope boundary, §7.3.1's `R409-2`/`R402` merge opportunity** — all re-confirmed as
+  genuinely out-of-scope-by-design (new-feature frontend work, unverified-but-not-known-broken
+  coverage, established form sequencing, and a pure readability nit respectively), not oversights.
+  Full reasoning in the ITR-1 doc §32.4 (shared, not form-specific).
+
+**Verification**: same test run as ITR-1 doc §32.5 (`salary.py` is shared code, so one test run
+covers both forms) — full backend suite green at the same baseline, no regressions.

@@ -1298,6 +1298,33 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                     "house_property_income.home_loan_interest_paid",
                     expected="<= 200000", actual=str(hp.home_loan_interest_paid)))
 
+            # Rule 154b: a loan sanctioned before 01/04/1999 is capped at
+            # Rs 30,000 under the Sec 24(b) proviso, not the usual
+            # Rs 2,00,000 -- schedules/house_property.py::compute() already
+            # applies this correctly (see ITR1-R048b's identical note), but
+            # no validator previously surfaced why claimed interest above
+            # Rs 30,000 gets silently capped lower than expected.
+            # Informational only -- ITR-4 computes income for only the first
+            # house-property row, so filter to property_sequence_no == 1
+            # matching ITR4-R289's own established convention.
+            if hp.home_loan_interest_paid > Decimal("30000") and inp.loan_details_24b_list:
+                own_property_loans = [
+                    ld for ld in inp.loan_details_24b_list
+                    if ld.property_sequence_no == 1
+                ]
+                if any(
+                    ld.sanction_date and ld.sanction_date < date(1999, 4, 1)
+                    for ld in own_property_loans
+                ):
+                    results.append(_info(
+                        "ITR4-R154b",
+                        f"Self-occupied loan was sanctioned before 01/04/1999. "
+                        f"Section 24(b)'s interest deduction for such loans is capped "
+                        f"at Rs 30,000, not the usual Rs 2,00,000 -- the computed "
+                        f"house property loss already reflects this lower cap correctly.",
+                        "house_property_income.home_loan_interest_paid",
+                    ))
+
         # Rule 323: Property type mandatory if 24(b) interest claimed (informational)
         if hp.home_loan_interest_paid > z:
             results.append(_info(

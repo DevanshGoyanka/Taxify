@@ -2278,3 +2278,50 @@ def test_R246_two_properties_second_property_mismatch_still_caught():
     results = validate_itr1_input(inp)
     result = next(r for r in results if r.rule_id == "ITR1-R246" and not r.passed)
     assert "Property 2" in result.message
+
+
+def test_R048b_pre_1999_loan_surfaces_informational_note():
+    """A self-occupied loan sanctioned before 01/04/1999 is correctly capped
+    at Rs 30,000 by the calculator; R048b explains why, informationally."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("500000"),
+            sanction_date=date(1997, 6, 1),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    result = get_result(results, "ITR1-R048b")
+    assert result is not None
+    assert result.passed  # informational, never blocking
+    assert "30,000" in result.message
+
+
+def test_R048b_post_1999_loan_does_not_fire():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("2000000"),
+            sanction_date=date(2015, 6, 1),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert get_result(results, "ITR1-R048b") is None

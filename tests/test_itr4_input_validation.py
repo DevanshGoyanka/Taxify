@@ -2030,6 +2030,45 @@ def test_R289_second_property_loan_does_not_cause_false_positive():
     assert not failed(results, "ITR4-R295")
 
 
+def test_R154b_pre_1999_loan_surfaces_informational_note():
+    """A self-occupied loan sanctioned before 01/04/1999 is correctly capped
+    at Rs 30,000 by the calculator; R154b explains why, informationally."""
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("500000"),
+            sanction_date=date(1997, 6, 1),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+    )
+    results = validate_itr4_input(inp)
+    result = get_result(results, "ITR4-R154b")
+    assert result is not None
+    assert result.passed  # informational, never blocking
+    assert "30,000" in result.message
+
+
+def test_R154b_post_1999_loan_does_not_fire():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("2000000"),
+            sanction_date=date(2015, 6, 1),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+    )
+    results = validate_itr4_input(inp)
+    assert get_result(results, "ITR4-R154b") is None
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # nature_of_employment keyword-vs-raw-code bug (10 sites, matching the
 # identical pattern already found and fixed in ITR-1's validators, §14.5).

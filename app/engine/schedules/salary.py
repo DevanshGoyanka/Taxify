@@ -296,14 +296,25 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         )
         chargeable = net_before_std - std_ded - prof_tax - ent_allowance
     else:
-        # New-regime HRA, LTA, and the uniform-allowance exemption (Sec
-        # 10(14)(i) / Rule 2BB(1)(f), same disallowed category as HRA/LTA
+        # New-regime HRA, LTA, and the Section 10(14)(i)/(ii) allowances
+        # (uniform, children-education, hostel-expenditure — all Rule
+        # 2BB(1)(f) personal allowances, same disallowed category as HRA/LTA
         # under Rule 149) are disallowed before calculating the available
-        # salary against which Section 16(ia) can be claimed.
-        disallowed_new_regime = hra_exempt + lta_exempt + uniform_allowance_exempt
+        # salary against which Section 16(ia) can be claimed. Confirmed via
+        # both forms' validators (ITR1-R166/R167, ITR4-R200/R201), which
+        # already hard-block a positive sec10_14i/sec10_14ii claim under the
+        # new regime -- the calculator must independently zero the same
+        # fields rather than rely solely on validator gating, matching how
+        # HRA/LTA/uniform are already handled here.
+        disallowed_new_regime = (
+            hra_exempt + lta_exempt + uniform_allowance_exempt
+            + children_education_exempt + hostel_exempt
+        )
         hra_exempt = Decimal("0")
         lta_exempt = Decimal("0")
         uniform_allowance_exempt = Decimal("0")
+        children_education_exempt = Decimal("0")
+        hostel_exempt = Decimal("0")
         exempt_allowances = max(Decimal("0"), exempt_allowances - disallowed_new_regime)
         net_before_std = max(Decimal("0"), gross - exempt_allowances)
         std_ded = min(NEW_REGIME_STANDARD_DEDUCTION, net_before_std)

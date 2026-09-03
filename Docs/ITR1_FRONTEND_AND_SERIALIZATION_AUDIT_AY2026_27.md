@@ -2495,3 +2495,140 @@ depth as ITR-4's. Next increment: `app/engine/validators/itr4/calc_rules.py` (82
 full earlier in the session during targeted investigations (57(iia), 234C, 80CCD1-20%-GTI) but not
 yet with this same file-order, rule-by-rule pass; tracked in
 `Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`.
+
+## 32. Full recheck of every open/not-fixed item recorded in this document — one real,
+financially material bug found and fixed; three stale "not fixed" claims corrected; one
+low-priority UX gap closed (2026-09-03)
+
+Per explicit instruction to re-audit this document (and the ITR-4 one) for every item still
+marked open and fix what's fixable, every occurrence of "not fixed"/"open item"/"gap"/"dormant"/
+"deferred" across both documents was re-collected and individually re-verified against the
+*current* state of the code (not trusted as still accurate from when it was written — several
+turned out to have been silently resolved by later, unrelated passes without the doc being
+updated, matching the exact staleness risk this document has flagged before, e.g. §17.1's
+Downloads-path correction).
+
+### 32.1 Real bug found and fixed: new-regime salary computation never zeroed the
+children-education/hostel-expenditure exemptions, only HRA/LTA/uniform allowance
+
+**Where flagged**: §20.6's own closing note ("not previously true for CEA/hostel's *existing*
+exemptions, which is a separate, pre-existing, unrelated gap not introduced or fixed here") —
+recorded in passing while fixing the *uniform*-allowance new-regime gap, but never itself
+tracked as its own open item or circled back to. Re-reading `app/engine/schedules/salary.py`'s
+new-regime branch directly confirmed the gap was still live:
+
+```python
+disallowed_new_regime = hra_exempt + lta_exempt + uniform_allowance_exempt
+hra_exempt = Decimal("0")
+lta_exempt = Decimal("0")
+uniform_allowance_exempt = Decimal("0")
+```
+
+`children_education_exempt` and `hostel_exempt` — both Section 10(14)(i)/Rule 2BB(1) personal
+allowances in exactly the same disallowed-under-115BAC category as HRA/LTA/uniform allowance —
+were computed earlier in the same function but never included in `disallowed_new_regime`, so a
+new-regime filer's CEA/hostel exemption silently survived into `exempt_allowances` and reduced
+taxable salary income, understating tax payable.
+
+**Not a guess**: both forms' own validators already independently confirm this classification —
+`ITR1-R166`/`R167` and `ITR4-R200`/`R201`/`R200-2`/`R201-2` all hard-block (Category A) any
+positive `sec10_14i_prescribed_allowance`/`sec10_14ii_personal_allowance` claim under the new
+regime. The calculator disagreeing with its own validators' documented classification of the
+same two fields is exactly the "two components of the same system silently drifting" pattern this
+audit has repeatedly found (80CCD(2)'s regime rate, the 57(iia) new-regime cap, the transport-
+allowance constant) — so this fix follows an established, verified pattern rather than an
+invented one.
+
+**Practical severity**: the two forms' validators would reject the JSON at input-validation time
+before a return carrying this combination could actually be filed (Category A gates block
+`generate_cbdt_json`), so this specific bug could not corrupt a submitted return. It could,
+however, show an incorrect (understated) live tax-liability preview to a new-regime filer with
+children-education or hostel allowance for as long as they hadn't yet hit the validator's
+rejection — and, per this codebase's own established discipline (the calculator must be correct
+independent of validator gating, not merely rely on it, matching why HRA/LTA/uniform are already
+zeroed directly in the calculator rather than left to the validator alone), this is a genuine
+calculator defect worth fixing regardless of whether a validator happens to catch it downstream.
+
+**Fix**: `children_education_exempt` and `hostel_exempt` added to `disallowed_new_regime` and
+zeroed in the new-regime branch, identical treatment to HRA/LTA/uniform allowance immediately
+above them.
+
+**Tests added** (`tests/test_salary_schedule.py`):
+`test_cea_and_hostel_exempt_apply_under_old_regime` (regression fence — old regime unaffected),
+`test_cea_and_hostel_exempt_disallowed_under_new_regime` (both exemptions and the combined
+`exempt_allowances` total are zero under the new regime). Both pass; the new-regime test fails
+against the pre-fix code (confirmed by reading the pre-fix logic directly — `disallowed_new_regime`
+excluding the two fields means they would have survived into `exempt_allowances`).
+
+### 32.2 Low-priority UX gap closed: pre-1999 self-occupied loan's Rs 30,000 cap now
+explained by an informational validator note, both forms
+
+**Where flagged**: ITR-1 doc §14.1, ITR-4 doc §11.2 — both explicitly "not fixed... recorded for
+completeness" given the near-zero population (a loan sanctioned before 1 April 1999 needs a
+still-active 27+ year tenure to appear in an AY 2026-27 return). The *calculation* was always
+correct (`schedules/house_property.py` already applies the tighter Rs 30,000 cap via
+`HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED_PRE_1999` when a matching loan's `sanction_date`
+predates the cutoff) — the gap was purely that no validator explained *why* a taxpayer's claimed
+interest above Rs 30,000 (but below the usual Rs 2,00,000 cap) would compute to a lower house
+property loss than they might expect.
+
+**Fix**: a new informational-only rule in each form (`ITR1-R048b`, `ITR4-R154b`) — fires when a
+self-occupied property's claimed 24(b) interest exceeds Rs 30,000 and at least one matching
+Schedule 24(b) loan row (filtered by `property_sequence_no`, same convention as `ITR1-R246`/
+`ITR4-R289`) has a `sanction_date` before 1 April 1999. Severity D (informational), never blocks
+JSON generation — the computed result was already correct; this only makes the reason visible.
+
+**Tests added**: `test_R048b_pre_1999_loan_surfaces_informational_note`,
+`test_R048b_post_1999_loan_does_not_fire` (`tests/test_itr1_input_validation.py`);
+`test_R154b_pre_1999_loan_surfaces_informational_note`,
+`test_R154b_post_1999_loan_does_not_fire` (`tests/test_itr4_input_validation.py`).
+
+### 32.3 Three stale "not fixed" claims corrected — already resolved by earlier, unrelated
+passes, doc simply never updated
+
+Re-verified directly against current code, not trusted from when each claim was written:
+
+- **§21/§23's "ITR-4's identical `ITR4-R295`/`tds_claimed_this_year` bugs — not fixed"** — both
+  were in fact resolved the same day, in `Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`
+  §3.4 (written *after* this document's §21/§23, which were never revisited to reflect it).
+  `ITR4-R295`/`R289` are fixed (filtered to `property_sequence_no == 1`); the
+  `tds_claimed_this_year` claim turned out to be a false alarm on re-verification (§3.4's own
+  text). No code change needed here — pure documentation correction so a future reader trusts
+  current state over a stale cross-reference.
+- **§14.2's dead-code claim** (`interest_sb` computed but never read inside `_map_deductions`,
+  using an inconsistent `_SAVINGS_KINDS` set) — re-checked directly: neither `_SAVINGS_KINDS` nor
+  any matching dead local exists anywhere in `app/engine/draft_to_itr1_input.py` today (confirmed
+  by full-repo grep, zero matches). Already removed by an unrelated later pass. No action needed.
+- **§14.3's "misleading warning message" nit** (a comment appearing to claim the 80TTB zeroing
+  happens in `calculators/itr1.py`'s warning block itself, when it actually happens in
+  `section_80ttb.py`) — re-checked directly: `app/engine/calculators/itr1.py` (lines 416-420)
+  already carries an explicit clarifying comment — *"These warnings are advisory only -- the
+  actual zeroing/capping for each section already happens inside its own `compute_details()`..."*
+  — added by an unrelated later pass. No action needed.
+
+### 32.4 Items re-confirmed as correctly out of scope, not fixed (by design, not oversight)
+
+- **The 44AD UI editable-override-income field gap** (ITR-4 doc §4) — a genuine frontend feature
+  gap (no UI path to declare 44AD income above the statutory floor, unlike 44ADA's equivalent
+  field), but this is new-feature frontend work, not a defect in existing behavior — every 44AD
+  filer's *statutory-minimum* presumptive income is computed correctly today. Left for a future
+  phase as originally scoped.
+- **The ~93/~104-path unexercised-schema-path gaps** (ITR-1 doc §20.5, ITR-4 doc item 9) — not a
+  known defect, just additional schema-compliance test coverage that hasn't been built yet
+  (structured 80G/80D/80DD/80U detail blocks, Part B1 salary sub-breakdown, Part E bank details).
+  A materially larger undertaking than a bug fix; left as originally scoped.
+- **ITR-4 doc §7.3.1's `R409-2`/`R402` merge opportunity** — a pure readability consolidation of
+  two already-correct, already-non-duplicate-ID checks, explicitly flagged in that section as "at
+  slightly more risk than a pure rename." Not a defect; left alone.
+- **ITR-2/ITR-3 remain untouched** in both documents — correctly out of scope per the standing
+  ITR-1-then-ITR-4-then-ITR-2-then-ITR-3 work order.
+
+### 32.5 Verification
+
+- `ast.parse()` syntax check on every touched file.
+- `pytest tests/test_salary_schedule.py tests/test_itr1_input_validation.py
+  tests/test_itr4_input_validation.py tests/test_itr1_calculator.py tests/test_itr4_calculator.py
+  tests/test_draft_to_itr1_input.py -q` — all green, including the 6 new tests.
+- Full backend suite re-run after all changes in this section — same baseline as every prior run
+  this session (3 pre-existing unrelated failures in `test_tax_v2_compute.py`, same collection
+  errors), no regressions.
