@@ -991,6 +991,19 @@ duplicate to fall back on, so its computation itself was fixed.
 
 ## 16. Summary of open items after this pass
 
+**Milestone**: `app/engine/validators/itr4/input_rules.py` has now been read and cross-checked
+line-by-line, start to finish (all ~4,900 lines), against the official catalog and each other —
+not just the earlier token-matching presence pass (§7). `calc_rules.py` (828 lines) was fully
+read earlier in this same phase (the 57(iia)/`ITR4-C022` investigations). Eight real bugs were
+found and fixed this way (0b–0g below, plus §12's `R043` and §13's transport-allowance constant),
+none of which the earlier presence-only cross-reference could have caught, since every one was a
+*logic* defect in an already-present, already-"passing" check. **Not yet done at the same
+line-by-line depth**: ITR-1's `input_rules.py`/`calc_rules.py` — several areas were reached via
+shared-code-path investigation (80CCD(2), 234C, 57(iia)/transport-allowance/80CCH-age, all fixed
+identically in both forms) and the `nature_of_employment` sweep already covered ITR-1
+specifically, but a full independent line-by-line pass of ITR-1's own files, mirroring what was
+just done for ITR-4, has not been performed and is the natural next increment.
+
 0g. **Fixed continuing the exhaustive rule-by-rule sweep, shared with ITR-1**: `ITR1-R187b`/
    `ITR4-R225b` (80CCH Agniveer age-at-joining) used a hardcoded `date(2000, 1, 1)` placeholder
    instead of the real date of birth — same defect class as §2's `filing_date` bug. Also:
