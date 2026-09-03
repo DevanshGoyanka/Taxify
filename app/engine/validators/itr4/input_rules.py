@@ -1042,7 +1042,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             # No disability_type in schedule — fallback generic check
             if ch6a.amount_80u > Decimal("125000"):
                 results.append(_make(
-                    "ITR4-R182", False,
+                    "ITR4-R182-2", False,
                     f"80U deduction ({ch6a.amount_80u}) exceeds Rs 1,25,000 maximum",
                     "deductions_chapter6a.amount_80u",
                     expected="<= 125000", actual=str(ch6a.amount_80u)))
@@ -1063,7 +1063,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 # CBDT Sl 147: Severe disability → exactly ₹1,25,000
                 if ch6a.amount_80dd != Decimal("125000"):
                     results.append(_make(
-                        "ITR4-R147", False,
+                        "ITR4-R147-2", False,
                         f"80DD severe disability: amount must be exactly Rs 1,25,000. "
                         f"Claimed: Rs {ch6a.amount_80dd}",
                         "deductions_chapter6a.amount_80dd",
@@ -1859,7 +1859,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # Sl 73: Gratuity ≤ ₹20L non-CG/SG
     if sal and sal.gratuity_received > z and inp.nature_of_employment:
         if not _is_cg_sg_employee(inp.nature_of_employment) and sal.gratuity_received > Decimal("2000000"):
-            results.append(_make("ITR4-R073", False,
+            results.append(_make("ITR4-R073-2", False,
                 f"Gratuity (Rs {sal.gratuity_received}) exceeds ₹20L for non-CG/SG",
                 "salary_income.gratuity_received"))
 
@@ -1918,20 +1918,20 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if inp.schedule_it_total_paid and inp.schedule_it_total_paid > z and inp.tax_payment_entries:
         it_sum = sum(tp.amount for tp in inp.tax_payment_entries)
         if abs(inp.schedule_it_total_paid - it_sum) > Decimal("1"):
-            results.append(_make("ITR4-R110", False,
+            results.append(_make("ITR4-R110-2", False,
                 f"Schedule IT col 4 total (Rs {inp.schedule_it_total_paid}) ≠ sum of rows "
                 f"(Rs {it_sum})", "schedule_it_total_paid"))
     # Sl 111: TCS claimed ≤ TCS collected per entry
     for i, e in enumerate(inp.tcs_entries or []):
         if e.tcs_credit_claimed and e.tcs_credit_claimed > e.tcs_collected:
-            results.append(_make("ITR4-R111", False,
+            results.append(_make("ITR4-R111-2", False,
                 f"TCS entry {i+1}: claimed (Rs {e.tcs_credit_claimed}) > collected "
                 f"(Rs {e.tcs_collected})", f"tcs_entries[{i}].tcs_credit_claimed"))
     # Sl 112: TCS col 5 total = sum individual col 5
     if inp.schedule_tcs_total_claimed and inp.schedule_tcs_total_claimed > z:
         tcs_claimed_sum = sum((e.tcs_credit_claimed or z) for e in (inp.tcs_entries or []))
         if abs(inp.schedule_tcs_total_claimed - tcs_claimed_sum) > Decimal("1"):
-            results.append(_make("ITR4-R112", False,
+            results.append(_make("ITR4-R112-2", False,
                 f"TCS col 5 total (Rs {inp.schedule_tcs_total_claimed}) ≠ sum (Rs {tcs_claimed_sum})",
                 "schedule_tcs_total_claimed"))
 
@@ -1943,7 +1943,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if inp.total_tds_claimed and inp.total_tds_claimed > z:
         from_tds_schedules = tds1_s + tds2_s + tds3_s
         if abs(inp.total_tds_claimed - from_tds_schedules) > Decimal("1"):
-            results.append(_make("ITR4-R131", False,
+            results.append(_make("ITR4-R131-2", False,
                 f"Total TDS claimed (Rs {inp.total_tds_claimed}) ≠ TDS1+TDS2+TDS3 "
                 f"(Rs {from_tds_schedules})", "total_tds_claimed"))
     # Sl 132: Total TCS claimed = sum TCS schedule
@@ -2168,7 +2168,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         )
         for pan, cnt in pan_counts.items():
             if cnt > 1 and pan != "AAAAR1077P":
-                results.append(_make("ITR4-R109", False,
+                results.append(_make("ITR4-R109-2", False,
                     f"80G: Donee PAN '{pan}' appears {cnt} times. Each PAN can appear "
                     f"once except AAAAR1077P.", "schedule_80g.donations"))
 
@@ -2278,7 +2278,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             tp.amount for tp in inp.tax_payment_entries if tp.payment_type == "advance"
         )
         if adv_from_entries > z and abs(inp.advance_tax_paid - adv_from_entries) > Decimal("1"):
-            results.append(_make("ITR4-R133", False,
+            results.append(_make("ITR4-R133-2", False,
                 f"Advance tax declared (Rs {inp.advance_tax_paid}) ≠ sum of advance "
                 f"entries (Rs {adv_from_entries})", "advance_tax_paid"))
     if inp.self_assessment_tax_paid and inp.self_assessment_tax_paid > z \
@@ -2454,7 +2454,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             else inp.schedule_80ggc.total_claimed
         )
         if getattr(ch6a, 'amount_80ggc', z) > eligible_total:
-            results.append(_make("ITR4-R241", False,
+            results.append(_make("ITR4-R241-2", False,
                 f"80GGC VIA (Rs {getattr(ch6a, 'amount_80ggc', z)}) exceeds eligible "
                 f"non-cash contributions (Rs {eligible_total})",
                 "deductions_chapter6a.amount_80ggc"))
@@ -2465,7 +2465,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         if sggc.contributions:
             contrib_total = sum(c.amount for c in sggc.contributions)
             if abs(sggc.total_claimed - contrib_total) > Decimal("1"):
-                results.append(_make("ITR4-R243", False,
+                results.append(_make("ITR4-R243-2", False,
                     f"80GGC total claimed (Rs {sggc.total_claimed}) ≠ sum of contributions "
                     f"(Rs {contrib_total})", "schedule_80ggc.total_claimed"))
             # R245: cash + non-cash = total
@@ -2494,7 +2494,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             if c.contribution_date:
                 if c.contribution_date < date(2025, 4, 1) \
                         or c.contribution_date > date(2026, 3, 31):
-                    results.append(_make("ITR4-R256", False,
+                    results.append(_make("ITR4-R256-2", False,
                         f"80GGC contribution {i+1}: date {c.contribution_date} outside "
                         f"01.04.2025-31.03.2026",
                         f"schedule_80ggc.contributions[{i}].contribution_date"))
@@ -2516,13 +2516,13 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # R248-R249: 80DD/80U VIA = Schedule values
     if ch6a and ch6a.amount_80dd > z and inp.schedule_80dd:
         if ch6a.amount_80dd != inp.schedule_80dd.deduction_amount:
-            results.append(_make("ITR4-R248", False,
+            results.append(_make("ITR4-R248-2", False,
                 f"80DD VIA (Rs {ch6a.amount_80dd}) ≠ Schedule 80DD "
                 f"(Rs {inp.schedule_80dd.deduction_amount})",
                 "deductions_chapter6a.amount_80dd"))
     if ch6a and ch6a.amount_80u > z and inp.schedule_80u:
         if ch6a.amount_80u != inp.schedule_80u.deduction_amount:
-            results.append(_make("ITR4-R249", False,
+            results.append(_make("ITR4-R249-2", False,
                 f"80U VIA (Rs {ch6a.amount_80u}) ≠ Schedule 80U "
                 f"(Rs {inp.schedule_80u.deduction_amount})",
                 "deductions_chapter6a.amount_80u"))
@@ -2562,7 +2562,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if inp.full_value_of_consideration and cg and cg.cost_of_acquisition > z:
         expected_ltcg = inp.full_value_of_consideration - cg.cost_of_acquisition
         if abs(cg.ltcg_112a - expected_ltcg) > Decimal("1"):
-            results.append(_make("ITR4-R266", False,
+            results.append(_make("ITR4-R266-2", False,
                 f"LTCG 112A (Rs {cg.ltcg_112a}) ≠ FV (Rs {inp.full_value_of_consideration}) "
                 f"- COA (Rs {cg.cost_of_acquisition}) = Rs {expected_ltcg}",
                 "capital_gains.ltcg_112a"))
@@ -3002,7 +3002,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if profile and hp:
         if hp.ownership_share_percentage != profile.assessee_share_percentage:
             results.append(_make(
-                "ITR4-R346", False,
+                "ITR4-R346-2", False,
                 f"Calculation ownership share ({hp.ownership_share_percentage}%) "
                 f"does not match the filing profile "
                 f"({profile.assessee_share_percentage}%).",
@@ -3012,7 +3012,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             row.pan == inp.assessee_pan for row in profile.co_owners
         ):
             results.append(_make(
-                "ITR4-R351", False,
+                "ITR4-R351-2", False,
                 "Co-owner PAN cannot equal the assessee PAN.",
                 "property_profile.co_owners",
             ))
@@ -3104,12 +3104,12 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # R410: Secondary address mandatory for representative
     if inp.representative_details and inp.representative_details.capacity \
             and not inp.secondary_address:
-        results.append(_make("ITR4-R410", False,
+        results.append(_make("ITR4-R410-2", False,
             "Representative filing: secondary address is mandatory",
             "secondary_address"))
 
     # R411: Secondary ≠ primary address (informational)
-    results.append(_info("ITR4-R411",
+    results.append(_info("ITR4-R411-2",
         "Secondary address must not equal primary address. Portal-level check.",
         "secondary_address"))
 
@@ -3141,7 +3141,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             liab_sum = (bpf.partners_capital + bpf.secured_loans + bpf.unsecured_loans
                         + bpf.advances_received + bpf.sundry_creditors + bpf.other_liabilities)
             if abs(bpf.total_capital_liabilities - liab_sum) > Decimal("1"):
-                results.append(_make("ITR4-R003", False,
+                results.append(_make("ITR4-R003-2", False,
                     f"BP E17: Total capital & liabilities (Rs {bpf.total_capital_liabilities}) "
                     f"≠ sum of components (Rs {liab_sum})",
                     "schedule_bp_financial.total_capital_liabilities",
@@ -3152,7 +3152,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                           + bpf.sundry_debtors + bpf.bank_balance + bpf.cash_in_hand
                           + bpf.loans_and_advances_given + bpf.other_assets)
             if abs(bpf.total_assets - assets_sum) > Decimal("1"):
-                results.append(_make("ITR4-R004", False,
+                results.append(_make("ITR4-R004-2", False,
                     f"BP E25: Total assets (Rs {bpf.total_assets}) "
                     f"≠ sum of components (Rs {assets_sum})",
                     "schedule_bp_financial.total_assets",
@@ -3165,14 +3165,14 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # Sl 167: 142(1) original → cannot file revised return
     if inp.original_filing_section and inp.original_filing_section == "142(1)" \
             and inp.filing_section and inp.filing_section == "139(5)":
-        results.append(_make("ITR4-R167", False,
+        results.append(_make("ITR4-R167-2", False,
             "Original return filed u/s 142(1) (notice). Revised return u/s 139(5) "
             "not allowed for 142(1) proceedings.", "filing_section"))
 
     # Sl 188: 148 proceeding → original 139 return cannot be revised
     if inp.is_148_proceeding \
             and inp.filing_section and inp.filing_section == "139(5)":
-        results.append(_make("ITR4-R188", False,
+        results.append(_make("ITR4-R188-2", False,
             "Proceeding u/s 148 initiated — original return filed u/s 139 cannot be "
             "revised u/s 139(5).", "filing_section"))
 
@@ -3318,7 +3318,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 _sum = _basic + _actual_hra
                 if _sum > sal.gross_salary:
                     results.append(_make(
-                        "ITR4-R316", False,
+                        "ITR4-R316-2", False,
                         f"Sum of basic+DA (Rs {_basic}) + actual HRA received "
                         f"(Rs {_actual_hra}) = Rs {_sum} exceeds gross salary "
                         f"u/s 17(1) (Rs {sal.gross_salary}).",
@@ -3328,7 +3328,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R315: Schedule 10(13A) mandatory if HRA exemption claimed
         if not _hra:
             results.append(_make(
-                "ITR4-R315", False,
+                "ITR4-R315-2", False,
                 "HRA exemption u/s 10(13A) claimed but Schedule 10(13A) "
                 "details not provided. Schedule 10(13A) is mandatory for "
                 "HRA exemption claim.",
@@ -3359,7 +3359,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R159: 10(10B) retrenchment ≤ ₹5,00,000 (first proviso)
         if sal.retrenchment_compensation > Decimal("500000"):
             results.append(_make(
-                "ITR4-R159", False,
+                "ITR4-R159-2", False,
                 f"Retrenchment compensation (Rs {sal.retrenchment_compensation}) "
                 f"exceeds ₹5,00,000 limit u/s 10(10B) first proviso.",
                 "salary_income.retrenchment_compensation",
@@ -3380,7 +3380,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             _max_80ccd2 = sal.gross_salary * Decimal("0.14")
             if ch6a.amount_80ccd2 > _max_80ccd2:
                 results.append(_make(
-                    "ITR4-R263", False,
+                    "ITR4-R263-2", False,
                     f"New regime 80CCD(2) (Rs {ch6a.amount_80ccd2}) exceeds 14% "
                     f"of salary (Rs {sal.gross_salary}) = Rs {_max_80ccd2} "
                     f"for employer category '{_emp_cat}'.",
@@ -3404,7 +3404,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 actual="None"))
         if _a23_reenter is None:
             results.append(_make(
-                "ITR4-R353b", False,
+                "ITR4-R353b-2", False,
                 "A23(A) is 'Yes' but A23(A)(ii) response is not provided. "
                 "Mandatory when A23(A) is 'Yes'.",
                 "has_reentered_new_regime",
@@ -3414,7 +3414,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if _a23_earlier is False:
         if _a23_current is None:
             results.append(_make(
-                "ITR4-R354", False,
+                "ITR4-R354-2", False,
                 "A23(A) is 'No' but A23(B) response is not provided. "
                 "Mandatory when A23(A) is 'No'.",
                 "has_filed_10iea_current",
@@ -3424,7 +3424,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if _a23_reenter is True:
         if inp.a23_reenter_ay is None:
             results.append(_make(
-                "ITR4-R355", False,
+                "ITR4-R355-2", False,
                 "A23(A)(ii) is 'Yes' (re-entered new regime) but "
                 "A23(A)(ii)(a) assessment year not provided. Mandatory.",
                 "a23_reenter_ay",
@@ -3458,7 +3458,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if _a23_current is True:
         if not inp.form_10iea_filed and not inp.form_10iea_ack_no:
             results.append(_make(
-                "ITR4-R359", False,
+                "ITR4-R359-2", False,
                 "A23(B) is 'Yes' (filed 10IEA for current AY) but "
                 "A23(B)(i) Form 10IEA details not provided. Mandatory.",
                 "form_10iea_ack_no",
@@ -3502,7 +3502,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if inp.a23_earlier_ay and inp.a23_reenter_ay:
         if inp.a23_reenter_ay <= inp.a23_earlier_ay:
             results.append(_make(
-                "ITR4-R393", False,
+                "ITR4-R393-2", False,
                 f"A23(A)(ii)(a) AY ({inp.a23_reenter_ay}) is same or prior to "
                 f"A23(A)(i) AY ({inp.a23_earlier_ay}). Must be a later AY.",
                 "a23_reenter_ay",
@@ -3517,7 +3517,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             _pan = getattr(_don, 'donee_pan', '') or ''
             if _amt > z and not _pan:
                 results.append(_make(
-                    "ITR4-R395", False,
+                    "ITR4-R395-2", False,
                     f"Schedule 80G donation row {_i+1}: amount Rs {_amt} > 0 "
                     f"but donee PAN not provided. Mandatory.",
                     f"schedule_80g.donations[{_i}].donee_pan",
@@ -3532,7 +3532,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             if _amt > z:
                 if not _name:
                     results.append(_make(
-                        "ITR4-R398", False,
+                        "ITR4-R398-2", False,
                         f"Schedule 80GGC row {_i+1}: amount > 0 but political "
                         f"party name not provided. Mandatory.",
                         f"schedule_80ggc.contributions[{_i}].political_party_name",
@@ -3553,7 +3553,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             _other = getattr(_don, 'non_cash_amount', z) or z
             if _cash > z and _other > z:
                 results.append(_make(
-                    "ITR4-R399", False,
+                    "ITR4-R399-2", False,
                     f"Schedule 80G donation row {_i+1}: both cash (Rs {_cash}) "
                     f"and other mode (Rs {_other}) entered. Only one mode "
                     f"per row allowed.",
@@ -3564,7 +3564,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if ch6a and (ch6a.amount_80ccd1 > z or ch6a.amount_80ccd1b > z):
         if not inp.pran_number:
             results.append(_make(
-                "ITR4-R409", False,
+                "ITR4-R409-2", False,
                 "80CCD(1) or 80CCD(1B) claimed but PRAN number not provided. "
                 "PRAN is mandatory for NPS contributions.",
                 "pran_number",
@@ -3616,7 +3616,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R195: Professional tax u/s 16(iii) must be zero under new regime
         if sal and sal.professional_tax_paid > z:
             results.append(_make(
-                "ITR4-R195", False,
+                "ITR4-R195-2", False,
                 f"New regime: Professional tax u/s 16(iii) (Rs {sal.professional_tax_paid}) "
                 f"must be zero.",
                 "salary_income.professional_tax_paid",
@@ -3626,28 +3626,28 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         if sal:
             if sal.lta_exempt_amount > z:
                 results.append(_make(
-                    "ITR4-R198", False,
+                    "ITR4-R198-2", False,
                     f"New regime: 10(5) LTA (Rs {sal.lta_exempt_amount}) must be zero.",
                     "salary_income.lta_exempt_amount",
                     expected="0",
                     actual=str(sal.lta_exempt_amount)))
             if sal.hra_exempt_amount > z:
                 results.append(_make(
-                    "ITR4-R199", False,
+                    "ITR4-R199-2", False,
                     f"New regime: 10(13A) HRA (Rs {sal.hra_exempt_amount}) must be zero.",
                     "salary_income.hra_exempt_amount",
                     expected="0",
                     actual=str(sal.hra_exempt_amount)))
             if sal.sec10_14i_prescribed_allowance > z:
                 results.append(_make(
-                    "ITR4-R200", False,
+                    "ITR4-R200-2", False,
                     f"New regime: 10(14)(i) (Rs {sal.sec10_14i_prescribed_allowance}) must be zero.",
                     "salary_income.sec10_14i_prescribed_allowance",
                     expected="0",
                     actual=str(sal.sec10_14i_prescribed_allowance)))
             if sal.sec10_14ii_personal_allowance > z:
                 results.append(_make(
-                    "ITR4-R201", False,
+                    "ITR4-R201-2", False,
                     f"New regime: 10(14)(ii) (Rs {sal.sec10_14ii_personal_allowance}) must be zero.",
                     "salary_income.sec10_14ii_personal_allowance",
                     expected="0",
@@ -3676,7 +3676,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             _max_ent = min(Decimal("5000"), _basic * Decimal("0.2"))
             if sal.entertainment_allowance > _max_ent:
                 results.append(_make(
-                    "ITR4-R067", False,
+                    "ITR4-R067-2", False,
                     f"Entertainment allowance (Rs {sal.entertainment_allowance}) "
                     f"exceeds ₹5,000 or 1/5th of basic (Rs {_basic * Decimal('0.2')}), "
                     f"whichever lower = Rs {_max_ent}. Only CG/SG/PSU eligible.",
@@ -3686,7 +3686,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R68: No entertainment allowance for non-CG/SG/PSU employees
         if _emp_cat not in ("CGOV", "SGOV", "PSU") and sal.entertainment_allowance > z:
             results.append(_make(
-                "ITR4-R068", False,
+                "ITR4-R068-2", False,
                 f"Entertainment allowance (Rs {sal.entertainment_allowance}) "
                 f"not allowed for employer category '{_emp_cat}'. "
                 f"Only CG/SG/PSU employees eligible.",
@@ -3700,7 +3700,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         _sal_components = sal.gross_salary
         if _total_exempt > _sal_components:
             results.append(_make(
-                "ITR4-R069", False,
+                "ITR4-R069-2", False,
                 f"Total exempt allowances u/s 10 (Rs {_total_exempt}) exceeds "
                 f"sum of salary components (Rs {_sal_components}).",
                 "salary_income",
@@ -3709,7 +3709,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R70: 10(5) LTA ≤ salary u/s 17(1)
         if sal.lta_exempt_amount > sal.gross_salary:
             results.append(_make(
-                "ITR4-R070", False,
+                "ITR4-R070-2", False,
                 f"10(5) LTA exemption (Rs {sal.lta_exempt_amount}) exceeds "
                 f"salary u/s 17(1) (Rs {sal.gross_salary}).",
                 "salary_income.lta_exempt_amount",
@@ -3718,7 +3718,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R71: 10(6) embassy remuneration ≤ gross salary
         if sal.sec10_6_embassy_exempt > sal.gross_salary:
             results.append(_make(
-                "ITR4-R071", False,
+                "ITR4-R071-2", False,
                 f"10(6) embassy remuneration exemption (Rs {sal.sec10_6_embassy_exempt}) "
                 f"exceeds gross salary (Rs {sal.gross_salary}).",
                 "salary_income.sec10_6_embassy_exempt",
@@ -3727,7 +3727,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R72: 10(7) foreign service allowance ≤ gross salary
         if sal.sec10_7_foreign_allowance > sal.gross_salary:
             results.append(_make(
-                "ITR4-R072", False,
+                "ITR4-R072-2", False,
                 f"10(7) foreign service allowance (Rs {sal.sec10_7_foreign_allowance}) "
                 f"exceeds gross salary (Rs {sal.gross_salary}).",
                 "salary_income.sec10_7_foreign_allowance",
@@ -3757,7 +3757,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R80: 10(14)(i) ≤ salary u/s 17(1)
         if sal.sec10_14i_prescribed_allowance > sal.gross_salary:
             results.append(_make(
-                "ITR4-R080", False,
+                "ITR4-R080-2", False,
                 f"10(14)(i) prescribed allowance (Rs {sal.sec10_14i_prescribed_allowance}) "
                 f"exceeds salary u/s 17(1) (Rs {sal.gross_salary}).",
                 "salary_income.sec10_14i_prescribed_allowance",
@@ -3766,7 +3766,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R81: 10(14)(ii) ≤ salary u/s 17(1)
         if sal.sec10_14ii_personal_allowance > sal.gross_salary:
             results.append(_make(
-                "ITR4-R081", False,
+                "ITR4-R081-2", False,
                 f"10(14)(ii) personal allowance (Rs {sal.sec10_14ii_personal_allowance}) "
                 f"exceeds salary u/s 17(1) (Rs {sal.gross_salary}).",
                 "salary_income.sec10_14ii_personal_allowance",
@@ -3980,7 +3980,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             if _sanction:
                 if not (date(2016, 4, 1) <= _sanction <= date(2017, 3, 31)):
                     results.append(_make(
-                        "ITR4-R301", False,
+                        "ITR4-R301-2", False,
                         f"80EE loan sanction date ({_sanction}) must be between "
                         f"01-04-2016 and 31-03-2017.",
                         "loan_details_80ee.sanction_date",
@@ -3994,7 +3994,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             )
             if _loan_amt > Decimal("3500000"):
                 results.append(_make(
-                    "ITR4-R276", False,
+                    "ITR4-R276-2", False,
                     f"80EE loan amount (Rs {_loan_amt}) exceeds ₹35,00,000 limit.",
                     "loan_details_80ee.loan_amount",
                     expected="<= 3500000",
@@ -4003,7 +4003,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R277: 80EEA bank details mandatory
         if not inp.loan_details_80eea_list and not inp.loan_details_80eea:
             results.append(_make(
-                "ITR4-R277", False,
+                "ITR4-R277-2", False,
                 "80EEA claimed but bank/loan details not provided. Mandatory.",
                 "loan_details_80eea_list",
                 expected="loan details",
@@ -4018,7 +4018,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 # R279: 80EEA sanction date between 1.4.19 and 31.3.22
                 if not (date(2019, 4, 1) <= _sanction <= date(2022, 3, 31)):
                     results.append(_make(
-                        "ITR4-R279", False,
+                        "ITR4-R279-2", False,
                         f"80EEA loan sanction date ({_sanction}) must be between "
                         f"01-04-2019 and 31-03-2022.",
                         "loan_details_80eea.sanction_date",
@@ -4032,7 +4032,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             )
             if _stamp_val and _stamp_val > Decimal("4500000"):
                 results.append(_make(
-                    "ITR4-R278", False,
+                    "ITR4-R278-2", False,
                     f"80EEA property stamp value (Rs {_stamp_val}) exceeds "
                     f"₹45,00,000 limit.",
                     "loan_details_80eea.stamp_duty_value",
@@ -4042,7 +4042,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # R280: 80EEB bank details mandatory
         if not inp.loan_details_80eeb_list and not inp.loan_details_80eeb:
             results.append(_make(
-                "ITR4-R280", False,
+                "ITR4-R280-2", False,
                 "80EEB claimed but bank/loan details not provided. Mandatory.",
                 "loan_details_80eeb_list",
                 expected="loan details",
@@ -4057,7 +4057,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 # R281: 80EEB sanction date between 1.4.19 and 31.3.23
                 if not (date(2019, 4, 1) <= _sanction <= date(2023, 3, 31)):
                     results.append(_make(
-                        "ITR4-R281", False,
+                        "ITR4-R281-2", False,
                         f"80EEB loan sanction date ({_sanction}) must be between "
                         f"01-04-2019 and 31-03-2023.",
                         "loan_details_80eeb.sanction_date",
@@ -4068,7 +4068,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         _row_sum = sum((getattr(e, 'amount', z) or z) for e in inp.schedule_80c_entries)
         if abs(_row_sum - ch6a.amount_80c) > Decimal("1"):
             results.append(_make(
-                "ITR4-R296", False,
+                "ITR4-R296-2", False,
                 f"80C: sum of individual rows (Rs {_row_sum}) does not match "
                 f"total 80C claimed (Rs {ch6a.amount_80c}).",
                 "schedule_80c_entries",
@@ -4258,7 +4258,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         _unrealized = getattr(hp, 'rent_not_realized', z) or z
         if _unrealized > _gross_rent:
             results.append(_make(
-                "ITR4-R408", False,
+                "ITR4-R408-2", False,
                 f"Unrealized rent (Rs {_unrealized}) exceeds gross rent "
                 f"(Rs {_gross_rent}). Not allowed.",
                 "house_property_income.rent_not_realized",
@@ -4266,7 +4266,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 actual=str(_unrealized)))
     # R410: Secondary address mandatory (informational — checked at JSON build time)
     if not inp.secondary_address and not getattr(inp.filing_profile, 'alternate_address', None):
-        results.append(_info("ITR4-R410",
+        results.append(_info("ITR4-R410-3",
             "Secondary address is mandatory in Part A General Information. "
             "Provide via secondary_address or filing_profile.alternate_address.",
             "secondary_address"))
@@ -4281,13 +4281,13 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             _pri_pin = getattr(_primary, 'pin_code', '') or ''
             if _sec_pin and _pri_pin and _sec_pin == _pri_pin:
                 # Could be same — informational warning
-                results.append(_info("ITR4-R411",
+                results.append(_info("ITR4-R411-3",
                     f"Secondary address pin ({_sec_pin}) matches primary pin. "
                     f"Verify if 'No' was selected for 'Is secondary same as primary?'.",
                     "secondary_address"))
     # R257-259: Aadhaar + mobile validation (informational — enforced at JSON build)
     if not inp.aadhaar_number:
-        results.append(_info("ITR4-R257",
+        results.append(_info("ITR4-R257-2",
             "Aadhaar number is mandatory in Part A General Information. "
             "Provide via aadhaar_number or filing_profile.aadhaar_number.",
             "aadhaar_number"))
@@ -4295,7 +4295,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if is_individual or is_huf:
         if inp.tax_regime not in (TaxRegime.NEW, TaxRegime.OLD):
             results.append(_make(
-                "ITR4-R260", False,
+                "ITR4-R260-2", False,
                 "Option for 115BAC question at A23 is mandatory for Individual/HUF.",
                 "tax_regime",
                 expected="NEW or OLD",
@@ -4313,7 +4313,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # R264: HUF not eligible for 44ADA
     if is_huf and inp.professional_income_44ada:
         results.append(_make(
-            "ITR4-R264", False,
+            "ITR4-R264-2", False,
             "HUF is not eligible to claim presumptive income u/s 44ADA. "
             "Only individuals and firms (other than LLP) eligible.",
             "presumptive_scheme",
@@ -4351,7 +4351,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # R310: 10(10AA) leave encashment ≤ salary u/s 17(1)
     if sal and sal.leave_encashment_received > sal.gross_salary:
         results.append(_make(
-            "ITR4-R310", False,
+            "ITR4-R310-2", False,
             f"10(10AA) leave encashment (Rs {sal.leave_encashment_received}) "
             f"exceeds salary u/s 17(1) (Rs {sal.gross_salary}).",
             "salary_income.leave_encashment_received",
@@ -4362,7 +4362,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # R314: Nature of employment mandatory if salary income
     if sal and sal.gross_salary > z and not inp.nature_of_employment:
         results.append(_make(
-            "ITR4-R314", False,
+            "ITR4-R314-2", False,
             "Salary income disclosed but Nature of Employment not provided. "
             "Mandatory for salary earners.",
             "nature_of_employment",
@@ -4372,7 +4372,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if inp.date_of_incorporation:
         if inp.date_of_incorporation >= date(2026, 4, 1):
             results.append(_make(
-                "ITR4-R318", False,
+                "ITR4-R318-2", False,
                 f"Firm/HUF formed on {inp.date_of_incorporation} (on or after "
                 f"01-04-2026) cannot file return for AY 2026-27.",
                 "date_of_incorporation",
@@ -4389,7 +4389,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             _actual_hra = getattr(_hra_sched, 'actual_hra_received', z) or z
             if _actual_hra > z and _actual_hra < sal.hra_exempt_amount:
                 results.append(_make(
-                    "ITR4-R320", False,
+                    "ITR4-R320-2", False,
                     f"10(13A) in Salary (Rs {sal.hra_exempt_amount}) exceeds "
                     f"actual HRA received (Rs {_actual_hra}). HRA exemption "
                     f"cannot exceed actual HRA received.",
@@ -4400,7 +4400,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if (inp.has_filed_10iea_earlier is True and
             inp.has_filed_10iea_current is True):
         results.append(_make(
-            "ITR4-R321", False,
+            "ITR4-R321-2", False,
             "Both A23(A) and A23(B) are 'Yes'. Only one applicable question "
             "should be answered.",
             "has_filed_10iea_earlier",
@@ -4408,14 +4408,14 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             actual="both Yes"))
     # R322: Judge's exempt income — CG/SG employees only (informational)
     if is_old:
-        results.append(_info("ITR4-R322",
+        results.append(_info("ITR4-R322-2",
             "Exempt income for Supreme Court/High Court judges can only be "
             "claimed by CG/SG employees. Verify if claimed.",
             "salary_income"))
     # R323: Type of house property mandatory if 24(b) interest claimed
     if hp and hp.home_loan_interest_paid > z and not hp.property_type:
         results.append(_make(
-            "ITR4-R323", False,
+            "ITR4-R323-2", False,
             "Interest on borrowed capital u/s 24(b) claimed but Type of House "
             "Property not selected. Mandatory.",
             "house_property_income.property_type",
@@ -4426,7 +4426,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         _row_sum = sum((getattr(e, 'amount', z) or z) for e in inp.schedule_80ccc_entries)
         if abs(_row_sum - ch6a.amount_80ccc) > Decimal("1"):
             results.append(_make(
-                "ITR4-R343", False,
+                "ITR4-R343-2", False,
                 f"80CCC: sum of individual rows (Rs {_row_sum}) does not match "
                 f"total 80CCC claimed (Rs {ch6a.amount_80ccc}).",
                 "schedule_80ccc_entries",
@@ -4451,7 +4451,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         _unrealized = getattr(hp, 'rent_not_realized', z) or z
         if _gross_rent == z and _unrealized > z:
             results.append(_make(
-                "ITR4-R352", False,
+                "ITR4-R352-2", False,
                 f"Gross rent received is zero but unrealized rent (Rs {_unrealized}) "
                 f"is more than 0. Inconsistent.",
                 "house_property_income.rent_not_realized",
@@ -4476,7 +4476,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 _txn = getattr(_don, 'transaction_ref', '') or ''
                 if not _ifsc:
                     results.append(_make(
-                        "ITR4-R394", False,
+                        "ITR4-R394-2", False,
                         f"80G row {_i+1}: non-cash donation (Rs {_other}) but "
                         f"IFSC code not provided. Mandatory.",
                         f"schedule_80g.donations[{_i}].ifsc_code",
@@ -4484,7 +4484,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                         actual="missing"))
                 if not _txn:
                     results.append(_make(
-                        "ITR4-R394b", False,
+                        "ITR4-R394b-2", False,
                         f"80G row {_i+1}: non-cash donation (Rs {_other}) but "
                         f"transaction reference not provided. Mandatory.",
                         f"schedule_80g.donations[{_i}].transaction_ref",
@@ -4497,7 +4497,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if inp.pran_number and ch6a:
         if ch6a.amount_80ccd1 == z and ch6a.amount_80ccd1b == z:
             results.append(_make(
-                "ITR4-R402", False,
+                "ITR4-R402-2", False,
                 "PRAN provided but both 80CCD(1) and 80CCD(1B) are zero. "
                 "PRAN should only be provided if NPS contribution claimed.",
                 "pran_number",
@@ -4507,7 +4507,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     if inp.pran_number and ch6a:
         if ch6a.amount_80ccd1 == z and ch6a.amount_80ccd1b == z and ch6a.amount_80ccd2 == z:
             results.append(_make(
-                "ITR4-R407", False,
+                "ITR4-R407-2", False,
                 "PRAN entered but no NPS contribution (80CCD) claimed. "
                 "PRAN should be provided only when NPS contribution is claimed.",
                 "pran_number",

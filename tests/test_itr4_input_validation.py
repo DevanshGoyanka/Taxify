@@ -724,12 +724,16 @@ def test_R149_80ddb_senior_exceeds_100k():
 
 
 def test_R182_80u_exceeds_125k():
-    """Rule 182: 80U > Rs 1,25,000."""
+    """Rule 182: 80U > Rs 1,25,000. Implemented at the "-2" occurrence of
+    this ID -- input_rules.py has two independent R182 checks (this general
+    ceiling, and a separate severe-disability-must-be-exactly-125000 check
+    kept as plain "ITR4-R182"); the duplicate-ID audit renamed the second
+    one uniquely rather than removing either."""
     inp = _base_input(
         deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("150000")),
     )
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R182")
+    assert failed(results, "ITR4-R182-2")
 
 
 def test_R182b_80u_not_valid_amount():
@@ -1988,22 +1992,28 @@ def test_R047_cgsg_employee_14pct_cap_now_reachable():
 def test_R073_cgsg_gratuity_20l_cap_now_reachable():
     """R073 (non-CG/SG gratuity Rs 20L cap) previously fired for every
     employee including genuine CG/SG ones (fully exempt, no 20L cap) --
-    now correctly does not fire for a real CGOV employee."""
+    now correctly does not fire for a real CGOV employee. The gratuity
+    check lives at the "-2" occurrence of this ID (see
+    test_R073_non_cgsg_gratuity_20l_cap_still_enforced above)."""
     inp = _base_input(
         salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2200000")),
         nature_of_employment="CGOV",
     )
     results = validate_itr4_input(inp)
-    assert not failed(results, "ITR4-R073")
+    assert not failed(results, "ITR4-R073-2")
 
 
 def test_R073_non_cgsg_gratuity_20l_cap_still_enforced():
+    """The gratuity check lives at the "-2" occurrence of this ID -- R073's
+    plain ID is a separate, unrelated exempt-income-dropdown-breakdown
+    check; the duplicate-ID audit renamed this one uniquely rather than
+    removing either."""
     inp = _base_input(
         salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2200000")),
         nature_of_employment="OTH",
     )
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R073")
+    assert failed(results, "ITR4-R073-2")
 
 
 def test_R317_cgsg_gratuity_25l_cap_now_reachable():
@@ -2080,7 +2090,9 @@ def test_R322_non_cgsg_judge_exemption_still_blocked():
 def test_R263_new_regime_80ccd2_cgov_now_reachable():
     """R263 (new regime 80CCD(2) 14% cap for PSU/CG/SG/Others) used "CG"/
     "SG" instead of the real raw codes "CGOV"/"SGOV", so it was dormant for
-    genuine CG/SG employees specifically (PSU/OTH already worked)."""
+    genuine CG/SG employees specifically (PSU/OTH already worked). This
+    fix lives at the "-2" occurrence of this ID -- the duplicate-ID audit
+    renamed it uniquely rather than removing either implementation."""
     inp = _base_input(
         tax_regime=TaxRegime.NEW,
         salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
@@ -2088,20 +2100,22 @@ def test_R263_new_regime_80ccd2_cgov_now_reachable():
         deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("150000")),  # 15%
     )
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R263")
+    assert failed(results, "ITR4-R263-2")
 
 
 def test_R067_entertainment_allowance_cgov_now_reachable():
     """R067 (entertainment allowance cap, CG/SG/PSU only) used "CG"/"SG"
     instead of "CGOV"/"SGOV", so it was dormant for genuine CG/SG
-    employees."""
+    employees. This fix lives at the "-2" occurrence of this ID -- the
+    duplicate-ID audit renamed it uniquely rather than removing either
+    implementation."""
     inp = _base_input(
         tax_regime=TaxRegime.OLD,
         salary_income=SalaryIncome(gross_salary=Decimal("500000"), entertainment_allowance=Decimal("8000")),
         nature_of_employment="CGOV",
     )
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R067")
+    assert failed(results, "ITR4-R067-2")
 
 
 def test_R068_entertainment_allowance_cgov_not_falsely_blocked():

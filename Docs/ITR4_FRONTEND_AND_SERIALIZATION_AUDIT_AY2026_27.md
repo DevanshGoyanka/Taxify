@@ -490,11 +490,41 @@ per-occurrence dump in `itr4_dup_output.txt`, not committed). Triaging all 98 by
   in full in §7.4, because the same bug is shared with ITR-1 (this is a calculator defect in
   code both forms call, not an ITR-4-only validator issue).
 
-No further individual cleanup of the ~70 harmless duplicate IDs was done this pass — removing
-them is a pure readability improvement with no behavioral effect, lower priority than the
-confirmed-gap work above, and out of scope for "don't refactor beyond what the task requires"
-per this repo's stated conventions. They are catalogued in `itr4_dup_output.txt` if a future
-pass wants to consolidate the file's two "Group"-labeled sections.
+### 7.3.1 Cleanup (2026-09-03, follow-up)
+
+All duplicate IDs were subsequently cleaned up, at the user's request, using a deliberately
+conservative strategy: **rename only, never delete code.** Two mechanisms:
+
+- **`calc_rules.py` moved to its own `ITR4-C###` namespace.** Its 61 distinct IDs were a
+  self-contained sequential numbering for post-computation arithmetic/cross-schedule
+  consistency checks (`GTI = sum of heads`, `cess = 4% of (tax+surcharge)`, etc.) that happened
+  to collide with `input_rules.py`'s official-rule-numbered IDs purely by coincidence — the two
+  files' numbering were always independent sequences, never meant to share one space. This one
+  change alone resolved 23 of the 98 groups.
+- **The remaining 75 `input_rules.py`-internal collisions** (1 of which, `ITR4-C062`'s old/new
+  regime split, is a legitimate same-file reuse and was left alone) were resolved by keeping
+  the first (textually earliest) occurrence's ID unchanged and appending `-2` (or `-3` for the
+  two 3-way collisions, `R410`/`R411`) to every later occurrence — a pure string rename via a
+  line-targeted script (`itr4_dedupe.py`), verified by re-parsing the file (`ast.parse`) and
+  confirming zero duplicate IDs remained. No conditional blocks, `_make`/`_info` calls, or
+  business logic were touched or removed — every check that fired before this cleanup still
+  fires identically after it, just under a now-unique ID.
+- **4 pre-existing tests broke** because they asserted the *specific* ID of a check that
+  happened to be the "later" (now `-2`) occurrence in its collision group (`R067`, `R073`,
+  `R182`, `R263` — each of these had already been the subject of a targeted fix earlier in this
+  session's `nature_of_employment` sweep, and the tests written for those fixes happened to
+  target the renamed occurrence). Updated to assert the `-2` ID; the underlying checks and their
+  pass/fail behavior are byte-for-byte unchanged. Full suite re-run: 1601 passed, same 3
+  pre-existing unrelated failures, no new failures.
+
+This was a data-integrity/reporting fix, not a functional one — no gap in coverage existed
+before or after (confirmed in §7.3's own triage: every collision was either harmless-coincidental
+or a genuinely redundant-but-correct duplicate, never a false negative). Two duplicate pairs
+worth flagging for a future pass, found while triaging renames but left as pure renames per the
+conservative policy above rather than restructured: `ITR4-R409`'s second occurrence (now
+`R409-2`, "80CCD(1) or 80CCD(1B) claimed but PRAN not provided") is near-identical in substance
+to `R402`'s canonical check at line 3078 — the two could be merged into one implementation in a
+future readability pass, at slightly more risk than a pure rename.
 
 ### 7.4 Real bug found: `is_government_employee` silently denied PSU employees their Section 16(ii) entertainment-allowance deduction — ITR-1 and ITR-4, calculator-level, not just validator
 
@@ -571,9 +601,10 @@ collection error, matching the documented baseline.
    not just a validator false positive (§7.4).
 2. **Done this pass, zero genuine gaps found**: the official CBDT ITR-4 Validation Rules
    cross-reference, all 424 rules (§7.1–7.2).
-3. **Done this pass**: the 98 duplicate-ID audit — one real bug found and fixed (§7.4); the
-   remaining ~70 harmless duplicates catalogued but not individually cleaned up, a pure
-   readability item (§7.3).
+3. **Done this pass**: the 98 duplicate-ID audit — one real bug found and fixed (§7.4); all
+   other 97 duplicate IDs subsequently cleaned up to be unique via conservative rename-only
+   edits (§7.3.1) — 76 of `input_rules.py`'s renamed to `-2`/`-3` suffixes, `calc_rules.py`'s
+   61 IDs moved to their own `ITR4-C###` namespace. Zero remaining duplicate IDs.
 4. **Not fixed, scoped, lower severity**: Section 44AD has no UI path to declare income above
    the statutory 6%/8% floor, unlike 44ADA's equivalent (already-editable) field (§4).
 5. **Not fixed, deliberately out of scope**: ITR-2/ITR-3 remain untouched, matching the

@@ -3,7 +3,14 @@ ITR-4 calculation validation rules (post-computation arithmetic, limits, regime)
 
 These run AFTER compute() has produced an ITR4Result dataclass.
 They verify arithmetic consistency, statutory limits, and cross-schedule
-integrity per CBDT Category A rules for AY 2026-27.
+integrity, most of it internal to this calculator rather than official
+CBDT-numbered rules on user input (input_rules.py is the module that
+implements those). Rule IDs use an "ITR4-C###" (Calculation) namespace,
+distinct from input_rules.py's "ITR4-R###" (official Rule) namespace, even
+where a check's inline comment cites a nearby official rule number for
+context -- the two files' numbering are independent sequences that used to
+collide by coincidence before this split (found during the ITR-4 duplicate
+rule-ID audit).
 """
 
 from __future__ import annotations
@@ -60,7 +67,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     )
     if result.gross_total_income != expected_gti:
         results.append(_make(
-            "ITR4-R049", False,
+            "ITR4-C049", False,
             f"Gross Total Income mismatch: computed={result.gross_total_income}, "
             f"sum of heads={expected_gti}",
             "gross_total_income",
@@ -77,7 +84,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         )
         if result.gross_total_income != expected_gti_new:
             results.append(_make(
-                "ITR4-R197", False,
+                "ITR4-C197", False,
                 f"New regime: negative HP income (Rs {result.house_property_income}) "
                 f"must be excluded from GTI. GTI should be Rs {expected_gti_new}, "
                 f"not Rs {result.gross_total_income}",
@@ -88,7 +95,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     raw_ti = max(z, result.gross_total_income - result.deductions_total)
     if abs(raw_ti - result.taxable_income) > Decimal("9"):
         results.append(_make(
-            "ITR4-R046", False,
+            "ITR4-C046", False,
             f"Total income (taxable) mismatch: {result.taxable_income} does not "
             f"equal GTI ({result.gross_total_income}) - deductions "
             f"({result.deductions_total}) = {raw_ti}",
@@ -99,7 +106,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     expected_tax_after = max(z, result.tax_before_rebate - result.rebate_87a)
     if result.tax_after_rebate != expected_tax_after:
         results.append(_make(
-            "ITR4-R052", False,
+            "ITR4-C052", False,
             f"Tax after rebate mismatch: {result.tax_after_rebate} != "
             f"tax_before_rebate ({result.tax_before_rebate}) - "
             f"rebate ({result.rebate_87a}) = {expected_tax_after}",
@@ -110,7 +117,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     expected_gross = result.tax_after_rebate + result.surcharge + result.health_education_cess
     if abs(result.gross_tax_liability - expected_gross) > Decimal("1"):
         results.append(_make(
-            "ITR4-R053", False,
+            "ITR4-C053", False,
             f"Gross tax liability mismatch: {result.gross_tax_liability} != "
             f"tax_after_rebate ({result.tax_after_rebate}) + "
             f"surcharge ({result.surcharge}) + "
@@ -124,7 +131,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                     + result.late_fee_234f + result.fees_234i - result.relief_89)
     if abs(result.net_tax_liability - expected_net) > Decimal("10"):
         results.append(_make(
-            "ITR4-R054", False,
+            "ITR4-C054", False,
             f"Net tax liability mismatch: {result.net_tax_liability} != "
             f"{expected_net}",
             "net_tax_liability",
@@ -133,7 +140,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     # Rule 19: Chapter VI-A deductions cannot exceed GTI
     if result.deductions_total > result.gross_total_income:
         results.append(_make(
-            "ITR4-R019", False,
+            "ITR4-C019", False,
             f"Chapter VI-A deductions ({result.deductions_total}) exceed "
             f"Gross Total Income ({result.gross_total_income})",
             "deductions_total",
@@ -144,7 +151,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     expected_tax = result.slab_tax + result.special_rate_tax
     if result.tax_before_rebate != expected_tax:
         results.append(_make(
-            "ITR4-R056", False,
+            "ITR4-C056", False,
             f"Total tax before rebate ({result.tax_before_rebate}) != "
             f"slab tax ({result.slab_tax}) + special rate tax "
             f"({result.special_rate_tax}) = {expected_tax}",
@@ -155,7 +162,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     expected_cess = (result.tax_after_rebate + result.surcharge) * Decimal("0.04")
     if abs(result.health_education_cess - expected_cess) > Decimal("1"):
         results.append(_make(
-            "ITR4-R105", False,
+            "ITR4-C105", False,
             f"HEC mismatch: {result.health_education_cess} != 4% of "
             f"({result.tax_after_rebate} + {result.surcharge}) = {expected_cess}",
             "health_education_cess",
@@ -165,7 +172,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     expected_interest = result.interest_234a + result.interest_234b + result.interest_234c
     if result.total_interest != expected_interest:
         results.append(_make(
-            "ITR4-R106", False,
+            "ITR4-C106", False,
             f"Total interest ({result.total_interest}) != 234A ({result.interest_234a}) "
             f"+ 234B ({result.interest_234b}) + 234C ({result.interest_234c}) "
             f"= {expected_interest}",
@@ -179,7 +186,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                                   + result.late_fee_234f))
         if abs(result.balance_payable - expected_payable) > Decimal("10"):
             results.append(_make(
-                "ITR4-R104a", False,
+                "ITR4-C104a", False,
                 f"Balance payable ({result.balance_payable}) != "
                 f"taxes paid ({result.total_taxes_paid}) - "
                 f"total liability",
@@ -192,7 +199,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                                  + result.late_fee_234f))
         if abs(result.refund_due - expected_refund) > Decimal("10"):
             results.append(_make(
-                "ITR4-R104b", False,
+                "ITR4-C104b", False,
                 f"Refund due ({result.refund_due}) != "
                 f"taxes paid ({result.total_taxes_paid}) - "
                 f"total liability",
@@ -207,7 +214,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     pres_sched = result.schedules.get("presumptive")
     if pres_sched and result.presumptive_income != pres_sched.total_presumptive_income:
         results.append(_make(
-            "ITR4-R002", False,
+            "ITR4-C002", False,
             f"Presumptive income in GTI ({result.presumptive_income}) != "
             f"Schedule BP total ({pres_sched.total_presumptive_income})",
             "presumptive_income",
@@ -219,7 +226,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     if sal_sched:
         if result.salary_income != sal_sched.income_chargeable:
             results.append(_make(
-                "ITR4-R003", False,
+                "ITR4-C003", False,
                 f"Salary income in GTI ({result.salary_income}) != "
                 f"Schedule S chargeable ({sal_sched.income_chargeable})",
                 "salary_income",
@@ -231,7 +238,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     if hp_sched:
         if result.house_property_income != hp_sched.income_chargeable:
             results.append(_make(
-                "ITR4-R004", False,
+                "ITR4-C004", False,
                 f"HP income in GTI ({result.house_property_income}) != "
                 f"Schedule HP chargeable ({hp_sched.income_chargeable})",
                 "house_property_income",
@@ -243,7 +250,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     if os_sched:
         if result.other_sources_income != os_sched.income_chargeable:
             results.append(_make(
-                "ITR4-R006", False,
+                "ITR4-C006", False,
                 f"Other sources income in GTI ({result.other_sources_income}) != "
                 f"Schedule OS chargeable ({os_sched.income_chargeable})",
                 "other_sources_income",
@@ -254,7 +261,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     ded_sched = result.schedules.get("deductions")
     if ded_sched and result.deductions_total != ded_sched.total:
         results.append(_make(
-            "ITR4-R007", False,
+            "ITR4-C007", False,
             f"Chapter VI-A in GTI ({result.deductions_total}) != "
             f"Schedule VIA total ({ded_sched.total})",
             "deductions_total",
@@ -276,7 +283,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         actual_44ad = pres_sched.income_44ad if pres_sched else z
         if actual_44ad < min_total:
             results.append(_make(
-                "ITR4-R005", False,
+                "ITR4-C005", False,
                 f"44AD presumptive income ({actual_44ad}) is below "
                 f"statutory minimum: 6% of digital ({min_digital}) + "
                 f"8% of cash ({min_cash}) = {min_total}",
@@ -290,7 +297,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         actual_44ada = pres_sched.income_44ada if pres_sched else z
         if actual_44ada < min_ada:
             results.append(_make(
-                "ITR4-R014", False,
+                "ITR4-C014", False,
                 f"44ADA presumptive income ({actual_44ada}) is below "
                 f"50% of gross receipts ({min_ada})",
                 "presumptive_income",
@@ -309,7 +316,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         actual_44ae = pres_sched.income_44ae if pres_sched else z
         if actual_44ae < expected_44ae:
             results.append(_make(
-                "ITR4-R136", False,
+                "ITR4-C136", False,
                 f"44AE presumptive income ({actual_44ae}) below "
                 f"per-vehicle statutory minimum ({expected_44ae})",
                 "presumptive_income",
@@ -323,7 +330,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     income_excl_ltcg = result.gross_total_income - result.capital_gains_112a
     if income_excl_ltcg > Decimal("5000000"):
         results.append(_make(
-            "ITR4-R267", False,
+            "ITR4-C267", False,
             f"Total income excluding LTCG 112A ({income_excl_ltcg}) exceeds "
             f"Rs 50 lakh ITR-4 filing limit. File ITR-3.",
             "gross_total_income",
@@ -332,7 +339,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     # Rule 268: Total income <= Rs 50 lakh (overall cap)
     if result.gross_total_income > Decimal("5000000"):
         results.append(_make(
-            "ITR4-R268", False,
+            "ITR4-C268", False,
             f"Total income ({result.gross_total_income}) exceeds Rs 50 lakh "
             f"ITR-4 limit. File ITR-3.",
             "gross_total_income",
@@ -347,14 +354,14 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         ti = result.taxable_income
         if ti > Decimal("500000"):
             results.append(_make(
-                "ITR4-R051", False,
+                "ITR4-C051", False,
                 f"87A rebate claimed (Rs {result.rebate_87a}) but total income "
                 f"({ti}) exceeds Rs 5,00,000 limit under old regime",
                 "rebate_87a",
                 expected="0 when TI > 500000", actual=str(result.rebate_87a)))
         if result.rebate_87a > Decimal("12500"):
             results.append(_make(
-                "ITR4-R229", False,
+                "ITR4-C229", False,
                 f"87A rebate ({result.rebate_87a}) exceeds maximum Rs 12,500 "
                 f"under old regime",
                 "rebate_87a",
@@ -365,14 +372,14 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         ti = result.taxable_income
         if ti > Decimal("1200000"):
             results.append(_make(
-                "ITR4-R227", False,
+                "ITR4-C227", False,
                 f"87A rebate claimed but total income ({ti}) exceeds "
                 f"Rs 12,00,000 under new regime",
                 "rebate_87a",
                 expected="0 when TI > 1200000", actual=str(result.rebate_87a)))
         if result.rebate_87a > Decimal("60000"):
             results.append(_make(
-                "ITR4-R228", False,
+                "ITR4-C228", False,
                 f"87A rebate ({result.rebate_87a}) exceeds maximum Rs 60,000 "
                 f"under new regime",
                 "rebate_87a",
@@ -389,7 +396,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                               + sal.profits_in_lieu_of_salary)
         if result.salary_gross != expected_sal_gross:
             results.append(_make(
-                "ITR4-R059", False,
+                "ITR4-C059", False,
                 f"Salary gross ({result.salary_gross}) != "
                 f"gross_salary ({sal.gross_salary}) + "
                 f"perquisites ({sal.perquisites_value}) + "
@@ -402,7 +409,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         if is_old and result.salary_deduction_us16ia > z:
             if result.salary_deduction_us16ia != Decimal("50000"):
                 results.append(_make(
-                    "ITR4-R060", False,
+                    "ITR4-C060", False,
                     f"Standard deduction old regime ({result.salary_deduction_us16ia}) "
                     f"should be Rs 50,000",
                     "salary_deduction_us16ia",
@@ -411,7 +418,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         if is_new and result.salary_deduction_us16ia > z:
             if result.salary_deduction_us16ia != Decimal("75000"):
                 results.append(_make(
-                    "ITR4-R261", False,
+                    "ITR4-C261", False,
                     f"Standard deduction new regime ({result.salary_deduction_us16ia}) "
                     f"should be Rs 75,000",
                     "salary_deduction_us16ia",
@@ -424,7 +431,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                                 - sal.lta_exempt_amount)
             if result.salary_net != expected_net_sal:
                 results.append(_make(
-                    "ITR4-R062", False,
+                    "ITR4-C062", False,
                     f"Salary net ({result.salary_net}) != "
                     f"gross ({result.salary_gross}) - "
                     f"hra_exempt ({sal.hra_exempt_amount}) - "
@@ -435,7 +442,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
             # Under new regime, HRA/LTA are nil per 115BAC — net_salary == gross
             if result.salary_net != result.salary_gross:
                 results.append(_make(
-                    "ITR4-R062", False,
+                    "ITR4-C062", False,
                     f"Salary net ({result.salary_net}) != "
                     f"gross ({result.salary_gross}) under new regime "
                     f"(HRA/LTA not allowed)",
@@ -451,7 +458,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
             expected_charge = max(z, expected_charge)
             if result.salary_income != expected_charge:
                 results.append(_make(
-                    "ITR4-R063", False,
+                    "ITR4-C063", False,
                     f"Salary chargeable ({result.salary_income}) != "
                     f"net ({result.salary_net}) - "
                     f"std_ded ({result.salary_deduction_us16ia}) - "
@@ -466,7 +473,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                                       - result.salary_deduction_us16ia)
             if result.salary_income != expected_charge_new:
                 results.append(_make(
-                    "ITR4-R196", False,
+                    "ITR4-C196", False,
                     f"Salary chargeable new regime ({result.salary_income}) != "
                     f"gross ({result.salary_gross}) - "
                     f"standard_ded ({result.salary_deduction_us16ia}) "
@@ -487,7 +494,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
             expected_30_alt = max(z, owned_value) * Decimal("0.30")
             if abs(expected_30 - expected_30_alt) > Decimal("1"):
                 results.append(_make(
-                    "ITR4-R057", False,
+                    "ITR4-C057", False,
                     f"HP 30% standard deduction ({expected_30}) != "
                     f"30% of owned annual value ({owned_value}) = {expected_30_alt}",
                     "house_property_income",
@@ -497,7 +504,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         if hp.property_type == PropertyType.SELF_OCCUPIED:
             if hp_sched.gross_annual_value > z:
                 results.append(_make(
-                    "ITR4-R048", False,
+                    "ITR4-C048", False,
                     f"Self-occupied property GAV ({hp_sched.gross_annual_value}) "
                     f"should be nil",
                     "house_property_income",
@@ -509,7 +516,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
             expected_hp = -max_interest
             if result.house_property_income != expected_hp:
                 results.append(_make(
-                    "ITR4-R047", False,
+                    "ITR4-C047", False,
                     f"Self-occupied HP income ({result.house_property_income}) "
                     f"should equal -min(interest, 200000) = {expected_hp}",
                     "house_property_income",
@@ -523,7 +530,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                 actual_interest = hp_sched.interest_on_loan
                 if abs(actual_interest - hp.home_loan_interest_paid) <= Decimal("1"):
                     results.append(_make(
-                        "ITR4-R154", False,
+                        "ITR4-C154", False,
                         f"Self-occupied interest ({hp.home_loan_interest_paid}) "
                         f"exceeds Rs 2,00,000 but appears uncapped in HP schedule "
                         f"({actual_interest})",
@@ -544,7 +551,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                 max_fp_ded = min(fp / Decimal("3"), Decimal("15000"))
             if os_sched.deduction_57iia > max_fp_ded + Decimal("1"):
                 results.append(_make(
-                    "ITR4-R096", False,
+                    "ITR4-C096", False,
                     f"57(iia) family pension deduction ({os_sched.deduction_57iia}) "
                     f"exceeds limit: min(1/3 of FP, {max_fp_ded})",
                     "other_sources_income.family_pension_received",
@@ -562,7 +569,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
             # Rule 273: LTCG 112A taxable should not exceed gross 112A
             if cg_sched.taxable_income > cg.ltcg_112a:
                 results.append(_make(
-                    "ITR4-R273", False,
+                    "ITR4-C273", False,
                     f"112A taxable income ({cg_sched.taxable_income}) exceeds "
                     f"gross 112A ({cg.ltcg_112a})",
                     "capital_gains.ltcg_112a"))
@@ -574,7 +581,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
             # The exemption reduces only the special-rate tax, not GTI.
             if result.capital_gains_112a != cg_sched.net_income:
                 results.append(_make(
-                    "ITR4-R264", False,
+                    "ITR4-C264", False,
                     f"GTI capital gains 112A ({result.capital_gains_112a}) != "
                     f"Schedule 112A net income ({cg_sched.net_income})",
                     "capital_gains_112a",
@@ -591,7 +598,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         ded_80c_actual = ded_sched.breakdown.get("80C+80CCC+80CCD(1)", z) if ded_sched else z
         if ded_80c_actual > z and ded_80c_actual > Decimal("150000"):
             results.append(_make(
-                "ITR4-R018", False,
+                "ITR4-C018", False,
                 f"Computed 80C/80CCC/80CCD(1) ({ded_80c_actual}) exceeds "
                 f"Rs 1,50,000 combined limit u/s 80CCE",
                 "deductions_chapter6a",
@@ -606,7 +613,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
             # 80G/80GG are computed against adjusted GTI, looser check
             if result.deductions_total > bd_sum + ded_sched.breakdown.get("80G", z) + ded_sched.breakdown.get("80GG", z) + Decimal("10"):
                 results.append(_make(
-                    "ITR4-R017", False,
+                    "ITR4-C017", False,
                     f"VI-A total ({result.deductions_total}) inconsistent with "
                     f"breakdown sum ({bd_sum + ded_sched.breakdown.get('80G', z) + ded_sched.breakdown.get('80GG', z)})",
                     "deductions_total"))
@@ -620,7 +627,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         for k, v in ded_sched.breakdown.items():
             if v > z and k not in allowed_keys:
                 results.append(_make(
-                    "ITR4-R185", False,
+                    "ITR4-C185", False,
                     f"New regime: Only 80CCD(2) and 80CCH are allowed. "
                     f"Found non-zero deduction: {k} = {v}",
                     "deductions_chapter6a",
@@ -630,7 +637,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         # Rule 277: HP loss not allowed in new regime (self-occupied)
         if result.hp_loss_disallowed > z:
             results.append(_info(
-                "ITR4-R277",
+                "ITR4-C277",
                 f"HP loss of Rs {result.hp_loss_disallowed} disallowed under new "
                 f"regime. Cannot be set off or carried forward.",
                 "hp_loss_disallowed"))
@@ -638,7 +645,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
         # Rule 278: Business loss not allowed (informational)
         if result.presumptive_income < z:
             results.append(_make(
-                "ITR4-R278", False,
+                "ITR4-C278", False,
                 f"Presumptive business income ({result.presumptive_income}) is "
                 f"negative. Under presumptive schemes (44AD/44ADA/44AE), income "
                 f"cannot be a loss. Minimum income is statutory presumptive amount.",
@@ -654,7 +661,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
 
     if result.total_tds != tds1_sum + tds2_sum:
         results.append(_make(
-            "ITR4-R114", False,
+            "ITR4-C114", False,
             f"Total TDS ({result.total_tds}) != "
             f"TDS1 ({tds1_sum}) + TDS2 ({tds2_sum}) = {tds1_sum + tds2_sum}",
             "total_tds",
@@ -662,7 +669,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
 
     if result.total_tcs != tcs_sum:
         results.append(_make(
-            "ITR4-R115", False,
+            "ITR4-C115", False,
             f"Total TCS ({result.total_tcs}) != "
             f"sum of TCS entries ({tcs_sum})",
             "total_tcs",
@@ -672,7 +679,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                                    + result.advance_tax_paid
                                    + result.self_assessment_tax_paid):
         results.append(_make(
-            "ITR4-R116", False,
+            "ITR4-C116", False,
             f"Total taxes paid ({result.total_taxes_paid}) != "
             f"TDS ({result.total_tds}) + TCS ({result.total_tcs}) + "
             f"Advance Tax ({result.advance_tax_paid}) + "
@@ -690,7 +697,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
                      + ad.cash_turnover * Decimal("0.08"))
         if ad.income_declared > statutory:
             results.append(_info(
-                "ITR4-R012",
+                "ITR4-C012",
                 f"44AD: Income declared ({ad.income_declared}) exceeds statutory "
                 f"presumptive income ({statutory}). Higher declared income accepted "
                 f"under Section 44AD(1) proviso.",
@@ -700,7 +707,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     if inp.goods_carriage_44ae:
         if len(inp.goods_carriage_44ae.vehicles) > 10:
             results.append(_make(
-                "ITR4-R138", False,
+                "ITR4-C138", False,
                 f"44AE: {len(inp.goods_carriage_44ae.vehicles)} vehicles listed. "
                 f"Maximum 10 goods carriages allowed under Section 44AE.",
                 "goods_carriage_44ae.vehicles",
@@ -713,7 +720,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     # Rule 45: Presumptive income taxed at normal slab rates (not special rate)
     if result.presumptive_income > z:
         results.append(_info(
-            "ITR4-R045",
+            "ITR4-C045",
             f"Presumptive income ({result.presumptive_income}) is taxed at normal "
             f"slab rates, not special rates. Only 112A income ("
             f"{result.capital_gains_112a}) is taxed at special rate "
@@ -727,7 +734,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     # Rule 107: Late fee u/s 234F check
     if result.late_fee_234f > z:
         results.append(_info(
-            "ITR4-R107",
+            "ITR4-C107",
             f"Late filing fee u/s 234F: Rs {result.late_fee_234f}. "
             f"Verify filing date ({inp.filing_date}) vs due date ({inp.due_date}) "
             f"and total income slab for correct late fee computation.",
@@ -739,32 +746,32 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
 
     # Rules 242-252: Cross-schedule matches for Schedule-S, HP, OS, CG, VIA
     results.append(_info(
-        "ITR4-R242",
+        "ITR4-C242",
         "Cross-schedule: Verify Schedule-S (salary) field-by-field matches "
         "with Form 16/ITR computation. Not automated.",
         ""))
     results.append(_info(
-        "ITR4-R243",
+        "ITR4-C243",
         "Cross-schedule: Verify Schedule-HP field-by-field matches with "
         "ITR computation. Not automated.",
         ""))
     results.append(_info(
-        "ITR4-R244",
+        "ITR4-C244",
         "Cross-schedule: Verify Schedule-OS figures match with 26AS/TIS. "
         "Not automated.",
         ""))
     results.append(_info(
-        "ITR4-R245",
+        "ITR4-C245",
         "Cross-schedule: Verify capital gains schedule (112A) — sale "
         "consideration, cost, FMV, and exemption match ITR. Not automated.",
         ""))
     results.append(_info(
-        "ITR4-R246",
+        "ITR4-C246",
         "Cross-schedule: Verify Schedule-VIA deduction figures match with "
         "individual deduction schedules and supporting documents. Not automated.",
         ""))
     results.append(_info(
-        "ITR4-R247",
+        "ITR4-C247",
         "Cross-schedule: Verify Schedule-IT (TDS, TCS, advance tax) matches "
         "Form 26AS and tax payment challans. Not automated.",
         ""))
@@ -772,7 +779,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     # Rule 272: Total special rate income <= Total income
     if result.special_rate_tax > z and result.special_rate_tax > result.tax_before_rebate:
         results.append(_make(
-            "ITR4-R272", False,
+            "ITR4-C272", False,
             f"Special rate tax ({result.special_rate_tax}) exceeds total tax "
             f"before rebate ({result.tax_before_rebate}). This is inconsistent.",
             "special_rate_tax",
@@ -783,7 +790,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     cg_sched = result.schedules.get("capital_gains_112a")
     if cg_sched and cg_sched.exemption_available > Decimal("125000"):
         results.append(_make(
-            "ITR4-R274", False,
+            "ITR4-C274", False,
             f"112A exemption ({cg_sched.exemption_available}) exceeds "
             f"Rs 1,25,000 statutory limit",
             "capital_gains.cost_of_acquisition"))
@@ -791,7 +798,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     # Rule 275: Tax calculation with marginal relief (informational)
     if result.surcharge > z:
         results.append(_info(
-            "ITR4-R275",
+            "ITR4-C275",
             f"Surcharge of Rs {result.surcharge} applied. "
             f"Verify marginal relief computation where applicable "
             f"(tax + surcharge should not exceed income above threshold).",
@@ -804,7 +811,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
             max_surcharge = result.tax_after_rebate * Decimal("0.25")
         if result.surcharge > max_surcharge:
             results.append(_make(
-                "ITR4-R276", False,
+                "ITR4-C276", False,
                 f"Surcharge ({result.surcharge}) exceeds maximum rate applicable "
                 f"({max_surcharge})",
                 "surcharge",
@@ -812,7 +819,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
 
     # Rule 279: Set-off and carry forward losses — not applicable for ITR-4 (informational)
     results.append(_info(
-        "ITR4-R279",
+        "ITR4-C279",
         "ITR-4 does not permit set-off or carry forward of losses. "
         "If the assessee has brought-forward losses, ITR-3 should be filed.",
         ""))
@@ -820,7 +827,7 @@ def validate_itr4_calculation(inp: ITR4Input, result: ITR4Result) -> list[Valida
     # Rule 280: Tax credit claimed <= tax payable (informational)
     if result.total_taxes_paid > result.gross_tax_liability:
         results.append(_info(
-            "ITR4-R280",
+            "ITR4-C280",
             f"Tax credits ({result.total_taxes_paid}) exceed gross tax liability "
             f"({result.gross_tax_liability}). Refund of Rs {result.refund_due} due.",
             "total_taxes_paid"))
