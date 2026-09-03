@@ -706,6 +706,51 @@ real encrypted-then-decrypted round trip in the schema-mismatch test uses the ac
 `ERI_SYMMETRIC_KEY` AES-128-ECB/PKCS7 scheme `decrypt_prefill()` implements, not a stub, so a
 future accidental change to that decryption logic would also be caught here.
 
+### 13.5 Wired into the unified filing pipeline: `POST /api/v1/filing/{client}/{ay}/{form}/submit`
+
+With `validate.py`/`submit.py` proven and the header-field mapping (PAN, `ReturnFileSec` →
+`filingTypeCd`/`incomeTaxSecCd`) worked out for §13.2, the last piece to make Type-2 actually
+reachable end-to-end through Taxify's own API (not a standalone script) was wiring it into
+`app/routers/filing.py`'s existing `/submit` endpoint, which previously just returned
+`501 "Type-2 submission is deferred until the next implementation phase"` for `ERI_MODE=type2`
+unconditionally — the module's own docstring even still said *"for Type-3 now and Type-2
+transport later"*.
+
+`submit_via_portal()` now dispatches on `creds.mode`: Type-3 keeps its existing Playwright job
+queue unchanged; Type-2 calls a new `_submit_via_type2_api()`, which is **synchronous** (no job
+queue needed — `validateItr`/`submitItr` are ordinary HTTPS calls returning in seconds, unlike
+a browser automation job):
+
+1. Restricts to ITR-1/ITR-4 (matching the Type-3 endpoint's own restriction, and this season's
+   scope generally).
+2. Reuses `produce_itd_json()` — the SAME mode-agnostic JSON producer Type-3 already uses (its
+   own docstring already anticipated this: *"Type-2 (next season): JSON → validate → signed API
+   envelope via AWS"*) — so there is exactly one JSON-generation code path for both modes, not
+   two that could drift.
+3. Extracts `PAN` and `ReturnFileSec` directly from the generated JSON
+   (`official["ITR"]["ITR1"/"ITR4"]["PersonalInfo"]["PAN"]` /
+   `["FilingStatus"]["ReturnFileSec"]`) rather than re-deriving them from the draft a second
+   time — one source of truth, confirmed to have the identical nested-key shape across both
+   forms. Maps `ReturnFileSec` to `filingTypeCd` (`"R"` only for 17/revised, `"O"` otherwise)
+   and `incomeTaxSecCd` (the code itself, as a string).
+4. Converts Taxify's own `ay` route param (`"YYYY-YY"`, e.g. `"2026-27"`) to the bare `"YYYY"`
+   Type-2 actually wants (`"2026"`) — confirmed by §13's live prefill calls, which is the only
+   place in this codebase this exact conversion had already been empirically verified.
+5. Logs in, calls `validate_itr()`, and only calls `submit_itr()` if validation raised no
+   `ERIApiError` — an invalid return must never reach the actual submit call.
+6. Persists the ARN into `FilingRecord` via the same `upsert_filing_record()`/
+   `log_filing_action()` helpers Type-3 already uses.
+
+**Deliberately out of scope for this endpoint**: e-verification. `verify_evc()`/`generate_evc()`
+need the taxpayer's live OTP consent, which cannot happen inside one synchronous HTTP call —
+use the separately-wired `/api/v1/eri/generate-evc` and `/verify-evc` routes (§12.5's sibling
+routes) as a follow-up step, the same way acknowledgement retrieval is already a separate step
+for both modes.
+
+`tests/test_filing_type2_submit.py` (new) covers the dispatch, the field-mapping (including the
+17→"R" case), the ITR-2 rejection, and — importantly — that a `validateItr` rejection stops the
+flow before `submitItr` is ever called, so an invalid return can never actually be filed.
+
 ## 14. References
 
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/ERI API Specification_v1.1 (4).pdf`
@@ -739,3 +784,5 @@ future accidental change to that decryption logic would also be caught here.
 - `uat-login-test/get_prefill_goypt2026a.sh` and its saved
   `get_prefill_response_goypt2026a.json` (outside this repo, on the user's machine) — the
   authoritative reference for §13.2 finding #2's real working request shape
+- `app/routers/filing.py`, `tests/test_filing_type2_submit.py` — §13.5's `/submit` Type-2 wiring
+  and its tests
