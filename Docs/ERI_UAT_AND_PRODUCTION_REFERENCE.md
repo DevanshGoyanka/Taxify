@@ -610,9 +610,10 @@ imports.
    → validate → submit → e-verify → acknowledgement) through Phase B's production-representative
    path, captured into ITD's Test Scenario Sheet format (mirroring the ITR-1 precedent exactly).
    **Update (2026-09-04, §13): login, add-client-already-added confirmation, and the full
-   prefill flow are now verified working end-to-end against live Type-2 UAT** (from the local
-   machine, Phase A) — validate/submit/e-verify/acknowledgement remain to be exercised live, now
-   with Phase B's whitelisted-egress path available to run them through.
+   prefill flow are now verified working end-to-end against live Type-2 UAT.** **Further update
+   (same day, §14.4): re-verified through Phase B's tunnel specifically** (not just Phase A's
+   direct local IP) — validate/submit/e-verify/acknowledgement remain to be exercised live, and
+   should now go through the tunnel from the start rather than needing a second pass.
 3. Email ITD requesting ITR-4 production enablement once the sheet is clean.
 
 ## 13. Prefill flow — live UAT verification and four real bugs found and
@@ -884,11 +885,17 @@ even install
   reachable at all without the tunnel, since it is whitelisted-only) — and a control test to an
   unrelated host (`www.google.com:443`) also succeeded normally, confirming the
   `AllowedIPs = 43.239.60.30/32` scoping did not accidentally capture other local traffic.
-- Not yet re-run: an actual Type-2 API call (login/validate/submit) through this path. §14's
-  testing so far is transport-level (TCP reachability) only; the next live UAT step should
-  confirm a real `eri_login()` call succeeds when routed through this tunnel rather than
-  directly from the local IP, closing the loop with §12.5's live login proof (which ran before
-  this tunnel existed, directly from the local IP, which happened to also be UAT-whitelisted).
+- **Update (2026-09-04, later same day): closed.** Re-ran both `eri_login()` and the full
+  prefill flow (`request_prefill_otp()` → `get_prefill_data()`, PAN `GOYPT2026A`, AY 2025) with
+  the tunnel live — both succeeded identically to §12.5/§13's earlier direct-IP runs. Confirmed
+  the traffic genuinely transited the tunnel (not a coincidental direct path) by diffing
+  `wg show wg0 transfer` and the `FORWARD` chain's packet/byte counters before and after each
+  call: the login call moved counters from 1628/564 bytes and 7/3 packets to 13092/10484 bytes
+  and 19/22 packets; the prefill flow (a much larger payload — the decrypted response includes
+  every top-level form section, even the 53 `null` ones) moved them further to 59608/52288
+  bytes and 75/100 packets. The catch-all `DROP` rule stayed at 0 packets throughout both
+  calls, same as the transport-level test in §14.4 above. No code changes were needed — the
+  tunnel is pure OS-level IP routing, entirely transparent to the application.
 
 ## 15. References
 
