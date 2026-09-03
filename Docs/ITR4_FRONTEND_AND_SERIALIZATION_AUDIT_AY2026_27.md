@@ -993,16 +993,40 @@ duplicate to fall back on, so its computation itself was fixed.
 
 **Milestone**: `app/engine/validators/itr4/input_rules.py` has now been read and cross-checked
 line-by-line, start to finish (all ~4,900 lines), against the official catalog and each other —
-not just the earlier token-matching presence pass (§7). `calc_rules.py` (828 lines) was fully
-read earlier in this same phase (the 57(iia)/`ITR4-C022` investigations). Eight real bugs were
-found and fixed this way (0b–0g below, plus §12's `R043` and §13's transport-allowance constant),
-none of which the earlier presence-only cross-reference could have caught, since every one was a
-*logic* defect in an already-present, already-"passing" check. **Not yet done at the same
-line-by-line depth**: ITR-1's `input_rules.py`/`calc_rules.py` — several areas were reached via
-shared-code-path investigation (80CCD(2), 234C, 57(iia)/transport-allowance/80CCH-age, all fixed
-identically in both forms) and the `nature_of_employment` sweep already covered ITR-1
-specifically, but a full independent line-by-line pass of ITR-1's own files, mirroring what was
-just done for ITR-4, has not been performed and is the natural next increment.
+not just the earlier token-matching presence pass (§7). `calc_rules.py` (868 lines) was fully
+read earlier in this same phase (the 57(iia)/`ITR4-C022` investigations), and again in a later
+dedicated file-order pass (§16a below) once ITR-1's equivalent files were done. Eight real bugs
+were found and fixed this way (0b–0g below, plus §12's `R043` and §13's transport-allowance
+constant), none of which the earlier presence-only cross-reference could have caught, since every
+one was a *logic* defect in an already-present, already-"passing" check.
+
+### 16a. Sweep completed for all four validator files (2026-09-03)
+
+Continuing directly from the milestone above: `app/engine/validators/itr1/input_rules.py`
+(3,771 lines) and `app/engine/validators/itr1/calc_rules.py` (781 lines) have now each received
+the same full, file-order, line-by-line read as ITR-4's files did. Full write-up of that pass —
+including the one stale docstring fixed (`salary.py`'s `_exempt_transport()`, still citing the
+pre-§13-fix Rs 19,200 figure in a comment though the code was already correct) and one recorded
+but not-fixed low-severity dead-branch note (`ITR1-R221`'s let-out-property threshold is
+tautological) — is in `ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §31.
+
+`app/engine/validators/itr4/calc_rules.py` (868 lines) was then re-read in the same file-order
+pass for symmetry with the other three files (it had previously only been touched via targeted
+investigation, not read start-to-finish in one pass). **No new bugs found** — every regime-split
+and category-split branch checked out against the calculator, including a direct confirmation
+that `ITR4-C136`'s 44AE per-vehicle-minimum formula (Rs 1,000/ton/month heavy, flat Rs 7,500/month
+otherwise) matches `presumptive.py`'s `_compute_44ae()` exactly, and that the inline pensioner
+code set `{"PE", "PESG", "PEPS", "PEO"}` at `ITR4-C022`/line 627 matches the shared
+`_is_pensioner()` helper's set in both `input_rules.py` files (not imported, but not drifted
+either — a minor style note, not a functional bug).
+
+**All four validator files — `itr1/input_rules.py`, `itr1/calc_rules.py`, `itr4/input_rules.py`,
+`itr4/calc_rules.py` — have now been read in full, in file order, at least once this session**,
+completing the exhaustive rule-by-rule sweep the user asked to continue. The remaining forms in
+the standing work order (ITR-2, then ITR-3) have not yet received this same depth of validator
+sweep — their own `input_rules.py`/`calc_rules.py` files (where they exist at this stage of their
+v2 pipeline build-out; see `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md`) are the natural next
+increment once ITR-1/ITR-4 work is otherwise complete.
 
 0g. **Fixed continuing the exhaustive rule-by-rule sweep, shared with ITR-1**: `ITR1-R187b`/
    `ITR4-R225b` (80CCH Agniveer age-at-joining) used a hardcoded `date(2000, 1, 1)` placeholder

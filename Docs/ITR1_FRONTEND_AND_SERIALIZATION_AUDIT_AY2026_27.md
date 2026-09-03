@@ -2416,3 +2416,82 @@ false-negative scenario, now correctly flagged) and
 still passes). No test coverage existed for `ITR4-R225b` (it was simply removed; `ITR4-R226`'s
 existing correctness was unaffected). Full backend suite: 1620 passed, same 3 pre-existing
 unrelated failures, no regressions.
+
+## 31. `app/engine/validators/itr1/input_rules.py` — full line-by-line sweep completed
+(2026-09-03)
+
+**Scope**: read the entire 3,771-line file start to finish (this session's earlier passes had
+reached specific rules via targeted investigation — §27-§30 above — but had not walked the file
+in file order end to end), applying the same methodology that found 8 real bugs in ITR-4's
+equivalent file: cross-checking every regime-dependent (`is_old`/`is_new`) and category-dependent
+(`is_government_employee`/CG-SG/pensioner) branch against the calculator's actual logic, looking
+for hardcoded placeholder values, and looking for string-literal/field mismatches.
+
+**Result: no new correctness bugs of that class found.** ITR-1's `input_rules.py` was already in
+materially better shape than ITR-4's equivalent file was before this session's ITR-4 pass — most
+of the patterns that produced real bugs in ITR-4 (the `nature_of_employment` label-vs-code
+mismatch, the 57(iia) regime-blind cap, the 80TTB dividend-padding bug) turned out, on direct
+inspection, to already be handled correctly here:
+
+- `ITR1-R016` (80TTB interest base) already excludes dividend income from the interest sum, with
+  an explicit comment citing CBDT rule 16 — this is the fix ITR-4's `ITR4-R041` needed (§15a) but
+  ITR-1 never had the bug in the first place.
+- Every `nature_of_employment` comparison found (`ITR1-R210`, `_is_cg_sg_employee`/`_is_pensioner`
+  call sites at `ITR1-R185`, `ITR1-R267`/`R067`, `ITR1-R301`/`R270`) already compares against the
+  raw official code (via the shared `_is_cg_sg_employee`/`_is_pensioner` helpers), not a
+  human-readable label — no repeat of the 18-site bug fixed earlier this session.
+- `ITR1-R267`/`ITR1-R067` (gratuity caps) already correctly implement the CG/SG-vs-everyone-else
+  split (₹25L / ₹20L) using `_is_cg_sg_employee`, mirroring the calculator's own split in
+  `app/engine/schedules/salary.py`.
+
+**One stale docstring fixed** (not a functional bug — the code was already correct): `salary.py`'s
+`_exempt_transport()` docstring still said *"Rs 19,200/yr for disabled employees"*, left over from
+before §29's fix raised `TRANSPORT_ALLOWANCE_DISABLED_LIMIT` to Rs 38,400. The function body
+already used the constant correctly (confirmed both `ITR1-R105` and `ITR1-R148` in the validator
+independently check against the correct 38,400 figure) — only the comment was wrong. Corrected to
+cite Rule 2BB(1)(f) and the correct Rs 3,200/month figure.
+
+**One pre-existing, low-severity design note (not fixed, recorded for completeness)**: `ITR1-R221`
+(80EE/80EEA require the applicable Section 24(b) limit to be exhausted before claiming the
+additional deduction) computes `required_24b = 200000 if self-occupied else
+hp.home_loan_interest_paid` — for any non-self-occupied property this sets the threshold equal to
+the exact value being compared against it, so the `home_loan_interest_paid < required_24b` half of
+the check is a tautological no-op for let-out/deemed-let-out properties (only the `<= 0` half can
+ever fire). In practice this is very low-impact: Sections 80EE/80EEA are, by their own eligibility
+criteria (first-time buyer, stamp-duty-value ceiling), overwhelmingly claimed against
+self-occupied residential purchases, and the calculator itself (`section_80ee.py`/
+`section_80eea.py`) does not gate the deduction on property type at all — so this validator
+branch's let-out case was never a meaningful gate to begin with, not a regression. Left as-is;
+flagged here rather than "fixed" because there is no clear correct replacement threshold for the
+let-out case without a CBDT rule text citation to anchor it, and invented thresholds are exactly
+the kind of unverified fix this audit has been careful to avoid (see §11.1's 80D preventive-
+checkup near-miss).
+
+**Verification**: `ast.parse()` syntax check on the touched file; full backend suite still green
+at the same baseline (no test assertions depend on the docstring text). No code-behavior change
+in this section beyond the docstring — no new tests required.
+
+**Milestone**: `app/engine/validators/itr1/input_rules.py` has now received the same full
+line-by-line sweep as `app/engine/validators/itr4/input_rules.py` (documented in
+`Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §16's Milestone note).
+
+**`app/engine/validators/itr1/calc_rules.py` (781 lines) — also read in full, file order, same
+pass.** No bugs found. This file's cross-schedule-consistency design turns out to structurally
+avoid the class of bug found in ITR-4's `calc_rules.py`'s 57(iia)/80CCD1-20%-GTI rules
+(§14/§15 of the ITR-4 doc): rather than re-deriving statutory caps independently (which is how
+ITR-4's `ITR4-C096` drifted out of sync with the calculator's regime-dependent 57(iia) cap),
+ITR-1's "Rules 272-291: Eligible <= User-Entered Amount" section (line ~709) reads the
+already-computed eligible amount straight from `result.schedules["deductions"].breakdown` and
+only checks that the user-entered VIA figure does not exceed it — it never reimplements a
+section's cap formula a second time, so there is no second copy of any regime-dependent formula
+that could silently fall out of sync with the engine. `ITR1-R214` (new-regime 57(iia), line 492)
+is the one place this file *does* independently restate a cap (`min(1/3 FP, Rs 25,000)`) — its
+inline comment already documents that this was checked against `other_sources.py`'s actual
+regime-dependent cap and found correct (added in an earlier pass this session, §continuing the
+57iia investigation).
+
+Both ITR-1 validator files (`input_rules.py` and `calc_rules.py`) are now fully swept at the same
+depth as ITR-4's. Next increment: `app/engine/validators/itr4/calc_rules.py` (828 lines) — read in
+full earlier in the session during targeted investigations (57(iia), 234C, 80CCD1-20%-GTI) but not
+yet with this same file-order, rule-by-rule pass; tracked in
+`Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`.

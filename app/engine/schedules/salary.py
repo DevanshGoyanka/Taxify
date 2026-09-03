@@ -144,7 +144,8 @@ def _exempt_commutted_pension(
 
 
 def _exempt_transport(allowance: Decimal, is_disabled: bool) -> Decimal:
-    """Exempt transport allowance u/s 10(14): Rs 19,200/yr for disabled employees."""
+    """Exempt transport allowance u/s 10(14) r/w Rule 2BB(1)(f): Rs 38,400/yr
+    (Rs 3,200/month) for disabled employees only; nil otherwise."""
     if not is_disabled:
         return _ZERO
     return min(max(_ZERO, allowance), TRANSPORT_ALLOWANCE_DISABLED_LIMIT)
