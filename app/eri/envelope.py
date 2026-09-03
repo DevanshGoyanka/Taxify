@@ -125,23 +125,36 @@ def sign_data(plain_json: str) -> tuple[str, str]:
             pass
             
     elif mode == "ngrok":
-        signer_url = os.getenv("SIGNER_URL", "https://unpondered-implacably-tamatha.ngrok-free.dev/api/sign")
-        print(f"DEBUG: Sending payload to remote signer: {signer_url}")
-        
+        # No default: this mode transmits the FULL plain ITR/API payload
+        # (real taxpayer PII, and live OTP/EVC values via everify.py) to an
+        # arbitrary external URL for signing. A hardcoded fallback here
+        # previously pointed at one developer's personal ngrok tunnel --
+        # exactly the "a wrong destination must fail, not be guessed"
+        # hazard app/eri/config.py's ERI_BASE_URL resolution already
+        # guards against. SIGNER_URL must be explicitly configured.
+        signer_url = os.getenv("SIGNER_URL")
+        if not signer_url:
+            raise ValueError(
+                "SIGNER_URL is not set. ERI_DSC_SIGNING_MODE=ngrok requires an "
+                "explicitly configured remote signer endpoint -- there is no "
+                "default, because sending taxpayer PII/OTP payloads to a "
+                "guessed or forgotten-default URL is not acceptable."
+            )
+
         try:
             import httpx
             import json
             # The signing service expects the raw JSON object
             json_payload = json.loads(plain_json)
-            
+
             with httpx.Client(timeout=30.0) as client:
                 sign_resp = client.post(signer_url, json={"payload": json_payload})
                 sign_resp.raise_for_status()
                 sign_data_resp = sign_resp.json()
-                
+
                 if not sign_data_resp.get("success"):
                     raise Exception(f"Signing failed remotely: {sign_data_resp}")
-                    
+
                 # The signer returns both .data (base64) and .sign. We need both.
                 return sign_data_resp.get("sign"), sign_data_resp.get("data")
         except Exception as e:
@@ -156,18 +169,23 @@ def sign_data(plain_json: str) -> tuple[str, str]:
 
 def build_request_envelope(payload: dict, eri_user_id: str) -> dict:
     """Builds the request envelope containing serialized payload, DSC signature, and ERI User ID.
-    
+
     Cites: Docs/API_Login_v1.1.pdf Section 4.4.2 (Request Body: Description)
+
+    Never logs the payload, signature, or encoded data: ``payload`` routinely
+    carries real taxpayer PII (PAN, name, address) and live authentication
+    secrets (Aadhaar/mobile/bank OTP values, via ``everify.py``'s
+    ``otpValue``/``evcValue`` fields) -- printing any of it, even a
+    truncated prefix, would leak that into console output/server logs.
+    ``login.py``'s own comment states the intended discipline explicitly:
+    "Send the request without logging URLs, envelopes, headers, tokens, or
+    response bodies." This function previously violated that on every call.
     """
     # JSON-serialize payload using strict compact formatting
     serialized = json.dumps(payload, separators=(",", ":"))
-    print(f"DEBUG [ENVELOPE] Plain payload: {serialized}")
-    print(f"DEBUG [ENVELOPE] Plain payload length: {len(serialized)} chars")
     # Sign the plain JSON string
     signature_b64, final_data_b64 = sign_data(serialized)
-    print(f"DEBUG [ENVELOPE] Signature (first 50 chars): {signature_b64[:50]}...")
-    print(f"DEBUG [ENVELOPE] Data b64 (first 50 chars): {final_data_b64[:50]}...")
-    
+
     return {
         "data": final_data_b64,
         "sign": signature_b64,
@@ -205,15 +223,40 @@ def parse_response_envelope(response_json: dict) -> dict:
 
 def eri_headers(auth_token: Optional[str] = None) -> dict:
     """Returns the HTTP request headers required for ERI API requests.
-    
+
     Cites: Docs/API_Login_v1.1.pdf Section 4.4.1 (Request Header)
+
+    Resolved per call from the active (ERI_MODE, ERI_ENV) pair via
+    ``get_eri_credentials()``, matching every other Type-2 module in this
+    package (see e.g. login.py's own header comment). This function used to
+    read the unsuffixed ``ERI_CLIENT_ID``/``ERI_CLIENT_SECRET`` directly --
+    the exact same "unsuffixed variable this project never sets" defect
+    already fixed for ``ERI_BASE_URL``/``ERI_USER_ID`` elsewhere in this
+    package, just not carried over to this one function. Since only the
+    suffix-qualified ``ERI_CLIENT_ID_TYPE2_UAT``/``_PRODUCTION`` variables
+    are ever set in .env, every Type-2 API call that reached this function
+    would unconditionally raise ValueError.
     """
-    client_id = os.getenv("ERI_CLIENT_ID")
-    client_secret = os.getenv("ERI_CLIENT_SECRET")
-    
+    from app.eri.config import ERIConfigurationError, get_eri_credentials
+
+    try:
+        creds = get_eri_credentials()
+    except ERIConfigurationError:
+        raise
+    except Exception as exc:
+        raise ERIConfigurationError(
+            f"Could not resolve ERI credentials for API headers: {exc}"
+        ) from exc
+    client_id = creds.client_id
+    client_secret = creds.client_secret
+
     if not client_id or not client_secret:
-        raise ValueError("ERI_CLIENT_ID and ERI_CLIENT_SECRET must be configured in environment variables.")
-        
+        raise ValueError(
+            f"ERI_CLIENT_ID_{creds.mode.upper()}_{creds.environment.upper()} and "
+            f"ERI_CLIENT_SECRET_{creds.mode.upper()}_{creds.environment.upper()} "
+            "must be configured in .env for the active ERI mode/environment."
+        )
+
     headers = {
         "Content-Type": "application/json",
         "clientId": client_id,

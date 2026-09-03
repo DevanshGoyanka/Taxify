@@ -271,8 +271,8 @@ def assert_credentials_at_startup() -> None:
     """Startup guard: validate the active credential bundle is sane.
 
     Call once from ``app/main.py`` lifespan. Raises ``RuntimeError`` if a
-    production deployment is misconfigured (mock DSC, missing digest secret
-    in production).
+    production deployment is misconfigured (mock or ngrok DSC signing,
+    missing digest secret in production).
 
     Note: this previously also required ``ERI_AWS_SSH_HOST_TYPE2_PRODUCTION``
     for Type-2 production, because egress had to leave from an IP that ITD had
@@ -287,6 +287,17 @@ def assert_credentials_at_startup() -> None:
             if creds.dsc_signing_mode == "mock":
                 raise RuntimeError(
                     "ERI_DSC_SIGNING_MODE=mock is forbidden in Type-2 production."
+                )
+            if creds.dsc_signing_mode == "ngrok":
+                # "mock" fails safely -- an invalid signature is simply
+                # rejected by ITD. "ngrok" is more dangerous: it transmits
+                # the full plain payload (real taxpayer PII, and live OTP/EVC
+                # values via everify.py) to an external signer URL. That has
+                # no place in a production deployment.
+                raise RuntimeError(
+                    "ERI_DSC_SIGNING_MODE=ngrok is forbidden in Type-2 production "
+                    "-- it transmits taxpayer PII/OTP payloads to an external "
+                    "signer endpoint and must only be used for local development."
                 )
         if not creds.digest_secret_key:
             raise RuntimeError(

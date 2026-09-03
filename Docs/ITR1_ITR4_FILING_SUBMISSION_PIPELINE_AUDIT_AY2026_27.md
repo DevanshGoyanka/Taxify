@@ -267,20 +267,24 @@ filing, per `app/routers/automation.py` vs `app/routers/filing.py`'s explicit se
 `CLAUDE.md`), this pass deliberately prioritized the *filing/submission*-specific surface over a
 full re-audit of the shared download-automation infrastructure:
 
-- `app/automation/navigation.py` (739 lines) and `app/automation/browser.py`'s `BrowserManager`
-  singleton (395 lines) were read only far enough to confirm the functions the filing pipeline
-  calls (`dismiss_portal_modals`, `navigate_income_tax_returns`, `session_expired`,
-  `get_context`) exist and are used correctly — not read end-to-end for their own internal
-  correctness. `SECURITY.md` already documents the singleton-Playwright-instance /
-  `--workers 1` constraint as a known, accepted deployment risk, not something to re-litigate
-  here.
-- `app/eri/envelope.py` (228 lines) and all of `app/eri/type2/*` (~750 lines across 6 files) are
-  Type-2-only — not the active deployment mode (`ERI_MODE=type3`) and explicitly deferred to
-  "next season" per the integration plan. Not read this pass; flagged as the natural next
-  increment if/when Type-2 work resumes.
 - `app/automation/downloader*.py`, `ais_converter.py`, `as26_converter.py`,
   `pdf_unlocker.py` (the AIS/TIS/26AS import pipeline) — a separate subsystem from filing
   entirely, out of scope for a *filing/submission* pipeline audit specifically.
+
+**Update (2026-09-03, continued pass)**: `app/automation/navigation.py` and
+`app/automation/browser.py`'s `BrowserManager`, and all of Type-2
+(`app/eri/envelope.py` + `app/eri/type2/*`), have now also been read in full. No defects found
+in `navigation.py`/`browser.py` beyond two minor notes (an unused `wait_for_overlay_clearance`
+import in `uploader.py`, and `BrowserManager.dispatch()`'s dedicated-Proactor-loop mechanism
+being used in only one call site repo-wide rather than uniformly — not a bug, since every other
+consumer already relies successfully on `run.py`'s app-wide Proactor policy instead). Type-2
+turned up three real issues, all fixed — full write-up in
+`Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §10: every Type-2 API call was logging the complete
+plaintext request payload (including live OTP/EVC values) to console; `eri_headers()` had the
+exact "unsuffixed env var this project never sets" defect already fixed everywhere else in the
+package, meaning the entire Type-2 API pipeline was non-functional; and the `ngrok` DSC-signing
+mode had a hardcoded personal fallback URL and was missing from the production-forbidden list
+that already covered `mock` mode.
 
 ## 11a. Filing-type coverage (original/belated/revised/notice-response) — mapping verified,
 extra-field handling unverified and *unverifiable* before production, by design of Type-3 UAT

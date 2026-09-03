@@ -256,9 +256,13 @@ are not caught by it).
 
 **Can be, and has been, verified before production** (all confirmed this pass): Digest algorithm
 correctness against the primary SOP; credential resolution correctness and safety (no silent
-mode/environment guessing); no divergent second JSON-generation path; filing-type dropdown
-mapping completeness against the schema; acknowledgement-retrieval AY-matching correctness;
-credential/password/OTP logging hygiene; the ITR-2 submission guard.
+mode/environment guessing, for either mode's DSC signing — §10.3); no divergent second
+JSON-generation path; filing-type dropdown mapping completeness against the schema;
+acknowledgement-retrieval AY-matching correctness; Type-3 taxpayer login's password/OTP logging
+hygiene (§5); the ITR-2 submission guard. **Type-2's own PII/OTP logging hygiene was not yet
+verified when this line was first written — it wasn't, and was fixed (§10.1, §10.2)**; corrected
+here rather than silently, since the original claim implicitly covered ground (Type-2) that
+hadn't actually been audited yet at the time.
 
 **Cannot be verified before production, by the structural nature of Type-3 onboarding** (§2.1):
 whether the portal's live upload wizard needs additional fields for revised-return or
@@ -279,15 +283,93 @@ across 18 tracked files, including `Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md` and 
 still awaiting their decision. Unrelated to the findings in this document but relevant to overall
 ERI operational risk, so noted here for completeness.
 
-## 10. Scope not covered
+## 10. Type-2 (`app/eri/envelope.py` + `app/eri/type2/*`) — read in full; three real issues
+found and fixed, all in the shared envelope module
 
-`app/eri/envelope.py` and all of `app/eri/type2/*` (~980 lines total) — Type-2's request-signing
-and API-client modules — were not read in this pass beyond confirming their existence and their
-separation from the Type-3 path. Type-2 is not the active deployment mode and is explicitly
-deferred to next season per the integration plan; a Type-2-specific audit of comparable depth to
-this document is the natural next increment if/when that work resumes. `app/automation/`'s
-download-side automation (AIS/TIS/26AS/Form-16/prefill, ~13,000 lines) is a separate subsystem
-from filing entirely and was not in scope here.
+Read `app/eri/envelope.py` (request signing/headers, shared by every Type-2 module) and all six
+`app/eri/type2/*.py` files (`login.py`, `add_client.py`, `everify.py`, `acknowledgement.py`,
+`prefill.py`, `client.py`) in full. Type-2 is not the active deployment mode this season, so
+none of these three issues are live-impacting today — but all three would have broken or
+endangered the very first real Type-2 usage, and all three are fixed now rather than left for
+whoever picks Type-2 up next to rediscover.
+
+### 10.1 Real PII/secret leak found and fixed: every Type-2 API call logged the full plaintext
+payload to console
+
+`envelope.py::build_request_envelope()` — called by every single Type-2 module before every API
+call — contained four `print()` debug statements, including `print(f"DEBUG [ENVELOPE] Plain
+payload: {serialized}")`, which logs the **complete, unencrypted request payload** to
+stdout/console on every call. This payload routinely carries real taxpayer PII (PAN, name,
+address — `add_client.py`'s `addRegisterClient`) and, more severely, **live authentication
+secrets**: `everify.py::verify_evc()` puts the taxpayer's actual Aadhaar OTP or bank EVC value
+directly into the payload as `otpValue`/`evcValue` before it reaches this function, and
+`prefill.py` does the same with `mobileOtp`/`emailOtp`. Every one of these would have been
+printed in full. This directly contradicts the discipline `login.py`'s own comment already
+states for this exact call: *"Send the request without logging URLs, envelopes, headers,
+tokens, or response bodies."* — an intent that `envelope.py` itself did not honor. Given server
+logs are routinely captured, retained, and sometimes shipped to external logging
+infrastructure, this was a live PII/credential-leak risk the moment any Type-2 code path ran.
+**Fixed**: all four `print()` calls removed.
+
+### 10.2 Real bug found and fixed: `eri_headers()` used the exact "unsuffixed variable this
+project never sets" defect already fixed everywhere else in this package
+
+`envelope.py::eri_headers()` read `os.getenv("ERI_CLIENT_ID")`/`os.getenv("ERI_CLIENT_SECRET")`
+directly — the unsuffixed names. But this project's entire credential architecture (§3) only
+ever sets the suffix-qualified `ERI_CLIENT_ID_TYPE2_UAT`/`_PRODUCTION` (and the `_SECRET`
+equivalents) in `.env`; the unsuffixed names are never set. Every one of the six Type-2 modules
+already carries a comment explaining this *exact* defect class was found and fixed for
+`ERI_BASE_URL`/`ERI_USER_ID` (*"It used to be a module constant captured at import time from an
+unsuffixed ERI_BASE_URL that this project never sets, so every request silently went to the
+hardcoded UAT default"*) — but that fix was never carried over to `eri_headers()`, the one
+function every Type-2 API call also depends on. The existing test suite even encoded this bug as
+expected behavior (`test_eri_headers`/`test_eri_headers_missing` set/cleared the unsuffixed
+vars directly). **Practical effect**: every Type-2 API call that reached `eri_headers()` would
+have unconditionally raised `ValueError("ERI_CLIENT_ID and ERI_CLIENT_SECRET must be
+configured...")`, before ever making an HTTP request — the Type-2 API pipeline was entirely
+non-functional. **Fixed**: `eri_headers()` now resolves `client_id`/`client_secret` via
+`get_eri_credentials()`, matching every sibling function. Both existing tests updated to use the
+suffix-qualified variables (confirmed via `git stash` that both fail against the pre-fix code
+with exactly the predicted symptom).
+
+### 10.3 Real safety gap found and fixed: the `ngrok` DSC-signing mode had a hardcoded fallback
+URL and was not forbidden in production
+
+`sign_data()`'s `"ngrok"` mode transmits the full plain payload — the same PII/OTP-bearing data
+as §10.1 — to an external URL for remote DSC signing. It defaulted `SIGNER_URL` to a hardcoded
+value, `https://unpondered-implacably-tamatha.ngrok-free.dev/api/sign` — apparently one
+developer's personal ngrok tunnel, used with no explicit configuration required. This is the
+exact "a wrong destination must fail, not be guessed" hazard `app/eri/config.py::get_eri_base_url()`
+already explicitly guards against for the ITD gateway URL, just not carried over to this signer
+URL. Worse, `app/eri/config.py::assert_credentials_at_startup()` already forbids `"mock"`
+DSC-signing mode in Type-2 production (an invalid-signature failure mode that fails safely — ITD
+simply rejects it) but did **not** forbid `"ngrok"` mode, which is more dangerous: a
+misconfiguration that left `ERI_DSC_SIGNING_MODE=ngrok` active in a production deployment would
+silently exfiltrate real taxpayer PII/OTP payloads to an external, unaudited endpoint on every
+signing call. **Fixed**: the hardcoded fallback URL is removed (`SIGNER_URL` must now be
+explicitly set, raising `ValueError` otherwise); `assert_credentials_at_startup()` now forbids
+`ngrok` mode in Type-2 production alongside `mock`.
+
+### 10.4 Noted, not fixed: hardcoded personal name as the default DSC certificate subject filter
+
+`sign_data()`'s `"token"` mode (Windows Certificate Store signing) defaults
+`ERI_DSC_CERT_SUBJECT` to a specific individual's name (matching the DSC holder referenced in
+the UAT Test Scenario Sheet filename in `Reference Docs by CBDT & ITD/`). Lower severity than
+§10.1–10.3: an unset/wrong value **fails loudly** (`RuntimeError` if no matching certificate is
+found in the store), rather than silently misbehaving, so it was left as a recorded finding
+rather than changed — a default that only works for one specific operator's machine is still
+worth knowing about before anyone else tries to run Type-2 token signing.
+
+### 10.5 Verified correct, not a bug
+
+`type2/client.py::get_eri_mode()` reads `ERI_MODE` but under an entirely different,
+undocumented vocabulary (`"real"`/`"mock"` per its own docstring, though it just lowercases
+whatever `ERI_MODE` actually holds — never `"real"` or `"mock"` in this project's actual usage).
+Confirmed via grep it is never called anywhere in the codebase — genuinely dead code, left
+alone. `parse_response_envelope()`'s error-detection (checking both a `messages[]` array and a
+separate `errors[]` array, per a comment noting the latter "seen in some Type-2 API responses")
+and `eri_post()` in `client.py` (the generic Type-2 HTTP dispatcher) were both read and found
+structurally sound — no defect found in either.
 
 ## 11. References
 
