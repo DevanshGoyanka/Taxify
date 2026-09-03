@@ -833,8 +833,42 @@ rather than the Rs 1,50,000 (or up to Rs 2,00,000) they might expect — a UX/cl
 correctness one. Flagged here per this document's "record scope honestly" practice rather than
 silently left for a future pass to rediscover.
 
-## 12. Summary of open items after this pass
+## 12. Real bug found and fixed during the exhaustive rule-by-rule sweep: `ITR4-R043` (80U) never
+blocked HUF, only Firm (2026-09-03)
 
+**Found starting the exhaustive rule-by-rule sweep** (requested explicitly, continuing after the
+tax-calculation-flow priority) by reading `input_rules.py` from the top and cross-checking each
+rule's actual condition against the official catalog's exact wording, rather than trusting an
+earlier presence-only cross-reference pass.
+
+**The rule**: CBDT Sl 43 reads *"HUF/Firm claiming 80U"* — both entity types must be blocked from
+Section 80U. This is a narrower rule than its neighbors: Section 80U is specifically the
+**assessee's own** disability, which neither an HUF nor a Firm can have (by contrast, Section 80DD
+concerns a *dependent's* disability, and a HUF member is a valid dependent per CBDT Sl 254 — so
+80DD correctly stays Firm-only-blocked, HUF-eligible).
+
+**The bug**: `ITR4-R043` was nested entirely inside the `if is_firm:` block alongside R020/R027/
+R028/R031 — all four of *those* are genuinely Firm-only per their own catalog rules, but R043 was
+grouped with them by pattern-following rather than by checking its own catalog text, so an HUF
+filer entering a positive `amount_80u` was never blocked at all, and the calculator
+(`section_80u.py`, which has no assessee-type gating of its own) would compute and allow the
+deduction in full.
+
+**Fix**: `ITR4-R043` moved out of the `is_firm`-only block to its own `if (is_firm or is_huf):`
+check, matching the catalog's stated scope exactly. Firm's existing blocking behavior is
+unchanged; HUF is now correctly blocked too.
+
+**Tests added**: `test_R043_huf_claiming_80u_now_blocked`, `test_R043_firm_claiming_80u_still_blocked`,
+`test_R043_individual_claiming_80u_not_blocked` (`tests/test_itr4_input_validation.py`). ITR-1 is
+unaffected — SAHAJ is individual-only, with no Firm/HUF assessee-type concept at all. Full backend
+suite: 1611 passed (3 new tests), same 3 pre-existing unrelated failures, no regressions.
+
+## 13. Summary of open items after this pass
+
+0c. **Fixed starting the exhaustive rule-by-rule sweep, ITR-4-only**: `ITR4-R043` (Section 80U)
+   was nested inside the Firm-only assessee-type block, so an HUF filer was never blocked from
+   claiming 80U (an individual's-own-disability deduction) even though the calculator itself has
+   no assessee-type gating and would compute/allow it in full. Full write-up: §12 above.
 0. **Fixed in a follow-up pass, ITR-1-only in practice (ITR-4 already correct)**:
    `section_80ccd2.py`'s engine computation ignored tax regime entirely, never applying Finance
    (No. 2) Act 2024's 14% new-regime rate for non-government employers. ITR-4's own validator

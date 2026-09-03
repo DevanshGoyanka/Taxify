@@ -80,6 +80,44 @@ def _base_input(**overrides) -> ITR4Input:
     return ITR4Input(**defaults)
 
 
+def test_R043_huf_claiming_80u_now_blocked():
+    """R043 (CBDT Sl 43: "HUF/Firm claiming 80U") -- 80U is the assessee's
+    OWN disability, which neither an HUF nor a Firm can have (unlike 80DD,
+    which concerns a dependent's disability and a HUF member is a valid
+    dependent per CBDT Sl 254, so 80DD stays available to HUF). Previously
+    this check only fired for Firm; an HUF claiming 80U was never
+    blocked."""
+    from app.schemas.itr1 import AssesseeType
+    inp = _base_input(
+        assessee_type=AssesseeType.HUF,
+        deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("75000")),
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R043")
+
+
+def test_R043_firm_claiming_80u_still_blocked():
+    """Firm claiming 80U must still be blocked (pre-existing behavior)."""
+    from app.schemas.itr1 import AssesseeType
+    inp = _base_input(
+        assessee_type=AssesseeType.FIRM,
+        deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("75000")),
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R043")
+
+
+def test_R043_individual_claiming_80u_not_blocked():
+    """Individuals remain eligible for 80U."""
+    from app.schemas.itr1 import AssesseeType
+    inp = _base_input(
+        assessee_type=AssesseeType.INDIVIDUAL,
+        deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("75000")),
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R043")
+
+
 def test_R270_80eea_requires_exhausted_section_24b_limit():
     """80EEA is available only after the self-occupied 24(b) cap is used."""
     deduction_row = ITR1Schedule80EEALoanEntry(

@@ -136,12 +136,19 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "ITR4-R031", False,
                 "Firms cannot claim deduction under 80DDB.",
                 "assessee_type"))
-        # R043: Firm cannot claim 80U
-        if ch6a and ch6a.amount_80u > z:
-            results.append(_make(
-                "ITR4-R043", False,
-                "Firms cannot claim deduction under 80U (individuals only).",
-                "assessee_type"))
+
+    # R043 (CBDT Sl 43: "HUF/Firm claiming 80U"): unlike 80DD/80DDB (which
+    # concern a DEPENDENT's disability -- a HUF member is a valid dependent,
+    # per CBDT Sl 254 -- so those stay Firm-only above), 80U is specifically
+    # the ASSESSEE's OWN disability, which neither an HUF nor a Firm can
+    # have. Checked for both, not nested under the is_firm block above (a
+    # HUF claiming 80U was previously never blocked at all).
+    if (is_firm or is_huf) and ch6a and ch6a.amount_80u > z:
+        results.append(_make(
+            "ITR4-R043", False,
+            f"{'Firms' if is_firm else 'HUFs'} cannot claim deduction under 80U "
+            f"(individuals only).",
+            "assessee_type"))
 
     if not is_individual:
         # R023: Non-individual cannot claim 80CCD(1)
