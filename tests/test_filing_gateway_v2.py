@@ -136,6 +136,39 @@ def test_generation_produces_official_schema_valid_json() -> None:
     assert summary["computedByFormEngine"] == "ITR-1"
 
 
+def test_itr1_filing_date_reaches_typed_input_from_verification_date() -> None:
+    """compute_canonical_itr1 must set filing_date/due_date on typed_input.
+
+    Previously never set (the mapper leaves ITR1Input.filing_date at its
+    None default and the gateway's model_copy didn't add it), so
+    compute_itr1()'s `if filing_date and due_date:` gate never ran and
+    234A/234B/234C interest and 234F/234-I late fees were silently zero for
+    every return regardless of actual filing date -- found 2026-09-03, see
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md."""
+    from datetime import date
+    draft = _filing_ready_draft()
+    pipeline = gateway.compute_canonical_itr1(draft)
+    assert pipeline.typed_input.filing_date == date(2026, 7, 31)
+    assert pipeline.typed_input.due_date == date(2026, 7, 31)
+
+
+def test_itr1_late_filing_computes_nonzero_interest_and_late_fee() -> None:
+    """A genuinely late-filed return must show real 234A interest and a
+    234F late fee in the generated JSON, not the silent zero the filing_date
+    wiring bug produced for every return."""
+    draft = _filing_ready_draft()
+    draft.verification.date = "2027-01-15"
+    draft.filing.filingSection = "139(4)"
+    draft.employers = [Employer(
+        id="e1", basic=Decimal("1500000"), tdsDeducted=Decimal("0"),
+    )]
+
+    official, summary = gateway.generate_cbdt_json(draft)
+    intrst_pay = official["ITR"]["ITR1"]["ITR1_TaxComputation"]["IntrstPay"]
+    assert intrst_pay["IntrstPayUs234A"] > 0
+    assert intrst_pay["LateFilingFee234F"] == 5000
+
+
 def test_itr1_emits_exact_refund_verification_and_creation_metadata() -> None:
     """Filing identity, bank data, and system metadata reach exact JSON paths."""
     draft = _filing_ready_draft()

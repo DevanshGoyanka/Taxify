@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from app.engine.calculators.itr1 import ITR1Result, compute as compute_itr1
 from app.engine.calculators.itr2 import ITR2Result, compute as compute_itr2
 from app.engine.calculators.itr4 import ITR4Result, compute as compute_itr4
-from app.engine.common.due_dates import filing_section_due_date_error
+from app.engine.common.due_dates import filing_section_due_date_error, get_due_date
 from app.engine.draft_to_itr1_input import (
     _SALARY_SECTIONS,
     _TAN_PATTERN,
@@ -401,11 +401,24 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
             "bank_accounts": typed_input.bank_accounts,
             "tax_return_preparer": tax_return_preparer,
         })
+        # filing_date is the date the return declares it is filed on --
+        # verification.date, the same value _reject_section_after_due_date
+        # judges the filing section against and that becomes the CBDT
+        # Verification.Date. Previously never set here (the mapper leaves
+        # ITR1Input.filing_date at its None default), so
+        # compute_itr1()'s `if filing_date and due_date:` gate never ran and
+        # 234A/234B/234C interest and 234F/234-I late fees were silently
+        # zero for every return regardless of actual filing date -- found
+        # 2026-09-03, see Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md.
+        filing_date = _to_date(draft.verification.date)
+        due_date = get_due_date("ITR-1", draft.assessmentYear or "2026-27")
         typed_input = typed_input.model_copy(update={
             "filing_profile": filing_profile,
             "property_profile": profiles[0],
             "property_profiles": profiles,
             "tax_return_preparer": tax_return_preparer,
+            "filing_date": filing_date,
+            "due_date": due_date,
         })
         result = compute_itr1(typed_input)
     except FilingGatewayV2Error:
@@ -1023,11 +1036,22 @@ def compute_canonical_itr4(draft: ReturnDraft) -> ITR4PipelineResult:
         property_profile = _itr4_property_profile(draft)
         bank_accounts = _itr4_bank_accounts(draft)
         tax_return_preparer = _itr4_tax_return_preparer(draft)
+        # See the identical comment in compute_canonical_itr1 -- this was
+        # the same shared-root-cause bug, found while auditing ITR-4:
+        # ITR4Input.filing_date was set to a placeholder (the taxpayer's
+        # date of birth, per draft_to_itr4_input.py's stale "gateway sets
+        # filing_date" comment) that this model_copy never actually
+        # overwrote, so compute_itr4()'s interest/late-fee gate always saw
+        # a "filing date" decades before the due date and computed zero.
+        filing_date = _to_date(draft.verification.date)
+        due_date = get_due_date("ITR-4", draft.assessmentYear or "2026-27")
         typed_input = typed_input.model_copy(update={
             "filing_profile": filing_profile,
             "property_profile": property_profile,
             "bank_accounts": bank_accounts,
             "tax_return_preparer": tax_return_preparer,
+            "filing_date": filing_date,
+            "due_date": due_date,
         })
         result = compute_itr4(typed_input)
     except FilingGatewayV2Error:

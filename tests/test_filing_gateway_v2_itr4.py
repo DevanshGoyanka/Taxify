@@ -157,6 +157,43 @@ def test_compute_canonical_itr4_prepares_filing_data_before_calculation() -> Non
     assert pipeline.typed_input.tax_return_preparer is not None
 
 
+def test_itr4_filing_date_reaches_typed_input_from_verification_date() -> None:
+    """compute_canonical_itr4 must set filing_date/due_date on typed_input.
+
+    Previously the mapper set ITR4Input.filing_date to a date-of-birth
+    placeholder that the gateway's model_copy never overwrote (stale
+    "gateway sets filing_date" comment), so compute_itr4()'s interest/fee
+    gate always saw a "filing date" decades before the due date and
+    computed zero -- found 2026-09-03 auditing ITR-4, see
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md."""
+    from datetime import date
+    draft = _filing_ready_itr4("44AD")
+    pipeline = compute_canonical_itr4(draft)
+    assert pipeline.typed_input.filing_date == date(2026, 7, 31)
+    assert pipeline.typed_input.due_date == date(2026, 8, 31)
+
+
+def test_itr4_late_filing_computes_nonzero_interest_and_late_fee() -> None:
+    """A genuinely late-filed ITR-4 return must show real 234A interest and
+    a 234F late fee in the generated JSON, not the silent zero the
+    date-of-birth filing_date placeholder produced for every return."""
+    from app.engine.filing_gateway_v2 import generate_cbdt_json
+    draft = _filing_ready_itr4("44AD")
+    draft.verification.date = "2027-02-01"
+    draft.filing.filingSection = "139(4)"
+    # Push declared income well above the new-regime 87A rebate threshold so
+    # there is genuine tax payable for 234A to accrue interest on -- the
+    # fixture's default 6L declared income is fully rebated under the new
+    # regime, which would make 234A correctly (not buggily) zero and defeat
+    # the point of this regression test.
+    draft.businesses[0].declaredIncome = Decimal("2500000")
+
+    official, summary = generate_cbdt_json(draft)
+    intrst_pay = official["ITR"]["ITR4"]["TaxComputation"]["IntrstPay"]
+    assert intrst_pay["IntrstPayUs234A"] > 0
+    assert intrst_pay["LateFilingFee234F"] == 5000
+
+
 def test_itr4_json_reuses_prepared_input_without_late_enrichment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

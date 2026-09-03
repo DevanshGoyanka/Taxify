@@ -2003,5 +2003,121 @@ phase doesn't have to re-discover it, matching how the analogous ITR-4 TDS bug w
 3. **Recorded, not chased**: the ~93-path broader schema-coverage gap (§20.5) — structured
    80G/80D/80DD/80U detail blocks untested by any current draft; no known defect, just
    unverified by this specific check.
-4. **No other open items remain** from §1-§22 that represent a known, live defect in ITR-1's
-   compute-and-generate-JSON pipeline.
+4. **Correction, superseded by §24**: item 4 as originally written here claimed no other known
+   live defects remained. That claim was wrong — §24, found the same day while starting the
+   ITR-4 audit, is the single most severe finding in this entire document and affected ITR-1
+   too. Left here rather than silently edited, per this document's own practice of recording
+   corrections instead of erasing a prior claim (see §17.1's identical treatment).
+
+## 24. CRITICAL: `filing_date` never reached the real compute pipeline — 234A/B/C interest and
+234F/234-I late fees were silently zero for every ITR-1 and ITR-4 return (2026-09-03)
+
+**Severity: the most severe finding in this document.** Found while starting the ITR-4 deep
+audit (reading `draft_to_itr4_input.py`'s `filing_date=_to_date(draft.personal.dateOfBirth),
+# placeholder; gateway sets filing_date` — the comment claimed a later step would overwrite it;
+grepping confirmed no such step exists anywhere in `filing_gateway_v2.py`). Checking whether
+ITR-1 had the equivalent "gateway sets it" step revealed it does not either, for either form —
+this is a shared-root-cause bug, not an ITR-4-only one, and it directly contradicts this
+document's own earlier "ITR-1 is production ready" conclusion.
+
+### 24.1 What was actually happening
+
+- `app/engine/draft_to_itr1_input.py` never sets `ITR1Input.filing_date`/`.due_date` at all —
+  they stay at the Pydantic default (`None`).
+- `app/engine/draft_to_itr4_input.py` set `ITR4Input.filing_date` to
+  `_to_date(draft.personal.dateOfBirth)` — the taxpayer's **date of birth** — with a comment
+  claiming the gateway would overwrite it later. It never did.
+- `app/engine/filing_gateway_v2.py`'s `compute_canonical_itr1`/`compute_canonical_itr4` — the
+  single dispatch point for the real production pipeline per this codebase's own architecture
+  (`generate_cbdt_json(draft)`) — each call `typed_input.model_copy(update={...})` to attach
+  `filing_profile`/`property_profile`/`bank_accounts`/`tax_return_preparer` before compute, but
+  neither update dict included `filing_date` or `due_date`.
+- `app/engine/calculators/itr1.py`/`itr4.py` both gate every interest/fee computation behind
+  `if filing_date and due_date:`. For ITR-1, `filing_date` was always `None` → the gate never
+  ran → `interest_234a`/`interest_234b`/`interest_234c`/`late_fee_234f`/`fees_234i` were **always
+  Decimal("0")**, for every ITR-1 return generated through `generate_cbdt_json`, regardless of
+  whether the taxpayer filed on time or years late. For ITR-4, `filing_date` was always the
+  taxpayer's date of birth (decades before any due date) → the gate ran, saw a "filing date"
+  long before the due date → same result, always zero.
+- Confirmed empirically, not just by reading code: a test draft filed under Section 139(4)
+  (belated) on 2027-01-15 — 5.5 months after the AY 2026-27 due date, ₹15L salary, zero TDS —
+  generated an official JSON showing `"IntrstPayUs234A": 0, "IntrstPayUs234B": 0,
+  "IntrstPayUs234C": 0, "LateFilingFee234F": 0, "TotalIntrstPay": 0` before the fix.
+
+**Practical impact**: every ITR-1/ITR-4 JSON this platform has ever generated through the real
+production `generate_cbdt_json` pipeline understated the taxpayer's actual statutory liability
+by the full amount of interest and late fees owed — for anyone who filed late, paid tax late, or
+underpaid advance tax. This is not a display bug; it is the exact number that gets uploaded to
+the ITD portal as `TotalTaxPlusIntrstPay`.
+
+### 24.2 The fix
+
+`draft.verification.date` — the value the return already declares itself filed on (the same one
+`_reject_section_after_due_date` judges the filing section against, and that becomes the CBDT
+`Verification.Date`) — is the correct source for `filing_date`. `due_date` is
+`get_due_date(form, assessment_year)` (already implemented, correctly form-aware: 31 July for
+ITR-1, 31 August for ITR-4). Both `compute_canonical_itr1` and `compute_canonical_itr4` now
+include `"filing_date"`/`"due_date"` in their `model_copy(update={...})` calls. The ITR-4
+mapper's date-of-birth placeholder and stale comment are removed — `filing_date`/`due_date` are
+left `None` there now, exactly matching ITR-1's mapper, since the gateway is the correct single
+place to set them (a schedule/compute-input field populated once, not independently guessed by
+each per-form mapper).
+
+### 24.3 Two more bugs this fix immediately exposed, both fixed in the same pass
+
+Wiring a real `filing_date` through for the first time made two previously-dormant code paths
+reachable — the same "fixing a root cause exposes a second, previously-unreachable defect"
+pattern this document has hit repeatedly (§14.5, §15.4):
+
+- **`ITR1-R190` was coded far too broadly.** The official rule (PDF rule 190: *"Option to
+  withdraw from New Tax Regime is not available after due date of filing of return as mentioned
+  u/s 139(1)"*) only blocks selecting the **old** regime after the due date — the exact same
+  restriction `ITR1-R151` already enforces. As coded, R190 fired for **any** regime (including a
+  perfectly valid belated New Regime filing) whenever `filing_section != "139(1)"` and the
+  return was late, because it was never gated on `is_old` the way R151 is. This is a pure
+  implementation bug — the condition literally didn't match its own rule text — that had zero
+  observable effect until `filing_date`/`due_date` became real, since `if inp.filing_date and
+  inp.due_date:` was always `False` before. Fixed: gated on `is_old`, mirroring R151.
+- **`compute_234f` still implemented the pre-Finance-Act-2021 three-tier structure** (₹1,000 /
+  ₹5,000 / ₹10,000, with the ₹10,000 tier for filing after 31 December). That third tier was
+  **removed** by the Finance Act 2021 (effective AY 2021-22 onward, still current law for AY
+  2026-27) — the maximum late fee under Section 234F is ₹5,000, full stop, regardless of how
+  late within the belated-filing window the return is filed. Confirmed independently by the
+  official ITR-1 JSON schema itself: `LateFilingFee234F` has `"maximum": 5000` — the very first
+  real late-filing scenario run after the `filing_date` fix hit exactly this ceiling
+  (`compute_234f` returned 10000) and failed official schema validation outright, which is how
+  this was caught. Fixed: `compute_234f` now returns `1000`/`5000` only, with no post-31-December
+  branch. Two existing unit tests (`tests/test_interest_reconciliation.py`,
+  `tests/test_itr4_statutory_formula_known_answers.py`) had encoded the wrong ₹10,000 "known
+  answer" as their expected value — both corrected to match current law, with a comment
+  explaining why.
+
+### 24.4 Verification
+
+- Empirical before/after: the same late-filing test draft that showed all-zero interest/fees
+  before the fix now shows `IntrstPayUs234A: 5850, IntrstPayUs234B: 9750, IntrstPayUs234C: 4924,
+  LateFilingFee234F: 5000, TotalIntrstPay: 25524` — and passes official JSON schema validation.
+- 4 new permanent regression tests (2 per form) in `tests/test_filing_gateway_v2.py` /
+  `tests/test_filing_gateway_v2_itr4.py`: `filing_date`/`due_date` reach `typed_input` correctly
+  from `verification.date` for an on-time filing; a genuinely late-filed return produces
+  nonzero 234A interest and the correct ₹5,000 234F fee in the real generated JSON (not a unit
+  test of the formula in isolation — the full `generate_cbdt_json` path, the same one that
+  shipped the bug).
+- Full backend suite (same pre-existing-exclusion list as every prior run this session): 1574
+  passed, same 3 pre-existing unrelated failures (`test_tax_v2_compute.py`) as every prior run —
+  no new failures, confirming the fix (and the two bugs it exposed) didn't regress anything else
+  in either form's pipeline.
+
+### 24.5 Why this wasn't caught by §15.1's earlier "234A/B/C interest... computes correctly" claim
+
+§15.1 verified the interest **formulas** (`compute_234a`/`compute_234b`/`compute_234c` in
+`app/engine/common/`) directly, with `filing_date`/`due_date` supplied by hand as test
+arguments — and those formulas are, and remain, correct. What was missing is not a formula bug
+but a **wiring** bug: nothing between the real `ReturnDraft` a taxpayer fills in and those
+correct formulas ever supplied a real filing date. A direct unit test of `compute_234a` cannot
+catch a wiring gap upstream of it; only an end-to-end test through the real
+`generate_cbdt_json(draft)` entrypoint — which is what the new regression tests in §24.4 do —
+can. This is the same lesson §17's methodology section already drew from a different angle (why
+the schema-compliance check had to use the real pipeline, not a hand-built minimal input) —
+recorded here again because it is the reason this specific bug survived an otherwise thorough
+audit for as long as it did.

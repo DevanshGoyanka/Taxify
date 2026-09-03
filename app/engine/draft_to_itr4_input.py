@@ -416,7 +416,13 @@ def draft_to_itr4_input(
         advance_tax_q2=quarterly[1] or None,
         advance_tax_q3=quarterly[2] or None,
         advance_tax_q4=quarterly[3] or None,
-        filing_date=_to_date(draft.personal.dateOfBirth),  # placeholder; gateway sets filing_date
+        # filing_date/due_date are set by filing_gateway_v2.compute_canonical_itr4
+        # from draft.verification.date -- not set here (was previously a
+        # date-of-birth placeholder that the gateway never actually
+        # overwrote, silently zeroing every return's 234A/B/C interest and
+        # 234F/234-I late fees; see
+        # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md).
+        filing_date=None,
         due_date=None,
         house_property_count=max(1, len(draft.houseProperties)),
         assessee_pan=draft.personal.pan or None,

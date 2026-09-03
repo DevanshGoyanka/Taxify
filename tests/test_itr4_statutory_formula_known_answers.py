@@ -126,11 +126,19 @@ def test_interest_234c_known_answers_regular_and_presumptive() -> None:
 
 
 def test_late_and_revised_return_fees_known_answers() -> None:
-    """Verify 234F and 234-I AY 2026-27 fee thresholds and dates."""
+    """Verify 234F and 234-I AY 2026-27 fee thresholds and dates.
+
+    234F's pre-Finance-Act-2021 Rs 10,000 tier for filing after 31 December
+    was removed; the maximum is Rs 5,000 (Rs 1,000 if total income <=
+    Rs 5,00,000) regardless of how late within the belated-filing window
+    the return is filed -- the official ITR-1 JSON schema enforces this
+    directly (LateFilingFee234F max 5,000). See
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md.
+    """
     assert compute_234f(DUE_DATE, DUE_DATE, D("600000")) == D("0")
     assert compute_234f(date(2026, 10, 1), DUE_DATE, D("500000")) == D("1000")
     assert compute_234f(date(2026, 10, 1), DUE_DATE, D("500001")) == D("5000")
-    assert compute_234f(date(2027, 1, 1), DUE_DATE, D("500000")) == D("10000")
+    assert compute_234f(date(2027, 1, 1), DUE_DATE, D("500000")) == D("1000")
     assert compute_234i(date(2027, 1, 1), DUE_DATE, D("500000"), "139(5)") == D("1000")
     assert compute_234i(date(2027, 1, 1), DUE_DATE, D("500001"), "139(5)") == D("5000")
     assert compute_234i(date(2027, 1, 1), DUE_DATE, D("500001"), "139(1)") == D("0")

@@ -1927,17 +1927,27 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     "tax_regime",
                 ))
 
-    # Rule 190: Late filing regime block
-    if inp.filing_section:
-        if inp.filing_section != "139(1)":
-            if inp.filing_date and inp.due_date:
-                if inp.filing_date > inp.due_date:
-                    results.append(_make(
-                        "ITR1-R190", False,
-                        f"Option to change tax regime not available for belated/revised returns "
-                        f"(filing section: {inp.filing_section}, date: {inp.filing_date})",
-                        "filing_section",
-                    ))
+    # Rule 190: option to withdraw FROM the new regime (i.e. select Old Tax
+    # Regime) is not available after the 139(1) due date has passed -- the
+    # same underlying restriction R151 already enforces, gated the same way
+    # (is_old). As originally coded this fired for ANY regime whenever
+    # filing_section != "139(1)" and the return was filed late, incorrectly
+    # blocking a perfectly valid belated/revised NEW-regime filing --
+    # dormant until filing_date/due_date were actually wired through by the
+    # gateway (see
+    # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md), so this bug
+    # never fired in production before that fix.
+    if is_old and inp.filing_section and inp.filing_section != "139(1)":
+        if inp.filing_date and inp.due_date:
+            if inp.filing_date > inp.due_date:
+                results.append(_make(
+                    "ITR1-R190", False,
+                    f"Option to withdraw from the New Tax Regime (i.e. select Old Tax "
+                    f"Regime) is not available for belated/revised returns filed after "
+                    f"the due date (filing section: {inp.filing_section}, date: "
+                    f"{inp.filing_date})",
+                    "filing_section",
+                ))
 
     # ========================================================================
     # SECTION: Additional Active Validations (formerly informational)
