@@ -625,6 +625,18 @@ def _tax_computation_itr1(
     Only total income, balance tax payable, and refund due are rounded to the
     nearest ₹10 under sections 288A/288B.
     """
+    # Official schema: NetTaxLiability = "Balance Tax After Relief" (Part D's
+    # D7 = D5 - D6, i.e. gross tax+cess minus Section 89 relief, computed
+    # BEFORE interest/fees are added) -- distinct from the calculator's own
+    # ``net_tax_liability`` internal variable, which is the FINAL total
+    # (D5-D6+D7+D8+D9+D10+D10a, i.e. Part D's D11/"Total Tax, Fee and
+    # Interest"). Reusing the calculator's total for this field understated
+    # nothing but mislabeled it: any return with Section 89 relief and/or
+    # late-filing interest/fees emitted a "Balance Tax After Relief" figure
+    # that had interest/fees baked in, and a "TotTaxPlusIntrstPay" that
+    # omitted the Section 89 relief subtraction entirely -- both wrong
+    # whenever relief_89 > 0 (the two only coincided when relief_89 == 0).
+    balance_tax_after_relief = max(Decimal("0"), gross_tax_liability - relief_89)
     return {
         "TotalTaxPayable": _to_rupees(slab_tax),
         "Rebate87A": _to_rupees(rebate_87a),
@@ -632,7 +644,7 @@ def _tax_computation_itr1(
         "EducationCess": _to_rupees(cess),
         "GrossTaxLiability": _to_rupees(gross_tax_liability),
         "Section89": _to_rupees(relief_89),
-        "NetTaxLiability": _to_rupees(net_tax_liability),
+        "NetTaxLiability": _to_rupees(balance_tax_after_relief),
         "TotalIntrstPay": _to_rupees(total_interest + late_fee_234f + fees_234i),
         "IntrstPay": {
             "IntrstPayUs234A": _to_rupees(interest_234a),
@@ -641,9 +653,7 @@ def _tax_computation_itr1(
             "LateFilingFee234F": _to_rupees(late_fee_234f),
             "FeeFurnish234I": _to_rupees(fees_234i),
         },
-        "TotTaxPlusIntrstPay": _to_rupees(
-            gross_tax_liability + total_interest + late_fee_234f + fees_234i
-        ),
+        "TotTaxPlusIntrstPay": _to_rupees(net_tax_liability),
     }
 
 

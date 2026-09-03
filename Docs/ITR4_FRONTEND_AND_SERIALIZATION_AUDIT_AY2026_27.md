@@ -594,23 +594,172 @@ added). Full regression: `pytest tests/` — 1601 passed, 3 failed (pre-existing
 are about an unrelated `property.address` filing-profile gap, not this fix), 1 pre-existing
 collection error, matching the documented baseline.
 
-## 8. Summary of open items after this pass
+## 9. Official ITR-4 FORM flow verification — Part B/C/D traced field-by-field against the actual
+gazette form PDF, not just the JSON schema or the Validation Rules PDF (2026-09-03)
 
-1. **Fixed this pass, shared with ITR-1**: `is_government_employee` silently denied PSU
+Everything checked before this section validated against either the JSON *schema* (structural
+type/required/min-max/pattern/enum compliance, §6) or the CBDT *Validation Rules* PDF (business
+rules on already-computed values, §7) — neither actually confirms the calculator implements the
+official return FORM's own arithmetic correctly, since a value can be schema-valid and pass every
+input-consistency rule while still being the *wrong number* for what the form says that line
+should contain. This section closes that gap: `Reference Docs by CBDT & ITD/Official ITR
+FORMS/ITR-4-2026-Eng.pdf` (the actual gazetted SUGAM form, Parts A–D) was read in full and traced
+directly against `app/engine/calculators/itr4.py` and `app/engine/itd/itr4.py`, field by field,
+alongside the same exercise for ITR-1's form (`ITR-1-2026-Eng (1).pdf`) since the two forms share
+the identical Part D tax-computation shape and much of the underlying calculator code.
+
+### 9.1 Confirmed correct (no defect)
+
+- **Part D's exact tax-computation sequence and formula**, both forms: `D1(TotalTaxPayable) →
+  D2(Rebate87A) → D3(TaxAfterRebate=D1-D2) → D4(Cess=4%×D3) → D5(D3+D4) → D6(Relief89) →
+  D7(BalanceTaxAfterRelief=D5-D6) → D8/D9/D10(234A/B/C) → D11/D11a(234F/234-I) →
+  D12(D7+D8+D9+D10+D11+D11a) → D13-D16(AdvanceTax/SelfAssessment/TDS/TCS) →
+  D17(TotalTaxesPaid)` (ITR-4's own D-numbering; ITR-1's Part D is the same sequence under
+  slightly different D-numbers). Verified by reading `app/engine/calculators/itr1.py` and
+  `itr4.py`'s final-liability block line-by-line against this exact formula chain — confirmed
+  algebraically identical, not just similarly-shaped.
+- **Neither form's Part D shows a Surcharge line.** Confirmed this is correct, not an omission:
+  both forms cap total income at Rs 50 lakh, and `SURCHARGE_SLABS`' lowest threshold triggers only
+  on `income > 5000000` (strict), so surcharge is structurally always zero for any genuinely
+  eligible filer — `app/engine/common/surcharge.py:88` uses `if income > low`, confirmed by
+  reading the comparison directly, not assumed.
+- **The Rs 2,00,000 house-property loss set-off cap** (both forms' Part B note: "Maximum loss
+  from House Property that can be set-off is INR 2,00,000... To avail the benefit of carry
+  forward and set of loss, please use ITR-2/3/5") is correctly implemented as an *inter-head*
+  cap distinct from the Section 24(b) self-occupied interest cap already verified earlier —
+  `app/engine/schedules/house_property.py:66` `apply_inter_head_loss_limit()`, shared by both
+  calculators, floors old-regime HP loss set-off at -200000 and disallows it entirely (0) under
+  the new regime, matching the form's note and Section 115BAC exactly.
+- **Gross Total Income's exact formula**, both forms: `GTI = [Business/Presumptive] + Salary +
+  HouseProperty + OtherSources + LTCG112A(full pre-exemption amount)`, matching each form's own
+  stated `B4`/`B5` formula including LTCG 112A. Confirmed the FULL pre-exemption 112A gain (not
+  the post-₹1.25L-exemption taxable portion) is what flows into GTI, matching the form's own
+  note ("Total Income Field includes LTCG u/s 112A. However, no tax would be payable on the said
+  income" within the exemption) — `app/engine/calculators/itr4.py:365-375`'s own comment already
+  documented this distinction correctly before this pass; this section is the first time it was
+  cross-checked against the form's literal text rather than just the JSON schema's two separate
+  GTI fields.
+- **The pre-existing golden/known-answer test suites** (`test_itr1_golden_suite.py`,
+  `test_itr4_statutory_formula_known_answers.py`, 22 tests) all still pass — independent,
+  hand-computed confirmation of the same formulas from a different angle.
+
+### 9.2 Real bug found and fixed: `NetTaxLiability`/`TotTaxPlusIntrstPay` JSON fields swapped in
+substance — shared by ITR-1 and ITR-4, live in production (not gated by any dormant eligibility
+rule, unlike most findings in this document)
+
+The official JSON schema documents `TaxComputation.NetTaxLiability` with
+`"description": "Balance Tax After Relief"` — i.e. Part D's `D7 = D5 - D6` (gross tax+cess minus
+Section 89 relief, computed **before** interest/late fees are added). Both `app/engine/itd/
+itr1.py::_tax_computation_itr1` and `itd/itr4.py::_tax_computation_itr4` instead populated this
+field with the calculator's own `result.net_tax_liability` — which is a **different, larger**
+quantity: the calculator uses that name for the fully-final total (`gross_tax_liability -
+relief_89 + total_interest + late_fee_234f + fees_234i`, i.e. Part D's `D12`/"Total Tax, Fee and
+Interest"), a pure naming coincidence between the calculator's internal variable and the
+similarly-named-but-differently-scoped official JSON field. `TotTaxPlusIntrstPay` (undocumented
+in the schema, but positioned immediately after `NetTaxLiability`/`IntrstPay` and, by elimination
+and by its own name, the field that should carry `D12`) had the mirror-image bug: computed as
+`gross_tax_liability + total_interest + late_fee_234f + fees_234i`, **omitting the Section 89
+relief subtraction** entirely.
+
+**Confirmed empirically, not just by reading the schema description**: a late-filed (234A/234F
+non-zero) fixture produced `gross_tax_liability=257400`, `total_interest=64479`,
+`late_fee_234f=5000`, `relief_89=0`. Before the fix, the JSON's `"NetTaxLiability"` — labeled
+"Balance Tax After Relief" — reported **326879** (overstated by exactly `69479`, the
+interest+fee amount, even with zero Section 89 relief in play); after the fix it correctly
+reports **257400**. `TotTaxPlusIntrstPay` correctly moved to **326879** (the true final total,
+what `NetTaxLiability` had been wrongly holding). **This bug does not depend on Section 89 relief
+being nonzero to manifest** — it triggers for *any* return with nonzero 234A/234B/234C interest
+or 234F/234-I fees, which is common (any late-filed return, or any return with an advance-tax
+shortfall), unlike most of this document's other findings which require a specific rare input
+combination. It only happened to be masked in test fixtures that never separately asserted these
+two fields' relationship to each other.
+
+The final payable/refund amount (`D13`/`D14`/`D16`/`D17`-equivalent, `balance_payable`/
+`refund_due`) was **never wrong** — those are computed directly from the calculator's
+`net_tax_liability` via a separate code path untouched by this bug. The defect was confined to
+these two specific intermediate JSON fields misreporting what the form calls "Balance Tax After
+Relief" — a real compliance/accuracy defect in the submitted JSON's Part D breakdown, not an
+error in the amount the taxpayer actually owes or is refunded.
+
+**Fix**: both builders now compute `balance_tax_after_relief = max(0, gross_tax_liability -
+relief_89)` for `"NetTaxLiability"`, and reuse the already-correctly-computed
+`result.net_tax_liability` (passed in as a parameter either way) for `"TotTaxPlusIntrstPay"`
+instead of re-deriving it incorrectly. No calculator changes — this was purely a JSON-builder
+mapping defect.
+
+**Tests added**: `test_itr1_net_tax_liability_json_field_excludes_interest_and_fees` (
+`tests/test_filing_gateway_v2.py`) and `test_itr4_net_tax_liability_json_field_excludes_interest_and_fees`
+(`tests/test_filing_gateway_v2_itr4.py`), both against real late-filed `generate_cbdt_json`
+output (not a hand-built minimal input), asserting `NetTaxLiability == GrossTaxLiability -
+Section89` and `TotTaxPlusIntrstPay == NetTaxLiability + (sum of all IntrstPay fields)`, plus a
+strict-inequality assertion (`TotTaxPlusIntrstPay > NetTaxLiability`) specifically chosen because
+that inequality is exactly what the bug destroyed when relief_89 happened to be zero.
+
+### 9.3 Real (currently dormant) inconsistency found and fixed: ITR-4's `TotalTaxPayable` used
+only slab tax, dropping special-rate (112A) tax — ITR-1's equivalent call site was already correct
+
+Part D's `D1` ("Tax payable on total income") must be the full pre-rebate tax, matching the
+calculator's `result.tax_before_rebate = result.slab_tax + result.special_rate_tax` (confirmed at
+`app/engine/calculators/itr4.py:561`, and cross-checked against `calc_rules.py`'s own Rule 56
+consistency check, which independently asserts this same identity). `itd/itr1.py`'s call site
+correctly passes `slab_tax=result.tax_before_rebate` into the JSON builder's (confusingly-named)
+`slab_tax` parameter; `itd/itr4.py`'s equivalent call site passed `slab_tax=result.slab_tax` —
+the narrower value, silently dropping the special-rate 112A tax component whenever one exists.
+
+**Confirmed structurally dormant, not silently wrong today**: ITR-4's own eligibility gate
+(`app/engine/schedules/restricted_112a.py:367`, `AGGREGATE_LIMIT_EXCEEDED` —
+*"Aggregate gross Section 112A gain exceeds Rs 1,25,000; ITR-1/ITR-4 is not eligible"*) caps the
+gross 112A gain at exactly the Rs 1,25,000 annual exemption ceiling, so `special_rate_tax` is
+structurally always zero for any input that passes construction — `result.slab_tax ==
+result.tax_before_rebate` always holds for a valid `ITR4Input`. Fixed anyway, for consistency
+with ITR-1's already-correct call site and so this does not silently break if that eligibility
+gate is ever loosened or bypassed by a future non-Pydantic-validated call path. Full regression
+suite confirms zero behavioral change for any currently-valid input (as expected, given the
+dormancy).
+
+### 9.4 What this section does not cover
+
+This was a targeted trace of the highest-financial-impact path (Part D's tax computation, GTI,
+and the HP-loss cap) plus the two JSON-builder bugs it surfaced — not an exhaustive field-by-field
+audit of every cell on the form (Part B1's salary sub-breakdown, Part B2/B3's per-property and
+per-donation schedule rows, Part E's bank-account section, etc.), most of which is already
+covered by the §6 JSON-schema pass and the §7 CBDT-rules cross-reference from different angles.
+Given the two real bugs found here were both in code paths *neither* of those earlier passes was
+positioned to catch (schema validation only checks type/shape, and calc_rules.py's own
+consistency checks validate the *calculator's* internal state, never the ITD JSON builder's
+output against itself), a similar targeted trace of Part B1's salary breakdown and Part E's bank
+details would be a reasonable next increment if further FORM-flow verification is wanted.
+
+## 10. Summary of open items after this pass
+
+1. **Fixed this pass, shared with ITR-1, live in production**: `NetTaxLiability`/
+   `TotTaxPlusIntrstPay` JSON fields swapped in substance for any return with nonzero
+   interest/late fees — a real compliance defect in the submitted JSON, not just the underlying
+   payable/refund amount (§9.2).
+2. **Fixed this pass, currently dormant**: ITR-4's `TotalTaxPayable` JSON field dropped
+   special-rate (112A) tax; structurally never wrong today since the 112A eligibility gate caps
+   gross gain at the exemption ceiling, but fixed for consistency with ITR-1 (§9.3).
+3. **Fixed this pass, shared with ITR-1**: `is_government_employee` silently denied PSU
    employees their Section 16(ii) entertainment-allowance deduction — a calculator-level bug,
    not just a validator false positive (§7.4).
-2. **Done this pass, zero genuine gaps found**: the official CBDT ITR-4 Validation Rules
+4. **Done this pass, zero genuine gaps found**: the official CBDT ITR-4 Validation Rules
    cross-reference, all 424 rules (§7.1–7.2).
-3. **Done this pass**: the 98 duplicate-ID audit — one real bug found and fixed (§7.4); all
+5. **Done this pass**: the 98 duplicate-ID audit — one real bug found and fixed (§7.4); all
    other 97 duplicate IDs subsequently cleaned up to be unique via conservative rename-only
    edits (§7.3.1) — 76 of `input_rules.py`'s renamed to `-2`/`-3` suffixes, `calc_rules.py`'s
    61 IDs moved to their own `ITR4-C###` namespace. Zero remaining duplicate IDs.
-4. **Not fixed, scoped, lower severity**: Section 44AD has no UI path to declare income above
+6. **Done this pass**: Part D tax-computation sequence, GTI formula, and the Rs 2,00,000 HP-loss
+   set-off cap traced directly against the official gazette FORM PDF (not just the schema or the
+   Validation Rules PDF) and confirmed correct for both forms (§9.1).
+7. **Not fixed, scoped, lower severity**: Section 44AD has no UI path to declare income above
    the statutory 6%/8% floor, unlike 44ADA's equivalent (already-editable) field (§4).
-5. **Not fixed, deliberately out of scope**: ITR-2/ITR-3 remain untouched, matching the
+8. **Not fixed, deliberately out of scope**: ITR-2/ITR-3 remain untouched, matching the
    established ITR-1-then-ITR-4-then-ITR-2-then-ITR-3 sequencing.
-6. **Recorded, not chased**: ~104 required schema paths not exercised by any of the four §6
-   drafts — no known defect, just unverified.
-7. **Closed earlier this pass**: the critical `filing_date` bug (§2), all three originally-carried-over
-   items (§3), the Schedule BP frontend adapter review (§4, one real gap found and flagged, not
-   fixed), the 18-site `nature_of_employment` bug (§5), and JSON schema compliance (§6).
+9. **Recorded, not chased**: ~104 required schema paths not exercised by any of the four §6
+   drafts — no known defect, just unverified. Part B1's salary sub-breakdown and Part E's bank
+   details were not traced against the FORM PDF this pass either (§9.4) — a reasonable next
+   increment.
+10. **Closed earlier this pass**: the critical `filing_date` bug (§2), all three
+    originally-carried-over items (§3), the Schedule BP frontend adapter review (§4, one real gap
+    found and flagged, not fixed), the 18-site `nature_of_employment` bug (§5), and JSON schema
+    compliance (§6).

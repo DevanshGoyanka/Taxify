@@ -194,6 +194,35 @@ def test_itr4_late_filing_computes_nonzero_interest_and_late_fee() -> None:
     assert intrst_pay["LateFilingFee234F"] == 5000
 
 
+def test_itr4_net_tax_liability_json_field_excludes_interest_and_fees() -> None:
+    """Same shared-builder bug as ITR-1's equivalent test: the official
+    schema documents TaxComputation.NetTaxLiability as "Balance Tax After
+    Relief" (Part D's D7 = D5-D6), computed BEFORE interest/234F/234-I. A
+    prior bug populated it with the calculator's internal final-total
+    ``net_tax_liability`` instead, inflating it by the full interest+fees
+    amount for any late-filed return; TotTaxPlusIntrstPay was wrong the
+    other way (omitted Section 89 relief in its own formula)."""
+    from app.engine.filing_gateway_v2 import generate_cbdt_json
+    draft = _filing_ready_itr4("44AD")
+    draft.verification.date = "2027-02-01"
+    draft.filing.filingSection = "139(4)"
+    draft.businesses[0].declaredIncome = Decimal("2500000")
+
+    official, summary = generate_cbdt_json(draft)
+    tc = official["ITR"]["ITR4"]["TaxComputation"]
+
+    assert tc["IntrstPay"]["IntrstPayUs234A"] > 0
+
+    total_intrst_fee = (
+        tc["IntrstPay"]["IntrstPayUs234A"] + tc["IntrstPay"]["IntrstPayUs234B"]
+        + tc["IntrstPay"]["IntrstPayUs234C"] + tc["IntrstPay"]["LateFilingFee234F"]
+        + tc["IntrstPay"]["FeeFurnish234I"]
+    )
+    assert tc["NetTaxLiability"] == tc["GrossTaxLiability"] - tc["Section89"]
+    assert tc["TotTaxPlusIntrstPay"] == tc["NetTaxLiability"] + total_intrst_fee
+    assert tc["TotTaxPlusIntrstPay"] > tc["NetTaxLiability"]
+
+
 def test_itr4_json_reuses_prepared_input_without_late_enrichment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -516,6 +516,19 @@ def _tax_computation_itr4(
     fees_234i: Decimal = Decimal("0"),
 ) -> dict[str, Any]:
     """ITR-4 TaxComputation — no TotalIntrstPay, Section89 not required."""
+    # Official schema: NetTaxLiability = "Balance Tax After Relief" (Part D's
+    # D7 = D5 - D6, i.e. gross tax+cess minus Section 89 relief, computed
+    # BEFORE interest/fees are added) -- distinct from the calculator's own
+    # ``net_tax_liability`` internal variable, which is the FINAL total
+    # (D5-D6+D8+D9+D10+D11+D11a, i.e. Part D's D12/"Total Tax, Fee and
+    # Interest"). Reusing the calculator's total for this field mislabeled
+    # it: any return with Section 89 relief and/or late-filing interest/fees
+    # emitted a "Balance Tax After Relief" figure that had interest/fees
+    # baked in, and a "TotTaxPlusIntrstPay" that omitted the Section 89
+    # relief subtraction entirely -- both wrong whenever relief_89 > 0 (the
+    # two only coincided when relief_89 == 0). Shared bug with ITR-1's
+    # equivalent builder, same fix pattern.
+    balance_tax_after_relief = max(Decimal("0"), gross_tax_liability - relief_89)
     return {
         "TotalTaxPayable": _to_rupees(slab_tax),
         "Rebate87A": _to_rupees(rebate_87a),
@@ -523,7 +536,7 @@ def _tax_computation_itr4(
         "EducationCess": _to_rupees(cess),
         "GrossTaxLiability": _to_rupees(gross_tax_liability),
         "Section89": _to_rupees(relief_89),
-        "NetTaxLiability": _to_rupees(net_tax_liability),
+        "NetTaxLiability": _to_rupees(balance_tax_after_relief),
         "IntrstPay": {
             "IntrstPayUs234A": _to_rupees(interest_234a),
             "IntrstPayUs234B": _to_rupees(interest_234b),
@@ -531,9 +544,7 @@ def _tax_computation_itr4(
             "LateFilingFee234F": _to_rupees(late_fee_234f),
             "FeeFurnish234I": _to_rupees(fees_234i),
         },
-        "TotTaxPlusIntrstPay": _to_rupees(
-            gross_tax_liability + total_interest + late_fee_234f + fees_234i
-        ),
+        "TotTaxPlusIntrstPay": _to_rupees(net_tax_liability),
     }
 
 
@@ -2024,7 +2035,17 @@ def build_itr4_json(
     )
 
     tax = _tax_computation_itr4(
-        slab_tax=result.slab_tax,
+        # "TotalTaxPayable" (Part D's D1, "Tax payable on total income") must
+        # be the FULL pre-rebate tax including special-rate (112A) tax, not
+        # just the slab portion -- result.tax_before_rebate = result.slab_tax
+        # + result.special_rate_tax, matching ITR-1's equivalent call site.
+        # Currently dormant (ITR-4's 112A eligibility gate caps gross gain at
+        # exactly the Rs 1,25,000 exemption threshold, so special_rate_tax is
+        # structurally always 0 for any input that passes it -- see
+        # app/engine/schedules/restricted_112a.py's AGGREGATE_LIMIT_EXCEEDED
+        # check), but fixed for consistency with ITR-1 and to not silently
+        # break if that gate is ever loosened.
+        slab_tax=result.tax_before_rebate,
         rebate_87a=result.rebate_87a,
         tax_after_rebate=result.tax_after_rebate,
         surcharge=result.surcharge,

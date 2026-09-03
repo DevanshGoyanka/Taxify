@@ -2013,6 +2013,12 @@ phase doesn't have to re-discover it, matching how the analogous ITR-4 TDS bug w
    entertainment-allowance deduction in the actual tax computation, not just the validator.
    Found during ITR-4's CBDT rules cross-reference and duplicate-ID audit; affected ITR-1 via
    shared calculator code (`app/engine/schedules/salary.py`). See §25 for the full write-up.
+6. **Correction, superseded by §26**: a third, independent live defect (fixed) — the
+   `NetTaxLiability`/`TotTaxPlusIntrstPay` ITD JSON fields misreported Part D's "Balance Tax
+   After Relief" vs. the final total, for any return with nonzero late-filing interest or fees
+   (far more common than a Section-89-relief edge case). Found during ITR-4's official FORM-flow
+   verification against the gazette PDF; affected ITR-1's identical builder pattern. See §26 for
+   the full write-up.
 
 ## 24. CRITICAL: `filing_date` never reached the real compute pipeline — 234A/B/C interest and
 234F/234-I late fees were silently zero for every ITR-1 and ITR-4 return (2026-09-03)
@@ -2173,3 +2179,53 @@ passed, 3 pre-existing unrelated failures (`test_tax_v2_compute.py`, confirmed v
 to fail identically before this change), 1 pre-existing collection error — no regressions. Full
 detail, including the exact code paths and the official-rule citation, is in
 `ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §7.4.
+
+## 26. Real bug found and fixed: `NetTaxLiability`/`TotTaxPlusIntrstPay` JSON fields swapped in
+substance — found during ITR-4's official FORM-flow verification, live in production for ITR-1
+too (2026-09-03)
+
+**Found while directly tracing the official ITR-4 gazette form PDF's Part D against the JSON
+builder** — a check neither §17's JSON-schema pass nor §16's CBDT-rules cross-reference was
+positioned to catch, since schema validation only checks type/shape (both fields are valid
+integers either way) and the rules PDF's checks validate the *calculator's* internal
+consistency, never the ITD JSON builder's field-to-field mapping against itself. Confirmed to
+affect ITR-1 identically — `app/engine/itd/itr1.py::_tax_computation_itr1` has the exact same
+bug pattern as ITR-4's builder, both sharing the same root confusion.
+
+**The bug**: the official JSON schema documents `ITR1_TaxComputation.NetTaxLiability` as
+`"description": "Balance Tax After Relief"` — Part D's `D7 = D5 - D6` (gross tax+cess minus
+Section 89 relief, computed *before* interest/late fees are added). The builder instead
+populated this field with the calculator's own `result.net_tax_liability`, which the calculator
+uses as the name for a *different, larger* quantity: the fully-final total (`D11` on ITR-1's own
+Part D, "Total Tax, Fee and Interest" = gross tax+cess - relief_89 + all interest + all fees) —
+a pure naming coincidence between the calculator's internal variable and the
+similarly-named-but-narrower-scoped official JSON field. The undocumented
+`TotTaxPlusIntrstPay` field (which, by its name and position, should carry that final total) had
+the mirror-image bug: computed as `gross_tax_liability + total_interest + late_fee_234f +
+fees_234i`, omitting the Section 89 relief subtraction entirely.
+
+**Confirmed empirically**: a late-filed fixture (`gross_tax_liability=257400`,
+`total_interest=64479`, `late_fee_234f=5000`, `relief_89=0`) showed the JSON's
+`"NetTaxLiability"` — labeled "Balance Tax After Relief" — reporting **326879** before the fix
+(overstated by exactly the interest+fee amount, 69479, even with zero Section 89 relief in
+play); after the fix it correctly reports **257400**, with `TotTaxPlusIntrstPay` correctly
+carrying the true final total (326879) instead. **This does not require Section 89 relief to be
+nonzero to manifest** — it triggers for any return with nonzero 234A/234B/234C interest or
+234F/234-I fees, i.e. any late-filed return or any return with an advance-tax shortfall, far
+more common than most findings in this document. The final payable/refund amount was never
+wrong — that comes from a separate code path unaffected by this bug; the defect was confined to
+these two intermediate Part D JSON fields misreporting their documented meaning, a real
+compliance/accuracy defect in the submitted JSON itself.
+
+**Fix**: `_tax_computation_itr1` now computes `balance_tax_after_relief = max(0,
+gross_tax_liability - relief_89)` for `"NetTaxLiability"`, and reuses the
+already-correctly-computed `net_tax_liability` parameter for `"TotTaxPlusIntrstPay"` instead of
+re-deriving it incorrectly. No calculator changes.
+
+**Verification**: `test_itr1_net_tax_liability_json_field_excludes_interest_and_fees`
+(`tests/test_filing_gateway_v2.py`) against real late-filed `generate_cbdt_json` output, asserting
+`NetTaxLiability == GrossTaxLiability - Section89`, `TotTaxPlusIntrstPay == NetTaxLiability +
+TotalIntrstPay`, and `TotTaxPlusIntrstPay > NetTaxLiability` (the inequality the bug destroyed).
+Full backend suite: 1603 passed, same 3 pre-existing unrelated failures, no regressions. Full
+detail, including the ITR-4-side fix and the (currently-dormant) related `TotalTaxPayable`
+finding, is in `ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §9.2–9.3.

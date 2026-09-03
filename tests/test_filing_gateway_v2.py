@@ -169,6 +169,45 @@ def test_itr1_late_filing_computes_nonzero_interest_and_late_fee() -> None:
     assert intrst_pay["LateFilingFee234F"] == 5000
 
 
+def test_itr1_net_tax_liability_json_field_excludes_interest_and_fees() -> None:
+    """The official schema documents ITR1_TaxComputation.NetTaxLiability as
+    "Balance Tax After Relief" -- Part D's D7 = D5-D6 (gross tax+cess minus
+    Section 89 relief), computed BEFORE interest/234F/234-I are added. A
+    prior bug reused the calculator's internal ``net_tax_liability`` (which
+    is the FINAL total, D5-D6+D8+D9+D10+D11+D11a) for this field instead,
+    silently inflating "Balance Tax After Relief" by the full interest+fees
+    amount for any late-filed or interest-bearing return. TotTaxPlusIntrstPay
+    (the field that should carry that final total) was correspondingly wrong
+    the other way, since its own formula omitted Section 89 relief."""
+    draft = _filing_ready_draft()
+    draft.verification.date = "2027-01-15"
+    draft.filing.filingSection = "139(4)"
+    draft.employers = [Employer(
+        id="e1", basic=Decimal("1500000"), tdsDeducted=Decimal("0"),
+    )]
+
+    official, summary = gateway.generate_cbdt_json(draft)
+    tc = official["ITR"]["ITR1"]["ITR1_TaxComputation"]
+
+    assert tc["IntrstPay"]["IntrstPayUs234A"] > 0
+    assert tc["TotalIntrstPay"] > 0
+
+    # NetTaxLiability must equal GrossTaxLiability - Section89, NOT include
+    # any interest/fees.
+    assert tc["NetTaxLiability"] == tc["GrossTaxLiability"] - tc["Section89"]
+
+    # TotTaxPlusIntrstPay must be the true final total: NetTaxLiability plus
+    # everything in IntrstPay (234A/B/C + 234F + 234-I).
+    assert tc["TotTaxPlusIntrstPay"] == tc["NetTaxLiability"] + tc["TotalIntrstPay"]
+
+    # And it must be strictly greater than NetTaxLiability, since real
+    # interest/fees were incurred -- the two fields must NOT be equal here
+    # (that equality is exactly what the bug produced when relief_89 == 0,
+    # since it made both fields collapse to gross_tax_liability + interest
+    # + fees, masking the mislabeling).
+    assert tc["TotTaxPlusIntrstPay"] > tc["NetTaxLiability"]
+
+
 def test_itr1_emits_exact_refund_verification_and_creation_metadata() -> None:
     """Filing identity, bank data, and system metadata reach exact JSON paths."""
     draft = _filing_ready_draft()
