@@ -254,11 +254,19 @@ def _map_salary(
     # was therefore always False — silently disallowing the Section 16(ii)
     # entertainment-allowance deduction and forcing the lower 10% (rather
     # than 14%) Section 80CCD(2) NPS cap for every actual government
-    # employee. "Government employee" for both of those sections means
-    # specifically Central/State Government (CGOV/SGOV) per this codebase's
-    # own definition in section_80ccd2.py -- PSU and the pensioner codes
-    # (PE/PESG/PEPS/PEO) do not qualify.
-    is_govt = any(e.natureOfEmployment in {"CGOV", "SGOV"} for e in employers)
+    # employee.
+    #
+    # Two distinct statutory "government employee" definitions exist here and
+    # must not be collapsed into one flag (confirmed against the official
+    # CBDT ITR-4 Validation Rules, rules 67/68, and Section 80CCD(2)):
+    #   - is_govt_or_psu (CGOV/SGOV/PSU): Section 16(ii) entertainment
+    #     allowance eligibility. PSU employees DO qualify for this one.
+    #   - is_cg_sg (CGOV/SGOV only): Section 10(10)/10(10A)/10(10AA) full
+    #     exemption (gratuity/commuted pension/leave encashment) and Section
+    #     80CCD(2)'s 14%-vs-10% cap. PSU and the pensioner codes
+    #     (PE/PESG/PEPS/PEO) do NOT qualify for either of these.
+    is_govt_or_psu = any(e.natureOfEmployment in {"CGOV", "SGOV", "PSU"} for e in employers)
+    is_cg_sg = any(e.natureOfEmployment in {"CGOV", "SGOV"} for e in employers)
 
     # Retirement/severance payouts (10(10), 10(10A), 10(10AA), 10(10B), 10(10C)).
     gratuity_received = sum((e.gratuity for e in employers), Decimal("0"))
@@ -344,7 +352,8 @@ def _map_salary(
         standard_deduction_claimed=standard_deduction_claimed,
         professional_tax_paid=prof_tax,
         entertainment_allowance=ent_allowance,
-        is_government_employee=is_govt,
+        is_government_employee=is_govt_or_psu,
+        is_cg_sg_employee=is_cg_sg,
         gratuity_received=gratuity_received,
         commuted_pension_received=commuted_pension_received,
         leave_encashment_received=leave_encashment_received,

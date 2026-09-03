@@ -226,7 +226,19 @@ class SalaryIncome(BaseModel):
     )
     is_government_employee: bool = Field(
         default=False,
-        description="True if the employee is a Government employee (Central/State/PSU). Required for entertainment allowance deduction u/s 16(ii).",
+        description="True if the employee is a Government employee (Central/State/PSU). Required for entertainment allowance deduction u/s 16(ii) — this definition is deliberately broader than is_cg_sg_employee below.",
+    )
+    is_cg_sg_employee: bool = Field(
+        default=False,
+        description=(
+            "True only if the employer is specifically Central or State Government "
+            "(narrower than is_government_employee, which also includes PSU). "
+            "Section 10(10)/10(10A)/10(10AA) full-exemption eligibility (gratuity, "
+            "commuted pension, leave encashment) and Section 80CCD(2)'s 14%-vs-10% "
+            "salary cap are both CG/SG-only by statute; PSU employees do not qualify "
+            "for either, unlike the broader Section 16(ii) entertainment-allowance "
+            "eligibility above."
+        ),
     )
     gratuity_received: Decimal = Field(default=Decimal("0"), ge=0)
     commuted_pension_received: Decimal = Field(default=Decimal("0"), ge=0)

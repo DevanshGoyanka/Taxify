@@ -486,7 +486,13 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         lta_exempt_amount=lta_exempt,
         professional_tax_paid=prof_tax,
         entertainment_allowance=ent_allowance,
+        # Legacy flat payload only carries one isGovernmentEmployee boolean —
+        # no CGOV/SGOV-vs-PSU distinction is available here, so both the
+        # broad (entertainment allowance) and narrow (gratuity/leave
+        # encashment/commuted pension/80CCD(2)) flags use the same value,
+        # preserving this endpoint's pre-existing behavior unchanged.
         is_government_employee=is_govt,
+        is_cg_sg_employee=is_govt,
     )
     
     # 2. Map every canonical housePropertyEntries row. The CBDT AY 2026-27

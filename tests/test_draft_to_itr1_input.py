@@ -588,10 +588,10 @@ def test_perquisites_not_double_counted_in_gross_salary() -> None:
 
 
 def test_government_employee_derived_from_nature_of_employment() -> None:
-    """is_government_employee must be derived from natureOfEmployment
-    (CGOV/SGOV specifically) -- the separate employer.isGovernmentEmployee
-    scalar has no live frontend control anywhere in the product and was
-    always False."""
+    """is_government_employee (CGOV/SGOV/PSU) and is_cg_sg_employee
+    (CGOV/SGOV only) must both be derived from natureOfEmployment -- the
+    separate employer.isGovernmentEmployee scalar has no live frontend
+    control anywhere in the product and was always False."""
     from app.schemas.return_draft import Employer as EmployerT
     draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
     draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
@@ -601,13 +601,16 @@ def test_government_employee_derived_from_nature_of_employment() -> None:
     )]
     itr1_input, _ = draft_to_itr1_input(draft)
     assert itr1_input.salary_income.is_government_employee is True
+    assert itr1_input.salary_income.is_cg_sg_employee is True
 
 
-def test_psu_employee_is_not_government_employee_for_16ii_or_80ccd2() -> None:
-    """PSU and the pensioner nature-of-employment codes do not qualify as
-    'Government employee' for Section 16(ii) / Section 80CCD(2) purposes --
-    matches this codebase's own Central/State-only definition in
-    section_80ccd2.py."""
+def test_psu_employee_qualifies_for_16ii_but_not_80ccd2_or_retirement_benefits() -> None:
+    """PSU is a genuine split case, confirmed against the official CBDT
+    ITR-4 Validation Rules (rules 67/68): PSU employees DO qualify as
+    'Government employee' for Section 16(ii) entertainment allowance
+    (is_government_employee), but do NOT qualify for Section 80CCD(2)'s
+    14% cap or the full Section 10(10)/10(10A)/10(10AA) retirement-benefit
+    exemptions (is_cg_sg_employee), which are Central/State-only."""
     from app.schemas.return_draft import Employer as EmployerT
     draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
     draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
@@ -616,7 +619,33 @@ def test_psu_employee_is_not_government_employee_for_16ii_or_80ccd2() -> None:
         natureOfEmployment="PSU",
     )]
     itr1_input, _ = draft_to_itr1_input(draft)
-    assert itr1_input.salary_income.is_government_employee is False
+    assert itr1_input.salary_income.is_government_employee is True
+    assert itr1_input.salary_income.is_cg_sg_employee is False
+
+
+def test_psu_employee_end_to_end_16ii_allowed_80ccd2_capped_at_10pct() -> None:
+    """Full mapper-to-calculator path for a PSU employee: entertainment
+    allowance is granted (was previously silently denied -- the mapper's
+    is_government_employee only recognized CGOV/SGOV), and 80CCD(2) is
+    capped at 10% of salary, not the CG/SG-only 14%."""
+    from app.schemas.return_draft import Employer as EmployerT
+
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Some PSU", basic=Decimal("500000"),
+        natureOfEmployment="PSU", entertainmentAllowance=Decimal("7000"),
+    )]
+    draft.deductions.chapterVIA.section80CCDEmployer = Decimal("100000")
+    itr1_input, _ = draft_to_itr1_input(draft)
+    res = compute_itr1(itr1_input)
+
+    ccd2 = res.schedules["deductions"].section_details["80CCD(2)"]
+    assert ccd2.allowed_deduction == Decimal("50000")  # 10% of 500000, not 14%
+
+    # Entertainment allowance capped at min(5000, 1/5 * (500000-7000)) = 5000,
+    # deducted from salary income (was 0 before this fix for PSU employees).
+    assert res.salary_income == Decimal("500000") - Decimal("50000") - Decimal("5000")
 
 
 def test_mapper_preserves_section_24b_loan_rows() -> None:

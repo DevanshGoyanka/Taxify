@@ -369,6 +369,35 @@ def test_entertainment_allowance_govt_employee():
     # Salary = 200k - 50k - 5k = 145k
     assert res.salary_income == Decimal("145000")
 
+
+def test_entertainment_allowance_psu_employee_gets_deduction():
+    """PSU employees qualify for the Section 16(ii) entertainment allowance
+    deduction (official CBDT ITR-4 Validation Rules, rules 67/68: "For
+    Central, State Govt, & PSU employees...") even though they do NOT
+    qualify for the Section 80CCD(2) 14% cap or full retirement-benefit
+    exemptions -- is_government_employee (this test) is the broader,
+    16(ii)-scoped flag; is_cg_sg_employee is the narrower one those other
+    sections use."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("200000"),
+            entertainment_allowance=Decimal("7000"),
+            is_government_employee=True,
+            is_cg_sg_employee=False,
+        ),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    res = compute_itr1(itr_input)
+    # Salary = 200k - 50k (std ded) - 5k (entertainment, capped) = 145k
+    assert res.salary_income == Decimal("145000")
+
 def test_80ccd1b_limit():
     """80CCD1B claimed = ₹70,000 (exceeds ₹50,000 limit). Expected: Only ₹50,000 allowed."""
     itr_input = ITR1Input(

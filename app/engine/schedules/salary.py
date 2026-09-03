@@ -189,7 +189,15 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
     if not input_data:
         return SalaryResult()
 
+    # Two distinct "government employee" definitions (see SalaryIncome's
+    # is_government_employee vs is_cg_sg_employee docstrings): the broader
+    # CGOV/SGOV/PSU one gates Section 16(ii) entertainment allowance below;
+    # the narrower CGOV/SGOV-only one gates the Section 10(10)/10(10A)/
+    # 10(10AA) full-exemption retirement benefits here — PSU employees get
+    # the capped, non-government exemption formula for those, not the full
+    # exemption.
     is_govt = getattr(input_data, "is_government_employee", False)
+    is_cg_sg = getattr(input_data, "is_cg_sg_employee", False)
     # Retirement/severance receipts (gratuity, leave encashment, commuted
     # pension, VRS, retrenchment compensation) are received in addition to
     # regular Section 17(1) salary and are not part of it — the *received*
@@ -209,16 +217,16 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
     hra_exempt = input_data.hra_exempt_amount
     lta_exempt = input_data.lta_exempt_amount
     gratuity_exempt = _exempt_gratuity(
-        input_data.gratuity_received, is_govt,
+        input_data.gratuity_received, is_cg_sg,
         input_data.average_monthly_salary, input_data.years_of_service,
     )
     leave_encashment_exempt = _exempt_leave_encashment(
-        input_data.leave_encashment_received, is_govt,
+        input_data.leave_encashment_received, is_cg_sg,
         input_data.average_monthly_salary, input_data.years_of_service,
         input_data.unavailed_leave_days,
     )
     commuted_pension_exempt = _exempt_commutted_pension(
-        input_data.commuted_pension_received, is_govt,
+        input_data.commuted_pension_received, is_cg_sg,
         input_data.is_gratuity_also_received,
     )
     vrs_exempt = _exempt_vrs(input_data.vrs_compensation)

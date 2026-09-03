@@ -2008,6 +2008,11 @@ phase doesn't have to re-discover it, matching how the analogous ITR-4 TDS bug w
    ITR-4 audit, is the single most severe finding in this entire document and affected ITR-1
    too. Left here rather than silently edited, per this document's own practice of recording
    corrections instead of erasing a prior claim (see §17.1's identical treatment).
+5. **Correction, superseded by §25**: a second, independent live defect (fixed) — the
+   `is_government_employee` field silently denied PSU employees their Section 16(ii)
+   entertainment-allowance deduction in the actual tax computation, not just the validator.
+   Found during ITR-4's CBDT rules cross-reference and duplicate-ID audit; affected ITR-1 via
+   shared calculator code (`app/engine/schedules/salary.py`). See §25 for the full write-up.
 
 ## 24. CRITICAL: `filing_date` never reached the real compute pipeline — 234A/B/C interest and
 234F/234-I late fees were silently zero for every ITR-1 and ITR-4 return (2026-09-03)
@@ -2121,3 +2126,50 @@ can. This is the same lesson §17's methodology section already drew from a diff
 the schema-compliance check had to use the real pipeline, not a hand-built minimal input) —
 recorded here again because it is the reason this specific bug survived an otherwise thorough
 audit for as long as it did.
+
+## 25. `is_government_employee` silently denied PSU employees their Section 16(ii) entertainment-
+allowance deduction — found during ITR-4's CBDT rules cross-reference (2026-09-03)
+
+**Found while auditing ITR-4's duplicate rule IDs** (`ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`
+§7.3–7.4) — two implementations of the same entertainment-allowance eligibility check disagreed
+for PSU employees, and tracing the disagreement led back into `app/engine/schedules/salary.py`
+and `app/engine/draft_to_itr1_input.py`, both shared by ITR-1. This directly affects ITR-1
+despite this document's earlier "production ready" conclusion — recorded here in full because
+that conclusion needs the correction, not just a pointer to the other document.
+
+**The bug**: `SalaryIncome.is_government_employee`'s own docstring (`app/schemas/itr1.py`) says
+it means Central/State Government **or PSU**, and is required for the Section 16(ii)
+entertainment-allowance deduction. But the mapper that populates it
+(`draft_to_itr1_input.py`) computed it as `natureOfEmployment in {"CGOV", "SGOV"}` —
+**excluding PSU** — per a comment claiming PSU doesn't qualify, citing `section_80ccd2.py`'s
+definition. That citation is correct for Section 80CCD(2)'s 14% cap and for the Section
+10(10)/10(10A)/10(10AA) retirement exemptions (gratuity/commuted pension/leave encashment,
+genuinely CG/SG-only by statute) but is **wrong specifically for Section 16(ii)**: the official
+CBDT ITR-4 Validation Rules PDF (page 8, rules 67–68) explicitly states entertainment allowance
+"will be allowed" to "Central, State Govt, & PSU employees" and disallowed only for "employees
+other than Central, State Government, and PSU." One boolean field was serving two statutory
+definitions that genuinely differ, and the mapper satisfied only the narrower one.
+
+**Impact — a calculator bug, not a validator false positive**: `app/engine/schedules/salary.py`'s
+`compute()` — the shared Schedule S module both ITR-1 and ITR-4 call — gates the actual
+entertainment-allowance deduction on this same flag. A PSU employee under the old regime with a
+genuine entertainment allowance had the deduction **silently zeroed in the real tax
+computation**, overstating taxable income and tax payable, for both forms.
+
+**Fix**: `SalaryIncome` gained a second field, `is_cg_sg_employee` (CG/SG only), used for the
+80CCD(2) cap and the three retirement exemptions; `is_government_employee` keeps its documented
+CG/SG/PSU meaning and is now used only for entertainment allowance. `draft_to_itr1_input.py`
+computes both correctly from `natureOfEmployment`. `app/engine/calculators/itr1.py`'s
+`compute_deductions(is_government_employee=...)` call (which feeds the 80CCD(2) cap) now passes
+the narrow `is_cg_sg_employee` flag. The legacy flat-dict pipeline (`app/routers/tax.py`, out of
+the v2 canonical scope) has no CGOV/SGOV-vs-PSU distinction in its payload, so both flags are
+set from its single existing boolean there — behavior-preserving.
+
+**Verification**: `tests/test_draft_to_itr1_input.py` and `tests/test_itr1_calculator.py` gained
+tests asserting the corrected CG/SG-vs-PSU split, including a full mapper-to-calculator
+integration test proving a PSU employee now gets the entertainment-allowance deduction (capped
+correctly) while their 80CCD(2) claim is capped at 10%, not 14%. Full backend suite: 1601
+passed, 3 pre-existing unrelated failures (`test_tax_v2_compute.py`, confirmed via `git stash`
+to fail identically before this change), 1 pre-existing collection error — no regressions. Full
+detail, including the exact code paths and the official-rule citation, is in
+`ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §7.4.

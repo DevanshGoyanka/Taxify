@@ -404,40 +404,182 @@ detail blocks) — not a known defect, just unverified by this specific check. R
 rather than chased to 100%, matching the established practice; a fifth or sixth draft would
 close most of the remainder but was not built in this pass given the scope already covered.
 
-## 7. Not yet done — the official CBDT ITR-4 Validation Rules cross-reference
+## 7. Official CBDT ITR-4 Validation Rules cross-reference, and the duplicate-ID audit (2026-09-03)
 
-The ITR-1 audit's §16 (its single most labor-intensive section — transcribing all 349 official
-rules from the CBDT PDF by hand and cross-referencing each against the implementation) has
-**no ITR-4 equivalent yet**. `Reference Docs by CBDT & ITD/Official Validations/CBDT_e-Filing_ITR
-4_Validation Rules_AY 2026-27 (1).pdf` (652 KB — larger than ITR-1's 543 KB PDF) has not been
-read. Given `app/engine/validators/itr4/input_rules.py` cites rule numbers up into the `R400`s
-in its own comments (vs. ITR-1's ~339), this document likely catalogs materially more official
-rules than ITR-1's 349. This is the largest remaining piece of unfinished work in this audit —
-named explicitly here rather than silently left for "later," per this document's own established
-practice of recording scope honestly.
+### 7.1 Method
 
-A related, smaller finding from the sweep that led to §5: `app/engine/validators/itr4/
-input_rules.py` has **76 rule IDs invoked more than once** (a mechanical count, not a semantic
-one), of which this pass fully investigated and resolved 8 (`R073`, `R317`, `R181`/`R075`,
-`R161`, plus `R289`/`R295` from §3.1). The remaining ~68 duplicate IDs have **not** been
-individually checked — some are certainly legitimate (e.g. an old-regime-gated and a
-new-regime-gated version of the same rule number, correctly mutually exclusive), but given this
-pass found real, high-severity bugs in essentially every duplicate-ID group it *did* check, the
-remaining ones are a reasonable, concrete starting point for the next phase of this audit,
-alongside the CBDT rules cross-reference above.
+`Reference Docs by CBDT & ITD/Official Validations/CBDT_e-Filing_ITR 4_Validation Rules_AY
+2026-27 (1).pdf` was read in full (all 25 pages) and transcribed rule-by-rule into
+`app/engine/validators/itr4/official_rules_reference.py` — 411 Category A rules (the PDF's own
+numbering skips 400/401, jumping 399→402), 13 Category B rules, 2 Category D rules; 424 total.
+That file is committed (not a scratch artifact) specifically so this transcription never has to
+be redone from the PDF.
+
+Unlike ITR-1's manual line-by-line cross-reference (§16 there), ITR-4's 424-rule catalog was
+cross-referenced with a two-stage approach given the scale: (1) a mechanical token-matching
+script (`itr4_rule_diff.py`) extracted distinctive tokens (section references, monetary amounts)
+from each official rule's text and searched the two validator files for candidate matches,
+flagging any rule with zero matched tokens for manual investigation; (2) every flagged rule was
+then manually investigated using the same three-question method as ITR-1's audit and
+CLAUDE.md's stated discipline (is the field genuinely user-suppliable and calculator-consumed;
+does the schema/builder already structurally guarantee the invariant; is there an equivalent
+check elsewhere under a different rule ID or a single generic check covering many enumerated
+official rules at once).
+
+### 7.2 Result: zero confirmed gaps in the 424-rule catalog
+
+13 of 424 rules were flagged by the token scan (listed in `itr4_diff_output.txt`, not committed).
+All 13 were resolved as false negatives on manual investigation, not gaps:
+
+- **8 were already implemented** under terminology the token scanner didn't recognize (field
+  names like `commuted_pension_received`, `tds2_entries[].tds_claimed_this_year` rather than the
+  PDF's literal "10(10A)"/"Sl.6" wording) — rules 74, 113, 115, 116, 117, 121, 122, 131.
+- **2 collapse into a single generic check** rather than needing per-rule duplication: the
+  TDS2(ii) special-rate/non-resident section-code eligibility rules (B7/B9) are covered by the
+  same loop (`ITR4-R127`/`R127b`) that covers B6/B8, because the typed schema has one flat
+  `tds2_entries` list rather than the official form's separate (i)/(ii) sub-schedules — applying
+  the check once to the single list structurally covers both PDF-numbered variants. Similarly,
+  rule 82 (and the ~30 other "exempt-income dropdown selected more than once" rules scattered
+  across 84–94 and 367–390) is covered by one general duplicate-detection check
+  (`len(inp.exempt_income_dropdowns) != len(set(inp.exempt_income_dropdowns))`, line 1681)
+  rather than 30+ individual per-category checks.
+- **2 are structurally guaranteed by the ITD JSON builder**, not just informally likely: rule 65
+  (`DeductionUs16` = sum of its three 16(ia)/16(ii)/16(iii) components) traces to
+  `app/engine/schedules/salary.py:312`'s `deductions_u16=std_ded + ent_allowance + prof_tax` —
+  the single shared computation that also produces the three components individually, so
+  drift is impossible by construction, not merely checked. Rule 69 (total exempt allowances u/s
+  10 = sum of its components) is the same pattern in `app/engine/itd/itr4.py`'s
+  `total_allwnc_exmp = sum(row["SalOthAmount"] for row in allowance_rows)`.
+- **1 was a direct spot-check of the tax-audit eligibility gate** (rules 237/238: 44AD/44ADA
+  cash-receipt-ratio thresholds that force ITR-3 instead of ITR-4) — confirmed implemented at
+  `input_rules.py:456` and `:541`, unrelated to the token scanner's false negative on this one.
+
+Beyond the flagged 13, targeted spot-checks (not exhaustive line-by-line, given 424 rules) of
+the Firm/HUF eligibility-restriction cluster (rules 20, 23, 26–33, 43, 50, 163–166, 230–232,
+236, 303–305) confirmed broad, consistent coverage (`is_firm`/`is_huf` gates at input_rules.py
+lines 106–254, 3787–3799, 3904–3943, 4145+).
+
+**Net finding: no genuine gaps were found in the 424-rule official catalog.** This differs from
+ITR-1's audit, which found two genuine gaps (R068/R069 there) — plausibly because much of the
+ITR-4-specific ground (the 18-site `nature_of_employment` bug in §5, the R289/R295 fixes in
+§3.4) was already covered by this session's earlier ITR-4 phases before this cross-reference
+was run.
+
+### 7.3 Duplicate-ID audit: one real bug found, shared with ITR-1
+
+`app/engine/validators/itr4/input_rules.py` and `calc_rules.py` combined have 409 distinct
+`ITR4-R###`-style IDs, of which **98 are invoked more than once** (`itr4_dup_ids.py`, full
+per-occurrence dump in `itr4_dup_output.txt`, not committed). Triaging all 98 by category:
+
+- **The large majority (~70) are harmless.** Either (a) the two occurrences are unrelated checks
+  that happen to reuse the same rule number by coincidence — mostly collisions between
+  `input_rules.py`'s own numbering and `calc_rules.py`'s independent sequential numbering (e.g.
+  `ITR4-R105` is "transport allowance exceeds ₹38,400" in `input_rules.py` but "health & education
+  cess cross-check" in `calc_rules.py`) — which is a cosmetic ID-namespace collision with no
+  effect on which checks actually run, since both are separate code paths that both execute
+  regardless of the shared label; or (b) the two occurrences are genuinely the same check
+  implemented twice in `input_rules.py` (an artifact of the file having grown a "Group"-labeled
+  consolidation section later in the file, lines ~3300–4500, alongside the original
+  implementation earlier) that are semantically identical or complementary (e.g. `ITR4-R402`
+  and `ITR4-R407` correctly check the *inverse* directions of the same PRAN/80CCD(1)/80CCD(1B)
+  consistency rule) and therefore redundant but not wrong — flagging the same real defect twice
+  produces no false positive or false negative, just a duplicated message in the
+  `ValidationReport`.
+- **One duplicate-ID pair (`ITR4-R067`/`R068`) exposed a real, confirmed, financially material
+  bug** — not in the duplication itself, but in *why* the two occurrences disagreed. Documented
+  in full in §7.4, because the same bug is shared with ITR-1 (this is a calculator defect in
+  code both forms call, not an ITR-4-only validator issue).
+
+No further individual cleanup of the ~70 harmless duplicate IDs was done this pass — removing
+them is a pure readability improvement with no behavioral effect, lower priority than the
+confirmed-gap work above, and out of scope for "don't refactor beyond what the task requires"
+per this repo's stated conventions. They are catalogued in `itr4_dup_output.txt` if a future
+pass wants to consolidate the file's two "Group"-labeled sections.
+
+### 7.4 Real bug found: `is_government_employee` silently denied PSU employees their Section 16(ii) entertainment-allowance deduction — ITR-1 and ITR-4, calculator-level, not just validator
+
+**Symptom that led to the finding**: `ITR4-R067`/`R068` (entertainment allowance cap / govt-only
+eligibility) are each implemented twice in `input_rules.py`. The first occurrence (line 1300,
+pre-existing) gates on `sal.is_government_employee`; the second (line 3672, added during this
+session's earlier §5 nature_of_employment-bug sweep) gates on
+`nature_of_employment in {"CGOV","SGOV","PSU"}` directly. These two gates disagree for PSU
+employees.
+
+**Root cause**: `SalaryIncome.is_government_employee`'s own docstring
+(`app/schemas/itr1.py:227`, pre-existing) says: *"True if the employee is a Government employee
+(Central/State/PSU). Required for entertainment allowance deduction u/s 16(ii)."* — i.e. the
+field was designed to include PSU. But the mapper that populates it
+(`app/engine/draft_to_itr1_input.py`, shared by ITR-1 and ITR-4) computed
+`is_govt = natureOfEmployment in {"CGOV", "SGOV"}` — **excluding PSU**, per an explanatory
+comment there claiming PSU "does not qualify," citing `section_80ccd2.py`'s definition. That
+citation is correct for Section 80CCD(2) and for the Section 10(10)/10(10A)/10(10AA) retirement
+exemptions (gratuity, commuted pension, leave encashment — all genuinely CG/SG-only by statute),
+but is **wrong for Section 16(ii) entertainment allowance specifically**. Re-reading the official
+CBDT ITR-4 Validation Rules PDF directly (page 8, rules 67–68) confirms: *"If Old Tax Regime is
+selected, For Central, State Govt, & PSU employees the Entertainment allowance u/s 16(ii) will
+be allowed... No Entertainment allowance u/s 16(ii) will be allowed to employees other than
+Central, State Government, and PSU."* PSU is explicitly, officially included for this one
+section — the one boolean field was being asked to serve two statutory definitions that
+genuinely differ, and the mapper satisfied only the narrower one.
+
+**Impact — this was a calculator bug, not merely a validator false positive**:
+`app/engine/schedules/salary.py`'s `compute()` (shared by ITR-1 and ITR-4, since both call the
+same Schedule S module) gates the actual entertainment-allowance deduction on this same
+`is_government_employee` flag (line 268, `if is_govt and input_data.entertainment_allowance > 0`).
+A PSU employee under the old regime with a genuine entertainment allowance therefore had **the
+entire deduction silently zeroed in the actual tax computation** — not a validator warning, an
+overstatement of taxable income and tax payable for every PSU employee claiming this allowance,
+for both ITR-1 and ITR-4. (`ITR4-R068`'s first, buggy occurrence would also have blocked the
+claim at validation time with a false "not available to Government employees" error, even before
+computation.)
+
+**Fix**: split the overloaded boolean into two fields on `SalaryIncome`
+(`app/schemas/itr1.py`) — `is_government_employee` keeps its documented CG/SG/PSU meaning,
+used only for Section 16(ii) entertainment allowance; a new `is_cg_sg_employee` (CG/SG only)
+is used for Section 80CCD(2)'s 14% cap and the three retirement-benefit full exemptions.
+`draft_to_itr1_input.py` now computes both from `natureOfEmployment` correctly.
+`app/engine/schedules/salary.py` now uses `is_cg_sg_employee` for `_exempt_gratuity`/
+`_exempt_leave_encashment`/`_exempt_commutted_pension` and keeps the (now-correct)
+`is_government_employee` for the entertainment-allowance gate.
+`app/engine/calculators/itr1.py`'s call into `compute_deductions(is_government_employee=...)`
+(which feeds Section 80CCD(2)'s cap) now passes the narrow `is_cg_sg_employee` flag instead —
+ITR-4's own `compute_deductions` call never passed this parameter at all (it doesn't
+engine-compute the 80CCD(2) cap; it relies entirely on the validator's `ITR4-R047`/`R263`,
+which already correctly used `nature_of_employment` CG/SG matching, not this field), so ITR-4's
+80CCD(2) path was unaffected by either the bug or the fix. The legacy flat-dict pipeline
+(`app/routers/tax.py`, out of scope for the v2 canonical architecture but still live) has no
+CGOV/SGOV-vs-PSU distinction in its payload at all, so both flags are set from the same source
+boolean there — behavior-preserving, no regression.
+
+ITR-4's now-redundant duplicate `R067`/`R068` blocks (§7.3) are left in place rather than
+deleted — both are now correct, and consolidating them is a pure readability change out of
+scope for this fix.
+
+**Tests added**: `tests/test_draft_to_itr1_input.py` (`test_government_employee_derived_from_nature_of_employment`
+updated; `test_psu_employee_qualifies_for_16ii_but_not_80ccd2_or_retirement_benefits`,
+`test_psu_employee_end_to_end_16ii_allowed_80ccd2_capped_at_10pct` added),
+`tests/test_itr1_calculator.py` (`test_entertainment_allowance_psu_employee_gets_deduction`
+added). Full regression: `pytest tests/` — 1601 passed, 3 failed (pre-existing, confirmed via
+`git stash` to fail identically before this change — `test_tax_v2_compute.py`'s three failures
+are about an unrelated `property.address` filing-profile gap, not this fix), 1 pre-existing
+collection error, matching the documented baseline.
 
 ## 8. Summary of open items after this pass
 
-1. **Not yet done, largest remaining item**: the official CBDT ITR-4 Validation Rules
-   cross-reference (§7) — the PDF has not been read yet.
-2. **Not yet done**: the remaining ~68 mechanically-duplicate rule IDs in
-   `app/engine/validators/itr4/input_rules.py` have not been individually audited (§7).
-3. **Not fixed, scoped, lower severity**: Section 44AD has no UI path to declare income above
+1. **Fixed this pass, shared with ITR-1**: `is_government_employee` silently denied PSU
+   employees their Section 16(ii) entertainment-allowance deduction — a calculator-level bug,
+   not just a validator false positive (§7.4).
+2. **Done this pass, zero genuine gaps found**: the official CBDT ITR-4 Validation Rules
+   cross-reference, all 424 rules (§7.1–7.2).
+3. **Done this pass**: the 98 duplicate-ID audit — one real bug found and fixed (§7.4); the
+   remaining ~70 harmless duplicates catalogued but not individually cleaned up, a pure
+   readability item (§7.3).
+4. **Not fixed, scoped, lower severity**: Section 44AD has no UI path to declare income above
    the statutory 6%/8% floor, unlike 44ADA's equivalent (already-editable) field (§4).
-4. **Not fixed, deliberately out of scope**: ITR-2/ITR-3 remain untouched, matching the
+5. **Not fixed, deliberately out of scope**: ITR-2/ITR-3 remain untouched, matching the
    established ITR-1-then-ITR-4-then-ITR-2-then-ITR-3 sequencing.
-5. **Recorded, not chased**: ~104 required schema paths not exercised by any of the four §6
+6. **Recorded, not chased**: ~104 required schema paths not exercised by any of the four §6
    drafts — no known defect, just unverified.
-6. **Closed this pass**: the critical `filing_date` bug (§2), all three originally-carried-over
+7. **Closed earlier this pass**: the critical `filing_date` bug (§2), all three originally-carried-over
    items (§3), the Schedule BP frontend adapter review (§4, one real gap found and flagged, not
    fixed), the 18-site `nature_of_employment` bug (§5), and JSON schema compliance (§6).

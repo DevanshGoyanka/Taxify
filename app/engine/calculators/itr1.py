@@ -461,8 +461,11 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         schedule_80u=schedule_80u,
         schedule_80d=input_data.schedule_80d,
         salary=input_data.salary_income.gross_salary if input_data.salary_income else Decimal("0"),
+        # Section 80CCD(2)'s 14%-vs-10% cap is CG/SG-only (PSU gets 10%,
+        # unlike Section 16(ii) entertainment allowance) — use the narrow
+        # flag, not is_government_employee.
         is_government_employee=bool(
-            input_data.salary_income and input_data.salary_income.is_government_employee
+            input_data.salary_income and input_data.salary_income.is_cg_sg_employee
         ),
     )
     result.schedules["deductions"] = ded
