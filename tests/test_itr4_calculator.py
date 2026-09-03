@@ -24,6 +24,7 @@ from app.schemas.itr1 import (
     Chapter6ADeductions,
     CompactExemptIncomeEntry,
     HousePropertyIncome,
+    LoanDetail,
     PropertyType,
     SalaryIncome,
     TDS2Entry,
@@ -304,6 +305,88 @@ def test_itr4_co_owned_property_uses_owned_annual_value():
     assert hp.standard_deduction_30pct == Decimal("35964")
     assert hp.interest_on_loan == Decimal("20000")
     assert hp.income_chargeable == Decimal("63916")
+
+
+def test_itr4_uniform_allowance_exemption_reaches_10_14_i_json_bucket():
+    """The uniform-allowance actual-expenditure exemption (added to the
+    shared schedules/salary.py during the ITR-1 audit) must also reach
+    ITR-4's official JSON, since ITR-4's _allowance_rows is its own,
+    separate copy of the JSON-building logic and does not automatically
+    inherit a fix made only to ITR-1's copy. See
+    Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §3."""
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("0"), digital_turnover=Decimal("0"),
+            cash_turnover=Decimal("0"),
+        ),
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("800000"),
+            uniform_allowance_received=Decimal("15000"),
+            uniform_allowance_actual_expenditure=Decimal("11000"),
+        ),
+        filing_profile=_minimal_filing_profile(),
+        bank_accounts=[_minimal_bank_account()],
+    )
+    result = compute_itr4(itr_input)
+    assert result.salary_uniform_allowance_exempt == Decimal("11000")
+    document = build_itr4_json(result, itr_input)
+    allwnc_rows = document["ITR"]["ITR4"]["IncomeDeductions"]["AllwncExemptUs10"]["AllwncExemptUs10Dtls"]
+    row = next(r for r in allwnc_rows if r["SalNatureDesc"] == "10(14)(i)")
+    assert row["SalOthAmount"] == 11000
+
+
+def test_itr4_self_occupied_pre_1999_loan_capped_at_30000():
+    """A self-occupied loan sanctioned before 1 April 1999 caps interest at
+    Rs 30,000, not the usual Rs 2,00,000 -- previously not wired for ITR-4's
+    calculator (only ITR-1's), even though house_property.py::compute()
+    already supported it. See
+    Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §3.1."""
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("0"), digital_turnover=Decimal("0"),
+            cash_turnover=Decimal("0"),
+        ),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("50000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("400000"), sanction_date=date(1997, 3, 15),
+            interest_paid_self_occupied=Decimal("50000"),
+        )],
+    )
+    result = compute_itr4(itr_input)
+    assert result.schedules["hp"].income_chargeable == Decimal("-30000")
+
+
+def test_itr4_self_occupied_post_1999_loan_keeps_2l_cap():
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("0"), digital_turnover=Decimal("0"),
+            cash_turnover=Decimal("0"),
+        ),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("250000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("3000000"), sanction_date=date(2019, 6, 1),
+            interest_paid_self_occupied=Decimal("250000"),
+        )],
+    )
+    result = compute_itr4(itr_input)
+    assert result.schedules["hp"].income_chargeable == Decimal("-200000")
 
 def test_itr4_44ada_professional_new_regime():
     """Scenario 3: 44ADA presumptive professional, new regime, 87A rebate crossover (exact 12L)."""

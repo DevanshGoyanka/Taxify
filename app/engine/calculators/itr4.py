@@ -91,6 +91,7 @@ class ITR4Result:
     salary_hostel_exempt: Decimal = Decimal("0")
     salary_hra_exempt: Decimal = Decimal("0")
     salary_lta_exempt: Decimal = Decimal("0")
+    salary_uniform_allowance_exempt: Decimal = Decimal("0")
 
     # Tax payment detail (for ITD JSON output)
     advance_tax_paid: Decimal = Decimal("0")
@@ -349,12 +350,26 @@ def compute(input_data: ITR4Input) -> ITR4Result:
     result.salary_hostel_exempt = getattr(sal, 'hostel_exempt', Decimal("0"))
     result.salary_hra_exempt = getattr(sal, 'hra_exempt', Decimal("0"))
     result.salary_lta_exempt = getattr(sal, 'lta_exempt', Decimal("0"))
+    result.salary_uniform_allowance_exempt = getattr(sal, 'uniform_allowance_exempt', Decimal("0"))
 
     result.advance_tax_paid = input_data.advance_tax_paid
     result.self_assessment_tax_paid = input_data.self_assessment_tax_paid
     result.relief_89 = input_data.relief_89
 
     # ── 3. House Property ────────────────────────────────────────────────────
+    # ITR-4 computes income for only the FIRST house property row (no
+    # house_properties list on ITR4Input, unlike ITR-1's up-to-two --
+    # confirmed directly: draft_to_itr4_input.py's house_property_income is
+    # hp_inputs[0] and filing_gateway_v2.py's _itr4_property_profile also
+    # only ever reads normalize_property_details(...)[0]). Nothing in this
+    # pipeline actually rejects a draft with a second house property row,
+    # though, and _map_24b_loans (shared with ITR-1) tags each loan with its
+    # own property_sequence_no regardless -- so loan_details_24b_list could
+    # in principle carry a second property's loan under sequence_no 2. Only
+    # sequence_no 1's loans are relevant to the interest actually being
+    # computed here. See the identical pre-1999 self-occupied interest cap
+    # fix in app/engine/calculators/itr1.py and
+    # Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §3.1.
     hp = compute_hp(
         input_data.house_property_income,
         regime,
@@ -362,6 +377,10 @@ def compute(input_data: ITR4Input) -> ITR4Result:
             input_data.house_property_income.ownership_share_percentage
             if input_data.house_property_income is not None else Decimal("100")
         ),
+        loan_sanction_dates=[
+            loan.sanction_date for loan in input_data.loan_details_24b_list
+            if loan.property_sequence_no == 1
+        ],
     )
     result.schedules["hp"] = hp
     hp_setoff = apply_inter_head_loss_limit(hp, regime)

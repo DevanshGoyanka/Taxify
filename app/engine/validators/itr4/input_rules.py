@@ -38,6 +38,31 @@ from app.engine.validators.base import ValidationResult, Severity
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+# inp.nature_of_employment carries the raw official code -- CGOV/SGOV/PSU/
+# PE/PESG/PEPS/PEO/OTH (see app/engine/draft_to_itr4_input.py's ITR4Input
+# construction, sourced from draft.employers[0].natureOfEmployment, the same
+# NatureOfEmployment field ITR-1's mapper reads) -- never a human-readable
+# label. Ten call sites in this file used to match keywords like "central
+# government"/"pension" against it, which never matched any real code -- the
+# identical bug already found and fixed across 10 sites in
+# app/engine/validators/itr1/input_rules.py (Docs/ITR1_FRONTEND_AND_
+# SERIALIZATION_AUDIT_AY2026_27.md §14.5). Each was either permanently
+# dormant (never caught a real invalid claim) or permanently blocking (fired
+# regardless of actual employment, hard-blocking legitimate CG/SG-employee/
+# pensioner/judge filers). These two sets are the single source of truth for
+# that classification going forward, matching ITR-1's exact code sets.
+_CG_SG_EMPLOYMENT_CODES = frozenset({"CGOV", "SGOV"})
+_PENSIONER_EMPLOYMENT_CODES = frozenset({"PE", "PESG", "PEPS", "PEO"})
+
+
+def _is_cg_sg_employee(nature_of_employment: str | None) -> bool:
+    return (nature_of_employment or "") in _CG_SG_EMPLOYMENT_CODES
+
+
+def _is_pensioner(nature_of_employment: str | None) -> bool:
+    return (nature_of_employment or "") in _PENSIONER_EMPLOYMENT_CODES
+
+
 def _make(rule_id: str, passed: bool, message: str, field_path: str = "",
           expected=None, actual=None) -> ValidationResult:
     return ValidationResult(
@@ -635,7 +660,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # Rule 22: 80CCD(1) pensioner cap — enforce if nature_of_employment available
         if ch6a.amount_80ccd1 > z:
             emp = inp.nature_of_employment or ""
-            if "pension" in emp.lower():
+            if _is_pensioner(emp):
                 gti_14 = max((sal.gross_salary if sal else z), z)  # GTI approx at input level
                 max_pensioner = gti_14 * Decimal("0.20")
                 if ch6a.amount_80ccd1 > max_pensioner:
@@ -648,7 +673,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
             # Rule 155: 80CCD(1) non-pensioner/non-salaried ≤ 10% salary (hard enforcement)
         if ch6a.amount_80ccd1 > z and is_old:
             emp = inp.nature_of_employment or ""
-            if "pension" not in emp.lower():
+            if not _is_pensioner(emp):
                 # For salaried: 10% of salary; for others: capped at 10% of estimated GTI
                 base_salary = sal.gross_salary if sal else z
                 cap_10pct = base_salary * Decimal("0.10")
@@ -663,7 +688,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # Rule 25: 80CCD(2) non-CG/SG <= 10% salary (HARD enforcement)
         if ch6a.amount_80ccd2 > z and is_old:
             emp = inp.nature_of_employment or ""
-            if "central government" not in emp.lower() and "state government" not in emp.lower():
+            if not _is_cg_sg_employee(emp):
                 base_salary = sal.gross_salary if sal else z
                 cap_10pct = base_salary * Decimal("0.10")
                 if cap_10pct > z and ch6a.amount_80ccd2 > cap_10pct:
@@ -684,7 +709,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # Rule 47: 80CCD(2) CG/SG <= 14% salary (HARD enforcement)
         if ch6a.amount_80ccd2 > z and is_old:
             emp = inp.nature_of_employment or ""
-            if "central government" in emp.lower() or "state government" in emp.lower():
+            if _is_cg_sg_employee(emp):
                 base_salary = sal.gross_salary if sal else z
                 cap_14pct = base_salary * Decimal("0.14")
                 if cap_14pct > z and ch6a.amount_80ccd2 > cap_14pct:
@@ -811,7 +836,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # Rule 161: 80CCD(2) not for pensioners (HARD enforcement)
         if ch6a.amount_80ccd2 > z:
             emp = inp.nature_of_employment or ""
-            if "pension" in emp.lower():
+            if _is_pensioner(emp):
                 results.append(_make(
                     "ITR4-R161", False,
                     f"80CCD(2) NPS employer contribution not available for pensioners. "
@@ -1833,9 +1858,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
 
     # Sl 73: Gratuity ≤ ₹20L non-CG/SG
     if sal and sal.gratuity_received > z and inp.nature_of_employment:
-        emp_l = inp.nature_of_employment.lower()
-        is_cg_sg = any(kw in emp_l for kw in ("central", "state")) and "government" in emp_l
-        if not is_cg_sg and sal.gratuity_received > Decimal("2000000"):
+        if not _is_cg_sg_employee(inp.nature_of_employment) and sal.gratuity_received > Decimal("2000000"):
             results.append(_make("ITR4-R073", False,
                 f"Gratuity (Rs {sal.gratuity_received}) exceeds ₹20L for non-CG/SG",
                 "salary_income.gratuity_received"))
@@ -2071,8 +2094,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
 
     # R075: Leave encashment ≤ ₹25L non-govt
     if sal and sal.leave_encashment_received > Decimal("2500000"):
-        emp = (inp.nature_of_employment or "").lower()
-        if not any(kw in emp for kw in ("central government", "state government")):
+        if not _is_cg_sg_employee(inp.nature_of_employment):
             results.append(_make("ITR4-R075", False,
                 f"Leave encashment (Rs {sal.leave_encashment_received}) exceeds ₹25,00,000 "
                 f"for non-government employees", "salary_income.leave_encashment_received"))
@@ -2334,8 +2356,10 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
 
     # R185: 10(10B) not for CG/SG/pensioners
     if sal and sal.retrenchment_compensation > z and inp.nature_of_employment:
-        emp_l = inp.nature_of_employment.lower()
-        if any(kw in emp_l for kw in ("central", "state", "pension")):
+        if (
+            _is_cg_sg_employee(inp.nature_of_employment)
+            or _is_pensioner(inp.nature_of_employment)
+        ):
             results.append(_make("ITR4-R185", False,
                 f"10(10B) retrenchment exemption claimed but employment is "
                 f"'{inp.nature_of_employment}'. Only industrial workers covered by "
@@ -2666,12 +2690,24 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # (CBDT Sl 289-296)
     # ═══════════════════════════════════════════════════════════════════════════
 
-    # R289: 24(b) total = schedule 24(b) total
+    # R289: 24(b) total = schedule 24(b) total.
+    # ITR-4 computes income for only the first house property row
+    # (house_property_income has no property list, unlike ITR-1's
+    # up-to-two), but loan_details_24b_list can carry loans tagged with a
+    # different property_sequence_no if a draft somehow carries a second
+    # property row (nothing in this pipeline rejects that outright -- see
+    # Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §3.1/§3.2).
+    # Comparing the one property actually being validated against an
+    # unfiltered sum across every property's loans is the same false-positive
+    # pattern already fixed for ITR1-R246 -- filter to sequence_no 1 here.
     total_24b = Decimal("0")
     if inp.loan_details_24b_list and hp and hp.home_loan_interest_paid > z:
+        own_property_loans = [
+            ld for ld in inp.loan_details_24b_list if ld.property_sequence_no == 1
+        ]
         total_24b = sum(
             ld.interest_paid_self_occupied + ld.interest_paid_let_out
-            for ld in inp.loan_details_24b_list
+            for ld in own_property_loans
         )
         if total_24b > z and abs(hp.home_loan_interest_paid - total_24b) > Decimal("1"):
             results.append(_make("ITR4-R289", False,
@@ -2710,15 +2746,14 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 f"80EEB VIA (Rs {ch6a.amount_80eeb}) ≠ Schedule 80EEB total (Rs {eeb_sum})",
                 "deductions_chapter6a.amount_80eeb"))
 
-    # R295-R296: Per-schedule row sum = total of payments
-    if inp.loan_details_24b_list:
-        total_rows = sum(
-            ld.interest_paid_self_occupied + ld.interest_paid_let_out
-            for ld in inp.loan_details_24b_list
-        )
-        if total_rows != total_24b and total_24b > z:
-            results.append(_make("ITR4-R295", False,
-                "24(b): sum of individual rows ≠ total", "loan_details_24b_list"))
+    # R296: 80C per-schedule row sum = total of payments.
+    # (R295 was a duplicate of R289 immediately above -- both compared the
+    # same 24(b) row-sum-vs-declared-total relationship under different rule
+    # IDs, one of them tautologically comparing a value to itself once R289
+    # was fixed to filter by property_sequence_no. Consolidated onto the
+    # genuine second R295 implementation below, which is now also fixed to
+    # filter correctly -- see
+    # Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §3.2.)
     if inp.schedule_80c_entries:
         sc_sum2 = sum(e.amount for e in inp.schedule_80c_entries)
         if ch6a and ch6a.amount_80c > z and ch6a.amount_80c != sc_sum2:
@@ -2775,8 +2810,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # ═══════════════════════════════════════════════════════════════════════════
 
     if sal and sal.gratuity_received > z and inp.nature_of_employment:
-        emp_l = inp.nature_of_employment.lower()
-        if any(kw in emp_l for kw in ("central", "state")) and "government" in emp_l:
+        if _is_cg_sg_employee(inp.nature_of_employment):
             if sal.gratuity_received > Decimal("2500000"):
                 results.append(_make("ITR4-R317", False,
                     f"Gratuity (Rs {sal.gratuity_received}) exceeds ₹25L for CG/SG",
@@ -2874,8 +2908,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
 
     # R322: Judge exemption only CG/SG
     if "Judge Salaries Act" in exempt_dds:
-        emp_l = (inp.nature_of_employment or "").lower()
-        if not any(kw in emp_l for kw in ("central government", "state government")):
+        if not _is_cg_sg_employee(inp.nature_of_employment):
             results.append(_make("ITR4-R322", False,
                 f"Judge Salaries Act exemption claimed but employment is "
                 f"'{inp.nature_of_employment}'", "exempt_income_dropdowns"))
@@ -3303,30 +3336,17 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 expected="Schedule 10(13A) details",
                 actual="None"))
 
-    # ── Group C: Gratuity / perquisite caps (Rules 73, 76, 159, 181, 317) ───
+    # ── Group C: Gratuity / perquisite caps (Rules 76, 159) ─────────────────
+    # R73/R317 (gratuity 20L/25L caps) and R181 (leave encashment 25L cap)
+    # were each duplicated here under hardcoded employment-code whitelists
+    # using WRONG strings ("CG"/"SG"/"CGP"/"SGP"/"PES" instead of the real
+    # raw codes "CGOV"/"SGOV"/"PESG") -- both dormant for the false-positive
+    # direction and redundant with the already-correct R073/R317/R075
+    # implementations elsewhere in this file (which use _is_cg_sg_employee).
+    # Removed rather than fixed in place, since a correct implementation of
+    # each already exists. See
+    # Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md.
     if sal:
-        # R73: 10(10) gratuity ≤ ₹20L for PSU/Pensioners/Others
-        if sal.gratuity_received > Decimal("2000000"):
-            _emp_cat = inp.nature_of_employment or ""
-            if _emp_cat in ("PSU", "PES", "PEO", "OTH", "NA"):
-                results.append(_make(
-                    "ITR4-R073", False,
-                    f"Gratuity received (Rs {sal.gratuity_received}) exceeds "
-                    f"₹20,00,000 limit for PSU/Pensioners/Others category.",
-                    "salary_income.gratuity_received",
-                    expected="<= 2000000",
-                    actual=str(sal.gratuity_received)))
-        # R317: 10(10) gratuity ≤ ₹25L for CG/SG/CG-Pensioners/SG-Pensioners
-        if sal.gratuity_received > Decimal("2500000"):
-            _emp_cat = inp.nature_of_employment or ""
-            if _emp_cat in ("CG", "CGP", "SG", "SGP"):
-                results.append(_make(
-                    "ITR4-R317", False,
-                    f"Gratuity received (Rs {sal.gratuity_received}) exceeds "
-                    f"₹25,00,000 limit for CG/SG/Pensioners category.",
-                    "salary_income.gratuity_received",
-                    expected="<= 2500000",
-                    actual=str(sal.gratuity_received)))
         # R76: 10(10C) VRS ≤ ₹5,00,000
         if sal.vrs_compensation > Decimal("500000"):
             results.append(_make(
@@ -3345,35 +3365,18 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 "salary_income.retrenchment_compensation",
                 expected="<= 500000",
                 actual=str(sal.retrenchment_compensation)))
-        # R181: 10(10AA) leave encashment ≤ ₹25L for non-CG/SG
-        if sal.leave_encashment_received > Decimal("2500000"):
-            _emp_cat = inp.nature_of_employment or ""
-            if _emp_cat not in ("CG", "CGP", "SG", "SGP"):
-                results.append(_make(
-                    "ITR4-R181", False,
-                    f"Leave encashment (Rs {sal.leave_encashment_received}) "
-                    f"exceeds ₹25,00,000 limit for non-CG/SG employees.",
-                    "salary_income.leave_encashment_received",
-                    expected="<= 2500000",
-                    actual=str(sal.leave_encashment_received)))
 
-    # ── Group D: 80CCD(2) employer-category logic (Rules 161, 263) ──────────
-    if ch6a and ch6a.amount_80ccd2 > z:
-        _emp_cat = inp.nature_of_employment or ""
-        # R161: 80CCD(2) not allowed for pensioners (CG-Pensioners, SG-Pensioners, PSU-Pensioners, others-Pensioners, NA)
-        if _emp_cat in ("PES", "PESG", "PEPS", "PEO", "NA"):
-            results.append(_make(
-                "ITR4-R161", False,
-                f"80CCD(2) employer contribution (Rs {ch6a.amount_80ccd2}) "
-                f"cannot be claimed by pensioner category '{_emp_cat}'. "
-                f"80CCD(2) is only for active employees.",
-                "deductions_chapter6a.amount_80ccd2",
-                expected="0 for pensioners",
-                actual=str(ch6a.amount_80ccd2)))
+    # ── Group D: 80CCD(2) employer-category logic (Rule 263) ────────────────
+    # R161 (80CCD(2) not for pensioners) was duplicated here with a
+    # hardcoded whitelist missing the base "PE" pensioner code entirely and
+    # containing a typo ("PES" instead of "PESG") -- redundant with the
+    # already-correct R161 implementation above (which uses
+    # _is_pensioner()). Removed rather than fixed in place. See
+    # Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md.
     # R263: New regime 80CCD(2) ≤ 14% of salary for PSU/CG/SG/Others
     if is_new and ch6a and ch6a.amount_80ccd2 > z and sal:
         _emp_cat = inp.nature_of_employment or ""
-        if _emp_cat in ("PSU", "OTH", "CG", "SG"):
+        if _emp_cat in ("PSU", "OTH", "CGOV", "SGOV"):
             _max_80ccd2 = sal.gross_salary * Decimal("0.14")
             if ch6a.amount_80ccd2 > _max_80ccd2:
                 results.append(_make(
@@ -3667,7 +3670,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
         # (verified post-computation in calc_rules.py R063)
         # R67: Entertainment allowance ≤ ₹5,000 or 1/5th basic, whichever lower (CG/SG/PSU only)
         _emp_cat = inp.nature_of_employment or ""
-        if _emp_cat in ("CG", "SG", "PSU") and sal.entertainment_allowance > z:
+        if _emp_cat in ("CGOV", "SGOV", "PSU") and sal.entertainment_allowance > z:
             # Need basic salary — approximate from gross_salary if no breakdown
             _basic = getattr(sal, 'basic_salary', sal.gross_salary) or sal.gross_salary
             _max_ent = min(Decimal("5000"), _basic * Decimal("0.2"))
@@ -3681,7 +3684,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                     expected=f"<= {_max_ent}",
                     actual=str(sal.entertainment_allowance)))
         # R68: No entertainment allowance for non-CG/SG/PSU employees
-        if _emp_cat not in ("CG", "SG", "PSU") and sal.entertainment_allowance > z:
+        if _emp_cat not in ("CGOV", "SGOV", "PSU") and sal.entertainment_allowance > z:
             results.append(_make(
                 "ITR4-R068", False,
                 f"Entertainment allowance (Rs {sal.entertainment_allowance}) "
@@ -4112,9 +4115,14 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
                 expected=str(ch6a.amount_80eeb),
                 actual=str(_row_sum)))
     if hp and hp.home_loan_interest_paid > z and inp.loan_details_24b_list:
+        # Filter to the one property ITR-4 actually computes income for
+        # (property_sequence_no 1) -- see the identical fix and comment on
+        # ITR4-R289 above; this was the same multi-property false-positive
+        # pattern already fixed for ITR1-R246.
         _row_sum = sum(
             e.interest_paid_self_occupied + e.interest_paid_let_out
             for e in inp.loan_details_24b_list
+            if e.property_sequence_no == 1
         )
         if abs(_row_sum - hp.home_loan_interest_paid) > Decimal("1"):
             results.append(_make(
@@ -4452,20 +4460,12 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # R358 (covered in 10IEA chain)
     # R362 (covered in 10IEA chain)
     # R366: 80CCC sum of rows = total (same as R343 — cross-foot check)
-    # R391: 80CCD(2) ≤ 10% of salary (old, non-CG/SG)
-    if is_old and ch6a and ch6a.amount_80ccd2 > z and sal:
-        _emp_cat = inp.nature_of_employment or ""
-        if _emp_cat not in ("CG", "SG"):
-            _max_80ccd2 = sal.gross_salary * Decimal("0.10")
-            if ch6a.amount_80ccd2 > _max_80ccd2:
-                results.append(_make(
-                    "ITR4-R391", False,
-                    f"80CCD(2) employer NPS (Rs {ch6a.amount_80ccd2}) exceeds 10% "
-                    f"of salary (Rs {sal.gross_salary}) = Rs {_max_80ccd2} "
-                    f"for non-CG/SG employees.",
-                    "deductions_chapter6a.amount_80ccd2",
-                    expected=f"<= {_max_80ccd2}",
-                    actual=str(ch6a.amount_80ccd2)))
+    # R391 (80CCD(2) <= 10% of salary, old regime, non-CG/SG) was duplicated
+    # here with the same wrong-code whitelist ("CG"/"SG" instead of "CGOV"/
+    # "SGOV") -- always-true, over-blocking every employee including
+    # genuine CG/SG ones. Redundant with the already-correct R025
+    # implementation earlier in this file. Removed rather than fixed in
+    # place. See Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md.
     # R392: 80CCD(2) ≤ 14% of salary (old, CG/SG) — informational pass
     # R394: IFSC + txn ref mandatory for non-cash 80G donations
     if inp.schedule_80g:

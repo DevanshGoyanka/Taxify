@@ -1078,6 +1078,11 @@ def _allowance_rows(input_data: Optional[ITR4Input], result: ITR4Result) -> list
     commuted_pension_exempt = getattr(sal_sched, "commuted_pension_exempt", getattr(salary, "commuted_pension_received", Decimal("0"))) if sal_sched else getattr(salary, "commuted_pension_received", Decimal("0"))
     transport_exempt = getattr(sal_sched, "transport_exempt", Decimal("0")) if sal_sched else Decimal("0")
     cea_exempt = getattr(sal_sched, "children_education_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    # Uniform allowance is also a 10(14)(i)/Rule 2BB(1) allowance and shares
+    # that single official JSON bucket with CEA -- see the identical fix and
+    # comment in app/engine/itd/itr1.py::_allowance_rows.
+    uniform_allowance_exempt = getattr(sal_sched, "uniform_allowance_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    cea_exempt += uniform_allowance_exempt
     hostel_exempt = getattr(sal_sched, "hostel_exempt", Decimal("0")) if sal_sched else Decimal("0")
     hra_exempt = getattr(sal_sched, "hra_exempt", getattr(salary, "hra_exempt_amount", Decimal("0"))) if sal_sched else getattr(salary, "hra_exempt_amount", Decimal("0"))
     lta_exempt = getattr(sal_sched, "lta_exempt", getattr(salary, "lta_exempt_amount", Decimal("0"))) if sal_sched else getattr(salary, "lta_exempt_amount", Decimal("0"))
