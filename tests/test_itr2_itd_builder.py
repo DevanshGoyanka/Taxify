@@ -17,6 +17,7 @@ from app.schemas.itr1 import (
     AgeBracket,
     BankAccount,
     FilingAddress,
+    OtherSourcesIncome,
     TaxRegime,
     TCSEntry,
     TDS2Entry,
@@ -28,6 +29,8 @@ from app.schemas.itr2 import (
     CGTransaction,
     ITR2FilingProfile,
     ITR2Input,
+    OSGiftBreakdown,
+    ScheduleSIEntry,
     TDS3FilingDetail,
     VDATransaction,
 )
@@ -424,3 +427,32 @@ def test_tds2_tds3_tcs_carry_ownership_and_brought_forward_data() -> None:
     assert tcs_row["TCSClaimedThisYearDtls"]["TCSAmtCollSpouseOrOthrHand"] == 2500
     assert tcs_row["BroughtFwdTDSAmt"] == 100
     assert payload["ScheduleTCS"]["TotalSchTCS"] == 8500  # 6000 own + 2500 spouse
+
+
+def test_schedule_os_serializes_lottery_pf_and_gift_income() -> None:
+    """Schedule OS emits real lottery/PF/gift data, not zero placeholders.
+
+    Regression test for the §3.4 finding: ``_schedule_os()`` initialized
+    ``LtryPzzlChrgblUs115BB``/``TaxAccumulatedBalRecPF``/``Tot562x`` and the
+    section-56(2)(x) category breakdown to zero unconditionally -- none of
+    winnings, accumulated PF, or gifts had any path into ``ITR2Input`` at
+    all for ITR-2 before this fix.
+    """
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("75000")),
+        si_entries=[
+            ScheduleSIEntry(section="115BB", gross_income=Decimal("50000")),
+            ScheduleSIEntry(section="111", gross_income=Decimal("30000")),
+        ],
+        os_gift_breakdown=OSGiftBreakdown(aggregate_without_consideration=Decimal("75000")),
+        os_pf_income_benefit=Decimal("30000"),
+        os_pf_tax_benefit=Decimal("3000"),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    os_block = document["ITR"]["ITR2"]["ScheduleOS"]["IncOthThanOwnRaceHorse"]
+
+    assert os_block["LtryPzzlChrgblUs115BB"] == 50000
+    assert os_block["Tot562x"] == 75000
+    assert os_block["Aggrtvaluewithoutcons562x"] == 75000
+    assert os_block["TaxAccumulatedBalRecPF"] == {"TotalIncomeBenefit": 30000, "TotalTaxBenefit": 3000}

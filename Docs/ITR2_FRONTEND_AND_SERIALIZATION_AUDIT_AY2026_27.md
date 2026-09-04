@@ -489,6 +489,96 @@ A value can be entered in the frontend but not appear in the official JSON.
 
 Map each canonical `OtherSources` entry to the exact official field, including category code, gross amount, deductions, rate, dates/quarters, payer/donor information, TDS linkage, and source schedule. Add a populated-category preservation test for every OS category.
 
+> **Fix status (2026-09-04): winnings, accumulated PF, and gifts fixed and
+> verified; DTAA/§89A/special-rate-income-entries/deductions/quarter-level
+> detail and race-horse-activity business income remain open (see below).**
+>
+> `draft.otherSources.winnings`/`accumulatedPf`/`gifts` were captured by the
+> frontend but had **no path into `ITR2Input` at all** for ITR-2 --
+> `_map_other_sources()` computed a `total_winnings` breakdown figure and
+> discarded it, and gifts/PF had no mapping whatsoever. This meant winnings
+> and gifts were silently excluded from **taxable income itself**, not just
+> from the JSON -- a revenue-correctness bug, not merely an incompleteness
+> one.
+>
+> `app/engine/draft_to_itr2_input.py` gained three new mapper functions:
+> - `_map_os_winnings_to_si()` -- aggregates `WinningIncome` rows by Schedule-SI
+>   section (LOTTERY/BETTING/CARD_GAME/HORSE_RACE → 115BB, ONLINE_GAMING →
+>   115BBJ, UNEXPLAINED_115BBE → 115BBE) and appends them to `si_entries`,
+>   reusing the calculator's existing (and already-correct) `compute_lottery`/
+>   `compute_115bbj`/`compute_115bbe` dispatch in `compute()`.
+> - `_map_os_accumulated_pf()` -- aggregates `AccumulatedPfEntry` rows into a
+>   section-111 SI entry plus `TotalIncomeBenefit`/`TotalTaxBenefit` totals
+>   (new `ITR2Input.os_pf_income_benefit`/`os_pf_tax_benefit` fields).
+> - `_compute_os_gifts()` -- computes Section 56(2)(x) taxable-gift totals
+>   with the correct statutory thresholds (money/other-property-without-
+>   consideration tested against the aggregate INR 50,000 threshold, whole
+>   amount taxable once crossed; immovable property tested per-property
+>   against its own stamp-duty-value/inadequate-consideration threshold;
+>   relative/marriage gifts exempt), feeding the existing
+>   `OtherSourcesIncome.income_56_2_x` field via `model_copy`, plus a new
+>   `ITR2Input.os_gift_breakdown` (`OSGiftBreakdown`, new schema type) for
+>   the JSON category split.
+>
+> **A second, more severe pre-existing bug was found and fixed while wiring
+> this**: `input_data.si_entries` sections 115BB/115BBE/115BBF/115BBG/
+> 115BBJ/115BBA/111 were dispatched for *tax* (`special_rate_tax`) but were
+> **never added to GTI/Total Income** in `compute()` -- unlike capital-gains
+> SI categories (111A/112/112A/VDA), which correctly flow into
+> `gti_before_loss_setoff` via `positive_regular_cg`/`vda_income` before the
+> SI dispatch runs. Yet `special_rate_income_for_slab` (which shrinks the
+> slab-tax base) already *subtracted* this same total via
+> `si_result.surcharge_full_income` -- meaning any of these categories
+> reduced slab tax on unrelated income without the income itself ever
+> appearing in Total Income. This bug pre-dates this session (reachable via
+> the frontend's generic Schedule SI manual-entry editor,
+> `draft.scheduleSIEntries`, for any user who added a 115BB/etc row
+> directly) but was never caught because no test exercised it end-to-end.
+> Fixed in `app/engine/calculators/itr2.py::compute()` by adding these
+> sections' `gross_income` to `r.other_sources_income` before GTI is
+> computed (mirroring the CG pattern exactly).
+>
+> **A third bug surfaced by making section 111 (accumulated PF) reachable
+> for the first time**: `_schedule_si()` in `app/engine/itd/itr2.py` emitted
+> `SplRatePercent: 0` for the section-111 SI entry (it's a genuine 0%-rate
+> dispatch entry internally, since PF income is taxed at slab rate) -- but
+> the official schema's `SplRatePercent` enum has no `0` value, so this
+> failed schema validation outright. Fixed by excluding section-111 entries
+> from `ScheduleSI`'s `SplCodeRateTax` rows entirely (its disclosure lives
+> in Schedule OS's `TaxAccumulatedBalRecPF`, already wired above); also
+> added the missing `115BBA`/`115BBJ` → `5BBA`/`5BBJ` `SecCode` mappings
+> (previously fell through to the generic default `"1"`, which happens to
+> be section 111's own code -- silently wrong for any 115BBJ/115BBA income).
+>
+> **Deliberately not fixed in this pass** (documented, not silently
+> dropped): DTAA-rate OS income, Section 89A (foreign retirement-account
+> deferral), `SpecialRateIncomeEntry` (the generic Schedule 5A-adjacent
+> bucket), Schedule OS deductions (`Deductions` block), and per-entry
+> quarter-level advance-tax-interest detail (`IncFrmLottery`/
+> `IncFrmOnGames`/`NOT89A`/dividend-category date-range objects, currently
+> emitted as all-zero placeholders via `_date_range()`) remain open --
+> these are lower real-world frequency and/or informational/relief-only
+> (89A specifically is a deferral, not new taxable income, so its absence
+> is not a Total Income correctness bug the way winnings/gifts were).
+> `RACE_HORSE_ACTIVITY` winning-income rows are also intentionally excluded
+> from the SI mapping -- income from owning/maintaining race horses is a
+> distinct business-like OS sub-head (`IncFromOwnHorse`) with its own
+> deduction rules, not a flat special-rate item, and has no calculator
+> support at all yet. These are tracked as follow-up work, not silently
+> left broken.
+>
+> Regression tests: `test_lottery_winnings_are_included_in_total_income_and_taxed_at_115bb`,
+> `test_accumulated_pf_maps_to_section_111_si_entry_and_pf_totals`,
+> `test_taxable_gift_from_non_relative_is_included_income_56_2_x`,
+> `test_gift_from_relative_is_exempt`,
+> `test_gift_below_fifty_thousand_threshold_is_exempt` (all in
+> `tests/test_draft_to_itr2_input.py`), and
+> `test_schedule_os_serializes_lottery_pf_and_gift_income` (in
+> `tests/test_itr2_itd_builder.py`) -- confirmed via `git stash` to be
+> entirely absent (and their underlying schema fields nonexistent) on
+> pre-fix code. Full combined `test_itr1_*`/`test_itr2_*`/`test_itr4_*`
+> regression suite (227 tests) green.
+
 ---
 
 ## 3.5 Negative house-property income is forced to zero in Part B-TI

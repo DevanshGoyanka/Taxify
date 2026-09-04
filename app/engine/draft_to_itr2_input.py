@@ -79,6 +79,7 @@ from app.schemas.itr2 import (
     FSICountryEntry,
     ITR2Input,
     LossHead as ITR2LossHead,
+    OSGiftBreakdown,
     PTIEntry,
     ResidentialStatus as ITR2ResidentialStatus,
     Schedule5AInput,
@@ -472,6 +473,142 @@ _SI_SECTION_MAP: dict[str, str] = {
 }
 
 
+_ZERO = Decimal("0")
+_FIFTY_THOUSAND = Decimal("50000")
+
+# WinningIncomeType -> Schedule SI section. Lottery/betting/card games/horse
+# -race betting all fall under section 115BB (the official form groups them
+# under one head); online gaming has its own section (115BBJ, inserted by
+# Finance Act 2023); UNEXPLAINED_115BBE is the taxpayer's own unexplained-
+# income disclosure. RACE_HORSE_ACTIVITY (income from owning/maintaining
+# race horses -- a distinct business-like OS sub-head with its own
+# deduction rules, not a flat special-rate item) is deliberately NOT mapped
+# here -- see Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §3.4's
+# fix-status note for why this remains a scoped-out follow-up.
+_WINNING_SI_SECTION: dict[str, str] = {
+    "LOTTERY": "115BB",
+    "BETTING": "115BB",
+    "CARD_GAME": "115BB",
+    "HORSE_RACE": "115BB",
+    "ONLINE_GAMING": "115BBJ",
+    "UNEXPLAINED_115BBE": "115BBE",
+}
+
+
+def _map_os_winnings_to_si(winnings: list) -> list[ITR2ScheduleSIEntry]:
+    """Aggregate WinningIncome rows into Schedule-SI entries by section.
+
+    The calculator's ``compute()`` already dispatches ``si_entries`` by
+    section (115BB/115BBJ/115BBE all have working ``compute_*`` special-rate
+    handlers) -- this was previously never reached for ITR-2 because
+    ``draft.otherSources.winnings`` was computed into a ``total_winnings``
+    breakdown figure and then discarded, never becoming part of
+    ``ITR2Input``. See §3.4 fix-status note.
+    """
+    totals: dict[str, Decimal] = {}
+    for w in winnings or []:
+        section = _WINNING_SI_SECTION.get(w.type)
+        if section is None:
+            continue
+        totals[section] = totals.get(section, _ZERO) + w.grossAmount
+    return [
+        ITR2ScheduleSIEntry(section=section, gross_income=amount)
+        for section, amount in totals.items()
+        if amount > 0
+    ]
+
+
+def _map_os_accumulated_pf(entries: list) -> tuple[Optional[ITR2ScheduleSIEntry], Decimal, Decimal]:
+    """Aggregate accumulated-PF rows into a section-111 SI entry + totals.
+
+    Section 111 income is taxed at slab rate (``compute_111`` is a 0%-rate
+    Schedule-SI disclosure entry, not a flat special rate) but must still be
+    disclosed in Schedule SI and in ``TaxAccumulatedBalRecPF``'s
+    ``TotalIncomeBenefit``/``TotalTaxBenefit`` pair. Returns
+    ``(si_entry_or_none, total_income_benefit, total_tax_benefit)``.
+    """
+    total_income = sum((e.incomeBenefit for e in entries or []), _ZERO)
+    total_tax = sum((e.taxBenefit for e in entries or []), _ZERO)
+    si_entry = ITR2ScheduleSIEntry(section="111", gross_income=total_income) if total_income > 0 else None
+    return si_entry, total_income, total_tax
+
+
+def _compute_os_gifts(gifts: list) -> tuple[Decimal, Optional[OSGiftBreakdown]]:
+    """Compute Section 56(2)(x) taxable-gift totals and category breakdown.
+
+    Statutory thresholds applied (Section 56(2)(x), Income Tax Act):
+    - Money and "any other property" received without consideration: tested
+      against the aggregate INR 50,000 threshold for the year; once the
+      aggregate exceeds it, the WHOLE aggregate is taxable, not just the
+      excess.
+    - Immovable property received without consideration: tested per
+      property against its own stamp-duty value exceeding INR 50,000.
+    - Immovable property for inadequate consideration: taxable only if
+      (stamp-duty value − consideration) exceeds the greater of INR 50,000
+      or 10% of the consideration; the excess itself is what's taxable.
+    - "Any other property" for inadequate consideration: aggregate excess of
+      fair market value over consideration, taxed once aggregate exceeds
+      INR 50,000.
+    - Gifts from a relative or received on the occasion of marriage are
+      statutorily exempt and excluded entirely, before any threshold test.
+
+    Returns ``(total_taxable, breakdown_or_none)`` -- ``breakdown`` is
+    ``None`` when every category is zero, so the builder can omit the block
+    entirely rather than emit an all-zero placeholder.
+    """
+    money_wo = _ZERO
+    immov_wo_total = _ZERO
+    immov_inadeq_total = _ZERO
+    other_wo_total = _ZERO
+    other_inadeq_total = _ZERO
+
+    for g in gifts or []:
+        if g.fromRelative or g.receivedOnMarriage:
+            continue
+        if g.propertyType == "CASH":
+            if g.considerationKind == "WITHOUT_CONSIDERATION":
+                money_wo += g.value
+        elif g.propertyType == "IMMOVABLE":
+            stamp_duty_value = g.stampDutyValue if g.stampDutyValue is not None else g.value
+            if g.considerationKind == "WITHOUT_CONSIDERATION":
+                if stamp_duty_value > _FIFTY_THOUSAND:
+                    immov_wo_total += stamp_duty_value
+            else:
+                consideration = g.considerationPaid or _ZERO
+                diff = stamp_duty_value - consideration
+                threshold = max(_FIFTY_THOUSAND, consideration * Decimal("0.10"))
+                if diff > threshold:
+                    immov_inadeq_total += diff
+        else:  # MOVABLE / OTHER
+            fmv = g.fairMarketValue if g.fairMarketValue is not None else g.value
+            if g.considerationKind == "WITHOUT_CONSIDERATION":
+                other_wo_total += fmv
+            else:
+                consideration = g.considerationPaid or _ZERO
+                diff = fmv - consideration
+                if diff > 0:
+                    other_inadeq_total += diff
+
+    money_taxable = money_wo if money_wo > _FIFTY_THOUSAND else _ZERO
+    other_wo_taxable = other_wo_total if other_wo_total > _FIFTY_THOUSAND else _ZERO
+    other_inadeq_taxable = other_inadeq_total if other_inadeq_total > _FIFTY_THOUSAND else _ZERO
+
+    aggregate_without_consideration = money_taxable + other_wo_taxable
+    total_taxable = (
+        aggregate_without_consideration + immov_wo_total + immov_inadeq_total + other_inadeq_taxable
+    )
+    if total_taxable == 0:
+        return _ZERO, None
+    breakdown = OSGiftBreakdown(
+        aggregate_without_consideration=aggregate_without_consideration,
+        immovable_property_without_consideration=immov_wo_total,
+        immovable_property_inadequate_consideration=immov_inadeq_total,
+        other_property_without_consideration=other_wo_taxable,
+        other_property_inadequate_consideration=other_inadeq_taxable,
+    )
+    return total_taxable, breakdown
+
+
 def _map_si_entries(draft: ReturnDraft) -> list[ITR2ScheduleSIEntry]:
     return [
         ITR2ScheduleSIEntry(
@@ -538,6 +675,15 @@ def draft_to_itr2_input(
     vda_transactions = _map_vda_transactions(draft)
     bf_losses = _map_bf_losses(draft)
     si_entries = _map_si_entries(draft)
+    si_entries += _map_os_winnings_to_si(draft.otherSources.winnings)
+    pf_si_entry, os_pf_income_benefit, os_pf_tax_benefit = _map_os_accumulated_pf(
+        draft.otherSources.accumulatedPf
+    )
+    if pf_si_entry is not None:
+        si_entries.append(pf_si_entry)
+    gift_taxable, os_gift_breakdown = _compute_os_gifts(draft.otherSources.gifts)
+    if gift_taxable > 0:
+        os_input = os_input.model_copy(update={"income_56_2_x": gift_taxable})
     agricultural_income = _map_agricultural_income(draft)
     exempt_income = _map_exempt_income(draft)
     fsi_entries = _map_fsi_entries(draft)
@@ -559,6 +705,9 @@ def draft_to_itr2_input(
         house_property_income=hp_input if len(hp_inputs) <= 1 else None,
         house_properties=hp_inputs if len(hp_inputs) > 1 else [],
         other_sources_income=os_input,
+        os_gift_breakdown=os_gift_breakdown,
+        os_pf_income_benefit=os_pf_income_benefit,
+        os_pf_tax_benefit=os_pf_tax_benefit,
         cg_transactions=cg_transactions,
         cg_112a_scrips=cg_112a_scrips,
         vda_transactions=vda_transactions,

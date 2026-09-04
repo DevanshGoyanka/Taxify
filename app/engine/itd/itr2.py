@@ -554,11 +554,26 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         block["IntrstFrmTermDeposit"] = _to_rupees(source.fixed_deposit_interest)
         block["IntrstFrmIncmTaxRefund"] = _to_rupees(source.interest_on_it_refund)
         block["FamilyPension"] = _to_rupees(source.family_pension_received)
+        block["Tot562x"] = _to_rupees(source.income_56_2_x)
     for entry in input_data.si_entries:
         if entry.section == "115BB":
             block["LtryPzzlChrgblUs115BB"] += _to_rupees(entry.gross_income)
+        elif entry.section == "115BBJ":
+            block["IncChrgblUs115BBJ"] += _to_rupees(entry.gross_income)
         elif entry.section == "115BBE":
             block["IncChrgblUs115BBE"] += _to_rupees(entry.gross_income)
+    gift = input_data.os_gift_breakdown
+    if gift is not None:
+        block["Aggrtvaluewithoutcons562x"] = _to_rupees(gift.aggregate_without_consideration)
+        block["Immovpropwithoutcons562x"] = _to_rupees(gift.immovable_property_without_consideration)
+        block["Immovpropinadeqcons562x"] = _to_rupees(gift.immovable_property_inadequate_consideration)
+        block["Anyotherpropwithoutcons562x"] = _to_rupees(gift.other_property_without_consideration)
+        block["Anyotherpropinadeqcons562x"] = _to_rupees(gift.other_property_inadequate_consideration)
+    if input_data.os_pf_income_benefit or input_data.os_pf_tax_benefit:
+        block["TaxAccumulatedBalRecPF"] = {
+            "TotalIncomeBenefit": _to_rupees(input_data.os_pf_income_benefit),
+            "TotalTaxBenefit": _to_rupees(input_data.os_pf_tax_benefit),
+        }
     return {
         "DividendDTAA": _date_range(),
         "DividendIncUs115A1aA": _date_range(),
@@ -1111,14 +1126,27 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
         "112": "21",
         "112A": "2A",
         "115BB": "5BB",
+        "115BBA": "5BBA",
         "115BBE": "5BBE",
         "115BBF": "5BBF",
         "115BBG": "5BBG",
         "115BBH": "5BBH",
+        "115BBJ": "5BBJ",
     }
     rows = []
     for entry in si.entries:
         if entry.taxable_income <= 0 and entry.tax_amount <= 0:
+            continue
+        if entry.section == "111":
+            # Section 111 (accumulated PF) is taxed at slab rate, not a
+            # genuine flat special rate -- compute_111() correctly models
+            # it as a 0%-rate SI dispatch entry purely so its income is
+            # included in GTI and excluded from the ordinary slab basket
+            # (see calculators/itr2.py's special_rate_income_for_slab). The
+            # official schema's SplRatePercent enum has no 0 value, so this
+            # entry belongs only in Schedule OS's TaxAccumulatedBalRecPF
+            # (already wired in _schedule_os()), never in ScheduleSI's
+            # SplCodeRateTax rows.
             continue
         code = section_code_map.get(entry.section, "1")
         rows.append({

@@ -97,6 +97,7 @@ from app.schemas.itr1 import AgeBracket, TaxRegime
 from app.schemas.itr2 import ITR2Input, ITR2FilingProfile, ResidentialStatus
 
 _ZERO = Decimal("0")
+_OS_HEAD_SI_SECTIONS = frozenset({"115BB", "115BBE", "115BBF", "115BBG", "115BBJ", "115BBA", "111"})
 
 
 @dataclass
@@ -377,6 +378,22 @@ def compute(input_data: ITR2Input) -> ITR2Result:
 
     os = compute_os(input_data.other_sources_income, regime)
     r.other_sources_income = os.income_chargeable
+    # Schedule-SI sections that are genuinely part of the Other Sources head
+    # for Total Income purposes -- lottery/gaming (115BB/115BBJ), unexplained
+    # income (115BBE), accumulated PF (111), patent royalty (115BBF), carbon
+    # credits (115BBG), non-resident sportsmen (115BBA). These must be
+    # included in GTI here, the same way 111A/112/112A/VDA capital-gains
+    # special-rate income is included via positive_regular_cg/vda_income
+    # below -- otherwise Total Income is understated and the later
+    # `ti - special_rate_income_for_slab` step (which already subtracts this
+    # same total via si_result.surcharge_full_income) removes income that
+    # was never added, incorrectly shrinking slab tax on unrelated income.
+    # Uses gross_income (not gross_income - deductions) to match exactly
+    # what compute_lottery()/compute_115bbe()/etc. below actually tax.
+    r.other_sources_income += sum(
+        (sie.gross_income for sie in input_data.si_entries if sie.section in _OS_HEAD_SI_SECTIONS),
+        _ZERO,
+    )
     r.schedules["os"] = os
 
     # ── 2. Capital Gains ─────────────────────────────────────────────────────

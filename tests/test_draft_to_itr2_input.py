@@ -19,6 +19,7 @@ import pytest
 from app.engine.calculators.itr2 import compute as compute_itr2
 from app.engine.draft_to_itr2_input import draft_to_itr2_input
 from app.schemas.return_draft import (
+    AccumulatedPfEntry,
     AMTCreditEntry,
     AMTDetails,
     BroughtForwardLossEntry,
@@ -27,6 +28,7 @@ from app.schemas.return_draft import (
     ForeignAssetEntry,
     ForeignSourceIncomeEntry,
     ForeignTaxReliefEntry,
+    GiftIncome,
     HouseProperty,
     ImmovableAssetGain,
     InterestIncome,
@@ -38,6 +40,7 @@ from app.schemas.return_draft import (
     TaxChallan,
     TdsCredit,
     VdaEntry,
+    WinningIncome,
     create_empty_draft,
 )
 
@@ -201,6 +204,102 @@ def test_amt_and_schedule_si_map_and_compute() -> None:
     result = compute_itr2(itr2_input)
     assert not result.errors
     assert result.special_rate_tax > 0
+
+
+def test_lottery_winnings_are_included_in_total_income_and_taxed_at_115bb() -> None:
+    """Lottery winnings entered via ScheduleOSWorkspace reach the calculator.
+
+    Regression test for a defect where ``draft.otherSources.winnings`` was
+    aggregated into a ``total_winnings`` breakdown figure by the shared
+    ``_map_other_sources()`` helper and then discarded -- never becoming
+    part of ``ITR2Input`` at all, so winnings entered by the taxpayer were
+    silently dropped from both taxable income and Schedule OS's JSON.
+    """
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.winnings = [WinningIncome(
+        id="w1", type="LOTTERY", grossAmount=Decimal("50000"),
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert any(sie.section == "115BB" and sie.gross_income == Decimal("50000") for sie in itr2_input.si_entries)
+
+    baseline = compute_itr2(draft_to_itr2_input(_filing_ready_itr2_draft())[0])
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    assert result.special_rate_tax > baseline.special_rate_tax
+    # Total Income must include the winnings, not just tax them via SI --
+    # otherwise `ti - special_rate_income_for_slab` (which already
+    # subtracts this same amount) would shrink slab tax on unrelated
+    # income without the winnings ever having been added.
+    assert result.other_sources_income == baseline.other_sources_income + Decimal("50000")
+    assert result.gross_total_income == baseline.gross_total_income + Decimal("50000")
+
+
+def test_accumulated_pf_maps_to_section_111_si_entry_and_pf_totals() -> None:
+    """Accumulated recognised-PF balance reaches Schedule SI section 111."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.accumulatedPf = [AccumulatedPfEntry(
+        id="pf1", assessmentYear="2024-25",
+        incomeBenefit=Decimal("30000"), taxBenefit=Decimal("3000"),
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert any(sie.section == "111" and sie.gross_income == Decimal("30000") for sie in itr2_input.si_entries)
+    assert itr2_input.os_pf_income_benefit == Decimal("30000")
+    assert itr2_input.os_pf_tax_benefit == Decimal("3000")
+
+    baseline = compute_itr2(draft_to_itr2_input(_filing_ready_itr2_draft())[0])
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    assert result.other_sources_income == baseline.other_sources_income + Decimal("30000")
+
+
+def test_taxable_gift_from_non_relative_is_included_income_56_2_x() -> None:
+    """A cash gift from a non-relative exceeding INR 50,000 is fully taxable.
+
+    Regression test: ``draft.otherSources.gifts`` had no mapping into
+    ``OtherSourcesIncome.income_56_2_x`` at all for ITR-2 -- gifts were
+    entirely dropped from taxable income.
+    """
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.gifts = [GiftIncome(
+        id="g1", propertyType="CASH", value=Decimal("100000"),
+        donorName="Friend", fromRelative=False, receivedOnMarriage=False,
+        considerationKind="WITHOUT_CONSIDERATION",
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.other_sources_income.income_56_2_x == Decimal("100000")
+    assert itr2_input.os_gift_breakdown is not None
+    assert itr2_input.os_gift_breakdown.aggregate_without_consideration == Decimal("100000")
+
+    baseline = compute_itr2(draft_to_itr2_input(_filing_ready_itr2_draft())[0])
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    assert result.other_sources_income == baseline.other_sources_income + Decimal("100000")
+
+
+def test_gift_from_relative_is_exempt() -> None:
+    """A gift from a relative is statutorily exempt regardless of amount."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.gifts = [GiftIncome(
+        id="g1", propertyType="CASH", value=Decimal("500000"),
+        donorName="Father", fromRelative=True,
+        considerationKind="WITHOUT_CONSIDERATION",
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.other_sources_income.income_56_2_x == Decimal("0")
+    assert itr2_input.os_gift_breakdown is None
+
+
+def test_gift_below_fifty_thousand_threshold_is_exempt() -> None:
+    """A non-relative cash gift at or under INR 50,000 is not taxable."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.gifts = [GiftIncome(
+        id="g1", propertyType="CASH", value=Decimal("50000"),
+        donorName="Colleague", fromRelative=False,
+        considerationKind="WITHOUT_CONSIDERATION",
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.other_sources_income.income_56_2_x == Decimal("0")
+    assert itr2_input.os_gift_breakdown is None
 
 
 def test_brought_forward_losses_map_correctly() -> None:

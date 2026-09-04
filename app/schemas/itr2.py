@@ -576,6 +576,26 @@ class TDS3FilingDetail(StrictModel):
     head_of_income: Literal["HP", "CG", "OS", "EI"] = "OS"
 
 
+class OSGiftBreakdown(StrictModel):
+    """Section 56(2)(x) taxable-gift category breakdown for Schedule OS.
+
+    Mirrors the official ``IncOthThanOwnRaceHorse`` block's own gift-category
+    fields exactly (``Tot562x``'s components): money and "any other property"
+    without consideration are tested against the aggregate INR 50,000
+    threshold (the whole amount becomes taxable once crossed, not just the
+    excess); immovable property is tested per-property against its own
+    stamp-duty value/inadequate-consideration threshold. Gifts from a
+    relative or received on the occasion of marriage are excluded entirely
+    upstream, before this breakdown is built.
+    """
+
+    aggregate_without_consideration: Decimal = Field(default=Decimal("0"), ge=0)
+    immovable_property_without_consideration: Decimal = Field(default=Decimal("0"), ge=0)
+    immovable_property_inadequate_consideration: Decimal = Field(default=Decimal("0"), ge=0)
+    other_property_without_consideration: Decimal = Field(default=Decimal("0"), ge=0)
+    other_property_inadequate_consideration: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 class ITR2Input(StrictModel):
     """Complete canonical input for an AY 2026-27 ITR-2 computation."""
 
@@ -592,6 +612,9 @@ class ITR2Input(StrictModel):
     house_property_income: Optional[HousePropertyIncome] = None
     house_properties: List[HousePropertyIncome] = Field(default_factory=list)
     other_sources_income: Optional[OtherSourcesIncome] = None
+    os_gift_breakdown: Optional[OSGiftBreakdown] = None
+    os_pf_income_benefit: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_tax_benefit: Decimal = Field(default=Decimal("0"), ge=0)
 
     cg_transactions: List[CGTransaction] = Field(default_factory=list)
     cg_112a_scrips: List[CG112AScrip] = Field(default_factory=list)
