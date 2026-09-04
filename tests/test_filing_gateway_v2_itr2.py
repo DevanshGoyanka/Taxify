@@ -29,6 +29,7 @@ from app.schemas.return_draft import (
     InterestIncome,
     PersonalInfo,
     ReturnDraft,
+    SeventhProvisoClause,
     TdsCredit,
     create_empty_draft,
 )
@@ -351,5 +352,78 @@ def test_itr2_filing_profile_rejects_director_flag_without_entries() -> None:
     was the exact live bug (a bare Y flag with no backing data)."""
     draft = _filing_ready_itr2_draft()
     draft.personal.isDirector = True
+    with pytest.raises(FilingGatewayV2Error):
+        generate_cbdt_json(draft)
+
+
+# ── Phase 4 re-audit: seventh-proviso sub-flags/amounts and Portuguese CC ───
+
+def test_generate_cbdt_json_itr2_emits_seventh_proviso_sub_flags_and_amounts() -> None:
+    """The seventh-proviso deposit/foreign-travel/electricity/clause(iv)
+    sub-flags, amounts, and detail rows all reach the official JSON.
+
+    Regression test found during the Phase 4 P0 exit re-audit: only the
+    umbrella SeventhProvisio139 Y/N flag was ever emitted -- none of
+    DepAmtAggAmtExcd1CrPrYrFlg/AmtSeventhProvisio139i/ii/iii/
+    clauseiv7provisio139iDtls/PortugeseCC5A were ever written to the JSON,
+    even though ITR2FilingProfile (via _itr2_filing_profile()) already
+    carried the individual amounts. This means the original §4.6
+    current-account-deposit fix was itself incomplete -- the frontend
+    control and the profile wiring were correct, but the actual filed JSON
+    never carried the disclosure.
+    """
+    draft = _filing_ready_itr2_draft()
+    draft.filing.seventhProviso.depositExceedsOneCrore = True
+    draft.filing.seventhProviso.depositAmount = Decimal("15000000")
+    draft.filing.seventhProviso.foreignTravel = True
+    draft.filing.seventhProviso.foreignTravelAmount = Decimal("300000")
+    draft.filing.seventhProviso.electricityExpenditure = True
+    draft.filing.seventhProviso.electricityExpenditureAmount = Decimal("150000")
+    draft.filing.seventhProviso.otherClauseIV = True
+    draft.filing.seventhProviso.clauseIVDetails = [
+        SeventhProvisoClause(id="c1", nature="1", amount=Decimal("50000")),
+    ]
+    draft.filing.portugueseCivilCodeApplies = True
+    official_json, _summary = generate_cbdt_json(draft)
+    filing_status = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
+
+    assert filing_status["DepAmtAggAmtExcd1CrPrYrFlg"] == "Y"
+    assert filing_status["AmtSeventhProvisio139i"] == 15000000
+    assert filing_status["IncrExpAggAmt2LkTrvFrgnCntryFlg"] == "Y"
+    assert filing_status["AmtSeventhProvisio139ii"] == 300000
+    assert filing_status["IncrExpAggAmt1LkElctrctyPrYrFlg"] == "Y"
+    assert filing_status["AmtSeventhProvisio139iii"] == 150000
+    assert filing_status["clauseiv7provisio139i"] == "Y"
+    clause_row = filing_status["clauseiv7provisio139iDtls"][0]
+    assert clause_row["clauseiv7provisio139iNature"] == "1"
+    assert clause_row["clauseiv7provisio139iAmount"] == 50000
+    assert filing_status["PortugeseCC5A"] == "Y"
+
+
+def test_generate_cbdt_json_itr2_omits_seventh_proviso_sub_amounts_when_unset() -> None:
+    """No seventh-proviso declarations means all sub-flags are N and no
+    amount/detail fields are emitted at all."""
+    draft = _filing_ready_itr2_draft()
+    official_json, _summary = generate_cbdt_json(draft)
+    filing_status = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
+    assert filing_status["DepAmtAggAmtExcd1CrPrYrFlg"] == "N"
+    assert filing_status["IncrExpAggAmt2LkTrvFrgnCntryFlg"] == "N"
+    assert filing_status["IncrExpAggAmt1LkElctrctyPrYrFlg"] == "N"
+    assert filing_status["clauseiv7provisio139i"] == "N"
+    assert filing_status["PortugeseCC5A"] == "N"
+    for key in (
+        "AmtSeventhProvisio139i", "AmtSeventhProvisio139ii", "AmtSeventhProvisio139iii",
+        "clauseiv7provisio139iDtls",
+    ):
+        assert key not in filing_status
+
+
+def test_itr2_filing_profile_rejects_deposit_flag_below_statutory_minimum() -> None:
+    """deposit_exceeds_one_crore=True with an amount under INR 1 crore is
+    rejected -- the checkbox is only meaningful once the real amount
+    crosses the threshold it names."""
+    draft = _filing_ready_itr2_draft()
+    draft.filing.seventhProviso.depositExceedsOneCrore = True
+    draft.filing.seventhProviso.depositAmount = Decimal("500000")
     with pytest.raises(FilingGatewayV2Error):
         generate_cbdt_json(draft)

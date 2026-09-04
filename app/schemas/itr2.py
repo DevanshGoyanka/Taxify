@@ -117,6 +117,17 @@ class UnlistedEquityEntry(StrictModel):
     closing_cost: Decimal = Field(ge=0)
 
 
+class SeventhProvisoClauseEntry(StrictModel):
+    """One clause-(iv) seventh-proviso disclosure row (official
+    ``clauseiv7provisio139iType``). ITR-2's own nature enum is ``1``/``2``
+    only — narrower than ITR-4's four codes; the frontend already restricts
+    the dropdown accordingly for ITR-2.
+    """
+
+    nature: Literal["1", "2"]
+    amount: Decimal = Field(ge=0)
+
+
 class ITR2FilingProfile(StrictModel):
     """Identity, address, filing status, and verification facts."""
 
@@ -138,9 +149,14 @@ class ITR2FilingProfile(StrictModel):
     notice_date: Optional[date] = None
     opted_out_new_tax_regime: bool = False
     seventh_proviso_139: bool = False
+    deposit_exceeds_one_crore: bool = False
     foreign_travel_expenditure: Decimal = Field(default=Decimal("0"), ge=0)
+    foreign_travel_flag: bool = False
     electricity_expenditure: Decimal = Field(default=Decimal("0"), ge=0)
+    electricity_expenditure_flag: bool = False
     current_account_deposits: Decimal = Field(default=Decimal("0"), ge=0)
+    other_clause_iv_flag: bool = False
+    seventh_proviso_clause_iv_entries: List[SeventhProvisoClauseEntry] = Field(default_factory=list)
     is_company_director: bool = False
     company_director_entries: List[CompanyDirectorEntry] = Field(default_factory=list)
     held_unlisted_equity: bool = False
@@ -180,6 +196,20 @@ class ITR2FilingProfile(StrictModel):
             raise ValueError("Company-director filing requires at least one company_director_entries row")
         if self.held_unlisted_equity and not self.unlisted_equity_entries:
             raise ValueError("Unlisted-equity filing requires at least one unlisted_equity_entries row")
+        # Statutory minimums the official schema hard-enforces for each
+        # seventh-proviso amount (AmtSeventhProvisio139i/ii/iii) -- the
+        # checkbox is only meaningful once the real amount crosses the
+        # threshold it names, so a flag set without a qualifying amount is a
+        # genuine data-entry inconsistency, not a value to silently pass
+        # through or drop.
+        if self.deposit_exceeds_one_crore and self.current_account_deposits < Decimal("10000000"):
+            raise ValueError("Current-account deposits exceeding INR 1 crore requires an amount of at least INR 1,00,00,000")
+        if self.foreign_travel_flag and self.foreign_travel_expenditure < Decimal("200000"):
+            raise ValueError("Foreign-travel expenditure exceeding INR 2 lakh requires an amount of at least INR 2,00,000")
+        if self.electricity_expenditure_flag and self.electricity_expenditure < Decimal("100000"):
+            raise ValueError("Electricity expenditure exceeding INR 1 lakh requires an amount of at least INR 1,00,000")
+        if self.other_clause_iv_flag and not self.seventh_proviso_clause_iv_entries:
+            raise ValueError("Other seventh-proviso clause (iv) filing requires at least one seventh_proviso_clause_iv_entries row")
         return self
 
 

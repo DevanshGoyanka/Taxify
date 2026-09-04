@@ -69,6 +69,7 @@ from app.schemas.itr2 import (
     JurisdictionResidenceEntry,
     PropertyFilingDetail,
     ResidentialStatus as ITR2ResidentialStatus,
+    SeventhProvisoClauseEntry,
     TDS3FilingDetail,
     UnlistedEquityEntry,
 )
@@ -1236,9 +1237,18 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
                 or seventh.electricity_expenditure
                 or seventh.other_clause_iv
             ),
+            deposit_exceeds_one_crore=seventh.deposit_exceeds_one_crore,
             foreign_travel_expenditure=seventh.foreign_travel_amount,
+            foreign_travel_flag=seventh.foreign_travel,
             electricity_expenditure=seventh.electricity_expenditure_amount,
+            electricity_expenditure_flag=seventh.electricity_expenditure,
             current_account_deposits=seventh.deposit_amount,
+            other_clause_iv_flag=seventh.other_clause_iv,
+            seventh_proviso_clause_iv_entries=[
+                SeventhProvisoClauseEntry(nature=nature, amount=amount)
+                for nature, amount in seventh.clause_iv_details
+                if nature in {"1", "2"}
+            ],
             is_company_director=personal.isDirector,
             company_director_entries=[
                 CompanyDirectorEntry(

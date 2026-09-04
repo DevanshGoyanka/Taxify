@@ -25,10 +25,16 @@
 >   `CompDirectorPrvYrFlg` emission) plus a missing residential-status *selector* the frontend
 >   never had at all.
 >
+> - **Phase 4** (P0 exit re-audit, see the dedicated section between §4 and §5): a systematic
+>   key-by-key schema diff of `_part_a_gen1()` — the function every Phase 3 fix landed in — found
+>   one more CRITICAL gap the Phase 3 fixes exposed: the seventh-proviso sub-flags/amounts and
+>   `PortugeseCC5A` were never emitted at all, meaning §4.6's own fix was itself incomplete. Fixed
+>   inline in the same pass.
+>
 > See each section's own "Fix status"/"Re-verified" blockquote for full evidence, regression
-> tests, and `git stash` pre-fix confirmation. Remaining open work is Phase 4 onward (P0 exit
-> re-audit, then the 7 P1 findings in §5-§13) — the overall "not production-ready" status is
-> unchanged pending those, though every CRITICAL P0 finding closed so far has a verified fix.
+> tests, and `git stash` pre-fix confirmation. Remaining open work is the 7 P1 findings in §5-§13
+> — the overall "not production-ready" status is unchanged pending those, though every CRITICAL P0
+> finding is now closed with a verified fix.
 
 ## Executive conclusion
 
@@ -999,6 +1005,44 @@ At `PersonalInfoTab.tsx:215`, the current-account deposit threshold controls are
 > the frontend control was unreachable for ITR-2 filers, so the data could
 > never be entered in the first place. `npm run build` confirmed clean
 > after the type/dropdown change.
+>
+> **Update (2026-09-04, Phase 4 P0 exit re-audit): the above fix was itself incomplete — corrected
+> and now verified end-to-end.** A systematic cross-check of every key `_part_a_gen1()` emits
+> against the official schema's full `FilingStatus` property list (prompted by this session's two
+> prior key-name/dead-field bugs in the same function) found that **none** of the seventh-proviso
+> sub-fields were ever emitted into the JSON at all — only the single umbrella
+> `SeventhProvisio139` Y/N flag. `DepAmtAggAmtExcd1CrPrYrFlg`, `AmtSeventhProvisio139i/ii/iii`,
+> `IncrExpAggAmt2LkTrvFrgnCntryFlg`, `IncrExpAggAmt1LkElctrctyPrYrFlg`, `clauseiv7provisio139i`,
+> `clauseiv7provisio139iDtls`, and (unrelated to this item but discovered in the same sweep)
+> `PortugeseCC5A` were all absent from the builder — meaning a taxpayer declaring >₹1 crore
+> current-account deposits, even after the frontend-gate fix above, would still have had that fact
+> silently dropped from the actual filed JSON. `ITR2FilingProfile` already carried the correct
+> aggregate amounts (`current_account_deposits`, `foreign_travel_expenditure`,
+> `electricity_expenditure`) from `_itr2_filing_profile()`'s existing wiring — this was a pure
+> builder gap, the exact same "captured but discarded mid-pipeline" pattern found repeatedly
+> earlier in this session (TDS/TCS, Schedule OS).
+>
+> Added four new boolean sub-flags (`deposit_exceeds_one_crore`, `foreign_travel_flag`,
+> `electricity_expenditure_flag`, `other_clause_iv_flag`) and a new `SeventhProvisoClauseEntry` row
+> list to `ITR2FilingProfile`, wired from `NormalizedSeventhProviso`'s already-captured raw fields
+> (`seventh.deposit_exceeds_one_crore`/`.foreign_travel`/`.electricity_expenditure`/
+> `.other_clause_iv`/`.clause_iv_details`, all pre-existing in `personal_profile.py`, simply never
+> reaching `ITR2FilingProfile` before now). Added a new model validator enforcing the schema's own
+> hard statutory minimums (deposit ≥ ₹1cr, foreign travel ≥ ₹2L, electricity ≥ ₹1L) whenever the
+> corresponding flag is true — a flag set without a qualifying amount is a genuine data-entry
+> inconsistency, not a value to silently pass through. `_part_a_gen1()` now emits all four sub-flags
+> unconditionally (matching the sibling `HeldUnlistedEqShrPrYrFlg`/`FiiFpiFlag`/
+> `CompDirectorPrvYrFlg` convention) and the amounts/detail array/`PortugeseCC5A` conditionally.
+>
+> No frontend changes were needed for this correction — the "Seventh proviso to section 139(1)"
+> UI (checkboxes, amounts, clause-IV row editor) already existed and already captured this data
+> correctly; only the backend pipeline from `ITR2FilingProfile` onward silently dropped it.
+>
+> Regression tests: `test_generate_cbdt_json_itr2_emits_seventh_proviso_sub_flags_and_amounts`,
+> `test_generate_cbdt_json_itr2_omits_seventh_proviso_sub_amounts_when_unset`, and
+> `test_itr2_filing_profile_rejects_deposit_flag_below_statutory_minimum` in
+> `tests/test_filing_gateway_v2_itr2.py`, confirmed via `git stash` to be absent on pre-fix code.
+> Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` suite (290 tests) green.
 
 ## 4.7 LEI fields are missing or incomplete
 
@@ -1021,6 +1065,38 @@ Applicable LEI information is not represented through a complete frontend workfl
 > `test_generate_cbdt_json_itr2_omits_lei_block_when_unset` in
 > `tests/test_filing_gateway_v2_itr2.py`, confirmed via `git stash` to be absent on pre-fix code.
 > `npm run build` clean.
+
+---
+
+## Phase 4 — P0 exit re-audit (2026-09-04)
+
+Per `C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`'s Phase 4: a targeted re-read of
+`_part_a_gen1()` (`app/engine/itd/itr2.py`) — the exact function every Phase 3 fix landed in —
+against the official schema's complete `FilingStatus`/`PersonalInfo` property lists, prompted by
+this session's two prior latent bugs in that same function (a wrong JSON key name, a dead field
+emission). Method: enumerated every property the schema defines for both blocks and diffed
+against every key the builder actually constructs.
+
+**Finding, fixed inline (CRITICAL — see §4.6's "Update" note above for the full write-up):** the
+seventh-proviso sub-flags/amounts (`DepAmtAggAmtExcd1CrPrYrFlg`, `AmtSeventhProvisio139i/ii/iii`,
+`IncrExpAggAmt2LkTrvFrgnCntryFlg`, `IncrExpAggAmt1LkElctrctyPrYrFlg`, `clauseiv7provisio139i`,
+`clauseiv7provisio139iDtls`) and `PortugeseCC5A` were never emitted at all — only the umbrella
+`SeventhProvisio139` flag was. This meant §4.6's own fix (unblocking the frontend control) was
+incomplete: the disclosure still never reached the actual filed JSON. Fixed, tested, and
+`git stash`-verified in the same pass.
+
+**Checked and confirmed correct, no further finding:** `PersonalInfo`'s full property list
+(`AssesseeName`, `PAN`, `Address`, `SecondaryAdd`, `AlternateAddress`, `DOB`, `Status`,
+`AadhaarCardNo`) — every key matches exactly. `AssesseeRep`/`AsseseeRepFlg` — `AsseseeRepFlg` is
+correctly hardcoded `"N"` (not a bug): `_itr2_filing_profile()` already rejects
+`verification.capacity == REPRESENTATIVE` outright before construction, so ITR-2 genuinely never
+has a represented return, unlike ITR-1/ITR-4.
+
+Not re-checked in this pass (deferred, in scope for Phase 5's own P1 review rather than expanding
+Phase 4): the full key-by-key schema diff was applied only to `PartA_GEN1` (the block every Phase
+1-3 fix touched) — Schedule CG/OS/TDS/TCS/IT builders were spot-checked via their own regression
+tests' schema validation (all passing) rather than independently re-diffed key-by-key against the
+schema, since those tests already assert `Draft4Validator` passes on realistic populated data.
 
 ---
 

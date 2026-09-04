@@ -143,7 +143,36 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         # HeldUnlistedEqShrPrYrFlg one line above.
         "CompDirectorPrvYrFlg": "Y" if profile.is_company_director else "N",
         "FiiFpiFlag": "Y" if profile.is_fii_fpi else "N",
+        # Sibling per-clause flags under the SeventhProvisio139 umbrella --
+        # previously never emitted at all, even though ITR2FilingProfile
+        # already carried the individual deposit/foreign-travel/electricity
+        # amounts (they were captured all the way from the frontend's
+        # SeventhProviso block through _itr2_filing_profile(), then silently
+        # dropped here before ever reaching the JSON). Found during the
+        # Phase 4 P0 exit re-audit -- confirms the §4.6 current-account-
+        # deposit fix was itself incomplete: the frontend control and the
+        # ITR2FilingProfile wiring were both correct, but the actual filed
+        # JSON never carried the disclosure at all.
+        "DepAmtAggAmtExcd1CrPrYrFlg": "Y" if profile.deposit_exceeds_one_crore else "N",
+        "IncrExpAggAmt2LkTrvFrgnCntryFlg": "Y" if profile.foreign_travel_flag else "N",
+        "IncrExpAggAmt1LkElctrctyPrYrFlg": "Y" if profile.electricity_expenditure_flag else "N",
+        "clauseiv7provisio139i": "Y" if profile.other_clause_iv_flag else "N",
+        "PortugeseCC5A": "Y" if profile.portuguese_civil_code_applies else "N",
     }
+    if profile.deposit_exceeds_one_crore:
+        filing_status["AmtSeventhProvisio139i"] = _to_rupees(profile.current_account_deposits)
+    if profile.foreign_travel_flag:
+        filing_status["AmtSeventhProvisio139ii"] = _to_rupees(profile.foreign_travel_expenditure)
+    if profile.electricity_expenditure_flag:
+        filing_status["AmtSeventhProvisio139iii"] = _to_rupees(profile.electricity_expenditure)
+    if profile.seventh_proviso_clause_iv_entries:
+        filing_status["clauseiv7provisio139iDtls"] = [
+            {
+                "clauseiv7provisio139iNature": entry.nature,
+                "clauseiv7provisio139iAmount": _to_rupees(entry.amount),
+            }
+            for entry in profile.seventh_proviso_clause_iv_entries
+        ]
     if profile.receipt_number:
         filing_status["ReceiptNo"] = profile.receipt_number
     if profile.original_return_date:
