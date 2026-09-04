@@ -115,6 +115,30 @@ def test_generate_cbdt_json_itr2_passes_validators_and_schema() -> None:
     assert summary["computedByFormEngine"] == "ITR-2"
 
 
+def test_generate_cbdt_json_itr2_emits_fii_fpi_declaration() -> None:
+    """FII/FPI status and SEBI registration number reach the official JSON.
+
+    Regression coverage for audit §4.2: the backend/builder path
+    (draft.filing.isFiiFpi/sebiRegistrationNumber -> _itr2_filing_profile ->
+    ITR2FilingProfile.is_fii_fpi/sebi_registration_number -> _part_a_gen1's
+    FiiFpiFlag/SebiRegnNo).
+
+    Found and fixed a real, pre-existing schema-blocking bug along the way:
+    the builder emitted the key "SEBIRegNo", but the official schema
+    requires "SebiRegnNo" -- confirmed via live Draft4Validator rejection
+    ("Additional properties are not allowed ('SEBIRegNo' was unexpected)").
+    No prior test ever exercised is_fii_fpi=True through schema validation.
+    """
+    draft = _filing_ready_itr2_draft()
+    draft.personal.residentialStatus = "NR"  # FII/FPI is NR-only (input_rules.py)
+    draft.filing.isFiiFpi = True
+    draft.filing.sebiRegistrationNumber = "INZZFP123456"
+    official_json, _summary = generate_cbdt_json(draft)
+    personal_info = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
+    assert personal_info["FiiFpiFlag"] == "Y"
+    assert personal_info["SebiRegnNo"] == "INZZFP123456"
+
+
 def test_generate_cbdt_json_itr2_rejects_representative_verification() -> None:
     """ITR-2 verification capacity REPRESENTATIVE/PARTNER is not supported."""
     draft = _filing_ready_itr2_draft()

@@ -149,7 +149,10 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
     if profile.notice_date:
         filing_status["NoticeDate"] = _date(profile.notice_date)
     if profile.sebi_registration_number:
-        filing_status["SEBIRegNo"] = profile.sebi_registration_number
+        # Official schema key is "SebiRegnNo", NOT "SEBIRegNo" -- confirmed
+        # via live Draft4Validator schema validation (the wrong key was
+        # rejected outright with "Additional properties are not allowed").
+        filing_status["SebiRegnNo"] = profile.sebi_registration_number
     return {"PersonalInfo": personal_info, "FilingStatus": filing_status}
 
 

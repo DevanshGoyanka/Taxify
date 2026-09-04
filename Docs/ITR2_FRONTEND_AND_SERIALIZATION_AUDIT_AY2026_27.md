@@ -794,6 +794,24 @@ The backend emits `FiiFpiFlag` and optionally `SEBIRegNo` around `itr2.py:132–
 
 **Severity: High**
 
+> **Fix status (2026-09-04): fixed and verified.** Re-audit at implementation time found the
+> backend/builder path was already fully wired end-to-end
+> (`filing_gateway_v2.py::_itr2_filing_profile` already reads `draft.filing.isFiiFpi`/
+> `sebiRegistrationNumber` into `ITR2FilingProfile`) — only the frontend control to actually set
+> these draft fields was missing, and no test exercised the path at all. Added a checkbox + SEBI
+> registration number field to `PersonalInfoTab.tsx` (gated `itrForm === 'ITR-2'`).
+>
+> **A real, pre-existing schema-blocking bug was found and fixed while adding the first end-to-end
+> test for this path**: `itd/itr2.py`'s `_part_a_gen1()` emitted the JSON key `"SEBIRegNo"`, but
+> the official schema requires `"SebiRegnNo"` (confirmed via live `Draft4Validator` rejection:
+> `Additional properties are not allowed ('SEBIRegNo' was unexpected)`). This meant any FII/FPI
+> taxpayer's return would have failed CBDT JSON schema validation outright — the bug simply had
+> no test to catch it before now.
+>
+> Regression test: `test_generate_cbdt_json_itr2_emits_fii_fpi_declaration` in
+> `tests/test_filing_gateway_v2_itr2.py`, confirmed via `git stash` to be absent (and the wrong
+> key present) on pre-fix code. `npm run build` clean.
+
 ## 4.3 Director and unlisted-equity disclosures are reduced to flags
 
 The model has `isDirector` and `holdsUnlistedShares` around `return_draft.py:1492–1502`, but the frontend does not provide the complete official detail tables, such as company identity, DIN/directorship details, ISIN, acquisition/disposal, share count, face value, and cost.
