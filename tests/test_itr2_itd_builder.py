@@ -30,7 +30,16 @@ from app.schemas.itr2 import (
     CGTransaction,
     ITR2FilingProfile,
     ITR2Input,
+    OS89ACountryEntry,
+    OSDeductions,
+    OSDividendEntry,
+    OSDtaaEntry,
     OSGiftBreakdown,
+    OSOtherIncomeEntry,
+    OSQuarterlyAmount,
+    OSRaceHorseActivity,
+    OSSection89A,
+    OSUnexplainedIncome,
     ScheduleSIEntry,
     TDS3FilingDetail,
     VDATransaction,
@@ -524,3 +533,139 @@ def test_schedule_it_incomplete_challan_error_names_row_and_missing_fields() -> 
     )
     with pytest.raises(ValueError, match=r"entry #2 is missing: payment date, challan serial number"):
         build_itr2_json(compute(input_data), input_data)
+
+
+def test_schedule_os_serializes_unexplained_income_89a_deductions_and_dtaa() -> None:
+    """Optional Schedule OS fields (unexplained income, §89A, other-income
+    detail, deductions, DTAA) all reach the official JSON, not just the
+    mandatory dividend/interest/family-pension aggregates.
+
+    Per explicit user instruction: the system must input and process every
+    schema field, mandatory or optional, not just the fields required for a
+    schema-valid minimal return.
+    """
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("5000")),
+        # The mapper (draft_to_itr2_input.py) is what actually routes
+        # os_unexplained_income's total into a "115BBE" Schedule-SI entry --
+        # this builder-level test supplies the matching entry directly,
+        # exactly like test_schedule_os_serializes_lottery_pf_and_gift_income
+        # already does for winnings/PF, since _schedule_os() itself only
+        # reads si_entries for the 115BBE tax figure.
+        si_entries=[ScheduleSIEntry(section="115BBE", gross_income=Decimal("150000"))],
+        os_unexplained_income=OSUnexplainedIncome(
+            cash_credits_us68=Decimal("100000"),
+            unexplained_money_us69a=Decimal("50000"),
+        ),
+        os_section_89a=OSSection89A(
+            income_notified=Decimal("200000"),
+            relief=Decimal("15000"),
+            country_entries=[OS89ACountryEntry(country_code="US", amount=Decimal("200000"))],
+        ),
+        os_other_income_entries=[
+            OSOtherIncomeEntry(nature="Freelance consulting", amount=Decimal("30000")),
+        ],
+        os_dtaa_entries=[
+            OSDtaaEntry(
+                amount=Decimal("40000"), nature_of_income="1ai",
+                country_name="Singapore", country_code="65", dtaa_article="11",
+                rate_as_per_treaty=Decimal("10"), rate_as_per_it_act=Decimal("20"),
+                tax_residency_certificate="Y", item_no_incl="5A1ai",
+                applicable_rate=Decimal("10"),
+            ),
+        ],
+        os_dtaa_aggregate=Decimal("4000"),
+        os_deductions=OSDeductions(expenses=Decimal("2000"), depreciation=Decimal("1000")),
+        bank_accounts=[
+            BankAccount(
+                account_number="1234567890", ifsc_code="SBIN0000001",
+                bank_name="State Bank of India", account_type="savings", is_primary=True,
+            )
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    os_block = document["ITR"]["ITR2"]["ScheduleOS"]
+    block = os_block["IncOthThanOwnRaceHorse"]
+
+    assert block["CashCreditsUs68"] == 100000
+    assert block["UnExplndMoneyUs69A"] == 50000
+    # 115BBE special-rate tax on the unexplained-income total.
+    assert block["IncChrgblUs115BBE"] == 150000
+
+    assert block["IncomeNotified89AOS"] == 200000
+    assert block["Increliefus89AOS"] == 15000
+    assert block["IncomeNotified89ATypeOS"] == [{"NOT89ACountrycode": "US", "NOT89AAmount": 200000}]
+
+    assert block["AnyOtherIncome"] == 30000
+    assert block["OthersInc"]["OthersIncDtls"] == [{"OthNatOfInc": "Freelance consulting", "OthAmount": 30000}]
+
+    assert block["Deductions"]["Expenses"] == 2000
+    assert block["Deductions"]["Depreciation"] == 1000
+
+    assert block["IncChargblSplRateOS"]["TotalAmtTaxUsDTAASchOs"] == 4000
+    dtaa_row = block["IncChargblSplRateOS"]["NRIOsDTAA"]["NRIDTAADtlsSchOS"][0]
+    assert dtaa_row["DTAAamt"] == 40000
+    assert dtaa_row["CountryName"] == "Singapore"
+    assert dtaa_row["NatureOfIncome"] == "1ai"
+
+
+def test_schedule_os_serializes_dividend_section_breakdown() -> None:
+    """Dividend rows preserve their official section classification
+    (Dividend22e/Dividend22f split, DTAA/115A-series date-range fields),
+    not just the undifferentiated aggregate."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("100000")),
+        os_dividend_entries=[
+            OSDividendEntry(section="10(22e)", amount=Decimal("30000")),
+            OSDividendEntry(section="DTAA", amount=Decimal("20000"), q2=Decimal("20000")),
+            OSDividendEntry(section="194", amount=Decimal("50000")),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    os_block = document["ITR"]["ITR2"]["ScheduleOS"]
+    block = os_block["IncOthThanOwnRaceHorse"]
+
+    assert block["Dividend22e"] == 30000
+    assert block["Dividend22f"] == 0
+    assert block["DividendOthThan22e"] == 70000  # 100000 - 30000
+    assert os_block["DividendDTAA"]["DateRange"]["Upto15Of9"] == 20000
+
+
+def test_schedule_os_serializes_race_horse_activity_and_includes_net_profit_in_gti() -> None:
+    """Race-horse-activity net profit reaches IncFromOwnHorse AND is
+    included in GTI (as slab-rate Other Sources income) -- previously this
+    entire sub-schedule had no data path into ITR2Input at all."""
+    input_data = _input(
+        os_race_horse=OSRaceHorseActivity(
+            receipts=Decimal("500000"), deduction_us57=Decimal("300000"),
+            balance=Decimal("200000"),
+        ),
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    os_block = document["ITR"]["ITR2"]["ScheduleOS"]
+
+    assert os_block["IncFromOwnHorse"]["Receipts"] == 500000
+    assert os_block["IncFromOwnHorse"]["BalanceOwnRaceHorse"] == 200000
+    # The race-horse profit is included in GTI (IncChargeable) but excluded
+    # from BalanceNoRaceHorse/TotOthSrcNoRaceHorse, matching the official
+    # form's own "no race horse" naming.
+    assert os_block["IncChargeable"] == 200000
+    assert os_block["IncOthThanOwnRaceHorse"]["BalanceNoRaceHorse"] == 0
+    assert os_block["TotOthSrcNoRaceHorse"] == 0
+    assert result.other_sources_income == Decimal("200000")
+
+
+def test_schedule_os_omits_optional_blocks_when_unset() -> None:
+    """No optional Schedule OS data means no placeholder detail blocks --
+    matches the project's no-fabricated-data convention."""
+    input_data = _input(other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("1000")))
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    block = document["ITR"]["ITR2"]["ScheduleOS"]["IncOthThanOwnRaceHorse"]
+    assert block["OthersInc"]["OthersIncDtls"] == []
+    assert "NRIOsDTAA" not in block["IncChargblSplRateOS"]
+    assert block["IncomeNotified89ATypeOS"] == []

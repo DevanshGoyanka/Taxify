@@ -394,6 +394,15 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         (sie.gross_income for sie in input_data.si_entries if sie.section in _OS_HEAD_SI_SECTIONS),
         _ZERO,
     )
+    # Income from owning/maintaining race horses (Schedule OS's own
+    # "IncFromOwnHorse" sub-head) is slab-rate Other Sources income like any
+    # other OS category, just disclosed separately in the official form.
+    # Only a net profit is added to GTI here -- a race-horse activity loss
+    # cannot be set off against other income at all (section 74A(3)), so a
+    # negative balance is disclosed but not netted against other OS income;
+    # its carry-forward is a further, separately-scoped limitation.
+    if input_data.os_race_horse is not None:
+        r.other_sources_income += max(_ZERO, input_data.os_race_horse.balance)
     r.schedules["os"] = os
 
     # ── 2. Capital Gains ─────────────────────────────────────────────────────

@@ -675,6 +675,125 @@ class OSGiftBreakdown(StrictModel):
     other_property_inadequate_consideration: Decimal = Field(default=Decimal("0"), ge=0)
 
 
+class OSUnexplainedIncome(StrictModel):
+    """Section 68/69/69A/69B/69C/69D unexplained-income breakdown.
+
+    Every category here is taxed under section 115BBE (flat rate, no
+    deductions/set-off) -- the aggregate of all eight feeds a Schedule-SI
+    115BBE entry alongside any ``UNEXPLAINED_115BBE``-type winnings.
+    """
+
+    cash_credits_us68: Decimal = Field(default=Decimal("0"), ge=0)
+    unexplained_investments_us69: Decimal = Field(default=Decimal("0"), ge=0)
+    unexplained_money_us69a: Decimal = Field(default=Decimal("0"), ge=0)
+    undisclosed_investments_us69b: Decimal = Field(default=Decimal("0"), ge=0)
+    unexplained_expenditure_us69c: Decimal = Field(default=Decimal("0"), ge=0)
+    hundi_borrowing_us69d: Decimal = Field(default=Decimal("0"), ge=0)
+    prior_year_business_trust_562xii: Decimal = Field(default=Decimal("0"), ge=0)
+    prior_year_life_insurance_562xiii: Decimal = Field(default=Decimal("0"), ge=0)
+
+    @property
+    def total(self) -> Decimal:
+        return (
+            self.cash_credits_us68 + self.unexplained_investments_us69
+            + self.unexplained_money_us69a + self.undisclosed_investments_us69b
+            + self.unexplained_expenditure_us69c + self.hundi_borrowing_us69d
+            + self.prior_year_business_trust_562xii + self.prior_year_life_insurance_562xiii
+        )
+
+
+class OSQuarterlyAmount(StrictModel):
+    """A quarterly (Q1-Q5) amount breakdown for 234C advance-tax-interest
+    purposes (official ``DateRangeType``)."""
+
+    q1: Decimal = Field(default=Decimal("0"), ge=0)
+    q2: Decimal = Field(default=Decimal("0"), ge=0)
+    q3: Decimal = Field(default=Decimal("0"), ge=0)
+    q4: Decimal = Field(default=Decimal("0"), ge=0)
+    q5: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class OS89ACountryEntry(StrictModel):
+    """One Section 89A notified-income-by-country row (official ``NOT89AType``)."""
+
+    country_code: Literal["US", "UK", "CA"]
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class OSSection89A(StrictModel):
+    """Section 89A (foreign-retirement-account income deferral) aggregates."""
+
+    income_notified: Decimal = Field(default=Decimal("0"), ge=0)
+    income_notified_other: Decimal = Field(default=Decimal("0"), ge=0)
+    income_notified_prior_yr: Decimal = Field(default=Decimal("0"), ge=0)
+    relief: Decimal = Field(default=Decimal("0"), ge=0)
+    country_entries: List[OS89ACountryEntry] = Field(default_factory=list)
+
+
+class OSOtherIncomeEntry(StrictModel):
+    """One "any other income" detail row (official ``OthersIncDtlOS``)."""
+
+    nature: str = Field(min_length=1, max_length=50)
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class OSDividendEntry(StrictModel):
+    """One dividend row carrying its official section classification and
+    quarter breakdown (official ``DividendXxx`` date-range fields plus the
+    ``Dividend22e``/``Dividend22f``/``DividendOthThan22e`` split)."""
+
+    section: Literal[
+        "194", "10(22e)", "10(22f)", "115BBDA", "115BBDAaiii",
+        "115A1ai", "115A1aA", "115AC", "115ACA", "115AD1i", "DTAA",
+    ]
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    q1: Decimal = Field(default=Decimal("0"), ge=0)
+    q2: Decimal = Field(default=Decimal("0"), ge=0)
+    q3: Decimal = Field(default=Decimal("0"), ge=0)
+    q4: Decimal = Field(default=Decimal("0"), ge=0)
+    q5: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class OSDtaaEntry(StrictModel):
+    """One DTAA-rate other-sources income row (official ``NRIDTAADtlsSchOS``)."""
+
+    amount: Decimal
+    nature_of_income: Literal["1ai", "1aiii", "1b", "1c", "1d", "2ai", "2aii", "2d", "2e"]
+    country_name: str = Field(min_length=1, max_length=55)
+    country_code: str = Field(min_length=1)
+    dtaa_article: str = Field(min_length=1, max_length=16)
+    rate_as_per_treaty: Decimal = Field(ge=0, le=100)
+    rate_as_per_it_act: Decimal = Field(ge=0, le=100)
+    tax_residency_certificate: Literal["Y", "N"] = "N"
+    item_no_incl: str = Field(min_length=1)
+    applicable_rate: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+
+
+class OSDeductions(StrictModel):
+    """Other-sources deduction claims (official ``Deductions`` block, minus
+    ``DeductionUs57iia`` which the calculator derives from family pension)."""
+
+    expenses: Decimal = Field(default=Decimal("0"), ge=0)
+    depreciation: Decimal = Field(default=Decimal("0"), ge=0)
+    interest_expense_us57: Decimal = Field(default=Decimal("0"), ge=0)
+    interest_expense_eligible_us57: Decimal = Field(default=Decimal("0"), ge=0)
+    amount_not_deductible_us58: Decimal = Field(default=Decimal("0"), ge=0)
+    profit_chargeable_us59: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class OSRaceHorseActivity(StrictModel):
+    """Income from owning and maintaining race horses (official
+    ``IncFromOwnHorse``) -- a distinct business-like Schedule OS sub-head
+    taxed at slab rate with its own specific deductions, separate from the
+    ordinary "other sources" total."""
+
+    receipts: Decimal = Field(default=Decimal("0"), ge=0)
+    deduction_us57: Decimal = Field(default=Decimal("0"), ge=0)
+    amount_not_deductible_us58: Decimal = Field(default=Decimal("0"))
+    profit_chargeable_us59: Decimal = Field(default=Decimal("0"))
+    balance: Decimal = Field(default=Decimal("0"))
+
+
 class ITR2Input(StrictModel):
     """Complete canonical input for an AY 2026-27 ITR-2 computation."""
 
@@ -694,6 +813,21 @@ class ITR2Input(StrictModel):
     os_gift_breakdown: Optional[OSGiftBreakdown] = None
     os_pf_income_benefit: Decimal = Field(default=Decimal("0"), ge=0)
     os_pf_tax_benefit: Decimal = Field(default=Decimal("0"), ge=0)
+    os_unexplained_income: Optional[OSUnexplainedIncome] = None
+    os_section_89a: Optional[OSSection89A] = None
+    os_other_income_entries: List[OSOtherIncomeEntry] = Field(default_factory=list)
+    os_dividend_entries: List[OSDividendEntry] = Field(default_factory=list)
+    os_dtaa_entries: List[OSDtaaEntry] = Field(default_factory=list)
+    os_dtaa_aggregate: Decimal = Field(default=Decimal("0"), ge=0)
+    os_deductions: Optional[OSDeductions] = None
+    os_race_horse: Optional[OSRaceHorseActivity] = None
+    os_pf_interest_10_11_first_proviso: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_interest_10_11_second_proviso: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_interest_10_12_first_proviso: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_interest_10_12_second_proviso: Decimal = Field(default=Decimal("0"), ge=0)
+    os_interest_from_others: Decimal = Field(default=Decimal("0"), ge=0)
+    os_lottery_quarters: Optional[OSQuarterlyAmount] = None
+    os_gaming_quarters: Optional[OSQuarterlyAmount] = None
 
     cg_transactions: List[CGTransaction] = Field(default_factory=list)
     cg_112a_scrips: List[CG112AScrip] = Field(default_factory=list)

@@ -67,15 +67,24 @@ def _z6() -> dict[str, int]:
     }
 
 
-def _date_range() -> dict[str, Any]:
-    """All-zero DateRangeType."""
+def _date_range(
+    q1: Decimal = _ZERO, q2: Decimal = _ZERO, q3: Decimal = _ZERO,
+    q4: Decimal = _ZERO, q5: Decimal = _ZERO,
+) -> dict[str, Any]:
+    """DateRangeType -- quarterly income breakdown used for advance-tax-
+    interest (234C) purposes across Schedule OS's dividend/lottery/89A
+    categories. Q1-Q5 map in order to the five official periods, matching
+    the established convention already used for ITR-1's own dividend
+    quarterly breakdown (`itd/itr1.py`'s ``dividend_quarterly_breakdown``).
+    Defaults to all-zero when the source data carries no quarter breakdown.
+    """
     return {
         "DateRange": {
-            "Upto15Of6": 0,
-            "Upto15Of9": 0,
-            "Up16Of9To15Of12": 0,
-            "Up16Of12To15Of3": 0,
-            "Up16Of3To31Of3": 0,
+            "Upto15Of6": _to_rupees(q1),
+            "Upto15Of9": _to_rupees(q2),
+            "Up16Of9To15Of12": _to_rupees(q3),
+            "Up16Of12To15Of3": _to_rupees(q4),
+            "Up16Of3To31Of3": _to_rupees(q5),
         }
     }
 
@@ -578,11 +587,51 @@ def _schedule_hp(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
 # Schedule OS — Other Sources
 # ============================================================================
 
+# Draft DividendSection -> official top-level DateRangeType field. "194"
+# (ordinary domestic-company dividend), "10(22e)", and "10(22f)" have no
+# top-level date-range field of their own -- they only ever appear inside
+# IncOthThanOwnRaceHorse's DividendOthThan22e/Dividend22e/Dividend22f.
+_DIVIDEND_SECTION_DATE_RANGE_FIELD: dict[str, str] = {
+    "DTAA": "DividendDTAA",
+    "115A1aA": "DividendIncUs115A1aA",
+    "115A1ai": "DividendIncUs115A1ai",
+    "115AC": "DividendIncUs115AC",
+    "115ACA": "DividendIncUs115ACA",
+    "115AD1i": "DividendIncUs115AD1i",
+    "115BBDA": "DividendIncUs115BBDA",
+    "115BBDAaiii": "DividendIncUs115BBDAaiii",
+}
+
+
 def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str, Any]]:
     """Serialize Schedule OS from source-income components."""
     source = input_data.other_sources_income
-    if source is None and not input_data.si_entries:
+    if (
+        source is None and not input_data.si_entries
+        and input_data.os_gift_breakdown is None
+        and not (input_data.os_pf_income_benefit or input_data.os_pf_tax_benefit)
+        and input_data.os_unexplained_income is None
+        and input_data.os_section_89a is None
+        and not input_data.os_other_income_entries
+        and not input_data.os_dividend_entries
+        and not input_data.os_dtaa_entries
+        and not input_data.os_dtaa_aggregate
+        and input_data.os_deductions is None
+        and input_data.os_race_horse is None
+        and not (
+            input_data.os_pf_interest_10_11_first_proviso or input_data.os_pf_interest_10_11_second_proviso
+            or input_data.os_pf_interest_10_12_first_proviso or input_data.os_pf_interest_10_12_second_proviso
+        )
+        and not input_data.os_interest_from_others
+    ):
         return None
+    os_schedule = result.schedules.get("os")
+    deduction_57iia = getattr(os_schedule, "deduction_57iia", _ZERO) if os_schedule else _ZERO
+
+    race_horse = input_data.os_race_horse
+    race_horse_profit = max(_ZERO, race_horse.balance) if race_horse else _ZERO
+    os_excl_race_horse = result.other_sources_income - race_horse_profit
+
     block: dict[str, Any] = {
         "GrossIncChrgblTaxAtAppRate": 0,
         "DividendGross": 0,
@@ -594,11 +643,11 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         "IntrstFrmTermDeposit": 0,
         "IntrstFrmIncmTaxRefund": 0,
         "NatofPassThrghIncome": 0,
-        "IntrstSec10XIFirstProviso": 0,
-        "IntrstSec10XISecondProviso": 0,
-        "IntrstSec10XIIFirstProviso": 0,
-        "IntrstSec10XIISecondProviso": 0,
-        "IntrstFrmOthers": 0,
+        "IntrstSec10XIFirstProviso": _to_rupees(input_data.os_pf_interest_10_11_first_proviso),
+        "IntrstSec10XISecondProviso": _to_rupees(input_data.os_pf_interest_10_11_second_proviso),
+        "IntrstSec10XIIFirstProviso": _to_rupees(input_data.os_pf_interest_10_12_first_proviso),
+        "IntrstSec10XIISecondProviso": _to_rupees(input_data.os_pf_interest_10_12_second_proviso),
+        "IntrstFrmOthers": _to_rupees(input_data.os_interest_from_others),
         "RentFromMachPlantBldgs": 0,
         "Tot562x": 0,
         "Aggrtvaluewithoutcons562x": 0,
@@ -630,19 +679,19 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         "OthersGrossDtls": [],
         "PassThrIncOSChrgblSplRate": 0,
         "PTIOthersGrossDtls": [],
-        "IncChargblSplRateOS": {"TotalAmtTaxUsDTAASchOs": 0},
+        "IncChargblSplRateOS": {"TotalAmtTaxUsDTAASchOs": _to_rupees(input_data.os_dtaa_aggregate)},
         "Deductions": {
-            "DeductionUs57iia": 0,
+            "DeductionUs57iia": _to_rupees(deduction_57iia),
             "Depreciation": 0,
             "Expenses": 0,
             "IntExp57": 0,
-            "TotDeductions": 0,
+            "TotDeductions": _to_rupees(deduction_57iia),
             "UsrIntExp57": 0,
         },
         "AmtNotDeductibleUs58": 0,
         "ProfitChargTaxUs59": 0,
         "Increliefus89AOS": 0,
-        "BalanceNoRaceHorse": _to_rupees(result.other_sources_income),
+        "BalanceNoRaceHorse": _to_rupees(os_excl_race_horse),
     }
     if source:
         block["DividendGross"] = _to_rupees(source.dividend_income)
@@ -672,29 +721,135 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
             "TotalIncomeBenefit": _to_rupees(input_data.os_pf_income_benefit),
             "TotalTaxBenefit": _to_rupees(input_data.os_pf_tax_benefit),
         }
-    return {
-        "DividendDTAA": _date_range(),
-        "DividendIncUs115A1aA": _date_range(),
-        "DividendIncUs115A1ai": _date_range(),
-        "DividendIncUs115AC": _date_range(),
-        "DividendIncUs115ACA": _date_range(),
-        "DividendIncUs115AD1i": _date_range(),
-        "DividendIncUs115BBDA": _date_range(),
-        "DividendIncUs115BBDAaiii": _date_range(),
-        "IncChargeable": 0,
-        "IncFrmLottery": _date_range(),
-        "IncFrmOnGames": _date_range(),
+
+    # Section 68/69/69A/69B/69C/69D unexplained-income breakdown -- the
+    # combined total already reached GTI via the "115BBE" Schedule-SI entry
+    # (see draft_to_itr2_input.py's wiring); this is the disclosure detail.
+    unexplained = input_data.os_unexplained_income
+    if unexplained is not None:
+        block["CashCreditsUs68"] = _to_rupees(unexplained.cash_credits_us68)
+        block["UnExplndInvstmntsUs69"] = _to_rupees(unexplained.unexplained_investments_us69)
+        block["SumRecdPrYrBusTRU562xii"] = _to_rupees(unexplained.prior_year_business_trust_562xii)
+        block["SumRecdPrYrLifIns562xiii"] = _to_rupees(unexplained.prior_year_life_insurance_562xiii)
+        block["UnExplndMoneyUs69A"] = _to_rupees(unexplained.unexplained_money_us69a)
+        block["UnDsclsdInvstmntsUs69B"] = _to_rupees(unexplained.undisclosed_investments_us69b)
+        block["UnExplndExpndtrUs69C"] = _to_rupees(unexplained.unexplained_expenditure_us69c)
+        block["AmtBrwdRepaidOnHundiUs69D"] = _to_rupees(unexplained.hundi_borrowing_us69d)
+
+    # Section 89A (foreign-retirement-account income deferral) -- notified
+    # income is deliberately excluded from current-year taxation, so only
+    # the relief amount (Increliefus89AOS) interacts with tax liability;
+    # everything else here is disclosure.
+    section_89a = input_data.os_section_89a
+    if section_89a is not None:
+        block["IncomeNotified89AOS"] = _to_rupees(section_89a.income_notified)
+        block["IncomeNotifiedOther89AOS"] = _to_rupees(section_89a.income_notified_other)
+        block["IncomeNotifiedPrYr89AOS"] = _to_rupees(section_89a.income_notified_prior_yr)
+        block["Increliefus89AOS"] = _to_rupees(section_89a.relief)
+        block["IncomeNotified89ATypeOS"] = [
+            {"NOT89ACountrycode": entry.country_code, "NOT89AAmount": _to_rupees(entry.amount)}
+            for entry in section_89a.country_entries
+        ]
+
+    other_income_entries = input_data.os_other_income_entries
+    if other_income_entries:
+        block["AnyOtherIncome"] = _to_rupees(sum((e.amount for e in other_income_entries), _ZERO))
+        block["OthersInc"] = {
+            "OthersIncDtls": [
+                {"OthNatOfInc": e.nature, "OthAmount": _to_rupees(e.amount)}
+                for e in other_income_entries
+            ]
+        }
+
+    deductions = input_data.os_deductions
+    if deductions is not None:
+        total_deductions = deduction_57iia + deductions.expenses + deductions.depreciation
+        block["Deductions"] = {
+            "DeductionUs57iia": _to_rupees(deduction_57iia),
+            "Depreciation": _to_rupees(deductions.depreciation),
+            "Expenses": _to_rupees(deductions.expenses),
+            "IntExp57": _to_rupees(deductions.interest_expense_us57),
+            "TotDeductions": _to_rupees(total_deductions),
+            "UsrIntExp57": _to_rupees(deductions.interest_expense_eligible_us57),
+        }
+        block["AmtNotDeductibleUs58"] = _to_rupees(deductions.amount_not_deductible_us58)
+        block["ProfitChargTaxUs59"] = _to_rupees(deductions.profit_chargeable_us59)
+
+    # Dividend Dividend22e/Dividend22f split -- "194" (ordinary domestic
+    # dividend) plus every other section not individually broken out falls
+    # into DividendOthThan22e (the residual after removing 22(e)/22(f)).
+    dividend_22e = sum(
+        (e.amount for e in input_data.os_dividend_entries if e.section == "10(22e)"), _ZERO
+    )
+    dividend_22f = sum(
+        (e.amount for e in input_data.os_dividend_entries if e.section == "10(22f)"), _ZERO
+    )
+    if dividend_22e or dividend_22f:
+        block["Dividend22e"] = _to_rupees(dividend_22e)
+        block["Dividend22f"] = _to_rupees(dividend_22f)
+        block["DividendOthThan22e"] = _to_rupees(
+            max(_ZERO, (source.dividend_income if source else _ZERO) - dividend_22e - dividend_22f)
+        )
+
+    dividend_date_ranges: dict[str, Any] = {}
+    for entry in input_data.os_dividend_entries:
+        field = _DIVIDEND_SECTION_DATE_RANGE_FIELD.get(entry.section)
+        if field is None:
+            continue
+        dividend_date_ranges[field] = _date_range(entry.q1, entry.q2, entry.q3, entry.q4, entry.q5)
+
+    if input_data.os_dtaa_entries:
+        block["IncChargblSplRateOS"]["NRIOsDTAA"] = {
+            "NRIDTAADtlsSchOS": [
+                {
+                    "DTAAamt": _to_rupees(e.amount),
+                    "NatureOfIncome": e.nature_of_income,
+                    "CountryName": e.country_name,
+                    "CountryCodeExcludingIndia": e.country_code,
+                    "DTAAarticle": e.dtaa_article,
+                    "RateAsPerTreaty": float(e.rate_as_per_treaty),
+                    "TaxRescertifiedFlag": e.tax_residency_certificate,
+                    "ItemNoincl": e.item_no_incl,
+                    "RateAsPerITAct": float(e.rate_as_per_it_act),
+                    "ApplicableRate": float(e.applicable_rate),
+                }
+                for e in input_data.os_dtaa_entries
+            ]
+        }
+
+    lottery_q = input_data.os_lottery_quarters
+    gaming_q = input_data.os_gaming_quarters
+
+    result_dict: dict[str, Any] = {
+        "DividendDTAA": dividend_date_ranges.get("DividendDTAA", _date_range()),
+        "DividendIncUs115A1aA": dividend_date_ranges.get("DividendIncUs115A1aA", _date_range()),
+        "DividendIncUs115A1ai": dividend_date_ranges.get("DividendIncUs115A1ai", _date_range()),
+        "DividendIncUs115AC": dividend_date_ranges.get("DividendIncUs115AC", _date_range()),
+        "DividendIncUs115ACA": dividend_date_ranges.get("DividendIncUs115ACA", _date_range()),
+        "DividendIncUs115AD1i": dividend_date_ranges.get("DividendIncUs115AD1i", _date_range()),
+        "DividendIncUs115BBDA": dividend_date_ranges.get("DividendIncUs115BBDA", _date_range()),
+        "DividendIncUs115BBDAaiii": dividend_date_ranges.get("DividendIncUs115BBDAaiii", _date_range()),
+        "IncChargeable": _to_rupees(result.other_sources_income),
+        "IncFrmLottery": (
+            _date_range(lottery_q.q1, lottery_q.q2, lottery_q.q3, lottery_q.q4, lottery_q.q5)
+            if lottery_q else _date_range()
+        ),
+        "IncFrmOnGames": (
+            _date_range(gaming_q.q1, gaming_q.q2, gaming_q.q3, gaming_q.q4, gaming_q.q5)
+            if gaming_q else _date_range()
+        ),
         "IncFromOwnHorse": {
-            "Receipts": 0,
-            "DeductSec57": 0,
-            "AmtNotDeductibleUs58": 0,
-            "ProfitChargTaxUs59": 0,
-            "BalanceOwnRaceHorse": 0,
+            "Receipts": _to_rupees(race_horse.receipts) if race_horse else 0,
+            "DeductSec57": _to_rupees(race_horse.deduction_us57) if race_horse else 0,
+            "AmtNotDeductibleUs58": _to_rupees(race_horse.amount_not_deductible_us58) if race_horse else 0,
+            "ProfitChargTaxUs59": _to_rupees(race_horse.profit_chargeable_us59) if race_horse else 0,
+            "BalanceOwnRaceHorse": _to_rupees(race_horse.balance) if race_horse else 0,
         },
         "IncOthThanOwnRaceHorse": block,
         "NOT89A": _date_range(),
-        "TotOthSrcNoRaceHorse": _to_rupees(result.other_sources_income),
+        "TotOthSrcNoRaceHorse": _to_rupees(os_excl_race_horse),
     }
+    return result_dict
 
 
 # ============================================================================

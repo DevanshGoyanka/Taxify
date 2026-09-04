@@ -24,6 +24,8 @@ from app.schemas.return_draft import (
     AMTDetails,
     BroughtForwardLossEntry,
     ClubbedIncomeEntry,
+    DividendIncome,
+    DtaaIncomeEntry,
     Employer,
     ForeignAssetEntry,
     ForeignSourceIncomeEntry,
@@ -32,11 +34,13 @@ from app.schemas.return_draft import (
     HouseProperty,
     ImmovableAssetGain,
     InterestIncome,
+    OtherIncomeEntry,
     PassThroughIncomeEntry,
     PersonalInfo,
     ReturnDraft,
     Scrip112A,
     ScheduleSIEntry,
+    Section89AEntry,
     TaxChallan,
     TdsCredit,
     VdaEntry,
@@ -300,6 +304,115 @@ def test_gift_below_fifty_thousand_threshold_is_exempt() -> None:
     itr2_input, _breakdown = draft_to_itr2_input(draft)
     assert itr2_input.other_sources_income.income_56_2_x == Decimal("0")
     assert itr2_input.os_gift_breakdown is None
+
+
+def test_unexplained_income_maps_to_115bbe_si_entry_and_is_taxed() -> None:
+    """Schedule OS unexplained income (§68/69/etc) reaches a real 115BBE
+    Schedule-SI entry and is taxed -- previously had no path into
+    ITR2Input at all."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.unexplainedIncome.cashCreditsUs68 = Decimal("100000")
+    draft.otherSources.unexplainedIncome.unexplainedMoneyUs69A = Decimal("50000")
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.os_unexplained_income is not None
+    assert itr2_input.os_unexplained_income.total == Decimal("150000")
+    assert any(
+        sie.section == "115BBE" and sie.gross_income == Decimal("150000")
+        for sie in itr2_input.si_entries
+    )
+
+    baseline = compute_itr2(draft_to_itr2_input(_filing_ready_itr2_draft())[0])
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    assert result.other_sources_income == baseline.other_sources_income + Decimal("150000")
+
+
+def test_unexplained_income_combines_with_115bbe_winnings_into_one_entry() -> None:
+    """UNEXPLAINED_115BBE-type winnings and the separate unexplainedIncome
+    block both feed the same 115BBE bucket, not two competing entries."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.winnings = [WinningIncome(
+        id="w1", type="UNEXPLAINED_115BBE", grossAmount=Decimal("20000"),
+    )]
+    draft.otherSources.unexplainedIncome.cashCreditsUs68 = Decimal("100000")
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    bbe_entries = [sie for sie in itr2_input.si_entries if sie.section == "115BBE"]
+    assert len(bbe_entries) == 1
+    assert bbe_entries[0].gross_income == Decimal("120000")
+
+
+def test_dividend_dtaa_89a_other_income_and_deductions_map_correctly() -> None:
+    """Dividend section/quarter detail, DTAA, §89A, other-income, and
+    deduction claims all flow from the draft into ITR2Input."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.dividends = [DividendIncome(
+        id="d1", section="DTAA", grossAmount=Decimal("20000"), q2=Decimal("20000"),
+    )]
+    draft.otherSources.dtaaIncome = [DtaaIncomeEntry(
+        id="dt1", amount=Decimal("40000"), natureOfIncome="1ai",
+        countryName="Singapore", countryCode="65", dtaaArticle="11",
+        rateAsPerTreaty=Decimal("10"), rateAsPerITAct=Decimal("20"),
+        taxResidencyCertificate="Y", itemNoIncl="5A1ai", applicableRate=Decimal("10"),
+    )]
+    draft.otherSources.dtaaAggregates.totalAmountTaxUsDtaa = Decimal("4000")
+    draft.otherSources.section89A = [Section89AEntry(id="s1", countryCode="US", amount=Decimal("200000"))]
+    draft.otherSources.section89AAggregates.incomeNotified89AOS = Decimal("200000")
+    draft.otherSources.section89AAggregates.incomeReliefUs89AOS = Decimal("15000")
+    draft.otherSources.otherIncome = [OtherIncomeEntry(
+        id="o1", nature="Freelance", amount=Decimal("30000"),
+    )]
+    draft.otherSources.deductions.expenses = Decimal("2000")
+
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert len(itr2_input.os_dividend_entries) == 1
+    assert itr2_input.os_dividend_entries[0].section == "DTAA"
+    assert len(itr2_input.os_dtaa_entries) == 1
+    assert itr2_input.os_dtaa_aggregate == Decimal("4000")
+    assert itr2_input.os_section_89a is not None
+    assert itr2_input.os_section_89a.income_notified == Decimal("200000")
+    assert itr2_input.os_section_89a.relief == Decimal("15000")
+    assert len(itr2_input.os_section_89a.country_entries) == 1
+    assert len(itr2_input.os_other_income_entries) == 1
+    assert itr2_input.os_deductions is not None
+    assert itr2_input.os_deductions.expenses == Decimal("2000")
+
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+
+
+def test_race_horse_activity_winnings_map_to_os_race_horse() -> None:
+    """RACE_HORSE_ACTIVITY winnings map to os_race_horse, distinct from the
+    other WinningIncomeType categories that route to Schedule SI."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.winnings = [WinningIncome(
+        id="w1", type="RACE_HORSE_ACTIVITY", receipts=Decimal("500000"),
+        deductionUs57=Decimal("300000"), balance=Decimal("200000"),
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.os_race_horse is not None
+    assert itr2_input.os_race_horse.receipts == Decimal("500000")
+    assert itr2_input.os_race_horse.balance == Decimal("200000")
+    assert not any(sie.section in {"115BB", "115BBJ", "115BBE"} for sie in itr2_input.si_entries)
+
+    baseline = compute_itr2(draft_to_itr2_input(_filing_ready_itr2_draft())[0])
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    assert result.other_sources_income == baseline.other_sources_income + Decimal("200000")
+
+
+def test_pf_interest_proviso_kinds_map_to_dedicated_fields() -> None:
+    """PF interest-proviso interest kinds are categorized separately, not
+    collapsed into the generic other-income aggregate."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.interest = [
+        InterestIncome(id="i1", kind="PF_10_11_FIRST", grossAmount=Decimal("1000")),
+        InterestIncome(id="i2", kind="PF_10_12_SECOND", grossAmount=Decimal("2000")),
+        InterestIncome(id="i3", kind="BONDS", grossAmount=Decimal("500")),
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.os_pf_interest_10_11_first_proviso == Decimal("1000")
+    assert itr2_input.os_pf_interest_10_12_second_proviso == Decimal("2000")
+    assert itr2_input.os_interest_from_others == Decimal("500")
 
 
 def test_brought_forward_losses_map_correctly() -> None:

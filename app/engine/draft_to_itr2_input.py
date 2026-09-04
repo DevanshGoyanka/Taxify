@@ -79,7 +79,16 @@ from app.schemas.itr2 import (
     FSICountryEntry,
     ITR2Input,
     LossHead as ITR2LossHead,
+    OS89ACountryEntry,
+    OSDeductions,
+    OSDividendEntry,
+    OSDtaaEntry,
     OSGiftBreakdown,
+    OSOtherIncomeEntry,
+    OSQuarterlyAmount,
+    OSRaceHorseActivity,
+    OSSection89A,
+    OSUnexplainedIncome,
     PTIEntry,
     ResidentialStatus as ITR2ResidentialStatus,
     Schedule5AInput,
@@ -609,6 +618,189 @@ def _compute_os_gifts(gifts: list) -> tuple[Decimal, Optional[OSGiftBreakdown]]:
     return total_taxable, breakdown
 
 
+def _map_os_unexplained_income(draft: ReturnDraft) -> Optional[OSUnexplainedIncome]:
+    """Map Schedule OS unexplained-income (§68/69/69A/69B/69C/69D) rows.
+
+    All eight categories are taxed under section 115BBE -- the caller adds
+    ``.total`` to the 115BBE Schedule-SI entry alongside any
+    ``UNEXPLAINED_115BBE``-type winnings.
+    """
+    u = draft.otherSources.unexplainedIncome
+    result = OSUnexplainedIncome(
+        cash_credits_us68=u.cashCreditsUs68,
+        unexplained_investments_us69=u.unexplainedInvestmentsUs69,
+        unexplained_money_us69a=u.unexplainedMoneyUs69A,
+        undisclosed_investments_us69b=u.undisclosedInvestmentsUs69B,
+        unexplained_expenditure_us69c=u.unexplainedExpenditureUs69C,
+        hundi_borrowing_us69d=u.hundiBorrowingUs69D,
+        prior_year_business_trust_562xii=u.priorYearBusinessTrust562xii,
+        prior_year_life_insurance_562xiii=u.priorYearLifeInsurance562xiii,
+    )
+    return result if result.total > 0 else None
+
+
+def _map_os_section_89a(draft: ReturnDraft) -> Optional[OSSection89A]:
+    """Map Schedule OS Section 89A (foreign-retirement-account deferral)."""
+    agg = draft.otherSources.section89AAggregates
+    entries = [
+        OS89ACountryEntry(country_code=row.countryCode, amount=row.amount)
+        for row in draft.otherSources.section89A
+        if row.amount > 0
+    ]
+    if not entries and agg.incomeNotified89AOS == 0 and agg.incomeNotifiedOther89AOS == 0 and agg.incomeNotifiedPriorYear89AOS == 0 and agg.incomeReliefUs89AOS == 0:
+        return None
+    return OSSection89A(
+        income_notified=agg.incomeNotified89AOS,
+        income_notified_other=agg.incomeNotifiedOther89AOS,
+        income_notified_prior_yr=agg.incomeNotifiedPriorYear89AOS,
+        relief=agg.incomeReliefUs89AOS,
+        country_entries=entries,
+    )
+
+
+def _map_os_other_income_entries(draft: ReturnDraft) -> list[OSOtherIncomeEntry]:
+    """Map "any other income" detail rows for Schedule OS's ``OthersInc``."""
+    return [
+        OSOtherIncomeEntry(nature=(row.description or row.nature or "Other income")[:50], amount=row.amount)
+        for row in draft.otherSources.otherIncome
+        if row.amount > 0
+    ]
+
+
+_OS_OTHER_INTEREST_KINDS = frozenset({"NSC", "BONDS", "SECURITIES", "OTHER"})
+
+
+def _map_os_interest_from_others(draft: ReturnDraft) -> Decimal:
+    """Sum NSC/bonds/securities/miscellaneous interest for Schedule OS's own
+    ``IntrstFrmOthers`` field.
+
+    Computed independently from the draft (not derived from the shared
+    ``OtherSourcesIncome.other_income`` aggregate, which also folds in
+    ``otherIncome`` entries and would double-count against
+    ``_map_os_other_income_entries()``/``AnyOtherIncome`` above).
+    """
+    return sum(
+        (i.grossAmount for i in draft.otherSources.interest if i.kind in _OS_OTHER_INTEREST_KINDS),
+        _ZERO,
+    )
+
+
+def _map_os_dividend_entries(draft: ReturnDraft) -> list[OSDividendEntry]:
+    """Map dividend rows preserving their official section classification
+    and quarter breakdown -- previously collapsed into one undifferentiated
+    aggregate (``OtherSourcesIncome.dividend_income``), losing the
+    Dividend22e/Dividend22f/DTAA/115A-series split entirely."""
+    return [
+        OSDividendEntry(
+            section=row.section, amount=row.grossAmount,
+            q1=row.q1, q2=row.q2, q3=row.q3, q4=row.q4, q5=row.q5,
+        )
+        for row in draft.otherSources.dividends
+        if row.grossAmount > 0
+    ]
+
+
+def _map_os_dtaa_entries(draft: ReturnDraft) -> list[OSDtaaEntry]:
+    """Map DTAA-rate other-sources income detail rows."""
+    return [
+        OSDtaaEntry(
+            amount=row.amount,
+            nature_of_income=row.natureOfIncome,
+            country_name=row.countryName or "Unspecified",
+            country_code=row.countryCode or "9999",
+            dtaa_article=row.dtaaArticle or "NA",
+            rate_as_per_treaty=row.rateAsPerTreaty,
+            rate_as_per_it_act=row.rateAsPerITAct,
+            tax_residency_certificate=row.taxResidencyCertificate,
+            item_no_incl=row.itemNoIncl or "56i",
+            applicable_rate=row.applicableRate,
+        )
+        for row in draft.otherSources.dtaaIncome
+        if row.amount > 0
+    ]
+
+
+def _map_os_deductions(draft: ReturnDraft) -> Optional[OSDeductions]:
+    """Map Schedule OS deduction claims (``DeductionUs57iia`` excluded --
+    the calculator derives it from family pension, not user input)."""
+    d = draft.otherSources.deductions
+    if (
+        d.expenses == 0 and d.depreciation == 0 and d.interestExpenseUs57 == 0
+        and d.interestExpenseEligibleUs57 == 0 and d.amountNotDeductibleUs58 == 0
+        and d.profitChargeableUs59 == 0
+    ):
+        return None
+    return OSDeductions(
+        expenses=d.expenses,
+        depreciation=d.depreciation,
+        interest_expense_us57=d.interestExpenseUs57,
+        interest_expense_eligible_us57=d.interestExpenseEligibleUs57,
+        amount_not_deductible_us58=d.amountNotDeductibleUs58,
+        profit_chargeable_us59=d.profitChargeableUs59,
+    )
+
+
+def _map_os_race_horse(winnings: list) -> Optional[OSRaceHorseActivity]:
+    """Aggregate RACE_HORSE_ACTIVITY winning-income rows into Schedule OS's
+    ``IncFromOwnHorse`` sub-schedule -- a distinct, slab-rate-taxed
+    business-like activity, not a flat special-rate item like the other
+    ``WinningIncomeType`` categories."""
+    rows = [w for w in winnings or [] if w.type == "RACE_HORSE_ACTIVITY"]
+    if not rows:
+        return None
+    receipts = sum((w.receipts or w.grossAmount or _ZERO for w in rows), _ZERO)
+    deduction = sum((w.deductionUs57 or _ZERO for w in rows), _ZERO)
+    not_deductible = sum((w.amountNotDeductibleUs58 or _ZERO for w in rows), _ZERO)
+    profit_chargeable = sum((w.profitChargeableUs59 or _ZERO for w in rows), _ZERO)
+    balance = receipts - deduction + not_deductible + profit_chargeable
+    if receipts == 0 and balance == 0:
+        return None
+    return OSRaceHorseActivity(
+        receipts=receipts, deduction_us57=deduction,
+        amount_not_deductible_us58=not_deductible,
+        profit_chargeable_us59=profit_chargeable, balance=balance,
+    )
+
+
+_LOTTERY_WINNING_TYPES = frozenset({"LOTTERY", "BETTING", "CARD_GAME", "HORSE_RACE"})
+
+
+def _map_os_winning_quarters(winnings: list) -> tuple[Optional[OSQuarterlyAmount], Optional[OSQuarterlyAmount]]:
+    """Aggregate lottery/betting/card-game/horse-race and online-gaming
+    winnings' quarterly breakdowns for Schedule OS's ``IncFrmLottery``/
+    ``IncFrmOnGames`` 234C-interest date-range fields."""
+    lottery = {"q1": _ZERO, "q2": _ZERO, "q3": _ZERO, "q4": _ZERO, "q5": _ZERO}
+    gaming = {"q1": _ZERO, "q2": _ZERO, "q3": _ZERO, "q4": _ZERO, "q5": _ZERO}
+    for w in winnings or []:
+        if w.type in _LOTTERY_WINNING_TYPES:
+            target = lottery
+        elif w.type == "ONLINE_GAMING":
+            target = gaming
+        else:
+            continue
+        for key in target:
+            value = getattr(w, key, None)
+            if value:
+                target[key] += value
+    lottery_result = OSQuarterlyAmount(**lottery) if any(lottery.values()) else None
+    gaming_result = OSQuarterlyAmount(**gaming) if any(gaming.values()) else None
+    return lottery_result, gaming_result
+
+
+def _map_os_pf_interest_provisos(draft: ReturnDraft) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Aggregate the four PF-interest-proviso categories (Section 10(11)/
+    10(12) first/second proviso -- Budget 2021's taxable-above-threshold PF
+    interest) -- previously collapsed into the generic ``other_income``
+    aggregate by the shared ``_map_other_sources()`` helper, losing this
+    specific categorization ITR-2's own Schedule OS requires."""
+    interest = draft.otherSources.interest
+    first_11 = sum((i.grossAmount for i in interest if i.kind == "PF_10_11_FIRST"), _ZERO)
+    second_11 = sum((i.grossAmount for i in interest if i.kind == "PF_10_11_SECOND"), _ZERO)
+    first_12 = sum((i.grossAmount for i in interest if i.kind == "PF_10_12_FIRST"), _ZERO)
+    second_12 = sum((i.grossAmount for i in interest if i.kind == "PF_10_12_SECOND"), _ZERO)
+    return first_11, second_11, first_12, second_12
+
+
 def _map_si_entries(draft: ReturnDraft) -> list[ITR2ScheduleSIEntry]:
     return [
         ITR2ScheduleSIEntry(
@@ -684,6 +876,32 @@ def draft_to_itr2_input(
     gift_taxable, os_gift_breakdown = _compute_os_gifts(draft.otherSources.gifts)
     if gift_taxable > 0:
         os_input = os_input.model_copy(update={"income_56_2_x": gift_taxable})
+    os_unexplained_income = _map_os_unexplained_income(draft)
+    if os_unexplained_income is not None:
+        unexplained_total = os_unexplained_income.total
+        existing_115bbe_index = next(
+            (i for i, e in enumerate(si_entries) if e.section == "115BBE"), None
+        )
+        if existing_115bbe_index is not None:
+            existing = si_entries[existing_115bbe_index]
+            si_entries[existing_115bbe_index] = existing.model_copy(
+                update={"gross_income": existing.gross_income + unexplained_total}
+            )
+        else:
+            si_entries.append(ITR2ScheduleSIEntry(section="115BBE", gross_income=unexplained_total))
+    os_section_89a = _map_os_section_89a(draft)
+    os_other_income_entries = _map_os_other_income_entries(draft)
+    os_dividend_entries = _map_os_dividend_entries(draft)
+    os_dtaa_entries = _map_os_dtaa_entries(draft)
+    os_dtaa_aggregate = draft.otherSources.dtaaAggregates.totalAmountTaxUsDtaa
+    os_deductions = _map_os_deductions(draft)
+    os_race_horse = _map_os_race_horse(draft.otherSources.winnings)
+    (
+        os_pf_interest_10_11_first, os_pf_interest_10_11_second,
+        os_pf_interest_10_12_first, os_pf_interest_10_12_second,
+    ) = _map_os_pf_interest_provisos(draft)
+    os_interest_from_others = _map_os_interest_from_others(draft)
+    os_lottery_quarters, os_gaming_quarters = _map_os_winning_quarters(draft.otherSources.winnings)
     agricultural_income = _map_agricultural_income(draft)
     exempt_income = _map_exempt_income(draft)
     fsi_entries = _map_fsi_entries(draft)
@@ -708,6 +926,21 @@ def draft_to_itr2_input(
         os_gift_breakdown=os_gift_breakdown,
         os_pf_income_benefit=os_pf_income_benefit,
         os_pf_tax_benefit=os_pf_tax_benefit,
+        os_unexplained_income=os_unexplained_income,
+        os_section_89a=os_section_89a,
+        os_other_income_entries=os_other_income_entries,
+        os_dividend_entries=os_dividend_entries,
+        os_dtaa_entries=os_dtaa_entries,
+        os_dtaa_aggregate=os_dtaa_aggregate,
+        os_deductions=os_deductions,
+        os_race_horse=os_race_horse,
+        os_pf_interest_10_11_first_proviso=os_pf_interest_10_11_first,
+        os_pf_interest_10_11_second_proviso=os_pf_interest_10_11_second,
+        os_pf_interest_10_12_first_proviso=os_pf_interest_10_12_first,
+        os_pf_interest_10_12_second_proviso=os_pf_interest_10_12_second,
+        os_interest_from_others=os_interest_from_others,
+        os_lottery_quarters=os_lottery_quarters,
+        os_gaming_quarters=os_gaming_quarters,
         cg_transactions=cg_transactions,
         cg_112a_scrips=cg_112a_scrips,
         vda_transactions=vda_transactions,

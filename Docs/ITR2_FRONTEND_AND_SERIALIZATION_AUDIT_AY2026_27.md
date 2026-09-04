@@ -597,6 +597,95 @@ Map each canonical `OtherSources` entry to the exact official field, including c
 > entirely absent (and their underlying schema fields nonexistent) on
 > pre-fix code. Full combined `test_itr1_*`/`test_itr2_*`/`test_itr4_*`
 > regression suite (227 tests) green.
+>
+> **Update (2026-09-05): every item deliberately deferred above has now
+> been closed**, per explicit user instruction that the system must
+> capture and process every schema field, mandatory or optional, not just
+> the highest-frequency ones. Specifically:
+> - **Unexplained income** (§68/69/69A/69B/69C/69D, `UnexplainedIncomeDetails`
+>   -- previously not wired at all): new `OSUnexplainedIncome` type on
+>   `ITR2Input`, its total combined with any `UNEXPLAINED_115BBE`-type
+>   winnings into one 115BBE Schedule-SI entry (both sources feed the same
+>   bucket, not two competing entries), and each of the 8 sub-fields
+>   individually disclosed in the JSON.
+> - **Section 89A** (foreign-retirement-account deferral): aggregates
+>   (notified/other/prior-year/relief) plus the per-country
+>   `IncomeNotified89ATypeOS` array now wired from `Section89AAggregates`/
+>   `Section89AEntry`. Deliberately NOT added to current-year taxable
+>   income -- notified income is a statutory deferral by definition.
+> - **Dividend section/quarter breakdown**: `DividendIncome` rows (previously
+>   collapsed into one undifferentiated aggregate) now drive the
+>   `Dividend22e`/`Dividend22f`/`DividendOthThan22e` split and all 8
+>   top-level `DividendDTAA`/`DividendIncUs115*` date-range fields with real
+>   quarterly data.
+> - **DTAA-rate OS income**: the aggregate (`IncChargblSplRateOS.
+>   TotalAmtTaxUsDTAASchOs`) and full `NRIDTAADtlsSchOS` per-entry detail
+>   (country, article, treaty/Act/applicable rates, tax-residency
+>   certificate) now wired from `dtaaAggregates`/`dtaaIncome`. Disclosure
+>   only -- correctly computing NRI-specific DTAA tax rates per treaty
+>   article is a separate, larger undertaking not attempted here (see the
+>   new finding below on `SpecialRateIncomeEntry` for the same boundary).
+> - **Schedule OS deductions**: `Expenses`/`Depreciation`/`IntExp57`/
+>   `UsrIntExp57`/`AmtNotDeductibleUs58`/`ProfitChargTaxUs59` now wired from
+>   `OtherSourcesDeductions`; `DeductionUs57iia` now reads the calculator's
+>   own already-correct `compute_os()` result (`OSResult.deduction_57iia`)
+>   instead of a hardcoded zero.
+> - **Race-horse activity** (`IncFromOwnHorse`): `RACE_HORSE_ACTIVITY`-type
+>   `WinningIncome` rows now map to a new `OSRaceHorseActivity` type, with
+>   the net profit (never a loss, per section 74A(3)'s no-set-off rule)
+>   added to GTI as slab-rate Other Sources income -- this required a small
+>   calculator change (`compute()` now adds `max(0, balance)`), plus a
+>   correction to `BalanceNoRaceHorse`/`TotOthSrcNoRaceHorse` (which must
+>   exclude the race-horse profit per their own naming, previously computed
+>   identically to the now-inclusive `IncChargeable` total) and to the
+>   top-level `IncChargeable` field (previously hardcoded `0`, now the true
+>   grand total including race-horse profit).
+> - **PF-interest-proviso categorization** (`IntrstSec10XIFirstProviso`/
+>   `SecondProviso`/`IntrstSec10XIIFirstProviso`/`SecondProviso`, Budget
+>   2021's taxable-above-threshold PF interest): computed independently
+>   from `draft.otherSources.interest`'s `PF_10_11_FIRST`/etc. kinds rather
+>   than the shared `_map_other_sources()` helper, which collapses them
+>   into the generic `other_income` aggregate for ITR-1's purposes.
+> - **`IncFrmLottery`/`IncFrmOnGames` quarterly breakdown**: real Q1-Q5
+>   sums from lottery/betting/card-game/horse-race and online-gaming
+>   `WinningIncome` rows respectively, replacing the all-zero placeholder.
+>
+> **New finding surfaced while implementing, deliberately left open and
+> explicitly flagged (not silently folded into "done")**:
+> `SpecialRateIncomeEntry`/`OthersGrossDtls` (the ~20-category NRI-specific
+> Section 115A/115AC/115ACA/etc. special-rate income bucket) genuinely
+> requires ~20 new statutory tax-rate handlers this codebase has never
+> implemented -- this is categorically different from every item above
+> (which needed only data wiring against calculator logic that already
+> existed correctly). Wiring the JSON disclosure alone without the
+> matching tax computation would misrepresent the return as complete while
+> leaving tax liability wrong, which is worse than not wiring it at all.
+> This -- and the DTAA-rate NRI tax computation noted above -- join §3.1's
+> Schedule 115AD as the project's now-consolidated list of "genuinely
+> requires new NRI/FII-specific tax logic" follow-up items, tracked for
+> Phase 5+ rather than deferred as merely "optional."
+>
+> Also newly captured in this pass: `RentFromMachPlantBldgs` (income from
+> letting machinery/plant/furniture, Schedule OS's own business-like
+> sub-category) has **no draft-level capture point anywhere in the
+> system** -- not a serialization gap but a frontend gap, since there is
+> no UI field for a taxpayer to enter this income in the first place. Left
+> open pending a small `ScheduleOSWorkspace.tsx` addition (a new income
+> category plus its own expense/depreciation deduction fields).
+>
+> Regression tests: `test_schedule_os_serializes_unexplained_income_89a_deductions_and_dtaa`,
+> `test_schedule_os_serializes_dividend_section_breakdown`,
+> `test_schedule_os_serializes_race_horse_activity_and_includes_net_profit_in_gti`,
+> `test_schedule_os_omits_optional_blocks_when_unset` (in
+> `tests/test_itr2_itd_builder.py`), and
+> `test_unexplained_income_maps_to_115bbe_si_entry_and_is_taxed`,
+> `test_unexplained_income_combines_with_115bbe_winnings_into_one_entry`,
+> `test_dividend_dtaa_89a_other_income_and_deductions_map_correctly`,
+> `test_race_horse_activity_winnings_map_to_os_race_horse`,
+> `test_pf_interest_proviso_kinds_map_to_dedicated_fields` (in
+> `tests/test_draft_to_itr2_input.py`), all confirmed via `git stash` to be
+> absent on pre-fix code. Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*`
+> suite (299 tests) green.
 
 ---
 
