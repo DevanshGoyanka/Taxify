@@ -125,6 +125,17 @@ Type-3 submission, DB persistence): `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.
 ITR-3's build-out onto the same complete-preparation contract is tracked phase-by-phase,
 including a "Delivered" note per completed phase, in
 `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` — read that first for their current status.
+ITR-2's pipeline is architecturally wired (that plan's Phases 1-7 delivered) but not yet
+production-ready on correctness grounds — `Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`
+is the living audit-fix-reaudit document tracking this separately (mirroring how the ITR-1/4
+audit docs got those two forms production-ready), currently mid-cycle
+(`C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`). Its Schedule CG fix pass (2026-09-04)
+is a useful precedent before touching `app/engine/itd/itr2.py`'s Schedule CG serializer again: a
+finding described as "missing detail" turned out on re-verification to be a schema-blocking
+wrong-field-name bug for land/building rows specifically (no test had ever exercised that path),
+plus a genuine section 112(1)(a) indexed-cost-primacy defect found and deliberately left
+documented-but-unfixed rather than rushed — don't assume a "missing mapping"-shaped finding in
+this file is only a completeness gap without checking the exact schema field names/types first.
 
 ### v2 canonical pipeline (`ReturnDraft`)
 

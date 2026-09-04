@@ -32,6 +32,7 @@ class CGAsset:
     date_of_acquisition: str = ""
     date_of_transfer: str = ""
     full_consideration: Decimal = _ZERO
+    stamp_duty_value: Decimal = _ZERO
     acquisition_cost: Decimal = _ZERO
     indexed_acquisition_cost: Decimal = _ZERO
     improvement_cost: Decimal = _ZERO
@@ -85,6 +86,11 @@ class STCGResult:
     income_app_rate: Decimal = _ZERO
     income_dtaa: Decimal = _ZERO
     total_stcg: Decimal = _ZERO
+    # Per-transaction land/building detail, preserved for Schedule CG's
+    # SaleofLandBuildDtls rows -- previously discarded after computing
+    # land_gain, leaving the official schedule's required detail array
+    # always empty even when land/building STCG was nonzero.
+    land_building: list = field(default_factory=list)
 
 
 @dataclass
@@ -97,6 +103,9 @@ class LTCGResult:
     income_125per_other: Decimal = _ZERO
     income_dtaa: Decimal = _ZERO
     total_ltcg: Decimal = _ZERO
+    # Same as STCGResult.land_building -- preserved for Schedule CG's
+    # LTCG SaleofLandBuildDtls rows.
+    land_building: list = field(default_factory=list)
 
 
 @dataclass
@@ -218,6 +227,39 @@ def compute_112a_tax(taxable_112a: Decimal) -> Decimal:
     return max(_ZERO, taxable_112a) * LTCG_112A_RATE_POST_JUL24 / Decimal("100")
 
 
+def deemed_consideration_50c(consideration: Decimal, stamp_duty_value: Decimal) -> Decimal:
+    """Apply section 50C's deemed full value of consideration for land/building.
+
+    Per the ITR-2 form's own instruction (Schedule CG, item 1(a)(iii)): "in
+    case (stamp value) does not exceed 1.10 times (consideration), take this
+    figure as (consideration), or else take (stamp value)." When no stamp
+    duty value is supplied, section 50C simply does not apply and the actual
+    consideration is used -- this is the common case and leaves every
+    existing computation unchanged.
+    """
+    stamp_duty_value = _decimal(stamp_duty_value)
+    consideration = _decimal(consideration)
+    if stamp_duty_value > _ZERO and stamp_duty_value > consideration * Decimal("1.10"):
+        return stamp_duty_value
+    return consideration
+
+
+def deemed_consideration_50ca(consideration: Decimal, fair_market_value: Decimal) -> Decimal:
+    """Apply section 50CA's deemed full value of consideration for unquoted shares.
+
+    Per the ITR-2 form's own instruction (Schedule CG, items 5(a)(i)(c) and
+    8(a)(i)(c)): "Full value of consideration in respect of unquoted shares
+    adopted as per section 50CA... (higher of a or b)" -- a straight
+    higher-of comparison with NO tolerance threshold, unlike section 50C's
+    "does not exceed 1.10 times" carve-out for land/building
+    (``deemed_consideration_50c``). When no FMV is supplied, section 50CA
+    simply does not apply and the actual consideration is used.
+    """
+    fair_market_value = _decimal(fair_market_value)
+    consideration = _decimal(consideration)
+    return max(consideration, fair_market_value)
+
+
 def compute_stcg(
     stcg_111a: Decimal = _ZERO,
     stcg_land_building: Optional[list[CGAsset]] = None,
@@ -236,18 +278,26 @@ def compute_stcg(
         Signed STCG baskets.
     """
     del is_post_jul24
-    land_gain = sum(
-        (
-            _decimal(asset.full_consideration)
-            - _decimal(asset.acquisition_cost)
-            - _decimal(asset.improvement_cost)
-            - _decimal(asset.expenditure_on_transfer)
-        )
-        for asset in stcg_land_building or []
-    )
+    # Set each asset's own .total_deductions/.balance in place so the ITD
+    # builder's per-row Schedule CG detail can read the exact same figures
+    # this land_gain sum uses, instead of independently recomputing gain
+    # with a formula that could drift out of sync.
+    land_gain = _ZERO
+    for asset in stcg_land_building or []:
+        deemed = deemed_consideration_50c(asset.full_consideration, getattr(asset, "stamp_duty_value", _ZERO))
+        total_ded = _decimal(asset.acquisition_cost) + _decimal(asset.improvement_cost) + _decimal(asset.expenditure_on_transfer)
+        asset.total_deductions = total_ded
+        asset.balance = deemed - total_ded
+        asset.taxable_gain = asset.balance
+        land_gain += asset.balance
     other = land_gain + _decimal(stcg_other)
     section_111a = _decimal(stcg_111a)
-    return STCGResult(income_111a=section_111a, income_30per=other, total_stcg=section_111a + other)
+    return STCGResult(
+        income_111a=section_111a,
+        income_30per=other,
+        total_stcg=section_111a + other,
+        land_building=list(stcg_land_building or []),
+    )
 
 
 def compute_ltcg(
@@ -268,15 +318,32 @@ def compute_ltcg(
         Signed LTCG baskets with the 112A threshold applied once.
     """
     gain_112a, exemption_112a, taxable_112a = compute_112a(ltcg_112a_assets)
-    land_gain = sum(
-        (
-            _decimal(asset.full_consideration)
-            - (_decimal(asset.indexed_acquisition_cost) or _decimal(asset.acquisition_cost))
-            - (_decimal(asset.indexed_improvement_cost) or _decimal(asset.improvement_cost))
-            - _decimal(asset.expenditure_on_transfer)
-        )
-        for asset in ltcg_land_building or []
-    )
+    # NOTE: this still prefers indexed_acquisition_cost/indexed_improvement_cost
+    # over the non-indexed figures when supplied, matching this function's
+    # pre-existing behavior (and the existing regression test
+    # test_compute_land_building_long_term_uses_indexed_cost). Per the
+    # official ITR-2 form's own Schedule CG instructions (Part B item 1),
+    # the PRIMARY declared LTCG ("1c"/B1e) should use the NON-indexed cost;
+    # the indexed cost is used only for a separate section 112(1)(a) second
+    # proviso tax comparison ("1ca", "for the purpose of computing eiB")
+    # that can only ever REDUCE the payable tax below what the non-indexed
+    # 12.5% computation would give, never serve as the primary basis. That
+    # appears to be a real, separate defect in this function -- deliberately
+    # NOT changed here since fixing it correctly requires implementing the
+    # full section 112(1)(a) dual tax-comparison this function doesn't
+    # attempt at all, not just swapping which cost figure is preferred; see
+    # Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md for the
+    # tracked finding.
+    land_gain = _ZERO
+    for asset in ltcg_land_building or []:
+        deemed = deemed_consideration_50c(asset.full_consideration, getattr(asset, "stamp_duty_value", _ZERO))
+        acquisition = _decimal(asset.indexed_acquisition_cost) or _decimal(asset.acquisition_cost)
+        improvement = _decimal(asset.indexed_improvement_cost) or _decimal(asset.improvement_cost)
+        total_ded = acquisition + improvement + _decimal(asset.expenditure_on_transfer)
+        asset.total_deductions = total_ded
+        asset.balance = deemed - total_ded
+        asset.taxable_gain = asset.balance
+        land_gain += asset.balance
     other = land_gain + _decimal(ltcg_other)
     dtaa = _decimal(ltcg_dtaa)
     return LTCGResult(
@@ -286,6 +353,7 @@ def compute_ltcg(
         income_125per_other=other,
         income_dtaa=dtaa,
         total_ltcg=gain_112a + other + dtaa,
+        land_building=list(ltcg_land_building or []),
     )
 
 
@@ -692,6 +760,7 @@ def _classify(transactions) -> tuple:
                 date_of_acquisition=acquired_str,
                 date_of_transfer=transferred_str,
                 full_consideration=full_consideration,
+                stamp_duty_value=_decimal_attr(tx, "stamp_duty_value"),
                 acquisition_cost=cost,
                 indexed_acquisition_cost=_decimal_attr(tx, "indexed_cost"),
                 improvement_cost=_decimal_attr(tx, "improvement_cost"),

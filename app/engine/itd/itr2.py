@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from app.engine.calculators.itr2 import ITR2Result
+from app.engine.schedules.capital_gains import deemed_consideration_50c
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -587,6 +588,112 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
 # Schedule CG — Capital Gains
 # ============================================================================
 
+# Asset types with no dedicated Schedule CG block of their own -- they fall
+# into the generic "sale of assets other than [111A/112A/land-building/
+# FII-115AD]" catch-all the official form describes at Schedule CG items 5
+# (STCG) and 8 (LTCG). Confirmed against the official form text
+# (Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf,
+# extracted to ITR-2-2026-Eng_extracted_text.txt): item 5/8 titles read
+# "From sale of assets other than at A1 or A2 or A3 or A4 above" / "From
+# sale of assets where B1 to B7 above are not applicable" -- i.e. this is
+# the genuine generic bucket, not a mislabeled unquoted-shares-only field.
+_GENERIC_OTHER_ASSET_TYPES = frozenset({
+    "unlisted_shares",
+    "listed_security",
+    "debt_mutual_fund",
+    "specified_mutual_fund_50aa",
+    "market_linked_debenture_50aa",
+    "bonds_debentures",
+    "depreciable_asset",
+    "jewellery",
+    "foreign_asset",
+    "other",
+})
+
+
+def _other_assets_block(
+    transactions: list,
+    is_long_term: bool,
+) -> dict[str, Any]:
+    """Aggregate the generic "other assets" bucket for Schedule CG item 5/8.
+
+    Both the STCG (``EquityOrUnitSec94Type``, ``SaleOnOtherAssets``) and
+    LTCG (``EquityOrUnitSec54Type``, ``SaleofAssetNADtls.SaleofAssetNA``)
+    variants share this structure: consideration/cost aggregated across
+    every ``_GENERIC_OTHER_ASSET_TYPES`` transaction of the matching
+    holding period, split into "unquoted shares" (``unlisted_shares`` --
+    section 50CA deeming applies) versus "assets other than unquoted
+    shares" (every other generic category) sub-totals. Unlike land/building
+    (section 50C, a 110%-tolerance deemed-consideration rule), section 50CA
+    is a straight higher-of-consideration-or-FMV comparison with no
+    tolerance band -- see ``deemed_consideration_50ca``'s docstring.
+
+    Indexation does not apply to this bucket at all (confirmed by the
+    official form's item 5b/8b, which only ever asks for "cost of
+    acquisition without indexation" here -- the dual indexed/non-indexed
+    track is specific to land/building's own section 112(1)(a) transitional
+    provision, not this generic bucket), so only the non-indexed cost
+    fields are used, matching what the calculator's own ``stcg_other``/
+    ``ltcg_other`` aggregate already does.
+    """
+    from app.engine.schedules.capital_gains import _is_short_term, deemed_consideration_50ca
+
+    unq_consideration = _ZERO
+    unq_fmv = _ZERO
+    oth_consideration = _ZERO
+    total_cost = _ZERO
+    total_improvement = _ZERO
+    total_expenditure = _ZERO
+
+    for tx in transactions or []:
+        asset_type = tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type
+        if asset_type not in _GENERIC_OTHER_ASSET_TYPES:
+            continue
+        is_short = True
+        if tx.date_of_acquisition is not None:
+            is_short = _is_short_term(asset_type, tx.date_of_acquisition, tx.date_of_transfer)
+        elif tx.explicit_long_term is not None:
+            is_short = not tx.explicit_long_term
+        wanted_short = not is_long_term
+        if is_short != wanted_short:
+            continue
+
+        total_cost += tx.cost_of_acquisition
+        total_improvement += tx.improvement_cost
+        total_expenditure += tx.expenditure_on_transfer
+        if asset_type == "unlisted_shares":
+            unq_consideration += tx.full_consideration
+            unq_fmv += tx.fair_market_value_50ca or _ZERO
+        else:
+            oth_consideration += tx.full_consideration
+
+    unq_deemed = deemed_consideration_50ca(unq_consideration, unq_fmv)
+    full_consideration = unq_deemed + oth_consideration
+    total_ded = total_cost + total_improvement + total_expenditure
+    balance = full_consideration - total_ded
+
+    return {
+        "FullValueConsdRecvUnqshr": _to_rupees(unq_consideration),
+        "FairMrktValueUnqshr": _to_rupees(unq_fmv),
+        "FullValueConsdSec50CA": _to_rupees(unq_deemed),
+        "FullValueConsdOthUnqshr": _to_rupees(oth_consideration),
+        "FullConsideration": _to_rupees(full_consideration),
+        "DeductSec48": {
+            "AquisitCost": _to_rupees(total_cost),
+            "ImproveCost": _to_rupees(total_improvement),
+            "ExpOnTrans": _to_rupees(total_expenditure),
+            "TotalDedn": _to_rupees(total_ded),
+        },
+        "BalanceCG": _to_rupees(balance),
+        **(
+            {"LossSec94of7Or94of8": 0}
+            if not is_long_term
+            else {"DeductionUs54F": 0}
+        ),
+        "CapgainonAssets": _to_rupees(balance),
+    }
+
+
 def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str, Any]]:
     """Serialize Schedule CG from actual classified transactions."""
     if not input_data.cg_transactions and not input_data.cg_112a_scrips and not input_data.vda_transactions:
@@ -600,11 +707,11 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     # Land/building STCG rows
     stcg_land_rows = []
     for asset in (getattr(stcg, "land_building", []) if stcg else []):
-        stcg_land_rows.append(_cg_land_building_row(asset))
+        stcg_land_rows.append(_cg_land_building_row_stcg(asset))
     # Land/building LTCG rows
     ltcg_land_rows = []
     for asset in (getattr(ltcg, "land_building", []) if ltcg else []):
-        ltcg_land_rows.append(_cg_land_building_row(asset, is_long_term=True))
+        ltcg_land_rows.append(_cg_land_building_row_ltcg(asset))
 
     # 111A equity rows
     equity_111a_rows = []
@@ -640,7 +747,7 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "EquityMFonSTT": equity_111a_rows,
         "NRITransacSec48Dtl": {"NRItaxSTTPaid": 0, "NRItaxSTTNotPaid": 0},
         "NRISecur115AD": _equity_or_unit_sec94(),
-        "SaleOnOtherAssets": _equity_or_unit_sec94(),
+        "SaleOnOtherAssets": _other_assets_block(input_data.cg_transactions, is_long_term=False),
         "UnutilizedStcgFlag": "N",
         "AmtDeemedStcg": 0,
         "TotalAmtDeemedStcg": 0,
@@ -654,13 +761,13 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "TotalSTCG": _to_rupees(getattr(stcg, "total_stcg", z) if stcg else z),
     }
     ltcg_block: dict[str, Any] = {
-        "SaleofLandBuild": {"SaleofLandBuildDtls": ltcg_land_rows, "TotalExcessTax": 0, "TotalLTCGImmblPrprty": _to_rupees(sum((r["BalanceCG"] for r in ltcg_land_rows), _ZERO))},
+        "SaleofLandBuild": {"SaleofLandBuildDtls": ltcg_land_rows, "TotalExcessTax": 0, "TotalLTCGImmblPrprty": _to_rupees(sum((r["LTCGonImmvblPrprty"] for r in ltcg_land_rows), _ZERO))},
         "Proviso112Applicable": [],
         "SaleOfEquityShareUs112A": _equity_share_112a(),
         "NRIProvisoSec48": _nri_proviso_48(),
         "NRISaleOfEquityShareUs112A": _equity_share_112a(),
         "NRISaleofForeignAsset": _nri_foreign_asset(),
-        "SaleofAssetNADtls": {"SaleofAssetNA": _equity_or_unit_sec54()},
+        "SaleofAssetNADtls": {"SaleofAssetNA": _other_assets_block(input_data.cg_transactions, is_long_term=True)},
         "UnutilizedLtcgFlag": "N",
         "AmtDeemedLtcg": 0,
         "TotalAmtDeemedLtcg": 0,
@@ -705,26 +812,84 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     }
 
 
-def _cg_land_building_row(asset: Any, is_long_term: bool = False) -> dict[str, Any]:
-    """Build a land/building capital-gains detail row."""
-    cost = asset.acquisition_cost + (asset.indexed_acquisition_cost if is_long_term else _ZERO)
-    improve = asset.improvement_cost + (asset.indexed_improvement_cost if is_long_term else _ZERO)
-    total_ded = cost + improve + asset.expenditure_on_transfer
-    gain = asset.full_consideration - total_ded
+def _cg_land_building_row_stcg(asset: Any) -> dict[str, Any]:
+    """Build one Schedule CG STCG SaleofLandBuildDtls row.
+
+    Field names match the official AY 2026-27 schema
+    (``ShortTermCapGainFor23.SaleofLandBuild.SaleofLandBuildDtls`` items)
+    exactly -- the previous version used an entirely different, wrong key
+    set (``FullValueConsdRecvUnqshr``/nested ``DeductSec48``/``BalanceCG``,
+    which is actually the shape for the *unquoted-shares/other-assets*
+    block, not land/building) that would have made any land/building STCG
+    submission schema-invalid. ``asset.balance``/``asset.total_deductions``
+    are read directly from what ``compute_stcg()`` already computed per
+    asset, so this row can never disagree with the aggregate total.
+    """
+    stamp_value = getattr(asset, "stamp_duty_value", _ZERO) or _ZERO
+    deemed = deemed_consideration_50c(asset.full_consideration, stamp_value)
     return {
-        "FullValueConsdRecvUnqshr": _to_rupees(asset.full_consideration),
-        "FairMrktValueUnqshr": 0,
-        "FullValueConsdSec50CA": _to_rupees(asset.full_consideration),
-        "FullValueConsdOthUnqshr": 0,
+        "DateofPurchase": asset.date_of_acquisition or "",
+        "DateofSale": asset.date_of_transfer,
         "FullConsideration": _to_rupees(asset.full_consideration),
-        "DeductSec48": {
-            "AquisitCost": _to_rupees(asset.acquisition_cost if not is_long_term else asset.indexed_acquisition_cost),
-            "ImproveCost": _to_rupees(asset.improvement_cost if not is_long_term else asset.indexed_improvement_cost),
-            "ExpOnTrans": _to_rupees(asset.expenditure_on_transfer),
-            "TotalDedn": _to_rupees(total_ded),
+        "PropertyValuation": _to_rupees(stamp_value),
+        "FullConsideration50C": _to_rupees(deemed),
+        "AquisitCost": _to_rupees(asset.acquisition_cost),
+        "ImproveCost": _to_rupees(asset.improvement_cost),
+        "ExpOnTrans": _to_rupees(asset.expenditure_on_transfer),
+        "TotalDedn": _to_rupees(asset.total_deductions),
+        "Balance": _to_rupees(asset.balance),
+        "DeductionUs54B": 0,
+        "STCGonImmvblPrprty": _to_rupees(asset.balance),
+    }
+
+
+def _cg_land_building_row_ltcg(asset: Any) -> dict[str, Any]:
+    """Build one Schedule CG LTCG SaleofLandBuildDtls row.
+
+    Field names match ``LongTermCapGain23.SaleofLandBuild.SaleofLandBuildDtls``
+    exactly -- see ``_cg_land_building_row_stcg``'s docstring for why the
+    previous shared implementation was wrong for both STCG and LTCG.
+
+    The official schema additionally carries a second, indexed-cost-basis
+    total/balance/tax-comparison track (``AquisitCostIndex``,
+    ``TotalDednForEiB``, ``BalanceForEiB``, ``TaxSec1121aiiB``,
+    ``TaxSec1121a``, ``ExcessAmtSec1121a`` -- the section 112(1)(a) second
+    proviso comparison for residents who acquired before 23-Jul-2024,
+    protecting against a tax increase from the 2024 indexation-removal
+    change) that this function does not populate -- none of those fields
+    are in the schema's ``required`` list, so omitting them keeps the JSON
+    schema-valid; only ``AquisitCostIndex`` is required and is always
+    emitted. See ``compute_ltcg()``'s docstring note for why the dual
+    tax-comparison itself is a separate, not-yet-implemented finding.
+    """
+    stamp_value = getattr(asset, "stamp_duty_value", _ZERO) or _ZERO
+    deemed = deemed_consideration_50c(asset.full_consideration, stamp_value)
+    return {
+        "DateofPurchase": asset.date_of_acquisition or "",
+        "DateofSale": asset.date_of_transfer,
+        "FullConsideration": _to_rupees(asset.full_consideration),
+        "PropertyValuation": _to_rupees(stamp_value),
+        "FullConsideration50C": _to_rupees(deemed),
+        "AquisitCost": _to_rupees(asset.acquisition_cost),
+        "AquisitCostIndex": _to_rupees(asset.indexed_acquisition_cost),
+        # Unlike STCG's flat ImproveCost, the LTCG schema's CostOfImprovements
+        # is a nested object with an (unused here -- no year-by-year
+        # breakdown captured) per-improvement detail array plus indexed/
+        # non-indexed totals.
+        "CostOfImprovements": {
+            "CostOfImprovementsDtls": [],
+            "TotalImprovecost": _to_rupees(asset.improvement_cost),
+            "TotalindexImprovecost": _to_rupees(asset.indexed_improvement_cost),
         },
-        "BalanceCG": _to_rupees(gain),
-        "CapgainonAssets": _to_rupees(gain),
+        "ExpOnTrans": _to_rupees(asset.expenditure_on_transfer),
+        "TotalDedn": _to_rupees(asset.total_deductions),
+        "Balance": _to_rupees(asset.balance),
+        # Like CostOfImprovements, this is a nested exemption-detail block
+        # (ExemptionOrDednUs54SaleLandType), not a flat integer.
+        # ExemptionOrDednUs54Dtls is optional (no per-claim detail
+        # available here); only ExemptionGrandTotal is schema-required.
+        "ExemptionOrDednUs54": {"ExemptionGrandTotal": 0},
+        "LTCGonImmvblPrprty": _to_rupees(asset.balance),
     }
 
 
@@ -739,21 +904,6 @@ def _equity_or_unit_sec94() -> dict[str, int]:
         "DeductSec48": {"AquisitCost": 0, "ImproveCost": 0, "ExpOnTrans": 0, "TotalDedn": 0},
         "BalanceCG": 0,
         "LossSec94of7Or94of8": 0,
-        "CapgainonAssets": 0,
-    }
-
-
-def _equity_or_unit_sec54() -> dict[str, int]:
-    """Return the statutory zero-valued EquityOrUnitSec54Type block."""
-    return {
-        "FullValueConsdRecvUnqshr": 0,
-        "FairMrktValueUnqshr": 0,
-        "FullValueConsdSec50CA": 0,
-        "FullValueConsdOthUnqshr": 0,
-        "FullConsideration": 0,
-        "DeductSec48": {"AquisitCost": 0, "ImproveCost": 0, "ExpOnTrans": 0, "TotalDedn": 0},
-        "BalanceCG": 0,
-        "DeductionUs54F": 0,
         "CapgainonAssets": 0,
     }
 

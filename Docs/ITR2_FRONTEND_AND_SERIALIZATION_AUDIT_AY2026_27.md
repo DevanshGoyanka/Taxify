@@ -6,6 +6,17 @@
 **Excluded:** Validators and validator-related working-tree changes  
 **Status:** Not production-ready for complete real-world ITR-2 filing
 
+> **Progress update (2026-09-04)**: this audit has moved from read-only findings-only into the
+> same iterative audit-fix-reaudit cycle ITR-1/ITR-4's own audit docs used, per
+> `C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`'s Phase 1. §3.2's capital-gains
+> serialization item is now fixed and re-verified (land/building rows, section 50C/50CA deeming,
+> the generic "other assets" bucket for the remaining 10 `CGAssetType` categories) — see §3.1's
+> and §3.2's own "Re-verified"/"Fix status" blockquotes for the full evidence trail, including one
+> newly-found P0 (the section 112(1)(a) indexed-cost-primacy defect, deliberately deferred, not
+> silently left broken). Schedule OS, TDS/TCS ownership, filing-profile completeness, and every
+> other item below remain open — the overall "not production-ready" status is unchanged pending
+> those.
+
 ## Executive conclusion
 
 Taxify has broad ITR-2 frontend coverage and a substantial canonical data model, but it should not yet be considered production-ready for preparing or filing all AY 2026–27 ITR-2 returns.
@@ -170,6 +181,20 @@ Applicable non-resident securities or units under section 115AD may be:
 - Map every official field, including security/unit classification, consideration, cost, STT status, loss, and relevant non-resident details.
 - Add schema and fixture tests for NRI 115AD securities, units, losses, and DTAA cases.
 
+> **Re-verified (2026-09-04): scope narrowed, not yet fixed.** Cross-referenced against the
+> official schema (`Reference Docs by CBDT & ITD/Official JSON Schema/ITR-2_2026_Main_V1.1
+> (2).json`) and `tmp/cbdt_rules/CBDT__e-Filing_ITR 2_Validation Rules_AY 2026-27_V1.0
+> (1).txt` (rules #994, #495): `NRISecur115AD` (STCG) and `NRISaleOfEquityShareUs112A` (LTCG,
+> the schema's "Schedule 115AD(1)(iii) proviso") are **genuinely and correctly** for FII/
+> non-resident 115AD-specific securities, not a mislabeled generic bucket — the official
+> ITR-2 form's own Schedule CG item 4/6 confirms this ("For NON-RESIDENT- from sale of
+> securities... by an FII as per section 115AD"). `app/schemas/itr2.py`'s `CGAssetType` enum
+> has no way to flag a transaction as this specific FII/115AD case (residency status alone is
+> insufficient — 115AD is FII-specific, narrower than general non-resident), so these fields
+> genuinely cannot be populated with today's schema and are correctly left at their zero
+> placeholder rather than guessed at. **What §3.2's re-verification below did fix**: the
+> non-115AD "everything else" gap this finding partly overlapped with — see §3.2.
+
 ---
 
 ## 3.2 Generic capital-gains rows are captured but not fully mapped
@@ -229,6 +254,134 @@ but uses `max(0, ...)` in other paths, including the 112A summary. This creates 
 
 Create a verified mapping matrix from every canonical capital-gains category to the exact official Schedule CG field. A populated category must either serialize fully or cause an explicit unsupported-case error before JSON generation. Do not silently emit zero placeholders for populated data.
 
+> **Fix status (2026-09-04): land/building fixed and verified; generic "other assets" mapping
+> still pending.** Re-investigating this finding's "land/building STCG and LTCG detail" item
+> turned up a more severe, previously-unknown defect than originally described, plus two
+> smaller related ones — all now fixed. The other 10 non-land/building, non-111A/112A
+> `CGAssetType` categories (`unlisted_shares`, `listed_security`, `debt_mutual_fund`,
+> `specified_mutual_fund_50aa`, `market_linked_debenture_50aa`, `bonds_debentures`,
+> `depreciable_asset`, `jewellery`, `foreign_asset`, `other`) remain genuinely unmapped — see
+> "Still pending" below.
+>
+> **Bug found #1 (schema-blocking — every land/building transaction was undeliverable)**:
+> `_cg_land_building_row()` (`app/engine/itd/itr2.py`, old single shared function) emitted an
+> entirely different, wrong key set for `SaleofLandBuildDtls` rows —
+> `FullValueConsdRecvUnqshr`/a nested `DeductSec48` object/`BalanceCG`/`CapgainonAssets` (which
+> is actually the shape for the unquoted-shares/other-assets block, §3.2's still-pending item,
+> not land/building at all). The real schema (confirmed against
+> `ShortTermCapGainFor23.SaleofLandBuild.SaleofLandBuildDtls` and
+> `LongTermCapGain23.SaleofLandBuild.SaleofLandBuildDtls`) uses flat fields —
+> `FullConsideration`/`AquisitCost`/`ImproveCost`(STCG)/`TotalDedn`/`Balance`/
+> `STCGonImmvblPrprty`(STCG)/`LTCGonImmvblPrprty`(LTCG) — plus LTCG-only nested blocks
+> (`CostOfImprovements`, `ExemptionOrDednUs54`) neither present nor named the same in the old
+> code. `additionalProperties: false` means this would have been outright rejected by ITD's
+> schema validator (or Taxify's own `validate_itr2_json()`) for *any* return with a land/building
+> capital gain — confirmed no test anywhere exercised this path (`grep` for `land_building` across
+> every ITR-2 test file returned zero hits before this fix).
+>
+> **Bug found #2 (arithmetic double-counting)**: for LTCG rows, the old code computed
+> `cost = asset.acquisition_cost + asset.indexed_acquisition_cost` (summing non-indexed and
+> indexed cost together) for the `gain`/`BalanceCG` figure, while separately computing
+> `DeductSec48.AquisitCost` as *either* the non-indexed *or* indexed figure (a ternary, not a
+> sum) — meaning the row's own displayed `TotalDedn` and `BalanceCG` could never actually
+> reconcile (`BalanceCG` used a higher, double-counted deduction than what `TotalDedn` itself
+> displayed). Confirmed the calculator's own total (`compute_ltcg` in
+> `app/engine/schedules/capital_gains.py`) was *not* similarly double-counted — it correctly used
+> `indexed_acquisition_cost or acquisition_cost` (fallback, not addition) — so the aggregate tax
+> liability was never wrong, only the (unreachable, per bug #1) row-level detail.
+>
+> **Bug found #3 (missing plumbing, not just a formula bug)**: `STCGResult`/`LTCGResult`
+> (`capital_gains.py`) had no field to carry the classified land/building `CGAsset` list through
+> to the serializer at all — `_schedule_cg()`'s `getattr(stcg, "land_building", [])` always fell
+> back to its empty-list default, so `SaleofLandBuildDtls` was **always empty**, even when
+> land/building transactions existed and correctly contributed to the aggregate total. Fixed by
+> adding a `land_building: list` field to both dataclasses, populated by `compute_stcg()`/
+> `compute_ltcg()` from the same list already passed to them for `land_gain` (previously computed
+> and discarded).
+>
+> **New capability added while fixing this: section 50C stamp-duty-value deeming.** Per the
+> official form's own item 1(a)(iii): "in case (stamp value) does not exceed 1.10 times
+> (consideration), take this figure as (consideration), or else take (stamp value)." This was
+> entirely unimplemented — `CGAsset` (the calculator-internal dataclass) had no
+> `stamp_duty_value` field at all, even though `CGTransaction` (the canonical schema) already
+> captured it. Added `CGAsset.stamp_duty_value`, wired it through both construction sites
+> (`app/engine/calculators/itr2.py` and `capital_gains.py`'s own `_classify()`), and added
+> `deemed_consideration_50c()` (`capital_gains.py`), used consistently in both `compute_stcg()`'s
+> and `compute_ltcg()`'s `land_gain` aggregate *and* the per-row serializer, so the schedule
+> detail and the tax total can never disagree on which consideration figure was used.
+>
+> **New finding, deliberately NOT fixed here (documented, not silently left broken)**:
+> `compute_ltcg()`'s `land_gain` formula prefers the *indexed* cost over the non-indexed cost
+> when both are supplied (`indexed_acquisition_cost or acquisition_cost`) for the figure used in
+> the **primary** declared LTCG. Per the official form's Schedule CG Part B item 1 (confirmed via
+> `Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf`, extracted text saved
+> alongside it as `ITR-2-2026-Eng_extracted_text.txt`), the **primary** declared gain ("1c",
+> flowing into `B1e`/`B1g`/the actual tax total) is explicitly computed from the **non-indexed**
+> cost only; the indexed-cost figure ("1ca") is used *exclusively* for a separate section
+> 112(1)(a) second-proviso tax comparison ("for the purpose of computing eiB") that protects
+> resident taxpayers who acquired property before 23-Jul-2024 from paying *more* tax than the old
+> 20%-with-indexation regime would have required — it is never meant to directly replace the
+> primary gain figure. Using indexed cost as primary when it's *higher* than the non-indexed cost
+> (the normal case, since indexation tracks inflation) understates the declared gain and,
+> potentially, the tax owed. This is locked in by an existing test
+> (`tests/test_standalone_cg_schedule.py::test_compute_land_building_long_term_uses_indexed_cost`)
+> that encodes the same (likely incorrect) expectation, not derived independently from the
+> statutory formula. **Deliberately not changed in this pass**: correctly fixing this requires
+> implementing the full section 112(1)(a) dual computation (both tax figures, the
+> "excess amount to be ignored" comparison) — the schema fields for it
+> (`AquisitCostIndex`/`TotalDednForEiB`/`BalanceForEiB`/`TaxSec1121aiiB`/`TaxSec1121a`/
+> `ExcessAmtSec1121a`, all schema-optional) are named but intentionally left unpopulated by the
+> new serializer rather than guessed at under time pressure in the same pass as three other
+> fixes. Flagged as a new, separate P0 item — see the remediation plan update below.
+>
+> **Tests**: `tests/test_itr2_itd_builder.py::test_land_building_stcg_and_ltcg_rows_are_schema_valid_with_correct_fields`
+> and `::test_land_building_applies_section_50c_stamp_duty_deeming`, both validating the full
+> generated document against the real official JSON schema (`Draft4Validator`), not just
+> asserting individual field values — this is exactly the check that would have caught bug #1
+> immediately had it existed before. Both confirmed via `git stash` (across all three touched
+> files: `itr2.py`, `capital_gains.py`, `calculators/itr2.py`) to fail against the pre-fix code.
+> Full combined regression run: `pytest tests/test_itr1_calculator.py tests/test_itr1_itd_builder.py
+> tests/test_itr4_calculator.py tests/test_filing_gateway_v2_itr4.py tests/test_itr2_*.py
+> tests/test_standalone_cg_schedule.py tests/test_draft_to_itr2_input.py` — 218 passed, 0 failed.
+>
+> **Update (2026-09-04, same day): the generic "other assets" mapping is now also fixed.** The
+> 10 non-land/building, non-111A/112A `CGAssetType` categories (`unlisted_shares`,
+> `listed_security`, `debt_mutual_fund`, `specified_mutual_fund_50aa`,
+> `market_linked_debenture_50aa`, `bonds_debentures`, `depreciable_asset`, `jewellery`,
+> `foreign_asset`, `other`) previously always emitted the zero-valued `SaleOnOtherAssets`
+> (STCG)/`SaleofAssetNADtls.SaleofAssetNA` (LTCG) placeholder regardless of real transaction
+> data. Confirmed via the official form (Schedule CG items 5 and 8, "From sale of assets other
+> than at A1 or A2 or A3 or A4 above" / "...where B1 to B7 above are not applicable") that this
+> is the genuine generic catch-all — internally split into "unquoted shares" (`unlisted_shares`,
+> section 50CA deemed-consideration applies) and "assets other than unquoted shares" (the other 9
+> categories). New helper `_other_assets_block()` (`app/engine/itd/itr2.py`) aggregates
+> consideration/cost across every matching transaction, split by holding period (reusing
+> `_is_short_term()`, matching the calculator's own classification exactly) and by the
+> unquoted/non-unquoted split, with a new `deemed_consideration_50ca()` helper
+> (`capital_gains.py`) applying the section 50CA "higher of consideration or FMV" comparison —
+> deliberately distinct from `deemed_consideration_50c()`'s 110%-tolerance version for
+> land/building, since the official form's own item 5(a)(i)(c)/8(a)(i)(c) text confirms section
+> 50CA has no tolerance band. Indexation does not apply to this bucket at all (the official
+> form's item 5b/8b only ever asks for "cost of acquisition **without** indexation" here), so no
+> indexed-cost handling was needed, unlike land/building.
+>
+> **Tests**: `test_generic_other_assets_bucket_maps_jewellery_and_bonds` (schema-valid, and
+> reconciles against `result.schedules["cg"].stcg.income_30per`/`ltcg.income_125per_other` — the
+> calculator's own signed totals, not just the row's internal arithmetic) and
+> `test_generic_other_assets_bucket_applies_section_50ca_for_unquoted_shares`. Both confirmed via
+> `git stash` to fail against the pre-fix code. Full combined regression run after this addition:
+> 220 passed, 0 failed (`test_itr1_calculator.py`, `test_itr1_itd_builder.py`,
+> `test_itr4_calculator.py`, `test_filing_gateway_v2_itr4.py`, `test_itr2_*.py`,
+> `test_standalone_cg_schedule.py`, `test_draft_to_itr2_input.py`).
+>
+> **Remaining, deliberately not attempted**: per-transaction §54/54B/54EC/54F exemption
+> attribution to this bucket's `LossSec94of7Or94of8`/`DeductionUs54F` fields (both left at 0 —
+> the aggregate `DeducClaimInfo.TotDeductClaim` elsewhere in Schedule CG is correct, just not
+> broken out per-row here), and the section 94(7)/94(8) dividend-stripping loss-disallowance
+> figure (Taxify has no input field capturing this at all). Also unaffected: §3.1's 115AD-specific
+> fields (`NRISecur115AD`, `NRISaleOfEquityShareUs112A`) — confirmed distinct from this generic
+> bucket, remain correctly zero pending a `CGAssetType`/FII-flag schema extension.
+
 ---
 
 ## 3.3 VDA business-income classification is serialized as capital gains
@@ -249,15 +402,32 @@ A VDA transaction selected or intended as business income can be filed as capita
 
 ### Severity
 
-**Critical**
+~~**Critical**~~
+
+> **Re-verified (2026-09-04): not a bug — ITR-2 cannot represent VDA business income at all, by
+> form scope, not by omission.** The official AY 2026-27 schema's `ScheduleVDA.ScheduleVDADtls`
+> item property for `HeadUndIncTaxed` has `"enum": ["CG"]` — a single legal value
+> (`Reference Docs by CBDT & ITD/Official JSON Schema/ITR-2_2026_Main_V1.1 (2).json`,
+> `definitions.ScheduleVDA.properties.ScheduleVDADtls.items.properties.HeadUndIncTaxed`). There is
+> no `"BP"` (business/profession) option in ITR-2's schema for this field at all. This matches
+> ITR-2's own statutory scope: a taxpayer with any Profits & Gains from Business/Profession —
+> including VDA transactions the taxpayer treats as business income — is required to file ITR-3
+> (or ITR-4 for eligible presumptive cases), not ITR-2, regardless of how the taxpayer classifies
+> the VDA transaction. `app/schemas/itr2.py`'s `VDATransaction` model correctly has no
+> business/capital classification field, because ITR-2 has nothing to classify into — every VDA
+> transaction reaching this serializer is definitionally capital-gains-taxed for this form. No fix
+> applied; this finding is retracted as stated. (A taxpayer who genuinely wants VDA treated as
+> business income needs Taxify to route them to ITR-3 filing at the form-selection stage, not to
+> a VDA head-classification field within ITR-2 — that is a distinct, valid future feature request,
+> not a defect in the current ITR-2 serializer.)
 
 ### Remediation
 
-- Add explicit VDA head classification to the canonical input.
-- Reject unsupported head/form combinations before calculation.
-- Serialize `CG` or `BP` from the actual selection.
-- Ensure calculator, Schedule VDA, Part B-TI, and tax computation use the same classification.
-- Add capital-gains VDA, business-income VDA, mixed, zero-profit, and invalid-expense tests.
+~~Add explicit VDA head classification to the canonical input. Reject unsupported head/form
+combinations before calculation. Serialize `CG` or `BP` from the actual selection. Ensure
+calculator, Schedule VDA, Part B-TI, and tax computation use the same classification. Add
+capital-gains VDA, business-income VDA, mixed, zero-profit, and invalid-expense tests.~~ No
+remediation needed — see re-verification note above.
 
 ---
 
@@ -341,11 +511,29 @@ A legitimate house-property loss can appear as zero in Part B-TI while the calcu
 
 ### Severity
 
-**Critical**
+**Critical** — ~~superseded, see re-verification below~~
+
+> **Re-verified (2026-09-04): not a bug.** `PartB-TI.IncomeFromHP` in the official AY 2026-27
+> JSON schema (`Reference Docs by CBDT & ITD/Official JSON Schema/ITR-2_2026_Main_V1.1 (2).json`,
+> `definitions.PartB-TI.properties.IncomeFromHP`) is schema-constrained to `"minimum": 0,
+> "exclusiveMinimum": false` — a negative value here would fail official schema validation, so
+> the `max(_ZERO, ...)` clamp at `itr2.py:1474` is schema-mandated, not a defect. By contrast
+> `ScheduleHP.TotalIncomeChargeableUnHP` (`itr2.py:474`, cited correctly by this finding as
+> emitting the signed value) has `"minimum": -99999999999999` in the schema — the two fields are
+> legitimately different: Schedule HP reports the head's own signed result, Part B-TI reports
+> post-set-off income only. The loss is not silently dropped: `_schedule_cyla()`
+> (`itr2.py:203-253`) separately computes `hp_remaining = abs(min(z, result.house_property_income))`
+> when HP income is negative and correctly emits it via `LossRemAftSetOff.BalHPlossCurYrAftSetoff`,
+> `TotalCurYr.TotHPlossCurYr`, and `TotalLossSetOff.TotHPlossCurYrSetoff` — the official CYLA
+> mechanism's actual designated place for a per-head current-year loss, not Part B-TI's aggregate
+> income field. No fix applied; this finding is retracted as stated. (Not yet independently
+> re-verified: whether the calculator's `cyla.hp_setoff` value itself is arithmetically correct
+> for every HP-loss scenario — that is a calculator-correctness question, not this serializer
+> finding, and remains open for whoever next audits `app/engine/calculators/itr2.py`'s CYLA step.)
 
 ### Remediation
 
-Preserve signed HP values where the official field permits them and use separate fields for current-year loss, set-off, remaining loss, and income after set-off. Add self-occupied, let-out, multiple-property, interest-limitation, and carried-forward-loss tests.
+~~Preserve signed HP values where the official field permits them and use separate fields for current-year loss, set-off, remaining loss, and income after set-off. Add self-occupied, let-out, multiple-property, interest-limitation, and carried-forward-loss tests.~~ No remediation needed for Part B-TI's `IncomeFromHP` itself — see re-verification note above.
 
 ---
 
@@ -558,9 +746,15 @@ The serializer calculates ALV and standard deduction using simplified logic arou
 
 ## 6.3 Schedule HP and Part B-TI can disagree
 
-Schedule HP emits `result.house_property_income`, while Part B-TI clamps negative HP income to zero. This is an internal consistency defect.
+Schedule HP emits `result.house_property_income`, while Part B-TI clamps negative HP income to zero.
 
-**Severity: Critical**
+> **Re-verified (2026-09-04): not a defect — see §3.5's re-verification note for the full
+> schema evidence.** `PartB-TI.IncomeFromHP` is schema-constrained non-negative
+> (`minimum: 0`); `ScheduleHP.TotalIncomeChargeableUnHP` is schema-permitted negative
+> (`minimum: -99999999999999`). The two fields are intentionally different by design, and the
+> loss itself is correctly tracked through `_schedule_cyla()`'s dedicated loss fields, not lost.
+
+~~**Severity: Critical**~~
 
 ---
 
@@ -861,12 +1055,31 @@ Even those cases require independent review of the generated JSON against the of
    - add serialized-field coverage tests.
 
 2. **Complete capital-gains serialization**
-   - dedicated Schedule 115AD;
-   - all CG categories;
-   - section-specific exemptions;
-   - signed loss handling;
-   - CYLA/BFLA/CFL reconciliation;
-   - no silent zero placeholders for populated data.
+   - ~~dedicated Schedule 115AD~~ — re-verified §3.1: genuinely not representable without a new
+     `CGAssetType`/FII-flag addition; `NRISecur115AD`/`NRISaleOfEquityShareUs112A` are correctly
+     zero when absent, not a mislabeled bucket. Remains open, scope narrowed.
+   - ~~land/building STCG/LTCG detail~~ — **fixed 2026-09-04**, see §3.2's fix write-up (was a
+     schema-blocking wrong-field-name bug, not just missing detail; §50C deeming added as a new
+     capability).
+   - ~~all OTHER CG categories (`unlisted_shares`, `listed_security`, `debt_mutual_fund`,
+     `specified_mutual_fund_50aa`, `market_linked_debenture_50aa`, `bonds_debentures`,
+     `depreciable_asset`, `jewellery`, `foreign_asset`, `other`)~~ — **fixed 2026-09-04**, see
+     §3.2's fix write-up update (mapped into the generic `SaleOnOtherAssets`/`SaleofAssetNADtls`
+     bucket per the official form's Schedule CG items 5/8, with section 50CA deeming for
+     unquoted shares).
+   - section-specific exemptions — still pending (per-transaction §54/54B/54EC/54F claims are not
+     wired to individual Schedule CG rows, though the aggregate `DeducClaimInfo.TotDeductClaim`
+     is correct).
+   - signed loss handling — resolved for land/building (§3.2); still open for the other 10
+     categories above.
+   - CYLA/BFLA/CFL reconciliation — not yet independently re-audited in this pass.
+   - **New P0 item found 2026-09-04**: `compute_ltcg()`'s land/building gain formula uses the
+     *indexed* cost as primary when supplied, but the official form requires the *non-indexed*
+     cost as primary — indexation should only feed a separate section 112(1)(a) second-proviso
+     tax comparison that can only reduce, never set, the base gain. Deliberately left unfixed in
+     this pass (needs the full dual tax-comparison implemented correctly, not a one-line formula
+     swap) — see §3.2's fix write-up for the complete evidence trail.
+   - no silent zero placeholders for populated data — resolved for land/building; open elsewhere.
 
 3. **Complete Schedule OS**
    - winnings, gifts, DTAA, 89A, PF, unexplained, special-rate, PTI, deductions, and dividend categories;
@@ -882,10 +1095,10 @@ Even those cases require independent review of the generated JSON against the of
    - buyer/tenant fields;
    - total reconciliation.
 
-5. **Correct negative HP handling**
-   - preserve signed values;
-   - align Schedule HP and Part B-TI;
-   - test current-year and carried-forward losses.
+5. ~~**Correct negative HP handling**~~ — **re-verified 2026-09-04, not a defect**: see §3.5's
+   and §6.3's re-verification notes. `PartB-TI.IncomeFromHP`'s non-negative constraint is
+   schema-mandated; the loss is correctly tracked via `_schedule_cyla()`'s dedicated fields, not
+   silently dropped.
 
 6. **Complete filing profile**
    - current-account deposit seventh-proviso field for ITR-2;

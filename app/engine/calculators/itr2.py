@@ -256,6 +256,7 @@ def _classify_cg_transactions(
                 date_of_acquisition=tx.date_of_acquisition.isoformat() if tx.date_of_acquisition else "",
                 date_of_transfer=tx.date_of_transfer.isoformat(),
                 full_consideration=tx.full_consideration,
+                stamp_duty_value=tx.stamp_duty_value or Decimal("0"),
                 acquisition_cost=tx.cost_of_acquisition,
                 indexed_acquisition_cost=tx.indexed_cost,
                 improvement_cost=tx.improvement_cost,

@@ -1,0 +1,2489 @@
+=== page 1 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 39
+MROF
+“
+INDIAN INCOME TAX RETURN Assessment Year
+[For Individuals and HUFs not having income from profits and gains
+ITR-2
+of business or profession]
+2 0 2 6 - 2 7
+(Please see Rule 12 of the Income-tax Rules, 1962)
+(Please refer instructions)
+NOITAMROFNI
+LANOSREP
+(A1) First (A2) Middle (A3) Last name (A4) PAN
+name name
+Addresses to be provided for communication purposes: (A5) Status (Tick) 
+ Individual  HUF
+Primary Address: (A6a) Flat/Door/Block No. (A7a) Name of
+Premises/Building/Village (A8a) Road/Street/Post Office (A9a) (A14) Date of Birth/ Formation (DD/MM/YYYY)
+Area/locality (A10a) Town/City/District (A11a) State (A12a) Country
+(A13a) PIN code/ZIP code.
+(A15) Aadhaar Number (12 digit)
+Secondary Address: (A6b) Flat/Door/Block No. (A7b) Name of
+Premises/Building/Village (A8b) Road/Street/Post Office (A9b)
+Area/locality (A10b) Town/City/District (A11b) State (A12b) Country
+(A13b) PIN code/ZIP code.
+Details to be provided for communication purposes:
+(A16) Residential/Office Phone Number with STD code/ Primary (A17) Secondary Mobile No.
+Mobile No. of the taxpayer
+(A18) Primary Email ID of the taxpayer (A19) Secondary Email ID
+SUTATS
+GNILIF
+Part A-GEN GENERAL
+139(1)-On or before due date, 139(4)-After due date, 139(5)-
+(a1i) Filed u/s (Tick) Revised Return, 92CD-Modified return, 119(2)(b)-After
+condonation of delay
+(A20)
+(a1ii) Or filed in response to notice u/s   139(9),  142(1),  148 ,  153C
+Do you wish to exercise the option u/s 115BAC(6) of Opting out of new tax regime? (default is “No”)  Yes
+(a2)  No
+Note- For Opting out, option should be exercised along with the return of income filed u/s 139(1)
+Are you filing return of income under Seventh proviso to section 139(1) but otherwise not required to furnish return
+of income? - (Tick)  Yes  No
+(b) If yes, please furnish following information [Note: To be filled only if a person is not required to furnish a return of
+income under section 139(1) but filing return of income due to fulfilling one or more conditions mentioned in the
+seventh proviso to section 139(1)]
+Have you deposited amount or aggregate of amounts exceeding Rs. 1 Crore in one or Amount (Rs) (If Yes)
+(bi)
+more current accounts during the previous year? (Yes/No)
+Have you incurred expenditure of an amount or aggregate of amount exceeding Rs. 2
+(bii) Amount (Rs) (If Yes)
+lakhs for travel to a foreign country for yourself or for any other person? (Yes/No)
+Have you incurred expenditure of amount or aggregate of amount exceeding Rs. 1
+(biii) Amount (Rs) (If Yes)
+lakh on consumption of electricity during the previous year? (Yes/No)
+Are you required to file a return as per other conditions prescribed under clause (iv)
+(biv) of seventh proviso to section 139(1) (If yes, please select the relevant condition from (Tick)  Yes  No
+the drop-down menu)
+If Revised/Defective/Modified, then enter
+(c) Receipt No. and Date of filing original / /
+return (DD/MM/YYYY)
+If filed, in response to a notice u/s 139(9)/142(1)/148/153C or order u/s 119(2)(b) enter
+(Unique /
+(d) Unique Number/ Document Identification Number (DIN) and date of such Notice/Order,
+Number) /
+or if filed u/s 92CD, enter date of Advance Pricing Agreement
+(e) Residential A. Resident  You were in India for 182 days or more during the previous year [section 6(1)(a)]
+Status in  You were in India for 60 days or more during the previous year, and have been in India
+India (for for 365 days or more within the 4 preceding years [section (6)(1)(c)] [where Explanation 1
+individuals) is not applicable]
+(Tick applicable  You are a citizen of India, who left India, for the purpose of employment, as a member
+option) of the crew of an Indian ship and were in India for 182 days or more during the previous
+year and 365 days or more within the preceding 4 years [Explanation 1(a) of section
+(6)(1)(c)]
+ You are a citizen of India or a person of Indian origin and have come on a visit to India
+during the previous year and were in India for
+a) 182 days or more during the previous year and 365 days or more within the preceding 4
+years; or
+b) 120 days or more during the previous year and 365 days or more within the preceding 4
+years if the total income, other than income from foreign sources, exceeds Rs. 15 lakh.
+[Explanation 1(b) of section (6)(1)(c)]
+B. Resident  You have been a non-resident in India in 9 out of 10 preceding years [section 6(6)(a)]
+but not  You have been in India for 729 days or less during the 7 preceding years [section 6(6)(a)]
+
+=== page 2 ===
+40 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+Ordinarily  You are a citizen of India or person of Indian origin, who comes on a visit to India,
+Resident having total income, other than the income from foreign sources, exceeding Rs. 15 lakh
+and have been in India for 120 days or more but less than 182 days during the previous year
+[section 6(6)(c)]
+ You are a citizen of India having total income, other than the income from foreign
+sources, exceeding Rs. 15 lakh during the previous year and not liable to tax in any other
+country or territory by reason of your domicile or residence or any other criteria of similar
+nature [section 6(6)(d) rws 6(1A)]
+C. Non-  You were a non-resident during the previous year.
+resident
+(i)Please specify the jurisdiction(s) of residence during the previous year -
+S. No. Jurisdiction(s) Taxpayer Identification Number(s)
+of residence
+1
+2
+(ii) In case you are a Citizen of India or a Person of Indian Origin (POI), please specify -
+Total period of stay in India Total period of stay in India during the 4 preceding years
+during the previous year (in (in days)
+days)
+Residential D.  Resident  Resident but not Ordinarily Resident  Non-resident
+Status in
+India (for
+HUF)
+(Tick applicable
+option)
+(f) Do you want to claim the benefit under section 115H? (applicable in case of resident)  Yes  No
+Are you governed by Portuguese Civil Code as per section 5A? Tick)   Yes  No (If “YES” please fill Schedule
+(g)
+5A)
+(h) Whether you are an FPI? Yes/No If yes, please provide SEBI Regn. No
+(i) Legal Entity Identifier (LEI) details (mandatory if refund is 50 Crores or more)
+LEI Number Valid upto date
+Whether this return is being filed by a representative assessee? (Tick)  Yes  No If yes, please furnish
+(j)
+following information -
+(1) Name of the representative assessee
+(2) E-mail ID of the representative assessee
+(3) Contact number of the representative assessee
+Whether you were Director in a company at any time during the previous year? (Tick)   Yes  No
+(k)
+If yes, please furnish following information -
+Name of Whether its shares are listed Director Identification Number
+Type of company PAN
+Company or unlisted (DIN)
+(Drop down to be
+provided)
+L (l)LLLL Whether you have held unlisted equity shares at any time during the previous year? (Tick)   Yes
+L LLL  No
+L If yes, please furnish following information in respect of equity shares
+Name Type Shares
+of of PA Opening transferred Closing
+Shares acquired during the year
+comp Comp N balance during the balance
+any any year
+Iss
+ue
+Purchas
+pri
+e price
+ce
+Fa per
+per
+(Drop Date of ce share
+No. No. sha No. No.
+down Cost of subscri val (in case Sale Cost of
+of of re of of
+to be acquisi ption / ue of consider acquisi
+sha sha (in sha sha
+provi tion purchas per purchas ation tion
+res res cas res res
+ded) e sha e from
+e of
+re existing
+fre
+shareho
+sh
+lder)
+iss
+ue)
+1a 1b 2 3 4 5 6 7 8 9 10 11 12 13
+
+=== page 3 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 41
+SCHEDULES TO THE RETURN FORM (FILL AS APPLICABLE)
+Schedule S Details of Income from Salary
+SEIRALAS
+Name of Employer Nature of employer (Tick)  TAN of Employer (mandatory if tax is deducted)
+(drop down to be provided)
+Address of employer Town/City State PIN code/ ZIP code
+1 Gross Salary (1a + 1b + 1c + 1d + 1e + 1f) 1
+a Salary as per section 17(1) (drop down to be provided) 1a
+Value of perquisites as per section 17(2) (drop down to
+b 1b
+be provided)
+Profit in lieu of salary as per section 17(3) (drop down
+c 1c
+to be provided)
+Income from retirement benefit account maintained in
+d a notified country u/s 89A (choose country from drop 1d
+down menu)
+Income from retirement benefit account maintained in
+e 1e
+a country “other than notified country u/s 89A”
+Income taxable during the previous year on which
+f 1f
+relief u/s 89A was claimed in any earlier previous year.
+(Add multiple rows for Gross Salary in case of more than one employer)
+2 Total Gross Salary (from all employers) 2
+Less allowances to the extent exempt u/s 10 (drop down to be provided in e-filing
+3 utility) 3
+(Note: Ensure that it is included in Total Gross salary in (2) above )
+3(a) Less: Income claimed for relief from taxation u/s 89A 3a
+4 Net Salary (2 – 3 – 3a) 4
+5 Deduction u/s 16 (5a + 5b + 5c) 5
+a Standard deduction u/s 16(ia) 5a
+b Entertainment allowance u/s 16(ii) 5b
+c Professional tax u/s 16(iii) 5c
+6 Income chargeable under the head ‘Salaries’ (4 - 5) 6
+Schedule HP Details Of Income From House Property (Drop down to be provided indicating ownership of property)
+YTREPORP
+ESUOH
+Address of property 1 Town/ City State Country PIN Code/ ZIP Code
+1
+Is the property co-owned?  Yes  No (if “YES” please enter following details)
+Your percentage of share in the property (%)
+Name of Co-owner(s) PAN/Aadhaar No. of Co- Percentage Share in Property
+owner(s)
+I
+II
+[Tick  the applicable Name(s) of PAN/ Aadhaar No. of Tenant(s) PAN/TAN/ Aadhaar No. of Tenant(s) (if TDS credit is
+option] Tenant(s) (Please see note) claimed)
+ Let out (if let out)
+ Self-occupied I
+ Deemed let out II
+a Gross rent received or receivable or lettable value 1a
+b The amount of rent which cannot be realized 1b
+c Tax paid to local authorities 1c
+d Total (1b + 1c) 1d
+e Annual value (1a – 1d) (nil if self -occupied etc. as per section 23(2)of the Act) 1e
+f Annual value of the property owned (own percentage share x 1e) 1f
+g 30% of 1f 1g
+Interest payable on borrowed capital (Details are
+h to be filled in the drop down to be provided in 1h
+e-filing utility)
+
+=== page 4 ===
+42 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+i Total (1g + 1h) 1i
+j Arrears/Unrealized rent received during the year less 30% 1j
+k Income from house property 1 (1f – 1i + 1j) 1k
+(fill up details separately for each property)
+2 Pass through income/loss if any * 2
+Income under the head “Income from House Property” (Ʃ1k + 2)
+3 3
+(if negative take the figure to 2i of schedule CYLA)
+Please include the income of the specified persons referred to in Schedule SPI and Pass through income referred to in schedule PTI
+NOTE ►
+while computing the income under this head.
+Furnishing of PAN/ Aadhaar No. of tenant is mandatory, if tax is deducted under section 194-IB.
+NOTE ►
+Furnishing of TAN of tenant is mandatory, if tax is deducted under section 194-I.
+Schedule CG
+Capital Gains
+SNIAG
+LATIPAC
+A
+Short-term Capital Gains (STCG) (Sub-items 3 and 4 are not applicable for residents)
+sniaG
+latipaC
+mret-trohS
+1
+From sale of land or building or both (fill up details separately for each property)
+Date of purchase/ acquisition DD/MM/YYYY Date of sale/transfer DD/MM/YYYY
+Full value of consideration
+a i ai
+received/receivable
+Value of property as per stamp valuation
+ii aii
+authority
+Full value of consideration adopted as per
+section 50C for the purpose of Capital Gains
+iii aiii
+[in case (aii) does not exceed 1.10 times (ai),
+take this figure as (ai), or else take (aii)]
+b Deductions under section 48
+i Cost of acquisition without indexation bi
+ii Cost of Improvement without indexation bii
+Expenditure wholly and exclusively in
+iii biii connection with transfer
+iv Total (bi + bii + biii) biv
+c
+Balance (aiii – biv) 1c
+Deduction under section 54B (Specify details in
+d 1d
+item D below)
+e A1e A1e
+Short-term Capital Gains on Immovable property (1c - 1d)
+f In case of transfer of immovable property, please furnish the following details (see note)
+PAN/ Address of
+Name of Aadhaar Percentage property,
+S. No. Amount Pin code State
+buyer(s) No. of share country code,
+buyer(s) ZIP code
+F
+NOTE ► Furnishing of PAN/ Aadhaar No. is mandatory, if the tax is deducted under section 194-IA
+or is quoted by buyer in the documents
+In case of more than one buyer, please indicate the respective percentage share and
+amount.
+From sale of equity share or unit of equity oriented Mutual Fund (MF) or unit of a business trust on which
+2
+STT is paid under section 111A or 115AD(1)(ii) proviso (for FII) (where A3 is not applicable)
+a 2a
+Full value of consideration
+b
+Deductions under section 48
+i
+Cost of acquisition without indexation bi
+ii
+Cost of Improvement without indexation bii
+iii Expenditure wholly and exclusively in
+biii
+connection with transfer
+iv Total (i + ii + iii)
+biv
+c
+Balance (2a – biv) 2c
+
+=== page 5 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 43
+Loss to be disallowed u/s 94(7) or 94(8)- for example
+if asset bought/acquired within 3 months prior to
+d record date and dividend/income/bonus units are 2d
+received, then loss arising out of sale of such asset to
+be ignored (Enter positive value only)
+e Short-term capital gain on equity share or equity oriented MF (STT paid) (2c +2d) A2e
+For NON-RESIDENT, not being an FII- from sale of shares or debentures of an Indian company (to be
+3
+computed with foreign exchange adjustment under first proviso to section 48)
+STCG on transactions covered u/s 111A A3a
+a
+STCG from sale of shares not covered in sl. no 3a or sale of debentures A3b
+b
+4 For NON-RESIDENT- from sale of securities (other than those at A2) by an FII as per section 115AD
+a i In case securities sold include shares of a company other than quoted shares, enter the
+following details
+a Full value of consideration received/receivable in respect of ia
+unquoted shares
+b Fair market value of unquoted shares determined in the ib
+prescribed manner
+c Full value of consideration in respect of unquoted shares ic
+adopted as per section 50CA for the purpose of Capital
+Gains (higher of a or b)
+ii Full value of consideration in respect of securities other than aii
+unquoted shares
+iii Total (ic + ii) aiii
+b Deductions under section 48
+i Cost of acquisition without indexation bi
+ii Cost of improvement without indexation
+bii
+iii Expenditure wholly and exclusively in connection with
+biii
+transfer
+iv Total (i + ii + iii)
+biv
+c Balance (4aiii – biv)
+4c
+Loss to be disallowed u/s 94(7) or 94(8)- for example if security
+bought/acquired within 3 months prior to record date and
+d 4d
+dividend/income/bonus units are received, then loss arising out of sale
+of such security to be ignored (Enter positive value only)
+A4e
+e Short-term capital gain on sale of securities by an FII (other than those at A2) (4c +4d) A4e
+5 From sale of assets other than at A1 or A2 or A3 or A4 above
+a In case assets sold include shares of a company other
+i
+than quoted shares, enter the following details
+a Full value of consideration received/receivable in respect of ia
+unquoted shares
+b Fair market value of unquoted shares determined in the ib
+prescribed manner
+c Full value of consideration in respect of unquoted shares ic
+adopted as per section 50CA for the purpose of Capital
+Gains (higher of a or b)
+ii Full value of consideration in respect of assets other than aii
+unquoted shares
+iii Total (ic + ii) aiii
+b
+Deductions under section 48
+i Cost of acquisition without indexation bi
+ii Cost of Improvement without indexation bii
+iii Expenditure wholly and exclusively in connection with biii
+transfer
+iv Total (i + ii + iii) biv
+c Balance (5aiii – biv) 5c
+d In case of asset (security/unit) loss to be disallowed u/s 94(7) or 94(8)- 5d
+for example if asset bought/acquired within 3 months prior to record
+date and dividend/income/bonus units are received, then loss arising out
+of sale of such asset to be ignored (Enter positive value only)
+e
+STCG on assets other than at A1 or A2 or A3 or A4 above (5c + 5d) A5e
+
+=== page 6 ===
+44 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+6 Amount deemed to be short term capital gains
+a Whether any amount of unutilized capital gain on asset transferred during the previous years shown below
+was deposited in the Capital Gains Accounts Scheme within due date for that year?
+ Yes  No  Not applicable. If yes, then provide the details below
+Sl. Previous Section under New asset acquired/constructed Amount not used for new asset
+No. year in which deduction or remained unutilized in
+which asset claimed in that Previous year in Amount utilised Capital gains account (X)
+transferred year which asset out of Capital
+acquired/constructed Gains account
+i 2023-24
+54B
+2024-25
+ii 54B
+b Amount deemed to be short term capital gains, other than at ‘a’
+Total amount deemed to be short term capital gains (aXi + aXii + b)
+A6
+Pass Through Income/ Loss in the nature of Short Term Capital Gain, (Fill up schedule PTI) (A7a + A7b +
+7 A7
+A7c)
+Pass Through Income/ Loss in the nature
+a of Short Term Capital Gain, chargeable @ A7a
+20%
+Pass Through Income/ Loss in the nature
+b of Short Term Capital Gain, chargeable @ A7b
+30%
+Pass Through Income/ Loss in the nature
+c of Short Term Capital Gain, chargeable at A7c
+applicable rates
+8 Amount of STCG included in A1 – A7 but claimed as not chargeable to tax or chargeable at special rates in
+India as per DTAA (Applicable for Non-Residents only)
+Rate as
+Amount Item No. A1 to Country per Whether Section Rate
+Sl. of A7 above in name & Article of Treaty TRC of I.T. as per Applicable rate [lower of (6) or
+No. income which included Code DTAA (en
+i
+t
+f
+e r
+n o
+N
+t
+I L, ob
+(Y
+ta
+/
+i
+N
+n
+)
+e d Act I
+A
+.T
+ct
+. (9)]
+chargeable)
+(1) (2) (3) (4) (5) (6) (7) (8) (9) (10)
+I
+II
+a Total amount of STCG claimed as not chargeable to tax in India as per DTAA A8a
+b Total amount of STCG claimed as chargeable to tax at special rates in India as per DTAA A8b
+Capital Loss on buy back of shares [ Short Term 20% or 30% or applicable rate] A(A)
+A(A) (can be claimed only if respective Dividend income u/s 2(22)(f) is offered in 1aiii or sl.no.2d/2e of
+schedule OS )
+9 Total Short-term Capital Gain (A1e+ A2e+ A3a+ A3b+ A4e+ A5e+A6 + A7 - A8a + A(A)) A9
+B Long-term capital gain (LTCG) (Sub-items, 4, 5 , 6 & 7 are not applicable for residents)
+sniaG
+latipaC
+mret-gnoL
+1 From sale of land or building or both (fill up details separately for each property from a to f)
+Date of purchase/ acquisition DD/MM/YYYY Date of sale/transfer DD/MM/YYYY
+a i Full value of consideration received/receivable ai
+ii Value of property as per stamp valuation authority aii
+Full value of consideration adopted as per section 50C for the
+iii purpose of Capital Gains [in case (aii) does not exceed 1.10 aiii
+times (ai), take this figure as (ai), or else take (aii)]
+b Deductions under section 48
+i Cost of acquisition without indexation bi
+Cost of acquisition with indexation
+(Applicable only for:
+iia
+Residents for computational purposes under second proviso biia
+to section 112(1)(a) where acquisition is before 23rd July
+2024)
+iib
+Total cost of improvement
+
+=== page 7 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 45
+(a) Cost of improvement without indexation biib(a)
+(b) Year of Improvement
+( c) Cost of Improvement with indexation
+(b & c applicable only for:
+Residents for computational purposes under second proviso biib(c)
+to section 112(1)(a) where acquisition is before 23rd July
+2024)
+Add row
+Expenditure wholly and exclusively in connection with
+iii biii
+transfer
+iv
+Total bi + Ʃbiib(a) + biii) biv
+Total (only for the purpose of computing eiB) (biia + Ʃbiib(c)
++ biii)
+iva (Applicable for Residents for computational purposes under biva
+second proviso to section 112(1)(a) where acquisition is before
+23rd July 2024)
+c Balance (aiii – biv) 1c
+Balance (aiii- biva)
+(Applicable for Residents for computational purposes under second
+proviso to section 112(1)(a) where acquisition is before 23rd July 2024)
+ca 1ca
+(only for the purpose of computing eiB)
+(In case of negative, to be considered as nil)
+Deduction under section 54/54B/54EC/54F (Specify details in item D
+d 1d
+below)
+e
+Long-term Capital Gains on Immovable property (1c - 1d) B1e
+ea Long-term Capital Gains on Immovable property (1ca – 1d)
+(Applicable for Residents for computational purposes under second proviso to section 112(1)(a) where
+acquisition is before after 23rd July 2024 )
+B1ea
+(only for the purpose of computing eiB)
+(In case of negative, to be considered as nil)
+ei Where acquisition is before 23rd July 2024 (for residents only)
+A. Tax as per section 112(1)(a)(ii)(B) (1e*12.5%)
+B1ei(A)
+B. Tax for the purposes of second proviso to section 112(1)(a) (1ea*20%)
+B1ei(B)
+(Note : Tax computed at (ei) is for determining ‘excess amount to be ignored in e(ii)’ )
+eii Excess amount, if any, that is required to be ignored as per second proviso to section 112(1)(a) (for
+residents only) [B1ei(A)- B1ei(B)] B1eii
+f In case of transfer of immovable property, please furnish the following details (see note)
+PAN/
+Address of
+S.No.
+Name of Aadhaar Percentage
+Amount property, country Pin code State
+buyer(s) No. of share
+code, ZIP code
+buyer(s)
+NOTE ► Furnishing of PAN/ Aadhaar No. is mandatory, if the tax is deducted under section 194-IA or
+is quoted by buyer in the documents.
+In case of more than one buyer, please indicate the respective percentage share and amount.
+g Total Long-term Capital Gains on all Immovable B1g
+properties (ƩB1e):
+h Total excess tax to be ignored (ƩB1eii) B1h
+From sale of, (i) listed securities (other than a unit) or zero coupon bonds as per Section 112(1); (ii) GDR of
+2 an Indian company referred in sec. 115ACA (applicable only for resident individuals)
+a Full value of consideration 2a
+b Deductions under section 48 b
+i
+Cost of acquisition without indexation bi
+ii Cost of improvement without
+bii
+indexation
+iii Expenditure wholly and exclusively in
+biii
+connection with transfer
+
+=== page 8 ===
+46 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+iv Total (bi + bii +biii) biv
+c Balance (2a – biv) 2c
+Deduction under sections 54F (Specify details
+d 2d
+in item D below)
+e B3(ii)e
+Long-term Capital Gains on assets at B3 above where transfer was (2c – 2d)
+B2e B3(ii)ei
+B3(ii)eii
+3 From sale of equity share in a company or unit of equity-oriented fund or unit of a business trust on which STT is
+paid under section 112A
+a 3a
+LTCG u/s 112A (column 14 of Schedule 112A)
+b Deduction under sections 54F (Specify details in item D below) 3b
+c Long-term Capital Gains on sale of capital assets at B3 above (3a – 3b) B3c
+For NON-RESIDENTS- from sale of unlisted shares or listed debenture of Indian company (to be computed
+4
+with foreign exchange adjustment under first proviso to section 48)
+LTCG computed without indexation benefit in respect of unlisted shares or 4a
+a
+listed debentures
+4b
+b Deduction under sections 54F (Specify details in item D below)
+LTCG on unlisted shares or listed debentures (4a-4b) B4c
+c
+For NON-RESIDENTS- from sale of, (i) unlisted securities as per sec. 112(1)(c), (ii) bonds or GDR as
+referred in sec. 115AC, (iii) securities by FII as referred to in sec. 115AD (other than securities referred to in
+5
+section 112A for which column B6 is to be filled up)
+i In case securities sold include shares of a company other than quoted shares, enter the following
+a
+details
+a Full value of consideration
+received/receivable in respect of ia
+unquoted shares
+b Fair market value of unquoted
+shares determined in the ib
+prescribed manner
+c Full value of consideration in
+respect of unquoted shares
+adopted as per section 50CA for ic
+the purpose of Capital Gains
+(higher of a or b)
+ii Full value of consideration in respect
+of securities other than unquoted aii
+shares
+iii Total (ic + ii)
+aiii
+b Deductions under section 48
+i
+Cost of acquisition without indexation bi
+ii Cost of improvement without
+bii
+indexation
+iii Expenditure wholly and exclusively in
+biii
+connection with transfer
+iv
+Total (bi + bii +biii) biv
+c Balance(aiii – biv) 5c
+Deduction under sections 54F (Specify details
+d 5d
+in item D below)
+e Long-term Capital Gains on assets at 5 above in case of NON-RESIDENT [(5c - 5d)] B5e
+6 For FII/ FPI (NON-RESIDENTS) - From sale of equity share in a company or unit of equity oriented fund
+or unit of a business trust on which STT is paid under section 112A read with section 115AD
+a LTCG u/s 112A (column 14 of Schedule 115AD(1)(b)(iii) 6a
+proviso)
+b 6b
+Deduction under section 54F (Specify details in item D
+below)
+c B6c
+Long-term Capital Gains on sale of capital assets at B6 (6a – 6b)
+7 From sale of foreign exchange asset by NON-RESIDENT INDIAN (If opted under chapter XII-A)
+
+=== page 9 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 47
+LTCG on sale of foreign exchange asset (as per section 7a
+a
+115F) (computed without indexation)
+Less deduction under section 115F (Specify details in item
+b 7b
+D below)
+Balance LTCG on sale of foreign exchange asset (7a – 7b)
+c B7c
+8 From sale of assets where B1 to B7 above are not applicable
+a In case assets sold include shares of a company other than quoted
+i
+shares, enter the following details
+a Full value of consideration ia
+received/receivable in respect of
+unquoted shares
+b Fair market value of unquoted ib
+shares determined in the prescribed
+manner
+c Full value of consideration in ic
+respect of unquoted shares adopted
+as per section 50CA for the purpose
+of Capital Gains (higher of a or b)
+ii Full value of consideration in respect aii
+of assets other than unquoted shares
+iii Total (ic + ii) aiii
+b
+Deductions under section 48
+i bi
+Cost of acquisition without indexation
+ii Cost of improvement without bii
+indexation
+iii Expenditure wholly and exclusively in biii
+connection with transfer
+iv biv
+Total (bi + bii +biii)
+c 8c
+Balance (aiii – biv)
+d Deduction under sections 54F(Specify details 8d
+in item D below)
+e Long-term Capital Gains on assets at B8 B8e
+above (8c – 8d)
+9 Amount deemed to be long-term capital gains
+Whether any amount of unutilized capital gain on asset transferred during the previous year shown
+a below was deposited in the Capital Gains Accounts Scheme within due date for that year?
+ Yes  No  Not applicable. If yes, then provide the details below
+Sl. Previous year in Section under New asset acquired/constructed Amount not
+No. which asset which deduction used for new
+transferred claimed in that asset or
+year remained
+Previous year in Amount utilised out
+unutilized in
+which asset of Capital Gains
+acquired/ account
+Capital gains
+account (X)
+constructed
+i 2022-23 54/54F
+ii 2023-24 54/54B/54F
+iii
+2024-25 54/54B/ 54F
+b Amount deemed to be long-term capital gains, other than at ‘a’.
+Total amount deemed to be long-term capital gains (aXi + aXii + aXiii + b) B9
+10 Pass Through Income/ Loss in the nature of Long-Term Capital Gain, (Fill up schedule PTI)
+B10
+(B10a1+ B10a2)
+a1 Pass Through Income/ Loss in the nature of Long-Term Capital Gain, B10a1
+chargeable @ 12.5% u/s 112A
+Pass Through Income/ Loss in the nature of Long-Term Capital Gain,
+a2 B10a2
+chargeable @ 12.5% other than u/s 112A
+
+=== page 10 ===
+48 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+Amount of LTCG included in B1- B10 but claimed as not chargeable to tax or chargeable at special rates in
+11 India as per DTAA (Applicable for Non-Residents only)
+Item No.
+Amount B1 to B10 Country Article Rate as per Whether Section Applicable
+Rate as per
+Sl. No.
+inc
+o
+o
+f
+m e
+ab
+w
+o
+h
+v
+i
+e
+c h
+in na
+C
+m
+od
+e
+e
+&
+DT
+o
+A
+f
+A (Enter NIL
+T
+, i
+r
+f
+e
+n
+a
+o
+t
+t
+y
+c hargeable)
+TRC
+( Y
+o
+/
+b
+N
+ta
+)
+ined of
+A
+I
+c
+.T
+t
+.
+I.T. Act
+o
+r
+f
+a
+(
+t
+6
+e
+)
+[
+o
+lo
+r
+w
+(9
+er
+)]
+included
+(1) (2) (3) (4) (5) (6) (7) (8) (9) (10)
+I
+II
+a Total amount of LTCG claimed as not chargeable to tax as per DTAA B11a
+b Total amount of LTCG claimed as chargeable to tax at special rates as per DTAA B11b
+Capital Loss on buy back of shares B(A)
+[ Long term 12.5%]
+B(A)
+(can be claimed only if respective Dividend income u/s 2(22)(f) is offered in 1aiii or sl.no.2d/2e of schedule
+OS)
+Total long term capital gain chargeable under I.T. Act (B1g+B2e+B3c+B4c+B5e+B6c+B7c+ B8e+B9+ B10-
+12 B12
+B11a+B(A))
+C1 Sum of Capital Gain Incomes (8ii +8iii + 8iv +8v + 8vi + 8vii of table E below) C1
+C2 Income from transfer of Virtual Digital Assets (Col. 7 of Schedule VDA) C2
+C3 Income chargeable under the head “CAPITAL GAINS” (C1 + C2) C3
+D Information about deduction claimed against Capital Gains
+1 In case of deduction u/s 54/54B/54EC/54F/115F give following details
+a Deduction claimed u/s 54
+i Date of transfer of original asset ai dd/mm/yyyy
+ii Cost of new residential house aii
+iii Date of purchase/construction of new residential house aiii dd/mm/yyyy
+Amount deposited in Capital Gains Accounts Scheme
+iv aiv
+before due date
+(iva) Date of deposit (ivb) Account number (ivc) IFS code
+dd/mm/yyyy
+v Amount of deduction claimed av
+b Deduction claimed u/s 54B
+i Date of transfer of original asset bi dd/mm/yyyy
+ii Cost of new agricultural land bii
+iii Date of purchase of new agricultural land biii dd/mm/yyyy
+Amount deposited in Capital Gains Accounts Scheme
+iv biv
+before due date
+(iva) Date of deposit (ivb) Account number (ivc) IFS code
+dd/mm/yyyy
+v Amount of deduction claimed bv
+c Deduction claimed u/s 54EC
+i Date of transfer of original asset ci dd/mm/yyyy
+Amount invested in specified/notified bonds
+ii cii
+(Not exceeding fifty lakh rupees)
+iii Date of investment ciii dd/mm/yyyy
+(
+iv Amount of deduction claimed civ
+d Deduction claimed u/s 54F
+i Date of transfer of original asset di dd/mm/yyyy
+ii Cost of new residential house dii
+iii Date of purchase/construction of new residential house diii dd/mm/yyyy
+Amount deposited in Capital Gains Accounts Scheme
+iv div
+before due date
+(iva) Date of deposit (ivb) Account number (ivc) IFS code
+dd/mm/yyyy
+v Amount of deduction claimed dv
+e Deduction claimed u/s 115F (for Non-Resident Indians)
+i Date of transfer of original foreign exchange asset e i dd/mm/yyyy
+Amount invested in new specified asset or savings
+ii e ii
+certificate
+iii Date of investment e iii dd/mm/yyyy
+iv Amount of deduction claimed e iv
+f Total deduction claimed (1a + 1b + 1c + 1d + 1e ) f
+
+=== page 11 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 49
+E Set-off of current year capital losses with current year capital gains (excluding amounts included in A8a & [B11a] which is not
+chargeable under DTAA)
+Current
+year’s
+Capital capital
+Gain of gains
+current Long term remainin
+Short term capital loss
+year (Fill capital loss g after
+Type of this column set off
+Sl. Capital only if
+Gain computed
+figure is
+positive) DTA DTA (8=1-2-3-
+20% 30% applicable rate A 12.50% A 4-5-6-7-)
+rates rates
+1 2 3 4 5 6 7 8
+(B1g*+
+Capital B2e+
+Loss to be B3c*+
+set off B4c*
+(A4e*
++B5e*
+(Fill this + (A1e*+A3b*+A5e + B6c*
+(A2e* + A7b*
+i row only if *+ A6* + A7c* + A8b +B7c*+ B11b
+A3a*+A7a*+A( +
+computed A(A)) B8e*+
+figure is A)) A(A)) B9*+
+negative) B10a1*
++
+B10a2*
++ B(A))
+(A2e* +
+ii 20% A3a*+A7a*
++ A(A))
+(A4e* +
+iii 30% A7b* +
+A(A))
+(A1e*+A3b*
+applicabl + A5e*+A6*
+iv
+e rate + A7c* +
+A(A))
+DTAA
+v A8b
+rates
+(B1g*+B2e
++ B3c*+
+B4c* + B5e*
++ B6c* +
+vi 12.50%
+B7c*+
+B8e*+ B9*+
+B10a1*+
+B10a2* +
+B(A))
+DTAA
+vii B11b
+rates
+vii Total loss set off (ii + iii +
+i iv + v + vi + vii)
+Loss remaining after set
+ix
+off (i – viii)
+The figures of STCG in this table (A1e* etc.) are the amounts of STCG computed in respective column (A1-A7) is after
+setoff with similar securities and as reduced by the amount of STCG not chargeable to tax or chargeable at special
+rates as per DTAA, which is included therein, if any.
+The figures of LTCG in this table (B1e* etc.) are the amounts of LTCG computed in respective column (B1-B10) is
+after setoff with similar securities and as reduced by the amount of LTCG not chargeable to tax or chargeable at
+special rates as per DTAA, which is included therein, if any.
+
+=== page 12 ===
+50 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+F Information about accrual/receipt of capital gain
+16/9 to 16/12 to
+Upto 15/6 16/6 to 15/9 16/3 to 31/3
+Type of Capital gain / Date 15/12 15/3
+(i) (ii) (v)
+(iii) (iv)
+Short-term capital gains taxable at the rate of 20%
+1.
+Enter value from item 3iii of schedule BFLA, if any.
+Short-term capital gains taxable at the rate of 30%
+2.
+Enter value from item 3iv of schedule BFLA, if any.
+Short-term capital gains taxable at applicable rates
+3.
+Enter value from item 3v of schedule BFLA, if any.
+Short-term capital gains taxable at DTAA rates
+4.
+Enter value from item 3vi of schedule BFLA, if any.
+Long- term capital gains taxable at the rate of
+5. 12.5%
+Enter value from item 3vii of schedule BFLA, if any.
+Long- term capital gains taxable at the rate DTAA
+6. rates
+Enter value from item 3viii of schedule BFLA, if any.
+Capital gains on transfer of Virtual Digital Asset
+7. taxable at the rate of 30%
+Enter value from item 16 of schedule SI, if any
+Please include the income of the specified persons (spouse, minor child etc.) referred to in
+NOTE ►
+Schedule SPI while computing the income under this head
+Schedule From sale of equity share in a company or unit of equity-oriented fund or unit of a business trust on which
+112A STT is paid under section 112A
+Sl Share/ IS Na No. Sa Full Cost Cost If Fair Tot Expe Tota Bal
+. Unit I me of le- Value of of the Mar al nditu l anc
+N Acquire N of Sh pri of acqu acquis long- ket Fair re dedu e
+o. d (On C th are ce Conside isitio itio n term Valu Mar wholl ction (6-
+or od e s/ pe ration n capit e ket y and s 13)
+before / e Sh Un r -If shares with al per Val exclu (7+1 Ite
+after ar its Sh are out asset shar ue sively 2) m 4
+31st Jan e/ ar acquired inde was e/un of in (a)
+on or
+2018) Un e/ xatio acqu it as capi conne of
+before
+it Un n ired on tal ction LT
+31.01.20
+it High befo 31st asse with CG
+18
+(Total er of re Jan t as trans Sch
+Sale 8 01.02 uary per fer edu
+Value) and .2018 , secti le of
+(4*5) 9 , - 2018 on ITR
+- If Low 55(2 2
+shares er of )(ac)
+are 6 -
+Acquired and (4*1
+after 31st 11 0)
+January
+2018 -
+Please
+enter Full
+Value of
+Consider
+ation
+( (Co l 1a) (C (C (C (C (Col 6) (Col (Col (Col (Col (Col (Col (Col (Co
+C ol ol ol ol 7) 8) 9) 10) 11) 12) 13) l
+ol 2) 3) 4) 5) 14)
+1)
+1
+2
+3
+4
+Add Rows
+Total
+
+=== page 13 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 51
+115AD(1)(b)(iii) For NON-RESIDENTS - From sale of equity share in a company or unit of equity-oriented
+proviso fund or unit of a business trust on which STT is paid under section 112A rws
+115AD(1)(b)(iii) proviso
+Sl. Sha ISI Na No. Sa Full Cost Cost If Fair Tot Expe Tota Bal
+No. re/ N me of le- Value of of the Mark al nditu l anc
+Unit Co of Sh pri of acqu acqu long- et Fair re dedu e
+Acq de th are ce Consi isitio isitio term Value Mar wholl ction (6-
+uire e s/ pe derati n n capit per ket y and s 13)
+d Sh Un r on with al share/ Val exclu (7+1 Ite
+(On ar its Sh -If out asset unit ue sively 2) m 7
+or e/ ar shares inde was as on of in (a)
+befo Un e/ are xatio acqu 31st capi conne of
+acquire
+re / it Un n ired Janua tal ction LT
+d on or
+afte it High befo ry,201 asse with CG
+before
+r er of re 8 t as trans Sch
+31.01.2
+31st 018 8 01.02 per fer edu
+Jan (Total and .2018 secti le of
+uar Sale 9 , on ITR
+y Value) Low 55(2 2
+201 (4*5) er of )(ac)
+8) -If 6 -
+shares and (4*1
+are 11 0)
+Acquire
+d after
+31st
+January
+2018 -
+Please
+enter
+Full
+Value
+of
+Consid
+erat ion
+(Col (Col 1a) (Co (C (C (C (Col (Col (Col (Col (Col (Col (Col (Col (Col
+1) l 2) ol ol ol 6) 7) 8) 9) 10) 11) 12) 13) 14)
+3) 4) 5)
+1
+2
+3
+4
+Add Rows
+Total
+Schedule Income from transfer of Virtual Digital Assets
+VDA (Note: Details of every transaction are to be filled, wherein every ‘transfer’ is a transaction)
+Sl. No. Date of Date of Head under which Cost of Acquisition Consideration Income from transfer of
+Acquisition Transfer income to be taxed Received Virtual Digital Assets (enter
+(Capital Gain) (In case of gift; nil in case of loss) (Col. 6 –
+a. Enter the amount on Col. 5)
+which tax is paid u/s
+56(2)(x) if any
+b. In any other case cost
+to previous owner)
+(Col. 1) (Col. 2) (Col. 3) (Col. 4) (Col. 5) (Col. 6) (Col. 7)
+Add Rows
+Total (Sum of all Positive Incomes of Capital Gain in Col. 7) (Item No. C2 of Schedule
+CG)
+
+=== page 14 ===
+52 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+Schedule OS Income from Other Sources
+SECRUOS
+REHTO
+1 Gross income chargeable to tax at normal applicable rates (1a+ 1b+ 1c+ 1d + 1e) 1
+a Dividends, Gross (ai+aii+aiii) 1a
+i Dividend income other than (ii) and (iii) ai
+ii Dividend income u/s 2(22)(e) aii
+iii Dividend income u/s 2(22)(f) aiii
+b Interest, Gross (bi + bii + biii + biv+ bv + bvi + bvii + bviii + bix) 1b
+i From Savings Bank bi
+ii From Deposits (Bank/ Post Office/ Co- bii
+operative) Society/)
+iii From Income-tax Refund biii
+iv In the nature of Pass through income/ biv
+loss
+v Interest accrued on contributions to bv
+provident fund to the extent taxable as
+per first proviso to section 10(11)
+vi Interest accrued on contributions to bvi
+provident fund to the extent taxable as
+per second proviso to section 10(11)
+vii Interest accrued on contributions to bvii
+provident fund to the extent taxable as
+per first proviso to section 10(12)
+viii Interest accrued on contributions to bviii
+provident fund to the extent taxable as
+per second proviso to section 10(12)
+ix Others including interest from Companies, bix
+NBFCs & HFCs
+c Rental income from machinery, plants, buildings, etc., Gross 1c
+d Income of the nature referred to in section 56(2)(x) which is chargeable to tax 1d
+(di + dii + diii + div + dv)
+i Aggregate value of sum of money received di
+without consideration
+ii In case immovable property is received without dii
+consideration, stamp duty value of property
+iii In case immovable property is received for diii
+inadequate consideration stamp duty value of
+property in excess of such consideration
+iv In case any other property is received without div
+consideration, fair market value of property
+v In case any other property is received for dv
+inadequate consideration, fair market value of
+property in excess of such consideration
+e Any other income (please specify nature) 1e
+Sl. Nature Amount
+No.
+1 Family Pension
+2 Income from retirement benefit account maintained in a notified country u/s
+89A (choose country from drop down menu)
+3 Income from retirement benefit account maintained in a country “other than
+notified country u/s 89A”
+
+=== page 15 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 53
+4 Income taxable during the previous year on which relief u/s 89A was claimed in
+any earlier previous year.
+5 Any specified sum received by a unit holder from a business trust during the
+previous year referred to in section 56(2)(xii)
+6 Any sum received, including the amount allocated by way of bonus, at any time
+during a previous year, under a life insurance policy referred to in section
+56(2)(xiii)
+Rows can be added as required
+2 Income chargeable at special rates (2ai+2aii+ 2b+ 2c+ 2d + 2e +2f elements related 2
+to Sl. No.1)
+ai Winnings from lotteries, crossword puzzles, races, card games etc. chargeable 2ai
+u/s 115BB
+aii Income by way of winnings from online games chargeable u/s 115BBJ 2aii
+b Income chargeable u/s 115BBE (bi + bii + biii + biv+ bv + bvi) 2b
+i Cash credits u/s 68 bi
+ii Unexplained investments u/s 69 bii
+iii Unexplained money etc. u/s 69A biii
+iv Undisclosed investments etc. u/s 69B biv
+v Unexplained expenditure etc. u/s 69C bv
+vi Amount borrowed or repaid on hundi u/s 69D bvi
+c Accumulated balance of recognised provident fund taxable u/s 111 2c
+S.No. Assessment Year Income Tax benefit
+benefit
+(i) (ii) (iii) (iv)
+d Any other income chargeable at special rate (total of di to [dxxi)] 2d
+i Dividends received by non-resident (not being di
+company) or foreign company chargeable u/s
+115A(1)(a)(i) other than proviso to section
+115A(1)(a)(A)
+ia Dividend received by non-resident (not being dia
+company) or foreign company from a unit in an
+International Financial Services Centre, as referred to
+in sub-section (1A) of section 80LA, chargeable under
+proviso to section 115A(1)(a)(A)
+ii Interest received from Government or Indian concern dii
+on foreign currency debts chargeable u/s
+115A(1)(a)(ii)
+iii Interest received from Infrastructure Debt Fund diii
+chargeable u/s 115A(1)(a)(iia)
+iv Interest referred to in section 194LC(1) - chargeable div
+u/s 115A(1)(a)(iiaa) @ 5%
+v Interest referred to in section 194LD - chargeable u/s dv
+115A(1)(a)(iiab)
+vi Distributed income being interest referred to in dvi
+section 194LBA - chargeable u/s 115A(1)(a)(iiac)
+vii Income from units of UTI or other Mutual Funds dvii
+specified in section 10(23D), purchased in Foreign
+Currency - chargeable u/s 115A(1)(a)(iii)
+viii Income from royalty or fees for technical services dviii
+received from Government or Indian concern -
+chargeable u/s 115A(1)(b)(A) & 115A(1)(b)(B)
+
+=== page 16 ===
+54 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+ix Income by way of interest on bonds purchased in dix
+foreign currency by non-residents - chargeable u/s
+115AC
+x Income by way of Dividend on GDRs purchased in dx
+foreign currency by non-residents - chargeable u/s
+115AC
+xi Income by way of dividends from GDRs purchased in dxi
+foreign currency by residents - chargeable u/s
+115ACA
+xii Income (other than dividend) received by an FII in dxii
+respect of securities (other than units referred to in
+section 115AB) - chargeable u/s 115AD(1)(i)
+xiii Income by way of interest received by an FII on bonds dxiii
+or Government securities referred to in section 194LD
+– chargeable as per proviso to section 115AD(1)(i)
+xiv Income received by non-residents sportsmen or sports d xiv
+associations chargeable u/s 115BBA
+xv Donations in certain cases chargeable u/s 115BBC dxv
+xvi Interest referred to in Proviso to section 194LC(1) - dxvi
+chargeable u/s 115A(1)(a)(iiaa) @ 4%
+xvii Income by way of royalty from patent developed and dxvii
+registered in India - chargeable u/s 115BBF
+xviii Income by way of transfer of carbon credits - dxviii
+chargeable u/s 115BBG
+xix Investment Income of a Non-Resident Indian - d xix
+chargeable u/s 115E
+xx Income being dividend received by an FII in respect dxx
+of securities (other than units referred to in section
+115AB) - chargeable u/s 115AD(1)(i)
+Income received by non-resident as referred in second dxxi
+xxi proviso to section 194LC(1) - chargeable u/s 115A(1)(a)(iiaa)
+@ 9%
+e Pass through income in the nature of income from other sources claimed as chargeable at special 2e
+rates (drop down to be provided)
+f Amount included in 1 and 2 above, which is claimed as chargeable at special rates in India as per 2f
+DTAA (total of column (2) of table below) (Applicable for Non-Residents only)
+Sl. No. Amount Item No.1 Country name & Article Rate as per Whether Section of Rate as Applicable
+of ai, 1aiii, 1b C ode of Treaty TRC I.T. Act per I.T. rate [lower of
+income to 2 in DTAA obtained Act (6) or (9)]
+w
+in
+h
+cl
+ic
+u
+h
+d ed
+(
+c
+e
+h
+n
+a
+t
+r
+e
+g
+r
+e
+N
+ab
+IL
+le
+,
+)
+if not
+(Y/N)
+(1) (2) (3) (4) (5) (6) (7) (8) (9) (10)
+I
+II
+3 Deductions under section 57 (other than those relating to income chargeable at special rates under 2a, 2b
+& 2d)
+ai Expenses / Deductions other than “aii”(in case other 3ai
+than family pension)
+aii Interest expenditure on dividend u/s 57(i) (available only if 3aii
+income offered in 1a(i) and / or 1a(ii))
+aiia Eligible Interest expenditure u/s 57(1) – Computed Amount 3aiia
+aiii Deduction u/s. 57(iia) (in case of family pension only) 3aiii
+
+=== page 17 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 55
+b Depreciation (available only if income offered in 1c of 3b
+Schedule OS)
+c Total 3c
+4 Amounts not deductible u/s 58 4
+5 Profits chargeable to tax u/s 59 5
+5a Income claimed for relief from taxation u/s 89A 5a
+6 Net Income from other sources chargeable at normal applicable rates (1(after reducing income related 6
+to DTAA portion) – 3 + 4 + 5-5a ) (If negative take the figure to 3i of schedule CYLA)
+7 Income from other sources (other than from owning race horses) (2 + 6) (enter 6 as nil, if negative) 7
+8 Income from the activity of owning and maintaining race horses
+a Receipts 8a
+b Deductions under section 57 in relation to 8b
+receipts at 8a only
+c Amounts not deductible u/s 58 8c
+d Profits chargeable to tax u/s 59 8d
+e Balance (8a - 8b + 8c + 8d) (if negative take the figure to 6xii of Schedule CFL) 8e
+9 Income under the head “Income from Other Sources” (7 + 8e) (take 8e as nil if negative) 9
+10 Information about accrual/receipt of income from Other Sources
+S.No. Other Source Upto 15/6 From 16/6 to 15/9 From 16/9 to From 16/12 to From 16/3
+Income 15/12 15/3 to 31/3
+(i) (ii) (iii) (iv) (v)
+1 Income by way of
+winnings from
+lotteries,
+crossword puzzles,
+races, games,
+gambling, betting
+etc. referred to in
+section 2(24)(ix)
+2 Income by way of
+winnings from
+online games u/s
+115BBJ
+3a Dividend Income
+referred in Sl. No.
+1a(i)
+3b Dividend Income
+referred in Sl. No.
+1a(iii)
+4 Dividend Income
+u/s 115A(1)(a)(i)
+other than as per
+proviso to sec
+115A(1)(a)(A) @
+20% (Including
+PTI Income)
+5 Dividend income
+under proviso to
+section
+115A(1)(a)(A) @
+10% (Including PTI
+Income)
+6 Dividend Income
+u/s 115AC @
+10%
+
+=== page 18 ===
+56 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+7 Dividend Income
+u/s 115ACA (1)(a)
+@ 10% (Including
+PTI Income)
+8 Dividend Income
+of FII (other than
+units referred to in
+section 115AB) u/s
+115AD(1)(i) @
+20% (Including
+PTI Income)
+9 Dividend income
+chargeable at
+DTAA Rates
+10 Income from
+retirement benefit
+account
+maintained in a
+notified country
+u/s 89A (Taxable
+portion after
+reducing relief u/s
+89A)
+NOTE ► Please include the income of the specified persons (spouse, minor child etc.) referred to in Schedule SPI while computing the
+income under this head.
+Schedule CYLA Details of Income after Set off of Current Year Losses
+TNEMTSUJDA
+SSOL
+RAEY
+TNERRUC
+Sl. No. Head/ Source of Income of current year House property Net loss from Other sources chargeable Current year’s
+Income (Fill this column only if loss of the current at normal applicable rates (other than Income remaining
+income is zero or year set off loss from race horses) of the current after set off
+positive) year set off
+1 2 3 4=1-2-3
+Loss to be set off
+(Fill this row only ( 3 of Schedule
+i (6 of Schedule-OS)
+if computed figure HP)
+is negative)
+ii Salaries (6 of Schedule S)
+iii House property (3 of Schedule HP)
+Short-term capital
+(8ii of item E of Schedule
+iv gain taxable @
+CG)
+20%
+Short-term capital
+(8iii of item E of Schedule
+v gain taxable @
+CG)
+30%
+Short-term capital
+(8iv of item E of Schedule
+vi gain taxable at
+CG)
+applicable rates
+Short-term capital
+gain taxable at (8v of item E of Schedule vii
+special rates in CG)
+India as per DTAA
+Long term capital
+( 8vi of item E of Schedule
+viii gain taxable @
+CG)
+12.5%
+Long term capital
+gains taxable at (8vii of item E of Schedule
+ix
+special rates in CG)
+India as per DTAA
+Net income from
+other sources
+x chargeable at (6 of Schedule OS)
+normal applicable
+rates
+Profit from the
+activity of owning
+xi (8e of Schedule OS)
+and maintaining
+race horses
+Income from other
+sources taxable at
+xii (2f of Schedule OS)
+special rates in
+India as per DTAA
+Total loss set off (ii + iii + iv + v + vi + vii + viii
+xiii
++ ix + x + xi + xii )
+
+=== page 19 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 57
+xiv Loss remaining after set-off (i – xiii)
+Schedule BFLA Details of Income after Set off of Brought Forward Losses of earlier years
+TNEMTSUJDA
+SSOL
+DRAWROF
+THGUORB
+Sl. Head/ Source of Income Income after set off, if any, of current Brought forward loss Current year’s income
+No. year’s losses as per 4 of Schedule set off remaining after set off
+CYLA)
+1 2 3
+i Salaries (4ii of schedule CYLA)
+(B/f house property
+ii House property (4iii of schedule CYLA)
+loss)
+Short-term capital gain taxable (B/f short-term capital
+iii (4iv of schedule CYLA)
+@ 20% loss)
+Short-term capital gain taxable (B/f short-term capital
+iv (4v of schedule CYLA)
+@ 30% loss)
+Short-term capital gain taxable (B/f short-term capital
+v (4vi of schedule CYLA)
+at applicable rates loss)
+Short-term capital gain taxable
+(B/f short-term capital
+vi at special rates in India as per (4vii of schedule CYLA)
+loss)
+DTAA
+Long-term capital gain taxable (B/f short-term or long- vii (4viii of schedule CYLA)
+@ 12.5% term capital loss)
+Long term capital gains taxable
+(B/f short-term or long-
+viii at special rates in India as per (4ix of schedule CYLA)
+term capital loss)
+DTAA
+Net income from other sources
+ix chargeable at normal applicable ( 4x of schedule CYLA)
+rates
+Profit from owning and (B/f loss from horse
+x (4xi of schedule CYLA)
+maintaining race horses races)
+Income from other sources
+xi taxable at special rates in India (4xii of Schedule CYLA)
+as per DTAA
+Total of brought forward loss set off
+xii
+(2ii + 2iii + 2iv + 2v+ 2vi + 2vii + 2viii + 2x)
+Current year’s income remaining after set off Total of (3i + 3ii + 3iii + 3iv + 3v+ 3vi + 3vii + 3viii+
+xiii
+3ix + 3x + 3xi)
+Schedule CFL CARRY FORWARD OF LOSS
+SSOL
+FO
+DRAWROF
+YRRAC
+Assessment Date of Filing House property Short-term capital loss Long-term Capital loss Loss from
+Year (DD/MM/YYYY) loss owning and
+maintaining
+race horses
+1 2 3 4 5 6
+i 2018-19
+ii 2019-20
+iii 2020-21
+iv 2021-22
+v 2022-23
+vi 2023-24
+vii 2024-25
+viii 2025-26
+Total of
+ix earlier year
+losses
+Adjustment
+of above (2x of
+(2ii of Schedule
+x losses in Schedule
+BFLA)
+Schedule BFLA)
+BFLA
+
+=== page 20 ===
+58 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+2026-27 [(2xiv] of (8e of
+(2ix+3ix+4ix+5ix) of item E (6ix+7ix) of item E of Schedule
+xi (Current Schedule OS,
+Schedule CYLA) of Schedule CG CG
+year losses) if –ve)
+Total loss
+carried
+xii
+forward to
+future years
+Schedule VI-A Deductions under Chapter VI-A
+SNOITCUDED
+LATOT
+1 Part B- Deduction in respect of certain payments
+80CCC (Details are to be
+80C (Details are to be filled
+filled in the drop down to
+a in the drop down to be b
+be provided in e-filing
+provided in e-filing utility)
+utility)
+80CCD(1) (Details are to be 80CCD(1B) (Details are to
+filled in the drop down to be filled in the drop down
+c d
+be provided in e-filing to be provided in e-filing
+utility) utility)
+80CCD(2) (Details are to be
+80D (Details are to be filled in the
+filled in the drop down to
+e f drop down to be provided in e-
+be provided in e-filing
+filing utility)
+utility)
+80DDB (Details are to be filled in
+g 80DD h the drop down to be provided in e-
+filing utility)
+80E (Details are to be
+80EE (Details are to be filled
+filled in the drop down to
+i j in the drop down to be
+be provided in e-filing
+provided in e-filing utility)
+utility)
+80EEA (Details are to be
+80EEB (Details are to be
+filled in the drop down to
+k l filled in the drop down to be
+be provided in e-filing
+provided in e-filing utility) utility)
+80GG (Details are to be filled
+m 80G n in the drop down to be
+provided in e-filing utility)
+o 80GGA p 80GGC
+2 Part C, CA and D- Deduction in respect of certain incomes/other deduction
+80QQB (Details are to be
+80RRB (Details are to be
+filled in the drop down to
+q r filled in the drop down to be
+be provided in e-filing
+provided in e-filing utility)
+utility)
+s 80TTA t 80TTB
+u 80U ua 80CCH
+Any other deduction as per the
+e-filing utility (Details are to
+ub be filled in the drop down
+to be provided in e-filing
+utility)
+v Total deductions under Chapter VI-A (Total of a to ub) v
+
+=== page 21 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 59
+Schedule 80G Details of donations entitled for deduction under section 80G
+SNOITANOD
+FO
+SLIATED
+Donations entitled for 100%
+A
+deduction without qualifying limit
+Transaction
+Reference number
+Eligible IFS code of
+PAN of for UPI transfer or
+Name and address of Donee Amount of donation Amount of Bank
+Donee Cheque number/
+donation
+IMPS/ NEFT/
+RTGS
+Donation Donation in Total
+in cash other mode Donation
+i
+ii
+iii Total
+Donations entitled for 50%
+B
+deduction without qualifying limit
+Transaction
+Reference number
+Eligible IFS code of
+PAN of for UPI transfer or
+Name and address of Donee Amount of donation Amount of Bank
+Donee Cheque number/
+donation
+IMPS/ NEFT/
+RTGS
+Donation Donation in Total
+in cash other mode Donation
+i
+ii
+iii Total
+Donations entitled for 100%
+C deduction subject to qualifying
+limit
+Transaction
+Reference number
+Eligible IFS code of
+PAN of for UPI transfer or
+Name and address of Donee Amount of donation Amount of Bank
+Donee Cheque number/
+donation
+IMPS/ NEFT/
+RTGS
+Donation Donation in Total
+in cash other mode Donation
+i
+ii
+iii Total
+Donations entitled for 50%
+D deduction subject to qualifying
+limit
+Transaction
+Reference
+ARN Eligible
+number for UPI IFS code of
+PAN of (Donation Amount
+Name and address of Donee Amount of donation transfer or Bank
+Donee Reference of
+Cheque number/
+Number) donation
+IMPS/ NEFT/
+RTGS
+Donation
+Donation Total
+in other
+in cash Donation
+mode
+i
+ii
+iii Total
+Total donations (Aiii + Biii + Ciii +
+E
+Diii)
+Schedule 80GGA Details of donations for scientific research or rural development
+Relevant clause under which Name and PAN of Amount of donation Eligible
+S.
+deduction is claimed (drop address of Donee Amount of
+No.
+down to be provided) Donee donation
+
+=== page 22 ===
+60 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+Donation in other
+Donation in cash Total
+mode
+Donation
+i
+ii
+Total donation
+Schedule Details of contributions made to political parties
+80GGC
+S. Amount of contribution Eligible Name of the PAN of Transaction IFS code of Bank
+Date
+No. amount of political party political party Reference
+Contribution contribution number for
+in other UPI transfer
+Contribution
+mode Total or Cheque
+in cash
+Contribution number/
+IMPS/ NEFT/
+RTGS
+i
+(add rows)
+Total
+contribution
+Schedule 80DD Details of deduction in respect of maintenance including medical treatment of a dependent who is a person with
+disability
+Nature of disability Type of PAN of the Aadhaar of Date of Ack. Form Ack. No. UDID Amount
+dependent dependent the filing of No. of as per Rule Number (If
+dependent Form Form 11A(2)(ii) (if available)
+10IA 10IA applicable)
+filed
+1. Dependent 1. Spouse
+person with 2. Son
+disability 3. Daughter
+2. Dependent 4. Father
+person with 5. Mother
+severe 6. Brother
+disability 7. Sister
+8. Member of
+the HUF (in
+case of HUF)
+Schedule 80U Details of deduction in case of a person with disability
+Nature of disability Date of filing of Ack. No. of Form Form Ack. No. as per Rule UDID Number (If Amount
+Form 10IA 10IA filed 11A(2)(ii) (if applicable) available)
+1. Self with
+disability
+2. Self with severe
+disability
+Schedule
+Computation of Alternate Minimum Tax payable under section 115JC
+AMT
+1 Total Income as per item 12 of PART-B-TI 1
+2 Adjustment as per section 115JC(2)
+Deduction claimed under any section included in Chapter VI-A 2a
+a under the heading “C.—Deductions in respect of certain
+incomes”
+3 Adjusted Total Income under section 115JC(1) (1+2a) 3
+4 Tax payable under section 115JC [18.5% of (3)] (if 3 is greater than Rs. 20 lakhs) 4
+Schedule
+Computation of tax credit under section 115JD
+AMTC
+1 Tax under section 115JC in assessment year 2026-27 (1d of Part-B-TTI) 1
+
+=== page 23 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 61
+2 Tax under other provisions of the Act in assessment year 2026-27 (7 of Part-B-TTI) 2
+3 Amount of tax against which credit is available [enter (2 – 1) if 2 is greater than 1, 3
+otherwise enter 0]
+4 Utilization of AMT credit Available (Sum of AMT credit utilized during the current year is subject to maximum of amount
+mentioned in 3 above and cannot exceed the sum of AMT Credit Brought Forward)
+S. Assessment Year AMT Credit AMT Credit Balance AMT Credit
+No. (A) Utilized during Carried Forward
+Gross Set-off in Balance brought
+the Current (D)= (B3) –(C)
+(B1) earlier forward to the
+Assessment Year
+assessment current
+(C)
+years assessment year
+(B2) (B3) = (B1) – (B2)
+I 2013-14
+ii 2014-15
+iii 2015-16
+iv 2016-17
+V 2017-18
+vi 2018-19
+vii 2019-20
+viii 2020-21
+ix 2021-22
+x 2022-23
+xi 2023-24
+xii 2024-25
+xiii 2025-26
+Current AY (enter 1-
+xiv
+2, if 1>2 else enter 0)
+xv Total
+Amount of tax credit under section 115JD utilized during the year [total of item No. 4 5
+5
+(C)]
+Amount of AMT liability available for credit in subsequent assessment years [total of 4 6
+6
+(D)]
+Schedule SPI Income of specified persons (spouse, minor child etc.) includable in income of the assessee as per section 64
+Sl No Name of person PAN/ Aadhaar No. of person Relationship Amount (Rs) Head of
+(optional) Income in
+which included
+1
+2
+3
+Schedule
+SI
+ETAR
+LAICEPS
+Sl No Section  Special rate Income Tax
+(%) (i) thereon
+(ii)
+(2civ of
+1 111- Accumulated balance of recognized provident for prior years  (2ciii of Schedule OS) Schedule
+OS)
+2 111A or section 115AD(1)(b)(ii)- Proviso (STCG on shares units on (part of 3iii of Schedule
+ 20
+which STT paid) BFLA)
+3 115AD (STCG for FIIs on securities where STT not paid)  30 (3iv of Schedule BFLA)
+4 (part of 3vii of
+112(1) (LTCG on listed securities/ units )  12.5
+Schedule BFLA)
+5 (part of 3vii of
+112(1)(c)(iii) (LTCG for non-resident on unlisted securities)  12.5
+Schedule BFLA)
+6 (part of 3vii of
+115AC (LTCG for non-resident on bonds/GDR)  12.5
+Schedule BFLA)
+6a 115AC (Income by way of interest received by non-resident on bonds (part of 2d of Schedule
+ 10
+purchased in foreign currency) OS)
+6b 115AC (Income by way of Dividend received by non-resident from GDR (part of 2d of Schedule
+ 10
+purchased in foreign currency) OS)
+7 (part of 3vii of
+115ACA (LTCG for an employee of specified company on GDR)  12.5
+Schedule BFLA)
+8 (part of 3vii of
+115AD (LTCG for FIIs on securities)  12.5
+Schedule BFLA)
+
+=== page 24 ===
+62 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+9 (part of 3vii of
+115E (LTCG for non-resident Indian on foreign exchange asset)  12.5
+Schedule BFLA)
+10 12.5 (as
+112 (LTCG on others) and tax thereon after taking into account Sl. no. reduced by
+(part of 3vii of
+B1h of Schedule CG, if any.  B1h of
+Schedule BFLA)
+Schedule
+CG, if any)
+11 112A or section 115AD(1)(b)(iii)-Proviso (LTCG on sale of shares or units (part of 3vii of
+ 12.5
+on which STT is paid)] Schedule BFLA)
+12 (part of 3vi of Schedule
+STCG Chargeable at special rates in India as per DTAA
+BFLA)
+13 (part of 3viii of
+LTCG Chargeable at special rates in India as per DTAA
+schedule BFLA)
+(part of 2a(i) of
+14a 115BB (Winnings from lotteries, puzzles, races, games etc.)  30
+Schedule OS)
+14b 115BBJ (Winnings from online games)  30 (2aii of Schedule OS)
+15 115BBE (Income under section 68, 69, 69A, 69B, 69C or 69D)  60 (2b of Schedule OS)
+16 115BBH (Income from transfer of Virtual Digital Asset)  30 (C2 of Schedule CG)
+115BBF (Tax on income from patent) 10 (part of 2d of Schedule
+17 
+OS)
+115BBG (Tax on income from transfer of carbon credits) 10 (part of 2d of Schedule
+18 
+OS)
+115A(1)(b)(A) & 115A(1)(b)(B) (Income of a non-resident from Royalty & 20 (part of 2d of Schedule
+18a 
+Fees for Technical Services) OS)
+Any other income chargeable at special rate (Drop down to be provided in (part of 2d of Schedule
+19 
+e-filing utility) OS)
+Other source of income chargeable at special rates in India as per DTAA (part of 3xi of Schedule
+20 
+BFLA)
+Pass Through Income in the nature of Short Term Capital Gain  20 (part of 3iii of Schedule
+21
+chargeable @ 20% BFLA)
+Pass Through Income in the nature of Short Term Capital Gain  30 (part of 3iv of Schedule
+22
+chargeable @ 30% BFLA)
+Pass Through Income in the nature of Long Term Capital Gain  12.5 (part of 3vii of
+23
+chargeable @ 12.5% u/s 112A Schedule BFLA)
+Pass Through Income in the nature of Long Term Capital Gain  12.5 (part of 3vii of
+24
+chargeable @ 12.5% under sections other than u/s 112A Schedule BFLA)
+Pass through income in the nature of income from other source 
+25 (2e of Schedule OS)
+chargeable at special rates (Drop down to be provided in e-filing utility)
+Total
+Schedule EI Details of Exempt Income (Income not to be included in Total Income or not chargeable to tax)
+EMOCNI
+TPMEXE
+1 Interest income 1
+Gross Agricultural receipts (other than income to be excluded
+2 i i
+under rule 7A, 7B or 8 of I.T. Rules)
+ii Expenditure incurred on agriculture ii
+iii Unabsorbed agricultural loss of previous eight assessment years iii
+iv Net Agricultural income for the year (i – ii – iii) (enter nil if loss) 2
+In case the net agricultural income for the year exceeds Rs.5 lakh, please furnish
+v
+the following details (Fill up details separately for each agricultural land)
+a Name of district along with pin code in which agricultural land is located
+b Measurement of agricultural land in Acre
+Whether the agricultural land is owned or held on lease (drop down to be
+c
+provided)
+Whether the agricultural land is irrigated or rain-fed (drop down to be
+d
+provided)
+3 Other exempt income (including exempt income of minor child) 3
+4 Income claimed as not chargeable to tax as per DTAA (Applicable for Non-Residents only)
+Sl. Amount of Nature of Country name & Article of DTAA Head of Income Whether TRC
+No. income income Code obtained
+(Y/N)
+I
+II
+III Total Income from DTAA claimed as not chargeable to tax 4
+5 Pass through income claimed as not chargeable to tax (Schedule PTI) 5
+6 Total (1+2+3+4+5) 6
+
+=== page 25 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 63
+Schedule PTI Pass Through Income details from business trust or investment fund as per section 115U, 115UA and 115UB
+EMOCNI
+HGUORHT
+SSAP
+Sl. Investment PAN of the Sl. Head of income Current Share of Net TDS on
+entity Name of business year current Income/ such
+covered by business trust/ income year loss Loss amount,
+section trust/ investment distributed (7-8) if any
+115U/ investment fund by
+115UA/ fund Investment
+115UB fund
+(1) (2) (3) (4) (5) (6) (7) (8) (9) (10)
+1. (Dropdown I House property
+to be ii Capital Gains
+provided)
+a Short term
+ai Section 111A
+aii Others
+b Long term
+bi Section 112A
+bii Other than
+Section 112A
+iii Other Sources
+A Dividend
+B Others
+iv Income claimed to be exempt
+a u/s 10(23FBB)
+b u/s …………..
+c u/s …………
+2. I House property
+ii Capital Gains
+a Short term
+ai Section 111A
+aii Others
+b Long term
+Bi Section 112A
+Bii Other than
+Section 112A
+iii Other Sources
+a Dividend
+B Others
+iv Income claimed to be exempt
+a u/s 10(23FBB)
+b u/s …………..
+c u/s …………
+Schedule FSI Details of Income from outside India and tax relief (available only in case of resident)
+Sl. Country Taxpayer Sl. Head of Income from Tax paid Tax payable on such income Tax relief Relevant
+Code Identification income outside India outside under normal provisions in available in article of
+Number (included in India India India DTAA if
+(dropdown to PART B-TI) (e)= (c) or (d) relief
+be provided whichever is claimed u/s
+in the e-filing lower 90 or 90A
+utility)
+(a) (b) (c) (d) (e) (f)
+1
+i Salary
+House
+ii
+Property
+iii Capital Gains
+iv Other sources
+Total
+2
+i Salary
+House
+ii
+Property
+iii Capital Gains
+
+=== page 26 ===
+64 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+iv Other sources
+Total
+Schedule TR Summary of tax relief claimed for taxes paid outside India (available only in case of resident)
+1 Summary of Tax relief claimed
+Country Code Taxpayer Identification Total taxes paid outside India Total tax relief available Tax Relief
+Number (total of (c) of Schedule FSI in respect of (total of (e) of Schedule FSI Claimed under
+each country) in respect of each country) section
+(specify 90, 90A
+or 91)
+(a) (b) (c) (d) (e)
+Total
+Total Tax relief available in respect of country where DTAA is applicable (section 90/90A)
+2 2
+(Part of total of 1(d))
+Total Tax relief available in respect of country where DTAA is not applicable (section 91)
+3 3
+(Part of total of 1(d))
+Whether any tax paid outside India, on which tax relief was allowed in India, has been
+4 refunded/credited by the foreign tax authority during the year? If yes, provide the details 4 Yes/No
+below
+Assessment year in which
+a Amount of tax refunded b
+tax relief allowed in India
+Schedule FA Details of Foreign Assets and Income from any source outside India
+NGIEROF
+FO
+SLIATED
+STESSA
+A Details of Foreign Depository Accounts held (including any beneficial interest) at any time during the calendar year ending as on
+1 31st December, 2025
+Sl Count Country code Name of Address of ZIP code Account Status Account Peak Closing Gross interest
+N ry financial financial number opening balance balance paid/credited to
+o name instituti institution date during the account
+on the during the
+period period
+(1 (2) (3) (4) (5) (6) (7) (8) (9) (10) (11) (12)
+)
+(i)
+(ii
+)
+A Details of Foreign Custodial Accounts held (including any beneficial interest) at any time during the calendar year ending as on 31st
+2 December, 2025
+Sl Count Country code Name of Addres ZIP Account Status Account Peak Closi Gross amount paid/credited to
+N ry financial s of code number opening balance ng the account during the period
+o name institution financi date during balan (drop down to be provided specifying
+al the ce nature of amount viz.
+instituti period interest/dividend/proceeds from sale or
+redemption of financial assets/ other
+on
+income)
+(1 (2) (3) (4) (5) (6) (7) (8) (9) (10) (11) (12)
+)
+(i)
+(ii
+)
+A Details of Foreign Equity and Debt Interest held (including any beneficial interest) in any entity at any time during the calendar year
+3 ending as on 31st December, 2025
+Sl Countr Country code Name Addres ZIP Nature Date of Initial Peak Closi Total gross Total gross
+N y name of s of code of entity acquiri value of value of ng amount proceeds from
+o entity entity ng the the investme value paid/credited sale or
+interest investme nt with respect to redemption of
+nt during the holding investment
+the during the during the period
+period period
+
+=== page 27 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 65
+(1 (2) (3) (4) (5) (6) (7) (8) (9) (10) (11) (12) (13)
+)
+(i)
+(ii
+)
+A Details of Foreign Cash Value Insurance Contract or Annuity Contract held (including any beneficial interest) at any time during the
+4 calendar year ending as on 31st December, 2025
+Sl Countr Country code Name of Address ZIP code Date of contract The cash value or Total gross amount
+N y name financial of surrender value of paid/credited with respect
+o institution in financia the contract to the contract during the
+which insurance l period
+contract held instituti
+on
+(1 (2) (3) (4) (5) (6) (7) (8) (9)
+)
+(i)
+(ii
+)
+B Details of Financial Interest in any Entity held (including any beneficial interest) at any time during the calendar year ending as on
+31st December, 2025
+Sl Country ZIP Code Nature Name and Nature of Date since Total Income NaturIncome taxable and offered
+N Name of Address of Interest- held Investment accrued e of in this return
+o and code entity the Entity Direct/ Beneficial (at cost) (in from Incom Amou Schedul Item
+owner/ rupees) such e nt e where number
+Beneficiary Interest offered of
+schedule
+(1) (2) 2a (3) (4) (5) (6) (7) (8) (9) (10) (11) (12)
+(i)
+(ii
+)
+C Details of Immovable Property held (including any beneficial interest) at any time during the calendar year ending as on 31st
+December, 2025
+Sl Country ZIP Code Address Ownership- Date of Total Income Nature Income taxable and offered in
+N Name of the Direct/ acquisitio Investment derived of this return
+o and code Property Beneficial n (at cost) (in from the Income Amoun Schedule Item
+owner/ rupees) property t where number of
+Beneficiary offered schedule
+(1) (2) 2a (3) (4) (5) (6) (7) (8) (9) (10) (11)
+(i)
+(ii
+)
+D Details of any other Capital Asset held (including any beneficial interest) at any time during the calendar year ending as on 31st
+December, 2025
+Sl Country Nature of Ownership- Date of Total Income Nature Income taxable and offered in
+N Name ZIP Code Asset Direct/ acquisition Investment (at derived of this return
+o and code Beneficial cost) (in from Income Amoun Schedule Item
+owner/ rupees) the t where number of
+Beneficiary asset offered schedule
+(1) (2) 2b (3) (4) (5) (6) (7) (8) (9) (10) (11)
+(i)
+(ii
+)
+E Details of account(s) in which you have signing authority held (including any beneficial interest) at any time during the calendar year
+ending as on 31st December, 2025 and which has not been included in A to D above.
+Sl Name of Addres Count ZIP Name of the Accou Peak Whether If (7) is If (7) is yes, Income offered
+N the s of the ry Code account holder nt Balance/ income yes, in this return
+o Institutio Institut Name Numb Investment accrued is Income
+n in ion and er during the taxable in accrued in
+which the Code year (in your hands? the
+account rupees) account
+is held
+Amou Schedule Item
+nt where number of
+offered schedule
+(1 (4) (5) (6) (7) (8) (9) (10) (11)
+(2) (3) (3a) (3b)
+)
+(i)
+(ii
+)
+F Details of trusts, created under the laws of a country outside India, in which you are a trustee, beneficiary or settlor
+Country ZIP Code Name Name and Date Whethe If (8) is If (8) is yes, Income offered
+Name and address of since r yes, in this return
+
+=== page 28 ===
+66 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+and address Beneficiar positio income Income Amount Sched Item
+code of ies n held derived derived ule numb
+Sl Name and Name and
+trustees is from the where er of
+N address of the address of
+taxable trust offered sched
+o trust Settlor
+in your ule
+hands?
+(1 (2) (2a) (3) (4) (5) (6) (7) (8) (9) (10) (11) (12)
+)
+(i)
+(ii
+)
+G Details of any other income derived from any source outside India which is not included in,- (i) items A to F above
+If (6) is yes, Income offered in
+this return
+Whether
+Sl Name and address of the Nature
+Country Name taxable
+N
+and code
+ZIP C ode person from whom Income derived of
+in your
+Amount Schedule Item
+o derived income where number
+hands?
+offered of
+schedule
+(1 (2b) (3) (4) (5) (6) (7) (8) (9)
+(2)
+)
+(i)
+(ii
+)
+In case of an individual, not being an Indian citizen, who is in India on a business, employment or student visa, an asset acquired
+NOTE ► during any previous year in which he was non-resident is not mandatory to be reported in this schedule if no income is derived from
+that asset during the current previous year.
+Schedule 5A Information regarding apportionment of income between spouses governed by Portuguese Civil Code
+A5
+eludehcS
+Name of the spouse
+PAN/ Aadhaar No. of the
+spo uHsee ads of Income Receipts under Amount apportioned in the Amount of TDS deducted TDS apportioned in the
+the head hands of the spouse on income at (ii) hands of spouse
+(i) (ii) (iii) (iv) (v)
+1 House Property
+2 Capital gains
+3 Other sources
+4 Total
+Schedule AL Assets and Liabilities at the end of the year (applicable in a case where total income exceeds Rs. 1 Crore.)
+SEITILIBAIL
+DNA
+STESSA
+FO
+SLIATED
+A Details of immovable assets
+Sl. No. Description Address Pin code Amount (cost) in Rs.
+(1) (2) (3) (4) (5)
+(i)
+(ii)
+B Details of movable assets
+Sl. No. Description Amount (cost) in Rs.
+(1) (2) (3)
+(i) Jewellery, bullion etc.
+Archaeological collections, drawings, painting, sculpture or any
+(ii)
+work of art
+(iii) Vehicles, yachts, boats and aircrafts
+(iv) Financial assets Amount (cost) in Rs.
+(a) Bank (including all deposits)
+(b) Shares and securities
+(c) Insurance policies
+(d) Loans and advances given
+(e) Cash in hand
+C Liabilities in relation to Assets at (A + B)
+Schedule: Tax Information related to Tax deferred - relatable to income on perquisites referred in section 17(2)(vi)
+deferred on received from employer, being an eligible start-up referred to in section 80-IAC
+ESOP
+PAN of the employer being an eligible startup
+
+=== page 29 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 67
+DPIIT registration number of the employer
+SLIA
+TED
+Sl. Assessment Amount of Has any of the following events occurred during the Balance
+No. Year Tax previous year relevant to current assessment year amount of
+deferred Such specified Ceased to Forty-eight months Amount of tax
+brought security or sweat be the have expired from the tax payable deferred to
+forw ard equity shares employee end of the relevant in the be carried
+were sold of the assessment year in current forward to
+(i)Fully employer which specified Assessment the next
+(ii)Partly who security or sweat Year Assessment
+(iii)Not sold allotted or equity shares referred years
+transferred to in the said *clause (to be
+such were allotted. If yes, populated Col (3- 7)
+Specify the date
+specified specify date of from col. 3
+and amount of
+security or allotment or 4 as the
+tax attributed to
+sweat case
+such sale out of
+equity maybe)
+Col 3
+share?
+o Yes o
+(Details to be
+No
+provided as per
+utility)
+If yes,
+specify
+date
+1 2 3 4 5 6 7 8
+1 2021-22 Sl. No. 8 (To be enabled from
+of AY 2027-28)
+Schedule
+(Payment to be made
+ESOP for
+in FY 2026-27)
+last year
+2 2022-23 Sl. No. 8
+of
+Schedule
+ESOP for
+last year
+3 2023-24 Sl. No. 8
+of
+Schedule
+ESOP for
+last year
+4 2024-25 Sl. No. 8
+of
+Schedule
+ESOP for
+last year
+5 2025-26 Sl. No. 8
+of
+Schedule
+ESOP for
+last year
+6 2026-27 Sl. No. 8 of
+Schedule
+ESOP for
+last year
+PART-B
+Part B – TI Computation of total income
+1 Salaries (6 of Schedule S) 1
+2 Income from house property ( 3 of Schedule HP) (enter nil if loss) 2
+EMOCNI
+LATOT
+3 Capital gains
+a Short term
+i Short-term chargeable @ 20% (8ii of item E of schedule CG) ai
+ii Short-term chargeable @ 30% (8iii of item E of schedule CG) aii
+iii
+Short-term chargeable at applicable rate (8iv of item E of schedule
+aiii
+CG)
+Short-term chargeable at special rates in India as per DTAA (8v of
+iv aiv
+item E of Schedule CG)
+
+=== page 30 ===
+68 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+v Total Short-term (ai + aii + aiii + aiv) (enter nil if loss) 3av
+b Long-term
+i Long-term chargeable @ 12.5% (8vi of item E of schedule CG) bi
+Long-term chargeable at special rates in India as per DTAA (8vii of
+ii bii
+item E of schedule CG)
+iii Total Long-term (bi+ bii ) (enter nil if loss) 3biii
+c Sum of Short-term/Long-term capital gains (3av + 3biii) (enter nil if loss) 3c
+d Capital gain chargeable @ 30% u/s 115BBH (C2 of schedule CG) 3d
+e Total capital gains (3c + 3d) 3e
+4 Income from other sources
+a Net income from other sources chargeable to tax at normal applicable
+4a
+rates (6 of Schedule OS) (enter nil if loss)
+b Income chargeable to tax at special rates ( 2 of Schedule OS) 4b
+c Income from the activity of owning and maintaining race horses ( 8e of
+4c
+Schedule OS) (enter nil if loss)
+d Total (4a + 4b + 4c) (enter nil if loss) 4d
+5 Total of head wise income (1+2+3e+4d) 5
+6 Losses of current year set off against 5 (total of 2xiii and 3xiii of Schedule CYLA) 6
+7 Balance after set off current year losses (5-6) (total of column 4 of Schedule CYLA+ 2 of Schedule OS) 7
+8 Brought forward losses set off against 7 ( 2xii of Schedule BFLA) 8
+9 Gross Total income (7-8) (3xiii of Schedule BFLA + 2 of Schedule OS) 9
+10 Income chargeable to tax at special rate under section 111A, 112, 112A etc. included in 9 10
+11 Deductions under Chapter VI-A [[v] of Schedule VIA and limited to ( 9-10)] 11
+12 Total income (9 - 11) 12
+13 Income which is included in 12 and chargeable to tax at special rates (total of column (i) of schedule SI) 13
+14 Net agricultural income/ any other income for rate purpose ( 3 of Schedule EI) 14
+15 Aggregate income (12-13+14) [applicable if (12-13) exceeds maximum amount not chargeable to tax] 15
+16 Losses of current year to be carried forward (total of row xi of Schedule CFL) 16
+17 Deemed income under section 115JC (3 of Schedule AMT) 17
+Part B –TTI Computation of tax liability on total income
+1 Tax payable on deemed total income u/s 115JC (4 of Schedule
+a 1a
+AMT)
+b Surcharge on (a) (if applicable) 1b
+c Health and Education Cess @ 4% on (1a + 1b) above 1c
+d Total tax payable on deemed total income (1a + 1b + 1c) 1d
+FO
+NOITATUPMOC
+YTILIBAIL
+XAT
+2 Tax payable on total income
+a Tax at normal rates on 15 of Part B-TI 2a
+b Tax at special rates (total of col. (ii) of Schedule SI) 2b
+c Rebate on agricultural income [applicable if (12-13) of Part B-TI 2c
+exceeds maximum amount not chargeable to tax]
+d Tax Payable on Total Income (2a + 2b - 2c) 2d
+3 Rebate under section 87A 3
+4 Tax payable after rebate (2d - 3) 4
+5 Surcharge Surcharge Surcharge after
+computed marginal relief
+before
+marginal
+relief
+i @ 25% of 15(ii) of Schedule SI 5i ia
+ii @10% or 15%, as applicable 5ii iia
+iii On [(4) – 15(ii) of Schedule SI – tax on incomes 5iii
+referred in 5(ii) above)]
+iv Total ia + iia 5iv
+6 Health and Education Cess @ 4% on (4 + 5iv) 6
+7 Gross tax liability (4 + 5iv + 6) 7
+8 Gross tax payable (higher of 1d and 7) 8
+Tax on income without including income on perquisites referred in section 17(2)(vi) received
+8a 8a
+from employer, being an eligible start-up referred to in section 80-IAC (8-8b)
+Tax deferred - relatable to income on perquisites referred in section 17(2)(vi) received from
+8b 8b
+employer, being an eligible start-up referred to in section 80-IAC
+Tax deferred from earlier years but payable during current AY (total of col 7 of schedule Tax
+8c 8c
+deferred on ESOP
+
+=== page 31 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 69
+Credit u/s 115JD of tax paid in earlier years (applicable only if 7 is higher than 1d) (row 5 of
+9 9
+Schedule AMTC)
+10 Tax payable after credit u/s 115JD (8a + 8c - 9) 10
+11 Tax relief
+a Section 89(Please ensure to submit Form 10E) 11a
+b Section 90/ 90A (2 of Schedule TR) 11b
+c Section 91 (3 of Schedule TR) 11c
+d Total (11a + 11b + 11c) 11d
+12 Net tax liability (10 – 11d) (enter zero if negative) 12
+13 Interest and fee payable
+Interest for default in furnishing the return (section
+a 13a
+234A)
+Interest for default in payment of advance tax (section
+b 13b
+234B)
+c Interest for deferment of advance tax (section 234C) 13c
+Fee for default in furnishing return of income (section
+d 13d
+234F)
+Fee for furnishing revised return of income (section
+da 13da
+234-I)
+e Total Interest and Fee Payable (13a+13b+13c+13d+13da) 13e
+14 Aggregate liability (12 + 13e) 14
+DIAP
+SEXAT
+15 Taxes Paid
+a Advance Tax (from column 5 of 20A) 15a
+b TDS (total of column 5 of 20B and column 9 of 20C) 15b
+c TCS (total of column 7(i) of 20D) 15c
+d Self-Assessment Tax (from column 5 of 20A) 15d
+e Total Taxes Paid (15a + 15b + 15c + 15d) 15e
+16 Amount payable (Enter if 14 is greater than 15e, else enter 0) 16
+17 Refund (If 15e is greater than 14) (Refund, if any, will be directly credited into the bank account) 17
+`TNUOCCA
+KNAB
+Select Yes
+Do you have a bank account in India (Non- Residents claiming refund with no bank account in India may select
+18 or No
+No)
+Sl. IFS Code of the Bank in case of Name of the Bank Account Type of account Select Account for refund
+Bank Accounts held in India Number (Dropdown to credit (tick at least one
+be provided by account √ )
+e-filing utility)
+i □
+ii □
+Note: 1. All bank accounts held at any time are to be reported, except dormant A/c.
+2. In case multiple accounts are selected, the refund will be credited to one of the validated accounts after processing the
+return.
+Rows can be added as required
+ii. b) Non- residents, not having bank account in India may, at their option, furnish the details of one foreign bank
+account:
+Sl. No. SWIFT Code Name of the Bank Country of Location IBAN
+Rows can be added as required
+19 Do you at any time during the previous year,
+(i) hold, as beneficial owner, beneficiary or otherwise, any asset (including financial interest in any
+entity) located outside India; or
+ Yes  No
+(ii) have signing authority in any account located outside India; or
+(iii) have income from any source outside India?
+[applicable only in case of a resident] [Ensure Schedule FA is filled up if the answer is Yes]
+
+=== page 32 ===
+70 THE GAZETTE OF INDIA : EXTRAORDINARY [PART II—SEC. 3(i)]
+20 TAX PAYMENTS
+A Details of payments of Advance Tax and Self-Assessment Tax
+FLES
+/ECNAVDA
+XAT
+TNEMSSESSA
+Sl No BSR Code Date of Deposit (DD/MM/YYYY) Serial Number of Amount (Rs)
+Challan
+(1) (2) (3) (4) (5)
+i
+ii
+iii
+iv
+NOTE ► Enter the totals of Advance tax and Self-Assessment tax in Sl No. 15a & 15d of Part B-TTI
+B Details of Tax Deducted at Source from Salary [As per Form 16 issued by Employer(s)]
+YRALAS
+NO
+SDT
+Sl No Tax Deduction Account Number Name of the Employer Income chargeable Total tax deducted
+(TAN) of the Employer under Salaries
+(1) (2) (3) (4) (5)
+I
+II
+NOTE ► Please enter total of column 5 in 15b of Part B-TTI
+C Details of Tax Deducted at Source (TDS) on Income [As per Form 16 A issued or Form 16B/16C/16E furnished by Deductor(s)]
+1
+Sl PAN/ TAN of Section Unclaimed TDS of the current TDS credit being claimed Corresponding TDS
+N TDS Aadhaa the under TDS brought Financial Year (TDS this Year (only if Receipt/withdraw credit
+o credit r No. of Deducto which forward (b/f) deducted during FY corresponding income is als offered being
+relating Other r/ PAN/ TDS is 2025-26) being offered for tax this carried
+to self Person Aadhaar deducte year, not applicable if TDS is forwar
+/other (if TDS No. of d deducted u/s 194N) d
+person credit Tenant/ Fin. TD Deducte Deducted Claime Claimed in the Gross Head of
+[spouse related Buyer Year in S d in own in the d in hands of spouse as Amount Income
+as per to other which b/f hands hands of own per section 5A or
+section person) deducte spouse as hands any other person as
+5A/othe d per section per rule 37BA(2) (if
+r 5A or any applicable)
+person other
+as per person as
+rule per rule
+37BA(2 37BA(2) (if
+)] applicable)
+(1 (2) (3) (4) 4a (5) (6) (7) (8) (9) (10) (11) (12) (13)
+)
+Incom TD Incom TD PAN/
+e S e S Aadhaa
+r No.
+I
+Details of Tax Collected at Source (TCS) [As per Form 27D issued by the Collector(s)]
+D
+
+=== page 33 ===
+[भाग II—खण् ड 3(i)] भारत का रािपत्र : असाधारण 71
+EMOCNI
+REHTO
+NO
+SDT
+Sl. TCS credit Tax PAN of Unclaimed TCS TCS of the current fin. TCS credit being claimed this TCS credit
+No. relating to Deduction other brought forward (b/f) Year Year being
+self /other and Tax Person (if Fin. Year Amount b/f Collected Collected in the carried
+person Collection TCS credit in which in own hands of forward
+p [s e p r o s u e s c e ti o as n Account related to collected hands spouse as per Claimed in the
+5A/ other Number of other section 5A or hands of spouse as person as the Collector person) any other Claimed per section 5A or
+per rule person as per in own any other person as
+37BA(2)] rule 37-I(1) (if hands p e r rule 37-I(1) (if
+applicable) applicable)
+(1) 2(i) (2)(ii) (3) (4) (5) 6(i) (6)(ii) 7(i) (7)(ii) (8)
+TCS PAN
+i
+NOTE ► Please enter total of column 7(i) in 15c of Part B- TTI
+VERIFICATION
+I, son/ daughter of , solemnly declare that to the best of my knowledge
+and belief, the information given in the return and schedules thereto is correct and complete and is in accordance with the provisions of the Income-
+tax Act, 1961 (43 of 1961).
+I further declare that I am making return in my capacity as ___________ and I am also competent to make this return and verify it. I am holding
+permanent account number (if allotted) I further declare that the critical assumptions specified in the agreement have been satisfied
+and all the terms and conditions of the agreement have been complied with. (Applicable in a case where return is furnished under section 92CD)
+Sign here ➔
+Date Place
+If the return has been prepared by a Tax Return Preparer (TRP) give further details below:
+Identification No. of TRP Name of TRP Counter Signature of TRP
+If TRP is entitled for any reimbursement from the Government, amount thereof”
+Uploaded by Dte. of Printing at Government of India Press, Ring Road, Mayapuri, New Delhi-110064
+and Published by the Controller of Publications, Delhi-110054.
