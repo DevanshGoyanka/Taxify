@@ -13,13 +13,22 @@ from jsonschema import Draft4Validator
 
 from app.engine.calculators.itr2 import compute
 from app.engine.itd.itr2 import build_itr2_json
-from app.schemas.itr1 import AgeBracket, BankAccount, FilingAddress, TaxRegime
+from app.schemas.itr1 import (
+    AgeBracket,
+    BankAccount,
+    FilingAddress,
+    TaxRegime,
+    TCSEntry,
+    TDS2Entry,
+    TDS3Entry,
+)
 from app.schemas.itr2 import (
     CG112AScrip,
     CGAssetType,
     CGTransaction,
     ITR2FilingProfile,
     ITR2Input,
+    TDS3FilingDetail,
     VDATransaction,
 )
 
@@ -319,3 +328,99 @@ def test_generic_other_assets_bucket_applies_section_50ca_for_unquoted_shares() 
     assert row["FullValueConsdSec50CA"] == 350000  # deemed value: higher of the two, no tolerance band
     assert row["FullConsideration"] == 350000
     assert row["BalanceCG"] == 250000  # 350000 - 100000
+
+
+def test_tds2_tds3_tcs_carry_ownership_and_brought_forward_data() -> None:
+    """TDS2/TDS3/TCS credits report real ownership, brought-forward, and
+    carry-forward data instead of always hardcoding "Self"/zero.
+
+    Regression test for a defect where the ITR-2 builder hardcoded
+    ``TDSCreditName``/``TCSCreditOwner`` to "Self" and ``BroughtFwdTDSAmt``
+    to 0 regardless of the taxpayer's actual entry -- even though the
+    frontend's ``ReturnDraft.taxes.tds``/``taxes.tcs`` rows (``TdsCredit``/
+    ``TcsCredit``) already captured this data; it was dropped when mapped
+    into the (until this fix) narrower canonical ``TDS2Entry``/
+    ``TDS3Entry``/``TCSEntry`` types.
+    """
+    input_data = _input(
+        tds2_entries=[
+            TDS2Entry(
+                deductor_tan="DELA00001A",
+                tds_section="94A",
+                gross_amount=Decimal("10000"),
+                tds_deducted=Decimal("1000"),
+                tds_claimed_this_year=Decimal("1000"),
+                financial_year="2024-25",
+                brought_forward_tds=Decimal("200"),
+                tds_credit_carried_forward=Decimal("0"),
+                ownership="O",
+                pan_of_other_person="BBBPB5678C",
+                aadhaar_of_other_person="123456789012",
+            )
+        ],
+        tds3_entries=[
+            TDS3Entry(
+                tenant_pan="CCCPC9012D",
+                tenant_name="Tenant Pvt Ltd",
+                gross_receipt=Decimal("500000"),
+                tds_deducted=Decimal("50000"),
+                tds_claimed=Decimal("50000"),
+                tds_section="195",
+                deducted_yr="2024",
+                brought_forward_tds=Decimal("5000"),
+                tds_credit_carried_forward=Decimal("1000"),
+                ownership="O",
+                pan_of_other_person="BBBPB5678C",
+            )
+        ],
+        tds3_filing_details=[
+            TDS3FilingDetail(buyer_tenant_pan="CCCPC9012D", head_of_income="OS"),
+        ],
+        tcs_entries=[
+            TCSEntry(
+                collector_tan="DELA00002B",
+                tcs_section="206C",
+                gross_amount=Decimal("100000"),
+                tcs_collected=Decimal("10000"),
+                tcs_credit_claimed=Decimal("6000"),
+                financial_year="2024-25",
+                ownership="2",
+                pan_of_spouse_or_other_person="DDDPD3456E",
+                tcs_collected_spouse_or_other=Decimal("4000"),
+                tcs_credit_claimed_spouse_or_other=Decimal("2500"),
+                brought_forward_tds=Decimal("100"),
+            )
+        ],
+        bank_accounts=[
+            BankAccount(
+                account_number="1234567890",
+                ifsc_code="SBIN0000001",
+                bank_name="State Bank of India",
+                account_type="savings",
+                is_primary=True,
+            )
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    payload = document["ITR"]["ITR2"]
+
+    tds2_row = payload["ScheduleTDS2"]["TDSOthThanSalaryDtls"][0]
+    assert tds2_row["TDSCreditName"] == "O"
+    assert tds2_row["PANofOtherPerson"] == "BBBPB5678C"
+    assert tds2_row["AadhaarOfOtherPerson"] == "123456789012"
+    assert tds2_row["BroughtFwdTDSAmt"] == 200
+
+    tds3_row = payload["ScheduleTDS3"]["TDS3onOthThanSalDtls"][0]
+    assert tds3_row["TDSCreditName"] == "O"
+    assert tds3_row["PANofOtherPerson"] == "BBBPB5678C"
+    assert tds3_row["BroughtFwdTDSAmt"] == 5000
+    assert tds3_row["AmtCarriedFwd"] == 1000
+
+    tcs_row = payload["ScheduleTCS"]["TCS"][0]
+    assert tcs_row["TCSCreditOwner"] == "2"
+    assert tcs_row["PANOfSpouseOrOthrPrsn"] == "DDDPD3456E"
+    assert tcs_row["TCSCurrFYDtls"]["TCSAmtCollSpouseOrOthrHand"] == 4000
+    assert tcs_row["TCSClaimedThisYearDtls"]["TCSAmtCollSpouseOrOthrHand"] == 2500
+    assert tcs_row["BroughtFwdTDSAmt"] == 100
+    assert payload["ScheduleTCS"]["TotalSchTCS"] == 8500  # 6000 own + 2500 spouse

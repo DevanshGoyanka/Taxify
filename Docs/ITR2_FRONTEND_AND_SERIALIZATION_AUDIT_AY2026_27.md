@@ -571,6 +571,47 @@ The return cannot correctly represent:
 
 Map canonical TDS ownership, spouse/other-person PAN, deducted year, brought-forward credit, current-year deduction, claim, carry-forward, head of income, gross amount, and buyer/tenant fields. Do not substitute `S` or `OS` unless that is the actual selected value.
 
+> **Fix status (2026-09-04): fixed and verified.** `TDS2Entry`/`TDS3Entry`
+> (`app/schemas/itr1.py`) gained `ownership`, `pan_of_other_person`,
+> `aadhaar_of_other_person` fields; `TDS2Entry` and `TDS3Entry` already carried
+> `brought_forward_tds`/`tds_credit_carried_forward`/`head_of_income` but these
+> were being discarded rather than serialized. `_map_tds()`/`_map_tds3()`
+> (`app/engine/draft_to_itr1_input.py`) now read the ownership/PAN/Aadhaar
+> fields from the frontend's existing `TdsCredit` draft rows (this data was
+> always captured by the UI — it was dropped in mapping, not missing at the
+> source). `_schedule_tds2()`/`_schedule_tds3()` (`app/engine/itd/itr2.py`) now
+> emit `entry.ownership` for `TDSCreditName`, conditionally add
+> `PANofOtherPerson`/`AadhaarOfOtherPerson` when ownership is `"O"`, and read
+> `BroughtFwdTDSAmt`/`AmtCarriedFwd`/`HeadOfIncome` from the real fields
+> instead of hardcoding.
+>
+> While wiring this, found and fixed **three separate crash bugs**, all
+> variants of the same root cause (a field name copied from `TDS2Entry`,
+> which has different attribute names than `TDS3Entry`):
+> 1. `app/engine/calculators/itr2.py::compute()` read
+>    `entry.tds_claimed_this_year` on `TDS3Entry` objects (that name belongs
+>    only to `TDS2Entry`; `TDS3Entry`'s field is `tds_claimed`) — this crashed
+>    `compute()` itself, before the JSON builder ever ran, on any return with
+>    populated `tds3_entries`.
+> 2. `_schedule_tds3()` (`app/engine/itd/itr2.py`) read `entry.financial_year`
+>    on `TDS3Entry` (no such field exists on that model — it carries the
+>    deducted year directly as `deducted_yr`, a `"20XX"` string, not a
+>    `"20XX-YY"` financial-year string to parse).
+> 3. `_schedule_tds3()` also read `entry.gross_amount` on `TDS3Entry` (that
+>    field is named `gross_receipt` on that model).
+>
+> None of these three were reachable by any prior test — `test_itr2_itd_builder.py`
+> had zero tests constructing a `TDS3Entry` with real data before this fix.
+> The same `tds_claimed_this_year`/`tds_claimed` typo was independently found
+> and fixed a fourth time in `app/engine/validators/itr2/calc_rules.py`'s
+> `validate_itr2_calculation()` (a genuine crash bug, fixed even though
+> validator *logic* additions are out of this audit doc's scope — this was a
+> mechanical attribute-name fix, not a new validation rule).
+>
+> Regression test: `test_tds2_tds3_tcs_carry_ownership_and_brought_forward_data`
+> in `tests/test_itr2_itd_builder.py`, confirmed via `git stash` to be entirely
+> absent (and its underlying schema fields nonexistent) on pre-fix code.
+
 ---
 
 ## 3.7 TCS ownership and claim amounts are hardcoded to self
@@ -596,6 +637,28 @@ TCS belonging to a spouse or another person cannot be represented. The credit ma
 ### Remediation
 
 Map current-year ownership, spouse/other-person PAN, own-hand and other-person collection, own-hand and other-person claim, brought-forward, and carried-forward values. Add tests for self, spouse, other-person, and partial claims.
+
+> **Fix status (2026-09-04): fixed and verified.** `TCSEntry`
+> (`app/schemas/itr1.py`) gained `ownership`, `pan_of_spouse_or_other_person`,
+> `tcs_collected_spouse_or_other`, `tcs_credit_claimed_spouse_or_other`,
+> `brought_forward_tds`, `tds_credit_carried_forward`, `deducted_year`.
+> `_map_tcs()` (`app/engine/draft_to_itr1_input.py`) now reads all of these
+> from the frontend's existing `TcsCredit` draft rows. `_schedule_tcs()`
+> (`app/engine/itd/itr2.py`) now emits `entry.ownership` for
+> `TCSCreditOwner`, conditionally adds `PANOfSpouseOrOthrPrsn` when ownership
+> is `"2"`, uses the real spouse-side collected/claimed amounts for
+> `TCSCurrFYDtls.TCSAmtCollSpouseOrOthrHand`/
+> `TCSClaimedThisYearDtls.TCSAmtCollSpouseOrOthrHand` (previously hardcoded
+> to `0`), and reads `AmtCarriedFwd` from the explicit
+> `tds_credit_carried_forward` field. `TotalSchTCS` was also fixed to sum
+> both own-hand and spouse-side claimed amounts, not own-hand alone.
+>
+> Regression test: `test_tds2_tds3_tcs_carry_ownership_and_brought_forward_data`
+> in `tests/test_itr2_itd_builder.py` (same test covers all three schedules —
+> TDS2/TDS3/TCS share the ownership-pattern root cause). Full combined
+> `test_itr1_*`/`test_itr2_*`/`test_itr4_*` regression suite (221 tests)
+> confirmed green after this fix, alongside §3.2's land/building and
+> generic-other-assets fixes from the same phase.
 
 ---
 

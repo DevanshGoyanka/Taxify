@@ -1594,6 +1594,15 @@ class TDS3Entry(BaseModel):
     brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
     head_of_income: Literal["HP", "BP", "OS", "EI"] = "OS"
     tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
+    # Matches the official schema's TDSCreditName enum exactly ("S"/"O").
+    # The frontend already captures this (ReturnDraft.TdsCredit.tdsCreditName/
+    # panOfOtherPerson/aadhaarOfOtherPerson) -- it was simply dropped when
+    # mapped into this narrower canonical type, causing the ITR-2 builder to
+    # hardcode "Self" for every TDS3 credit regardless of the taxpayer's
+    # actual entry.
+    ownership: Literal["S", "O"] = "S"
+    pan_of_other_person: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    aadhaar_of_other_person: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
 
     @model_validator(mode="after")
     def validate_claimed_does_not_exceed_deducted(self) -> "TDS3Entry":
@@ -2057,6 +2066,11 @@ class TDS2Entry(BaseModel):
     deducted_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}$")
     brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
     tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
+    # Same rationale as TDS3Entry.ownership above -- already captured by the
+    # frontend, previously dropped in mapping.
+    ownership: Literal["S", "O"] = "S"
+    pan_of_other_person: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    aadhaar_of_other_person: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
 
 
 class TCSEntry(BaseModel):
@@ -2067,6 +2081,19 @@ class TCSEntry(BaseModel):
     tcs_collected: Decimal = Field(default=Decimal("0"), ge=0)
     tcs_credit_claimed: Decimal = Field(default=Decimal("0"), ge=0)
     financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
+    # Matches the official schema's TCSCreditOwner enum exactly ("1"/"2").
+    # ReturnDraft.TcsCredit already captures the full ownership split
+    # (tcsCreditOwner, panOfSpouseOrOthrPrsn, and the spouse-side collected/
+    # claimed amounts below) -- previously dropped when mapped into this
+    # narrower canonical type, causing the ITR-2 builder to hardcode "Self"
+    # and zero out the spouse-side amounts for every TCS credit.
+    ownership: Literal["1", "2"] = "1"
+    pan_of_spouse_or_other_person: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    tcs_collected_spouse_or_other: Decimal = Field(default=Decimal("0"), ge=0)
+    tcs_credit_claimed_spouse_or_other: Decimal = Field(default=Decimal("0"), ge=0)
+    brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
+    deducted_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}$")
 
 
 ITR1Input.model_rebuild()

@@ -839,7 +839,12 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # amount appearing as deducted/collected in an information statement.
     r.total_tds = sum((entry.tds_deducted for entry in input_data.tds1_entries), _ZERO)
     r.total_tds += sum((entry.tds_claimed_this_year for entry in input_data.tds2_entries), _ZERO)
-    r.total_tds += sum((entry.tds_claimed_this_year for entry in input_data.tds3_entries), _ZERO)
+    # TDS3Entry's field is `tds_claimed`, not `tds_claimed_this_year` (that
+    # name belongs to TDS2Entry) -- the old line here referenced a
+    # nonexistent attribute, an AttributeError that crashed compute()
+    # outright on any return with real tds3_entries data, before ever
+    # reaching the JSON builder. No prior test exercised this path.
+    r.total_tds += sum((entry.tds_claimed for entry in input_data.tds3_entries), _ZERO)
     r.total_tcs = sum((entry.tcs_credit_claimed for entry in input_data.tcs_entries), _ZERO)
 
     detailed_advance = sum(

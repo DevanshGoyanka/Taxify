@@ -143,7 +143,10 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
         ))
     expected_tds = sum(entry.tds_deducted for entry in inp.tds1_entries)
     expected_tds += sum(entry.tds_claimed_this_year for entry in inp.tds2_entries)
-    expected_tds += sum(entry.tds_claimed_this_year for entry in inp.tds3_entries)
+    # TDS3Entry's field is `tds_claimed`, not `tds_claimed_this_year` (that name
+    # belongs to TDS2Entry) -- same crash-causing typo found and fixed in
+    # app/engine/calculators/itr2.py::compute() and itd/itr2.py::_schedule_tds3().
+    expected_tds += sum(entry.tds_claimed for entry in inp.tds3_entries)
     expected_tcs = sum(entry.tcs_credit_claimed for entry in inp.tcs_entries)
     if _different(result.total_tds, expected_tds):
         results.append(_result(

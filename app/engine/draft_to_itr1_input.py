@@ -1085,6 +1085,9 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
                 ),
                 brought_forward_tds=row.broughtFwdTDSAmt,
                 tds_credit_carried_forward=row.amtCarriedFwd,
+                ownership=row.tdsCreditName,
+                pan_of_other_person=row.panOfOtherPerson or None,
+                aadhaar_of_other_person=row.aadhaarOfOtherPerson or None,
             ))
             tds_other_total += tax
     tds_interest = sum(
@@ -1117,6 +1120,9 @@ def _map_tds3(tds_rows: list[TdsCredit]) -> tuple[list[TDS3Entry], Decimal]:
                 else "OS"
             ),
             tds_credit_carried_forward=row.amtCarriedFwd,
+            ownership=row.tdsCreditName,
+            pan_of_other_person=row.panOfOtherPerson or None,
+            aadhaar_of_other_person=row.aadhaarOfOtherPerson or None,
         ))
         total += claimed
     return mapped, total
@@ -1151,6 +1157,12 @@ def _map_tcs(tcs_rows: list[TcsCredit]) -> tuple[list[TCSEntry], Decimal, list[d
                 tcs_collected=collected,
                 tcs_credit_claimed=claimed,
                 financial_year=(f"{row.deductedYr}-{str(int(row.deductedYr) + 1)[-2:]}" if row.deductedYr else None),
+                ownership=row.tcsCreditOwner,
+                pan_of_spouse_or_other_person=row.panOfSpouseOrOthrPrsn or None,
+                tcs_collected_spouse_or_other=row.tcsAmtCollSpouseOrOthrHand,
+                tcs_credit_claimed_spouse_or_other=row.tcsClaimedAmtCollSpouseOrOthrHand,
+                brought_forward_tds=row.broughtFwdTDSAmt,
+                deducted_year=str(row.deductedYr) if row.deductedYr else None,
             ))
             total += claimed
     return mapped, total, issues

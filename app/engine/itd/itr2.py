@@ -1531,78 +1531,135 @@ def _schedule_tds1(input_data: ITR2Input) -> Optional[dict[str, Any]]:
 
 
 def _schedule_tds2(input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize Schedule TDS2 from real deductor entries."""
+    """Serialize Schedule TDS2 from real deductor entries.
+
+    ``TDSCreditName``/``PANofOtherPerson``/``AadhaarOfOtherPerson``,
+    ``HeadOfIncome``, ``BroughtFwdTDSAmt``, and ``AmtCarriedFwd`` are all
+    read from ``entry``'s own fields rather than hardcoded/recomputed --
+    every one of these is real, taxpayer-entered data that already flows
+    through `_map_tds()` (`app/engine/draft_to_itr1_input.py`) from
+    `ReturnDraft.taxes.tds`'s `TdsCredit` rows; the previous version simply
+    never read it back out.
+    """
     if not input_data.tds2_entries:
         return None
     rows = []
     for entry in input_data.tds2_entries:
         deducted_year = int((entry.financial_year or "2024-25").split("-")[0])
-        rows.append({
-            "TDSCreditName": "S",
+        row: dict[str, Any] = {
+            "TDSCreditName": entry.ownership,
             "TANOfDeductor": entry.deductor_tan,
             "TDSSection": entry.tds_section,
             "DeductedYr": deducted_year,
-            "BroughtFwdTDSAmt": 0,
+            "BroughtFwdTDSAmt": _to_rupees(entry.brought_forward_tds),
             "TaxDeductCreditDtls": {
                 "TaxDeductedOwnHands": _to_rupees(entry.tds_deducted),
                 "TaxClaimedOwnHands": _to_rupees(entry.tds_claimed_this_year),
             },
             "GrossAmount": _to_rupees(entry.gross_amount),
-            "HeadOfIncome": "OS",
-            "AmtCarriedFwd": _to_rupees(max(_ZERO, entry.tds_deducted - entry.tds_claimed_this_year)),
-        })
+            "HeadOfIncome": entry.head_of_income or "OS",
+            "AmtCarriedFwd": _to_rupees(entry.tds_credit_carried_forward),
+        }
+        if entry.ownership == "O":
+            if entry.pan_of_other_person:
+                row["PANofOtherPerson"] = entry.pan_of_other_person
+            if entry.aadhaar_of_other_person:
+                row["AadhaarOfOtherPerson"] = entry.aadhaar_of_other_person
+        rows.append(row)
     return {"TDSOthThanSalaryDtls": rows, "TotalTDSonOthThanSals": sum(r["TaxDeductCreditDtls"]["TaxClaimedOwnHands"] for r in rows)}
 
 
 def _schedule_tds3(input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize Schedule TDS3 from real non-resident deductor entries."""
+    """Serialize Schedule TDS3 from real non-resident deductor entries.
+
+    Same fix as ``_schedule_tds2`` for ``TDSCreditName``/``PANofOtherPerson``/
+    ``AadhaarOfOtherPerson``/``BroughtFwdTDSAmt``/``AmtCarriedFwd``.
+    """
     if not input_data.tds3_entries:
         return None
     if len(input_data.tds3_filing_details) != len(input_data.tds3_entries):
         raise ValueError("Schedule TDS3 requires one tds3_filing_details row per entry")
     rows = []
     for entry, detail in zip(input_data.tds3_entries, input_data.tds3_filing_details):
-        deducted_year = int((entry.financial_year or "2024-25").split("-")[0])
-        rows.append({
-            "TDSCreditName": "S",
+        # TDS3Entry has no `financial_year` field (that belongs to TDS2Entry) --
+        # it carries the deducted year directly as `deducted_yr` ("20XX"). The
+        # old code here read a nonexistent attribute, an AttributeError that
+        # fired on any return with real TDS3 data.
+        deducted_year = int(entry.deducted_yr)
+        row: dict[str, Any] = {
+            "TDSCreditName": entry.ownership,
             "PANOfBuyerTenant": detail.buyer_tenant_pan,
             "TDSSection": entry.tds_section or "195",
             "DeductedYr": deducted_year,
-            "BroughtFwdTDSAmt": 0,
+            "BroughtFwdTDSAmt": _to_rupees(entry.brought_forward_tds),
             "TaxDeductCreditDtls": {
                 "TaxDeductedOwnHands": _to_rupees(entry.tds_deducted),
-                "TaxClaimedOwnHands": _to_rupees(entry.tds_claimed_this_year),
+                # TDS3Entry's field is `tds_claimed`, not `tds_claimed_this_year`
+                # (that name belongs to TDS2Entry) -- the old code here
+                # referenced a nonexistent attribute, an AttributeError that
+                # would fire on any return with real TDS3 data. No prior
+                # test ever exercised this path with a real TDS3Entry.
+                "TaxClaimedOwnHands": _to_rupees(entry.tds_claimed),
             },
-            "GrossAmount": _to_rupees(entry.gross_amount),
+            # TDS3Entry's field is `gross_receipt`, not `gross_amount` (that
+            # belongs to TDS2Entry) -- another nonexistent-attribute
+            # AttributeError, same root cause as `deducted_yr` above.
+            "GrossAmount": _to_rupees(entry.gross_receipt),
             "HeadOfIncome": detail.head_of_income,
-            "AmtCarriedFwd": _to_rupees(max(_ZERO, entry.tds_deducted - entry.tds_claimed_this_year)),
-        })
+            "AmtCarriedFwd": _to_rupees(entry.tds_credit_carried_forward),
+        }
+        if entry.ownership == "O":
+            if entry.pan_of_other_person:
+                row["PANofOtherPerson"] = entry.pan_of_other_person
+            if entry.aadhaar_of_other_person:
+                row["AadhaarOfOtherPerson"] = entry.aadhaar_of_other_person
+        rows.append(row)
     return {"TDS3onOthThanSalDtls": rows, "TotalTDS3OnOthThanSal": sum(r["TaxDeductCreditDtls"]["TaxClaimedOwnHands"] for r in rows)}
 
 
 def _schedule_tcs(input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize Schedule TCS from real collector entries."""
+    """Serialize Schedule TCS from real collector entries.
+
+    ``TCSCreditOwner``/``PANOfSpouseOrOthrPrsn`` and the spouse-side
+    collected/claimed amounts are real fields on ``TCSEntry`` (added
+    alongside this fix) sourced from ``ReturnDraft.taxes.tcs``'s
+    ``TcsCredit`` rows, which already captured this data -- it was
+    previously dropped when mapped into the (until now, narrower)
+    canonical ``TCSEntry`` type.
+    """
     if not input_data.tcs_entries:
         return None
     rows = []
     for entry in input_data.tcs_entries:
-        deducted_year = int((entry.financial_year or "2024-25").split("-")[0])
-        rows.append({
-            "TCSCreditOwner": "1",
+        deducted_year = int(
+            (entry.deducted_year or (entry.financial_year or "2024-25").split("-")[0])
+        )
+        row: dict[str, Any] = {
+            "TCSCreditOwner": entry.ownership,
             "EmployerOrDeductorOrCollectTAN": entry.collector_tan,
             "DeductedYr": deducted_year,
-            "BroughtFwdTDSAmt": 0,
+            "BroughtFwdTDSAmt": _to_rupees(entry.brought_forward_tds),
             "TCSCurrFYDtls": {
                 "TCSAmtCollOwnHand": _to_rupees(entry.tcs_collected),
-                "TCSAmtCollSpouseOrOthrHand": 0,
+                "TCSAmtCollSpouseOrOthrHand": _to_rupees(entry.tcs_collected_spouse_or_other),
             },
             "TCSClaimedThisYearDtls": {
                 "TCSAmtCollOwnHand": _to_rupees(entry.tcs_credit_claimed),
-                "TCSAmtCollSpouseOrOthrHand": 0,
+                "TCSAmtCollSpouseOrOthrHand": _to_rupees(entry.tcs_credit_claimed_spouse_or_other),
             },
-            "AmtCarriedFwd": 0,
-        })
-    return {"TCS": rows, "TotalSchTCS": sum(r["TCSClaimedThisYearDtls"]["TCSAmtCollOwnHand"] for r in rows)}
+            "AmtCarriedFwd": _to_rupees(entry.tds_credit_carried_forward),
+        }
+        if entry.ownership == "2" and entry.pan_of_spouse_or_other_person:
+            row["PANOfSpouseOrOthrPrsn"] = entry.pan_of_spouse_or_other_person
+        rows.append(row)
+    return {
+        "TCS": rows,
+        "TotalSchTCS": sum(
+            r["TCSClaimedThisYearDtls"]["TCSAmtCollOwnHand"]
+            + r["TCSClaimedThisYearDtls"]["TCSAmtCollSpouseOrOthrHand"]
+            for r in rows
+        ),
+    }
 
 
 # ============================================================================
