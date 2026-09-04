@@ -1266,18 +1266,24 @@ Even those cases require independent review of the generated JSON against the of
    - no silent zero placeholders for populated data — resolved for land/building; open elsewhere.
 
 3. **Complete Schedule OS**
-   - winnings, gifts, DTAA, 89A, PF, unexplained, special-rate, PTI, deductions, and dividend categories;
-   - category-specific detail and TDS linkage;
-   - populated-category preservation tests.
+   - ~~winnings, accumulated PF~~ — **fixed 2026-09-04**, see §3.4's fix write-up (also fixed a
+     pre-existing bug where this SI-dispatched income was taxed but never added to Total Income).
+   - ~~gifts (section 56(2)(x))~~ — **fixed 2026-09-04**, see §3.4's fix write-up (relative/marriage
+     exemption and the correct aggregate/per-property thresholds applied).
+   - DTAA, 89A, unexplained income, special-rate-income entries, PTI, deductions, and dividend
+     sub-categories — still open (documented in §3.4's fix write-up as deliberately scoped out;
+     89A specifically is a deferral relief, not new taxable income, so lower urgency than the
+     items above were).
+   - `RACE_HORSE_ACTIVITY` winnings (owning/maintaining race horses — a distinct business-like OS
+     sub-head with its own deduction rules) — still open, no calculator support at all yet.
+   - category-specific detail and TDS linkage — still open.
+   - populated-category preservation tests — added for winnings/PF/gifts; still open for the rest.
 
-4. **Correct TDS/TCS credits**
-   - ownership;
-   - spouse/other-person PAN;
-   - brought-forward and carry-forward;
-   - partial claims;
-   - correct head of income;
-   - buyer/tenant fields;
-   - total reconciliation.
+4. ~~**Correct TDS/TCS credits**~~ — **fixed 2026-09-04**, see §3.6/§3.7's fix write-ups: ownership,
+   spouse/other-person PAN, brought-forward and carry-forward, correct head of income, and total
+   reconciliation are all now real. Also fixed four crash-bug typos found along the way
+   (`TDS3Entry.tds_claimed_this_year`/`financial_year`/`gross_amount` misreads). Partial-claims
+   handling was already correct before this fix (unaffected).
 
 5. ~~**Correct negative HP handling**~~ — **re-verified 2026-09-04, not a defect**: see §3.5's
    and §6.3's re-verification notes. `PartB-TI.IncomeFromHP`'s non-negative constraint is
@@ -1285,14 +1291,16 @@ Even those cases require independent review of the generated JSON against the of
    silently dropped.
 
 6. **Complete filing profile**
-   - current-account deposit seventh-proviso field for ITR-2;
-   - 92CD;
-   - 115H;
-   - residential-status facts;
-   - FII/FPI and SEBI;
-   - director details;
-   - unlisted-equity details;
-   - LEI.
+   - ~~current-account deposit seventh-proviso field for ITR-2~~ — **fixed 2026-09-04**, see §4.6's
+     fix write-up (backend was already correct; the frontend control was simply gated to ITR-4 only).
+   - ~~92CD~~ — **fixed 2026-09-04**, see §4.5's fix write-up (was unreachable at three layers: draft
+     schema, `FILING_SECTION_CODES` map, and the frontend dropdown).
+   - 115H — still open.
+   - residential-status facts — still open.
+   - FII/FPI and SEBI — still open.
+   - director details — still open.
+   - unlisted-equity details — still open.
+   - LEI — still open.
 
 ## P1 — Required for broad taxpayer coverage
 
