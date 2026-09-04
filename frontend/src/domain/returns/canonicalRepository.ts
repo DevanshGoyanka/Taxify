@@ -57,6 +57,7 @@ export function createEmptyPersonalInfo(): PersonalInfo {
     employerCategory: '', age: 30, assesseeStatus: 'I',
     landlineStdCode: '0', landlinePhoneNo: '0',
     secondaryAddressDifferent: false, alternateAddress: null,
+    companyDirectorEntries: [], unlistedEquityEntries: [],
   };
 }
 

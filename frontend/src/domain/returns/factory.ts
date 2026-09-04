@@ -30,6 +30,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       employerCategory: '', age: 30, assesseeStatus: 'I',
       landlineStdCode: '0', landlinePhoneNo: '0',
       secondaryAddressDifferent: false, alternateAddress: null,
+      companyDirectorEntries: [], unlistedEquityEntries: [],
     },
     filing: {
       filingSection: '139(1)', returnType: 'ORIGINAL',

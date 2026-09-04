@@ -445,6 +445,20 @@ export interface PersonalInfo {
   residentialStatus?: 'ROR' | 'RNOR' | 'NR';
   isDirector?: boolean;
   holdsUnlistedShares?: boolean;
+  companyDirectorEntries: CompanyDirectorEntry[];
+  unlistedEquityEntries: UnlistedEquityEntry[];
+}
+export type CompanyType = 'D' | 'F';
+export interface CompanyDirectorEntry extends Identified {
+  companyName: string; companyType: CompanyType; pan: string; sharesType: 'L' | 'U'; din: string;
+}
+export interface UnlistedEquityEntry extends Identified {
+  companyName: string; companyType: CompanyType; pan: string;
+  openingShares: Money; openingCost: Money;
+  acquiredShares: Money; dateOfAcquisition: string | null;
+  faceValuePerShare: Money; issuePricePerShare: Money; purchasePricePerShare: Money;
+  transferredShares: Money; transferSaleConsideration: Money;
+  closingShares: Money; closingCost: Money;
 }
 
 // ---------------------------------------------------------------------------

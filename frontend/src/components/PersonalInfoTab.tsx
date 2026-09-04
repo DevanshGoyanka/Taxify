@@ -2,7 +2,7 @@ import React, { useEffect, useMemo } from 'react';
 import { BankAccountManager, type BankAccountData } from './BankAccountManager';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import { calculateAgeFromDob } from '../utils/age';
-import type { ReturnDraft } from '../domain/returns/types';
+import type { CompanyDirectorEntry, CompanyType, ReturnDraft, UnlistedEquityEntry } from '../domain/returns/types';
 import {
   EMPLOYER_CATEGORY_OPTIONS,
   STATE_CODE_OPTIONS,
@@ -283,6 +283,55 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       </div>)}
       <button type="button" onClick={() => updateFiling({ jurisdictionResidenceEntries: [...filing.jurisdictionResidenceEntries, { id: `jurisdiction-${Date.now()}`, jurisdictionCode: '', tin: '' }] })}>Add jurisdiction</button>
     </div>
+    </div></>}
+    {itrForm === 'ITR-2' && <><SectionHeading title="Director and unlisted-equity disclosures" description="Company directorships held and unlisted equity shares held at any time during the year." /><div style={CARD_STYLE}>
+      <CheckField label="Assessee was a director in a company at any time during the year" checked={bool(personal.isDirector)} onChange={(checked) => updatePersonal({ isDirector: checked, companyDirectorEntries: checked ? personal.companyDirectorEntries : [] })} />
+      {bool(personal.isDirector) && <div style={{ marginTop: 12 }}>
+        {personal.companyDirectorEntries.map((row, index) => <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 10 }}>
+          <Field label={`Company ${index + 1} name`} value={row.companyName} onChange={(value) => updatePersonal({ companyDirectorEntries: personal.companyDirectorEntries.map((item) => item.id === row.id ? { ...item, companyName: value } : item) })} required maxLength={125} />
+          <SelectField label={`Company ${index + 1} type`} value={row.companyType} onChange={(value) => updatePersonal({ companyDirectorEntries: personal.companyDirectorEntries.map((item) => item.id === row.id ? { ...item, companyType: value as CompanyDirectorEntry['companyType'] } : item) })} required>
+            <option value="D">Domestic</option>
+            <option value="F">Foreign</option>
+          </SelectField>
+          <Field label={`Company ${index + 1} PAN`} value={row.pan} onChange={(value) => updatePersonal({ companyDirectorEntries: personal.companyDirectorEntries.map((item) => item.id === row.id ? { ...item, pan: value.toUpperCase() } : item) })} pattern={PAN_PATTERN} maxLength={10} />
+          <SelectField label={`Company ${index + 1} shares`} value={row.sharesType} onChange={(value) => updatePersonal({ companyDirectorEntries: personal.companyDirectorEntries.map((item) => item.id === row.id ? { ...item, sharesType: value as CompanyDirectorEntry['sharesType'] } : item) })} required>
+            <option value="L">Listed</option>
+            <option value="U">Unlisted</option>
+          </SelectField>
+          <Field label={`Company ${index + 1} DIN`} value={row.din} onChange={(value) => updatePersonal({ companyDirectorEntries: personal.companyDirectorEntries.map((item) => item.id === row.id ? { ...item, din: value.replace(/\D/g, '').slice(0, 8) } : item) })} pattern="[0-9]{8}" maxLength={8} inputMode="numeric" />
+          <button type="button" onClick={() => updatePersonal({ companyDirectorEntries: personal.companyDirectorEntries.filter((item) => item.id !== row.id) })}>Remove</button>
+        </div>)}
+        <button type="button" onClick={() => updatePersonal({ companyDirectorEntries: [...personal.companyDirectorEntries, { id: `director-${Date.now()}`, companyName: '', companyType: 'D', pan: '', sharesType: 'L', din: '' }] })}>Add company</button>
+      </div>}
+      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+        <CheckField label="Assessee held unlisted equity shares at any time during the year" checked={bool(personal.holdsUnlistedShares)} onChange={(checked) => updatePersonal({ holdsUnlistedShares: checked, unlistedEquityEntries: checked ? personal.unlistedEquityEntries : [] })} />
+        {bool(personal.holdsUnlistedShares) && <div style={{ marginTop: 12 }}>
+          {personal.unlistedEquityEntries.map((row, index) => {
+            const updateRow = (patch: Partial<UnlistedEquityEntry>): void => updatePersonal({ unlistedEquityEntries: personal.unlistedEquityEntries.map((item) => item.id === row.id ? { ...item, ...patch } : item) });
+            return <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--border)' }}>
+              <Field label={`Company ${index + 1} name`} value={row.companyName} onChange={(value) => updateRow({ companyName: value })} required maxLength={125} />
+              <SelectField label={`Company ${index + 1} type`} value={row.companyType} onChange={(value) => updateRow({ companyType: value as CompanyType })} required>
+                <option value="D">Domestic</option>
+                <option value="F">Foreign</option>
+              </SelectField>
+              <Field label={`Company ${index + 1} PAN`} value={row.pan} onChange={(value) => updateRow({ pan: value.toUpperCase() })} pattern={PAN_PATTERN} maxLength={10} />
+              <Field label="Opening balance — shares" value={row.openingShares} onChange={(value) => updateRow({ openingShares: Number(value) || 0 })} type="number" min={0} required />
+              <Field label="Opening balance — cost (₹)" value={row.openingCost} onChange={(value) => updateRow({ openingCost: Number(value) || 0 })} type="number" min={0} required />
+              <Field label="Acquired during year — shares" value={row.acquiredShares} onChange={(value) => updateRow({ acquiredShares: Number(value) || 0 })} type="number" min={0} />
+              <Field label="Date of subscription / purchase" value={row.dateOfAcquisition || ''} onChange={(value) => updateRow({ dateOfAcquisition: value || null })} type="date" />
+              <Field label="Face value per share (₹)" value={row.faceValuePerShare} onChange={(value) => updateRow({ faceValuePerShare: Number(value) || 0 })} type="number" min={0} />
+              <Field label="Issue price per share (₹)" value={row.issuePricePerShare} onChange={(value) => updateRow({ issuePricePerShare: Number(value) || 0 })} type="number" min={0} />
+              <Field label="Purchase price per share (₹)" value={row.purchasePricePerShare} onChange={(value) => updateRow({ purchasePricePerShare: Number(value) || 0 })} type="number" min={0} />
+              <Field label="Transferred during year — shares" value={row.transferredShares} onChange={(value) => updateRow({ transferredShares: Number(value) || 0 })} type="number" min={0} />
+              <Field label="Sale consideration on transfer (₹)" value={row.transferSaleConsideration} onChange={(value) => updateRow({ transferSaleConsideration: Number(value) || 0 })} type="number" min={0} />
+              <Field label="Closing balance — shares" value={row.closingShares} onChange={(value) => updateRow({ closingShares: Number(value) || 0 })} type="number" min={0} required />
+              <Field label="Closing balance — cost (₹)" value={row.closingCost} onChange={(value) => updateRow({ closingCost: Number(value) || 0 })} type="number" min={0} required />
+              <button type="button" onClick={() => updatePersonal({ unlistedEquityEntries: personal.unlistedEquityEntries.filter((item) => item.id !== row.id) })}>Remove</button>
+            </div>;
+          })}
+          <button type="button" onClick={() => updatePersonal({ unlistedEquityEntries: [...personal.unlistedEquityEntries, { id: `equity-${Date.now()}`, companyName: '', companyType: 'D', pan: '', openingShares: 0, openingCost: 0, acquiredShares: 0, dateOfAcquisition: null, faceValuePerShare: 0, issuePricePerShare: 0, purchasePricePerShare: 0, transferredShares: 0, transferSaleConsideration: 0, closingShares: 0, closingCost: 0 }] })}>Add company</button>
+        </div>}
+      </div>
     </div></>}
     <SectionHeading title="Verification" description="The declaration must be accepted before official CBDT JSON generation." />
     <div style={CARD_STYLE}><div style={GRID_STYLE}>

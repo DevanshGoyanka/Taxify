@@ -88,6 +88,35 @@ class JurisdictionResidenceEntry(StrictModel):
     tin: str = Field(min_length=1, max_length=75)
 
 
+class CompanyDirectorEntry(StrictModel):
+    """One company-directorship disclosure row (official ``CompDirectorPrvYrDtls``)."""
+
+    company_name: str = Field(min_length=1, max_length=125)
+    company_type: Literal["D", "F"]
+    pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    shares_type: Literal["L", "U"]
+    din: Optional[str] = Field(default=None, pattern=r"^[0-9]{8}$")
+
+
+class UnlistedEquityEntry(StrictModel):
+    """One unlisted-equity holding row (official ``HeldUnlistedEqShrPrYrDtls``)."""
+
+    company_name: str = Field(min_length=1, max_length=125)
+    company_type: Literal["D", "F"]
+    pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    opening_shares: int = Field(ge=0, le=99999999999999)
+    opening_cost: Decimal = Field(ge=0)
+    acquired_shares: int = Field(default=0, ge=0, le=99999999999999)
+    date_of_acquisition: Optional[date] = None
+    face_value_per_share: Decimal = Field(default=Decimal("0"), ge=0)
+    issue_price_per_share: int = Field(default=0, ge=0, le=99999999999999)
+    purchase_price_per_share: Decimal = Field(default=Decimal("0"), ge=0)
+    transferred_shares: int = Field(default=0, ge=0, le=99999999999999)
+    transfer_sale_consideration: Decimal = Field(default=Decimal("0"), ge=0)
+    closing_shares: int = Field(ge=0, le=99999999999999)
+    closing_cost: Decimal = Field(ge=0)
+
+
 class ITR2FilingProfile(StrictModel):
     """Identity, address, filing status, and verification facts."""
 
@@ -113,7 +142,9 @@ class ITR2FilingProfile(StrictModel):
     electricity_expenditure: Decimal = Field(default=Decimal("0"), ge=0)
     current_account_deposits: Decimal = Field(default=Decimal("0"), ge=0)
     is_company_director: bool = False
+    company_director_entries: List[CompanyDirectorEntry] = Field(default_factory=list)
     held_unlisted_equity: bool = False
+    unlisted_equity_entries: List[UnlistedEquityEntry] = Field(default_factory=list)
     is_fii_fpi: bool = False
     sebi_registration_number: Optional[str] = Field(
         default=None, pattern=r"^IN[A-Za-z]{2}FP[0-9]{6}$"
@@ -145,6 +176,10 @@ class ITR2FilingProfile(StrictModel):
             raise ValueError("Notice return requires notice number and notice date")
         if self.is_fii_fpi and self.sebi_registration_number is None:
             raise ValueError("FII/FPI filing requires a SEBI registration number")
+        if self.is_company_director and not self.company_director_entries:
+            raise ValueError("Company-director filing requires at least one company_director_entries row")
+        if self.held_unlisted_equity and not self.unlisted_equity_entries:
+            raise ValueError("Unlisted-equity filing requires at least one unlisted_equity_entries row")
         return self
 
 

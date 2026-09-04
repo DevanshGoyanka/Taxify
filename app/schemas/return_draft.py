@@ -170,6 +170,35 @@ class JurisdictionResidenceEntry(Identified):
     tin: str = Field(default="", description="Taxpayer identification number in that jurisdiction.")
 
 
+class CompanyDirectorEntry(Identified):
+    """One company-directorship disclosure row (ITR-2's ``CompDirectorPrvYrDtls``)."""
+
+    companyName: str = Field(default="")
+    companyType: Literal["D", "F"] = Field(default="D", description="D = Domestic, F = Foreign.")
+    pan: str = Field(default="")
+    sharesType: Literal["L", "U"] = Field(default="L", description="L = Listed, U = Unlisted.")
+    din: str = Field(default="", description="Director Identification Number, 8 digits.")
+
+
+class UnlistedEquityEntry(Identified):
+    """One unlisted-equity holding row (ITR-2's ``HeldUnlistedEqShrPrYrDtls``)."""
+
+    companyName: str = Field(default="")
+    companyType: Literal["D", "F"] = Field(default="D", description="D = Domestic, F = Foreign.")
+    pan: str = Field(default="")
+    openingShares: Money = Field(default=Decimal("0"))
+    openingCost: Money = Field(default=Decimal("0"))
+    acquiredShares: Money = Field(default=Decimal("0"))
+    dateOfAcquisition: Optional[str] = Field(default=None)
+    faceValuePerShare: Money = Field(default=Decimal("0"))
+    issuePricePerShare: Money = Field(default=Decimal("0"))
+    purchasePricePerShare: Money = Field(default=Decimal("0"))
+    transferredShares: Money = Field(default=Decimal("0"))
+    transferSaleConsideration: Money = Field(default=Decimal("0"))
+    closingShares: Money = Field(default=Decimal("0"))
+    closingCost: Money = Field(default=Decimal("0"))
+
+
 class SeventhProviso(_StrictModel):
     """Seventh-proviso to Section 139(1) declarations."""
 
@@ -1547,6 +1576,16 @@ class PersonalInfo(_StrictModel):
         default=False,
         description="Whether the assessee held unlisted equity shares at any "
         "time during the year. Already live on the frontend. ITR-2/3 only.",
+    )
+    companyDirectorEntries: list[CompanyDirectorEntry] = Field(
+        default_factory=list,
+        description="Company-directorship detail rows, required when "
+        "isDirector is true. ITR-2 only.",
+    )
+    unlistedEquityEntries: list[UnlistedEquityEntry] = Field(
+        default_factory=list,
+        description="Unlisted-equity holding detail rows, required when "
+        "holdsUnlistedShares is true. ITR-2 only.",
     )
 
 

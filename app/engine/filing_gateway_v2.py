@@ -62,6 +62,7 @@ from app.schemas.itr1 import (
 )
 from app.schemas.itr2 import (
     AssesseeStatus as ITR2AssesseeStatus,
+    CompanyDirectorEntry,
     EmployerFilingDetail,
     ITR2FilingProfile,
     ITR2Input,
@@ -69,6 +70,7 @@ from app.schemas.itr2 import (
     PropertyFilingDetail,
     ResidentialStatus as ITR2ResidentialStatus,
     TDS3FilingDetail,
+    UnlistedEquityEntry,
 )
 from app.schemas.itr4 import (
     ITR4BankAccount,
@@ -1238,7 +1240,38 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
             electricity_expenditure=seventh.electricity_expenditure_amount,
             current_account_deposits=seventh.deposit_amount,
             is_company_director=personal.isDirector,
+            company_director_entries=[
+                CompanyDirectorEntry(
+                    company_name=row.companyName,
+                    company_type=row.companyType,
+                    pan=row.pan.strip() or None,
+                    shares_type=row.sharesType,
+                    din=row.din.strip() or None,
+                )
+                for row in personal.companyDirectorEntries
+                if row.companyName
+            ],
             held_unlisted_equity=personal.holdsUnlistedShares,
+            unlisted_equity_entries=[
+                UnlistedEquityEntry(
+                    company_name=row.companyName,
+                    company_type=row.companyType,
+                    pan=row.pan.strip() or None,
+                    opening_shares=int(row.openingShares),
+                    opening_cost=row.openingCost,
+                    acquired_shares=int(row.acquiredShares),
+                    date_of_acquisition=_to_date(row.dateOfAcquisition),
+                    face_value_per_share=row.faceValuePerShare,
+                    issue_price_per_share=int(row.issuePricePerShare),
+                    purchase_price_per_share=row.purchasePricePerShare,
+                    transferred_shares=int(row.transferredShares),
+                    transfer_sale_consideration=row.transferSaleConsideration,
+                    closing_shares=int(row.closingShares),
+                    closing_cost=row.closingCost,
+                )
+                for row in personal.unlistedEquityEntries
+                if row.companyName
+            ],
             is_fii_fpi=filing.isFiiFpi,
             sebi_registration_number=filing.sebiRegistrationNumber.strip() or None,
             lei_number=filing.leiNumber.strip() or None,

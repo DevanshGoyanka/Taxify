@@ -138,6 +138,10 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         "AsseseeRepFlg": "N",
         "ItrFilingDueDate": _date(profile.filing_due_date),
         "HeldUnlistedEqShrPrYrFlg": "Y" if profile.held_unlisted_equity else "N",
+        # Previously never emitted at all -- is_company_director was read
+        # from the draft but silently dropped here, unlike its sibling
+        # HeldUnlistedEqShrPrYrFlg one line above.
+        "CompDirectorPrvYrFlg": "Y" if profile.is_company_director else "N",
         "FiiFpiFlag": "Y" if profile.is_fii_fpi else "N",
     }
     if profile.receipt_number:
@@ -172,6 +176,49 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         filing_status["TotalPrStayIndia4PrecYr"] = profile.total_stay_india_4_prec_yr
     if profile.benefit_us_115h:
         filing_status["BenefitUs115HFlg"] = "Y"
+    if profile.company_director_entries:
+        rows = []
+        for entry in profile.company_director_entries:
+            row: dict[str, Any] = {
+                "NameOfCompany": entry.company_name,
+                "CompanyType": entry.company_type,
+                "SharesTypes": entry.shares_type,
+            }
+            if entry.pan:
+                row["PAN"] = entry.pan
+            if entry.din:
+                row["DIN"] = entry.din
+            rows.append(row)
+        filing_status["CompDirectorPrvYr"] = {"CompDirectorPrvYrDtls": rows}
+    if profile.unlisted_equity_entries:
+        rows = []
+        for entry in profile.unlisted_equity_entries:
+            row = {
+                "NameOfCompany": entry.company_name,
+                "CompanyType": entry.company_type,
+                "OpngBalNumberOfShares": entry.opening_shares,
+                "OpngBalCostOfAcquisition": _to_rupees(entry.opening_cost),
+                "ClsngBalNumberOfShares": entry.closing_shares,
+                "ClsngBalCostOfAcquisition": _to_rupees(entry.closing_cost),
+            }
+            if entry.pan:
+                row["PAN"] = entry.pan
+            if entry.acquired_shares:
+                row["ShrAcqDurYrNumberOfShares"] = entry.acquired_shares
+            if entry.date_of_acquisition:
+                row["DateOfSubscrPurchase"] = _date(entry.date_of_acquisition)
+            if entry.face_value_per_share:
+                row["FaceValuePerShare"] = _to_rupees(entry.face_value_per_share)
+            if entry.issue_price_per_share:
+                row["IssuePricePerShare"] = entry.issue_price_per_share
+            if entry.purchase_price_per_share:
+                row["PurchasePricePerShare"] = _to_rupees(entry.purchase_price_per_share)
+            if entry.transferred_shares:
+                row["ShrTrnfNumberOfShares"] = entry.transferred_shares
+            if entry.transfer_sale_consideration:
+                row["ShrTrnfSaleConsideration"] = _to_rupees(entry.transfer_sale_consideration)
+            rows.append(row)
+        filing_status["HeldUnlistedEqShrPrYr"] = {"HeldUnlistedEqShrPrYrDtls": rows}
     return {"PersonalInfo": personal_info, "FilingStatus": filing_status}
 
 

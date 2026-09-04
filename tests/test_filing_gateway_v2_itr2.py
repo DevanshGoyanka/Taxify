@@ -282,3 +282,74 @@ def test_generate_cbdt_json_itr2_omits_residential_status_facts_when_unset() -> 
     assert "TotalPrStayIndiaPrevYr" not in filing_status
     assert "TotalPrStayIndia4PrecYr" not in filing_status
     assert "BenefitUs115HFlg" not in filing_status
+
+
+# ── §4.3: director and unlisted-equity disclosures ──────────────────────────
+
+def test_generate_cbdt_json_itr2_emits_director_and_unlisted_equity_detail() -> None:
+    """Director and unlisted-equity detail rows reach the official JSON.
+
+    Regression coverage for audit §4.3: two real gaps existed before this
+    fix -- CompDirectorPrvYrFlg was never emitted at all (is_company_director
+    was read from the draft but silently dropped), and
+    HeldUnlistedEqShrPrYrFlg (which the official schema marks required) had
+    no backing HeldUnlistedEqShrPrYr.HeldUnlistedEqShrPrYrDtls[] array ever
+    emitted, so a "Y" flag could reach ITD with zero detail rows.
+    """
+    from app.schemas.return_draft import CompanyDirectorEntry as DraftDirectorEntry
+    from app.schemas.return_draft import UnlistedEquityEntry as DraftEquityEntry
+
+    draft = _filing_ready_itr2_draft()
+    draft.personal.isDirector = True
+    draft.personal.companyDirectorEntries = [DraftDirectorEntry(
+        id="d1", companyName="Acme Pvt Ltd", companyType="D",
+        pan="AAACA1234A", sharesType="U", din="12345678",
+    )]
+    draft.personal.holdsUnlistedShares = True
+    draft.personal.unlistedEquityEntries = [DraftEquityEntry(
+        id="e1", companyName="Beta Pvt Ltd", companyType="D",
+        pan="AAACB1234B", openingShares=Decimal("100"), openingCost=Decimal("10000"),
+        acquiredShares=Decimal("50"), dateOfAcquisition="2025-06-01",
+        faceValuePerShare=Decimal("10"), issuePricePerShare=Decimal("100"),
+        purchasePricePerShare=Decimal("100"), transferredShares=Decimal("20"),
+        transferSaleConsideration=Decimal("2500"),
+        closingShares=Decimal("130"), closingCost=Decimal("15000"),
+    )]
+    official_json, _summary = generate_cbdt_json(draft)
+    filing_status = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
+
+    assert filing_status["CompDirectorPrvYrFlg"] == "Y"
+    director_row = filing_status["CompDirectorPrvYr"]["CompDirectorPrvYrDtls"][0]
+    assert director_row["NameOfCompany"] == "Acme Pvt Ltd"
+    assert director_row["CompanyType"] == "D"
+    assert director_row["SharesTypes"] == "U"
+    assert director_row["DIN"] == "12345678"
+
+    assert filing_status["HeldUnlistedEqShrPrYrFlg"] == "Y"
+    equity_row = filing_status["HeldUnlistedEqShrPrYr"]["HeldUnlistedEqShrPrYrDtls"][0]
+    assert equity_row["NameOfCompany"] == "Beta Pvt Ltd"
+    assert equity_row["OpngBalNumberOfShares"] == 100
+    assert equity_row["OpngBalCostOfAcquisition"] == 10000
+    assert equity_row["ShrAcqDurYrNumberOfShares"] == 50
+    assert equity_row["ClsngBalNumberOfShares"] == 130
+    assert equity_row["ClsngBalCostOfAcquisition"] == 15000
+
+
+def test_generate_cbdt_json_itr2_omits_director_and_equity_blocks_when_unset() -> None:
+    """Both flags default to N and no detail blocks are emitted."""
+    draft = _filing_ready_itr2_draft()
+    official_json, _summary = generate_cbdt_json(draft)
+    filing_status = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
+    assert filing_status["CompDirectorPrvYrFlg"] == "N"
+    assert filing_status["HeldUnlistedEqShrPrYrFlg"] == "N"
+    assert "CompDirectorPrvYr" not in filing_status
+    assert "HeldUnlistedEqShrPrYr" not in filing_status
+
+
+def test_itr2_filing_profile_rejects_director_flag_without_entries() -> None:
+    """is_company_director=True with zero director rows is rejected -- this
+    was the exact live bug (a bare Y flag with no backing data)."""
+    draft = _filing_ready_itr2_draft()
+    draft.personal.isDirector = True
+    with pytest.raises(FilingGatewayV2Error):
+        generate_cbdt_json(draft)

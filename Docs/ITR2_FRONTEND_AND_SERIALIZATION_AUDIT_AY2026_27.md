@@ -844,6 +844,42 @@ The model has `isDirector` and `holdsUnlistedShares` around `return_draft.py:149
 
 **Severity: High**
 
+> **Fix status (2026-09-04): fixed and verified.** Re-audit found two real, more severe gaps than
+> "reduced to flags": `CompDirectorPrvYrFlg` was **never emitted at all** — `is_company_director`
+> was read from the draft into `ITR2FilingProfile` but the builder silently dropped it (its
+> sibling `HeldUnlistedEqShrPrYrFlg` one line above was emitted correctly, `CompDirectorPrvYrFlg`
+> was simply missing) — and `HeldUnlistedEqShrPrYrFlg`, which the official schema marks
+> **required**, had no backing `HeldUnlistedEqShrPrYr.HeldUnlistedEqShrPrYrDtls[]` array ever
+> built, so a real "Y" flag could reach ITD with zero supporting detail rows.
+>
+> Added `CompanyDirectorEntry` (`companyName`, `companyType` D/F, `pan`, `sharesType` L/U, `din`)
+> and `UnlistedEquityEntry` (`companyName`, `companyType`, `pan`, opening/closing share count +
+> cost, acquired/transferred-during-year sub-fields, face/issue/purchase price) — field names and
+> required-ness taken directly from the official schema's `CompDirectorPrvYrDtls`/
+> `HeldUnlistedEqShrPrYrDtls` definitions — as new list fields on `PersonalInfo`
+> (`return_draft.py`) and `ITR2FilingProfile` (`app/schemas/itr2.py`), wired through
+> `_itr2_filing_profile()` (`filing_gateway_v2.py`), fixed the dead `CompDirectorPrvYrFlg` emission
+> and added both detail arrays in `_part_a_gen1()` (`itd/itr2.py`).
+>
+> **New model validator** added to `ITR2FilingProfile.validate_conditional_filing_facts()`
+> (matching the existing `is_fii_fpi`/`sebi_registration_number` precedent):
+> `is_company_director=True` now requires ≥1 director entry, `held_unlisted_equity=True` requires
+> ≥1 equity entry. The official schema itself only enforces object shape, not this business rule —
+> without the validator, the exact live bug (a bare "Y" flag with zero backing rows) could be
+> silently reintroduced.
+>
+> Frontend: two new repeatable-row table editors in `PersonalInfoTab.tsx` (director rows and
+> unlisted-equity rows, following the existing seventh-proviso clause add/remove-row pattern),
+> gated `itrForm === 'ITR-2'`. Also found and fixed two frontend `PersonalInfo` constructor
+> call-sites (`factory.ts`, `canonicalRepository.ts`) that needed the new list fields added — a
+> `tsc` build failure caught both immediately.
+>
+> Regression tests: `test_generate_cbdt_json_itr2_emits_director_and_unlisted_equity_detail`,
+> `test_generate_cbdt_json_itr2_omits_director_and_equity_blocks_when_unset`, and
+> `test_itr2_filing_profile_rejects_director_flag_without_entries` in
+> `tests/test_filing_gateway_v2_itr2.py`, confirmed via `git stash` to be absent on pre-fix code.
+> `npm run build` clean. Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` suite (284 tests) green.
+
 ## 4.4 Section 115H is missing
 
 The frontend filing-profile workflow does not expose section 115H applicability and supporting information.
