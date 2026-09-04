@@ -153,6 +153,10 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         # via live Draft4Validator schema validation (the wrong key was
         # rejected outright with "Additional properties are not allowed").
         filing_status["SebiRegnNo"] = profile.sebi_registration_number
+    if profile.lei_number:
+        filing_status["LEIDtls"] = {"LEINumber": profile.lei_number}
+        if profile.lei_valid_upto_date:
+            filing_status["LEIDtls"]["ValidUptoDate"] = _date(profile.lei_valid_upto_date)
     return {"PersonalInfo": personal_info, "FilingStatus": filing_status}
 
 

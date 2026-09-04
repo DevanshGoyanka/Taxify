@@ -112,6 +112,8 @@ class ITR2FilingProfile(StrictModel):
         default=None, pattern=r"^IN[A-Za-z]{2}FP[0-9]{6}$"
     )
     portuguese_civil_code_applies: bool = False
+    lei_number: Optional[str] = Field(default=None, min_length=20, max_length=20)
+    lei_valid_upto_date: Optional[date] = None
     father_name: str = Field(min_length=1, max_length=125)
     verification_place: str = Field(min_length=1, max_length=50)
     verification_capacity: Literal["S", "K"] = "S"

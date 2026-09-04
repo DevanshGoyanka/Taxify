@@ -1423,6 +1423,16 @@ class FilingStatus(_StrictModel):
         description="Whether the Portuguese Civil Code (Schedule 5A income "
         "apportionment) applies to this assessee. ITR-2 only.",
     )
+    leiNumber: str = Field(
+        default="",
+        description="Legal Entity Identifier — CBDT requires disclosure when "
+        "the refund claimed is INR 50 crore or more (not schema-enforced, "
+        "an instructional requirement). 20 characters exactly. ITR-2 only.",
+    )
+    leiValidUptoDate: Optional[str] = Field(
+        default=None,
+        description="LEI validity expiry date (YYYY-MM-DD). ITR-2 only.",
+    )
 
 
 class PersonalInfo(_StrictModel):

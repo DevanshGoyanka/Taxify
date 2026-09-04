@@ -54,6 +54,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
         otherClauseIV: false, clauseIVDetails: [],
       },
       sebiRegistrationNumber: '', isFiiFpi: false, portugueseCivilCodeApplies: false,
+      leiNumber: '', leiValidUptoDate: null,
     },
     employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: { ...EMPTY_CAPITAL_GAINS_SCHEDULE },
     otherSources: {

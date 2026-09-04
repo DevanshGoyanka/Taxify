@@ -875,6 +875,22 @@ Applicable LEI information is not represented through a complete frontend workfl
 
 **Severity: Medium to High**, depending on taxpayer and transaction applicability.
 
+> **Fix status (2026-09-04): fixed and verified.** Confirmed fully greenfield before this fix —
+> nothing existed at any layer (backend schema, builder, frontend). Added `leiNumber`
+> (20-character, matches the official schema's exact `LEINumber` length constraint) and
+> `leiValidUptoDate` to `FilingStatus` (`app/schemas/return_draft.py`) and
+> `lei_number`/`lei_valid_upto_date` to `ITR2FilingProfile` (`app/schemas/itr2.py`), wired through
+> `_itr2_filing_profile()` (`filing_gateway_v2.py`), emitted as `LEIDtls.LEINumber`/`ValidUptoDate`
+> in `_part_a_gen1()` (`itd/itr2.py`) only when `lei_number` is set (the block is omitted entirely
+> otherwise, not emitted as an empty placeholder). Added a two-field UI section to
+> `PersonalInfoTab.tsx` (gated `itrForm === 'ITR-2'`), a note explaining the CBDT ₹50cr-refund
+> instructional trigger (not schema-enforced).
+>
+> Regression tests: `test_generate_cbdt_json_itr2_emits_lei_details` and
+> `test_generate_cbdt_json_itr2_omits_lei_block_when_unset` in
+> `tests/test_filing_gateway_v2_itr2.py`, confirmed via `git stash` to be absent on pre-fix code.
+> `npm run build` clean.
+
 ---
 
 # 5. Schedule S — Salary

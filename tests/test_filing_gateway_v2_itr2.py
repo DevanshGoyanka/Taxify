@@ -139,6 +139,29 @@ def test_generate_cbdt_json_itr2_emits_fii_fpi_declaration() -> None:
     assert personal_info["SebiRegnNo"] == "INZZFP123456"
 
 
+def test_generate_cbdt_json_itr2_emits_lei_details() -> None:
+    """LEI number and validity date reach the official JSON when supplied.
+
+    Regression coverage for audit §4.7: LEI was entirely unimplemented at
+    every layer (backend schema, builder, frontend) before this fix.
+    """
+    draft = _filing_ready_itr2_draft()
+    draft.filing.leiNumber = "9845003OQ3EEHS7QYW10"
+    draft.filing.leiValidUptoDate = "2027-03-31"
+    official_json, _summary = generate_cbdt_json(draft)
+    filing_status = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
+    assert filing_status["LEIDtls"]["LEINumber"] == "9845003OQ3EEHS7QYW10"
+    assert filing_status["LEIDtls"]["ValidUptoDate"] == "2027-03-31"
+
+
+def test_generate_cbdt_json_itr2_omits_lei_block_when_unset() -> None:
+    """No LEI number means no LEIDtls block at all -- no empty placeholder."""
+    draft = _filing_ready_itr2_draft()
+    official_json, _summary = generate_cbdt_json(draft)
+    filing_status = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
+    assert "LEIDtls" not in filing_status
+
+
 def test_generate_cbdt_json_itr2_rejects_representative_verification() -> None:
     """ITR-2 verification capacity REPRESENTATIVE/PARTNER is not supported."""
     draft = _filing_ready_itr2_draft()

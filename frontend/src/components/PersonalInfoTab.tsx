@@ -243,9 +243,11 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       {filing.form10IEACurrentAYOldRegime && <Field label="Current AY old-regime filing date" value={filing.form10IEACurrentAYOldRegimeDate || ''} onChange={(value) => updateFiling({ form10IEACurrentAYOldRegimeDate: value || null })} type="date" required />}
       {filing.form10IEACurrentAYOldRegime && <Field label="Current AY old-regime acknowledgement" value={filing.form10IEACurrentAYOldRegimeAck} onChange={(value) => updateFiling({ form10IEACurrentAYOldRegimeAck: value.replace(/\D/g, '').slice(0, 15) })} pattern="[0-9]{15}" maxLength={15} required />}
     </div></div></>}
-    {itrForm === 'ITR-2' && <><SectionHeading title="Other ITR-2 declarations" description="FII/FPI status and SEBI registration." /><div style={CARD_STYLE}><div style={GRID_STYLE}>
+    {itrForm === 'ITR-2' && <><SectionHeading title="Other ITR-2 declarations" description="FII/FPI status, SEBI registration, and Legal Entity Identifier." /><div style={CARD_STYLE}><div style={GRID_STYLE}>
       <CheckField label="Assessee is a Foreign Institutional Investor / Foreign Portfolio Investor (FII/FPI)" checked={filing.isFiiFpi} onChange={(checked) => updateFiling({ isFiiFpi: checked })} />
       {filing.isFiiFpi && <Field label="SEBI registration number" value={filing.sebiRegistrationNumber} onChange={(value) => updateFiling({ sebiRegistrationNumber: value.toUpperCase() })} required pattern="IN[A-Z]{2}FP[0-9]{6}" maxLength={11} help="Format: IN followed by 2 letters, FP, then 6 digits." />}
+      <Field label="Legal Entity Identifier (LEI)" value={filing.leiNumber} onChange={(value) => updateFiling({ leiNumber: value.toUpperCase().slice(0, 20) })} maxLength={20} help="Required by CBDT instructions only when the refund claimed is ₹50 crore or more." />
+      {filing.leiNumber && <Field label="LEI valid upto date" value={filing.leiValidUptoDate || ''} onChange={(value) => updateFiling({ leiValidUptoDate: value || null })} type="date" />}
     </div></div></>}
     <SectionHeading title="Verification" description="The declaration must be accepted before official CBDT JSON generation." />
     <div style={CARD_STYLE}><div style={GRID_STYLE}>

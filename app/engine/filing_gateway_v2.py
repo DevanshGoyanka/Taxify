@@ -1240,6 +1240,8 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
             held_unlisted_equity=personal.holdsUnlistedShares,
             is_fii_fpi=filing.isFiiFpi,
             sebi_registration_number=filing.sebiRegistrationNumber.strip() or None,
+            lei_number=filing.leiNumber.strip() or None,
+            lei_valid_upto_date=_to_date(filing.leiValidUptoDate),
             # ITR2Input's cross-schedule validator requires this to equal
             # (schedule_5a is not None). Mirror draft_to_itr2_input.py's
             # _map_schedule_5a guard exactly (spouseName + spousePAN both
