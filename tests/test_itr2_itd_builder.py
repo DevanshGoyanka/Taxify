@@ -41,6 +41,7 @@ from app.schemas.itr2 import (
     OSSection89A,
     OSSpecialRateEntry,
     OSUnexplainedIncome,
+    PTIEntry,
     ResidentialStatus,
     ScheduleSIEntry,
     TDS3FilingDetail,
@@ -797,6 +798,38 @@ def test_schedule_os_serializes_nri_special_rate_entries_and_taxes_them_via_si()
     # All three amounts are gross OS income and must reach GTI, the same
     # way 111A/112A/VDA capital-gains special-rate income does.
     assert result.other_sources_income == Decimal("170000")
+
+
+def test_pti_hp_and_os_head_entries_reach_gti_and_schedule_pti() -> None:
+    """HP-head and OS-head Schedule PTI entries reach both the JSON
+    disclosure (SchedulePTIDtls) AND actual GTI -- previously only the
+    disclosure existed; STCG/LTCG-head entries already dispatched to
+    Schedule SI, but HP/OS heads had no GTI-inclusion path at all."""
+    input_data = _input(
+        pti_entries=[
+            PTIEntry(
+                entity_name="ABC REIT", entity_pan="AAATA1234B",
+                income_head="HP", section="115UA", income_amount=Decimal("50000"),
+            ),
+            PTIEntry(
+                entity_name="XYZ InvIT", entity_pan="AAATX1234B",
+                income_head="OS", section="115UB", income_amount=Decimal("30000"),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+
+    pti_rows = document["ITR"]["ITR2"]["SchedulePTI"]["SchedulePTIDtls"]
+    assert len(pti_rows) == 2
+    hp_row = next(r for r in pti_rows if r["BusinessName"] == "ABC REIT")
+    assert hp_row["IncFromHP"]["NetIncomeLoss"] == 50000
+    os_row = next(r for r in pti_rows if r["BusinessName"] == "XYZ InvIT")
+    assert os_row["IncOthSrc"]["NetIncomeLoss"] == 30000
+
+    assert result.house_property_income == Decimal("50000")
+    assert result.other_sources_income == Decimal("30000")
 
 
 def test_schedule_os_omits_optional_blocks_when_unset() -> None:

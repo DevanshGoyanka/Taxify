@@ -188,6 +188,34 @@ def test_foreign_and_clubbing_and_pti_schedules_map_and_compute() -> None:
     assert not result.errors
 
 
+def test_pti_hp_and_os_head_income_reaches_gti() -> None:
+    """HP-head and OS-head Schedule PTI entries were disclosed in
+    SchedulePTIDtls but never reached GTI at all -- STCG/LTCG-head PTI
+    entries were already dispatched to Schedule SI, but HP/OS-head entries
+    had no calculator path whatsoever, silently understating house-property/
+    other-sources income for any taxpayer with pass-through income from
+    those two heads."""
+    draft = _filing_ready_itr2_draft()
+    draft.passThroughIncomeEntries = [
+        PassThroughIncomeEntry(
+            id="pti1", entityName="ABC REIT", entityPAN="AAATA1234B",
+            incomeHead="HP", section="115UA", incomeAmount=Decimal("50000"),
+        ),
+        PassThroughIncomeEntry(
+            id="pti2", entityName="XYZ InvIT", entityPAN="AAATX1234B",
+            incomeHead="OS", section="115UB", incomeAmount=Decimal("30000"),
+        ),
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert len(itr2_input.pti_entries) == 2
+
+    baseline = compute_itr2(draft_to_itr2_input(_filing_ready_itr2_draft())[0])
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    assert result.house_property_income == baseline.house_property_income + Decimal("50000")
+    assert result.other_sources_income == baseline.other_sources_income + Decimal("30000")
+
+
 def test_amt_and_schedule_si_map_and_compute() -> None:
     """AMT details and a Schedule SI entry both map and compute cleanly."""
     draft = _filing_ready_itr2_draft()

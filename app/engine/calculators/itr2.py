@@ -391,6 +391,17 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     hp_loss_disallowed_total = sum((hp.loss_disallowed for hp in hp_results), _ZERO)
     r.hp_loss_disallowed = hp_loss_disallowed_total
     r.house_property_income = hp_total
+    # HP-head pass-through income (Schedule PTI, e.g. a REIT/InvIT's own
+    # house-property income passed through under section 115UA) retains its
+    # head in the unit holder's hands -- added here, before CYLA/BFLA, so a
+    # passed-through HP loss is subject to the same inter-head set-off cap
+    # as the assessee's own HP loss. Previously this income was disclosed in
+    # Schedule PTI's own JSON block but never reached GTI at all -- the same
+    # "computed but not included in GTI" bug pattern as several other
+    # Schedule OS/PTI categories fixed this session.
+    r.house_property_income += sum(
+        (p.income_amount for p in input_data.pti_entries if p.income_head == "HP"), _ZERO
+    )
     r.schedules["hp"] = hp_results
 
     os = compute_os(input_data.other_sources_income, regime)
@@ -452,6 +463,14 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # never reached GTI or Schedule SI at all.
     r.other_sources_income += sum(
         (dtaa.amount for dtaa in input_data.os_dtaa_entries), _ZERO
+    )
+    # OS-head pass-through income (Schedule PTI) -- STCG/LTCG-head PTI
+    # entries are already dispatched to Schedule SI above; HP-head is added
+    # to house_property_income above; OS-head retains its head as ordinary
+    # slab-rate Other Sources income in the unit holder's hands. Same
+    # previously-missing GTI-inclusion bug as the HP-head fix above.
+    r.other_sources_income += sum(
+        (p.income_amount for p in input_data.pti_entries if p.income_head == "OS"), _ZERO
     )
     r.schedules["os"] = os
 

@@ -36,8 +36,9 @@
 >
 > **Update (2026-09-05): Schedule OS's remaining P0 sub-items are now also closed.** Per explicit
 > user instruction that the system must capture and process every schema field, mandatory or
-> optional, §3.4's Schedule OS finding is now closed except for two narrow, explicitly-tracked
-> items (PTI sub-category detail; category-specific TDS linkage) — see §3.4's "Update
+> optional, §3.4's Schedule OS finding is now closed except one narrow, explicitly-tracked item
+> (deeper PTI category-specific TDS linkage beyond the flat `tds_credit` field already wired; the
+> PTI HP/OS-head GTI-inclusion gap itself is now fixed too) — see §3.4's "Update
 > (2026-09-05)" blockquotes for the full write-up, including a full NRI Section 115A/AC/ACA/AD/E
 > special-rate income module (17 new tax-rate handlers) and DTAA-rate Other Sources tax
 > computation (a pre-written but never-called helper function, now wired up).
@@ -1479,12 +1480,12 @@ The frontend supports categories that are initialized but not equivalently seria
 
 **Severity: Critical**
 
-> **Status (2026-09-05): superseded by §3.4, mostly closed.** This is the same underlying finding
-> as §3.4 (Schedule OS), restated here at summary level. Of the categories named above, only PTI
-> remains genuinely unserialized — winnings, gifts, DTAA, 89A, PF, unexplained income, and
-> special-rate income are all now wired end-to-end (disclosure and, where applicable, taxation).
-> See §3.4's fix write-ups for the full evidence trail; this entry is kept for cross-reference,
-> not as an independent open finding.
+> **Status (2026-09-05): superseded by §3.4, fully closed.** This is the same underlying finding
+> as §3.4 (Schedule OS), restated here at summary level. Every category named above -- winnings,
+> gifts, DTAA, 89A, PF, unexplained income, special-rate income, and PTI -- is now wired end-to-end
+> (disclosure and, where applicable, taxation); PTI's HP/OS-head GTI-inclusion gap (the last item
+> here) was fixed 2026-09-05. See §3.4's fix write-ups for the full evidence trail; this entry is
+> kept for cross-reference, not as an independent open finding.
 
 ## 7.2 Exempt-income rows default to a misleading category
 
@@ -1837,7 +1838,19 @@ Even those cases require independent review of the generated JSON against the of
      its DTAA-computation correction note (the "separate, larger undertaking" originally assumed
      for DTAA tax computation turned out to be a pre-existing unused helper function plus the
      same GTI-inclusion wiring gap as everything else in this list).
-   - PTI (pass-through income) sub-category detail — still open.
+   - ~~PTI (pass-through income) HP/OS-head GTI inclusion~~ — **fixed 2026-09-05**: a real bug,
+     not just missing detail -- `_schedule_pti()` already disclosed HP-head and OS-head
+     `pti_entries` correctly in `SchedulePTIDtls`, but `compute()`'s PTI dispatch loop only handled
+     STCG/LTCG heads (routing them to Schedule SI); HP/OS-head entries had NO calculator path at
+     all, so that income was disclosed but never reached GTI. Fixed by adding HP-head PTI income
+     to `r.house_property_income` (before CYLA/BFLA, so a passed-through HP loss shares the same
+     inter-head set-off cap as the assessee's own HP loss) and OS-head PTI income to
+     `r.other_sources_income`. Regression tests:
+     `test_pti_hp_and_os_head_entries_reach_gti_and_schedule_pti` (`tests/test_itr2_itd_builder.py`)
+     and `test_pti_hp_and_os_head_income_reaches_gti` (`tests/test_draft_to_itr2_input.py`),
+     confirmed via `git stash` to fail on pre-fix code. Remaining open: per-entry PTI TDS linkage
+     beyond the flat `tds_credit` field already wired (no deeper category-specific detail attempted
+     here).
    - ~~`RACE_HORSE_ACTIVITY` winnings~~ — **fixed 2026-09-04**, see §3.4's "Update (2026-09-05)"
      write-up: net profit now flows to `IncFromOwnHorse` and GTI, per section 74A(3)'s no-loss-
      set-off rule (this bullet was stale — the fix landed before this list was last touched).
@@ -2003,16 +2016,20 @@ That success does not establish ITR-2 filing completeness. The implementation cu
 > **Update (2026-09-05): substantial P0 progress since this assessment was first written.**
 > Of the P0 list in §18: filing-profile completeness (item 6, all seven sub-items), TDS/TCS
 > credits (item 4), Schedule IT (§3.8), and negative-HP handling (item 5, retracted as never a
-> defect) are all closed with verified fixes. Schedule OS (item 3) is closed except PTI detail and
-> broader TDS linkage. What remains open and blocking production filing: the legacy-mapper
-> duplication (item 1), Schedule 115AD (item 2, needs a `CGAssetType`/FII-flag schema extension),
-> and several capital-gains sub-items (item 2: per-transaction 54/54B/54EC/54F exemption rows,
-> signed-loss handling for 10 non-land/building asset categories, CYLA/BFLA/CFL reconciliation,
-> and the section 112(1)(a) indexed-cost-primacy defect found 2026-09-04). See the consolidated
+> defect) are all closed with verified fixes. Schedule OS (item 3) is closed except deeper PTI
+> TDS-linkage detail (the PTI HP/OS-head GTI-inclusion bug is now fixed too). The section 112(1)(a)
+> indexed-cost-primacy defect (found 2026-09-04) is fixed, including the full second-proviso
+> relief; signed-loss handling for the generic-other CG categories was confirmed already correct;
+> CYLA/BFLA/CFL was reviewed with no arithmetic bug found. What remains open and blocking
+> production filing: the legacy-mapper duplication (item 1), Schedule 115AD (item 2, needs a
+> `CGAssetType`/FII-flag schema extension), and per-transaction §54/54B/54EC/54F exemption
+> attribution to individual Schedule CG rows (item 2 -- the aggregate `DeducClaimInfo.
+> TotDeductClaim` is correct, only row-level detail is missing). See the consolidated
 > open-findings list this update maintains for the complete current picture.
 >
 > **Final classification: broadly implemented, meaningfully more complete than the original
 > audit found, but still not production-ready for complete AY 2026–27 ITR-2 filing** — the
-> remaining gaps concentrate in capital gains, Schedule 115AD, and the legacy-mapper duplication,
-> not the broad surface area (filing profile, Schedule OS, TDS/TCS/IT) the original audit
-> identified as highest-risk.
+> remaining gaps concentrate in Schedule 115AD, per-transaction CG exemption attribution, and the
+> legacy-mapper duplication, not the broad surface area (filing profile, Schedule OS, TDS/TCS/IT,
+> and the core capital-gains tax-computation defects) the original audit identified as
+> highest-risk.
