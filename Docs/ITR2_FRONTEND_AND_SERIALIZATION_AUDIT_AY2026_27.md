@@ -1790,9 +1790,34 @@ Even those cases require independent review of the generated JSON against the of
    - section-specific exemptions — still pending (per-transaction §54/54B/54EC/54F claims are not
      wired to individual Schedule CG rows, though the aggregate `DeducClaimInfo.TotDeductClaim`
      is correct).
-   - signed loss handling — resolved for land/building (§3.2); still open for the other 10
-     categories above.
-   - CYLA/BFLA/CFL reconciliation — not yet independently re-audited in this pass.
+   - ~~signed loss handling for the other 10 categories~~ — **confirmed already resolved
+     2026-09-05** (stale bullet, never marked closed): the same 2026-09-04 "generic other assets"
+     fix (§3.2's own earlier "Update" note) already made `_other_assets_block()`'s
+     `BalanceCG`/`CapgainonAssets` genuinely signed (verified live: a loss transaction emits
+     `-200000`, not a `max(0, ...)`-clamped `0`; both fields' schema definitions permit negative
+     values). No code change was needed for this bullet specifically -- only the tracking list was
+     out of date.
+   - **CYLA/BFLA/CFL reconciliation — reviewed 2026-09-05, no arithmetic bug found; one
+     discretionary-ordering observation flagged, not treated as a defect.**
+     `app/engine/schedules/loss_setoff/{cyla,bfla,cfl}.py` were read in full. CYLA's six-sub-basket
+     intra-head STCL-before-LTCL set-off, and BFLA's oldest-brought-forward-loss-first FIFO
+     ordering (respecting each head's own carry-forward expiry — 8 years for HP/business-non-
+     speculative/STCG/LTCG, 4 years for speculative business, matching `_MAX_CARRY_FWD`), both
+     match the statutory requirements checked against. CFL's carry-forward totals derive from the
+     same CYLA/BFLA remaining-loss fields the builder also reads, so no independent drift was
+     found. One observation: CYLA processes non-speculative-business loss against pools in the
+     order `nsb → hp → cg → other`, while house-property loss (capped at ₹2L per section 71B) is
+     processed `other → nsb → spec → cg` — a different traversal order for different loss types
+     drawing on shared pools. This can affect which specific loss category's carry-forward balance
+     is smaller in a scarce-pool scenario, but does NOT affect the aggregate current-year loss
+     set-off total or resulting GTI (a basic invariant of sequential pool-draining: total consumed
+     from a pool is `min(pool, sum of demands)` regardless of draw order). No statute text found
+     that prescribes an exact head-vs-head priority here beyond "intra-head first, then
+     inter-head," so this is treated as a discretionary implementation choice, not a proven defect
+     — flagged for a live ITD Type-2 UAT cross-check (Phase 12) rather than a speculative rewrite,
+     matching this project's "static review doesn't prove correctness, only a live call does"
+     discipline (already established for the Digest computation and the NRI special-rate module's
+     7 lower-confidence tax rates).
    - ~~**Section 112(1)(a) indexed-cost-primacy defect** (found 2026-09-04)~~ — **fixed
      2026-09-05**, see §3.2's fix write-up: primary balance now always uses non-indexed cost; the
      full second-proviso dual tax-comparison (`TaxSec1121a`/`TaxSec1121aiiB`/`ExcessAmtSec1121a`)
