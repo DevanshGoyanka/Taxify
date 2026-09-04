@@ -317,7 +317,7 @@ export const EMPTY_TAX_CHALLAN: Omit<TaxChallan, 'id'> = {
 };
 
 export interface BankAccount extends Identified { bankName: string; accountNumber: string; ifscCode: string; accountType: 'SB' | 'CA' | 'CC' | 'OD' | 'NRO' | 'OTH'; useForRefund: boolean; }
-export type FilingSection = '139(1)' | '139(4)' | '142(1)' | '148' | '153C' | '139(5)' | '139(9)' | '119(2)(b)';
+export type FilingSection = '139(1)' | '139(4)' | '142(1)' | '148' | '153C' | '139(5)' | '139(9)' | '92CD' | '119(2)(b)';
 export interface SeventhProvisoClause extends Identified { nature: '1' | '2' | '3' | '4'; amount: Money; }
 export interface SeventhProviso {
   depositExceedsOneCrore: boolean; depositAmount: Money;

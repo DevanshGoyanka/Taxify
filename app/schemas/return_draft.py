@@ -68,7 +68,7 @@ TaxChallanKind = Literal["ADVANCE_TAX", "SELF_ASSESSMENT"]
 BankAccountType = Literal["SB", "CA", "CC", "OD", "NRO", "OTH"]
 FilingSection = Literal[
     "139(1)", "139(4)", "142(1)", "148", "153C", "139(5)", "139(9)",
-    "119(2)(b)",
+    "92CD", "119(2)(b)",
 ]
 ReturnType = Literal["ORIGINAL", "REVISED"]
 VerificationCapacity = Literal["SELF", "REPRESENTATIVE", "KARTA", "PARTNER"]

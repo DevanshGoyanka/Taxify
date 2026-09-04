@@ -812,6 +812,26 @@ The frontend filing-profile workflow does not expose section 115H applicability 
 
 **Severity: High**
 
+> **Fix status (2026-09-04): fixed and verified.** "Despite backend
+> support" needed correction during the fix: `ITR2Input`'s
+> `ReturnFileSection.MODIFIED_92CD = 19` enum member existed, but nothing
+> upstream could actually reach it — the canonical draft's own
+> `FilingSection` `Literal` (`app/schemas/return_draft.py`) had no `"92CD"`
+> member, and `app/engine/personal_profile.py::FILING_SECTION_CODES` (the
+> string→CBDT-code map `normalize_personal_profile()` uses for every form)
+> had no entry for it either. Added `"92CD"` to both, added
+> `"92CD": 19` to `FILING_SECTION_CODES`, and added the missing
+> `<option value="92CD">92CD — Modified return</option>` to
+> `PersonalInfoTab.tsx`'s filing-section dropdown (and the frontend's own
+> `FilingSection` type in `frontend/src/domain/returns/types.ts`).
+> `ITR2FilingProfile.validate_conditional_filing_facts()` does not require
+> notice-number/notice-date for 92CD (that requirement is scoped to
+> 142(1)/148/153C/139(9) only), so no further conditional-field work was
+> needed. Regression test:
+> `test_normalize_personal_profile_maps_92cd_to_code_19` in
+> `tests/test_personal_profile.py`, confirmed via `git stash` to be absent
+> on pre-fix code.
+
 ## 4.6 Current-account deposits are incorrectly gated to ITR-4
 
 At `PersonalInfoTab.tsx:215`, the current-account deposit threshold controls are rendered only when `itrForm === 'ITR-4'`. The canonical model documentation at `return_draft.py:1399–1403` states that the seventh-proviso block is shared by ITR-2 and ITR-4.
@@ -819,6 +839,17 @@ At `PersonalInfoTab.tsx:215`, the current-account deposit threshold controls are
 **Severity: Critical**
 
 **Remediation:** render the control for ITR-2 with the correct form-specific clauses and thresholds.
+
+> **Fix status (2026-09-04): fixed and verified.** Changed the gate from
+> `itrForm === 'ITR-4'` to `itrForm === 'ITR-4' || itrForm === 'ITR-2'` in
+> `PersonalInfoTab.tsx`. The backend side of this was already correct
+> before this fix — `app/engine/filing_gateway_v2.py`'s ITR-2 profile
+> builder already reads `seventh.deposit_amount`/`deposit_exceeds_one_crore`
+> into `ITR2FilingProfile.current_account_deposits`/`seventh_proviso_139`
+> (confirmed at `filing_gateway_v2.py:1230-1238`) — the bug was purely that
+> the frontend control was unreachable for ITR-2 filers, so the data could
+> never be entered in the first place. `npm run build` confirmed clean
+> after the type/dropdown change.
 
 ## 4.7 LEI fields are missing or incomplete
 

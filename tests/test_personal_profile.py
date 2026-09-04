@@ -131,6 +131,20 @@ def test_normalize_personal_profile_rejects_unsupported_filing_section():
         normalize_personal_profile(draft, form_error_prefix="ITR-1")
 
 
+def test_normalize_personal_profile_maps_92cd_to_code_19():
+    """Section 92CD (modified return) maps to CBDT ReturnFileSec code 19.
+
+    Regression test for audit finding §4.5: the frontend's filing-section
+    dropdown omitted 92CD entirely, and FILING_SECTION_CODES had no entry
+    for it either -- ITR2FilingProfile.return_file_section's own
+    MODIFIED_92CD = 19 enum member was unreachable from any draft.
+    """
+    draft = _base_draft()
+    draft.filing.filingSection = "92CD"
+    profile = normalize_personal_profile(draft, form_error_prefix="ITR-2")
+    assert profile.return_file_section == 19
+
+
 # ── Bank accounts ────────────────────────────────────────────────────────
 
 def test_bank_account_projections_derive_from_the_same_normalized_row():
