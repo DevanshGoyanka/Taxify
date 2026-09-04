@@ -97,7 +97,17 @@ from app.schemas.itr1 import AgeBracket, TaxRegime
 from app.schemas.itr2 import ITR2Input, ITR2FilingProfile, ResidentialStatus
 
 _ZERO = Decimal("0")
-_OS_HEAD_SI_SECTIONS = frozenset({"115BB", "115BBE", "115BBF", "115BBG", "115BBJ", "115BBA", "111"})
+_OS_HEAD_SI_SECTIONS = frozenset({
+    "115BB", "115BBE", "115BBF", "115BBG", "115BBJ", "115BBA", "111", "115E",
+    # Section 115A/115AC/115ACA/115AD "any other income chargeable at
+    # special rate" dropdown family -- confirmed part of the Other Sources
+    # head by the official form's own Part B-TI arithmetic (item 4:
+    # "4d Total (4a + 4b + 4c)" where 4b is literally "Income chargeable to
+    # tax at special rates (2 of Schedule OS)").
+    "5A1ai", "5A1aA", "5A1aii", "5A1aiia", "5A1aiiaa", "5A1aiiab",
+    "5A1aiiac", "5A1aiii", "5A1bA", "5AC1ab", "5AC1abD", "5ACA1a",
+    "5AD1i", "5AD1iP", "5AD1iDiv", "5A1aiiaaP", "5A1aiiaa2P",
+})
 
 
 @dataclass
@@ -419,6 +429,15 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         r.other_sources_income += max(
             _ZERO, input_data.os_machinery_plant_rent - deductible + addbacks
         )
+    # NRI/FII special-rate Other Sources income (Section 115A/115AC/115ACA/
+    # 115AD/115E family, Schedule OS's "OthersGrossDtls" dropdown) lives in
+    # its own `os_special_rate_entries` field, entirely separate from
+    # `input_data.si_entries` -- so it is NOT covered by the
+    # `_OS_HEAD_SI_SECTIONS` inclusion above and must be added to GTI here,
+    # using the same gross-amount-taxed convention.
+    r.other_sources_income += sum(
+        (spr.source_amount for spr in input_data.os_special_rate_entries), _ZERO
+    )
     r.schedules["os"] = os
 
     # ── 2. Capital Gains ─────────────────────────────────────────────────────
@@ -736,6 +755,27 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         elif sie.section == "111":
             from app.engine.schedules.special_rates import compute_111
             si_entries.append(compute_111(sie.gross_income))
+
+    # Schedule OS "any other income chargeable at special rate" dropdown --
+    # the Section 115A/115AC/115ACA/115AD/115E/115BBF/115BBG family of
+    # NRI/FII-specific special-rate categories. 115BBF/115BBG/115E already
+    # have dedicated handlers (reused here for consistency with every other
+    # caller of those functions); every other code dispatches through the
+    # shared compute_other_special_rate_income() lookup table.
+    from app.engine.schedules.special_rates import compute_other_special_rate_income
+    for spr in input_data.os_special_rate_entries:
+        if spr.source_description == "5BBF":
+            si_entries.append(compute_115bbf(spr.source_amount))
+        elif spr.source_description == "5BBG":
+            si_entries.append(compute_115bbg(spr.source_amount))
+        elif spr.source_description == "5Ea":
+            from app.engine.schedules.special_rates import compute_115e_a
+            si_entries.append(compute_115e_a(spr.source_amount))
+        elif spr.source_description == "5BBA":
+            from app.engine.schedules.special_rates import compute_115bba
+            si_entries.append(compute_115bba(spr.source_amount))
+        else:
+            si_entries.append(compute_other_special_rate_income(spr.source_description, spr.source_amount))
 
     # Pass-through income (Schedule PTI) → SI entries
     from app.engine.schedules.special_rates import (

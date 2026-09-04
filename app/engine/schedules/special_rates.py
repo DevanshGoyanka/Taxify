@@ -47,6 +47,46 @@ class SpecialRateSection(str, Enum):
     PTI_LTCG112A = "PTI_LTCG12_5P112A"
     PTI_LTCG125 = "PTI_LTCG12_5P"
 
+    # Section 115A/115AC/115ACA/115AD "any other income chargeable at
+    # special rate" dropdown (official Schedule OS ``SourceDescription``
+    # enum). Rates confirmed against the official ITR-2 form text
+    # (Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf,
+    # pages 15-16's Part B-TI Sl.No.2d breakdown and its own Schedule SI
+    # table) -- the form explicitly annotates S5A1AIIAA/S5A1AIIAAP/
+    # S5A1AIIAA2P (5%/4%/9%, the 194LC(1)-linked interest categories that
+    # have been amended by multiple Finance Acts) and the dividend-quarterly
+    # breakdown table explicitly annotates S5A1AI/S5A1AA/S5AC1ABD/S5ACA1A/
+    # S5AD1IDIV (20%/10%/10%/10%/20%) and Schedule SI's own row 18a
+    # (S5A1BA, royalty/FTS, 20% -- NOT the commonly-assumed 10%, confirmed
+    # by checking the primary source rather than general knowledge, per
+    # this project's own established discipline). S5A1AII/S5A1AIIA/
+    # S5A1AIIAB/S5A1AIIAC/S5A1AIII/S5AD1I/S5AD1IP are NOT independently
+    # re-annotated by the form (only "chargeable u/s [X]" with no "@X%"),
+    # since these are long-stable statutory rates the form doesn't need to
+    # restate; their rates below (20%/5%/5%/5%/20%/20%/5%) are the
+    # established Section 115A(1)(a)(ii)/(iia)/(iiab)/(iiac)/(iii) and
+    # 115AD(1)(i) rates, not independently confirmed against a CBDT
+    # document in this pass -- flagged in
+    # Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md for a live
+    # UAT/ITD cross-check before this path is relied on for a real filing.
+    S5A1AI = "5A1ai"
+    S5A1AA = "5A1aA"
+    S5A1AII = "5A1aii"
+    S5A1AIIA = "5A1aiia"
+    S5A1AIIAA = "5A1aiiaa"
+    S5A1AIIAB = "5A1aiiab"
+    S5A1AIIAC = "5A1aiiac"
+    S5A1AIII = "5A1aiii"
+    S5A1BA = "5A1bA"
+    S5AC1AB = "5AC1ab"
+    S5AC1ABD = "5AC1abD"
+    S5ACA1A = "5ACA1a"
+    S5AD1I = "5AD1i"
+    S5AD1IP = "5AD1iP"
+    S5AD1IDIV = "5AD1iDiv"
+    S5A1AIIAAP = "5A1aiiaaP"
+    S5A1AIIAA2P = "5A1aiiaa2P"
+
 
 @dataclass
 class SpecialRateEntry:
@@ -85,6 +125,16 @@ _SURCHARGE_CAP_SECTIONS: set[str] = {
     SpecialRateSection.PTI_LTCG112A.value,
     SpecialRateSection.PTI_LTCG125.value,
     SpecialRateSection.S115AD.value,
+    # Purely-dividend 115A/115AC/115ACA/115AD sub-clauses -- the Finance
+    # Act's 15%-surcharge cap for dividend income applies regardless of
+    # which section charges it. The mixed dividend+interest+units category
+    # (S5A1AI) is deliberately excluded from this cap: it is not purely
+    # dividend income, so capping its surcharge the same way would be an
+    # unverified extension of the dividend-specific relief.
+    SpecialRateSection.S5A1AA.value,
+    SpecialRateSection.S5AC1ABD.value,
+    SpecialRateSection.S5ACA1A.value,
+    SpecialRateSection.S5AD1IDIV.value,
 }
 
 
@@ -273,6 +323,48 @@ def compute_115e_a(investment_income: Decimal | None) -> SpecialRateEntry:
 def compute_115e_b(ltcg_nri: Decimal | None) -> SpecialRateEntry:
     """Compute section 115E(b) tax on LTCG of NRIs on foreign exchange assets at 10%."""
     return _flat_rate_entry(SpecialRateSection.S115E, "LTCG of NRI on foreign exchange assets (Section 115E(b))", ltcg_nri, Decimal("10"))
+
+
+# (SpecialRateSection, description, rate%) for each Schedule OS "any other
+# income chargeable at special rate" dropdown code -- see the enum's own
+# docstring above for the rate citations and confidence level per entry.
+_OTHER_SPECIAL_RATE_TABLE: dict[str, tuple[SpecialRateSection, str, Decimal]] = {
+    "5A1ai": (SpecialRateSection.S5A1AI, "Dividend/interest/unit income in foreign currency (115A(1)(a)(i))", Decimal("20")),
+    "5A1aA": (SpecialRateSection.S5A1AA, "NR dividend from an IFSC unit (proviso to 115A(1)(a)(A))", Decimal("10")),
+    "5A1aii": (SpecialRateSection.S5A1AII, "Interest from govt/Indian concern in foreign currency (115A(1)(a)(ii))", Decimal("20")),
+    "5A1aiia": (SpecialRateSection.S5A1AIIA, "Interest from Infrastructure Debt Fund (115A(1)(a)(iia))", Decimal("5")),
+    "5A1aiiaa": (SpecialRateSection.S5A1AIIAA, "Interest u/s 194LC(1) (115A(1)(a)(iiaa))", Decimal("5")),
+    "5A1aiiab": (SpecialRateSection.S5A1AIIAB, "Interest u/s 194LD (115A(1)(a)(iiab))", Decimal("5")),
+    "5A1aiiac": (SpecialRateSection.S5A1AIIAC, "Business-trust distributed interest u/s 194LBA (115A(1)(a)(iiac))", Decimal("5")),
+    "5A1aiii": (SpecialRateSection.S5A1AIII, "UTI/mutual-fund unit income in foreign currency (115A(1)(a)(iii))", Decimal("20")),
+    "5A1bA": (SpecialRateSection.S5A1BA, "Royalty / fees for technical services (115A(1)(b)(A)&(B))", Decimal("20")),
+    "5AC1ab": (SpecialRateSection.S5AC1AB, "NR interest on foreign-currency bonds (115AC(1)(a))", Decimal("10")),
+    "5AC1abD": (SpecialRateSection.S5AC1ABD, "NR dividend on foreign-currency GDRs (115AC(1)(b))", Decimal("10")),
+    "5ACA1a": (SpecialRateSection.S5ACA1A, "Resident dividend on foreign-currency GDRs (115ACA(1)(a))", Decimal("10")),
+    "5AD1i": (SpecialRateSection.S5AD1I, "FII income (other than dividend) on securities (115AD(1)(i))", Decimal("20")),
+    "5AD1iP": (SpecialRateSection.S5AD1IP, "FII interest on bonds/govt securities u/s 194LD (115AD(1)(i) proviso)", Decimal("5")),
+    "5AD1iDiv": (SpecialRateSection.S5AD1IDIV, "FII dividend on securities (115AD(1)(i))", Decimal("20")),
+    "5A1aiiaaP": (SpecialRateSection.S5A1AIIAAP, "Interest per proviso to 194LC(1) (115A(1)(a)(iiaa))", Decimal("4")),
+    "5A1aiiaa2P": (SpecialRateSection.S5A1AIIAA2P, "Interest per second proviso to 194LC(1) (115A(1)(a)(iiaa))", Decimal("9")),
+}
+
+
+def compute_other_special_rate_income(source_description: str, amount: Decimal | None) -> SpecialRateEntry:
+    """Compute tax for a Schedule OS "any other income chargeable at
+    special rate" dropdown entry (official ``SourceDescription`` code).
+
+    ``5BBF``/``5BBG``/``5Ea`` are deliberately not in the lookup table --
+    those three already have their own dedicated ``compute_115bbf``/
+    ``compute_115bbg``/``compute_115e_a`` handlers; callers should dispatch
+    to those directly for consistency with every other caller of this
+    module (e.g. Schedule OS's own lottery/PF SI-entries), not duplicate
+    them here.
+    """
+    entry = _OTHER_SPECIAL_RATE_TABLE.get(source_description)
+    if entry is None:
+        raise ValueError(f"Unsupported special-rate source description: {source_description!r}")
+    section, description, rate = entry
+    return _flat_rate_entry(section, description, amount, rate)
 
 
 def compute_dividend_special(section: str, dividend_income: Decimal | None, rate: Decimal) -> SpecialRateEntry:

@@ -769,6 +769,21 @@ class OSDtaaEntry(StrictModel):
     applicable_rate: Decimal = Field(default=Decimal("0"), ge=0, le=100)
 
 
+class OSSpecialRateEntry(StrictModel):
+    """One "any other income chargeable at special rate" row (official
+    ``OthersGrossDtls`` / ``SourceDescription`` dropdown) -- the Section
+    115A/115AC/115ACA/115AD/115E/115BBF/115BBG family of NRI/FII-specific
+    special-rate income categories."""
+
+    source_description: Literal[
+        "5A1ai", "5A1aA", "5A1aii", "5A1aiia", "5A1aiiaa", "5A1aiiab",
+        "5A1aiiac", "5A1aiii", "5A1bA", "5AC1ab", "5AC1abD", "5ACA1a",
+        "5AD1i", "5AD1iP", "5BBA", "5BBF", "5BBG", "5Ea", "5A1aiiaaP",
+        "5A1aiiaa2P", "5AD1iDiv",
+    ]
+    source_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 class OSDeductions(StrictModel):
     """Other-sources deduction claims (official ``Deductions`` block, minus
     ``DeductionUs57iia`` which the calculator derives from family pension)."""
@@ -830,6 +845,7 @@ class ITR2Input(StrictModel):
     os_gaming_quarters: Optional[OSQuarterlyAmount] = None
     os_machinery_plant_rent: Decimal = Field(default=Decimal("0"), ge=0)
     os_pass_through_income: Decimal = Field(default=Decimal("0"), ge=0)
+    os_special_rate_entries: List[OSSpecialRateEntry] = Field(default_factory=list)
 
     cg_transactions: List[CGTransaction] = Field(default_factory=list)
     cg_112a_scrips: List[CG112AScrip] = Field(default_factory=list)

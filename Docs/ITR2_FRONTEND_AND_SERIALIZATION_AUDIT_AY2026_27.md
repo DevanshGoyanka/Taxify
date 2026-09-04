@@ -696,6 +696,91 @@ Map each canonical `OtherSources` entry to the exact official field, including c
 > `tests/test_draft_to_itr2_input.py`), all confirmed via `git stash` to be
 > absent on pre-fix code. Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*`
 > suite (299 tests) green.
+>
+> **Update (2026-09-05): the `SpecialRateIncomeEntry`/`OthersGrossDtls` NRI
+> special-rate income module (flagged above as a deliberately-open "new
+> finding") is now implemented end-to-end**, per the same explicit user
+> instruction driving this whole batch, extended by the user's own choice
+> ("Implement both now, including the full NRI Section 115A tax-rate
+> module") when asked to prioritize between this and `RentFromMachPlantBldgs`
+> (which turned out to already have frontend UI, see the correction above).
+> This required genuinely new tax-computation logic, not just data wiring:
+> - 17 new `SpecialRateSection` enum values and a `_OTHER_SPECIAL_RATE_TABLE`
+>   dispatch table in `app/engine/schedules/special_rates.py`, covering the
+>   full official `OthersGrossDtls.SourceDescription` dropdown (Section
+>   115A(1)(a)(i)/(A)/(ii)/(iia)/(iiaa)/(iiaa proviso)/(iiaa second
+>   proviso)/(iiab)/(iiac)/(iii), 115A(1)(b), 115AC(1)(a)/(b), 115ACA(1)(a),
+>   115AD(1)(i) dividend/non-dividend/proviso) plus the pre-existing
+>   115BBF/115BBG/115E(a)/115BBA handlers for the four codes that dispatch
+>   to their own functions instead of the generic table.
+> - New `OSSpecialRateEntry` schema type and `os_special_rate_entries` field
+>   on `ITR2Input` (`app/schemas/itr2.py`); mapped from
+>   `draft.otherSources.specialRateIncome` (a pre-existing `ReturnDraft`
+>   field from an earlier phase that had never been wired into the v2
+>   pipeline) via `_map_os_special_rate_entries()` in
+>   `app/engine/draft_to_itr2_input.py`.
+> - Calculator dispatch (`compute()` in `app/engine/calculators/itr2.py`):
+>   each entry is taxed via Schedule SI at its statutory rate, and — since
+>   `os_special_rate_entries` is a field entirely separate from
+>   `input_data.si_entries` (the pre-existing `_OS_HEAD_SI_SECTIONS` GTI
+>   inclusion only scans the latter) — a **second, independent GTI-inclusion
+>   step** was required, adding the gross total directly to
+>   `r.other_sources_income`. This was caught before shipping, not found as
+>   a live bug: the entries would otherwise have been taxed correctly via
+>   Schedule SI while silently never reaching Gross Total Income at all,
+>   the same "computed but not added to GTI" bug class documented for gifts/
+>   winnings/race-horse/machinery-rent above.
+> - Builder emission (`_schedule_os()` in `app/engine/itd/itr2.py`):
+>   `OthersGross` (sum) and `OthersGrossDtls[]` (per-entry `SourceDescription`/
+>   `SourceAmount`) now populated instead of the permanent zero/empty
+>   placeholder; `IncChargeableSpecialRates` (also previously a hardcoded
+>   zero placeholder, not part of the original 8 CRITICAL findings but the
+>   exact same bug pattern, fixed in the same sitting since it aggregates
+>   the same "special rate" OS sub-categories this fix touches) now sums
+>   `LtryPzzlChrgblUs115BB + IncChrgblUs115BBJ + IncChrgblUs115BBE +
+>   OthersGross`; the early-return guard extended with
+>   `os_special_rate_entries` (the same guard-completeness bug class found
+>   for every other new field this session — a test with only this field
+>   populated would otherwise silently omit the whole Schedule OS block).
+>
+> **Confidence flag for a future live-UAT/ITD cross-check**: 10 of the 17
+> new rates were confirmed directly against the official ITR-2 form PDF's
+> own Schedule SI rate table (`Reference Docs by CBDT & ITD/Official ITR
+> FORMS/`, read as page images for rows 15-16 since `pdfplumber` text
+> extraction silently dropped several inline "@X%" annotations — this is
+> also how the pre-existing assumption of a 10% royalty/FTS rate was caught
+> and corrected to the form's actual 20%). The remaining 7 — `5A1aii`
+> (interest from govt/Indian concern in foreign currency, 20%), `5A1aiia`
+> (Infrastructure Debt Fund interest, 5%), `5A1aiiab` (§194LD interest, 5%),
+> `5A1aiiac` (business-trust-distributed §194LBA interest, 5%), `5A1aiii`
+> (UTI/mutual-fund foreign-currency unit income, 20%), `5AD1i` (FII income
+> other than dividend, 20%), and `5AD1iP` (FII §194LD bond/govt-security
+> interest, 5%) — use well-established general statutory knowledge of
+> Section 115A/115AD rather than an inline form-PDF confirmation, since the
+> form's own printed rate table does not itemize every one of these
+> narrower sub-clauses individually. Recommend a live ITD Type-2 UAT
+> `validateItr` cross-check (Phase 12) before relying on these 7 specific
+> rates for a real filing — the same "static cross-referencing does not
+> prove correctness, only a live call does" discipline this project's own
+> CLAUDE.md already states for the Digest computation.
+>
+> **Still deliberately open**: DTAA-rate NRI tax *computation* (as opposed
+> to the disclosure fields wired in the update above) — computing the
+> correct NRI tax rate per treaty article for `os_dtaa_entries` rows is a
+> separate, larger undertaking (treaty-by-treaty rate lookup, not a single
+> statutory flat rate) not attempted in this pass. Tracked as a Phase 5+
+> item alongside §3.1's Schedule 115AD and the land/building indexed-cost
+> defect noted in §18.
+>
+> Regression tests:
+> `test_schedule_os_serializes_nri_special_rate_entries_and_taxes_them_via_si`
+> (in `tests/test_itr2_itd_builder.py`), and
+> `test_special_rate_income_entries_map_and_are_taxed_at_correct_nri_rate`,
+> `test_special_rate_income_zero_amount_rows_are_excluded` (in
+> `tests/test_draft_to_itr2_input.py`), confirmed via `git stash` (stashing
+> only the five implementation files, keeping the new tests) to fail with
+> an `ImportError` on pre-fix code. Full combined `test_itr1_*`/
+> `test_itr4_*`/`test_itr2_*` regression suite (305 tests) green.
 
 ---
 
@@ -1615,10 +1700,12 @@ Even those cases require independent review of the generated JSON against the of
      pre-existing bug where this SI-dispatched income was taxed but never added to Total Income).
    - ~~gifts (section 56(2)(x))~~ — **fixed 2026-09-04**, see §3.4's fix write-up (relative/marriage
      exemption and the correct aggregate/per-property thresholds applied).
-   - DTAA, 89A, unexplained income, special-rate-income entries, PTI, deductions, and dividend
-     sub-categories — still open (documented in §3.4's fix write-up as deliberately scoped out;
-     89A specifically is a deferral relief, not new taxable income, so lower urgency than the
-     items above were).
+   - ~~DTAA disclosure, 89A, unexplained income, special-rate-income entries (disclosure +
+     taxation), deductions, and dividend sub-categories~~ — **fixed 2026-09-04/05**, see §3.4's
+     fix write-up and its "NRI special-rate income module" update. DTAA-rate NRI tax
+     *computation* itself (as opposed to disclosure) remains open — tracked as a Phase 5+ item
+     alongside §3.1's Schedule 115AD.
+   - PTI (pass-through income) sub-category detail — still open.
    - `RACE_HORSE_ACTIVITY` winnings (owning/maintaining race horses — a distinct business-like OS
      sub-head with its own deduction rules) — still open, no calculator support at all yet.
    - category-specific detail and TDS linkage — still open.

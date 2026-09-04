@@ -88,6 +88,7 @@ from app.schemas.itr2 import (
     OSQuarterlyAmount,
     OSRaceHorseActivity,
     OSSection89A,
+    OSSpecialRateEntry,
     OSUnexplainedIncome,
     PTIEntry,
     ResidentialStatus as ITR2ResidentialStatus,
@@ -817,6 +818,17 @@ def _map_os_winning_quarters(winnings: list) -> tuple[Optional[OSQuarterlyAmount
     return lottery_result, gaming_result
 
 
+def _map_os_special_rate_entries(draft: ReturnDraft) -> list[OSSpecialRateEntry]:
+    """Map the Section 115A/115AC/115ACA/115AD/115E/115BBF/115BBG "any other
+    income chargeable at special rate" dropdown rows for Schedule OS's
+    ``OthersGrossDtls``."""
+    return [
+        OSSpecialRateEntry(source_description=row.sourceDescription, source_amount=row.sourceAmount)
+        for row in draft.otherSources.specialRateIncome
+        if row.sourceAmount > 0
+    ]
+
+
 def _map_os_pf_interest_provisos(draft: ReturnDraft) -> tuple[Decimal, Decimal, Decimal, Decimal]:
     """Aggregate the four PF-interest-proviso categories (Section 10(11)/
     10(12) first/second proviso -- Budget 2021's taxable-above-threshold PF
@@ -947,6 +959,7 @@ def draft_to_itr2_input(
         os_pf_interest_10_12_first, os_pf_interest_10_12_second,
     ) = _map_os_pf_interest_provisos(draft)
     os_interest_from_others = _map_os_interest_from_others(draft)
+    os_special_rate_entries = _map_os_special_rate_entries(draft)
     os_lottery_quarters, os_gaming_quarters = _map_os_winning_quarters(draft.otherSources.winnings)
     agricultural_income = _map_agricultural_income(draft)
     exempt_income = _map_exempt_income(draft)
@@ -985,6 +998,7 @@ def draft_to_itr2_input(
         os_pf_interest_10_12_first_proviso=os_pf_interest_10_12_first,
         os_pf_interest_10_12_second_proviso=os_pf_interest_10_12_second,
         os_interest_from_others=os_interest_from_others,
+        os_special_rate_entries=os_special_rate_entries,
         os_lottery_quarters=os_lottery_quarters,
         os_gaming_quarters=os_gaming_quarters,
         os_machinery_plant_rent=os_machinery_plant_rent,

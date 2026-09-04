@@ -625,6 +625,7 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         and not input_data.os_interest_from_others
         and not input_data.os_machinery_plant_rent
         and not input_data.os_pass_through_income
+        and not input_data.os_special_rate_entries
     ):
         return None
     os_schedule = result.schedules.get("os")
@@ -818,6 +819,34 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
                 for e in input_data.os_dtaa_entries
             ]
         }
+
+    # NRI/FII special-rate income (Section 115A/115AC/115ACA/115AD/115E/
+    # 115BBF/115BBG family) -- Schedule OS's "OthersGrossDtls" dropdown.
+    # OthersGross is the plain sum of every disclosed row; the tax itself is
+    # computed via Schedule SI (see calculators/itr2.py's dispatch loop over
+    # `os_special_rate_entries`), this is disclosure only.
+    special_rate_entries = input_data.os_special_rate_entries
+    if special_rate_entries:
+        block["OthersGross"] = _to_rupees(
+            sum((e.source_amount for e in special_rate_entries), _ZERO)
+        )
+        block["OthersGrossDtls"] = [
+            {
+                "SourceDescription": e.source_description,
+                "SourceAmount": _to_rupees(e.source_amount),
+            }
+            for e in special_rate_entries
+        ]
+    # IncChargeableSpecialRates aggregates every OS sub-category taxed at a
+    # special (non-slab) rate rather than the "chargeable at applicable
+    # rate" head -- lottery/game-show (115BB), online-games (115BBJ),
+    # unexplained income (115BBE), and the 115A-family NRI/FII rows above.
+    block["IncChargeableSpecialRates"] = (
+        block["LtryPzzlChrgblUs115BB"]
+        + block["IncChrgblUs115BBJ"]
+        + block["IncChrgblUs115BBE"]
+        + block["OthersGross"]
+    )
 
     lottery_q = input_data.os_lottery_quarters
     gaming_q = input_data.os_gaming_quarters
@@ -1387,6 +1416,20 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
         "115BBG": "5BBG",
         "115BBH": "5BBH",
         "115BBJ": "5BBJ",
+        "115E": "5Ea",
+        # The "any other income chargeable at special rate" dropdown family
+        # (compute_other_special_rate_income()) already uses the exact
+        # official SecCode string as its internal section value, so these
+        # are identity mappings, not translations -- kept explicit here
+        # (rather than relying on section_code_map.get(section, section))
+        # so a genuinely-unmapped internal code still visibly falls through
+        # to the "1" default instead of silently passing through Any string.
+        "5A1ai": "5A1ai", "5A1aA": "5A1aA", "5A1aii": "5A1aii",
+        "5A1aiia": "5A1aiia", "5A1aiiaa": "5A1aiiaa", "5A1aiiab": "5A1aiiab",
+        "5A1aiiac": "5A1aiiac", "5A1aiii": "5A1aiii", "5A1bA": "5A1bA",
+        "5AC1ab": "5AC1ab", "5AC1abD": "5AC1abD", "5ACA1a": "5ACA1a",
+        "5AD1i": "5AD1i", "5AD1iP": "5AD1iP", "5AD1iDiv": "5AD1iDiv",
+        "5A1aiiaaP": "5A1aiiaaP", "5A1aiiaa2P": "5A1aiiaa2P",
     }
     rows = []
     for entry in si.entries:

@@ -41,6 +41,7 @@ from app.schemas.return_draft import (
     Scrip112A,
     ScheduleSIEntry,
     Section89AEntry,
+    SpecialRateIncomeEntry,
     TaxChallan,
     TdsCredit,
     VdaEntry,
@@ -378,6 +379,43 @@ def test_dividend_dtaa_89a_other_income_and_deductions_map_correctly() -> None:
 
     result = compute_itr2(itr2_input)
     assert not result.errors
+
+
+def test_special_rate_income_entries_map_and_are_taxed_at_correct_nri_rate() -> None:
+    """draft.otherSources.specialRateIncome rows (Section 115A/115AC/
+    115ACA/115AD/115E "any other income chargeable at special rate" family)
+    flow into os_special_rate_entries, get taxed via Schedule SI at the
+    correct statutory rate per code, and are added to GTI -- previously had
+    no mapping into ITR2Input at all."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.specialRateIncome = [
+        SpecialRateIncomeEntry(id="s1", sourceDescription="5A1bA", sourceAmount=Decimal("100000")),
+        SpecialRateIncomeEntry(id="s2", sourceDescription="5AD1i", sourceAmount=Decimal("50000")),
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert len(itr2_input.os_special_rate_entries) == 2
+    codes = {e.source_description for e in itr2_input.os_special_rate_entries}
+    assert codes == {"5A1bA", "5AD1i"}
+
+    baseline = compute_itr2(draft_to_itr2_input(_filing_ready_itr2_draft())[0])
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    assert result.other_sources_income == baseline.other_sources_income + Decimal("150000")
+    si_by_section = {sie.section: sie for sie in result.schedules["si"].entries}
+    assert si_by_section["5A1bA"].tax_rate_pct == Decimal("20")
+    assert si_by_section["5A1bA"].tax_amount == Decimal("20000")
+    assert si_by_section["5AD1i"].tax_rate_pct == Decimal("20")
+
+
+def test_special_rate_income_zero_amount_rows_are_excluded() -> None:
+    """A zero-amount specialRateIncome row (a blank/unfilled UI row) is
+    dropped, matching every other Schedule OS entry mapper's convention."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.specialRateIncome = [
+        SpecialRateIncomeEntry(id="s1", sourceDescription="5A1bA", sourceAmount=Decimal("0")),
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.os_special_rate_entries == []
 
 
 def test_race_horse_activity_winnings_map_to_os_race_horse() -> None:

@@ -39,6 +39,7 @@ from app.schemas.itr2 import (
     OSQuarterlyAmount,
     OSRaceHorseActivity,
     OSSection89A,
+    OSSpecialRateEntry,
     OSUnexplainedIncome,
     ScheduleSIEntry,
     TDS3FilingDetail,
@@ -679,6 +680,44 @@ def test_schedule_os_serializes_machinery_rent_and_pass_through_income() -> None
     block = document["ITR"]["ITR2"]["ScheduleOS"]["IncOthThanOwnRaceHorse"]
     assert block["RentFromMachPlantBldgs"] == 50000
     assert block["NatofPassThrghIncome"] == 15000
+
+
+def test_schedule_os_serializes_nri_special_rate_entries_and_taxes_them_via_si() -> None:
+    """Section 115A/115AC/115ACA/115AD/115E "any other income chargeable at
+    special rate" rows (Schedule OS's OthersGrossDtls dropdown) previously
+    had no data path at all -- this now wires disclosure (OthersGross/
+    OthersGrossDtls, IncChargeableSpecialRates), Schedule SI taxation at the
+    correct statutory rate per code, and GTI inclusion, all from one input
+    field."""
+    input_data = _input(
+        os_special_rate_entries=[
+            OSSpecialRateEntry(source_description="5A1bA", source_amount=Decimal("100000")),  # royalty/FTS @20%
+            OSSpecialRateEntry(source_description="5AD1i", source_amount=Decimal("50000")),  # FII income @20%
+            OSSpecialRateEntry(source_description="5Ea", source_amount=Decimal("20000")),  # 115E investment income
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+
+    os_block = document["ITR"]["ITR2"]["ScheduleOS"]["IncOthThanOwnRaceHorse"]
+    assert os_block["OthersGross"] == 170000
+    assert {
+        (row["SourceDescription"], row["SourceAmount"]) for row in os_block["OthersGrossDtls"]
+    } == {("5A1bA", 100000), ("5AD1i", 50000), ("5Ea", 20000)}
+    assert os_block["IncChargeableSpecialRates"] == 170000
+
+    si = document["ITR"]["ITR2"]["ScheduleSI"]
+    si_by_code = {row["SecCode"]: row for row in si["SplCodeRateTax"]}
+    assert si_by_code["5A1bA"]["SplRatePercent"] == 20
+    assert si_by_code["5A1bA"]["SplRateIncTax"] == 20000
+    assert si_by_code["5AD1i"]["SplRatePercent"] == 20
+    assert si_by_code["5Ea"]["SplRateIncTax"] == 4000  # 115E(a) @20%
+    assert si["TotSplRateInc"] == 170000
+
+    # All three amounts are gross OS income and must reach GTI, the same
+    # way 111A/112A/VDA capital-gains special-rate income does.
+    assert result.other_sources_income == Decimal("170000")
 
 
 def test_schedule_os_omits_optional_blocks_when_unset() -> None:
