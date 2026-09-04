@@ -243,6 +243,27 @@ export function validateCbdtFrontendFields(draft: ReturnDraft): string[] {
     }
   });
 
+  // Enforced server-side by _schedule_it()/_tax_payments_from_input() (both
+  // raise ValueError, resolving to a 400) -- checked here only cosmetically
+  // before this fix (aria-invalid styling with no submit-time gate), so an
+  // incomplete challan row could be saved and only surfaced as an opaque
+  // error at generate/submit time.
+  const bsrPattern = /^[0-9]{3}[0-9A-Z]{4}$/;
+  const challanSerialPattern = /^[0-9]{1,5}$/;
+  draft.taxes.challans.forEach((challan, index) => {
+    const kindLabel = challan.kind === 'SELF_ASSESSMENT' ? 'Self-assessment tax' : 'Advance tax';
+    const label = `${kindLabel} entry ${index + 1}`;
+    if (!bsrPattern.test(challan.bsrCode.trim().toUpperCase())) {
+      errors.push(`${label}: enter a valid 7-character BSR code (3 digits then 4 alphanumeric).`);
+    }
+    if (!challan.depositDate.trim()) {
+      errors.push(`${label}: enter the deposit date.`);
+    }
+    if (!challanSerialPattern.test(String(challan.challanSerialNo)) || Number(challan.challanSerialNo) <= 0) {
+      errors.push(`${label}: enter a valid challan serial number (1-5 digits, greater than zero).`);
+    }
+  });
+
   if (draft.bankAccounts.length === 0) {
     errors.push('Bank accounts: add at least one account for the mandatory refund section.');
   }

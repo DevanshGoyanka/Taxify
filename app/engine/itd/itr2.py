@@ -1596,9 +1596,19 @@ def _schedule_it(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     if not input_data.tax_payment_entries:
         return None
     rows = []
-    for item in input_data.tax_payment_entries:
-        if not item.bsr_code or not item.payment_date or not item.challan_serial_number:
-            raise ValueError("Schedule IT payment requires BSR code, date, and challan serial number")
+    for index, item in enumerate(input_data.tax_payment_entries, start=1):
+        missing = [
+            field for field, value in (
+                ("BSR code", item.bsr_code),
+                ("payment date", item.payment_date),
+                ("challan serial number", item.challan_serial_number),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"Tax payment entry #{index} is missing: {', '.join(missing)}."
+            )
         rows.append({
             "BSRCode": item.bsr_code,
             "DateDep": _date(item.payment_date),

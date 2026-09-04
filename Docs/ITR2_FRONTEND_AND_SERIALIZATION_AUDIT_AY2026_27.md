@@ -770,6 +770,50 @@ A tax payment can exist in canonical data but fail to appear in Schedule IT if t
 
 Use a complete Schedule IT editor, block JSON generation with field-specific errors for incomplete challans, and reconcile Schedule IT totals with Part B-TTI taxes paid.
 
+> **Fix status (2026-09-04): fixed and verified.** This item is shared with ITR-1
+> (`app/engine/itd/itr1.py::_tax_payments_from_input` has the identical raise-with-no-field-detail
+> pattern as ITR-2's `_schedule_it`), so both forms were fixed and tested together per CLAUDE.md's
+> scope boundary.
+>
+> A complete challan editor **already existed** (`frontend/src/pages/ITRComputationTabs.tsx`,
+> BSR code/deposit date/challan serial number/amount, shared by both forms) — the actual gaps were
+> narrower than "use a complete editor":
+> 1. **Frontend validation was cosmetic only.** The editor showed red inline `aria-invalid` text
+>    via regex checks but had no blocking gate anywhere — an incomplete row could be saved and
+>    submitted, surfacing only as the backend's opaque exception at generate/submit time. Added a
+>    real blocking check to `validateCbdtFrontendFields()` (`domain/returns/filingPreflight.ts`) —
+>    the same pre-flight gate `handleGenerateCbdtJson` (`ITRComputationPage.tsx`) already calls and
+>    blocks on for every other CBDT-constrained field (PAN, TAN, bank accounts, etc.) — so an
+>    incomplete challan row now surfaces the same actionable, pre-submit toast as those checks
+>    always have, instead of reaching the backend at all.
+> 2. **Backend errors had no per-row/per-field detail.** `_schedule_it()`'s
+>    `raise ValueError("Schedule IT payment requires BSR code, date, and challan serial number")`
+>    named neither the row nor which of the three fields was actually missing. Both existing call
+>    paths already resolved this to a clean HTTP 400 (`routers/itr.py`'s explicit
+>    `except ValueError`, `filing_gateway_v2.py`'s `FilingGatewayV2Error` wrapping), so this was a
+>    message-quality fix, not a 500-prevention fix. Rewrote both `_schedule_it()` (ITR-2) and
+>    `_tax_payments_from_input()` (ITR-1) identically to report `"Tax payment entry #N is missing:
+>    <field list>."`.
+> 3. **Reconciliation** (`ScheduleIT.TotalTaxPayments` vs. Part B-TTI's taxes-paid total) was
+>    traced end-to-end rather than assumed: `app/engine/calculators/itr2.py`'s
+>    `detailed_advance`/`detailed_self_assessment` are computed by summing the *same*
+>    `input_data.tax_payment_entries` list `_schedule_it()` serializes (split by `payment_type`),
+>    and both derive from `draft.taxes.challans` through the same shared mapper
+>    (`_map_tax_payments`, `draft_to_itr1_input.py`, reused by ITR-2). Confirmed already
+>    structurally consistent for the actual product path — no new validator added, since the one
+>    theoretical divergence (directly constructing `ITR2Input` with `tax_payment_entries` and an
+>    inconsistent separate `advance_tax_paid`/`self_assessment_tax_paid` scalar) is not reachable
+>    through the mapper any real caller uses.
+>
+> Regression tests: `test_schedule_it_serializes_complete_challan_rows` and
+> `test_schedule_it_incomplete_challan_error_names_row_and_missing_fields`
+> (`tests/test_itr2_itd_builder.py`), `test_incomplete_challan_error_names_row_and_missing_fields`
+> (`tests/test_itr1_itd_builder.py`), and a new frontend vitest case in
+> `frontend/src/domain/returns/filingPreflight.test.ts`, all confirmed via `git stash` to be absent
+> (or, for the vitest count, present-and-passing pre-fix at 12 tests vs. 13 post-fix) on pre-fix
+> code. Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` suite (287 tests) green; frontend `npm test`
+> (186 tests) and `npm run build` clean.
+
 ---
 
 # 4. Part A-GEN and filing profile

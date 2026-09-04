@@ -1549,10 +1549,18 @@ def _tcs_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
 def _tax_payments_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
     """Build Schedule IT from complete challan rows without fabricating data."""
     rows = []
-    for entry in input_data.tax_payment_entries:
-        if not entry.bsr_code or not entry.payment_date or not entry.challan_serial_number:
+    for index, entry in enumerate(input_data.tax_payment_entries, start=1):
+        missing = [
+            field for field, value in (
+                ("BSR code", entry.bsr_code),
+                ("payment date", entry.payment_date),
+                ("challan serial number", entry.challan_serial_number),
+            )
+            if not value
+        ]
+        if missing:
             raise ValueError(
-                "Tax payment entries require BSR code, payment date, and challan serial number"
+                f"Tax payment entry #{index} is missing: {', '.join(missing)}."
             )
         rows.append({
             "BSRCode": entry.bsr_code,

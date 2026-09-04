@@ -18,6 +18,7 @@ from app.schemas.itr1 import (
     BankAccount,
     FilingAddress,
     OtherSourcesIncome,
+    TaxPaymentDetail,
     TaxRegime,
     TCSEntry,
     TDS2Entry,
@@ -456,3 +457,70 @@ def test_schedule_os_serializes_lottery_pf_and_gift_income() -> None:
     assert os_block["Tot562x"] == 75000
     assert os_block["Aggrtvaluewithoutcons562x"] == 75000
     assert os_block["TaxAccumulatedBalRecPF"] == {"TotalIncomeBenefit": 30000, "TotalTaxBenefit": 3000}
+
+
+def test_schedule_it_serializes_complete_challan_rows() -> None:
+    """A complete tax-payment challan row reaches Schedule IT correctly."""
+    input_data = _input(
+        tax_payment_entries=[
+            TaxPaymentDetail(
+                amount=Decimal("50000"), payment_type="advance",
+                payment_date=date(2025, 12, 15), bsr_code="1234567",
+                challan_serial_number="12345",
+            ),
+        ],
+        bank_accounts=[
+            BankAccount(
+                account_number="1234567890",
+                ifsc_code="SBIN0000001",
+                bank_name="State Bank of India",
+                account_type="savings",
+                is_primary=True,
+            )
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    schedule_it = document["ITR"]["ITR2"]["ScheduleIT"]
+    row = schedule_it["TaxPayment"][0]
+    assert row["BSRCode"] == "1234567"
+    assert row["DateDep"] == "2025-12-15"
+    assert row["SrlNoOfChaln"] == 12345
+    assert row["Amt"] == 50000
+    assert schedule_it["TotalTaxPayments"] == 50000
+
+
+def test_schedule_it_incomplete_challan_error_names_row_and_missing_fields() -> None:
+    """An incomplete challan row's error identifies the row and the exact
+    missing field(s), not just a generic "requires BSR code..." message.
+
+    Regression test for audit §3.8: the old message
+    ("Schedule IT payment requires BSR code, date, and challan serial
+    number") gave no indication of which row was wrong or which of the
+    three fields it was actually missing, forcing a taxpayer/support agent
+    to guess across every entered challan.
+    """
+    input_data = _input(
+        tax_payment_entries=[
+            TaxPaymentDetail(
+                amount=Decimal("50000"), payment_type="advance",
+                payment_date=date(2025, 12, 15), bsr_code="1234567",
+                challan_serial_number="12345",
+            ),
+            TaxPaymentDetail(
+                amount=Decimal("20000"), payment_type="self_assessment",
+                bsr_code="7654321",
+            ),
+        ],
+        bank_accounts=[
+            BankAccount(
+                account_number="1234567890",
+                ifsc_code="SBIN0000001",
+                bank_name="State Bank of India",
+                account_type="savings",
+                is_primary=True,
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match=r"entry #2 is missing: payment date, challan serial number"):
+        build_itr2_json(compute(input_data), input_data)

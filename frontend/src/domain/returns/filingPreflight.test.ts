@@ -110,6 +110,33 @@ describe('validateCbdtFrontendFields', () => {
     ]);
   });
 
+  it('rejects an incomplete tax-payment challan row before it reaches the backend', () => {
+    // Regression test for audit §3.8: the challan editor's BSR/serial
+    // regex checks were cosmetic only (aria-invalid styling), so an
+    // incomplete row could be saved and only surfaced as an opaque error
+    // from the backend's _schedule_it()/_tax_payments_from_input() at
+    // generate/submit time. This is the actual pre-submit blocking gate.
+    const draft = createPreflightDraft();
+    draft.personal.employerCategory = 'NA';
+    draft.personal.stateCode = '09';
+    draft.personal.pinCode = '110001';
+    draft.taxes.challans = [{
+      id: 'challan-1', kind: 'ADVANCE_TAX', bsrCode: '', depositDate: '',
+      challanSerialNo: 0, amount: 50000, cin: '',
+    }];
+
+    expect(validateCbdtFrontendFields(draft)).toEqual([
+      'Advance tax entry 1: enter a valid 7-character BSR code (3 digits then 4 alphanumeric).',
+      'Advance tax entry 1: enter the deposit date.',
+      'Advance tax entry 1: enter a valid challan serial number (1-5 digits, greater than zero).',
+    ]);
+
+    draft.taxes.challans[0] = {
+      ...draft.taxes.challans[0], bsrCode: '1234567', depositDate: '2025-12-15', challanSerialNo: 12345,
+    };
+    expect(validateCbdtFrontendFields(draft)).toEqual([]);
+  });
+
   it('validates state enums in conditional property and donation rows', () => {
     const draft = createPreflightDraft();
     draft.personal.employerCategory = 'NA';
