@@ -1384,7 +1384,11 @@ class FilingStatus(_StrictModel):
         description="Date Form 10-IEA was filed for the current AY old-regime "
         "election (YYYY-MM-DD). ITR-4 only.",
     )
-    form10IEAEarlierAYOldRegime: Literal["Y", "N", "NA"] = Field(default="NA")
+    # Default "N" (not "NA"): Sl. No. A23 of Part A-General is mandatory
+    # Y/N for Individual/HUF (CBDT ITR-4 Validation Rules AY 2026-27 rule
+    # #260); "NA" is reserved for Firm status (rule #235). See the matching
+    # note on ITR4FilingProfile.form_10iea_earlier_ay_old_regime.
+    form10IEAEarlierAYOldRegime: Literal["Y", "N", "NA"] = Field(default="N")
     form10IEAAssessmentYear: Literal["", "2024-25", "2025-26"] = Field(default="")
     form10IEAEarlierAYAckOldRegime: str = Field(default="")
     form10IEAEarlierAYNewRegime: Literal["Y", "N"] = Field(default="N")

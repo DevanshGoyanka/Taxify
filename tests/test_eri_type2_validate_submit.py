@@ -38,7 +38,11 @@ def test_build_itr_payload_shape():
 
     assert payload["serviceName"] == "EriValidateItr"
     assert payload["pan"] == "ABCDE1234F"
-    assert payload["formData"] == '{"ITR":{"ITR1":{}}}'
+    # formData is base64-encoded JSON, not a plain JSON string -- confirmed
+    # live (2026-09-04): a plain-string formData was rejected with
+    # errCd=EF500140; see build_itr_payload()'s own docstring.
+    import base64
+    assert base64.b64decode(payload["formData"]).decode("utf-8") == '{"ITR":{"ITR1":{}}}'
     header = payload["header"]
     assert header["formName"] == "ITR-1"
     assert header["formCode"] == "1"

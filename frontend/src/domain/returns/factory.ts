@@ -36,7 +36,12 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       originalAcknowledgementNumber: '', originalFilingDate: null,
       noticeNumber: '', noticeDate: null, representative: null,
       form10IEAAcknowledgement: '', form10IEADate: null,
-      form10IEAEarlierAYOldRegime: 'NA', form10IEAAssessmentYear: '',
+      // "N" (not "NA"): ITR-4 Sl. No. A23 is mandatory Y/N for
+      // Individual/HUF (CBDT ITR-4 Validation Rules AY 2026-27 rule
+      // #260) -- "NA" is reserved for Firm status (rule #235) and is
+      // rejected live by ITD's Type-2 UAT validateItr for the far more
+      // common Individual/HUF case if left at this default.
+      form10IEAEarlierAYOldRegime: 'N', form10IEAAssessmentYear: '',
       form10IEAEarlierAYAckOldRegime: '', form10IEAEarlierAYNewRegime: 'N',
       form10IEANewRegimeAssessmentYear: '', form10IEAEarlierAYAckNewRegime: '',
       form10IEACurrentAYNewRegime: false, form10IEACurrentAYNewRegimeDate: null,

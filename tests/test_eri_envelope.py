@@ -221,6 +221,37 @@ def test_parse_response_envelope_validate_success_with_false_success_flag():
     assert parsed == response
 
 
+def test_parse_response_envelope_arn_present_overrides_error_message():
+    """A `messages[].type == 'ERROR'` entry is not always fatal: if the
+    response also carries an `arnNumber`, the submission genuinely
+    succeeded and the ARN must be returned to the caller, not discarded.
+
+    Confirmed live (2026-09-04, PAN SRGPZ2026C, ITR-4 AY 2026-27):
+    submitItr returned an ADHAAR_NOTIN_PROFILE_2026_004 ERROR-typed
+    message alongside a real ARN (116997020040926, later confirmed by the
+    taxpayer's emailed ITR-V acknowledgement) -- the unlinked-Aadhaar
+    condition was a warning, not a block. The prior unconditional
+    raise-on-any-ERROR-message logic discarded the response (and the ARN)
+    before the caller ever saw it.
+    """
+    response = {
+        "messages": [
+            {
+                "code": "ADHAAR_NOTIN_PROFILE_2026_004",
+                "type": "ERROR",
+                "desc": "It is seen that, your PAN and Aadhaar are not linked.",
+                "fieldName": None,
+            }
+        ],
+        "errors": [],
+        "arnNumber": "116997020040926",
+        "successFlag": True,
+    }
+
+    parsed = parse_response_envelope(response)
+    assert parsed["arnNumber"] == "116997020040926"
+
+
 def test_parse_response_envelope_legacy_error_shape_still_works():
     """Regression fence: the login/addClient/everify {code,desc,fieldName}
     errors[] shape must still be recognized after adding the errCd/errFld

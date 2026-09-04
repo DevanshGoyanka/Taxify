@@ -64,11 +64,17 @@ def validateClientOtp(pan: str, transactionId: str, otpSourceFlag: str, otp: str
         raise ValueError("ERI_USER_ID is not configured in the environment.")
         
     payload = {
+        # Empirically confirmed (2026-09-04, live UAT call, PAN SRGPZ2026C):
+        # a request using "Otp" (capital O, matching API_AddClientFlow_v1.1.pdf's
+        # own sample JSON) was rejected with errCd=EF40000/fieldName="otp"
+        # (lowercase) -- the live gateway's real field name is lowercase
+        # "otp". Do not "fix" this back to match the spec sample without
+        # re-verifying against a live call first.
         "serviceName": "EriValidateClientService",
         "pan": pan,
         "transactionId": transactionId,
         "otpSourceFlag": otpSourceFlag,
-        "Otp": otp,
+        "otp": otp,
         "validUpto": validUpto,
         "timeStamp": get_ist_timestamp()
     }

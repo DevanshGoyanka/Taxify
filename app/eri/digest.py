@@ -30,8 +30,31 @@ Reference flow (PDF §5.3), implemented step-by-step in
           credential bundle (:func:`app.eri.config.get_eri_credentials`).
   Step 5. Generate the digest: HMAC-SHA256, initialized with the secret
           key, hash the modified JSON string, repeat for ``iterations``
-          times, then Base64-encode the final hash.
+          MORE times, then Base64-encode the final hash. Total HMAC
+          operations = ``iterations + 1`` -- see the off-by-one note below.
   Step 6. Update the JSON — replace the placeholder with the new digest.
+
+CRITICAL, empirically confirmed (2026-09-04, live Type-2 UAT ``validateItr``
+call against ITR-4): the total number of HMAC-SHA256 operations is
+``iterations + 1``, not ``iterations``. The SOP's own step numbering is the
+tell -- "1. Initialize with the secret key. 2. Hash the modified JSON
+string. 3. Repeat hashing for the specified number of iterations" reads as
+three sequential sub-steps: an initial hash (step 2), THEN ``iterations``
+additional repeats (step 3) -- ``iterations + 1`` total, not ``iterations``.
+This module previously ran the loop exactly ``iterations`` times (one hash
+short), which is self-consistent (Taxify always agreed with itself) but
+was REJECTED by ITD's live server on every single call with
+``errCd=Digest_Invalid, desc="Modification to ITR details outside Utility
+is not allowed"`` -- a misleading error, since nothing was actually
+modified; the digest was simply one iteration short. Confirmed by testing
+``iterations``, ``iterations + 1``, and ``iterations - 1`` against a live
+call with the same payload: only ``iterations + 1`` passed the digest
+check (the response changed from ``Digest_Invalid`` to real ITR
+business-rule validation errors). Do not "fix" this back to a bare
+``iterations``-times loop without re-verifying against a live call first --
+this had never been exercised against ITD's real server before this
+session; the self-consistency of the old code proved nothing about whether
+it matched ITD's own algorithm.
 
 The ``SWCreatedBy``/``JSONCreatedBy`` in ``CreationInfo`` and the
 ``(secret_key, iterations)`` used here are resolved from the SAME
@@ -145,8 +168,11 @@ def compute_digest(itr_json: dict[str, Any]) -> str:
       Step 4. Load the secret key + iteration count from the active
               ``(ERI_MODE, ERI_ENV)`` ERI credential bundle.
       Step 5. HMAC-SHA256: initialize with the secret key, hash the
-              modified JSON string, repeat ``iterations`` times, then
-              Base64-encode the final hash.
+              modified JSON string once, then repeat ``iterations`` MORE
+              times, then Base64-encode the final hash. Total HMAC
+              operations = ``iterations + 1`` (see the module-level
+              off-by-one note -- empirically confirmed against a live
+              ``validateItr`` call, not merely inferred from the spec).
       Step 6. (Caller's responsibility) update the JSON with the digest.
 
     Args:
@@ -175,10 +201,13 @@ def compute_digest(itr_json: dict[str, Any]) -> str:
     # Steps 1-3: the canonical payload the portal will also see.
     payload_text = canonicial_digest_payload(itr_json)
 
-    # Step 5: iterated HMAC-SHA256 over the UTF-8 bytes, then Base64.
+    # Step 5: HMAC-SHA256 over the UTF-8 bytes, once, THEN `iterations`
+    # more times -- iterations + 1 total. See the module-level note: this
+    # was the source of every "Digest_Invalid" rejection before it was
+    # empirically found and fixed.
     key_bytes = secret_key.encode("utf-8")
     digest_bytes = payload_text.encode("utf-8")
-    for _ in range(iterations):
+    for _ in range(iterations + 1):
         digest_bytes = hmac.new(key_bytes, digest_bytes, hashlib.sha256).digest()
     return base64.b64encode(digest_bytes).decode("utf-8")
 

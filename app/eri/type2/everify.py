@@ -66,8 +66,14 @@ def generate_evc(pan: str, ack_num: str, ay: str, form_code: str, ver_mode: str,
         raise ValueError("ERI_USER_ID environment variable not set")
         
     payload = {
+        # No "eriUserId" here -- confirmed live (2026-09-04, PAN
+        # SRGPZ2026C): including it inside the signed data payload was
+        # rejected with errCd=EF40000/"JSON data invalid". The official
+        # spec's own "Details of data attribute" table for
+        # EriGenerateEvcService lists only serviceName/pan/verMode/
+        # ackNum/ay/formCode -- eriUserId belongs solely at the envelope
+        # level, which build_request_envelope() already supplies.
         "serviceName": "EriGenerateEvcService",
-        "eriUserId": eri_user_id,
         "pan": pan,
         "verMode": ver_mode,
         "ackNum": ack_num,
@@ -103,8 +109,10 @@ def verify_evc(pan: str, ack_num: str, ay: str, form_code: str, ver_mode: str, t
         raise ValueError("ERI_USER_ID environment variable not set")
         
     payload = {
+        # No "eriUserId" -- same reasoning as generate_evc() above; the
+        # official spec's data-attribute table for EriVerifyEvcService
+        # doesn't list it either.
         "serviceName": "EriVerifyEvcService",
-        "eriUserId": eri_user_id,
         "pan": pan,
         "verMode": ver_mode,
         "ay": ay,

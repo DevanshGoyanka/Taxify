@@ -416,6 +416,36 @@ def test_generate_itr4_schedule_bp_preserves_exact_canonical_fields() -> None:
     assert bp["FinanclPartclrOfBusiness"]["FixedAssets"] == 50000
 
 
+def test_generate_itr4_schedule_bp_income_chargeable_set_without_44ae() -> None:
+    """IncChargeableUnderBus must equal the 44AD/44ADA/44AE sum even when no
+    44AE (goods carriage) business is declared -- the field lives inside the
+    ``PersumptiveInc44AE`` block per the official schema, but per ITD's own
+    live ``validateItr`` error text it represents the aggregate "Income
+    chargeable under Business & Profession" across ALL three presumptive
+    schemes, not just 44AE. A prior version of the builder only computed it
+    inside the ``goods_44ae is not None`` branch, leaving it hardcoded at 0
+    for any return with 44AD/44ADA income and no 44AE business -- exactly
+    the common case -- which ITD's validator rejected with two cross-schedule
+    consistency errors (Sl. No E8 of Schedule BP vs. Part BTI Business
+    Income, and the 44AD+44ADA+44AE sum vs. IncChargeableUnderBus itself).
+    """
+    draft = _filing_ready_itr4("44AD")
+    business = draft.businesses[0]
+    business.digitalReceipts = Decimal("0")
+    business.nonDigitalReceipts = Decimal("400000")
+    business.declaredIncome = Decimal("32415")
+
+    official, _ = generate_cbdt_json(draft)
+    validate_itr4_json(official)
+    bp = official["ITR"]["ITR4"]["ScheduleBP"]
+    assert bp["PersumptiveInc44AD"]["TotPersumptiveInc44AD"] == 32415
+    assert bp["PersumptiveInc44AE"]["IncChargeableUnderBus"] == 32415
+    assert (
+        official["ITR"]["ITR4"]["IncomeDeductions"]["IncomeFromBusinessProf"]
+        == bp["PersumptiveInc44AE"]["IncChargeableUnderBus"]
+    )
+
+
 def test_generate_itr4_schedule_bp_supports_all_three_schemes() -> None:
     """Official Schedule BP emits concurrent 44AD, 44ADA, and 44AE blocks."""
     draft = _filing_ready_itr4("44AD")
@@ -508,6 +538,87 @@ def test_generate_itr4_emits_full_filing_status_and_trp() -> None:
     assert itr4["FilingStatus"]["AssesseeRep"]["RepName"] == "Priya Sharma"
     assert itr4["Verification"]["Capacity"] == "R"
     assert itr4["TaxReturnPreparer"]["IdentificationNoOfTRP"] == "T123456789"
+
+
+def test_generate_itr4_filing_status_form10iea_default_answers_only_a23b() -> None:
+    """Default draft (never filed Form 10-IEA) answers ONLY the A23(B)
+    branch, not the mutually exclusive A23(A) "re-entered new regime"
+    branch.
+
+    CBDT ITR-4 Validation Rules AY 2026-27 rules #260/#353-364: A23
+    (Form10IEAEarlierAYOldRegime) must be an explicit "Y"/"N" for
+    Individual/HUF (never the schema-legal-but-live-rejected "NA"
+    default), and answering "N" activates ONLY A23(B)
+    (F10IEACurrAYOldRegime) -- the A23(A) new-regime-cascade fields
+    (F10IEAEarlierAYNewRegime, F10IEACurrAYNewRegime) must not also be
+    emitted. A prior version of the builder emitted "NA" and both
+    branches unconditionally, which ITD's live Type-2 UAT validateItr
+    rejected with "It is mandatory to select an Option for 115BAC
+    question at sl.no.A23" and "Multiple question shall not be responded
+    in A23" (2026-09-04, PAN SRGPZ2026C).
+    """
+    draft = _filing_ready_itr4("44AD")
+    official, _ = generate_cbdt_json(draft)
+    fs = official["ITR"]["ITR4"]["FilingStatus"]
+    assert fs["Form10IEAEarlierAYOldRegime"] == "N"
+    assert fs["F10IEACurrAYOldRegime"] == "N"
+    assert "F10IEAEarlierAYNewRegime" not in fs
+    assert "F10IEACurrAYNewRegime" not in fs
+
+
+def test_generate_itr4_filing_status_form10iea_yes_branch_excludes_a23b() -> None:
+    """The A23(A) branch (filed 10-IEA earlier for old regime) must not
+    also emit the mutually exclusive A23(B) field.
+    """
+    draft = _filing_ready_itr4("44AD")
+    draft.filing.form10IEAEarlierAYOldRegime = "Y"
+
+    official, _ = generate_cbdt_json(draft)
+    fs = official["ITR"]["ITR4"]["FilingStatus"]
+    assert fs["Form10IEAEarlierAYOldRegime"] == "Y"
+    assert "F10IEAEarlierAYNewRegime" in fs
+    assert "F10IEACurrAYOldRegime" not in fs
+
+
+def test_generate_itr4_omits_schedule80c_when_no_80c_claim() -> None:
+    """Schedule80C must be entirely absent, not an empty placeholder, when
+    no Section 80C deduction is claimed.
+
+    CBDT ITR-4 Validation Rules AY 2026-27 rule #305: an Individual on the
+    new tax regime who has "filled" any of 80C/80E/80EE/80EEA/80EEB/10(13A)
+    is rejected -- confirmed live that the mere PRESENCE of an empty
+    Schedule80C object (Schedule80CDtls: [], TotalAmt: 0) counts as
+    "filled" and triggers ITD's Type-2 UAT validateItr rejection "Since you
+    have selected new tax regime deduction u/s 10(13A), 80C... are not
+    applicable to you" (2026-09-04, PAN SRGPZ2026C), even though nothing
+    was actually claimed. Every sibling deduction schedule already omits
+    itself when unclaimed; Schedule80C was the one outlier.
+    """
+    draft = _filing_ready_itr4("44AD")
+    official, _ = generate_cbdt_json(draft)
+    itr4 = official["ITR"]["ITR4"]
+    assert "Schedule80C" not in itr4
+
+
+def test_generate_itr4_defaults_alternate_address_to_primary() -> None:
+    """SecondaryAdd/AlternateAddress must always be present, defaulting to
+    a mirror of the primary address when no distinct secondary address is
+    supplied.
+
+    input_rules.py's rule R410 already flagged secondary address as
+    mandatory in Part A General Information, but only as an informational
+    check -- not a JSON-build-time default. ITD's live Type-2 UAT
+    validateItr confirmed this is a hard requirement, rejecting an
+    entirely-absent AlternateAddress with "Secondary address details are
+    not provided in Schedule Part A General information" (2026-09-04, PAN
+    SRGPZ2026C).
+    """
+    draft = _filing_ready_itr4("44AD")
+    official, _ = generate_cbdt_json(draft)
+    pi = official["ITR"]["ITR4"]["PersonalInfo"]
+    assert pi["SecondaryAdd"] == "Y"
+    assert pi["AlternateAddress"]["CityOrTownOrDistrict"] == pi["Address"]["CityOrTownOrDistrict"]
+    assert pi["AlternateAddress"]["PinCode"] == pi["Address"]["PinCode"]
 
 
 def test_generate_cbdt_json_itr4_emits_80eea_stamp_duty_value():

@@ -102,6 +102,23 @@ app/schemas/itr*.py  →   app/engine/calculators/itr*.py  →  app/engine/itd/i
    the ERI onboarding SOP exactly: iterated HMAC-SHA256 (keyed with the active `(ERI_MODE,
    ERI_ENV)` credential bundle's secret + iteration count, not a bare hash) over the sorted,
    whitespace-free JSON with `Digest` replaced by the placeholder `"-"`, then Base64-encoded.
+   The total HMAC operation count is `iterations + 1`, **not** `iterations` — confirmed live
+   against ITD's Type-2 UAT `validateItr` (an `iterations`-only digest was rejected with
+   `Digest_Invalid`; `iterations + 1` was accepted). This was a real, previously-undetected
+   off-by-one that made every digest this engine ever computed wrong, for every form and both
+   ERI modes, until fixed 2026-09-04 — see `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §15 before
+   touching this iteration count again; static cross-referencing against the SOP PDF alone (what
+   originally "confirmed" the old, wrong count) does not prove correctness, only a live call does.
+   Once the digest check itself passes, four independent `app/engine/itd/itr4.py` builder bugs —
+   found by iterating live `validateItr` calls against ITD's Type-2 UAT, not by spec-reading —
+   are common enough to hit on almost any real ITR-4 return: `ScheduleBP.PersumptiveInc44AE.
+   IncChargeableUnderBus` must equal the 44AD+44ADA+44AE sum even with no 44AE business; the
+   Form 10-IEA regime cascade (`FilingStatus`, Sl. No. A23) must default to `"N"` (not the
+   schema-legal `"NA"`) and answer only one of its two mutually exclusive sub-branches at a time;
+   `Schedule80C` must be omitted entirely (not an empty placeholder) when unclaimed, like every
+   sibling deduction schedule; and `PersonalInfo.AlternateAddress`/`SecondaryAdd` must always be
+   present, defaulting to the primary address when no distinct secondary address exists. See
+   `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §16 for the full live-call evidence per bug.
 
 Full verified end-to-end architecture reference (every route, the canonical pipeline,
 Type-3 submission, DB persistence): `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`. ITR-2/
@@ -181,6 +198,21 @@ egress from an IP ITD has whitelisted — this is still required for both UAT an
 do not trust any doc claiming otherwise without checking
 `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §2/§12 first, which corrects two earlier wrong
 claims to that effect (one in this file's own history, one in `Docs/AWS_FREE_TIER_DEPLOYMENT.md`).
+
+`envelope.py::parse_response_envelope()` treats a truthy `arnNumber` in the response as
+overriding proof of success, checked *before* the usual raise-on-`messages[].type=="ERROR"`
+logic — confirmed live: `submitItr` for a genuinely-filed ITR-4 return (ARN 116997020040926,
+2026-09-04) carried an `ADHAAR_NOTIN_PROFILE_2026_004` ERROR-typed message that was a warning,
+not a rejection, and the pre-fix code discarded the ARN by raising on it. Do not read this as
+"ERROR-typed messages are generally non-fatal" — they remain fatal everywhere an `arnNumber` is
+absent (login, addClient, everify, prefill all still raise correctly). `everify.py`'s
+`generate_evc()`/`verify_evc()` must not put `eriUserId` inside the signed payload — only
+`build_request_envelope()`'s own envelope-level field is expected; an in-payload copy is
+rejected live with `EF40000`. `acknowledgement.py::get_acknowledgement()` locates the PDF by its
+own `%PDF-`/`%%EOF` byte markers rather than trusting `Content-Type`, because ITD's live
+`getAcknowledgement` intermittently (not always) returns a raw Java-serialized object wrapping
+the real PDF, mislabeled `application/json` — see
+`Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §18 for the full live-call evidence behind all three.
 
 DSC signing (`envelope.py::sign_data()`, `ERI_DSC_SIGNING_MODE`) is Windows-only for the
 `"token"` mode (`win32crypt`, physical USB hardware token via legacy CryptoAPI

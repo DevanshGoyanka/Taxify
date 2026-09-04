@@ -500,7 +500,13 @@ class ITR4FilingProfile(BaseModel):
     assessee_representative: Optional[AssesseeRepresentativeProfile] = None
     seventh_proviso: ITR4SeventhProvisoDetails = Field(default_factory=ITR4SeventhProvisoDetails)
     # Form 10-IEA cascade (ITR-4 uses this, not OptOutNewTaxRegime).
-    form_10iea_earlier_ay_old_regime: str = Field(default="NA", pattern=r"^(NA|Y|N)$")
+    # Default "N" (not "NA"): this is Sl. No. A23 of Part A-General, and
+    # CBDT's ITR-4 Validation Rules AY 2026-27 rule #260 makes it mandatory
+    # to select Y/N for Individual/HUF -- "NA" is reserved for Firm status
+    # (rule #235). Confirmed live: ITD's Type-2 UAT validateItr rejected
+    # "NA" for an Individual return with "It is mandatory to select an
+    # Option for 115BAC question at sl.no.A23" (2026-09-04, PAN SRGPZ2026C).
+    form_10iea_earlier_ay_old_regime: str = Field(default="N", pattern=r"^(NA|Y|N)$")
     form_10iea_ass_year: str = Field(default="", pattern=r"^(2024-25|2025-26)?$")
     form_10iea_earlier_ay_ack_old_regime: int = Field(default=0, ge=0)
     f10iea_earlier_ay_new_regime: str = Field(default="N", pattern=r"^(Y|N)$")

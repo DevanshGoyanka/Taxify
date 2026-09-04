@@ -133,6 +133,18 @@ sets both explicitly) still resolves correctly after the change; 5 new tests in
 
 ## 4. Digest computation — verified correct against the primary source
 
+> **Correction (2026-09-04, §15): this section's title overclaimed.** The cross-check below was
+> a *structural/static* read-through against the SOP text — it was never exercised against a
+> live `validateItr` call, and it missed a real off-by-one in the iteration count (`iterations`
+> HMAC operations were run instead of the correct `iterations + 1`) that made every digest this
+> engine ever computed wrong, for every form and both ERI modes, until fixed. "Matches the SOP
+> exactly, including step ordering" below is TRUE for the algorithm shape (minify → placeholder
+> → keyed HMAC-SHA256 → iterate → Base64) but was wrong about the iteration *count* specifically
+> — see §15 for the full discovery, live-call evidence, and fix. Static cross-referencing against
+> a spec document is not the same as live verification; this session's own pattern (found
+> repeatedly in `prefill.py`, `add_client.py`, and now here) is that ITD's real server can diverge
+> from what a spec PDF documents, and only a live call proves which one is right.
+
 Cross-checked `app/eri/digest.py::compute_digest()` line-by-line against
 `Digest_generation_ERI 2 (2).pdf` §5.3, the official ERI Type-3 onboarding SOP's digest guide.
 The algorithm: minify the JSON (sorted keys, no interstitial whitespace), locate the `Digest`
@@ -897,7 +909,500 @@ even install
   calls, same as the transport-level test in §14.4 above. No code changes were needed — the
   tunnel is pure OS-level IP routing, entirely transparent to the application.
 
-## 15. References
+## 15. CRITICAL: `app/eri/digest.py`'s HMAC iteration count was off by
+one — every Digest this engine ever computed was wrong (2026-09-04)
+
+### 15.1 The bug
+
+`compute_digest()` ran the HMAC-SHA256 loop exactly `iterations` times. The correct total, per
+the SOP's own step numbering, is **`iterations + 1`**. The SOP (`Digest_generation_ERI 2
+(2).pdf` §5.3 Step 5) lists three separate sub-steps: *"1. Initialize with the secret key. 2.
+Hash the modified JSON string. 3. Repeat hashing for the specified number of iterations."* Read
+literally, step 2 is **one** hash, and step 3 is **`iterations` additional** hashes on top of
+that — `iterations + 1` total, not `iterations`. This module (and its
+`API_Testing/digest_generator.py` sibling — a separate, unmodified script, see §15.4) both ran
+the loop exactly `iterations` times, one hash short.
+
+### 15.2 Why this went undetected for so long
+
+This bug is **self-consistent** — `compute_digest()` always agreed with itself (recomputing over
+the same content always reproduces the same, internally-consistent, but wrong, digest) — so
+every offline check this session ran *before* discovering the bug (§12's digest-vs-SW_ID
+verification, §13's prefill work, the JSON review in the "check this generated JSON" exchange)
+correctly confirmed **internal** consistency without ever catching that the *algorithm itself*
+didn't match ITD's real server. It had never been exercised against a live `validateItr`/
+`submitItr` call before this session — the prior successful ITR-1 UAT/production pass that
+earned Type-2 production access for ITR-1 must have used a different tool or process, not this
+module (§12–14's login/prefill live-testing used the credential/signing path only; this session
+is the first time `app/eri/digest.py`'s own algorithm was actually round-tripped against ITD's
+server).
+
+### 15.3 How it was found and confirmed
+
+While validating the user's own manually-generated, manually-corrected ITR-4 JSON (SW_ID
+correctly SW20014242/Type-2 UAT, schema-valid, arithmetic-verified — see the prior exchange),
+`validateItr` rejected it every time with `errCd=Digest_Invalid,
+desc="Modification to ITR details outside Utility is not allowed"` — regardless of five
+different content-canonicalization attempts (original key order, sorted keys, float-vs-int
+formatting, a pure character-level minify of the untouched downloaded file with zero Python JSON
+re-parsing, and a completely fresh in-memory generation with zero file round-trip at all). Ruling
+out formatting entirely, and after the user's direct assertion that ITR-1 had validated
+successfully before (implying the algorithm, not the credentials, must be at fault), three
+digest variants — `iterations`, `iterations + 1`, `iterations - 1` — were computed for the exact
+same payload and submitted live. **Only `iterations + 1` passed**: the response changed from
+`Digest_Invalid` to real ITR business-rule validation errors (§15.5), proving the digest check
+itself now succeeds.
+
+### 15.4 Fix and blast radius
+
+Fixed: `compute_digest()`'s loop now runs `iterations + 1` times. Since `compute_digest()` is
+"the single canonical source of the ITR JSON Digest" (its own module docstring) used by every
+form builder (`app/engine/itd/itr1.py` through `itr4.py`, all via the shared `_creation_info()`/
+`_compute_digest()` in `app/engine/itd/common.py`) for **both** Type-2 (API `validateItr`/
+`submitItr`) **and** Type-3 (portal-uploaded JSON, `serialize_for_upload()`), this bug affected
+**every ITR JSON this engine has ever produced**, for every form, both ERI modes, both UAT and
+production. Any Type-3 JSON previously uploaded to ITD's portal via the Offline Mode would have
+carried the same wrong digest and — if the portal's own integrity check is as strict as
+`validateItr`'s — would have been rejected for the same reason.
+
+`API_Testing/digest_generator.py` has the identical bug (confirmed: its `generate_digest()` also
+loops exactly `iterations` times) but is **deliberately left unmodified** — the user's explicit
+instruction was not to touch it, and it is a standalone script under separate development, not
+depended on by the running application. `tests/test_eri_creation_info_invariant.py`'s existing
+cross-reference test (which asserted `compute_digest()` matches that script's output) previously
+"passed" only because both sides shared the same bug; it's been updated to call the reference
+script with `iterations + 1` explicitly, preserving the cross-implementation check without
+asserting the now-known-wrong `iterations`-only behavior as ground truth. A new test,
+`test_compute_digest_total_hmac_operations_is_iterations_plus_one`, locks in the fix against an
+independently hand-computed expected value (not derived by calling `compute_digest()` twice and
+comparing to itself) — both confirmed via `git stash` to fail against the pre-fix code.
+
+### 15.5 What surfaced once the digest check passed — not yet resolved
+
+With `iterations + 1`, the SAME JSON that previously got `Digest_Invalid` now gets real
+validation errors instead, including several that read as **old-regime rule text applied to a
+new-regime return**: *"In case of Old Tax Regime, standard deduction shall be lower of Rs.50000
+or Net salary"* (the JSON correctly carries the new-regime ₹75,000 standard deduction) and
+*"Rebate u/s 87A cannot be more than 12,500 under old tax regime"* (the JSON's full rebate is
+correct for new-regime AY 2026-27 thresholds). Also: *"Kindly enter the amount mentioned in Sl.
+No E8 of Schedule BP in the field Business Income... of Part BTI"* and *"Multiple question shall
+not be responded in A23"*. All nine errors from this batch were investigated and fixed — see
+§16.
+
+## 16. Four ITR-4 builder bugs found via live `validateItr` iteration — all nine errors from
+§15.5 resolved to a clean pass (2026-09-04)
+
+Once §15's digest fix let real business-rule errors through, iterating live against ITD's Type-2
+UAT `validateItr` for the SRGPZ2026C ITR-4 test case (§17) surfaced 9 distinct errors across 4
+independent root causes in `app/engine/itd/itr4.py`. Fixing all four, in order, took the same
+JSON from 9 errors → 7 → 5 → 2 → 1 → **0, `successFlag: true`**. Each fix has a regression test
+in `tests/test_filing_gateway_v2_itr4.py`, confirmed via `git stash` to fail against the pre-fix
+code.
+
+### 16.1 `ScheduleBP.PersumptiveInc44AE.IncChargeableUnderBus` was 0 whenever no 44AE business
+existed
+
+**Bug**: `_schedule_bp()` only computed `IncChargeableUnderBus` (the official schema's aggregate
+"Income chargeable under Business & Profession" field — despite living inside the
+`PersumptiveInc44AE` block, it is documented as the sum across **all three** presumptive
+schemes, not just 44AE) inside the `if goods_44ae is not None:` branch. Any return with 44AD
+and/or 44ADA income but **no** 44AE (goods-carriage) business — the common case — left this
+field hardcoded at its placeholder default of `0`, even though `IncomeDeductions.
+IncomeFromBusinessProf` was correctly populated. ITD's live validator caught the mismatch from
+both directions: *"Kindly enter the amount mentioned in Sl. No E8 of Schedule BP in the field
+Business Income... of Part BTI"* and *"Enter sum of values mentioned in field 'Presumptive
+income under section 44AD, ...44ADA... and ...44AE' in the field 'Income chargeable under
+Business & Profession' of schedule BP"*.
+
+**Fix**: compute `IncChargeableUnderBus` as `income_44ad + income_44ada + income_44ae`
+unconditionally, in the base `PersumptiveInc44AE` dict built before any scheme-specific branch
+runs (`app/engine/itd/itr4.py` ~line 741). The `goods_44ae is not None` branch already computed
+the same sum correctly when it ran; the bug only manifested in its absence.
+
+**Test**: `test_generate_itr4_schedule_bp_income_chargeable_set_without_44ae` — the only existing
+test asserting on `IncChargeableUnderBus` (`test_generate_itr4_schedule_bp_supports_all_three_
+schemes`) always had 44AE present, so it never exercised the buggy path.
+
+### 16.2 Form 10-IEA regime cascade: wrong default + two branches answered at once
+
+**Bug, part 1**: `Form10IEAEarlierAYOldRegime` — Sl. No. **A23** of Part A-General, "Have you
+filed Form 10-IEA in any earlier AY for choosing old tax regime?" — defaulted to `"NA"` in both
+`ITR4FilingProfile` (`app/schemas/itr4.py`) and `ReturnDraft.filing` (`app/schemas/
+return_draft.py`). The official schema's enum (`NA|Y|N`) permits this, but CBDT's own **ITR-4
+Validation Rules AY 2026-27** (`tmp/cbdt_rules/CBDT_e-Filing_ITR 4_Validation Rules_AY 2026-27
+(1).txt`) rule #260 states *"It is mandatory to select an Option for 115BAC question at sl.no.
+A23... Applicable in case of Individual and HUF"* — `"NA"` is reserved for Firm status only
+(rule #235). ITD's live validator rejected `"NA"` for our Individual test case with exactly that
+message.
+
+**Bug, part 2**: A23 gates two **mutually exclusive** sub-branches (rules #353–364): answering
+"Yes" (filed 10-IEA before) activates A23(A) — `F10IEAEarlierAYNewRegime`/`F10IEACurrAYNewRegime`
+and their date/ack descendants; answering "No" activates **only** A23(B) —
+`F10IEACurrAYOldRegime`. `_filing_status_itr4()` emitted **both** branches unconditionally,
+regardless of the A23 answer. ITD's live validator rejected this with *"Multiple question shall
+not be responded in A23"*.
+
+**Fix**: default `form_10iea_earlier_ay_old_regime`/`form10IEAEarlierAYOldRegime` to `"N"`
+(`app/schemas/itr4.py`, `app/schemas/return_draft.py`). Restructured `_filing_status_itr4()`
+(`app/engine/itd/itr4.py` ~line 310) so the A23(A) fields are emitted only when the answer is
+`"Y"`, and A23(B) (`F10IEACurrAYOldRegime`) only when `"N"` — never both. The `profile is None`
+placeholder branch got the same treatment.
+
+**Tests**: `test_generate_itr4_filing_status_form10iea_default_answers_only_a23b`,
+`test_generate_itr4_filing_status_form10iea_yes_branch_excludes_a23b`.
+
+### 16.3 `Schedule80C` was emitted as an empty placeholder even when nothing was claimed
+
+**Bug**: every other optional deduction schedule (`Schedule80D`, `ScheduleEA10_13A`, the
+80G/80E/80EE/80EEA/80EEB family via `_emit_conditional_deduction_schedules`) is omitted from the
+output entirely when nothing is claimed. `Schedule80C` was the one outlier — it was always
+present in the dict literal, `{"Schedule80CDtls": [], "TotalAmt": 0}` when unclaimed. `Schedule
+80C` is not in the schema's top-level `required` list, so this placeholder was legal per-schema
+but not per ITD's live business rules: CBDT rule #305 says an Individual on the **new tax
+regime** who has "filled" **any** of the 80C/80E/80EE/80EEA/80EEB/10(13A) schedules is rejected
+— and ITD's live validator treats the mere *presence* of the key as "filled," regardless of its
+contents being all-zero. Rejected with *"Since you have selected new tax regime deduction u/s
+10(13A), 80C, 80E, 80EE, 80EEA or 80EEB are not applicable to you."*
+
+**Fix**: `Schedule80C` is now added to the `itr4` dict only when `deduction("80C") > 0`
+(`app/engine/itd/itr4.py` ~line 2157), matching every sibling schedule's pattern.
+
+**Test**: `test_generate_itr4_omits_schedule80c_when_no_80c_claim`.
+
+### 16.4 `AlternateAddress`/`SecondaryAdd` were omitted when no distinct secondary address existed
+
+**Bug**: `SecondaryAdd` was `"Y"` only if `profile.alternate_address` was supplied, and
+`AlternateAddress` was omitted entirely otherwise. `app/engine/validators/itr4/input_rules.py`'s
+rule R410 had already flagged this — *"Secondary address is mandatory in Part A General
+Information"* — but only as an **informational** check, never enforced at JSON-build time. ITD's
+live validator confirmed it as a hard requirement, rejecting the entirely-absent block with
+*"Secondary address details are not provided in Schedule Part A General information."*
+
+**Fix**: `_personal_info_from_profile()` (`app/engine/itd/itr4.py` ~line 185) now always sets
+`SecondaryAdd: "Y"` and always emits `AlternateAddress`, defaulting to
+`profile.alternate_address or profile.primary_address` — i.e. "secondary same as primary" when
+no genuinely distinct secondary address was supplied. This works directly because
+`ITR4FilingAddress` (the primary address type) is a schema subclass of `ITR4PostalAddress` (what
+`AlternateAddress` needs), so no new address-mapping code was required.
+
+**Test**: `test_generate_itr4_defaults_alternate_address_to_primary`.
+
+### 16.5 Net result
+
+Live-tested end to end against Type-2 UAT `validateItr` for PAN SRGPZ2026C (§17): 9 errors → 0,
+`successFlag: true`, `arnNumber`/`transactionNo: "35481079"` returned on the validate call
+(non-mutating; `submitItr` was not called). All four fixes plus §15's digest fix are code
+changes in this session, none yet committed as of this writing — see §17 for the full test-case
+trace and current filing status.
+
+## 17. SRGPZ2026C ITR-4 UAT test case — trace and current status (2026-09-04)
+
+Single dummy PAN used to exercise the remaining Type-2 UAT flow for ITR-4 (ITR-1 is already
+Type-2 production; ITR-2/ITR-3 are not yet production-ready, so cannot be tested this way): PAN
+`SRGPZ2026C`, Sourav Hari Gupta, DOB 1995-01-01, EVC-enabled (BANKEVC).
+
+**Test case**: salary (₹8,25,000 gross, ₹75,000 standard deduction under 115BAC), savings/FD
+bank interest (₹37,027), and 44AD presumptive business income ("THE BITS HUB", cash sales of
+handcrafted materials, ₹4,00,000 turnover, ₹32,415 declared income at 8%). Belated return
+(`ReturnFileSec: 12`), late fee ₹5,000 u/s 234F, TDS ₹35,000, refund due ₹30,000 to an SBI
+account. New tax regime throughout (no Chapter VI-A/10(13A) claims).
+
+**Error-reduction trace** (all through live Type-2 UAT `validateItr`, WireGuard tunnel via the
+AWS jump-box, §14):
+
+| Round | Change | Errors |
+|---|---|---|
+| 1 | First live pass, `iterations`-only digest | `Digest_Invalid` (§15) |
+| 2 | Digest fixed to `iterations + 1` | 9 errors (§15.5) |
+| 3 | ScheduleBP fix (§16.1) | 7 errors |
+| 3b | + regime-cascade fix attempt (`F10IEACurrAYNewRegime="Y"`, later found wrong — see below) | 5 errors, one NEW error surfaced (10-IEA ack-number requirement) |
+| 4 | + correct regime-cascade fix (§16.2, A23="N" branch only) | 2 errors |
+| 4b | + Schedule80C omission (§16.3) | 1 error (secondary address) |
+| 4c | + AlternateAddress default (§16.4) | **0 errors**, `successFlag: true` |
+
+One dead end worth recording: an intermediate hypothesis tried setting `F10IEACurrAYNewRegime:
+"Y"` (declaring an explicit new-regime election) to satisfy the "mandatory 115BAC" check. ITD's
+live response showed this was the *wrong* field — `F10IEACurrAYNewRegime="Y"` specifically means
+"I am re-entering the new regime via Form 10-IEA after having previously opted out," which
+doesn't apply to a taxpayer who was never in the old regime, and it triggered its own new error
+(*"Since A23(A)(ii)(b) is selected as 'Yes' A(ii)(b)(i) can not be blank"*) demanding an
+acknowledgement number for a form that was never filed. The actual fix (§16.2) was to answer
+**only** A23(B), not A23(A) at all — found by reading CBDT's own Validation Rules text (rules
+#353–364) rather than further guessing.
+
+**Final status (updated after live `submitItr`/`getAcknowledgement` calls, 2026-09-04)**: the
+return was genuinely **filed**. `submitItr`, called with round-7's frontend-generated JSON (the
+first round built entirely by the fixed code, with no manual patching — see §17.1), returned a
+`messages[].type == "ERROR"` entry (`ADHAAR_NOTIN_PROFILE_2026_004`, unlinked PAN-Aadhaar on the
+test profile) that Taxify's own client code treated as a hard failure and raised on. It was not
+one: ITD emailed the taxpayer a genuine ITR-V acknowledgement (Acknowledgement Number
+**116997020040926**, filed 04-Sep-2026, u/s 139(4)) proving the submission was accepted despite
+that message. See §18.1 for the `parse_response_envelope()` fix this required, and §18 generally
+for every fix made after this point (e-Verification prerequisites, `getAcknowledgement`
+retrieval). e-Verification itself remains blocked — see §18.4 — pending an ITD reply on the test
+PAN's bank-account EVC enablement.
+
+The official ITD Test Scenario Sheet (`Reference Docs by CBDT & ITD/Official ERI REFERENCE
+Documentation/ERI Type 2 - Sunit Ramashankar Goyanka-UAT Test Scenario Sheet (3).xlsx`) has been
+filled in with these results (rows 13–20); e-Verification is marked "In Progress" there pending
+ITD's response.
+
+### 17.1 Round-7: the first fully clean, unpatched frontend JSON
+
+Rounds 1–4c (the table above) all involved the assistant manually patching a downloaded JSON in
+a scratch script to test a hypothesis before the fix was reflected in a fresh app-generated file
+— necessary because each fix required either a code change the running `run.py` process hadn't
+picked up yet, or an explicit user action in the frontend (e.g. toggling the Form 10-IEA
+dropdown). Round 7 (`CBDT_790f586e-62a0-44c7-95b6-30e75cb58b08_2026-27 (7).json`) was the first
+JSON downloaded directly from the frontend, with zero manual patching, that validated with 0
+errors — confirming all four `itr4.py`/schema fixes (§16) were correctly live in the running app
+and that the frontend's "Form 10-IEA" dropdown (`PersonalInfoTab.tsx`) had been set to "No" for
+this client. Round 8 (`... (8).json`) additionally omitted `AadhaarCardNo` (schema-optional,
+confirmed via `PersonalInfo`'s `required` list) and re-validated clean before the submit attempt.
+
+## 18. Post-submission fixes — three more live-only bugs found getting from `submitItr` to a
+retrievable acknowledgement PDF (2026-09-04)
+
+Getting the round-7/8 JSON's genuine acceptance (§17, ARN 116997020040926) fully confirmed and
+then retrieving its acknowledgement surfaced three more real, live-only bugs — none catchable by
+reading the spec PDFs alone, each found by iterating live calls against ITD's Type-2 UAT. This
+section documents each one in the same depth as §15/§16, plus a complete file-by-file record of
+every file this session's ITR-4 work touched, for future reference.
+
+### 18.1 `parse_response_envelope()` discarded a genuine ARN because of an unconditional
+raise-on-any-ERROR-message rule
+
+**Symptom**: `submitItr` for the round-7/8 JSON returned HTTP 200 with a `messages[]` entry
+`{code: "ADHAAR_NOTIN_PROFILE_2026_004", type: "ERROR", desc: "It is seen that, your PAN and
+Aadhaar are not linked...", fieldName: null}`. `app/eri/type2/submit.py::submit_itr()` — via
+`parse_response_envelope()` — raised `ERIApiError`, which the assistant initially (wrongly)
+treated as proof the submission had failed outright, and reported that as the outcome.
+
+**How the mistake was caught**: the user asserted from direct evidence — ITD had emailed a real
+ITR-V acknowledgement PDF — that the return actually had been filed, and asked "so how will be
+resubmitted" and "the aadhar rejection might just be a warning nothing else." Re-running
+`validateItr`/`submitItr` for the same PAN+AY+form independently confirmed this: every
+subsequent call was rejected with `EF20006 "Your return is already submitted. You cannot
+resubmit it."` — impossible unless the original submission had genuinely succeeded, since a
+truly-failed submission consumes no filing slot.
+
+**Root cause**: `app/eri/envelope.py::parse_response_envelope()` (before this fix) raised on the
+*first* `messages[]` entry with `type == "ERROR"`, unconditionally, discarding the rest of the
+response body — including any `arnNumber` field — before the caller ever saw it. ITD's live
+Type-2 UAT `submitItr` evidently uses `type: "ERROR"` for at least one condition
+(PAN-Aadhaar-not-linked) that is a **warning attached to a successful submission**, not a
+rejection of it — a distinction the spec text nowhere states, and one that contradicts every
+other endpoint's use of `type: "ERROR"` observed this session (login, addClient, validate, where
+an ERROR-typed message always did mean outright failure).
+
+**Fix**: `parse_response_envelope()` (`app/eri/envelope.py`, function starting line ~251) now
+checks `response_json.get("arnNumber")` first — if truthy, the response is returned as-is,
+bypassing the ERROR-message/errors-array raise logic entirely. An ARN is the one field ITD only
+issues on genuine acceptance, so its presence is a strictly more reliable success signal than
+any `messages[].type` value. This does not change behavior for any endpoint that never returns
+an `arnNumber` (login, addClient, everify, prefill) — the new check is a no-op for them.
+
+**Test**: `tests/test_eri_envelope.py::test_parse_response_envelope_arn_present_overrides_error_message`
+— constructs the exact response shape ITD returned live, asserts `parse_response_envelope()`
+returns it (does not raise) and preserves the `arnNumber`.
+
+**Caution for future readers**: do not read this fix as "ERROR-typed messages are generally
+non-fatal." They remain fatal everywhere except when an `arnNumber` is also present. If a future
+endpoint is found where a genuine ARN-bearing success also needs additional error-message
+handling (e.g. surfacing the warning text to the user without treating it as failure), extend
+the response object's warning list rather than loosening the raise condition further.
+
+### 18.2 `generateEvc`/`verifyEvc` sent an undocumented, rejected `eriUserId` field inside the
+signed payload
+
+**Symptom**: `generate_evc()` (BANKEVC mode, ARN 116997020040926) was rejected with
+`EF40000 "JSON data invalid"` — a generic schema-validation failure with no field-level detail.
+
+**Root cause**: `app/eri/type2/everify.py`'s `generate_evc()` and `verify_evc()` both included
+`"eriUserId": eri_user_id` as a key inside the signed `data` payload (in addition to
+`build_request_envelope()` already placing `eriUserId` at the outer envelope level, which every
+Type-2 endpoint requires and which is correct). Every other module in this codebase
+(`login.py`, `add_client.py`, `validate.py`, `submit.py`, `acknowledgement.py`) puts `eriUserId`
+*only* in the envelope, never inside the signed payload — `everify.py` was the sole outlier.
+Cross-checked against `tmp/pdf_text/API_Everify_Return_v1.1 (1).txt`'s own "Details of data
+attribute" tables (§5.4.3 for `generateEvc`, the equivalent table for `verifyEvc`): neither lists
+`eriUserId` among the documented fields (`serviceName`, `pan`, `verMode`, `ackNum`, `ay`,
+`formCode` for generate; plus `transactionId`/`otpValue`/`evcValue` for verify). ITD's live
+schema validation for this specific endpoint is evidently strict about unexpected fields in a
+way `validateItr`/`submitItr` are not (those tolerate the same `timeStamp` field despite it also
+being absent from their own documented tables — a known, deliberately-kept quirk per this
+file's earlier sections).
+
+**Fix**: removed `"eriUserId": eri_user_id` from both payload dicts in `everify.py`. The local
+`eri_user_id` variable is still resolved and still passed to `build_request_envelope()` — only
+the redundant, rejected duplicate inside the signed payload was removed.
+
+**Verification**: re-running `generate_evc()` after the fix returned a *different*, legitimate
+business-rule error (`EF00101`, §18.4) instead of `EF40000` — proof the payload-shape issue
+itself was resolved, isolating the remaining blocker to something else entirely.
+
+**Test coverage note**: no new unit test was added for this specific fix (the existing
+`tests/test_eri_routers.py` EVC-route tests already mock at the `everify.generate_evc`/
+`verify_evc` function boundary and would not have caught a payload-shape regression one level
+deeper; a live-call-verified fix without a matching unit test is an acknowledged gap here,
+unlike every other fix in this file).
+
+### 18.3 `getAcknowledgement`'s live UAT response is intermittently a malformed, Java-serialized
+wrapper around the real PDF — not a clean binary body
+
+**Symptom**: `get_acknowledgement(pan="SRGPZ2026C", ack_number="116997020040926", ...)` raised
+`ERIApiError("UNEXPECTED", "Received JSON success response instead of PDF binary.")`. The
+response's `Content-Type` header was `application/json`, but `response.json()` itself raised
+`JSONDecodeError: Expecting value` — the declared content type was wrong on both counts (not a
+real PDF binary, and not real JSON either).
+
+**Diagnosis**: printing the raw response bytes showed they began with `\xac\xed\x00\x05` — the
+standard Java `ObjectOutputStream` serialization stream header — followed by readable embedded
+strings (`java.util.HashMap`, `Transfer-Encoding`, `chunked`, `Date`, `Content-Type`,
+`application/pdf`) consistent with a serialized wrapper around an upstream HTTP response object,
+and a `%PDF-1.4` marker further into the byte stream. This is a genuine ITD-side bug: their
+`getAcknowledgement` backend appears to, at least sometimes, serialize its own internal
+HTTP-response object (headers included) as the API response body instead of extracting and
+returning just the PDF bytes, while still labeling the `Content-Type` header
+`application/json`.
+
+**Confirmed independently, twice**: (1) the SAME malformed structure was found inside the ITR-V
+PDF file ITD emailed the taxpayer directly (`Pdf_116997020040926.pdf`, downloaded by the user) —
+proving this is a bug in whatever generates the PDF content ITD-side, not an artifact of the
+`getAcknowledgement` API path specifically. (2) Re-running the live API call after the fix
+(twice, in separate turns) reproduced the identical wrapped structure both times for this same
+ARN — not a one-off transient glitch for this specific ARN.
+
+**Confirmed NOT universal**: `uat-login-test/acknowledgement_GOYPT2026B_111202010240326.pdf`
+(saved during the original ITR-1 UAT round, a different PAN/ARN) is a **clean, unwrapped PDF**
+starting directly with `%PDF-1.4` at byte 0 — no Java-serialization wrapper at all. So this is an
+intermittent ITD-side inconsistency (possibly load-balanced across backend instances, one of
+which has this bug and one of which doesn't), not a constant characteristic of the endpoint.
+Client code must tolerate *both* shapes.
+
+**Fix**: `get_acknowledgement()` (`app/eri/type2/acknowledgement.py`) no longer branches on the
+`Content-Type` header to decide success vs. failure. It now searches `response.content` for the
+`%PDF-` marker (via `bytes.find`, which returns `0` for a clean unwrapped response and a
+positive offset for a wrapped one) and, if found, returns the slice from there through the last
+`%%EOF` marker (`bytes.rfind`) inclusive — correctly handling both the clean case and the
+wrapped case with the same code path. Only when no `%PDF-` marker is found at all does it fall
+back to the original Content-Type/JSON-based error-parsing logic.
+
+**Tests**: `tests/test_eri_acknowledgement.py` (new file) —
+`test_get_acknowledgement_extracts_pdf_from_malformed_java_serialized_response` (constructs a
+synthetic Java-serialization-wrapped body and asserts the correct PDF bytes are extracted) and
+`test_get_acknowledgement_raises_on_real_json_error` (a genuine JSON error response, no embedded
+PDF, must still raise `ERIApiError` with the server's code/desc — guards against the new
+magic-bytes detection swallowing real errors). Both confirmed via `git stash` against the pre-fix
+code: the malformed-extraction test fails (as expected, `UNEXPECTED` error raised instead of
+returning the PDF), the error-handling test already passed (pre-existing correct behavior,
+included as a regression fence).
+
+**End-to-end verification**: after the fix, `get_acknowledgement()` was called live twice more
+(fresh login each time) and both times correctly extracted a 48,880-byte PDF that opens cleanly
+— confirmed both via text-content extraction (matches the emailed ITR-V exactly: Acknowledgement
+Number 116997020040926, PAN SRGPZ2026C, Form ITR-4, filed u/s 139(4)) and via a full visual
+render in the browser preview pane (correct layout, Income Tax Department watermark, readable
+barcode/QR image, all 8 instruction paragraphs present, single page). The PDF was also saved to
+`Downloads/ITR4_Acknowledgement_SRGPZ2026C_116997020040926.pdf` and auto-opened via
+`os.startfile()` per the user's request that a downloaded acknowledgement auto-open — this is
+scratch-script behavior for this session's testing, not yet built into the app's own frontend
+(no frontend UI currently calls `POST /api/v1/eri/get-acknowledgement` at all — see the route in
+`app/routers/integration.py` — so there is nothing there to add auto-open behavior to yet; that
+becomes relevant only once a frontend acknowledgement-download feature is built).
+
+### 18.4 Still open: e-Verification blocked on the test PAN's bank-account EVC enablement
+
+`generate_evc(ver_mode="BANKEVC")` for SRGPZ2026C is rejected with `EF00101 "To generate EVC,
+you need to validate and enable EVC on your bank account."` This is a live ITD-side account-state
+condition, not a Taxify defect (confirmed via §18.2's fix ruling out the payload-shape
+hypothesis first). The bank account in the filed JSON (SBIN0000306 / 39210261985) is not
+validated/EVC-enabled on ITD's UAT profile for this PAN, despite the original test-PAN sheet's
+"EVC Enabled - BANKEVC" remark. User has emailed ITD about this; held pending their reply.
+Acknowledgement retrieval (§18.3) and the "already filed" status (§17) do not depend on
+e-Verification succeeding, so this does not block anything else already completed.
+
+### 18.5 Complete file-by-file record for this ITR-4 UAT round (2026-09-04)
+
+Every file created or modified while getting SRGPZ2026C's ITR-4 through validate → submit →
+acknowledgement, for future reference. Grouped by what each one is for.
+
+**Digest/algorithm fix** (§15, carried over from earlier in this same session — listed here for
+completeness of the file inventory):
+- `app/eri/digest.py` — `compute_digest()`'s HMAC loop fixed to `iterations + 1`.
+- `tests/test_eri_creation_info_invariant.py` — updated cross-reference test plus a new
+  independently-hand-computed-expected-value test for the iteration count.
+
+**ITR-4 CBDT-JSON builder fixes** (§16):
+- `app/engine/itd/itr4.py` — four separate fixes: `ScheduleBP.PersumptiveInc44AE.
+  IncChargeableUnderBus` aggregate computation (§16.1); `_filing_status_itr4()`'s Form 10-IEA
+  cascade restructured to answer only one of the two mutually-exclusive A23 branches (§16.2);
+  `Schedule80C` changed from an unconditional empty placeholder to conditional emission
+  (§16.3); `_personal_info_from_profile()`'s `AlternateAddress`/`SecondaryAdd` now always
+  emitted, defaulting to the primary address (§16.4).
+- `app/schemas/itr4.py` — `ITR4FilingProfile.form_10iea_earlier_ay_old_regime` default changed
+  `"NA"` → `"N"`.
+- `app/schemas/return_draft.py` — `Filing.form10IEAEarlierAYOldRegime` default changed `"NA"` →
+  `"N"` (same reasoning, draft-schema side).
+- `frontend/src/domain/returns/factory.ts` — `createEmptyDraft()`'s
+  `form10IEAEarlierAYOldRegime` default changed `"NA"` → `"N"` (the frontend has its own
+  independent default; the backend schema fix alone does not reach the frontend's own draft
+  factory, and a request payload with an explicit `"NA"` overrides any backend default anyway).
+- `tests/test_filing_gateway_v2_itr4.py` — five new tests:
+  `test_generate_itr4_schedule_bp_income_chargeable_set_without_44ae`,
+  `test_generate_itr4_filing_status_form10iea_default_answers_only_a23b`,
+  `test_generate_itr4_filing_status_form10iea_yes_branch_excludes_a23b`,
+  `test_generate_itr4_omits_schedule80c_when_no_80c_claim`,
+  `test_generate_itr4_defaults_alternate_address_to_primary`.
+
+**Post-submission fixes** (§18.1–18.3):
+- `app/eri/envelope.py` — `parse_response_envelope()` now returns early on a truthy `arnNumber`
+  before evaluating the ERROR-message/errors-array raise logic (§18.1).
+- `app/eri/type2/everify.py` — removed the redundant `eriUserId` key from both
+  `generate_evc()`'s and `verify_evc()`'s payload dicts (§18.2).
+- `app/eri/type2/acknowledgement.py` — `get_acknowledgement()` rewritten to locate the embedded
+  PDF via `%PDF-`/`%%EOF` byte markers rather than trusting `Content-Type` (§18.3).
+- `tests/test_eri_envelope.py` — new test
+  `test_parse_response_envelope_arn_present_overrides_error_message`.
+- `tests/test_eri_acknowledgement.py` — new file, two tests (§18.3).
+- `tests/test_eri_type2_validate_submit.py` — one pre-existing test
+  (`test_build_itr_payload_shape`) fixed in passing: it asserted `formData` was a plain JSON
+  string, stale since the base64-encoding fix earlier in this session; updated to
+  base64-decode before comparing. Unrelated to this round's own fixes, but touched the same
+  file area and was trivial to fix alongside it.
+
+**Documentation**:
+- `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` — this file: §16 (four ITR-4 builder bugs), §17
+  (SRGPZ2026C test-case trace, updated in this pass with the final filed/ARN outcome and the
+  round-7/8 clean-JSON note at §17.1), §18 (this section).
+- `CLAUDE.md` — pointer to §16's four builder bugs added under the existing digest paragraph
+  (added earlier in this session); a further pointer to §18's post-submission fixes is added in
+  this same pass.
+
+**Reference material read (not modified)**, for anyone retracing this investigation:
+- `tmp/cbdt_rules/CBDT_e-Filing_ITR 4_Validation Rules_AY 2026-27 (1).txt` — source for rules
+  #260, #235, #305, #353–364 (the Form 10-IEA/A23 cascade and Schedule80C business rules).
+- `Reference Docs by CBDT & ITD/Official JSON Schema/ITR-4_2026_Main_V1.1 (2).json` — source for
+  confirming `AadhaarCardNo`/`Schedule80C`/the various Form-10IEA fields' required-vs-optional
+  status, and for ruling out a standalone "115BAC election" field distinct from the Form 10-IEA
+  cascade.
+- `tmp/pdf_text/API_Everify_Return_v1.1 (1).txt`, `tmp/pdf_text/API_AcknowledgementFlow (1).txt`
+  — sources for §18.2/§18.3's documented-field cross-checks.
+- `uat-login-test/get_acknowledgement.sh`,
+  `uat-login-test/acknowledgement_GOYPT2026B_111202010240326.pdf` — the original ITR-1 UAT
+  round's acknowledgement retrieval, used as the counter-example proving §18.3's malformed
+  response is intermittent, not universal.
+
+**Test-only artifacts (not part of the repo, not committed)**: numerous ad-hoc scripts in this
+session's scratchpad directory (`validate_round{3,4,4b,4c,6,7,8}*.py`,
+`submit_round7.py`, `generate_evc.py`, `check_ack.py`, `check_real_ack*.py`,
+`get_ack_and_open.py`, `retry_login_validate_submit.py`, `add_client_*.py`, `recheck_fresh.py`,
+`digest_iteration_test.py`) were used to iterate live against ITD's Type-2 UAT one hypothesis at
+a time before each fix was written into the actual application code. None of these are meant to
+be preserved long-term; the corresponding application code and `tests/` files above are the
+durable record.
+
+## 19. References
 
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/ERI API Specification_v1.1 (4).pdf`
 - `Reference Docs by CBDT & ITD/Official ERI REFERENCE Documentation/Digest_generation_ERI 2 (2).pdf`

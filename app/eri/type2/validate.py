@@ -1,3 +1,5 @@
+import base64
+import json
 import requests
 from typing import Any, Dict, Optional
 
@@ -32,10 +34,37 @@ def build_itr_payload(
     module does not build or validate ITR JSON itself, matching the existing
     ``app/eri/type2/*`` modules' style of taking already-prepared values
     rather than re-deriving filing business logic at the API-call layer.
+
+    Empirically confirmed (2026-09-04, live UAT call): the live gateway
+    rejects a plain JSON string for ``formData`` with
+    errCd=EF500140 "Form data is not properly formatted, It should be in
+    double-quotes and then Base-64 encoded" -- despite the spec PDF's own
+    sample request showing an unencoded string. The real requirement is the
+    JSON string, Base64-encoded, same as this project's other Base64-then-
+    sign pattern elsewhere in the envelope. Do not "fix" this back to a
+    plain string without re-verifying against a live call first.
+
+    Also empirically confirmed the same session: sending ``form_data_json``
+    re-serialized in its original (insertion) key order -- rather than the
+    SORTED key order ``app/eri/digest.py::compute_digest()`` used to compute
+    the JSON's own embedded ``CreationInfo.Digest`` -- gets rejected with
+    errCd=Digest_Invalid "Modification to ITR details outside Utility is
+    not allowed", even though the content is byte-for-byte identical and
+    the digest is independently verifiable as correct offline. ITD's server
+    re-serializes with sorted keys before recomputing the digest to compare,
+    so an unsorted-but-content-identical payload doesn't match. To make this
+    caller-proof (no caller has to remember this), this function re-parses
+    ``form_data_json`` and re-serializes it canonically (sorted, whitespace-
+    free) itself, regardless of how the caller originally produced it.
     """
     eri_user_id = get_eri_user_id()
     if not eri_user_id:
         raise ValueError("ERI_USER_ID environment variable not set")
+
+    canonical_form_data = json.dumps(
+        json.loads(form_data_json), sort_keys=True, separators=(",", ":")
+    )
+    form_data_b64 = base64.b64encode(canonical_form_data.encode("utf-8")).decode("ascii")
 
     return {
         "serviceName": service_name,
@@ -53,7 +82,7 @@ def build_itr_payload(
             "incomeTaxSecCd": income_tax_sec_cd,
             "submittedBy": submitted_by,
         },
-        "formData": form_data_json,
+        "formData": form_data_b64,
         # Correction, confirmed directly by ITD via email (not shown in this
         # spec PDF's own sample request tables): every API call must carry a
         # timeStamp field inside the signed payload, matching login.py/

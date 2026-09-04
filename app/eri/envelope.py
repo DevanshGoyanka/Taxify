@@ -250,14 +250,33 @@ def build_request_envelope(payload: dict, eri_user_id: str) -> dict:
 
 def parse_response_envelope(response_json: dict) -> dict:
     """Parses response envelope, raises ERIApiError on failure, and returns the response dictionary.
-    
+
     Cites: Docs/API_Login_v1.1.pdf Section 4.5 (Response Parameters)
+
+    An `arnNumber` in the response is treated as definitive proof of a
+    successful submission -- confirmed live (2026-09-04, PAN SRGPZ2026C,
+    ITR-4 AY 2026-27, ARN 116997020040926): `submitItr` returned a
+    `messages[].type == "ERROR"` entry for an unlinked PAN-Aadhaar
+    (`ADHAAR_NOTIN_PROFILE_2026_004`), which this function's previous,
+    unconditional raise-on-any-ERROR-message logic treated as an outright
+    failure -- discarding the response body, including the `arnNumber`,
+    before the caller ever saw it. ITD's ITR-V acknowledgement (emailed to
+    the taxpayer independently of this API call) proved the return was
+    genuinely filed despite that message: it was a warning, not a block.
+    Do not revert this without re-verifying against a live call -- a
+    `messages[].type == "ERROR"` entry is evidently not always fatal on
+    this endpoint, and there is no other documented field that
+    distinguishes "warning that happens to be typed ERROR" from "real
+    failure" except whether an ARN was actually issued.
     """
     if "messages" not in response_json:
         # Some endpoints might not wrap in 'messages' for generic errors
         if "error" in response_json:
             raise ERIApiError(code="UNKNOWN", desc=response_json["error"])
-            
+
+    if response_json.get("arnNumber"):
+        return response_json
+
     # Check for errors in the messages array
     for msg in response_json.get("messages", []):
         if msg.get("type") == "ERROR":

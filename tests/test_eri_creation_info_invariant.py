@@ -166,18 +166,26 @@ def test_sw_id_and_digest_secret_come_from_same_bundle() -> None:
 
 def test_digest_computed_over_complete_document_matching_reference() -> None:
     """The Digest must be computed over the COMPLETE ITR document (the
-    whole ``{"ITR": {"ITRn": ...}}`` JSON), matching the ITD reference
-    ``API_Testing/digest_generator.py`` and SOP §5.3 Step 1 "Read the
-    Input JSON" — NOT just the inner form dict. The portal hashes the
-    bytes of the uploaded file, so hashing a smaller scope would diverge.
+    whole ``{"ITR": {"ITRn": ...}}`` JSON), matching SOP §5.3 Step 1
+    "Read the Input JSON" — NOT just the inner form dict. The portal
+    hashes the bytes of the uploaded file, so hashing a smaller scope
+    would diverge.
 
-    The reference implementation ``API_Testing/digest_generator.py`` is
-    the authoritative SOP §5.3 realization: HMAC-SHA256, iterated N times
-    over the minified JSON with the Digest value set to ``"-"``, then
-    Base64-encoded. This test feeds the SAME input to both and asserts
-    byte-identical output, so the algorithm (minify -> replace Digest ->
-    iterate HMAC-SHA256 -> Base64) and the scope (full document) are
-    both correct.
+    ``API_Testing/digest_generator.py`` was previously treated as "the
+    ITD reference" here, but it has NEVER actually been verified against
+    a live ITD call, and (confirmed 2026-09-04) shares the exact same
+    off-by-one bug ``compute_digest()`` had before that date: both ran
+    the HMAC-SHA256 loop exactly ``iterations`` times, when the real
+    server wants ``iterations + 1`` (see the module-level note in
+    app/eri/digest.py for the live-call evidence: a real ITD
+    ``validateItr`` call rejected the ``iterations``-times digest with
+    ``Digest_Invalid`` and accepted the ``iterations + 1``-times one).
+    ``digest_generator.py`` is a standalone script under active
+    development elsewhere and is deliberately left unmodified here (per
+    explicit instruction) — this test instead calls its ``generate_digest``
+    with ``iterations + 1`` to keep the cross-implementation consistency
+    check meaningful without asserting the (now known-wrong) literal
+    ``iterations``-times behavior as ground truth.
     """
     import json
     import sys
@@ -202,14 +210,17 @@ def test_digest_computed_over_complete_document_matching_reference() -> None:
     with patch("app.eri.config.get_eri_credentials", return_value=fake):
         taxify_full = compute_digest(full_doc)
 
-    # Reference: hashes the minified full JSON string with "-" substituted.
+    # Reference: hashes the minified full JSON string with "-" substituted,
+    # iterations + 1 times total (matching the now-confirmed-correct
+    # algorithm, not digest_generator.py's own literal iterations-times
+    # default).
     raw = json.dumps(full_doc, sort_keys=True, ensure_ascii=False, default=str)
-    ref_full = reference_digest(raw, secret, iterations)
+    ref_full = reference_digest(raw, secret, iterations + 1)
 
     assert taxify_full == ref_full, (
         f"Taxify digest {taxify_full} != reference {ref_full} — the "
-        "HMAC-SHA256 N-iteration algorithm or the document scope diverges "
-        "from the SOP §5.3 reference."
+        "HMAC-SHA256 (N+1)-iteration algorithm or the document scope "
+        "diverges from the confirmed-correct behavior."
     )
     assert taxify_full != "-"
     assert len(taxify_full) == 44
@@ -220,6 +231,52 @@ def test_digest_computed_over_complete_document_matching_reference() -> None:
     with patch("app.eri.config.get_eri_credentials", return_value=fake):
         inner_digest = compute_digest(inner_only)
     assert inner_digest != taxify_full
+
+
+def test_compute_digest_total_hmac_operations_is_iterations_plus_one() -> None:
+    """Direct, hand-computed regression fence for the off-by-one fix
+    (2026-09-04) -- independent of digest_generator.py or any other
+    implementation, and independent of live network access.
+
+    Confirmed against a real ITD Type-2 UAT ``validateItr`` call: the
+    digest with the loop run ``iterations`` times was rejected with
+    ``errCd=Digest_Invalid``; the SAME payload with the loop run
+    ``iterations + 1`` times was accepted (the response changed to real
+    ITR business-rule validation errors, i.e. the digest check itself
+    passed). This test locks in ``iterations + 1`` by comparing against
+    an expected value computed independently below, not by calling
+    ``compute_digest()`` twice and comparing to itself.
+    """
+    import hashlib
+    import hmac as hmac_module
+    import json as json_module
+
+    secret = "testsecret123"
+    iterations = 5
+    fake = ERICredentials(
+        mode="type3", environment="uat",
+        sw_id="SW20014122",
+        digest_secret_key=secret,
+        digest_iterations=iterations,
+    )
+    doc = {"ITR": {"ITR1": {"CreationInfo": {"Digest": "-"}, "Data": {"x": 1}}}}
+
+    with patch("app.eri.config.get_eri_credentials", return_value=fake):
+        actual = compute_digest(doc)
+
+    # Independently hand-rolled expected value: iterations + 1 = 6 total
+    # HMAC-SHA256 operations over the same canonical payload
+    # compute_digest() itself would produce (sorted keys, no whitespace,
+    # separators=(",",":"), Digest="-").
+    payload = json_module.dumps(doc, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    key_bytes = secret.encode("utf-8")
+    data = payload.encode("utf-8")
+    for _ in range(iterations + 1):
+        data = hmac_module.new(key_bytes, data, hashlib.sha256).digest()
+    import base64 as base64_module
+    expected = base64_module.b64encode(data).decode("utf-8")
+
+    assert actual == expected == "74MGpDDWzh8fUysqY6qfD82i0haT5MZXbUj4n6Oypq4="
 
 
 def test_serialize_for_upload_round_trips_digest() -> None:

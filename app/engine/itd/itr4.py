@@ -194,7 +194,17 @@ def _personal_info_from_profile(
         },
         "PAN": profile.pan,
         "Address": _address_from_postal(profile.primary_address, include_contact=True),
-        "SecondaryAdd": "Y" if profile.alternate_address else "N",
+        # Secondary address details are mandatory in Part A General
+        # Information -- confirmed live: ITD's Type-2 UAT validateItr
+        # rejected an entirely-absent AlternateAddress with "Secondary
+        # address details are not provided in Schedule Part A General
+        # information" (2026-09-04, PAN SRGPZ2026C). input_rules.py's
+        # rule R410 already flagged this as mandatory but only as an
+        # informational check, not a JSON-build-time default. When the
+        # caller supplies no genuinely distinct secondary address,
+        # default it to the primary address ("secondary same as
+        # primary") rather than omitting the block.
+        "SecondaryAdd": "Y",
         "DOB": profile.date_of_birth.isoformat(),
         "EmployerCategory": profile.employer_category,
         "Status": profile.assessee_status.value,
@@ -205,11 +215,10 @@ def _personal_info_from_profile(
         "STDcode": phone.landline_std_code,
         "PhoneNo": _validate_phone_no(phone.landline_phone_no),
     }
-    if profile.alternate_address is not None:
-        personal["AlternateAddress"] = _address_from_postal(
-            profile.alternate_address,
-            include_contact=False,
-        )
+    personal["AlternateAddress"] = _address_from_postal(
+        profile.alternate_address or profile.primary_address,
+        include_contact=False,
+    )
     if profile.aadhaar_number is not None:
         personal["AadhaarCardNo"] = profile.aadhaar_number
     return personal
@@ -246,11 +255,13 @@ def _filing_status_itr4(profile: Optional[ITR4FilingProfile]) -> dict[str, Any]:
     if profile is None:
         result.update({
             "ReturnFileSec": 11,
-            "Form10IEAEarlierAYOldRegime": "NA",
+            # "N", not "NA" -- see the rule #260/#235 note below.
+            "Form10IEAEarlierAYOldRegime": "N",
             "SeventhProvisio139": "N",
             "AsseseeRepFlg": "N",
-            "F10IEAEarlierAYNewRegime": "N",
-            "F10IEACurrAYNewRegime": "N",
+            # Only the A23(B) branch applies when A23="N" -- see the
+            # rule #353-364 note below; the A23(A) new-regime-cascade
+            # fields must not be emitted alongside it.
             "F10IEACurrAYOldRegime": "N",
         })
         return result
@@ -307,29 +318,39 @@ def _filing_status_itr4(profile: Optional[ITR4FilingProfile]) -> dict[str, Any]:
             "RepMobileNo": int(rep.mobile_no),
         }
 
-    # Form 10-IEA cascade — emit only when the caller supplies real values.
-    if profile.form_10iea_ass_year:
-        result["Form10IEAAssYear"] = profile.form_10iea_ass_year
-    if profile.form_10iea_earlier_ay_ack_old_regime > 0:
-        result["Form10IEAEarlierAYAckOldRegime"] = profile.form_10iea_earlier_ay_ack_old_regime
+    # Form 10-IEA cascade — CBDT ITR-4 Validation Rules AY 2026-27 rules
+    # #353-364: Form10IEAEarlierAYOldRegime ("A23") gates two MUTUALLY
+    # EXCLUSIVE sub-branches, only one of which may be answered. "Y" (filed
+    # 10-IEA in an earlier AY for old regime) activates A23(A) — the
+    # EarlierAYNewRegime/CurrAYNewRegime "re-entered new regime" fields.
+    # "N" activates A23(B) — CurrAYOldRegime only. "NA" (Firm only, rule
+    # #235) activates neither. Emitting both branches at once — even with
+    # "N" answers — was REJECTED live by ITD's Type-2 UAT validateItr with
+    # "Multiple question shall not be responded in A23" (2026-09-04, PAN
+    # SRGPZ2026C); the prior code emitted both branches unconditionally.
+    if profile.form_10iea_earlier_ay_old_regime == "Y":
+        if profile.form_10iea_ass_year:
+            result["Form10IEAAssYear"] = profile.form_10iea_ass_year
+        if profile.form_10iea_earlier_ay_ack_old_regime > 0:
+            result["Form10IEAEarlierAYAckOldRegime"] = profile.form_10iea_earlier_ay_ack_old_regime
 
-    result["F10IEAEarlierAYNewRegime"] = profile.f10iea_earlier_ay_new_regime
-    if profile.ass_yr_f10iea_new_tax_reg:
-        result["AssYrF10IEANewTaxReg"] = profile.ass_yr_f10iea_new_tax_reg
-    if profile.form_10iea_earlier_ay_ack_new_regime > 0:
-        result["Form10IEAEarlierAYAckNewRegime"] = profile.form_10iea_earlier_ay_ack_new_regime
+        result["F10IEAEarlierAYNewRegime"] = profile.f10iea_earlier_ay_new_regime
+        if profile.ass_yr_f10iea_new_tax_reg:
+            result["AssYrF10IEANewTaxReg"] = profile.ass_yr_f10iea_new_tax_reg
+        if profile.form_10iea_earlier_ay_ack_new_regime > 0:
+            result["Form10IEAEarlierAYAckNewRegime"] = profile.form_10iea_earlier_ay_ack_new_regime
 
-    result["F10IEACurrAYNewRegime"] = profile.f10iea_curr_ay_new_regime
-    if profile.f10iea_date_curr_ay_new_tax:
-        result["F10IEADateCurrAYNewTax"] = profile.f10iea_date_curr_ay_new_tax
-    if profile.f10iea_ack_no_curr_ay_new_tax > 0:
-        result["F10IEAAckNoCurrAYNewTax"] = profile.f10iea_ack_no_curr_ay_new_tax
-
-    result["F10IEACurrAYOldRegime"] = profile.f10iea_curr_ay_old_regime
-    if profile.f10iea_date_curr_ay_old_tax:
-        result["F10IEADateCurrAYOldTax"] = profile.f10iea_date_curr_ay_old_tax
-    if profile.f10iea_ack_no_curr_ay_old_tax > 0:
-        result["F10IEAAckNoCurrAYOldTax"] = profile.f10iea_ack_no_curr_ay_old_tax
+        result["F10IEACurrAYNewRegime"] = profile.f10iea_curr_ay_new_regime
+        if profile.f10iea_date_curr_ay_new_tax:
+            result["F10IEADateCurrAYNewTax"] = profile.f10iea_date_curr_ay_new_tax
+        if profile.f10iea_ack_no_curr_ay_new_tax > 0:
+            result["F10IEAAckNoCurrAYNewTax"] = profile.f10iea_ack_no_curr_ay_new_tax
+    elif profile.form_10iea_earlier_ay_old_regime == "N":
+        result["F10IEACurrAYOldRegime"] = profile.f10iea_curr_ay_old_regime
+        if profile.f10iea_date_curr_ay_old_tax:
+            result["F10IEADateCurrAYOldTax"] = profile.f10iea_date_curr_ay_old_tax
+        if profile.f10iea_ack_no_curr_ay_old_tax > 0:
+            result["F10IEAAckNoCurrAYOldTax"] = profile.f10iea_ack_no_curr_ay_old_tax
 
     return result
 
@@ -740,7 +761,10 @@ def _schedule_bp(
         "GoodsDtlsUs44AE": [],
         "PersumptiveInc44AE": {
             "TotPersumInc44AE": 0, "SalInterestByFirm": 0,
-            "TotalPersumptiveInc": 0, "IncChargeableUnderBus": 0,
+            "TotalPersumptiveInc": 0,
+            "IncChargeableUnderBus": _to_rupees(
+                income_44ad + income_44ada + income_44ae
+            ),
         },
         "TurnoverGrsRcptForGSTIN": [],
         "TotalTurnoverGrsRcptGSTIN": 0,
@@ -2139,8 +2163,22 @@ def build_itr4_json(
         "Verification": ver,
         "ScheduleBP": bp,
         "TaxExmpIntIncDtls": _tax_exmp_int_inc_dtls(input_data),
-        "Schedule80C": _schedule_80c_total(deduction("80C"), input_data, ded_sched),
     }
+
+    # Schedule80C — omitted (not an empty placeholder) when nothing is
+    # claimed. CBDT ITR-4 Validation Rules AY 2026-27 rule #305: an
+    # Individual on the new tax regime who has "filled" ANY of the
+    # 80C/80E/80EE/80EEA/80EEB/10(13A) schedules is rejected, regardless of
+    # whether the schedule's own total is zero -- ITD's live Type-2 UAT
+    # validateItr treated the mere presence of an empty Schedule80C object
+    # as "filled" and rejected it with "Since you have selected new tax
+    # regime deduction u/s 10(13A), 80C... are not applicable to you"
+    # (2026-09-04, PAN SRGPZ2026C). Every sibling schedule (80D, 80G,
+    # ScheduleEA10_13A, etc.) already follows this omit-when-unclaimed
+    # pattern; Schedule80C was the one outlier emitting an unconditional
+    # placeholder.
+    if deduction("80C") > 0:
+        itr4["Schedule80C"] = _schedule_80c_total(deduction("80C"), input_data, ded_sched)
 
     # TaxReturnPreparer — only when supplied
     if input_data is not None and input_data.tax_return_preparer is not None:
