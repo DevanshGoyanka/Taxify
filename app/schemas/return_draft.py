@@ -163,6 +163,13 @@ class SeventhProvisoClause(Identified):
     amount: Money = Field(default=Decimal("0"))
 
 
+class JurisdictionResidenceEntry(Identified):
+    """One jurisdiction-of-residence + TIN row (ITR-2's ``JurisdictionResPrevYrDtls``)."""
+
+    jurisdictionCode: str = Field(default="", description="ITD numeric country code.")
+    tin: str = Field(default="", description="Taxpayer identification number in that jurisdiction.")
+
+
 class SeventhProviso(_StrictModel):
     """Seventh-proviso to Section 139(1) declarations."""
 
@@ -1432,6 +1439,32 @@ class FilingStatus(_StrictModel):
     leiValidUptoDate: Optional[str] = Field(
         default=None,
         description="LEI validity expiry date (YYYY-MM-DD). ITR-2 only.",
+    )
+    conditionsResStatus: Literal["", "1", "2", "3", "4", "5", "6", "7", "8", "9"] = Field(
+        default="",
+        description="Section 6 residential-status basis code ('' = not "
+        "specified). Only meaningful for NRI/RNOR. ITR-2 only.",
+    )
+    jurisdictionResidenceEntries: list[JurisdictionResidenceEntry] = Field(
+        default_factory=list,
+        description="Jurisdiction(s) of residence and TIN, for NRI/RNOR "
+        "taxpayers. ITR-2 only.",
+    )
+    totalStayIndiaPrevYr: Optional[int] = Field(
+        default=None, ge=0, le=365,
+        description="Total days stayed in India during the previous year. "
+        "ITR-2 only.",
+    )
+    totalStayIndia4PrecYr: Optional[int] = Field(
+        default=None, ge=0, le=1461,
+        description="Total days stayed in India during the 4 preceding "
+        "years. ITR-2 only.",
+    )
+    benefitUs115H: bool = Field(
+        default=False,
+        description="Section 115H benefit claim — an NRI who becomes "
+        "resident may continue special-rate treatment on specified "
+        "foreign-exchange investment income. ITR-2 only.",
     )
 
 

@@ -65,6 +65,7 @@ from app.schemas.itr2 import (
     EmployerFilingDetail,
     ITR2FilingProfile,
     ITR2Input,
+    JurisdictionResidenceEntry,
     PropertyFilingDetail,
     ResidentialStatus as ITR2ResidentialStatus,
     TDS3FilingDetail,
@@ -1242,6 +1243,15 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
             sebi_registration_number=filing.sebiRegistrationNumber.strip() or None,
             lei_number=filing.leiNumber.strip() or None,
             lei_valid_upto_date=_to_date(filing.leiValidUptoDate),
+            conditions_res_status=filing.conditionsResStatus or None,
+            jurisdiction_residence_entries=[
+                JurisdictionResidenceEntry(jurisdiction_code=row.jurisdictionCode, tin=row.tin)
+                for row in filing.jurisdictionResidenceEntries
+                if row.jurisdictionCode and row.tin
+            ],
+            total_stay_india_prev_yr=filing.totalStayIndiaPrevYr,
+            total_stay_india_4_prec_yr=filing.totalStayIndia4PrecYr,
+            benefit_us_115h=filing.benefitUs115H,
             # ITR2Input's cross-schedule validator requires this to equal
             # (schedule_5a is not None). Mirror draft_to_itr2_input.py's
             # _map_schedule_5a guard exactly (spouseName + spousePAN both

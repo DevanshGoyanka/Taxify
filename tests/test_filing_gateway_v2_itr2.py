@@ -239,3 +239,46 @@ def test_compute_canonical_itr2_succeeds_with_no_employer_category() -> None:
     pipeline = compute_canonical_itr2(draft)
     assert not hasattr(pipeline.typed_input.filing_profile, "employer_category")
     assert not pipeline.computation.errors
+
+
+# ── §4.1/§4.4: residential-status facts and Section 115H ────────────────────
+
+def test_generate_cbdt_json_itr2_emits_residential_status_facts() -> None:
+    """Section 6 basis, day counts, jurisdiction/TIN, and 115H all reach the
+    official JSON. Regression coverage for audit §4.1/§4.4: none of this was
+    representable at any layer before this fix -- only the bare
+    ResidentialStatus classification itself was ever emitted."""
+    from app.schemas.return_draft import JurisdictionResidenceEntry as DraftJurisdictionEntry
+
+    draft = _filing_ready_itr2_draft()
+    draft.personal.residentialStatus = "RNOR"
+    draft.filing.conditionsResStatus = "2"
+    draft.filing.totalStayIndiaPrevYr = 90
+    draft.filing.totalStayIndia4PrecYr = 400
+    draft.filing.benefitUs115H = True
+    draft.filing.jurisdictionResidenceEntries = [
+        DraftJurisdictionEntry(id="j1", jurisdictionCode="2", tin="123-45-6789"),
+    ]
+    official_json, _summary = generate_cbdt_json(draft)
+    filing_status = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
+    assert filing_status["ResidentialStatus"] == "NOR"
+    assert filing_status["ConditionsResStatus"] == "2"
+    assert filing_status["TotalPrStayIndiaPrevYr"] == 90
+    assert filing_status["TotalPrStayIndia4PrecYr"] == 400
+    assert filing_status["BenefitUs115HFlg"] == "Y"
+    jur_row = filing_status["JurisdictionResPrevYr"]["JurisdictionResPrevYrDtls"][0]
+    assert jur_row["JurisdictionResidence"] == "2"
+    assert jur_row["TIN"] == "123-45-6789"
+
+
+def test_generate_cbdt_json_itr2_omits_residential_status_facts_when_unset() -> None:
+    """No residential-status detail entered means no fields emitted at all --
+    all of it is genuinely optional per the official schema."""
+    draft = _filing_ready_itr2_draft()
+    official_json, _summary = generate_cbdt_json(draft)
+    filing_status = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
+    assert "ConditionsResStatus" not in filing_status
+    assert "JurisdictionResPrevYr" not in filing_status
+    assert "TotalPrStayIndiaPrevYr" not in filing_status
+    assert "TotalPrStayIndia4PrecYr" not in filing_status
+    assert "BenefitUs115HFlg" not in filing_status

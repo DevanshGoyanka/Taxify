@@ -81,6 +81,13 @@ class AssesseeStatus(str, Enum):
     HUF = "H"
 
 
+class JurisdictionResidenceEntry(StrictModel):
+    """One jurisdiction-of-residence + TIN row (official ``JurisdictionResPrevYrDtls``)."""
+
+    jurisdiction_code: str = Field(min_length=1)
+    tin: str = Field(min_length=1, max_length=75)
+
+
 class ITR2FilingProfile(StrictModel):
     """Identity, address, filing status, and verification facts."""
 
@@ -114,6 +121,11 @@ class ITR2FilingProfile(StrictModel):
     portuguese_civil_code_applies: bool = False
     lei_number: Optional[str] = Field(default=None, min_length=20, max_length=20)
     lei_valid_upto_date: Optional[date] = None
+    conditions_res_status: Optional[Literal["1", "2", "3", "4", "5", "6", "7", "8", "9"]] = None
+    jurisdiction_residence_entries: List[JurisdictionResidenceEntry] = Field(default_factory=list)
+    total_stay_india_prev_yr: Optional[int] = Field(default=None, ge=0, le=365)
+    total_stay_india_4_prec_yr: Optional[int] = Field(default=None, ge=0, le=1461)
+    benefit_us_115h: bool = False
     father_name: str = Field(min_length=1, max_length=125)
     verification_place: str = Field(min_length=1, max_length=50)
     verification_capacity: Literal["S", "K"] = "S"

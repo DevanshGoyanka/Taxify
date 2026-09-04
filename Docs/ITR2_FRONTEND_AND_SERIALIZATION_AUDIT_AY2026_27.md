@@ -788,6 +788,32 @@ at `itr2.py:111–137`. The frontend does not visibly capture the complete suppo
 
 **Remediation:** add a conditional residential-status questionnaire and retain the supporting facts in the canonical profile.
 
+> **Fix status (2026-09-04): fixed and verified.** Re-audit at implementation time found an even
+> more basic gap than the one originally documented: `PersonalInfoTab.tsx` had **no residential-
+> status selector at all** — `draft.personal.residentialStatus` (ROR/RNOR/NR) was set nowhere in
+> the ITR-2 filing form itself, only read by `eligibility.ts`/`itr2Mapper.ts` elsewhere. Added the
+> selector first, then the full supporting-facts questionnaire.
+>
+> New fields (all optional per the official schema — only bare `ResidentialStatus` is required):
+> `conditionsResStatus` (Section 6 basis code 1-9), `jurisdictionResidenceEntries` (new
+> `JurisdictionResidenceEntry` repeatable row: country + TIN, reusing the existing
+> `ITD_COUNTRY_CODES` dropdown already used for postal addresses), `totalStayIndiaPrevYr` (0-365),
+> `totalStayIndia4PrecYr` (0-1461) — added to `FilingStatus` (`return_draft.py`) and
+> `ITR2FilingProfile` (`app/schemas/itr2.py`), wired through `_itr2_filing_profile()`
+> (`filing_gateway_v2.py`), emitted as `ConditionsResStatus`/`JurisdictionResPrevYr.
+> JurisdictionResPrevYrDtls[]`/`TotalPrStayIndiaPrevYr`/`TotalPrStayIndia4PrecYr` in
+> `_part_a_gen1()` (`itd/itr2.py`), each only when set. Frontend section gated on
+> `residentialStatus !== 'ROR'` (matches this remediation's own "conditional questionnaire"
+> suggestion — day-count/jurisdiction facts are only meaningful for NRI/RNOR).
+>
+> §4.4's `BenefitUs115HFlg` was implemented in the same pass (see below) since it lives in the
+> identical schema block and is logically tied to residential status.
+>
+> Regression tests: `test_generate_cbdt_json_itr2_emits_residential_status_facts` and
+> `test_generate_cbdt_json_itr2_omits_residential_status_facts_when_unset` in
+> `tests/test_filing_gateway_v2_itr2.py`, confirmed via `git stash` to be absent on pre-fix code.
+> `npm run build` clean. Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` suite (281 tests) green.
+
 ## 4.2 FII/FPI and SEBI information is incomplete
 
 The backend emits `FiiFpiFlag` and optionally `SEBIRegNo` around `itr2.py:132–137`, but the frontend does not provide a complete workflow for all associated information and income classification.
@@ -823,6 +849,18 @@ The model has `isDirector` and `holdsUnlistedShares` around `return_draft.py:149
 The frontend filing-profile workflow does not expose section 115H applicability and supporting information.
 
 **Severity: High**
+
+> **Fix status (2026-09-04): fixed and verified.** Implemented in the same pass as §4.1 (same
+> schema block, `BenefitUs115HFlg`, `Y`/`N`, optional). Added `benefitUs115H: bool` to
+> `FilingStatus`/`ITR2FilingProfile`, wired through `_itr2_filing_profile()`, emitted as
+> `BenefitUs115HFlg: "Y"` in `_part_a_gen1()` only when true (omitted otherwise). Frontend
+> checkbox added to the same conditional "Residential status details" section as §4.1.
+> Confirmed backend had genuinely zero representation before this fix — `prefill_parser.py`
+> already parsed `benefitUs115HFlg` from ITD prefill JSON into an intermediate dataclass field,
+> but nothing downstream could receive or re-emit it.
+>
+> Regression test: `test_generate_cbdt_json_itr2_emits_residential_status_facts` (shared with
+> §4.1, asserts `BenefitUs115HFlg == "Y"`).
 
 ## 4.5 Section 92CD is missing from the filing-section dropdown
 

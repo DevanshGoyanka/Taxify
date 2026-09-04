@@ -178,6 +178,11 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
         <option value="">-- Select employer category --</option>
         {EMPLOYER_CATEGORY_OPTIONS.map(({ code, label }) => <option key={code} value={code}>{code} — {label}</option>)}
       </SelectField>
+      {itrForm === 'ITR-2' && <SelectField label="Residential Status" value={personal.residentialStatus || 'ROR'} onChange={(value) => updatePersonal({ residentialStatus: value as Personal['residentialStatus'] })} required>
+        <option value="ROR">Resident and Ordinarily Resident</option>
+        <option value="RNOR">Resident but Not Ordinarily Resident</option>
+        <option value="NR">Non-Resident</option>
+      </SelectField>}
     </div></div>
     <div style={CARD_STYLE}><h4 style={{ marginTop: 0, fontSize: 14 }}>Contact details</h4><div style={GRID_STYLE}>
       <Field label="Mobile Country Code" value={personal.mobileCountryCode} onChange={(value) => updatePersonal({ mobileCountryCode: value.replace(/\D/g, '').slice(0, 5) })} required pattern="[0-9]{1,5}" maxLength={5} inputMode="numeric" />
@@ -249,6 +254,36 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       <Field label="Legal Entity Identifier (LEI)" value={filing.leiNumber} onChange={(value) => updateFiling({ leiNumber: value.toUpperCase().slice(0, 20) })} maxLength={20} help="Required by CBDT instructions only when the refund claimed is ₹50 crore or more." />
       {filing.leiNumber && <Field label="LEI valid upto date" value={filing.leiValidUptoDate || ''} onChange={(value) => updateFiling({ leiValidUptoDate: value || null })} type="date" />}
     </div></div></>}
+    {itrForm === 'ITR-2' && (personal.residentialStatus || 'ROR') !== 'ROR' && <><SectionHeading title="Residential status details" description="Basis, day counts, and jurisdiction of residence supporting the NRI/RNOR classification above." /><div style={CARD_STYLE}><div style={GRID_STYLE}>
+      <SelectField label="Basis for residential status (Section 6)" value={filing.conditionsResStatus} onChange={(value) => updateFiling({ conditionsResStatus: value as Filing['conditionsResStatus'] })}>
+        <option value="">-- Select basis --</option>
+        <option value="1">1 — 182 days or more in India this year [6(1)(a)]</option>
+        <option value="2">2 — 60+ days this year and 365+ days in preceding 4 years [6(1)(c)]</option>
+        <option value="3">3 — Non-resident in 9 of the preceding 10 years [6(6)(a)]</option>
+        <option value="4">4 — In India 729 days or less in preceding 7 years [6(6)(a)]</option>
+        <option value="5">5 — Non-resident during the previous year</option>
+        <option value="6">6 — Citizen/PIO visiting India, income &gt;₹15L, 120-181 days [6(6)(c)]</option>
+        <option value="7">7 — Citizen, income &gt;₹15L, not liable to tax elsewhere [6(6)(d)/6(1A)]</option>
+        <option value="8">8 — Citizen, crew member of Indian ship [Expl. 1(a) of 6(1)(c)]</option>
+        <option value="9">9 — Citizen/PIO visiting India [Expl. 1(b) of 6(1)(c)]</option>
+      </SelectField>
+      <Field label="Total days stayed in India this previous year" value={filing.totalStayIndiaPrevYr ?? ''} onChange={(value) => updateFiling({ totalStayIndiaPrevYr: value === '' ? null : Math.max(0, Math.min(365, Number(value) || 0)) })} type="number" min={0} max={365} inputMode="numeric" />
+      <Field label="Total days stayed in India in preceding 4 years" value={filing.totalStayIndia4PrecYr ?? ''} onChange={(value) => updateFiling({ totalStayIndia4PrecYr: value === '' ? null : Math.max(0, Math.min(1461, Number(value) || 0)) })} type="number" min={0} max={1461} inputMode="numeric" />
+      <CheckField label="Claiming Section 115H benefit (continued special-rate treatment for an NRI who becomes resident)" checked={filing.benefitUs115H} onChange={(checked) => updateFiling({ benefitUs115H: checked })} />
+    </div>
+    <div style={{ marginTop: 16 }}>
+      <h4 style={{ margin: '0 0 10px', fontSize: 13 }}>Jurisdiction(s) of residence</h4>
+      {filing.jurisdictionResidenceEntries.map((row, index) => <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 10 }}>
+        <SelectField label={`Jurisdiction ${index + 1} country`} value={row.jurisdictionCode} onChange={(value) => updateFiling({ jurisdictionResidenceEntries: filing.jurisdictionResidenceEntries.map((item) => item.id === row.id ? { ...item, jurisdictionCode: value } : item) })} required>
+          <option value="">-- Select country --</option>
+          {ITD_COUNTRY_CODES.map((country) => <option key={country.value} value={country.value}>{country.value} — {country.label}</option>)}
+        </SelectField>
+        <Field label={`Jurisdiction ${index + 1} TIN`} value={row.tin} onChange={(value) => updateFiling({ jurisdictionResidenceEntries: filing.jurisdictionResidenceEntries.map((item) => item.id === row.id ? { ...item, tin: value } : item) })} required maxLength={75} />
+        <button type="button" onClick={() => updateFiling({ jurisdictionResidenceEntries: filing.jurisdictionResidenceEntries.filter((item) => item.id !== row.id) })}>Remove</button>
+      </div>)}
+      <button type="button" onClick={() => updateFiling({ jurisdictionResidenceEntries: [...filing.jurisdictionResidenceEntries, { id: `jurisdiction-${Date.now()}`, jurisdictionCode: '', tin: '' }] })}>Add jurisdiction</button>
+    </div>
+    </div></>}
     <SectionHeading title="Verification" description="The declaration must be accepted before official CBDT JSON generation." />
     <div style={CARD_STYLE}><div style={GRID_STYLE}>
       <SelectField label="Verification capacity" value={verification.capacity} onChange={(value) => updateVerification({ capacity: value as Verification['capacity'] })} required><option value="SELF">Self</option><option value="REPRESENTATIVE">Representative assessee</option>{itrForm === 'ITR-4' && <option value="KARTA">Karta</option>}{itrForm === 'ITR-4' && <option value="PARTNER">Partner</option>}</SelectField>

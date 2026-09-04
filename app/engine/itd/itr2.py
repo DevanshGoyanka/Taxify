@@ -157,6 +157,21 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         filing_status["LEIDtls"] = {"LEINumber": profile.lei_number}
         if profile.lei_valid_upto_date:
             filing_status["LEIDtls"]["ValidUptoDate"] = _date(profile.lei_valid_upto_date)
+    if profile.conditions_res_status:
+        filing_status["ConditionsResStatus"] = profile.conditions_res_status
+    if profile.jurisdiction_residence_entries:
+        filing_status["JurisdictionResPrevYr"] = {
+            "JurisdictionResPrevYrDtls": [
+                {"JurisdictionResidence": entry.jurisdiction_code, "TIN": entry.tin}
+                for entry in profile.jurisdiction_residence_entries
+            ]
+        }
+    if profile.total_stay_india_prev_yr is not None:
+        filing_status["TotalPrStayIndiaPrevYr"] = profile.total_stay_india_prev_yr
+    if profile.total_stay_india_4_prec_yr is not None:
+        filing_status["TotalPrStayIndia4PrecYr"] = profile.total_stay_india_4_prec_yr
+    if profile.benefit_us_115h:
+        filing_status["BenefitUs115HFlg"] = "Y"
     return {"PersonalInfo": personal_info, "FilingStatus": filing_status}
 
 
