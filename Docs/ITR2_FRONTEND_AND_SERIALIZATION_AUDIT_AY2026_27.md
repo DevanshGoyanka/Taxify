@@ -32,9 +32,24 @@
 >   inline in the same pass.
 >
 > See each section's own "Fix status"/"Re-verified" blockquote for full evidence, regression
-> tests, and `git stash` pre-fix confirmation. Remaining open work is the 7 P1 findings in §5-§13
-> — the overall "not production-ready" status is unchanged pending those, though every CRITICAL P0
-> finding is now closed with a verified fix.
+> tests, and `git stash` pre-fix confirmation.
+>
+> **Update (2026-09-05): Schedule OS's remaining P0 sub-items are now also closed.** Per explicit
+> user instruction that the system must capture and process every schema field, mandatory or
+> optional, §3.4's Schedule OS finding is now closed except for two narrow, explicitly-tracked
+> items (PTI sub-category detail; category-specific TDS linkage) — see §3.4's "Update
+> (2026-09-05)" blockquotes for the full write-up, including a full NRI Section 115A/AC/ACA/AD/E
+> special-rate income module (17 new tax-rate handlers) and DTAA-rate Other Sources tax
+> computation (a pre-written but never-called helper function, now wired up).
+>
+> **Correction to this note's own prior claim**: the sentence previously here — "every CRITICAL P0
+> finding is now closed" — was inaccurate and has been removed. §3.1 (Schedule 115AD) and several
+> §3.2 (capital-gains) sub-items remain genuinely open P0 findings, not merely P1 polish; see the
+> consolidated open-findings list in §18 for the accurate current state. What *is* true: every P0
+> finding in the **filing-profile family** (§4.1-§4.7, Phase 3/4) and in **TDS/TCS/Schedule IT**
+> (§3.6-§3.8) is closed with a verified fix, and Schedule OS (§3.4) is now closed to the same
+> two-item exception noted above. Schedule 115AD, the capital-gains loss/exemption/indexed-cost
+> items, and the legacy-mapper duplication remain open P0 work.
 
 ## Executive conclusion
 
@@ -1407,6 +1422,13 @@ The frontend supports categories that are initialized but not equivalently seria
 
 **Severity: Critical**
 
+> **Status (2026-09-05): superseded by §3.4, mostly closed.** This is the same underlying finding
+> as §3.4 (Schedule OS), restated here at summary level. Of the categories named above, only PTI
+> remains genuinely unserialized — winnings, gifts, DTAA, 89A, PF, unexplained income, and
+> special-rate income are all now wired end-to-end (disclosure and, where applicable, taxation).
+> See §3.4's fix write-ups for the full evidence trail; this entry is kept for cross-reference,
+> not as an independent open finding.
+
 ## 7.2 Exempt-income rows default to a misleading category
 
 New exempt-income rows default to provident-fund income under section 10(11), even if the taxpayer has not selected that source.
@@ -1734,10 +1756,13 @@ Even those cases require independent review of the generated JSON against the of
      for DTAA tax computation turned out to be a pre-existing unused helper function plus the
      same GTI-inclusion wiring gap as everything else in this list).
    - PTI (pass-through income) sub-category detail — still open.
-   - `RACE_HORSE_ACTIVITY` winnings (owning/maintaining race horses — a distinct business-like OS
-     sub-head with its own deduction rules) — still open, no calculator support at all yet.
-   - category-specific detail and TDS linkage — still open.
-   - populated-category preservation tests — added for winnings/PF/gifts; still open for the rest.
+   - ~~`RACE_HORSE_ACTIVITY` winnings~~ — **fixed 2026-09-04**, see §3.4's "Update (2026-09-05)"
+     write-up: net profit now flows to `IncFromOwnHorse` and GTI, per section 74A(3)'s no-loss-
+     set-off rule (this bullet was stale — the fix landed before this list was last touched).
+   - category-specific detail and TDS linkage (beyond what's now wired: dividend/DTAA/winnings/
+     PF/89A/unexplained-income/special-rate/deductions detail) — still open.
+   - populated-category preservation tests — added for winnings/PF/gifts/unexplained-income/89A/
+     dividend/DTAA/deductions/race-horse/machinery-rent/special-rate/DTAA-tax; still open for PTI.
 
 4. ~~**Correct TDS/TCS credits**~~ — **fixed 2026-09-04**, see §3.6/§3.7's fix write-ups: ownership,
    spouse/other-person PAN, brought-forward and carry-forward, correct head of income, and total
@@ -1891,6 +1916,21 @@ Even those cases require independent review of the generated JSON against the of
 
 Taxify has meaningful architecture and broad UI coverage, including a strong canonical model and a structured CBDT serializer. The frontend build succeeds, confirming build integrity.
 
-That success does not establish ITR-2 filing completeness. The implementation currently has a material gap between UI/model coverage and official JSON output. Before real ITR-2 filing, the project must complete the canonical serialization path and resolve the P0 findings, especially Schedule 115AD, capital gains, Schedule OS, TDS/TCS, filing profile, and negative house-property handling.
+That success does not establish ITR-2 filing completeness. The implementation currently has a material gap between UI/model coverage and official JSON output. Before real ITR-2 filing, the project must complete the canonical serialization path and resolve the remaining P0 findings.
 
-> **Final classification: broadly implemented but not production-ready for complete AY 2026–27 ITR-2 filing.**
+> **Update (2026-09-05): substantial P0 progress since this assessment was first written.**
+> Of the P0 list in §18: filing-profile completeness (item 6, all seven sub-items), TDS/TCS
+> credits (item 4), Schedule IT (§3.8), and negative-HP handling (item 5, retracted as never a
+> defect) are all closed with verified fixes. Schedule OS (item 3) is closed except PTI detail and
+> broader TDS linkage. What remains open and blocking production filing: the legacy-mapper
+> duplication (item 1), Schedule 115AD (item 2, needs a `CGAssetType`/FII-flag schema extension),
+> and several capital-gains sub-items (item 2: per-transaction 54/54B/54EC/54F exemption rows,
+> signed-loss handling for 10 non-land/building asset categories, CYLA/BFLA/CFL reconciliation,
+> and the section 112(1)(a) indexed-cost-primacy defect found 2026-09-04). See the consolidated
+> open-findings list this update maintains for the complete current picture.
+>
+> **Final classification: broadly implemented, meaningfully more complete than the original
+> audit found, but still not production-ready for complete AY 2026–27 ITR-2 filing** — the
+> remaining gaps concentrate in capital gains, Schedule 115AD, and the legacy-mapper duplication,
+> not the broad surface area (filing profile, Schedule OS, TDS/TCS/IT) the original audit
+> identified as highest-risk.
