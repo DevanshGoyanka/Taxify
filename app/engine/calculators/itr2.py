@@ -403,6 +403,22 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # its carry-forward is a further, separately-scoped limitation.
     if input_data.os_race_horse is not None:
         r.other_sources_income += max(_ZERO, input_data.os_race_horse.balance)
+    # Income from letting machinery/plant/furniture (Section 56(2)(ii)/(iii),
+    # Schedule OS's "RentFromMachPlantBldgs") is ordinary slab-rate Other
+    # Sources income computed net of its own specific deductions --
+    # Expenses/Depreciation/interest u/s 57 reduce it, while amounts
+    # disallowed u/s 58 and deemed profits u/s 59 (a balancing charge on
+    # sale of assets used in the letting activity) add back to it. Floored
+    # at zero: a resulting loss would need its own carry-forward tracking,
+    # a further scoped-out limitation matching the race-horse treatment
+    # above.
+    if input_data.os_machinery_plant_rent:
+        ded = input_data.os_deductions
+        deductible = (ded.expenses + ded.depreciation + ded.interest_expense_us57) if ded else _ZERO
+        addbacks = (ded.amount_not_deductible_us58 + ded.profit_chargeable_us59) if ded else _ZERO
+        r.other_sources_income += max(
+            _ZERO, input_data.os_machinery_plant_rent - deductible + addbacks
+        )
     r.schedules["os"] = os
 
     # ── 2. Capital Gains ─────────────────────────────────────────────────────

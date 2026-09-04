@@ -665,13 +665,23 @@ Map each canonical `OtherSources` entry to the exact official field, including c
 > requires new NRI/FII-specific tax logic" follow-up items, tracked for
 > Phase 5+ rather than deferred as merely "optional."
 >
-> Also newly captured in this pass: `RentFromMachPlantBldgs` (income from
-> letting machinery/plant/furniture, Schedule OS's own business-like
-> sub-category) has **no draft-level capture point anywhere in the
-> system** -- not a serialization gap but a frontend gap, since there is
-> no UI field for a taxpayer to enter this income in the first place. Left
-> open pending a small `ScheduleOSWorkspace.tsx` addition (a new income
-> category plus its own expense/depreciation deduction fields).
+> **Correction (same day): `RentFromMachPlantBldgs` was NOT actually a
+> frontend gap.** `ScheduleOSWorkspace.tsx` already has full UI for it --
+> its "other income" row editor lets a row be tagged `nature ===
+> 'MACHINERY_RENT'` (labeled exactly "RentFromMachPlantBldgs — Rent from
+> machinery, plant or building" in the dropdown) and reuses the existing
+> `Deductions` UI (already wired above) for its expenses/depreciation.
+> `PASS_THROUGH`-tagged rows (labeled "NatofPassThrghIncome") exist in the
+> same editor too. Both were being silently absorbed into the generic
+> "any other income" bucket by the mapper rather than routed to their own
+> fields -- fixed by filtering `MACHINERY_RENT`/`PASS_THROUGH`-tagged rows
+> out of the generic aggregate (in both this mapper's own detail-row list
+> *and* the shared `_map_other_sources()` aggregate it reuses, which would
+> otherwise double-count machinery-rent income once gross, once net of its
+> deductions) and routing them to `RentFromMachPlantBldgs` (net of
+> Expenses/Depreciation/interest-u/s-57, added to GTI, floored at zero)
+> and `NatofPassThrghIncome` (pure disclosure -- already taxed as ordinary
+> income "at normal rate" per the frontend's own label) respectively.
 >
 > Regression tests: `test_schedule_os_serializes_unexplained_income_89a_deductions_and_dtaa`,
 > `test_schedule_os_serializes_dividend_section_breakdown`,

@@ -400,6 +400,45 @@ def test_race_horse_activity_winnings_map_to_os_race_horse() -> None:
     assert result.other_sources_income == baseline.other_sources_income + Decimal("200000")
 
 
+def test_machinery_rent_income_maps_net_of_deductions_without_double_counting() -> None:
+    """MACHINERY_RENT-tagged otherIncome rows route to os_machinery_plant_rent
+    (net of its own expenses/depreciation deductions, added to GTI), not to
+    the generic other_income aggregate -- which would otherwise double-tax
+    it (once gross via the shared aggregate, once net via this field)."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.otherIncome = [OtherIncomeEntry(
+        id="o1", nature="MACHINERY_RENT", amount=Decimal("100000"),
+    )]
+    draft.otherSources.deductions.expenses = Decimal("30000")
+    draft.otherSources.deductions.depreciation = Decimal("20000")
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.os_machinery_plant_rent == Decimal("100000")
+    # Backed out of the generic aggregate to prevent double-counting.
+    assert itr2_input.other_sources_income.other_income == Decimal("0")
+
+    baseline = compute_itr2(draft_to_itr2_input(_filing_ready_itr2_draft())[0])
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    # 100000 - 30000 - 20000 = 50000 net, added to GTI.
+    assert result.other_sources_income == baseline.other_sources_income + Decimal("50000")
+
+
+def test_pass_through_income_is_disclosed_and_not_double_counted() -> None:
+    """PASS_THROUGH-tagged otherIncome is backed out of the generic
+    aggregate (it is disclosure-only, already taxed as ordinary income
+    elsewhere per the frontend's own "at normal rate" label) but not lost
+    -- it reaches os_pass_through_income for NatofPassThrghIncome."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.otherIncome = [
+        OtherIncomeEntry(id="o1", nature="PASS_THROUGH", amount=Decimal("15000")),
+        OtherIncomeEntry(id="o2", nature="OTHER", description="Freelance", amount=Decimal("5000")),
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.os_pass_through_income == Decimal("15000")
+    assert itr2_input.other_sources_income.other_income == Decimal("5000")
+    assert len(itr2_input.os_other_income_entries) == 1
+
+
 def test_pf_interest_proviso_kinds_map_to_dedicated_fields() -> None:
     """PF interest-proviso interest kinds are categorized separately, not
     collapsed into the generic other-income aggregate."""

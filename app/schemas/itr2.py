@@ -828,6 +828,8 @@ class ITR2Input(StrictModel):
     os_interest_from_others: Decimal = Field(default=Decimal("0"), ge=0)
     os_lottery_quarters: Optional[OSQuarterlyAmount] = None
     os_gaming_quarters: Optional[OSQuarterlyAmount] = None
+    os_machinery_plant_rent: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pass_through_income: Decimal = Field(default=Decimal("0"), ge=0)
 
     cg_transactions: List[CGTransaction] = Field(default_factory=list)
     cg_112a_scrips: List[CG112AScrip] = Field(default_factory=list)

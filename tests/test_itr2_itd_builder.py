@@ -659,6 +659,28 @@ def test_schedule_os_serializes_race_horse_activity_and_includes_net_profit_in_g
     assert result.other_sources_income == Decimal("200000")
 
 
+def test_schedule_os_serializes_machinery_rent_and_pass_through_income() -> None:
+    """RentFromMachPlantBldgs and NatofPassThrghIncome reach the JSON --
+    previously always hardcoded to zero even though the frontend
+    (ScheduleOSWorkspace.tsx) already captures both via specially-tagged
+    "other income" rows."""
+    input_data = _input(
+        os_machinery_plant_rent=Decimal("50000"),
+        os_pass_through_income=Decimal("15000"),
+        bank_accounts=[
+            BankAccount(
+                account_number="1234567890", ifsc_code="SBIN0000001",
+                bank_name="State Bank of India", account_type="savings", is_primary=True,
+            )
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    block = document["ITR"]["ITR2"]["ScheduleOS"]["IncOthThanOwnRaceHorse"]
+    assert block["RentFromMachPlantBldgs"] == 50000
+    assert block["NatofPassThrghIncome"] == 15000
+
+
 def test_schedule_os_omits_optional_blocks_when_unset() -> None:
     """No optional Schedule OS data means no placeholder detail blocks --
     matches the project's no-fabricated-data convention."""

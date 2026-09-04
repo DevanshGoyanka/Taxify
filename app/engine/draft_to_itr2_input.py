@@ -658,13 +658,43 @@ def _map_os_section_89a(draft: ReturnDraft) -> Optional[OSSection89A]:
     )
 
 
+# ScheduleOSWorkspace.tsx's "other income" editor tags certain rows with a
+# special `nature` marker to route them to their own dedicated Schedule OS
+# field instead of the generic "any other income" bucket -- MACHINERY_RENT
+# -> RentFromMachPlantBldgs, PASS_THROUGH -> NatofPassThrghIncome. Only
+# unmarked/OTHER rows belong in OthersInc/AnyOtherIncome.
+_OS_OTHER_INCOME_SPECIAL_NATURES = frozenset({"MACHINERY_RENT", "PASS_THROUGH"})
+
+
 def _map_os_other_income_entries(draft: ReturnDraft) -> list[OSOtherIncomeEntry]:
     """Map "any other income" detail rows for Schedule OS's ``OthersInc``."""
     return [
         OSOtherIncomeEntry(nature=(row.description or row.nature or "Other income")[:50], amount=row.amount)
         for row in draft.otherSources.otherIncome
-        if row.amount > 0
+        if row.amount > 0 and row.nature not in _OS_OTHER_INCOME_SPECIAL_NATURES
     ]
+
+
+def _map_os_machinery_plant_rent(draft: ReturnDraft) -> Decimal:
+    """Sum "other income" rows tagged MACHINERY_RENT for Schedule OS's
+    ``RentFromMachPlantBldgs`` -- Section 56(2)(ii)/(iii) income from
+    letting machinery/plant/furniture."""
+    return sum(
+        (row.amount for row in draft.otherSources.otherIncome if row.nature == "MACHINERY_RENT"),
+        _ZERO,
+    )
+
+
+def _map_os_pass_through_income(draft: ReturnDraft) -> Decimal:
+    """Sum "other income" rows tagged PASS_THROUGH for Schedule OS's
+    ``NatofPassThrghIncome`` disclosure field. Purely informational --
+    pass-through income "at normal rate" is already taxed as ordinary
+    Other Sources income elsewhere; this field discloses how much of the
+    total is pass-through in nature, it is not additive."""
+    return sum(
+        (row.amount for row in draft.otherSources.otherIncome if row.nature == "PASS_THROUGH"),
+        _ZERO,
+    )
 
 
 _OS_OTHER_INTEREST_KINDS = frozenset({"NSC", "BONDS", "SECURITIES", "OTHER"})
@@ -848,6 +878,22 @@ def draft_to_itr2_input(
     os_input, total_interest, total_dividend, family_pension, total_winnings = (
         _map_other_sources(draft)
     )
+    # _map_other_sources() (shared with ITR-1) sums every draft.otherSources.
+    # otherIncome row into its other_income aggregate regardless of the
+    # ITR-2-only MACHINERY_RENT/PASS_THROUGH nature tags -- those two
+    # categories are handled separately below (machinery-rent net of its
+    # own deductions; pass-through as pure disclosure), so their gross
+    # amounts must be backed out here to avoid taxing machinery-rent income
+    # twice: once undeducted via this generic aggregate, once (correctly,
+    # net of deductions) via os_machinery_plant_rent.
+    os_machinery_plant_rent = _map_os_machinery_plant_rent(draft)
+    os_pass_through_income = _map_os_pass_through_income(draft)
+    if os_machinery_plant_rent or os_pass_through_income:
+        os_input = os_input.model_copy(update={
+            "other_income": max(
+                _ZERO, os_input.other_income - os_machinery_plant_rent - os_pass_through_income
+            )
+        })
     ded_input, structured_80g, schedule_80c_entries = _map_deductions(draft, tax_regime)
 
     tds1, tds2, tds_salary, tds_interest, tds_other, claimed_tds, tds_issues = (
@@ -941,6 +987,8 @@ def draft_to_itr2_input(
         os_interest_from_others=os_interest_from_others,
         os_lottery_quarters=os_lottery_quarters,
         os_gaming_quarters=os_gaming_quarters,
+        os_machinery_plant_rent=os_machinery_plant_rent,
+        os_pass_through_income=os_pass_through_income,
         cg_transactions=cg_transactions,
         cg_112a_scrips=cg_112a_scrips,
         vda_transactions=vda_transactions,

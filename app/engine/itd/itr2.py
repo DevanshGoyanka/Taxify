@@ -623,6 +623,8 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
             or input_data.os_pf_interest_10_12_first_proviso or input_data.os_pf_interest_10_12_second_proviso
         )
         and not input_data.os_interest_from_others
+        and not input_data.os_machinery_plant_rent
+        and not input_data.os_pass_through_income
     ):
         return None
     os_schedule = result.schedules.get("os")
@@ -642,13 +644,13 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         "IntrstFrmSavingBank": 0,
         "IntrstFrmTermDeposit": 0,
         "IntrstFrmIncmTaxRefund": 0,
-        "NatofPassThrghIncome": 0,
+        "NatofPassThrghIncome": _to_rupees(input_data.os_pass_through_income),
         "IntrstSec10XIFirstProviso": _to_rupees(input_data.os_pf_interest_10_11_first_proviso),
         "IntrstSec10XISecondProviso": _to_rupees(input_data.os_pf_interest_10_11_second_proviso),
         "IntrstSec10XIIFirstProviso": _to_rupees(input_data.os_pf_interest_10_12_first_proviso),
         "IntrstSec10XIISecondProviso": _to_rupees(input_data.os_pf_interest_10_12_second_proviso),
         "IntrstFrmOthers": _to_rupees(input_data.os_interest_from_others),
-        "RentFromMachPlantBldgs": 0,
+        "RentFromMachPlantBldgs": _to_rupees(input_data.os_machinery_plant_rent),
         "Tot562x": 0,
         "Aggrtvaluewithoutcons562x": 0,
         "Immovpropwithoutcons562x": 0,
