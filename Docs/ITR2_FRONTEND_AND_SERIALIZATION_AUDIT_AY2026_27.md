@@ -8,14 +8,27 @@
 
 > **Progress update (2026-09-04)**: this audit has moved from read-only findings-only into the
 > same iterative audit-fix-reaudit cycle ITR-1/ITR-4's own audit docs used, per
-> `C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`'s Phase 1. §3.2's capital-gains
-> serialization item is now fixed and re-verified (land/building rows, section 50C/50CA deeming,
-> the generic "other assets" bucket for the remaining 10 `CGAssetType` categories) — see §3.1's
-> and §3.2's own "Re-verified"/"Fix status" blockquotes for the full evidence trail, including one
-> newly-found P0 (the section 112(1)(a) indexed-cost-primacy defect, deliberately deferred, not
-> silently left broken). Schedule OS, TDS/TCS ownership, filing-profile completeness, and every
-> other item below remain open — the overall "not production-ready" status is unchanged pending
-> those.
+> `C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`. Phases 1-3 of that plan are now
+> complete:
+> - **Phase 1** (§3.1-§3.3, §3.5): capital-gains serialization — land/building rows, section
+>   50C/50CA deeming, the generic "other assets" bucket for the remaining 10 `CGAssetType`
+>   categories, negative-HP re-verification. One P0 (section 112(1)(a) indexed-cost-primacy) was
+>   found and deliberately deferred, not silently left broken — see §3.2's write-up.
+> - **Phase 2** (§3.4, §3.6, §3.7): Schedule OS winnings/accumulated-PF/gifts, and TDS/TCS
+>   ownership+brought-forward+carry-forward data — all previously silently dropped despite the
+>   frontend already capturing them. Found and fixed a genuine Total-Income-understatement bug
+>   along the way (special-rate Schedule-SI income taxed but never added to GTI).
+> - **Phase 3** (§3.8, §4.1-§4.7): every remaining filing-profile gap — 92CD, the
+>   current-account-deposit gate, FII/FPI, LEI, residential-status facts, Section 115H,
+>   director/unlisted-equity disclosure, and Schedule IT challan completeness. Found and fixed two
+>   further schema-blocking bugs (`SEBIRegNo`/`SebiRegnNo` key mismatch; a dead
+>   `CompDirectorPrvYrFlg` emission) plus a missing residential-status *selector* the frontend
+>   never had at all.
+>
+> See each section's own "Fix status"/"Re-verified" blockquote for full evidence, regression
+> tests, and `git stash` pre-fix confirmation. Remaining open work is Phase 4 onward (P0 exit
+> re-audit, then the 7 P1 findings in §5-§13) — the overall "not production-ready" status is
+> unchanged pending those, though every CRITICAL P0 finding closed so far has a verified fix.
 
 ## Executive conclusion
 
@@ -1442,17 +1455,22 @@ Even those cases require independent review of the generated JSON against the of
    schema-mandated; the loss is correctly tracked via `_schedule_cyla()`'s dedicated fields, not
    silently dropped.
 
-6. **Complete filing profile**
-   - ~~current-account deposit seventh-proviso field for ITR-2~~ — **fixed 2026-09-04**, see §4.6's
-     fix write-up (backend was already correct; the frontend control was simply gated to ITR-4 only).
-   - ~~92CD~~ — **fixed 2026-09-04**, see §4.5's fix write-up (was unreachable at three layers: draft
-     schema, `FILING_SECTION_CODES` map, and the frontend dropdown).
-   - 115H — still open.
-   - residential-status facts — still open.
-   - FII/FPI and SEBI — still open.
-   - director details — still open.
-   - unlisted-equity details — still open.
-   - LEI — still open.
+6. ~~**Complete filing profile**~~ — **all items fixed 2026-09-04**, closing the last of Phase 3's
+   filing-profile gaps:
+   - ~~current-account deposit seventh-proviso field for ITR-2~~ — see §4.6 (backend was already
+     correct; the frontend control was simply gated to ITR-4 only).
+   - ~~92CD~~ — see §4.5 (was unreachable at three layers: draft schema, `FILING_SECTION_CODES`
+     map, and the frontend dropdown).
+   - ~~115H~~ — see §4.4 (implemented alongside §4.1 in the same schema block).
+   - ~~residential-status facts~~ — see §4.1 (re-audit found the frontend had no residential-status
+     *selector* at all, a more basic gap than originally documented).
+   - ~~FII/FPI and SEBI~~ — see §4.2 (backend was already fully wired; found and fixed a
+     schema-blocking `SEBIRegNo`/`SebiRegnNo` key-name bug along the way).
+   - ~~director details~~ — see §4.3 (found `CompDirectorPrvYrFlg` was never emitted at all; added
+     a model validator requiring backing detail rows whenever the flag is true).
+   - ~~unlisted-equity details~~ — see §4.3 (the official-schema-required flag had no backing
+     detail array ever built).
+   - ~~LEI~~ — see §4.7 (confirmed fully greenfield before this fix).
 
 ## P1 — Required for broad taxpayer coverage
 
