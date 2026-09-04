@@ -366,6 +366,13 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         input_data.filing_profile is None
         or input_data.filing_profile.assessee_status.value == "I"
     )
+    # Section 112(1)(a) second-proviso eligibility (land/building LTCG
+    # comparison, capital_gains.py::compute_ltcg()) counts BOTH ordinary
+    # residents and not-ordinarily-residents (NOR is a species of "resident"
+    # under section 6 -- only a non-resident is excluded), distinct from
+    # `is_resident` above (used for the narrower section 87A rebate
+    # eligibility, deliberately left unchanged here).
+    is_resident_or_nor = input_data.residential_status != ResidentialStatus.NON_RESIDENT
 
     # ── 1. Income Heads ──────────────────────────────────────────────────────
     sal = compute_salary(input_data.salary_income, regime)
@@ -464,7 +471,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         compute_stcg as _compute_stcg_merged,
         compute_vda as _compute_vda_income,
     )
-    cg_result = _compute_cg_schedule(input_data.cg_transactions)
+    cg_result = _compute_cg_schedule(input_data.cg_transactions, is_resident=is_resident_or_nor)
 
     # Merge explicit 112A scrips (Schedule 112A Part-A3) into the 112A basket
     # so the ₹1.25L threshold is applied once over the union of classified
@@ -500,6 +507,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             ltcg_112a_assets=ltcg_112a_assets,
             ltcg_land_building=ltcg_land,
             ltcg_other=ltcg_other_signed,
+            is_resident=is_resident_or_nor,
         )
         cg_result = _aggregate_cg(stcg_result, ltcg_result, _ZERO, cg_result.exemptions)
     else:
@@ -738,6 +746,19 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     other_ltcg = post_loss_cg["112"]
     if other_ltcg > 0:
         si_112_entry = compute_112(other_ltcg)
+        # Section 112(1)(a) second-proviso relief (land/building, residents,
+        # pre-23-Jul-2024 acquisition) computed per-row in compute_ltcg().
+        # Capped at this bucket's own actual tax so the relief can never
+        # exceed what was actually charged here -- loss set-off/exemption
+        # consumption upstream (post_loss_cg, exemptions) may already have
+        # reduced this blended bucket below the raw land/building gain the
+        # relief figure was computed from; capping avoids over-relieving in
+        # that case rather than attempting an exact proportional allocation
+        # across land/building vs. other section-112 income, which
+        # post_loss_cg's blended-basket design does not track separately.
+        relief = min(ltcg_result.total_excess_tax_112_1a, si_112_entry.tax_amount)
+        if relief > _ZERO:
+            si_112_entry.tax_amount -= relief
         si_entries.append(si_112_entry)
 
     # VDA at 30%

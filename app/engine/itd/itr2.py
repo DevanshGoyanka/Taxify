@@ -1060,7 +1060,11 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "TotalSTCG": _to_rupees(getattr(stcg, "total_stcg", z) if stcg else z),
     }
     ltcg_block: dict[str, Any] = {
-        "SaleofLandBuild": {"SaleofLandBuildDtls": ltcg_land_rows, "TotalExcessTax": 0, "TotalLTCGImmblPrprty": _to_rupees(sum((r["LTCGonImmvblPrprty"] for r in ltcg_land_rows), _ZERO))},
+        "SaleofLandBuild": {
+            "SaleofLandBuildDtls": ltcg_land_rows,
+            "TotalExcessTax": _to_rupees(getattr(ltcg, "total_excess_tax_112_1a", _ZERO) if ltcg else _ZERO),
+            "TotalLTCGImmblPrprty": _to_rupees(sum((r["LTCGonImmvblPrprty"] for r in ltcg_land_rows), _ZERO)),
+        },
         "Proviso112Applicable": [],
         "SaleOfEquityShareUs112A": _equity_share_112a(),
         "NRIProvisoSec48": _nri_proviso_48(),
@@ -1150,20 +1154,18 @@ def _cg_land_building_row_ltcg(asset: Any) -> dict[str, Any]:
     previous shared implementation was wrong for both STCG and LTCG.
 
     The official schema additionally carries a second, indexed-cost-basis
-    total/balance/tax-comparison track (``AquisitCostIndex``,
-    ``TotalDednForEiB``, ``BalanceForEiB``, ``TaxSec1121aiiB``,
-    ``TaxSec1121a``, ``ExcessAmtSec1121a`` -- the section 112(1)(a) second
-    proviso comparison for residents who acquired before 23-Jul-2024,
-    protecting against a tax increase from the 2024 indexation-removal
-    change) that this function does not populate -- none of those fields
-    are in the schema's ``required`` list, so omitting them keeps the JSON
-    schema-valid; only ``AquisitCostIndex`` is required and is always
-    emitted. See ``compute_ltcg()``'s docstring note for why the dual
-    tax-comparison itself is a separate, not-yet-implemented finding.
+    total/balance/tax-comparison track (``TotalDednForEiB``, ``BalanceForEiB``,
+    ``LTCGonImmvblPrprtyBE``, ``TaxSec1121aiiB``, ``TaxSec1121a``,
+    ``ExcessAmtSec1121a``) -- the section 112(1)(a) second-proviso comparison
+    for residents who acquired before 23-Jul-2024, protecting against a tax
+    increase from the 2024 indexation-removal change. ``compute_ltcg()``
+    computes these per asset (``asset.eib_applicable``/``balance_for_eib``/
+    etc.); none of these fields are schema-``required``, so they are omitted
+    entirely (not zero-placeholder emitted) when the row isn't eligible.
     """
     stamp_value = getattr(asset, "stamp_duty_value", _ZERO) or _ZERO
     deemed = deemed_consideration_50c(asset.full_consideration, stamp_value)
-    return {
+    row: dict[str, Any] = {
         "DateofPurchase": asset.date_of_acquisition or "",
         "DateofSale": asset.date_of_transfer,
         "FullConsideration": _to_rupees(asset.full_consideration),
@@ -1190,6 +1192,17 @@ def _cg_land_building_row_ltcg(asset: Any) -> dict[str, Any]:
         "ExemptionOrDednUs54": {"ExemptionGrandTotal": 0},
         "LTCGonImmvblPrprty": _to_rupees(asset.balance),
     }
+    if getattr(asset, "eib_applicable", False):
+        indexed_acquisition = asset.indexed_acquisition_cost or asset.acquisition_cost
+        indexed_improvement = asset.indexed_improvement_cost or asset.improvement_cost
+        total_dedn_for_eib = indexed_acquisition + indexed_improvement + asset.expenditure_on_transfer
+        row["TotalDednForEiB"] = _to_rupees(total_dedn_for_eib)
+        row["BalanceForEiB"] = _to_rupees(asset.balance_for_eib)
+        row["LTCGonImmvblPrprtyBE"] = _to_rupees(asset.balance_for_eib)
+        row["TaxSec1121a"] = _to_rupees(asset.tax_sec_112_1a)
+        row["TaxSec1121aiiB"] = _to_rupees(asset.tax_sec_112_1a_iib)
+        row["ExcessAmtSec1121a"] = _to_rupees(asset.excess_amt_sec_112_1a)
+    return row
 
 
 def _equity_or_unit_sec94() -> dict[str, int]:

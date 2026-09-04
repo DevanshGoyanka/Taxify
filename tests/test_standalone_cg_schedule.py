@@ -71,8 +71,14 @@ def test_compute_short_term_equity_lands_in_111a_basket() -> None:
     assert result.ltcg.income_112a == Decimal("0")
 
 
-def test_compute_land_building_long_term_uses_indexed_cost() -> None:
-    """Long-term land/building gain deducts indexed cost when supplied."""
+def test_compute_land_building_long_term_uses_non_indexed_cost_as_primary() -> None:
+    """The PRIMARY declared long-term land/building gain always uses the
+    non-indexed cost -- per the official ITR-2 form's Schedule CG item 1c,
+    the indexed cost feeds only the separate section 112(1)(a) second-
+    proviso comparison (item 1ca, "only for the purpose of computing eiB"),
+    never the primary basis. Regression test for a real defect where the
+    indexed cost was preferred here whenever supplied, understating the
+    declared gain (and tax) any time indexed cost exceeds actual cost."""
     tx = SimpleNamespace(
         asset_type="land_building",
         description="Flat",
@@ -90,8 +96,66 @@ def test_compute_land_building_long_term_uses_indexed_cost() -> None:
         explicit_long_term=None,
     )
     result = compute([tx])
-    # 50L - 30L (indexed) - 50K = 19.5L
-    assert result.ltcg.income_125per_other == Decimal("1950000")
+    # 50L - 20L (non-indexed) - 50K = 29.5L
+    assert result.ltcg.income_125per_other == Decimal("2950000")
+
+
+def test_compute_land_building_section_112_1a_second_proviso_relief() -> None:
+    """A resident who acquired land/building before 23-Jul-2024 gets the
+    section 112(1)(a) second-proviso comparison: relief equal to the excess
+    of (12.5% x non-indexed gain) over (20% x indexed gain), when the old
+    20%-indexed computation would have taxed less. Previously unimplemented
+    entirely -- both tax figures always computed as zero/absent."""
+    tx = SimpleNamespace(
+        asset_type="land_building",
+        description="Ancestral plot",
+        isin_code="",
+        full_consideration=Decimal("5000000"),
+        cost_of_acquisition=Decimal("1000000"),
+        indexed_cost=Decimal("3000000"),
+        improvement_cost=Decimal("0"),
+        indexed_improvement=Decimal("0"),
+        expenditure_on_transfer=Decimal("0"),
+        fair_market_value_jan2018=None,
+        date_of_acquisition=__import__("datetime").date(2005, 4, 1),
+        date_of_transfer=__import__("datetime").date(2024, 1, 1),
+        exemptions=[],
+        explicit_long_term=None,
+    )
+    result = compute([tx], is_resident=True)
+    # Primary: (50L - 10L) * 12.5% = 5L. EiB: (50L - 30L) * 20% = 4L.
+    # Relief = 5L - 4L = 1L.
+    assert result.ltcg.income_125per_other == Decimal("4000000")
+    assert result.ltcg.total_excess_tax_112_1a == Decimal("100000")
+    asset = result.ltcg.land_building[0]
+    assert asset.eib_applicable is True
+    assert asset.tax_sec_112_1a == Decimal("500000")
+    assert asset.tax_sec_112_1a_iib == Decimal("400000")
+
+
+def test_compute_land_building_section_112_1a_not_applicable_for_non_resident() -> None:
+    """A non-resident gets no second-proviso comparison at all, even with
+    an identical pre-23-Jul-2024 acquisition -- the relief is resident-only
+    per the official form's own text."""
+    tx = SimpleNamespace(
+        asset_type="land_building",
+        description="Plot",
+        isin_code="",
+        full_consideration=Decimal("5000000"),
+        cost_of_acquisition=Decimal("1000000"),
+        indexed_cost=Decimal("3000000"),
+        improvement_cost=Decimal("0"),
+        indexed_improvement=Decimal("0"),
+        expenditure_on_transfer=Decimal("0"),
+        fair_market_value_jan2018=None,
+        date_of_acquisition=__import__("datetime").date(2005, 4, 1),
+        date_of_transfer=__import__("datetime").date(2024, 1, 1),
+        exemptions=[],
+        explicit_long_term=None,
+    )
+    result = compute([tx], is_resident=False)
+    assert result.ltcg.total_excess_tax_112_1a == Decimal("0")
+    assert result.ltcg.land_building[0].eib_applicable is False
 
 
 def test_compute_applies_112a_threshold_once_across_scrips() -> None:

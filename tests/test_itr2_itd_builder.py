@@ -41,6 +41,7 @@ from app.schemas.itr2 import (
     OSSection89A,
     OSSpecialRateEntry,
     OSUnexplainedIncome,
+    ResidentialStatus,
     ScheduleSIEntry,
     TDS3FilingDetail,
     VDATransaction,
@@ -225,12 +226,22 @@ def test_land_building_stcg_and_ltcg_rows_are_schema_valid_with_correct_fields()
     assert ltcg_row["FullConsideration"] == 8000000
     assert ltcg_row["AquisitCost"] == 3000000
     assert ltcg_row["AquisitCostIndex"] == 4500000
-    # Uses indexed cost (4500000), matching compute_ltcg()'s existing,
-    # documented (not-yet-corrected) preference -- see its docstring note.
-    assert ltcg_row["TotalDedn"] == 4550000
-    assert ltcg_row["Balance"] == 3450000
-    assert ltcg_row["LTCGonImmvblPrprty"] == 3450000
-    assert cg["LongTermCapGain23"]["SaleofLandBuild"]["TotalLTCGImmblPrprty"] == 3450000
+    # The PRIMARY declared gain always uses the non-indexed cost (3000000),
+    # per the official form's Schedule CG item 1c -- the indexed cost only
+    # feeds the separate section 112(1)(a) second-proviso comparison below.
+    assert ltcg_row["TotalDedn"] == 3050000
+    assert ltcg_row["Balance"] == 4950000
+    assert ltcg_row["LTCGonImmvblPrprty"] == 4950000
+    assert cg["LongTermCapGain23"]["SaleofLandBuild"]["TotalLTCGImmblPrprty"] == 4950000
+    # Plot B was acquired 2015-04-01 (pre-23-Jul-2024) and `_input()`
+    # defaults to RESIDENT, so the second-proviso EiB comparison applies:
+    # 12.5% * 4950000 = 618750 vs 20% * (8000000-4550000=3450000) = 690000
+    # -- the new-regime tax is already lower, so no relief is triggered.
+    assert ltcg_row["BalanceForEiB"] == 3450000
+    assert ltcg_row["TaxSec1121a"] == 618750
+    assert ltcg_row["TaxSec1121aiiB"] == 690000
+    assert ltcg_row["ExcessAmtSec1121a"] == 0
+    assert cg["LongTermCapGain23"]["SaleofLandBuild"]["TotalExcessTax"] == 0
 
 
 def test_land_building_applies_section_50c_stamp_duty_deeming() -> None:
@@ -256,6 +267,44 @@ def test_land_building_applies_section_50c_stamp_duty_deeming() -> None:
     assert row["PropertyValuation"] == 1500000
     assert row["FullConsideration50C"] == 1500000  # deemed value, not the lower actual consideration
     assert row["Balance"] == 900000  # 1500000 - 600000, not 1000000 - 600000
+
+
+def test_land_building_section_112_1a_relief_reduces_actual_si_tax() -> None:
+    """The section 112(1)(a) second-proviso relief isn't just disclosed in
+    Schedule CG -- it actually reduces the Schedule SI section-112 tax
+    figure, since a self-assessed return declares tax liability inclusive
+    of every relief the law allows, not just an FYI memo alongside an
+    unreduced tax total."""
+    input_data = _input(
+        residential_status=ResidentialStatus.RESIDENT,
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LAND_BUILDING,
+                description="Ancestral plot",
+                date_of_acquisition=date(2005, 4, 1),
+                date_of_transfer=date(2024, 1, 1),
+                full_consideration=Decimal("5000000"),
+                cost_of_acquisition=Decimal("1000000"),
+                indexed_cost=Decimal("3000000"),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+
+    cg = document["ITR"]["ITR2"]["ScheduleCGFor23"]
+    ltcg_row = cg["LongTermCapGain23"]["SaleofLandBuild"]["SaleofLandBuildDtls"][0]
+    assert ltcg_row["TaxSec1121a"] == 500000  # 12.5% * (50L - 10L)
+    assert ltcg_row["TaxSec1121aiiB"] == 400000  # 20% * (50L - 30L)
+    assert ltcg_row["ExcessAmtSec1121a"] == 100000
+    assert cg["LongTermCapGain23"]["SaleofLandBuild"]["TotalExcessTax"] == 100000
+
+    si = document["ITR"]["ITR2"]["ScheduleSI"]
+    si_112_row = next(row for row in si["SplCodeRateTax"] if row["SecCode"] == "21")
+    # Without relief this would be 500000 (12.5% * 4000000 declared gain);
+    # the 100000 second-proviso relief reduces it to 400000.
+    assert si_112_row["SplRateIncTax"] == 400000
 
 
 def test_generic_other_assets_bucket_maps_jewellery_and_bonds() -> None:

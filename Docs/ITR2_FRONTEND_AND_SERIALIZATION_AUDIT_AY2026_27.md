@@ -415,6 +415,63 @@ Create a verified mapping matrix from every canonical capital-gains category to 
 > figure (Taxify has no input field capturing this at all). Also unaffected: §3.1's 115AD-specific
 > fields (`NRISecur115AD`, `NRISaleOfEquityShareUs112A`) — confirmed distinct from this generic
 > bucket, remain correctly zero pending a `CGAssetType`/FII-flag schema extension.
+>
+> **Fix status (2026-09-05): the section 112(1)(a) indexed-cost-primacy defect (flagged above as
+> "New P0 item found 2026-09-04") is now fixed, including the full second-proviso relief, not just
+> the primary-balance correction.** Per the official form's own text (Schedule CG item 1,
+> `Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng_extracted_text.txt` lines
+> 459-522): the primary declared LTCG ("1c"/`Balance`) must always use the non-indexed cost;
+> `compute_ltcg()` (`app/engine/schedules/capital_gains.py`) previously preferred the indexed cost
+> whenever supplied, understating the declared gain (and tax) any time indexed cost exceeded
+> actual cost — the common case. Fixed by removing the indexed-cost preference from the primary
+> `Balance`/`TotalDedn` computation entirely.
+>
+> This also implements the previously-unattempted second-proviso comparison itself, not just the
+> primary-balance fix: a resident (`CGAsset.eib_applicable`, true for RES/NOR — NRI excluded — with
+> `date_of_acquisition` before 23-Jul-2024) gets a per-row comparison of two tax figures —
+> `TaxSec1121a` (12.5% × non-indexed gain) vs `TaxSec1121aiiB` (20% × indexed gain, `BalanceForEiB`,
+> floored at nil per the form's own "in case of negative, to be considered as nil") — with the
+> excess of the former over the latter (`ExcessAmtSec1121a`) disclosed per row and aggregated as
+> `SaleofLandBuild.TotalExcessTax` (both previously hardcoded/omitted placeholders). Critically,
+> this relief is not merely disclosed: `calculators/itr2.py::compute()` subtracts
+> `ltcg_result.total_excess_tax_112_1a` from the actual Schedule SI section-112 tax figure (capped
+> at that bucket's own computed tax, never negative) — a self-assessed return declares tax
+> liability *inclusive* of every relief the law allows, so a JSON-only disclosure that didn't
+> reduce the actual payable amount would itself have been a new, distinct bug (Schedule CG
+> claiming a relief that Part B-TTI's tax figure doesn't reflect).
+>
+> **Known, explicitly documented simplification**: the relief is capped at the actual computed
+> section-112 tax rather than proportionally attributed across land/building vs. the generic-other
+> LTCG sub-basket that `_post_loss_cg_baskets()` blends together after loss set-off and exemption
+> consumption — that function doesn't track the two sub-baskets separately post-loss-setoff, and
+> building that separate tracking is a larger undertaking than this fix's scope. The cap means the
+> relief can never exceed what was actually taxed (never manufactures a negative tax or an
+> impossible over-relief), but in a return that also has current-year/brought-forward losses or
+> §54-series exemptions consuming part of the section-112 bucket, the relief actually granted may
+> be a conservative (i.e., not necessarily exact-to-the-rupee) approximation. Documented here
+> rather than silently assumed exact; a return with no such losses/exemptions on the 112 bucket
+> (the common case for a standalone land/building sale) computes this relief exactly.
+>
+> Also similarly simplified, consistent with the pre-existing per-row exemption limitation
+> documented above: the per-row comparison itself uses each row's gross balance, not a
+> post-exemption one (no per-row §54/54B/54EC/54F attribution exists yet) — this can only ever
+> make the computed relief a lower-bound estimate, never an overstatement, since a real per-row
+> exemption would shrink both the 12.5% and 20% tax figures together.
+>
+> Regression tests: `test_compute_land_building_long_term_uses_non_indexed_cost_as_primary`
+> (renamed/corrected from the old `..._uses_indexed_cost`, which had encoded the bug's own wrong
+> expectation), `test_compute_land_building_section_112_1a_second_proviso_relief`,
+> `test_compute_land_building_section_112_1a_not_applicable_for_non_resident` (in
+> `tests/test_standalone_cg_schedule.py`), and
+> `test_land_building_section_112_1a_relief_reduces_actual_si_tax` plus corrected assertions in
+> `test_land_building_stcg_and_ltcg_rows_are_schema_valid_with_correct_fields` (in
+> `tests/test_itr2_itd_builder.py`) — the latter proving the relief reaches the actual
+> `ScheduleSI.SplCodeRateTax` tax figure, not just Schedule CG's disclosure fields. All confirmed
+> via `git stash` to fail on pre-fix code. Full combined `test_itr1_*`/`test_itr4_*`/`test_itr2_*`/
+> `test_standalone_cg_schedule.py`/`test_capital_gains_loss_foundation.py` regression suite (318
+> tests) green; ITR-1/3/4's shared `compute_ltcg()`/`compute()` call sites were checked and remain
+> unaffected (they default `is_resident=False` and, for ITR-1/4, never surface land/building LTCG
+> at all via `project_restricted_112a`'s own aggregation).
 
 ---
 
@@ -1736,12 +1793,12 @@ Even those cases require independent review of the generated JSON against the of
    - signed loss handling — resolved for land/building (§3.2); still open for the other 10
      categories above.
    - CYLA/BFLA/CFL reconciliation — not yet independently re-audited in this pass.
-   - **New P0 item found 2026-09-04**: `compute_ltcg()`'s land/building gain formula uses the
-     *indexed* cost as primary when supplied, but the official form requires the *non-indexed*
-     cost as primary — indexation should only feed a separate section 112(1)(a) second-proviso
-     tax comparison that can only reduce, never set, the base gain. Deliberately left unfixed in
-     this pass (needs the full dual tax-comparison implemented correctly, not a one-line formula
-     swap) — see §3.2's fix write-up for the complete evidence trail.
+   - ~~**Section 112(1)(a) indexed-cost-primacy defect** (found 2026-09-04)~~ — **fixed
+     2026-09-05**, see §3.2's fix write-up: primary balance now always uses non-indexed cost; the
+     full second-proviso dual tax-comparison (`TaxSec1121a`/`TaxSec1121aiiB`/`ExcessAmtSec1121a`)
+     is implemented and its relief actually reduces the Schedule SI section-112 tax, capped
+     (documented, not exact-to-the-rupee) at that bucket's own computed tax when losses/exemptions
+     also apply to it.
    - no silent zero placeholders for populated data — resolved for land/building; open elsewhere.
 
 3. **Complete Schedule OS**
