@@ -438,6 +438,14 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     r.other_sources_income += sum(
         (spr.source_amount for spr in input_data.os_special_rate_entries), _ZERO
     )
+    # DTAA-rate Other Sources income (Schedule OS's NRIDTAADtlsSchOS rows) --
+    # likewise a field entirely separate from `input_data.si_entries`/
+    # `_OS_HEAD_SI_SECTIONS`, so it needs the same independent GTI-inclusion
+    # step as the block above. Previously this income was disclosed but
+    # never reached GTI or Schedule SI at all.
+    r.other_sources_income += sum(
+        (dtaa.amount for dtaa in input_data.os_dtaa_entries), _ZERO
+    )
     r.schedules["os"] = os
 
     # ── 2. Capital Gains ─────────────────────────────────────────────────────
@@ -776,6 +784,16 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             si_entries.append(compute_115bba(spr.source_amount))
         else:
             si_entries.append(compute_other_special_rate_income(spr.source_description, spr.source_amount))
+
+    # DTAA-rate Other Sources income (Schedule OS's NRIDTAADtlsSchOS detail
+    # rows, disclosure-only until now) → taxed via Schedule SI's dedicated
+    # "DTAAOS" code at each entry's own treaty-vs-Act beneficial rate
+    # (`applicable_rate`, per section 90(2)) -- unlike every other special
+    # rate in this module, this one is not a fixed statutory percentage but
+    # varies per DTAA article/country, hence the per-entry rate argument.
+    from app.engine.schedules.special_rates import compute_dtaa_os
+    for dtaa in input_data.os_dtaa_entries:
+        si_entries.append(compute_dtaa_os(dtaa.amount, dtaa.applicable_rate))
 
     # Pass-through income (Schedule PTI) → SI entries
     from app.engine.schedules.special_rates import (

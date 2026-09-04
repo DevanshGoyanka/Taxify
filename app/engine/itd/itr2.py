@@ -1430,6 +1430,9 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
         "5AC1ab": "5AC1ab", "5AC1abD": "5AC1abD", "5ACA1a": "5ACA1a",
         "5AD1i": "5AD1i", "5AD1iP": "5AD1iP", "5AD1iDiv": "5AD1iDiv",
         "5A1aiiaaP": "5A1aiiaaP", "5A1aiiaa2P": "5A1aiiaa2P",
+        # DTAA-rate Other Sources income (compute_dtaa_os()) -- same
+        # identity-mapping rationale as the block above.
+        "DTAAOS": "DTAAOS",
     }
     rows = []
     for entry in si.entries:

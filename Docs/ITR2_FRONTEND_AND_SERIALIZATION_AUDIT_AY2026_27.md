@@ -764,23 +764,50 @@ Map each canonical `OtherSources` entry to the exact official field, including c
 > prove correctness, only a live call does" discipline this project's own
 > CLAUDE.md already states for the Digest computation.
 >
-> **Still deliberately open**: DTAA-rate NRI tax *computation* (as opposed
-> to the disclosure fields wired in the update above) — computing the
-> correct NRI tax rate per treaty article for `os_dtaa_entries` rows is a
-> separate, larger undertaking (treaty-by-treaty rate lookup, not a single
-> statutory flat rate) not attempted in this pass. Tracked as a Phase 5+
-> item alongside §3.1's Schedule 115AD and the land/building indexed-cost
-> defect noted in §18.
+> **Correction (same day): DTAA-rate NRI tax computation was NOT actually a
+> "separate, larger undertaking" as first assessed above.** On closer
+> inspection, `OSDtaaEntry`/`NRIDTAADtlsSchOS` already carries its own
+> per-entry `applicable_rate` field (the section 90(2) beneficial
+> treaty-vs-Act rate, entered directly by the preparer per DTAA article --
+> not something this codebase needs to derive from a treaty-rate lookup
+> table), and `app/engine/schedules/special_rates.py::compute_dtaa_os()`
+> already existed, pre-written but never called from anywhere. The actual
+> gap was the same "computed but never reaches GTI/Schedule SI" pattern as
+> every other item in this section, just not yet recognized as such. Fixed
+> by dispatching each `os_dtaa_entries` row through `compute_dtaa_os(amount,
+> applicable_rate)` in the calculator (a new Schedule SI "DTAAOS" entry per
+> row, since a taxpayer can hold DTAA income taxed at different treaty
+> rates across countries/articles) and adding a second, independent
+> GTI-inclusion step (same reason as the `os_special_rate_entries` one
+> above: this field is not covered by `_OS_HEAD_SI_SECTIONS`, which only
+> scans `input_data.si_entries`). Builder-side, `_schedule_si()`'s
+> `section_code_map` gained the `"DTAAOS": "DTAAOS"` identity mapping; no
+> other builder change was needed since `NRIDTAADtlsSchOS` disclosure was
+> already correct.
+>
+> **Known constraint, not fixed here** (an ITD schema property, not a bug
+> in this codebase): the official schema's `ScheduleSI.SplCodeRateTax[].
+> SplRatePercent` is a closed enum (`{1, 4, 5, 9, 10, 12.5, 15, 20, 25, 30,
+> 50, 60}`), not a free-form percentage. A treaty `applicable_rate` outside
+> this set (an unusual but real possibility -- some DTAAs specify rates
+> like 7.5%) will fail schema validation at compute time. This is the
+> correct fail-closed behavior per this project's own convention (matching
+> the pre-existing section-111 zero-rate schema bug documented above), not
+> a gap to silently work around by rounding/clamping the rate.
 >
 > Regression tests:
-> `test_schedule_os_serializes_nri_special_rate_entries_and_taxes_them_via_si`
+> `test_schedule_os_serializes_nri_special_rate_entries_and_taxes_them_via_si`,
+> `test_schedule_os_dtaa_entries_are_taxed_via_si_at_applicable_rate_and_reach_gti`
 > (in `tests/test_itr2_itd_builder.py`), and
 > `test_special_rate_income_entries_map_and_are_taxed_at_correct_nri_rate`,
-> `test_special_rate_income_zero_amount_rows_are_excluded` (in
-> `tests/test_draft_to_itr2_input.py`), confirmed via `git stash` (stashing
-> only the five implementation files, keeping the new tests) to fail with
-> an `ImportError` on pre-fix code. Full combined `test_itr1_*`/
-> `test_itr4_*`/`test_itr2_*` regression suite (305 tests) green.
+> `test_special_rate_income_zero_amount_rows_are_excluded`,
+> `test_dtaa_os_income_is_taxed_at_applicable_rate_and_reaches_gti` (in
+> `tests/test_draft_to_itr2_input.py`), confirmed via `git stash` to fail
+> on pre-fix code (an `ImportError` for the special-rate-entries tests;
+> a wrong-GTI/missing-SI-entry `AssertionError` for the DTAA tests, stashing
+> only the two DTAA-specific implementation files while keeping the tests).
+> Full combined `test_itr1_*`/`test_itr4_*`/`test_itr2_*` regression suite
+> (307 tests) green.
 
 ---
 
@@ -1700,11 +1727,12 @@ Even those cases require independent review of the generated JSON against the of
      pre-existing bug where this SI-dispatched income was taxed but never added to Total Income).
    - ~~gifts (section 56(2)(x))~~ — **fixed 2026-09-04**, see §3.4's fix write-up (relative/marriage
      exemption and the correct aggregate/per-property thresholds applied).
-   - ~~DTAA disclosure, 89A, unexplained income, special-rate-income entries (disclosure +
-     taxation), deductions, and dividend sub-categories~~ — **fixed 2026-09-04/05**, see §3.4's
-     fix write-up and its "NRI special-rate income module" update. DTAA-rate NRI tax
-     *computation* itself (as opposed to disclosure) remains open — tracked as a Phase 5+ item
-     alongside §3.1's Schedule 115AD.
+   - ~~DTAA disclosure and taxation, 89A, unexplained income, special-rate-income entries
+     (disclosure + taxation), deductions, and dividend sub-categories~~ — **fixed
+     2026-09-04/05**, see §3.4's fix write-up, its "NRI special-rate income module" update, and
+     its DTAA-computation correction note (the "separate, larger undertaking" originally assumed
+     for DTAA tax computation turned out to be a pre-existing unused helper function plus the
+     same GTI-inclusion wiring gap as everything else in this list).
    - PTI (pass-through income) sub-category detail — still open.
    - `RACE_HORSE_ACTIVITY` winnings (owning/maintaining race horses — a distinct business-like OS
      sub-head with its own deduction rules) — still open, no calculator support at all yet.

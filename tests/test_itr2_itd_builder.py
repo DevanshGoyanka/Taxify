@@ -682,6 +682,36 @@ def test_schedule_os_serializes_machinery_rent_and_pass_through_income() -> None
     assert block["NatofPassThrghIncome"] == 15000
 
 
+def test_schedule_os_dtaa_entries_are_taxed_via_si_at_applicable_rate_and_reach_gti() -> None:
+    """DTAA-rate Other Sources income (NRIDTAADtlsSchOS rows) was previously
+    disclosure-only -- never taxed, never added to GTI. Each entry's own
+    per-treaty `applicable_rate` (section 90(2) beneficial-treatment rate)
+    now drives a dedicated Schedule SI "DTAAOS" entry, and the amount
+    reaches Gross Total Income."""
+    input_data = _input(
+        os_dtaa_entries=[
+            OSDtaaEntry(
+                amount=Decimal("100000"), nature_of_income="1b",
+                country_name="Singapore", country_code="65", dtaa_article="12",
+                rate_as_per_treaty=Decimal("10"), rate_as_per_it_act=Decimal("20"),
+                tax_residency_certificate="Y", item_no_incl="5A1bA",
+                applicable_rate=Decimal("10"),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+
+    si = document["ITR"]["ITR2"]["ScheduleSI"]
+    dtaa_row = next(row for row in si["SplCodeRateTax"] if row["SecCode"] == "DTAAOS")
+    assert dtaa_row["SplRatePercent"] == 10
+    assert dtaa_row["SplRateInc"] == 100000
+    assert dtaa_row["SplRateIncTax"] == 10000
+
+    assert result.other_sources_income == Decimal("100000")
+
+
 def test_schedule_os_serializes_nri_special_rate_entries_and_taxes_them_via_si() -> None:
     """Section 115A/115AC/115ACA/115AD/115E "any other income chargeable at
     special rate" rows (Schedule OS's OthersGrossDtls dropdown) previously

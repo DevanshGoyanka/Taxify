@@ -418,6 +418,33 @@ def test_special_rate_income_zero_amount_rows_are_excluded() -> None:
     assert itr2_input.os_special_rate_entries == []
 
 
+def test_dtaa_os_income_is_taxed_at_applicable_rate_and_reaches_gti() -> None:
+    """draft.otherSources.dtaaIncome rows were previously disclosure-only
+    (NRIDTAADtlsSchOS) -- never taxed, never added to GTI. Each entry's own
+    per-treaty applicableRate now drives a dedicated Schedule SI "DTAAOS"
+    entry, and the amount reaches Gross Total Income, matching every other
+    special-rate OS category's treatment."""
+    draft = _filing_ready_itr2_draft()
+    draft.otherSources.dtaaIncome = [DtaaIncomeEntry(
+        id="dt1", amount=Decimal("100000"), natureOfIncome="1b",
+        countryName="Singapore", countryCode="65", dtaaArticle="12",
+        rateAsPerTreaty=Decimal("10"), rateAsPerITAct=Decimal("20"),
+        taxResidencyCertificate="Y", itemNoIncl="5A1bA", applicableRate=Decimal("10"),
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert len(itr2_input.os_dtaa_entries) == 1
+    assert itr2_input.os_dtaa_entries[0].applicable_rate == Decimal("10")
+
+    baseline = compute_itr2(draft_to_itr2_input(_filing_ready_itr2_draft())[0])
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    assert result.other_sources_income == baseline.other_sources_income + Decimal("100000")
+    dtaa_entries = [e for e in result.schedules["si"].entries if e.section == "DTAAOS"]
+    assert len(dtaa_entries) == 1
+    assert dtaa_entries[0].tax_rate_pct == Decimal("10")
+    assert dtaa_entries[0].tax_amount == Decimal("10000")
+
+
 def test_race_horse_activity_winnings_map_to_os_race_horse() -> None:
     """RACE_HORSE_ACTIVITY winnings map to os_race_horse, distinct from the
     other WinningIncomeType categories that route to Schedule SI."""
