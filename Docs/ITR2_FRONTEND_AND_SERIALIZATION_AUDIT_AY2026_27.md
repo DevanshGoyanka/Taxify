@@ -1092,11 +1092,16 @@ correctly hardcoded `"N"` (not a bug): `_itr2_filing_profile()` already rejects
 `verification.capacity == REPRESENTATIVE` outright before construction, so ITR-2 genuinely never
 has a represented return, unlike ITR-1/ITR-4.
 
+Extended the same key-by-key technique to `_schedule_tds2()`/`_schedule_tds3()`/`_schedule_tcs()`
+(Phase 2's other major fix area) against the official schema's `TDSOthThanSalaryDtls`/
+`TDS3onOthThanSalDtls`/`ScheduleTCS.TCS[]` item definitions — every emitted key matches the schema
+exactly (including all conditional `PANofOtherPerson`/`AadhaarOfOtherPerson`/
+`PANOfSpouseOrOthrPrsn` keys); no further bug found.
+
 Not re-checked in this pass (deferred, in scope for Phase 5's own P1 review rather than expanding
-Phase 4): the full key-by-key schema diff was applied only to `PartA_GEN1` (the block every Phase
-1-3 fix touched) — Schedule CG/OS/TDS/TCS/IT builders were spot-checked via their own regression
-tests' schema validation (all passing) rather than independently re-diffed key-by-key against the
-schema, since those tests already assert `Draft4Validator` passes on realistic populated data.
+Phase 4): Schedule CG/OS/IT builders were spot-checked via their own regression tests' schema
+validation (all passing) rather than independently re-diffed key-by-key against the schema, since
+those tests already assert `Draft4Validator` passes on realistic populated data.
 
 ---
 
