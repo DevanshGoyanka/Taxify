@@ -2082,6 +2082,36 @@ The serializer begins around `itr2.py:1316` and serializes from the first entry.
 
 **Remediation:** model employer-level data, grant/event-level information, and a complete AY ledger with brought-forward, current-year, payable, and carried-forward amounts.
 
+> **Fix status (2026-09-05): a real data-loss bug found and fixed; the event-level/multi-employer
+> completeness gap this item describes remains open.** "Serializes from the first entry" undersold
+> the actual defect: `_schedule_esop()`'s per-AY ledger built `entry_by_ay = {e.assessment_year: e
+> for e in input_data.esop_deferrals}` — a plain dict comprehension keyed by assessment year, which
+> keeps only the LAST entry for a given year. Two ESOP grants vesting in the same assessment year
+> (a realistic scenario — more than one qualifying tranche from the same eligible startup, or a
+> second grant, in one year) meant the earlier entry's `tax_deferred_brought_forward`/
+> `tax_payable_current_year`/`balance_tax_carried_forward` were silently dropped entirely, not
+> merely under-detailed. Separately, the running AY2026-27 carry-forward balance
+> (`ScheduleESOP2627_Type.BalanceTaxCF`) used `first.balance_tax_carried_forward` — literally the
+> first entry in the whole list, regardless of how many other entries existed — dropping every
+> other entry's outstanding deferred-tax balance from the one field meant to show the taxpayer's
+> total remaining ESOP tax liability. (`DPIITRegNo`/`PanofStartUp` legitimately use the first
+> entry only — the official schema defines these as single top-level scalars, not per-entry, since
+> Section 80-IAC's "eligible start-up" ESOP deferral is inherently a one-employer relationship;
+> that part was not a bug.)
+>
+> **Fix**: entries are now aggregated (summed) per assessment year before building each AY block,
+> and the AY2026-27 balance is the sum of every entry's `balance_tax_carried_forward`, not just
+> the first. Regression test `test_schedule_esop_aggregates_same_year_entries_instead_of_dropping_them`
+> in `tests/test_itr2_itd_builder.py`, confirmed via `git stash` to fail pre-fix. Full
+> `test_itr1_*`/`test_itr2_*`/`test_itr4_*` suite green (628 passed).
+>
+> **Still open** (the completeness gap this item originally described): `ScheduleESOPEventDtls`
+> (`esop_event`, shared unchanged across every AY block) is hardcoded to `{"SecurityType": "NS",
+> "ScheduleESOPEventDtlsType": [], "CeasedEmployee": "N"}` regardless of the taxpayer's actual
+> security type, individual vesting/allotment events, or cessation-of-employment status — this
+> requires new event-level input fields and frontend UI, not just an aggregation fix, and remains
+> exactly as the original finding described.
+
 ---
 
 # 14. Precision and monetary representation

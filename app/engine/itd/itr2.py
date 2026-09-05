@@ -2052,22 +2052,50 @@ def _schedule_esop(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     first = input_data.esop_deferrals[0]
     esop_event = {"SecurityType": "NS", "ScheduleESOPEventDtlsType": [], "CeasedEmployee": "N"}
 
-    def ay_block(ay_label: str, tax_key: str, entry: Optional[Any] = None) -> dict[str, Any]:
-        if entry is None or entry.assessment_year != ay_label:
-            return {"AssessmentYear": ay_label, "TaxDeferredBFEarlierAY": 0, "ScheduleESOPEventDtls": esop_event, tax_key: 0, "TaxPayableCurrentAY": 0, "BalanceTaxCF": 0}
-        return {"AssessmentYear": ay_label, "TaxDeferredBFEarlierAY": _to_rupees(entry.tax_deferred_brought_forward), "ScheduleESOPEventDtls": esop_event, tax_key: _to_rupees(entry.tax_payable_current_year), "TaxPayableCurrentAY": _to_rupees(entry.tax_payable_current_year), "BalanceTaxCF": _to_rupees(entry.balance_tax_carried_forward)}
+    # Each AY block's schema fields (TaxDeferredBFEarlierAY, TaxPayableCurrentAY,
+    # BalanceTaxCF) are single scalars, not an array -- multiple entries
+    # sharing the same assessment_year (e.g. more than one qualifying grant
+    # vesting the same year) must be SUMMED into one block. The previous
+    # `{e.assessment_year: e for e in ...}` dict comprehension instead kept
+    # only the last entry for a given year, silently discarding every
+    # earlier same-year entry's deferred/payable/carried-forward amounts.
+    aggregated_by_ay: dict[str, dict[str, Decimal]] = {}
+    for e in input_data.esop_deferrals:
+        bucket = aggregated_by_ay.setdefault(
+            e.assessment_year, {"bf": _ZERO, "payable": _ZERO, "cf": _ZERO}
+        )
+        bucket["bf"] += e.tax_deferred_brought_forward
+        bucket["payable"] += e.tax_payable_current_year
+        bucket["cf"] += e.balance_tax_carried_forward
 
-    entry_by_ay = {e.assessment_year: e for e in input_data.esop_deferrals}
+    def ay_block(ay_label: str, tax_key: str) -> dict[str, Any]:
+        bucket = aggregated_by_ay.get(ay_label)
+        if bucket is None:
+            return {"AssessmentYear": ay_label, "TaxDeferredBFEarlierAY": 0, "ScheduleESOPEventDtls": esop_event, tax_key: 0, "TaxPayableCurrentAY": 0, "BalanceTaxCF": 0}
+        return {
+            "AssessmentYear": ay_label,
+            "TaxDeferredBFEarlierAY": _to_rupees(bucket["bf"]),
+            "ScheduleESOPEventDtls": esop_event,
+            tax_key: _to_rupees(bucket["payable"]),
+            "TaxPayableCurrentAY": _to_rupees(bucket["payable"]),
+            "BalanceTaxCF": _to_rupees(bucket["cf"]),
+        }
+
     total_attributed = sum((e.tax_payable_current_year for e in input_data.esop_deferrals), _ZERO)
+    # The running balance carried into the current AY is the sum of every
+    # outstanding entry's carry-forward, not just the first entry's --
+    # using `first.balance_tax_carried_forward` alone silently dropped every
+    # other entry's remaining deferred-tax balance.
+    total_balance_cf = sum((e.balance_tax_carried_forward for e in input_data.esop_deferrals), _ZERO)
     return {
         "DPIITRegNo": first.dpiit_registration_number,
         "PanofStartUp": first.employer_pan,
-        "ScheduleESOP2122_Type": ay_block("2021-22", "TotalTaxAttributedAmt21", entry_by_ay.get("2021-22")),
-        "ScheduleESOP2223_Type": ay_block("2022-23", "TotalTaxAttributedAmt22", entry_by_ay.get("2022-23")),
-        "ScheduleESOP2324_Type": ay_block("2023-24", "TotalTaxAttributedAmt23", entry_by_ay.get("2023-24")),
-        "ScheduleESOP2425_Type": ay_block("2024-25", "TotalTaxAttributedAmt24", entry_by_ay.get("2024-25")),
-        "ScheduleESOP2526_Type": ay_block("2025-26", "TotalTaxAttributedAmt25", entry_by_ay.get("2025-26")),
-        "ScheduleESOP2627_Type": {"AssessmentYear": "2026-27", "BalanceTaxCF": _to_rupees(first.balance_tax_carried_forward)},
+        "ScheduleESOP2122_Type": ay_block("2021-22", "TotalTaxAttributedAmt21"),
+        "ScheduleESOP2223_Type": ay_block("2022-23", "TotalTaxAttributedAmt22"),
+        "ScheduleESOP2324_Type": ay_block("2023-24", "TotalTaxAttributedAmt23"),
+        "ScheduleESOP2425_Type": ay_block("2024-25", "TotalTaxAttributedAmt24"),
+        "ScheduleESOP2526_Type": ay_block("2025-26", "TotalTaxAttributedAmt25"),
+        "ScheduleESOP2627_Type": {"AssessmentYear": "2026-27", "BalanceTaxCF": _to_rupees(total_balance_cf)},
         "TotalTaxAttributedAmt": _to_rupees(total_attributed),
     }
 

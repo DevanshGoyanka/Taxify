@@ -35,6 +35,7 @@ from app.schemas.itr2 import (
     CGTransaction,
     CapitalGainExemptionClaim,
     EmployerFilingDetail,
+    ESOPDeferralInput,
     ITR2FilingProfile,
     ITR2Input,
     LossHead,
@@ -1219,6 +1220,61 @@ def test_schedule_cfl_omits_race_horse_field_for_older_year_slots() -> None:
     _assert_schema_valid(document)
     year_detail = document["ITR"]["ITR2"]["ScheduleCFL"]["LossCFFromPrev8thYearFromAY"]["CarryFwdLossDetail"]
     assert "OthSrcLossRaceHorseCF" not in year_detail
+
+
+def test_schedule_esop_aggregates_same_year_entries_instead_of_dropping_them() -> None:
+    """_schedule_esop() previously built entry_by_ay as
+    ``{e.assessment_year: e for e in ...}`` -- a plain dict comprehension
+    that keeps only the LAST entry for a given year, silently discarding
+    every earlier same-year entry's deferred/payable/carried-forward
+    amounts (a real scenario: more than one qualifying ESOP grant vesting
+    in the same assessment year). It also used ``first.balance_tax_carried_
+    forward`` alone for the running AY2026-27 balance, dropping every other
+    entry's outstanding balance. Two entries for AY2024-25 plus one for
+    AY2025-26 exercise both bugs at once."""
+    input_data = _input(
+        esop_deferrals=[
+            ESOPDeferralInput(
+                employer_pan="AAACS1234A",
+                dpiit_registration_number="DIPP12345",
+                assessment_year="2024-25",
+                tax_deferred_brought_forward=Decimal("2000"),
+                tax_payable_current_year=Decimal("10000"),
+                balance_tax_carried_forward=Decimal("8000"),
+            ),
+            ESOPDeferralInput(
+                employer_pan="AAACS1234A",
+                dpiit_registration_number="DIPP12345",
+                assessment_year="2024-25",
+                tax_deferred_brought_forward=Decimal("1000"),
+                tax_payable_current_year=Decimal("5000"),
+                balance_tax_carried_forward=Decimal("3000"),
+            ),
+            ESOPDeferralInput(
+                employer_pan="AAACS1234A",
+                dpiit_registration_number="DIPP12345",
+                assessment_year="2025-26",
+                tax_deferred_brought_forward=Decimal("0"),
+                tax_payable_current_year=Decimal("7000"),
+                balance_tax_carried_forward=Decimal("6000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    esop = document["ITR"]["ITR2"]["ScheduleESOP"]
+
+    block_2425 = esop["ScheduleESOP2425_Type"]
+    assert block_2425["TaxDeferredBFEarlierAY"] == 3000  # 2000 + 1000
+    assert block_2425["TaxPayableCurrentAY"] == 15000  # 10000 + 5000
+    assert block_2425["BalanceTaxCF"] == 11000  # 8000 + 3000
+
+    block_2526 = esop["ScheduleESOP2526_Type"]
+    assert block_2526["TaxPayableCurrentAY"] == 7000
+    assert block_2526["BalanceTaxCF"] == 6000
+
+    assert esop["ScheduleESOP2627_Type"]["BalanceTaxCF"] == 17000  # 8000 + 3000 + 6000
+    assert esop["TotalTaxAttributedAmt"] == 22000  # 10000 + 5000 + 7000
 
 
 def test_schedule_os_omits_optional_blocks_when_unset() -> None:
