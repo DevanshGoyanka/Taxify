@@ -115,6 +115,15 @@ class UnlistedEquityEntry(StrictModel):
     transfer_sale_consideration: Decimal = Field(default=Decimal("0"), ge=0)
     closing_shares: int = Field(ge=0, le=99999999999999)
     closing_cost: Decimal = Field(ge=0)
+    @model_validator(mode="after")
+    def validate_balances(self) -> "UnlistedEquityEntry":
+        """Ensure closing shares reconcile with opening, acquisitions, and transfers."""
+        expected_shares = self.opening_shares + self.acquired_shares - self.transferred_shares
+        if self.transferred_shares > self.opening_shares + self.acquired_shares:
+            raise ValueError("Transferred unlisted-equity shares cannot exceed available shares")
+        if self.closing_shares != expected_shares:
+            raise ValueError("Closing unlisted-equity shares must reconcile with opening, acquired, and transferred shares")
+        return self
 
 
 class SeventhProvisoClauseEntry(StrictModel):
@@ -126,6 +135,23 @@ class SeventhProvisoClauseEntry(StrictModel):
 
     nature: Literal["1", "2"]
     amount: Decimal = Field(ge=0)
+
+
+class AssesseeRepresentativeProfile(StrictModel):
+    """Representative-assessee contact details for official Part A-GEN JSON."""
+
+    name: str = Field(min_length=1, max_length=125)
+    email: str = Field(min_length=1, max_length=125)
+    mobile_country_code: int = Field(ge=0, le=99999)
+    mobile_no: str = Field(pattern=r"^[1-9][0-9]{4,9}$")
+
+
+class TaxReturnPreparerProfile(StrictModel):
+    """Tax Return Preparer details emitted when a TRP prepared the return."""
+
+    identification_number: str = Field(pattern=r"^(T[0-9]{9}|[0-9]{6})$")
+    name: str = Field(min_length=1, max_length=125)
+    reimbursement_from_government: Decimal = Field(ge=0, le=99999999999999)
 
 
 class ITR2FilingProfile(StrictModel):
@@ -168,6 +194,7 @@ class ITR2FilingProfile(StrictModel):
     portuguese_civil_code_applies: bool = False
     lei_number: Optional[str] = Field(default=None, min_length=20, max_length=20)
     lei_valid_upto_date: Optional[date] = None
+    refund_due: Decimal = Field(default=Decimal("0"), ge=0)
     conditions_res_status: Optional[Literal["1", "2", "3", "4", "5", "6", "7", "8", "9"]] = None
     jurisdiction_residence_entries: List[JurisdictionResidenceEntry] = Field(default_factory=list)
     total_stay_india_prev_yr: Optional[int] = Field(default=None, ge=0, le=365)
@@ -175,7 +202,9 @@ class ITR2FilingProfile(StrictModel):
     benefit_us_115h: bool = False
     father_name: str = Field(min_length=1, max_length=125)
     verification_place: str = Field(min_length=1, max_length=50)
-    verification_capacity: Literal["S", "K"] = "S"
+    verification_capacity: Literal["S", "R", "K", "A"] = "S"
+    assessee_representative: Optional[AssesseeRepresentativeProfile] = None
+    tax_return_preparer: Optional[TaxReturnPreparerProfile] = None
 
     @model_validator(mode="after")
     def validate_conditional_filing_facts(self) -> "ITR2FilingProfile":
@@ -190,8 +219,16 @@ class ITR2FilingProfile(StrictModel):
             ReturnFileSection.DEFECTIVE_139_9,
         } and (self.notice_number is None or self.notice_date is None):
             raise ValueError("Notice return requires notice number and notice date")
+        if self.return_file_section == ReturnFileSection.CONDONATION_119_2B and (self.notice_number is None or self.notice_date is None):
+            raise ValueError("119(2)(b) return requires condonation order number and order date")
+        if self.refund_due >= Decimal("500000000") and not self.lei_number:
+            raise ValueError("LEI is required when refund due is INR 50 crore or more")
+        if self.refund_due >= Decimal("500000000") and self.lei_valid_upto_date is None:
+            raise ValueError("LEI validity date is required when refund due is INR 50 crore or more")
         if self.is_fii_fpi and self.sebi_registration_number is None:
             raise ValueError("FII/FPI filing requires a SEBI registration number")
+        if self.is_fii_fpi and self.residential_status != ResidentialStatus.NON_RESIDENT:
+            raise ValueError("FII/FPI status requires non-resident residential status")
         if self.is_company_director and not self.company_director_entries:
             raise ValueError("Company-director filing requires at least one company_director_entries row")
         if self.held_unlisted_equity and not self.unlisted_equity_entries:
@@ -210,6 +247,22 @@ class ITR2FilingProfile(StrictModel):
             raise ValueError("Electricity expenditure exceeding INR 1 lakh requires an amount of at least INR 1,00,000")
         if self.other_clause_iv_flag and not self.seventh_proviso_clause_iv_entries:
             raise ValueError("Other seventh-proviso clause (iv) filing requires at least one seventh_proviso_clause_iv_entries row")
+        if self.date_of_birth_or_formation > date(2026, 3, 31):
+            raise ValueError("DOB or formation date must be on or before 2026-03-31")
+        if self.verification_capacity == "R" and self.assessee_representative is None:
+            raise ValueError("Representative verification requires assessee representative details")
+        if self.verification_capacity != "R" and self.assessee_representative is not None:
+            raise ValueError("Assessee representative details require representative verification")
+        if self.tax_return_preparer is not None and not self.tax_return_preparer.identification_number:
+            raise ValueError("Tax Return Preparer identification number is required")
+        if self.assessee_status == AssesseeStatus.HUF and self.verification_capacity not in {"K", "R"}:
+            raise ValueError("HUF ITR-2 verification requires Karta or representative capacity")
+        if self.residential_status == ResidentialStatus.NON_RESIDENT and self.benefit_us_115h:
+            raise ValueError("Section 115H benefit cannot be claimed by a non-resident")
+        if self.residential_status == ResidentialStatus.RESIDENT and self.benefit_us_115h:
+            raise ValueError("Section 115H benefit requires RNOR resident status")
+        if self.residential_status == ResidentialStatus.RESIDENT and self.jurisdiction_residence_entries:
+            raise ValueError("Foreign residence jurisdictions require NRI or RNOR status")
         return self
 
 

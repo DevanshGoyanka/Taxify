@@ -1435,6 +1435,8 @@ class FilingAddress(PostalAddress):
         max_length=125,
         pattern=r"^([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+$",
     )
+    landline_std_code: int = Field(default=0, ge=0, le=99999)
+    landline_phone_no: str = Field(default="0", pattern=r"^[0-9]{1,10}$")
 
 
 class SeventhProvisoDetails(BaseModel):

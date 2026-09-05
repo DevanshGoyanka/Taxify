@@ -61,6 +61,7 @@ from app.schemas.itr1 import (
     TaxReturnPreparer,
 )
 from app.schemas.itr2 import (
+    AssesseeRepresentativeProfile as ITR2AssesseeRepresentativeProfile,
     AssesseeStatus as ITR2AssesseeStatus,
     CoOwnerDetail as ITR2CoOwnerDetail,
     CompanyDirectorEntry,
@@ -1166,11 +1167,15 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
     filing = draft.filing
     verification = draft.verification
 
-    if verification.capacity not in {"SELF", "KARTA"}:
+    if verification.capacity not in {"SELF", "REPRESENTATIVE", "KARTA"}:
         raise FilingGatewayV2Error(
             "ITR-2 verification capacity is invalid.",
-            ["verification.capacity must be SELF or KARTA for ITR-2 — "
-             "representative-filed ITR-2 verification is not yet supported."],
+            ["verification.capacity must be SELF, REPRESENTATIVE, or KARTA for ITR-2."],
+        )
+    if personal.assesseeStatus == "H" and verification.capacity == "SELF":
+        raise FilingGatewayV2Error(
+            "HUF ITR-2 verification capacity is invalid.",
+            ["HUF ITR-2 returns must be verified by Karta or representative assessee."],
         )
 
     try:
@@ -1197,6 +1202,8 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
             secondary_mobile_country_code=addr.secondary_mobile_country_code,
             secondary_mobile_no=addr.secondary_mobile_no,
             secondary_email=addr.secondary_email,
+            landline_std_code=int(personal.landlineStdCode or 0),
+            landline_phone_no=personal.landlinePhoneNo or "0",
         )
         alternate_address = None
         if normalized.alternate_address is not None:
@@ -1211,6 +1218,23 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
                 country_code=alt.country_code,
                 pin_code=alt.pin_code,
                 zip_code=alt.zip_code,
+            )
+        representative = None
+        if normalized.representative is not None:
+            representative = ITR2AssesseeRepresentativeProfile(
+                name=normalized.representative.name,
+                email=normalized.representative.email,
+                mobile_country_code=normalized.representative.mobile_country_code,
+                mobile_no=normalized.representative.mobile_no,
+            )
+        trp = normalize_tax_return_preparer(draft)
+        tax_return_preparer = None
+        if trp is not None:
+            from app.schemas.itr2 import TaxReturnPreparerProfile
+            tax_return_preparer = TaxReturnPreparerProfile(
+                identification_number=trp.identification_number,
+                name=trp.name,
+                reimbursement_from_government=trp.reimbursement_from_government,
             )
 
         seventh = normalized.seventh_proviso
@@ -1317,7 +1341,9 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
             ),
             father_name=normalized.father_name,
             verification_place=normalized.verification_place,
-            verification_capacity="K" if verification.capacity == "KARTA" else "S",
+            verification_capacity={"SELF": "S", "REPRESENTATIVE": "R", "KARTA": "K"}[verification.capacity],
+            assessee_representative=representative,
+            tax_return_preparer=tax_return_preparer,
         )
     except (ValidationError, ValueError) as exc:
         raise FilingGatewayV2Error("ITR-2 filing profile is invalid.", [str(exc)]) from exc
@@ -1678,6 +1704,11 @@ def compute_canonical_itr2(draft: ReturnDraft) -> ITR2PipelineResult:
             "tds3_filing_details": tds3_filing_details,
         })
         result = compute_itr2(typed_input)
+        filing_profile = ITR2FilingProfile.model_validate({
+            **filing_profile.model_dump(),
+            "refund_due": result.refund_due,
+        })
+        typed_input = typed_input.model_copy(update={"filing_profile": filing_profile})
     except FilingGatewayV2Error:
         raise
     except (DraftMappingError, ValidationError, ValueError) as exc:

@@ -99,6 +99,31 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
     """Serialize Part A from the real filing profile."""
     profile = _required_profile(input_data)
     addr = profile.primary_address
+    address_data: dict[str, Any] = {
+        "ResidenceNo": addr.residence_no,
+        "ResidenceName": addr.residence_name,
+        "RoadOrStreet": addr.road_or_street,
+        "LocalityOrArea": addr.locality_or_area,
+        "CityOrTownOrDistrict": addr.city_or_town_or_district,
+        "StateCode": addr.state_code,
+        "CountryCode": addr.country_code,
+        "CountryCodeMobile": addr.mobile_country_code,
+        "MobileNo": int(addr.mobile_no) if addr.mobile_no.isdigit() else 0,
+        "CountryCodeMobileNoSec": addr.secondary_mobile_country_code,
+        "MobileNoSec": int(addr.secondary_mobile_no) if addr.secondary_mobile_no and addr.secondary_mobile_no.isdigit() else 0,
+        "EmailAddress": addr.email,
+    }
+    if addr.country_code == "91":
+        address_data["PinCode"] = int(addr.pin_code) if addr.pin_code else 0
+    else:
+        address_data["ZipCode"] = addr.zip_code
+    if addr.secondary_email:
+        address_data["EmailAddressSec"] = addr.secondary_email
+    phone = profile.primary_address
+    address_data["Phone"] = {
+        "STDcode": phone.landline_std_code,
+        "PhoneNo": phone.landline_phone_no,
+    }
     personal_info: dict[str, Any] = {
         "AssesseeName": {
             "FirstName": profile.first_name,
@@ -106,22 +131,7 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
             "SurNameOrOrgName": profile.surname_or_org_name,
         },
         "PAN": profile.pan,
-        "Address": {
-            "ResidenceNo": addr.residence_no,
-            "ResidenceName": addr.residence_name,
-            "RoadOrStreet": addr.road_or_street,
-            "LocalityOrArea": addr.locality_or_area,
-            "CityOrTownOrDistrict": addr.city_or_town_or_district,
-            "StateCode": addr.state_code,
-            "CountryCode": addr.country_code,
-            "PinCode": int(addr.pin_code) if addr.pin_code else 0,
-            "ZipCode": "",
-            "CountryCodeMobile": 91,
-            "MobileNo": int(addr.mobile_no) if addr.mobile_no.isdigit() else 0,
-            "CountryCodeMobileNoSec": 0,
-            "MobileNoSec": 0,
-            "EmailAddress": addr.email,
-        },
+        "Address": address_data,
         "SecondaryAdd": "Y" if profile.alternate_address else "N",
         "DOB": _date(profile.date_of_birth_or_formation),
         "Status": profile.assessee_status.value,
@@ -146,7 +156,7 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         "OptOutNewTaxRegime": "Y" if profile.opted_out_new_tax_regime else "N",
         "SeventhProvisio139": "Y" if profile.seventh_proviso_139 else "N",
         "ResidentialStatus": profile.residential_status.value,
-        "AsseseeRepFlg": "N",
+        "AsseseeRepFlg": "Y" if profile.verification_capacity == "R" else "N",
         "ItrFilingDueDate": _date(profile.filing_due_date),
         "HeldUnlistedEqShrPrYrFlg": "Y" if profile.held_unlisted_equity else "N",
         # Previously never emitted at all -- is_company_director was read
@@ -192,6 +202,14 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         filing_status["NoticeNo"] = profile.notice_number
     if profile.notice_date:
         filing_status["NoticeDate"] = _date(profile.notice_date)
+    if profile.assessee_representative is not None:
+        representative = profile.assessee_representative
+        filing_status["AssesseeRep"] = {
+            "RepName": representative.name,
+            "RepEmailID": representative.email,
+            "CountryCodeRepMobileNo": representative.mobile_country_code,
+            "RepMobileNo": int(representative.mobile_no),
+        }
     if profile.sebi_registration_number:
         # Official schema key is "SebiRegnNo", NOT "SEBIRegNo" -- confirmed
         # via live Draft4Validator schema validation (the wrong key was
@@ -2667,6 +2685,13 @@ def build_itr2_json(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]
         "PartB_TTI": _partb_tti(result, input_data),
         "Verification": _verification_block(input_data),
     }
+    if profile.tax_return_preparer is not None:
+        tax_return_preparer = profile.tax_return_preparer
+        itr2["TaxReturnPreparer"] = {
+            "IdentificationNoOfTRP": tax_return_preparer.identification_number,
+            "NameOfTRP": tax_return_preparer.name,
+            "ReImbFrmGov": _to_rupees(tax_return_preparer.reimbursement_from_government),
+        }
     optional: dict[str, Optional[dict[str, Any]]] = {
         "ScheduleS": _schedule_s(result, input_data),
         "ScheduleHP": _schedule_hp(result, input_data),

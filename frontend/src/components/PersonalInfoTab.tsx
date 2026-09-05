@@ -53,6 +53,15 @@ const GRID_STYLE: React.CSSProperties = { display: 'grid', gridTemplateColumns: 
 const PAN_PATTERN = '[A-Z]{5}[0-9]{4}[A-Z]';
 const PIN_PATTERN = '[1-9][0-9]{5}';
 
+function moneyValue(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return '';
+  return String(value);
+}
+
+function parseMoney(value: string): number {
+  return value === '' ? 0 : Number(value);
+}
+
 function bool(value: unknown): boolean { return value === true; }
 function blankAddress(): AddressData { return { residenceNo: '', residenceName: '', roadOrStreet: '', localityOrArea: '', city: '', stateCode: '', countryCode: '91', pinCode: '', zipCode: '' }; }
 
@@ -178,6 +187,9 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
         <option value="">-- Select employer category --</option>
         {EMPLOYER_CATEGORY_OPTIONS.map(({ code, label }) => <option key={code} value={code}>{code} — {label}</option>)}
       </SelectField>
+      {itrForm === 'ITR-2' && <SelectField label="ITR-2 assessee status" value={personal.assesseeStatus === 'H' ? 'H' : 'I'} onChange={(value) => updatePersonal({ assesseeStatus: value as Personal['assesseeStatus'] })} required>
+        <option value="I">Individual</option><option value="H">HUF</option>
+      </SelectField>}
       {itrForm === 'ITR-2' && <SelectField label="Residential Status" value={personal.residentialStatus || 'ROR'} onChange={(value) => updatePersonal({ residentialStatus: value as Personal['residentialStatus'] })} required>
         <option value="ROR">Resident and Ordinarily Resident</option>
         <option value="RNOR">Resident but Not Ordinarily Resident</option>
@@ -211,24 +223,24 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       {dueDatePassed && filing.filingSection === '139(1)' && <div style={{ gridColumn: '1 / -1', padding: '8px 10px', borderRadius: 6, border: '1px solid #f0c36d', background: '#fdf6e3', fontSize: 12, color: '#7a5b00' }}>The {itrForm} due date for AY {assessmentYear} ({filingDueDate}) has passed, so this return cannot be filed under 139(1). Choose 139(4) if it has not been filed yet, or 139(5) with the original acknowledgement details if it has. Filing and validation are blocked until this is changed.</div>}
       {filing.filingSection === '139(5)' && <Field label="Original Acknowledgement Number" value={filing.originalAcknowledgementNumber} onChange={(value) => updateFiling({ originalAcknowledgementNumber: value.replace(/\D/g, '').slice(0, 15) })} required pattern="[0-9]{15}" maxLength={15} inputMode="numeric" />}
       {filing.filingSection === '139(5)' && <Field label="Original Return Filing Date" value={filing.originalFilingDate || ''} onChange={(value) => updateFiling({ originalFilingDate: value || null })} type="date" required />}
-      {['142(1)', '148', '153C', '139(9)'].includes(filing.filingSection) && <Field label="Notice / Order Number" value={filing.noticeNumber} onChange={(value) => updateFiling({ noticeNumber: value })} required maxLength={100} />}
-      {['142(1)', '148', '153C', '139(9)'].includes(filing.filingSection) && <Field label="Notice / Order Date" value={filing.noticeDate || ''} onChange={(value) => updateFiling({ noticeDate: value || null })} type="date" required />}
+      {['142(1)', '148', '153C', '139(9)', '119(2)(b)'].includes(filing.filingSection) && <Field label="Notice / Order Number" value={filing.noticeNumber} onChange={(value) => updateFiling({ noticeNumber: value })} required maxLength={100} />}
+      {['142(1)', '148', '153C', '139(9)', '119(2)(b)'].includes(filing.filingSection) && <Field label="Notice / Order Date" value={filing.noticeDate || ''} onChange={(value) => updateFiling({ noticeDate: value || null })} type="date" required />}
       <SelectField label="Tax Regime Election" value={draft.regime === 'old' ? 'OLD' : 'NEW'} onChange={(value) => { const next = value === 'OLD' ? 'old' : 'new'; onChange({ regime: next }); onRegimeChange(next); }} required><option value="NEW">New tax regime</option><option value="OLD">Old tax regime / opt out</option></SelectField>
     </div></div>
     <SectionHeading title="Seventh proviso to section 139(1)" description="Complete only when filing is triggered by expenditure, deposits, turnover, receipts, or TDS/TCS thresholds despite otherwise being below the income threshold." />
     <div style={CARD_STYLE}>
-      {(itrForm === 'ITR-4' || itrForm === 'ITR-2') && <><CheckField label="Deposits in current accounts exceeded ₹1 crore" checked={filing.seventhProviso.depositExceedsOneCrore} onChange={(checked) => updateFiling({ seventhProviso: { ...filing.seventhProviso, depositExceedsOneCrore: checked } })} />{filing.seventhProviso.depositExceedsOneCrore && <Field label="Aggregate current-account deposits (₹)" value={filing.seventhProviso.depositAmount} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, depositAmount: Number(value) || 0 } })} type="number" required />}</>}
+      {(itrForm === 'ITR-4' || itrForm === 'ITR-2') && <><CheckField label="Deposits in current accounts exceeded ₹1 crore" checked={filing.seventhProviso.depositExceedsOneCrore} onChange={(checked) => updateFiling({ seventhProviso: { ...filing.seventhProviso, depositExceedsOneCrore: checked } })} />{filing.seventhProviso.depositExceedsOneCrore && <Field label="Aggregate current-account deposits (₹)" value={moneyValue(filing.seventhProviso.depositAmount)} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, depositAmount: parseMoney(value) } })} type="number" required />}</>}
       <CheckField label="Foreign-travel expenditure exceeded ₹2 lakh" checked={filing.seventhProviso.foreignTravel} onChange={(checked) => updateFiling({ seventhProviso: { ...filing.seventhProviso, foreignTravel: checked } })} />
-      {filing.seventhProviso.foreignTravel && <Field label="Foreign-travel expenditure (₹)" value={filing.seventhProviso.foreignTravelAmount} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, foreignTravelAmount: Number(value) || 0 } })} type="number" required />}
+      {filing.seventhProviso.foreignTravel && <Field label="Foreign-travel expenditure (₹)" value={moneyValue(filing.seventhProviso.foreignTravelAmount)} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, foreignTravelAmount: parseMoney(value) } })} type="number" required />}
       <CheckField label="Electricity expenditure exceeded ₹1 lakh" checked={filing.seventhProviso.electricityExpenditure} onChange={(checked) => updateFiling({ seventhProviso: { ...filing.seventhProviso, electricityExpenditure: checked } })} />
-      {filing.seventhProviso.electricityExpenditure && <Field label="Electricity expenditure (₹)" value={filing.seventhProviso.electricityExpenditureAmount} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, electricityExpenditureAmount: Number(value) || 0 } })} type="number" required />}
+      {filing.seventhProviso.electricityExpenditure && <Field label="Electricity expenditure (₹)" value={moneyValue(filing.seventhProviso.electricityExpenditureAmount)} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, electricityExpenditureAmount: parseMoney(value) } })} type="number" required />}
       <CheckField label="Other clause-(iv) threshold applies" checked={filing.seventhProviso.otherClauseIV} onChange={(checked) => updateFiling({ seventhProviso: { ...filing.seventhProviso, otherClauseIV: checked } })} />
       {filing.seventhProviso.otherClauseIV && <div style={{ marginTop: 12 }}>
         {filing.seventhProviso.clauseIVDetails.map((row, index) => <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 10 }}>
           <SelectField label={`Clause ${index + 1} nature`} value={row.nature} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, clauseIVDetails: filing.seventhProviso.clauseIVDetails.map((item) => item.id === row.id ? { ...item, nature: value as typeof row.nature } : item) } })} required>
             {(itrForm === 'ITR-4' ? ['1', '2', '3', '4'] : ['1', '2']).map((code) => <option key={code} value={code}>Nature {code}</option>)}
           </SelectField>
-          <Field label={`Clause ${index + 1} amount (₹)`} value={row.amount} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, clauseIVDetails: filing.seventhProviso.clauseIVDetails.map((item) => item.id === row.id ? { ...item, amount: Number(value) || 0 } : item) } })} type="number" required />
+          <Field label={`Clause ${index + 1} amount (₹)`} value={moneyValue(row.amount)} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, clauseIVDetails: filing.seventhProviso.clauseIVDetails.map((item) => item.id === row.id ? { ...item, amount: parseMoney(value) } : item) } })} type="number" required />
           <button type="button" onClick={() => updateFiling({ seventhProviso: { ...filing.seventhProviso, clauseIVDetails: filing.seventhProviso.clauseIVDetails.filter((item) => item.id !== row.id) } })}>Remove</button>
         </div>)}
         <button type="button" onClick={() => updateFiling({ seventhProviso: { ...filing.seventhProviso, clauseIVDetails: [...filing.seventhProviso.clauseIVDetails, { id: `seventh-${Date.now()}`, nature: '1', amount: 0 }] } })}>Add clause detail</button>
@@ -252,7 +264,8 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       <CheckField label="Assessee is a Foreign Institutional Investor / Foreign Portfolio Investor (FII/FPI)" checked={filing.isFiiFpi} onChange={(checked) => updateFiling({ isFiiFpi: checked })} />
       {filing.isFiiFpi && <Field label="SEBI registration number" value={filing.sebiRegistrationNumber} onChange={(value) => updateFiling({ sebiRegistrationNumber: value.toUpperCase() })} required pattern="IN[A-Z]{2}FP[0-9]{6}" maxLength={11} help="Format: IN followed by 2 letters, FP, then 6 digits." />}
       <Field label="Legal Entity Identifier (LEI)" value={filing.leiNumber} onChange={(value) => updateFiling({ leiNumber: value.toUpperCase().slice(0, 20) })} maxLength={20} help="Required by CBDT instructions only when the refund claimed is ₹50 crore or more." />
-      {filing.leiNumber && <Field label="LEI valid upto date" value={filing.leiValidUptoDate || ''} onChange={(value) => updateFiling({ leiValidUptoDate: value || null })} type="date" />}
+      <CheckField label="Governed by Portuguese Civil Code under Section 5A" checked={filing.portugueseCivilCodeApplies} onChange={(checked) => updateFiling({ portugueseCivilCodeApplies: checked })} />
+      <Field label="LEI valid upto date" value={filing.leiValidUptoDate || ''} onChange={(value) => updateFiling({ leiValidUptoDate: value || null })} type="date" />
     </div></div></>}
     {itrForm === 'ITR-2' && (personal.residentialStatus || 'ROR') !== 'ROR' && <><SectionHeading title="Residential status details" description="Basis, day counts, and jurisdiction of residence supporting the NRI/RNOR classification above." /><div style={CARD_STYLE}><div style={GRID_STYLE}>
       <SelectField label="Basis for residential status (Section 6)" value={filing.conditionsResStatus} onChange={(value) => updateFiling({ conditionsResStatus: value as Filing['conditionsResStatus'] })}>
@@ -269,7 +282,8 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       </SelectField>
       <Field label="Total days stayed in India this previous year" value={filing.totalStayIndiaPrevYr ?? ''} onChange={(value) => updateFiling({ totalStayIndiaPrevYr: value === '' ? null : Math.max(0, Math.min(365, Number(value) || 0)) })} type="number" min={0} max={365} inputMode="numeric" />
       <Field label="Total days stayed in India in preceding 4 years" value={filing.totalStayIndia4PrecYr ?? ''} onChange={(value) => updateFiling({ totalStayIndia4PrecYr: value === '' ? null : Math.max(0, Math.min(1461, Number(value) || 0)) })} type="number" min={0} max={1461} inputMode="numeric" />
-      <CheckField label="Claiming Section 115H benefit (continued special-rate treatment for an NRI who becomes resident)" checked={filing.benefitUs115H} onChange={(checked) => updateFiling({ benefitUs115H: checked })} />
+      {(personal.residentialStatus || 'ROR') === 'RNOR' && <CheckField label="Claiming Section 115H benefit (continued special-rate treatment for an NRI who becomes resident)" checked={filing.benefitUs115H} onChange={(checked) => updateFiling({ benefitUs115H: checked })} />}
+      {filing.benefitUs115H && <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11 }}>Available only for a resident taxpayer who was formerly non-resident.</div>}
     </div>
     <div style={{ marginTop: 16 }}>
       <h4 style={{ margin: '0 0 10px', fontSize: 13 }}>Jurisdiction(s) of residence</h4>
@@ -282,8 +296,7 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
         <button type="button" onClick={() => updateFiling({ jurisdictionResidenceEntries: filing.jurisdictionResidenceEntries.filter((item) => item.id !== row.id) })}>Remove</button>
       </div>)}
       <button type="button" onClick={() => updateFiling({ jurisdictionResidenceEntries: [...filing.jurisdictionResidenceEntries, { id: `jurisdiction-${Date.now()}`, jurisdictionCode: '', tin: '' }] })}>Add jurisdiction</button>
-    </div>
-    </div></>}
+    </div></div></>}
     {itrForm === 'ITR-2' && <><SectionHeading title="Director and unlisted-equity disclosures" description="Company directorships held and unlisted equity shares held at any time during the year." /><div style={CARD_STYLE}>
       <CheckField label="Assessee was a director in a company at any time during the year" checked={bool(personal.isDirector)} onChange={(checked) => updatePersonal({ isDirector: checked, companyDirectorEntries: checked ? personal.companyDirectorEntries : [] })} />
       {bool(personal.isDirector) && <div style={{ marginTop: 12 }}>
@@ -315,17 +328,17 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
                 <option value="F">Foreign</option>
               </SelectField>
               <Field label={`Company ${index + 1} PAN`} value={row.pan} onChange={(value) => updateRow({ pan: value.toUpperCase() })} pattern={PAN_PATTERN} maxLength={10} />
-              <Field label="Opening balance — shares" value={row.openingShares} onChange={(value) => updateRow({ openingShares: Number(value) || 0 })} type="number" min={0} required />
-              <Field label="Opening balance — cost (₹)" value={row.openingCost} onChange={(value) => updateRow({ openingCost: Number(value) || 0 })} type="number" min={0} required />
-              <Field label="Acquired during year — shares" value={row.acquiredShares} onChange={(value) => updateRow({ acquiredShares: Number(value) || 0 })} type="number" min={0} />
+              <Field label="Opening balance — shares" value={moneyValue(row.openingShares)} onChange={(value) => updateRow({ openingShares: parseMoney(value) })} type="number" min={0} required />
+              <Field label="Opening balance — cost (₹)" value={moneyValue(row.openingCost)} onChange={(value) => updateRow({ openingCost: parseMoney(value) })} type="number" min={0} required />
+              <Field label="Acquired during year — shares" value={moneyValue(row.acquiredShares)} onChange={(value) => updateRow({ acquiredShares: parseMoney(value) })} type="number" min={0} />
               <Field label="Date of subscription / purchase" value={row.dateOfAcquisition || ''} onChange={(value) => updateRow({ dateOfAcquisition: value || null })} type="date" />
-              <Field label="Face value per share (₹)" value={row.faceValuePerShare} onChange={(value) => updateRow({ faceValuePerShare: Number(value) || 0 })} type="number" min={0} />
-              <Field label="Issue price per share (₹)" value={row.issuePricePerShare} onChange={(value) => updateRow({ issuePricePerShare: Number(value) || 0 })} type="number" min={0} />
-              <Field label="Purchase price per share (₹)" value={row.purchasePricePerShare} onChange={(value) => updateRow({ purchasePricePerShare: Number(value) || 0 })} type="number" min={0} />
-              <Field label="Transferred during year — shares" value={row.transferredShares} onChange={(value) => updateRow({ transferredShares: Number(value) || 0 })} type="number" min={0} />
-              <Field label="Sale consideration on transfer (₹)" value={row.transferSaleConsideration} onChange={(value) => updateRow({ transferSaleConsideration: Number(value) || 0 })} type="number" min={0} />
-              <Field label="Closing balance — shares" value={row.closingShares} onChange={(value) => updateRow({ closingShares: Number(value) || 0 })} type="number" min={0} required />
-              <Field label="Closing balance — cost (₹)" value={row.closingCost} onChange={(value) => updateRow({ closingCost: Number(value) || 0 })} type="number" min={0} required />
+              <Field label="Face value per share (₹)" value={moneyValue(row.faceValuePerShare)} onChange={(value) => updateRow({ faceValuePerShare: parseMoney(value) })} type="number" min={0} />
+              <Field label="Issue price per share (₹)" value={moneyValue(row.issuePricePerShare)} onChange={(value) => updateRow({ issuePricePerShare: parseMoney(value) })} type="number" min={0} />
+              <Field label="Purchase price per share (₹)" value={moneyValue(row.purchasePricePerShare)} onChange={(value) => updateRow({ purchasePricePerShare: parseMoney(value) })} type="number" min={0} />
+              <Field label="Transferred during year — shares" value={moneyValue(row.transferredShares)} onChange={(value) => updateRow({ transferredShares: parseMoney(value) })} type="number" min={0} />
+              <Field label="Sale consideration on transfer (₹)" value={moneyValue(row.transferSaleConsideration)} onChange={(value) => updateRow({ transferSaleConsideration: parseMoney(value) })} type="number" min={0} />
+              <Field label="Closing balance — shares" value={moneyValue(row.closingShares)} onChange={(value) => updateRow({ closingShares: parseMoney(value) })} type="number" min={0} required />
+              <Field label="Closing balance — cost (₹)" value={moneyValue(row.closingCost)} onChange={(value) => updateRow({ closingCost: parseMoney(value) })} type="number" min={0} required />
               <button type="button" onClick={() => updatePersonal({ unlistedEquityEntries: personal.unlistedEquityEntries.filter((item) => item.id !== row.id) })}>Remove</button>
             </div>;
           })}
@@ -335,7 +348,7 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
     </div></>}
     <SectionHeading title="Verification" description="The declaration must be accepted before official CBDT JSON generation." />
     <div style={CARD_STYLE}><div style={GRID_STYLE}>
-      <SelectField label="Verification capacity" value={verification.capacity} onChange={(value) => updateVerification({ capacity: value as Verification['capacity'] })} required><option value="SELF">Self</option><option value="REPRESENTATIVE">Representative assessee</option>{itrForm === 'ITR-4' && <option value="KARTA">Karta</option>}{itrForm === 'ITR-4' && <option value="PARTNER">Partner</option>}</SelectField>
+      <SelectField label="Verification capacity" value={verification.capacity} onChange={(value) => updateVerification({ capacity: value as Verification['capacity'] })} required><option value="SELF">Self</option><option value="REPRESENTATIVE">Representative assessee</option>{itrForm === 'ITR-2' && personal.assesseeStatus === 'H' && <option value="KARTA">Karta</option>}{itrForm === 'ITR-4' && <option value="KARTA">Karta</option>}{itrForm === 'ITR-4' && <option value="PARTNER">Partner</option>}</SelectField>
       <Field label="Place of verification" value={verification.place} onChange={(value) => updateVerification({ place: value })} required maxLength={50} />
       <Field label="Verification date" value={verification.date || ''} onChange={(value) => updateVerification({ date: value || null })} type="date" required />
     </div>{verification.capacity === 'REPRESENTATIVE' && <div style={{ ...GRID_STYLE, marginTop: 16 }}>
@@ -345,7 +358,7 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       <Field label="Representative mobile number" value={filing.representative?.mobile || ''} onChange={(value) => updateFiling({ representative: { name: filing.representative?.name || '', email: filing.representative?.email || '', mobileCountryCode: filing.representative?.mobileCountryCode || '91', mobile: value.replace(/\D/g, '').slice(0, 10) } })} required pattern="[1-9][0-9]{4,9}" maxLength={10} />
     </div>}<label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 16, fontSize: 13 }}><input type="checkbox" checked={bool(verification.declarationAccepted)} onChange={(event) => updateVerification({ declarationAccepted: event.target.checked })} />I declare that the information given in this return and its schedules is correct and complete.</label></div>
     <SectionHeading title="Tax Return Preparer (TRP)" description="Optional. Fill only if a Tax Return Preparer prepared this return." />
-    <div style={CARD_STYLE}><SelectField label="Was this return prepared by a TRP?" value={taxReturnPreparer.used ? 'Y' : 'N'} onChange={(value) => onChange({ taxReturnPreparer: { used: value === 'Y' } })} required><option value="N">No</option><option value="Y">Yes</option></SelectField>{taxReturnPreparer.used && <div style={{ ...GRID_STYLE, marginTop: 16 }}><Field label="TRP identification number" value={taxReturnPreparer.identificationNumber} onChange={(value) => onChange({ taxReturnPreparer: { identificationNumber: value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) } })} required pattern="(T[0-9]{9}|[0-9]{6})" maxLength={10} help="Enter T followed by 9 digits, or a 6-digit legacy identifier." /><Field label="TRP name" value={taxReturnPreparer.name} onChange={(value) => onChange({ taxReturnPreparer: { name: value } })} required maxLength={125} /><Field label="Reimbursement from government (₹)" value={taxReturnPreparer.reimbursementFromGovernment} onChange={(value) => onChange({ taxReturnPreparer: { reimbursementFromGovernment: Number(value) || 0 } })} type="number" min={0} max={99999999999999} inputMode="numeric" /></div>}</div>
+    <div style={CARD_STYLE}><SelectField label="Was this return prepared by a TRP?" value={taxReturnPreparer.used ? 'Y' : 'N'} onChange={(value) => onChange({ taxReturnPreparer: { used: value === 'Y' } })} required><option value="N">No</option><option value="Y">Yes</option></SelectField>{taxReturnPreparer.used && <div style={{ ...GRID_STYLE, marginTop: 16 }}><Field label="TRP identification number" value={taxReturnPreparer.identificationNumber} onChange={(value) => onChange({ taxReturnPreparer: { identificationNumber: value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) } })} required pattern="(T[0-9]{9}|[0-9]{6})" maxLength={10} help="Enter T followed by 9 digits, or a 6-digit legacy identifier." /><Field label="TRP name" value={taxReturnPreparer.name} onChange={(value) => onChange({ taxReturnPreparer: { name: value } })} required maxLength={125} /><Field label="Reimbursement from government (₹)" value={moneyValue(taxReturnPreparer.reimbursementFromGovernment)} onChange={(value) => onChange({ taxReturnPreparer: { reimbursementFromGovernment: parseMoney(value) } })} type="number" min={0} max={99999999999999} inputMode="numeric" /></div>}</div>
     <SectionHeading title="Bank accounts and refund" description="Add all reportable accounts. Select exactly one refund account whenever a refund account is required." />
     <div style={CARD_STYLE}><BankAccountManager data={{ accounts: draft.bankAccounts }} onChange={onBanksChange} /></div>
     <div style={{ padding: 12, borderRadius: 6, background: 'var(--info-bg)', color: 'var(--info)', fontSize: 12 }}>Bank accounts are stored in the canonical draft and sent directly to the v2 repository.</div>
