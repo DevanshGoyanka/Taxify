@@ -641,6 +641,41 @@ class EmployerFilingDetail(StrictModel):
     state_code: str = Field(pattern=r"^(0[1-9]|[12][0-9]|3[0-7]|99)$")
 
 
+class HomeLoanDetail(StrictModel):
+    """One Section 24(b) home-loan row for a Schedule HP property (official
+    Section24BDtls). ``interest_this_year`` is this loan's share of the
+    property's total Section 24(b) interest for the year -- when more than
+    one loan exists for a property, the rows must cross-foot to the
+    property's real computed interest."""
+
+    loan_taken_from: Literal["B", "I"] = Field(description="B: Bank, I: Other than Bank")
+    bank_or_institution_name: str = Field(min_length=1, max_length=125)
+    loan_account_or_ref_no: str = Field(min_length=1, max_length=20)
+    date_of_loan: date
+    total_loan_amount: Decimal = Field(ge=0)
+    loan_outstanding_amount: Decimal = Field(ge=0)
+    interest_this_year: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class CoOwnerDetail(StrictModel):
+    """One co-owner row for a Schedule HP property (official CoOwners)."""
+
+    name: str = Field(min_length=1, max_length=125)
+    pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    percent_share: Optional[Decimal] = Field(default=None, ge=0, le=100)
+
+
+class TenantDetail(StrictModel):
+    """One tenant row for a let-out Schedule HP property (official
+    TenantDetails)."""
+
+    name: str = Field(min_length=1, max_length=125)
+    pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    pan_or_tan: Optional[str] = Field(default=None, max_length=10)
+
+
 class PropertyFilingDetail(StrictModel):
     """Official address and ownership facts for one Schedule HP row."""
 
@@ -653,6 +688,9 @@ class PropertyFilingDetail(StrictModel):
     property_owner: Literal["SE", "MI", "SP", "OT"] = "SE"
     co_owned: bool = False
     assessee_share_percent: Decimal = Field(default=Decimal("100"), ge=0, le=100)
+    home_loan_details: List[HomeLoanDetail] = Field(default_factory=list)
+    co_owner_details: List[CoOwnerDetail] = Field(default_factory=list)
+    tenant_details: List[TenantDetail] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_postal_code(self) -> "PropertyFilingDetail":
@@ -661,6 +699,16 @@ class PropertyFilingDetail(StrictModel):
             raise ValueError("Indian property requires pin_code")
         if self.country_code != "91" and self.zip_code is None:
             raise ValueError("Foreign property requires zip_code")
+        return self
+
+    @model_validator(mode="after")
+    def validate_co_owner_details(self) -> "PropertyFilingDetail":
+        """A co-owned property disclosed as such must name its co-owners --
+        matching the ITR2FilingProfile precedent for is_fii_fpi/
+        sebi_registration_number: a bare flag with no backing detail is
+        exactly the class of bug already found and fixed once in Schedule HP."""
+        if self.co_owned and not self.co_owner_details:
+            raise ValueError("co_owned=True requires at least one co_owner_details entry")
         return self
 
 

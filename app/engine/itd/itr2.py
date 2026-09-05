@@ -607,6 +607,27 @@ def _schedule_hp(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
             interest = -income
         else:
             interest = _to_rupees(hp_res.interest_on_loan)
+
+        loan_rows = []
+        for loan in detail.home_loan_details:
+            loan_rows.append({
+                "LoanTknFrom": loan.loan_taken_from,
+                "BankOrInstnName": loan.bank_or_institution_name,
+                "LoanAccNoOfBankOrInstnRefNo": loan.loan_account_or_ref_no,
+                "DateofLoan": _date(loan.date_of_loan),
+                "TotalLoanAmt": _to_rupees(loan.total_loan_amount),
+                "LoanOutstndngAmt": _to_rupees(loan.loan_outstanding_amount),
+                "InterestUs24B": _to_rupees(loan.interest_this_year),
+            })
+        if loan_rows:
+            loan_total = sum(row["InterestUs24B"] for row in loan_rows)
+            if loan_total != interest:
+                raise ValueError(
+                    f"Schedule HP property {idx}: home_loan_details interest_this_year "
+                    f"({loan_total}) does not cross-foot to the property's real Section "
+                    f"24(b) interest ({interest})."
+                )
+
         address: dict[str, Any] = {
             "AddrDetail": detail.address_detail,
             "CityOrTownOrDistrict": detail.city_or_town_or_district,
@@ -617,7 +638,7 @@ def _schedule_hp(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
             address["PinCode"] = int(detail.pin_code)
         if detail.zip_code:
             address["ZipCode"] = detail.zip_code
-        props.append({
+        prop: dict[str, Any] = {
             "HPSNo": idx,
             "AddressDetailWithZipCode": address,
             "PropertyOwner": detail.property_owner,
@@ -634,11 +655,38 @@ def _schedule_hp(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
                 "ArrearsUnrealizedRentRcvd": arrears,
                 "ThirtyPercentOfBalance": std_ded,
                 "IntOnBorwCap": interest,
-                "Section24B": {"Section24BDtls": [], "TotalInterestUs24B": interest},
+                "Section24B": {"Section24BDtls": loan_rows, "TotalInterestUs24B": interest},
                 "TotalDeduct": std_ded + interest,
                 "IncomeOfHP": income,
             },
-        })
+        }
+        if detail.co_owner_details:
+            prop["CoOwners"] = [
+                {
+                    k: v for k, v in {
+                        "CoOwnersSNo": i,
+                        "NameCoOwner": co.name,
+                        "PAN_CoOwner": co.pan,
+                        "Aadhaar_CoOwner": co.aadhaar,
+                        "PercentShareProperty": float(co.percent_share) if co.percent_share is not None else None,
+                    }.items() if v is not None
+                }
+                for i, co in enumerate(detail.co_owner_details, 1)
+            ]
+        if detail.tenant_details:
+            prop["TenantDetails"] = [
+                {
+                    k: v for k, v in {
+                        "TenantSNo": i,
+                        "NameofTenant": t.name,
+                        "PANofTenant": t.pan,
+                        "AadhaarofTenant": t.aadhaar,
+                        "PANTANofTenant": t.pan_or_tan,
+                    }.items() if v is not None
+                }
+                for i, t in enumerate(detail.tenant_details, 1)
+            ]
+        props.append(prop)
     return {
         "PropertyDetails": props,
         "PassThroghIncome": 0,

@@ -24,13 +24,16 @@ from app.engine.filing_gateway_v2 import (
 )
 from app.schemas.return_draft import (
     BankAccount,
+    CoOwner,
     Employer,
+    HomeLoan,
     HouseProperty,
     InterestIncome,
     PersonalInfo,
     ReturnDraft,
     SeventhProvisoClause,
     TdsCredit,
+    TenantDetail,
     create_empty_draft,
 )
 
@@ -182,6 +185,37 @@ def test_generate_cbdt_json_itr2_property_details_match_house_property_count() -
     official_json, _summary = generate_cbdt_json(draft)
     schedule_hp = official_json["ITR"]["ITR2"].get("ScheduleHP")
     assert schedule_hp is not None
+
+
+def test_generate_cbdt_json_itr2_wires_real_home_loan_co_owner_and_tenant_rows() -> None:
+    """The frontend already has a complete UI for HouseProperty.homeLoans/
+    coOwners/tenantDetails (HousePropertyEntryManager.tsx) -- but
+    _itr2_property_filing_details() (filing_gateway_v2.py) only ever mapped
+    the flat isCoOwned/ownershipShare scalars, silently dropping all three
+    real detail arrays. Confirm they now reach the official JSON."""
+    draft = _filing_ready_itr2_draft()
+    draft.houseProperties = [
+        HouseProperty(
+            id="hp1", propertyType="LET_OUT", annualLettingValue=Decimal("600000"),
+            isCoOwned=True, ownershipShare=Decimal("50"),
+            homeLoans=[HomeLoan(
+                lenderType="B", lenderName="HDFC Bank", loanAccountNo="HL999",
+                dateOfLoan="2019-04-01", totalLoanAmount=Decimal("4000000"),
+                loanOutstandingAmount=Decimal("2500000"), interestUs24B=Decimal("180000"),
+            )],
+            coOwners=[CoOwner(name="Spouse Name", pan="BBBPB5678C", share=Decimal("50"))],
+            tenantDetails=[TenantDetail(name="Tenant Pvt Ltd", pan="CCCPC9012D")],
+        ),
+    ]
+    official_json, _summary = generate_cbdt_json(draft)
+    row = official_json["ITR"]["ITR2"]["ScheduleHP"]["PropertyDetails"][0]
+
+    loan_row = row["Rentdetails"]["Section24B"]["Section24BDtls"][0]
+    assert loan_row["BankOrInstnName"] == "HDFC Bank"
+    assert loan_row["InterestUs24B"] == 180000
+
+    assert row["CoOwners"][0]["NameCoOwner"] == "Spouse Name"
+    assert row["TenantDetails"][0]["NameofTenant"] == "Tenant Pvt Ltd"
 
 
 # ── Phase 5G: complete pre-calculation preparation ──────────────────────────

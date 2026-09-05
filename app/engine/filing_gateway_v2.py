@@ -62,8 +62,10 @@ from app.schemas.itr1 import (
 )
 from app.schemas.itr2 import (
     AssesseeStatus as ITR2AssesseeStatus,
+    CoOwnerDetail as ITR2CoOwnerDetail,
     CompanyDirectorEntry,
     EmployerFilingDetail,
+    HomeLoanDetail as ITR2HomeLoanDetail,
     ITR2FilingProfile,
     ITR2Input,
     JurisdictionResidenceEntry,
@@ -71,6 +73,7 @@ from app.schemas.itr2 import (
     ResidentialStatus as ITR2ResidentialStatus,
     SeventhProvisoClauseEntry,
     TDS3FilingDetail,
+    TenantDetail as ITR2TenantDetail,
     UnlistedEquityEntry,
 )
 from app.schemas.itr4 import (
@@ -1338,6 +1341,45 @@ def _itr2_property_filing_details(draft: ReturnDraft) -> list[PropertyFilingDeta
         zip_code = (row.zipCode or draft.personal.zipCode).strip() or None
         address = (row.address or row.premisesName or row.name
                    or draft.personal.flatNo or draft.personal.residenceName).strip() or "NA"
+        home_loan_details = []
+        for loan in row.homeLoans:
+            if not (loan.lenderName or loan.totalLoanAmount > 0):
+                continue
+            loan_date = _to_date(loan.dateOfLoan)
+            if loan_date is None:
+                raise FilingGatewayV2Error(
+                    f"ITR-2 property filing detail [{index}] is invalid.",
+                    [f"Home loan {loan.lenderName or loan.loanAccountNo!r} requires a valid dateOfLoan."],
+                )
+            home_loan_details.append(ITR2HomeLoanDetail(
+                loan_taken_from=loan.lenderType,
+                bank_or_institution_name=loan.lenderName or "NA",
+                loan_account_or_ref_no=loan.loanAccountNo or "NA",
+                date_of_loan=loan_date,
+                total_loan_amount=loan.totalLoanAmount,
+                loan_outstanding_amount=loan.loanOutstandingAmount,
+                interest_this_year=loan.interestUs24B,
+            ))
+        co_owner_details = [
+            ITR2CoOwnerDetail(
+                name=co.name or "NA",
+                pan=co.pan or None,
+                aadhaar=co.aadhaar or None,
+                percent_share=co.share if co.share > 0 else None,
+            )
+            for co in row.coOwners
+            if co.name
+        ]
+        tenant_details = [
+            ITR2TenantDetail(
+                name=t.name or "NA",
+                pan=t.pan or None,
+                aadhaar=t.aadhaar or None,
+                pan_or_tan=t.panOrTan or None,
+            )
+            for t in row.tenantDetails
+            if t.name
+        ]
         try:
             details.append(PropertyFilingDetail(
                 address_detail=address[:200],
@@ -1349,6 +1391,9 @@ def _itr2_property_filing_details(draft: ReturnDraft) -> list[PropertyFilingDeta
                 property_owner=row.propertyOwnerType,
                 co_owned=row.isCoOwned,
                 assessee_share_percent=row.ownershipShare if row.isCoOwned else Decimal("100"),
+                home_loan_details=home_loan_details,
+                co_owner_details=co_owner_details,
+                tenant_details=tenant_details,
             ))
         except (ValidationError, ValueError) as exc:
             raise FilingGatewayV2Error(

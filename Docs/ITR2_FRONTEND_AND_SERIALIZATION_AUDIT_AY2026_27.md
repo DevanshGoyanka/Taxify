@@ -1742,16 +1742,54 @@ Missing or incomplete details include:
 > regime (where Section 24(b) disallows the self-occupied deduction entirely), by construction of
 > `house_property.py`'s own formula, with no cap logic duplicated in the serializer.
 >
-> **Still open** (genuinely a completeness gap, not re-verified away): lender identity/PAN,
-> loan account number, sanction date, and outstanding balance (`Section24BDtls[]`, still emitted
-> empty — the official schema's own `LoanTknFrom`/`BankOrInstnName`/`LoanAccNoOfBankOrInstnRefNo`/
-> `DateofLoan`/`TotalLoanAmt`/`LoanOutstndngAmt`/`InterestUs24B` fields have no backing input model
-> at all yet); `CoOwners[]` and `TenantDetails[]` detail rows (both schema-optional arrays,
-> similarly unbacked); pre-construction interest amortization; property completion date/status.
-> These require new input schema fields (on `PropertyFilingDetail` or a new per-property model) and
-> frontend UI, not just a builder fix, and are deferred to a follow-up sub-phase of Phase 5 rather
-> than folded into this fix — matching this file's own established practice of not silently
-> expanding a fix's scope mid-fix.
+> **Update (2026-09-05): closed.** Lender identity/PAN, loan account number, sanction date, and
+> outstanding balance (`Section24BDtls[]`); co-owner rows (`CoOwners[]`); and tenant rows
+> (`TenantDetails[]`) are now backed by real input models — `HomeLoanDetail`, `CoOwnerDetail`,
+> `TenantDetail` (`app/schemas/itr2.py`), added as `home_loan_details`/`co_owner_details`/
+> `tenant_details` lists on `PropertyFilingDetail`. `_schedule_hp()` now serializes real rows and
+> **cross-foots** `home_loan_details` interest against the property's actual computed Section
+> 24(b) interest (raising if they disagree, matching this file's own established cross-foot
+> discipline), rather than accepting an arbitrary user-supplied total. A `co_owned=True` flag with
+> no `co_owner_details` is now rejected at construction time — the exact "flag with no detail"
+> bug class this fix's own §6.1 root cause already was.
+>
+> Investigating the v2 pipeline wiring found this was a smaller gap than expected: the frontend
+> (`HousePropertyEntryManager.tsx`) and draft schema (`HouseProperty.homeLoans`/`coOwners`/
+> `tenantDetails`, using `HomeLoan`/`CoOwner`/`TenantDetail` in `app/schemas/return_draft.py`)
+> **already existed** — this data was being collected from real taxpayers and then silently
+> discarded, because `filing_gateway_v2.py`'s `_itr2_property_filing_details()` only ever mapped
+> the flat `isCoOwned`/`ownershipShare` scalars and never read any of the three detail arrays at
+> all. Wired all three through. Confirmed the frontend's `interestOnLoan` field has no UI control
+> of its own (only ever defaults to `0`), so `_map_house_property()`'s existing "fall back to
+> `sum(homeLoans[].interestUs24B)` when the top-level scalar is zero" branch is what real frontend
+> traffic always exercises — meaning the new per-loan cross-foot check cannot conflict with the
+> calculator's own computed interest for any draft actually produced by this frontend.
+>
+> Pre-construction interest amortization and property completion date/status remain out of scope
+> — the official schema does not carry dedicated fields for either as part of `Section24BDtls`, so
+> they are a different (and smaller) kind of gap than the "no backing model at all" one this note
+> originally described.
+>
+> Two regression tests added to `tests/test_itr2_itd_builder.py` (serialization + cross-foot
+> rejection) and one to `tests/test_filing_gateway_v2_itr2.py` (real v2-pipeline wiring), each
+> confirmed via `git stash` to fail pre-fix. Also caught and fixed, in the same pass: 4 pre-existing
+> `test_itr2_input_validation.py` tests (`HP-004`/`HP-007`) constructed `co_owned=True` without
+> `co_owner_details` and needed updating for the new construction-time requirement — not a
+> regression in those rules themselves, just fixture rows written before this requirement existed.
+> Full combined `test_itr1_*`/`test_itr2_*`/`test_itr4_*` plus every non-glob-matching sibling file
+> (`test_draft_to_itr{1,2,4}_input*.py`, `test_filing_gateway_v2_itr{2,4}.py`, `validate_itr1_json.py`
+> — see the note below on why these are now checked every time) green: 782 passed.
+>
+> **Process note**: this same investigation surfaced that commit `53ff0a6` (the §5.4 Schedule S
+> fix, earlier in this Phase 5 pass) had silently broken 12 of 23 tests in
+> `test_filing_gateway_v2_itr2.py` — undetected for several commits because that filename doesn't
+> start with `test_itr2_` and so was never caught by this session's `tests/test_itr2_*.py`
+> regression glob. Root cause there was a test fixture (`_filing_ready_itr2_draft()`) that set
+> `TdsCredit.taxDeducted` but never `grossAmount`, which the shared `_map_tds()` helper needs for
+> `TDS1Entry.income_chargeable` — genuinely incomplete test data, not a flaw in the Schedule S fix
+> (confirmed by a one-line fixture correction, committed separately as `6e8cccf`, making all 23
+> tests pass again). Every subsequent regression run in this file, and this session going forward,
+> uses the expanded file list above instead of the bare `test_itr{1,2,4}_*.py` glob.
 >
 > **Separately noted, not fixed here**: `app/engine/calculators/itr2.py` calls
 > `compute_hp(prop, regime)` for every house property without passing
@@ -2449,12 +2487,15 @@ Even those cases require independent review of the generated JSON against the of
 
 7. Expand Schedule HP with section 24(b), pre-construction interest, ownership, co-owner, tenant, unrealized-rent, and complete property details.
 
-   > **Partially fixed 2026-09-05** — see §6.1/§6.2's fix write-ups. The correctness bug (self-
-   > occupied interest reported uncapped; `RentNotRealized`/`ArrearsUnrealizedRentRcvd`/per-row
-   > `IncomeOfHP` silently recomputed instead of read from the real calculator result) is fixed
-   > and regression-tested. Still open: section 24(b) loan-lender detail rows, co-owner rows,
-   > tenant rows, pre-construction interest, and complete property/completion-status fields — all
-   > genuinely missing input models, not builder bugs.
+   > **Fixed 2026-09-05** — see §6.1/§6.2's fix write-ups. The correctness bug (self-occupied
+   > interest reported uncapped; `RentNotRealized`/`ArrearsUnrealizedRentRcvd`/per-row `IncomeOfHP`
+   > silently recomputed instead of read from the real calculator result) is fixed. Section 24(b)
+   > loan-lender detail rows, co-owner rows, and tenant rows are now backed by real typed models
+   > and wired end-to-end through the v2 pipeline — the frontend UI for all three already existed
+   > (`HousePropertyEntryManager.tsx`) and was being silently discarded before this fix, not
+   > actually missing. Pre-construction interest amortization and property completion date/status
+   > remain out of scope (the official schema has no dedicated fields for either within
+   > `Section24BDtls`).
 
 8. Replace generic Schedule FA rows with category-specific foreign bank, custodial, equity/debt, insurance, trust, signing-authority, property, and other-asset editors and serializers.
 

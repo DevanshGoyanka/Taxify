@@ -39,6 +39,7 @@ from app.schemas.itr2 import (
     ITR2Input,
     ESOPDeferralInput,
     CapitalGainExemptionClaim,
+    CoOwnerDetail,
     PropertyFilingDetail,
     ReturnFileSection,
     ResidentialStatus,
@@ -238,6 +239,7 @@ def test_HP_004_co_owned_share_below_100_passes():
         property_filing_details=[PropertyFilingDetail(
             address_detail="A", city_or_town_or_district="City", state_code="27",
             pin_code="400001", co_owned=True, assessee_share_percent=Decimal("50"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner", percent_share=Decimal("50"))],
         )],
     )
     assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-004")
@@ -249,6 +251,7 @@ def test_HP_004_co_owned_share_at_100_fails():
         property_filing_details=[PropertyFilingDetail(
             address_detail="A", city_or_town_or_district="City", state_code="27",
             pin_code="400001", co_owned=True, assessee_share_percent=Decimal("100"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner", percent_share=Decimal("0"))],
         )],
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-HP-004")
@@ -303,6 +306,7 @@ def test_HP_007_zero_share_without_interest_passes():
         property_filing_details=[PropertyFilingDetail(
             address_detail="A", city_or_town_or_district="City", state_code="27",
             pin_code="400001", co_owned=True, assessee_share_percent=Decimal("0.01"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner", percent_share=Decimal("99.99"))],
         )],
     )
     assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-007")
@@ -318,6 +322,7 @@ def test_HP_007_zero_share_with_interest_fails():
         property_filing_details=[PropertyFilingDetail(
             address_detail="A", city_or_town_or_district="City", state_code="27",
             pin_code="400001", co_owned=True, assessee_share_percent=Decimal("0"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner", percent_share=Decimal("100"))],
         )],
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-HP-007")

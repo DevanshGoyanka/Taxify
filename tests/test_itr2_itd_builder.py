@@ -34,10 +34,12 @@ from app.schemas.itr2 import (
     CGAssetType,
     CGTransaction,
     CapitalGainExemptionClaim,
+    CoOwnerDetail,
     EmployerFilingDetail,
     ESOPDeferralInput,
     ForeignAssetEntry,
     ForeignAssetType,
+    HomeLoanDetail,
     ITR2FilingProfile,
     ITR2Input,
     LossHead,
@@ -57,6 +59,7 @@ from app.schemas.itr2 import (
     ResidentialStatus,
     ScheduleSIEntry,
     TDS3FilingDetail,
+    TenantDetail,
     VDATransaction,
 )
 
@@ -1100,6 +1103,115 @@ def test_schedule_hp_reflects_rent_not_realized_and_arrears() -> None:
     assert rent_details["BalanceALV"] == 270000
     assert rent_details["ThirtyPercentOfBalance"] == 81000
     assert rent_details["IncomeOfHP"] == 224000
+
+
+def test_schedule_hp_serializes_loan_co_owner_and_tenant_detail_rows() -> None:
+    """Section24BDtls/CoOwners/TenantDetails were previously always emitted
+    empty regardless of real input -- PropertyFilingDetail now carries
+    home_loan_details/co_owner_details/tenant_details, and the builder
+    must serialize real rows and cross-foot the loan rows' interest against
+    the property's actual computed Section 24(b) interest."""
+    input_data = _input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("600000"),
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="7 MG Road",
+                city_or_town_or_district="Bengaluru",
+                state_code="29",
+                pin_code="560001",
+                co_owned=True,
+                home_loan_details=[
+                    HomeLoanDetail(
+                        loan_taken_from="B",
+                        bank_or_institution_name="HDFC Bank",
+                        loan_account_or_ref_no="HL123456",
+                        date_of_loan=date(2018, 4, 1),
+                        total_loan_amount=Decimal("5000000"),
+                        loan_outstanding_amount=Decimal("3000000"),
+                        interest_this_year=Decimal("150000"),
+                    ),
+                ],
+                co_owner_details=[
+                    CoOwnerDetail(name="Spouse Name", pan="BBBPB5678C", percent_share=Decimal("50")),
+                ],
+                tenant_details=[
+                    TenantDetail(name="Tenant Pvt Ltd", pan="CCCPC9012D"),
+                ],
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleHP"]["PropertyDetails"][0]
+
+    loan_row = row["Rentdetails"]["Section24B"]["Section24BDtls"][0]
+    assert loan_row["BankOrInstnName"] == "HDFC Bank"
+    assert loan_row["LoanAccNoOfBankOrInstnRefNo"] == "HL123456"
+    assert loan_row["InterestUs24B"] == 150000
+    assert row["Rentdetails"]["Section24B"]["TotalInterestUs24B"] == 150000
+
+    co_owner_row = row["CoOwners"][0]
+    assert co_owner_row["NameCoOwner"] == "Spouse Name"
+    assert co_owner_row["PAN_CoOwner"] == "BBBPB5678C"
+    assert co_owner_row["PercentShareProperty"] == 50.0
+
+    tenant_row = row["TenantDetails"][0]
+    assert tenant_row["NameofTenant"] == "Tenant Pvt Ltd"
+    assert tenant_row["PANofTenant"] == "CCCPC9012D"
+
+
+def test_schedule_hp_rejects_loan_rows_that_dont_cross_foot_to_real_interest() -> None:
+    """A home_loan_details total that disagrees with the property's real
+    computed Section 24(b) interest must be rejected, not silently
+    accepted -- matching this project's established cross-foot discipline."""
+    input_data = _input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("600000"),
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="7 MG Road",
+                city_or_town_or_district="Bengaluru",
+                state_code="29",
+                pin_code="560001",
+                home_loan_details=[
+                    HomeLoanDetail(
+                        loan_taken_from="B",
+                        bank_or_institution_name="HDFC Bank",
+                        loan_account_or_ref_no="HL123456",
+                        date_of_loan=date(2018, 4, 1),
+                        total_loan_amount=Decimal("5000000"),
+                        loan_outstanding_amount=Decimal("3000000"),
+                        interest_this_year=Decimal("100000"),  # real interest is 150000
+                    ),
+                ],
+            ),
+        ],
+    )
+    result = compute(input_data)
+    with pytest.raises(ValueError, match="cross-foot"):
+        build_itr2_json(result, input_data)
+
+
+def test_property_filing_detail_requires_co_owner_rows_when_co_owned_flag_set() -> None:
+    """A bare co_owned=True with no backing co_owner_details is exactly the
+    "flag with no detail" bug class already found and fixed once in
+    Schedule HP -- the schema itself now makes it impossible to construct."""
+    with pytest.raises(ValueError, match="co_owner_details"):
+        PropertyFilingDetail(
+            address_detail="7 MG Road",
+            city_or_town_or_district="Bengaluru",
+            state_code="29",
+            pin_code="560001",
+            co_owned=True,
+        )
 
 
 def test_schedule_s_standard_deduction_does_not_silently_zero_on_mismatch() -> None:
