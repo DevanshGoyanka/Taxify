@@ -26,6 +26,7 @@ from app.engine.itd.common import (
 )
 from app.schemas.itr1 import BankAccountType
 from app.schemas.itr2 import (
+    ForeignAssetEntry,
     ForeignAssetType,
     ITR2Input,
     ITR2FilingProfile,
@@ -1812,6 +1813,34 @@ def _schedule_tr1(input_data: ITR2Input) -> Optional[dict[str, Any]]:
 # Schedule FA — Foreign Assets
 # ============================================================================
 
+# Maps ForeignAssetEntry.income_head to the official IncTaxSch enum, which
+# names which OTHER schedule of this same return the asset's income is
+# already included under -- "NI" (no income) when the asset produced none.
+_FA_INC_TAX_SCH: dict[Optional[str], str] = {
+    "SAL": "SA", "HP": "HP", "CG": "CG", "OS": "OS", "EI": "EI", None: "NI",
+}
+
+# Official Ownership/OwnerStatus enums differ by category: bank accounts use
+# "OWNER", every other category here uses "DIRECT" for the equivalent
+# direct-ownership value; both share BENEFICIAL_OWNER/BENIFICIARY (the
+# schema's own spelling, not a transcription error here).
+_FA_BANK_OWNER_STATUS = {"OWNER", "BENEFICIAL_OWNER", "BENIFICIARY"}
+_FA_OTHER_OWNERSHIP = {"DIRECT", "BENEFICIAL_OWNER", "BENIFICIARY"}
+
+
+def _fa_inc_tax_sch(item: ForeignAssetEntry) -> str:
+    return _FA_INC_TAX_SCH[item.income_head]
+
+
+def _fa_inc_tax_sch_no(item: ForeignAssetEntry, label: str) -> str:
+    if not item.income_tax_schedule_item_no:
+        raise ValueError(
+            f"Schedule FA {label} entry requires income_tax_schedule_item_no "
+            "(the item/row reference within the schedule its income is included under)."
+        )
+    return item.income_tax_schedule_item_no
+
+
 def _schedule_fa(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     """Serialize foreign-asset disclosures by category."""
     if not input_data.foreign_assets:
@@ -1830,12 +1859,17 @@ def _schedule_fa(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     }
     for item in input_data.foreign_assets:
         if item.asset_type == ForeignAssetType.BANK_ACCOUNT:
+            if item.ownership_status not in _FA_BANK_OWNER_STATUS:
+                raise ValueError(
+                    f"Schedule FA bank account OwnerStatus must be one of "
+                    f"{sorted(_FA_BANK_OWNER_STATUS)}, got {item.ownership_status!r}"
+                )
             result["DetailsForiegnBank"].append({
                 "CountryName": item.country_code,
                 "CountryCodeExcludingIndia": item.country_code,
                 "Bankname": item.institution_or_entity_name,
                 "AddressOfBank": item.address,
-                "ZipCode": item.account_or_asset_identifier[:8],
+                "ZipCode": item.zip_code,
                 "ForeignAccountNumber": item.account_or_asset_identifier[:34],
                 "OwnerStatus": item.ownership_status,
                 "AccOpenDate": _date(item.opening_or_acquisition_date),
@@ -1844,30 +1878,67 @@ def _schedule_fa(input_data: ITR2Input) -> Optional[dict[str, Any]]:
                 "IntrstAccured": _to_rupees(item.gross_income),
             })
         elif item.asset_type == ForeignAssetType.IMMOVABLE_PROPERTY:
+            if item.ownership_status not in _FA_OTHER_OWNERSHIP:
+                raise ValueError(
+                    f"Schedule FA immovable property Ownership must be one of "
+                    f"{sorted(_FA_OTHER_OWNERSHIP)}, got {item.ownership_status!r}"
+                )
+            if not item.nature_of_income:
+                raise ValueError("Schedule FA immovable property entry requires nature_of_income")
             result["DetailsImmovableProperty"].append({
                 "CountryName": item.country_code,
                 "CountryCodeExcludingIndia": item.country_code,
-                "AddressOfProp": item.address,
-                "ZipCode": item.account_or_asset_identifier[:8],
+                "ZipCode": item.zip_code,
+                "AddressOfProperty": item.address,
+                "Ownership": item.ownership_status,
                 "DateOfAcq": _date(item.opening_or_acquisition_date),
-                "DateOfImp": _date(item.opening_or_acquisition_date),
-                "PeakValueOfProp": _to_rupees(item.peak_value),
-                "ClosingBalance": _to_rupees(item.closing_value),
-                "IncFromProp": _to_rupees(item.gross_income),
+                "TotalInvestment": _to_rupees(item.peak_value),
+                "IncDrvProperty": _to_rupees(item.gross_income),
+                "NatureOfInc": item.nature_of_income,
+                "IncTaxAmt": _to_rupees(item.income_offered),
+                "IncTaxSch": _fa_inc_tax_sch(item),
+                "IncTaxSchNo": _fa_inc_tax_sch_no(item, "immovable property"),
             })
-        else:
+        elif item.asset_type == ForeignAssetType.OTHER_ASSET:
+            if item.ownership_status not in _FA_OTHER_OWNERSHIP:
+                raise ValueError(
+                    f"Schedule FA other-asset Ownership must be one of "
+                    f"{sorted(_FA_OTHER_OWNERSHIP)}, got {item.ownership_status!r}"
+                )
+            if not item.nature_of_asset:
+                raise ValueError("Schedule FA other-asset entry requires nature_of_asset")
+            if not item.nature_of_income:
+                raise ValueError("Schedule FA other-asset entry requires nature_of_income")
             result["DetailsOthAssets"].append({
                 "CountryName": item.country_code,
                 "CountryCodeExcludingIndia": item.country_code,
-                "NameOfInst": item.institution_or_entity_name,
-                "AddressOfInst": item.address,
-                "AcctNumOrIdtyNum": item.account_or_asset_identifier,
-                "OwnerStatus": item.ownership_status,
+                "ZipCode": item.zip_code,
+                "NatureOfAsset": item.nature_of_asset,
+                "Ownership": item.ownership_status,
                 "DateOfAcq": _date(item.opening_or_acquisition_date),
-                "PeakBalanceDuringYear": _to_rupees(item.peak_value),
-                "ClosingBalance": _to_rupees(item.closing_value),
-                "IncFromOthSrc": _to_rupees(item.gross_income),
+                "TotalInvestment": _to_rupees(item.peak_value),
+                "IncDrvAsset": _to_rupees(item.gross_income),
+                "NatureOfInc": item.nature_of_income,
+                "IncTaxAmt": _to_rupees(item.income_offered),
+                "IncTaxSch": _fa_inc_tax_sch(item),
+                "IncTaxSchNo": _fa_inc_tax_sch_no(item, "other-asset"),
             })
+        else:
+            # Custodial account, equity/debt interest, cash-value insurance,
+            # financial interest in an entity, signing authority, trust, and
+            # other foreign-sourced income each require official fields
+            # ForeignAssetEntry does not capture (e.g. equity/debt's
+            # InitialValOfInvstmnt/TotGrossProceeds, trust's settlor/trustee/
+            # beneficiary names) -- silently folding these into
+            # DetailsOthAssets, as the previous code did, would misclassify
+            # them into the wrong official category entirely, not just omit
+            # detail. Fail closed until each category gets its own typed
+            # model and serializer path.
+            raise ValueError(
+                f"Schedule FA category {item.asset_type.value!r} is not yet "
+                "supported by the ITR-2 JSON builder -- it requires a "
+                "dedicated typed model, not the generic ForeignAssetEntry."
+            )
     return result
 
 

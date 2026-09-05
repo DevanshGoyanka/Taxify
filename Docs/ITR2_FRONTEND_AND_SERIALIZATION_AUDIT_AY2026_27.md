@@ -2032,6 +2032,85 @@ Missing category-specific data includes account type, institution details, peak/
 
 **Severity: Critical for foreign-asset taxpayers**
 
+> **Fix status (2026-09-05): the three categories with a real code path (bank account, immovable
+> property, other asset) were producing invalid or wrong data and are now fixed and
+> schema-correct; the other seven categories remain genuinely unbuilt and now fail closed instead
+> of being silently misclassified.**
+>
+> Writing the first-ever Schedule FA tests found `_schedule_fa()` (`itr2.py:1815`) was far more
+> broken than "under-modeled": two of its three implemented branches were producing
+> **schema-invalid JSON on every single row**, not merely incomplete detail.
+>
+> 1. **Bank accounts (`DetailsForiegnBank`)**: field names were correct, but `"ZipCode":
+>    item.account_or_asset_identifier[:8]` used the first 8 characters of the **account number**
+>    as the postal code, because `ForeignAssetEntry` had no dedicated zip field at all. Schema-valid
+>    (any short string satisfies `ZipCode`'s pattern) but entirely fabricated data.
+> 2. **Immovable property (`DetailsImmovableProperty`)**: the code emitted `AddressOfProp`,
+>    `DateOfImp`, `PeakValueOfProp`, `IncFromProp` — **none of which are valid property names**
+>    for the official type (the real names are `AddressOfProperty`, `TotalInvestment`,
+>    `IncDrvProperty`, with no `DateOfImp` field at all) — and omitted `Ownership`, `NatureOfInc`,
+>    `IncTaxAmt`, `IncTaxSch`, `IncTaxSchNo` entirely, all of which are required.
+>    `additionalProperties: false` means every prior immovable-property disclosure was rejected.
+> 3. **"Other assets" (`DetailsOthAssets`)**: the code emitted `NameOfInst`, `AddressOfInst`,
+>    `AcctNumOrIdtyNum`, `OwnerStatus`, `PeakBalanceDuringYear`, `ClosingBalance`, `IncFromOthSrc`
+>    — **none of which are valid property names** for this type either (the real names are
+>    `NatureOfAsset`, `Ownership`, `TotalInvestment`, `IncDrvAsset`, `NatureOfInc`, `IncTaxAmt`,
+>    `IncTaxSch`, `IncTaxSchNo`). Wrong properties present, every required property absent — the
+>    most severe of the three.
+> 4. **All ten categories' `else`-branch fallback**: any asset type other than bank account or
+>    immovable property (custodial account, equity/debt interest, insurance, financial interest,
+>    signing authority, trust, other foreign-sourced income) was silently folded into
+>    `DetailsOthAssets` — misclassifying it into the wrong official category entirely, not just
+>    omitting detail (a custodial account disclosed as a generic "other asset" is a different
+>    factual claim to ITD, not a subset of one).
+>
+> **Fix**: added `zip_code` (required), `nature_of_asset`, `nature_of_income`, and
+> `income_tax_schedule_item_no` to `ForeignAssetEntry` (`app/schemas/itr2.py`); corrected all
+> field names for immovable property and other-asset rows to the real schema names; added
+> `Ownership`/`OwnerStatus` enum validation (bank accounts use `OWNER`/`BENEFICIAL_OWNER`/
+> `BENIFICIARY`, every other category uses `DIRECT`/`BENEFICIAL_OWNER`/`BENIFICIARY` — two
+> different enums for what looks like the same concept); the `else` branch now raises a clear
+> `ValueError` naming the unsupported category instead of misclassifying it. Also fixed the v2
+> pipeline's `_map_foreign_assets()` (`app/engine/draft_to_itr2_input.py`), which defaulted
+> `ownership_status` to the wrong-case `"Owner"` regardless of category (now `"OWNER"` for bank
+> accounts, `"DIRECT"` otherwise, matching the real enums) and had no way to supply the three new
+> fields at all — added `zipCode`/`natureOfAsset`/`natureOfIncome`/`incomeTaxScheduleItemNo` to
+> the draft-side `ForeignAssetEntry` (`app/schemas/return_draft.py`) and wired them through.
+>
+> Five regression tests added to `tests/test_itr2_itd_builder.py`, each confirmed via `git stash`
+> to fail pre-fix (three with a `ForeignAssetEntry` construction error alone, since `zip_code`
+> didn't exist as a field before this fix). Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` suite
+> green (633 passed); `test_draft_to_itr2_input.py`/`test_return_draft_schema.py` checked directly
+> (44 passed, no regression).
+>
+> **Still open**: the other seven official categories (custodial account, equity/debt interest,
+> insurance, financial interest, signing authority, trust, other foreign-sourced income) each need
+> their own typed input model — the official schema requires fields this generic
+> `ForeignAssetEntry` has no equivalent for (e.g. equity/debt's `InitialValOfInvstmnt`/
+> `TotGrossProceeds`, insurance's `ContractDate`/`CashValOrSurrenderVal`, trust's settlor/trustee/
+> beneficiary names) — plus frontend UI for all ten categories (currently one generic form).
+> Building these out is a genuinely large, multi-category feature addition, not a bug fix; it now
+> fails closed with a clear message instead of silently misclassifying, which is the safe interim
+> state until each category is built. The immovable-property and other-asset frontend forms also
+> have no fields yet for `nature_of_income`/`nature_of_asset`/`income_tax_schedule_item_no` — a
+> v2-pipeline taxpayer entering either asset type today will get a clean, informative
+> `FilingGatewayV2Error` (via `filing_gateway_v2.py`'s existing exception handling) rather than a
+> silent schema-invalid submission, until that frontend work lands.
+>
+> **Separately noted, not fixed here (pre-existing, wider than Schedule FA)**: `country_code` on
+> `ForeignAssetEntry` — and the identical `country_code` field on `FSIEntry`/`TR1Entry`/
+> `OSDtaaEntry` — is passed as BOTH `CountryName` (a free-text name) and `CountryCodeExcludingIndia`
+> (one specific ITD-bespoke numeric code from a ~200-entry enum, e.g. `"2"` for USA, `"44"` for the
+> UK — not ISO alpha or numeric-3) using the exact same raw value for both fields
+> (`app/engine/itd/itr2.py` lines 874, 1766, 1792, 1869, 1890, 1914). This can only be
+> simultaneously correct for both fields if the caller already supplies ITD's numeric code as
+> `country_code` AND a human-readable name is never actually required — neither the schema
+> (`min_length=2, max_length=4`, which excludes some valid single-digit ITD codes like `"2"`) nor
+> any caller in this codebase currently enforces or supplies the real ITD numeric list. This is a
+> systemic issue across at least four schedule builders (FA, FSI, TR1, Schedule OS's DTAA block),
+> not specific to Schedule FA, and needs its own dedicated fix (a real country name/code lookup
+> table) rather than a local patch inside this Schedule FA pass.
+
 ---
 
 # 11. Schedule SPI and PTI
@@ -2378,6 +2457,13 @@ Even those cases require independent review of the generated JSON against the of
    > genuinely missing input models, not builder bugs.
 
 8. Replace generic Schedule FA rows with category-specific foreign bank, custodial, equity/debt, insurance, trust, signing-authority, property, and other-asset editors and serializers.
+
+   > **Partially fixed 2026-09-05** — see §10.2's fix write-up. Two of the three implemented
+   > categories (immovable property, other assets) were producing schema-INVALID JSON on every
+   > row (wrong field names, required fields missing), not just incomplete detail; the third (bank
+   > account) had a fabricated ZipCode. All three are now schema-correct and regression-tested.
+   > The other seven categories still need dedicated typed models and UI — they now fail closed
+   > with a clear error instead of being silently misclassified as generic "other assets."
 
 9. Separate AMT and AMTC in the UI and add the historical AMTC ledger.
 

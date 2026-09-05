@@ -517,12 +517,25 @@ class ForeignAssetType(str, Enum):
 
 
 class ForeignAssetEntry(StrictModel):
-    """One Schedule FA asset or account disclosure."""
+    """One Schedule FA asset or account disclosure.
+
+    Currently backs the three categories with a real serializer path
+    (bank account, immovable property, other asset) -- the remaining seven
+    official Schedule FA categories (custodial account, equity/debt
+    interest, cash-value insurance, financial interest in an entity,
+    signing authority, trust, other foreign-sourced income) each require
+    their own category-specific fields the official schema mandates
+    (e.g. equity/debt's InitialValOfInvstmnt/TotGrossProceeds, trust's
+    settlor/trustee/beneficiary names) that this generic model does not
+    capture; app/engine/itd/itr2.py's builder raises rather than
+    misclassify those entries into the wrong official category.
+    """
 
     asset_type: ForeignAssetType
     country_code: str = Field(min_length=2, max_length=4)
     institution_or_entity_name: str = Field(min_length=1, max_length=125)
     address: str = Field(min_length=1, max_length=250)
+    zip_code: str = Field(min_length=1, max_length=8)
     account_or_asset_identifier: str = Field(min_length=1, max_length=100)
     ownership_status: str = Field(min_length=1, max_length=50)
     opening_or_acquisition_date: date
@@ -530,7 +543,10 @@ class ForeignAssetEntry(StrictModel):
     closing_value: Decimal = Field(default=Decimal("0"), ge=0)
     gross_income: Decimal = Field(default=Decimal("0"))
     income_offered: Decimal = Field(default=Decimal("0"))
-    income_head: Optional[Literal["SAL", "HP", "CG", "OS"]] = None
+    income_head: Optional[Literal["SAL", "HP", "CG", "OS", "EI"]] = None
+    nature_of_asset: Optional[str] = Field(default=None, max_length=100)
+    nature_of_income: Optional[str] = Field(default=None, max_length=100)
+    income_tax_schedule_item_no: Optional[str] = Field(default=None, min_length=1, max_length=50)
 
 
 class SPIEntry(StrictModel):

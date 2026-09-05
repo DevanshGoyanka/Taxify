@@ -358,19 +358,28 @@ def _map_foreign_assets(draft: ReturnDraft) -> list[ITR2ForeignAssetEntry]:
         acquired = _to_date(row.openingOrAcquisitionDate)
         if acquired is None or not row.countryCode:
             continue
+        asset_type = _FA_ASSET_TYPE_MAP.get(row.assetType, ITR2ForeignAssetType.OTHER_ASSET)
+        # The official OwnerStatus/Ownership enum differs by category: bank
+        # accounts use "OWNER", every other category uses "DIRECT" -- a
+        # single untyped default can't correctly serve both.
+        default_ownership = "OWNER" if asset_type == ITR2ForeignAssetType.BANK_ACCOUNT else "DIRECT"
         entries.append(ITR2ForeignAssetEntry(
-            asset_type=_FA_ASSET_TYPE_MAP.get(row.assetType, ITR2ForeignAssetType.OTHER_ASSET),
+            asset_type=asset_type,
             country_code=row.countryCode,
             institution_or_entity_name=row.institutionOrEntityName or "NA",
             address=row.address or "NA",
+            zip_code=row.zipCode or "NA",
             account_or_asset_identifier=row.accountOrAssetIdentifier or "NA",
-            ownership_status=row.ownershipStatus or "Owner",
+            ownership_status=row.ownershipStatus or default_ownership,
             opening_or_acquisition_date=acquired,
             peak_value=row.peakValue,
             closing_value=row.closingValue,
             gross_income=row.grossIncome,
             income_offered=row.incomeOffered,
             income_head=row.incomeHead,
+            nature_of_asset=row.natureOfAsset or None,
+            nature_of_income=row.natureOfIncome or None,
+            income_tax_schedule_item_no=row.incomeTaxScheduleItemNo or None,
         ))
     return entries
 

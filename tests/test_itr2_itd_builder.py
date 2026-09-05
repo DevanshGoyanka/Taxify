@@ -36,6 +36,8 @@ from app.schemas.itr2 import (
     CapitalGainExemptionClaim,
     EmployerFilingDetail,
     ESOPDeferralInput,
+    ForeignAssetEntry,
+    ForeignAssetType,
     ITR2FilingProfile,
     ITR2Input,
     LossHead,
@@ -1275,6 +1277,164 @@ def test_schedule_esop_aggregates_same_year_entries_instead_of_dropping_them() -
 
     assert esop["ScheduleESOP2627_Type"]["BalanceTaxCF"] == 17000  # 8000 + 3000 + 6000
     assert esop["TotalTaxAttributedAmt"] == 22000  # 10000 + 5000 + 7000
+
+
+def test_schedule_fa_bank_account_uses_real_zip_not_truncated_account_number() -> None:
+    """The bank-account branch previously set "ZipCode" to
+    ``item.account_or_asset_identifier[:8]`` -- the first 8 characters of
+    the ACCOUNT NUMBER, not any real postal code -- because the model had
+    no dedicated zip_code field at all. Schema-valid (ZipCode's pattern
+    accepts any short string) but semantically fabricated data."""
+    input_data = _input(
+        foreign_assets=[
+            ForeignAssetEntry(
+                asset_type=ForeignAssetType.BANK_ACCOUNT,
+                country_code="44",
+                institution_or_entity_name="Chase Bank",
+                address="270 Park Avenue, New York",
+                zip_code="10017",
+                account_or_asset_identifier="123456789012",
+                ownership_status="OWNER",
+                opening_or_acquisition_date=date(2020, 1, 1),
+                peak_value=Decimal("500000"),
+                closing_value=Decimal("400000"),
+                gross_income=Decimal("2000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleFA"]["DetailsForiegnBank"][0]
+    assert row["ZipCode"] == "10017"
+    assert row["ForeignAccountNumber"] == "123456789012"
+
+
+def test_schedule_fa_bank_account_rejects_invalid_owner_status() -> None:
+    """OwnerStatus is an official enum (OWNER/BENEFICIAL_OWNER/BENIFICIARY)
+    -- an unrecognized value must be rejected, not passed through to
+    produce schema-invalid JSON."""
+    input_data = _input(
+        foreign_assets=[
+            ForeignAssetEntry(
+                asset_type=ForeignAssetType.BANK_ACCOUNT,
+                country_code="US",
+                institution_or_entity_name="Chase Bank",
+                address="270 Park Avenue, New York",
+                zip_code="10017",
+                account_or_asset_identifier="123456789012",
+                ownership_status="SELF",
+                opening_or_acquisition_date=date(2020, 1, 1),
+            ),
+        ],
+    )
+    with pytest.raises(ValueError, match="OwnerStatus"):
+        build_itr2_json(compute(input_data), input_data)
+
+
+def test_schedule_fa_immovable_property_uses_correct_official_field_names() -> None:
+    """The immovable-property branch previously emitted AddressOfProp,
+    DateOfImp, PeakValueOfProp, and IncFromProp -- none of which are valid
+    property names for the official DetailsImmovableProperty type
+    (the real names are AddressOfProperty, TotalInvestment, IncDrvProperty,
+    with no DateOfImp at all) -- and omitted several required fields
+    (Ownership, NatureOfInc, IncTaxAmt, IncTaxSch, IncTaxSchNo) entirely.
+    With additionalProperties: false, every prior immovable-property
+    disclosure was schema-invalid."""
+    input_data = _input(
+        foreign_assets=[
+            ForeignAssetEntry(
+                asset_type=ForeignAssetType.IMMOVABLE_PROPERTY,
+                country_code="44",
+                institution_or_entity_name="N/A",
+                address="10 Downing Street area flat, London",
+                zip_code="SW1A2AA",
+                account_or_asset_identifier="PROP-001",
+                ownership_status="DIRECT",
+                opening_or_acquisition_date=date(2019, 6, 15),
+                peak_value=Decimal("15000000"),
+                gross_income=Decimal("300000"),
+                income_offered=Decimal("300000"),
+                income_head="OS",
+                nature_of_income="Rental income",
+                income_tax_schedule_item_no="OS-1",
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleFA"]["DetailsImmovableProperty"][0]
+    assert row["AddressOfProperty"] == "10 Downing Street area flat, London"
+    assert row["Ownership"] == "DIRECT"
+    assert row["TotalInvestment"] == 15000000
+    assert row["IncDrvProperty"] == 300000
+    assert row["NatureOfInc"] == "Rental income"
+    assert row["IncTaxSch"] == "OS"
+    assert row["IncTaxSchNo"] == "OS-1"
+    assert "DateOfImp" not in row
+    assert "AddressOfProp" not in row
+
+
+def test_schedule_fa_other_asset_uses_correct_official_field_names() -> None:
+    """The generic "other asset" branch previously emitted NameOfInst,
+    AddressOfInst, AcctNumOrIdtyNum, OwnerStatus, PeakBalanceDuringYear,
+    ClosingBalance, IncFromOthSrc -- NONE of which are valid property names
+    for the official DetailsOthAssets type (whose real fields are
+    NatureOfAsset, Ownership, TotalInvestment, IncDrvAsset, NatureOfInc,
+    IncTaxAmt, IncTaxSch, IncTaxSchNo). Every prior "other asset"
+    disclosure was schema-invalid on both counts: wrong properties present,
+    required properties absent."""
+    input_data = _input(
+        foreign_assets=[
+            ForeignAssetEntry(
+                asset_type=ForeignAssetType.OTHER_ASSET,
+                country_code="971",
+                institution_or_entity_name="N/A",
+                address="N/A",
+                zip_code="00000",
+                account_or_asset_identifier="GOLD-001",
+                ownership_status="DIRECT",
+                opening_or_acquisition_date=date(2021, 3, 1),
+                peak_value=Decimal("800000"),
+                nature_of_asset="Gold bullion held in a Dubai vault",
+                nature_of_income="No income",
+                income_tax_schedule_item_no="NA",
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleFA"]["DetailsOthAssets"][0]
+    assert row["NatureOfAsset"] == "Gold bullion held in a Dubai vault"
+    assert row["Ownership"] == "DIRECT"
+    assert row["TotalInvestment"] == 800000
+    assert row["IncTaxSch"] == "NI"
+    assert "NameOfInst" not in row
+    assert "AcctNumOrIdtyNum" not in row
+
+
+def test_schedule_fa_unsupported_category_fails_closed() -> None:
+    """Custodial accounts, equity/debt interests, insurance, financial
+    interests, signing authority, trusts, and other foreign-sourced income
+    each require official fields ForeignAssetEntry doesn't capture --
+    the previous code silently folded all of them into DetailsOthAssets,
+    misclassifying them into the wrong official category entirely. Confirm
+    this now fails closed instead."""
+    input_data = _input(
+        foreign_assets=[
+            ForeignAssetEntry(
+                asset_type=ForeignAssetType.CUSTODIAL_ACCOUNT,
+                country_code="SG",
+                institution_or_entity_name="DBS Bank",
+                address="12 Marina Blvd, Singapore",
+                zip_code="018982",
+                account_or_asset_identifier="CUST-001",
+                ownership_status="DIRECT",
+                opening_or_acquisition_date=date(2022, 1, 1),
+            ),
+        ],
+    )
+    with pytest.raises(ValueError, match="custodial_account"):
+        build_itr2_json(compute(input_data), input_data)
 
 
 def test_schedule_os_omits_optional_blocks_when_unset() -> None:

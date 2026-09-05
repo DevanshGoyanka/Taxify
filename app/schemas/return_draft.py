@@ -811,6 +811,7 @@ class ForeignAssetEntry(Identified):
     countryCode: str = Field(default="")
     institutionOrEntityName: str = Field(default="")
     address: str = Field(default="")
+    zipCode: str = Field(default="")
     accountOrAssetIdentifier: str = Field(default="")
     ownershipStatus: str = Field(default="")
     openingOrAcquisitionDate: str = Field(default="")
@@ -819,6 +820,9 @@ class ForeignAssetEntry(Identified):
     grossIncome: Money = Field(default=Decimal("0"))
     incomeOffered: Money = Field(default=Decimal("0"))
     incomeHead: Optional[ClubbedHeadOfIncome] = Field(default=None)
+    natureOfAsset: str = Field(default="")
+    natureOfIncome: str = Field(default="")
+    incomeTaxScheduleItemNo: str = Field(default="")
 
 
 class ClubbedIncomeEntry(Identified):
