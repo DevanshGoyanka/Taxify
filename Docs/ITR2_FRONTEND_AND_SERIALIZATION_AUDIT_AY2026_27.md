@@ -2117,6 +2117,17 @@ This is useful baseline coverage but does not fully expose official category, tr
 
 **Severity: High**
 
+> **Fix status (2026-09-05): a severe, universal correctness bug found and fixed in Schedule FSI;
+> the completeness gap this item describes remains open.** See §10.2's "Update" note for the full
+> write-up (found while fixing the country-code issue documented there): `_schedule_fsi()` was
+> serializing its five per-head income fields as plain integers when the official schema requires
+> each to be a nested tax-breakdown object, plus three fabricated top-level fields with no schema
+> basis at all — every Schedule FSI disclosure this builder ever produced was schema-invalid.
+> Fixed and regression-tested. Schedule TR1 had no equivalent structural defect (its fields were
+> already correctly-shaped plain scalars) — only its own `CountryName`-based row-matching bug,
+> also fixed in the same pass. The category/treaty/conversion/Form-67/timing/limitation detail
+> this item describes is unaffected and remains open.
+
 ## 10.2 Schedule FA is substantially under-modeled
 
 The frontend creates a generic foreign asset row around `ITR2SchedulesWorkspace.tsx:38` with:
@@ -2207,19 +2218,63 @@ Missing category-specific data includes account type, institution details, peak/
 > `FilingGatewayV2Error` (via `filing_gateway_v2.py`'s existing exception handling) rather than a
 > silent schema-invalid submission, until that frontend work lands.
 >
-> **Separately noted, not fixed here (pre-existing, wider than Schedule FA)**: `country_code` on
-> `ForeignAssetEntry` — and the identical `country_code` field on `FSIEntry`/`TR1Entry`/
-> `OSDtaaEntry` — is passed as BOTH `CountryName` (a free-text name) and `CountryCodeExcludingIndia`
-> (one specific ITD-bespoke numeric code from a ~200-entry enum, e.g. `"2"` for USA, `"44"` for the
-> UK — not ISO alpha or numeric-3) using the exact same raw value for both fields
-> (`app/engine/itd/itr2.py` lines 874, 1766, 1792, 1869, 1890, 1914). This can only be
-> simultaneously correct for both fields if the caller already supplies ITD's numeric code as
-> `country_code` AND a human-readable name is never actually required — neither the schema
-> (`min_length=2, max_length=4`, which excludes some valid single-digit ITD codes like `"2"`) nor
-> any caller in this codebase currently enforces or supplies the real ITD numeric list. This is a
-> systemic issue across at least four schedule builders (FA, FSI, TR1, Schedule OS's DTAA block),
-> not specific to Schedule FA, and needs its own dedicated fix (a real country name/code lookup
-> table) rather than a local patch inside this Schedule FA pass.
+> **Update (2026-09-05): the systemic `country_code`/`CountryName` issue is fixed.** `country_code`
+> on `ForeignAssetEntry`/`FSICountryEntry`/`TR1Entry` was passed as BOTH `CountryName` (a free-text
+> name) and `CountryCodeExcludingIndia` (one specific ITD-bespoke numeric code from a 249-entry
+> enum, e.g. `"2"` for USA, `"44"` for the UK — not ISO alpha or numeric-3) using the exact same
+> raw value for both fields. **Correction to this note's own earlier claim**: `OSDtaaEntry` was
+> misidentified as part of this systemic issue — re-checking found it already has a genuinely
+> separate `country_name` field, correctly used for `CountryName` alongside `country_code` for
+> `CountryCodeExcludingIndia` (`app/engine/itd/itr2.py`'s OS-DTAA block); it was never broken.
+>
+> Fixed by transcribing the schema's own `CountryCodeExcludingIndia` enum + description (249
+> entries, cross-checked pair-for-pair against the enum list, not just the description text) into
+> `app/engine/itd/country_codes.py`'s `ITD_COUNTRY_CODE_TO_NAME` lookup table, then deriving
+> `CountryName` from it (`country_name(item.country_code)`) at all three real sites (Schedule FA's
+> three asset-type branches, Schedule FSI, Schedule TR1) instead of reusing the raw code. An
+> unrecognized code now raises a clear error naming it, rather than silently passing through
+> whatever string was supplied (this is a closed official enum, not free text). Also fixed
+> Schedule TR1's own DTAA/non-DTAA relief aggregation, which matched rows via `e.country_code ==
+> r["CountryName"]` — harmless only because `CountryName` used to equal the raw code too; now
+> compares against `CountryCodeExcludingIndia` instead.
+>
+> Confirmed the real frontend is unaffected: `frontend/src/constants/itdCountryCodes.ts` already
+> has the identical 249-entry ITD code list wired to a proper dropdown for House Property and
+> Personal Info address fields (confirming the codebase's own established convention that
+> `country_code` fields hold ITD's numeric codes, not ISO alpha) — but the currently-shipped
+> generic Schedule FSI/TR/FA workspace (`ITR2SchedulesWorkspace.tsx`) renders `countryCode` as a
+> plain text field with no dropdown at all, so a real user typing e.g. `"USA"` there would already
+> have produced schema-invalid JSON before this fix (via `CountryCodeExcludingIndia`'s own enum
+> constraint) — this fix surfaces that with a clear, actionable error instead of a confusing
+> downstream schema-validation failure; it does not newly block anything that previously worked.
+> Wiring the same `ITD_COUNTRY_CODES` dropdown into the generic FSI/TR/FA workspace is a real,
+> separate frontend-completeness gap, logged here but not fixed in this pass.
+>
+> **Separately discovered, unrelated to country codes, and fixed in the same pass**: writing the
+> first-ever schema-validating test for Schedule FSI found `_schedule_fsi()` was serializing
+> `IncFromSal`/`IncFromHP`/`IncCapGain`/`IncOthSrc`/`TotalCountryWise` as plain integers, when the
+> official schema requires each to be a NESTED object (`ScheduleFSIIncType`/
+> `TotalScheduleFSIIncType`: `IncFrmOutsideInd`/`TaxPaidOutsideInd`/`TaxPayableinInd`/
+> `TaxReliefinInd`) — and was separately emitting three fabricated top-level fields
+> (`TaxPaidOutsideIndia`/`TaxPayableInIndia`/`TaxReliefAvailable`) that do not exist in the real
+> schema at all. With `additionalProperties: false` and all five nested objects required, **every
+> Schedule FSI disclosure this builder has ever produced was schema-invalid** — a universal defect
+> for any taxpayer with foreign-source income, undiscovered only because Schedule FSI had zero
+> test coverage before this pass. Fixed by restructuring each row into the correct nested shape;
+> since `FSICountryEntry` carries only one tax-paid/payable figure per jurisdiction (not per income
+> head), the per-head tax breakdown is attributed to a specific head only when exactly one head has
+> nonzero income for that country — the same single-attributable-source precedent already
+> established for Schedule S's per-employer perquisites — with every other head correctly reporting
+> zero tax rather than a guessed split. `TotalCountryWise` (the aggregate row) is unambiguous and
+> always uses the real jurisdiction-level figures.
+>
+> Four regression tests added to `tests/test_itr2_itd_builder.py`
+> (`test_schedule_fa_fsi_tr_derive_real_country_name_from_the_code`,
+> `test_schedule_fa_rejects_unrecognized_country_code`,
+> `test_schedule_fsi_income_fields_are_nested_tax_objects_not_plain_integers`, plus the earlier
+> Schedule FA tests re-verified against real country names), each confirmed via `git stash` to fail
+> pre-fix. Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` plus every non-glob-matching sibling file
+> green: 787 passed.
 
 ---
 

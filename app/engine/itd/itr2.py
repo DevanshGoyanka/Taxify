@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from app.engine.calculators.itr2 import ITR2Result
 from app.engine.schedules.capital_gains import _exemption_claim_total, deemed_consideration_50c
+from app.engine.itd.country_codes import country_name as _country_name
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -1847,18 +1848,56 @@ def _schedule_fsi(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         return None
     rows = []
     for item in input_data.fsi_entries:
+        # IncFromSal/IncFromHP/IncCapGain/IncOthSrc/TotalCountryWise are all
+        # NESTED objects in the official schema (ScheduleFSIIncType /
+        # TotalScheduleFSIIncType: IncFrmOutsideInd/TaxPaidOutsideInd/
+        # TaxPayableinInd/TaxReliefinInd each), not plain integers -- the
+        # previous code emitted plain integers for all five and three
+        # fabricated top-level fields (TaxPaidOutsideIndia/TaxPayableInIndia/
+        # TaxReliefAvailable) that do not exist in the real schema at all,
+        # meaning every Schedule FSI disclosure this builder ever produced
+        # was schema-invalid, not just under-detailed.
+        #
+        # FSICountryEntry only carries one tax-paid/payable figure per
+        # jurisdiction (not per income head), so the per-head breakdown is
+        # only attributable when exactly one head has nonzero income for
+        # this country -- matching the same single-attributable-source
+        # precedent as Schedule S's per-employer perquisites.
+        heads = {
+            "IncFromSal": item.salary_income,
+            "IncFromHP": item.hp_income,
+            "IncCapGain": item.cg_income,
+            "IncOthSrc": item.os_income,
+        }
+        nonzero_heads = [k for k, v in heads.items() if v != _ZERO]
+        single_head = nonzero_heads[0] if len(nonzero_heads) == 1 else None
+
+        def head_block(key: str, income: Decimal) -> dict[str, int]:
+            if key == single_head:
+                tax_paid, tax_payable = item.tax_paid_outside_india, item.tax_payable_in_india
+            else:
+                tax_paid = tax_payable = _ZERO
+            return {
+                "IncFrmOutsideInd": _to_rupees(income),
+                "TaxPaidOutsideInd": _to_rupees(tax_paid),
+                "TaxPayableinInd": _to_rupees(tax_payable),
+                "TaxReliefinInd": _to_rupees(min(tax_paid, tax_payable)),
+            }
+
         rows.append({
-            "CountryName": item.country_code,
+            "CountryName": _country_name(item.country_code),
             "CountryCodeExcludingIndia": item.country_code,
             "TaxIdentificationNo": item.tax_identification_no,
-            "IncFromSal": _to_rupees(item.salary_income),
-            "IncFromHP": _to_rupees(item.hp_income),
-            "IncCapGain": _to_rupees(item.cg_income),
-            "IncOthSrc": _to_rupees(item.os_income),
-            "TotalCountryWise": _to_rupees(item.total_income or _ZERO),
-            "TaxPaidOutsideIndia": _to_rupees(item.tax_paid_outside_india),
-            "TaxPayableInIndia": _to_rupees(item.tax_payable_in_india),
-            "TaxReliefAvailable": _to_rupees(min(item.tax_paid_outside_india, item.tax_payable_in_india)),
+            "IncFromSal": head_block("IncFromSal", item.salary_income),
+            "IncFromHP": head_block("IncFromHP", item.hp_income),
+            "IncCapGain": head_block("IncCapGain", item.cg_income),
+            "IncOthSrc": head_block("IncOthSrc", item.os_income),
+            "TotalCountryWise": {
+                "IncFrmOutsideInd": _to_rupees(item.total_income or _ZERO),
+                "TaxPaidOutsideInd": _to_rupees(item.tax_paid_outside_india),
+                "TaxPayableinInd": _to_rupees(item.tax_payable_in_india),
+                "TaxReliefinInd": _to_rupees(min(item.tax_paid_outside_india, item.tax_payable_in_india)),
+            },
         })
     return {"ScheduleFSIDtls": rows}
 
@@ -1874,15 +1913,19 @@ def _schedule_tr1(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     rows = []
     for item in input_data.tr1_entries:
         rows.append({
-            "CountryName": item.country_code,
+            "CountryName": _country_name(item.country_code),
             "CountryCodeExcludingIndia": item.country_code,
             "TaxIdentificationNo": item.tax_identification_no,
             "TaxPaidOutsideIndia": _to_rupees(item.tax_paid_outside_india),
             "TaxReliefOutsideIndia": _to_rupees(item.relief_claimed),
             "ReliefClaimedUsSection": item.relief_section,
         })
-    dtaa = sum(r["TaxReliefOutsideIndia"] for r in rows if any(e.relief_section in {"90", "90A"} for e in input_data.tr1_entries if e.country_code == r["CountryName"]))
-    non_dtaa = sum(r["TaxReliefOutsideIndia"] for r in rows if any(e.relief_section == "91" for e in input_data.tr1_entries if e.country_code == r["CountryName"]))
+    # Compared against CountryName here previously -- harmless only because
+    # CountryName used to equal the raw country_code too; now that
+    # CountryName is a real looked-up name, this must key off the code
+    # field instead.
+    dtaa = sum(r["TaxReliefOutsideIndia"] for r in rows if any(e.relief_section in {"90", "90A"} for e in input_data.tr1_entries if e.country_code == r["CountryCodeExcludingIndia"]))
+    non_dtaa = sum(r["TaxReliefOutsideIndia"] for r in rows if any(e.relief_section == "91" for e in input_data.tr1_entries if e.country_code == r["CountryCodeExcludingIndia"]))
     return {
         "ScheduleTR": rows,
         "TotalTaxPaidOutsideIndia": sum(r["TaxPaidOutsideIndia"] for r in rows),
@@ -1951,7 +1994,7 @@ def _schedule_fa(input_data: ITR2Input) -> Optional[dict[str, Any]]:
                     f"{sorted(_FA_BANK_OWNER_STATUS)}, got {item.ownership_status!r}"
                 )
             result["DetailsForiegnBank"].append({
-                "CountryName": item.country_code,
+                "CountryName": _country_name(item.country_code),
                 "CountryCodeExcludingIndia": item.country_code,
                 "Bankname": item.institution_or_entity_name,
                 "AddressOfBank": item.address,
@@ -1972,7 +2015,7 @@ def _schedule_fa(input_data: ITR2Input) -> Optional[dict[str, Any]]:
             if not item.nature_of_income:
                 raise ValueError("Schedule FA immovable property entry requires nature_of_income")
             result["DetailsImmovableProperty"].append({
-                "CountryName": item.country_code,
+                "CountryName": _country_name(item.country_code),
                 "CountryCodeExcludingIndia": item.country_code,
                 "ZipCode": item.zip_code,
                 "AddressOfProperty": item.address,
@@ -1996,7 +2039,7 @@ def _schedule_fa(input_data: ITR2Input) -> Optional[dict[str, Any]]:
             if not item.nature_of_income:
                 raise ValueError("Schedule FA other-asset entry requires nature_of_income")
             result["DetailsOthAssets"].append({
-                "CountryName": item.country_code,
+                "CountryName": _country_name(item.country_code),
                 "CountryCodeExcludingIndia": item.country_code,
                 "ZipCode": item.zip_code,
                 "NatureOfAsset": item.nature_of_asset,

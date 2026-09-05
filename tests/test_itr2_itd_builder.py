@@ -39,6 +39,7 @@ from app.schemas.itr2 import (
     ESOPDeferralInput,
     ForeignAssetEntry,
     ForeignAssetType,
+    FSICountryEntry,
     HomeLoanDetail,
     ITR2FilingProfile,
     ITR2Input,
@@ -60,6 +61,7 @@ from app.schemas.itr2 import (
     ScheduleSIEntry,
     TDS3FilingDetail,
     TenantDetail,
+    TR1Entry,
     VDATransaction,
 )
 
@@ -1635,6 +1637,122 @@ def test_schedule_fa_unsupported_category_fails_closed() -> None:
         ],
     )
     with pytest.raises(ValueError, match="custodial_account"):
+        build_itr2_json(compute(input_data), input_data)
+
+
+def test_schedule_fa_fsi_tr_derive_real_country_name_from_the_code() -> None:
+    """CountryName was fed the exact same raw country_code value as
+    CountryCodeExcludingIndia everywhere a foreign country is disclosed
+    (Schedule FA, FSI, TR) -- correct only for the latter (a specific
+    ~200-entry ITD-bespoke numeric enum, not ISO alpha/numeric), never for
+    the former, which needs a real name. Confirm all three now derive a
+    real name via the official lookup table, and that TR's own DTAA/non-DTAA
+    aggregation (previously matched rows via the fabricated CountryName)
+    still cross-foots by country code."""
+    input_data = _input(
+        fsi_entries=[
+            FSICountryEntry(country_code="44", tax_identification_no="UK-TIN-1", salary_income=Decimal("100000")),
+        ],
+        tr1_entries=[
+            TR1Entry(
+                country_code="44", tax_identification_no="UK-TIN-1",
+                tax_paid_outside_india=Decimal("10000"), indian_tax_payable=Decimal("8000"),
+                relief_claimed=Decimal("8000"), relief_section="90",
+            ),
+        ],
+        foreign_assets=[
+            ForeignAssetEntry(
+                asset_type=ForeignAssetType.BANK_ACCOUNT,
+                country_code="44",
+                institution_or_entity_name="Barclays",
+                address="1 Churchill Place, London",
+                zip_code="E145HP",
+                account_or_asset_identifier="12345678",
+                ownership_status="OWNER",
+                opening_or_acquisition_date=date(2020, 1, 1),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    payload = document["ITR"]["ITR2"]
+
+    fsi_row = payload["ScheduleFSI"]["ScheduleFSIDtls"][0]
+    assert fsi_row["CountryName"] == "UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND"
+    assert fsi_row["CountryCodeExcludingIndia"] == "44"
+
+    tr_row = payload["ScheduleTR1"]["ScheduleTR"][0]
+    assert tr_row["CountryName"] == "UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND"
+    assert payload["ScheduleTR1"]["TaxReliefOutsideIndiaDTAA"] == 8000
+
+    fa_row = payload["ScheduleFA"]["DetailsForiegnBank"][0]
+    assert fa_row["CountryName"] == "UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND"
+
+
+def test_schedule_fsi_income_fields_are_nested_tax_objects_not_plain_integers() -> None:
+    """IncFromSal/IncFromHP/IncCapGain/IncOthSrc/TotalCountryWise are all
+    nested objects in the official schema (ScheduleFSIIncType /
+    TotalScheduleFSIIncType: IncFrmOutsideInd/TaxPaidOutsideInd/
+    TaxPayableinInd/TaxReliefinInd each) -- the previous code emitted plain
+    integers for all five, plus three fabricated top-level fields
+    (TaxPaidOutsideIndia/TaxPayableInIndia/TaxReliefAvailable) that do not
+    exist in the real schema at all. Every Schedule FSI disclosure this
+    builder ever produced was schema-invalid on both counts, discovered
+    only because a country-code test happened to call schema validation on
+    Schedule FSI for the first time."""
+    input_data = _input(
+        fsi_entries=[
+            FSICountryEntry(
+                country_code="65", tax_identification_no="SG-TIN-1",
+                salary_income=Decimal("500000"),
+                tax_paid_outside_india=Decimal("50000"), tax_payable_in_india=Decimal("40000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleFSI"]["ScheduleFSIDtls"][0]
+
+    # Sole nonzero head (salary) gets the jurisdiction's real tax figures.
+    assert row["IncFromSal"] == {
+        "IncFrmOutsideInd": 500000, "TaxPaidOutsideInd": 50000,
+        "TaxPayableinInd": 40000, "TaxReliefinInd": 40000,
+    }
+    # Every other head is genuinely zero income here -- zero tax, not a guess.
+    assert row["IncFromHP"] == {
+        "IncFrmOutsideInd": 0, "TaxPaidOutsideInd": 0,
+        "TaxPayableinInd": 0, "TaxReliefinInd": 0,
+    }
+    assert row["TotalCountryWise"] == {
+        "IncFrmOutsideInd": 500000, "TaxPaidOutsideInd": 50000,
+        "TaxPayableinInd": 40000, "TaxReliefinInd": 40000,
+    }
+    assert "TaxPaidOutsideIndia" not in row
+    assert "TaxReliefAvailable" not in row
+
+
+def test_schedule_fa_rejects_unrecognized_country_code() -> None:
+    """country_code is a closed ~200-entry ITD enum, not free text -- an
+    unrecognized value (e.g. a raw ISO alpha code from a plain text input,
+    since the currently-shipped generic FSI/TR/FA workspace has no country
+    dropdown, unlike the House Property and Personal Info tabs) must be
+    rejected with a clear message, not silently accepted as if it were a
+    real code."""
+    input_data = _input(
+        foreign_assets=[
+            ForeignAssetEntry(
+                asset_type=ForeignAssetType.BANK_ACCOUNT,
+                country_code="US",
+                institution_or_entity_name="Chase Bank",
+                address="270 Park Avenue, New York",
+                zip_code="10017",
+                account_or_asset_identifier="123456789012",
+                ownership_status="OWNER",
+                opening_or_acquisition_date=date(2020, 1, 1),
+            ),
+        ],
+    )
+    with pytest.raises(ValueError, match="not a valid ITD"):
         build_itr2_json(compute(input_data), input_data)
 
 
