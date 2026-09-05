@@ -80,11 +80,13 @@ from app.engine.schedules.other_sources import compute as compute_os
 from app.engine.schedules.salary import compute as compute_salary
 from app.engine.schedules.special_rates import (
     SpecialRateEntry,
+    SpecialRateSection,
     SpecialRatesResult,
     aggregate as aggregate_si,
     compute_111a,
     compute_112,
     compute_112a_taxable,
+    compute_115ad_stcg_other,
     compute_115bbf,
     compute_115bbg,
     compute_115bbe,
@@ -373,6 +375,13 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # `is_resident` above (used for the narrower section 87A rebate
     # eligibility, deliberately left unchanged here).
     is_resident_or_nor = input_data.residential_status != ResidentialStatus.NON_RESIDENT
+    # Section 115AD: an FII/FPI's OWN capital gains on securities are taxed
+    # under a completely separate code (Schedule CG's NRISecur115AD/
+    # NRISaleOfEquityShareUs112A/NRIOnSec112and115Dtls, Schedule SI's
+    # 5AD1biip/5ADii/5ADiii/5ADiiiP), not the ordinary 111A/112/112A
+    # buckets -- distinct from `is_resident_or_nor` above (FII/FPI is
+    # inherently a non-resident classification).
+    is_fii_fpi = bool(input_data.filing_profile and input_data.filing_profile.is_fii_fpi)
 
     # ── 1. Income Heads ──────────────────────────────────────────────────────
     sal = compute_salary(input_data.salary_income, regime)
@@ -755,10 +764,20 @@ def compute(input_data: ITR2Input) -> ITR2Result:
 
     # Section 112A: use the taxable amount from the CG engine (threshold applied once)
     si_112a_entry = compute_112a_taxable(cg_112a_taxable)
+    if is_fii_fpi:
+        # Section 115AD(1)(b)(iii) proviso: same 12.5% rate, FII-specific
+        # SecCode/Schedule-CG field (NRISaleOfEquityShareUs112A instead of
+        # SaleOfEquityShareUs112A) -- relabeling only, tax is unaffected.
+        si_112a_entry.section = SpecialRateSection.S115AD_LTCG_112A.value
     si_entries.append(si_112a_entry)
 
     # Section 111A: listed equity STCG (at 20% for AY 2026-27)
     si_111a_entry = compute_111a(cg_111a_income)
+    if is_fii_fpi:
+        # Section 115AD(1)(b)(ii) proviso: same 20% rate, FII-specific
+        # SecCode/Schedule-CG field (EquityMFonSTT's MFSectionCode
+        # "5AD1biip" instead of "1A").
+        si_111a_entry.section = SpecialRateSection.S115AD_STCG_111A.value
     si_entries.append(si_111a_entry)
 
     # Section 112: other post-loss LTCG at 12.5%
@@ -775,10 +794,47 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         # that case rather than attempting an exact proportional allocation
         # across land/building vs. other section-112 income, which
         # post_loss_cg's blended-basket design does not track separately.
+        # (An FII assessee never has this relief anyway -- compute_ltcg()'s
+        # own is_resident gate already zeroes it for a non-resident.)
         relief = min(ltcg_result.total_excess_tax_112_1a, si_112_entry.tax_amount)
         if relief > _ZERO:
             si_112_entry.tax_amount -= relief
+        if is_fii_fpi:
+            # Section 115AD(1)(iii): same 12.5% rate, FII-specific SecCode/
+            # Schedule-CG field (NRIOnSec112and115Dtls[SectionCode=5ADiii]
+            # instead of SaleofAssetNADtls).
+            #
+            # Known limitation: `other_ltcg` blends EVERY "generic other"
+            # LTCG asset type together (securities AND non-securities like
+            # jewellery/depreciable/foreign-asset) -- the same blended-
+            # basket design already noted above for the 112(1)(a) relief.
+            # If an FII/FPI assessee holds a non-securities LTCG asset in
+            # the same year (unusual -- SEBI FPI registration doesn't
+            # typically permit it, but the schema doesn't forbid entering
+            # one), this relabels their entire blended total to 5ADiii, so
+            # Schedule SI's "5ADiii" figure can overstate (and "21"
+            # understate) the true FII-securities-only split versus
+            # Schedule CG's own NRIOnSec112and115/SaleofAssetNADtls
+            # disclosure. The TAX AMOUNT is unaffected either way (both
+            # codes share the identical 12.5% rate) -- only the SecCode
+            # attribution can be imprecise in this edge case. Splitting it
+            # exactly would require tracking an FII-securities-vs-other
+            # sub-basket through CYLA/BFLA/post_loss_cg, a materially
+            # larger change than this fix's scope; not attempted here.
+            si_112_entry.section = SpecialRateSection.S115AD_LTCG_OTHER.value
         si_entries.append(si_112_entry)
+
+    # Section 115AD(1)(ii): an FII/FPI's OWN "other" STCG on securities
+    # (STT not paid, i.e. not 111A-equivalent) is a flat 30% special rate,
+    # unlike an ordinary taxpayer's identical basket, which is slab-rate.
+    # This basket is EXCLUDED from the ordinary slab-tax base below
+    # (special_rate_income_for_slab) precisely because of this dispatch.
+    # Same blended-basket limitation as the LTCG comment above applies here
+    # (post_loss_cg["normal_stcg"] mixes securities and non-securities
+    # asset types) -- tax amount unaffected, SecCode attribution only
+    # approximate if both are present in the same return.
+    if is_fii_fpi and post_loss_cg["normal_stcg"] > 0:
+        si_entries.append(compute_115ad_stcg_other(post_loss_cg["normal_stcg"]))
 
     # VDA at 30%
     if vda_income > 0:
@@ -864,6 +920,13 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # Full post-loss 111A/112/112A/VDA income is excluded from slab tax.
     # For 112A, the ₹1.25 lakh threshold is tax-free but remains special-rate
     # income and must not leak into the normal slab basket.
+    # An FII/FPI's "other" STCG on securities (post_loss_cg["normal_stcg"])
+    # is dispatched to Schedule SI above (section 115AD(1)(ii), always
+    # special-rate for FII/FPI, unlike every other taxpayer type where this
+    # same basket is slab-rate) -- its exclusion from the slab base already
+    # comes through `si_result.surcharge_full_income` below (that new SI
+    # entry's own `taxable_income`), the same mechanism already used for
+    # 115BB/115BBE/etc., so it must not be added a second time here.
     special_rate_income_for_slab = (
         post_loss_cg["111a"]
         + post_loss_cg["112"]

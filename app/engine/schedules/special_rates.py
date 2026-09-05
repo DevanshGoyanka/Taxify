@@ -38,6 +38,28 @@ class SpecialRateSection(str, Enum):
     S115BBH = "115BBH"
     S115BBI = "115BBI"
     S115E = "115E"
+    # Section 115AD-specific Schedule-SI codes for an FII/FPI assessee's OWN
+    # capital gains on securities -- distinct from the generic S115AD above
+    # (declared but never dispatched anywhere) and from the unrelated
+    # Schedule-OS S5AD1I/S5AD1IP/S5AD1IDIV family (Section 115A(1)(a)/(b)
+    # dividend/interest/royalty income, not capital gains). Rates confirmed
+    # against the official ITR-2 form's own Schedule SI rate table
+    # (Reference Docs by CBDT & ITD/Official ITR FORMS/
+    # ITR-2-2026-Eng_extracted_text.txt, rows 2/3/8/11): row 2 groups
+    # "111A or 115AD(1)(b)(ii)-Proviso" at 20% (same rate as ordinary 111A,
+    # just a distinct SecCode for FII securities with STT paid); row 3 is
+    # "115AD (STCG for FIIs on securities where STT not paid)" at 30% (no
+    # ordinary-taxpayer equivalent -- for a resident/ordinary NR this same
+    # "other STCG" basket is slab-rate, not a flat special rate, but 115AD
+    # is a complete code unto itself for FII securities, so it is ALWAYS
+    # special-rate, never slab); row 8 is "115AD (LTCG for FIIs on
+    # securities)" at 12.5% (same rate as ordinary section 112); row 11
+    # groups "112A or 115AD(1)(b)(iii)-Proviso" at 12.5% (same rate as
+    # ordinary 112A).
+    S115AD_STCG_111A = "5AD1biip"
+    S115AD_STCG_OTHER = "5ADii"
+    S115AD_LTCG_OTHER = "5ADiii"
+    S115AD_LTCG_112A = "5ADiiiP"
     DIVIDEND = "DIVIDEND"
     DTAA_STCG = "DTAASTCG"
     DTAA_LTCG = "DTAALTCG"
@@ -125,6 +147,16 @@ _SURCHARGE_CAP_SECTIONS: set[str] = {
     SpecialRateSection.PTI_LTCG112A.value,
     SpecialRateSection.PTI_LTCG125.value,
     SpecialRateSection.S115AD.value,
+    # FII/FPI 115AD-specific 111A/112/112A-equivalent codes get the same
+    # 15% surcharge cap as their ordinary counterparts, since they are the
+    # same underlying tax treatment just disclosed under a different
+    # SecCode. S115AD_STCG_OTHER (30%, no ordinary-taxpayer equivalent) is
+    # deliberately excluded -- a 30% STCG rate is not among the categories
+    # the Finance Act's surcharge cap covers for any taxpayer (VDA, also
+    # 30%, is likewise not in this set).
+    SpecialRateSection.S115AD_STCG_111A.value,
+    SpecialRateSection.S115AD_LTCG_OTHER.value,
+    SpecialRateSection.S115AD_LTCG_112A.value,
     # Purely-dividend 115A/115AC/115ACA/115AD sub-clauses -- the Finance
     # Act's 15%-surcharge cap for dividend income applies regardless of
     # which section charges it. The mixed dividend+interest+units category
@@ -257,6 +289,30 @@ def compute_112(ltcg_112: Decimal | None) -> SpecialRateEntry:
         "LTCG other than section 112A",
         ltcg_112,
         LTCG_OTHER_RATE_POST_JUL24,
+    )
+
+
+def compute_115ad_stcg_other(stcg_other: Decimal | None) -> SpecialRateEntry:
+    """Compute section 115AD(1)(ii) STCG tax at 30% for an FII/FPI's
+    securities other than 111A-equivalent equity/units (STT not paid).
+
+    Unlike an ordinary taxpayer's "other" STCG (slab-rate, never Schedule
+    SI), section 115AD is a complete code for FII/FPI securities taxation
+    -- this basket is always a flat special rate, never slab-taxed, for an
+    assessee flagged as FII/FPI on the filing profile.
+
+    Args:
+        stcg_other: Net taxable short-term capital gain on securities other
+            than 111A-equivalent equity/units.
+
+    Returns:
+        The section 115AD(1)(ii) Schedule-SI entry.
+    """
+    return _flat_rate_entry(
+        SpecialRateSection.S115AD_STCG_OTHER,
+        "STCG on securities (FII/FPI, STT not paid) under section 115AD(1)(ii)",
+        stcg_other,
+        Decimal("30"),
     )
 
 

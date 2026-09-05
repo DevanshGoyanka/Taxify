@@ -230,6 +230,92 @@ Applicable non-resident securities or units under section 115AD may be:
 > placeholder rather than guessed at. **What §3.2's re-verification below did fix**: the
 > non-115AD "everything else" gap this finding partly overlapped with — see §3.2.
 
+> **Fix status (2026-09-05): fixed and verified — the prior re-verification's own conclusion
+> ("genuinely cannot be populated with today's schema... residency status alone is insufficient")
+> was itself wrong and is retracted.** Section 115AD applies based on the ASSESSEE's FII/FPI
+> registration status, a whole-taxpayer classification -- not a per-transaction one. Once this was
+> understood correctly, no new `CGAssetType` enum value or per-transaction flag was needed at all:
+> `ITR2FilingProfile.is_fii_fpi` (already implemented for §4.2's FII/FPI filing-profile checkbox)
+> is exactly the right discriminator, and simply routing an FII/FPI assessee's existing
+> `CGTransaction`/`CG112AScrip` classifications to the parallel 115AD-specific fields closes this
+> finding completely.
+>
+> Cross-referenced the full official form text (Schedule CG items A2-A4 for STCG, B3-B6 for LTCG,
+> `Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng_extracted_text.txt` lines
+> 285-330, 558-626) and the official schema's `EquityOrUnitSec94Type`/`EquityShareUs112A`
+> `$ref` reuse (`NRISecur115AD` and `SaleOnOtherAssets` share the identical type; likewise
+> `NRISaleOfEquityShareUs112A`/`SaleOfEquityShareUs112A`) to confirm section 115AD reuses the same
+> field SHAPES as the ordinary buckets — it is a parallel disclosure slot, not a structurally
+> different schedule. The official form's own Schedule SI rate table (rows 2/3/8/11) additionally
+> confirms every 115AD-specific rate is IDENTICAL to its ordinary counterpart (111A-equivalent
+> 20%, 112A-equivalent 12.5%, LTCG-other 12.5%) with exactly one exception: 115AD(1)(ii) STCG on
+> securities where STT is NOT paid is a flat 30% special rate for an FII/FPI -- unlike an ordinary
+> taxpayer's identical basket, which is slab-rate, never a flat special rate. This is the one
+> genuine COMPUTATION change (not just disclosure-routing) this fix required.
+>
+> Implementation:
+> - `app/engine/schedules/special_rates.py`: four new `SpecialRateSection` codes
+>   (`S115AD_STCG_111A="5AD1biip"`, `S115AD_STCG_OTHER="5ADii"`, `S115AD_LTCG_OTHER="5ADiii"`,
+>   `S115AD_LTCG_112A="5ADiiiP"`), three added to `_SURCHARGE_CAP_SECTIONS` (matching their
+>   ordinary counterparts' cap treatment; the 30% STCG-other code is deliberately excluded, same as
+>   VDA), and a new `compute_115ad_stcg_other()` function for the one genuinely new rate.
+> - `app/engine/calculators/itr2.py`: a new `is_fii_fpi` flag derived from
+>   `input_data.filing_profile.is_fii_fpi`. The existing `compute_111a()`/`compute_112a_taxable()`/
+>   `compute_112()` calls are unchanged (same rates); their resulting `SpecialRateEntry.section` is
+>   simply relabeled to the FII-specific code when `is_fii_fpi` is true. The one new dispatch is
+>   `compute_115ad_stcg_other(post_loss_cg["normal_stcg"])`, added to Schedule SI only when
+>   `is_fii_fpi` -- for every other taxpayer type this exact same basket remains correctly
+>   slab-rate (unchanged), since `special_rate_income_for_slab`'s existing
+>   `si_result.surcharge_full_income` mechanism (already used for 115BB/115BBE/etc.) automatically
+>   excludes it from the slab base once it is SI-dispatched, with no separate double-subtraction
+>   needed.
+> - `app/engine/itd/itr2.py`: `_schedule_cg()` now derives `is_fii_fpi` and routes accordingly --
+>   `EquityMFonSTT`'s `MFSectionCode` (`"5AD1biip"` vs `"1A"`), the 112A summary (`gain_112a` now
+>   populated from the real `compute_112a()` result instead of a hardcoded zero, routed to
+>   `NRISaleOfEquityShareUs112A` or `SaleOfEquityShareUs112A`), and the generic "other assets"
+>   bucket, newly split by a `_FII_SECURITIES_ASSET_TYPES` subset (`unlisted_shares`,
+>   `listed_security`, `debt_mutual_fund`, `specified_mutual_fund_50aa`,
+>   `market_linked_debenture_50aa`, `bonds_debentures` -- genuine "securities"; `jewellery`,
+>   `depreciable_asset`, `foreign_asset`, `other` are NOT securities under 115AD and always stay in
+>   the ordinary bucket regardless of FII/FPI status) routed to `NRISecur115AD` (STCG) or
+>   `NRIOnSec112and115Dtls[SectionCode="5ADiii"]` (LTCG, omitted entirely when empty per the
+>   project's no-placeholder convention, since that array is schema-optional unlike its STCG
+>   sibling). `_other_assets_block()` gained an `asset_types` parameter to support calling it twice
+>   with disjoint sets.
+> - **A genuinely separate, non-FII-specific bug was found and fixed in the same pass**:
+>   `SaleOfEquityShareUs112A` (Schedule CG item 3a/3c, "LTCG u/s 112A (column 14 of Schedule
+>   112A)") was hardcoded to zero regardless of ANY taxpayer's actual 112A gain -- a resident with
+>   genuine 112A gains would see this summary field as zero even though the dedicated
+>   per-scrip `Schedule112A` block and the actual Schedule-SI tax were both already correct. Fixed
+>   by populating it from `ltcg.income_112a` (the gross, pre-threshold aggregate, matching "column
+>   14" -- the ₹1.25L threshold is a separate Schedule-SI-only adjustment, not applied to this
+>   disclosure figure) for a non-FII taxpayer.
+>
+> **Known, explicitly documented limitation**: the "other securities" STCG/LTCG baskets
+> (`post_loss_cg["normal_stcg"]`/`post_loss_cg["112"]`) blend EVERY generic-other asset type
+> together after loss set-off -- if an FII/FPI assessee holds a non-securities asset (jewellery
+> etc.) in the same return as genuine 115AD securities (statutorily unusual but not
+> schema-forbidden), the blended SI entry is relabeled entirely to the FII-specific SecCode even
+> though a portion is technically ordinary section-112/slab income. The TAX AMOUNT is unaffected
+> (both codes share the identical rate), only the SecCode attribution can be imprecise in this
+> edge case; splitting it exactly would require tracking an FII-securities-vs-other sub-basket
+> through CYLA/BFLA/`_post_loss_cg_baskets()`, a materially larger change not attempted here.
+> Documented in code comments at both dispatch points.
+>
+> **Known pre-existing bug found in passing, NOT fixed (out of scope for this pass)**: the
+> official schema's `EquityMFonSTT` array has `maxItems: 2` (one row per distinct `MFSectionCode`),
+> but `_schedule_cg()` emits one row PER TRANSACTION -- a taxpayer with 3+ separate 111A-eligible
+> transactions would already exceed this limit and fail schema validation, independent of this
+> fix (this fix only changes which single `MFSectionCode` value such rows carry, since an
+> assessee is never both FII and non-FII in the same return). Flagged here as a newly-found item
+> for a future pass, not expanded into this fix's scope.
+>
+> Regression tests: `test_sale_of_equity_share_us112a_reflects_real_gain_not_hardcoded_zero` and
+> `test_fii_fpi_capital_gains_route_to_section_115ad_fields_and_si_codes` (both in
+> `tests/test_itr2_itd_builder.py`), confirmed via `git stash` to fail on pre-fix code. Full
+> combined `test_itr1_*`/`test_itr4_*`/`test_itr2_*`/`test_standalone_cg_schedule.py`/
+> `test_capital_gains_loss_foundation.py` regression suite (322 tests) green.
+
 ---
 
 ## 3.2 Generic capital-gains rows are captured but not fully mapped
@@ -1776,9 +1862,12 @@ Even those cases require independent review of the generated JSON against the of
    - add serialized-field coverage tests.
 
 2. **Complete capital-gains serialization**
-   - ~~dedicated Schedule 115AD~~ — re-verified §3.1: genuinely not representable without a new
-     `CGAssetType`/FII-flag addition; `NRISecur115AD`/`NRISaleOfEquityShareUs112A` are correctly
-     zero when absent, not a mislabeled bucket. Remains open, scope narrowed.
+   - ~~dedicated Schedule 115AD~~ — **fixed 2026-09-05**, see §3.1's fix write-up: the "needs a new
+     `CGAssetType`/FII-flag addition" conclusion from the 2026-09-04 re-verification was itself
+     wrong — `ITR2FilingProfile.is_fii_fpi` (already implemented) is the correct, sufficient
+     discriminator, since 115AD is a whole-taxpayer classification, not per-transaction. Also fixed
+     a genuinely separate, non-FII-specific bug found in the same pass: `SaleOfEquityShareUs112A`
+     was hardcoded to zero for every taxpayer, FII or not.
    - ~~land/building STCG/LTCG detail~~ — **fixed 2026-09-04**, see §3.2's fix write-up (was a
      schema-blocking wrong-field-name bug, not just missing detail; §50C deeming added as a new
      capability).

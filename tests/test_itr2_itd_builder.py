@@ -171,6 +171,116 @@ def test_112a_and_vda_rows_are_complete_signed_and_schema_valid() -> None:
     assert payload["ScheduleVDA"]["TotIncCapGain"] == 150
 
 
+def test_sale_of_equity_share_us112a_reflects_real_gain_not_hardcoded_zero() -> None:
+    """Schedule CG's LongTermCapGain23.SaleOfEquityShareUs112A (item 3a/3c,
+    "LTCG u/s 112A (column 14 of Schedule 112A)") was previously always a
+    hardcoded zero placeholder regardless of actual 112A gain -- a real bug
+    independent of FII/FPI status: even a resident with genuine 112A gains
+    saw this summary field as zero, though the dedicated Schedule112A
+    per-scrip block and the actual tax were both already correct."""
+    input_data = _input(
+        cg_112a_scrips=[
+            CG112AScrip(
+                isin_code="INE000A00001", share_unit_name="GAIN SCRIP",
+                date_of_acquisition=date(2023, 1, 1), date_of_transfer=date(2025, 5, 1),
+                num_shares_units=Decimal("10"), sale_price_per_share=Decimal("500"),
+                total_sale_value=Decimal("5000"), cost_acq_without_index=Decimal("2000"),
+            )
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    ltcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]
+    assert ltcg["SaleOfEquityShareUs112A"]["BalanceCG"] == 3000
+    assert ltcg["SaleOfEquityShareUs112A"]["CapgainonAssets"] == 3000
+    # Not FII/FPI -- the parallel NRI-specific field stays at its zero
+    # placeholder, not populated a second time.
+    assert ltcg["NRISaleOfEquityShareUs112A"]["BalanceCG"] == 0
+
+
+def test_fii_fpi_capital_gains_route_to_section_115ad_fields_and_si_codes() -> None:
+    """An FII/FPI's OWN capital gains on securities route to the parallel
+    Section 115AD Schedule-CG fields (NRISecur115AD, NRISaleOfEquityShareUs112A,
+    NRIOnSec112and115Dtls[SectionCode=5ADiii], EquityMFonSTT's
+    "5AD1biip" code) and Schedule-SI codes (5AD1biip/5ADii/5ADiii/5ADiiiP)
+    instead of the ordinary ones -- same statutory rates (20%/30%/12.5%/
+    12.5%), previously always zero-placeholder regardless of real FII
+    activity. A non-security asset type (jewellery) held in the same
+    return stays in the ordinary generic-other bucket, not swept into the
+    FII-specific one."""
+    profile = _profile().model_copy(update={
+        "is_fii_fpi": True,
+        "sebi_registration_number": "INABFP123456",
+        "residential_status": ResidentialStatus.NON_RESIDENT,
+    })
+    input_data = _input(
+        filing_profile=profile,
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_transactions=[
+            # 111A-equivalent (STT paid): 20%, same rate as ordinary 111A.
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_EQUITY_111A,
+                date_of_acquisition=date(2024, 6, 1), date_of_transfer=date(2025, 1, 1),
+                full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+            ),
+            # "Other securities" STCG (STT not paid): 30% flat under 115AD,
+            # unlike an ordinary taxpayer where this same basket is slab-rate.
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_SECURITY,
+                date_of_acquisition=date(2024, 6, 1), date_of_transfer=date(2025, 1, 1),
+                full_consideration=Decimal("200000"), cost_of_acquisition=Decimal("150000"),
+            ),
+            # "Other securities" LTCG: 12.5%, same rate as ordinary section 112.
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_SECURITY,
+                date_of_acquisition=date(2020, 6, 1), date_of_transfer=date(2025, 6, 1),
+                full_consideration=Decimal("900000"), cost_of_acquisition=Decimal("400000"),
+            ),
+        ],
+        cg_112a_scrips=[
+            CG112AScrip(
+                isin_code="INE000A00002", share_unit_name="FII GAIN SCRIP",
+                date_of_acquisition=date(2023, 1, 1), date_of_transfer=date(2025, 5, 1),
+                num_shares_units=Decimal("10"), sale_price_per_share=Decimal("50000"),
+                total_sale_value=Decimal("500000"), cost_acq_without_index=Decimal("200000"),
+            )
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+
+    stcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg["EquityMFonSTT"][0]["MFSectionCode"] == "5AD1biip"
+    assert stcg["EquityMFonSTT"][0]["EquityMFonSTTDtls"]["BalanceCG"] == 200000
+    assert stcg["NRISecur115AD"]["CapgainonAssets"] == 50000
+    # No non-FII-security STCG in this return, so the ordinary bucket is zero.
+    assert stcg["SaleOnOtherAssets"]["CapgainonAssets"] == 0
+
+    ltcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]
+    assert ltcg["NRISaleOfEquityShareUs112A"]["BalanceCG"] == 300000
+    # Not FII-specific -- stays at zero since the 112A gain routed to the FII field.
+    assert ltcg["SaleOfEquityShareUs112A"]["BalanceCG"] == 0
+    nri_sec = ltcg["NRIOnSec112and115"]["NRIOnSec112and115Dtls"]
+    assert len(nri_sec) == 1
+    assert nri_sec[0]["SectionCode"] == "5ADiii"
+    assert nri_sec[0]["CapgainonAssets"] == 500000
+
+    si_by_code = {row["SecCode"]: row for row in document["ITR"]["ITR2"]["ScheduleSI"]["SplCodeRateTax"]}
+    assert si_by_code["5AD1biip"]["SplRatePercent"] == 20
+    assert si_by_code["5AD1biip"]["SplRateIncTax"] == 40000
+    assert si_by_code["5ADii"]["SplRatePercent"] == 30
+    assert si_by_code["5ADii"]["SplRateIncTax"] == 15000
+    assert si_by_code["5ADiii"]["SplRatePercent"] == 12.5
+    assert si_by_code["5ADiii"]["SplRateIncTax"] == 62500
+    assert si_by_code["5ADiiiP"]["SplRatePercent"] == 12.5
+    assert si_by_code["5ADiiiP"]["SplRateIncTax"] == 21875  # 12.5% * (300000 - 125000 threshold)
+    # None of the ordinary (non-FII) SecCodes should appear at all.
+    assert "1A" not in si_by_code
+    assert "21" not in si_by_code
+    assert "2A" not in si_by_code
+
+
 def test_land_building_stcg_and_ltcg_rows_are_schema_valid_with_correct_fields() -> None:
     """Schedule CG land/building rows use the official field names and values.
 

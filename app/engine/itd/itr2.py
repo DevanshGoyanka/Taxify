@@ -909,17 +909,35 @@ _GENERIC_OTHER_ASSET_TYPES = frozenset({
     "other",
 })
 
+# The subset of the generic "other assets" bucket that are genuinely
+# "securities" for section 115AD purposes (an FII/FPI's own gains on
+# these route to NRISecur115AD/NRIOnSec112and115Dtls instead of the
+# ordinary SaleOnOtherAssets/SaleofAssetNADtls, per the official form's
+# Schedule CG item 4/5 "For NON-RESIDENT- from sale of securities... by
+# an FII as per section 115AD"). `jewellery`/`depreciable_asset`/
+# `foreign_asset`/`other` are NOT securities and always stay in the
+# ordinary bucket regardless of FII/FPI status.
+_FII_SECURITIES_ASSET_TYPES = frozenset({
+    "unlisted_shares",
+    "listed_security",
+    "debt_mutual_fund",
+    "specified_mutual_fund_50aa",
+    "market_linked_debenture_50aa",
+    "bonds_debentures",
+})
+
 
 def _other_assets_block(
     transactions: list,
     is_long_term: bool,
+    asset_types: frozenset = _GENERIC_OTHER_ASSET_TYPES,
 ) -> dict[str, Any]:
     """Aggregate the generic "other assets" bucket for Schedule CG item 5/8.
 
     Both the STCG (``EquityOrUnitSec94Type``, ``SaleOnOtherAssets``) and
     LTCG (``EquityOrUnitSec54Type``, ``SaleofAssetNADtls.SaleofAssetNA``)
     variants share this structure: consideration/cost aggregated across
-    every ``_GENERIC_OTHER_ASSET_TYPES`` transaction of the matching
+    every matching-``asset_types`` transaction of the matching
     holding period, split into "unquoted shares" (``unlisted_shares`` --
     section 50CA deeming applies) versus "assets other than unquoted
     shares" (every other generic category) sub-totals. Unlike land/building
@@ -946,7 +964,7 @@ def _other_assets_block(
 
     for tx in transactions or []:
         asset_type = tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type
-        if asset_type not in _GENERIC_OTHER_ASSET_TYPES:
+        if asset_type not in asset_types:
             continue
         is_short = True
         if tx.date_of_acquisition is not None:
@@ -1002,6 +1020,14 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     stcg = getattr(cg, "stcg", None) if cg else None
     ltcg = getattr(cg, "ltcg", None) if cg else None
     post_loss = result.schedules.get("post_loss_cg", {})
+    # Section 115AD: an FII/FPI's OWN capital gains on securities route to
+    # a parallel set of Schedule-CG fields (NRISecur115AD/
+    # NRISaleOfEquityShareUs112A/NRIOnSec112and115Dtls/EquityMFonSTT's
+    # "5AD1biip" code) instead of the ordinary ones -- same underlying tax
+    # treatment (calculators/itr2.py already computes identical rates),
+    # this is purely a disclosure-routing decision keyed off the filing
+    # profile's own FII/FPI flag.
+    is_fii_fpi = bool(input_data.filing_profile and input_data.filing_profile.is_fii_fpi)
 
     # Land/building STCG rows
     stcg_land_rows = []
@@ -1012,13 +1038,14 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     for asset in (getattr(ltcg, "land_building", []) if ltcg else []):
         ltcg_land_rows.append(_cg_land_building_row_ltcg(asset))
 
-    # 111A equity rows
+    # 111A equity rows (or, for an FII/FPI, the 115AD(1)(b)(ii) proviso
+    # equivalent -- same 20% rate, distinct MFSectionCode/SecCode).
     equity_111a_rows = []
     for tx in input_data.cg_transactions:
         if tx.asset_type.value in ("listed_equity_111a", "equity_oriented_fund_111a"):
             gain = tx.full_consideration - tx.cost_of_acquisition - tx.expenditure_on_transfer
             equity_111a_rows.append({
-                "MFSectionCode": "1A",
+                "MFSectionCode": "5AD1biip" if is_fii_fpi else "1A",
                 "EquityMFonSTTDtls": {
                     "FullConsideration": _to_rupees(tx.full_consideration),
                     "DeductSec48": {
@@ -1033,6 +1060,31 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
                 },
             })
 
+    # Generic "other assets" bucket, split for FII/FPI: securities-type
+    # transactions route to the 115AD-specific fields below; non-security
+    # types (jewellery/depreciable/foreign/other) always stay in the
+    # ordinary bucket regardless of FII/FPI status.
+    other_asset_types_ordinary = (
+        _GENERIC_OTHER_ASSET_TYPES - _FII_SECURITIES_ASSET_TYPES if is_fii_fpi
+        else _GENERIC_OTHER_ASSET_TYPES
+    )
+    stcg_other_ordinary = _other_assets_block(input_data.cg_transactions, is_long_term=False, asset_types=other_asset_types_ordinary)
+    ltcg_other_ordinary = _other_assets_block(input_data.cg_transactions, is_long_term=True, asset_types=other_asset_types_ordinary)
+    fii_stcg_securities = None
+    fii_ltcg_securities = None
+    if is_fii_fpi:
+        fii_stcg_securities = _other_assets_block(input_data.cg_transactions, is_long_term=False, asset_types=_FII_SECURITIES_ASSET_TYPES)
+        fii_ltcg_securities = _other_assets_block(input_data.cg_transactions, is_long_term=True, asset_types=_FII_SECURITIES_ASSET_TYPES)
+
+    # Section 112A summary (Schedule CG item 3a/3c, "LTCG u/s 112A (column
+    # 14 of Schedule 112A)") -- the GROSS per-scrip aggregate before the
+    # ₹1.25L annual threshold (that threshold is applied separately, only
+    # for Schedule-SI tax purposes via compute_112a_taxable()), routed to
+    # the FII-specific field instead when FII/FPI. Previously hardcoded to
+    # zero regardless of actual 112A gain or FII status.
+    gain_112a = getattr(ltcg, "income_112a", z) if ltcg else z
+    equity_share_112a_block = {"BalanceCG": _to_rupees(gain_112a), "DeductionUs54F": 0, "CapgainonAssets": _to_rupees(gain_112a)}
+
     z6 = _z6()
     exemptions = getattr(cg, "exemptions", None) if cg else None
     total_54 = getattr(exemptions, "section_54", z) if exemptions else z
@@ -1045,8 +1097,8 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "SaleofLandBuild": {"SaleofLandBuildDtls": stcg_land_rows},
         "EquityMFonSTT": equity_111a_rows,
         "NRITransacSec48Dtl": {"NRItaxSTTPaid": 0, "NRItaxSTTNotPaid": 0},
-        "NRISecur115AD": _equity_or_unit_sec94(),
-        "SaleOnOtherAssets": _other_assets_block(input_data.cg_transactions, is_long_term=False),
+        "NRISecur115AD": fii_stcg_securities if fii_stcg_securities is not None else _equity_or_unit_sec94(),
+        "SaleOnOtherAssets": stcg_other_ordinary,
         "UnutilizedStcgFlag": "N",
         "AmtDeemedStcg": 0,
         "TotalAmtDeemedStcg": 0,
@@ -1066,11 +1118,18 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
             "TotalLTCGImmblPrprty": _to_rupees(sum((r["LTCGonImmvblPrprty"] for r in ltcg_land_rows), _ZERO)),
         },
         "Proviso112Applicable": [],
-        "SaleOfEquityShareUs112A": _equity_share_112a(),
+        "SaleOfEquityShareUs112A": _equity_share_112a() if is_fii_fpi else equity_share_112a_block,
         "NRIProvisoSec48": _nri_proviso_48(),
-        "NRISaleOfEquityShareUs112A": _equity_share_112a(),
+        "NRISaleOfEquityShareUs112A": equity_share_112a_block if is_fii_fpi else _equity_share_112a(),
         "NRISaleofForeignAsset": _nri_foreign_asset(),
-        "SaleofAssetNADtls": {"SaleofAssetNA": _other_assets_block(input_data.cg_transactions, is_long_term=True)},
+        "SaleofAssetNADtls": {"SaleofAssetNA": ltcg_other_ordinary},
+        **(
+            {"NRIOnSec112and115": {"NRIOnSec112and115Dtls": [
+                {"SectionCode": "5ADiii", **fii_ltcg_securities}
+            ]}}
+            if is_fii_fpi and fii_ltcg_securities is not None and fii_ltcg_securities["FullConsideration"] > 0
+            else {}
+        ),
         "UnutilizedLtcgFlag": "N",
         "AmtDeemedLtcg": 0,
         "TotalAmtDeemedLtcg": 0,
@@ -1446,6 +1505,12 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
         # DTAA-rate Other Sources income (compute_dtaa_os()) -- same
         # identity-mapping rationale as the block above.
         "DTAAOS": "DTAAOS",
+        # Section 115AD FII/FPI capital-gains codes (calculators/itr2.py
+        # relabels the ordinary 111A/112/112A entries' `.section` to these
+        # when the filing profile is flagged FII/FPI) -- same identity-
+        # mapping rationale as the blocks above.
+        "5AD1biip": "5AD1biip", "5ADii": "5ADii",
+        "5ADiii": "5ADiii", "5ADiiiP": "5ADiiiP",
     }
     rows = []
     for entry in si.entries:
