@@ -1635,6 +1635,41 @@ Retirement-benefit and section 89A data are not consistently represented with th
 
 **Severity: High**
 
+## 5.4 Schedule S standard deduction could be silently reported as zero
+
+**New finding (2026-09-05, Phase 5).** `_schedule_s()` (`itr2.py:467`) derives every employer's
+`GrossSalary`/`Salary` from `tds1_entries[].income_chargeable` (Schedule TDS1, a per-employer
+Form-16/26AS-sourced figure) and separately back-derives `DeductionUnderSection16ia` as
+`net_salary - result.salary_income - entertainment_allowance - professional_tax_paid`, where
+`result.salary_income` comes from the calculator taxing the *aggregate* `SalaryIncome` schema
+object. These are two genuinely independent inputs — confirmed in `filing_gateway_v2.py:1386-1389`,
+where `TDS1Entry.income_chargeable` is populated from imported TDS-row data (`row.deductorName`
+etc.), not from the frontend's salary-entry form that feeds `SalaryIncome` — and nothing validates
+that they agree; `ITR2-IN-TDS-004` (`app/engine/validators/itr2/input_rules.py:765`) only bounds
+`tds_deducted` against a chargeable-income figure, never `tds1_entries[].income_chargeable`
+itself. When the TDS1 figure is smaller than what `SalaryIncome` yields once taxed (e.g. a
+26AS-imported "amount credited" that predates a manually-entered retirement benefit or exemption
+adjustment), the subtraction went negative and the previous code silently clamped it to `0` —
+reporting a real, calculator-applied standard deduction as if none had been claimed, while
+`TotIncUnderHeadSalaries` (`result.salary_income`) disagreed with the schedule's own visible
+Gross/Net/Deduction arithmetic.
+
+**Severity: High**
+
+> **Fix status (2026-09-05): fixed and verified.** Replaced the silent `max(0, ...)` clamp with an
+> explicit `raise ValueError` when the subtraction goes negative, matching
+> `app/engine/itd/itr1.py`'s identical cross-foot guard for its analogous Schedule HP
+> back-derivation (fail closed rather than silently wrong, this project's established standard).
+> This does not resolve *which* of the two inputs is correct when they diverge — that would
+> require deciding whether `tds1_entries` or `salary_income` is authoritative, a product/data-model
+> question out of scope for a JSON-builder fix — it converts a silently-wrong number into a loud,
+> actionable error surfaced cleanly as HTTP 400/422 by both call sites (`app/routers/itr.py`'s
+> existing `except ValueError` handler and `filing_gateway_v2.py`'s existing
+> `except Exception` → `FilingGatewayV2Error` handler; neither needed changes). Regression test
+> `test_schedule_s_standard_deduction_does_not_silently_zero_on_mismatch` in
+> `tests/test_itr2_itd_builder.py`, confirmed via `git stash` to fail (silently, with no
+> exception) pre-fix.
+
 ---
 
 # 6. Schedule HP — House Property
@@ -2281,6 +2316,12 @@ Even those cases require independent review of the generated JSON against the of
 10. Add a read-only Schedule CFL year-by-year reconciliation.
 
 11. Expand Schedule S with employer, salary nature, perquisite, section 10, HRA, retirement, arrears, and section 89A structures.
+
+    > **Partially fixed 2026-09-05** — see §5.4's new finding and fix write-up: a real
+    > silent-wrong-number risk (standard deduction clamped to 0 on a tds1_entries/salary_income
+    > mismatch) is now a loud, fail-closed error instead. The completeness gaps this item lists
+    > (salary nature, perquisite categories, section 10 detail rows, HRA structure, retirement
+    > detail, section 89A) remain open — unaffected by this fix.
 
 ## P2 — Quality and maintainability
 

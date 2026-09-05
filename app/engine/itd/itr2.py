@@ -500,7 +500,24 @@ def _schedule_s(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str,
         })
     exempt_10 = source.hra_exempt_amount + source.lta_exempt_amount
     net_salary = gross_total - exempt_10
-    std_deduction = max(_ZERO, net_salary - result.salary_income - source.entertainment_allowance - source.professional_tax_paid)
+    std_deduction = net_salary - result.salary_income - source.entertainment_allowance - source.professional_tax_paid
+    if std_deduction < _ZERO:
+        # tds1_entries (per-employer Form 16 "income chargeable") and
+        # salary_income (the aggregate SalaryIncome the calculator actually
+        # taxes) are two independently editable inputs with no runtime
+        # cross-check tying them together. Silently clamping this negative
+        # result to 0 would hide a real standard deduction the calculator
+        # already applied and leave TotIncUnderHeadSalaries disagreeing
+        # with this schedule's own Gross/Net/Deduction arithmetic -- fail
+        # closed instead, matching app/engine/itd/itr1.py's identical
+        # cross-foot guard for the analogous Schedule HP back-derivation.
+        raise ValueError(
+            "Schedule S cannot cross-foot: tds1_entries income_chargeable "
+            f"({net_salary}) is less than the taxed salary income "
+            f"({result.salary_income}) plus entertainment allowance and "
+            "professional tax. Check that tds1_entries and salary_income "
+            "reflect the same underlying salary facts."
+        )
     return {
         "Salaries": employers,
         "TotalGrossSalary": _to_rupees(gross_total),

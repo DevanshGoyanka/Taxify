@@ -20,9 +20,11 @@ from app.schemas.itr1 import (
     HousePropertyIncome,
     OtherSourcesIncome,
     PropertyType,
+    SalaryIncome,
     TaxPaymentDetail,
     TaxRegime,
     TCSEntry,
+    TDS1Entry,
     TDS2Entry,
     TDS3Entry,
 )
@@ -31,6 +33,7 @@ from app.schemas.itr2 import (
     CGAssetType,
     CGTransaction,
     CapitalGainExemptionClaim,
+    EmployerFilingDetail,
     ITR2FilingProfile,
     ITR2Input,
     OS89ACountryEntry,
@@ -1092,6 +1095,46 @@ def test_schedule_hp_reflects_rent_not_realized_and_arrears() -> None:
     assert rent_details["BalanceALV"] == 270000
     assert rent_details["ThirtyPercentOfBalance"] == 81000
     assert rent_details["IncomeOfHP"] == 224000
+
+
+def test_schedule_s_standard_deduction_does_not_silently_zero_on_mismatch() -> None:
+    """_schedule_s() back-derives DeductionUnderSection16ia as
+    ``max(0, net_salary - result.salary_income - ...)`` where net_salary
+    comes from tds1_entries (a separate, independently-editable model from
+    the SalaryIncome the calculator actually taxes). Nothing keeps the two
+    in sync -- ITR2-IN-TDS-004 only bounds tds_deducted, never
+    income_chargeable -- so if an employer's reported TDS1
+    income_chargeable is smaller than what SalaryIncome yields once taxed,
+    the subtraction goes negative and the previous code silently clamped
+    it to 0, hiding a real standard deduction the calculator actually
+    applied (and producing a Schedule S row whose own Gross/Net/Deduction
+    arithmetic no longer cross-foots to TotIncUnderHeadSalaries)."""
+    input_data = _input(
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        tds1_entries=[
+            TDS1Entry(
+                employer_tan="DELA00003C",
+                employer_name="Acme Corp",
+                income_chargeable=Decimal("900000"),
+                tds_deducted=Decimal("50000"),
+            ),
+        ],
+        employer_filing_details=[
+            EmployerFilingDetail(
+                employer_tan="DELA00003C",
+                employer_name="Acme Corp",
+                address_detail="1 Corporate Park",
+                city_or_town_or_district="Mumbai",
+                state_code="27",
+            ),
+        ],
+    )
+    result = compute(input_data)
+    # Old-regime standard deduction: min(50000, gross) = 50000.
+    assert result.salary_income == Decimal("950000")
+
+    with pytest.raises(ValueError, match="Schedule S"):
+        build_itr2_json(result, input_data)
 
 
 def test_schedule_os_omits_optional_blocks_when_unset() -> None:
