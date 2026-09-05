@@ -17,7 +17,9 @@ from app.schemas.itr1 import (
     AgeBracket,
     BankAccount,
     FilingAddress,
+    HousePropertyIncome,
     OtherSourcesIncome,
+    PropertyType,
     TaxPaymentDetail,
     TaxRegime,
     TCSEntry,
@@ -42,6 +44,7 @@ from app.schemas.itr2 import (
     OSSection89A,
     OSSpecialRateEntry,
     OSUnexplainedIncome,
+    PropertyFilingDetail,
     PTIEntry,
     ResidentialStatus,
     ScheduleSIEntry,
@@ -1015,6 +1018,80 @@ def test_pti_hp_and_os_head_entries_reach_gti_and_schedule_pti() -> None:
 
     assert result.house_property_income == Decimal("50000")
     assert result.other_sources_income == Decimal("30000")
+
+
+def test_schedule_hp_self_occupied_interest_is_capped_not_raw() -> None:
+    """Self-occupied home-loan interest above the Sec 24(b) old-regime cap
+    (Rs 2,00,000) must be reported CAPPED in Schedule HP, matching what the
+    calculator actually allows -- not the raw, uncapped amount. The builder
+    previously recomputed IntOnBorwCap/IncomeOfHP from raw input fields
+    instead of the real per-property HPResult, via a dead
+    ``hasattr(hp_res, "interest_deduction")`` check (HPResult's real field is
+    named ``interest_on_loan``, so the hasattr always failed silently and
+    fell through to the uncapped raw value)."""
+    input_data = _input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("350000"),
+        ),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="12 MG Road",
+                city_or_town_or_district="Pune",
+                state_code="27",
+                pin_code="411001",
+            ),
+        ],
+    )
+    result = compute(input_data)
+    assert result.house_property_income == Decimal("-200000")
+
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    rent_details = document["ITR"]["ITR2"]["ScheduleHP"]["PropertyDetails"][0]["Rentdetails"]
+    assert rent_details["IntOnBorwCap"] == 200000
+    assert rent_details["Section24B"]["TotalInterestUs24B"] == 200000
+    assert rent_details["IncomeOfHP"] == -200000
+
+
+def test_schedule_hp_reflects_rent_not_realized_and_arrears() -> None:
+    """RentNotRealized and ArrearsUnrealizedRentRcvd must reflect the real
+    values the calculator already applies (rent_not_realized reduces ALV;
+    arrears are 70%-taxable u/s 25A and added to income_chargeable) --
+    previously RentNotRealized was hardcoded to 0 and arrears were never
+    emitted at all, while IncomeOfHP was independently recomputed without
+    either adjustment, so it could disagree with the calculator's real
+    per-property HPResult and with result.house_property_income."""
+    input_data = _input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("300000"),
+            rent_not_realized=Decimal("20000"),
+            municipal_taxes_paid=Decimal("10000"),
+            arrears_unrealised_rent_received=Decimal("50000"),
+        ),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="45 Park Street",
+                city_or_town_or_district="Kolkata",
+                state_code="19",
+                pin_code="700016",
+            ),
+        ],
+    )
+    result = compute(input_data)
+    # NAV = 300000 - 20000 - 10000 = 270000; std ded = 30% = 81000
+    # income = 270000 - 81000 + 0.7*50000 = 224000
+    assert result.house_property_income == Decimal("224000")
+
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    rent_details = document["ITR"]["ITR2"]["ScheduleHP"]["PropertyDetails"][0]["Rentdetails"]
+    assert rent_details["RentNotRealized"] == 20000
+    assert rent_details["ArrearsUnrealizedRentRcvd"] == 50000
+    assert rent_details["BalanceALV"] == 270000
+    assert rent_details["ThirtyPercentOfBalance"] == 81000
+    assert rent_details["IncomeOfHP"] == 224000
 
 
 def test_schedule_os_omits_optional_blocks_when_unset() -> None:

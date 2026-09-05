@@ -540,10 +540,32 @@ def _schedule_hp(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
     hp_results = result.schedules.get("hp", [])
     for idx, (source, hp_res, detail) in enumerate(zip(sources, hp_results, input_data.property_filing_details), 1):
         ptype = source.property_type.value
-        alv = max(_ZERO, source.annual_rent_received - source.municipal_taxes_paid)
-        interest = hp_res.interest_deduction if hasattr(hp_res, "interest_deduction") else source.home_loan_interest_paid
-        std_ded = alv * Decimal("0.3") if ptype != "S" else _ZERO
-        income = alv - std_ded - interest
+        # Use the real per-property HPResult the calculator already computed
+        # -- it correctly applies the Sec 24(b) self-occupied interest cap,
+        # rent_not_realized, and the Sec 25A 70%-taxable arrears inclusion.
+        # Re-deriving these locally from raw input fields (the previous
+        # approach) silently dropped all three adjustments, so a
+        # schema-valid but WRONG per-property IncomeOfHP could disagree with
+        # the calculator's own income_chargeable and, in aggregate, with
+        # result.house_property_income.
+        rent_not_realized = _to_rupees(hp_res.rent_not_realized)
+        local_taxes = _to_rupees(hp_res.municipal_taxes)
+        alv = _to_rupees(hp_res.net_annual_value)
+        annual_of_prop_owned = _to_rupees(hp_res.annual_value_owned)
+        std_ded = _to_rupees(hp_res.standard_deduction_30pct)
+        arrears = _to_rupees(hp_res.arrears_unrealised_rent)
+        income = _to_rupees(hp_res.income_chargeable)
+        if ptype == "S":
+            # HPResult.interest_on_loan stores the RAW interest paid for
+            # self-occupied property, not the Sec 24(b) allowed/capped
+            # amount -- income_chargeable is the one field that already
+            # reflects the real cap (old regime) or full disallowance (new
+            # regime), and equals exactly -allowed_interest by construction
+            # (app/engine/schedules/house_property.py), so derive from it
+            # rather than re-implementing the cap/regime logic here.
+            interest = -income
+        else:
+            interest = _to_rupees(hp_res.interest_on_loan)
         address: dict[str, Any] = {
             "AddrDetail": detail.address_detail,
             "CityOrTownOrDistrict": detail.city_or_town_or_district,
@@ -563,17 +585,17 @@ def _schedule_hp(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
             "ifLetOut": "S" if ptype == "S" else "L",
             "Rentdetails": {
                 "AnnualLetableValue": _to_rupees(source.annual_rent_received),
-                "RentNotRealized": 0,
-                "LocalTaxes": _to_rupees(source.municipal_taxes_paid),
-                "TotalUnrealizedAndTax": 0,
-                "BalanceALV": _to_rupees(alv),
-                "AnnualOfPropOwned": _to_rupees(alv),
-                "ArrearsUnrealizedRentRcvd": 0,
-                "ThirtyPercentOfBalance": _to_rupees(std_ded),
-                "IntOnBorwCap": _to_rupees(interest),
-                "Section24B": {"Section24BDtls": [], "TotalInterestUs24B": _to_rupees(interest)},
-                "TotalDeduct": _to_rupees(std_ded + interest),
-                "IncomeOfHP": _to_rupees(income),
+                "RentNotRealized": rent_not_realized,
+                "LocalTaxes": local_taxes,
+                "TotalUnrealizedAndTax": rent_not_realized + local_taxes,
+                "BalanceALV": alv,
+                "AnnualOfPropOwned": annual_of_prop_owned,
+                "ArrearsUnrealizedRentRcvd": arrears,
+                "ThirtyPercentOfBalance": std_ded,
+                "IntOnBorwCap": interest,
+                "Section24B": {"Section24BDtls": [], "TotalInterestUs24B": interest},
+                "TotalDeduct": std_ded + interest,
+                "IncomeOfHP": income,
             },
         })
     return {

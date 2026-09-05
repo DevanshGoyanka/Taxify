@@ -1665,11 +1665,81 @@ Missing or incomplete details include:
 
 **Severity: Critical for affected cases**
 
+> **Fix status (2026-09-05): partially fixed and verified — a genuine correctness bug found and
+> closed; the disclosure-completeness gap (lender/loan/co-owner/tenant detail rows) remains open,
+> tracked below.** Re-auditing this finding at implementation time (Phase 5 of
+> `C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`) surfaced something more severe than
+> the original "missing detail" framing: `_schedule_hp()` was not just omitting loan/co-owner/
+> tenant rows, it was silently **recomputing** `IntOnBorwCap`/`IncomeOfHP`/`BalanceALV`/
+> `RentNotRealized`/`ArrearsUnrealizedRentRcvd` from raw input fields instead of using the real
+> per-property `HPResult` the calculator (`app/engine/schedules/house_property.py::compute()`)
+> already produces — the exact "schema-valid but wrong number" bug class this file's own
+> introduction warns about (see the `NetTaxLiability` precedent). Three concrete defects, each
+> confirmed with a dedicated regression test in `tests/test_itr2_itd_builder.py` (`git stash`-
+> verified to fail pre-fix):
+>
+> 1. **Self-occupied home-loan interest was reported uncapped.** The interest-selection line read
+>    `hp_res.interest_deduction if hasattr(hp_res, "interest_deduction") else
+>    source.home_loan_interest_paid` — `HPResult`'s real field is named `interest_on_loan`, not
+>    `interest_deduction`, so the `hasattr` check always failed and the code silently fell through
+>    to the *raw, uncapped* interest every time. For a self-occupied property with interest paid
+>    above the Section 24(b) old-regime ceiling (₹2,00,000, or ₹30,000 pre-1999-loan), the JSON's
+>    `IntOnBorwCap`/`Section24B.TotalInterestUs24B` would disagree with the calculator's actual
+>    allowed deduction and with `result.house_property_income` itself.
+> 2. **`RentNotRealized` was hardcoded to `0`**, ignoring `source.rent_not_realized` — a real,
+>    user-suppliable schema field the calculator already subtracts from Gross Annual Value
+>    (`house_property.py:125`). `ArrearsUnrealizedRentRcvd` was likewise always `0`, even though
+>    Section 25A arrears (taxed at the statutory 70%, `house_property.py:139`) are already fully
+>    computed and included in `income_chargeable` — they were simply never surfaced in the JSON.
+> 3. **Per-property `IncomeOfHP` was independently re-derived** (`alv - std_ded - interest`) from
+>    a locally recomputed `alv`/`std_ded` that omitted `rent_not_realized`/arrears entirely,
+>    instead of reading `hp_res.income_chargeable` directly — so a property with any of the above
+>    inputs set could show a per-row income figure that disagreed with the very `HPResult` the
+>    calculator computed for it.
+>
+> **Fix**: every Rentdetails field now reads directly from the real per-property `HPResult`
+> (`rent_not_realized`, `municipal_taxes`, `net_annual_value`, `annual_value_owned`,
+> `standard_deduction_30pct`, `arrears_unrealised_rent`, `income_chargeable`), eliminating the
+> local re-derivation entirely. Self-occupied interest is special-cased: `HPResult.interest_on_loan`
+> stores the *raw* interest paid for self-occupied property (not the allowed/capped amount) by the
+> shared calculator's own design, so `IntOnBorwCap` is derived as `-income_chargeable` instead —
+> which equals exactly the allowed/capped interest under the old regime, and `0` under the new
+> regime (where Section 24(b) disallows the self-occupied deduction entirely), by construction of
+> `house_property.py`'s own formula, with no cap logic duplicated in the serializer.
+>
+> **Still open** (genuinely a completeness gap, not re-verified away): lender identity/PAN,
+> loan account number, sanction date, and outstanding balance (`Section24BDtls[]`, still emitted
+> empty — the official schema's own `LoanTknFrom`/`BankOrInstnName`/`LoanAccNoOfBankOrInstnRefNo`/
+> `DateofLoan`/`TotalLoanAmt`/`LoanOutstndngAmt`/`InterestUs24B` fields have no backing input model
+> at all yet); `CoOwners[]` and `TenantDetails[]` detail rows (both schema-optional arrays,
+> similarly unbacked); pre-construction interest amortization; property completion date/status.
+> These require new input schema fields (on `PropertyFilingDetail` or a new per-property model) and
+> frontend UI, not just a builder fix, and are deferred to a follow-up sub-phase of Phase 5 rather
+> than folded into this fix — matching this file's own established practice of not silently
+> expanding a fix's scope mid-fix.
+>
+> **Separately noted, not fixed here**: `app/engine/calculators/itr2.py` calls
+> `compute_hp(prop, regime)` for every house property without passing
+> `ownership_share_percentage` (the calculator's `compute()` accepts it but defaults to 100), even
+> though `PropertyFilingDetail.assessee_share_percent` is captured and *disclosed* in the JSON's
+> `AsseseeShareProperty` field. This means co-ownership share currently affects only the
+> disclosure, not the actual computed income — a genuine, separate bug, but a calculator-level one
+> (shared by every consumer of `compute_hp`), not a JSON-builder bug, and out of scope for this
+> fix. Logged here so it isn't lost; a fix would need to thread `assessee_share_percent` from
+> `ITR2Input.property_filing_details` into the `compute_hp()` call site in
+> `app/engine/calculators/itr2.py`.
+
 ## 6.2 Self-occupied property is over-simplified
 
 The serializer calculates ALV and standard deduction using simplified logic around `itr2.py:434–438`, which does not guarantee that the official self-occupied-property and loan fields are correctly represented.
 
 **Severity: High**
+
+> **Fix status (2026-09-05): the interest-cap portion is fixed — see §6.1's fix write-up (item 1
+> and the self-occupied interest special-case).** The "over-simplified" framing here referred to
+> the same recomputation the §6.1 fix removed; self-occupied ALV/standard-deduction were already
+> correctly zero by construction (no separate bug there). The loan-detail-array gap this finding
+> also implies is the same open item tracked in §6.1's "Still open" note, not duplicated here.
 
 ## 6.3 Schedule HP and Part B-TI can disagree
 
@@ -2120,6 +2190,13 @@ Even those cases require independent review of the generated JSON against the of
 ## P1 — Required for broad taxpayer coverage
 
 7. Expand Schedule HP with section 24(b), pre-construction interest, ownership, co-owner, tenant, unrealized-rent, and complete property details.
+
+   > **Partially fixed 2026-09-05** — see §6.1/§6.2's fix write-ups. The correctness bug (self-
+   > occupied interest reported uncapped; `RentNotRealized`/`ArrearsUnrealizedRentRcvd`/per-row
+   > `IncomeOfHP` silently recomputed instead of read from the real calculator result) is fixed
+   > and regression-tested. Still open: section 24(b) loan-lender detail rows, co-owner rows,
+   > tenant rows, pre-construction interest, and complete property/completion-status fields — all
+   > genuinely missing input models, not builder bugs.
 
 8. Replace generic Schedule FA rows with category-specific foreign bank, custodial, equity/debt, insurance, trust, signing-authority, property, and other-asset editors and serializers.
 
