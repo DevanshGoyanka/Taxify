@@ -1947,6 +1947,52 @@ The frontend states around `ITR2SchedulesWorkspace.tsx:116` that Schedule CFL is
 
 **Severity: Medium to High**
 
+> **Fix status (2026-09-05): three real correctness/schema-validity bugs found and fixed in
+> `_schedule_cfl()` (`itr2.py:416`) while investigating this item; the frontend reconciliation
+> display itself remains unbuilt.**
+>
+> 1. **`DateOfFiling` was silently omitted whenever `date_of_filing` was unset.** The official
+>    schema requires `DateOfFiling` unconditionally for every one of the 8 year-slot objects
+>    (both the `CarryFwdLossDetail` type used for AY2022-23 onward and the
+>    `CarryFwdWithoutLossDetail` type used for AY2018-19 through AY2021-22) — since
+>    `BFLossItem.date_of_filing` is `Optional` in the Pydantic schema, any taxpayer with a
+>    brought-forward loss and no filing date entered would produce schema-invalid JSON, discovered
+>    only at validation time with no indication of which field was missing or why. Fixed to raise
+>    a clear `ValueError` naming the assessment year and the reason (filing date is a genuine
+>    carry-forward eligibility precondition under Section 80, not an arbitrary schema requirement).
+> 2. **`OthSrcLossRaceHorseCF` was hardcoded to `0`**, dropping any real Section 74A race-horse
+>    brought-forward loss from every total it should have appeared in — including the field
+>    literally named for it. Traced through `app/engine/schedules/loss_setoff/bfla.py:120-174`:
+>    a `LossHead.RACE_HORSE`-headed entry matches none of that function's head branches, so the
+>    full brought-forward amount passes through unset-off as a genuine `CFLossEntry` with
+>    `head="RaceHorse"` — `_schedule_cfl()`'s `summary()` helper simply never looked for it. Fixed
+>    to sum real race-horse `loss_remaining` into the field.
+> 3. **`OthSrcLossRaceHorseCF` was also being emitted for year-slots whose schema type doesn't
+>    have that property at all** (`CarryFwdWithoutLossDetail`, AY2018-19 through AY2021-22 —
+>    structurally excluded from the schema itself, since Section 74A's 4-year cap means a
+>    race-horse loss should never legitimately survive to that age) — with
+>    `additionalProperties: false` on that type, this was an independent schema violation any time
+>    a taxpayer had ANY brought-forward loss (of any head) that old. Fixed by making
+>    `include_race_horse` conditional on which of the two schema types the target year-slot uses.
+>
+> **Separately noted, not fixed here**: `app/engine/schedules/loss_setoff/bfla.py`'s
+> `_MAX_CARRY_FWD` dict (line 12) has no entry for `"RaceHorse"`, so a race-horse loss never
+> expires under this engine's carry-forward logic at all — Section 74A caps it at 4 years, same
+> as speculative business loss. This is a shared-module bug (used by ITR-2's and ITR-3's
+> calculators) independent of the three JSON-builder bugs above, and touching a shared module
+> needs its own dedicated fix-and-regression cycle across every form that consumes it — deferred
+> rather than folded into this fix.
+>
+> Three regression tests added to `tests/test_itr2_itd_builder.py`
+> (`test_schedule_cfl_reports_race_horse_loss_instead_of_dropping_it`,
+> `test_schedule_cfl_requires_date_of_filing_instead_of_silently_omitting_it`,
+> `test_schedule_cfl_omits_race_horse_field_for_older_year_slots`), each confirmed via `git stash`
+> to fail pre-fix. Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` suite green (627 passed), plus
+> every other test file referencing `bf_losses`/`BFLossItem` (`test_bfla.py`,
+> `test_capital_gains_loss_foundation.py`, `test_draft_to_itr2_input.py`, `test_itr2_integration.py`,
+> `test_itr2_validators.py`, `validate_schemas.py`) checked directly — the only 2 failures there
+> (`validate_schemas.py::test_itr2`/`test_itr3`) confirmed via `git stash` to pre-date this fix.
+
 ---
 
 # 10. Foreign schedules
@@ -2314,6 +2360,12 @@ Even those cases require independent review of the generated JSON against the of
    > listed under "Not safe for broad production use today").
 
 10. Add a read-only Schedule CFL year-by-year reconciliation.
+
+    > **Backend correctness fixed 2026-09-05** — see §9.4's fix write-up: a missing `DateOfFiling`
+    > (schema-invalid JSON on any brought-forward loss with no filing date), a hardcoded-zero
+    > `OthSrcLossRaceHorseCF` (real race-horse losses silently dropped), and that same field being
+    > emitted where the schema forbids it (a second, independent schema violation) are all fixed
+    > and regression-tested. The frontend reconciliation display itself remains unbuilt.
 
 11. Expand Schedule S with employer, salary nature, perquisite, section 10, HRA, retirement, arrears, and section 89A structures.
 

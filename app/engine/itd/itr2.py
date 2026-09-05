@@ -420,26 +420,35 @@ def _schedule_cfl(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[st
     if not flattened:
         return None
 
-    def summary(entries: list) -> dict[str, int]:
-        return {
+    def summary(entries: list, *, include_race_horse: bool) -> dict[str, int]:
+        detail: dict[str, int] = {
             "TotalHPPTILossCF": _to_rupees(sum((e.loss_remaining for e in entries if e.head in ("HP", "HouseProperty")), _ZERO)),
             "TotalSTCGPTILossCF": _to_rupees(sum((e.loss_remaining for e in entries if e.head in ("STCG", "CG")), _ZERO)),
             "TotalLTCGPTILossCF": _to_rupees(sum((e.loss_remaining for e in entries if e.head == "LTCG"), _ZERO)),
-            "OthSrcLossRaceHorseCF": 0,
         }
+        if include_race_horse:
+            detail["OthSrcLossRaceHorseCF"] = _to_rupees(sum((e.loss_remaining for e in entries if e.head == "RaceHorse"), _ZERO))
+        return detail
 
     by_year: dict[str, list] = {}
     for entry in flattened:
         by_year.setdefault(entry.assessment_year_of_loss, []).append(entry)
-    year_keys = {
-        "2018-19": "LossCFFromPrev8thYearFromAY",
-        "2019-20": "LossCFFromPrev7thYearFromAY",
-        "2020-21": "LossCFFromPrev6thYearFromAY",
-        "2021-22": "LossCFFromPrev5thYearFromAY",
-        "2022-23": "LossCFFromPrev4thYearFromAY",
-        "2023-24": "LossCFFromPrev3rdYearFromAY",
-        "2024-25": "LossCFFromPrev2ndYearFromAY",
-        "2025-26": "LossCFFromPrevYrToAY",
+    # Section 74A caps race-horse-activity loss carry-forward at 4 years, so
+    # the official schema's own year-slot types structurally omit
+    # OthSrcLossRaceHorseCF for the 5th-8th-year-back slots (type
+    # CarryFwdWithoutLossDetail) -- only the 1st-4th-year-back slots (type
+    # CarryFwdLossDetail) carry that field at all. additionalProperties is
+    # false on both, so emitting it in the older slots is itself a schema
+    # violation, not just a wrong value.
+    year_keys: dict[str, tuple[str, bool]] = {
+        "2018-19": ("LossCFFromPrev8thYearFromAY", False),
+        "2019-20": ("LossCFFromPrev7thYearFromAY", False),
+        "2020-21": ("LossCFFromPrev6thYearFromAY", False),
+        "2021-22": ("LossCFFromPrev5thYearFromAY", False),
+        "2022-23": ("LossCFFromPrev4thYearFromAY", True),
+        "2023-24": ("LossCFFromPrev3rdYearFromAY", True),
+        "2024-25": ("LossCFFromPrev2ndYearFromAY", True),
+        "2025-26": ("LossCFFromPrevYrToAY", True),
     }
     output: dict[str, Any] = {}
     filing_dates = {
@@ -448,13 +457,27 @@ def _schedule_cfl(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[st
         if item.date_of_filing is not None
     }
     for year, entries in by_year.items():
-        key = year_keys.get(year)
-        if key:
-            detail: dict[str, Any] = summary(entries)
-            if year in filing_dates:
-                detail["DateOfFiling"] = _date(filing_dates[year])
-            output[key] = {"CarryFwdLossDetail": detail}
-    all_summary = summary(flattened)
+        mapping = year_keys.get(year)
+        if mapping is None:
+            continue
+        key, include_race_horse = mapping
+        # DateOfFiling is unconditionally required by both year-slot schema
+        # types (CarryFwdLossDetail and CarryFwdWithoutLossDetail) -- a
+        # brought-forward loss with no known original-return filing date
+        # would previously omit the field silently and fail official-schema
+        # validation downstream instead of failing here with a clear cause.
+        if year not in filing_dates:
+            raise ValueError(
+                f"Schedule CFL requires date_of_filing for the brought-forward "
+                f"loss from AY {year} (the original return's filing date is "
+                "mandatory for carry-forward eligibility under Section 80)."
+            )
+        detail: dict[str, Any] = summary(entries, include_race_horse=include_race_horse)
+        detail["DateOfFiling"] = _date(filing_dates[year])
+        output[key] = {"CarryFwdLossDetail": detail}
+    # LossSummaryDetail (the aggregate wrapper) allows OthSrcLossRaceHorseCF
+    # unconditionally regardless of loss age, unlike the per-year slots.
+    all_summary = summary(flattened, include_race_horse=True)
     output["TotalOfBFLossesEarlierYrs"] = {"LossSummaryDetail": all_summary}
     output["TotalLossCFSummary"] = {"LossSummaryDetail": all_summary}
     return output

@@ -29,6 +29,7 @@ from app.schemas.itr1 import (
     TDS3Entry,
 )
 from app.schemas.itr2 import (
+    BFLossItem,
     CG112AScrip,
     CGAssetType,
     CGTransaction,
@@ -36,6 +37,7 @@ from app.schemas.itr2 import (
     EmployerFilingDetail,
     ITR2FilingProfile,
     ITR2Input,
+    LossHead,
     OS89ACountryEntry,
     OSDeductions,
     OSDividendEntry,
@@ -1135,6 +1137,88 @@ def test_schedule_s_standard_deduction_does_not_silently_zero_on_mismatch() -> N
 
     with pytest.raises(ValueError, match="Schedule S"):
         build_itr2_json(result, input_data)
+
+
+def test_schedule_cfl_reports_race_horse_loss_instead_of_dropping_it() -> None:
+    """A brought-forward race-horse activity loss (LossHead.RACE_HORSE,
+    Section 74A) is tracked correctly through BFLA (unset-off, carried
+    forward as its own entry -- confirmed at
+    app/engine/schedules/loss_setoff/bfla.py:120-174, where no head branch
+    matches "RaceHorse" so the full brought-forward amount passes through
+    as remaining) but _schedule_cfl()'s summary() helper only recognizes
+    HP/STCG/CG/LTCG heads -- a RaceHorse-head entry matched none of them,
+    so its loss_remaining was dropped from every total, INCLUDING the one
+    field literally named for it (OthSrcLossRaceHorseCF), which stayed
+    hardcoded at 0 regardless of the real disclosed loss."""
+    input_data = _input(
+        bf_losses=[
+            BFLossItem(
+                assessment_year="2024-25",
+                head=LossHead.RACE_HORSE,
+                original_loss=Decimal("40000"),
+                brought_forward=Decimal("40000"),
+                date_of_filing=date(2024, 7, 31),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    cfl_entries = [e for coll in result.schedules.get("cfl", []) for e in coll.entries]
+    race_horse_entry = next(e for e in cfl_entries if e.head == "RaceHorse")
+    assert race_horse_entry.loss_remaining == Decimal("40000")
+
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    cfl = document["ITR"]["ITR2"]["ScheduleCFL"]
+    year_detail = cfl["LossCFFromPrev2ndYearFromAY"]["CarryFwdLossDetail"]
+    assert year_detail["OthSrcLossRaceHorseCF"] == 40000
+    assert cfl["TotalLossCFSummary"]["LossSummaryDetail"]["OthSrcLossRaceHorseCF"] == 40000
+
+
+def test_schedule_cfl_requires_date_of_filing_instead_of_silently_omitting_it() -> None:
+    """DateOfFiling is unconditionally required by the official schema for
+    every Schedule CFL year-slot (both CarryFwdLossDetail and
+    CarryFwdWithoutLossDetail) -- BFLossItem.date_of_filing is Optional in
+    the Pydantic schema, and the previous code silently left the field out
+    whenever it was unset, producing schema-invalid JSON instead of a clear
+    error naming the missing input."""
+    input_data = _input(
+        bf_losses=[
+            BFLossItem(
+                assessment_year="2024-25",
+                head=LossHead.SHORT_TERM_CAPITAL,
+                original_loss=Decimal("30000"),
+                brought_forward=Decimal("30000"),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    with pytest.raises(ValueError, match="date_of_filing"):
+        build_itr2_json(result, input_data)
+
+
+def test_schedule_cfl_omits_race_horse_field_for_older_year_slots() -> None:
+    """The official schema's 5th-8th-year-back CFL slots (AY2018-19 through
+    AY2021-22) use a different type, CarryFwdWithoutLossDetail, which has
+    no OthSrcLossRaceHorseCF property at all -- additionalProperties is
+    false, so emitting it there (as the previous unconditional summary()
+    helper did) is itself a schema violation, independent of whether a
+    real race-horse loss exists at that age."""
+    input_data = _input(
+        bf_losses=[
+            BFLossItem(
+                assessment_year="2018-19",
+                head=LossHead.SHORT_TERM_CAPITAL,
+                original_loss=Decimal("20000"),
+                brought_forward=Decimal("20000"),
+                date_of_filing=date(2018, 7, 31),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    year_detail = document["ITR"]["ITR2"]["ScheduleCFL"]["LossCFFromPrev8thYearFromAY"]["CarryFwdLossDetail"]
+    assert "OthSrcLossRaceHorseCF" not in year_detail
 
 
 def test_schedule_os_omits_optional_blocks_when_unset() -> None:
