@@ -56,7 +56,7 @@ def _filing_ready_itr2_draft() -> ReturnDraft:
     )]
     draft.taxes.tds = [TdsCredit(
         id="t1", section="192", deductorName="Acme", deductorTAN="MUMA12345B",
-        taxDeducted=Decimal("120000"), schedule="TDS1",
+        grossAmount=Decimal("1500000"), taxDeducted=Decimal("120000"), schedule="TDS1",
     )]
     draft.bankAccounts = [BankAccount(
         id="b1", bankName="HDFC Bank", accountNumber="000123456789",
