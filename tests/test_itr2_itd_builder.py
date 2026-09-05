@@ -1254,6 +1254,95 @@ def test_schedule_s_standard_deduction_does_not_silently_zero_on_mismatch() -> N
         build_itr2_json(result, input_data)
 
 
+def test_schedule_s_serializes_real_perquisites_profits_in_lieu_and_relief_89() -> None:
+    """ValueOfPerquisites and ProfitsinLieuOfSalary were hardcoded to 0
+    regardless of source.perquisites_value/profits_in_lieu_of_salary (real,
+    user-suppliable schema fields the calculator already taxes as part of
+    gross salary); Increliefus89A was hardcoded to 0 regardless of
+    result.relief_89. All three are single-employer-attributable here."""
+    input_data = _input(
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("900000"),
+            perquisites_value=Decimal("50000"),
+            profits_in_lieu_of_salary=Decimal("20000"),
+        ),
+        relief_89=Decimal("15000"),
+        tds1_entries=[
+            TDS1Entry(
+                employer_tan="DELA00003C",
+                employer_name="Acme Corp",
+                income_chargeable=Decimal("970000"),  # 900000 + 50000 + 20000
+                tds_deducted=Decimal("50000"),
+            ),
+        ],
+        employer_filing_details=[
+            EmployerFilingDetail(
+                employer_tan="DELA00003C",
+                employer_name="Acme Corp",
+                address_detail="1 Corporate Park",
+                city_or_town_or_district="Mumbai",
+                state_code="27",
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    schedule_s = document["ITR"]["ITR2"]["ScheduleS"]
+    salarys = schedule_s["Salaries"][0]["Salarys"]
+    assert salarys["GrossSalary"] == 970000
+    assert salarys["ValueOfPerquisites"] == 50000
+    assert salarys["ProfitsinLieuOfSalary"] == 20000
+    assert salarys["Salary"] == 900000  # 970000 - 50000 - 20000
+    assert schedule_s["Increliefus89A"] == 15000
+
+
+def test_schedule_s_reports_real_section_10_exemption_breakdown() -> None:
+    """AllwncExemptUs10Dtls was always hardcoded to an empty array, even
+    though the calculator already computes a full per-category exemption
+    breakdown (gratuity/leave-encashment/VRS/etc. -- SalaryResult) that was
+    simply never read. AllwncExtentExemptUs10/NetSalary/
+    DeductionUnderSection16ia now come from the real SalaryResult too,
+    instead of being re-derived locally from only hra+lta."""
+    input_data = _input(
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("800000"),
+            gratuity_received=Decimal("300000"),
+            is_cg_sg_employee=True,
+            lta_exempt_amount=Decimal("10000"),
+        ),
+        tds1_entries=[
+            TDS1Entry(
+                employer_tan="DELA00003C",
+                employer_name="Acme Corp",
+                income_chargeable=Decimal("1100000"),  # 800000 + 300000 gratuity received
+                tds_deducted=Decimal("50000"),
+            ),
+        ],
+        employer_filing_details=[
+            EmployerFilingDetail(
+                employer_tan="DELA00003C",
+                employer_name="Acme Corp",
+                address_detail="1 Corporate Park",
+                city_or_town_or_district="Mumbai",
+                state_code="27",
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    schedule_s = document["ITR"]["ITR2"]["ScheduleS"]
+    rows = schedule_s["AllwncExemptUs10"]["AllwncExemptUs10Dtls"]
+    codes = {r["SalNatureDesc"] for r in rows}
+    assert "10(10)" in codes  # gratuity -- govt employee, fully exempt
+    assert "10(5)" in codes  # LTA
+    assert "10(13A)" not in codes  # HRA has its own dedicated block, not this array
+    gratuity_row = next(r for r in rows if r["SalNatureDesc"] == "10(10)")
+    assert gratuity_row["SalOthAmount"] == 300000
+    assert schedule_s["AllwncExtentExemptUs10"] == 310000  # 300000 gratuity + 10000 LTA
+
+
 def test_schedule_cfl_reports_race_horse_loss_instead_of_dropping_it() -> None:
     """A brought-forward race-horse activity loss (LossHead.RACE_HORSE,
     Section 74A) is tracked correctly through BFLA (unset-off, carried

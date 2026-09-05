@@ -488,8 +488,26 @@ def _schedule_cfl(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[st
 # Schedule S — Salary
 # ============================================================================
 
+# Maps a SalaryResult per-exemption field to its official Section 10
+# sub-clause enum value and a human-readable label, for AllwncExemptUs10Dtls.
+# 10(13A) (HRA) is deliberately excluded -- it has its own dedicated
+# Section10_13A structure below, not this generic array.
+_SALARY_EXEMPTION_ROWS: tuple[tuple[str, str, str], ...] = (
+    ("lta_exempt", "10(5)", "Leave travel allowance"),
+    ("gratuity_exempt", "10(10)", "Gratuity"),
+    ("commuted_pension_exempt", "10(10A)", "Commuted pension"),
+    ("leave_encashment_exempt", "10(10AA)", "Leave encashment"),
+    ("retrenchment_exempt", "10(10B)(i)", "Retrenchment compensation"),
+    ("vrs_exempt", "10(10C)", "Voluntary retirement compensation"),
+    ("transport_exempt", "10(14)(ii)", "Transport allowance"),
+    ("children_education_exempt", "10(14)(ii)", "Children education allowance"),
+    ("hostel_exempt", "10(14)(ii)", "Hostel expenditure allowance"),
+    ("uniform_allowance_exempt", "10(14)(ii)", "Uniform allowance"),
+)
+
+
 def _schedule_s(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize Schedule S from real employer TDS1 entries."""
+    """Serialize Schedule S from the real calculator SalaryResult and TDS1 employer identity."""
     source = input_data.salary_income
     if source is None:
         return None
@@ -497,15 +515,48 @@ def _schedule_s(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str,
         raise ValueError("Salary income present but no TDS1 employer entries provided")
     if len(input_data.employer_filing_details) != len(input_data.tds1_entries):
         raise ValueError("Schedule S requires one employer_filing_details row per TDS1 employer")
+    sal = result.schedules.get("salary")
+    if sal is None:
+        raise ValueError("Salary income present but no computed SalaryResult is available")
+
+    # gross_total (from tds1_entries, per-employer Form 16 figures) and
+    # sal.gross_salary (from the aggregate SalaryIncome the calculator
+    # actually taxes) are two independently editable inputs with no runtime
+    # cross-check tying them together elsewhere. Cross-foot here rather than
+    # silently disclosing whichever number happens to be smaller.
+    gross_total = sum((e.income_chargeable for e in input_data.tds1_entries), _ZERO)
+    if _to_rupees(gross_total) != _to_rupees(sal.gross_salary):
+        raise ValueError(
+            f"Schedule S cannot cross-foot: tds1_entries income_chargeable "
+            f"({gross_total}) does not match the taxed salary income's real gross "
+            f"({sal.gross_salary}). Check that tds1_entries and salary_income reflect "
+            "the same underlying salary facts."
+        )
+
+    # ValueOfPerquisites/ProfitsinLieuOfSalary are official per-employer
+    # fields, but SalaryIncome (and hence source.perquisites_value/
+    # profits_in_lieu_of_salary) is a single aggregate covering every
+    # employer -- only attributable to a specific employer's row when there
+    # is exactly one. GrossSalary = Salary (17(1)) + ValueOfPerquisites
+    # (17(2)) + ProfitsinLieuOfSalary (17(3)) is the official relationship;
+    # the previous code assumed perquisites/profits were always zero.
+    single_employer = len(input_data.tds1_entries) == 1
     employers = []
-    gross_total = _ZERO
     for entry, detail in zip(input_data.tds1_entries, input_data.employer_filing_details):
         if not entry.employer_name or not entry.employer_tan:
             raise ValueError("Schedule S requires employer name and TAN")
         if detail.employer_tan != entry.employer_tan or detail.employer_name != entry.employer_name:
             raise ValueError("Schedule S employer filing details must match TDS1 identity")
         gross = entry.income_chargeable
-        gross_total += gross
+        perquisites = source.perquisites_value if single_employer else _ZERO
+        profits_in_lieu = source.profits_in_lieu_of_salary if single_employer else _ZERO
+        base_salary = gross - perquisites - profits_in_lieu
+        if base_salary < _ZERO:
+            raise ValueError(
+                f"Schedule S employer {entry.employer_name!r}: perquisites "
+                f"({perquisites}) plus profits in lieu ({profits_in_lieu}) exceed "
+                f"gross salary ({gross})."
+            )
         employers.append({
             "NameOfEmployer": entry.employer_name,
             "NatureOfEmployment": detail.nature_of_employment,
@@ -513,46 +564,33 @@ def _schedule_s(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str,
             "TANofEmployer": entry.employer_tan,
             "Salarys": {
                 "GrossSalary": _to_rupees(gross),
-                "Salary": _to_rupees(gross),
+                "Salary": _to_rupees(base_salary),
                 "NatureOfSalary": {"OthersIncDtls": []},
-                "ValueOfPerquisites": 0,
+                "ValueOfPerquisites": _to_rupees(perquisites),
                 "NatureOfPerquisites": {"OthersIncDtls": []},
-                "ProfitsinLieuOfSalary": 0,
+                "ProfitsinLieuOfSalary": _to_rupees(profits_in_lieu),
                 "IncomeNotified89A": 0,
                 "IncomeNotifiedOther89A": 0,
             },
         })
-    exempt_10 = source.hra_exempt_amount + source.lta_exempt_amount
-    net_salary = gross_total - exempt_10
-    std_deduction = net_salary - result.salary_income - source.entertainment_allowance - source.professional_tax_paid
-    if std_deduction < _ZERO:
-        # tds1_entries (per-employer Form 16 "income chargeable") and
-        # salary_income (the aggregate SalaryIncome the calculator actually
-        # taxes) are two independently editable inputs with no runtime
-        # cross-check tying them together. Silently clamping this negative
-        # result to 0 would hide a real standard deduction the calculator
-        # already applied and leave TotIncUnderHeadSalaries disagreeing
-        # with this schedule's own Gross/Net/Deduction arithmetic -- fail
-        # closed instead, matching app/engine/itd/itr1.py's identical
-        # cross-foot guard for the analogous Schedule HP back-derivation.
-        raise ValueError(
-            "Schedule S cannot cross-foot: tds1_entries income_chargeable "
-            f"({net_salary}) is less than the taxed salary income "
-            f"({result.salary_income}) plus entertainment allowance and "
-            "professional tax. Check that tds1_entries and salary_income "
-            "reflect the same underlying salary facts."
-        )
+
+    exemption_rows = [
+        {"SalNatureDesc": code, "SalOthNatOfInc": label, "SalOthAmount": _to_rupees(amount)}
+        for field, code, label in _SALARY_EXEMPTION_ROWS
+        if (amount := getattr(sal, field)) > _ZERO
+    ]
+
     return {
         "Salaries": employers,
-        "TotalGrossSalary": _to_rupees(gross_total),
-        "AllwncExemptUs10": {"AllwncExemptUs10Dtls": []},
-        "AllwncExtentExemptUs10": _to_rupees(exempt_10),
-        "NetSalary": _to_rupees(net_salary),
-        "DeductionUS16": _to_rupees(std_deduction + source.entertainment_allowance + source.professional_tax_paid),
-        "DeductionUnderSection16ia": _to_rupees(std_deduction),
-        "EntertainmntalwncUs16ii": _to_rupees(source.entertainment_allowance),
-        "ProfessionalTaxUs16iii": _to_rupees(source.professional_tax_paid),
-        "Increliefus89A": 0,
+        "TotalGrossSalary": _to_rupees(sal.gross_salary),
+        "AllwncExemptUs10": {"AllwncExemptUs10Dtls": exemption_rows},
+        "AllwncExtentExemptUs10": _to_rupees(sal.exempt_allowances),
+        "NetSalary": _to_rupees(sal.net_salary),
+        "DeductionUS16": _to_rupees(sal.deductions_u16),
+        "DeductionUnderSection16ia": _to_rupees(sal.standard_deduction),
+        "EntertainmntalwncUs16ii": _to_rupees(sal.entertainment_allowance),
+        "ProfessionalTaxUs16iii": _to_rupees(sal.professional_tax),
+        "Increliefus89A": _to_rupees(result.relief_89),
         "Section10_13A": {
             "Placeofwork": "2",
             "ActlHRARecv": 0,

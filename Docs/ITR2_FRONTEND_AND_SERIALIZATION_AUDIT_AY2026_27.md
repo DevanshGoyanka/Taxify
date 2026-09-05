@@ -1669,6 +1669,78 @@ Gross/Net/Deduction arithmetic.
 > `test_schedule_s_standard_deduction_does_not_silently_zero_on_mismatch` in
 > `tests/test_itr2_itd_builder.py`, confirmed via `git stash` to fail (silently, with no
 > exception) pre-fix.
+>
+> **Update (2026-09-05): §5.1/§5.2/§5.3's completeness gaps substantially closed too, in the same
+> pass.** Investigating "salary detail breakdown" found `_schedule_s()` was recomputing
+> `NetSalary`/`AllwncExtentExemptUs10`/`DeductionUnderSection16ia` locally from only
+> `hra_exempt_amount + lta_exempt_amount`, instead of reading `result.schedules["salary"]` — the
+> real, already-computed `SalaryResult` the calculator produces via
+> `app/engine/schedules/salary.py::compute()`, which already has a complete per-exemption
+> breakdown (gratuity/commuted-pension/leave-encashment/VRS/retrenchment/transport/children-
+> education/hostel/uniform-allowance, each separately exempted per its own statutory formula) —
+> the exact same "recompute instead of trust the calculator" bug class as §6.1's Schedule HP fix,
+> just discovered one schedule over. Concretely, three real defects fixed:
+>
+> 1. `ValueOfPerquisites`/`ProfitsinLieuOfSalary` were hardcoded to `0` regardless of
+>    `source.perquisites_value`/`profits_in_lieu_of_salary` — real, user-suppliable fields the
+>    calculator already taxes as part of gross salary. Now populated (attributable to a specific
+>    employer's row only when there is exactly one TDS1 entry — `SalaryIncome` is a single
+>    aggregate across every employer, so a genuine multi-employer per-employer split isn't
+>    determinable from this input shape; `Salary` (17(1)) is correctly back-solved as
+>    `GrossSalary - ValueOfPerquisites - ProfitsinLieuOfSalary` rather than left equal to
+>    `GrossSalary`, matching the real Section 17 relationship instead of implicitly assuming both
+>    are always zero).
+> 2. `AllwncExemptUs10Dtls` was hardcoded to an empty array. Now populated with one row per
+>    exemption category the calculator actually granted a nonzero amount for (LTA, gratuity,
+>    commuted pension, leave encashment, retrenchment, VRS, transport, children-education, hostel,
+>    uniform), using the exact `SalNatureDesc` enum codes the official schema defines for each.
+>    HRA (`10(13A)`) is deliberately excluded from this array — it already has its own dedicated
+>    `Section10_13A` structure, and duplicating it risked double-disclosure.
+> 3. `Increliefus89A` was hardcoded to `0` regardless of `result.relief_89` — a taxpayer claiming
+>    salary-arrears relief under Section 89 had it correctly applied to their overall tax
+>    liability but never disclosed in Schedule S at all. Now reads the real value.
+>
+> Switching `NetSalary`/`AllwncExtentExemptUs10`/`DeductionUnderSection16ia`/`DeductionUS16`/
+> `EntertainmntalwncUs16ii`/`ProfessionalTaxUs16iii` to read directly from `SalaryResult` also
+> incidentally fixed a fourth, smaller defect: under the new regime, entertainment allowance and
+> professional-tax deductions are correctly zeroed by the calculator (Section 16(ii)/(iii) don't
+> apply under 115BAC), but the previous code read the *raw* `source.entertainment_allowance`/
+> `professional_tax_paid` input fields directly, disclosing a deduction the calculator never
+> actually applied.
+>
+> The original mismatch-detection cross-foot (item 1's fix, above) is now a cleaner gross-to-gross
+> comparison (`tds1_entries` sum vs `sal.gross_salary`) instead of the previous net-derived
+> standard-deduction-going-negative check — functionally equivalent for catching the same
+> divergence, but no longer coupled to the specific arithmetic path that produced it.
+>
+> Checked whether this is usable end-to-end via the v2 pipeline before considering it closed
+> (matching the §6.1 HP lesson: check the frontend before assuming a gap needs new UI). It already
+> is — `_map_salary()` (`app/engine/draft_to_itr1_input.py`, shared with ITR-1) already sums
+> `Employer.perquisites`/`profitsInLieu`/`gratuity`/`commutedPension`/`leaveEncashment`/etc. into
+> the aggregate `SalaryIncome` correctly (that function's own docstring documents its own earlier
+> ITR-1 audit-fix history for these exact fields), so no v2-pipeline mapper changes were needed —
+> this fix alone makes the real data already collected from the frontend actually reach the
+> official JSON.
+>
+> Three regression tests added to `tests/test_itr2_itd_builder.py`
+> (`test_schedule_s_serializes_real_perquisites_profits_in_lieu_and_relief_89`,
+> `test_schedule_s_reports_real_section_10_exemption_breakdown`, plus the original mismatch test
+> re-verified against the redesigned cross-foot), each confirmed via `git stash` to fail pre-fix.
+> Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` plus every non-glob-matching sibling file (see the
+> process note on commit `6e8cccf`) green: 784 passed.
+>
+> **Still open**: `NatureOfSalary`/`NatureOfPerquisites` detail arrays (event/category-level rows
+> within a single employer, e.g. which specific perquisite types make up the total) remain
+> hardcoded empty — the input schema has no per-category breakdown for these, only aggregate
+> `perquisites_value`/`profits_in_lieu_of_salary` totals; and the full `Section10_13A` HRA
+> structure (`ActlHRARecv`/`ActlRentPaid`/`Placeofwork`) remains unpopulated beyond the exempt
+> amount itself — `SalaryIncome` only carries the *already-computed* `hra_exempt_amount`, not the
+> raw rent/city/actual-HRA-received components the official schema's detailed structure wants,
+> even though those raw components do exist on the frontend's `Employer.rentPaid`/`city`/
+> `isMetroCity`/`hra` fields. Populating `Section10_13A` fully would need new `SalaryIncome` input
+> fields to carry those raw components through — a schema change beyond this JSON-builder fix, and
+> the multi-employer per-perquisite-category attribution problem (item 1 above) would need a real
+> per-employer schema redesign, not a builder fix, to resolve properly.
 
 ---
 
@@ -2526,11 +2598,16 @@ Even those cases require independent review of the generated JSON against the of
 
 11. Expand Schedule S with employer, salary nature, perquisite, section 10, HRA, retirement, arrears, and section 89A structures.
 
-    > **Partially fixed 2026-09-05** — see §5.4's new finding and fix write-up: a real
-    > silent-wrong-number risk (standard deduction clamped to 0 on a tds1_entries/salary_income
-    > mismatch) is now a loud, fail-closed error instead. The completeness gaps this item lists
-    > (salary nature, perquisite categories, section 10 detail rows, HRA structure, retirement
-    > detail, section 89A) remain open — unaffected by this fix.
+    > **Substantially fixed 2026-09-05** — see §5.4's fix write-up and its "Update" note.
+    > Perquisites, profits in lieu, the full Section 10 exemption breakdown (gratuity, leave
+    > encashment, VRS, retrenchment, transport, children-education, hostel, uniform, LTA), and
+    > Section 89A relief are now all real, sourced from the calculator's already-computed
+    > `SalaryResult` (previously hardcoded to zero/empty) — confirmed already reachable end-to-end
+    > from the real frontend via the shared `_map_salary()` mapper, no v2-pipeline changes needed.
+    > Still open: `NatureOfSalary`/`NatureOfPerquisites` per-category detail arrays (only aggregate
+    > totals exist in the input schema) and the full `Section10_13A` HRA structure (raw rent/city
+    > components, not just the computed exempt amount) — both need new input schema fields, not
+    > just a builder fix; multi-employer per-perquisite attribution also needs a schema redesign.
 
 ## P2 — Quality and maintainability
 
