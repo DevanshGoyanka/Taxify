@@ -28,6 +28,7 @@ from app.schemas.itr2 import (
     CG112AScrip,
     CGAssetType,
     CGTransaction,
+    CapitalGainExemptionClaim,
     ITR2FilingProfile,
     ITR2Input,
     OS89ACountryEntry,
@@ -416,6 +417,80 @@ def test_land_building_section_112_1a_relief_reduces_actual_si_tax() -> None:
     # Without relief this would be 500000 (12.5% * 4000000 declared gain);
     # the 100000 second-proviso relief reduces it to 400000.
     assert si_112_row["SplRateIncTax"] == 400000
+
+
+def test_per_transaction_exemption_claims_reduce_own_row_and_populate_detail_arrays() -> None:
+    """Section 54/54B/54EC/54F/115F exemption claims, already captured
+    per-transaction on CGTransaction.exemptions, previously only reduced
+    the AGGREGATE DeducClaimInfo.TotDeductClaim -- individual Schedule CG
+    rows (land/building's ExemptionOrDednUs54, the generic-other bucket's
+    DeductionUs54F) always showed the pre-exemption gain as if no
+    exemption existed, and the DeducClaimDtlsUs54/etc detail arrays were
+    always empty regardless of real claims. This does not change the
+    actual tax computed (the pre-existing aggregate-level
+    compute_exemptions()/eligible_exemption mechanism already applies the
+    exemption correctly exactly once) -- only the disclosure granularity."""
+    input_data = _input(
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LAND_BUILDING,
+                date_of_acquisition=date(2020, 1, 1), date_of_transfer=date(2025, 6, 1),
+                full_consideration=Decimal("5000000"), cost_of_acquisition=Decimal("2000000"),
+                exemptions=[
+                    CapitalGainExemptionClaim(
+                        section="54", transfer_date=date(2025, 6, 1),
+                        eligible_gain=Decimal("3000000"), investment_amount=Decimal("1000000"),
+                        investment_date=date(2025, 7, 1),
+                    ),
+                ],
+            ),
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_SECURITY,
+                date_of_acquisition=date(2020, 1, 1), date_of_transfer=date(2025, 6, 1),
+                full_consideration=Decimal("1000000"), cost_of_acquisition=Decimal("400000"),
+                exemptions=[
+                    CapitalGainExemptionClaim(
+                        section="54F", transfer_date=date(2025, 6, 1),
+                        eligible_gain=Decimal("600000"), investment_amount=Decimal("300000"),
+                        investment_date=date(2025, 7, 1),
+                    ),
+                ],
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    cg = document["ITR"]["ITR2"]["ScheduleCGFor23"]
+
+    land_row = cg["LongTermCapGain23"]["SaleofLandBuild"]["SaleofLandBuildDtls"][0]
+    assert land_row["Balance"] == 3000000  # pre-exemption "1c"
+    assert land_row["ExemptionOrDednUs54"]["ExemptionGrandTotal"] == 1000000
+    assert land_row["ExemptionOrDednUs54"]["ExemptionOrDednUs54Dtls"] == [
+        {"ExemptionSecCode": "54", "ExemptionAmount": 1000000}
+    ]
+    assert land_row["LTCGonImmvblPrprty"] == 2000000  # post-exemption "1e" = 3000000 - 1000000
+
+    other_assets = cg["LongTermCapGain23"]["SaleofAssetNADtls"]["SaleofAssetNA"]
+    assert other_assets["BalanceCG"] == 600000  # pre-exemption
+    assert other_assets["DeductionUs54F"] == 300000
+    assert other_assets["CapgainonAssets"] == 300000  # post-exemption
+
+    claims = cg["DeducClaimInfo"]
+    assert claims["DeducClaimDtlsUs54"] == [
+        {"DateofTransfer": "2025-06-01", "AmtDeducted": 1000000, "CostofNewResHouse": 1000000, "DateofPurchase": "2025-07-01"}
+    ]
+    assert claims["DeducClaimDtlsUs54F"] == [
+        {"DateofTransfer": "2025-06-01", "AmtDeducted": 300000, "CostofNewResHouse": 300000, "DateofPurchase": "2025-07-01"}
+    ]
+    assert claims["TotDeductClaim"] == 1300000
+
+    # The actual taxable total is unaffected by per-row disclosure -- the
+    # pre-existing aggregate mechanism still applies eligible_exemption
+    # exactly once to the real GTI/tax computation: total LTCG
+    # (3000000 + 600000 = 3600000) minus the aggregate exemption
+    # (1000000 + 300000 = 1300000) = 2300000.
+    result = compute(input_data)
+    assert result.schedules["cg"].total_capital_gains == Decimal("2300000")
 
 
 def test_generic_other_assets_bucket_maps_jewellery_and_bonds() -> None:

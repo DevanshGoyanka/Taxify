@@ -14,7 +14,7 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from app.engine.calculators.itr2 import ITR2Result
-from app.engine.schedules.capital_gains import deemed_consideration_50c
+from app.engine.schedules.capital_gains import _exemption_claim_total, deemed_consideration_50c
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -961,6 +961,7 @@ def _other_assets_block(
     total_cost = _ZERO
     total_improvement = _ZERO
     total_expenditure = _ZERO
+    deduction_us54f = _ZERO
 
     for tx in transactions or []:
         asset_type = tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type
@@ -983,6 +984,16 @@ def _other_assets_block(
             unq_fmv += tx.fair_market_value_50ca or _ZERO
         else:
             oth_consideration += tx.full_consideration
+        # Section 54F (any capital asset other than a residential house,
+        # reinvested into a new residential house) is the only §54-series
+        # exemption applicable to this bucket -- confirmed by the official
+        # form's item 5d/8d, which cites only section 54F here (54/54B/54EC
+        # belong to land/building or bonds specifically). Aggregated across
+        # every matching transaction, mirroring the bucket's own
+        # transaction-level aggregation (no per-row detail exists for this
+        # bucket, matching land/building's DIFFERENT, per-row treatment).
+        if is_long_term:
+            deduction_us54f += _exemption_claim_total(getattr(tx, "exemptions", None), frozenset({"54F"}))
 
     unq_deemed = deemed_consideration_50ca(unq_consideration, unq_fmv)
     full_consideration = unq_deemed + oth_consideration
@@ -1005,9 +1016,9 @@ def _other_assets_block(
         **(
             {"LossSec94of7Or94of8": 0}
             if not is_long_term
-            else {"DeductionUs54F": 0}
+            else {"DeductionUs54F": _to_rupees(deduction_us54f)}
         ),
-        "CapgainonAssets": _to_rupees(balance),
+        "CapgainonAssets": _to_rupees(balance - deduction_us54f),
     }
 
 
@@ -1083,7 +1094,25 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     # the FII-specific field instead when FII/FPI. Previously hardcoded to
     # zero regardless of actual 112A gain or FII status.
     gain_112a = getattr(ltcg, "income_112a", z) if ltcg else z
-    equity_share_112a_block = {"BalanceCG": _to_rupees(gain_112a), "DeductionUs54F": 0, "CapgainonAssets": _to_rupees(gain_112a)}
+    # Section 54F on 112A-eligible gains: attributable only to CGTransaction
+    # rows classified into the 112A basket (`cg_112a_scrips`'s own
+    # CG112AScrip type has no `exemptions` field at all -- a separate,
+    # narrower pre-existing limitation of the explicit-scrip path, not
+    # expanded here).
+    _112a_types = {"listed_equity_112a", "equity_oriented_fund_112a", "business_trust_unit_112a"}
+    ded_54f_112a = sum(
+        (
+            _exemption_claim_total(getattr(tx, "exemptions", None), frozenset({"54F"}))
+            for tx in input_data.cg_transactions
+            if (tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type) in _112a_types
+        ),
+        _ZERO,
+    )
+    equity_share_112a_block = {
+        "BalanceCG": _to_rupees(gain_112a),
+        "DeductionUs54F": _to_rupees(ded_54f_112a),
+        "CapgainonAssets": _to_rupees(gain_112a - ded_54f_112a),
+    }
 
     z6 = _z6()
     exemptions = getattr(cg, "exemptions", None) if cg else None
@@ -1149,11 +1178,11 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "ShortTermCapGainFor23": stcg_block,
         "LongTermCapGain23": ltcg_block,
         "DeducClaimInfo": {
-            "DeducClaimDtlsUs115F": [],
-            "DeducClaimDtlsUs54": [],
-            "DeducClaimDtlsUs54B": [],
-            "DeducClaimDtlsUs54EC": [],
-            "DeducClaimDtlsUs54F": [],
+            "DeducClaimDtlsUs115F": _deduction_claim_detail_rows(input_data.cg_transactions, "115F"),
+            "DeducClaimDtlsUs54": _deduction_claim_detail_rows(input_data.cg_transactions, "54"),
+            "DeducClaimDtlsUs54B": _deduction_claim_detail_rows(input_data.cg_transactions, "54B"),
+            "DeducClaimDtlsUs54EC": _deduction_claim_detail_rows(input_data.cg_transactions, "54EC"),
+            "DeducClaimDtlsUs54F": _deduction_claim_detail_rows(input_data.cg_transactions, "54F"),
             "TotDeductClaim": _to_rupees(total_exempt),
         },
         "CurrYrLosses": {
@@ -1172,6 +1201,87 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "SumOfCGIncm": total_cg,
         "TotScheduleCGFor23": total_cg,
     }
+
+
+_LAND_BUILDING_EXEMPTION_SECCODES = ("54", "54B", "54EC", "54F")
+
+
+def _claim_amount(claim: Any) -> Decimal:
+    """Return one canonical exemption claim's disclosed amount."""
+    investment = getattr(claim, "investment_amount", None) or _ZERO
+    cgas = getattr(claim, "cgas_deposit_amount", None) or _ZERO
+    return investment + cgas
+
+
+def _exemption_or_dedn_us54_block(exemptions: Optional[list], seccodes: tuple) -> dict[str, Any]:
+    """Build one land/building row's nested ExemptionOrDednUs54SaleLandType
+    block: a per-code (54/54B/54EC/54F) breakdown of THIS asset's own
+    exemption claims. ExemptionOrDednUs54Dtls is schema-optional (only
+    ExemptionGrandTotal is required), so it is omitted entirely when this
+    asset has no claims -- not emitted as an empty placeholder array.
+    """
+    dtls = []
+    grand_total = _ZERO
+    for code in seccodes:
+        amount = sum(
+            (_claim_amount(c) for c in (exemptions or []) if getattr(c, "section", None) == code),
+            _ZERO,
+        )
+        if amount > 0:
+            dtls.append({"ExemptionSecCode": code, "ExemptionAmount": _to_rupees(amount)})
+            grand_total += amount
+    result: dict[str, Any] = {"ExemptionGrandTotal": _to_rupees(grand_total)}
+    if dtls:
+        result["ExemptionOrDednUs54Dtls"] = dtls
+    return result
+
+
+def _deduction_claim_detail_rows(transactions: list, section: str) -> list[dict[str, Any]]:
+    """Build the top-level DeducClaimDtlsUs{54,54B,54EC,54F,115F} rows from
+    every transaction's own canonical exemption claims for one section,
+    regardless of which Schedule CG bucket the transaction itself belongs
+    to (land/building, generic-other, 112A) -- these are flat, section-only
+    arrays at the DeducClaimInfo level, not per-bucket.
+    """
+    rows: list[dict[str, Any]] = []
+    for tx in transactions or []:
+        for claim in getattr(tx, "exemptions", None) or []:
+            if getattr(claim, "section", None) != section:
+                continue
+            investment_amount = getattr(claim, "investment_amount", None) or _ZERO
+            investment_date = getattr(claim, "investment_date", None)
+            cgas_amount = getattr(claim, "cgas_deposit_amount", None) or _ZERO
+            amt_deducted = investment_amount + cgas_amount
+            row: dict[str, Any] = {
+                "DateofTransfer": claim.transfer_date.isoformat(),
+                "AmtDeducted": _to_rupees(amt_deducted),
+            }
+            if section in ("54", "54F"):
+                row["CostofNewResHouse"] = _to_rupees(investment_amount)
+                if investment_date is not None:
+                    row["DateofPurchase"] = investment_date.isoformat()
+            elif section == "54B":
+                row["CostofNewAgriLand"] = _to_rupees(investment_amount)
+                if investment_date is not None:
+                    row["DateofPurchase"] = investment_date.isoformat()
+            else:  # 54EC / 115F -- no CGAS scheme exists for these sections
+                row["AmtInvested"] = _to_rupees(investment_amount)
+                # DateofInvestment is required for both; the canonical
+                # schema guarantees investment_date is set whenever
+                # investment_amount > 0, but fall back to the transfer
+                # date for a genuinely zero-investment (CGAS-only) claim
+                # rather than omit a required field.
+                row["DateofInvestment"] = (investment_date or claim.transfer_date).isoformat()
+            if section in ("54", "54B", "54F") and cgas_amount > 0:
+                row["AmtDeposited"] = _to_rupees(cgas_amount)
+                if getattr(claim, "cgas_deposit_date", None) is not None:
+                    row["DepositDate"] = claim.cgas_deposit_date.isoformat()
+                if getattr(claim, "cgas_account_number", None):
+                    row["AccountNo"] = claim.cgas_account_number
+                if getattr(claim, "cgas_ifsc", None):
+                    row["IFSC"] = claim.cgas_ifsc
+            rows.append(row)
+    return rows
 
 
 def _cg_land_building_row_stcg(asset: Any) -> dict[str, Any]:
@@ -1200,8 +1310,8 @@ def _cg_land_building_row_stcg(asset: Any) -> dict[str, Any]:
         "ExpOnTrans": _to_rupees(asset.expenditure_on_transfer),
         "TotalDedn": _to_rupees(asset.total_deductions),
         "Balance": _to_rupees(asset.balance),
-        "DeductionUs54B": 0,
-        "STCGonImmvblPrprty": _to_rupees(asset.balance),
+        "DeductionUs54B": _to_rupees(getattr(asset, "exemption_total", _ZERO)),
+        "STCGonImmvblPrprty": _to_rupees(asset.balance - getattr(asset, "exemption_total", _ZERO)),
     }
 
 
@@ -1245,11 +1355,10 @@ def _cg_land_building_row_ltcg(asset: Any) -> dict[str, Any]:
         "TotalDedn": _to_rupees(asset.total_deductions),
         "Balance": _to_rupees(asset.balance),
         # Like CostOfImprovements, this is a nested exemption-detail block
-        # (ExemptionOrDednUs54SaleLandType), not a flat integer.
-        # ExemptionOrDednUs54Dtls is optional (no per-claim detail
-        # available here); only ExemptionGrandTotal is schema-required.
-        "ExemptionOrDednUs54": {"ExemptionGrandTotal": 0},
-        "LTCGonImmvblPrprty": _to_rupees(asset.balance),
+        # (ExemptionOrDednUs54SaleLandType), not a flat integer -- per-code
+        # (54/54B/54EC/54F) breakdown of this asset's own exemption claims.
+        "ExemptionOrDednUs54": _exemption_or_dedn_us54_block(getattr(asset, "exemptions", None), _LAND_BUILDING_EXEMPTION_SECCODES),
+        "LTCGonImmvblPrprty": _to_rupees(asset.balance - getattr(asset, "exemption_total", _ZERO)),
     }
     if getattr(asset, "eib_applicable", False):
         indexed_acquisition = asset.indexed_acquisition_cost or asset.acquisition_cost
@@ -1257,7 +1366,11 @@ def _cg_land_building_row_ltcg(asset: Any) -> dict[str, Any]:
         total_dedn_for_eib = indexed_acquisition + indexed_improvement + asset.expenditure_on_transfer
         row["TotalDednForEiB"] = _to_rupees(total_dedn_for_eib)
         row["BalanceForEiB"] = _to_rupees(asset.balance_for_eib)
-        row["LTCGonImmvblPrprtyBE"] = _to_rupees(asset.balance_for_eib)
+        # "1ea = 1ca - 1d" per the form's own text -- same exemption total
+        # ("1d") subtracted from both the primary and EiB tracks.
+        row["LTCGonImmvblPrprtyBE"] = _to_rupees(
+            max(_ZERO, asset.balance_for_eib - getattr(asset, "exemption_total", _ZERO))
+        )
         row["TaxSec1121a"] = _to_rupees(asset.tax_sec_112_1a)
         row["TaxSec1121aiiB"] = _to_rupees(asset.tax_sec_112_1a_iib)
         row["ExcessAmtSec1121a"] = _to_rupees(asset.excess_amt_sec_112_1a)

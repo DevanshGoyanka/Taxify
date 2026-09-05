@@ -316,6 +316,60 @@ Applicable non-resident securities or units under section 115AD may be:
 > combined `test_itr1_*`/`test_itr4_*`/`test_itr2_*`/`test_standalone_cg_schedule.py`/
 > `test_capital_gains_loss_foundation.py` regression suite (322 tests) green.
 
+> **Fix status (2026-09-05): per-transaction §54/54B/54EC/54F/115F exemption attribution is now
+> implemented** (the item flagged in §3.2's "Remaining, deliberately not attempted" list). The
+> data was already fully captured per-transaction — `CGTransaction.exemptions: List[
+> CapitalGainExemptionClaim]`, an evidence-backed claim structure (investment/CGAS-deposit amount,
+> dates, CGAS account/IFSC) — but only the AGGREGATE `_claim_total()` sum reached
+> `DeducClaimInfo.TotDeductClaim`; individual Schedule CG rows always showed the pre-exemption gain
+> as if no claim existed, and the five `DeducClaimDtlsUs{54,54B,54EC,54F,115F}` detail arrays were
+> always empty.
+>
+> **Deliberate architectural choice, confirmed correct before implementing**: exemption
+> attribution here is a DISCLOSURE-granularity fix only, not a tax recomputation. The actual
+> taxable total was already correct — computed once via the existing aggregate-level
+> `compute_exemptions()`/`eligible_exemption` mechanism (confirmed: `eligible_exemption =
+> min(positive_ltcg, exemptions.total_exemption)`, applied exactly once in `aggregate()`). Making
+> individual rows ALSO subtract their own exemption from the SAME real gain figures used in that
+> aggregate (rather than only from a separate disclosure copy) would have double-counted the
+> exemption. So each row's PRIMARY gain field (`Balance`/`BalanceCG`, "1c"/"5c") is left untouched
+> — still feeding the real aggregate/tax pipeline unchanged — while a NEW post-exemption field
+> (`LTCGonImmvblPrprty`/"1e", `CapgainonAssets`/"5e") is computed purely for disclosure, matching
+> the official form's own item-lettering distinction between the pre- and post-exemption figures.
+>
+> Implementation:
+> - `app/engine/schedules/capital_gains.py`: `CGAsset` gained an `exemptions` field (the
+>   transaction's own claim list, threaded through by `_classify()`) and an `exemption_total`
+>   field (computed by `compute_stcg()`/`compute_ltcg()`: §54B only for STCG land/building, per
+>   the form's own item 1d; §54/54B/54EC/54F for LTCG land/building, per item "1d").
+> - The section 112(1)(a) second-proviso relief comparison (§3.2's earlier fix, same session) was
+>   ALSO corrected in the same pass: the official form bases "ei(A)"/"ei(B)" on the POST-exemption
+>   "1e"/"1ea" figures, not the pre-exemption "1c"/"1ca" the relief comparison previously used
+>   (documented at the time as a known simplification pending this exact fix) — now both tracks
+>   subtract the same `exemption_total`.
+> - `app/engine/itd/itr2.py`: new `_exemption_or_dedn_us54_block()` builds land/building's
+>   per-code `ExemptionOrDednUs54Dtls` array (omitted entirely, not empty-array-emitted, when the
+>   asset has no claims — only `ExemptionGrandTotal` is schema-required); the generic-other LTCG
+>   bucket (`_other_assets_block`) and the 112A summary block each gained their own §54F
+>   attribution (54F is the only §54-series section applicable to either, per the form's own
+>   items 5d/8d and 3b); new `_deduction_claim_detail_rows()` populates all five top-level
+>   `DeducClaimDtlsUs*` arrays by scanning every transaction's claims for one section, independent
+>   of which Schedule CG bucket the transaction belongs to.
+> - **Known, narrower limitation**: `CG112AScrip` (the explicit Schedule-112A-detail path used via
+>   `cg_112a_scrips`, distinct from a 112A-classified `CGTransaction`) has no `exemptions` field at
+>   all, so a 54F claim against an explicit scrip entry isn't representable yet — a separate,
+>   smaller gap than this fix's scope, not expanded into it.
+> - The section 94(7)/94(8) dividend-stripping loss-disallowance figure (a distinct concept from
+>   §54-series exemptions) remains unrepresented — Taxify has no input field capturing it at all;
+>   not attempted here.
+>
+> Regression test: `test_per_transaction_exemption_claims_reduce_own_row_and_populate_detail_arrays`
+> (`tests/test_itr2_itd_builder.py`) — asserts both the per-row disclosure figures AND that the
+> real `total_capital_gains` is unchanged by this fix (still driven by the one existing
+> aggregate-level mechanism) — confirmed via `git stash` to fail on pre-fix code. Full combined
+> `test_itr1_*`/`test_itr4_*`/`test_itr2_*`/`test_standalone_cg_schedule.py`/
+> `test_capital_gains_loss_foundation.py` regression suite (323 tests) green.
+
 ---
 
 ## 3.2 Generic capital-gains rows are captured but not fully mapped
@@ -495,13 +549,14 @@ Create a verified mapping matrix from every canonical capital-gains category to 
 > `test_itr4_calculator.py`, `test_filing_gateway_v2_itr4.py`, `test_itr2_*.py`,
 > `test_standalone_cg_schedule.py`, `test_draft_to_itr2_input.py`).
 >
-> **Remaining, deliberately not attempted**: per-transaction §54/54B/54EC/54F exemption
-> attribution to this bucket's `LossSec94of7Or94of8`/`DeductionUs54F` fields (both left at 0 —
-> the aggregate `DeducClaimInfo.TotDeductClaim` elsewhere in Schedule CG is correct, just not
-> broken out per-row here), and the section 94(7)/94(8) dividend-stripping loss-disallowance
-> figure (Taxify has no input field capturing this at all). Also unaffected: §3.1's 115AD-specific
-> fields (`NRISecur115AD`, `NRISaleOfEquityShareUs112A`) — confirmed distinct from this generic
-> bucket, remain correctly zero pending a `CGAssetType`/FII-flag schema extension.
+> **Remaining, deliberately not attempted**: ~~per-transaction §54/54B/54EC/54F exemption
+> attribution to this bucket's `LossSec94of7Or94of8`/`DeductionUs54F` fields~~ — **fixed
+> 2026-09-05**, see the dedicated write-up below (after §3.1's Schedule 115AD fix). The section
+> 94(7)/94(8) dividend-stripping loss-disallowance figure remains open (Taxify has no input field
+> capturing this at all — a distinct concept from §54-series exemptions, not attempted here). Also
+> unaffected: §3.1's 115AD-specific fields (`NRISecur115AD`, `NRISaleOfEquityShareUs112A`) — see
+> §3.1's own fix write-up, since the "requires a `CGAssetType`/FII-flag schema extension"
+> conclusion here was also corrected there.
 >
 > **Fix status (2026-09-05): the section 112(1)(a) indexed-cost-primacy defect (flagged above as
 > "New P0 item found 2026-09-04") is now fixed, including the full second-proviso relief, not just
@@ -1877,9 +1932,10 @@ Even those cases require independent review of the generated JSON against the of
      §3.2's fix write-up update (mapped into the generic `SaleOnOtherAssets`/`SaleofAssetNADtls`
      bucket per the official form's Schedule CG items 5/8, with section 50CA deeming for
      unquoted shares).
-   - section-specific exemptions — still pending (per-transaction §54/54B/54EC/54F claims are not
-     wired to individual Schedule CG rows, though the aggregate `DeducClaimInfo.TotDeductClaim`
-     is correct).
+   - ~~section-specific exemptions~~ — **fixed 2026-09-05**, see §3.2's fix write-up: per-row
+     `ExemptionOrDednUs54Dtls`/`DeductionUs54F` disclosure and all five `DeducClaimDtlsUs*` detail
+     arrays now populated from `CGTransaction.exemptions`, disclosure-only (the actual tax total
+     was already correct via the pre-existing aggregate mechanism, unchanged by this fix).
    - ~~signed loss handling for the other 10 categories~~ — **confirmed already resolved
      2026-09-05** (stale bullet, never marked closed): the same 2026-09-04 "generic other assets"
      fix (§3.2's own earlier "Update" note) already made `_other_assets_block()`'s

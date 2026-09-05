@@ -26,6 +26,19 @@ def _decimal(value: Optional[Decimal]) -> Decimal:
     return value if value is not None else _ZERO
 
 
+_LAND_BUILDING_EXEMPTION_SECTIONS = frozenset({"54", "54B", "54EC", "54F"})
+
+
+def _exemption_claim_total(claims: list, sections: frozenset) -> Decimal:
+    """Sum `investment_amount + cgas_deposit_amount` across matching claims."""
+    total = _ZERO
+    for claim in claims or []:
+        if getattr(claim, "section", None) in sections:
+            total += _decimal(getattr(claim, "investment_amount", None))
+            total += _decimal(getattr(claim, "cgas_deposit_amount", None))
+    return total
+
+
 def _parse_date(value: str) -> Optional[date]:
     if not value:
         return None
@@ -54,6 +67,23 @@ class CGAsset:
     exemption_applied: Decimal = _ZERO
     exemption_section: str = ""
     taxable_gain: Decimal = _ZERO
+    # This transaction's own section 54/54B/54EC/54F/115F exemption claims
+    # (the canonical `CapitalGainExemptionClaim` list, carried through from
+    # `CGTransaction.exemptions` by `_classify()`) -- used by the ITD
+    # builder to reduce THIS row's own disclosed post-exemption gain
+    # (e.g. LTCGonImmvblPrprty) and populate the per-claim DeducClaimDtls
+    # detail arrays. Does NOT affect the actual taxable total, which
+    # continues to use the pre-existing aggregate-level
+    # compute_exemptions()/eligible_exemption mechanism -- this is a
+    # disclosure-granularity addition only, not a tax recomputation.
+    exemptions: list = field(default_factory=list)
+    # This asset's own §54/54B/54EC/54F claim total (populated by
+    # compute_ltcg()/compute_stcg() from `exemptions` above) -- used for
+    # the section 112(1)(a) second-proviso relief comparison (which the
+    # official form bases on the POST-exemption "1e"/"1ea" figures, not
+    # the pre-exemption "1c"/"1ca") and exposed for the ITD builder's own
+    # disclosure so both stay consistent with each other.
+    exemption_total: Decimal = _ZERO
     # Section 112(1)(a) second-proviso comparison track (LTCG land/building
     # only, residents who acquired before 23-Jul-2024) -- populated by
     # compute_ltcg() only when eib_applicable is True; zero/False otherwise,
@@ -315,6 +345,10 @@ def compute_stcg(
         asset.total_deductions = total_ded
         asset.balance = deemed - total_ded
         asset.taxable_gain = asset.balance
+        # STCG land/building can only claim section 54B (agricultural
+        # land) per the official form's own item 1d -- 54/54EC/54F are
+        # LTCG-only exemptions.
+        asset.exemption_total = _exemption_claim_total(asset.exemptions, frozenset({"54B"}))
         land_gain += asset.balance
     other = land_gain + _decimal(stcg_other)
     section_111a = _decimal(stcg_111a)
@@ -367,6 +401,15 @@ def compute_ltcg(
         asset.total_deductions = total_ded
         asset.balance = deemed - total_ded
         asset.taxable_gain = asset.balance
+        # This asset's own §54/54B/54EC/54F claims -- used below for the
+        # EiB relief comparison (the form bases "ei(A)" on "1e", the
+        # POST-exemption figure) and by the ITD builder's own disclosure.
+        # Does NOT reduce `asset.balance`/`land_gain` themselves: the
+        # actual taxable total continues to use the pre-existing
+        # aggregate-level compute_exemptions()/eligible_exemption
+        # mechanism exactly once, so subtracting here too would double the
+        # exemption's effect on the real tax computation.
+        asset.exemption_total = _exemption_claim_total(asset.exemptions, _LAND_BUILDING_EXEMPTION_SECTIONS)
         land_gain += asset.balance
 
         # Section 112(1)(a) second proviso: a resident who acquired before
@@ -386,16 +429,14 @@ def compute_ltcg(
             indexed_total_ded = indexed_acquisition + indexed_improvement + _decimal(asset.expenditure_on_transfer)
             # "In case of negative, to be considered as nil" (form item 1ca).
             asset.balance_for_eib = max(_ZERO, deemed - indexed_total_ded)
-            # No per-row §54/54B/54EC/54F attribution exists yet (a
-            # separately tracked limitation -- see
-            # Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md), so
-            # this compares gross balances, not post-exemption ones. This
-            # can only ever make the computed relief a lower-bound
-            # (conservative) estimate, never an overstatement, since a real
-            # per-row exemption would shrink both tax figures together.
-            primary_taxable = max(_ZERO, asset.balance)
+            # Per the form's own text, "ei(A)" is "1e*12.5%" and "ei(B)" is
+            # "1ea*20%" -- both POST-exemption ("1e"/"1ea" = "1c"/"1ca"
+            # minus "1d"), not the pre-exemption "1c"/"1ca" this comparison
+            # previously used before per-row exemption attribution existed.
+            primary_taxable = max(_ZERO, asset.balance - asset.exemption_total)
+            eib_taxable = max(_ZERO, asset.balance_for_eib - asset.exemption_total)
             asset.tax_sec_112_1a = primary_taxable * LTCG_OTHER_RATE_POST_JUL24 / Decimal("100")
-            asset.tax_sec_112_1a_iib = asset.balance_for_eib * LTCG_OTHER_RATE / Decimal("100")
+            asset.tax_sec_112_1a_iib = eib_taxable * LTCG_OTHER_RATE / Decimal("100")
             asset.excess_amt_sec_112_1a = max(_ZERO, asset.tax_sec_112_1a - asset.tax_sec_112_1a_iib)
             total_excess_tax_112_1a += asset.excess_amt_sec_112_1a
     other = land_gain + _decimal(ltcg_other)
@@ -821,6 +862,7 @@ def _classify(transactions) -> tuple:
                 improvement_cost=_decimal_attr(tx, "improvement_cost"),
                 indexed_improvement_cost=_decimal_attr(tx, "indexed_improvement"),
                 expenditure_on_transfer=expenditure,
+                exemptions=list(getattr(tx, "exemptions", None) or []),
             )
             if is_short:
                 stcg_land.append(asset)
