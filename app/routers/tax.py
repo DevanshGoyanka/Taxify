@@ -15,20 +15,12 @@ from app.schemas.itr1 import (
     DonationAddress, TDS1Entry, TDS2Entry,
     TCSEntry, TaxPaymentDetail, PropertyType, AgeBracket, TaxRegime,
 )
-from app.schemas.itr2 import (
-    ITR2Input,
-    CGAssetType,
-    CGTransaction,
-    ResidentialStatus as ITR2ResidentialStatus,
-    ReturnFileSection,
-)
 from app.schemas.itr4 import (
     ITR4Input, PresumptiveScheme, PresumptiveBusinessIncome44AD,
     PresumptiveProfessionalIncome44ADA, PresumptiveGoodsCarriage44AE,
     GoodsCarriageVehicle,
 )
 from app.engine.calculators.itr1 import compute as compute_itr1
-from app.engine.calculators.itr2 import compute as compute_itr2
 from app.engine.calculators.itr4 import compute as compute_itr4
 from app.engine.schedules.special_rates import compute_112a, compute_111a
 from app.engine.schedules.restricted_112a import compute_restricted_112a
@@ -122,27 +114,6 @@ def _records(payload: dict, key: str) -> list[dict]:
     return value
 
 
-def _itr2_filing_section(value: object) -> ReturnFileSection:
-    """Map UI filing-section text to ITR-2's official numeric enum."""
-    section_map = {
-        "139(1)": ReturnFileSection.ON_TIME_139_1,
-        "139(4)": ReturnFileSection.BELATED_139_4,
-        "142(1)": ReturnFileSection.NOTICE_142_1,
-        "148": ReturnFileSection.NOTICE_148,
-        "153C": ReturnFileSection.NOTICE_153C,
-        "139(5)": ReturnFileSection.REVISED_139_5,
-        "139(9)": ReturnFileSection.DEFECTIVE_139_9,
-        "119(2)(b)": ReturnFileSection.CONDONATION_119_2B,
-    }
-    raw = str(value or "139(1)").strip()
-    if raw in section_map:
-        return section_map[raw]
-    try:
-        return ReturnFileSection(int(raw))
-    except (TypeError, ValueError):
-        return ReturnFileSection.ON_TIME_139_1
-
-
 def _date(value: object, field_name: str) -> Optional[datetime.date]:
     """Parse an optional ISO date.
 
@@ -207,159 +178,6 @@ def compute_tax_summary(
     except Exception as exc:
         _logger.exception("compute_tax_summary unexpected error: %s", exc)
         raise
-
-
-def _compute_itr2_from_flat_payload(
-    payload: dict,
-    age_bracket: AgeBracket,
-    tax_regime: TaxRegime,
-    salary_input: SalaryIncome,
-    hp_input: HousePropertyIncome,
-    os_input: OtherSourcesIncome,
-    ded_input: Chapter6ADeductions,
-    capital_gain_rows: list[dict],
-    tds1_entries: list,
-    tds2_entries: list,
-    tcs_entries: list,
-    advance_tax_paid: Decimal,
-    self_assessment_paid: Decimal,
-    quarterly_advance: list[Decimal],
-    capital_gains_summary: dict | None,
-) -> "object":
-    """Map the flat frontend payload to ITR2Input and run the ITR-2 engine.
-
-    This mirrors the ITR-1/ITR-4 mapping pattern: the backend translates
-    the flat form data to the canonical Pydantic model, so the frontend
-    never needs a form-specific mapper.
-    """
-    from app.schemas.itr2 import CGTransaction as CGTx, CGAssetType
-
-    # Map capital-gain transactions from flat rows to canonical CGTransaction.
-    # The frontend stores each field under multiple alias keys (set via
-    # updateBoth) so we check all possible names for each field.
-    _ASSET_TYPE_MAP: dict[str, str] = {
-        "EQUITY_ORIENTED_MUTUAL_FUND": "equity_oriented_fund_112a",
-        "LISTED_EQUITY": "listed_equity_112a",
-        "BUSINESS_TRUST_UNIT": "business_trust_unit_112a",
-        "LAND_BUILDING": "land_building",
-        "UNLISTED_SHARES": "unlisted_shares",
-        "LISTED_SECURITY": "listed_security",
-        "DEBT_MUTUAL_FUND": "debt_mutual_fund",
-        "SPECIFIED_MUTUAL_FUND": "specified_mutual_fund_50aa",
-        "MARKET_LINKED_DEBENTURE": "market_linked_debenture_50aa",
-        "BONDS_DEBENTURES": "bonds_debentures",
-        "DEPRECIABLE_ASSET": "depreciable_asset",
-        "JEWELLERY": "jewellery",
-        "FOREIGN_ASSET": "foreign_asset",
-    }
-
-    def _first(row: dict, *keys: str, default=None):
-        """Return the first non-None/non-empty value among the keys."""
-        for k in keys:
-            v = row.get(k)
-            if v is not None and v != "" and v != 0:
-                return v
-        return default
-
-    cg_transactions: list[CGTx] = []
-    for row in capital_gain_rows:
-        # AIS SFT-18(Pur) purchase-only evidence rows are reference data:
-        # they carry a quarter (e.g. "Q2(Jul-Sep)") in place of a real
-        # transaction date and have no sale consideration.  They are not
-        # disposals to report in ITR-2 Schedule CG, so skip them here.
-        # The reconciled purchase totals are already reflected in the
-        # restricted-112A cost-of-acquisition aggregates computed above.
-        side = str(row.get("evidenceSide", "")).upper()
-        sale_value = _first(row, "saleValue", "saleCost", "fullValueOfConsideration", default=0)
-        is_purchase_only = side == "PURCHASE" or (
-            _money(sale_value) == 0
-            and bool(row.get("quarter"))
-        )
-        if is_purchase_only:
-            continue
-
-        raw_asset = str(row.get("assetType", "other")).upper()
-        mapped = _ASSET_TYPE_MAP.get(raw_asset, raw_asset.lower())
-        try:
-            asset_type = CGAssetType(mapped)
-        except ValueError:
-            asset_type = CGAssetType.OTHER
-
-        # Date of transfer — frontend uses transferDate / saleDate
-        raw_transfer = _first(row, "transferDate", "saleDate", "dateOfTransfer")
-        date_of_transfer = _date(raw_transfer, "dateOfTransfer") if raw_transfer else None
-        if date_of_transfer is None:
-            date_of_transfer = datetime.date(2026, 3, 31)
-
-        # Date of acquisition — frontend uses acquisitionDate / purchaseDate
-        raw_acq = _first(row, "acquisitionDate", "purchaseDate", "dateOfAcquisition")
-        date_of_acquisition = _date(raw_acq, "dateOfAcquisition") if raw_acq else None
-
-        # Sale consideration — frontend uses saleValue / saleCost
-        sale = _money(_first(row, "saleValue", "saleCost", "fullValueOfConsideration", default=0))
-        # Cost — frontend uses actualCost / purchaseCost
-        cost = _money(_first(row, "actualCost", "purchaseCost", "costOfAcquisition", default=0))
-        # Transfer expenses
-        exp = _money(_first(row, "transferExpenses", "expenses", "expenditureOnTransfer", default=0))
-        # STT on transfer
-        stt = row.get("sttPaidOnTransfer")
-        if stt is None:
-            stt = row.get("sttPaid")
-        # FMV 31-Jan-2018
-        raw_fmv = _first(row, "fmv31Jan2018", "fmvJan2018", "fairMarketValueJan2018")
-        fmv = _money(raw_fmv) if raw_fmv else None
-
-        cg_transactions.append(CGTx(
-            asset_type=asset_type,
-            description=str(row.get("description", row.get("assetDescription", ""))),
-            date_of_acquisition=date_of_acquisition,
-            date_of_transfer=date_of_transfer,
-            full_consideration=sale,
-            cost_of_acquisition=cost,
-            expenditure_on_transfer=exp,
-            is_stt_paid_on_transfer=stt if stt is not None else None,
-            fair_market_value_jan2018=fmv,
-        ))
-
-    # Map residential status
-    raw_res_status = str(payload.get("residentialStatus", "ROR")).upper()
-    if raw_res_status in {"ROR", "RES", "RESIDENT"}:
-        res_status = ITR2ResidentialStatus.RESIDENT
-    elif raw_res_status in {"NRI", "NR", "NON_RESIDENT"}:
-        res_status = ITR2ResidentialStatus.NON_RESIDENT
-    else:
-        res_status = ITR2ResidentialStatus.RESIDENT_NOT_ORDINARILY
-
-    itr2_input = ITR2Input(
-        age_bracket=age_bracket,
-        tax_regime=tax_regime,
-        residential_status=res_status,
-        salary_income=salary_input,
-        house_property_income=hp_input,
-        other_sources_income=os_input,
-        deductions_chapter6a=ded_input,
-        cg_transactions=cg_transactions,
-        tds1_entries=tds1_entries or [],
-        tds2_entries=tds2_entries or [],
-        tcs_entries=tcs_entries or [],
-        advance_tax_paid=advance_tax_paid,
-        self_assessment_tax_paid=self_assessment_paid,
-        advance_tax_q1=quarterly_advance[0],
-        advance_tax_q2=quarterly_advance[1],
-        advance_tax_q3=quarterly_advance[2],
-        advance_tax_q4=quarterly_advance[3],
-        filing_date=_date(payload.get("filingDate"), "filingDate"),
-        due_date=_date(payload.get("dueDate"), "dueDate"),
-        filing_section=_itr2_filing_section(payload.get("filingSection") or payload.get("filing_section")),
-        relief_89=_money(payload.get("relief89", payload.get("relief_89"))),
-    )
-    try:
-        return compute_itr2(itr2_input)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        )
 
 
 def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
@@ -1163,30 +981,19 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
                 detail="Regular business income is outside ITR-4 presumptive computation.",
             )
         res = compute_itr4(itr4_in)
-    elif is_future_form and requested_form == "ITR-2":
-        # ── ITR-2 computation path ────────────────────────────────────────
-        # Map the flat frontend payload to the canonical ITR2Input, following
-        # the same pattern as ITR-1/ITR-4: the backend does the mapping.
-        res = _compute_itr2_from_flat_payload(
-            payload,
-            age_bracket,
-            tax_regime,
-            salary_input,
-            hp_input,
-            os_input,
-            ded_input,
-            capital_gain_rows,
-            tds1_entries,
-            tds2_entries,
-            tcs_entries,
-            advance_tax_paid,
-            self_assessment_paid,
-            quarterly_advance,
-            capital_gains_summary,
-        )
-        computation_form = "ITR-2"
-        filing_computation_status = "FORM_COMPUTATION"
     else:
+        # ITR-2 (and ITR-3) intentionally fall through here: this legacy
+        # flat-payload endpoint's own ITR-2 computation path has been
+        # retired -- the real, tested ITR-2 pipeline is the canonical
+        # ReturnDraft path (`POST /v2/tax-summary/compute`,
+        # `draft_to_itr2_input` -> `compute_itr2`), which is what the
+        # live frontend actually calls. An ITR-2 request landing on this
+        # endpoint gets the same "provisional common-income preview" via
+        # the ITR-1 engine that ITR-3 (which never had a flat-payload
+        # engine of its own) already receives -- `filing_computation_status`
+        # is already set to "PROVISIONAL_COMMON_INCOME_PREVIEW" for both
+        # by `is_future_form` above, so callers are correctly told not to
+        # treat this as a real computation for either form.
         res = compute_itr1(ITR1Input(**common_input))
 
     if res.errors:

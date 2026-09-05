@@ -333,45 +333,50 @@ def test_80g_zero_user_claim_stays_zero_with_structured_rows() -> None:
     ) == Decimal("0")
 
 
-def test_tax_summary_preserves_imported_cg_evidence_without_taxing_it() -> None:
-    """Purchase/sale evidence with form ITR-2 now runs the ITR-2 engine.
+def test_tax_summary_legacy_endpoint_redirects_itr2_cg_evidence_to_itr2_or_itr3() -> None:
+    """This legacy flat-payload endpoint's ITR-2-specific computation
+    branch has been retired -- the real, tested ITR-2 pipeline is the
+    canonical ReturnDraft path (``POST /v2/tax-summary/compute``,
+    ``draft_to_itr2_input`` -> ``compute_itr2``), which is what the live
+    frontend actually calls; this legacy endpoint had zero real callers
+    for ITR-2 (confirmed: the frontend only ever posts to the v2 route).
 
-    Previously the backend returned a provisional preview with GTI=0.
-    Now that ITR-2 is fully integrated, the evidence rows with sale values
-    are mapped to canonical CGTransactions and the ITR-2 engine computes
-    actual capital gains.  The first row (saleCost=0, purchaseCost=4000)
-    produces no gain; the second row (saleValue=68394, no cost) produces
-    a full gain because cost_of_acquisition defaults to 0.
+    An ITR-2-tagged request landing here now falls through to the same
+    ITR-1-engine-based "provisional common-income preview" that ITR-3
+    (which never had a flat-payload engine of its own) already received.
+    For a payload with real capital-gains evidence outside restricted
+    section 112A, that preview's own eligibility gate correctly rejects
+    it with a "file ITR-2 or ITR-3" redirect, rather than silently
+    misclassifying the gain as ITR-1-eligible income.
     """
-    result = compute_tax_summary(
-        payload={
-            "assessmentYear": "2026-27",
-            "form": "ITR-2",
-            "capitalGainTransactions": [
-                {
-                    "assetType": "MUTUAL_FUND",
-                    "purchaseDate": "",
-                    "saleDate": "",
-                    "purchaseCost": 4000,
-                    "saleCost": 0,
-                    "importStatus": "INCOMPLETE",
-                },
-                {
-                    "recordKind": "EVIDENCE",
-                    "evidenceSide": "SALE",
-                    "assetType": "MUTUAL_FUND",
-                    "saleValue": 68394,
-                },
-            ],
-        },
-        regime="NEW",
-        current_user=None,
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        compute_tax_summary(
+            payload={
+                "assessmentYear": "2026-27",
+                "form": "ITR-2",
+                "capitalGainTransactions": [
+                    {
+                        "assetType": "MUTUAL_FUND",
+                        "purchaseDate": "",
+                        "saleDate": "",
+                        "purchaseCost": 4000,
+                        "saleCost": 0,
+                        "importStatus": "INCOMPLETE",
+                    },
+                    {
+                        "recordKind": "EVIDENCE",
+                        "evidenceSide": "SALE",
+                        "assetType": "MUTUAL_FUND",
+                        "saleValue": 68394,
+                    },
+                ],
+            },
+            regime="NEW",
+            current_user=None,
+        )
 
-    # ITR-2 engine now computes actual capital gains from the evidence.
-    assert result["requestedForm"] == "ITR-2"
-    assert result["computedByFormEngine"] == "ITR-2"
-    assert result["filingComputationStatus"] == "FORM_COMPUTATION"
+    assert exc_info.value.status_code == 422
+    assert "File ITR-2 or ITR-3" in str(exc_info.value.detail)
 
 
 def test_tax_summary_computes_canonical_restricted_112a_rows() -> None:

@@ -49,8 +49,15 @@
 > consolidated open-findings list in §18 for the accurate current state. What *is* true: every P0
 > finding in the **filing-profile family** (§4.1-§4.7, Phase 3/4) and in **TDS/TCS/Schedule IT**
 > (§3.6-§3.8) is closed with a verified fix, and Schedule OS (§3.4) is now closed to the same
-> two-item exception noted above. Schedule 115AD, the capital-gains loss/exemption/indexed-cost
-> items, and the legacy-mapper duplication remain open P0 work.
+> two-item exception noted above.
+>
+> **Update (2026-09-05): all remaining named P0 items closed except one.** Schedule 115AD (§3.1),
+> per-transaction capital-gains exemption attribution (§3.2), and the legacy-mapper duplication
+> (§2.2/§1) are now all fixed — see each section's own write-up. What remains open in the
+> capital-gains cluster specifically: the section-94(7)/94(8) dividend-stripping loss-disallowance
+> figure (no input field captures it at all) and CYLA/BFLA/CFL's one noted discretionary-ordering
+> observation (reviewed, not a proven defect — flagged for live-UAT confirmation). See §18 for the
+> complete, current picture.
 
 ## Executive conclusion
 
@@ -175,6 +182,71 @@ It does not represent the breadth of the canonical model and drops substantial o
 **Severity: High**
 
 **Required action:** establish one supported ITR-2 path. Remove, disable, or strictly adapt the legacy mapper to `ReturnDraft`; do not maintain two semantically different filing representations.
+
+> **Fix status (2026-09-05): the confirmed-dead legacy mapper chain is removed; two adjacent
+> discoveries corrected the original plan's scope.**
+>
+> Confirmed via live-code tracing (not just a string grep) that the ENTIRE chain --
+> `frontend/src/api/itr2Mapper.ts` -> `frontend/src/api/itrCompute.ts`'s `computeItr2`/
+> `computeItr2Json` -> `POST /itr2/compute`/`/itr2/compute-json` -- had zero live frontend callers:
+> `itr2Mapper.ts` had zero importers anywhere in `frontend/src`, and `itrCompute.ts`'s entire
+> `itrComputeApi` object (including its ITR-1/ITR-4 functions, left untouched here as out of
+> scope) was in turn imported nowhere except by the now-dead `itr2Mapper.ts`. Deleted
+> `itr2Mapper.ts` outright and removed `computeItr2`/`computeItr2Json`/the `ITR2Result` interface
+> from `itrCompute.ts`, leaving its ITR-1/ITR-4 exports untouched. `npm run build` and `npm test`
+> (186 tests) both clean after the change.
+>
+> A SECOND, independently dead ITR-2 flat-payload path was also found and removed in the same
+> pass: `app/routers/tax.py::_compute_itr2_from_flat_payload`, dispatched from the shared
+> `compute_tax_summary()`/`_compute_tax_summary_impl()` (backing the legacy `/tax-summary/compute`
+> and `/api/tax/compute` routes) whenever `payload["form"] == "ITR-2"`. The live frontend only
+> ever calls the canonical `/v2/tax-summary/compute` route (`tax_v2.py`) for ITR-2 -- this legacy
+> endpoint's ITR-2 branch had a real, but entirely synthetic, test harness (three test files
+> called it as a direct Python function, never through an HTTP client exercising the actual live
+> route). Removed the function and its dispatch branch; an ITR-2-tagged request landing on this
+> legacy endpoint now falls through to the SAME "provisional common-income preview" (via the
+> ITR-1 engine) that ITR-3 -- which never had a flat-payload engine of its own -- already
+> receives; `filing_computation_status` was already correctly set to
+> `"PROVISIONAL_COMMON_INCOME_PREVIEW"` for both by the pre-existing `is_future_form` check, so no
+> caller is told a real computation happened when it didn't. Also removed the now-dead
+> `_itr2_filing_section()` helper and five now-unused module-level imports
+> (`ITR2Input`/`CGAssetType`/`CGTransaction`/`ResidentialStatus as ITR2ResidentialStatus`/
+> `ReturnFileSection` from `app.schemas.itr2`, `compute as compute_itr2` from
+> `app.engine.calculators.itr2`) that existed only to support the removed function.
+>
+> **Correction to the plan's own prior scoping (caught before acting on it, not after): `/itr2/
+> compute`/`/itr2/compute-json` in `app/routers/itr.py` are NOT dead code and were deliberately
+> left untouched.** The originating plan document assumed these were "dead ... routes" alongside
+> `itr2Mapper.ts`, but `tests/test_itr2_production_path.py` (its own docstring: "Production-path
+> tests for ITR-2 JSON validation and routing") has real, meaningful assertions about their
+> behavior -- schema-valid-document generation, HTTP 400 mapping for incomplete filing identity,
+> and post-calculation validation-report inclusion. Unlike the removed flat-payload mapper, these
+> two routes accept an ALREADY-TYPED `ITR2Input` body directly (no flat-payload translation
+> involved at all), making them a legitimate, if currently frontend-unused, typed direct-input API
+> surface -- not the "two different incomplete mappers of the same user data" problem this finding
+> was originally about. Deleting them would have broken 3 passing tests for no correctness gain.
+>
+> **Also investigated, confirmed unaffected, not further modified**: two OTHER, unrelated callers
+> of the shared `compute_tax_summary()` --
+> `app/engine/filing_gateway.py::generate_filing_artifact()` (confirmed zero callers anywhere in
+> `app/`, i.e. also dead, but out of scope for this fix) and
+> `app/routers/client_itr.py::validate_client_itr()` (its own frontend caller,
+> `frontend/src/api/validation.ts`, posts to a URL shape --
+> `/clients/{clientId}/validate/{assessmentYear}` -- that does not match this endpoint's actual
+> route -- `/clients/{client_id}/itr/{year}/validate` -- a separate, pre-existing routing mismatch
+> unrelated to this fix, not investigated further here). Neither is exercised by any test with an
+> ITR-2-tagged payload, so this fix's behavior change to `compute_tax_summary()` does not affect
+> any passing test through either path.
+>
+> Regression test: `test_tax_summary_legacy_endpoint_redirects_itr2_cg_evidence_to_itr2_or_itr3`
+> (`tests/test_ay2026_calculator_regressions.py`, replacing
+> `test_tax_summary_preserves_imported_cg_evidence_without_taxing_it`, which explicitly tested the
+> now-removed ITR-2 computation branch) confirmed via `git stash` to fail
+> (`DID NOT RAISE HTTPException`) on pre-fix code. Full combined backend regression suite (388
+> tests, including all of `test_itr2_production_path.py`, `test_ay2026_calculator_regressions.py`,
+> `test_integration_routers.py`, `test_purchase_evidence_filtering.py`) green; the 3 failures in
+> `tests/test_tax_v2_compute.py` are confirmed pre-existing baseline failures (fail identically
+> with `git stash` on/off this change), not caused by this fix.
 
 ---
 
@@ -1859,6 +1931,15 @@ It uses simplified credit arrays and lacks the complete ownership, brought-forwa
 
 **Conclusion:** the legacy mapper must be removed, made unreachable, or replaced by a strict adapter that preserves canonical data.
 
+> **Fix status (2026-09-05): the confirmed-dead portion is removed.** See §2.2's fix write-up —
+> `itr2Mapper.ts` (the file this whole section describes) is deleted outright, along with its
+> `itrCompute.ts` wrapper and the equally-dead `_compute_itr2_from_flat_payload` legacy
+> flat-payload path in `app/routers/tax.py`. The category-by-category gaps documented above
+> (Salary/House property/Other sources/Capital gains/Deductions/TDS-TCS) described exactly what
+> this now-deleted file failed to map — they are moot now that the file no longer exists as a
+> reachable path; the canonical v2 (`ReturnDraft`) pipeline this section contrasts it against
+> already has its own, separately-tracked completeness findings elsewhere in this document (§3-§14).
+
 ---
 
 # 16. Schema-validity versus semantic completeness
@@ -1910,11 +1991,15 @@ Even those cases require independent review of the generated JSON against the of
 
 ## P0 — Required before production filing
 
-1. **Establish one canonical path**
-   - remove or disable the legacy mapper;
-   - ensure every ITR-2 route uses `ReturnDraft`;
-   - assert the active route at the API boundary;
-   - add serialized-field coverage tests.
+1. ~~**Establish one canonical path**~~ — **fixed 2026-09-05**, see §2.2's fix write-up:
+   `itr2Mapper.ts` deleted (zero importers), its `itrCompute.ts` wrapper functions removed, and
+   the dead `_compute_itr2_from_flat_payload` flat-payload path in `app/routers/tax.py` retired
+   (an ITR-2 request to that legacy endpoint now correctly falls through to the same
+   "provisional preview" status ITR-3 already receives, rather than computing a real-looking but
+   unreachable-from-the-frontend result). `/itr2/compute`/`/itr2/compute-json` in
+   `app/routers/itr.py` were investigated and found to be real, tested, typed direct-input API
+   surface — NOT the dead legacy mapper this item's original scoping assumed — and were
+   deliberately left in place.
 
 2. **Complete capital-gains serialization**
    - ~~dedicated Schedule 115AD~~ — **fixed 2026-09-05**, see §3.1's fix write-up: the "needs a new
@@ -2165,16 +2250,20 @@ That success does not establish ITR-2 filing completeness. The implementation cu
 > TDS-linkage detail (the PTI HP/OS-head GTI-inclusion bug is now fixed too). The section 112(1)(a)
 > indexed-cost-primacy defect (found 2026-09-04) is fixed, including the full second-proviso
 > relief; signed-loss handling for the generic-other CG categories was confirmed already correct;
-> CYLA/BFLA/CFL was reviewed with no arithmetic bug found. What remains open and blocking
-> production filing: the legacy-mapper duplication (item 1), Schedule 115AD (item 2, needs a
-> `CGAssetType`/FII-flag schema extension), and per-transaction §54/54B/54EC/54F exemption
-> attribution to individual Schedule CG rows (item 2 -- the aggregate `DeducClaimInfo.
-> TotDeductClaim` is correct, only row-level detail is missing). See the consolidated
-> open-findings list this update maintains for the complete current picture.
+> CYLA/BFLA/CFL was reviewed with no arithmetic bug found. **All of item 1 (legacy-mapper
+> duplication), item 2's Schedule 115AD (turned out to need only FII/FPI-flag-based routing off
+> the already-existing `is_fii_fpi` filing-profile flag, not a schema extension as first assumed),
+> and item 2's per-transaction §54/54B/54EC/54F/115F exemption attribution are now also fixed.**
+> What remains open in the capital-gains cluster: the section-94(7)/94(8) dividend-stripping
+> loss-disallowance figure (no input field captures it at all — a distinct, smaller gap). See the
+> consolidated open-findings list this update maintains for the complete current picture (P1 items
+> in §5-§13 remain the largest body of open work).
 >
 > **Final classification: broadly implemented, meaningfully more complete than the original
-> audit found, but still not production-ready for complete AY 2026–27 ITR-2 filing** — the
-> remaining gaps concentrate in Schedule 115AD, per-transaction CG exemption attribution, and the
-> legacy-mapper duplication, not the broad surface area (filing profile, Schedule OS, TDS/TCS/IT,
-> and the core capital-gains tax-computation defects) the original audit identified as
+> audit found, but still not fully production-ready for complete AY 2026–27 ITR-2 filing** — every
+> P0 finding this audit originally identified is now closed except the narrow §94(7)/94(8)
+> disclosure gap noted above; the remaining path to production readiness runs primarily through
+> the P1 findings (§5-§13: Schedule HP detail, Schedule FA category-specific structures, AMT/AMTC
+> UI separation, Schedule CFL reconciliation, Schedule S detail, and several smaller frontend-
+> compression findings), not the broad P0 surface area the original audit identified as
 > highest-risk.
