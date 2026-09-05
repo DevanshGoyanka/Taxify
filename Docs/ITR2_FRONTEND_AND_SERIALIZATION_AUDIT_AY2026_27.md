@@ -1790,6 +1790,12 @@ Agricultural-income fields are not consistently gated by the official income thr
 
 **Severity: High**
 
+> **Correction (2026-09-05, dead-code audit): the finding's subject no longer exists.**
+> `frontend/src/api/itr2Mapper.ts` was itself confirmed dead code (zero importers) and deleted in
+> commit `45d3f10`, alongside the legacy `_compute_itr2_from_flat_payload` backend path it fed.
+> This finding is now moot — there is no legacy mapper left to have an incomplete Schedule EI
+> mapping. Kept here (rather than deleted) only as a historical record; no action needed.
+
 ---
 
 # 8. Deductions
@@ -1837,6 +1843,68 @@ The frontend presents `Schedule AMT / AMTC` as one nullable generic section arou
 The frontend exposes only a few AMT deduction fields and no year-by-year AMTC ledger for brought-forward credit, utilization, and carry-forward.
 
 **Severity: High**
+
+> **New finding (2026-09-05, Phase 5 investigation): the backend `_schedule_amtc()`
+> (`itr2.py:1876`) has a credit-utilization direction bug more severe than "the ledger UI is
+> missing" — it is not clear the utilization figures it computes are ever correct, and
+> deliberately left unfixed pending tax-law verification rather than rushed. Documented here in
+> full per this project's own established practice (see the CLAUDE.md-cited section 112(1)(a)
+> precedent) rather than shipping an uncertain fix.**
+>
+> **Evidence.** `_schedule_amtc()` computes each brought-forward credit row's
+> `AmtTaxCreditUtilisedCY` as `min(credit.credit_brought_forward, result.amt_tax)`.
+> `result.amt_tax` (`ITR2Result.amt_tax`, set in `app/engine/calculators/itr2.py:991-993`) is
+> **not** "this year's AMT liability" — it is the *top-up delta* added to total tax only when AMT
+> applies this year (`amt_result.amt_tax - tax_before_cess`), and is exactly `Decimal("0")` in
+> every year AMT does **not** apply. Section 115JD credit, by contrast, can only ever be
+> *consumed* in a year AMT does **not** apply (a year AMT applies is a year generating *new*
+> credit, not consuming old credit — `amt.py`'s own `amt_credit` field, computed as
+> `amt_total - regular_tax` only `if amt_applies`, is precisely the newly-generated amount, and is
+> a completely different quantity from brought-forward-credit consumption).
+>
+> Tracing through a concrete case: a taxpayer with a brought-forward credit of ₹1,00,000 files a
+> return in a year where AMT does **not** apply (`result.amt_tax == 0`, the normal case in which
+> credit *should* be usable) — the code computes `AmtTaxCreditUtilisedCY = min(100000, 0) = 0`
+> for every row, **every time**, regardless of how much headroom (regular tax minus this year's
+> AMT floor) actually exists. Conversely, in a year AMT *does* apply (`result.amt_tax > 0` — the
+> one case where, per Section 115JD, credit should **not** be consumable at all, since AMT ≥
+> regular tax by definition that year), the code reports nonzero "utilization." The condition
+> under which the code reports any utilization at all is the exact opposite of the condition
+> under which Section 115JD permits it.
+>
+> **Separately, when more than one brought-forward-credit row exists** (`amt_in.amt_credits`
+> is a list — the official schema's `ScheduleAMTCDtls` explicitly supports multiple
+> assessment-year rows, and a taxpayer with several years of AMT history could legitimately have
+> more than one), each row independently computes `min(credit.credit_brought_forward,
+> result.amt_tax)` against the **same, full** `result.amt_tax` rather than allocating a single
+> shared utilization pool across rows (in statutory FIFO order — the earliest assessment year's
+> credit must be exhausted first, since credit expires after 15 years). With two rows of
+> ₹50,000 and ₹30,000 brought forward and `result.amt_tax = 40000` (itself the wrong quantity per
+> above, but illustrating the row-independence bug on its own terms), each row separately claims
+> up to ₹40,000 utilized -- a combined ₹70,000 "utilized" against a single year's ₹40,000 figure.
+>
+> **Why this is left unfixed rather than corrected now**: a correct fix requires knowing, for a
+> year where no AMT-triggering deduction is claimed at all (`addition_total == 0` in
+> `app/engine/schedules/amt.py::compute()`), whether Section 115JD credit remains consumable that
+> year and against what comparison figure -- `compute_amt()` deliberately short-circuits and
+> never computes a real `amt_tax`/`regular_tax` comparison in that case (returning
+> `AMTResult(regular_tax=regular_tax, final_tax=regular_tax)` with every AMT-specific field at its
+> zero default), because Section 115JC's own applicability condition requires a specified
+> deduction claim in that year. Whether the ₹115JD credit-consumption comparison is legally
+> required to run independently of that short-circuit is a genuine tax-law question this audit
+> is not confident enough to resolve by inference alone -- it needs either the official ITR-2
+> form instructions/Section 115JD case law, or a live Type-2 UAT `validateItr` test with a
+> populated `ScheduleAMTCDtls` array, the same standard this project's Digest off-by-one and
+> ITR-4 builder-bug fixes were held to (CLAUDE.md's own "static cross-referencing... does not
+> prove correctness, only a live call does" standard). Rushing a plausible-looking formula here
+> risks replacing one wrong-number bug with a different, equally confident-looking wrong one.
+>
+> **Blast radius check performed**: `app/engine/calculators/itr3.py` also calls
+> `app.engine.schedules.amt.compute()` with the identical applicability-gated-storage pattern
+> (`itr3.py:517-521`), but `app/engine/itd/itr3.py` has no `_schedule_amt`/`_schedule_amtc`
+> functions at all yet -- ITR-3 does not serialize either schedule today, so this finding and any
+> future fix are isolated to `app/engine/calculators/itr2.py` and `app/engine/itd/itr2.py`; no
+> other form is affected.
 
 ## 9.4 CFL is backend-only with no reconciliation display
 
@@ -2201,6 +2269,14 @@ Even those cases require independent review of the generated JSON against the of
 8. Replace generic Schedule FA rows with category-specific foreign bank, custodial, equity/debt, insurance, trust, signing-authority, property, and other-asset editors and serializers.
 
 9. Separate AMT and AMTC in the UI and add the historical AMTC ledger.
+
+   > **Investigated 2026-09-05, not fixed — see §9.3's new finding.** The backend AMTC
+   > credit-utilization logic has a direction bug (uses the wrong-year's comparison figure,
+   > backwards) plus a multi-row double-counting bug, deliberately left unfixed pending tax-law
+   > verification of the correct year-with-no-AMT-trigger comparison rather than shipping an
+   > uncertain formula. This is a real correctness defect, not just a missing UI ledger — treat
+   > "AMT/AMTC history" cases as unsafe for production filing until this is resolved (already
+   > listed under "Not safe for broad production use today").
 
 10. Add a read-only Schedule CFL year-by-year reconciliation.
 
