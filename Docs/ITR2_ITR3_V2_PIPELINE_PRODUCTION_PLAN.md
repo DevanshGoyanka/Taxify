@@ -1663,16 +1663,44 @@ The ITR-3 validator work requires a separate rule inventory. Classify every offi
 
 **Sub-phases:** 8.1 extend draft fields, 8.2 close schema imports, 8.3 build the complete canonical mapper/preparer, 8.4 wire gateway dispatch, 8.5 build the classified validator suite, 8.6 wire the frontend, and 8.7 extend endpoints/Direct Submit. Every sub-phase must preserve the same single prepared input for computation and JSON.
 
+**Item flagged for resolution in this phase (2026-09-05, full-codebase dead-code audit)**:
+`app/routers/itr.py`'s `/itr3/compute`/`/itr3/compute-json` (functions `itr3_compute`/
+`itr3_compute_json`) currently have **zero frontend callers and zero test coverage** —
+strictly weaker than every sibling form's compute route (ITR-1/ITR-2 both have direct test
+coverage in `test_itr1_route_validation.py`/`test_itr2_production_path.py`; ITR-4's equivalents
+were removed for the same reason in the same audit — see Phase 10-adjacent cleanup note below).
+Deliberately left in place for now rather than removed, since ITR-3 is mid-build here in Phase
+8 and the route may become genuinely load-bearing once wired to the frontend (sub-phase 8.7).
+**Resolve as part of sub-phase 8.7**: either wire `/itr3/compute`/`/itr3/compute-json` into the
+live frontend and add real test coverage matching ITR-1/2's pattern, or confirm they remain
+unneeded once the v2 canonical path is complete and remove them then — do not let them persist
+untested and uncalled past this phase's completion.
+
 ### Phase 9 — Delete the now-dead ITR-2 legacy path
 
 Once Phases 5E–5G, Phase 6, and Phase 7 are tested and the frontend no longer calls the flat-payload path:
-- `app/routers/tax.py::_compute_itr2_from_flat_payload` and its call sites.
-- `frontend/src/api/itr2Mapper.ts` (already confirmed to have zero external importers even
-  today — safe to remove regardless of timing, but grouped here for a single clean commit).
-- Confirm `app/routers/itr.py`'s `/itr2/compute`, `/itr2/compute-json` routes (already dead
-  per the pipeline reference doc's route inventory) are formally removed, not just unused.
+- ~~`app/routers/tax.py::_compute_itr2_from_flat_payload` and its call sites.~~ — **Delivered
+  2026-09-05.** Removed (`Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §2.2's fix
+  write-up has the full evidence trail). An ITR-2 request to the legacy `/tax-summary/compute`
+  endpoint now falls through to the same provisional-preview status ITR-3 already received.
+- ~~`frontend/src/api/itr2Mapper.ts` (already confirmed to have zero external importers even
+  today — safe to remove regardless of timing, but grouped here for a single clean commit).~~ —
+  **Delivered 2026-09-05.** Deleted, along with its `itrCompute.ts` wrapper functions
+  (`computeItr2`/`computeItr2Json`).
+- **Deliberately NOT done, correcting this plan's own prior assumption**: `app/routers/itr.py`'s
+  `/itr2/compute`/`/itr2/compute-json` routes were investigated (2026-09-05) and found to be real,
+  deliberately-tested, typed direct-input API surface — `tests/test_itr2_production_path.py`
+  (its own docstring: "Production-path tests for ITR-2 JSON validation and routing") asserts
+  meaningful behavior for both (schema-valid-document generation, HTTP 400 mapping for incomplete
+  filing identity, post-calculation validation-report inclusion). This plan's own "already dead
+  per the pipeline reference doc's route inventory" claim was not independently re-verified
+  before being written here — it was carried forward from `Docs/
+  ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`'s route table, which characterizes "dead" purely as
+  "no live frontend caller," not "no real test contract." Kept deliberately, not an oversight.
 
 **Tests:** full regression suite green with the legacy path physically absent, not just unused.
+Confirmed: 388+ tests green after the two deliverable bullets above, including all of
+`test_itr2_production_path.py`.
 
 ### Phase 10 — Production hardening + final verification
 

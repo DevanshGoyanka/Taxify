@@ -267,9 +267,16 @@ filing, per `app/routers/automation.py` vs `app/routers/filing.py`'s explicit se
 `CLAUDE.md`), this pass deliberately prioritized the *filing/submission*-specific surface over a
 full re-audit of the shared download-automation infrastructure:
 
-- `app/automation/downloader*.py`, `ais_converter.py`, `as26_converter.py`,
-  `pdf_unlocker.py` (the AIS/TIS/26AS import pipeline) — a separate subsystem from filing
-  entirely, out of scope for a *filing/submission* pipeline audit specifically.
+- `app/automation/downloader*.py`, `as26_converter.py`, `pdf_unlocker.py` (the AIS/TIS/26AS
+  import pipeline) — a separate subsystem from filing entirely, out of scope for a
+  *filing/submission* pipeline audit specifically.
+
+> **Correction (2026-09-05, dead-code audit)**: this list previously also named
+> `ais_converter.py` as part of the AIS/TIS/26AS import pipeline. It was never actually wired into
+> that pipeline (zero importers anywhere in the codebase, confirmed via a full-codebase dead-code
+> audit) and has been deleted; the real AIS/TIS/26AS parsing goes through the separate
+> `ais_extractor/` package instead (`app/routers/integration.py`). This was a scope-listing error
+> in this audit's own "out of scope" note, not a defect in the actual pipeline this audit covers.
 
 **Update (2026-09-03, continued pass)**: `app/automation/navigation.py` and
 `app/automation/browser.py`'s `BrowserManager`, and all of Type-2

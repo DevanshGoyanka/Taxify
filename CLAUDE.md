@@ -189,10 +189,15 @@ taxpayer's live OTP consent, which can't happen inside the synchronous submit ca
 `app/automation/browser.py`'s `BrowserManager` is a singleton owning one Playwright browser
 instance, run on its own dedicated event-loop thread (see the Windows event-loop note above).
 `--workers 1` is mandatory in deployment for this reason (`SECURITY.md`). Downloaders
-(`downloader*.py`) pull AIS/TIS/26AS PDFs from the ITD portal; `pdf_unlocker.py`,
-`ais_converter.py`, `as26_converter.py` turn them into structured data. `ais_extractor/` is a
-separate, browser-free PDF-parsing tool (state-machine parser) used by the 26AS import
-endpoint's parsing step.
+(`downloader*.py`) pull AIS/TIS/26AS PDFs from the ITD portal. The actual AIS/TIS/26AS
+PDF-to-structured-data parsing is done by the separate, browser-free `ais_extractor/` package
+(`ais_extractor.extractor.extract_ais`, `ais_extractor.tis_extractor.extract_tis`,
+`ais_extractor.as26_extractor.extract_26as`, all wired in `app/routers/integration.py`) —
+**correcting a stale claim previously in this file**: `app/automation/ais_converter.py` was
+never actually part of this pipeline (confirmed via a full-codebase dead-code audit, 2026-09-05
+— it had zero importers anywhere) and has been deleted; only `app/automation/as26_converter.py`
+is still live, and only as an explicitly-labeled "legacy fallback for .txt uploads" alongside the
+primary `ais_extractor` path (see `app/routers/integration.py`'s own comment on that import).
 
 ### ERI integration
 
