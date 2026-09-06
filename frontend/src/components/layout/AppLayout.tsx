@@ -4,22 +4,11 @@ import { Topbar } from './Topbar';
 
 export const AppLayout = () => {
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+    <div className="app-shell">
       <Sidebar />
-      <div style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        marginLeft: 'var(--sidebar-w)'
-      }}>
+      <div className="app-content">
         <Topbar />
-        <main style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: 24,
-          background: 'var(--bg)'
-        }}>
+        <main className="app-main">
           <Outlet />
         </main>
       </div>

@@ -1333,7 +1333,7 @@ export default function ITRComputationPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <button
-              onClick={() => navigate('/filing')}
+              onClick={() => navigate('/clients')}
               style={{
                 background: 'none',
                 border: 'none',
@@ -1448,7 +1448,7 @@ export default function ITRComputationPage() {
               onClick={() => setShowImportMenu(!showImportMenu)}
               style={{
                 padding: '6px 12px',
-                background: 'var(--info)',
+                background: '#374151',
                 color: 'white',
                 border: 'none',
                 borderRadius: 6,
@@ -1603,7 +1603,7 @@ export default function ITRComputationPage() {
             disabled={saving}
             style={{
               padding: '6px 12px',
-              background: saving ? 'var(--border)' : 'var(--gold)',
+              background: saving ? 'var(--border)' : '#374151',
               color: 'white',
               border: 'none',
               borderRadius: 6,
@@ -1624,7 +1624,7 @@ export default function ITRComputationPage() {
             disabled={validating}
             style={{
               padding: '6px 12px',
-              background: validating ? 'var(--border)' : 'var(--accent-blue)',
+              background: validating ? 'var(--border)' : '#2563EB',
               color: 'white',
               border: 'none',
               borderRadius: 6,
@@ -1646,7 +1646,7 @@ export default function ITRComputationPage() {
               title="Generate and download the official CBDT ITD-compliant JSON (ITR-1/ITR-4)"
               style={{
                 padding: '6px 12px',
-                background: 'var(--gold)',
+                background: '#6B7280',
                 color: 'white',
                 border: 'none',
                 borderRadius: 6,
@@ -1663,7 +1663,7 @@ export default function ITRComputationPage() {
             onClick={handleDownloadPdf}
             style={{
               padding: '6px 12px',
-              background: 'var(--accent-teal)',
+              background: '#6B7280',
               color: 'white',
               border: 'none',
               borderRadius: 6,
@@ -1680,7 +1680,7 @@ export default function ITRComputationPage() {
             title="Launch a visible browser, log in to the ITD portal with the client's PAN + password, and leave the browser open for follow-up after-login tasks"
             style={{
               padding: '6px 12px',
-              background: 'var(--accent-rose, #BE185D)',
+              background: '#374151',
               color: 'white',
               border: 'none',
               borderRadius: 6,
@@ -1703,7 +1703,7 @@ export default function ITRComputationPage() {
                 padding: '6px 12px',
                 background: (filingSubmitting || filingJobId !== null)
                   ? 'var(--border)'
-                  : 'var(--accent-navy, #0b3d6b)',
+                  : '#16A34A',
                 color: 'white',
                 border: 'none',
                 borderRadius: 6,
@@ -1732,7 +1732,7 @@ export default function ITRComputationPage() {
                 padding: '6px 12px',
                 background: fetchingAck
                   ? 'var(--border)'
-                  : 'var(--accent-green, #1a7f4b)',
+                  : '#16A34A',
                 color: 'white',
                 border: 'none',
                 borderRadius: 6,
@@ -1828,7 +1828,7 @@ export default function ITRComputationPage() {
         </div>
       )}
       {backendTaxResult?.filingComputationStatus === 'PROVISIONAL_COMMON_INCOME_PREVIEW' && (
-        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d' }}>
+        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: '#eb6767', background: '#FDECEC', border: '1px solid #eb6767' }}>
           <strong>Provisional preview only.</strong>{' '}
           {backendTaxResult.filingComputationMessage}
         </div>
@@ -1844,7 +1844,7 @@ export default function ITRComputationPage() {
       )}
 
       {validationReport && validationReport.valid && validationReport.warnings.length > 0 && (
-        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--text-secondary)', background: 'var(--warn-bg, #fff8e1)' }}>
+        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: '#eb6767', background: '#FDECEC', border: '1px solid #eb6767' }}>
           <strong>Warnings ({validationReport.warnings.length}):</strong>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
             {validationReport.warnings.map((w, i) => <li key={i} style={{ fontSize: 13 }}>{w}</li>)}
@@ -1860,11 +1860,11 @@ export default function ITRComputationPage() {
           gap: 8,
           padding: '10px 14px',
           marginBottom: 12,
-          background: '#fff8e1',
-          border: '1px solid #f9a825',
+          background: '#FDECEC',
+          border: '1px solid #eb6767',
           borderRadius: 8,
           fontSize: 12,
-          color: '#5d4037',
+          color: '#eb6767',
         }}>
           <span style={{ fontSize: 16, flexShrink: 0 }}>⚠️</span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>

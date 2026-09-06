@@ -82,7 +82,7 @@ export const BankAccountManager: React.FC<BankAccountManagerProps> = ({ data, on
         const isExpanded = expandedId === account.id;
         const accType = ACCOUNT_TYPES.find(t => t.value === account.accountType) || ACCOUNT_TYPES[0];
         return (
-          <div key={account.id} style={{ background: 'white', border: '1px solid ' + (isExpanded ? accType.color : '#e0e0e0'), borderLeft: '4px solid ' + accType.color, borderRadius: 6, marginBottom: 8, overflow: 'hidden' }}>
+          <div key={account.id} style={{ background: 'white', border: '1px solid #000', borderRadius: 6, marginBottom: 8, overflow: 'hidden' }}>
             <div onClick={() => toggleExpand(account.id)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', cursor: 'pointer', background: isExpanded ? accType.color + '06' : 'white' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ background: accType.color, color: 'white', fontSize: 10, padding: '2px 8px', borderRadius: 3 }}>{account.accountType}</span>

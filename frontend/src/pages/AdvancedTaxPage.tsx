@@ -1,108 +1,66 @@
 import { useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { advancedTaxApi } from '../api/advancedTax';
 import toast from 'react-hot-toast';
 import { IndianNumberInput } from '../components/IndianNumberInput';
 
+export const ADVANCED_TAX_CALCULATORS = [
+  { id: 'hra', name: 'HRA Exemption', icon: '🏠' },
+  { id: 'section14a', name: 'Section 14A', icon: '📊' },
+  { id: 'section50c', name: 'Section 50C', icon: '🏘️' },
+  { id: 'relief89', name: 'Relief u/s 89', icon: '💰' },
+  { id: 'depreciation', name: 'Depreciation', icon: '📉' },
+  { id: 'multiEmployer', name: 'Multi-Employer', icon: '👥' },
+  { id: 'ltcg', name: 'LTCG Grandfathering', icon: '📈' },
+  { id: 'epf', name: 'EPF Taxation', icon: '🏦' },
+  { id: 'clubbing', name: 'Clubbing', icon: '👨‍👩‍👧' },
+  { id: 'foTrading', name: 'F&O Trading', icon: '📊' },
+  { id: 'breakEven', name: 'Break-Even', icon: '⚖️' },
+] as const;
+
 export default function AdvancedTaxPage() {
-  const [activeCalculator, setActiveCalculator] = useState<string>('hra');
+  const { calculatorId = 'hra' } = useParams<{ calculatorId: string }>();
+  const activeCalculator = ADVANCED_TAX_CALCULATORS.some(({ id }) => id === calculatorId) ? calculatorId : 'hra';
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  const calculators = [
-    { id: 'hra', name: 'HRA Exemption', icon: '🏠' },
-    { id: 'section14a', name: 'Section 14A', icon: '📊' },
-    { id: 'section50c', name: 'Section 50C', icon: '🏘️' },
-    { id: 'relief89', name: 'Relief u/s 89', icon: '💰' },
-    { id: 'depreciation', name: 'Depreciation', icon: '📉' },
-    { id: 'multiEmployer', name: 'Multi-Employer', icon: '👥' },
-    { id: 'ltcg', name: 'LTCG Grandfathering', icon: '📈' },
-    { id: 'epf', name: 'EPF Taxation', icon: '🏦' },
-    { id: 'clubbing', name: 'Clubbing', icon: '👨‍👩‍👧' },
-    { id: 'foTrading', name: 'F&O Trading', icon: '📊' },
-    { id: 'breakEven', name: 'Break-Even', icon: '⚖️' },
-  ];
-
   const renderCalculator = () => {
     switch (activeCalculator) {
-      case 'hra':
-        return <HRACalculator onResult={setResult} setLoading={setLoading} />;
-      case 'section14a':
-        return <Section14ACalculator onResult={setResult} setLoading={setLoading} />;
-      case 'section50c':
-        return <Section50CCalculator onResult={setResult} setLoading={setLoading} />;
-      case 'relief89':
-        return <Relief89Calculator onResult={setResult} setLoading={setLoading} />;
-      case 'depreciation':
-        return <DepreciationCalculator onResult={setResult} setLoading={setLoading} />;
-      case 'multiEmployer':
-        return <MultiEmployerCalculator onResult={setResult} setLoading={setLoading} />;
-      case 'ltcg':
-        return <LTCGCalculator onResult={setResult} setLoading={setLoading} />;
-      case 'epf':
-        return <EPFCalculator onResult={setResult} setLoading={setLoading} />;
-      case 'clubbing':
-        return <ClubbingCalculator onResult={setResult} setLoading={setLoading} />;
-      case 'foTrading':
-        return <FOTradingCalculator onResult={setResult} setLoading={setLoading} />;
-      case 'breakEven':
-        return <BreakEvenCalculator onResult={setResult} setLoading={setLoading} />;
-      default:
-        return null;
+      case 'hra': return <HRACalculator onResult={setResult} setLoading={setLoading} />;
+      case 'section14a': return <Section14ACalculator onResult={setResult} setLoading={setLoading} />;
+      case 'section50c': return <Section50CCalculator onResult={setResult} setLoading={setLoading} />;
+      case 'relief89': return <Relief89Calculator onResult={setResult} setLoading={setLoading} />;
+      case 'depreciation': return <DepreciationCalculator onResult={setResult} setLoading={setLoading} />;
+      case 'multiEmployer': return <MultiEmployerCalculator onResult={setResult} setLoading={setLoading} />;
+      case 'ltcg': return <LTCGCalculator onResult={setResult} setLoading={setLoading} />;
+      case 'epf': return <EPFCalculator onResult={setResult} setLoading={setLoading} />;
+      case 'clubbing': return <ClubbingCalculator onResult={setResult} setLoading={setLoading} />;
+      case 'foTrading': return <FOTradingCalculator onResult={setResult} setLoading={setLoading} />;
+      case 'breakEven': return <BreakEvenCalculator onResult={setResult} setLoading={setLoading} />;
+      default: return null;
     }
   };
 
   return (
     <div>
       <h1 className="crimson" style={{ fontSize: 22, marginBottom: 24 }}>Advanced Tax Calculators</h1>
+      <div style={{ background: 'white', padding: 24, borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+        {renderCalculator()}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '250px 1fr', gap: 24 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {calculators.map((calc) => (
-            <button
-              key={calc.id}
-              onClick={() => {
-                setActiveCalculator(calc.id);
-                setResult(null);
-              }}
-              style={{
-                padding: '12px 16px',
-                background: activeCalculator === calc.id ? 'var(--gold)' : 'white',
-                color: activeCalculator === calc.id ? 'white' : 'var(--text-primary)',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                fontSize: 13,
-                fontWeight: 500,
-                cursor: 'pointer',
-                textAlign: 'left',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
-              <span>{calc.icon}</span>
-              <span>{calc.name}</span>
-            </button>
-          ))}
-        </div>
+        {loading && (
+          <div style={{ textAlign: 'center', padding: 24 }}>
+            <div className="spinner" />
+          </div>
+        )}
 
-        <div style={{ background: 'white', padding: 24, borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
-          {renderCalculator()}
-          
-          {loading && (
-            <div style={{ textAlign: 'center', padding: 24 }}>
-              <div className="spinner" />
-            </div>
-          )}
-
-          {result && !loading && (
-            <div style={{ marginTop: 24, padding: 16, background: 'var(--bg)', borderRadius: 6 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Result</h3>
-              <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {JSON.stringify(result, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
+        {result && !loading && (
+          <div style={{ marginTop: 24, padding: 16, background: 'var(--bg)', borderRadius: 6 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Result</h3>
+            <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {JSON.stringify(result, null, 2)}
+            </pre>
+          </div>
+        )}
       </div>
     </div>
   );

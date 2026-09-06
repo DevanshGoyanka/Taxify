@@ -1,0 +1,118 @@
+.client-modal {
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+}
+
+.client-modal-title {
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.client-modal-form {
+  font-family: 'DM Sans', sans-serif;
+}
+
+.client-modal-form label {
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.client-modal-form input,
+.client-modal-form button {
+  font-family: 'DM Sans', sans-serif;
+}
+
+.clients-page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 4px 24px;
+  padding-top: 4px;
+}
+
+.clients-page-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 2px;
+}
+
+.clients-search {
+  display: flex;
+  width: 380px;
+  height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  border: 1px solid #111111;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.clients-search-icon {
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.clients-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+}
+
+.clients-search input::placeholder { color: var(--text-muted); }
+
+.clients-add-button {
+  align-self: flex-start;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 6px;
+  background: #16a34a;
+  color: #ffffff;
+  font-family: 'Raleway', Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 180ms ease, transform 180ms ease;
+}
+
+.clients-add-button:hover {
+  background: #15803d;
+  transform: translateY(-2px);
+}
+
+.clients-table {
+  margin: 0 4px;
+  overflow-x: auto;
+  border: 1px solid #111111;
+  border-radius: var(--radius);
+  background: #ffffff;
+}
+
+.clients-table table { min-width: 820px; }
+
+@media (max-width: 560px) {
+  .clients-page-heading {
+    align-items: stretch;
+    flex-direction: column;
+    margin-right: 0;
+    margin-left: 0;
+  }
+
+  .clients-search { width: 100%; }
+  .clients-add-button { align-self: flex-start; }
+  .clients-table { margin-right: 0; margin-left: 0; }
+}

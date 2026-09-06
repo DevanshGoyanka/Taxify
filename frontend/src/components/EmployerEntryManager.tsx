@@ -393,7 +393,7 @@ function EmployerForm({
   const nTDS = next();
 
   return (
-    <div style={{ ...CARD_STYLE, padding: 20, marginBottom: 22, borderTop: '3px solid var(--gold)' }}>
+    <div style={{ ...CARD_STYLE, padding: 20, marginBottom: 22, border: '1px solid #000' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0 14px', borderBottom: '1px solid var(--border)' }}>
         <div>
           <h3 style={{ margin: 0, fontSize: 17, color: 'var(--navy)' }}>{entry.employerName?.trim() || 'Employer'}</h3>

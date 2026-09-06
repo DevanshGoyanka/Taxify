@@ -1,0 +1,31 @@
+ frontend/index.html                                |   4 [32m+[m[31m-[m
+ frontend/public/taxify-black.png                   | Bin [31m0[m -> [32m70411[m bytes
+ frontend/src/App.tsx                               |   4 [32m+[m[31m-[m
+ frontend/src/components/BankAccountManager.tsx     |   2 [32m+[m[31m-[m
+ .../src/components/CapitalGainsEntryManager.tsx    |   2 [32m+[m[31m-[m
+ frontend/src/components/EmployerEntryManager.tsx   |   2 [32m+[m[31m-[m
+ frontend/src/components/PersonalInfoTab.tsx        |  71 [32m++++[m[31m-[m
+ frontend/src/components/layout/AppLayout.tsx       |  17 [32m+[m[31m-[m
+ frontend/src/components/layout/Sidebar.tsx         | 253 [32m+++++++[m[31m----------[m
+ frontend/src/components/layout/Topbar.tsx          |  41 [32m+[m[31m--[m
+ frontend/src/index.css                             | 302 [32m++++++++++++++++++++[m[31m-[m
+ frontend/src/pages/AdvancedTaxPage.tsx             | 130 [32m+++[m[31m------[m
+ frontend/src/pages/ClientsPage.css                 | 118 [32m++++++++[m
+ frontend/src/pages/ClientsPage.tsx                 | 134 [32m+++++[m[31m----[m
+ frontend/src/pages/DashboardPage.tsx               | 109 [32m+++[m[31m-----[m
+ frontend/src/pages/ITRComputationPage.tsx          |  28 [32m+[m[31m-[m
+ frontend/src/pages/LandingPage.css                 | 261 [32m++++++++++++++++++[m
+ frontend/src/pages/LandingPage.tsx                 |  64 [32m+++++[m
+ frontend/src/pages/LoginPage.css                   | 238 [32m++++++++++++++++[m
+ frontend/src/pages/LoginPage.tsx                   | 241 [32m++++++++[m[31m--------[m
+ frontend/src/pages/RegisterPage.tsx                |   6 [32m+[m[31m-[m
+ frontend/svgs/clients.svg                          |  51 [32m++++[m
+ frontend/svgs/clock.svg                            |   4 [32m+[m
+ frontend/svgs/document.svg                         |   4 [32m+[m
+ frontend/svgs/google-icon.svg                      |   1 [32m+[m
+ frontend/svgs/google-tile.svg                      |   1 [32m+[m
+ frontend/svgs/microsoft.svg                        |  10 [32m+[m
+ frontend/svgs/taxify black.png                     | Bin [31m0[m -> [32m70411[m bytes
+ frontend/svgs/taxify white.png                     | Bin [31m0[m -> [32m61868[m bytes
+ frontend/svgs/tick.svg                             |   4 [32m+[m
+ 30 files changed, 1519 insertions(+), 583 deletions(-)

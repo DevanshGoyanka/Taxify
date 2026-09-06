@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, type JSX } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAY } from '../contexts/AYContext';
 import { clientsApi } from '../api/clients';
@@ -10,6 +10,7 @@ import { Spinner } from '../components/ui/Spinner';
 import { panInitials, deriveEntityFromPAN } from '../utils/formatters';
 import type { ClientRecord } from '../types/client.types';
 import toast from 'react-hot-toast';
+import './ClientsPage.css';
 
 export default function ClientsPage() {
   const { ayParam } = useAY();
@@ -57,41 +58,27 @@ export default function ClientsPage() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 className="crimson" style={{ fontSize: 22 }}>Client Master</h1>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <input
-            type="text"
-            placeholder="Search clients, PAN..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              fontSize: 13,
-              width: 250
-            }}
-          />
-          <button
-            onClick={() => setShowAddModal(true)}
-            style={{
-              padding: '8px 16px',
-              background: 'var(--gold)',
-              color: 'white',
-              border: 'none',
-              borderRadius: 6,
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: 'pointer'
-            }}
-          >
-            Add Client
-          </button>
+      <div className="clients-page-heading">
+        <div className="clients-page-title-group">
+          <div className="clients-search" role="search">
+            <span className="clients-search-icon" aria-hidden="true">⌕</span>
+            <input
+              type="text"
+              placeholder="Search client"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Search client"
+            />
+          </div>
         </div>
+        <button
+          className="clients-add-button"
+          onClick={() => setShowAddModal(true)}
+        >
+          Add Client
+        </button>
       </div>
-
-      <div style={{ background: 'white', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+      <div className="clients-table">
         <table>
           <thead>
             <tr>
@@ -162,11 +149,12 @@ export default function ClientsPage() {
                         onClick={() => navigate(`/filing/${client.publicId}/${latestYear?.year || ayParam || '2026-27'}`)}
                         style={{
                           padding: '4px 8px',
-                          background: 'var(--accent-blue)',
+                          background: '#15803D',
                           color: 'white',
                           border: 'none',
                           borderRadius: 4,
                           fontSize: 11,
+                          fontWeight: 700,
                           cursor: 'pointer'
                         }}
                       >
@@ -176,10 +164,12 @@ export default function ClientsPage() {
                         onClick={() => setEditingClient(client)}
                         style={{
                           padding: '4px 8px',
-                          background: 'var(--border)',
+                          background: '#374151',
+                          color: 'white',
                           border: 'none',
                           borderRadius: 4,
                           fontSize: 11,
+                          fontWeight: 700,
                           cursor: 'pointer'
                         }}
                       >
@@ -189,11 +179,12 @@ export default function ClientsPage() {
                         onClick={() => handleArchive(client.publicId, client.name)}
                         style={{
                           padding: '4px 8px',
-                          background: 'var(--danger-bg)',
-                          color: 'var(--danger)',
+                          background: '#F59E0B',
+                          color: '#000000',
                           border: 'none',
                           borderRadius: 4,
                           fontSize: 11,
+                          fontWeight: 700,
                           cursor: 'pointer'
                         }}
                       >
@@ -224,6 +215,51 @@ export default function ClientsPage() {
       )}
     </div>
   );
+}
+
+function ClientDatePicker({ value, onChange }: { value: string; onChange: (value: string) => void }): JSX.Element {
+  const initialDate = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date();
+  const [open, setOpen] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState(new Date(initialDate.getFullYear(), initialDate.getMonth(), 1));
+  const ref = useRef<HTMLDivElement>(null);
+  const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : null;
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const years = Array.from({ length: 101 }, (_, index) => 1920 + index);
+  const firstDay = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1).getDay();
+  const daysInMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0).getDate();
+  const cells = Array.from({ length: Math.ceil((firstDay + daysInMonth) / 7) * 7 }, (_, index) => {
+    const day = index - firstDay + 1;
+    return day >= 1 && day <= daysInMonth ? day : null;
+  });
+
+  useEffect(() => {
+    const close = (event: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+
+  const chooseDay = (day: number): void => {
+    onChange(`${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+    setOpen(false);
+  };
+
+  return <div ref={ref} className="verification-date-picker client-date-picker">
+    <button type="button" className="verification-date-trigger" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
+      <span>{selectedDate ? selectedDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Pick a date'}</span><span aria-hidden="true">▣</span>
+    </button>
+    {open && <div className="verification-calendar" role="dialog" aria-label="Choose date of birth">
+      <div className="verification-calendar-header">
+        <button type="button" onClick={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))} aria-label="Previous month">‹</button>
+        <select value={visibleMonth.getMonth()} onChange={(event) => setVisibleMonth(new Date(visibleMonth.getFullYear(), Number(event.target.value), 1))} aria-label="Month">{months.map((month, index) => <option key={month} value={index}>{month}</option>)}</select>
+        <select value={visibleMonth.getFullYear()} onChange={(event) => setVisibleMonth(new Date(Number(event.target.value), visibleMonth.getMonth(), 1))} aria-label="Year">{years.map((year) => <option key={year} value={year}>{year}</option>)}</select>
+        <button type="button" onClick={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))} aria-label="Next month">›</button>
+      </div>
+      <div className="verification-calendar-weekdays">{['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((day) => <span key={day}>{day}</span>)}</div>
+      <div className="verification-calendar-grid">{cells.map((day, index) => day === null ? <span key={`empty-${index}`} /> : <button key={day} type="button" className={selectedDate && selectedDate.getFullYear() === visibleMonth.getFullYear() && selectedDate.getMonth() === visibleMonth.getMonth() && selectedDate.getDate() === day ? 'selected' : ''} onClick={() => chooseDay(day)}>{day}</button>)}</div>
+    </div>}
+  </div>;
 }
 
 function ClientModal({ client, onClose, onSave }: any) {
@@ -327,7 +363,7 @@ function ClientModal({ client, onClose, onSave }: any) {
       justifyContent: 'center',
       zIndex: 1000
     }}>
-      <div style={{
+      <div className="client-modal" style={{
         background: 'white',
         borderRadius: 'var(--radius)',
         padding: 32,
@@ -336,11 +372,11 @@ function ClientModal({ client, onClose, onSave }: any) {
         maxHeight: '90vh',
         overflowY: 'auto'
       }}>
-        <h2 className="crimson" style={{ fontSize: 20, marginBottom: 24 }}>
+        <h2 className="client-modal-title" style={{ fontSize: 20, marginBottom: 24 }}>
           {client ? 'Edit Client' : 'Add Client'}
         </h2>
 
-        <form onSubmit={handleSubmit}>
+        <form className="client-modal-form" onSubmit={handleSubmit}>
           <div style={{ marginBottom: 16 }}>
             <label style={{ display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 500 }}>
               PAN *
@@ -500,19 +536,7 @@ function ClientModal({ client, onClose, onSave }: any) {
               <label style={{ display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 500 }}>
                 Date of Birth * (CBDT Mandatory)
               </label>
-              <input
-                type="date"
-                value={formData.dob}
-                onChange={(e) => setFormData({ ...formData, dob: e.target.value })}
-                required
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 6,
-                  fontSize: 13
-                }}
-              />
+              <ClientDatePicker value={formData.dob} onChange={(value) => setFormData({ ...formData, dob: value })} />
             </div>
           </div>
 
@@ -555,7 +579,7 @@ function ClientModal({ client, onClose, onSave }: any) {
               disabled={loading}
               style={{
                 padding: '8px 16px',
-                background: loading ? 'var(--border)' : 'var(--gold)',
+                background: loading ? 'var(--border)' : '#16a34a',
                 color: 'white',
                 border: 'none',
                 borderRadius: 6,

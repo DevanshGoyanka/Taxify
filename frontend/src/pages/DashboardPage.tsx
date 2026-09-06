@@ -6,6 +6,10 @@ import { Spinner } from '../components/ui/Spinner';
 import { Badge } from '../components/ui/Badge';
 
 import toast from 'react-hot-toast';
+import clientsIcon from '../../svgs/clients.svg';
+import tickIcon from '../../svgs/tick.svg';
+import clockIcon from '../../svgs/clock.svg';
+import documentIcon from '../../svgs/document.svg';
 
 export default function DashboardPage() {
   const { ayParam } = useAY();
@@ -35,7 +39,10 @@ export default function DashboardPage() {
     );
   }
 
-  const progress = stats ? (stats.filed / stats.total) * 100 : 0;
+  const totalClients = Number(stats?.total || 0);
+  const filedClients = Number(stats?.filed || 0);
+  const progress = totalClients > 0 ? Math.min(100, Math.max(0, (filedClients / totalClients) * 100)) : 0;
+  const progressColor = progress <= 30 ? '#EF4444' : progress > 70 ? '#22C55E' : '#FEF3C7';
 
   // Get ITR type breakdown from real client data
   const itrBreakdown = clients.reduce((acc: any, client: any) => {
@@ -84,87 +91,43 @@ export default function DashboardPage() {
     });
 
   return (
-    <div>
-      <div style={{
-        background: 'var(--gold-pale)',
-        padding: '12px 20px',
-        borderRadius: 'var(--radius)',
-        marginBottom: 24,
-        border: '1px solid var(--gold-light)'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
-          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-            AY 2026-27 Filing Season:
-          </span>
-          <div className="progress-bar" style={{ flex: 1, maxWidth: 400 }}>
-            <div className="progress-fill" style={{ width: `${progress}%`, background: 'var(--gold)' }} />
+    <div className="dashboard-page">
+      <section className="dashboard-greeting">
+        <h1>Hi Devansh,</h1>
+        <p>This is the current report</p>
+      </section>
+
+      <div className="dashboard-stat-grid">
+        {[
+          { label: 'Total Clients', value: stats?.total || 0, icon: clientsIcon, color: 'var(--accent-blue)' },
+          { label: 'Filed', value: stats?.filed || 0, icon: tickIcon, color: 'var(--success)' },
+          { label: 'In Progress', value: stats?.inProgress || 0, icon: clockIcon, color: 'var(--info)' },
+          { label: 'Doc Pending', value: stats?.docPending || 0, icon: documentIcon, color: 'var(--warning)' }
+        ].map((stat, idx) => (
+          <div className="dashboard-stat-card" key={idx}>
+            <img className="dashboard-stat-icon" src={stat.icon} alt="" />
+            <div className="mono dashboard-stat-value">{stat.value}</div>
+            <div className="dashboard-stat-label">{stat.label}</div>
           </div>
-          <span className="mono" style={{ fontWeight: 600 }}>{Math.round(progress)}% complete</span>
+        ))}
+      </div>
+
+      <div className="dashboard-filing-season">
+        <div className="dashboard-filing-heading">
+          <span>AY 2026-27 Filing Season:</span>
+          <span className="mono dashboard-filing-percent">{Math.round(progress)}% complete</span>
         </div>
-        <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-          Clients filed: <strong>{stats?.filed || 0}</strong> of <strong>{stats?.total || 0}</strong> | 
-          <strong> {stats?.inProgress || 0}</strong> in progress | 
+        <div className="progress-bar">
+          <div className="progress-fill" style={{ width: `${progress}%`, background: progressColor }} />
+        </div>
+        <div className="dashboard-filing-details">
+          Clients filed: <strong>{stats?.filed || 0}</strong> of <strong>{stats?.total || 0}</strong> |
+          <strong> {stats?.inProgress || 0}</strong> in progress |
           <strong> {stats?.docPending || 0}</strong> doc pending
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 24 }}>
-        {[
-          { label: 'Total Clients', value: stats?.total || 0, icon: '👥', color: 'var(--accent-blue)' },
-          { label: 'Filed', value: stats?.filed || 0, icon: '✓', color: 'var(--success)' },
-          { label: 'In Progress', value: stats?.inProgress || 0, icon: '⏱', color: 'var(--info)' },
-          { label: 'Doc Pending', value: stats?.docPending || 0, icon: '📄', color: 'var(--warning)' }
-        ].map((stat, idx) => (
-          <div key={idx} style={{
-            background: 'white',
-            padding: 20,
-            borderRadius: 'var(--radius)',
-            borderLeft: `4px solid ${stat.color}`,
-            boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
-          }}>
-            <div style={{ fontSize: 24, marginBottom: 8 }}>{stat.icon}</div>
-            <div className="mono" style={{ fontSize: 28, fontWeight: 600, marginBottom: 4 }}>
-              {stat.value}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{stat.label}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 16,
-        padding: '20px 0',
-        marginBottom: 24
-      }}>
-        {[
-          { label: 'Total', value: stats?.total || 0 },
-          { label: 'Filed', value: stats?.filed || 0 },
-          { label: 'In Progress', value: stats?.inProgress || 0 },
-          { label: 'Doc Pending', value: stats?.docPending || 0 },
-          { label: 'Mismatch', value: stats?.totalMismatches || 0 }
-        ].map((item, idx) => (
-          <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {idx > 0 && <span style={{ color: 'var(--text-muted)' }}>→</span>}
-            <div style={{
-              background: 'white',
-              padding: '12px 20px',
-              borderRadius: 'var(--radius)',
-              border: '1px solid var(--border)'
-            }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
-                {item.label}
-              </div>
-              <div className="mono" style={{ fontSize: 20, fontWeight: 600 }}>
-                {item.value}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20 }}>
+      <div className="dashboard-content-grid">
         <div style={{
           background: 'white',
           padding: 20,

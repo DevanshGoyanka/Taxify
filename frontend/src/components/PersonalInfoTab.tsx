@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BankAccountManager, type BankAccountData } from './BankAccountManager';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import { calculateAgeFromDob } from '../utils/age';
@@ -71,6 +71,73 @@ function Field({ label, value, onChange, type = 'text', required = false, patter
     <label htmlFor={id} style={LABEL_STYLE}>{label}{required ? ' *' : ''}</label>
     <input id={id} type={type} value={value ?? ''} onChange={(event) => onChange(event.target.value)} required={required} pattern={pattern} maxLength={maxLength} min={min} max={max} inputMode={inputMode} disabled={disabled} style={INPUT_STYLE} />
     {help && <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11 }}>{help}</div>}
+  </div>;
+}
+
+function VerificationDatePicker({ value, onChange, required = false }: { value: string | null | undefined; onChange: (value: string | null) => void; required?: boolean }): React.JSX.Element {
+  const initialDate = value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date();
+  const [open, setOpen] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState(new Date(initialDate.getFullYear(), initialDate.getMonth(), 1));
+  const containerRef = useRef<HTMLDivElement>(null);
+  const selectedDate = value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : null;
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const years = Array.from({ length: 101 }, (_, index) => 1970 + index);
+  const firstDay = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1).getDay();
+  const daysInMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0).getDate();
+  const calendarCells = Array.from({ length: Math.ceil((firstDay + daysInMonth) / 7) * 7 }, (_, index) => {
+    const day = index - firstDay + 1;
+    return day >= 1 && day <= daysInMonth ? day : null;
+  });
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event: MouseEvent): void => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, []);
+
+  const formatDisplayDate = (): string => {
+    if (!selectedDate) return '';
+    return selectedDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  const chooseDay = (day: number): void => {
+    const month = String(visibleMonth.getMonth() + 1).padStart(2, '0');
+    const date = String(day).padStart(2, '0');
+    onChange(`${visibleMonth.getFullYear()}-${month}-${date}`);
+    setOpen(false);
+  };
+
+  const changeMonth = (offset: number): void => {
+    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+  };
+
+  return <div ref={containerRef} className="verification-date-picker">
+    <label style={LABEL_STYLE}>Verification date{required ? ' *' : ''}</label>
+    <button type="button" className="verification-date-trigger" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
+      <span>{formatDisplayDate() || 'Pick a date'}</span><span aria-hidden="true">▣</span>
+    </button>
+    {open && <div className="verification-calendar" role="dialog" aria-label="Choose verification date">
+      <div className="verification-calendar-header">
+        <button type="button" onClick={() => changeMonth(-1)} aria-label="Previous month">‹</button>
+        <select value={visibleMonth.getMonth()} onChange={(event) => setVisibleMonth(new Date(visibleMonth.getFullYear(), Number(event.target.value), 1))} aria-label="Month">
+          {monthNames.map((month, index) => <option key={month} value={index}>{month}</option>)}
+        </select>
+        <select value={visibleMonth.getFullYear()} onChange={(event) => setVisibleMonth(new Date(Number(event.target.value), visibleMonth.getMonth(), 1))} aria-label="Year">
+          {years.map((year) => <option key={year} value={year}>{year}</option>)}
+        </select>
+        <button type="button" onClick={() => changeMonth(1)} aria-label="Next month">›</button>
+      </div>
+      <div className="verification-calendar-weekdays">{['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((day) => <span key={day}>{day}</span>)}</div>
+      <div className="verification-calendar-grid">
+        {calendarCells.map((day, index) => {
+          const isSelected = day !== null && selectedDate !== null && selectedDate.getFullYear() === visibleMonth.getFullYear() && selectedDate.getMonth() === visibleMonth.getMonth() && selectedDate.getDate() === day;
+          return day === null ? <span key={`empty-${index}`} /> : <button key={day} type="button" className={isSelected ? 'selected' : ''} onClick={() => chooseDay(day)}>{day}</button>;
+        })}
+      </div>
+      <button type="button" className="verification-calendar-clear" onClick={() => { onChange(null); setOpen(false); }}>Clear date</button>
+    </div>}
   </div>;
 }
 
@@ -350,7 +417,7 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
     <div style={CARD_STYLE}><div style={GRID_STYLE}>
       <SelectField label="Verification capacity" value={verification.capacity} onChange={(value) => updateVerification({ capacity: value as Verification['capacity'] })} required><option value="SELF">Self</option><option value="REPRESENTATIVE">Representative assessee</option>{itrForm === 'ITR-2' && personal.assesseeStatus === 'H' && <option value="KARTA">Karta</option>}{itrForm === 'ITR-4' && <option value="KARTA">Karta</option>}{itrForm === 'ITR-4' && <option value="PARTNER">Partner</option>}</SelectField>
       <Field label="Place of verification" value={verification.place} onChange={(value) => updateVerification({ place: value })} required maxLength={50} />
-      <Field label="Verification date" value={verification.date || ''} onChange={(value) => updateVerification({ date: value || null })} type="date" required />
+      <VerificationDatePicker value={verification.date} onChange={(value) => updateVerification({ date: value })} required />
     </div>{verification.capacity === 'REPRESENTATIVE' && <div style={{ ...GRID_STYLE, marginTop: 16 }}>
       <Field label="Representative name" value={filing.representative?.name || ''} onChange={(value) => updateFiling({ representative: { name: value, email: filing.representative?.email || '', mobileCountryCode: filing.representative?.mobileCountryCode || '91', mobile: filing.representative?.mobile || '' } })} required maxLength={125} />
       <Field label="Representative email" value={filing.representative?.email || ''} onChange={(value) => updateFiling({ representative: { name: filing.representative?.name || '', email: value, mobileCountryCode: filing.representative?.mobileCountryCode || '91', mobile: filing.representative?.mobile || '' } })} required type="email" maxLength={125} />
