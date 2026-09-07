@@ -17,6 +17,20 @@ export interface CapitalGainTransaction extends JsonRow { id?: string; transacti
 export interface CapitalGainsIssue extends JsonRow { code?: string; message?: string; row?: number; field?: string; severity?: string; }
 export interface CapitalGainsSummary { issues?: CapitalGainsIssue[]; eligibility?: Record<string, boolean>; [key: string]: unknown; }
 
+/**
+ * The simplified section 112A quick-entry's LTCG readout must show the
+ * backend's own computed gain (summary.gross112AGain), not be re-derived
+ * client-side from totalSaleConsideration/totalCostAcquisition -- before
+ * this existed it was a hardcoded placeholder string that never displayed a
+ * value at all, even after the user entered both figures and a compute had
+ * run. Returns the placeholder only when no computation has happened yet
+ * (summary is null/undefined); once a summary exists, always shows its
+ * number, matching the same "single source of truth" contract the rest of
+ * this codebase enforces for computed totals.
+ */
+export const gross112AGainDisplay = (summary: CapitalGainsSummary | null | undefined): string =>
+  summary ? `₹${Number(summary.gross112AGain ?? 0).toLocaleString('en-IN')}` : 'Computed by tax engine after calculation';
+
 export interface CapitalGainsScheduleData {
   simplified112A: JsonRow;
   stImmovable: JsonRow[];
@@ -291,7 +305,7 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
     <div style={cardStyle}><div style={gridStyle}>
       <Field spec={{ key: 'totalSaleConsideration', label: 'Total sale consideration *', kind: 'money', required: true }} row={data.simplified112A} patch={(patch) => patchObject('simplified112A', patch)} />
       <Field spec={{ key: 'totalCostAcquisition', label: 'Total cost of acquisition *', kind: 'money', required: true }} row={data.simplified112A} patch={(patch) => patchObject('simplified112A', patch)} />
-      <div><label style={labelStyle}>Long-term capital gain u/s 112A</label><input readOnly value="Computed by tax engine after calculation" style={{ ...inputStyle, background: '#f8fafc', color: 'var(--text-muted)' }} /></div>
+      <div><label style={labelStyle}>Long-term capital gain u/s 112A</label><input readOnly value={gross112AGainDisplay(summary)} style={{ ...inputStyle, background: '#f8fafc', color: 'var(--text-muted)' }} /></div>
     </div><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>ITR-1/ITR-4 permit only the simplified section 112A schedule. The tax engine computes the eligible gain and exemption from the raw sale and acquisition-cost values after calculation. ITR-2/3 filers should use the full Schedule 112A in section C below for scrip-level detail.</div>
     {simple && importedScripCount > 0 && (
       <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>

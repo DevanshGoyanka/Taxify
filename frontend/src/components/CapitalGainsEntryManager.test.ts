@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
+import { hasNonSimplifiedCapitalGains, gross112AGainDisplay } from '../components/CapitalGainsEntryManager';
 
 describe('hasNonSimplifiedCapitalGains', () => {
   it('returns false for undefined, null, or empty schedule', () => {
@@ -45,5 +45,32 @@ describe('hasNonSimplifiedCapitalGains', () => {
       deductionClaims: [{ section: '54' }],
     };
     expect(hasNonSimplifiedCapitalGains(schedule)).toBe(true);
+  });
+});
+
+describe('gross112AGainDisplay', () => {
+  // The simplified section 112A quick-entry's LTCG readout was previously a
+  // hardcoded placeholder string, "Computed by tax engine after
+  // calculation", that never changed regardless of what the user entered or
+  // whether a compute had actually run -- confirmed live: after entering a
+  // real sale consideration and cost of acquisition and letting the
+  // debounced /v2/tax-summary/compute call complete (which does return the
+  // real gain as capitalGainsSummary.gross112AGain), the field kept showing
+  // the same static text forever.
+
+  it('shows the placeholder only when no computation has run yet', () => {
+    expect(gross112AGainDisplay(null)).toBe('Computed by tax engine after calculation');
+    expect(gross112AGainDisplay(undefined)).toBe('Computed by tax engine after calculation');
+  });
+
+  it('shows the backend-computed gain once a summary exists, not a placeholder', () => {
+    expect(gross112AGainDisplay({ gross112AGain: 100000 })).toBe('₹1,00,000');
+  });
+
+  it('shows zero explicitly (not the placeholder) when the backend computed a zero gain', () => {
+    // A real, computed Rs 0 is different information than "not computed
+    // yet" -- collapsing both into the same placeholder would hide a
+    // genuine result (e.g. sale consideration equals cost of acquisition).
+    expect(gross112AGainDisplay({ gross112AGain: 0 })).toBe('₹0');
   });
 });

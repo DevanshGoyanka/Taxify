@@ -3503,3 +3503,49 @@ re-verified live in the browser after rebuilding — not just asserted from the 
 income head and tab named across this session's live-testing instructions (Salary, House
 Property, Capital Gains, Other Sources, Deductions, TDS & Advance Tax) has now been exercised
 end-to-end against the real running application, not just reviewed as static code.
+
+### 34.14 User-directed re-check of Capital Gains: "after entering cost of acquisition and sales
+consideration, is it displaying the total computed capital gains that should come strictly from
+backend" — it was not; it never displayed a computed value at all
+
+The user explicitly asked to re-verify this exact scenario before moving on. Checked
+`CapitalGainsEntryManager.tsx`'s simplified section 112A quick-entry (the only Capital Gains
+surface ITR-1/ITR-4 permit) and found the "Long-term capital gain u/s 112A" readout was a
+**hardcoded static string literal** — `value="Computed by tax engine after calculation"` — not
+bound to any state, prop, or computed value at all. It showed that same text before any data was
+entered, after entering both sale consideration and cost of acquisition, and after a real
+`/v2/tax-summary/compute` call had already returned the real gain. This is a stricter version of
+the same "entered but not reflected" defect class as every earlier finding in this cluster: those
+showed a *wrong* number (₹0, a concatenated string, a stale scalar); this one never showed *any*
+number, under any circumstance.
+
+The real computed value was already available and already flowing correctly one layer up: the
+component receives `summary = taxResult?.capitalGainsSummary` as a prop (confirmed live via the
+raw compute response: `capitalGainsSummary: {status: "VALID", gross112AGain: 100000.0,
+fullValueOfConsideration: 300000.0, costOfAcquisition: 200000.0, ...}` for a test entry of
+₹3,00,000 sale / ₹2,00,000 cost) — the exact same `summary` prop this file's own
+`overlayComputedReadouts` function (for the full Schedule 112A used by ITR-2/3) already reads
+from for its own readouts. The simplified quick-entry's readout simply never used it.
+
+**Fix**: extracted a small pure function, `gross112AGainDisplay(summary)`, that returns
+`` ₹${summary.gross112AGain} `` when a `summary` exists (i.e., at least one compute has
+succeeded) and falls back to the "Computed by tax engine after calculation" placeholder only when
+`summary` is genuinely absent (no compute has run yet) — deliberately not collapsing a real,
+computed ₹0 gain into the same placeholder as "not computed", since those are different facts.
+Wired it into the readout in place of the literal string.
+
+**Test added**: `CapitalGainsEntryManager.test.ts` — three cases: placeholder shown for
+`null`/`undefined` summary (not yet computed), the real gain shown once a summary exists, and a
+genuine computed ₹0 shown as `"₹0"` rather than silently reverting to the placeholder.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 197/197, `npm run build` clean.
+Live-reverified end-to-end: entered ₹3,00,000 sale consideration and ₹2,00,000 cost of
+acquisition on the actual running ITR-1 draft, confirmed the readout updated to **₹1,00,000**
+immediately after the debounced compute completed, and confirmed byte-for-byte against the raw
+network response (`capitalGainsSummary.gross112AGain: 100000.0`) that this is genuinely the
+backend's own computed figure, not a client-side re-derivation of the two entered amounts. Also
+incidentally reproduced and correctly saw handled the ₹1,25,000 ITR-1 eligibility limit: entering
+₹5,00,000/₹2,00,000 (a ₹3,00,000 gain) correctly triggered a clean 422 rejection ("Ineligible for
+ITR-1: LTCG u/s 112A of Rs 300000 exceeds Rs 125000 limit. File ITR-2.") rather than silently
+computing or crashing — confirming the eligibility gate fixed earlier in this document (§32.1)
+still holds.
