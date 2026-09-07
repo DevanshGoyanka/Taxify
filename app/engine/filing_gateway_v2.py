@@ -109,6 +109,33 @@ class FilingGatewayV2Error(ValueError):
         self.errors = errors or [message]
 
 
+def _exception_error_list(exc: Exception) -> list[str]:
+    """Extract a list of human-readable error strings from a caught exception.
+
+    ``pydantic.ValidationError`` has an ``.errors()`` *method* (returning a
+    list of structured error dicts) with the exact same name as the plain
+    list *attribute* every other exception type reaching this helper
+    exposes (``FilingGatewayV2Error.errors``, or none at all for
+    ``DraftMappingError``/``ValueError``). A prior version of this helper
+    used ``getattr(exc, "errors", None)`` to duck-type across both shapes --
+    for a real ``ValidationError`` this silently returned the unbound
+    method object itself (always truthy, since methods are), not a list,
+    which then crashed `app/main.py`'s HTTP error-response JSON
+    serialization with "Object of type builtin_function_or_method is not
+    JSON serializable" -- hiding the real validation message behind a
+    generic "Network Error" for the taxpayer. Confirmed live: entering a
+    Section 24(b) home loan with a blank account/reference number (a
+    genuinely invalid, but common, incomplete-entry mistake) reached this
+    exact path via ``LoanDetail``'s Pydantic validation.
+    """
+    if isinstance(exc, ValidationError):
+        return [
+            f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}" if err.get("loc") else err["msg"]
+            for err in exc.errors()
+        ]
+    return [str(exc)]
+
+
 def _to_date(value: str | None) -> datetime.date | None:
     """Parse an optional canonical ISO date."""
     if not value:
@@ -549,10 +576,9 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
         raise
     except (DraftMappingError, ValidationError, ValueError) as exc:
         logger.debug("compute_canonical_itr1 REJECT mapping/compute error: %s", exc)
-        errors = getattr(exc, "errors", None) or [str(exc)]
         raise FilingGatewayV2Error(
             "ITR-1 mapping or computation failed.",
-            errors,
+            _exception_error_list(exc),
         ) from exc
     if result.errors:
         logger.debug("compute_canonical_itr1 REJECT result.errors=%s", result.errors)
