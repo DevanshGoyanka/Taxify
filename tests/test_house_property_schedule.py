@@ -71,3 +71,39 @@ def test_self_occupied_new_regime_disallows_interest_regardless_of_sanction_date
     )
     assert result.income_chargeable == Decimal("0")
     assert result.loss_disallowed == Decimal("-50000")
+
+
+def test_self_occupied_interest_on_loan_reflects_the_2l_cap_not_raw_interest():
+    """HPResult.interest_on_loan feeds ITR-1/ITR-4's ITD-JSON IntOnBorwCap
+    field and the live Tax Computation preview's totalDeduction figure
+    (filing_gateway_v2.py). It must report what was actually allowed under
+    Section 24(b) (Rs 2,00,000), not the raw amount the taxpayer paid --
+    ITR-2's builder (app/engine/itd/itr2.py:729-737) already documents this
+    exact raw-vs-capped distinction and works around it by deriving from
+    income_chargeable instead of trusting this field; ITR-4's calc_rules.py
+    (ITR4-C154) has a dedicated validator built specifically to catch this
+    class of bug. Both are strong signals the field itself should carry the
+    capped value at the source rather than requiring every downstream
+    consumer to re-derive it.
+    """
+    result = compute(_self_occupied(Decimal("250000")), TaxRegime.OLD)
+    assert result.interest_on_loan == Decimal("200000")
+    assert result.income_chargeable == Decimal("-200000")
+
+
+def test_self_occupied_interest_on_loan_is_zero_under_new_regime():
+    """New regime disallows Section 24(b) interest for self-occupied
+    property entirely -- interest_on_loan must reflect that (0), not the
+    raw amount paid, for the same reason as the capped-old-regime case
+    above."""
+    result = compute(_self_occupied(Decimal("50000")), TaxRegime.NEW)
+    assert result.interest_on_loan == Decimal("0")
+    assert result.income_chargeable == Decimal("0")
+
+
+def test_self_occupied_interest_on_loan_unaffected_when_under_cap():
+    """Below the cap, interest_on_loan is unchanged -- this is the common
+    case and must not regress."""
+    result = compute(_self_occupied(Decimal("100000")), TaxRegime.OLD)
+    assert result.interest_on_loan == Decimal("100000")
+    assert result.income_chargeable == Decimal("-100000")

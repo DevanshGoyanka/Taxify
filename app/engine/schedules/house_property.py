@@ -92,6 +92,7 @@ def compute(
     if input_data.property_type == PropertyType.SELF_OCCUPIED:
         interest = input_data.home_loan_interest_paid
         if regime == TaxRegime.NEW:
+            allowed_interest = Decimal("0")
             hp_income = Decimal("0")
             loss_disallowed = -interest
             loss_cf = Decimal("0")
@@ -109,7 +110,15 @@ def compute(
 
         return HPResult(
             property_type=pt,
-            interest_on_loan=interest,
+            # interest_on_loan carries what was actually ALLOWED under
+            # Sec 24(b) (capped at Rs 2L old regime, nil under the new
+            # regime) rather than the raw amount the taxpayer paid --
+            # this field feeds the ITR-1/ITR-4 ITD-JSON IntOnBorwCap field
+            # and the live Tax Computation preview's totalDeduction figure
+            # directly, and both must agree with income_chargeable, which
+            # already reflected the cap/disallowance. See
+            # test_house_property_schedule.py's interest_on_loan tests.
+            interest_on_loan=allowed_interest,
             income_chargeable=hp_income,
             loss_disallowed=loss_disallowed,
             loss_carried_forward=loss_cf,

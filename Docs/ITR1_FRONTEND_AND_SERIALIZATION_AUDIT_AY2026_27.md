@@ -3057,3 +3057,99 @@ pre-fix code (with the exact same `TypeError` the live app produced, not a diffe
 
 Full suite (`test_itr1_*`, `test_itr4_*`, `test_filing_gateway_v2*`, `test_draft_to_itr1_input.py`):
 582 passed, no regressions.
+
+### 34.6 Continuing §34.5's House Property live test to completion: found and fixed a second,
+real bug — self-occupied Section 24(b) interest was displayed uncapped, disagreeing with its own
+income figure on the same screen
+
+Picked back up exactly where §34.5 left off: with the crash from §34.5 fixed, filled in a
+complete Section 24(b) loan (HDFC Bank, account `HL123456789`, loan date 01-04-2020, ₹30,00,000
+loan amount, ₹22,00,000 outstanding, ₹1,80,000 interest this year) on the same self-occupied
+property and re-ran the live compute. It succeeded — but the resulting numbers were internally
+inconsistent. Under the new regime, the raw response showed
+`housePropertyDetails[0].totalDeduction: 180000` sitting right next to `incomeOfHP: 0` on the
+same row — implying a ₹1,80,000 deduction had been allowed when, per Section 115BAC, new-regime
+self-occupied property gets **no** Section 24(b) interest deduction at all (`income_chargeable`
+correctly showed the disallowance; the displayed "deduction" figure did not agree with it).
+Switching to the old regime and raising the interest to ₹2,50,000 (above the ₹2,00,000 Section
+24(b) self-occupied cap) reproduced the same disagreement in a second form: `incomeOfHP` correctly
+showed `-200000` (capped), but `interestOnBorrowedCapital`/`totalDeduction` both still showed the
+raw `250000` — the taxpayer-facing screen was telling two different stories about the same number
+in the same row.
+
+**Root cause**: `app/engine/schedules/house_property.py`'s `compute()`, in the self-occupied
+branch, correctly computes `income_chargeable` from the capped/disallowed `allowed_interest`, but
+returned `interest_on_loan=interest` — the **raw, uncapped** amount the taxpayer entered — into
+the `HPResult`. That single field is read directly, with no re-derivation, by three different
+consumers: `filing_gateway_v2.py`'s live Tax Computation preview (`totalDeduction =
+standard_deduction_30pct + interest_on_loan`, both duplicate builders at lines ~312-315 and
+~1775-1778), and `app/engine/itd/itr1.py`/`app/engine/itd/itr4.py`'s official-JSON builders
+(`IntOnBorwCap`/`TotalDeduct`). Whenever raw interest exceeds what Section 24(b) actually allows
+(old-regime cap, or full new-regime disallowance), every one of those consumers disagreed with
+`income_chargeable`/`IncomeOfHP` on the very same row.
+
+This is a **known, previously-flagged bug class in this exact field**, not a fresh discovery from
+nothing — two independent pieces of prior evidence already existed in the codebase pointing at
+it, neither of which had been traced back to the root cause before now:
+- `app/engine/itd/itr2.py:729-737` carries a standing comment documenting that
+  `HPResult.interest_on_loan` "stores the RAW interest paid for self-occupied property, not the
+  Sec 24(b) allowed/capped amount" and works around it locally by deriving from
+  `-income_chargeable` instead of trusting the field — a targeted downstream patch, not a fix at
+  the source.
+- `app/engine/validators/itr4/calc_rules.py`'s `ITR4-C154` rule exists specifically to *detect*
+  this exact symptom at validation time ("Self-occupied interest exceeds Rs 2,00,000 but appears
+  uncapped in HP schedule") rather than prevent it from occurring.
+
+Confirmed the actual JSON-generation path (`generate_cbdt_json`) is not silently wrong here: both
+scenarios (new-regime self-occupied interest, and old-regime interest over the cap) are already
+caught and blocked with clear, correct messages by existing Category A input validators before
+the ITD builder's own cross-foot check (`if standard_deduction < 0: raise ValueError(...)`) is
+even reached — live-confirmed via the actual `/v2/.../generate-cbdt-json` 422 responses:
+`"New Tax Regime does not allow interest on borrowed capital for self-occupied property. Claimed:
+Rs 180000"` and `"Self-occupied property interest (Rs 250000) exceeds Rs 2,00,000 cap u/s
+24(b)"`. So this was not a JSON-correctness bug (no wrong figure could ever reach ITD); it was a
+**live-preview honesty bug**: `compute_canonical_itr1()`/`compute_canonical_itr4()` (the path
+behind the always-on Tax Computation tab) do not run the Category A validators at all — only
+`generate_cbdt_json()` does — so a taxpayer filling in a self-occupied property with interest
+above what's allowed would see a quietly wrong "Total deduction" figure on their live screen with
+no warning, and would only discover the real problem if and when they clicked "Generate CBDT
+JSON" — by which point they may already have treated the preview number as final.
+
+**Fix**: changed `house_property.py`'s self-occupied branch to store the actually-**allowed**
+interest into `HPResult.interest_on_loan` — `min(interest, cap)` under the old regime, `0` under
+the new regime — instead of the raw entered amount, so every downstream consumer of this one
+field agrees with `income_chargeable` by construction, without needing its own workaround. Traced
+every call site first (`itd/itr1.py`, `itd/itr2.py`, `itd/itr4.py`,
+`validators/itr1/calc_rules.py`, `validators/itr4/calc_rules.py`, both `filing_gateway_v2.py`
+summary builders) to confirm none needed a compensating change: `itr1.py`/`itr4.py`'s ITD
+builders now cross-foot cleanly by construction instead of relying on upstream validators to
+prevent a would-be negative `standard_deduction`; ITR-2's builder's existing `-income_chargeable`
+workaround becomes redundant (both now equal) but not wrong, so it was left as-is rather than
+touched in this pass; `ITR1-R047` (`calc_rules.py`) already explicitly excludes self-occupied
+properties from its raw-`interest_on_loan` cross-check, so it is unaffected; `ITR4-C154` now
+receives the correctly-capped value, so it stops firing false-negatively (its purpose — catching
+an uncapped value — no longer has anything to catch, exactly as intended once the root cause is
+fixed).
+
+**Tests added** (`tests/test_house_property_schedule.py`):
+`test_self_occupied_interest_on_loan_reflects_the_2l_cap_not_raw_interest`,
+`test_self_occupied_interest_on_loan_is_zero_under_new_regime`, and
+`test_self_occupied_interest_on_loan_unaffected_when_under_cap` (the last confirms the common,
+below-cap case is byte-for-byte unchanged). Confirmed via `git stash` that the first two fail
+against pre-fix code with the exact wrong (raw, uncapped) values this section describes.
+
+**Verification**: `tests/test_house_property_schedule.py` (9/9), plus the full
+`test_itr1_calculator.py` + `test_itr4_calculator.py` + `test_house_property_schedule.py` +
+`test_filing_gateway_v2.py` + `test_filing_gateway_v2_itr4.py` + `test_itr1_itd_builder.py` +
+`test_itr4_calc_validation.py` + `test_itr4_e2e.py` + `test_itr1_e2e.py` +
+`test_itr1_golden_suite.py` + `test_itr4_input_validation.py` + `test_itr2_itd_builder.py` combined
+suite: 197 + 197 = 394 passed, no regressions. A broader sweep across every `itr1`/`itr2`/`itr4`/
+`house_property`-named test file found 6 pre-existing failures, all in unrelated ITR-2 input-
+validation tests, confirmed via `git stash` to fail identically without this change (baseline, not
+a regression this fix introduced).
+
+Re-verified live end-to-end after restarting the backend: the same self-occupied property with a
+₹2,50,000 old-regime loan interest now shows `interestOnBorrowedCapital: 200000`,
+`totalDeduction: 200000`, and `incomeOfHP: -200000` — all three agreeing — and Gross Total Income
+correctly falls by the full ₹2,00,000 house-property loss (confirmed via the raw
+`/v2/tax-summary/compute` network response, not just the rendered UI).
