@@ -2785,6 +2785,42 @@ scenario for ITR-4). All three confirmed via `git stash` to fail against pre-fix
 `test_draft_to_itr4_input_itr4.py`, `test_filing_gateway_v2_itr4.py`, `validate_itr1_json.py`)
 green: 567 passed.
 
-Part C (Deductions and Taxable Total Income), Part D (Tax Computation), Part E (Bank Accounts),
-Schedule IT, Schedule TDS, and Verification are next in this same pass — not yet started as of
-this section.
+### 33.3 Part C — Deductions and Taxable Total Income
+
+Read against `DeductUndChapVIAType`/`UsrDeductUndChapVIAType` (every Chapter VI-A section the
+form's 80C-through-"Any other Deduction" grid lists), `LTCG112A` (C3(a)), and
+`ExemptIncAgriOthUs10Type` (C3, the exempt-income disclosure grid). This pass's specific new
+angle — cross-checking every section's *statutory rupee cap* against the schema's own declared
+`maximum`, not just presence/wiring (already exhaustively covered by §5/§6/§10-§32's own
+Chapter-VI-A-heavy validator work) — found no new discrepancy: every cap in
+`app/engine/constants.py` matches the schema's `DeductUndChapVIAType` maxima exactly —
+80C/80CCC/80CCD(1) at Rs 1,50,000, 80CCD(1B) at Rs 50,000, 80D at Rs 1,00,000 (25k+25k non-senior
+or 50k+50k senior self+parents, both correctly summing to the schema's own 100000 ceiling),
+80DD/80U severe-disability at Rs 1,25,000, 80DDB senior at Rs 1,00,000, 80EE at Rs 50,000,
+80EEA/80EEB at Rs 1,50,000, 80GG at Rs 60,000, 80TTA at Rs 10,000, 80TTB at Rs 50,000 — with
+80CCD(2)/80E/80G/80GGA/80GGC correctly left uncapped in both the schema and the calculator,
+matching their real statutory unlimited-deduction status.
+
+C3(a) (`LTCG112A`: `TotSaleCnsdrn`/`TotCstAcqisn`/`LongCap112A`) is a simple, correct pass-through
+(`app/engine/itd/itr1.py::_ltcg_112a_schedule()`) of already-eligibility-gated values (§33.2
+confirmed `gain_112a` can never exceed the schema's own `LongCap112A` maximum of 125000 by the
+time a result reaches this function, since the calculator rejects earlier otherwise).
+
+C3 (`ExemptIncAgriOthUs10`, the exempt-income disclosure grid) is fully wired and more complete
+than a first grep suggested — `CompactExemptIncomeEntry` (`app/schemas/itr1.py:948`) implements
+the schema's complete 8-category/37-subcategory enum verbatim, and
+`frontend/src/components/exemptincome/ExemptIncomeWorkspace.tsx` gives it a real, form-aware UI
+(filters both the category and subcategory dropdowns to what's actually valid for ITR-1
+specifically vs. ITR-2/3/4, warns visibly when a saved entry is incompatible with the currently
+selected form rather than silently dropping it). Agricultural income has its own dedicated
+`agriculture_income` field *and* auto-populates a `10(1)` exempt-income row
+(`app/engine/itd/itr1.py:1407-1415`) only when the taxpayer hasn't already added one explicitly,
+avoiding a double-counted row.
+
+No new fix in this section — Part C's structural correctness had already received the heaviest
+concentration of fix-cycle attention of any part of this document (§5, §6, most of §10-§32), and
+this pass's specific min/max cross-reference did not surface anything those passes missed.
+
+### 33.4 Part D — Computation of Tax Payable
+
+Read against `ITR1_TaxComputation` next. Not yet started as of this section.
