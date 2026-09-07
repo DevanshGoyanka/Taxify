@@ -77,22 +77,24 @@ export const Sidebar = ({ collapsed, onToggleCollapse }: SidebarProps) => {
             <img src={taxifyWhiteCroppedLogo} alt="Taxify" className="sidebar-brand-logo sidebar-brand-logo-collapsed" />
           </Link>
         ) : (
-          <Link to="/dashboard" className="sidebar-brand" aria-label="Taxify dashboard">
-            <img src={taxifyWhiteLogo} alt="Taxify" className="sidebar-brand-logo" />
-          </Link>
+          <>
+            <Link to="/dashboard" className="sidebar-brand" aria-label="Taxify dashboard">
+              <img src={taxifyWhiteLogo} alt="Taxify" className="sidebar-brand-logo" />
+            </Link>
+            <button
+              type="button"
+              className="sidebar-collapse-toggle"
+              onClick={onToggleCollapse}
+              aria-label="Collapse sidebar"
+              aria-expanded={true}
+              title="Collapse sidebar"
+            >
+              <span className="sidebar-hamburger" aria-hidden="true">
+                <span /><span /><span />
+              </span>
+            </button>
+          </>
         )}
-        <button
-          type="button"
-          className="sidebar-collapse-toggle"
-          onClick={onToggleCollapse}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          aria-expanded={!collapsed}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          <span className="sidebar-hamburger" aria-hidden="true">
-            <span /><span /><span />
-          </span>
-        </button>
       </div>
 
       {!collapsed && (

@@ -6,8 +6,6 @@ type TopbarProps = {
 };
 
 export const Topbar = ({ collapsed, onToggleCollapse }: TopbarProps) => {
-  void collapsed;
-  void onToggleCollapse;
   const location = useLocation();
   const isClientManager = location.pathname === '/clients';
   const isOpenItr = location.pathname.startsWith('/filing/');
@@ -16,6 +14,20 @@ export const Topbar = ({ collapsed, onToggleCollapse }: TopbarProps) => {
 
   return (
     <header className={`topbar${isClientManager ? ' topbar-client-manager' : ''}`}>
+      {collapsed && (
+        <button
+          type="button"
+          className="topbar-collapse-toggle"
+          onClick={onToggleCollapse}
+          aria-label="Expand sidebar"
+          aria-expanded={false}
+          title="Expand sidebar"
+        >
+          <span className="topbar-hamburger" aria-hidden="true">
+            <span /><span /><span />
+          </span>
+        </button>
+      )}
       <span className="topbar-page-icon" aria-hidden="true">{isClientManager ? '◉' : '⌂'}</span>
       <span className="topbar-page-name">{pageName}</span>
       <span className="topbar-help" aria-label="Help">ⓘ&nbsp; Help</span>

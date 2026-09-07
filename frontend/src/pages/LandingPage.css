@@ -10,8 +10,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  min-height: 72px;
-  padding: 14px clamp(16px, 3vw, 40px);
+  min-height: 48px;
+  padding: 6px clamp(16px, 3vw, 40px);
   border: none;
   background: #ffffff;
 }
@@ -25,7 +25,7 @@
 
 .landing-brand img {
   display: block;
-  width: 116px;
+  width: 80px;
   height: auto;
 }
 
@@ -141,15 +141,6 @@
   gap: 18px;
 }
 
-.landing-eyebrow {
-  margin: 0 0 14px;
-  color: #166534;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
 .landing-hero h1 {
   width: 686.4px;
   max-width: 100%;
@@ -191,32 +182,11 @@
   line-height: 1.4;
 }
 
-.landing-about {
-  padding: 84px 24px;
-  border-top: 1px solid #d1d5db;
-  background: #ffffff;
-}
-
-.landing-about-inner {
-  max-width: 760px;
-  margin: 0 auto;
-  text-align: center;
-}
-
-.landing-about h2 {
-  margin: 0 0 16px;
-  color: #111827;
-  font-family: 'Playfair Display', Georgia, serif;
-  font-size: clamp(28px, 4vw, 44px);
-  line-height: 1.15;
-}
-
+.landing-about,
+.landing-about-inner,
+.landing-about h2,
 .landing-about p:last-child {
-  margin: 0 auto;
-  max-width: 620px;
-  color: #4b5563;
-  font-size: 16px;
-  line-height: 1.75;
+  display: none;
 }
 
 @media (max-width: 560px) {
@@ -246,10 +216,6 @@
   .landing-cta,
   .landing-talk-button {
     width: min(100%, 260px);
-  }
-
-  .landing-about {
-    padding: 64px 20px;
   }
 }
 

@@ -46,7 +46,7 @@ body {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
-  padding: 28px 40px 40px;
+  padding: 16px 16px 20px;
   background: var(--bg);
 }
 .topbar {
@@ -69,6 +69,37 @@ body {
 .topbar-page-icon { margin-right: 9px; margin-left: 6px; font-size: 15px; }
 .topbar-page-name { font-size: 16px; font-weight: 600; }
 .topbar-help { margin-left: auto; color: #AEB5BF; font-size: 12px; }
+.topbar-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-right: 18px;
+  padding: 0;
+  color: #F2F4F7;
+  background: transparent;
+  border: 1px solid #2A3036;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.topbar-collapse-toggle:hover { background: #1B1E21; border-color: #3A4048; }
+.topbar-collapse-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.topbar-hamburger {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 16px;
+  height: 14px;
+}
+.topbar-hamburger span {
+  display: block;
+  height: 2px;
+  width: 100%;
+  background: currentColor;
+  border-radius: 1px;
+}
 .dashboard-greeting { margin-bottom: 22px; }
 .dashboard-greeting h1 {
   color: var(--text-primary);
@@ -137,6 +168,9 @@ body {
   cursor: pointer;
 }
 .verification-date-trigger:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.verification-date-icon { display: block; width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; pointer-events: none; }
+.itr-tab-icon { display: block; width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; pointer-events: none; }
+.itr-tab-icon-capital-gains { width: 20px; height: 20px; }
 .verification-calendar {
   position: absolute;
   z-index: 30;
@@ -280,7 +314,8 @@ body {
   background: currentColor;
   border-radius: 1px;
 }
-.sidebar-header-collapsed { justify-content: space-between; }
+.sidebar-header-collapsed { justify-content: center; }
+.sidebar-header-collapsed .sidebar-brand { margin-left: 0; justify-content: center; }
 .sidebar-brand-mark {
   display: inline-flex;
   align-items: center;

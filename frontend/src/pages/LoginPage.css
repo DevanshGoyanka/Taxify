@@ -77,7 +77,7 @@
 
 .login-field label {
   display: block;
-  margin: 0 0 8px;
+  margin: 0 0 4px;
   color: #637087;
   font-size: 12px;
   font-weight: 700;
@@ -102,22 +102,26 @@
   box-shadow: 0 0 0 2px rgba(98, 89, 217, .14);
 }
 
-.login-password-field { margin-top: 2px; }
+.login-password-field { margin-top: 0; }
 .login-password-wrap { position: relative; }
 .login-password-wrap input { padding-right: 48px; }
 
 .login-password-toggle {
   position: absolute;
-  top: 50%;
+  top: 0;
+  bottom: 0;
   right: 10px;
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
   padding: 0;
   border: 0;
   background: none;
   color: #6259d9;
   font-size: 10px;
   font-weight: 700;
+  line-height: 1;
   cursor: pointer;
-  transform: translateY(-50%);
 }
 
 .login-continue,

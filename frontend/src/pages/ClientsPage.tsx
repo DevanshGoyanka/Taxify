@@ -10,6 +10,7 @@ import { Spinner } from '../components/ui/Spinner';
 import { panInitials, deriveEntityFromPAN } from '../utils/formatters';
 import type { ClientRecord } from '../types/client.types';
 import toast from 'react-hot-toast';
+import calendarIcon from '../../svgs/calender.svg';
 import './ClientsPage.css';
 
 export default function ClientsPage() {
@@ -221,7 +222,9 @@ function ClientDatePicker({ value, onChange }: { value: string; onChange: (value
   const initialDate = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date();
   const [open, setOpen] = useState(false);
   const [visibleMonth, setVisibleMonth] = useState(new Date(initialDate.getFullYear(), initialDate.getMonth(), 1));
-  const ref = useRef<HTMLDivElement>(null);
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : null;
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const years = Array.from({ length: 101 }, (_, index) => 1920 + index);
@@ -233,23 +236,37 @@ function ClientDatePicker({ value, onChange }: { value: string; onChange: (value
   });
 
   useEffect(() => {
+    if (!open) return;
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      const popupWidth = 286;
+      const popupHeight = 320;
+      let left = rect.left;
+      if (left + popupWidth > window.innerWidth) left = window.innerWidth - popupWidth - 8;
+      if (left < 8) left = 8;
+      let top = rect.bottom + 6;
+      if (top + popupHeight > window.innerHeight) top = Math.max(8, rect.top - popupHeight - 6);
+      setPopupStyle({ position: 'fixed', left, top, zIndex: 2000 });
+    }
     const close = (event: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+      if (popupRef.current && popupRef.current.contains(event.target as Node)) return;
+      if (triggerRef.current && triggerRef.current.contains(event.target as Node)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
-  }, []);
+  }, [open]);
 
   const chooseDay = (day: number): void => {
     onChange(`${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
     setOpen(false);
   };
 
-  return <div ref={ref} className="verification-date-picker client-date-picker">
-    <button type="button" className="verification-date-trigger" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
-      <span>{selectedDate ? selectedDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Pick a date'}</span><span aria-hidden="true">▣</span>
+  return <div className="verification-date-picker client-date-picker">
+    <button ref={triggerRef} type="button" className="verification-date-trigger" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
+      <span>{selectedDate ? selectedDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Pick a date'}</span><img src={calendarIcon} alt="" aria-hidden="true" className="verification-date-icon" />
     </button>
-    {open && <div className="verification-calendar" role="dialog" aria-label="Choose date of birth">
+    {open && <div ref={popupRef} className="verification-calendar" style={popupStyle} role="dialog" aria-label="Choose date of birth">
       <div className="verification-calendar-header">
         <button type="button" onClick={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))} aria-label="Previous month">‹</button>
         <select value={visibleMonth.getMonth()} onChange={(event) => setVisibleMonth(new Date(visibleMonth.getFullYear(), Number(event.target.value), 1))} aria-label="Month">{months.map((month, index) => <option key={month} value={index}>{month}</option>)}</select>

@@ -7,8 +7,16 @@ import { itrAutomationApi } from '../api/itrAutomation';
 import type { AutomationJob } from '../api/itrAutomation';
 import { filingSubmitApi, type FilingJobStatus, type VerificationMode } from '../api/filingSubmit';
 import { Spinner } from '../components/ui/Spinner';import StatusPill from '../components/StatusPill';
+import { CollapsibleWarning } from '../components/ui/CollapsibleWarning';
 import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
+import personalInfoIcon from '../../svgs/personal info.svg';
+import salaryIncomeIcon from '../../svgs/salary income.svg';
+import housePropertyIcon from '../../svgs/house property.svg';
+import capitalGainsIcon from '../../svgs/capital gains.svg';
+import otherSourcesIcon from '../../svgs/other sources.svg';
+import exemptIncomeIcon from '../../svgs/extempt income.svg';
+import taxComputationIcon from '../../svgs/tax computation.svg';
 import { BankAccountManager } from '../components/BankAccountManager';
 import { PersonalInfoTab } from '../components/PersonalInfoTab';
 import { hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
@@ -1304,18 +1312,18 @@ export default function ITRComputationPage() {
     );
   }
 
-  const tabs = [
-    '📋 Personal Info',
-    '💼 Salary Income',
-    '🏠 House Property',
-    '📈 Capital Gains',
-    '🏪 Business or Profession',
-    '💰 Other Sources',
-    '📋 Exempt Income',  // VR1-027, VR1-028 - CBDT mandatory
-    '➖ Deductions',
-    '🧾 TDS & Advance Tax',
-    ...(itrForm === 'ITR-2' ? ['🗂️ ITR-2 Schedules'] : []),
-    '🧮 Tax Computation'
+  const tabs: { label: string; icon?: string }[] = [
+    { label: 'Personal Info', icon: personalInfoIcon },
+    { label: 'Salary Income', icon: salaryIncomeIcon },
+    { label: 'House Property', icon: housePropertyIcon },
+    { label: 'Capital Gains', icon: capitalGainsIcon },
+    { label: '🏪 Business or Profession' },
+    { label: 'Other Sources', icon: otherSourcesIcon },
+    { label: 'Exempt Income', icon: exemptIncomeIcon },
+    { label: '➖ Deductions' },
+    { label: '🧾 TDS & Advance Tax' },
+    ...(itrForm === 'ITR-2' ? [{ label: '🗂️ ITR-2 Schedules' }] : []),
+    { label: 'Tax Computation', icon: taxComputationIcon }
   ];
 
   // Form changes can remove the conditional tab; keep the selected index valid.
@@ -1448,7 +1456,7 @@ export default function ITRComputationPage() {
               onClick={() => setShowImportMenu(!showImportMenu)}
               style={{
                 padding: '8px 14px',
-                background: '#16A34A',
+                background: '#5BB981',
                 color: '#000000',
                 border: 'none',
                 borderRadius: 6,
@@ -1604,7 +1612,7 @@ export default function ITRComputationPage() {
             disabled={saving}
             style={{
               padding: '6px 12px',
-              background: saving ? 'var(--border)' : '#16A34A',
+              background: saving ? 'var(--border)' : '#5BB981',
               color: '#000000',
               border: 'none',
               borderRadius: 6,
@@ -1625,7 +1633,7 @@ export default function ITRComputationPage() {
             disabled={validating}
             style={{
               padding: '6px 12px',
-              background: validating ? 'var(--border)' : '#16A34A',
+              background: validating ? 'var(--border)' : '#5BB981',
               color: '#000000',
               border: 'none',
               borderRadius: 6,
@@ -1647,7 +1655,7 @@ export default function ITRComputationPage() {
               title="Generate and download the official CBDT ITD-compliant JSON (ITR-1/ITR-4)"
               style={{
                 padding: '6px 12px',
-                background: '#16A34A',
+                background: '#5BB981',
                 color: '#000000',
                 border: 'none',
                 borderRadius: 6,
@@ -1664,7 +1672,7 @@ export default function ITRComputationPage() {
             onClick={handleDownloadPdf}
             style={{
               padding: '6px 12px',
-              background: '#16A34A',
+              background: '#5BB981',
               color: '#000000',
               border: 'none',
               borderRadius: 6,
@@ -1682,7 +1690,7 @@ export default function ITRComputationPage() {
             title="Launch a visible browser, log in to the ITD portal with the client's PAN + password, and leave the browser open for follow-up after-login tasks"
             style={{
               padding: '6px 12px',
-              background: '#16A34A',
+              background: '#5BB981',
               color: '#000000',
               border: 'none',
               borderRadius: 6,
@@ -1705,7 +1713,7 @@ export default function ITRComputationPage() {
                 padding: '6px 12px',
                 background: (filingSubmitting || filingJobId !== null)
                   ? 'var(--border)'
-                  : '#16A34A',
+                  : '#5BB981',
                 color: '#000000',
                 border: 'none',
                 borderRadius: 6,
@@ -1734,7 +1742,7 @@ export default function ITRComputationPage() {
                 padding: '6px 12px',
                 background: fetchingAck
                   ? 'var(--border)'
-                  : '#16A34A',
+                  : '#5BB981',
                 color: '#000000',
                 border: 'none',
                 borderRadius: 6,
@@ -1830,10 +1838,9 @@ export default function ITRComputationPage() {
         </div>
       )}
       {backendTaxResult?.filingComputationStatus === 'PROVISIONAL_COMMON_INCOME_PREVIEW' && (
-        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: '#eb6767', background: '#FDECEC', border: '1px solid #eb6767' }}>
-          <strong>Provisional preview only.</strong>{' '}
+        <CollapsibleWarning title="Provisional preview only">
           {backendTaxResult.filingComputationMessage}
-        </div>
+        </CollapsibleWarning>
       )}
 
       {validationReport && !validationReport.valid && (
@@ -1846,30 +1853,17 @@ export default function ITRComputationPage() {
       )}
 
       {validationReport && validationReport.valid && validationReport.warnings.length > 0 && (
-        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: '#eb6767', background: '#FDECEC', border: '1px solid #eb6767' }}>
-          <strong>Warnings ({validationReport.warnings.length}):</strong>
+        <CollapsibleWarning title={`Warnings (${validationReport.warnings.length})`}>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
             {validationReport.warnings.map((w, i) => <li key={i} style={{ fontSize: 13 }}>{w}</li>)}
           </ul>
-        </div>
+        </CollapsibleWarning>
       )}
 
       {/* Reconciliation Discrepancy Warning Banner */}
       {reconDiscrepancies.length > 0 && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: 8,
-          padding: '10px 14px',
-          marginBottom: 12,
-          background: '#FDECEC',
-          border: '1px solid #eb6767',
-          borderRadius: 8,
-          fontSize: 12,
-          color: '#eb6767',
-        }}>
-          <span style={{ fontSize: 16, flexShrink: 0 }}>⚠️</span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+        <CollapsibleWarning title="⚠️ Reconciliation discrepancies">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {reconDiscrepancies.map((msg: string, i: number) => (
               <span key={i}>{msg}</span>
             ))}
@@ -1889,7 +1883,7 @@ export default function ITRComputationPage() {
               Dismiss
             </button>
           </div>
-        </div>
+        </CollapsibleWarning>
       )}
 
     {/* ── Eligibility Banner (CBDT) ──────────────────────────────────── */}
@@ -1969,38 +1963,44 @@ export default function ITRComputationPage() {
       })()}
 
       <div style={{
-        background: '#cfe2f3',
+        background: '#1e3a5f',
         borderRadius: 'var(--radius) var(--radius) 0 0',
         marginBottom: 0,
         display: 'flex',
-        flexWrap: 'wrap',
-        border: '1px solid #000',
-        borderBottom: '1px solid #000'
+        flexWrap: 'nowrap',
+        overflowX: 'auto',
+        border: '1px solid #0f2438',
+        borderBottom: '1px solid #0f2438'
       }}>
         {tabs.map((tab, idx) => (
           <button
             key={idx}
             onClick={() => setActiveTab(idx)}
             style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
               padding: '12px 16px',
-              background: safeActiveTab === idx ? 'rgba(11, 25, 41, 0.10)' : 'transparent',
-              color: safeActiveTab === idx ? 'var(--navy)' : 'var(--text-secondary)',
+              background: safeActiveTab === idx ? 'rgba(201, 148, 58, 0.25)' : 'transparent',
+              color: safeActiveTab === idx ? '#FFFFFF' : '#CBD5E1',
               border: 'none',
-              borderBottom: safeActiveTab === idx ? '3px solid var(--navy)' : '3px solid transparent',
+              borderBottom: safeActiveTab === idx ? '3px solid var(--gold)' : '3px solid transparent',
               fontSize: 13,
               fontWeight: safeActiveTab === idx ? 600 : 400,
               cursor: 'pointer',
-              whiteSpace: 'nowrap'
+              whiteSpace: 'nowrap',
+              flexShrink: 0
             }}
           >
-            {tab}
+            {tab.icon && <img src={tab.icon} alt="" className={`itr-tab-icon${tab.label === 'Capital Gains' ? ' itr-tab-icon-capital-gains' : ''}`} />}
+            {tab.label}
           </button>
         ))}
       </div>
 
       <div style={{
         background: '#cfe2f3',
-        padding: 24,
+        padding: 10,
         borderRadius: '0 0 var(--radius) var(--radius)',
         border: '1px solid #000',
         borderTop: 0

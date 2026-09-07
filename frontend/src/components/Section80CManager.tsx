@@ -6,6 +6,15 @@
 import React, { useState, useMemo } from 'react';
 import { IndianNumberInput } from './IndianNumberInput';
 
+/** Renders a field label, turning a trailing " *" into a red asterisk. */
+function LabelText({ label }: { label: string }): React.JSX.Element {
+  const trimmed = label.trim();
+  if (trimmed.endsWith('*')) {
+    return <>{trimmed.slice(0, -1).trim()}<span style={{ color: 'var(--danger)' }}> *</span></>;
+  }
+  return <>{label}</>;
+}
+
 interface Investment80C {
   id: string;
   investmentType: string;
@@ -129,37 +138,37 @@ export const Section80CManager: React.FC<Section80CManagerProps> = ({ data, onCh
               <div style={{ padding: '12px 14px', borderTop: '1px solid #eee' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
                   <div>
-                    <label style={labelStyle}>Investment Type *</label>
+                    <label style={labelStyle}><LabelText label="Investment Type *" /></label>
                     <select value={inv.investmentType} onChange={e => updateInvestment(inv.id, 'investmentType', e.target.value)} style={inputStyle}>
                       {Object.entries(INVESTMENT_TYPES).map(([k, v]) => (<option key={k} value={k}>{v.label}</option>))}
                     </select>
                   </div>
                   <div>
-                    <label style={labelStyle}>Identification No *</label>
+                    <label style={labelStyle}><LabelText label="Identification No *" /></label>
                     <input type="text" value={inv.identificationNo || ''} onChange={e => updateInvestment(inv.id, 'identificationNo', e.target.value)}
                       placeholder="Investment identification number" maxLength={50} style={{ ...inputStyle, fontFamily: 'monospace' }} />
                   </div>
                   <div>
-                    <label style={labelStyle}>Account / Policy No *</label>
+                    <label style={labelStyle}><LabelText label="Account / Policy No *" /></label>
                     <input type="text" value={inv.accountOrPolicyNo || ''} onChange={e => updateInvestment(inv.id, 'accountOrPolicyNo', e.target.value)}
                       placeholder="Policy, PPF, folio or loan account" maxLength={50} style={{ ...inputStyle, fontFamily: 'monospace' }} />
                   </div>
                   <div>
-                    <label style={labelStyle}>Date of Investment *</label>
+                    <label style={labelStyle}><LabelText label="Date of Investment *" /></label>
                     <input type="date" value={inv.dateOfInvestment || ''} onChange={e => updateInvestment(inv.id, 'dateOfInvestment', e.target.value)} style={inputStyle} />
                   </div>
                   <div>
-                    <label style={labelStyle}>Institution Name *</label>
+                    <label style={labelStyle}><LabelText label="Institution Name *" /></label>
                     <input type="text" value={inv.institutionName || ''} onChange={e => updateInvestment(inv.id, 'institutionName', e.target.value)}
                       placeholder="Employer / Bank / AMC name" maxLength={125} style={inputStyle} />
                   </div>
                   <div>
-                    <label style={labelStyle}>Institution PAN *</label>
+                    <label style={labelStyle}><LabelText label="Institution PAN *" /></label>
                     <input type="text" value={inv.institutionPAN || ''} onChange={e => updateInvestment(inv.id, 'institutionPAN', e.target.value.toUpperCase().slice(0, 10))}
                       placeholder="ABCDE1234F" maxLength={10} style={{ ...inputStyle, fontFamily: 'monospace', textTransform: 'uppercase' }} />
                   </div>
                   <div>
-                    <label style={{ ...labelStyle, color: '#2e7d32' }}>Amount (₹) *</label>
+                    <label style={{ ...labelStyle, color: '#2e7d32' }}><LabelText label="Amount (₹) *" /></label>
                     <IndianNumberInput value={inv.amount || 0} onChange={v => updateInvestment(inv.id, 'amount', v)}
                       style={{ ...inputStyle, fontWeight: 600, color: '#2e7d32' }} />
                   </div>

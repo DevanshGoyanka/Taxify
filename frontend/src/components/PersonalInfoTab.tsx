@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BankAccountManager, type BankAccountData } from './BankAccountManager';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import { calculateAgeFromDob } from '../utils/age';
+import calendarIcon from '../../svgs/calender.svg';
 import type { CompanyDirectorEntry, CompanyType, ReturnDraft, UnlistedEquityEntry } from '../domain/returns/types';
 import {
   EMPLOYER_CATEGORY_OPTIONS,
@@ -46,10 +47,10 @@ interface AddressData {
   zipCode: string;
 }
 
-const CARD_STYLE: React.CSSProperties = { background: '#fff', border: '1px solid var(--border)', borderRadius: 8, padding: 18, marginBottom: 16 };
-const LABEL_STYLE: React.CSSProperties = { display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' };
-const INPUT_STYLE: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: '#fff' };
-const GRID_STYLE: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 14 };
+const CARD_STYLE: React.CSSProperties = { background: '#fff', border: '1px solid var(--border)', borderRadius: 8, padding: 8, marginBottom: 6 };
+const LABEL_STYLE: React.CSSProperties = { display: 'block', marginBottom: 2, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' };
+const INPUT_STYLE: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '6px 9px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: '#fff' };
+const GRID_STYLE: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 6 };
 const PAN_PATTERN = '[A-Z]{5}[0-9]{4}[A-Z]';
 const PIN_PATTERN = '[1-9][0-9]{5}';
 
@@ -65,10 +66,20 @@ function parseMoney(value: string): number {
 function bool(value: unknown): boolean { return value === true; }
 function blankAddress(): AddressData { return { residenceNo: '', residenceName: '', roadOrStreet: '', localityOrArea: '', city: '', stateCode: '', countryCode: '91', pinCode: '', zipCode: '' }; }
 
+/** Renders a field label, turning a trailing " *" into a red asterisk. */
+function LabelText({ label, required = false }: { label: string; required?: boolean }): React.JSX.Element {
+  const text = required ? `${label} *` : label;
+  const trimmed = text.trim();
+  if (trimmed.endsWith('*')) {
+    return <>{trimmed.slice(0, -1).trim()}<span style={{ color: 'var(--danger)' }}>*</span></>;
+  }
+  return <>{text}</>;
+}
+
 function Field({ label, value, onChange, type = 'text', required = false, pattern, maxLength, min, max, inputMode, help, disabled = false }: { label: string; value: string | number | undefined | null; onChange: (value: string) => void; type?: React.HTMLInputTypeAttribute; required?: boolean; pattern?: string; maxLength?: number; min?: number | string; max?: number | string; inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode']; help?: string; disabled?: boolean }): React.JSX.Element {
   const id = `personal-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
   return <div>
-    <label htmlFor={id} style={LABEL_STYLE}>{label}{required ? ' *' : ''}</label>
+    <label htmlFor={id} style={LABEL_STYLE}><LabelText label={label} required={required} /></label>
     <input id={id} type={type} value={value ?? ''} onChange={(event) => onChange(event.target.value)} required={required} pattern={pattern} maxLength={maxLength} min={min} max={max} inputMode={inputMode} disabled={disabled} style={INPUT_STYLE} />
     {help && <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11 }}>{help}</div>}
   </div>;
@@ -114,9 +125,9 @@ function VerificationDatePicker({ value, onChange, required = false }: { value: 
   };
 
   return <div ref={containerRef} className="verification-date-picker">
-    <label style={LABEL_STYLE}>Verification date{required ? ' *' : ''}</label>
+    <label style={LABEL_STYLE}><LabelText label="Verification date" required={required} /></label>
     <button type="button" className="verification-date-trigger" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
-      <span>{formatDisplayDate() || 'Pick a date'}</span><span aria-hidden="true">▣</span>
+      <span>{formatDisplayDate() || 'Pick a date'}</span><img src={calendarIcon} alt="" aria-hidden="true" className="verification-date-icon" />
     </button>
     {open && <div className="verification-calendar" role="dialog" aria-label="Choose verification date">
       <div className="verification-calendar-header">
@@ -143,11 +154,11 @@ function VerificationDatePicker({ value, onChange, required = false }: { value: 
 
 function SelectField({ label, value, onChange, children, required = false }: { label: string; value: string; onChange: (value: string) => void; children: React.ReactNode; required?: boolean }): React.JSX.Element {
   const id = `personal-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
-  return <div><label htmlFor={id} style={LABEL_STYLE}>{label}{required ? ' *' : ''}</label><select id={id} value={value} required={required} onChange={(event) => onChange(event.target.value)} style={INPUT_STYLE}>{children}</select></div>;
+  return <div><label htmlFor={id} style={LABEL_STYLE}><LabelText label={label} required={required} /></label><select id={id} value={value} required={required} onChange={(event) => onChange(event.target.value)} style={INPUT_STYLE}>{children}</select></div>;
 }
 
 function SectionHeading({ title, description }: { title: string; description: string }): React.JSX.Element {
-  return <div style={{ marginBottom: 16 }}><h3 style={{ margin: 0, fontSize: 16, color: 'var(--text-primary)' }}>{title}</h3><p style={{ margin: '5px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>{description}</p></div>;
+  return <div style={{ marginBottom: 6 }}><h3 style={{ margin: 0, fontSize: 16, color: 'var(--text-primary)' }}>{title}</h3><p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>{description}</p></div>;
 }
 
 function CheckField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }): React.JSX.Element {
@@ -302,8 +313,8 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       <CheckField label="Electricity expenditure exceeded ₹1 lakh" checked={filing.seventhProviso.electricityExpenditure} onChange={(checked) => updateFiling({ seventhProviso: { ...filing.seventhProviso, electricityExpenditure: checked } })} />
       {filing.seventhProviso.electricityExpenditure && <Field label="Electricity expenditure (₹)" value={moneyValue(filing.seventhProviso.electricityExpenditureAmount)} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, electricityExpenditureAmount: parseMoney(value) } })} type="number" required min={100000} help="Must be at least ₹1,00,000 — this declaration is only applicable above that threshold." />}
       <CheckField label="Other clause-(iv) threshold applies" checked={filing.seventhProviso.otherClauseIV} onChange={(checked) => updateFiling({ seventhProviso: { ...filing.seventhProviso, otherClauseIV: checked } })} />
-      {filing.seventhProviso.otherClauseIV && <div style={{ marginTop: 12 }}>
-        {filing.seventhProviso.clauseIVDetails.map((row, index) => <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 10 }}>
+      {filing.seventhProviso.otherClauseIV && <div style={{ marginTop: 6 }}>
+        {filing.seventhProviso.clauseIVDetails.map((row, index) => <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 5 }}>
           <SelectField label={`Clause ${index + 1} nature`} value={row.nature} onChange={(value) => updateFiling({ seventhProviso: { ...filing.seventhProviso, clauseIVDetails: filing.seventhProviso.clauseIVDetails.map((item) => item.id === row.id ? { ...item, nature: value as typeof row.nature } : item) } })} required>
             {(itrForm === 'ITR-4' ? ['1', '2', '3', '4'] : ['1', '2']).map((code) => <option key={code} value={code}>Nature {code}</option>)}
           </SelectField>
@@ -352,9 +363,9 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       {(personal.residentialStatus || 'ROR') === 'RNOR' && <CheckField label="Claiming Section 115H benefit (continued special-rate treatment for an NRI who becomes resident)" checked={filing.benefitUs115H} onChange={(checked) => updateFiling({ benefitUs115H: checked })} />}
       {filing.benefitUs115H && <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11 }}>Available only for a resident taxpayer who was formerly non-resident.</div>}
     </div>
-    <div style={{ marginTop: 16 }}>
-      <h4 style={{ margin: '0 0 10px', fontSize: 13 }}>Jurisdiction(s) of residence</h4>
-      {filing.jurisdictionResidenceEntries.map((row, index) => <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 10 }}>
+    <div style={{ marginTop: 6 }}>
+      <h4 style={{ margin: '0 0 5px', fontSize: 13 }}>Jurisdiction(s) of residence</h4>
+      {filing.jurisdictionResidenceEntries.map((row, index) => <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 5 }}>
         <SelectField label={`Jurisdiction ${index + 1} country`} value={row.jurisdictionCode} onChange={(value) => updateFiling({ jurisdictionResidenceEntries: filing.jurisdictionResidenceEntries.map((item) => item.id === row.id ? { ...item, jurisdictionCode: value } : item) })} required>
           <option value="">-- Select country --</option>
           {ITD_COUNTRY_CODES.map((country) => <option key={country.value} value={country.value}>{country.value} — {country.label}</option>)}
@@ -366,8 +377,8 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
     </div></div></>}
     {itrForm === 'ITR-2' && <><SectionHeading title="Director and unlisted-equity disclosures" description="Company directorships held and unlisted equity shares held at any time during the year." /><div style={CARD_STYLE}>
       <CheckField label="Assessee was a director in a company at any time during the year" checked={bool(personal.isDirector)} onChange={(checked) => updatePersonal({ isDirector: checked, companyDirectorEntries: checked ? personal.companyDirectorEntries : [] })} />
-      {bool(personal.isDirector) && <div style={{ marginTop: 12 }}>
-        {personal.companyDirectorEntries.map((row, index) => <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 10 }}>
+      {bool(personal.isDirector) && <div style={{ marginTop: 6 }}>
+        {personal.companyDirectorEntries.map((row, index) => <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 5 }}>
           <Field label={`Company ${index + 1} name`} value={row.companyName} onChange={(value) => updatePersonal({ companyDirectorEntries: personal.companyDirectorEntries.map((item) => item.id === row.id ? { ...item, companyName: value } : item) })} required maxLength={125} />
           <SelectField label={`Company ${index + 1} type`} value={row.companyType} onChange={(value) => updatePersonal({ companyDirectorEntries: personal.companyDirectorEntries.map((item) => item.id === row.id ? { ...item, companyType: value as CompanyDirectorEntry['companyType'] } : item) })} required>
             <option value="D">Domestic</option>
@@ -388,7 +399,7 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
         {bool(personal.holdsUnlistedShares) && <div style={{ marginTop: 12 }}>
           {personal.unlistedEquityEntries.map((row, index) => {
             const updateRow = (patch: Partial<UnlistedEquityEntry>): void => updatePersonal({ unlistedEquityEntries: personal.unlistedEquityEntries.map((item) => item.id === row.id ? { ...item, ...patch } : item) });
-            return <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid var(--border)' }}>
+            return <div key={row.id} style={{ ...GRID_STYLE, marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
               <Field label={`Company ${index + 1} name`} value={row.companyName} onChange={(value) => updateRow({ companyName: value })} required maxLength={125} />
               <SelectField label={`Company ${index + 1} type`} value={row.companyType} onChange={(value) => updateRow({ companyType: value as CompanyType })} required>
                 <option value="D">Domestic</option>
@@ -423,9 +434,9 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       <Field label="Representative email" value={filing.representative?.email || ''} onChange={(value) => updateFiling({ representative: { name: filing.representative?.name || '', email: value, mobileCountryCode: filing.representative?.mobileCountryCode || '91', mobile: filing.representative?.mobile || '' } })} required type="email" maxLength={125} />
       <Field label="Representative mobile country code" value={filing.representative?.mobileCountryCode || '91'} onChange={(value) => updateFiling({ representative: { name: filing.representative?.name || '', email: filing.representative?.email || '', mobileCountryCode: value.replace(/\D/g, '').slice(0, 5), mobile: filing.representative?.mobile || '' } })} required pattern="[0-9]{1,5}" maxLength={5} />
       <Field label="Representative mobile number" value={filing.representative?.mobile || ''} onChange={(value) => updateFiling({ representative: { name: filing.representative?.name || '', email: filing.representative?.email || '', mobileCountryCode: filing.representative?.mobileCountryCode || '91', mobile: value.replace(/\D/g, '').slice(0, 10) } })} required pattern="[1-9][0-9]{4,9}" maxLength={10} />
-    </div>}<label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 16, fontSize: 13 }}><input type="checkbox" checked={bool(verification.declarationAccepted)} onChange={(event) => updateVerification({ declarationAccepted: event.target.checked })} />I declare that the information given in this return and its schedules is correct and complete.</label></div>
+    </div>}<label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6, fontSize: 13 }}><input type="checkbox" checked={bool(verification.declarationAccepted)} onChange={(event) => updateVerification({ declarationAccepted: event.target.checked })} />I declare that the information given in this return and its schedules is correct and complete.</label></div>
     <SectionHeading title="Tax Return Preparer (TRP)" description="Optional. Fill only if a Tax Return Preparer prepared this return." />
-    <div style={CARD_STYLE}><SelectField label="Was this return prepared by a TRP?" value={taxReturnPreparer.used ? 'Y' : 'N'} onChange={(value) => onChange({ taxReturnPreparer: { used: value === 'Y' } })} required><option value="N">No</option><option value="Y">Yes</option></SelectField>{taxReturnPreparer.used && <div style={{ ...GRID_STYLE, marginTop: 16 }}><Field label="TRP identification number" value={taxReturnPreparer.identificationNumber} onChange={(value) => onChange({ taxReturnPreparer: { identificationNumber: value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) } })} required pattern="(T[0-9]{9}|[0-9]{6})" maxLength={10} help="Enter T followed by 9 digits, or a 6-digit legacy identifier." /><Field label="TRP name" value={taxReturnPreparer.name} onChange={(value) => onChange({ taxReturnPreparer: { name: value } })} required maxLength={125} /><Field label="Reimbursement from government (₹)" value={moneyValue(taxReturnPreparer.reimbursementFromGovernment)} onChange={(value) => onChange({ taxReturnPreparer: { reimbursementFromGovernment: parseMoney(value) } })} type="number" min={0} max={99999999999999} inputMode="numeric" /></div>}</div>
+    <div style={CARD_STYLE}><SelectField label="Was this return prepared by a TRP?" value={taxReturnPreparer.used ? 'Y' : 'N'} onChange={(value) => onChange({ taxReturnPreparer: { used: value === 'Y' } })} required><option value="N">No</option><option value="Y">Yes</option></SelectField>{taxReturnPreparer.used && <div style={{ ...GRID_STYLE, marginTop: 6 }}><Field label="TRP identification number" value={taxReturnPreparer.identificationNumber} onChange={(value) => onChange({ taxReturnPreparer: { identificationNumber: value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) } })} required pattern="(T[0-9]{9}|[0-9]{6})" maxLength={10} help="Enter T followed by 9 digits, or a 6-digit legacy identifier." /><Field label="TRP name" value={taxReturnPreparer.name} onChange={(value) => onChange({ taxReturnPreparer: { name: value } })} required maxLength={125} /><Field label="Reimbursement from government (₹)" value={moneyValue(taxReturnPreparer.reimbursementFromGovernment)} onChange={(value) => onChange({ taxReturnPreparer: { reimbursementFromGovernment: parseMoney(value) } })} type="number" min={0} max={99999999999999} inputMode="numeric" /></div>}</div>
     <SectionHeading title="Bank accounts and refund" description="Add all reportable accounts. Select exactly one refund account whenever a refund account is required." />
     <div style={CARD_STYLE}><BankAccountManager data={{ accounts: draft.bankAccounts }} onChange={onBanksChange} /></div>
     <div style={{ padding: 12, borderRadius: 6, background: 'var(--info-bg)', color: 'var(--info)', fontSize: 12 }}>Bank accounts are stored in the canonical draft and sent directly to the v2 repository.</div>

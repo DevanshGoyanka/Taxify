@@ -303,7 +303,7 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
     <FormWarning form={form} categories={incompatibilities} />
 
     {/* ═══ Section 1: Interest income (open) ═══ */}
-    <Section title="Interest income" subtitle="Sections 194A, 194K, 244A, 10(11)/10(12) provisos" badge={COMPACT_FORMS.has(form) ? form : undefined} defaultOpen={true} summary={inr(interestTotal)}>
+    <Section title="Interest income" subtitle="Sections 194A, 194K, 244A, 10(11)/10(12) provisos" badge={COMPACT_FORMS.has(form) ? form : undefined} badgeColor="var(--accent-blue)" defaultOpen={true} summary={inr(interestTotal)}>
       <div style={subSectionHeaderStyle}>
         <h3 style={sectionTitleStyle}>Interest Entries (CBDT Compliant)</h3>
         <button type="button" style={addButtonStyle} disabled={disabled} onClick={addInterest}>+ Add Interest Entry</button>
@@ -491,7 +491,7 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
     </Section>
 
     {/* ═══ Section 7: Advanced disclosures (collapsed) ═══ */}
-    <Section title="Advanced Other Sources disclosures" subtitle="Sections 68–69D, 89A, accumulated PF, DTAA, special-rate income" defaultOpen={false} badge={COMPACT_FORMS.has(form) ? 'ITR-2/3 only' : undefined} badgeColor="var(--accent-rose)">
+    <Section title="Advanced Other Sources disclosures" subtitle="Sections 68–69D, 89A, accumulated PF, DTAA, special-rate income" defaultOpen={false} badge={COMPACT_FORMS.has(form) ? 'ITR-2/3 only' : undefined} badgeColor="var(--accent-blue)">
       <FormWarning form={form} categories={['unexplained', 'dtaa', 'section89A', 'accumulatedPf', 'specialRate'].filter((c) => isCategoryPopulated(c as Category, os)) as Category[]} />
 
       {/* Unexplained income — sections 68–69D */}

@@ -828,7 +828,7 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
         </div>
       ))}
 
-      <div style={{ marginTop: 24, padding: 16, background: 'var(--gold-pale)', borderRadius: 6 }}>
+      <div style={{ marginTop: 24, padding: 16, background: '#ffffff', borderRadius: 6 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--gold)', marginBottom: 10 }}>Schedule-wise totals (claimed)</div>
         <Field label="Schedule TDS-1 — Salary TDS (TotalTDSonSalaries)" value={tdsBreakdown.tds1} computed />
         <Field label="Schedule TDS-2 — Non-salary TDS (TotalTDSonOthThanSals)" value={tdsBreakdown.tds2} computed />

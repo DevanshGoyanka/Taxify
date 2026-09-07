@@ -19,7 +19,6 @@ export default function LandingPage(): ReactElement {
           <img src={taxifyBlackLogo} alt="Taxify" />
         </Link>
         <div className="landing-nav-actions">
-          <a href="#about-us">About us</a>
           <a href="#pricing">Pricing</a>
           <Link className="landing-login-button" to="/login">
             Login
@@ -44,18 +43,6 @@ export default function LandingPage(): ReactElement {
                 Sign up
               </button>
             </div>
-          </div>
-        </section>
-
-        <section className="landing-about" id="about-us" aria-labelledby="about-title">
-          <div className="landing-about-inner">
-            <p className="landing-eyebrow">About Taxify</p>
-            <h2 id="about-title">A focused workspace for confident filing.</h2>
-            <p>
-              Taxify brings client information, income details, deductions, review,
-              and filing preparation together in one organized workspace for tax
-              professionals.
-            </p>
           </div>
         </section>
       </main>

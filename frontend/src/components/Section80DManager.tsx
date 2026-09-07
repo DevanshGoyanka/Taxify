@@ -12,6 +12,15 @@
 import React, { useState } from 'react';
 import { IndianNumberInput } from './IndianNumberInput';
 
+/** Renders a field label, turning a trailing " *" into a red asterisk. */
+function LabelText({ label }: { label: string }): React.JSX.Element {
+  const trimmed = label.trim();
+  if (trimmed.endsWith('*')) {
+    return <>{trimmed.slice(0, -1).trim()}<span style={{ color: 'var(--danger)' }}> *</span></>;
+  }
+  return <>{label}</>;
+}
+
 // ---- Per-policy entry (maps to Sch80DInsDtls) ----
 interface Policy80D {
   id: string;
@@ -131,7 +140,7 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
       {/* Senior citizen flags */}
       <div style={{ display: 'flex', gap: 20, marginBottom: 16, flexWrap: 'wrap' }}>
         <div>
-          <label style={labelStyle}>Self / Family *</label>
+          <label style={labelStyle}><LabelText label="Self / Family *" /></label>
           <select value={data.selfSeniorCitizen}
             onChange={e => onChange({ ...data, selfSeniorCitizen: e.target.value as 'Y' | 'N' | 'S' })}
             style={inputStyle}>
@@ -141,7 +150,7 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
           </select>
         </div>
         <div>
-          <label style={labelStyle}>Parents *</label>
+          <label style={labelStyle}><LabelText label="Parents *" /></label>
           <select value={data.parentsSeniorCitizen}
             onChange={e => onChange({ ...data, parentsSeniorCitizen: e.target.value as 'Y' | 'N' | 'P' })}
             style={inputStyle}>
@@ -237,22 +246,22 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
                     <div style={{ padding: '12px 14px', borderTop: '1px solid #eee' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
                         <div>
-                          <label style={labelStyle}>Insurer Name *</label>
+                          <label style={labelStyle}><LabelText label="Insurer Name *" /></label>
                           <input type="text" value={p.insurerName} onChange={e => updatePolicy(cm.key, p.id, 'insurerName', e.target.value)}
                             placeholder="e.g., Star Health, ICICI Lombard" maxLength={125} style={inputStyle} />
                         </div>
                         <div>
-                          <label style={labelStyle}>Policy Number *</label>
+                          <label style={labelStyle}><LabelText label="Policy Number *" /></label>
                           <input type="text" value={p.policyNo} onChange={e => updatePolicy(cm.key, p.id, 'policyNo', e.target.value)}
                             placeholder="Policy number" maxLength={75} style={inputStyle} />
                         </div>
                         <div>
-                          <label style={labelStyle}>Premium Amount (₹) *</label>
+                          <label style={labelStyle}><LabelText label="Premium Amount (₹) *" /></label>
                           <IndianNumberInput value={p.premiumAmount || 0} onChange={v => updatePolicy(cm.key, p.id, 'premiumAmount', v)}
                             style={{ ...inputStyle, fontWeight: 600 }} />
                         </div>
                         <div>
-                          <label style={labelStyle}>Policy Type *</label>
+                          <label style={labelStyle}><LabelText label="Policy Type *" /></label>
                           <select value={p.policyType || 'INDIVIDUAL'} onChange={e => updatePolicy(cm.key, p.id, 'policyType', e.target.value)} style={inputStyle}>
                             <option value="INDIVIDUAL">Individual</option>
                             <option value="FAMILY_FLOATER">Family Floater</option>
@@ -261,7 +270,7 @@ export const Section80DManager: React.FC<Section80DManagerProps> = ({ data, onCh
                           </select>
                         </div>
                         <div>
-                          <label style={labelStyle}>Date of Commencement *</label>
+                          <label style={labelStyle}><LabelText label="Date of Commencement *" /></label>
                           <input type="date" value={p.dateOfCommencement || ''} onChange={e => updatePolicy(cm.key, p.id, 'dateOfCommencement', e.target.value)} style={inputStyle} />
                         </div>
                       </div>

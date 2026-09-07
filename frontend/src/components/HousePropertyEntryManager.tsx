@@ -6,6 +6,15 @@ const MONEY_MAX = 99999999999999;
 const PAN_PATTERN = '[A-Z]{5}[0-9]{4}[A-Z]';
 const PAN_TAN_PATTERN = '(?:[A-Z]{5}[0-9]{4}[A-Z]|[A-Z]{4}[0-9]{5}[A-Z])';
 const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: '#fff', color: 'var(--text-primary)' };
+
+/** Renders a field label, turning a trailing " *" into a red asterisk. */
+function LabelText({ label }: { label: string }): React.ReactElement {
+  const trimmed = label.trim();
+  if (trimmed.endsWith('*')) {
+    return <>{trimmed.slice(0, -1).trim()}<span style={{ color: 'var(--danger)' }}> *</span></>;
+  }
+  return <>{label}</>;
+}
 const gridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 16 };
 const labelStyle: React.CSSProperties = { display: 'block', marginBottom: 5, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' };
 
@@ -112,9 +121,9 @@ export function HousePropertyEntryManager({ entries, passThroughIncome, onChange
 
 function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement { return <section><h4 style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '20px 0 12px' }}>{title}</h4>{children}</section>; }
 function Rows({ title, add, children }: { title: string; add: () => void; children: React.ReactNode }): React.ReactElement { return <div style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 6, marginBottom: 16 }}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}><strong style={{ fontSize: 12 }}>{title}</strong><button type="button" onClick={add} style={{ background: 'var(--gold)', color: '#fff', border: 0, borderRadius: 5, padding: '5px 9px' }}>+ Add</button></div>{children}</div>; }
-function Field({ label, value, onValue, type = 'number', ...props }: FieldProps): React.ReactElement { return <div><label style={labelStyle}>{label}</label><input {...props} type={type} value={value ?? ''} onChange={(event) => onValue(type === 'number' ? Number(event.target.value) : event.target.value)} style={inputStyle} /></div>; }
+function Field({ label, value, onValue, type = 'number', ...props }: FieldProps): React.ReactElement { return <div><label style={labelStyle}><LabelText label={label} /></label><input {...props} type={type} value={value ?? ''} onChange={(event) => onValue(type === 'number' ? Number(event.target.value) : event.target.value)} style={inputStyle} /></div>; }
 function Money(props: Omit<FieldProps, 'type'>): React.ReactElement { return <Field {...props} type="number" min={0} max={MONEY_MAX} step="1" inputMode="numeric" />; }
-function Select({ label, value, options, onChange, required }: { label: string; value: string; options: Array<[string,string]>; onChange: (value: string) => void; required?: boolean }): React.ReactElement { return <div><label style={labelStyle}>{label}</label><select value={value} required={required} onChange={(event) => onChange(event.target.value)} style={inputStyle}>{options.map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></div>; }
+function Select({ label, value, options, onChange, required }: { label: string; value: string; options: Array<[string,string]>; onChange: (value: string) => void; required?: boolean }): React.ReactElement { return <div><label style={labelStyle}><LabelText label={label} /></label><select value={value} required={required} onChange={(event) => onChange(event.target.value)} style={inputStyle}>{options.map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></div>; }
 function Remove({ onClick }: { onClick: () => void }): React.ReactElement { return <div><button type="button" onClick={onClick} style={{ background: 'var(--danger)', color: '#fff', border: 0, borderRadius: 4, padding: '7px 9px' }}>Remove</button></div>; }
-function NumberReadout({ label, value }: { label: string; value: number }): React.ReactElement { return <div><label style={labelStyle}>{label}</label><input readOnly type="number" value={value} style={{ ...inputStyle, background: '#f8fafc' }} /></div>; }
-function Readout({ label, value }: { label: string; value: number | null }): React.ReactElement { return <div><label style={labelStyle}>{label}</label><input readOnly value={value === null ? '—' : `₹${Number(value).toLocaleString('en-IN')}`} style={{ ...inputStyle, background: '#f8fafc' }} /></div>; }
+function NumberReadout({ label, value }: { label: string; value: number }): React.ReactElement { return <div><label style={labelStyle}><LabelText label={label} /></label><input readOnly type="number" value={value} style={{ ...inputStyle, background: '#f8fafc' }} /></div>; }
+function Readout({ label, value }: { label: string; value: number | null }): React.ReactElement { return <div><label style={labelStyle}><LabelText label={label} /></label><input readOnly value={value === null ? '—' : `₹${Number(value).toLocaleString('en-IN')}`} style={{ ...inputStyle, background: '#f8fafc' }} /></div>; }

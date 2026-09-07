@@ -129,7 +129,7 @@ export default function ImportConfirmationModal({
 
   const btnPrimary: React.CSSProperties = {
     padding: '8px 16px',
-    background: 'var(--gold)',
+    background: '#16a34a',
     color: 'white',
     border: 'none',
     borderRadius: 6,
