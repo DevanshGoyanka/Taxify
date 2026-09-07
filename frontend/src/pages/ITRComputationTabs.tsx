@@ -954,6 +954,17 @@ export function TaxComputationTab({ taxResult, regime, itrForm }: any) {
             </>
           )}
 
+          {/* ── LTCG u/s 112A — included in GTI below but was previously
+              never shown as its own income-head row, so the jump from
+              Other Sources straight to Gross Total Income was unexplained
+              whenever a taxpayer had a real capital-gains entry. ── */}
+          {Number(taxResult.capitalGains112A) > 0 && (
+            <tr>
+              <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Long-Term Capital Gains (u/s 112A)</td>
+              <td className="mono" style={{ padding: '8px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{INR(taxResult.capitalGains112A)}</td>
+            </tr>
+          )}
+
           {/* ── GTI ── */}
           <tr style={{ borderTop: '2px solid var(--border)' }}>
             <td style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600 }}>Gross Total Income</td>

@@ -323,12 +323,36 @@ def _summary_from_result(
         # ITR-4 filer sees) reads these directly off the top of the summary
         # object, not from the nested "breakdown" block below -- most of
         # them were never included here at all, so the tab silently showed
-        # Rs 0 for real, non-zero computed values (D2 rebate, D3 tax after
-        # rebate, D4 cess, D5 gross tax liability, D6 relief u/s 89, D7-D9
-        # interest by section, D10/D10a fees) any time the true figure
+        # Rs 0 for real, non-zero computed values any time the true figure
         # wasn't coincidentally already zero. Sourced directly from the
         # already-computed ITR1Result/ITR4Result fields -- no new
         # computation, this was purely a missing-serialization gap.
+        #
+        # Each field below is a REAL official-schema field with an exact
+        # ITR1_TaxComputation/TaxPaid JSON counterpart, sourced from the
+        # identical ITR1Result/ITR4Result field the JSON builder
+        # (app/engine/itd/itr1.py) also reads -- both are built from the
+        # one canonical `result` object compute_canonical_itr1() computes
+        # exactly once (see generate_cbdt_json(), which reuses
+        # `pipeline.computation` for build_itr1_json() rather than
+        # recomputing), so the two can never drift. Cross-checked
+        # byte-for-byte against a real generated JSON in
+        # tests/test_filing_gateway_v2.py::
+        # test_summary_tax_computation_fields_match_the_real_generated_json_exactly.
+        # Official field / form line each maps to:
+        #   rebate87A            -> Rebate87A            (D2)
+        #   taxPayableOnRebate   -> TaxPayableOnRebate    (D3)
+        #   cess                 -> EducationCess         (D4)
+        #   grossTaxLiability    -> GrossTaxLiability      (D5)
+        #   section89            -> Section89              (D6)
+        #   interest234A/B/C     -> IntrstPay.IntrstPayUs234A/B/C (D7-D9)
+        #   lateFee234F          -> IntrstPay.LateFilingFee234F  (D10)
+        #   fees234I             -> IntrstPay.FeeFurnish234I     (D10(a))
+        # `surcharge` has no separate ITR1_TaxComputation field at all --
+        # confirmed against the official schema (only EducationCess is a
+        # named Part D component besides tax/rebate/relief/interest/fees);
+        # any real surcharge amount is already embedded inside
+        # GrossTaxLiability's own value, not double-counted here.
         "rebate87A": _decimal_float(result.rebate_87a),
         "taxPayableOnRebate": _decimal_float(result.tax_after_rebate),
         "grossTaxLiability": _decimal_float(result.gross_tax_liability),
@@ -341,6 +365,19 @@ def _summary_from_result(
         "lateFee234F": _decimal_float(result.late_fee_234f),
         "fees234I": _decimal_float(result.fees_234i),
         # ── Total-income / Section 288A rounding (Part B4/C2) ──
+        # UNLIKE the block above, NONE of the five fields immediately below
+        # have their own official ITR1_TaxComputation JSON field -- the
+        # official schema/form only ever discloses the FINAL slab-tax
+        # figure (TotalTaxPayable / D1), never the basic-exemption-limit/
+        # normal-rate-income/rounding breakdown that produces it. These are
+        # Taxify-computed transparency figures for the live preview only,
+        # not literal form line items -- each is still exactly correct
+        # (sourced from the real ITR1Result fields the calculator already
+        # produces, not invented), just without a JSON field to cross-check
+        # against the way the D2-D10(a) block above can be. Documented here
+        # explicitly so a future reader does not assume these are official
+        # fields.
+        #
         # basic_exemption_limit/normal_rate_income/income_chargeable_above_
         # basic_exemption/nil_tax_reason/total_income_before_288a/
         # rounding_adjustment_288a exist on ITR1Result but not ITR4Result
@@ -374,6 +411,13 @@ def _summary_from_result(
         "otherIncome": _decimal_float(result.other_sources_income),
         "familyPensionDed": _decimal_float(deduction_57iia),
         "deductUs57iia": _decimal_float(deduction_57iia),
+        # ── LTCG u/s 112A (Part B, included in GTI but not shown as its own
+        # income-head row anywhere the tab previously read). Maps exactly
+        # to the official LTCG112A.LongCap112A JSON field -- both read the
+        # identical result.capital_gains_112a (app/engine/itd/itr1.py:2070
+        # passes the same field as long_cap_112a), so this is guaranteed
+        # consistent with the real generated JSON by construction. ──
+        "capitalGains112A": _decimal_float(result.capital_gains_112a),
         # ── Deductions (Part C) aliases the tab reads under a different key ──
         "deductChapVIA": _decimal_float(result.deductions_total),
         "deductionBreakdown": deduction_breakdown,

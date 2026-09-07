@@ -139,6 +139,7 @@ def test_summary_exposes_full_tax_computation_breakdown_at_top_level() -> None:
     assert summary["grossSalary"] == float(result.salary_gross)
     assert summary["standardDeduction"] == float(result.salary_deduction_us16ia)
     assert summary["deductionBreakdown"] == summary["breakdown"]["deductions"]
+    assert summary["capitalGains112A"] == float(result.capital_gains_112a)
 
 
 def test_generate_reuses_one_computation_for_summary_and_json(
@@ -243,6 +244,49 @@ def test_itr1_net_tax_liability_json_field_excludes_interest_and_fees() -> None:
     # TotTaxPlusIntrstPay must be the true final total: NetTaxLiability plus
     # everything in IntrstPay (234A/B/C + 234F + 234-I).
     assert tc["TotTaxPlusIntrstPay"] == tc["NetTaxLiability"] + tc["TotalIntrstPay"]
+
+
+def test_summary_tax_computation_fields_match_the_real_generated_json_exactly() -> None:
+    """The live Tax Computation tab's summary fields (§34 of the ITR-1
+    audit doc) must not merely be non-zero -- for every field that has a
+    real official ITR1_TaxComputation/TaxPaid/Refund JSON counterpart, the
+    summary value must be byte-for-byte identical to what
+    generate_cbdt_json() actually emits for the exact same draft. This is
+    only guaranteed because both are built from the one canonical
+    `pipeline.computation` object (compute_itr1() is called exactly once
+    per compute_canonical_itr1()); this test proves it holds rather than
+    asserting it as an architectural claim. Uses the same late-filing
+    fixture as the two tests above (real, non-zero 234A interest and 234F
+    late fee -- not a scenario where every field being zero would mask a
+    drift bug)."""
+    draft = _filing_ready_draft()
+    draft.verification.date = "2027-01-15"
+    draft.filing.filingSection = "139(4)"
+    draft.employers = [Employer(
+        id="e1", basic=Decimal("1500000"), tdsDeducted=Decimal("0"),
+    )]
+
+    official, summary = gateway.generate_cbdt_json(draft)
+    tc = official["ITR"]["ITR1"]["ITR1_TaxComputation"]
+    tax_paid = official["ITR"]["ITR1"]["TaxPaid"]
+
+    # Sanity: this scenario genuinely exercises non-zero interest/fees/
+    # rebate, not a degenerate all-zero case.
+    assert tc["IntrstPay"]["IntrstPayUs234A"] > 0
+    assert tc["IntrstPay"]["LateFilingFee234F"] > 0
+
+    assert summary["rebate87A"] == tc["Rebate87A"]
+    assert summary["taxPayableOnRebate"] == tc["TaxPayableOnRebate"]
+    assert summary["grossTaxLiability"] == tc["GrossTaxLiability"]
+    assert summary["section89"] == tc["Section89"]
+    assert summary["cess"] == tc["EducationCess"]
+    assert summary["interest234A"] == tc["IntrstPay"]["IntrstPayUs234A"]
+    assert summary["interest234B"] == tc["IntrstPay"]["IntrstPayUs234B"]
+    assert summary["interest234C"] == tc["IntrstPay"]["IntrstPayUs234C"]
+    assert summary["lateFee234F"] == tc["IntrstPay"]["LateFilingFee234F"]
+    assert summary["netTaxLiability"] == tc["TotTaxPlusIntrstPay"]
+    assert summary["totalTaxesPaid"] == tax_paid["TaxesPaid"]["TotalTaxesPaid"]
+    assert summary["balTaxPayable"] == tax_paid["BalTaxPayable"]
 
     # And it must be strictly greater than NetTaxLiability, since real
     # interest/fees were incurred -- the two fields must NOT be equal here
@@ -680,4 +724,21 @@ def test_compute_canonical_itr1_purchase_only_does_not_fabricate_112a_gain() -> 
     # The gain must be 0 (sale - cost floored at 0), so ITR-1 stays eligible.
     assert result.computation.capital_gains_112a == Decimal("0")
     assert not result.computation.errors
+
+
+def test_summary_capital_gains_112a_matches_the_real_generated_json_exactly() -> None:
+    """summary["capitalGains112A"] (the new Tax Computation tab income-head
+    row, §34 of the ITR-1 audit doc) must be byte-for-byte identical to
+    the official LTCG112A.LongCap112A JSON field for the same draft --
+    both are sourced from the identical result.capital_gains_112a."""
+    draft = _filing_ready_draft()
+    draft.capitalGainsSchedule = CapitalGainsSchedule(
+        simplified112A={
+            "totalSaleConsideration": Decimal("300000"),
+            "totalCostAcquisition": Decimal("200000"),
+        },
+    )
+    official, summary = gateway.generate_cbdt_json(draft)
+    assert summary["capitalGains112A"] > 0
+    assert summary["capitalGains112A"] == official["ITR"]["ITR1"]["LTCG112A"]["LongCap112A"]
 
