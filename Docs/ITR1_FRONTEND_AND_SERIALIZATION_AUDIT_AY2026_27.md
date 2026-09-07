@@ -2823,4 +2823,35 @@ this pass's specific min/max cross-reference did not surface anything those pass
 
 ### 33.4 Part D — Computation of Tax Payable
 
-Read against `ITR1_TaxComputation` next. Not yet started as of this section.
+Read against `ITR1_TaxComputation` (D1-D6, D11), `IntrstPay` (D7-D10(a)), and `TaxPaid`/`Refund`
+(D12-D14). No new discrepancy found — every field this part covers checks out on direct re-read:
+
+- **`Rebate87A`'s schema maximum (Rs 60,000)** matches `app/engine/constants.py`'s
+  `NEW_REBATE_TAX_LIMIT = Decimal("60000")` exactly (the enhanced new-regime Section 87A rebate,
+  Finance Act 2025).
+- **`NetTaxLiability`/`TotTaxPlusIntrstPay`** — the exact field-name/description trap CLAUDE.md's
+  own architecture notes warn about generally (`NetTaxLiability` is documented "Balance Tax After
+  Relief," a *pre*-interest/fees quantity, despite the tempting-but-wrong assumption that a field
+  named "Net Tax Liability" should be the fully-final total) — confirmed still correctly resolved
+  for ITR-1 specifically: `app/engine/itd/itr1.py:647` maps `NetTaxLiability` to
+  `balance_tax_after_relief` (correct, matches the schema's own description) and
+  `TotTaxPlusIntrstPay` (line 656) to the real final `net_tax_liability` (interest/fees included).
+  This is this document's own §26 fix, re-verified rather than assumed still correct.
+- **D10(a) / `FeeFurnish234I` (Section 234-I, the AY 2026-27-era fee for furnishing a revised
+  return after 31 December)** is fully implemented end-to-end — `app/engine/common/interest.py`
+  computes it, `app/engine/validators/itr1/input_rules.py` rules R324/R328 gate it, and
+  `app/engine/itd/itr1.py:654` emits it — confirmed *not* a gap despite being one of the newer
+  additions to the form; the sibling ITR-2/ITR-3 builders still hardcode this field to `0`
+  (`app/engine/itd/itr2.py:2699`, `itr3.py:913`), correctly out of scope for this ITR-1 pass.
+- **D13/D14 mutual exclusivity** (`app/engine/calculators/itr1.py:613-626`): `balance_payable` and
+  `refund_due` are set from a single `if diff > 0: ... else: ...` branch, so exactly one is
+  nonzero (or both zero) — matches the form's own "(D11-D12) if D11>D12" / "(D12-D11) if D12>D11"
+  framing exactly, both correctly rounded to the nearest Rs 10 (Section 288B) via
+  `round_to_nearest_10`, applied only at this final step (the pre-rounding `net_tax_liability` is
+  retained separately so TDS/TCS/challan reconciliation stays exact to the rupee beforehand).
+
+No new fix in this section.
+
+### 33.5 Part E — Other Information (Bank Accounts)
+
+Read against `BankAccountDtls`/`AddtnlBankDetails` next. Not yet started as of this section.
