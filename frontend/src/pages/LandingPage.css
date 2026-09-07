@@ -1,6 +1,6 @@
 .landing-page {
   min-height: 100vh;
-  background: #F7F7F5;
+  background: #d2d4dc;
   color: #111827;
   font-family: 'Raleway', Arial, sans-serif;
 }
@@ -141,6 +141,15 @@
   gap: 18px;
 }
 
+.landing-eyebrow {
+  margin: 0 0 14px;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .landing-hero h1 {
   width: 686.4px;
   max-width: 100%;
@@ -164,7 +173,7 @@
   transition: color 0.2s ease;
 }
 
-.landing-hero:hover .landing-hero-f {
+.landing-hero-f-selected {
   color: #16a34a;
 }
 
@@ -180,6 +189,34 @@
   color: #4b5563;
   font-size: clamp(18px, 2.2vw, 24px);
   line-height: 1.4;
+}
+
+.landing-about {
+  padding: 84px 24px;
+  border-top: 1px solid #d1d5db;
+  background: #ffffff;
+}
+
+.landing-about-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.landing-about h2 {
+  margin: 0 0 16px;
+  color: #111827;
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.15;
+}
+
+.landing-about p:last-child {
+  margin: 0 auto;
+  max-width: 620px;
+  color: #4b5563;
+  font-size: 16px;
+  line-height: 1.75;
 }
 
 @media (max-width: 560px) {
@@ -209,6 +246,10 @@
   .landing-cta,
   .landing-talk-button {
     width: min(100%, 260px);
+  }
+
+  .landing-about {
+    padding: 64px 20px;
   }
 }
 
