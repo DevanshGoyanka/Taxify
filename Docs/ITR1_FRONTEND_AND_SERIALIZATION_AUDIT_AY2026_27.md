@@ -3232,3 +3232,60 @@ ITR-3 is out of scope for both this document and the current ITR-2 production-re
 `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md`'s explicit scope boundary), and touching it here
 would mix an ITR-1-audit commit with unrelated ITR-3 changes. Flagged here as a forward pointer
 for whoever picks up ITR-3.
+
+### 34.8 User pushback caught two more real issues in the same Salary Summary panel §34.7 had
+just touched: a frontend-computed total that should never have existed, and a second field-name
+bug the same class as §34.7 but not yet found there
+
+While reporting §34.7's live verification (the Salary tab's "Locally entered gross salary for
+this employer" now correctly reading ₹6,00,000 instead of ₹0), the user pushed back with two
+concrete objections instead of accepting the fix at face value: **(1)** this figure "must come
+from the backend live, never calculated by frontend" — and **(2)** "how can the gross salary and
+net salary be same!?", pointing at the same screenshot's "Schedule S — Salary Summary" panel
+showing GROSS SALARY ₹6,00,000, SECTION 16 DEDUCTIONS ₹0, and NET TAXABLE SALARY ₹5,50,000 side
+by side — arithmetically impossible together (₹6,00,000 minus a real ₹0 deduction cannot equal
+₹5,50,000).
+
+**Issue 1 — a client-side "gross salary" preview should not exist at all.** The line the user
+objected to (`EmployerEntryManager.tsx`'s per-employer `gross` variable, summing `entry.basic +
+entry.da + entry.hra + ...` locally) was exactly the value §34.7 had just "fixed" by correcting
+its `money()` type-coercion bug. But fixing the *symptom* (wrong ₹0) left the underlying *design*
+risk intact: any client-side re-derivation of a monetary total can drift from the backend's
+authoritative computation, which is precisely how §34.7's bug happened in the first place. The
+aggregate "Schedule S — Salary Summary" panel immediately below it already sources GROSS SALARY
+from `backendResult?.grossSalary` (the live tax-engine result) — a second, redundant,
+frontend-computed "gross" figure for the same concept serves no purpose that panel doesn't already
+serve, and only reintroduces the drift risk. **Fix**: deleted the `gross` computation and its
+"Locally entered gross salary for this employer" display block entirely (was labeled "locally
+entered" and already caveated as provisional, but per the user's instruction such values should
+not be computed client-side at all, not merely disclosed as provisional).
+
+**Issue 2 — the very panel the user was reading from had a second, independent field-name bug of
+the same class §34.7 fixed elsewhere, that §34.7 itself missed.** `SECTION 16 DEDUCTIONS` read
+`backendResult?.totalSection16Deductions` — a field that does not exist anywhere in the actual
+`/v2/tax-summary/compute` response (confirmed against the live raw JSON, which carries
+`deductionUs16` instead). `BackendResult`'s local TypeScript interface *declared*
+`totalSection16Deductions?: number` itself, so the mismatch compiled cleanly and was invisible to
+`tsc` — a self-invented field name never validated against the real API contract, the same
+"schema vocabulary vs. calculator vocabulary don't necessarily match" trap this document's own
+methodology (CLAUDE.md) warns about for the ITD JSON layer, here recurring in a hand-typed
+frontend interface instead. `money(undefined)` correctly returns `0` for a missing field, so the
+display looked plausible (a real-looking ₹0) rather than crashing or looking obviously broken —
+exactly why it took a human re-checking the arithmetic, not an automated check, to catch it.
+**Fix**: renamed the interface field to `deductionUs16` and updated the one read site to match.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 187/187, `npm run build` clean. Live
+re-verified in the browser: the Salary Summary panel now reads GROSS SALARY ₹6,00,000 → SECTION
+16 DEDUCTIONS ₹50,000 → NET TAXABLE SALARY ₹5,50,000 (600000 − 50000 = 550000, internally
+consistent for the first time), and the "Locally entered gross salary" line is gone from the
+per-employer form entirely — the Salary tab now has exactly one source of truth for every
+monetary figure it shows: the live backend computation.
+
+**Process note, not just a code note**: this is the second time in this document (see §34's own
+opening) that user-directed live testing, not static code review, found the real bug — and this
+specific instance is one step further: it was live testing of a fix I had already made and
+reported as verified. "I fixed the wrong number" and "I fixed the *right* number, sourced from the
+right place" are different claims, and only the second one is what this audit is supposed to
+guarantee. Re-reading a panel's own arithmetic for internal consistency (not just "is the
+₹0 gone") should be a standard part of verifying any financial-summary fix in this codebase going
+forward.
