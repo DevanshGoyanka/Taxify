@@ -248,6 +248,15 @@ def _summary_from_result(
     """Build the v2 response while preserving legacy headline aliases."""
     deductions = result.schedules.get("deductions") if result.schedules else None
     raw_deductions = getattr(deductions, "breakdown", {}) if deductions else {}
+    os_result = result.schedules.get("os") if result.schedules else None
+    deduction_57iia = getattr(os_result, "deduction_57iia", Decimal("0")) if os_result else Decimal("0")
+    total_section_10_exempt = (
+        result.salary_hra_exempt + result.salary_lta_exempt + result.salary_gratuity_exempt
+        + result.salary_leave_encashment_exempt + result.salary_vrs_exempt
+        + result.salary_commutted_pension_exempt + result.salary_transport_exempt
+        + result.salary_children_education_exempt + result.salary_hostel_exempt
+        + result.salary_uniform_allowance_exempt
+    )
     deduction_breakdown = {
         str(key): _decimal_float(value) for key, value in raw_deductions.items()
     }
@@ -307,7 +316,70 @@ def _summary_from_result(
         "refundDue": refund,
         "hpIncome": _decimal_float(result.house_property_income),
         "totalIncChargeHP": _decimal_float(result.house_property_income),
+        "incomeFromHouseProperty": _decimal_float(result.house_property_income),
         "housePropertyDetails": house_property_details,
+        # ── ITR1_TaxComputation (Part D) breakdown, as top-level fields ──
+        # TaxComputationTab.tsx (the live Tax Computation tab every ITR-1/
+        # ITR-4 filer sees) reads these directly off the top of the summary
+        # object, not from the nested "breakdown" block below -- most of
+        # them were never included here at all, so the tab silently showed
+        # Rs 0 for real, non-zero computed values (D2 rebate, D3 tax after
+        # rebate, D4 cess, D5 gross tax liability, D6 relief u/s 89, D7-D9
+        # interest by section, D10/D10a fees) any time the true figure
+        # wasn't coincidentally already zero. Sourced directly from the
+        # already-computed ITR1Result/ITR4Result fields -- no new
+        # computation, this was purely a missing-serialization gap.
+        "rebate87A": _decimal_float(result.rebate_87a),
+        "taxPayableOnRebate": _decimal_float(result.tax_after_rebate),
+        "grossTaxLiability": _decimal_float(result.gross_tax_liability),
+        "section89": _decimal_float(result.relief_89),
+        "surcharge": _decimal_float(result.surcharge),
+        "cess": _decimal_float(result.health_education_cess),
+        "interest234A": _decimal_float(result.interest_234a),
+        "interest234B": _decimal_float(result.interest_234b),
+        "interest234C": _decimal_float(result.interest_234c),
+        "lateFee234F": _decimal_float(result.late_fee_234f),
+        "fees234I": _decimal_float(result.fees_234i),
+        # ── Total-income / Section 288A rounding (Part B4/C2) ──
+        # basic_exemption_limit/normal_rate_income/income_chargeable_above_
+        # basic_exemption/nil_tax_reason/total_income_before_288a/
+        # rounding_adjustment_288a exist on ITR1Result but not ITR4Result
+        # (ITR-4's calculator never split these out) -- getattr with a
+        # sensible fallback keeps this function safe for both callers
+        # instead of raising AttributeError for ITR-4.
+        "totalIncomeBefore288A": _decimal_float(
+            getattr(result, "total_income_before_288a", result.taxable_income)
+        ),
+        "roundingAdjustment288A": _decimal_float(
+            getattr(result, "rounding_adjustment_288a", Decimal("0"))
+        ),
+        "basicExemptionLimit": _decimal_float(getattr(result, "basic_exemption_limit", Decimal("0"))),
+        "normalRateIncome": _decimal_float(getattr(result, "normal_rate_income", Decimal("0"))),
+        "incomeChargeableAboveBasicExemption": _decimal_float(
+            getattr(result, "income_chargeable_above_basic_exemption", Decimal("0"))
+        ),
+        "nilTaxReason": getattr(result, "nil_tax_reason", None),
+        # ── Schedule S (Part B1) breakdown ──
+        "grossSalary": _decimal_float(result.salary_gross),
+        "netSalary": _decimal_float(result.salary_net),
+        "incomeFromSal": _decimal_float(result.salary_income),
+        "salaryBeforeSection16": _decimal_float(result.salary_net),
+        "deductionUs16": _decimal_float(result.salary_deduction_us16),
+        "standardDeduction": _decimal_float(result.salary_deduction_us16ia),
+        "entertainmentAllowanceDed": _decimal_float(result.salary_entertainment_allowance),
+        "professionalTaxDed": _decimal_float(result.salary_professional_tax),
+        "totalSection10Exempt": _decimal_float(total_section_10_exempt),
+        # ── Other Sources (Part B3) ──
+        "incomeOthSrc": _decimal_float(result.other_sources_income),
+        "otherIncome": _decimal_float(result.other_sources_income),
+        "familyPensionDed": _decimal_float(deduction_57iia),
+        "deductUs57iia": _decimal_float(deduction_57iia),
+        # ── Deductions (Part C) aliases the tab reads under a different key ──
+        "deductChapVIA": _decimal_float(result.deductions_total),
+        "deductionBreakdown": deduction_breakdown,
+        # ── Presumptive business income (ITR-4 only; absent on ITR1Result,
+        # correctly zero for ITR-1) ──
+        "bizIncome": _decimal_float(getattr(result, "presumptive_income", Decimal("0"))),
         "breakdown": {
             "income": {
                 "salary": _decimal_float(result.salary_income),
@@ -335,7 +407,7 @@ def _summary_from_result(
         "creditValidationIssues": issues,
         "warnings": warnings,
         "calculationStatus": "CALCULATED_WITH_CREDIT_ISSUES" if issues else "CALCULATED",
-        "computedByFormEngine": "ITR-1",
+        "computedByFormEngine": draft.form,
         "filingComputationStatus": "FORM_COMPUTATION",
         # Per-row capital-gains summary + bottom totals so the frontend's
         # CapitalGainsEntryManager readouts (gain/actual_cost/balance and
@@ -1429,42 +1501,79 @@ def _itr2_property_filing_details(draft: ReturnDraft) -> list[PropertyFilingDeta
 
 
 def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDetail]:
-    """Map one ``EmployerFilingDetail`` per row that becomes a TDS1 entry.
+    """Map Schedule S employer details from TDS rows or salary rows.
 
-    Count must exactly match ``len(tds1_entries)``
-    (``ITR2Input.validate_cross_schedule_contract``), so this replays the
-    exact same accept/reject filter ``draft_to_itr1_input._map_tds`` uses to
-    build ``tds1_entries`` (claimed-in-return, non-TDS3, valid TAN, salary
-    section) over ``draft.taxes.tds``, rather than deriving counts from
-    ``draft.employers`` independently — the two lists are not guaranteed to
-    correspond 1:1 (an employer row need not have a matching TDS credit,
-    and vice versa).
+    TDS is optional: when no salary TDS rows exist, employer rows are still
+    required to serialize legitimate salary income. When TDS rows exist, the
+    existing one-row-per-TDS identity contract remains authoritative.
     """
-    details: list[EmployerFilingDetail] = []
-    for index, row in enumerate(draft.taxes.tds, start=1):
-        if row.claimedInReturn is False or row.schedule == "TDS3":
-            continue
+    salary_tds_rows = [
+        row for row in draft.taxes.tds
+        if row.claimedInReturn is not False
+        and row.schedule != "TDS3"
+        and _TAN_PATTERN.fullmatch((row.deductorTAN or "").strip().upper())
+        and (row.section or "").strip().upper() in _SALARY_SECTIONS
+    ]
+    if not salary_tds_rows:
+        details: list[EmployerFilingDetail] = []
+        for index, employer in enumerate(draft.employers, start=1):
+            gross = sum(
+                (
+                    employer.basic, employer.da, employer.commission,
+                    employer.hra, employer.bonus, employer.allowances,
+                    employer.lta, employer.otherAllowance, employer.arrearSalary,
+                    employer.perquisites, employer.profitsInLieu,
+                    employer.uniformAllowance, employer.commutedPension,
+                    employer.gratuity, employer.leaveEncashment,
+                    employer.vrsCompensation, employer.retrenchmentCompensation,
+                ),
+                Decimal("0"),
+            )
+            if gross <= 0:
+                continue
+            tan = (employer.employerTAN or "").strip().upper() or None
+            try:
+                details.append(EmployerFilingDetail(
+                    employer_tan=tan,
+                    employer_name=(employer.employerName or employer.customEmployerName).strip(),
+                    nature_of_employment=employer.natureOfEmployment or "OTH",
+                    address_detail=(employer.employerAddress or "NA").strip()[:200],
+                    city_or_town_or_district=(employer.employerCity or draft.personal.city or "City").strip()[:50],
+                    state_code=(employer.employerStateCode or draft.personal.stateCode or "07").strip()[:2],
+                    pin_code=(employer.employerPinCode or "").strip() or None,
+                    zip_code=(employer.employerZipCode or "").strip() or None,
+                    actual_hra_received=employer.hra,
+                    actual_rent_paid=employer.rentPaid,
+                    salary_for_hra=employer.basic + employer.da,
+                    is_metro_city=employer.isMetroCity,
+                    section10_exemption_rows=[
+                        {"SalNatureDesc": row.natureCode, "SalOthNatOfInc": row.otherDescription or row.natureCode, "SalOthAmount": int(row.amount)}
+                        for row in employer.section10ExemptionRows if row.natureCode and row.amount > 0
+                    ],
+                    nature_of_salary_rows=[{"NatureDesc": row.natureCode, "OthNatOfInc": row.otherDescription or None, "OthAmount": int(row.amount)} for row in employer.salaryNatureRows if row.natureCode and row.amount > 0],
+                    nature_of_perquisites_rows=[{"NatureDesc": row.natureCode, "OthNatOfInc": row.otherDescription or None, "OthAmount": int(row.amount)} for row in employer.perquisiteNatureRows if row.natureCode and row.amount > 0],
+                    nature_of_profit_in_lieu_rows=[{"NatureDesc": row.natureCode, "OthNatOfInc": row.otherDescription or None, "OthAmount": int(row.amount)} for row in employer.profitInLieuNatureRows if row.natureCode and row.amount > 0],
+                    income_notified_89a=employer.incomeNotified89A,
+                    income_notified_other_89a=employer.incomeNotifiedOther89A,
+                    income_notified_prior_year_89a=employer.incomeNotifiedPriorYear89A,
+                    income_notified_89a_country_rows=list(employer.incomeNotified89ACountryRows),
+                ))
+            except (ValidationError, ValueError) as exc:
+                raise FilingGatewayV2Error(
+                    f"ITR-2 employer filing detail [{index}] is invalid.", [str(exc)]
+                ) from exc
+        return details
+
+    details = []
+    for index, row in enumerate(salary_tds_rows, start=1):
         tan = (row.deductorTAN or "").strip().upper()
-        if not _TAN_PATTERN.fullmatch(tan):
-            continue
-        section = (row.section or "").strip().upper()
-        if section not in _SALARY_SECTIONS:
-            continue
         employer = next(
             (e for e in draft.employers if (e.employerTAN or "").strip().upper() == tan),
             None,
         )
-        # Must be byte-identical to TDS1Entry.employer_name
-        # (`row.deductorName or None`, built by draft_to_itr1_input._map_tds)
-        # — build_itr2_json's Schedule S rejects any filing-detail row whose
-        # name doesn't match its TDS1 entry's name exactly.
         name = row.deductorName or "Employer"
-        city = (
-            (employer.employerCity if employer else "") or draft.personal.city
-        ).strip() or "City"
-        state = (
-            (employer.employerStateCode if employer else "") or draft.personal.stateCode
-        ).strip() or "07"
+        city = ((employer.employerCity if employer else "") or draft.personal.city).strip() or "City"
+        state = ((employer.employerStateCode if employer else "") or draft.personal.stateCode).strip() or "07"
         address = ((employer.employerAddress if employer else "") or "NA").strip()
         try:
             details.append(EmployerFilingDetail(
@@ -1474,6 +1583,23 @@ def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDeta
                 address_detail=address[:200] or "NA",
                 city_or_town_or_district=city[:50],
                 state_code=state[:2],
+                pin_code=((employer.employerPinCode if employer else "") or "").strip() or None,
+                zip_code=((employer.employerZipCode if employer else "") or "").strip() or None,
+                actual_hra_received=employer.hra if employer else Decimal("0"),
+                actual_rent_paid=employer.rentPaid if employer else Decimal("0"),
+                salary_for_hra=(employer.basic + employer.da) if employer else Decimal("0"),
+                is_metro_city=employer.isMetroCity if employer else False,
+                section10_exemption_rows=[
+                    {"SalNatureDesc": item.natureCode, "SalOthNatOfInc": item.otherDescription or item.natureCode, "SalOthAmount": int(item.amount)}
+                    for item in (employer.section10ExemptionRows if employer else []) if item.natureCode and item.amount > 0
+                ],
+                nature_of_salary_rows=[{"NatureDesc": item.natureCode, "OthNatOfInc": item.otherDescription or None, "OthAmount": int(item.amount)} for item in (employer.salaryNatureRows if employer else []) if item.natureCode and item.amount > 0],
+                nature_of_perquisites_rows=[{"NatureDesc": item.natureCode, "OthNatOfInc": item.otherDescription or None, "OthAmount": int(item.amount)} for item in (employer.perquisiteNatureRows if employer else []) if item.natureCode and item.amount > 0],
+                nature_of_profit_in_lieu_rows=[{"NatureDesc": item.natureCode, "OthNatOfInc": item.otherDescription or None, "OthAmount": int(item.amount)} for item in (employer.profitInLieuNatureRows if employer else []) if item.natureCode and item.amount > 0],
+                income_notified_89a=employer.incomeNotified89A if employer else Decimal("0"),
+                income_notified_other_89a=employer.incomeNotifiedOther89A if employer else Decimal("0"),
+                income_notified_prior_year_89a=employer.incomeNotifiedPriorYear89A if employer else Decimal("0"),
+                income_notified_89a_country_rows=list(employer.incomeNotified89ACountryRows) if employer else [],
             ))
         except (ValidationError, ValueError) as exc:
             raise FilingGatewayV2Error(

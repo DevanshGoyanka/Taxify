@@ -2854,4 +2854,145 @@ No new fix in this section.
 
 ### 33.5 Part E — Other Information (Bank Accounts)
 
-Read against `BankAccountDtls`/`AddtnlBankDetails` next. Not yet started as of this section.
+Read against `BankAccountDtls`/`AddtnlBankDetails` next. Deferred — §34 below took priority per
+explicit instruction (verify the real end-to-end data flow, not just backend schema/builder
+correctness) and surfaced a severe, live, user-visible bug that needed fixing before continuing
+the remaining schema-compliance walk.
+
+## 34. CRITICAL: the live Tax Computation tab silently showed ₹0 for most of Part D, in the
+running app, for every ITR-1/ITR-4 filer — found by actually running the app, not by reading code
+
+§§10-33 of this document all verified *backend* correctness: given a `ReturnDraft`, does
+`generate_cbdt_json`/`compute_canonical` produce a schema-valid, arithmetically-correct CBDT JSON.
+None of that verifies what a real user actually **sees** while filing. Per explicit instruction to
+check the real end-to-end data flow, this section logs into the running app
+(`test1@test.com`), opens a real client's real ITR-1 return, and reads what the live "🧮 Tax
+Computation" tab actually renders — a check no prior section in this document, across 33 prior
+subsections and roughly 40 real bugs found, had ever performed.
+
+### 34.1 What was found
+
+Opening any real client's Tax Computation tab showed, verbatim:
+
+```
+Total Income before rounding    ₹0
+Normal-rate income              ₹0
+Basic exemption limit           ₹0
+Income above basic exemption limit  ₹0
+Tax before rebate               ₹8,050        ← real, non-zero
+Tax After Rebate                ₹0
+Gross Tax Liability             ₹0
+NET TAX LIABILITY               ₹0
+```
+
+"Tax before rebate" being a real ₹8,050 while "Basic exemption limit"/"Normal-rate income" show
+₹0 is internally contradictory — a nonzero slab tax cannot arise from a ₹0 basic-exemption
+computation. This is exactly the class of symptom explicit instruction flagged: *"you passed the
+tax computation as fully CBDT compliant... but the values never flow to tax computation tab...
+no data is reflected for some fields."*
+
+### 34.2 Root cause: found the actual raw HTTP response, not by guessing
+
+Reading the real `POST /v2/tax-summary/compute` network response directly (not the frontend
+code, not the backend code — the actual bytes sent over the wire) showed:
+
+```json
+{"gti":560996.0,"grossTotalIncome":560996.0,"totalIncome":561000.0,"totalTaxPayable":8050.0,
+ "netTaxLiability":0.0, ...,
+ "breakdown":{"income":{...},"deductions":{},"tax":{"slabTax":8050.0,"rebate87A":8050.0,
+ "surcharge":0.0,"cess":0.0,"interest":0.0},"credits":{...}}}
+```
+
+Cross-referencing this against every `taxResult.*` field `TaxComputationTab.tsx`
+(`frontend/src/pages/ITRComputationTabs.tsx`) actually reads found the real defect:
+`app/engine/filing_gateway_v2.py::_summary_from_result()` — the function building this exact
+response, shared by both `compute_canonical_itr1` and `compute_canonical_itr4` — only exposed a
+small subset of the computed result at the top level. Most of Part D's line items
+(`rebate87A`, `taxPayableOnRebate`, `grossTaxLiability`, `section89`, `interest234A/B/C`,
+`lateFee234F`, `fees234I`, `basicExemptionLimit`, `normalRateIncome`,
+`incomeChargeableAboveBasicExemption`, `nilTaxReason`, `totalIncomeBefore288A`,
+`roundingAdjustment288A`) were either **entirely absent**, or present only **nested** under
+`breakdown.tax.*` using a key the frontend never reads (e.g. `rebate87A` existed at
+`breakdown.tax.rebate87A` but the tab reads the top-level `taxResult.rebate87A`, which was
+`undefined` — `Number(undefined) > 0` is `false`, so the whole "Less: Rebate u/s 87A" row was
+silently skipped, not just its value).
+
+**Every one of these fields was already correctly computed** — `ITR1Result`
+(`app/engine/calculators/itr1.py`) already has `total_income_before_288a`,
+`rounding_adjustment_288a`, `basic_exemption_limit`, `normal_rate_income`,
+`income_chargeable_above_basic_exemption`, and `nil_tax_reason` as real dataclass fields, correctly
+populated by the calculator. This was purely a **missing-serialization** bug — the summary-builder
+function dropped already-correct data on the floor before it ever reached the frontend — not a
+missing-computation bug, and not a schema-compliance bug (the official CBDT JSON, built by a
+completely separate code path in `app/engine/itd/itr1.py`, was never affected; only the *live
+preview tab* was reading from this incomplete summary).
+
+**Severity**: this affects **every ITR-1 and ITR-4 filer using the live product today** — not an
+edge case. Basic exemption limit, income above it, rebate u/s 87A, gross tax liability, and every
+234-series interest/fee figure all silently showed ₹0 regardless of the real computed value,
+throughout ordinary use of the primary filing UI.
+
+### 34.3 Fix
+
+Added the full missing field set to `_summary_from_result()`'s top-level return, sourced directly
+from the already-computed `ITR1Result`/`ITR4Result` fields (no new computation logic). `ITR4Result`
+lacks the six newer ITR-1-only fields (`total_income_before_288a` and friends — ITR-4's calculator
+never split these out); each uses `getattr(result, "field_name", sensible_default)` so the shared
+function stays safe for both callers instead of raising `AttributeError` for ITR-4. Also fixed, in
+the same pass: `deductionBreakdown` (an alias of `breakdown.deductions` under the actual key name
+the tab reads), `familyPensionDed`/`deductUs57iia` (Section 57(iia) family-pension deduction,
+sourced from the "os" schedule's `deduction_57iia`), the full Schedule S breakdown
+(`grossSalary`/`netSalary`/`standardDeduction`/`entertainmentAllowanceDed`/`professionalTaxDed`/
+`totalSection10Exempt`), and `bizIncome` (ITR-4's presumptive income, correctly `0` for ITR-1 via
+the same `getattr` pattern). Also fixed `computedByFormEngine`, which was hardcoded to the literal
+string `"ITR-1"` regardless of which form actually ran — an ITR-4 computation's response falsely
+claimed to be computed by the ITR-1 engine; now reads `draft.form`.
+
+**Verified two ways**: (1) a new regression test,
+`tests/test_filing_gateway_v2.py::test_summary_exposes_full_tax_computation_breakdown_at_top_level`,
+asserting every one of these fields against the real `ITR1Result` on a fixture where rebate u/s
+87A genuinely applies (so the test fails, not passes-by-coincidence, on the exact pre-fix bug —
+confirmed via `git stash` to fail on pre-fix code); (2) **live, in the running app**, logged into
+`test1@test.com`, opened a real client's real ITR-1 return, confirmed the Tax Computation tab now
+renders correctly end-to-end:
+
+```
+Total Income before rounding        ₹5,25,996
+Section 288A rounding adjustment    +₹4
+ROUNDED TOTAL INCOME (u/s 288A)     ₹5,26,000
+Normal-rate income                  ₹5,26,000
+Basic exemption limit               ₹4,00,000
+Income above basic exemption limit  ₹1,26,000
+Tax before rebate                   ₹6,300
+Less: Rebate u/s 87A                (₹6,300)
+Nil tax after applying rebate under Section 87A.
+Tax After Rebate                    ₹0
+Gross Tax Liability                 ₹0
+Add: Late filing fee u/s 234F       ₹5,000
+NET TAX LIABILITY                   ₹5,000
+BALANCE TAX PAYABLE                 ₹5,000
+```
+
+Every figure cross-foots correctly (₹5,26,000 − ₹4,00,000 = ₹1,26,000; 5% new-regime slab on
+₹1,26,000 = ₹6,300; the informational "Nil tax after rebate" banner now correctly appears since
+`nilTaxReason` is populated) — this is the first time in this document's history that a fix was
+verified by actually operating the live application rather than by code inspection or a unit
+test alone.
+
+Also incidentally fixed a stale test assertion (`test_filing_gateway_v2_itr4.py`) that had baked
+in the `computedByFormEngine == "ITR-1"` bug as expected behavior (commented `# shared summary`)
+— updated to assert the correct `"ITR-4"`.
+
+Full test suite (`test_itr1_*`, `test_itr4_*`, `test_filing_gateway_v2*`,
+`test_draft_to_itr{1,4}_input*`, `validate_itr1_json.py`): 591 passed, no regressions.
+
+### 34.4 What this means for §§10-33's own conclusions
+
+Every backend-correctness finding in §§10-33 remains accurate — the official CBDT JSON generation
+path was never affected by this bug, since it reads directly from `ITR1Result`/`ITR2Input`, not
+from this summary object. What §§10-33 could **not** and did not claim is that a correct backend
+computation was reaching the screen — this section is the first in this document to actually check
+that, and the gap between "backend computes correctly" and "user sees the correct number" was
+real and severe. Part E, Schedule IT/TDS, and Verification (the remainder of the original
+part-by-part pass) should each get the same live, logged-in check this section performed, not
+only a schema/builder read, before being marked complete.

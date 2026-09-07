@@ -147,7 +147,11 @@ def test_compute_canonical_itr4_prepares_filing_data_before_calculation() -> Non
     assert isinstance(pipeline, ITR4PipelineResult)
     assert pipeline.computation.gross_total_income > 0
     assert "grossTotalIncome" in pipeline.summary
-    assert pipeline.summary["computedByFormEngine"] == "ITR-1"  # shared summary
+    # _summary_from_result() is shared with ITR-1, but computedByFormEngine
+    # must reflect the actual form computed, not the function's other caller
+    # -- previously hardcoded "ITR-1" regardless of which form ran (fixed
+    # 2026-09-07, see the ITR-1 Tax Computation tab data-flow fix).
+    assert pipeline.summary["computedByFormEngine"] == "ITR-4"
     assert pipeline.breakdown["presumptive_scheme"] == "44AD"
     assert pipeline.typed_input.filing_profile is not None
     assert pipeline.typed_input.filing_profile.pan == draft.personal.pan

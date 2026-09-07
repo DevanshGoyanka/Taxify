@@ -97,6 +97,50 @@ def test_itr1_rejects_itr4_only_verification_capacity() -> None:
     assert caught.value.message == "ITR-1 verification capacity is invalid."
 
 
+def test_summary_exposes_full_tax_computation_breakdown_at_top_level() -> None:
+    """TaxComputationTab.tsx (the live Tax Computation tab every ITR-1/ITR-4
+    filer sees) reads rebate87A/taxPayableOnRebate/grossTaxLiability/
+    section89/interest234A-C/lateFee234F/fees234I/basicExemptionLimit/
+    normalRateIncome/totalIncomeBefore288A directly off the top level of
+    the compute-v2 summary object -- previously _summary_from_result()
+    only exposed a small subset of these (mostly nested under
+    "breakdown", under different key names, or not at all), so the tab
+    silently showed Rs 0 for real, non-zero computed values any time the
+    true figure wasn't coincidentally already zero. This taxpayer's real
+    tax before rebate is fully wiped out by the new-regime Section 87A
+    rebate, so rebate87A/taxPayableOnRebate specifically exercise the
+    exact "real nonzero value, previously silently dropped" scenario."""
+    draft = _filing_ready_draft()
+    pipeline = gateway.compute_canonical_itr1(draft)
+    summary = pipeline.summary
+    result = pipeline.computation
+
+    assert result.tax_before_rebate > 0
+    assert result.rebate_87a > 0
+    assert summary["computedByFormEngine"] == "ITR-1"
+    assert summary["rebate87A"] == float(result.rebate_87a)
+    assert summary["taxPayableOnRebate"] == float(result.tax_after_rebate)
+    assert summary["grossTaxLiability"] == float(result.gross_tax_liability)
+    assert summary["section89"] == float(result.relief_89)
+    assert summary["cess"] == float(result.health_education_cess)
+    assert summary["surcharge"] == float(result.surcharge)
+    assert summary["interest234A"] == float(result.interest_234a)
+    assert summary["interest234B"] == float(result.interest_234b)
+    assert summary["interest234C"] == float(result.interest_234c)
+    assert summary["lateFee234F"] == float(result.late_fee_234f)
+    assert summary["fees234I"] == float(result.fees_234i)
+    assert summary["basicExemptionLimit"] == float(result.basic_exemption_limit)
+    assert summary["normalRateIncome"] == float(result.normal_rate_income)
+    assert summary["incomeChargeableAboveBasicExemption"] == float(
+        result.income_chargeable_above_basic_exemption
+    )
+    assert summary["totalIncomeBefore288A"] == float(result.total_income_before_288a)
+    assert summary["roundingAdjustment288A"] == float(result.rounding_adjustment_288a)
+    assert summary["grossSalary"] == float(result.salary_gross)
+    assert summary["standardDeduction"] == float(result.salary_deduction_us16ia)
+    assert summary["deductionBreakdown"] == summary["breakdown"]["deductions"]
+
+
 def test_generate_reuses_one_computation_for_summary_and_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
