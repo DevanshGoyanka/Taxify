@@ -241,6 +241,27 @@ def test_itr4_no_income():
     assert res.taxable_income == Decimal("0")
     assert res.net_tax_liability == Decimal("0")
 
+def test_itr4_eligibility_50_lakh_cap_excludes_112a_ltcg():
+    """Same rule as ITR-1 (official CBDT Validation Rules, both forms):
+    the Rs 50 lakh eligibility cap excludes the 112A LTCG gain -- it is a
+    separate Rs 1.25 lakh allowance on top, not counted against it. Rs
+    49,00,000 net salary + Rs 1,25,000 112A gain (Rs 50,25,000 combined)
+    was previously rejected outright by an early gate that wrongly
+    compared the full combined GTI against a flat Rs 50 lakh threshold."""
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("0"), digital_turnover=Decimal("0"), cash_turnover=Decimal("0")),
+        salary_income=SalaryIncome(gross_salary=Decimal("4950000")),
+        capital_gains=CapitalGainsIncome(ltcg_112a=Decimal("125000")),
+    )
+    res = compute_itr4(itr_input)
+    assert res.errors == []
+    assert res.gross_total_income == Decimal("5025000")
+
+
 def test_itr4_44ad_business_old_regime():
     """Scenario 2: 44AD presumptive business, old regime, standard deduction & 80C, 87A rebate applies."""
     itr_input = ITR4Input(

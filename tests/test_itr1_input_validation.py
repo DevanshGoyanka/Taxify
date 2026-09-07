@@ -2054,6 +2054,94 @@ def test_R187b_agniveer_real_age_within_range_not_blocked():
     assert not failed(results, "ITR1-R187b")
 
 
+def test_R191_seventh_proviso_foreign_travel_below_threshold_blocked():
+    """AmtSeventhProvisio139ii has a schema-mandated minimum of Rs 2,00,000
+    -- a taxpayer ticking the foreign-travel declaration but entering an
+    amount below that threshold would previously reach JSON generation
+    unblocked and produce schema-invalid output (nothing enforced the
+    minimum: ITR1FilingProfile's field only requires ge=0, and the
+    frontend amount input has no min attribute)."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress, SeventhProvisoDetails
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(1990, 1, 1),
+            employer_category="OTH", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+            seventh_proviso=SeventhProvisoDetails(
+                foreign_travel_flag=True, foreign_travel_amount=Decimal("50000"),
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R191")
+
+
+def test_R191_seventh_proviso_foreign_travel_at_threshold_not_blocked():
+    """Exactly Rs 2,00,000 (the schema's own minimum, inclusive) must pass."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress, SeventhProvisoDetails
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(1990, 1, 1),
+            employer_category="OTH", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+            seventh_proviso=SeventhProvisoDetails(
+                foreign_travel_flag=True, foreign_travel_amount=Decimal("200000"),
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R191")
+
+
+def test_R192_seventh_proviso_electricity_below_threshold_blocked():
+    """AmtSeventhProvisio139iii has a schema-mandated minimum of Rs 1,00,000
+    -- same gap as R191, for the electricity-expenditure declaration."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress, SeventhProvisoDetails
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(1990, 1, 1),
+            employer_category="OTH", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+            seventh_proviso=SeventhProvisoDetails(
+                electricity_expenditure_flag=True,
+                electricity_expenditure_amount=Decimal("40000"),
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R192")
+
+
 def test_judges_exemption_not_blocked_for_real_cgov_employee():
     """R270/R301: a genuine CGOV employee (e.g. a Supreme/High Court judge)
     claiming the Judge Salaries Act exemption was previously always

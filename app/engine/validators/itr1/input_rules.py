@@ -1987,6 +1987,37 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     "filing_section",
                 ))
 
+    # Rule 191/192: seventh-proviso-to-139(1) declared amounts must actually
+    # cross the statutory threshold that makes the declaration true.
+    # AmtSeventhProvisio139ii/AmtSeventhProvisio139iii carry a schema-level
+    # minimum (Rs 2,00,000 / Rs 1,00,000) that nothing in this codebase
+    # enforced before this rule -- ITR1FilingProfile's own Pydantic fields
+    # only require `ge=0`, and the frontend amount inputs have no `min`
+    # attribute either (PersonalInfoTab.tsx), so a taxpayer ticking "foreign
+    # travel exceeded Rs 2 lakh" and then entering e.g. Rs 50,000 would
+    # previously reach JSON generation unblocked and produce a
+    # schema-invalid document (app/engine/itd/itr1.py only omits the amount
+    # key when the flag is false; it does not check the amount itself
+    # against the schema's minimum when the flag is true).
+    if inp.filing_profile:
+        sp = inp.filing_profile.seventh_proviso
+        if sp.foreign_travel_flag and sp.foreign_travel_amount < 200_000:
+            results.append(_make(
+                "ITR1-R191", False,
+                f"Seventh proviso to section 139(1): foreign-travel expenditure is declared "
+                f"but the amount entered (Rs {sp.foreign_travel_amount}) is below the "
+                f"Rs 2,00,000 threshold that makes this declaration applicable.",
+                "filing_profile.seventh_proviso.foreign_travel_amount",
+            ))
+        if sp.electricity_expenditure_flag and sp.electricity_expenditure_amount < 100_000:
+            results.append(_make(
+                "ITR1-R192", False,
+                f"Seventh proviso to section 139(1): electricity expenditure is declared "
+                f"but the amount entered (Rs {sp.electricity_expenditure_amount}) is below "
+                f"the Rs 1,00,000 threshold that makes this declaration applicable.",
+                "filing_profile.seventh_proviso.electricity_expenditure_amount",
+            ))
+
     # ========================================================================
     # SECTION: Additional Active Validations (formerly informational)
     # ========================================================================

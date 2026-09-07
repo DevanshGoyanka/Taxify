@@ -5,7 +5,11 @@ Composes schedule modules to produce a complete ITR-1 computation.
 
 ITR-1 eligibility:
   - Resident individual
-  - Total income <= Rs 50 lakh
+  - Total income EXCLUDING LTCG u/s 112A <= Rs 50 lakh (official CBDT ITR-1
+    Validation Rules, AY 2026-27, rule 117 -- the 112A gain is a separate,
+    additional Rs 1.25 lakh allowance on top of this, not counted against
+    it; combined ceiling Rs 51.25 lakh, matching the official schema's
+    ITR1_IncomeDeductions.TotalIncome field maximum of exactly 5125000)
   - Income from: Salary, up to two House Properties, Other Sources
   - LTCG u/s 112A only (capped at Rs 1.25 lakh), no other capital gains
   - No business/professional income
@@ -376,11 +380,29 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.net_agricultural_income = input_data.agriculture_income
     result.aggregate_income = gti + result.net_agricultural_income
 
-    # Eligibility: GTI cannot exceed Rs 50 lakh for ITR-1
-    if gti > Decimal("5000000"):
+    # Eligibility: total income EXCLUDING LTCG 112A cannot exceed Rs 50 lakh
+    # for ITR-1 -- confirmed against the official CBDT ITR-1 Validation
+    # Rules PDF (AY 2026-27), rule 117: "Total income excluding LTCG
+    # C3(a)(iii) should not be greater than Rs 50 lakhs." This is a
+    # DIFFERENT quantity from GTI itself (which correctly includes the full
+    # 112A gain, per the comment above) -- the combined ceiling is Rs 50L
+    # (regular income) + Rs 1.25L (112A, already separately gated above) =
+    # Rs 51.25L, matching the official schema's own ITR1_IncomeDeductions.
+    # TotalIncome field, whose maximum is exactly 5125000. The previous
+    # check compared the FULL gti (including cg_112a_income) against the
+    # flat Rs 50L threshold, wrongly rejecting an eligible taxpayer whenever
+    # their regular income was within Rs 1.25L of 50L and they also had any
+    # 112A gain -- e.g. Rs 49,00,000 regular income + Rs 1,25,000 112A gain
+    # (Rs 50,25,000 combined, fully eligible per the official rule) was
+    # incorrectly rejected. The correct check already existed downstream as
+    # ITR1-R117 in app/engine/validators/itr1/calc_rules.py, but could never
+    # fire for the affected population because this earlier, stricter gate
+    # returned before a result reached that validator at all.
+    income_excl_112a = gti - cg_112a_income
+    if income_excl_112a > Decimal("5000000"):
         result.errors.append(
-            f"Ineligible for ITR-1: Gross Total Income of Rs {gti} "
-            f"exceeds Rs 50 lakh limit. File ITR-2."
+            f"Ineligible for ITR-1: total income excluding LTCG u/s 112A of "
+            f"Rs {income_excl_112a} exceeds Rs 50 lakh limit. File ITR-2."
         )
         return result
 

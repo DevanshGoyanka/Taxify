@@ -2632,3 +2632,226 @@ Re-verified directly against current code, not trusted from when each claim was 
 - Full backend suite re-run after all changes in this section — same baseline as every prior run
   this session (3 pre-existing unrelated failures in `test_tax_v2_compute.py`, same collection
   errors), no regressions.
+
+## 33. Fresh, form-structure-driven re-audit (2026-09-07): reading the official ITR-1 SAHAJ PDF
+part-by-part against the schema, rather than schema/validator-driven
+
+Per explicit instruction, this pass inverts the direction of every prior audit in this document.
+§10-§32 all started from the schema, the validators, or the calculator and worked outward; this
+pass starts from `Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-1-2026-Eng (1).pdf` — the
+actual gazetted form a human would fill in — read part by part (Part A → Part B → Part C → Part D
+→ Part E → Schedule IT → Schedule TDS → Verification), and for every field visible on the form,
+cross-references `Reference Docs by CBDT & ITD/Official JSON Schema/ITR-1_2026_Main_V1.1 (2).json`
+for its exact type/required/min/max/pattern/enum, then checks presence and correctness in both
+`app/schemas/itr1.py`/`app/engine/itd/itr1.py` (backend) and `frontend/src/components/
+PersonalInfoTab.tsx` and siblings (frontend). The ITR-1 SAHAJ form itself is short — 3 pages
+(Gazette pp. 16-18) covering Parts A-E, Schedule IT, Schedule TDS, and Verification — so this is a
+tractable full pass, not a sampled one.
+
+### 33.1 Part A — General Information
+
+Read in full against `PersonalInfo`, `FilingStatus`, `AssesseeRep`, and
+`clauseiv7provisio139iType`. Every field the form shows (A1 PAN, A2/A2a/A3 name, A4 DOB, A5
+Aadhaar, A6-A14 contact/address ×2, A15 filing section, A16 notice-response codes, A17 nature of
+employment, A18 revised/defective receipt no + date, A19 notice/order reference + date, A20
+115BAC(6) opt-out, A21(i)-(iii) seventh-proviso declarations, A22 representative assessee) has a
+real, correctly-named backend field (`ITR1FilingProfile` and its nested models) and a working
+frontend control (`PersonalInfoTab.tsx`), confirmed by direct code read rather than assumed from
+this document's own prior "verified complete" claims.
+
+**One real, previously-undocumented gap found and fixed**: `FilingStatus.AmtSeventhProvisio139ii`
+(A21(i), foreign-travel expenditure) and `AmtSeventhProvisio139iii` (A21(ii), electricity
+expenditure) both carry a schema-level `minimum` (Rs 2,00,000 and Rs 1,00,000 respectively) — the
+amount is only meaningful, and only schema-legal, once it crosses the threshold that makes the
+underlying declaration true. `app/engine/itd/itr1.py::_filing_status_itr1()` correctly *omits*
+each amount key when its flag is "N" (so a false declaration never emits a below-minimum 0), but
+nothing anywhere — not `ITR1FilingProfile.SeventhProvisoDetails` (`Field(default=Decimal("0"),
+ge=0)`, no floor), not any rule in `app/engine/validators/itr1/input_rules.py` (confirmed:
+zero prior references to `seventh_proviso`/`SeventhProviso` in that file), not the frontend's
+`Field` control in `PersonalInfoTab.tsx` (`type="number" required`, no `min` attribute) — stopped
+a taxpayer from ticking "foreign travel exceeded Rs 2 lakh" and then entering e.g. Rs 50,000. That
+combination would reach `generate_cbdt_json` unblocked and produce a document that violates the
+official schema's own `minimum` constraint on `AmtSeventhProvisio139ii`. §17.3 of this document
+had flagged the seventh-proviso clause-(iv) *detail rows* as an untested schema-shape path, but
+this specific minimum-value gap — an input-validation robustness question, not a schema-output
+shape question — was never checked by that pass, because §17's four fixtures all used
+schema-legal amounts (or the flag off) by construction; it only tests "does a good-faith fixture
+validate cleanly," not "does an inconsistent user entry get rejected before it reaches the
+builder."
+
+**Fix**: two new Category A rules, `ITR1-R191` (foreign travel) and `ITR1-R192` (electricity), in
+`app/engine/validators/itr1/input_rules.py`'s "SECTION: Filing & Regime" block — reject the
+respective amount when its flag is true and the amount is below the schema's own minimum. Matching
+`min={200000}`/`min={100000}` attributes (plus an explanatory `help` string) added to the two
+`Field` controls in `PersonalInfoTab.tsx` so the constraint is visible before submission, not only
+enforced after it.
+
+**Tests added** (`tests/test_itr1_input_validation.py`):
+`test_R191_seventh_proviso_foreign_travel_below_threshold_blocked`,
+`test_R191_seventh_proviso_foreign_travel_at_threshold_not_blocked` (exactly Rs 2,00,000, the
+schema's own inclusive minimum, must pass), `test_R192_seventh_proviso_electricity_below_
+threshold_blocked`. All three confirmed via `git stash` to fail against pre-fix code (the two
+`_blocked` tests failed outright — no rule fired at all; the at-threshold test already passed,
+serving as a non-regression fence). Full `test_itr1_*`/`test_itr4_*` plus every sibling file this
+document's own established practice checks (`test_draft_to_itr1_input.py`,
+`test_draft_to_itr4_input_itr4.py`, `test_filing_gateway_v2_itr4.py`, `validate_itr1_json.py`)
+green: 564 passed. Frontend `npm run build` clean.
+
+**Everything else in Part A**: confirmed correct on direct re-read, no new discrepancy — the
+`PostalAddress`/`FilingAddress` PIN-code pattern (`^[1-9][0-9]{5}$`) matches the schema's
+`[1-9]{1}[0-9]{5}` exactly; `StateCode`'s 38-value enum (01-37, 99) matches; `AadhaarCardNo` is
+correctly optional both in the schema and in `ITR1FilingProfile.aadhaar_number`, and correctly
+omitted (not emitted as `null` or `""`) when absent; `ReturnFileSec`'s full 8-value enum (11, 12,
+13, 14, 16, 17, 18, 20) is represented via `return_file_section: Literal[...]`, not a narrowed
+subset; `ReceiptNo`/`OrigRetFiledDate`/`NoticeNo`/`NoticeDateUnderSec` are all correctly
+conditionally emitted only when the corresponding profile field is set.
+
+### 33.2 Part B — Gross Total Income
+
+Read against `ITR1_IncomeDeductions` (`GrossSalary`/`Salary`/`PerquisitesValue`/`ProfitsInSalary`/
+`AllwncExemptUs10`/`NetSalary`/`DeductionUs16`/`DeductionUs16ia`/`EntertainmentAlw16ii`/
+`ProfessionalTaxUs16iii`/`IncomeFromSal` for B1; `PropertyDetails`/`Rentdetails`/`CoOwners`/
+`TenantDetails` for B2; `IncomeOthSrc`/`OthersInc`/`DeductionUs57iia` for B3; `GrossTotIncome`/
+`GrossTotIncomeIncLTCG112A` for B4). Every min/max on this block was cross-checked directly:
+`DeductionUs16ia` (standard deduction) has a flat schema ceiling of Rs 75,000 (the higher,
+new-regime figure) — confirmed the calculator's own regime-differentiated constants
+(`OLD_REGIME_STANDARD_DEDUCTION` = Rs 50,000, `NEW_REGIME_STANDARD_DEDUCTION` = Rs 75,000, both in
+`app/engine/constants.py`) never let the emitted value exceed either regime's real cap, so this
+schema ceiling is satisfied trivially and correctly. `EntertainmentAlw16ii` (max Rs 5,000) and
+`ProfessionalTaxUs16iii` (max Rs 5,000) are likewise both correctly capped in
+`app/engine/schedules/salary.py` (entertainment allowance at the statutory least-of-three formula
+capped at Rs 5,000; professional tax at the Article 276(2) constitutional ceiling of Rs 2,500,
+comfortably inside the schema's looser Rs 5,000). B2's `Rentdetails.IncomeOfHP` correctly permits
+negative values (a loss) in the schema; every other `Rentdetails` field is correctly non-negative
+by construction. No new discrepancy found in B1-B4's field-level shapes or bounds — this specific
+angle (per-field schema bound vs. what the calculator can actually emit) had not been walked this
+explicitly before, but confirms clean.
+
+**One real, previously-undocumented, financially material bug found and fixed — the eligibility
+gate itself, not a field within Part B**: the form's own subtitle states ITR-1 is for taxpayers
+"having total income upto Rs.50 lakh and having Income from Salaries, two house properties, other
+sources (Interest etc.), long-term capital gains under section 112A up to Rs. 1.25 lakh." This
+sentence is genuinely ambiguous read in isolation (does the Rs 50 lakh figure include or exclude
+the 112A component?) — resolved definitively, not by inference, by reading the official
+`CBDT_e-Filing_ITR 1_Validation Rules_AY 2026-27` PDF directly: rule 117 states in as many words,
+**"Total income excluding LTCG C3(a)(iii) should not be greater than Rs 50 lakhs."** The 112A
+LTCG is a separate, additional Rs 1.25 lakh allowance on top of the Rs 50 lakh regular-income cap,
+not counted against it — combined ceiling Rs 51.25 lakh, which is exactly why the official
+schema's own `ITR1_IncomeDeductions.TotalIncome` field has a maximum of precisely `5125000`
+(50,00,000 + 1,25,000), not a flat `5000000`.
+
+`app/engine/calculators/itr1.py`'s own eligibility gate got this backwards:
+```python
+gti = result.salary_income + result.house_property_income + result.other_sources_income + cg_112a_income
+if gti > Decimal("5000000"):
+    result.errors.append(f"Ineligible for ITR-1: Gross Total Income of Rs {gti} exceeds Rs 50 lakh limit...")
+    return result
+```
+`cg_112a_income` (confirmed via `app/engine/schedules/special_rates.py::compute_112a()` —
+`net_income`, the gain **before** the Rs 1.25 lakh exemption is subtracted, since that exemption
+is a special-rate-tax reduction applied afterward, not a GTI reduction) was being added into the
+same `gti` figure the flat Rs 50 lakh check compares against — incorrectly rejecting, for example,
+a taxpayer with Rs 49,00,000 of regular income and Rs 1,25,000 of 112A gain (Rs 50,25,000
+combined, textbook-eligible per the official rule) outright. The **correct** version of this exact
+check already existed, downstream, as `ITR1-R117` in `app/engine/validators/itr1/calc_rules.py`
+(`income_excl_ltcg = gti - cg_112a; if income_excl_ltcg > 5_000_000: ...`) — but it could never
+fire for the affected population, because the calculator's own earlier, wrong gate returned an
+error and short-circuited before a `result` object ever reached that downstream validator. Two
+independently-maintained implementations of the "same" rule had silently diverged, and the wrong
+one ran first — the exact "two components of the same system silently drifting apart" pattern
+§32.1 (and, before it, §27-§30) already identified as this codebase's most common real-bug shape.
+
+**Same bug, same fix, confirmed and closed in ITR-4 too**: `app/engine/calculators/itr4.py` had
+the byte-for-byte identical pattern (`gti = presumptive + salary + hp + os + cg_112a_income; if
+gti > Decimal("5000000")`), with the same already-correct downstream rule
+(`app/engine/validators/itr4/calc_rules.py`'s `income_excl_ltcg` check) unreachable for the same
+reason. Fixed identically, matching this document's own established practice (§32.1) of applying
+one genuinely shared-pattern fix to both forms in the same pass rather than leaving the sibling
+form's copy of the same bug for a later, separate discovery.
+
+**Fix** (both forms): the early gate now computes `income_excl_112a = gti - cg_112a_income` and
+compares that (not the raw `gti`) against Rs 50 lakh, matching the already-correct downstream
+validator exactly — making the early gate and the downstream rule agree, rather than picking one
+to delete.
+
+**Tests added**: `tests/test_itr1_calculator.py::test_eligibility_50_lakh_cap_excludes_112a_ltcg`
+(Rs 49,00,000 net salary + Rs 1,25,000 112A gain, must now be accepted, GTI = Rs 50,25,000) and
+`::test_eligibility_50_lakh_cap_still_rejects_regular_income_over_50l` (non-regression fence — Rs
+50,00,001 of regular income alone, no 112A gain, must still be rejected — confirms the fix
+*narrows* the check rather than loosening the Rs 50 lakh cap on regular income itself);
+`tests/test_itr4_calculator.py::test_itr4_eligibility_50_lakh_cap_excludes_112a_ltcg` (identical
+scenario for ITR-4). All three confirmed via `git stash` to fail against pre-fix code. Full
+`test_itr1_*`/`test_itr4_*` plus sibling files (`test_draft_to_itr1_input.py`,
+`test_draft_to_itr4_input_itr4.py`, `test_filing_gateway_v2_itr4.py`, `validate_itr1_json.py`)
+green: 567 passed.
+
+### 33.3 Part C — Deductions and Taxable Total Income
+
+Read against `DeductUndChapVIAType`/`UsrDeductUndChapVIAType` (every Chapter VI-A section the
+form's 80C-through-"Any other Deduction" grid lists), `LTCG112A` (C3(a)), and
+`ExemptIncAgriOthUs10Type` (C3, the exempt-income disclosure grid). This pass's specific new
+angle — cross-checking every section's *statutory rupee cap* against the schema's own declared
+`maximum`, not just presence/wiring (already exhaustively covered by §5/§6/§10-§32's own
+Chapter-VI-A-heavy validator work) — found no new discrepancy: every cap in
+`app/engine/constants.py` matches the schema's `DeductUndChapVIAType` maxima exactly —
+80C/80CCC/80CCD(1) at Rs 1,50,000, 80CCD(1B) at Rs 50,000, 80D at Rs 1,00,000 (25k+25k non-senior
+or 50k+50k senior self+parents, both correctly summing to the schema's own 100000 ceiling),
+80DD/80U severe-disability at Rs 1,25,000, 80DDB senior at Rs 1,00,000, 80EE at Rs 50,000,
+80EEA/80EEB at Rs 1,50,000, 80GG at Rs 60,000, 80TTA at Rs 10,000, 80TTB at Rs 50,000 — with
+80CCD(2)/80E/80G/80GGA/80GGC correctly left uncapped in both the schema and the calculator,
+matching their real statutory unlimited-deduction status.
+
+C3(a) (`LTCG112A`: `TotSaleCnsdrn`/`TotCstAcqisn`/`LongCap112A`) is a simple, correct pass-through
+(`app/engine/itd/itr1.py::_ltcg_112a_schedule()`) of already-eligibility-gated values (§33.2
+confirmed `gain_112a` can never exceed the schema's own `LongCap112A` maximum of 125000 by the
+time a result reaches this function, since the calculator rejects earlier otherwise).
+
+C3 (`ExemptIncAgriOthUs10`, the exempt-income disclosure grid) is fully wired and more complete
+than a first grep suggested — `CompactExemptIncomeEntry` (`app/schemas/itr1.py:948`) implements
+the schema's complete 8-category/37-subcategory enum verbatim, and
+`frontend/src/components/exemptincome/ExemptIncomeWorkspace.tsx` gives it a real, form-aware UI
+(filters both the category and subcategory dropdowns to what's actually valid for ITR-1
+specifically vs. ITR-2/3/4, warns visibly when a saved entry is incompatible with the currently
+selected form rather than silently dropping it). Agricultural income has its own dedicated
+`agriculture_income` field *and* auto-populates a `10(1)` exempt-income row
+(`app/engine/itd/itr1.py:1407-1415`) only when the taxpayer hasn't already added one explicitly,
+avoiding a double-counted row.
+
+No new fix in this section — Part C's structural correctness had already received the heaviest
+concentration of fix-cycle attention of any part of this document (§5, §6, most of §10-§32), and
+this pass's specific min/max cross-reference did not surface anything those passes missed.
+
+### 33.4 Part D — Computation of Tax Payable
+
+Read against `ITR1_TaxComputation` (D1-D6, D11), `IntrstPay` (D7-D10(a)), and `TaxPaid`/`Refund`
+(D12-D14). No new discrepancy found — every field this part covers checks out on direct re-read:
+
+- **`Rebate87A`'s schema maximum (Rs 60,000)** matches `app/engine/constants.py`'s
+  `NEW_REBATE_TAX_LIMIT = Decimal("60000")` exactly (the enhanced new-regime Section 87A rebate,
+  Finance Act 2025).
+- **`NetTaxLiability`/`TotTaxPlusIntrstPay`** — the exact field-name/description trap CLAUDE.md's
+  own architecture notes warn about generally (`NetTaxLiability` is documented "Balance Tax After
+  Relief," a *pre*-interest/fees quantity, despite the tempting-but-wrong assumption that a field
+  named "Net Tax Liability" should be the fully-final total) — confirmed still correctly resolved
+  for ITR-1 specifically: `app/engine/itd/itr1.py:647` maps `NetTaxLiability` to
+  `balance_tax_after_relief` (correct, matches the schema's own description) and
+  `TotTaxPlusIntrstPay` (line 656) to the real final `net_tax_liability` (interest/fees included).
+  This is this document's own §26 fix, re-verified rather than assumed still correct.
+- **D10(a) / `FeeFurnish234I` (Section 234-I, the AY 2026-27-era fee for furnishing a revised
+  return after 31 December)** is fully implemented end-to-end — `app/engine/common/interest.py`
+  computes it, `app/engine/validators/itr1/input_rules.py` rules R324/R328 gate it, and
+  `app/engine/itd/itr1.py:654` emits it — confirmed *not* a gap despite being one of the newer
+  additions to the form; the sibling ITR-2/ITR-3 builders still hardcode this field to `0`
+  (`app/engine/itd/itr2.py:2699`, `itr3.py:913`), correctly out of scope for this ITR-1 pass.
+- **D13/D14 mutual exclusivity** (`app/engine/calculators/itr1.py:613-626`): `balance_payable` and
+  `refund_due` are set from a single `if diff > 0: ... else: ...` branch, so exactly one is
+  nonzero (or both zero) — matches the form's own "(D11-D12) if D11>D12" / "(D12-D11) if D12>D11"
+  framing exactly, both correctly rounded to the nearest Rs 10 (Section 288B) via
+  `round_to_nearest_10`, applied only at this final step (the pre-rounding `net_tax_liability` is
+  retained separately so TDS/TCS/challan reconciliation stays exact to the rupee beforehand).
+
+No new fix in this section.
+
+### 33.5 Part E — Other Information (Bank Accounts)
+
+Read against `BankAccountDtls`/`AddtnlBankDetails` next. Not yet started as of this section.
