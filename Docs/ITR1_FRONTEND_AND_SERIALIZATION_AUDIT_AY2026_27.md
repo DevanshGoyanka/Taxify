@@ -3722,3 +3722,50 @@ field's input by accident — re-verified correctly with `label.querySelector('i
 grid layout's actual DOM nesting was checked, so this is noted here only to be transparent that
 the first verification attempt was itself briefly misleading, not to suggest the underlying fix
 is in doubt).
+
+### 34.18 Personal Info: Verification and TRP sections — two explicit UX defaults added, plus one
+piece of stale test data cleaned up along the way (not a live bug)
+
+Per explicit instruction: "for the TRP set the place as default city of address and default tick
+too." Read the full Verification/TRP block first — there is no separate "place" field inside the
+TRP card itself; the single "Place of verification" field in the Verification section directly
+above it is the one CBDT expects (TRP has no place field of its own in the official schema), and
+the only checkbox in either section is the "I declare that the information given in this return
+... is correct and complete" declaration checkbox. Interpreted the instruction accordingly.
+
+**Added default 1 — Place of verification defaults to the taxpayer's city**: a new `useEffect` in
+`PersonalInfoTab.tsx`, mirroring the file's own existing pattern for defaulting `verification.date`
+(same file, a few lines above), fires `onChange({ verification: { place: personal.city } })`
+whenever `place` is empty and a city is available. Deliberately guarded on `!verification.place`
+so it never overwrites a place the preparer has actually typed — it only fills a blank.
+
+**Added default 2 — Declaration checkbox defaults to ticked**: changed
+`declarationAccepted: false` to `true` in `factory.ts`'s `createEmptyReturnDraft` (a brand-new
+draft now starts pre-declared). Deliberately implemented as a **static factory default**, not a
+reactive effect like default 1 — a reactive `!verification.declarationAccepted` guard would have
+the same shape as default 1's, but for a boolean legal declaration that can legitimately be
+`false` because the preparer *chose* to uncheck it, "empty" and "deliberately unchecked" are the
+same value and indistinguishable to a reactive effect; forcing it back to `true` on the next
+render would make the checkbox impossible to ever leave unchecked. A one-time factory default
+carries no such risk — it only shapes the starting state of a new draft. Live-verified this
+distinction directly: unchecked the box, waited 2 seconds (long enough for any reactive effect to
+have re-fired), and confirmed it stayed unchecked.
+
+**Found while testing, not a live bug**: the existing test client's saved "Place of verification"
+read `"AKOLAAAA"` instead of the correct `"AKOLA"`. Checked the codebase for any auto-fill/derivation
+logic that could produce that pattern before assuming it was live-buggy — found none (no code
+path existed to default or derive `place` at all prior to this section's own new effect) — so this
+is stale manual test data typed earlier in this same very long session, not a defect in the
+current code. Cleared it via the running app and confirmed the new default correctly restored it
+to `"AKOLA"`; saved.
+
+**Test added**: new file `factory.test.ts` (this factory had no prior test coverage) — asserts a
+brand-new draft's `verification.declarationAccepted` is `true` and `verification.place` is `""`
+(confirming default 2 is factory-level while default 1 remains the UI's job, not the factory's).
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 207/207, `npm run build` clean.
+Live-reverified end-to-end on the real running client: cleared "Place of verification" → the
+field correctly auto-filled to "AKOLA" (the real city) within one render cycle; unchecked the
+declaration checkbox → confirmed it does **not** get reactively re-forced back to checked after
+waiting; re-checked it and saved → confirmed via the raw saved draft that both
+`place: "AKOLA"` and `declarationAccepted: true` persisted correctly.
