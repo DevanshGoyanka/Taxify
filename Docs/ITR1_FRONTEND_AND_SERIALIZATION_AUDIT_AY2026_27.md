@@ -3650,3 +3650,75 @@ section to 206C, "TDS Entry #1" (SECOND-ENTRY) correctly still shows Section "19
 #2" (FIRST-ENTRY) correctly shows "206C" — no cross-contamination. Confirmed via `git stash` that
 the pre-fix code reproduces the exact corruption described above and the post-fix code does not,
 on the identical sequence of actions.
+
+### 34.17 Continuing per "try multiple entries for Business or Profession tab" (ITR-4's Schedule
+BP — out of this document's own ITR-1 scope, but the same live-testing pass and the same bug
+class, so recorded here): found a real, severe, *data-corrupting* bug, not just a display glitch
+
+Switched to ITR-4 (Business/Profession is not reportable under ITR-1) for this client, which
+already had one Section 44AD business entry ("OTHERS", turnover ₹5,00,000, presumptive income
+₹35,000 @ 6%, from an earlier AIS/TIS reconciliation import). Added a second Section 44AD entry
+("Consulting Services") via "+ Add entry", per the explicit instruction to try multiple entries.
+The two-row identity list (`NatOfBus44AD`) correctly grew to two rows, and the shared aggregate
+turnover/presumptive-income figures (Schedule BP's `PersumptiveInc44AD` is a single combined
+object across every 44AD business, per the official CBDT schema — confirmed this is correct,
+intentional design, not a bug, before looking any further) still correctly read ₹5,00,000 /
+₹35,000 immediately after adding the second entry. Saved, then reloaded the page to confirm
+persistence — and on reload, the same fields now read **₹50,00,000** turnover and **₹3,50,000**
+presumptive income: a **10x inflation** that appeared purely from a save-then-reload round trip.
+
+**Root cause, found by checking the raw saved data first rather than assuming the display was
+wrong**: fetched the client's saved draft directly and confirmed the backend's stored data was
+completely correct the entire time — `businesses[0].digitalReceipts: "500000"`,
+`declaredIncome: "35000"`; `businesses[1]` (the new "Consulting Services" row) correctly all
+zeros, per `businessesFromScheduleBp`'s existing convention of only the first entry per scheme
+carrying the real aggregate figures. The corruption was entirely in
+`frontend/src/domain/returns/scheduleBpAdapter.ts`'s `scheduleBpFromBusinesses` — the function
+that reconstructs the editable Schedule BP view from the saved `businesses[]` array on every
+render — which computed every aggregate via `ad.reduce((sum, row) => sum + row.digitalReceipts,
+0)` and equivalents. `row.digitalReceipts` is a Decimal-backed field that travels over the wire
+as a JSON **string** ("500000"), the same wire-format fact behind every other finding in this
+document's §34.7-§34.11 cluster — `0 + "500000"` is JavaScript string concatenation, not
+addition, giving `"0500000"`; the second row's `"0"` then concatenates again to `"05000000"`,
+which parses back to **5,000,000**. Every other aggregate field (`GrsTotalTrnOver`,
+`PersumptiveInc44AD6Per`, `TotPersumptiveInc44AD`, the 44ADA and 44AE equivalents, and the GSTIN
+turnover total) had the identical unguarded `sum + row.field` pattern.
+
+**Why this is more serious than a display bug**: `scheduleBpFromBusinesses`'s output feeds
+directly into `ITR4ScheduleBPManager`, whose `onChange` converts edits back through
+`businessesFromScheduleBp` into `businesses[]` for saving. The corrupted (inflated) figures were
+only ever *read back* from a correct backend in this session's reproduction, but any further edit
+to the schedule (even something unrelated, like fixing a business name) would have round-tripped
+the *already-corrupted, displayed* 10x figure back through `businessesFromScheduleBp` and
+persisted it as the new "real" saved turnover — silently and permanently overstating a taxpayer's
+declared business turnover and presumptive income by an order of magnitude, in the actual filed
+return, the next time they saved. This was not caught in this session before persistence only
+because no further edit happened to trigger that second write.
+
+**Fix**: added the same `num()` coercion helper used throughout this session's fixes and applied
+it to every `sum + row.field` site in `scheduleBpFromBusinesses` — `44AD`'s four turnover fields
+and two presumptive-income-rate fields, `44ADA`'s three turnover fields, `44AE`'s two income
+fields, all three schemes' `declaredIncome` aggregates, and the GSTIN turnover total.
+`businessesFromScheduleBp` (the reverse direction) was checked and confirmed already safe — it
+only does direct `??` fallback assignment, no arithmetic on row fields.
+
+**Test added**: `scheduleBpAdapter.test.ts` — a new case with two Section 44AD business rows
+built from realistic backend-string values (`digitalReceipts: "500000"` on row 0,
+`"0"` on row 1, etc., cast via `as unknown as number` since the TS interface itself declares
+`number`), asserting every aggregate field resolves to the correct number rather than a
+concatenated string. Confirmed via `git stash` that it fails on pre-fix code with
+`expected '05000000' to be 500000` — the exact corruption string this section describes.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 205/205 (full suite, including the
+existing round-trip test in the same file, which continues to pass since it always used real
+number literals and never exercised the string-wire-format path), `npm run build` clean.
+Live-reverified: reloaded the same two-business ITR-4 draft after the fix — "Gross total
+turnover" and "Total presumptive income u/s 44AD" both correctly read ₹5,00,000 / ₹35,000 again,
+with every other field in the group (`Turnover in cash`, `Turnover through any other mode`,
+`Presumptive income @ 8%`) correctly reading ₹0, not the inflated/misattributed values a first,
+sloppier inline debug query briefly appeared to show (that was a bug in the *ad hoc verification
+script* itself, querying `label.parentElement.querySelector('input')` and picking up a sibling
+field's input by accident — re-verified correctly with `label.querySelector('input')` once the
+grid layout's actual DOM nesting was checked, so this is noted here only to be transparent that
+the first verification attempt was itself briefly misleading, not to suggest the underlying fix
+is in doubt).
