@@ -1441,19 +1441,18 @@ export default function ITRComputationPage() {
             </select>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 34, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 34 }}>
 
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               onClick={() => setShowImportMenu(!showImportMenu)}
               style={{
-                padding: '8px 14px',
-                background: '#16A34A',
-                color: '#000000',
+                padding: '6px 12px',
+                background: '#374151',
+                color: 'white',
                 border: 'none',
                 borderRadius: 6,
-                fontSize: 13,
-                fontWeight: 600,
+                fontSize: 12,
                 cursor: 'pointer'
               }}
             >
@@ -1604,12 +1603,12 @@ export default function ITRComputationPage() {
             disabled={saving}
             style={{
               padding: '6px 12px',
-              background: saving ? 'var(--border)' : '#16A34A',
-              color: '#000000',
+              background: saving ? 'var(--border)' : '#374151',
+              color: 'white',
               border: 'none',
               borderRadius: 6,
-              fontSize: 13,
-              fontWeight: 600,
+              fontSize: 12,
+              fontWeight: 500,
               cursor: saving ? 'not-allowed' : 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -1625,12 +1624,12 @@ export default function ITRComputationPage() {
             disabled={validating}
             style={{
               padding: '6px 12px',
-              background: validating ? 'var(--border)' : '#16A34A',
-              color: '#000000',
+              background: validating ? 'var(--border)' : '#2563EB',
+              color: 'white',
               border: 'none',
               borderRadius: 6,
-              fontSize: 13,
-              fontWeight: 600,
+              fontSize: 12,
+              fontWeight: 500,
               cursor: validating ? 'not-allowed' : 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -1647,11 +1646,11 @@ export default function ITRComputationPage() {
               title="Generate and download the official CBDT ITD-compliant JSON (ITR-1/ITR-4)"
               style={{
                 padding: '6px 12px',
-                background: '#16A34A',
-                color: '#000000',
+                background: '#6B7280',
+                color: 'white',
                 border: 'none',
                 borderRadius: 6,
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: 600,
                 cursor: 'pointer',
               }}
@@ -1664,12 +1663,11 @@ export default function ITRComputationPage() {
             onClick={handleDownloadPdf}
             style={{
               padding: '6px 12px',
-              background: '#16A34A',
-              color: '#000000',
+              background: '#6B7280',
+              color: 'white',
               border: 'none',
               borderRadius: 6,
-              fontSize: 13,
-              fontWeight: 600,
+              fontSize: 12,
               cursor: 'pointer'
             }}
           >
@@ -1682,11 +1680,11 @@ export default function ITRComputationPage() {
             title="Launch a visible browser, log in to the ITD portal with the client's PAN + password, and leave the browser open for follow-up after-login tasks"
             style={{
               padding: '6px 12px',
-              background: '#16A34A',
-              color: '#000000',
+              background: '#374151',
+              color: 'white',
               border: 'none',
               borderRadius: 6,
-              fontSize: 13,
+              fontSize: 12,
               fontWeight: 600,
               cursor: loginSubmitting ? 'wait' : 'pointer',
               opacity: loginSubmitting ? 0.6 : 1
@@ -1706,10 +1704,10 @@ export default function ITRComputationPage() {
                 background: (filingSubmitting || filingJobId !== null)
                   ? 'var(--border)'
                   : '#16A34A',
-                color: '#000000',
+                color: 'white',
                 border: 'none',
                 borderRadius: 6,
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: 600,
                 cursor: (filingSubmitting || filingJobId !== null) ? 'not-allowed' : 'pointer',
                 display: 'flex',
@@ -1735,10 +1733,10 @@ export default function ITRComputationPage() {
                 background: fetchingAck
                   ? 'var(--border)'
                   : '#16A34A',
-                color: '#000000',
+                color: 'white',
                 border: 'none',
                 borderRadius: 6,
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: 600,
                 cursor: fetchingAck ? 'not-allowed' : 'pointer',
                 display: 'flex',
@@ -1969,13 +1967,11 @@ export default function ITRComputationPage() {
       })()}
 
       <div style={{
-        background: '#cfe2f3',
-        borderRadius: 'var(--radius) var(--radius) 0 0',
-        marginBottom: 0,
+        background: 'var(--navy)',
+        borderRadius: 'var(--radius)',
+        marginBottom: 16,
         display: 'flex',
-        flexWrap: 'wrap',
-        border: '1px solid #000',
-        borderBottom: '1px solid #000'
+        overflowX: 'auto'
       }}>
         {tabs.map((tab, idx) => (
           <button
@@ -1983,10 +1979,10 @@ export default function ITRComputationPage() {
             onClick={() => setActiveTab(idx)}
             style={{
               padding: '12px 16px',
-              background: safeActiveTab === idx ? 'rgba(11, 25, 41, 0.10)' : 'transparent',
-              color: safeActiveTab === idx ? 'var(--navy)' : 'var(--text-secondary)',
+              background: safeActiveTab === idx ? 'rgba(201, 148, 58, 0.15)' : 'transparent',
+              color: safeActiveTab === idx ? 'var(--gold)' : 'var(--text-muted)',
               border: 'none',
-              borderBottom: safeActiveTab === idx ? '3px solid var(--navy)' : '3px solid transparent',
+              borderBottom: safeActiveTab === idx ? '3px solid var(--gold)' : '3px solid transparent',
               fontSize: 13,
               fontWeight: safeActiveTab === idx ? 600 : 400,
               cursor: 'pointer',
@@ -1999,11 +1995,10 @@ export default function ITRComputationPage() {
       </div>
 
       <div style={{
-        background: '#cfe2f3',
+        background: 'white',
         padding: 24,
-        borderRadius: '0 0 var(--radius) var(--radius)',
-        border: '1px solid #000',
-        borderTop: 0
+        borderRadius: 'var(--radius)',
+        border: '1px solid var(--border)'
       }}>
         {activeTab === 0 && editorModel && <PersonalInfoTab draft={editorModel.draft} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={(patch: any) => updateEditor((current) => ({
           ...current,

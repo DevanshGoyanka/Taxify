@@ -81,7 +81,7 @@ export default function ClientsPage() {
       <div className="clients-table">
         <table>
           <thead>
-            <tr className="clients-table-header-row">
+            <tr>
               <th>Client</th>
               <th>PAN</th>
               <th>Type</th>
@@ -136,7 +136,7 @@ export default function ClientsPage() {
                     <Badge variant="navy">{latestYear?.itrType || 'N/A'}</Badge>
                   </td>
                   <td>
-                    <Badge variant={getStatusBadge(latestYear?.status) as any} className={latestYear?.status === 'In Progress' ? 'badge-in-progress' : undefined}>
+                    <Badge variant={getStatusBadge(latestYear?.status)}>
                       {latestYear?.status || 'Not Started'}
                     </Badge>
                   </td>

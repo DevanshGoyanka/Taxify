@@ -1,13 +1,11 @@
-export const Badge = ({
-  children,
-  variant = 'muted',
-  className = ''
-}: {
-  children: React.ReactNode;
+export const Badge = ({ 
+  children, 
+  variant = 'muted' 
+}: { 
+  children: React.ReactNode; 
   variant?: 'success' | 'warning' | 'danger' | 'info' | 'gold' | 'muted' | 'navy';
-  className?: string;
 }) => (
-  <span className={`badge badge-${variant}${className ? ` ${className}` : ''}`}>
+  <span className={`badge badge-${variant}`}>
     {children}
   </span>
 );

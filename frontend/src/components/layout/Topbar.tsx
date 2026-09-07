@@ -1,13 +1,6 @@
 import { useLocation } from 'react-router-dom';
 
-type TopbarProps = {
-  collapsed: boolean;
-  onToggleCollapse: () => void;
-};
-
-export const Topbar = ({ collapsed, onToggleCollapse }: TopbarProps) => {
-  void collapsed;
-  void onToggleCollapse;
+export const Topbar = () => {
   const location = useLocation();
   const isClientManager = location.pathname === '/clients';
   const isOpenItr = location.pathname.startsWith('/filing/');

@@ -64,7 +64,7 @@ const TOTAL_KEYS = /(^Tot|Total$|Total[A-Z]|Tot[A-Z]|NetIncomeFrmSpecActivity$|T
 const inputStyle: React.CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid var(--border, #d7dce2)', borderRadius: 6, padding: '8px 12px', background: '#fff', color: 'var(--text-primary, #17202a)', fontSize: 13 };
 const cardStyle: React.CSSProperties = { border: '1px solid var(--border, #d7dce2)', borderRadius: 6, padding: 16, marginBottom: 16, background: 'var(--bg, #fafbfc)' };
 const gridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 };
-const addButtonStyle: React.CSSProperties = { padding: '6px 12px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' };
+const addButtonStyle: React.CSSProperties = { padding: '6px 12px', background: 'var(--gold, #b58b2a)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' };
 const removeButtonStyle: React.CSSProperties = { padding: '4px 8px', background: 'var(--danger, #c0392b)', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' };
 
 /**

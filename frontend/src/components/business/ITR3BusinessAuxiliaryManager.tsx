@@ -25,7 +25,7 @@ const UNITS = ['101','102','103','104','105','106','107','108','109','110','111'
 const UNIT_LABELS: Record<string, string> = {101:'Gms',102:'Kilograms',103:'Litre',104:'Kilolitre',105:'Metre',106:'Kilometre',107:'Numbers',108:'Quintal',109:'Ton',110:'Pound',111:'Milligrams',112:'Carat',113:'Numbers (1000s)',114:'Kwatt',115:'Mwatt',116:'Inch',117:'Feet',118:'Sqft',119:'Acre',120:'Cubicft',121:'Sqmetre',122:'Cubicmetre',999:'Residual'};
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text-primary)', background: '#fff' };
 const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 };
-const addButton: React.CSSProperties = { padding: '6px 12px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' };
+const addButton: React.CSSProperties = { padding: '6px 12px', background: 'var(--gold)', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' };
 const removeButton: React.CSSProperties = { padding: '4px 8px', background: 'var(--danger)', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' };
 const panel: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 6, padding: 16, marginTop: 12, background: 'var(--bg)' };
 

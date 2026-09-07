@@ -431,7 +431,7 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
           onClick={addTDSEntry}
           style={{
             padding: '6px 12px',
-            background: '#16a34a',
+            background: 'var(--gold)',
             color: 'white',
             border: 'none',
             borderRadius: 6,
@@ -689,7 +689,7 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
           }}
           style={{
             padding: '6px 12px',
-            background: '#16a34a',
+            background: 'var(--gold)',
             color: 'white',
             border: 'none',
             borderRadius: 6,
@@ -767,7 +767,7 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
           onClick={addSelfAssessmentEntry}
           style={{
             padding: '6px 12px',
-            background: '#16a34a',
+            background: 'var(--gold)',
             color: 'white',
             border: 'none',
             borderRadius: 6,
