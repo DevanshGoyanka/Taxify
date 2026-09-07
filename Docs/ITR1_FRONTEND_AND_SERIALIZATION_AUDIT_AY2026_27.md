@@ -3397,3 +3397,64 @@ the file (80DD/80DDB/80U, 80GGA/80GGC, 80E family, 80GG, 80QQB/80RRB, 80TTA/80TT
 80CCH) — all of these read plain `chapterVIA.<scalar>` fields directly (no separate manager/array
 backing them), so none share this specific bug; they were already covered by §34.9's money()
 fix.
+
+### 34.11 Continuing into TDS & Advance Tax (per "continue with Deductions and TDS tabs"): the
+same Decimal-as-string bug class found in a fourth, entirely different file — client-side
+pre-filing validation, not a display total
+
+Added a real Section 194A TDS entry (STATE BANK OF INDIA interest, matching the two Other Sources
+interest entries already on the return) and confirmed it correctly flowed through to "Schedule
+TDS-2 — Non-salary TDS" and to the live Tax Computation tab's "Validated TDS" line — this part of
+the TDS tab works correctly end-to-end. Along the way, deliberately reproduced a second, real
+scenario: a TDS entry with an invalid Deductor TAN correctly gets *excluded* from the computed
+credit (`totalTDS`), with the backend surfacing a clear, accurate `creditValidationIssues` entry
+(`INVALID_TAN_FORMAT`) and `calculationStatus: CALCULATED_WITH_CREDIT_ISSUES` — this is correct,
+intentional behavior (an invalid TAN cannot legally support a TDS credit claim), and clicking
+"Validate" does surface it to the user as a clear blocking error, so this is not a bug.
+
+Clicking "Validate" to confirm the above also surfaced a second, unrelated blocking error that
+had nothing to do with TDS: **"House property 1: sole ownership requires a 100% share."** — for
+the same self-occupied, sole-owned (not co-owned) property from §34.6/§34.7, whose ownership share
+had never been touched since it was created (should be, and per the raw saved draft genuinely
+was, 100%).
+
+**Root cause**: `frontend/src/domain/returns/filingPreflight.ts` (the client-side pre-filing
+validator run by the "Validate" button) checked sole ownership with
+`property.ownershipShare !== 100` — a **strict** inequality. Confirmed via the raw draft JSON
+(same technique as §34.7-§34.10) that `ownershipShare` is serialized as the JSON **string** `"100"`
+on a loaded draft, not the number `100`, despite `ReturnDraft`'s own TS type declaring
+`ownershipShare: number` — the same TS-type-vs-runtime-shape mismatch as every other finding in
+this cluster, just discovered for the first time outside a "Workspace" display component, inside
+a validation function instead. `"100" !== 100` is `true` in JavaScript (strict inequality does
+not coerce types), so a property that is genuinely, correctly 100% owned was wrongly told it
+needed to be. This is more severe than a display bug: it is a **blocking** error that would have
+stopped the taxpayer from generating the CBDT JSON or filing at all, for a completely valid,
+correctly-entered return.
+
+**Checked the whole file for the same pattern, not just this one line**: grepped every
+`!==`/`===` comparison against a numeric literal (relational `<`/`>` comparisons are not at risk —
+JavaScript does coerce types for those, unlike strict equality). Found two more: the co-owned
+cross-foot check's `totalShare = property.ownershipShare + coOwners.reduce((t, o) => t + o.share,
+0)` risked the exact same string-concatenation corruption as §34.9's Deductions bug if `ownershipShare`
+or any `owner.share` were ever string-typed (not yet live-reproduced, since the only property
+tested so far is sole-owned, but the same wire format applies to co-owned drafts); and the
+per-co-owner `owner.share > 0 && owner.share < 100` check, which — while not actually broken today
+(relational operators coerce) — was made consistent with the fix for defense-in-depth and to avoid
+this exact bug resurfacing if the code is later changed to a strict comparison. `refundAccountCount
+!== 1` (bank-account validation, a different section of the same file) was checked and confirmed
+safe: it is a genuine `.filter(...).length` integer count, never a serialized Decimal.
+
+**Fix**: added a `num()` coercion helper (same pattern as the `money()`/`finiteMoney()` helpers
+from §34.7-§34.10) and applied it to all four affected expressions: the sole-ownership strict
+check, both operands of the co-owned `totalShare` sum, and the per-co-owner share range check.
+
+**Test added**: `filingPreflight.test.ts` — `"does not false-flag sole ownership when
+ownershipShare arrives as a backend-serialized string"`, constructing a sole-owned property with
+`ownershipShare: '100'` (a string, matching the real wire shape) and asserting the false blocking
+error is absent. Confirmed via `git stash` that it fails identically to the live bug on pre-fix
+code.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 194/194, `npm run build` clean.
+Live-reverified: clicking "Validate" on the same return no longer reports the false ownership
+error — only the pre-existing, already-documented (§34.9) 80TTA/80TTB mutual-exclusivity data
+warnings remain.

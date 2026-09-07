@@ -250,6 +250,30 @@ describe('validateCbdtFrontendFields', () => {
     );
   });
 
+  it('does not false-flag sole ownership when ownershipShare arrives as a backend-serialized string', () => {
+    // A saved-and-reloaded draft's ownershipShare travels over the wire as the
+    // JSON string "100" (Decimal-backed field), not the number 100, even
+    // though ReturnDraft's own TS type says `number`. The strict `!== 100`
+    // check this validator used to run treated "100" !== 100 as true (no
+    // implicit coercion for strict inequality between a string and a
+    // number), wrongly blocking filing with "sole ownership requires a 100%
+    // share" for a property that is genuinely, correctly 100% owned --
+    // reproduced live via the actual app's "Validate" button.
+    const draft = createPreflightDraft('ITR-1', 'old');
+    draft.personal.stateCode = '09';
+    draft.personal.pinCode = '110001';
+    draft.houseProperties = [{
+      id: 'hp-1', propertySequenceNo: 1, propertyType: 'SELF_OCCUPIED',
+      state: '27', countryCode: '91', pinCode: '400001',
+      propertyOwnerType: 'SE', isCoOwned: false, ownershipShare: '100',
+      coOwners: [], tenantDetails: [],
+    } as unknown as ReturnDraft['houseProperties'][number]];
+
+    expect(validateCbdtFrontendFields(draft)).not.toContain(
+      'House property 1: sole ownership requires a 100% share.',
+    );
+  });
+
   it('rejects mixed metro and non-metro HRA evidence', () => {
     const draft = createPreflightDraft('ITR-1', 'old');
     draft.personal.employerCategory = 'OTH';
