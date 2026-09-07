@@ -3289,3 +3289,52 @@ right place" are different claims, and only the second one is what this audit is
 guarantee. Re-reading a panel's own arithmetic for internal consistency (not just "is the
 ₹0 gone") should be a standard part of verifying any financial-summary fix in this codebase going
 forward.
+
+### 34.9 Continuing into Deductions (per "continue with Deductions and TDS tabs"): a worse variant
+of the same bug family — string *concatenation*, not just silent zeroing
+
+Moved to the Deductions tab next. The "Section 80TTA / 80TTB — savings account interest" section
+header read **₹1,57,839** — not zero (which §34.7's fix pattern would have caught by inspection)
+but a plausible-*looking*, entirely wrong number. Fetched the raw draft directly and found
+`section80TTA: "157"`, `section80TTB: "839"` (both backend-serialized strings, matching every
+other finding in this family). `DeductionsWorkspace.tsx`'s `money()` helper had already been
+fixed in §34.7 — but this particular section header's `summary={inr(chapterVIA.section80TTA +
+chapterVIA.section80TTB)}` never called `money()` on the two operands at all, doing raw `+`
+directly on the two string fields: `"157" + "839"` is JavaScript string concatenation, not
+addition, giving `"157839"` (which `inr()`'s own internal `Number(...)` coercion then happily
+formatted as ₹1,57,839 — a real, finite, positive number, so nothing looked obviously broken).
+This is the same root bug family as §34.7 but a more dangerous variant: silent zeroing is
+visually obvious (₹0 next to real entries), silent concatenation is not (the result looks like a
+plausible rupee amount).
+
+**Grepped the same pattern across the whole file** rather than fixing this one instance and
+moving on, since §34.7 had already shown this bug class recurs by copy-paste: found **six more**
+section-header summaries with the identical `chapterVIA.<field> + chapterVIA.<field>` raw-string
+addition (80C/80CCC/80CCD, 80DD/80DDB/80U, 80GGA/80GGC, 80E/80EE/80EEA/80EEB, 80QQB/80RRB, and the
+ITR-3-only business 80IA-family total) — every one of the file's collapsible-section summary
+badges, seven in total. Confirmed via grep that no other already-fixed file (`ScheduleOSWorkspace.
+tsx`, `ExemptIncomeWorkspace.tsx`, `ITR2SchedulesWorkspace.tsx`) has this specific raw-`+`-inside-
+`inr()` pattern — this appears to be unique to `DeductionsWorkspace.tsx`, likely because it alone
+has this many two/three/four-field section headers needing an inline sum.
+
+**Fix**: wrapped every operand individually in `money()` before summing, at all seven sites.
+
+**Test added**: `frontend/src/components/deductions/DeductionsWorkspace.test.ts` (new file,
+`money` now exported for this purpose) — asserts `money("157") + money("839") === 996` and, for
+direct contrast, asserts what the pre-fix code actually computed:
+`Number("157" + "839") === 157839`, documenting the exact wrong value this bug produced rather
+than just asserting the fix is correct in isolation.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 190/190 (full suite, including the new
+file), `npm run build` clean. Live-reverified: the 80TTA/80TTB header now reads ₹996, matching
+the (already-correct) "Chapter VI-A aggregate (user-entered)" total beneath it.
+
+**Not fixed, and deliberately not chased further**: the underlying data itself has both
+`section80TTA` ("157") and `section80TTB` ("839") simultaneously non-zero for a taxpayer whose
+personal info records them as 30 years old (non-senior) — 80TTA and 80TTB are mutually exclusive
+by law (matching this app's own live warning: "80TTA and 80TTB are mutually exclusive..."), so
+having both populated is itself questionable test data, not a code defect this display fix should
+paper over. The backend's actual computed deduction (`deductChapVIA: 157`) already correctly
+reflects only the real, eligible amount regardless of what's sitting in the (likely stale, possibly
+manually-seeded) `section80TTB` field — the display now honestly shows what is actually entered,
+which is the right scope for this fix.

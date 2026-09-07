@@ -44,7 +44,7 @@ const MAX_MONEY = 99_999_999_999_999;
 // Backend monetary fields are Decimal-backed and travel over the wire as
 // JSON strings (e.g. "839"), not numbers -- must parse those, not silently
 // zero them, or summary totals read 0 for a freshly loaded draft.
-const money = (value: unknown): number => {
+export const money = (value: unknown): number => {
   const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
   return Number.isFinite(n) && n >= 0 ? n : 0;
 };
@@ -258,7 +258,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
   return <div>
     <div style={{ marginBottom: 16 }}><h3 style={styles.title}>Deductions under Chapter VI-A (Schedule VIA)</h3><div style={styles.subtitle}>AY 2026-27 · {form} · backend applies statutory ceilings; enter gross eligible amounts</div></div>
 
-    <Collapsible title="Section 80C / 80CCC / 80CCD — savings & pension" subtitle="PF, PPF, ELSS, LIC, NSC, NPS; aggregate ceiling ₹1.5L under 80CCE" defaultOpen summary={inr(chapterVIA.section80C + chapterVIA.section80CCC + chapterVIA.section80CCDEmployeeOrSE + chapterVIA.section80CCD1B)} badge={<span style={{ ...styles.badge, background: 'var(--success)' }}>80CCE ₹1.5L</span>}>
+    <Collapsible title="Section 80C / 80CCC / 80CCD — savings & pension" subtitle="PF, PPF, ELSS, LIC, NSC, NPS; aggregate ceiling ₹1.5L under 80CCE" defaultOpen summary={inr(money(chapterVIA.section80C) + money(chapterVIA.section80CCC) + money(chapterVIA.section80CCDEmployeeOrSE) + money(chapterVIA.section80CCD1B))} badge={<span style={{ ...styles.badge, background: 'var(--success)' }}>80CCE ₹1.5L</span>}>
       <Section80CManager data={{ investments: section80C }} onChange={managers.section80C} backendEligible={eligible('80C')} />
       <Schedule80CCCEditor entries={pensionContribution80CCC} onChange={(entries) => {
         const total = entries.reduce((sum, entry) => sum + money(entry.amount), 0);
@@ -278,7 +278,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
       <Section80DManager data={section80D} onChange={managers.section80D} backendEligible={eligible('80D')} />
     </Collapsible>
 
-    <Collapsible title="Section 80DD / 80DDB / 80U — disability & medical treatment" subtitle="Disabled dependent (80DD), specified disease (80DDB), self disability (80U)" defaultOpen={false} summary={inr(chapterVIA.section80DD + chapterVIA.section80DDB + chapterVIA.section80U)} badge={<span style={{ ...styles.badge, background: 'var(--info)' }}>Medical</span>}>
+    <Collapsible title="Section 80DD / 80DDB / 80U — disability & medical treatment" subtitle="Disabled dependent (80DD), specified disease (80DDB), self disability (80U)" defaultOpen={false} summary={inr(money(chapterVIA.section80DD) + money(chapterVIA.section80DDB) + money(chapterVIA.section80U))} badge={<span style={{ ...styles.badge, background: 'var(--info)' }}>Medical</span>}>
       <h4 style={{ ...styles.panelTitle, marginBottom: 10 }}>Section 80DD — disabled dependent</h4>
       <div style={styles.grid}>
         <NumberField label="80DD deduction amount (₹)" value={chapterVIA.section80DD} hint="Flat ₹75,000 (disability) / ₹1,25,000 (severe)" onChange={(value) => patch({ section80DD: value })} />
@@ -317,7 +317,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
       <DonationEntryManager entries={section80G} onChange={managers.donations} backendEligible={eligible('80G')} />
     </Collapsible>
 
-    <Collapsible title="Section 80GGA / 80GGC — scientific research & political contributions" subtitle="Donations for scientific research/rural development (80GGA) and political parties/electoral trusts (80GGC)" defaultOpen={false} summary={inr(chapterVIA.section80GGA + chapterVIA.section80GGC)} badge={<span style={{ ...styles.badge, background: 'var(--gold)' }}>{caps.gga ? 'Research/Political' : 'Political only'}</span>}>
+    <Collapsible title="Section 80GGA / 80GGC — scientific research & political contributions" subtitle="Donations for scientific research/rural development (80GGA) and political parties/electoral trusts (80GGC)" defaultOpen={false} summary={inr(money(chapterVIA.section80GGA) + money(chapterVIA.section80GGC))} badge={<span style={{ ...styles.badge, background: 'var(--gold)' }}>{caps.gga ? 'Research/Political' : 'Political only'}</span>}>
       {!caps.gga && <div style={styles.unsupported}>Section 80GGA is not available on {form}. Only 80GGC applies.</div>}
       {caps.gga && <>
         <h4 style={{ ...styles.panelTitle, marginBottom: 10 }}>Section 80GGA — scientific research / rural development donations</h4>
@@ -329,7 +329,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
       <NumberField label="80GGC aggregate (₹)" value={chapterVIA.section80GGC} hint="Auto-derived from detail rows; 100% deductible, cash not allowed" disabled onChange={() => undefined} />
     </Collapsible>
 
-    <Collapsible title="Section 80E / 80EE / 80EEA / 80EEB — education & home/EV loans" subtitle="Education loan interest (80E), first-home loan interest (80EE/80EEA), electric vehicle loan interest (80EEB)" defaultOpen={false} summary={inr(chapterVIA.section80E + chapterVIA.section80EE + chapterVIA.section80EEA + chapterVIA.section80EEB)} badge={<span style={{ ...styles.badge, background: 'var(--info)' }}>Loans</span>}>
+    <Collapsible title="Section 80E / 80EE / 80EEA / 80EEB — education & home/EV loans" subtitle="Education loan interest (80E), first-home loan interest (80EE/80EEA), electric vehicle loan interest (80EEB)" defaultOpen={false} summary={inr(money(chapterVIA.section80E) + money(chapterVIA.section80EE) + money(chapterVIA.section80EEA) + money(chapterVIA.section80EEB))} badge={<span style={{ ...styles.badge, background: 'var(--info)' }}>Loans</span>}>
       <DeductionLoanManager data={loans} onChange={managers.deductionLoans} />
     </Collapsible>
 
@@ -340,7 +340,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
       </div>
     </Collapsible>
 
-    {(caps.qqb || caps.rrb) && <Collapsible title="Section 80QQB / 80RRB — royalty & patent income" subtitle="Author royalty (80QQB) and patent royalties (80RRB); ITR-2/3 only" defaultOpen={false} summary={inr(chapterVIA.section80QQB + chapterVIA.section80RRB)} badge={<span style={{ ...styles.badge, background: 'var(--info)' }}>Royalty</span>}>
+    {(caps.qqb || caps.rrb) && <Collapsible title="Section 80QQB / 80RRB — royalty & patent income" subtitle="Author royalty (80QQB) and patent royalties (80RRB); ITR-2/3 only" defaultOpen={false} summary={inr(money(chapterVIA.section80QQB) + money(chapterVIA.section80RRB))} badge={<span style={{ ...styles.badge, background: 'var(--info)' }}>Royalty</span>}>
       <div style={styles.grid}>
         <NumberField label="80QQB — royalty income (₹)" value={chapterVIA.section80QQB} hint="Max ₹3,00,000" onChange={(value) => patch({ section80QQB: value })} />
         <TextField label="Form 10-CD acknowledgement no. (80QQB)" value={chapterVIA.section80QQBForm10CCDAckNum} maxLength={15} placeholder="Form 10-CD ack number" onChange={(value) => patch({ section80QQBForm10CCDAckNum: value })} />
@@ -349,14 +349,14 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
       </div>
     </Collapsible>}
 
-    <Collapsible title="Section 80TTA / 80TTB — savings account interest" subtitle="80TTA: ₹10,000 (non-senior); 80TTB: ₹50,000 (senior citizen, incl. FD/RD)" defaultOpen={false} summary={inr(chapterVIA.section80TTA + chapterVIA.section80TTB)} badge={<span style={{ ...styles.badge, background: 'var(--info)' }}>Interest</span>}>
+    <Collapsible title="Section 80TTA / 80TTB — savings account interest" subtitle="80TTA: ₹10,000 (non-senior); 80TTB: ₹50,000 (senior citizen, incl. FD/RD)" defaultOpen={false} summary={inr(money(chapterVIA.section80TTA) + money(chapterVIA.section80TTB))} badge={<span style={{ ...styles.badge, background: 'var(--info)' }}>Interest</span>}>
       <div style={styles.grid}>
         <NumberField label="80TTA — savings account interest (₹)" value={chapterVIA.section80TTA} hint="Max ₹10,000; non-senior individuals/HUF" onChange={(value) => patch({ section80TTA: value })} />
         <NumberField label="80TTB — senior citizen deposit interest (₹)" value={chapterVIA.section80TTB} hint="Max ₹50,000; FD/RD/savings for senior citizens" onChange={(value) => patch({ section80TTB: value })} />
       </div>
     </Collapsible>
 
-    {caps.business && <Collapsible title="Part B/C — business-linked deductions (80IA family)" subtitle="ITR-3 only: infrastructure, power, SEZ, employment, etc." defaultOpen={false} summary={inr(chapterVIA.businessDeductions.totalPartBChapterVIA + chapterVIA.businessDeductions.totalPartCChapterVIA)} badge={<span style={{ ...styles.badge, background: 'var(--gold)' }}>ITR-3</span>}>
+    {caps.business && <Collapsible title="Part B/C — business-linked deductions (80IA family)" subtitle="ITR-3 only: infrastructure, power, SEZ, employment, etc." defaultOpen={false} summary={inr(money(chapterVIA.businessDeductions.totalPartBChapterVIA) + money(chapterVIA.businessDeductions.totalPartCChapterVIA))} badge={<span style={{ ...styles.badge, background: 'var(--gold)' }}>ITR-3</span>}>
       <div style={styles.grid}>
         <NumberField label="80IA — infra / power / telecom profits (₹)" value={chapterVIA.businessDeductions.section80IA} onChange={(value) => patchBusiness({ section80IA: value })} />
         <NumberField label="80IAB — SEZ developer profits (₹)" value={chapterVIA.businessDeductions.section80IAB} onChange={(value) => patchBusiness({ section80IAB: value })} />
