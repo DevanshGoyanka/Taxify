@@ -3604,3 +3604,49 @@ describes (e.g. `getReferenceDate('2026-27')` returning `'2027-03-31'`).
 **Verification**: `npx tsc -b` clean, `npx vitest run` 204/204, `npm run build` clean.
 Live-reverified: the Personal Info tab's "Age as on 31 March 2026" field for DOB `2006-06-01` now
 reads **19**, matching the backend's own independently-computed age bracket for the first time.
+
+### 34.16 User-reported: "adding a single TDS entry adds two entries, one salary by default and
+the other TDS-2" — reproduced, root-caused, and fixed as an unstable React list key, not a
+literal duplicate-add
+
+Could not reproduce a literal "two rows created from one click" on first attempt: `addTDSEntry`
+(`ITRComputationTabs.tsx`) has exactly one call site, one button, and pushes exactly one new
+object into the array — confirmed via direct DOM inspection (`document.querySelectorAll('h4')`
+count) after a single click, repeatedly, on a clean draft. Traced every manager/reducer in the
+round trip (`updateTaxCreditsFromManager`, `tdsFromManager`/`tcsFromManager`,
+`mergeById`) and found each one correct and already unit-tested.
+
+**Found the real mechanism by testing a *second*, closely-related scenario instead of giving up**:
+`tdsEntries` (the array these rows render from) is `[...tdsToManager(draftTds),
+...tcsToManager(draftTcs)]` — two source arrays concatenated fresh on every render. Any TDS entry
+whose Section changes to a TCS code (206C and its variants) reclassifies from the first segment to
+the second, which means its position in the merged array jumps to the end — a genuine, real
+reordering. The row list's `<div key={index}>` (`ITRComputationTabs.tsx:453`) used the array
+*index*, not the entry's own stable `id`, as the React key — exactly the pattern React's own docs
+warn never to use when list order can change.
+
+**Live-reproduced the actual corruption this causes**: added two TDS entries named FIRST-ENTRY
+(section 192, default) and SECOND-ENTRY (section 192, default). Changed FIRST-ENTRY's section to
+206C (a TCS code) — it correctly moved to the end of the list. But because the `<select>` DOM
+node keyed by index 0 was reused by React for what is now SECOND-ENTRY, **the section dropdown
+that FIRST-ENTRY had just changed to 206C stayed visually stuck on the OTHER entry** — both "TDS
+Entry #1" (now the row genuinely named SECOND-ENTRY) and "TDS Entry #2" (FIRST-ENTRY) displayed
+Section "206C", even though SECOND-ENTRY's actual underlying data was never touched. This is the
+mechanism behind the reported symptom: not a second entry being *added*, but an existing entry's
+displayed Section field bleeding into a different entry's row the moment any reordering occurs —
+which reads, at a glance, exactly like "one entry shows Salary, the other shows something else,
+and I only added one."
+
+**Fix**: changed the row key to `entry.id` (falling back to `index` only if an entry somehow
+lacks one) at all three index-keyed entry lists in this file — the combined TDS/TCS list
+(the reported one), and, found by grepping for the identical `key={index}` pattern in the same
+file, the Advance Tax and Self Assessment Tax challan lists (`ChallanManagerEntry`/`TaxChallan`
+rows also carry a stable `id` via `challansToManager`, confirmed before applying the same fix, so
+they were fixed for the same latent risk even though not reported).
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 204/204, `npm run build` clean.
+Live-reverified the *exact* reproduction above against the fix: after changing FIRST-ENTRY's
+section to 206C, "TDS Entry #1" (SECOND-ENTRY) correctly still shows Section "192" and "TDS Entry
+#2" (FIRST-ENTRY) correctly shows "206C" — no cross-contamination. Confirmed via `git stash` that
+the pre-fix code reproduces the exact corruption described above and the post-fix code does not,
+on the identical sequence of actions.
