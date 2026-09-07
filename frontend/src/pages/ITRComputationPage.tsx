@@ -1969,13 +1969,11 @@ export default function ITRComputationPage() {
       })()}
 
       <div style={{
-        background: '#cfe2f3',
-        borderRadius: 'var(--radius) var(--radius) 0 0',
-        marginBottom: 0,
+        background: 'var(--navy)',
+        borderRadius: 'var(--radius)',
+        marginBottom: 16,
         display: 'flex',
-        flexWrap: 'wrap',
-        border: '1px solid #000',
-        borderBottom: '1px solid #000'
+        overflowX: 'auto'
       }}>
         {tabs.map((tab, idx) => (
           <button
@@ -1983,10 +1981,10 @@ export default function ITRComputationPage() {
             onClick={() => setActiveTab(idx)}
             style={{
               padding: '12px 16px',
-              background: safeActiveTab === idx ? 'rgba(11, 25, 41, 0.10)' : 'transparent',
-              color: safeActiveTab === idx ? 'var(--navy)' : 'var(--text-secondary)',
+              background: safeActiveTab === idx ? 'rgba(201, 148, 58, 0.15)' : 'transparent',
+              color: safeActiveTab === idx ? 'var(--gold)' : 'var(--text-muted)',
               border: 'none',
-              borderBottom: safeActiveTab === idx ? '3px solid var(--navy)' : '3px solid transparent',
+              borderBottom: safeActiveTab === idx ? '3px solid var(--gold)' : '3px solid transparent',
               fontSize: 13,
               fontWeight: safeActiveTab === idx ? 600 : 400,
               cursor: 'pointer',
@@ -2001,9 +1999,8 @@ export default function ITRComputationPage() {
       <div style={{
         background: '#cfe2f3',
         padding: 24,
-        borderRadius: '0 0 var(--radius) var(--radius)',
-        border: '1px solid #000',
-        borderTop: 0
+        borderRadius: 'var(--radius)',
+        border: '1px solid var(--border)'
       }}>
         {activeTab === 0 && editorModel && <PersonalInfoTab draft={editorModel.draft} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={(patch: any) => updateEditor((current) => ({
           ...current,
