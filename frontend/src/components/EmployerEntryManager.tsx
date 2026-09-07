@@ -605,7 +605,7 @@ export function EmployerEntryManager({
         <button
           type="button"
           onClick={addEmployer}
-          style={{ padding: '9px 14px', background: 'var(--gold)', color: '#fff', border: 0, borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
+          style={{ padding: '9px 14px', background: '#16a34a', color: '#fff', border: 0, borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
         >
           + Add employer
         </button>
