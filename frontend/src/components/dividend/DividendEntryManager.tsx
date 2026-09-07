@@ -74,7 +74,7 @@ export function DividendEntryManager({ entries = [], onChange }: DividendEntryMa
           {' '} | Taxable vs Exempt
         </div>
         <select onChange={(e) => e.target.value && addEntry(e.target.value as DividendSection)} defaultValue=""
-          style={{ padding: '6px 12px', borderRadius: 4, border: '1px solid var(--border)', fontSize: 13, background: '#16a34a', color: 'white' }}>
+          style={{ padding: '6px 12px', borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}>
           <option value="">+ Add Dividend</option>
           <option value="194">194 - Taxable</option>
           <option value="10(22e)">2(22)(e) - Deemed Dividend</option>

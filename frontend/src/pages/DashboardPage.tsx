@@ -127,8 +127,13 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="dashboard-content-grid dashboard-content-grid-split">
-        <div className="dashboard-panel dashboard-panel-recent-activity">
+      <div className="dashboard-content-grid">
+        <div style={{
+          background: 'white',
+          padding: 20,
+          borderRadius: 'var(--radius)',
+          border: '1px solid var(--border)'
+        }}>
           <h3 className="crimson" style={{ fontSize: 18, marginBottom: 16 }}>Recent Activity</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {recentActivity.length > 0 ? recentActivity.map((item, idx) => (
@@ -153,8 +158,13 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="dashboard-right-stack">
-          <div className="dashboard-panel">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div style={{
+            background: 'white',
+            padding: 20,
+            borderRadius: 'var(--radius)',
+            border: '1px solid var(--border)'
+          }}>
             <h3 className="crimson" style={{ fontSize: 16, marginBottom: 16 }}>ITR Type Breakdown</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {Object.keys(itrBreakdown).length > 0 ? Object.entries(itrBreakdown).map(([type, count]: [string, any]) => (
@@ -166,8 +176,8 @@ export default function DashboardPage() {
                   <div className="progress-bar">
                     <div className="progress-fill" style={{
                       width: `${(count / clients.length) * 100}%`,
-                      background: type === 'ITR-1' ? 'var(--accent-blue)' :
-                                 type === 'ITR-2' ? 'var(--accent-teal)' :
+                      background: type === 'ITR-1' ? 'var(--accent-blue)' : 
+                                 type === 'ITR-2' ? 'var(--accent-teal)' : 
                                  type === 'ITR-3' ? 'var(--gold)' : 'var(--accent-rose)'
                     }} />
                   </div>
@@ -180,7 +190,12 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="dashboard-panel">
+          <div style={{
+            background: 'white',
+            padding: 20,
+            borderRadius: 'var(--radius)',
+            border: '1px solid var(--border)'
+          }}>
             <h3 className="crimson" style={{ fontSize: 16, marginBottom: 16 }}>Today's Deadlines</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {[

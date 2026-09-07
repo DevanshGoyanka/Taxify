@@ -62,7 +62,7 @@ export function InterestEntryManager({ entries = [], onChange }: InterestEntryMa
         <select 
           onChange={(e) => e.target.value && addEntry(e.target.value as InterestITDTag)}
           defaultValue=""
-          style={{ padding: '6px 12px', borderRadius: 4, border: '1px solid var(--border)', fontSize: 13, background: '#16a34a', color: 'white' }}
+          style={{ padding: '6px 12px', borderRadius: 4, border: '1px solid var(--border)', fontSize: 13 }}
         >
           <option value="">+ Add Interest</option>
           <option value="SAVINGS_BANK">17A - Bank Savings</option>
