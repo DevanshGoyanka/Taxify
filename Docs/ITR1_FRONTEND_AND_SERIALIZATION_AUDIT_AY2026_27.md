@@ -2996,3 +2996,64 @@ that, and the gap between "backend computes correctly" and "user sees the correc
 real and severe. Part E, Schedule IT/TDS, and Verification (the remainder of the original
 part-by-part pass) should each get the same live, logged-in check this section performed, not
 only a schema/builder read, before being marked complete.
+
+### 34.5 Follow-up: live-tested every other income-head tab, per explicit instruction
+
+Continuing the live testing into Capital Gains (explicitly named) and House Property.
+
+**Capital Gains**: entered a real section 112A quick-entry transaction (₹3,00,000 sale, ₹2,00,000
+cost) on the live ITR-1 draft. Confirmed via the raw network response that Gross Total Income
+correctly rose from ₹5,25,996 to ₹6,25,996 (the full ₹1,00,000 gain, matching
+`app/engine/calculators/itr1.py`'s documented "GTI includes the FULL pre-exemption LTCG u/s 112A
+gain" design) and that "Normal-rate income" correctly stayed at ₹5,26,000 (the gain is fully
+within the ₹1,25,000 annual 112A exemption, so it never enters the slab-tax base) — the underlying
+computation was already correct. But the ₹1,00,000 gain itself was never shown as its own
+income-head row anywhere in the Tax Computation tab's Part B breakdown — the display jumped
+straight from "Income from Other Sources" to "Gross Total Income" with the ₹1,00,000 difference
+unexplained. Fixed: added `summary["capitalGains112A"]` (confirmed byte-for-byte identical to the
+real `LTCG112A.LongCap112A` JSON field, same source `result.capital_gains_112a`) and a
+"Long-Term Capital Gains (u/s 112A)" row in `TaxComputationTab.tsx`.
+
+**House Property**: adding a Section 24(b) home loan row via the tab's "+ Add" button (which,
+matching the frontend's own factory default, starts every field blank) and letting the debounced
+compute fire before filling in the loan's required account/reference number produced, on screen,
+only `Tax computation failed: Network Error` — no indication of what was actually wrong. Reading
+the backend log directly (not guessing from the frontend) found the real chain: `LoanDetail`'s
+Pydantic validation correctly rejected the blank `account_or_reference_number` field, but the
+`except (DraftMappingError, ValidationError, ValueError)` handler in
+`compute_canonical_itr1()` (`app/engine/filing_gateway_v2.py`) used
+`getattr(exc, "errors", None) or [str(exc)]` to extract a detail list — `pydantic.ValidationError`
+has an `.errors` **method** (not a list attribute) sharing its name with
+`FilingGatewayV2Error.errors` (a real list) and `DraftMappingError` (no `.errors` at all);
+`getattr` returned the **unbound method object itself** (always truthy, since methods are), which
+was then handed to `FilingGatewayV2Error(..., errors)` as the detail list. That non-list,
+non-JSON-serializable object reached `app/main.py`'s HTTP error handler and crashed
+`json.dumps()` with `"Object of type builtin_function_or_method is not JSON serializable"` —
+a second, unrelated failure that replaced the real, actionable "loan account number is required"
+message with a generic network error the taxpayer cannot act on.
+
+**Severity**: this is not specific to Section 24(b) loans — it is the generic exception-handling
+path for *every* Pydantic validation failure inside `compute_canonical_itr1()`'s mapping step, so
+any incomplete required field anywhere in the ITR-1 mapping pipeline that raises a
+`pydantic.ValidationError` (as opposed to the codebase's own `DraftMappingError`/`ValueError`,
+which this same handler already handled safely via the `[str(exc)]` fallback) would hit the same
+crash. Confirmed the sibling ITR-2/ITR-4 equivalents (`app/engine/filing_gateway_v2.py`, "ITR-2/
+ITR-4 mapping or computation failed" handlers) do **not** share this bug — both already use
+`[str(exc)]` directly rather than attempting to duck-type a `.errors` list, so they were never at
+risk; the bug was isolated to ITR-1's handler specifically.
+
+**Fix**: added `_exception_error_list(exc)`, which checks `isinstance(exc, ValidationError)`
+explicitly and calls `.errors()` (formatting each structured error dict as
+`"field.path: message"`), falling back to `[str(exc)]` for every other exception type — replacing
+the broken `getattr` duck-typing with an explicit type check.
+
+**Test added**: `tests/test_filing_gateway_v2.py::
+test_incomplete_24b_loan_raises_readable_error_not_unserializable_crash` — reproduces the exact
+live scenario (a `HouseProperty` with a `HomeLoan` carrying a blank `loanAccountNo`), asserts the
+raised `FilingGatewayV2Error.errors` is a list of strings naming the real Pydantic field
+(`account_or_reference_number`), and asserts the whole error is actually `json.dumps`-able —
+directly proving the crash this bug caused cannot recur. Confirmed via `git stash` to fail on
+pre-fix code (with the exact same `TypeError` the live app produced, not a different failure).
+
+Full suite (`test_itr1_*`, `test_itr4_*`, `test_filing_gateway_v2*`, `test_draft_to_itr1_input.py`):
+582 passed, no regressions.

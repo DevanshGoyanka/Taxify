@@ -15,6 +15,7 @@ from app.schemas.return_draft import (
     Category80D,
     CoOwner,
     Employer,
+    HomeLoan,
     HouseProperty,
     InterestIncome,
     OtherIncomeEntry,
@@ -95,6 +96,42 @@ def test_itr1_rejects_itr4_only_verification_capacity() -> None:
         gateway.generate_cbdt_json(draft)
 
     assert caught.value.message == "ITR-1 verification capacity is invalid."
+
+
+def test_incomplete_24b_loan_raises_readable_error_not_unserializable_crash() -> None:
+    """Found live: adding a Section 24(b) home loan row via the House
+    Property tab's "+ Add" button (which starts every field blank,
+    including the required loanAccountNo) and computing immediately, before
+    filling in the loan's account/reference number, must raise a
+    FilingGatewayV2Error with a real, JSON-serializable list of error
+    strings -- not crash while trying to build the HTTP error response.
+
+    Root cause: pydantic.ValidationError.errors is a *method*, not a list
+    attribute, but shares its name with FilingGatewayV2Error.errors (a
+    plain list) and DraftMappingError (no .errors at all). The prior
+    getattr(exc, "errors", None) duck-typing returned the unbound method
+    object itself for a real ValidationError (always truthy), which
+    reached app/main.py's http_exception_handler and crashed
+    json.dumps() with "Object of type builtin_function_or_method is not
+    JSON serializable" -- hiding the real "account/reference number is
+    required" message behind a generic "Network Error" for the taxpayer."""
+    draft = _filing_ready_draft()
+    draft.houseProperties = [HouseProperty(
+        id="hp1", propertyType="SELF_OCCUPIED",
+        homeLoans=[HomeLoan(lenderName="Test Bank", loanAccountNo="")],
+    )]
+
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.compute_canonical_itr1(draft)
+
+    assert caught.value.errors
+    assert all(isinstance(e, str) for e in caught.value.errors)
+    # The underlying Pydantic field name should be surfaced, not swallowed.
+    assert any("account_or_reference_number" in e for e in caught.value.errors)
+    # Must not itself be a builtin_function_or_method or any other
+    # non-JSON-serializable object -- the exact crash this reproduces.
+    import json
+    json.dumps({"message": caught.value.message, "errors": caught.value.errors})
 
 
 def test_summary_exposes_full_tax_computation_breakdown_at_top_level() -> None:
