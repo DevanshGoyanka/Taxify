@@ -64,7 +64,7 @@ export function HousePropertyEntryManager({ entries, passThroughIncome, onChange
   const hasBackendResult = taxResult !== null && taxResult !== undefined;
   const totalIncome = Number(taxResult?.totalIncChargeHP ?? taxResult?.hpIncome ?? 0);
   return <div style={{ marginBottom: 24 }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}><h3 style={{ fontSize: 14, color: 'var(--text-secondary)' }}>House Property Entries ({entries.length}/{Number.isFinite(maxProperties) ? maxProperties : '∞'})</h3><button type="button" onClick={addProperty} disabled={entries.length >= maxProperties} style={{ padding: '6px 12px', background: 'var(--gold)', color: '#fff', border: 0, borderRadius: 6 }}>+ Add Property</button></div>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}><h3 style={{ fontSize: 14, color: 'var(--text-secondary)' }}>House Property Entries ({entries.length}/{Number.isFinite(maxProperties) ? maxProperties : '∞'})</h3><button type="button" onClick={addProperty} disabled={entries.length >= maxProperties} style={{ padding: '6px 12px', background: '#16a34a', color: '#fff', border: 0, borderRadius: 6 }}>+ Add Property</button></div>
     {entries.length === 0 && <div style={{ padding: 24, textAlign: 'center', background: 'var(--bg)', color: 'var(--text-muted)' }}>No house property entries.</div>}
     {entries.map((entry, index) => {
       const computed = taxResult?.housePropertyDetails?.[index];

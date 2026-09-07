@@ -76,7 +76,7 @@ const styles = {
   primaryRow: { display: 'grid', gridTemplateColumns: 'minmax(180px, .8fr) minmax(280px, 1.6fr) minmax(150px, .65fr)', gap: 16, alignItems: 'end' } as React.CSSProperties,
   label: { display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' } as React.CSSProperties,
   input: { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'white' } as React.CSSProperties,
-  add: { padding: '6px 12px', background: 'var(--gold)', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' } as React.CSSProperties,
+  add: { padding: '6px 12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' } as React.CSSProperties,
   remove: { padding: '4px 8px', background: 'var(--danger)', color: 'white', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' } as React.CSSProperties,
   empty: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 6, marginBottom: 24 } as React.CSSProperties,
 };
