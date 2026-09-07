@@ -2632,3 +2632,80 @@ Re-verified directly against current code, not trusted from when each claim was 
 - Full backend suite re-run after all changes in this section — same baseline as every prior run
   this session (3 pre-existing unrelated failures in `test_tax_v2_compute.py`, same collection
   errors), no regressions.
+
+## 33. Fresh, form-structure-driven re-audit (2026-09-07): reading the official ITR-1 SAHAJ PDF
+part-by-part against the schema, rather than schema/validator-driven
+
+Per explicit instruction, this pass inverts the direction of every prior audit in this document.
+§10-§32 all started from the schema, the validators, or the calculator and worked outward; this
+pass starts from `Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-1-2026-Eng (1).pdf` — the
+actual gazetted form a human would fill in — read part by part (Part A → Part B → Part C → Part D
+→ Part E → Schedule IT → Schedule TDS → Verification), and for every field visible on the form,
+cross-references `Reference Docs by CBDT & ITD/Official JSON Schema/ITR-1_2026_Main_V1.1 (2).json`
+for its exact type/required/min/max/pattern/enum, then checks presence and correctness in both
+`app/schemas/itr1.py`/`app/engine/itd/itr1.py` (backend) and `frontend/src/components/
+PersonalInfoTab.tsx` and siblings (frontend). The ITR-1 SAHAJ form itself is short — 3 pages
+(Gazette pp. 16-18) covering Parts A-E, Schedule IT, Schedule TDS, and Verification — so this is a
+tractable full pass, not a sampled one.
+
+### 33.1 Part A — General Information
+
+Read in full against `PersonalInfo`, `FilingStatus`, `AssesseeRep`, and
+`clauseiv7provisio139iType`. Every field the form shows (A1 PAN, A2/A2a/A3 name, A4 DOB, A5
+Aadhaar, A6-A14 contact/address ×2, A15 filing section, A16 notice-response codes, A17 nature of
+employment, A18 revised/defective receipt no + date, A19 notice/order reference + date, A20
+115BAC(6) opt-out, A21(i)-(iii) seventh-proviso declarations, A22 representative assessee) has a
+real, correctly-named backend field (`ITR1FilingProfile` and its nested models) and a working
+frontend control (`PersonalInfoTab.tsx`), confirmed by direct code read rather than assumed from
+this document's own prior "verified complete" claims.
+
+**One real, previously-undocumented gap found and fixed**: `FilingStatus.AmtSeventhProvisio139ii`
+(A21(i), foreign-travel expenditure) and `AmtSeventhProvisio139iii` (A21(ii), electricity
+expenditure) both carry a schema-level `minimum` (Rs 2,00,000 and Rs 1,00,000 respectively) — the
+amount is only meaningful, and only schema-legal, once it crosses the threshold that makes the
+underlying declaration true. `app/engine/itd/itr1.py::_filing_status_itr1()` correctly *omits*
+each amount key when its flag is "N" (so a false declaration never emits a below-minimum 0), but
+nothing anywhere — not `ITR1FilingProfile.SeventhProvisoDetails` (`Field(default=Decimal("0"),
+ge=0)`, no floor), not any rule in `app/engine/validators/itr1/input_rules.py` (confirmed:
+zero prior references to `seventh_proviso`/`SeventhProviso` in that file), not the frontend's
+`Field` control in `PersonalInfoTab.tsx` (`type="number" required`, no `min` attribute) — stopped
+a taxpayer from ticking "foreign travel exceeded Rs 2 lakh" and then entering e.g. Rs 50,000. That
+combination would reach `generate_cbdt_json` unblocked and produce a document that violates the
+official schema's own `minimum` constraint on `AmtSeventhProvisio139ii`. §17.3 of this document
+had flagged the seventh-proviso clause-(iv) *detail rows* as an untested schema-shape path, but
+this specific minimum-value gap — an input-validation robustness question, not a schema-output
+shape question — was never checked by that pass, because §17's four fixtures all used
+schema-legal amounts (or the flag off) by construction; it only tests "does a good-faith fixture
+validate cleanly," not "does an inconsistent user entry get rejected before it reaches the
+builder."
+
+**Fix**: two new Category A rules, `ITR1-R191` (foreign travel) and `ITR1-R192` (electricity), in
+`app/engine/validators/itr1/input_rules.py`'s "SECTION: Filing & Regime" block — reject the
+respective amount when its flag is true and the amount is below the schema's own minimum. Matching
+`min={200000}`/`min={100000}` attributes (plus an explanatory `help` string) added to the two
+`Field` controls in `PersonalInfoTab.tsx` so the constraint is visible before submission, not only
+enforced after it.
+
+**Tests added** (`tests/test_itr1_input_validation.py`):
+`test_R191_seventh_proviso_foreign_travel_below_threshold_blocked`,
+`test_R191_seventh_proviso_foreign_travel_at_threshold_not_blocked` (exactly Rs 2,00,000, the
+schema's own inclusive minimum, must pass), `test_R192_seventh_proviso_electricity_below_
+threshold_blocked`. All three confirmed via `git stash` to fail against pre-fix code (the two
+`_blocked` tests failed outright — no rule fired at all; the at-threshold test already passed,
+serving as a non-regression fence). Full `test_itr1_*`/`test_itr4_*` plus every sibling file this
+document's own established practice checks (`test_draft_to_itr1_input.py`,
+`test_draft_to_itr4_input_itr4.py`, `test_filing_gateway_v2_itr4.py`, `validate_itr1_json.py`)
+green: 564 passed. Frontend `npm run build` clean.
+
+**Everything else in Part A**: confirmed correct on direct re-read, no new discrepancy — the
+`PostalAddress`/`FilingAddress` PIN-code pattern (`^[1-9][0-9]{5}$`) matches the schema's
+`[1-9]{1}[0-9]{5}` exactly; `StateCode`'s 38-value enum (01-37, 99) matches; `AadhaarCardNo` is
+correctly optional both in the schema and in `ITR1FilingProfile.aadhaar_number`, and correctly
+omitted (not emitted as `null` or `""`) when absent; `ReturnFileSec`'s full 8-value enum (11, 12,
+13, 14, 16, 17, 18, 20) is represented via `return_file_section: Literal[...]`, not a narrowed
+subset; `ReceiptNo`/`OrigRetFiledDate`/`NoticeNo`/`NoticeDateUnderSec` are all correctly
+conditionally emitted only when the corresponding profile field is set.
+
+Part B (Gross Total Income: Salary, House Property, Other Sources), Part C (Deductions), Part D
+(Tax Computation), Part E (Bank Accounts), Schedule IT, Schedule TDS, and Verification are next in
+this same pass — not yet started as of this section.
