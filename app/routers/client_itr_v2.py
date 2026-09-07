@@ -396,16 +396,25 @@ def download_client_itr_pdf_v2(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Download a lightweight PDF snapshot of the saved canonical draft.
+    """Download a CA-style "Statement of Income" computation PDF.
 
-    Renders a single-page summary from the typed ``ReturnDraft`` (client
-    identity, form, regime, and the income-head totals the draft
-    carries). It does not fabricate tax figures — for the official CBDT
-    computation, use ``POST /v2/clients/{id}/itr/{year}/generate-cbdt-json``.
+    Runs the same canonical compute pipeline as ``compute_canonical()``
+    (the endpoint the frontend's own compute button calls) and renders
+    its real result — income-head summary, tax computation, and the
+    supporting schedules (employers, interest/dividends, capital gains,
+    TDS/TCS, bank accounts) — as a single PDF. Every figure on the page
+    comes from the calculator; this endpoint never recomputes tax itself.
 
-    When ``reportlab`` is unavailable, emits a minimal valid PDF shell
-    so the endpoint never 500s on a dependency gap (mirrors the legacy
-    ``download-pdf`` fallback).
+    ITR-3 has no canonical ``ReturnDraft`` compute pipeline yet (only a
+    separate, non-persisted legacy endpoint), so it is not supported
+    here — 501, not a best-effort guess.
+
+    There is deliberately no placeholder-PDF fallback for a missing
+    ``reportlab`` (or any other rendering failure): a stub page that
+    downloads successfully but isn't the real computation report is worse
+    than an explicit error, since it looks like a working download until
+    the taxpayer tries to open it. Either the real report downloads, or
+    the request fails loudly with a 500 the operator can act on.
 
     Args:
         client_id: Public UUID or legacy numeric client identifier.
@@ -414,85 +423,86 @@ def download_client_itr_pdf_v2(
         db: Request database session.
 
     Returns:
-        Download response containing the PDF snapshot.
+        Download response containing the Statement of Income PDF.
 
     Raises:
-        HTTPException: 404 for unknown client; 422 for legacy blobs or a
-            draft/URL year mismatch; 500 for invalid stored JSON.
+        HTTPException: 404 for unknown client; 422 for legacy blobs, a
+            draft/URL year mismatch, or a compute-blocking issue; 500 for
+            invalid stored JSON or a PDF-rendering failure; 501 for ITR-3
+            (no compute pipeline yet).
     """
-    client, itr, draft = _load_saved_draft(client_id, year, current_user, db)
+    client, _itr, draft = _load_saved_draft(client_id, year, current_user, db)
 
-    import io
-
-    try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.pdfgen import canvas as rl_canvas
-    except ImportError:
-        pdf_data = (
-            b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
-            b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
-            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
-            b"/Resources << >> /Contents 4 0 R >>\nendobj\n"
-            b"4 0 obj\n<< /Length 50 >>\nstream\nBT /F1 12 Tf 70 800 Td "
-            b"(ITR Computation Report) Tj ET\nendstream\nendobj\n"
-            b"xref\n0 5\n0000000000 65535 f\n0000000009 00000 n\n0000000056 00000 n\n"
-            b"0000000111 00000 n\n0000000212 00000 n\ntrailer\n<< /Size 5 >>\n"
-            b"startxref\n312\n%%EOF"
-        )
-        return Response(
-            content=pdf_data,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f"attachment; filename=ITR_{client.pan}_{year}.pdf",
+    if draft.form == "ITR-3":
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "message": "PDF computation report for ITR-3 is not available yet.",
+                "errors": [
+                    "ITR-3 does not yet have a canonical ReturnDraft compute "
+                    "pipeline — this will be added in a future release.",
+                ],
             },
         )
+    if draft.form not in ("ITR-1", "ITR-2", "ITR-4"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": f"Unsupported form for PDF generation: {draft.form}", "errors": []},
+        )
 
-    buf = io.BytesIO()
-    c = rl_canvas.Canvas(buf, pagesize=A4)
-    width, height = A4
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(50, height - 50, f"ITR Computation Report — {client.name}")
-    c.setFont("Helvetica", 10)
-    form_label = itr.itr_type if itr and itr.itr_type else (draft.form or "ITR-1")
-    regime_label = (draft.regime or "new").upper()
-    c.drawString(
-        50, height - 80,
-        f"PAN: {client.pan or 'N/A'}    Year: {year}    Form: {form_label}    Regime: {regime_label}",
-    )
-    y = height - 110
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(50, y, "Canonical Draft Summary")
-    y -= 18
-    c.setFont("Helvetica", 9)
+    from app.engine.filing_gateway_v2 import FilingGatewayV2Error, compute_canonical
+    from app.engine.reports.builders import build_statement_of_income_context
+    from app.engine.reports.renderer import render_statement_of_income
 
-    # Surface the typed draft's income-head counts + key personal fields.
-    summary_lines: list[str] = [
-        f"Schema version: {draft.schemaVersion}",
-        f"Assessee: {draft.personal.name or client.name or '—'}",
-        f"Employers: {len(draft.employers)}",
-        f"House properties: {len(draft.houseProperties)}",
-        f"Businesses: {len(draft.businesses)}",
-        f"Bank accounts: {len(draft.bankAccounts)}",
-        f"TDS credits: {len(draft.taxes.tds)}",
-        f"Tax challans: {len(draft.taxes.challans)}",
-        f"Filing section: {draft.filing.filingSection}",
-    ]
-    for line in summary_lines:
-        if y < 60:
-            c.showPage()
-            c.setFont("Helvetica", 9)
-            y = height - 50
-        c.drawString(50, y, line)
-        y -= 14
+    try:
+        pipeline_result = compute_canonical(draft)
+    except FilingGatewayV2Error as exc:
+        logger.error(
+            "PDF compute failed for client %s AY %s: %s",
+            client.pan, year, exc.message,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": exc.message, "errors": exc.errors},
+        ) from exc
 
-    c.save()
-    pdf_bytes = buf.getvalue()
+    try:
+        context = build_statement_of_income_context(draft, client, pipeline_result)
+        pdf_bytes = render_statement_of_income(context)
+    except ImportError as exc:
+        # No placeholder fallback: a stub that "downloads successfully" but
+        # cannot be opened is worse than a loud, actionable failure — this
+        # previously masked reportlab being absent from the server's actual
+        # virtualenv (declared in requirements.txt but never installed),
+        # silently handing every caller a broken 467-byte stub PDF instead
+        # of ever surfacing the real problem.
+        logger.error(
+            "PDF rendering unavailable for client %s AY %s: %s",
+            client.pan, year, exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "message": "PDF rendering is unavailable on the server (missing dependency).",
+                "errors": [str(exc)],
+            },
+        ) from exc
+    except Exception as exc:
+        logger.error(
+            "PDF rendering failed for client %s AY %s: %s",
+            client.pan, year, exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "PDF rendering failed.", "errors": [str(exc)]},
+        ) from exc
+
     form_slug = (draft.form or "ITR-1").replace("-", "")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename=ITR_{form_slug}_{client.pan}_{year}.pdf",
+            "Content-Disposition": f"attachment; filename=ITR_{form_slug}_{client.pan}_{year}_StatementOfIncome.pdf",
             "X-Return-Form": draft.form or "ITR-1",
         },
     )

@@ -192,6 +192,7 @@ export default function ITRComputationPage() {
   // number; it triggers the standalone downloader (separate from the
   // working uploader) to fetch the receipt PDF from the ITD portal.
   const [fetchingAck, setFetchingAck] = useState(false);
+  const [pdfDownloading, setPdfDownloading] = useState(false);
   const [filingJob, setFilingJob] = useState<FilingJobStatus | null>(null);
   
   // Part 2: Import document state
@@ -607,11 +608,14 @@ export default function ITRComputationPage() {
   };
 
   const handleDownloadPdf = async () => {
+    setPdfDownloading(true);
     try {
       await itrV2.downloadPdf(clientId, effectiveAssessmentYear);
-      toast.success('PDF downloaded successfully');
+      toast.success('Statement of Income PDF downloaded successfully');
     } catch (err: any) {
       toast.error(err.message || 'PDF download failed');
+    } finally {
+      setPdfDownloading(false);
     }
   };
 
@@ -764,20 +768,34 @@ export default function ITRComputationPage() {
       `acknowledgement PDF will be downloaded.\n\nProceed?`,
     );
     if (!ok) return;
+    // Open the viewer tab synchronously, still inside the click's user-gesture
+    // stack (before the `await` below) -- opening it after the network
+    // response comes back is what popup blockers treat as an unsolicited
+    // popup and silently kill. Pointed at the real PDF once it's ready.
+    const previewWindow = window.open('', '_blank');
     setFetchingAck(true);
     try {
       const blob = await filingSubmitApi.fetchAcknowledgement(clientId, ay, itrForm);
-      // Persist the PDF to the user's downloads via a synthetic anchor.
       const url = window.URL.createObjectURL(blob);
+      // Persist the PDF to the user's downloads via a synthetic anchor...
       const a = document.createElement('a');
       a.href = url;
       a.download = `${itrForm}_${ay}_Acknowledgement.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+      // ...and open the same PDF so it's immediately viewable, not just saved.
+      if (previewWindow) {
+        previewWindow.location.href = url;
+      } else {
+        window.open(url, '_blank');
+      }
+      // Revoke later, not immediately -- the viewer tab needs time to load
+      // the blob before its URL is invalidated.
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
       toast.success(`Acknowledgement PDF downloaded for AY ${ay}.`);
     } catch (err: any) {
+      previewWindow?.close();
       // The backend returns errors as JSON ({detail: "..."}), but because
       // the success path is responseType:'blob', axios delivers the error
       // body as a Blob too. Parse it to surface the "file the ITR first"
@@ -1670,17 +1688,23 @@ export default function ITRComputationPage() {
 
           <button
             onClick={handleDownloadPdf}
+            disabled={pdfDownloading}
+            title="Generate and download a CA-style Statement of Income PDF (computed figures, income-head summary, and supporting schedules) for ITR-1/ITR-2/ITR-4. Not yet available for ITR-3."
             style={{
               padding: '6px 12px',
-              background: '#5BB981',
+              background: pdfDownloading ? 'var(--border)' : '#5BB981',
               color: '#000000',
               border: 'none',
               borderRadius: 6,
               fontSize: 13,
               fontWeight: 600,
-              cursor: 'pointer'
+              cursor: pdfDownloading ? 'wait' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
             }}
           >
+            {pdfDownloading && <Spinner size={12} />}
             PDF
           </button>
 

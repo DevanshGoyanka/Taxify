@@ -71,3 +71,33 @@ def compute(taxable_income: Decimal, age_bracket: str, regime: str) -> Decimal:
     if regime == TaxRegime.NEW:
         return compute_new_regime(taxable_income)
     return compute_old_regime(taxable_income, age_bracket)
+
+
+def slab_breakdown(
+    taxable_income: Decimal, age_bracket: str, regime: str,
+) -> list[tuple[Decimal, Decimal | None, Decimal, Decimal, Decimal]]:
+    """Return the per-bracket split of ``compute()``'s slab tax for display.
+
+    Each tuple is ``(lower, upper, rate_pct, income_in_bracket, tax_in_bracket)``
+    for every bracket actually reached by ``taxable_income`` — the same
+    bracket table and rounding ``compute()`` uses, just not collapsed into
+    a single total. Used only to print a "Tax - Nil rate / @5% / @10% ..."
+    breakdown on the Statement of Income report; never a second source of
+    truth for the tax figure itself.
+    """
+    slab_defs = _slabs_for(age_bracket, regime)
+    rows: list[tuple[Decimal, Decimal | None, Decimal, Decimal, Decimal]] = []
+    if taxable_income <= 0:
+        return rows
+    for lower, upper, rate in slab_defs:
+        if taxable_income <= lower:
+            break
+        bracket_income = (
+            min(taxable_income, upper) - lower if upper is not None
+            else taxable_income - lower
+        )
+        if bracket_income <= 0:
+            continue
+        bracket_tax = round_to_nearest_rupee(bracket_income * rate / Decimal("100"))
+        rows.append((lower, upper, rate, bracket_income, bracket_tax))
+    return rows

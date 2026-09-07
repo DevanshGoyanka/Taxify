@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Literal
 
@@ -34,6 +35,7 @@ from app.services.filing_record_service import upsert_filing_record
 from app.automation.job_worker import client_folder_name
 
 router = APIRouter(prefix="/api/v1/filing", tags=["filing"])
+logger = logging.getLogger("taxify.routers.filing")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -540,14 +542,20 @@ async def fetch_acknowledgement(
         )
 
     output_dir = _imports_dir(client, ay)
+
+    def _log(message: str) -> None:
+        logger.info("ack-fetch[%s]: %s", client.public_id, message)
+
     try:
         result = await download_acknowledgement_pdf(
             pan=client.pan,
             portal_password_cipher=client.portal_password,
             assessment_year=ay,
             output_dir=output_dir,
+            log_callback=_log,
         )
     except AcknowledgementDownloadError as exc:
+        logger.error("ack-fetch[%s] raised before a result could be produced: %s", client.public_id, exc)
         log_filing_action(
             db=db, user=current_user, client=client, assessment_year=ay,
             itr_type=form, action="ack", outcome="error",
@@ -571,6 +579,7 @@ async def fetch_acknowledgement(
             "Kindly file the ITR first to download the acknowledgement.",
         )
     if not result.success or not result.acknowledgement_path:
+        logger.error("ack-fetch[%s] failed: %s", client.public_id, result.error or "Acknowledgement download failed.")
         log_filing_action(
             db=db, user=current_user, client=client, assessment_year=ay,
             itr_type=form, action="ack", outcome="error",
