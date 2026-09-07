@@ -21,11 +21,17 @@ export function calculateAgeFromDob(
   const birthDate = new Date(dob);
   if (Number.isNaN(birthDate.getTime())) return 0;
 
-  // AY "2026-27" → reference date is 31 March of the END year (2027).
-  // The end year is the last two digits of the AY suffix + 2000.
-  const endYearSuffix = assessmentYear.split('-')[1] ?? '27';
-  const endYear = parseInt(endYearSuffix, 10) + 2000;
-  const refDate = new Date(endYear, 2, 31); // March = month index 2
+  // AY "2026-27" assesses income for the previous year 2025-26, which ends
+  // 31 March 2026 -- the reference date's year is the AY string's OWN first
+  // (start) component, not the suffix. The previous version parsed the
+  // suffix ("27") as if it were itself a calendar year and added 2000,
+  // landing on 31 March 2027 -- one full year past the correct statutory
+  // reference date. Confirmed against the backend's own hardcoded
+  // datetime.date(2026, 3, 31) in draft_to_itr1_input.py's
+  // _age_bracket_from_dob(), which is unaffected by this bug since it is
+  // computed independently server-side -- this was a display-only defect.
+  const startYear = parseInt(assessmentYear.split('-')[0] ?? '2026', 10);
+  const refDate = new Date(startYear, 2, 31); // March = month index 2
 
   let age = refDate.getFullYear() - birthDate.getFullYear();
   const monthDiff = refDate.getMonth() - birthDate.getMonth();
@@ -42,10 +48,9 @@ export function calculateAgeFromDob(
  * Derive the statutory reference date (31 March) for an assessment year.
  *
  * @param assessmentYear Assessment year string like "2026-27".
- * @returns ISO date string like "2027-03-31".
+ * @returns ISO date string like "2026-03-31".
  */
 export function getReferenceDate(assessmentYear: string): string {
-  const endYearSuffix = assessmentYear.split('-')[1] ?? '27';
-  const endYear = parseInt(endYearSuffix, 10) + 2000;
-  return `${endYear}-03-31`;
+  const startYear = parseInt(assessmentYear.split('-')[0] ?? '2026', 10);
+  return `${startYear}-03-31`;
 }

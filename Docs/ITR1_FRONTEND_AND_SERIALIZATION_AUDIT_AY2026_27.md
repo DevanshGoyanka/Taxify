@@ -3549,3 +3549,58 @@ incidentally reproduced and correctly saw handled the ₹1,25,000 ITR-1 eligibil
 ITR-1: LTCG u/s 112A of Rs 300000 exceeds Rs 125000 limit. File ITR-2.") rather than silently
 computing or crashing — confirming the eligibility gate fixed earlier in this document (§32.1)
 still holds.
+
+### 34.15 Continuing into Exempt Income and Personal Info, per explicit instruction
+
+**Exempt Income**: added a real entry (₹15,000, category SRPC/10(11) PPF withdrawal). The tab's
+own "Total exempt income" running total correctly read ₹15,000 (this section's `money()`-style
+coercion was already fixed in §34.7). Traced the mapping into the actual ITD input
+(`draft_to_itr1_input.py`'s `exempt_income_breakdown`/`exempt_income_entries`/
+`total_exempt_income`, all reading `draft.exemptIncome.otherExemptIncome`) and confirmed it is
+wired correctly — this schedule carries no tax-computation weight (it is pure disclosure, exempt
+income by definition never enters GTI), so there is no backend-vs-frontend "which number is
+authoritative" risk here the way there is for Capital Gains: nothing on the backend computes a
+competing total this figure could drift from. No bug found.
+
+**Personal Info**: found and fixed a real, previously-undetected off-by-one-year bug in the
+"Age as on 31 March 2026" field — DOB `2006-06-01` displayed as **age 20**, when the person has
+not yet had their 2026 birthday as of the 31 March 2026 reference date and is genuinely 19.
+
+**Root cause**: `frontend/src/utils/age.ts`'s `calculateAgeFromDob()` derived its reference year
+by taking the assessment-year string's *second* component ("27" from "2026-27") and adding 2000,
+producing 31 March **2027** — a full year past the correct statutory reference date. AY "2026-27"
+assesses the previous year 2025-26, which ends 31 March **2026** — the correct reference year is
+the AY string's *first* component, used directly, not the suffix. Confirmed the correct date
+independently against this exact codebase's own backend: `app/engine/draft_to_itr1_input.py`'s
+`_age_bracket_from_dob()` hardcodes `datetime.date(2026, 3, 31)` for the same AY, with an explicit
+comment ("AY 2026-27 → previous year ends 2026-03-31") that the frontend utility's own comment
+directly contradicted ("reference date is 31 March of the END year (2027)").
+
+**Blast-radius check performed, not assumed**: grepped every call site of both
+`calculateAgeFromDob` and the sibling `getReferenceDate` (also affected, same bug) across the
+frontend. `getReferenceDate` is imported once (`ITRComputationPage.tsx`) but never actually
+called — dead code, zero live impact. `calculateAgeFromDob` has exactly one live call site
+(`PersonalInfoTab.tsx:174`), and that component uses the resulting `age` value for exactly one
+thing: the disabled, read-only "Age as on 31 March 2026" display field — it does not gate any
+other client-side logic. Most importantly, confirmed the **actual tax computation is unaffected**:
+`age_bracket` (which drives senior-citizen slabs, 80D/80DDB/80TTB age-gated limits, etc.) is
+derived independently server-side from `draft.personal.dateOfBirth` by the correct
+`_age_bracket_from_dob()` shown above — this bug never reached the real computation, JSON
+generation, or the filed return; it was a pure, isolated display defect on one field. Still a real
+bug worth fixing: a preparer trusting this displayed age near a 59/60, 79/80, or any other
+age-sensitive boundary could be misled into second-guessing a correct backend result, or into
+manually working around a discrepancy that shouldn't exist.
+
+**Fix**: changed both functions to derive the reference year from the assessment year's first
+component (`assessmentYear.split('-')[0]`) instead of the second, matching the backend exactly.
+
+**Test added**: new file `frontend/src/utils/age.test.ts` (this utility had no prior test
+coverage at all) — asserts the exact reported case (DOB `2006-06-01`, AY `2026-27` → age 19, not
+20), a birthday landing exactly on the reference date, a birthday the day after it, missing/invalid
+DOB handling, and that both functions respect a different AY string. Confirmed via `git stash`
+that 6 of the 7 new tests fail against the pre-fix code with the exact wrong values this section
+describes (e.g. `getReferenceDate('2026-27')` returning `'2027-03-31'`).
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 204/204, `npm run build` clean.
+Live-reverified: the Personal Info tab's "Age as on 31 March 2026" field for DOB `2006-06-01` now
+reads **19**, matching the backend's own independently-computed age bracket for the first time.
