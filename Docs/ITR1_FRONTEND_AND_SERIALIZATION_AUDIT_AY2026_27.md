@@ -3458,3 +3458,48 @@ code.
 Live-reverified: clicking "Validate" on the same return no longer reports the false ownership
 error — only the pre-existing, already-documented (§34.9) 80TTA/80TTB mutual-exclusivity data
 warnings remain.
+
+### 34.12 Rest of TDS & Advance Tax verified working, no further bugs found
+
+Completed the remaining scope of "check inputting all the fields ... [and] Deductions and TDS
+tabs": Advance Tax (per-challan) and Self Assessment Tax entries. Added one of each (BSR
+`0004567`, serial `123`, ₹15,000 advance tax; BSR `0004567`, serial `456`, ₹1,000 self-assessment
+tax) and confirmed, via both the tab's own "Schedule-wise totals" panel and the live
+`/v2/tax-summary/compute` response, that both flow correctly end-to-end: `Advance Tax
+(TaxesPaid.AdvanceTax)` → ₹15,000, `Self-Assessment Tax (TaxesPaid.SelfAssessmentTax)` → ₹1,000,
+`Entered Tax Payments`/`Validated Filing Credits` → ₹16,000, and the Tax Computation tab's
+`REFUND DUE` correctly nets to ₹15,000 (₹16,000 credits − ₹1,000 net tax liability). The SAT
+entry's CIN (Challan Identification Number) was also confirmed correctly auto-derived from the
+three component fields (`0004567-20260819-00456`). No bugs found in this part of the tab.
+
+### 34.13 Summary of the Deductions + TDS & Advance Tax testing pass
+
+Six real, independently-rooted bugs found and fixed across this pass (§34.6-§34.11), all
+following the same investigative discipline: reproduce live against the actual running app,
+trace to the real raw JSON/network response (never guess), write a regression test against the
+exact reported value, confirm via `git stash` that it fails on pre-fix code, fix, then
+re-verify live after rebuilding:
+
+1. Self-occupied Section 24(b) interest shown uncapped in the live preview and ITD JSON
+   (`house_property.py`, backend).
+2. `money()`-style helpers across six frontend files silently zeroing every backend
+   Decimal-as-string value on a loaded draft.
+3. The Salary tab's redundant client-computed "gross salary" preview (removed, per explicit user
+   direction that such figures must come from the backend, not be re-derived client-side) plus a
+   wrong backend field name (`totalSection16Deductions` → the real `deductionUs16`) in the same
+   panel.
+4. Seven Chapter VI-A section-header totals doing raw string concatenation instead of numeric
+   addition (`DeductionsWorkspace.tsx`).
+5. 80C/80D/80G section totals never reflecting real entered data at all, because three
+   sub-manager fields were never synced back into the scalars the totals actually read.
+6. A false "sole ownership requires a 100% share" blocking error in the client-side pre-filing
+   validator (`filingPreflight.ts`), from the same Decimal-as-string mismatch recurring in a
+   fourth, non-display-component file.
+
+Every fix has a regression test, is `git stash`-confirmed against the pre-fix code, and was
+re-verified live in the browser after rebuilding — not just asserted from the diff. Combined with
+§34.1-§34.5's earlier findings (Tax Computation tab silently showing ₹0 for most of Part D, the
+`builtin_function_or_method` JSON-serialization crash, and the Section 112A summary gap), every
+income head and tab named across this session's live-testing instructions (Salary, House
+Property, Capital Gains, Other Sources, Deductions, TDS & Advance Tax) has now been exercised
+end-to-end against the real running application, not just reviewed as static code.
