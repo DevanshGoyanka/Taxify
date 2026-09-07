@@ -3338,3 +3338,62 @@ paper over. The backend's actual computed deduction (`deductChapVIA: 157`) alrea
 reflects only the real, eligible amount regardless of what's sitting in the (likely stale, possibly
 manually-seeded) `section80TTB` field — the display now honestly shows what is actually entered,
 which is the right scope for this fix.
+
+### 34.10 Still in Deductions: a real "entered but not reflected" bug for 80C, 80D, and 80G —
+the class of bug the user's very first message in this session described
+
+Added a real 80C investment (EPF, ₹1,20,000) to test the just-fixed section headers end-to-end.
+The investment row itself displayed correctly (₹1,20,000), but the **section header directly
+above it** ("Section 80C / 80CCC / 80CCD") still read ₹0, and the bottom "Chapter VI-A aggregate
+(user-entered)" panel still read ₹996 — both unchanged, as if the investment had never been
+entered. The live `/v2/tax-summary/compute` response proved the backend had it right:
+`deductionBreakdown: {"80C+80CCC+80CCD(1)": 120000, "80TTA": 157}`, `totalDeductions: 120157` —
+so, like every other finding in this cluster, the real computation and JSON generation were
+correct; only the frontend's own display of what the user had just typed was wrong. This is the
+closest any finding in this document has come to literally reproducing the user's original
+complaint verbatim ("no data is reflected for some fields").
+
+**Root cause**: `Section80CManager` (and, checked immediately after for the same pattern,
+`Section80DManager` and `DonationEntryManager`) store their entries in their own dedicated draft
+fields (`section80C: Investment80C[]`, `section80D: Section80D`, `section80G: Donation80G[]`) --
+entirely separate from the `chapterVIA.section80C` / `chapterVIA.section80D` /
+`chapterVIA.section80G` scalar fields the section headers and the "Chapter VI-A aggregate" total
+actually read. Traced each one's update path in `editorModelV2.ts`: `updateSection80C`,
+`updateSection80D`, and `updateSection80G` all simply replace their own array/object field and
+never touch `chapterVIA` at all — so those three scalars are permanently stuck at whatever they
+started as (here, `"0"`), no matter what the user enters. **Checked whether this is systemic
+across every such manager, not assumed**: it is not — `updateDeductionLoansFromManager` (backing
+the 80E/80EE/80EEA/80EEB section) already correctly derives per-section totals from the real loan
+rows and writes them into `chapterVIA.section80E` etc. on every change (the same pattern
+80CCC's pension editor uses inline, at `DeductionsWorkspace.tsx:263-267`) — proving the "sync the
+derived total back into chapterVIA" pattern is known and already used correctly elsewhere in this
+same file; 80C/80D/80G simply never got it.
+
+**Fix**: rather than retrofitting a sync-on-every-change into `editorModelV2.ts` for three
+different shapes of data (a flat investment array, a four-category nested object, and a donation
+array), computed each section's real total directly from its own array/object at render time in
+`DeductionsWorkspace.tsx`, replacing the stale-scalar reads: 80C sums `section80C[].amount`; 80D
+sums, via a new `category80DTotal()` helper, each of the four `Section80D` categories' policy
+premiums plus preventive-checkup and medical-expense amounts; 80G sums
+`section80G[].donationAmtCash + donationAmtOtherMode`. Applied identically to both the section
+header (`summary={inr(...)}`) and the bottom-panel `viaTotal` aggregate, since both had the exact
+same bug independently (the header via a totally missing scalar read, `viaTotal` via never
+including `section80C`/`section80D`/`section80G` in its sum at all — two different-shaped
+instances of the same root cause).
+
+**Tests added**: `DeductionsWorkspace.test.ts` — `category80DTotal` exported for testing; three
+new tests confirming the 80C, 80D, and 80G sums produce the correct totals from realistic
+(backend-string-typed, per §34.7-§34.9) entry data, mirroring the exact live scenario (EPF
+investment ₹1,20,000; a two-policy 80D category; a mixed cash/other-mode 80G donation).
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 193/193, `npm run build` clean.
+Live-reverified: after re-adding the same ₹1,20,000 EPF investment, the 80C section header now
+reads ₹1,20,000 and the "Chapter VI-A aggregate (user-entered)" panel now reads ₹1,20,996 (was
+₹996) — both matching the backend's real ₹1,20,157 net of the (already-known, §34.9) mutual-
+exclusivity data-quality issue in the pre-existing 80TTA/80TTB test data.
+
+**Scope check performed, nothing else found**: re-read every remaining `Collapsible` section in
+the file (80DD/80DDB/80U, 80GGA/80GGC, 80E family, 80GG, 80QQB/80RRB, 80TTA/80TTB, Form 10-BA/
+80CCH) — all of these read plain `chapterVIA.<scalar>` fields directly (no separate manager/array
+backing them), so none share this specific bug; they were already covered by §34.9's money()
+fix.

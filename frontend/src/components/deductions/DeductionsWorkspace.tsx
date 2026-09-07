@@ -4,7 +4,7 @@
 // Chapter VI-A section, gated per ITR form. New regime restricts to 80CCD(2).
 
 import React, { useMemo, useState } from 'react';
-import type { ChapterVIA, BusinessDeductions, Donation80G, Investment80C, PensionContribution80CCC, Schedule80GGAEntry, Schedule80GGCEntry, Section80D, Section80GGAClause } from '../../domain/returns/types';
+import type { Category80D, ChapterVIA, BusinessDeductions, Donation80G, Investment80C, PensionContribution80CCC, Schedule80GGAEntry, Schedule80GGCEntry, Section80D, Section80GGAClause } from '../../domain/returns/types';
 import type { DeductionLoanManagerData } from '../../domain/returns';
 import type { ItrForm } from '../../domain/eligibility';
 import { Section80CManager } from '../Section80CManager';
@@ -49,6 +49,13 @@ export const money = (value: unknown): number => {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 };
 const inr = (value: number): string => `₹${money(value).toLocaleString('en-IN')}`;
+
+// Section80DManager stores policies/checkup/medical amounts in a separate
+// section80D prop, not chapterVIA.section80D -- see the 80D header's comment
+// below for why this must be summed here rather than reading the scalar.
+export const category80DTotal = (category: Category80D): number =>
+  category.policies.reduce((sum, policy) => sum + money(policy.premiumAmount), 0)
+  + money(category.preventiveCheckup) + money(category.medicalExpense);
 
 // Per-form capability matrix (from the official UsrDeductUndChapVIAType enums).
 const FORM_CAPS = {
@@ -230,14 +237,23 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
   const patchBusiness = (next: Partial<BusinessDeductions>): void => onChangeChapterVIA({ ...chapterVIA, businessDeductions: { ...chapterVIA.businessDeductions, ...next } });
 
   // Sum of scalar Chapter VI-A fields the user entered (display only; backend owns statutory caps).
+  // section80C, section80D, and section80G are separate props managed by their own
+  // Section80CManager/Section80DManager/DonationEntryManager, not chapterVIA scalars -- none of
+  // the three is ever synced back into chapterVIA.section80C/section80D/section80G, so all three
+  // must be summed here directly or this total silently omits them (confirmed live: the backend's
+  // actual deduction included the 80C investments; this "user-entered" display total did not,
+  // even though the corresponding chapterVIA scalars happened to read as 0 regardless).
   const viaTotal = useMemo(() => {
     const v = chapterVIA;
-    return money(v.section80CCC) + money(v.section80CCDEmployeeOrSE) + money(v.section80CCD1B) + money(v.section80CCDEmployer)
-      + money(v.section80D) + money(v.section80DD) + money(v.section80DDB) + money(v.section80E) + money(v.section80EE) + money(v.section80EEA) + money(v.section80EEB)
-      + money(v.section80G) + money(v.section80GG) + money(v.section80GGA) + money(v.section80GGC) + money(v.section80U) + money(v.section80QQB) + money(v.section80RRB)
+    return section80C.reduce((sum, investment) => sum + money(investment.amount), 0)
+      + category80DTotal(section80D.selfFamily) + category80DTotal(section80D.selfFamilySenior) + category80DTotal(section80D.parents) + category80DTotal(section80D.parentsSenior)
+      + section80G.reduce((sum, donation) => sum + money(donation.donationAmtCash) + money(donation.donationAmtOtherMode), 0)
+      + money(v.section80CCC) + money(v.section80CCDEmployeeOrSE) + money(v.section80CCD1B) + money(v.section80CCDEmployer)
+      + money(v.section80DD) + money(v.section80DDB) + money(v.section80E) + money(v.section80EE) + money(v.section80EEA) + money(v.section80EEB)
+      + money(v.section80GG) + money(v.section80GGA) + money(v.section80GGC) + money(v.section80U) + money(v.section80QQB) + money(v.section80RRB)
       + money(v.section80TTA) + money(v.section80TTB) + money(v.anyOtherSection80CCH)
       + (caps.business ? money(chapterVIA.businessDeductions.section80IA) + money(chapterVIA.businessDeductions.section80IAB) + money(chapterVIA.businessDeductions.section80IB) + money(chapterVIA.businessDeductions.section80IBA) + money(chapterVIA.businessDeductions.section80IC) + money(chapterVIA.businessDeductions.section80JJA) + money(chapterVIA.businessDeductions.section80JJAA) : 0);
-  }, [chapterVIA, caps.business]);
+  }, [chapterVIA, caps.business, section80C, section80D, section80G]);
 
   const eligible = (section: string): number | null => (deductionBreakdown && typeof deductionBreakdown[section] === 'number') ? deductionBreakdown[section] : null;
 
@@ -258,7 +274,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
   return <div>
     <div style={{ marginBottom: 16 }}><h3 style={styles.title}>Deductions under Chapter VI-A (Schedule VIA)</h3><div style={styles.subtitle}>AY 2026-27 · {form} · backend applies statutory ceilings; enter gross eligible amounts</div></div>
 
-    <Collapsible title="Section 80C / 80CCC / 80CCD — savings & pension" subtitle="PF, PPF, ELSS, LIC, NSC, NPS; aggregate ceiling ₹1.5L under 80CCE" defaultOpen summary={inr(money(chapterVIA.section80C) + money(chapterVIA.section80CCC) + money(chapterVIA.section80CCDEmployeeOrSE) + money(chapterVIA.section80CCD1B))} badge={<span style={{ ...styles.badge, background: 'var(--success)' }}>80CCE ₹1.5L</span>}>
+    <Collapsible title="Section 80C / 80CCC / 80CCD — savings & pension" subtitle="PF, PPF, ELSS, LIC, NSC, NPS; aggregate ceiling ₹1.5L under 80CCE" defaultOpen summary={inr(section80C.reduce((sum, investment) => sum + money(investment.amount), 0) + money(chapterVIA.section80CCC) + money(chapterVIA.section80CCDEmployeeOrSE) + money(chapterVIA.section80CCD1B))} badge={<span style={{ ...styles.badge, background: 'var(--success)' }}>80CCE ₹1.5L</span>}>
       <Section80CManager data={{ investments: section80C }} onChange={managers.section80C} backendEligible={eligible('80C')} />
       <Schedule80CCCEditor entries={pensionContribution80CCC} onChange={(entries) => {
         const total = entries.reduce((sum, entry) => sum + money(entry.amount), 0);
@@ -274,7 +290,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
       </div>
     </Collapsible>
 
-    <Collapsible title="Section 80D — health insurance & preventive checkup" subtitle="Self/family and parents; senior-citizen ceilings apply" defaultOpen summary={inr(chapterVIA.section80D)} badge={<span style={{ ...styles.badge, background: 'var(--success)' }}>80D</span>}>
+    <Collapsible title="Section 80D — health insurance & preventive checkup" subtitle="Self/family and parents; senior-citizen ceilings apply" defaultOpen summary={inr(category80DTotal(section80D.selfFamily) + category80DTotal(section80D.selfFamilySenior) + category80DTotal(section80D.parents) + category80DTotal(section80D.parentsSenior))} badge={<span style={{ ...styles.badge, background: 'var(--success)' }}>80D</span>}>
       <Section80DManager data={section80D} onChange={managers.section80D} backendEligible={eligible('80D')} />
     </Collapsible>
 
@@ -313,7 +329,7 @@ export default function DeductionsWorkspace({ form, regime, section80C, pensionC
       </div>
     </Collapsible>
 
-    <Collapsible title="Section 80G — donations" subtitle="Cash donations capped at ₹2,000; PAN-required donees for 100%/50% approval categories" defaultOpen={false} summary={inr(chapterVIA.section80G)} badge={<span style={{ ...styles.badge, background: 'var(--gold)' }}>80G</span>}>
+    <Collapsible title="Section 80G — donations" subtitle="Cash donations capped at ₹2,000; PAN-required donees for 100%/50% approval categories" defaultOpen={false} summary={inr(section80G.reduce((sum, donation) => sum + money(donation.donationAmtCash) + money(donation.donationAmtOtherMode), 0))} badge={<span style={{ ...styles.badge, background: 'var(--gold)' }}>80G</span>}>
       <DonationEntryManager entries={section80G} onChange={managers.donations} backendEligible={eligible('80G')} />
     </Collapsible>
 
