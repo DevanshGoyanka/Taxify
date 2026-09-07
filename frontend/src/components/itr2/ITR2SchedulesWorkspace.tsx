@@ -28,7 +28,13 @@ const uid = (prefix: string): string => {
   const random = globalThis.crypto?.randomUUID;
   return random ? random.call(globalThis.crypto) : `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
-const money = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+// Backend monetary fields are Decimal-backed and travel over the wire as
+// JSON strings (e.g. "839"), not numbers -- must parse those, not silently
+// zero them, or summary totals read 0 for a freshly loaded draft.
+const money = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
 const text = (value: unknown): string => value == null ? '' : String(value);
 
 export const createBroughtForwardLossEntry = (): BroughtForwardLossEntry => ({ id: uid('bfla'), assessmentYear: '', head: 'HP', subCategory: '', originalLoss: 0, broughtForward: 0, dateOfFiling: null });

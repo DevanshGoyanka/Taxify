@@ -3057,3 +3057,715 @@ pre-fix code (with the exact same `TypeError` the live app produced, not a diffe
 
 Full suite (`test_itr1_*`, `test_itr4_*`, `test_filing_gateway_v2*`, `test_draft_to_itr1_input.py`):
 582 passed, no regressions.
+
+### 34.6 Continuing §34.5's House Property live test to completion: found and fixed a second,
+real bug — self-occupied Section 24(b) interest was displayed uncapped, disagreeing with its own
+income figure on the same screen
+
+Picked back up exactly where §34.5 left off: with the crash from §34.5 fixed, filled in a
+complete Section 24(b) loan (HDFC Bank, account `HL123456789`, loan date 01-04-2020, ₹30,00,000
+loan amount, ₹22,00,000 outstanding, ₹1,80,000 interest this year) on the same self-occupied
+property and re-ran the live compute. It succeeded — but the resulting numbers were internally
+inconsistent. Under the new regime, the raw response showed
+`housePropertyDetails[0].totalDeduction: 180000` sitting right next to `incomeOfHP: 0` on the
+same row — implying a ₹1,80,000 deduction had been allowed when, per Section 115BAC, new-regime
+self-occupied property gets **no** Section 24(b) interest deduction at all (`income_chargeable`
+correctly showed the disallowance; the displayed "deduction" figure did not agree with it).
+Switching to the old regime and raising the interest to ₹2,50,000 (above the ₹2,00,000 Section
+24(b) self-occupied cap) reproduced the same disagreement in a second form: `incomeOfHP` correctly
+showed `-200000` (capped), but `interestOnBorrowedCapital`/`totalDeduction` both still showed the
+raw `250000` — the taxpayer-facing screen was telling two different stories about the same number
+in the same row.
+
+**Root cause**: `app/engine/schedules/house_property.py`'s `compute()`, in the self-occupied
+branch, correctly computes `income_chargeable` from the capped/disallowed `allowed_interest`, but
+returned `interest_on_loan=interest` — the **raw, uncapped** amount the taxpayer entered — into
+the `HPResult`. That single field is read directly, with no re-derivation, by three different
+consumers: `filing_gateway_v2.py`'s live Tax Computation preview (`totalDeduction =
+standard_deduction_30pct + interest_on_loan`, both duplicate builders at lines ~312-315 and
+~1775-1778), and `app/engine/itd/itr1.py`/`app/engine/itd/itr4.py`'s official-JSON builders
+(`IntOnBorwCap`/`TotalDeduct`). Whenever raw interest exceeds what Section 24(b) actually allows
+(old-regime cap, or full new-regime disallowance), every one of those consumers disagreed with
+`income_chargeable`/`IncomeOfHP` on the very same row.
+
+This is a **known, previously-flagged bug class in this exact field**, not a fresh discovery from
+nothing — two independent pieces of prior evidence already existed in the codebase pointing at
+it, neither of which had been traced back to the root cause before now:
+- `app/engine/itd/itr2.py:729-737` carries a standing comment documenting that
+  `HPResult.interest_on_loan` "stores the RAW interest paid for self-occupied property, not the
+  Sec 24(b) allowed/capped amount" and works around it locally by deriving from
+  `-income_chargeable` instead of trusting the field — a targeted downstream patch, not a fix at
+  the source.
+- `app/engine/validators/itr4/calc_rules.py`'s `ITR4-C154` rule exists specifically to *detect*
+  this exact symptom at validation time ("Self-occupied interest exceeds Rs 2,00,000 but appears
+  uncapped in HP schedule") rather than prevent it from occurring.
+
+Confirmed the actual JSON-generation path (`generate_cbdt_json`) is not silently wrong here: both
+scenarios (new-regime self-occupied interest, and old-regime interest over the cap) are already
+caught and blocked with clear, correct messages by existing Category A input validators before
+the ITD builder's own cross-foot check (`if standard_deduction < 0: raise ValueError(...)`) is
+even reached — live-confirmed via the actual `/v2/.../generate-cbdt-json` 422 responses:
+`"New Tax Regime does not allow interest on borrowed capital for self-occupied property. Claimed:
+Rs 180000"` and `"Self-occupied property interest (Rs 250000) exceeds Rs 2,00,000 cap u/s
+24(b)"`. So this was not a JSON-correctness bug (no wrong figure could ever reach ITD); it was a
+**live-preview honesty bug**: `compute_canonical_itr1()`/`compute_canonical_itr4()` (the path
+behind the always-on Tax Computation tab) do not run the Category A validators at all — only
+`generate_cbdt_json()` does — so a taxpayer filling in a self-occupied property with interest
+above what's allowed would see a quietly wrong "Total deduction" figure on their live screen with
+no warning, and would only discover the real problem if and when they clicked "Generate CBDT
+JSON" — by which point they may already have treated the preview number as final.
+
+**Fix**: changed `house_property.py`'s self-occupied branch to store the actually-**allowed**
+interest into `HPResult.interest_on_loan` — `min(interest, cap)` under the old regime, `0` under
+the new regime — instead of the raw entered amount, so every downstream consumer of this one
+field agrees with `income_chargeable` by construction, without needing its own workaround. Traced
+every call site first (`itd/itr1.py`, `itd/itr2.py`, `itd/itr4.py`,
+`validators/itr1/calc_rules.py`, `validators/itr4/calc_rules.py`, both `filing_gateway_v2.py`
+summary builders) to confirm none needed a compensating change: `itr1.py`/`itr4.py`'s ITD
+builders now cross-foot cleanly by construction instead of relying on upstream validators to
+prevent a would-be negative `standard_deduction`; ITR-2's builder's existing `-income_chargeable`
+workaround becomes redundant (both now equal) but not wrong, so it was left as-is rather than
+touched in this pass; `ITR1-R047` (`calc_rules.py`) already explicitly excludes self-occupied
+properties from its raw-`interest_on_loan` cross-check, so it is unaffected; `ITR4-C154` now
+receives the correctly-capped value, so it stops firing false-negatively (its purpose — catching
+an uncapped value — no longer has anything to catch, exactly as intended once the root cause is
+fixed).
+
+**Tests added** (`tests/test_house_property_schedule.py`):
+`test_self_occupied_interest_on_loan_reflects_the_2l_cap_not_raw_interest`,
+`test_self_occupied_interest_on_loan_is_zero_under_new_regime`, and
+`test_self_occupied_interest_on_loan_unaffected_when_under_cap` (the last confirms the common,
+below-cap case is byte-for-byte unchanged). Confirmed via `git stash` that the first two fail
+against pre-fix code with the exact wrong (raw, uncapped) values this section describes.
+
+**Verification**: `tests/test_house_property_schedule.py` (9/9), plus the full
+`test_itr1_calculator.py` + `test_itr4_calculator.py` + `test_house_property_schedule.py` +
+`test_filing_gateway_v2.py` + `test_filing_gateway_v2_itr4.py` + `test_itr1_itd_builder.py` +
+`test_itr4_calc_validation.py` + `test_itr4_e2e.py` + `test_itr1_e2e.py` +
+`test_itr1_golden_suite.py` + `test_itr4_input_validation.py` + `test_itr2_itd_builder.py` combined
+suite: 197 + 197 = 394 passed, no regressions. A broader sweep across every `itr1`/`itr2`/`itr4`/
+`house_property`-named test file found 6 pre-existing failures, all in unrelated ITR-2 input-
+validation tests, confirmed via `git stash` to fail identically without this change (baseline, not
+a regression this fix introduced).
+
+Re-verified live end-to-end after restarting the backend: the same self-occupied property with a
+₹2,50,000 old-regime loan interest now shows `interestOnBorrowedCapital: 200000`,
+`totalDeduction: 200000`, and `incomeOfHP: -200000` — all three agreeing — and Gross Total Income
+correctly falls by the full ₹2,00,000 house-property loss (confirmed via the raw
+`/v2/tax-summary/compute` network response, not just the rendered UI).
+
+### 34.7 Continuing into the next untested income head (Other Sources), per explicit instruction
+"check inputting all the fields in all the applicable income heads" — found and fixed a
+systemic frontend bug affecting six components, not specific to Other Sources
+
+Moved on to the next untested tab after House Property: Other Sources. The tab already had two
+pre-existing interest entries (loaded from a prior AIS reconciliation import — IDs
+`recon-interest-*`) with real gross amounts (₹839 and ₹157). The "Interest income" section
+header and the "Schedule OS review" summary panel at the bottom of the tab both showed **₹0** for
+every subtotal, despite the individual entry rows correctly displaying their real amounts in the
+input fields themselves. The live `/v2/tax-summary/compute` response confirmed the *actual*
+computed total was correct (`incomeOthSrc: 996` = 839 + 157, correctly flowing into GTI and into
+the 80TTA deduction) — so this was, like §34.6, a display-only bug, not a computation or
+JSON-generation bug.
+
+**Root cause**: fetched the raw draft JSON directly
+(`GET /v2/clients/{id}/itr/2026-27`) rather than guessing, and found every monetary field in it
+serialized as a **JSON string** — `"grossAmount":"839"`, `"basic":"600000"`,
+`"totalLoanAmount":"3000000"`, etc. — consistent with this codebase's own stated convention
+(`decimal.Decimal` end-to-end). `frontend/src/components/othersources/ScheduleOSWorkspace.tsx`'s
+local `money()` helper, used by every section-header running total and the "Schedule OS review"
+panel, required `typeof value === 'number'` and silently returned `0` for anything else —
+including a perfectly valid numeric string. Any field loaded from a saved draft (as opposed to
+freshly typed by the user this session, which goes through an explicit `Number(value)` conversion
+in each field's `onChange`) hit this and read as zero.
+
+**Same bug, independently, in five more files** — checked because the identical
+`typeof value === 'number' && Number.isFinite(value) ...` pattern is not unique to this one file:
+- `frontend/src/components/exemptincome/ExemptIncomeWorkspace.tsx` — identical `money()`, same
+  fix. (Exempt Income was still on the untested list per §34.5/§34.6; this closes it.)
+- `frontend/src/components/deductions/DeductionsWorkspace.tsx` — identical `money()`, same fix.
+  (Deductions was still on the untested list; this closes it too.)
+- `frontend/src/components/itr2/ITR2SchedulesWorkspace.tsx` — identical `money()`, same fix.
+  Out of this document's direct scope (ITR-2 has its own audit doc) but fixed in the same pass
+  since it's the exact same bug in the exact same shared pattern; flagged for a cross-reference
+  note in `Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`.
+- `frontend/src/domain/returns/editorModelV2.ts`'s `finiteMoney()` — the most consequential of
+  the five, since this is not a display-only summary function but the **reconciliation/merge**
+  layer both `ITRComputationTabs.tsx` and `ITRComputationPage.tsx` import from directly. It is
+  used inside `mergeById`-style functions for interest, dividends, winnings, TDS, TCS, 80GGA/
+  80GGC non-cash-donation totals, and the Section 24(b) home-loan-interest cross-foot check —
+  meaning a saved-and-reloaded (or AIS/TIS/26AS-reconciled) entry in any of those categories could
+  have its amount silently zeroed during the merge, not just at final display.
+- `frontend/src/components/EmployerEntryManager.tsx` (Salary Income — itself one of the
+  "applicable income heads" this instruction named) — a differently-shaped but equivalent bug:
+  `money(value: number | undefined)`'s TypeScript signature assumed callers always pass a real
+  `number`, but `entry.basic`/`entry.hra`/etc. arrive as the same backend-serialized strings at
+  runtime regardless of what the type declares. Broke the "Locally entered gross salary for this
+  employer" line specifically (confirmed live: read ₹0 before the fix, ₹6,00,000 — matching the
+  backend-computed Gross Salary directly below it — after).
+
+**Fix**: widened all six `money`/`finiteMoney` helpers to accept `string` (via `Number(value)`)
+alongside `number`, falling back to `0` only for genuinely non-numeric/negative input — preserving
+existing behavior for every already-numeric caller (including every `onChange` handler, which
+already converts via `Number(value)` before calling `money()`) while correctly parsing the
+string-typed values that come from a loaded draft.
+
+**Tests added**: `frontend/src/domain/returns/editorModelV2.test.ts`'s
+`"sums 80GGA/80GGC totals correctly even when amounts arrive as backend-serialized strings"` —
+feeds `updateSchedule80GGA`/`updateSchedule80GGC` string-typed `otherModeAmount`/`cashAmount`
+fields (the real runtime shape, cast via `as unknown as Parameters<...>[1]` since the TS interface
+itself declares `number`) and asserts the totals still sum correctly. Confirmed via `git stash`
+that it fails on pre-fix `editorModelV2.ts` with `expected +0 to be 3000` — the exact class of
+wrong value this section describes.
+
+**Verification**: `npx tsc -b` (clean, all six widened signatures compile), `npx vitest run`
+(full frontend suite: 187/187, plus the new test = 188/188 including the one above),
+`npm run build` (clean production build). Live-reverified in the browser after rebuilding: Other
+Sources' "Interest income" header now reads ₹996 (was ₹0); the Salary tab's "Locally entered
+gross salary for this employer" now reads ₹6,00,000 (was ₹0), matching the backend-computed Gross
+Salary shown directly beneath it.
+
+**Scope note**: `frontend/src/components/business/ITR3BusinessCoreManager.tsx`,
+`ITR3PresumptiveManager.tsx`, `ITR3BusinessAuxiliaryManager.tsx` carry the same pattern
+(`typeof value === 'number' && Number.isFinite(value) ...`) but were left unfixed in this pass —
+ITR-3 is out of scope for both this document and the current ITR-2 production-readiness plan (see
+`Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md`'s explicit scope boundary), and touching it here
+would mix an ITR-1-audit commit with unrelated ITR-3 changes. Flagged here as a forward pointer
+for whoever picks up ITR-3.
+
+### 34.8 User pushback caught two more real issues in the same Salary Summary panel §34.7 had
+just touched: a frontend-computed total that should never have existed, and a second field-name
+bug the same class as §34.7 but not yet found there
+
+While reporting §34.7's live verification (the Salary tab's "Locally entered gross salary for
+this employer" now correctly reading ₹6,00,000 instead of ₹0), the user pushed back with two
+concrete objections instead of accepting the fix at face value: **(1)** this figure "must come
+from the backend live, never calculated by frontend" — and **(2)** "how can the gross salary and
+net salary be same!?", pointing at the same screenshot's "Schedule S — Salary Summary" panel
+showing GROSS SALARY ₹6,00,000, SECTION 16 DEDUCTIONS ₹0, and NET TAXABLE SALARY ₹5,50,000 side
+by side — arithmetically impossible together (₹6,00,000 minus a real ₹0 deduction cannot equal
+₹5,50,000).
+
+**Issue 1 — a client-side "gross salary" preview should not exist at all.** The line the user
+objected to (`EmployerEntryManager.tsx`'s per-employer `gross` variable, summing `entry.basic +
+entry.da + entry.hra + ...` locally) was exactly the value §34.7 had just "fixed" by correcting
+its `money()` type-coercion bug. But fixing the *symptom* (wrong ₹0) left the underlying *design*
+risk intact: any client-side re-derivation of a monetary total can drift from the backend's
+authoritative computation, which is precisely how §34.7's bug happened in the first place. The
+aggregate "Schedule S — Salary Summary" panel immediately below it already sources GROSS SALARY
+from `backendResult?.grossSalary` (the live tax-engine result) — a second, redundant,
+frontend-computed "gross" figure for the same concept serves no purpose that panel doesn't already
+serve, and only reintroduces the drift risk. **Fix**: deleted the `gross` computation and its
+"Locally entered gross salary for this employer" display block entirely (was labeled "locally
+entered" and already caveated as provisional, but per the user's instruction such values should
+not be computed client-side at all, not merely disclosed as provisional).
+
+**Issue 2 — the very panel the user was reading from had a second, independent field-name bug of
+the same class §34.7 fixed elsewhere, that §34.7 itself missed.** `SECTION 16 DEDUCTIONS` read
+`backendResult?.totalSection16Deductions` — a field that does not exist anywhere in the actual
+`/v2/tax-summary/compute` response (confirmed against the live raw JSON, which carries
+`deductionUs16` instead). `BackendResult`'s local TypeScript interface *declared*
+`totalSection16Deductions?: number` itself, so the mismatch compiled cleanly and was invisible to
+`tsc` — a self-invented field name never validated against the real API contract, the same
+"schema vocabulary vs. calculator vocabulary don't necessarily match" trap this document's own
+methodology (CLAUDE.md) warns about for the ITD JSON layer, here recurring in a hand-typed
+frontend interface instead. `money(undefined)` correctly returns `0` for a missing field, so the
+display looked plausible (a real-looking ₹0) rather than crashing or looking obviously broken —
+exactly why it took a human re-checking the arithmetic, not an automated check, to catch it.
+**Fix**: renamed the interface field to `deductionUs16` and updated the one read site to match.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 187/187, `npm run build` clean. Live
+re-verified in the browser: the Salary Summary panel now reads GROSS SALARY ₹6,00,000 → SECTION
+16 DEDUCTIONS ₹50,000 → NET TAXABLE SALARY ₹5,50,000 (600000 − 50000 = 550000, internally
+consistent for the first time), and the "Locally entered gross salary" line is gone from the
+per-employer form entirely — the Salary tab now has exactly one source of truth for every
+monetary figure it shows: the live backend computation.
+
+**Process note, not just a code note**: this is the second time in this document (see §34's own
+opening) that user-directed live testing, not static code review, found the real bug — and this
+specific instance is one step further: it was live testing of a fix I had already made and
+reported as verified. "I fixed the wrong number" and "I fixed the *right* number, sourced from the
+right place" are different claims, and only the second one is what this audit is supposed to
+guarantee. Re-reading a panel's own arithmetic for internal consistency (not just "is the
+₹0 gone") should be a standard part of verifying any financial-summary fix in this codebase going
+forward.
+
+### 34.9 Continuing into Deductions (per "continue with Deductions and TDS tabs"): a worse variant
+of the same bug family — string *concatenation*, not just silent zeroing
+
+Moved to the Deductions tab next. The "Section 80TTA / 80TTB — savings account interest" section
+header read **₹1,57,839** — not zero (which §34.7's fix pattern would have caught by inspection)
+but a plausible-*looking*, entirely wrong number. Fetched the raw draft directly and found
+`section80TTA: "157"`, `section80TTB: "839"` (both backend-serialized strings, matching every
+other finding in this family). `DeductionsWorkspace.tsx`'s `money()` helper had already been
+fixed in §34.7 — but this particular section header's `summary={inr(chapterVIA.section80TTA +
+chapterVIA.section80TTB)}` never called `money()` on the two operands at all, doing raw `+`
+directly on the two string fields: `"157" + "839"` is JavaScript string concatenation, not
+addition, giving `"157839"` (which `inr()`'s own internal `Number(...)` coercion then happily
+formatted as ₹1,57,839 — a real, finite, positive number, so nothing looked obviously broken).
+This is the same root bug family as §34.7 but a more dangerous variant: silent zeroing is
+visually obvious (₹0 next to real entries), silent concatenation is not (the result looks like a
+plausible rupee amount).
+
+**Grepped the same pattern across the whole file** rather than fixing this one instance and
+moving on, since §34.7 had already shown this bug class recurs by copy-paste: found **six more**
+section-header summaries with the identical `chapterVIA.<field> + chapterVIA.<field>` raw-string
+addition (80C/80CCC/80CCD, 80DD/80DDB/80U, 80GGA/80GGC, 80E/80EE/80EEA/80EEB, 80QQB/80RRB, and the
+ITR-3-only business 80IA-family total) — every one of the file's collapsible-section summary
+badges, seven in total. Confirmed via grep that no other already-fixed file (`ScheduleOSWorkspace.
+tsx`, `ExemptIncomeWorkspace.tsx`, `ITR2SchedulesWorkspace.tsx`) has this specific raw-`+`-inside-
+`inr()` pattern — this appears to be unique to `DeductionsWorkspace.tsx`, likely because it alone
+has this many two/three/four-field section headers needing an inline sum.
+
+**Fix**: wrapped every operand individually in `money()` before summing, at all seven sites.
+
+**Test added**: `frontend/src/components/deductions/DeductionsWorkspace.test.ts` (new file,
+`money` now exported for this purpose) — asserts `money("157") + money("839") === 996` and, for
+direct contrast, asserts what the pre-fix code actually computed:
+`Number("157" + "839") === 157839`, documenting the exact wrong value this bug produced rather
+than just asserting the fix is correct in isolation.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 190/190 (full suite, including the new
+file), `npm run build` clean. Live-reverified: the 80TTA/80TTB header now reads ₹996, matching
+the (already-correct) "Chapter VI-A aggregate (user-entered)" total beneath it.
+
+**Not fixed, and deliberately not chased further**: the underlying data itself has both
+`section80TTA` ("157") and `section80TTB` ("839") simultaneously non-zero for a taxpayer whose
+personal info records them as 30 years old (non-senior) — 80TTA and 80TTB are mutually exclusive
+by law (matching this app's own live warning: "80TTA and 80TTB are mutually exclusive..."), so
+having both populated is itself questionable test data, not a code defect this display fix should
+paper over. The backend's actual computed deduction (`deductChapVIA: 157`) already correctly
+reflects only the real, eligible amount regardless of what's sitting in the (likely stale, possibly
+manually-seeded) `section80TTB` field — the display now honestly shows what is actually entered,
+which is the right scope for this fix.
+
+### 34.10 Still in Deductions: a real "entered but not reflected" bug for 80C, 80D, and 80G —
+the class of bug the user's very first message in this session described
+
+Added a real 80C investment (EPF, ₹1,20,000) to test the just-fixed section headers end-to-end.
+The investment row itself displayed correctly (₹1,20,000), but the **section header directly
+above it** ("Section 80C / 80CCC / 80CCD") still read ₹0, and the bottom "Chapter VI-A aggregate
+(user-entered)" panel still read ₹996 — both unchanged, as if the investment had never been
+entered. The live `/v2/tax-summary/compute` response proved the backend had it right:
+`deductionBreakdown: {"80C+80CCC+80CCD(1)": 120000, "80TTA": 157}`, `totalDeductions: 120157` —
+so, like every other finding in this cluster, the real computation and JSON generation were
+correct; only the frontend's own display of what the user had just typed was wrong. This is the
+closest any finding in this document has come to literally reproducing the user's original
+complaint verbatim ("no data is reflected for some fields").
+
+**Root cause**: `Section80CManager` (and, checked immediately after for the same pattern,
+`Section80DManager` and `DonationEntryManager`) store their entries in their own dedicated draft
+fields (`section80C: Investment80C[]`, `section80D: Section80D`, `section80G: Donation80G[]`) --
+entirely separate from the `chapterVIA.section80C` / `chapterVIA.section80D` /
+`chapterVIA.section80G` scalar fields the section headers and the "Chapter VI-A aggregate" total
+actually read. Traced each one's update path in `editorModelV2.ts`: `updateSection80C`,
+`updateSection80D`, and `updateSection80G` all simply replace their own array/object field and
+never touch `chapterVIA` at all — so those three scalars are permanently stuck at whatever they
+started as (here, `"0"`), no matter what the user enters. **Checked whether this is systemic
+across every such manager, not assumed**: it is not — `updateDeductionLoansFromManager` (backing
+the 80E/80EE/80EEA/80EEB section) already correctly derives per-section totals from the real loan
+rows and writes them into `chapterVIA.section80E` etc. on every change (the same pattern
+80CCC's pension editor uses inline, at `DeductionsWorkspace.tsx:263-267`) — proving the "sync the
+derived total back into chapterVIA" pattern is known and already used correctly elsewhere in this
+same file; 80C/80D/80G simply never got it.
+
+**Fix**: rather than retrofitting a sync-on-every-change into `editorModelV2.ts` for three
+different shapes of data (a flat investment array, a four-category nested object, and a donation
+array), computed each section's real total directly from its own array/object at render time in
+`DeductionsWorkspace.tsx`, replacing the stale-scalar reads: 80C sums `section80C[].amount`; 80D
+sums, via a new `category80DTotal()` helper, each of the four `Section80D` categories' policy
+premiums plus preventive-checkup and medical-expense amounts; 80G sums
+`section80G[].donationAmtCash + donationAmtOtherMode`. Applied identically to both the section
+header (`summary={inr(...)}`) and the bottom-panel `viaTotal` aggregate, since both had the exact
+same bug independently (the header via a totally missing scalar read, `viaTotal` via never
+including `section80C`/`section80D`/`section80G` in its sum at all — two different-shaped
+instances of the same root cause).
+
+**Tests added**: `DeductionsWorkspace.test.ts` — `category80DTotal` exported for testing; three
+new tests confirming the 80C, 80D, and 80G sums produce the correct totals from realistic
+(backend-string-typed, per §34.7-§34.9) entry data, mirroring the exact live scenario (EPF
+investment ₹1,20,000; a two-policy 80D category; a mixed cash/other-mode 80G donation).
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 193/193, `npm run build` clean.
+Live-reverified: after re-adding the same ₹1,20,000 EPF investment, the 80C section header now
+reads ₹1,20,000 and the "Chapter VI-A aggregate (user-entered)" panel now reads ₹1,20,996 (was
+₹996) — both matching the backend's real ₹1,20,157 net of the (already-known, §34.9) mutual-
+exclusivity data-quality issue in the pre-existing 80TTA/80TTB test data.
+
+**Scope check performed, nothing else found**: re-read every remaining `Collapsible` section in
+the file (80DD/80DDB/80U, 80GGA/80GGC, 80E family, 80GG, 80QQB/80RRB, 80TTA/80TTB, Form 10-BA/
+80CCH) — all of these read plain `chapterVIA.<scalar>` fields directly (no separate manager/array
+backing them), so none share this specific bug; they were already covered by §34.9's money()
+fix.
+
+### 34.11 Continuing into TDS & Advance Tax (per "continue with Deductions and TDS tabs"): the
+same Decimal-as-string bug class found in a fourth, entirely different file — client-side
+pre-filing validation, not a display total
+
+Added a real Section 194A TDS entry (STATE BANK OF INDIA interest, matching the two Other Sources
+interest entries already on the return) and confirmed it correctly flowed through to "Schedule
+TDS-2 — Non-salary TDS" and to the live Tax Computation tab's "Validated TDS" line — this part of
+the TDS tab works correctly end-to-end. Along the way, deliberately reproduced a second, real
+scenario: a TDS entry with an invalid Deductor TAN correctly gets *excluded* from the computed
+credit (`totalTDS`), with the backend surfacing a clear, accurate `creditValidationIssues` entry
+(`INVALID_TAN_FORMAT`) and `calculationStatus: CALCULATED_WITH_CREDIT_ISSUES` — this is correct,
+intentional behavior (an invalid TAN cannot legally support a TDS credit claim), and clicking
+"Validate" does surface it to the user as a clear blocking error, so this is not a bug.
+
+Clicking "Validate" to confirm the above also surfaced a second, unrelated blocking error that
+had nothing to do with TDS: **"House property 1: sole ownership requires a 100% share."** — for
+the same self-occupied, sole-owned (not co-owned) property from §34.6/§34.7, whose ownership share
+had never been touched since it was created (should be, and per the raw saved draft genuinely
+was, 100%).
+
+**Root cause**: `frontend/src/domain/returns/filingPreflight.ts` (the client-side pre-filing
+validator run by the "Validate" button) checked sole ownership with
+`property.ownershipShare !== 100` — a **strict** inequality. Confirmed via the raw draft JSON
+(same technique as §34.7-§34.10) that `ownershipShare` is serialized as the JSON **string** `"100"`
+on a loaded draft, not the number `100`, despite `ReturnDraft`'s own TS type declaring
+`ownershipShare: number` — the same TS-type-vs-runtime-shape mismatch as every other finding in
+this cluster, just discovered for the first time outside a "Workspace" display component, inside
+a validation function instead. `"100" !== 100` is `true` in JavaScript (strict inequality does
+not coerce types), so a property that is genuinely, correctly 100% owned was wrongly told it
+needed to be. This is more severe than a display bug: it is a **blocking** error that would have
+stopped the taxpayer from generating the CBDT JSON or filing at all, for a completely valid,
+correctly-entered return.
+
+**Checked the whole file for the same pattern, not just this one line**: grepped every
+`!==`/`===` comparison against a numeric literal (relational `<`/`>` comparisons are not at risk —
+JavaScript does coerce types for those, unlike strict equality). Found two more: the co-owned
+cross-foot check's `totalShare = property.ownershipShare + coOwners.reduce((t, o) => t + o.share,
+0)` risked the exact same string-concatenation corruption as §34.9's Deductions bug if `ownershipShare`
+or any `owner.share` were ever string-typed (not yet live-reproduced, since the only property
+tested so far is sole-owned, but the same wire format applies to co-owned drafts); and the
+per-co-owner `owner.share > 0 && owner.share < 100` check, which — while not actually broken today
+(relational operators coerce) — was made consistent with the fix for defense-in-depth and to avoid
+this exact bug resurfacing if the code is later changed to a strict comparison. `refundAccountCount
+!== 1` (bank-account validation, a different section of the same file) was checked and confirmed
+safe: it is a genuine `.filter(...).length` integer count, never a serialized Decimal.
+
+**Fix**: added a `num()` coercion helper (same pattern as the `money()`/`finiteMoney()` helpers
+from §34.7-§34.10) and applied it to all four affected expressions: the sole-ownership strict
+check, both operands of the co-owned `totalShare` sum, and the per-co-owner share range check.
+
+**Test added**: `filingPreflight.test.ts` — `"does not false-flag sole ownership when
+ownershipShare arrives as a backend-serialized string"`, constructing a sole-owned property with
+`ownershipShare: '100'` (a string, matching the real wire shape) and asserting the false blocking
+error is absent. Confirmed via `git stash` that it fails identically to the live bug on pre-fix
+code.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 194/194, `npm run build` clean.
+Live-reverified: clicking "Validate" on the same return no longer reports the false ownership
+error — only the pre-existing, already-documented (§34.9) 80TTA/80TTB mutual-exclusivity data
+warnings remain.
+
+### 34.12 Rest of TDS & Advance Tax verified working, no further bugs found
+
+Completed the remaining scope of "check inputting all the fields ... [and] Deductions and TDS
+tabs": Advance Tax (per-challan) and Self Assessment Tax entries. Added one of each (BSR
+`0004567`, serial `123`, ₹15,000 advance tax; BSR `0004567`, serial `456`, ₹1,000 self-assessment
+tax) and confirmed, via both the tab's own "Schedule-wise totals" panel and the live
+`/v2/tax-summary/compute` response, that both flow correctly end-to-end: `Advance Tax
+(TaxesPaid.AdvanceTax)` → ₹15,000, `Self-Assessment Tax (TaxesPaid.SelfAssessmentTax)` → ₹1,000,
+`Entered Tax Payments`/`Validated Filing Credits` → ₹16,000, and the Tax Computation tab's
+`REFUND DUE` correctly nets to ₹15,000 (₹16,000 credits − ₹1,000 net tax liability). The SAT
+entry's CIN (Challan Identification Number) was also confirmed correctly auto-derived from the
+three component fields (`0004567-20260819-00456`). No bugs found in this part of the tab.
+
+### 34.13 Summary of the Deductions + TDS & Advance Tax testing pass
+
+Six real, independently-rooted bugs found and fixed across this pass (§34.6-§34.11), all
+following the same investigative discipline: reproduce live against the actual running app,
+trace to the real raw JSON/network response (never guess), write a regression test against the
+exact reported value, confirm via `git stash` that it fails on pre-fix code, fix, then
+re-verify live after rebuilding:
+
+1. Self-occupied Section 24(b) interest shown uncapped in the live preview and ITD JSON
+   (`house_property.py`, backend).
+2. `money()`-style helpers across six frontend files silently zeroing every backend
+   Decimal-as-string value on a loaded draft.
+3. The Salary tab's redundant client-computed "gross salary" preview (removed, per explicit user
+   direction that such figures must come from the backend, not be re-derived client-side) plus a
+   wrong backend field name (`totalSection16Deductions` → the real `deductionUs16`) in the same
+   panel.
+4. Seven Chapter VI-A section-header totals doing raw string concatenation instead of numeric
+   addition (`DeductionsWorkspace.tsx`).
+5. 80C/80D/80G section totals never reflecting real entered data at all, because three
+   sub-manager fields were never synced back into the scalars the totals actually read.
+6. A false "sole ownership requires a 100% share" blocking error in the client-side pre-filing
+   validator (`filingPreflight.ts`), from the same Decimal-as-string mismatch recurring in a
+   fourth, non-display-component file.
+
+Every fix has a regression test, is `git stash`-confirmed against the pre-fix code, and was
+re-verified live in the browser after rebuilding — not just asserted from the diff. Combined with
+§34.1-§34.5's earlier findings (Tax Computation tab silently showing ₹0 for most of Part D, the
+`builtin_function_or_method` JSON-serialization crash, and the Section 112A summary gap), every
+income head and tab named across this session's live-testing instructions (Salary, House
+Property, Capital Gains, Other Sources, Deductions, TDS & Advance Tax) has now been exercised
+end-to-end against the real running application, not just reviewed as static code.
+
+### 34.14 User-directed re-check of Capital Gains: "after entering cost of acquisition and sales
+consideration, is it displaying the total computed capital gains that should come strictly from
+backend" — it was not; it never displayed a computed value at all
+
+The user explicitly asked to re-verify this exact scenario before moving on. Checked
+`CapitalGainsEntryManager.tsx`'s simplified section 112A quick-entry (the only Capital Gains
+surface ITR-1/ITR-4 permit) and found the "Long-term capital gain u/s 112A" readout was a
+**hardcoded static string literal** — `value="Computed by tax engine after calculation"` — not
+bound to any state, prop, or computed value at all. It showed that same text before any data was
+entered, after entering both sale consideration and cost of acquisition, and after a real
+`/v2/tax-summary/compute` call had already returned the real gain. This is a stricter version of
+the same "entered but not reflected" defect class as every earlier finding in this cluster: those
+showed a *wrong* number (₹0, a concatenated string, a stale scalar); this one never showed *any*
+number, under any circumstance.
+
+The real computed value was already available and already flowing correctly one layer up: the
+component receives `summary = taxResult?.capitalGainsSummary` as a prop (confirmed live via the
+raw compute response: `capitalGainsSummary: {status: "VALID", gross112AGain: 100000.0,
+fullValueOfConsideration: 300000.0, costOfAcquisition: 200000.0, ...}` for a test entry of
+₹3,00,000 sale / ₹2,00,000 cost) — the exact same `summary` prop this file's own
+`overlayComputedReadouts` function (for the full Schedule 112A used by ITR-2/3) already reads
+from for its own readouts. The simplified quick-entry's readout simply never used it.
+
+**Fix**: extracted a small pure function, `gross112AGainDisplay(summary)`, that returns
+`` ₹${summary.gross112AGain} `` when a `summary` exists (i.e., at least one compute has
+succeeded) and falls back to the "Computed by tax engine after calculation" placeholder only when
+`summary` is genuinely absent (no compute has run yet) — deliberately not collapsing a real,
+computed ₹0 gain into the same placeholder as "not computed", since those are different facts.
+Wired it into the readout in place of the literal string.
+
+**Test added**: `CapitalGainsEntryManager.test.ts` — three cases: placeholder shown for
+`null`/`undefined` summary (not yet computed), the real gain shown once a summary exists, and a
+genuine computed ₹0 shown as `"₹0"` rather than silently reverting to the placeholder.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 197/197, `npm run build` clean.
+Live-reverified end-to-end: entered ₹3,00,000 sale consideration and ₹2,00,000 cost of
+acquisition on the actual running ITR-1 draft, confirmed the readout updated to **₹1,00,000**
+immediately after the debounced compute completed, and confirmed byte-for-byte against the raw
+network response (`capitalGainsSummary.gross112AGain: 100000.0`) that this is genuinely the
+backend's own computed figure, not a client-side re-derivation of the two entered amounts. Also
+incidentally reproduced and correctly saw handled the ₹1,25,000 ITR-1 eligibility limit: entering
+₹5,00,000/₹2,00,000 (a ₹3,00,000 gain) correctly triggered a clean 422 rejection ("Ineligible for
+ITR-1: LTCG u/s 112A of Rs 300000 exceeds Rs 125000 limit. File ITR-2.") rather than silently
+computing or crashing — confirming the eligibility gate fixed earlier in this document (§32.1)
+still holds.
+
+### 34.15 Continuing into Exempt Income and Personal Info, per explicit instruction
+
+**Exempt Income**: added a real entry (₹15,000, category SRPC/10(11) PPF withdrawal). The tab's
+own "Total exempt income" running total correctly read ₹15,000 (this section's `money()`-style
+coercion was already fixed in §34.7). Traced the mapping into the actual ITD input
+(`draft_to_itr1_input.py`'s `exempt_income_breakdown`/`exempt_income_entries`/
+`total_exempt_income`, all reading `draft.exemptIncome.otherExemptIncome`) and confirmed it is
+wired correctly — this schedule carries no tax-computation weight (it is pure disclosure, exempt
+income by definition never enters GTI), so there is no backend-vs-frontend "which number is
+authoritative" risk here the way there is for Capital Gains: nothing on the backend computes a
+competing total this figure could drift from. No bug found.
+
+**Personal Info**: found and fixed a real, previously-undetected off-by-one-year bug in the
+"Age as on 31 March 2026" field — DOB `2006-06-01` displayed as **age 20**, when the person has
+not yet had their 2026 birthday as of the 31 March 2026 reference date and is genuinely 19.
+
+**Root cause**: `frontend/src/utils/age.ts`'s `calculateAgeFromDob()` derived its reference year
+by taking the assessment-year string's *second* component ("27" from "2026-27") and adding 2000,
+producing 31 March **2027** — a full year past the correct statutory reference date. AY "2026-27"
+assesses the previous year 2025-26, which ends 31 March **2026** — the correct reference year is
+the AY string's *first* component, used directly, not the suffix. Confirmed the correct date
+independently against this exact codebase's own backend: `app/engine/draft_to_itr1_input.py`'s
+`_age_bracket_from_dob()` hardcodes `datetime.date(2026, 3, 31)` for the same AY, with an explicit
+comment ("AY 2026-27 → previous year ends 2026-03-31") that the frontend utility's own comment
+directly contradicted ("reference date is 31 March of the END year (2027)").
+
+**Blast-radius check performed, not assumed**: grepped every call site of both
+`calculateAgeFromDob` and the sibling `getReferenceDate` (also affected, same bug) across the
+frontend. `getReferenceDate` is imported once (`ITRComputationPage.tsx`) but never actually
+called — dead code, zero live impact. `calculateAgeFromDob` has exactly one live call site
+(`PersonalInfoTab.tsx:174`), and that component uses the resulting `age` value for exactly one
+thing: the disabled, read-only "Age as on 31 March 2026" display field — it does not gate any
+other client-side logic. Most importantly, confirmed the **actual tax computation is unaffected**:
+`age_bracket` (which drives senior-citizen slabs, 80D/80DDB/80TTB age-gated limits, etc.) is
+derived independently server-side from `draft.personal.dateOfBirth` by the correct
+`_age_bracket_from_dob()` shown above — this bug never reached the real computation, JSON
+generation, or the filed return; it was a pure, isolated display defect on one field. Still a real
+bug worth fixing: a preparer trusting this displayed age near a 59/60, 79/80, or any other
+age-sensitive boundary could be misled into second-guessing a correct backend result, or into
+manually working around a discrepancy that shouldn't exist.
+
+**Fix**: changed both functions to derive the reference year from the assessment year's first
+component (`assessmentYear.split('-')[0]`) instead of the second, matching the backend exactly.
+
+**Test added**: new file `frontend/src/utils/age.test.ts` (this utility had no prior test
+coverage at all) — asserts the exact reported case (DOB `2006-06-01`, AY `2026-27` → age 19, not
+20), a birthday landing exactly on the reference date, a birthday the day after it, missing/invalid
+DOB handling, and that both functions respect a different AY string. Confirmed via `git stash`
+that 6 of the 7 new tests fail against the pre-fix code with the exact wrong values this section
+describes (e.g. `getReferenceDate('2026-27')` returning `'2027-03-31'`).
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 204/204, `npm run build` clean.
+Live-reverified: the Personal Info tab's "Age as on 31 March 2026" field for DOB `2006-06-01` now
+reads **19**, matching the backend's own independently-computed age bracket for the first time.
+
+### 34.16 User-reported: "adding a single TDS entry adds two entries, one salary by default and
+the other TDS-2" — reproduced, root-caused, and fixed as an unstable React list key, not a
+literal duplicate-add
+
+Could not reproduce a literal "two rows created from one click" on first attempt: `addTDSEntry`
+(`ITRComputationTabs.tsx`) has exactly one call site, one button, and pushes exactly one new
+object into the array — confirmed via direct DOM inspection (`document.querySelectorAll('h4')`
+count) after a single click, repeatedly, on a clean draft. Traced every manager/reducer in the
+round trip (`updateTaxCreditsFromManager`, `tdsFromManager`/`tcsFromManager`,
+`mergeById`) and found each one correct and already unit-tested.
+
+**Found the real mechanism by testing a *second*, closely-related scenario instead of giving up**:
+`tdsEntries` (the array these rows render from) is `[...tdsToManager(draftTds),
+...tcsToManager(draftTcs)]` — two source arrays concatenated fresh on every render. Any TDS entry
+whose Section changes to a TCS code (206C and its variants) reclassifies from the first segment to
+the second, which means its position in the merged array jumps to the end — a genuine, real
+reordering. The row list's `<div key={index}>` (`ITRComputationTabs.tsx:453`) used the array
+*index*, not the entry's own stable `id`, as the React key — exactly the pattern React's own docs
+warn never to use when list order can change.
+
+**Live-reproduced the actual corruption this causes**: added two TDS entries named FIRST-ENTRY
+(section 192, default) and SECOND-ENTRY (section 192, default). Changed FIRST-ENTRY's section to
+206C (a TCS code) — it correctly moved to the end of the list. But because the `<select>` DOM
+node keyed by index 0 was reused by React for what is now SECOND-ENTRY, **the section dropdown
+that FIRST-ENTRY had just changed to 206C stayed visually stuck on the OTHER entry** — both "TDS
+Entry #1" (now the row genuinely named SECOND-ENTRY) and "TDS Entry #2" (FIRST-ENTRY) displayed
+Section "206C", even though SECOND-ENTRY's actual underlying data was never touched. This is the
+mechanism behind the reported symptom: not a second entry being *added*, but an existing entry's
+displayed Section field bleeding into a different entry's row the moment any reordering occurs —
+which reads, at a glance, exactly like "one entry shows Salary, the other shows something else,
+and I only added one."
+
+**Fix**: changed the row key to `entry.id` (falling back to `index` only if an entry somehow
+lacks one) at all three index-keyed entry lists in this file — the combined TDS/TCS list
+(the reported one), and, found by grepping for the identical `key={index}` pattern in the same
+file, the Advance Tax and Self Assessment Tax challan lists (`ChallanManagerEntry`/`TaxChallan`
+rows also carry a stable `id` via `challansToManager`, confirmed before applying the same fix, so
+they were fixed for the same latent risk even though not reported).
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 204/204, `npm run build` clean.
+Live-reverified the *exact* reproduction above against the fix: after changing FIRST-ENTRY's
+section to 206C, "TDS Entry #1" (SECOND-ENTRY) correctly still shows Section "192" and "TDS Entry
+#2" (FIRST-ENTRY) correctly shows "206C" — no cross-contamination. Confirmed via `git stash` that
+the pre-fix code reproduces the exact corruption described above and the post-fix code does not,
+on the identical sequence of actions.
+
+### 34.17 Continuing per "try multiple entries for Business or Profession tab" (ITR-4's Schedule
+BP — out of this document's own ITR-1 scope, but the same live-testing pass and the same bug
+class, so recorded here): found a real, severe, *data-corrupting* bug, not just a display glitch
+
+Switched to ITR-4 (Business/Profession is not reportable under ITR-1) for this client, which
+already had one Section 44AD business entry ("OTHERS", turnover ₹5,00,000, presumptive income
+₹35,000 @ 6%, from an earlier AIS/TIS reconciliation import). Added a second Section 44AD entry
+("Consulting Services") via "+ Add entry", per the explicit instruction to try multiple entries.
+The two-row identity list (`NatOfBus44AD`) correctly grew to two rows, and the shared aggregate
+turnover/presumptive-income figures (Schedule BP's `PersumptiveInc44AD` is a single combined
+object across every 44AD business, per the official CBDT schema — confirmed this is correct,
+intentional design, not a bug, before looking any further) still correctly read ₹5,00,000 /
+₹35,000 immediately after adding the second entry. Saved, then reloaded the page to confirm
+persistence — and on reload, the same fields now read **₹50,00,000** turnover and **₹3,50,000**
+presumptive income: a **10x inflation** that appeared purely from a save-then-reload round trip.
+
+**Root cause, found by checking the raw saved data first rather than assuming the display was
+wrong**: fetched the client's saved draft directly and confirmed the backend's stored data was
+completely correct the entire time — `businesses[0].digitalReceipts: "500000"`,
+`declaredIncome: "35000"`; `businesses[1]` (the new "Consulting Services" row) correctly all
+zeros, per `businessesFromScheduleBp`'s existing convention of only the first entry per scheme
+carrying the real aggregate figures. The corruption was entirely in
+`frontend/src/domain/returns/scheduleBpAdapter.ts`'s `scheduleBpFromBusinesses` — the function
+that reconstructs the editable Schedule BP view from the saved `businesses[]` array on every
+render — which computed every aggregate via `ad.reduce((sum, row) => sum + row.digitalReceipts,
+0)` and equivalents. `row.digitalReceipts` is a Decimal-backed field that travels over the wire
+as a JSON **string** ("500000"), the same wire-format fact behind every other finding in this
+document's §34.7-§34.11 cluster — `0 + "500000"` is JavaScript string concatenation, not
+addition, giving `"0500000"`; the second row's `"0"` then concatenates again to `"05000000"`,
+which parses back to **5,000,000**. Every other aggregate field (`GrsTotalTrnOver`,
+`PersumptiveInc44AD6Per`, `TotPersumptiveInc44AD`, the 44ADA and 44AE equivalents, and the GSTIN
+turnover total) had the identical unguarded `sum + row.field` pattern.
+
+**Why this is more serious than a display bug**: `scheduleBpFromBusinesses`'s output feeds
+directly into `ITR4ScheduleBPManager`, whose `onChange` converts edits back through
+`businessesFromScheduleBp` into `businesses[]` for saving. The corrupted (inflated) figures were
+only ever *read back* from a correct backend in this session's reproduction, but any further edit
+to the schedule (even something unrelated, like fixing a business name) would have round-tripped
+the *already-corrupted, displayed* 10x figure back through `businessesFromScheduleBp` and
+persisted it as the new "real" saved turnover — silently and permanently overstating a taxpayer's
+declared business turnover and presumptive income by an order of magnitude, in the actual filed
+return, the next time they saved. This was not caught in this session before persistence only
+because no further edit happened to trigger that second write.
+
+**Fix**: added the same `num()` coercion helper used throughout this session's fixes and applied
+it to every `sum + row.field` site in `scheduleBpFromBusinesses` — `44AD`'s four turnover fields
+and two presumptive-income-rate fields, `44ADA`'s three turnover fields, `44AE`'s two income
+fields, all three schemes' `declaredIncome` aggregates, and the GSTIN turnover total.
+`businessesFromScheduleBp` (the reverse direction) was checked and confirmed already safe — it
+only does direct `??` fallback assignment, no arithmetic on row fields.
+
+**Test added**: `scheduleBpAdapter.test.ts` — a new case with two Section 44AD business rows
+built from realistic backend-string values (`digitalReceipts: "500000"` on row 0,
+`"0"` on row 1, etc., cast via `as unknown as number` since the TS interface itself declares
+`number`), asserting every aggregate field resolves to the correct number rather than a
+concatenated string. Confirmed via `git stash` that it fails on pre-fix code with
+`expected '05000000' to be 500000` — the exact corruption string this section describes.
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 205/205 (full suite, including the
+existing round-trip test in the same file, which continues to pass since it always used real
+number literals and never exercised the string-wire-format path), `npm run build` clean.
+Live-reverified: reloaded the same two-business ITR-4 draft after the fix — "Gross total
+turnover" and "Total presumptive income u/s 44AD" both correctly read ₹5,00,000 / ₹35,000 again,
+with every other field in the group (`Turnover in cash`, `Turnover through any other mode`,
+`Presumptive income @ 8%`) correctly reading ₹0, not the inflated/misattributed values a first,
+sloppier inline debug query briefly appeared to show (that was a bug in the *ad hoc verification
+script* itself, querying `label.parentElement.querySelector('input')` and picking up a sibling
+field's input by accident — re-verified correctly with `label.querySelector('input')` once the
+grid layout's actual DOM nesting was checked, so this is noted here only to be transparent that
+the first verification attempt was itself briefly misleading, not to suggest the underlying fix
+is in doubt).
+
+### 34.18 Personal Info: Verification and TRP sections — two explicit UX defaults added, plus one
+piece of stale test data cleaned up along the way (not a live bug)
+
+Per explicit instruction: "for the TRP set the place as default city of address and default tick
+too." Read the full Verification/TRP block first — there is no separate "place" field inside the
+TRP card itself; the single "Place of verification" field in the Verification section directly
+above it is the one CBDT expects (TRP has no place field of its own in the official schema), and
+the only checkbox in either section is the "I declare that the information given in this return
+... is correct and complete" declaration checkbox. Interpreted the instruction accordingly.
+
+**Added default 1 — Place of verification defaults to the taxpayer's city**: a new `useEffect` in
+`PersonalInfoTab.tsx`, mirroring the file's own existing pattern for defaulting `verification.date`
+(same file, a few lines above), fires `onChange({ verification: { place: personal.city } })`
+whenever `place` is empty and a city is available. Deliberately guarded on `!verification.place`
+so it never overwrites a place the preparer has actually typed — it only fills a blank.
+
+**Added default 2 — Declaration checkbox defaults to ticked**: changed
+`declarationAccepted: false` to `true` in `factory.ts`'s `createEmptyReturnDraft` (a brand-new
+draft now starts pre-declared). Deliberately implemented as a **static factory default**, not a
+reactive effect like default 1 — a reactive `!verification.declarationAccepted` guard would have
+the same shape as default 1's, but for a boolean legal declaration that can legitimately be
+`false` because the preparer *chose* to uncheck it, "empty" and "deliberately unchecked" are the
+same value and indistinguishable to a reactive effect; forcing it back to `true` on the next
+render would make the checkbox impossible to ever leave unchecked. A one-time factory default
+carries no such risk — it only shapes the starting state of a new draft. Live-verified this
+distinction directly: unchecked the box, waited 2 seconds (long enough for any reactive effect to
+have re-fired), and confirmed it stayed unchecked.
+
+**Found while testing, not a live bug**: the existing test client's saved "Place of verification"
+read `"AKOLAAAA"` instead of the correct `"AKOLA"`. Checked the codebase for any auto-fill/derivation
+logic that could produce that pattern before assuming it was live-buggy — found none (no code
+path existed to default or derive `place` at all prior to this section's own new effect) — so this
+is stale manual test data typed earlier in this same very long session, not a defect in the
+current code. Cleared it via the running app and confirmed the new default correctly restored it
+to `"AKOLA"`; saved.
+
+**Test added**: new file `factory.test.ts` (this factory had no prior test coverage) — asserts a
+brand-new draft's `verification.declarationAccepted` is `true` and `verification.place` is `""`
+(confirming default 2 is factory-level while default 1 remains the UI's job, not the factory's).
+
+**Verification**: `npx tsc -b` clean, `npx vitest run` 207/207, `npm run build` clean.
+Live-reverified end-to-end on the real running client: cleared "Place of verification" → the
+field correctly auto-filled to "AKOLA" (the real city) within one render cycle; unchecked the
+declaration checkbox → confirmed it does **not** get reactively re-forced back to checked after
+waiting; re-checked it and saved → confirmed via the raw saved draft that both
+`place: "AKOLA"` and `declarationAccepted: true` persisted correctly.

@@ -22,6 +22,16 @@ const isValidBankAccountNumber = (value: string): boolean => {
     && /[1-9]/.test(normalized);
 };
 const BANK_ACCOUNT_TYPES = new Set(['SB', 'CA', 'CC', 'OD', 'NRO', 'OTH']);
+// Backend monetary/percentage fields (ReturnDraft's ownershipShare, share, etc.) are
+// Decimal-backed and travel over the wire as JSON strings on a loaded draft, even though
+// their TS types say `number`. Strict equality (`=== 100` / `!== 100`) and arithmetic (`+`)
+// against such a value are broken by that mismatch -- relational comparisons (`<`/`>`)
+// happen to coerce automatically and are not affected, but every strict-equality or `+`
+// use must go through this first.
+const num = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) ? n : 0;
+};
 
 /** Frontend checks for CBDT-constrained fields before validation or filing. */
 export function validateCbdtFrontendFields(draft: ReturnDraft): string[] {
@@ -133,15 +143,15 @@ export function validateCbdtFrontendFields(draft: ReturnDraft): string[] {
       if (coOwners.length === 0) {
         errors.push(`${label}: add at least one co-owner.`);
       }
-      if (!(property.ownershipShare > 0 && property.ownershipShare < 100)) {
+      if (!(num(property.ownershipShare) > 0 && num(property.ownershipShare) < 100)) {
         errors.push(`${label}: your ownership share must be above 0% and below 100%.`);
       }
-      const totalShare = property.ownershipShare
-        + coOwners.reduce((total, owner) => total + owner.share, 0);
+      const totalShare = num(property.ownershipShare)
+        + coOwners.reduce((total, owner) => total + num(owner.share), 0);
       if (Math.abs(totalShare - 100) > 0.001) {
         errors.push(`${label}: your share and all co-owner shares must total 100%.`);
       }
-    } else if (property.ownershipShare != null && property.ownershipShare !== 100) {
+    } else if (property.ownershipShare != null && num(property.ownershipShare) !== 100) {
       errors.push(`${label}: sole ownership requires a 100% share.`);
     }
 
@@ -154,7 +164,7 @@ export function validateCbdtFrontendFields(draft: ReturnDraft): string[] {
       if (!owner.name.trim()) {
         errors.push(`${ownerLabel}: enter the co-owner name.`);
       }
-      if (!(owner.share > 0 && owner.share < 100)) {
+      if (!(num(owner.share) > 0 && num(owner.share) < 100)) {
         errors.push(`${ownerLabel}: share must be above 0% and below 100%.`);
       }
       if (pan && !isValidPan(pan)) {

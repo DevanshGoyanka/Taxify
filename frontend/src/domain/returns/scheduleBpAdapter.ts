@@ -2,32 +2,44 @@ import type { ITR4ScheduleBPData } from '../../components/business/ITR4ScheduleB
 import { createEmptyFinancialParticulars } from './factory';
 import type { ReturnDraft } from './types';
 
+// Backend monetary fields (ReturnDraft's businesses[].digitalReceipts, declaredIncome, etc.)
+// are Decimal-backed and travel over the wire as JSON strings on a loaded draft, even though
+// their TS types say `number`. `sum + row.field` with a string right-hand side is JS string
+// concatenation, not addition -- summing "500000" and "0" across two rows produced "0500000"
+// then "05000000", which parses back to 5,000,000 (a real 10x inflation, confirmed live: adding
+// a second Section 44AD business entry turned a genuine Rs 5,00,000 turnover into
+// Rs 50,00,000). Every reduce below must coerce through this first.
+const num = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) ? n : 0;
+};
+
 export function scheduleBpFromBusinesses(businesses: ReturnDraft['businesses']): ITR4ScheduleBPData {
   const ad = businesses.filter((row) => row.scheme === '44AD');
   const ada = businesses.filter((row) => row.scheme === '44ADA');
   const ae = businesses.filter((row) => row.scheme === '44AE');
   const fp = businesses[0]?.financialParticulars;
   const gst = businesses.flatMap((row) => row.gstinTurnovers);
-  const adIncome = ad.reduce((sum, row) => sum + row.declaredIncome, 0);
-  const adaIncome = ada.reduce((sum, row) => sum + row.declaredIncome, 0);
-  const aeIncome = ae.reduce((sum, row) => sum + row.declaredIncome, 0);
+  const adIncome = ad.reduce((sum, row) => sum + num(row.declaredIncome), 0);
+  const adaIncome = ada.reduce((sum, row) => sum + num(row.declaredIncome), 0);
+  const aeIncome = ae.reduce((sum, row) => sum + num(row.declaredIncome), 0);
   return {
     NatOfBus44AD: ad.map((row) => ({ NameOfBusiness: row.businessName, CodeAD: row.natureCode, Description: row.description })),
     PersumptiveInc44AD: ad.length ? {
-      GrsTotalTrnOver: ad.reduce((sum, row) => sum + row.digitalReceipts + row.nonDigitalReceipts + row.otherModeReceipts, 0),
-      GrsTrnOverBank: ad.reduce((sum, row) => sum + row.digitalReceipts, 0),
-      GrsTotalTrnOverInCash: ad.reduce((sum, row) => sum + row.nonDigitalReceipts, 0),
-      GrsTrnOverAnyOthMode: ad.reduce((sum, row) => sum + row.otherModeReceipts, 0),
-      PersumptiveInc44AD6Per: ad.reduce((sum, row) => sum + row.digitalPresumptiveIncome, 0),
-      PersumptiveInc44AD8Per: ad.reduce((sum, row) => sum + row.nonDigitalPresumptiveIncome, 0),
+      GrsTotalTrnOver: ad.reduce((sum, row) => sum + num(row.digitalReceipts) + num(row.nonDigitalReceipts) + num(row.otherModeReceipts), 0),
+      GrsTrnOverBank: ad.reduce((sum, row) => sum + num(row.digitalReceipts), 0),
+      GrsTotalTrnOverInCash: ad.reduce((sum, row) => sum + num(row.nonDigitalReceipts), 0),
+      GrsTrnOverAnyOthMode: ad.reduce((sum, row) => sum + num(row.otherModeReceipts), 0),
+      PersumptiveInc44AD6Per: ad.reduce((sum, row) => sum + num(row.digitalPresumptiveIncome), 0),
+      PersumptiveInc44AD8Per: ad.reduce((sum, row) => sum + num(row.nonDigitalPresumptiveIncome), 0),
       TotPersumptiveInc44AD: adIncome,
     } : undefined,
     NatOfBus44ADA: ada.map((row) => ({ NameOfBusiness: row.businessName, CodeADA: row.natureCode, Description: row.description })),
     PersumptiveInc44ADA: ada.length ? {
-      GrsReceipt: ada.reduce((sum, row) => sum + row.grossReceipts, 0),
-      GrsTrnOverBank44ADA: ada.reduce((sum, row) => sum + row.digitalReceipts, 0),
-      GrsTotalTrnOverInCash44ADA: ada.reduce((sum, row) => sum + row.nonDigitalReceipts, 0),
-      GrsTrnOverAnyOthMode44ADA: ada.reduce((sum, row) => sum + row.otherModeReceipts, 0),
+      GrsReceipt: ada.reduce((sum, row) => sum + num(row.grossReceipts), 0),
+      GrsTrnOverBank44ADA: ada.reduce((sum, row) => sum + num(row.digitalReceipts), 0),
+      GrsTotalTrnOverInCash44ADA: ada.reduce((sum, row) => sum + num(row.nonDigitalReceipts), 0),
+      GrsTrnOverAnyOthMode44ADA: ada.reduce((sum, row) => sum + num(row.otherModeReceipts), 0),
       TotPersumptiveInc44ADA: adaIncome,
     } : undefined,
     NatOfBus44AE: ae.map((row) => ({ NameOfBusiness: row.businessName, CodeAE: row.natureCode, Description: row.description })),
@@ -39,13 +51,13 @@ export function scheduleBpFromBusinesses(businesses: ReturnDraft['businesses']):
       PresumptiveIncome: vehicle.presumptiveIncome,
     }))),
     PersumptiveInc44AE: ae.length ? {
-      TotPersumInc44AE: ae.reduce((sum, row) => sum + row.declaredIncome + row.salaryInterestFromFirm, 0),
-      SalInterestByFirm: ae.reduce((sum, row) => sum + row.salaryInterestFromFirm, 0),
+      TotPersumInc44AE: ae.reduce((sum, row) => sum + num(row.declaredIncome) + num(row.salaryInterestFromFirm), 0),
+      SalInterestByFirm: ae.reduce((sum, row) => sum + num(row.salaryInterestFromFirm), 0),
       TotalPersumptiveInc: aeIncome,
       IncChargeableUnderBus: adIncome + adaIncome + aeIncome,
     } : undefined,
     TurnoverGrsRcptForGSTIN: gst.map((row) => ({ GSTINNo: row.gstin, AmtTurnGrossRcptGSTIN: row.turnover })),
-    TotalTurnoverGrsRcptGSTIN: gst.reduce((sum, row) => sum + row.turnover, 0),
+    TotalTurnoverGrsRcptGSTIN: gst.reduce((sum, row) => sum + num(row.turnover), 0),
     FinanclPartclrOfBusiness: fp ? {
       PartnerMemberOwnCapital: fp.partnerMemberOwnCapital, SecuredLoans: fp.securedLoans,
       UnSecuredLoans: fp.unsecuredLoans, Advances: fp.advances, SundryCreditors: fp.sundryCreditors,

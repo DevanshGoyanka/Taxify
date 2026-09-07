@@ -172,7 +172,14 @@ export interface BankManagerData { accounts: BankManagerEntry[] }
 const clone = <T>(value: T): T => structuredClone(value);
 const cloneArray = <T>(value: readonly T[]): T[] => value.map((entry) => clone(entry));
 const record = (value: unknown): value is LegacyRecord => value !== null && typeof value === 'object' && !Array.isArray(value);
-const finiteMoney = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+// Backend monetary fields are Decimal-backed and travel over the wire as
+// JSON strings (e.g. "839"), not numbers -- reconciliation/merge below must
+// parse those, not silently zero them, or a value that round-tripped through
+// a save+reload (or an AIS/TIS/26AS reconciliation import) is treated as 0.
+const finiteMoney = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
 const optionalText = (value: unknown): string => value == null ? '' : String(value);
 
 function stableStringify(value: unknown): string {

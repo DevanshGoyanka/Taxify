@@ -250,6 +250,16 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
     }
   }, [filing.originalFilingDate, onChange, verification.date]);
 
+  // Place of verification defaults to the taxpayer's own city (the usual
+  // real-world case: verified where they live) rather than being left
+  // blank for every return. Only fills when place is empty, so it never
+  // overwrites a place the preparer has deliberately typed in.
+  useEffect(() => {
+    if (!verification.place && personal.city) {
+      onChange({ verification: { place: personal.city } });
+    }
+  }, [personal.city, onChange, verification.place]);
+
   return <div>
     <SectionHeading title="Identity and contact" description="Enter the identity, communication and statutory profile exactly as registered. PAN and date of birth are used for validation and age-based tax rules." />
     <div style={CARD_STYLE}><div style={GRID_STYLE}>

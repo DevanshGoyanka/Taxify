@@ -80,7 +80,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
     taxes: { tds: [], tcs: [], challans: [] }, bankAccounts: [],
     lossesBroughtForward: { ...EMPTY_BROUGHT_FORWARD_LOSSES },
     bpNetProfit: 0,
-    verification: { capacity: 'SELF', place: '', date: null, declarationAccepted: false },
+    verification: { capacity: 'SELF', place: '', date: null, declarationAccepted: true },
     taxReturnPreparer: { used: false, identificationNumber: '', name: '', reimbursementFromGovernment: 0 },
     provenance: [], reconciliation: { evidence: [], discrepancies: [] },
     broughtForwardLossEntries: [], carriedForwardLossEntries: [], scheduleSIEntries: [],

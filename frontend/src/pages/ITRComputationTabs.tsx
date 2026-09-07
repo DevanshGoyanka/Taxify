@@ -450,7 +450,7 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
       )}
 
       {tdsEntries.map((entry: any, index: number) => (
-        <div key={index} style={{ marginBottom: 24, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
+        <div key={entry.id ?? index} style={{ marginBottom: 24, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h4 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
               TDS Entry #{index + 1}
@@ -706,7 +706,7 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
         </div>
       )}
       {(advanceTaxEntries).map((entry: any, index: number) => (
-        <div key={index} style={{ marginBottom: 16, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
+        <div key={entry.id ?? index} style={{ marginBottom: 16, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h4 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
               Advance Tax #{index + 1}
@@ -786,7 +786,7 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
       )}
 
       {selfAssessmentTaxEntries.map((entry: any, index: number) => (
-        <div key={index} style={{ marginBottom: 16, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
+        <div key={entry.id ?? index} style={{ marginBottom: 16, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h4 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
               SAT Entry #{index + 1}

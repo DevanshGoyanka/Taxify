@@ -99,7 +99,7 @@ interface BackendResult {
   standardDeduction?: number;
   entertainmentAllowanceDed?: number;
   professionalTaxDed?: number;
-  totalSection16Deductions?: number;
+  deductionUs16?: number;
   totalTDSDeducted?: number;
 }
 
@@ -143,11 +143,16 @@ function generateId(): string {
   return 'salary-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
 }
 
-function money(value: number | undefined): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+// Backend monetary fields are Decimal-backed and travel over the wire as
+// JSON strings (e.g. "600000"), not numbers -- the locally-entered-gross
+// running total below must parse those, not silently zero them, or it reads
+// 0 for a freshly loaded (not yet re-typed this session) employer entry.
+function money(value: number | string | undefined): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-function formatINR(value: number | undefined): string {
+function formatINR(value: number | string | undefined): string {
   return Math.round(money(value)).toLocaleString('en-IN');
 }
 
@@ -372,13 +377,6 @@ function EmployerForm({
     money(entry.retrenchmentCompensation) > 0;
   const section10Rows = entry.section10ExemptionRows || [];
 
-  const gross =
-    money(entry.basic) + money(entry.da) + money(entry.hra) + money(entry.lta) +
-    money(entry.bonus) + money(entry.commission) + money(entry.allowances) +
-    money(entry.otherAllowance) + money(entry.arrearSalary) + money(entry.perquisites) +
-    money(entry.profitsInLieu) + money(entry.commutedPension) + money(entry.gratuity) +
-    money(entry.leaveEncashment) + money(entry.vrsCompensation) + money(entry.retrenchmentCompensation);
-
   // Sequential section numbers -- only visible sections get a number
   let seq = 0;
   const next = (): number => { seq += 1; return seq; };
@@ -565,11 +563,6 @@ function EmployerForm({
         description="Pulled from the TDS & Advance Tax tab, matched by employer TAN. Go to that tab to add or edit entries -- changes appear here immediately."
       />
       <EmployerTDSPanel employerTAN={entry.employerTAN} allTdsEntries={allTdsEntries} />
-
-      <div style={{ marginTop: 16, padding: 12, borderRadius: 6, background: 'var(--gold-pale)', border: '1px solid var(--gold-light)', fontSize: 12, color: '#7c530e' }}>
-        Locally entered gross salary for this employer: <strong>&#x20B9;{formatINR(gross)}</strong>.
-        Final exemptions and net taxable salary are calculated by the tax engine after computation.
-      </div>
     </div>
   );
 }
@@ -586,7 +579,7 @@ export function EmployerEntryManager({
   const hasBackendResult = backendResult !== null && backendResult !== undefined;
   const finalGross = money(backendResult?.grossSalary);
   const section10Exemptions = money(backendResult?.totalSection10Exempt);
-  const section16Deductions = money(backendResult?.totalSection16Deductions);
+  const section16Deductions = money(backendResult?.deductionUs16);
 
   const totalSalaryTDS = tdsEntries
     .filter((e) => (e.section === '192' || e.section === '192A') && e.claimedInReturn !== false)
