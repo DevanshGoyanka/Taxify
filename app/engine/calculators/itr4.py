@@ -465,11 +465,24 @@ def compute(input_data: ITR4Input) -> ITR4Result:
     )
     result.gross_total_income = gti
 
-    # Eligibility check
-    if gti > Decimal("5000000"):
+    # Eligibility check: total income EXCLUDING LTCG 112A cannot exceed
+    # Rs 50 lakh -- the 112A gain (already separately capped at Rs 1.25L
+    # above) is an additional allowance on top of this, not counted against
+    # it, matching ITR-1's identical rule (confirmed against the official
+    # CBDT Validation Rules PDFs for both forms: ITR1-R117/ITR4's own
+    # "Total income excluding LTCG 112A <= Rs 50 lakh" rule already
+    # implemented correctly downstream in app/engine/validators/itr4/
+    # calc_rules.py, which this early gate was wrongly short-circuiting
+    # before it could ever run for the affected population). Previously
+    # compared the FULL gti (including cg_112a_income) against the flat
+    # Rs 50L threshold, incorrectly rejecting an eligible taxpayer whenever
+    # their non-112A income was within Rs 1.25L of 50L and they also had
+    # any 112A gain.
+    income_excl_112a = gti - cg_112a_income
+    if income_excl_112a > Decimal("5000000"):
         result.errors.append(
-            f"Ineligible for ITR-4: Total income of Rs {gti} "
-            f"exceeds Rs 50 lakh limit. File ITR-3."
+            f"Ineligible for ITR-4: total income excluding LTCG u/s 112A of "
+            f"Rs {income_excl_112a} exceeds Rs 50 lakh limit. File ITR-3."
         )
         return result
 

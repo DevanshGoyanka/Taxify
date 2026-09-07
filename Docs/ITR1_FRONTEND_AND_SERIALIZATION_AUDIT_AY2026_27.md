@@ -2706,6 +2706,85 @@ omitted (not emitted as `null` or `""`) when absent; `ReturnFileSec`'s full 8-va
 subset; `ReceiptNo`/`OrigRetFiledDate`/`NoticeNo`/`NoticeDateUnderSec` are all correctly
 conditionally emitted only when the corresponding profile field is set.
 
-Part B (Gross Total Income: Salary, House Property, Other Sources), Part C (Deductions), Part D
-(Tax Computation), Part E (Bank Accounts), Schedule IT, Schedule TDS, and Verification are next in
-this same pass — not yet started as of this section.
+### 33.2 Part B — Gross Total Income
+
+Read against `ITR1_IncomeDeductions` (`GrossSalary`/`Salary`/`PerquisitesValue`/`ProfitsInSalary`/
+`AllwncExemptUs10`/`NetSalary`/`DeductionUs16`/`DeductionUs16ia`/`EntertainmentAlw16ii`/
+`ProfessionalTaxUs16iii`/`IncomeFromSal` for B1; `PropertyDetails`/`Rentdetails`/`CoOwners`/
+`TenantDetails` for B2; `IncomeOthSrc`/`OthersInc`/`DeductionUs57iia` for B3; `GrossTotIncome`/
+`GrossTotIncomeIncLTCG112A` for B4). Every min/max on this block was cross-checked directly:
+`DeductionUs16ia` (standard deduction) has a flat schema ceiling of Rs 75,000 (the higher,
+new-regime figure) — confirmed the calculator's own regime-differentiated constants
+(`OLD_REGIME_STANDARD_DEDUCTION` = Rs 50,000, `NEW_REGIME_STANDARD_DEDUCTION` = Rs 75,000, both in
+`app/engine/constants.py`) never let the emitted value exceed either regime's real cap, so this
+schema ceiling is satisfied trivially and correctly. `EntertainmentAlw16ii` (max Rs 5,000) and
+`ProfessionalTaxUs16iii` (max Rs 5,000) are likewise both correctly capped in
+`app/engine/schedules/salary.py` (entertainment allowance at the statutory least-of-three formula
+capped at Rs 5,000; professional tax at the Article 276(2) constitutional ceiling of Rs 2,500,
+comfortably inside the schema's looser Rs 5,000). B2's `Rentdetails.IncomeOfHP` correctly permits
+negative values (a loss) in the schema; every other `Rentdetails` field is correctly non-negative
+by construction. No new discrepancy found in B1-B4's field-level shapes or bounds — this specific
+angle (per-field schema bound vs. what the calculator can actually emit) had not been walked this
+explicitly before, but confirms clean.
+
+**One real, previously-undocumented, financially material bug found and fixed — the eligibility
+gate itself, not a field within Part B**: the form's own subtitle states ITR-1 is for taxpayers
+"having total income upto Rs.50 lakh and having Income from Salaries, two house properties, other
+sources (Interest etc.), long-term capital gains under section 112A up to Rs. 1.25 lakh." This
+sentence is genuinely ambiguous read in isolation (does the Rs 50 lakh figure include or exclude
+the 112A component?) — resolved definitively, not by inference, by reading the official
+`CBDT_e-Filing_ITR 1_Validation Rules_AY 2026-27` PDF directly: rule 117 states in as many words,
+**"Total income excluding LTCG C3(a)(iii) should not be greater than Rs 50 lakhs."** The 112A
+LTCG is a separate, additional Rs 1.25 lakh allowance on top of the Rs 50 lakh regular-income cap,
+not counted against it — combined ceiling Rs 51.25 lakh, which is exactly why the official
+schema's own `ITR1_IncomeDeductions.TotalIncome` field has a maximum of precisely `5125000`
+(50,00,000 + 1,25,000), not a flat `5000000`.
+
+`app/engine/calculators/itr1.py`'s own eligibility gate got this backwards:
+```python
+gti = result.salary_income + result.house_property_income + result.other_sources_income + cg_112a_income
+if gti > Decimal("5000000"):
+    result.errors.append(f"Ineligible for ITR-1: Gross Total Income of Rs {gti} exceeds Rs 50 lakh limit...")
+    return result
+```
+`cg_112a_income` (confirmed via `app/engine/schedules/special_rates.py::compute_112a()` —
+`net_income`, the gain **before** the Rs 1.25 lakh exemption is subtracted, since that exemption
+is a special-rate-tax reduction applied afterward, not a GTI reduction) was being added into the
+same `gti` figure the flat Rs 50 lakh check compares against — incorrectly rejecting, for example,
+a taxpayer with Rs 49,00,000 of regular income and Rs 1,25,000 of 112A gain (Rs 50,25,000
+combined, textbook-eligible per the official rule) outright. The **correct** version of this exact
+check already existed, downstream, as `ITR1-R117` in `app/engine/validators/itr1/calc_rules.py`
+(`income_excl_ltcg = gti - cg_112a; if income_excl_ltcg > 5_000_000: ...`) — but it could never
+fire for the affected population, because the calculator's own earlier, wrong gate returned an
+error and short-circuited before a `result` object ever reached that downstream validator. Two
+independently-maintained implementations of the "same" rule had silently diverged, and the wrong
+one ran first — the exact "two components of the same system silently drifting apart" pattern
+§32.1 (and, before it, §27-§30) already identified as this codebase's most common real-bug shape.
+
+**Same bug, same fix, confirmed and closed in ITR-4 too**: `app/engine/calculators/itr4.py` had
+the byte-for-byte identical pattern (`gti = presumptive + salary + hp + os + cg_112a_income; if
+gti > Decimal("5000000")`), with the same already-correct downstream rule
+(`app/engine/validators/itr4/calc_rules.py`'s `income_excl_ltcg` check) unreachable for the same
+reason. Fixed identically, matching this document's own established practice (§32.1) of applying
+one genuinely shared-pattern fix to both forms in the same pass rather than leaving the sibling
+form's copy of the same bug for a later, separate discovery.
+
+**Fix** (both forms): the early gate now computes `income_excl_112a = gti - cg_112a_income` and
+compares that (not the raw `gti`) against Rs 50 lakh, matching the already-correct downstream
+validator exactly — making the early gate and the downstream rule agree, rather than picking one
+to delete.
+
+**Tests added**: `tests/test_itr1_calculator.py::test_eligibility_50_lakh_cap_excludes_112a_ltcg`
+(Rs 49,00,000 net salary + Rs 1,25,000 112A gain, must now be accepted, GTI = Rs 50,25,000) and
+`::test_eligibility_50_lakh_cap_still_rejects_regular_income_over_50l` (non-regression fence — Rs
+50,00,001 of regular income alone, no 112A gain, must still be rejected — confirms the fix
+*narrows* the check rather than loosening the Rs 50 lakh cap on regular income itself);
+`tests/test_itr4_calculator.py::test_itr4_eligibility_50_lakh_cap_excludes_112a_ltcg` (identical
+scenario for ITR-4). All three confirmed via `git stash` to fail against pre-fix code. Full
+`test_itr1_*`/`test_itr4_*` plus sibling files (`test_draft_to_itr1_input.py`,
+`test_draft_to_itr4_input_itr4.py`, `test_filing_gateway_v2_itr4.py`, `validate_itr1_json.py`)
+green: 567 passed.
+
+Part C (Deductions and Taxable Total Income), Part D (Tax Computation), Part E (Bank Accounts),
+Schedule IT, Schedule TDS, and Verification are next in this same pass — not yet started as of
+this section.

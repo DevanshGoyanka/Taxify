@@ -494,6 +494,57 @@ def test_80cce_pool_limit():
     assert res.taxable_income == Decimal("200000")
     assert res.deductions_total == Decimal("150000")
 
+def test_eligibility_50_lakh_cap_excludes_112a_ltcg():
+    """Official CBDT ITR-1 Validation Rules (AY 2026-27), rule 117: "Total
+    income excluding LTCG C3(a)(iii) should not be greater than Rs 50
+    lakhs." The 112A gain is a SEPARATE Rs 1.25 lakh allowance on top of
+    the Rs 50 lakh regular-income cap, not counted against it -- combined
+    ceiling Rs 51.25 lakh, matching the official schema's
+    ITR1_IncomeDeductions.TotalIncome field maximum of exactly 5125000.
+    Rs 49,00,000 regular income + Rs 1,25,000 112A LTCG (Rs 50,25,000
+    combined) was previously rejected outright by an early eligibility
+    gate that wrongly compared the FULL combined GTI against a flat
+    Rs 50 lakh threshold."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("4950000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        capital_gains=CapitalGainsIncome(ltcg_112a=Decimal("125000")),
+    )
+    res = compute_itr1(itr_input)
+    # salary_income (net of the Rs 50,000 old-regime standard deduction) =
+    # 4,90,00,000; + 1,25,000 112A gain = Rs 50,25,000 combined GTI.
+    assert res.errors == []
+    assert res.gross_total_income == Decimal("5025000")
+
+
+def test_eligibility_50_lakh_cap_still_rejects_regular_income_over_50l():
+    """Non-regression: Rs 50,00,001 of regular income alone (no 112A gain)
+    must still be rejected -- the fix narrows the check to exclude 112A,
+    it does not loosen the Rs 50 lakh cap on regular income itself."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("5050001")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    res = compute_itr1(itr_input)
+    # salary_income net of the Rs 50,000 standard deduction = 50,00,001.
+    assert res.errors
+    assert "Ineligible for ITR-1" in res.errors[0]
+
+
 def test_json_output_keys():
     """Verify output contains required keys."""
     itr_input = ITR1Input(
