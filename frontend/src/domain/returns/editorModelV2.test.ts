@@ -239,6 +239,31 @@ describe('ReturnEditorModelV2', () => {
     expect(withGgc.draft.deductions.chapterVIA.section80GGC).toBe(4000);
   });
 
+  it('sums 80GGA/80GGC totals correctly even when amounts arrive as backend-serialized strings', () => {
+    // The backend's Decimal-backed monetary fields travel over the wire as
+    // JSON strings (e.g. "3000"), not numbers -- this is the real shape of
+    // an entry re-hydrated from a saved draft, not a hypothetical. Before
+    // the fix, finiteMoney's strict `typeof value === 'number'` check
+    // silently treated every such string as 0, so a freshly loaded (not
+    // yet re-typed this session) draft would show a 0 deduction total
+    // despite real saved data.
+    const model = replaceDraft(createEmptyReturnDraft('2026-27'));
+    const withGga = updateSchedule80GGA(model, [{
+      id: 'gga', relevantClause: '80GGA2aa', doneeName: 'Research Trust',
+      doneePAN: 'ABCDE1234F', addressLine: '1 Road', city: 'Delhi',
+      stateCode: '07', pinCode: '110001', cashAmount: 100, otherModeAmount: '3000',
+    }] as unknown as Parameters<typeof updateSchedule80GGA>[1]);
+    const withGgc = updateSchedule80GGC(withGga, [{
+      id: 'ggc', cashAmount: '200', otherModeAmount: '4000',
+      contributionDate: '2025-06-01', transactionRef: 'UTR-1',
+      ifscCode: 'SBIN0001234', politicalPartyName: 'Party',
+      politicalPartyPAN: 'ABCDE1234F',
+    }] as unknown as Parameters<typeof updateSchedule80GGC>[1]);
+
+    expect(withGgc.draft.deductions.chapterVIA.section80GGA).toBe(3000);
+    expect(withGgc.draft.deductions.chapterVIA.section80GGC).toBe(4000);
+  });
+
   it('persists complete Tax Return Preparer details immutably', () => {
     const model = replaceDraft(createEmptyReturnDraft('2026-27'));
     const updated = updateTaxReturnPreparer(model, {

@@ -3153,3 +3153,82 @@ Re-verified live end-to-end after restarting the backend: the same self-occupied
 `totalDeduction: 200000`, and `incomeOfHP: -200000` — all three agreeing — and Gross Total Income
 correctly falls by the full ₹2,00,000 house-property loss (confirmed via the raw
 `/v2/tax-summary/compute` network response, not just the rendered UI).
+
+### 34.7 Continuing into the next untested income head (Other Sources), per explicit instruction
+"check inputting all the fields in all the applicable income heads" — found and fixed a
+systemic frontend bug affecting six components, not specific to Other Sources
+
+Moved on to the next untested tab after House Property: Other Sources. The tab already had two
+pre-existing interest entries (loaded from a prior AIS reconciliation import — IDs
+`recon-interest-*`) with real gross amounts (₹839 and ₹157). The "Interest income" section
+header and the "Schedule OS review" summary panel at the bottom of the tab both showed **₹0** for
+every subtotal, despite the individual entry rows correctly displaying their real amounts in the
+input fields themselves. The live `/v2/tax-summary/compute` response confirmed the *actual*
+computed total was correct (`incomeOthSrc: 996` = 839 + 157, correctly flowing into GTI and into
+the 80TTA deduction) — so this was, like §34.6, a display-only bug, not a computation or
+JSON-generation bug.
+
+**Root cause**: fetched the raw draft JSON directly
+(`GET /v2/clients/{id}/itr/2026-27`) rather than guessing, and found every monetary field in it
+serialized as a **JSON string** — `"grossAmount":"839"`, `"basic":"600000"`,
+`"totalLoanAmount":"3000000"`, etc. — consistent with this codebase's own stated convention
+(`decimal.Decimal` end-to-end). `frontend/src/components/othersources/ScheduleOSWorkspace.tsx`'s
+local `money()` helper, used by every section-header running total and the "Schedule OS review"
+panel, required `typeof value === 'number'` and silently returned `0` for anything else —
+including a perfectly valid numeric string. Any field loaded from a saved draft (as opposed to
+freshly typed by the user this session, which goes through an explicit `Number(value)` conversion
+in each field's `onChange`) hit this and read as zero.
+
+**Same bug, independently, in five more files** — checked because the identical
+`typeof value === 'number' && Number.isFinite(value) ...` pattern is not unique to this one file:
+- `frontend/src/components/exemptincome/ExemptIncomeWorkspace.tsx` — identical `money()`, same
+  fix. (Exempt Income was still on the untested list per §34.5/§34.6; this closes it.)
+- `frontend/src/components/deductions/DeductionsWorkspace.tsx` — identical `money()`, same fix.
+  (Deductions was still on the untested list; this closes it too.)
+- `frontend/src/components/itr2/ITR2SchedulesWorkspace.tsx` — identical `money()`, same fix.
+  Out of this document's direct scope (ITR-2 has its own audit doc) but fixed in the same pass
+  since it's the exact same bug in the exact same shared pattern; flagged for a cross-reference
+  note in `Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`.
+- `frontend/src/domain/returns/editorModelV2.ts`'s `finiteMoney()` — the most consequential of
+  the five, since this is not a display-only summary function but the **reconciliation/merge**
+  layer both `ITRComputationTabs.tsx` and `ITRComputationPage.tsx` import from directly. It is
+  used inside `mergeById`-style functions for interest, dividends, winnings, TDS, TCS, 80GGA/
+  80GGC non-cash-donation totals, and the Section 24(b) home-loan-interest cross-foot check —
+  meaning a saved-and-reloaded (or AIS/TIS/26AS-reconciled) entry in any of those categories could
+  have its amount silently zeroed during the merge, not just at final display.
+- `frontend/src/components/EmployerEntryManager.tsx` (Salary Income — itself one of the
+  "applicable income heads" this instruction named) — a differently-shaped but equivalent bug:
+  `money(value: number | undefined)`'s TypeScript signature assumed callers always pass a real
+  `number`, but `entry.basic`/`entry.hra`/etc. arrive as the same backend-serialized strings at
+  runtime regardless of what the type declares. Broke the "Locally entered gross salary for this
+  employer" line specifically (confirmed live: read ₹0 before the fix, ₹6,00,000 — matching the
+  backend-computed Gross Salary directly below it — after).
+
+**Fix**: widened all six `money`/`finiteMoney` helpers to accept `string` (via `Number(value)`)
+alongside `number`, falling back to `0` only for genuinely non-numeric/negative input — preserving
+existing behavior for every already-numeric caller (including every `onChange` handler, which
+already converts via `Number(value)` before calling `money()`) while correctly parsing the
+string-typed values that come from a loaded draft.
+
+**Tests added**: `frontend/src/domain/returns/editorModelV2.test.ts`'s
+`"sums 80GGA/80GGC totals correctly even when amounts arrive as backend-serialized strings"` —
+feeds `updateSchedule80GGA`/`updateSchedule80GGC` string-typed `otherModeAmount`/`cashAmount`
+fields (the real runtime shape, cast via `as unknown as Parameters<...>[1]` since the TS interface
+itself declares `number`) and asserts the totals still sum correctly. Confirmed via `git stash`
+that it fails on pre-fix `editorModelV2.ts` with `expected +0 to be 3000` — the exact class of
+wrong value this section describes.
+
+**Verification**: `npx tsc -b` (clean, all six widened signatures compile), `npx vitest run`
+(full frontend suite: 187/187, plus the new test = 188/188 including the one above),
+`npm run build` (clean production build). Live-reverified in the browser after rebuilding: Other
+Sources' "Interest income" header now reads ₹996 (was ₹0); the Salary tab's "Locally entered
+gross salary for this employer" now reads ₹6,00,000 (was ₹0), matching the backend-computed Gross
+Salary shown directly beneath it.
+
+**Scope note**: `frontend/src/components/business/ITR3BusinessCoreManager.tsx`,
+`ITR3PresumptiveManager.tsx`, `ITR3BusinessAuxiliaryManager.tsx` carry the same pattern
+(`typeof value === 'number' && Number.isFinite(value) ...`) but were left unfixed in this pass —
+ITR-3 is out of scope for both this document and the current ITR-2 production-readiness plan (see
+`Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md`'s explicit scope boundary), and touching it here
+would mix an ITR-1-audit commit with unrelated ITR-3 changes. Flagged here as a forward pointer
+for whoever picks up ITR-3.

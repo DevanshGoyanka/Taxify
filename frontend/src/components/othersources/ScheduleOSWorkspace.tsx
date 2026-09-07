@@ -17,7 +17,14 @@ interface ScheduleOSWorkspaceProps {
 }
 
 const genId = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`;
-const money = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0);
+// Backend monetary fields are Decimal-backed and travel over the wire as JSON
+// strings (e.g. "839"), not numbers -- summary totals below must parse those,
+// not silently zero them, or every section subtotal reads 0 for a freshly
+// loaded (not yet re-typed this session) draft despite real saved data.
+const money = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
 const inr = (value: number): string => `₹${Number(value || 0).toLocaleString('en-IN')}`;
 const sum = (values: readonly { grossAmount?: number; value?: number; amount?: number; sourceAmount?: number }[]): number => values.reduce((total, entry) => total + money(entry.grossAmount ?? entry.value ?? entry.amount ?? entry.sourceAmount), 0);
 

@@ -41,7 +41,13 @@ interface DeductionsWorkspaceProps {
 }
 
 const MAX_MONEY = 99_999_999_999_999;
-const money = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+// Backend monetary fields are Decimal-backed and travel over the wire as
+// JSON strings (e.g. "839"), not numbers -- must parse those, not silently
+// zero them, or summary totals read 0 for a freshly loaded draft.
+const money = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
 const inr = (value: number): string => `₹${money(value).toLocaleString('en-IN')}`;
 
 // Per-form capability matrix (from the official UsrDeductUndChapVIAType enums).

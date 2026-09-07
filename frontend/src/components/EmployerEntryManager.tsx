@@ -143,11 +143,16 @@ function generateId(): string {
   return 'salary-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
 }
 
-function money(value: number | undefined): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+// Backend monetary fields are Decimal-backed and travel over the wire as
+// JSON strings (e.g. "600000"), not numbers -- the locally-entered-gross
+// running total below must parse those, not silently zero them, or it reads
+// 0 for a freshly loaded (not yet re-typed this session) employer entry.
+function money(value: number | string | undefined): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-function formatINR(value: number | undefined): string {
+function formatINR(value: number | string | undefined): string {
   return Math.round(money(value)).toLocaleString('en-IN');
 }
 
