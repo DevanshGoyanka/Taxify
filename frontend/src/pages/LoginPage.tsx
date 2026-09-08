@@ -1,12 +1,27 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactElement } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { authApi } from '../api/auth';
 import { tokenManager } from '../api/tokenManager';
 import { Spinner } from '../components/ui/Spinner';
 import { useSeo } from '../hooks/useSeo';
+import taxifyBlackLogo from '../../svgs/taxify black.png';
+import googleIcon from '../../svgs/google-icon.svg';
+import microsoftIcon from '../../svgs/microsoft.svg';
+import './LoginPage.css';
 
-export default function LoginPage() {
+interface SocialProvider {
+  readonly name: string;
+  readonly icon: string;
+  readonly className: string;
+}
+
+const socialProviders: readonly SocialProvider[] = [
+  { name: 'Google', icon: googleIcon, className: 'login-social-google' },
+  { name: 'Microsoft', icon: microsoftIcon, className: 'login-social-microsoft' },
+];
+
+export default function LoginPage(): ReactElement {
   useSeo({
     title: 'Sign In',
     description:
@@ -14,159 +29,121 @@ export default function LoginPage() {
     path: '/login',
   });
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
+  const [email, setEmail] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
+  const [loading, setLoading] = useState<boolean>(false);
+  const [showPassword, setShowPassword] = useState<boolean>(false);
   const navigate = useNavigate();
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
     setLoading(true);
     try {
       const data = await authApi.login(email, password);
       tokenManager.save(data.token, data.email);
       toast.success('Login successful!');
       navigate('/dashboard');
-    } catch (err: any) {
-      toast.error(err.message || 'Login failed');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Login failed';
+      toast.error(message);
     } finally {
       setLoading(false);
     }
   };
 
+  const handleSocialLogin = (provider: string): void => {
+    toast(`${provider} login is not configured yet.`);
+  };
+
   return (
-    <div style={{ display: 'flex', height: '100vh' }}>
-      <div style={{
-        width: '40%',
-        background: 'var(--navy)',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 48,
-        color: 'white'
-      }}>
-        <div style={{
-          width: 80, height: 80,
-          background: 'var(--gold)',
-          borderRadius: 16,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontFamily: 'Crimson Pro',
-          fontWeight: 600,
-          fontSize: 32,
-          color: 'var(--navy)',
-          marginBottom: 24
-        }}>IT</div>
-        <h1 className="crimson" style={{ fontSize: 32, marginBottom: 16 }}>IncomeTax ERP</h1>
-        <p style={{ color: 'var(--gold-light)', fontSize: 16, textAlign: 'center' }}>
-          Trusted by 500+ CA Firms across India
-        </p>
-      </div>
+    <main className="login-page">
+      <div className="login-background-shape login-background-shape-top" />
+      <div className="login-background-shape login-background-shape-bottom" />
 
-      <div style={{
-        flex: 1,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'white'
-      }}>
-        <div style={{ width: 400, maxWidth: '90%' }}>
-          <h2 className="crimson" style={{ fontSize: 28, marginBottom: 8 }}>Sign In</h2>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: 32 }}>
-            Welcome back! Please enter your credentials.
-          </p>
+      <header className="login-brand" aria-label="Taxify">
+        <img src={taxifyBlackLogo} alt="Taxify" />
+      </header>
 
-          <form onSubmit={handleSubmit}>
-            <div style={{ marginBottom: 20 }}>
-              <label style={{ display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500 }}>
-                Email Address
-              </label>
+      <section className="login-card" aria-labelledby="login-heading">
+        <h1 id="login-heading">Log in to Taxify</h1>
+
+        <form onSubmit={handleSubmit}>
+          <div className="login-field">
+            <label htmlFor="login-email">Enter your email</label>
+            <input
+              id="login-email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoComplete="email"
+              required
+              autoFocus
+            />
+          </div>
+
+          <div className="login-field login-password-field">
+            <label htmlFor="login-password">Password</label>
+            <div className="login-password-wrap">
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                id="login-password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
                 required
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 6,
-                  fontSize: 14,
-                  outline: 'none'
-                }}
               />
+              <button
+                className="login-password-toggle"
+                type="button"
+                onClick={() => setShowPassword((visible) => !visible)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
             </div>
+          </div>
 
-            <div style={{ marginBottom: 24 }}>
-              <label style={{ display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500 }}>
-                Password
-              </label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  style={{
-                    width: '100%',
-                    padding: '10px 12px',
-                    border: '1px solid var(--border)',
-                    borderRadius: 6,
-                    fontSize: 14,
-                    outline: 'none'
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  style={{
-                    position: 'absolute',
-                    right: 12,
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: 18
-                  }}
-                >
-                  {showPassword ? '👁️' : '👁️‍🗨️'}
-                </button>
-              </div>
-            </div>
+          <button
+            className={`login-continue${email && password ? ' login-continue-ready' : ''}`}
+            type="submit"
+            disabled={loading || !email || !password}
+          >
+            {loading ? <Spinner size={16} /> : 'Log in'}
+          </button>
+        </form>
 
-            <button
-              type="submit"
-              disabled={loading}
-              style={{
-                width: '100%',
-                padding: '12px',
-                background: loading ? 'var(--border)' : 'var(--gold)',
-                color: 'white',
-                border: 'none',
-                borderRadius: 6,
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: loading ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8
-              }}
-            >
-              {loading && <Spinner size={16} />}
-              {loading ? 'Signing in...' : 'Sign In'}
-            </button>
-          </form>
+        <>
+          <div className="login-divider" aria-hidden="true"><span /> <b>OR</b> <span /></div>
+          <div className="login-social-list">
+            {socialProviders.map((provider) => (
+              <button
+                className={`login-social ${provider.className}`}
+                type="button"
+                key={provider.name}
+                onClick={() => handleSocialLogin(provider.name)}
+              >
+                <img className="login-social-icon" src={provider.icon} alt="" aria-hidden="true" />
+                Continue with {provider.name}
+              </button>
+            ))}
+          </div>
+        </>
 
-          <p style={{ marginTop: 24, textAlign: 'center', fontSize: 13, color: 'var(--text-secondary)' }}>
-            Don't have an account? <a href="/register" style={{ color: 'var(--gold)', textDecoration: 'none' }}>Register</a>
-          </p>
+        <div className="login-links">
+          <a href="/login" onClick={(event) => { event.preventDefault(); toast('Please contact support to recover your account.'); }}>Can't log in?</a>
+          <span>·</span>
+          <a href="/register">Create an account</a>
         </div>
-      </div>
-    </div>
+
+        <div className="login-legal">
+          <div className="login-legal-links">
+            <a href="/privacy">Privacy Policy</a>
+            <span>·</span>
+            <a href="/terms">User Notice</a>
+          </div>
+          <p>This site is protected by reCAPTCHA and the Google <a href="https://policies.google.com/privacy">Privacy Policy</a> and <a href="https://policies.google.com/terms">Terms of Service</a> apply.</p>
+        </div>
+      </section>
+    </main>
   );
 }

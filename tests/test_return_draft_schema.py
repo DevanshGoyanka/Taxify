@@ -20,15 +20,25 @@ import pytest
 
 from app.schemas.return_draft import (
     AlternateAddress,
+    AMTDetails,
+    AssetLiabilityDetails,
     BankAccount,
+    BroughtForwardLossEntry,
+    CapitalGainsSchedule,
     Employer,
     DividendIncome,
+    ForeignAssetEntry,
+    ForeignSourceIncomeEntry,
+    ImmovableAssetGain,
     Investment80C,
     InterestIncome,
+    PortugueseCivilCodeDetails,
     ReturnDraft,
+    Scrip112A,
     SeventhProviso,
     TdsCredit,
     TaxChallan,
+    VdaEntry,
     create_empty_draft,
     draft_from_client_seed,
 )
@@ -266,3 +276,179 @@ def test_itr1_draft_without_additive_fields_still_validates():
     assert draft.personal.assesseeStatus == "I"
     assert draft.personal.employerCategory == ""
     assert draft.filing.seventhProviso.foreignTravel is False
+
+
+# ── ITR-2/3 plan Phase 1: typed capitalGainsSchedule ─────────────────────────
+# Mirrors frontend/src/domain/returns/types.ts::CapitalGainsSchedule exactly
+# (Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md Phase 1).
+
+def test_empty_draft_has_typed_empty_capital_gains_schedule():
+    """The default CapitalGainsSchedule is a real typed instance, not a dict."""
+    draft = create_empty_draft("2026-27", "ITR-1", "new")
+    assert isinstance(draft.capitalGainsSchedule, CapitalGainsSchedule)
+    assert draft.capitalGainsSchedule.simplified112A.totalSaleConsideration == Decimal("0")
+    assert draft.capitalGainsSchedule.schedule112A == []
+    assert draft.capitalGainsSchedule.stEquity == []
+    assert draft.capitalGainsSchedule.stUnutilizedFlag == "N"
+
+
+def test_capital_gains_schedule_round_trips_typed_and_generic_rows():
+    """Typed sub-arrays (112A, VDA, immovable) and generic JsonRow[] fields
+    both survive a full JSON round-trip losslessly."""
+    draft = create_empty_draft("2026-27", "ITR-2", "new")
+    draft.capitalGainsSchedule = CapitalGainsSchedule(
+        simplified112A={"totalSaleConsideration": Decimal("500000"), "totalCostAcquisition": Decimal("300000")},
+        schedule112A=[Scrip112A(
+            id="s1", isin="INE001A01036", name="Reliance", quantity=Decimal("100"),
+            salePricePerUnit=Decimal("2500"), totalSaleValue=Decimal("250000"),
+            costWithoutIndexation=Decimal("200000"), acquisitionCost=Decimal("200000"),
+        )],
+        vda=[VdaEntry(
+            id="v1", dateOfAcquisition="2025-01-01", dateOfTransfer="2025-06-01",
+            head="CG", acquisitionCost=Decimal("10000"), consideration=Decimal("15000"),
+        )],
+        ltImmovable=[ImmovableAssetGain(
+            id="p1", dateOfSale="2025-12-01", fullConsideration=Decimal("8000000"),
+            acquisitionCost=Decimal("3000000"), transferExpenses=Decimal("50000"),
+        )],
+        # Generic JsonRow[]-equivalent field — arbitrary keys must pass through
+        # untouched (matches the frontend's deliberately-untyped scope).
+        stEquity=[{"isin": "INE002A01018", "grossGain": 5000, "customField": "x"}],
+    )
+    restored = ReturnDraft.model_validate_json(draft.model_dump_json())
+    cg = restored.capitalGainsSchedule
+    assert cg.simplified112A.totalSaleConsideration == Decimal("500000")
+    assert len(cg.schedule112A) == 1
+    assert cg.schedule112A[0].isin == "INE001A01036"
+    assert len(cg.vda) == 1
+    assert cg.vda[0].head == "CG"
+    assert len(cg.ltImmovable) == 1
+    assert cg.ltImmovable[0].fullConsideration == Decimal("8000000")
+    assert cg.stEquity == [{"isin": "INE002A01018", "grossGain": 5000, "customField": "x"}]
+
+
+def test_capital_gains_schedule_rejects_unknown_key():
+    """extra='forbid' still holds on the typed CG schedule itself."""
+    with pytest.raises(Exception):
+        ReturnDraft.model_validate({
+            "assessmentYear": "2026-27", "form": "ITR-2",
+            "capitalGainsSchedule": {"bogusField": 123},
+        })
+
+
+def test_capital_gains_schedule_rejects_unknown_key_in_typed_subarray():
+    """extra='forbid' also holds on typed sub-array elements like Scrip112A."""
+    with pytest.raises(Exception):
+        ReturnDraft.model_validate({
+            "assessmentYear": "2026-27", "form": "ITR-2",
+            "capitalGainsSchedule": {
+                "schedule112A": [{"id": "s1", "legacyAliasField": "x"}],
+            },
+        })
+
+
+def test_old_simplified_112a_only_shape_still_validates():
+    """Backward compatibility: a draft with only the old simplified112A block
+    (the shape every ITR-1/4 client currently has saved) still loads."""
+    draft = ReturnDraft.model_validate({
+        "assessmentYear": "2026-27", "form": "ITR-1",
+        "capitalGainsSchedule": {
+            "simplified112A": {
+                "totalSaleConsideration": "180000",
+                "totalCostAcquisition": "100000",
+            },
+        },
+    })
+    assert draft.capitalGainsSchedule.simplified112A.totalSaleConsideration == Decimal("180000")
+    assert draft.capitalGainsSchedule.schedule112A == []
+
+
+# ── ITR-2/3 plan Phase 2: remaining ITR-2 fields ─────────────────────────────
+# (Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md Phase 2)
+
+def test_empty_itr2_draft_validates_with_new_defaults():
+    """An empty ITR-2 draft validates; every Phase 2 field defaults sanely."""
+    draft = create_empty_draft("2026-27", "ITR-2", "new")
+    payload = draft.model_dump_json()
+    restored = ReturnDraft.model_validate_json(payload)
+    assert restored.form == "ITR-2"
+    # Already-live-on-frontend fields, now matched on the backend.
+    assert restored.personal.residentialStatus == "ROR"
+    assert restored.personal.isDirector is False
+    assert restored.personal.holdsUnlistedShares is False
+    # New declarations.
+    assert restored.filing.sebiRegistrationNumber == ""
+    assert restored.filing.isFiiFpi is False
+    assert restored.filing.portugueseCivilCodeApplies is False
+    # New schedules — all empty/None by default.
+    assert restored.lossesBroughtForward.bfLossHP == Decimal("0")
+    assert restored.broughtForwardLossEntries == []
+    assert restored.carriedForwardLossEntries == []
+    assert restored.foreignSourceIncome == []
+    assert restored.foreignTaxRelief == []
+    assert restored.foreignAssets == []
+    assert restored.clubbedIncome == []
+    assert restored.passThroughIncomeEntries == []
+    assert restored.amt is None
+    assert restored.assetLiability is None
+    assert restored.portugueseCivilCode is None
+    assert restored.esopDeferrals == []
+
+
+def test_itr2_fields_round_trip():
+    """Populated Phase 2 fields survive a full JSON round-trip exactly."""
+    draft = create_empty_draft("2026-27", "ITR-2", "new")
+    draft.personal.residentialStatus = "NR"
+    draft.personal.isDirector = True
+    draft.personal.holdsUnlistedShares = True
+    draft.filing.sebiRegistrationNumber = "INZP0123456"
+    draft.filing.isFiiFpi = True
+    draft.filing.portugueseCivilCodeApplies = True
+    draft.broughtForwardLossEntries = [BroughtForwardLossEntry(
+        id="bf1", assessmentYear="2024-25", head="STCG",
+        originalLoss=Decimal("50000"), broughtForward=Decimal("50000"),
+    )]
+    draft.foreignSourceIncome = [ForeignSourceIncomeEntry(
+        id="fsi1", countryCode="US", taxIdentificationNo="123-45-6789",
+        salaryIncome=Decimal("1000000"), taxPaidOutsideIndia=Decimal("150000"),
+    )]
+    draft.foreignAssets = [ForeignAssetEntry(
+        id="fa1", assetType="BANK_ACCOUNT", countryCode="US",
+        institutionOrEntityName="Chase Bank", peakValue=Decimal("500000"),
+    )]
+    draft.amt = AMTDetails(deduction10AA=Decimal("200000"))
+    draft.assetLiability = AssetLiabilityDetails(immovableProperty=Decimal("5000000"))
+    draft.portugueseCivilCode = PortugueseCivilCodeDetails(
+        spouseName="Maria Fernandes", spousePAN="ABCDE1234F",
+    )
+
+    restored = ReturnDraft.model_validate_json(draft.model_dump_json())
+    assert restored.personal.residentialStatus == "NR"
+    assert restored.personal.isDirector is True
+    assert restored.filing.sebiRegistrationNumber == "INZP0123456"
+    assert restored.filing.isFiiFpi is True
+    assert len(restored.broughtForwardLossEntries) == 1
+    assert restored.broughtForwardLossEntries[0].head == "STCG"
+    assert len(restored.foreignSourceIncome) == 1
+    assert restored.foreignSourceIncome[0].countryCode == "US"
+    assert len(restored.foreignAssets) == 1
+    assert restored.foreignAssets[0].assetType == "BANK_ACCOUNT"
+    assert restored.amt is not None
+    assert restored.amt.deduction10AA == Decimal("200000")
+    assert restored.assetLiability is not None
+    assert restored.assetLiability.immovableProperty == Decimal("5000000")
+    assert restored.portugueseCivilCode is not None
+    assert restored.portugueseCivilCode.spouseName == "Maria Fernandes"
+
+
+def test_itr1_draft_unaffected_by_phase_2_additions():
+    """Regression: an ITR-1 draft with none of the Phase 2 fields set still
+    validates and defaults exactly as before (additive-only guarantee)."""
+    draft = ReturnDraft.model_validate({
+        "assessmentYear": "2026-27", "form": "ITR-1",
+        "personal": {"name": "Rahul", "pan": "ABCDE1234F"},
+    })
+    assert draft.personal.residentialStatus == "ROR"
+    assert draft.personal.isDirector is False
+    assert draft.amt is None
+    assert draft.foreignAssets == []

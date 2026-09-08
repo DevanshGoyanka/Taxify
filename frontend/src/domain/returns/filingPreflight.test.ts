@@ -59,20 +59,18 @@ describe('validateCbdtFrontendFields', () => {
       employerStateCode: '',
       employerPinCode: '',
       employerZipCode: '',
-      salaryNatureRows: [],
-      perquisiteNatureRows: [],
       section10ExemptionRows: [],
       basic: 0, da: 0, commission: 0, hra: 0, bonus: 0, allowances: 0, lta: 0,
       otherAllowance: 0, arrearSalary: 0, perquisites: 0, profitsInLieu: 0,
       rentPaid: 0, city: '', isMetroCity: false, isGovernmentEmployee: false,
       isDisabledEmployee: false, commutedPension: 0, gratuity: 0, leaveEncashment: 0,
       averageMonthlySalary: 0, yearsOfService: 0, unavailedLeaveDays: 0,
-      actualLtaFare: 0, isDomesticTravel: true, journeysInBlock: 0, ltaExempt: 0,
+      actualLtaFare: 0, isDomesticTravel: true, journeysInBlock: 0,
       numberOfChildren: 0, gratuityAlsoReceived: false, transportAllowance: 0,
       childrenEducationAllowance: 0, hostelExpenditureAllowance: 0,
-      uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
-      vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0,
-      tdsDeducted: 0, employerNPS: 0,
+      uniformAllowance: 0, uniformAllowanceExpenditure: 0, entertainmentAllowance: 0, professionalTax: 0,
+      vrsCompensation: 0, retrenchmentCompensation: 0,
+      tdsDeducted: 0,
     }];
 
     expect(validateCbdtFrontendFields(draft)).toEqual([
@@ -110,6 +108,33 @@ describe('validateCbdtFrontendFields', () => {
     expect(validateCbdtFrontendFields(draft)).toEqual([
       'TDS entry 1: deductor TAN is not a valid CBDT jurisdiction TAN.',
     ]);
+  });
+
+  it('rejects an incomplete tax-payment challan row before it reaches the backend', () => {
+    // Regression test for audit §3.8: the challan editor's BSR/serial
+    // regex checks were cosmetic only (aria-invalid styling), so an
+    // incomplete row could be saved and only surfaced as an opaque error
+    // from the backend's _schedule_it()/_tax_payments_from_input() at
+    // generate/submit time. This is the actual pre-submit blocking gate.
+    const draft = createPreflightDraft();
+    draft.personal.employerCategory = 'NA';
+    draft.personal.stateCode = '09';
+    draft.personal.pinCode = '110001';
+    draft.taxes.challans = [{
+      id: 'challan-1', kind: 'ADVANCE_TAX', bsrCode: '', depositDate: '',
+      challanSerialNo: 0, amount: 50000, cin: '',
+    }];
+
+    expect(validateCbdtFrontendFields(draft)).toEqual([
+      'Advance tax entry 1: enter a valid 7-character BSR code (3 digits then 4 alphanumeric).',
+      'Advance tax entry 1: enter the deposit date.',
+      'Advance tax entry 1: enter a valid challan serial number (1-5 digits, greater than zero).',
+    ]);
+
+    draft.taxes.challans[0] = {
+      ...draft.taxes.challans[0], bsrCode: '1234567', depositDate: '2025-12-15', challanSerialNo: 12345,
+    };
+    expect(validateCbdtFrontendFields(draft)).toEqual([]);
   });
 
   it('validates state enums in conditional property and donation rows', () => {
@@ -225,6 +250,30 @@ describe('validateCbdtFrontendFields', () => {
     );
   });
 
+  it('does not false-flag sole ownership when ownershipShare arrives as a backend-serialized string', () => {
+    // A saved-and-reloaded draft's ownershipShare travels over the wire as the
+    // JSON string "100" (Decimal-backed field), not the number 100, even
+    // though ReturnDraft's own TS type says `number`. The strict `!== 100`
+    // check this validator used to run treated "100" !== 100 as true (no
+    // implicit coercion for strict inequality between a string and a
+    // number), wrongly blocking filing with "sole ownership requires a 100%
+    // share" for a property that is genuinely, correctly 100% owned --
+    // reproduced live via the actual app's "Validate" button.
+    const draft = createPreflightDraft('ITR-1', 'old');
+    draft.personal.stateCode = '09';
+    draft.personal.pinCode = '110001';
+    draft.houseProperties = [{
+      id: 'hp-1', propertySequenceNo: 1, propertyType: 'SELF_OCCUPIED',
+      state: '27', countryCode: '91', pinCode: '400001',
+      propertyOwnerType: 'SE', isCoOwned: false, ownershipShare: '100',
+      coOwners: [], tenantDetails: [],
+    } as unknown as ReturnDraft['houseProperties'][number]];
+
+    expect(validateCbdtFrontendFields(draft)).not.toContain(
+      'House property 1: sole ownership requires a 100% share.',
+    );
+  });
+
   it('rejects mixed metro and non-metro HRA evidence', () => {
     const draft = createPreflightDraft('ITR-1', 'old');
     draft.personal.employerCategory = 'OTH';
@@ -236,20 +285,20 @@ describe('validateCbdtFrontendFields', () => {
     > = {
       customEmployerName: '', employerTAN: '', natureOfEmployment: 'OTH',
       employerAddress: '', employerCity: '', employerStateCode: '',
-      employerPinCode: '', employerZipCode: '', salaryNatureRows: [],
-      perquisiteNatureRows: [], section10ExemptionRows: [], basic: 500000,
+      employerPinCode: '', employerZipCode: '',
+      section10ExemptionRows: [], basic: 500000,
       da: 0, commission: 0, hra: 100000, bonus: 0, allowances: 0, lta: 0,
       otherAllowance: 0, arrearSalary: 0, perquisites: 0, profitsInLieu: 0,
       rentPaid: 150000, city: '', isGovernmentEmployee: false,
       isDisabledEmployee: false, commutedPension: 0, gratuity: 0,
       leaveEncashment: 0, averageMonthlySalary: 0, yearsOfService: 0,
       unavailedLeaveDays: 0, actualLtaFare: 0, isDomesticTravel: true,
-      journeysInBlock: 0, ltaExempt: 0, numberOfChildren: 0,
+      journeysInBlock: 0, numberOfChildren: 0,
       gratuityAlsoReceived: false, transportAllowance: 0,
       childrenEducationAllowance: 0, hostelExpenditureAllowance: 0,
-      uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
-      vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0,
-      tdsDeducted: 0, employerNPS: 0,
+      uniformAllowance: 0, uniformAllowanceExpenditure: 0, entertainmentAllowance: 0, professionalTax: 0,
+      vrsCompensation: 0, retrenchmentCompensation: 0,
+      tdsDeducted: 0,
     };
     draft.employers = [
       { ...base, id: 'e1', employerName: 'Metro Employer', isMetroCity: true },

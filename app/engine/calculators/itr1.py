@@ -5,7 +5,11 @@ Composes schedule modules to produce a complete ITR-1 computation.
 
 ITR-1 eligibility:
   - Resident individual
-  - Total income <= Rs 50 lakh
+  - Total income EXCLUDING LTCG u/s 112A <= Rs 50 lakh (official CBDT ITR-1
+    Validation Rules, AY 2026-27, rule 117 -- the 112A gain is a separate,
+    additional Rs 1.25 lakh allowance on top of this, not counted against
+    it; combined ceiling Rs 51.25 lakh, matching the official schema's
+    ITR1_IncomeDeductions.TotalIncome field maximum of exactly 5125000)
   - Income from: Salary, up to two House Properties, Other Sources
   - LTCG u/s 112A only (capped at Rs 1.25 lakh), no other capital gains
   - No business/professional income
@@ -110,6 +114,7 @@ class ITR1Result:
     salary_hostel_exempt: Decimal = Decimal("0")
     salary_hra_exempt: Decimal = Decimal("0")
     salary_lta_exempt: Decimal = Decimal("0")
+    salary_uniform_allowance_exempt: Decimal = Decimal("0")
 
     # Tax payment detail (for ITD JSON output)
     advance_tax_paid: Decimal = Decimal("0")
@@ -240,8 +245,13 @@ def compute(input_data: ITR1Input) -> ITR1Result:
             hp_input,
             regime,
             hp_input.ownership_share_percentage,
+            loan_sanction_dates=[
+                loan.sanction_date
+                for loan in input_data.loan_details_24b_list
+                if loan.property_sequence_no == idx + 1
+            ],
         )
-        for hp_input in hp_inputs
+        for idx, hp_input in enumerate(hp_inputs)
     ]
     # Aggregate intra-head income BEFORE applying the inter-head loss limit
     # (Section 24(b) self-occupied interest cap and Section 71B set-off).
@@ -283,6 +293,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.salary_hostel_exempt = getattr(sal, 'hostel_exempt', Decimal("0"))
     result.salary_hra_exempt = getattr(sal, 'hra_exempt', Decimal("0"))
     result.salary_lta_exempt = getattr(sal, 'lta_exempt', Decimal("0"))
+    result.salary_uniform_allowance_exempt = getattr(sal, 'uniform_allowance_exempt', Decimal("0"))
 
     result.advance_tax_paid = input_data.advance_tax_paid
     result.self_assessment_tax_paid = input_data.self_assessment_tax_paid
@@ -369,11 +380,29 @@ def compute(input_data: ITR1Input) -> ITR1Result:
     result.net_agricultural_income = input_data.agriculture_income
     result.aggregate_income = gti + result.net_agricultural_income
 
-    # Eligibility: GTI cannot exceed Rs 50 lakh for ITR-1
-    if gti > Decimal("5000000"):
+    # Eligibility: total income EXCLUDING LTCG 112A cannot exceed Rs 50 lakh
+    # for ITR-1 -- confirmed against the official CBDT ITR-1 Validation
+    # Rules PDF (AY 2026-27), rule 117: "Total income excluding LTCG
+    # C3(a)(iii) should not be greater than Rs 50 lakhs." This is a
+    # DIFFERENT quantity from GTI itself (which correctly includes the full
+    # 112A gain, per the comment above) -- the combined ceiling is Rs 50L
+    # (regular income) + Rs 1.25L (112A, already separately gated above) =
+    # Rs 51.25L, matching the official schema's own ITR1_IncomeDeductions.
+    # TotalIncome field, whose maximum is exactly 5125000. The previous
+    # check compared the FULL gti (including cg_112a_income) against the
+    # flat Rs 50L threshold, wrongly rejecting an eligible taxpayer whenever
+    # their regular income was within Rs 1.25L of 50L and they also had any
+    # 112A gain -- e.g. Rs 49,00,000 regular income + Rs 1,25,000 112A gain
+    # (Rs 50,25,000 combined, fully eligible per the official rule) was
+    # incorrectly rejected. The correct check already existed downstream as
+    # ITR1-R117 in app/engine/validators/itr1/calc_rules.py, but could never
+    # fire for the affected population because this earlier, stricter gate
+    # returned before a result reached that validator at all.
+    income_excl_112a = gti - cg_112a_income
+    if income_excl_112a > Decimal("5000000"):
         result.errors.append(
-            f"Ineligible for ITR-1: Gross Total Income of Rs {gti} "
-            f"exceeds Rs 50 lakh limit. File ITR-2."
+            f"Ineligible for ITR-1: total income excluding LTCG u/s 112A of "
+            f"Rs {income_excl_112a} exceeds Rs 50 lakh limit. File ITR-2."
         )
         return result
 
@@ -407,12 +436,16 @@ def compute(input_data: ITR1Input) -> ITR1Result:
                 )
 
     # ── Statutory validation warnings ──
+    # These warnings are advisory only -- the actual zeroing/capping for each
+    # section already happens inside its own compute_details() in
+    # app/engine/schedules/deductions/ (e.g. section_80ttb.py for the case
+    # below), independent of whether this block runs.
     if ded_input:
         # 80TTB only for senior citizens (age >= 60)
         if ded_input.amount_80ttb > 0 and age not in (AgeBracket.SIXTY_TO_80, AgeBracket.ABOVE_80):
             result.warnings.append(
                 "80TTB is only available for senior citizens (age >= 60). "
-                "Deduction set to Rs 0."
+                "This deduction will not be allowed."
             )
         # 80TTA and 80TTB are mutually exclusive
         if ded_input.amount_80tta > 0 and ded_input.amount_80ttb > 0:
@@ -450,8 +483,11 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         schedule_80u=schedule_80u,
         schedule_80d=input_data.schedule_80d,
         salary=input_data.salary_income.gross_salary if input_data.salary_income else Decimal("0"),
+        # Section 80CCD(2)'s 14%-vs-10% cap is CG/SG-only (PSU gets 10%,
+        # unlike Section 16(ii) entertainment allowance) — use the narrow
+        # flag, not is_government_employee.
         is_government_employee=bool(
-            input_data.salary_income and input_data.salary_income.is_government_employee
+            input_data.salary_income and input_data.salary_income.is_cg_sg_employee
         ),
     )
     result.schedules["deductions"] = ded
@@ -512,6 +548,7 @@ def compute(input_data: ITR1Input) -> ITR1Result:
         tds1_entries=input_data.tds1_entries,
         tds2_entries=input_data.tds2_entries,
         tcs_entries=input_data.tcs_entries,
+        tds3_entries=input_data.tds3_entries,
     )
     result.total_tds = tds_tcs.total_tds
     result.total_tcs = tds_tcs.total_tcs

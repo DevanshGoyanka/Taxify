@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import axiosInstance from '../../api/axiosInstance';
 import { createEmptyReturnDraft } from './factory';
+import type { ReturnDraft } from './types';
 import {
   CanonicalReturnRepository,
   assertCanonicalDraft,
@@ -75,6 +76,33 @@ describe('normalizeLoadedDraft', () => {
     const draft = createEmptyReturnDraft('2026-27', 'ITR-1', 'old');
     delete (draft.deductions as Partial<typeof draft.deductions>).pensionContribution80CCC;
     expect(normalizeLoadedDraft(draft).deductions.pensionContribution80CCC).toEqual([]);
+  });
+
+  it('serializes additive schedules unchanged through the canonical payload boundary', () => {
+    const draft = createEmptyReturnDraft('2026-27', 'ITR-2', 'new');
+    draft.foreignAssets = [{ id: 'fa-1', assetType: 'BANK_ACCOUNT', countryCode: 'US', institutionOrEntityName: 'Bank', address: 'A', accountOrAssetIdentifier: '1', ownershipStatus: 'OWNER', openingOrAcquisitionDate: '2025-04-01', peakValue: 10, closingValue: 8, grossIncome: 0, incomeOffered: 0 }];
+    const normalized = normalizeLoadedDraft(JSON.parse(JSON.stringify(draft)) as ReturnDraft);
+    expect(JSON.parse(JSON.stringify(normalized)).foreignAssets).toEqual(draft.foreignAssets);
+  });
+
+  it('backfills every ITR-2 additive field without replacing existing values', () => {
+    const draft = createEmptyReturnDraft('2026-27', 'ITR-2', 'new');
+    draft.scheduleSIEntries = [{ id: 'si-1', section: '111', description: 'Dividend', grossIncome: 100, deductions: 0, taxRatePct: 10 }];
+    const legacy = draft as unknown as Record<string, unknown>;
+    for (const field of ['broughtForwardLossEntries', 'carriedForwardLossEntries', 'foreignSourceIncome', 'foreignTaxRelief', 'foreignAssets', 'clubbedIncome', 'passThroughIncomeEntries', 'amt', 'assetLiability', 'portugueseCivilCode', 'esopDeferrals']) delete legacy[field];
+    const normalized = normalizeLoadedDraft(draft);
+    expect(normalized.scheduleSIEntries).toEqual(draft.scheduleSIEntries);
+    expect(normalized.broughtForwardLossEntries).toEqual([]);
+    expect(normalized.carriedForwardLossEntries).toEqual([]);
+    expect(normalized.foreignSourceIncome).toEqual([]);
+    expect(normalized.foreignTaxRelief).toEqual([]);
+    expect(normalized.foreignAssets).toEqual([]);
+    expect(normalized.clubbedIncome).toEqual([]);
+    expect(normalized.passThroughIncomeEntries).toEqual([]);
+    expect(normalized.amt).toBeNull();
+    expect(normalized.assetLiability).toBeNull();
+    expect(normalized.portugueseCivilCode).toBeNull();
+    expect(normalized.esopDeferrals).toEqual([]);
   });
 });
 

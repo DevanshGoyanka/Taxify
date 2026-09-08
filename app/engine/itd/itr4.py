@@ -194,7 +194,17 @@ def _personal_info_from_profile(
         },
         "PAN": profile.pan,
         "Address": _address_from_postal(profile.primary_address, include_contact=True),
-        "SecondaryAdd": "Y" if profile.alternate_address else "N",
+        # Secondary address details are mandatory in Part A General
+        # Information -- confirmed live: ITD's Type-2 UAT validateItr
+        # rejected an entirely-absent AlternateAddress with "Secondary
+        # address details are not provided in Schedule Part A General
+        # information" (2026-09-04, PAN SRGPZ2026C). input_rules.py's
+        # rule R410 already flagged this as mandatory but only as an
+        # informational check, not a JSON-build-time default. When the
+        # caller supplies no genuinely distinct secondary address,
+        # default it to the primary address ("secondary same as
+        # primary") rather than omitting the block.
+        "SecondaryAdd": "Y",
         "DOB": profile.date_of_birth.isoformat(),
         "EmployerCategory": profile.employer_category,
         "Status": profile.assessee_status.value,
@@ -205,11 +215,10 @@ def _personal_info_from_profile(
         "STDcode": phone.landline_std_code,
         "PhoneNo": _validate_phone_no(phone.landline_phone_no),
     }
-    if profile.alternate_address is not None:
-        personal["AlternateAddress"] = _address_from_postal(
-            profile.alternate_address,
-            include_contact=False,
-        )
+    personal["AlternateAddress"] = _address_from_postal(
+        profile.alternate_address or profile.primary_address,
+        include_contact=False,
+    )
     if profile.aadhaar_number is not None:
         personal["AadhaarCardNo"] = profile.aadhaar_number
     return personal
@@ -246,11 +255,13 @@ def _filing_status_itr4(profile: Optional[ITR4FilingProfile]) -> dict[str, Any]:
     if profile is None:
         result.update({
             "ReturnFileSec": 11,
-            "Form10IEAEarlierAYOldRegime": "NA",
+            # "N", not "NA" -- see the rule #260/#235 note below.
+            "Form10IEAEarlierAYOldRegime": "N",
             "SeventhProvisio139": "N",
             "AsseseeRepFlg": "N",
-            "F10IEAEarlierAYNewRegime": "N",
-            "F10IEACurrAYNewRegime": "N",
+            # Only the A23(B) branch applies when A23="N" -- see the
+            # rule #353-364 note below; the A23(A) new-regime-cascade
+            # fields must not be emitted alongside it.
             "F10IEACurrAYOldRegime": "N",
         })
         return result
@@ -307,29 +318,39 @@ def _filing_status_itr4(profile: Optional[ITR4FilingProfile]) -> dict[str, Any]:
             "RepMobileNo": int(rep.mobile_no),
         }
 
-    # Form 10-IEA cascade — emit only when the caller supplies real values.
-    if profile.form_10iea_ass_year:
-        result["Form10IEAAssYear"] = profile.form_10iea_ass_year
-    if profile.form_10iea_earlier_ay_ack_old_regime > 0:
-        result["Form10IEAEarlierAYAckOldRegime"] = profile.form_10iea_earlier_ay_ack_old_regime
+    # Form 10-IEA cascade — CBDT ITR-4 Validation Rules AY 2026-27 rules
+    # #353-364: Form10IEAEarlierAYOldRegime ("A23") gates two MUTUALLY
+    # EXCLUSIVE sub-branches, only one of which may be answered. "Y" (filed
+    # 10-IEA in an earlier AY for old regime) activates A23(A) — the
+    # EarlierAYNewRegime/CurrAYNewRegime "re-entered new regime" fields.
+    # "N" activates A23(B) — CurrAYOldRegime only. "NA" (Firm only, rule
+    # #235) activates neither. Emitting both branches at once — even with
+    # "N" answers — was REJECTED live by ITD's Type-2 UAT validateItr with
+    # "Multiple question shall not be responded in A23" (2026-09-04, PAN
+    # SRGPZ2026C); the prior code emitted both branches unconditionally.
+    if profile.form_10iea_earlier_ay_old_regime == "Y":
+        if profile.form_10iea_ass_year:
+            result["Form10IEAAssYear"] = profile.form_10iea_ass_year
+        if profile.form_10iea_earlier_ay_ack_old_regime > 0:
+            result["Form10IEAEarlierAYAckOldRegime"] = profile.form_10iea_earlier_ay_ack_old_regime
 
-    result["F10IEAEarlierAYNewRegime"] = profile.f10iea_earlier_ay_new_regime
-    if profile.ass_yr_f10iea_new_tax_reg:
-        result["AssYrF10IEANewTaxReg"] = profile.ass_yr_f10iea_new_tax_reg
-    if profile.form_10iea_earlier_ay_ack_new_regime > 0:
-        result["Form10IEAEarlierAYAckNewRegime"] = profile.form_10iea_earlier_ay_ack_new_regime
+        result["F10IEAEarlierAYNewRegime"] = profile.f10iea_earlier_ay_new_regime
+        if profile.ass_yr_f10iea_new_tax_reg:
+            result["AssYrF10IEANewTaxReg"] = profile.ass_yr_f10iea_new_tax_reg
+        if profile.form_10iea_earlier_ay_ack_new_regime > 0:
+            result["Form10IEAEarlierAYAckNewRegime"] = profile.form_10iea_earlier_ay_ack_new_regime
 
-    result["F10IEACurrAYNewRegime"] = profile.f10iea_curr_ay_new_regime
-    if profile.f10iea_date_curr_ay_new_tax:
-        result["F10IEADateCurrAYNewTax"] = profile.f10iea_date_curr_ay_new_tax
-    if profile.f10iea_ack_no_curr_ay_new_tax > 0:
-        result["F10IEAAckNoCurrAYNewTax"] = profile.f10iea_ack_no_curr_ay_new_tax
-
-    result["F10IEACurrAYOldRegime"] = profile.f10iea_curr_ay_old_regime
-    if profile.f10iea_date_curr_ay_old_tax:
-        result["F10IEADateCurrAYOldTax"] = profile.f10iea_date_curr_ay_old_tax
-    if profile.f10iea_ack_no_curr_ay_old_tax > 0:
-        result["F10IEAAckNoCurrAYOldTax"] = profile.f10iea_ack_no_curr_ay_old_tax
+        result["F10IEACurrAYNewRegime"] = profile.f10iea_curr_ay_new_regime
+        if profile.f10iea_date_curr_ay_new_tax:
+            result["F10IEADateCurrAYNewTax"] = profile.f10iea_date_curr_ay_new_tax
+        if profile.f10iea_ack_no_curr_ay_new_tax > 0:
+            result["F10IEAAckNoCurrAYNewTax"] = profile.f10iea_ack_no_curr_ay_new_tax
+    elif profile.form_10iea_earlier_ay_old_regime == "N":
+        result["F10IEACurrAYOldRegime"] = profile.f10iea_curr_ay_old_regime
+        if profile.f10iea_date_curr_ay_old_tax:
+            result["F10IEADateCurrAYOldTax"] = profile.f10iea_date_curr_ay_old_tax
+        if profile.f10iea_ack_no_curr_ay_old_tax > 0:
+            result["F10IEAAckNoCurrAYOldTax"] = profile.f10iea_ack_no_curr_ay_old_tax
 
     return result
 
@@ -516,6 +537,19 @@ def _tax_computation_itr4(
     fees_234i: Decimal = Decimal("0"),
 ) -> dict[str, Any]:
     """ITR-4 TaxComputation — no TotalIntrstPay, Section89 not required."""
+    # Official schema: NetTaxLiability = "Balance Tax After Relief" (Part D's
+    # D7 = D5 - D6, i.e. gross tax+cess minus Section 89 relief, computed
+    # BEFORE interest/fees are added) -- distinct from the calculator's own
+    # ``net_tax_liability`` internal variable, which is the FINAL total
+    # (D5-D6+D8+D9+D10+D11+D11a, i.e. Part D's D12/"Total Tax, Fee and
+    # Interest"). Reusing the calculator's total for this field mislabeled
+    # it: any return with Section 89 relief and/or late-filing interest/fees
+    # emitted a "Balance Tax After Relief" figure that had interest/fees
+    # baked in, and a "TotTaxPlusIntrstPay" that omitted the Section 89
+    # relief subtraction entirely -- both wrong whenever relief_89 > 0 (the
+    # two only coincided when relief_89 == 0). Shared bug with ITR-1's
+    # equivalent builder, same fix pattern.
+    balance_tax_after_relief = max(Decimal("0"), gross_tax_liability - relief_89)
     return {
         "TotalTaxPayable": _to_rupees(slab_tax),
         "Rebate87A": _to_rupees(rebate_87a),
@@ -523,7 +557,7 @@ def _tax_computation_itr4(
         "EducationCess": _to_rupees(cess),
         "GrossTaxLiability": _to_rupees(gross_tax_liability),
         "Section89": _to_rupees(relief_89),
-        "NetTaxLiability": _to_rupees(net_tax_liability),
+        "NetTaxLiability": _to_rupees(balance_tax_after_relief),
         "IntrstPay": {
             "IntrstPayUs234A": _to_rupees(interest_234a),
             "IntrstPayUs234B": _to_rupees(interest_234b),
@@ -531,9 +565,7 @@ def _tax_computation_itr4(
             "LateFilingFee234F": _to_rupees(late_fee_234f),
             "FeeFurnish234I": _to_rupees(fees_234i),
         },
-        "TotTaxPlusIntrstPay": _to_rupees(
-            gross_tax_liability + total_interest + late_fee_234f + fees_234i
-        ),
+        "TotTaxPlusIntrstPay": _to_rupees(net_tax_liability),
     }
 
 
@@ -729,7 +761,10 @@ def _schedule_bp(
         "GoodsDtlsUs44AE": [],
         "PersumptiveInc44AE": {
             "TotPersumInc44AE": 0, "SalInterestByFirm": 0,
-            "TotalPersumptiveInc": 0, "IncChargeableUnderBus": 0,
+            "TotalPersumptiveInc": 0,
+            "IncChargeableUnderBus": _to_rupees(
+                income_44ad + income_44ada + income_44ae
+            ),
         },
         "TurnoverGrsRcptForGSTIN": [],
         "TotalTurnoverGrsRcptGSTIN": 0,
@@ -1078,6 +1113,11 @@ def _allowance_rows(input_data: Optional[ITR4Input], result: ITR4Result) -> list
     commuted_pension_exempt = getattr(sal_sched, "commuted_pension_exempt", getattr(salary, "commuted_pension_received", Decimal("0"))) if sal_sched else getattr(salary, "commuted_pension_received", Decimal("0"))
     transport_exempt = getattr(sal_sched, "transport_exempt", Decimal("0")) if sal_sched else Decimal("0")
     cea_exempt = getattr(sal_sched, "children_education_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    # Uniform allowance is also a 10(14)(i)/Rule 2BB(1) allowance and shares
+    # that single official JSON bucket with CEA -- see the identical fix and
+    # comment in app/engine/itd/itr1.py::_allowance_rows.
+    uniform_allowance_exempt = getattr(sal_sched, "uniform_allowance_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    cea_exempt += uniform_allowance_exempt
     hostel_exempt = getattr(sal_sched, "hostel_exempt", Decimal("0")) if sal_sched else Decimal("0")
     hra_exempt = getattr(sal_sched, "hra_exempt", getattr(salary, "hra_exempt_amount", Decimal("0"))) if sal_sched else getattr(salary, "hra_exempt_amount", Decimal("0"))
     lta_exempt = getattr(sal_sched, "lta_exempt", getattr(salary, "lta_exempt_amount", Decimal("0"))) if sal_sched else getattr(salary, "lta_exempt_amount", Decimal("0"))
@@ -2019,7 +2059,17 @@ def build_itr4_json(
     )
 
     tax = _tax_computation_itr4(
-        slab_tax=result.slab_tax,
+        # "TotalTaxPayable" (Part D's D1, "Tax payable on total income") must
+        # be the FULL pre-rebate tax including special-rate (112A) tax, not
+        # just the slab portion -- result.tax_before_rebate = result.slab_tax
+        # + result.special_rate_tax, matching ITR-1's equivalent call site.
+        # Currently dormant (ITR-4's 112A eligibility gate caps gross gain at
+        # exactly the Rs 1,25,000 exemption threshold, so special_rate_tax is
+        # structurally always 0 for any input that passes it -- see
+        # app/engine/schedules/restricted_112a.py's AGGREGATE_LIMIT_EXCEEDED
+        # check), but fixed for consistency with ITR-1 and to not silently
+        # break if that gate is ever loosened.
+        slab_tax=result.tax_before_rebate,
         rebate_87a=result.rebate_87a,
         tax_after_rebate=result.tax_after_rebate,
         surcharge=result.surcharge,
@@ -2113,8 +2163,22 @@ def build_itr4_json(
         "Verification": ver,
         "ScheduleBP": bp,
         "TaxExmpIntIncDtls": _tax_exmp_int_inc_dtls(input_data),
-        "Schedule80C": _schedule_80c_total(deduction("80C"), input_data, ded_sched),
     }
+
+    # Schedule80C — omitted (not an empty placeholder) when nothing is
+    # claimed. CBDT ITR-4 Validation Rules AY 2026-27 rule #305: an
+    # Individual on the new tax regime who has "filled" ANY of the
+    # 80C/80E/80EE/80EEA/80EEB/10(13A) schedules is rejected, regardless of
+    # whether the schedule's own total is zero -- ITD's live Type-2 UAT
+    # validateItr treated the mere presence of an empty Schedule80C object
+    # as "filled" and rejected it with "Since you have selected new tax
+    # regime deduction u/s 10(13A), 80C... are not applicable to you"
+    # (2026-09-04, PAN SRGPZ2026C). Every sibling schedule (80D, 80G,
+    # ScheduleEA10_13A, etc.) already follows this omit-when-unclaimed
+    # pattern; Schedule80C was the one outlier emitting an unconditional
+    # placeholder.
+    if deduction("80C") > 0:
+        itr4["Schedule80C"] = _schedule_80c_total(deduction("80C"), input_data, ded_sched)
 
     # TaxReturnPreparer — only when supplied
     if input_data is not None and input_data.tax_return_preparer is not None:

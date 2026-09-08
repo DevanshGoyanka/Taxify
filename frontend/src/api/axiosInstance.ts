@@ -26,6 +26,11 @@ axiosInstance.interceptors.response.use(
       localStorage.clear();
       window.location.href = '/login';
     }
+    // Keep blob responses intact so download APIs can parse structured JSON
+    // error bodies instead of receiving only a generic normalized Error.
+    if (error.config?.responseType === 'blob') {
+      return Promise.reject(error);
+    }
     // Expose backend's unified error message when available.
     const raw =
       error.response?.data?.message ||

@@ -1,7 +1,9 @@
-"""Unified filing API for Type-3 now and Type-2 transport later."""
+"""Unified filing API for Type-3 and Type-2."""
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 from typing import Literal
 
@@ -33,6 +35,7 @@ from app.services.filing_record_service import upsert_filing_record
 from app.automation.job_worker import client_folder_name
 
 router = APIRouter(prefix="/api/v1/filing", tags=["filing"])
+logger = logging.getLogger("taxify.routers.filing")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -53,10 +56,10 @@ def _normalize_form(itr_type: str) -> str:
     value = itr_type.strip().upper().replace("_", "-")
     if value in {"ITR1", "ITR2", "ITR3", "ITR4"}:
         value = f"ITR-{value[-1]}"
-    if value not in {"ITR-1", "ITR-4"}:
+    if value not in {"ITR-1", "ITR-2", "ITR-4"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="This season's Type-3 filing supports ITR-1 and ITR-4 only.",
+            detail="This season's Type-3 filing supports ITR-1, ITR-2, and ITR-4 only; ITR-3 is not supported.",
         )
     return value
 
@@ -175,12 +178,30 @@ def submit_via_portal(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Queue an explicitly authorized Type-3 portal filing job."""
+    """Submit a return: Type-3 queues a portal automation job, Type-2 calls
+    the ITD API directly (validate then submit, synchronously)."""
     creds = get_eri_credentials()
-    if creds.mode != "type3":
+    if creds.mode == "type2":
+        return _submit_via_type2_api(
+            client_id=client_id, ay=ay, itr_type=itr_type,
+            current_user=current_user, db=db,
+        )
+    form = _normalize_form(itr_type)
+    # _normalize_form() accepts ITR-1/ITR-2/ITR-4 for /generate and /download
+    # (JSON preparation is fine for a form still under active build-out), but
+    # this endpoint triggers a REAL, automated Playwright submission to the
+    # live ITD portal. The frontend already hides the Direct Submit button
+    # for ITR-2 (Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md Phase 3 Addendum-3)
+    # because ITR-2's compute/validation pipeline has not been through the
+    # same production-readiness audit as ITR-1/ITR-4 -- that restriction
+    # must also be enforced here, not just at the UI layer, or a direct API
+    # call could submit a real, under-audited ITR-2 return.
+    if form not in {"ITR-1", "ITR-4"}:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Type-2 submission is deferred until the next implementation phase.",
+            detail="Automated Type-3 portal submission is available for "
+            "ITR-1 and ITR-4 only this season. Use the JSON download "
+            "for manual upload of other forms.",
         )
     client = resolve_owned_client(client_id, current_user.id, db)
     if not client.portal_password:
@@ -188,7 +209,6 @@ def submit_via_portal(
             status_code=400,
             detail="Client does not have an ITD portal password.",
         )
-    form = _normalize_form(itr_type)
     try:
         path = export_itd_json_file(
             client_id=client.id,
@@ -244,6 +264,150 @@ def submit_via_portal(
         "filing_id": filing.id,
         "status": "queued",
         "verification_mode": request.verification_mode,
+    }
+
+
+def _submit_via_type2_api(
+    *,
+    client_id: str,
+    ay: str,
+    itr_type: str,
+    current_user: User,
+    db: Session,
+) -> dict:
+    """Validate then submit a return via the Type-2 API, synchronously.
+
+    Unlike the Type-3 path, there is no Playwright job queue: validateItr
+    and submitItr are ordinary HTTPS calls that return in seconds, so this
+    whole request/response cycle is a single call. E-verification is
+    NOT performed here -- it requires the taxpayer's live OTP consent,
+    which cannot happen inside this call. Use the separately-wired
+    ``/api/v1/eri/generate-evc`` and ``/verify-evc`` routes afterward, the
+    same way acknowledgement retrieval is a separate step for both modes.
+    """
+    creds = get_eri_credentials()
+    form = _normalize_form(itr_type)
+    if form not in {"ITR-1", "ITR-4"}:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Type-2 API submission is available for ITR-1 and ITR-4 only this season.",
+        )
+    client = resolve_owned_client(client_id, current_user.id, db)
+
+    payload = _draft(db, client.id, ay, form)
+    try:
+        official = produce_itd_json(
+            client_id=client.id, ay=ay, itr_type=form,
+            flat_draft=payload, user=current_user, db=db,
+        )
+    except FilingOrchestratorError as exc:
+        log_filing_action(
+            db=db, user=current_user, client=client, assessment_year=ay,
+            itr_type=form, action="submit", outcome="error",
+            message=str(exc)[:200],
+        )
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    form_key = form.replace("-", "")
+    itr_body = official["ITR"][form_key]
+    pan = itr_body["PersonalInfo"]["PAN"]
+    return_file_sec = itr_body["FilingStatus"]["ReturnFileSec"]
+    # incomeTaxSecCd is the ReturnFileSec code itself, as a string (e.g.
+    # "11" original, "12" belated, "17" revised -- confirmed against
+    # API_SubmitFlow_v1.1.pdf's sample requests). filingTypeCd is coarser:
+    # "R" only for a revised return (139(5), code 17), "O" for every other
+    # section this engine supports (original, belated, notice-response).
+    filing_type_cd = "R" if return_file_sec == 17 else "O"
+    income_tax_sec_cd = str(return_file_sec)
+    form_code = form.split("-")[1]
+    # Type-2's assessmentYear is bare "YYYY" (confirmed via live UAT calls,
+    # see Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md SS13); the route's own
+    # `ay` path param is Taxify's internal "YYYY-YY" form.
+    itd_ay = TaxYearContext.from_assessment_year(ay).assessment_year.split("-")[0]
+
+    from app.eri.exceptions import ERIApiError
+    from app.eri.type2.login import eri_login
+    from app.eri.type2.validate import validate_itr
+    from app.eri.type2.submit import submit_itr
+
+    try:
+        login_resp = eri_login()
+        auth_token = login_resp["authToken"]
+    except (ValueError, ERIApiError) as exc:
+        log_filing_action(
+            db=db, user=current_user, client=client, assessment_year=ay,
+            itr_type=form, action="submit", outcome="error",
+            message=f"ERI login failed: {exc}"[:200],
+        )
+        raise HTTPException(status_code=502, detail=f"ERI login failed: {exc}") from exc
+
+    form_data_json = json.dumps(official, separators=(",", ":"))
+    common_kwargs = dict(
+        pan=pan,
+        form_name=form,
+        form_code=form_code,
+        ay=itd_ay,
+        filing_type_cd=filing_type_cd,
+        filing_mode="OF",
+        income_tax_sec_cd=income_tax_sec_cd,
+        submitted_by="ERI",
+        form_data_json=form_data_json,
+        auth_token=auth_token,
+    )
+
+    try:
+        validate_itr(**common_kwargs)
+    except ERIApiError as exc:
+        log_filing_action(
+            db=db, user=current_user, client=client, assessment_year=ay,
+            itr_type=form, action="submit", outcome="error",
+            message=f"validateItr rejected [{exc.code}]: {exc.desc}"[:200],
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=f"ITD validation failed [{exc.code}]: {exc.desc}"
+            + (f" (Field: {exc.field_name})" if exc.field_name else ""),
+        ) from exc
+
+    try:
+        submit_resp = submit_itr(**common_kwargs)
+    except ERIApiError as exc:
+        log_filing_action(
+            db=db, user=current_user, client=client, assessment_year=ay,
+            itr_type=form, action="submit", outcome="error",
+            message=f"submitItr rejected [{exc.code}]: {exc.desc}"[:200],
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=f"ITD submission failed [{exc.code}]: {exc.desc}"
+            + (f" (Field: {exc.field_name})" if exc.field_name else ""),
+        ) from exc
+
+    arn = submit_resp.get("arnNumber")
+    filing = upsert_filing_record(
+        db=db,
+        client_id=client.id,
+        user_id=current_user.id,
+        assessment_year=ay,
+        itr_type=form,
+        eri_mode=creds.mode,
+        eri_environment=creds.environment,
+        status="submitted",
+        acknowledgement_number=arn,
+        json_path=None,
+        error_message=None,
+    )
+    log_filing_action(
+        db=db, user=current_user, client=client, assessment_year=ay,
+        itr_type=form, action="submit", outcome="ok",
+        message=f"Submitted via Type-2 API, ARN {arn}.",
+    )
+    return {
+        "success": True,
+        "filing_id": filing.id,
+        "arnNumber": arn,
+        "transactionNo": submit_resp.get("transactionNo"),
+        "status": "submitted",
     }
 
 
@@ -378,14 +542,20 @@ async def fetch_acknowledgement(
         )
 
     output_dir = _imports_dir(client, ay)
+
+    def _log(message: str) -> None:
+        logger.info("ack-fetch[%s]: %s", client.public_id, message)
+
     try:
         result = await download_acknowledgement_pdf(
             pan=client.pan,
             portal_password_cipher=client.portal_password,
             assessment_year=ay,
             output_dir=output_dir,
+            log_callback=_log,
         )
     except AcknowledgementDownloadError as exc:
+        logger.error("ack-fetch[%s] raised before a result could be produced: %s", client.public_id, exc)
         log_filing_action(
             db=db, user=current_user, client=client, assessment_year=ay,
             itr_type=form, action="ack", outcome="error",
@@ -409,6 +579,7 @@ async def fetch_acknowledgement(
             "Kindly file the ITR first to download the acknowledgement.",
         )
     if not result.success or not result.acknowledgement_path:
+        logger.error("ack-fetch[%s] failed: %s", client.public_id, result.error or "Acknowledgement download failed.")
         log_filing_action(
             db=db, user=current_user, client=client, assessment_year=ay,
             itr_type=form, action="ack", outcome="error",

@@ -6,8 +6,11 @@ This orchestrator is the single entry point that both ERI modes share:
   - Type-2 (next season):  JSON → validate → signed API envelope via AWS.
 
 It produces a CBDT-compliant ITR JSON for a given ``(client, ay, itr_type)``
-by delegating to the per-form builders in :mod:`app.engine.itd` and the
-existing :func:`app.engine.filing_gateway.generate_filing_artifact`.
+by delegating to :func:`app.engine.filing_gateway_v2.generate_cbdt_json`
+(ITR-1/2/4; ITR-3 is explicitly rejected — not yet on the canonical
+pipeline) and, through it, the per-form builders in :mod:`app.engine.itd`.
+The legacy flat-draft :mod:`app.engine.filing_gateway` path is no longer
+reachable from this orchestrator.
 
 The Digest is computed INSIDE the per-form builders (each calls
 ``_compute_digest(itr_json)`` at the end and injects it into
@@ -71,12 +74,7 @@ def produce_itd_json(
         FilingOrchestratorError: If the form is unsupported, computation
             fails, schema validation fails, or the builder rejects the input.
     """
-    # Local imports to avoid a circular dependency at module load time.
-    from app.engine.filing_gateway import (
-        FilingGatewayError,
-        generate_filing_artifact,
-    )
-
+    # Local import avoids a circular dependency at module load time.
     form = itr_type.strip().upper()
     if form not in {"ITR-1", "ITR-2", "ITR-3", "ITR-4"}:
         raise FilingOrchestratorError(
@@ -92,17 +90,21 @@ def produce_itd_json(
 
     official_json: Optional[dict[str, Any]] = None
 
-    if form in {"ITR-1", "ITR-4"}:
-        # ITR-1 and ITR-4 use the v2 canonical pipeline (the live path the
-        # v2 frontend routes call). v2's generate_cbdt_json dispatches by
-        # draft.form and runs the full CBDT rule validators
-        # (run_input_validation + run_calc_validation) before building the
-        # official JSON, so every Category A rule is enforced on this path.
+    if form == "ITR-3":
+        raise FilingOrchestratorError(
+            "ITR-3 filing is not supported by the canonical filing pipeline yet."
+        )
+
+    if form in {"ITR-1", "ITR-2", "ITR-4"}:
+        # All currently supported forms use the canonical v2 pipeline. The
+        # gateway dispatches by draft.form and runs preparation, input and
+        # calculation validation, CBDT building, and official schema
+        # validation before returning the generated JSON.
         from app.engine.filing_gateway_v2 import (
             FilingGatewayV2Error,
             generate_cbdt_json,
         )
-        from app.schemas.return_draft import ReturnDraft
+        from app.schemas.return_draft import ReturnDraft, migrate_stored_draft_payload
         try:
             if "schemaVersion" not in payload:
                 raise FilingOrchestratorError(
@@ -110,7 +112,11 @@ def produce_itd_json(
                     "Save the return through /v2/clients/{client_id}/itr/{year} "
                     "before generating or submitting it."
                 )
-            draft = ReturnDraft.model_validate(payload)
+            # This payload may come straight from ClientITR.form_data (the
+            # Type-3 export/submission path in app/eri/type3/json_exporter.py
+            # loads it without going through the /v2 router's own migration),
+            # so the same stored-payload migration must run here too.
+            draft = ReturnDraft.model_validate(migrate_stored_draft_payload(payload))
             if draft.form != form:
                 raise FilingOrchestratorError(
                     f"Saved canonical draft form is {draft.form}, not {form}."
@@ -134,23 +140,9 @@ def produce_itd_json(
                 f"{form} draft mapping or generation failed: {exc}",
             ) from exc
     else:
-        # ITR-2/3 still flow through the legacy filing_gateway (the v2
-        # pipeline does not support them yet). Phase 7 will delete this
-        # branch once ITR-2/3 move to canonical drafts.
-        payload["itrForm"] = form
-        try:
-            result = generate_filing_artifact(
-                flat_draft=payload,
-                user=user,
-                db=db,
-                include_official_json=include_official_json,
-            )
-        except FilingGatewayError as exc:
-            raise FilingOrchestratorError(
-                f"ITD JSON generation failed for {form}: {exc}",
-                errors=list(exc.errors),
-            ) from exc
-        official_json = result.official_json
+        # Keep the legacy gateway unavailable for unsupported forms rather
+        # than allowing a flat draft to bypass canonical validation.
+        raise FilingOrchestratorError(f"Unsupported filing form: {form}.")
 
     if not include_official_json or official_json is None:
         # Dry-run preview: return an empty placeholder.

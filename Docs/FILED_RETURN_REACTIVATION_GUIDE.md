@@ -2,7 +2,7 @@
 
 **Document created:** 2026-08-15
 **Status:** Filed-return integration temporarily disabled for Phase 2 testing
-**Related plan:** `IMPORT_PIPELINE_IMPLEMENTATION_PLAN.md` (Phase 2)
+**Related doc:** `Docs/IMPORTS_AND_RECONCILIATION_END_TO_END.md`
 
 This document describes how to reactivate the filed-return integration
 after Phase 2 testing is complete.  The filed-return integration was

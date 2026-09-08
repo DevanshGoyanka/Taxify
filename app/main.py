@@ -10,6 +10,7 @@ Startup sequence:
   6. Mount all routers
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -17,6 +18,15 @@ import sys
 from dotenv import load_dotenv
 
 load_dotenv()  # Must run before any import that reads os.environ
+
+# ── Windows event-loop policy (must run before any asyncio loop is created) ─
+# Playwright spawns Chromium via asyncio.create_subprocess_exec, which only the
+# Windows Proactor event loop supports. uvicorn's own loop setup can otherwise
+# pick a Selector loop (e.g. under --reload), which cannot spawn subprocesses
+# (NotImplementedError). Setting the Proactor policy here at module scope, the
+# same defence run.py applies, keeps subprocess support correct as a fallback.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 # ── Logging configuration ───────────────────────────────────────────────────
 # Set up structured console logging so all taxify.* loggers produce
@@ -86,12 +96,6 @@ install_uvicorn_access_privacy_filter(logging.getLogger("uvicorn.access"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: create tables + launch background worker.  Shutdown: stop worker."""
-    # Back up .env BEFORE any other code reads or modifies it, so a recent
-    # copy of all secrets is always available on disk if the live file is
-    # accidentally changed or corrupted.
-    from app.security.env_backup import backup_env
-    backup_env()
-
     # Validate the active ERI credential bundle (mode/env) is sane before
     # serving traffic. Fails fast on production misconfiguration (mock DSC,
     # missing AWS host for Type-2, missing digest secret).

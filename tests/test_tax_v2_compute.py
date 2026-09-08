@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.routers.tax_v2 import compute_tax_summary_v2
 from app.schemas.return_draft import (
+    CapitalGainsSchedule,
     Employer,
     ReconciliationDiscrepancy,
     ReturnDraft,
@@ -45,12 +46,12 @@ def test_compute_v2_surfaces_per_row_capital_gains_for_simplified_112a() -> None
     """
     draft = create_empty_draft("2026-27", "ITR-1", "new")
     draft.employers = [Employer(id="e1", basic=Decimal("800000"))]
-    draft.capitalGainsSchedule = {  # type: ignore[assignment]
-        "simplified112A": {
+    draft.capitalGainsSchedule = CapitalGainsSchedule(
+        simplified112A={
             "totalSaleConsideration": Decimal("41871"),
             "totalCostAcquisition": Decimal("20586"),
         }
-    }
+    )
     summary = compute_tax_summary_v2(draft)
     cg = summary["capitalGainsSummary"]
     assert cg["status"] == "VALID"
@@ -68,8 +69,13 @@ def test_compute_v2_surfaces_per_row_capital_gains_for_simplified_112a() -> None
 
 
 def test_compute_v2_rejects_non_itr1_form_with_422() -> None:
-    """Unsupported canonical forms fail at the v2 boundary with 422."""
-    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-2")
+    """Unsupported canonical forms fail at the v2 boundary with 422.
+
+    ITR-3 remains unsupported (Phase 8 of
+    Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md); ITR-2 is supported by
+    the v2 pipeline as of Phase 4 and is covered by its own tests instead.
+    """
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-3")
     with pytest.raises(HTTPException) as caught:
         compute_tax_summary_v2(draft)
     assert caught.value.status_code == 422

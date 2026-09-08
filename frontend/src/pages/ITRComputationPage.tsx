@@ -7,18 +7,26 @@ import { itrAutomationApi } from '../api/itrAutomation';
 import type { AutomationJob } from '../api/itrAutomation';
 import { filingSubmitApi, type FilingJobStatus, type VerificationMode } from '../api/filingSubmit';
 import { Spinner } from '../components/ui/Spinner';import StatusPill from '../components/StatusPill';
+import { CollapsibleWarning } from '../components/ui/CollapsibleWarning';
 import toast from 'react-hot-toast';
 import { EmployerEntryManager } from '../components/EmployerEntryManager';
+import personalInfoIcon from '../../svgs/personal info.svg';
+import salaryIncomeIcon from '../../svgs/salary income.svg';
+import housePropertyIcon from '../../svgs/house property.svg';
+import capitalGainsIcon from '../../svgs/capital gains.svg';
+import otherSourcesIcon from '../../svgs/other sources.svg';
+import exemptIncomeIcon from '../../svgs/extempt income.svg';
+import taxComputationIcon from '../../svgs/tax computation.svg';
 import { BankAccountManager } from '../components/BankAccountManager';
 import { PersonalInfoTab } from '../components/PersonalInfoTab';
 import { hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
 import { BusinessProfessionEntryManager, type BusinessProfessionScheduleData } from '../components/BusinessProfessionEntryManager';
-import { BankInterestEntryManager } from '../components/BankInterestEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
 import { HousePropertyEntryManager } from '../components/HousePropertyEntryManager';
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import ExemptIncomeWorkspace from '../components/exemptincome/ExemptIncomeWorkspace';
+import ITR2SchedulesWorkspace from '../components/itr2/ITR2SchedulesWorkspace';
 import {
   createReturnRepository, stripCompatibility,
 } from '../domain/returns';
@@ -29,7 +37,10 @@ import {
   updateDividendsFromManager, updateEmployers, updateExemptIncome, updateFamilyPensionFromManager, updateGiftsFromManager,
   updateHouseProperties, updateInterestFromManager, updateLossesBroughtForward, updateOtherSources, updateSection80C, updateSection80D, updateSection80G,
   updateChapterVIA, updateTaxCreditsFromManager, updateTcsCredits, updateWinningsFromManager,
-  updatePensionContribution80CCC, updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
+  updateBroughtForwardLossEntries, updateScheduleSIEntries,
+  updateForeignSourceIncome, updateForeignTaxRelief, updateForeignAssets, updateClubbedIncome,
+  updatePassThroughIncomeEntries, updateAmt, updateAssetLiability, updatePortugueseCivilCode,
+  updateEsopDeferrals, updatePensionContribution80CCC, updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
   replaceDraft, type ReturnEditorModelV2,
 } from '../domain/returns/editorModelV2';
 import { createEmptyReturnDraft } from '../domain/returns/factory';
@@ -181,6 +192,7 @@ export default function ITRComputationPage() {
   // number; it triggers the standalone downloader (separate from the
   // working uploader) to fetch the receipt PDF from the ITD portal.
   const [fetchingAck, setFetchingAck] = useState(false);
+  const [pdfDownloading, setPdfDownloading] = useState(false);
   const [filingJob, setFilingJob] = useState<FilingJobStatus | null>(null);
   
   // Part 2: Import document state
@@ -348,9 +360,9 @@ export default function ITRComputationPage() {
 
   // Fetch backend-computed tax summary - replaces local computeTax()
   // All ITR forms (ITR-1, ITR-2, ITR-3, ITR-4) use the same endpoint.
-  // The backend maps the flat payload to the correct canonical model
-  // (ITR1Input / ITR2Input / ITR4Input) based on the `form` field and
-  // runs the appropriate engine.  The frontend never needs a mapper.
+  // The canonical draft is sent directly to the v2 compute endpoint; the
+  // backend consumes the already-typed ReturnDraft and dispatches by form.
+  // The frontend never projects it through a legacy flat-payload mapper.
   //
   // Debounced: only fires 500ms after user stops typing.
   useEffect(() => {
@@ -596,20 +608,33 @@ export default function ITRComputationPage() {
   };
 
   const handleDownloadPdf = async () => {
+    setPdfDownloading(true);
     try {
       await itrV2.downloadPdf(clientId, effectiveAssessmentYear);
-      toast.success('PDF downloaded successfully');
+      toast.success('Statement of Income PDF downloaded successfully');
     } catch (err: any) {
       toast.error(err.message || 'PDF download failed');
+    } finally {
+      setPdfDownloading(false);
     }
   };
 
-  const handleDownloadJson = async () => {
+  // Standalone portal login: launches a visible browser, logs in with the
+  // client's PAN + stored portal password, and leaves the browser open so
+  // after-login tasks can reuse the authenticated session. No download or
+  // submission occurs here.
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
+  const handleLogin = async () => {
+    if (loginSubmitting) return;
+    setLoginSubmitting(true);
+    const toastId = toast.loading('Launching browser and logging in to the ITD portal...');
     try {
-      await itrV2.download(clientId, effectiveAssessmentYear);
-      toast.success('Draft JSON downloaded successfully');
+      const res = await itrAutomationApi.loginPortal(clientId);
+      toast.success(`Logged in as ${res.pan}. Browser left open for follow-up tasks.`, { id: toastId });
     } catch (err: any) {
-      toast.error(err.message || 'Draft JSON download failed');
+      toast.error(err?.response?.data?.detail || err.message || 'Portal login failed', { id: toastId });
+    } finally {
+      setLoginSubmitting(false);
     }
   };
 
@@ -677,8 +702,8 @@ export default function ITRComputationPage() {
   }, [filingJobId]);
 
   const handleDirectSubmit = async () => {
-    if (itrForm === 'ITR-3' || itrForm === 'ITR-2') {
-      toast.error('Direct Submit is available for ITR-1 and ITR-4 only this season.');
+    if (itrForm === 'ITR-3') {
+      toast.error('Direct Submit is not available for ITR-3 this season.');
       return;
     }
     if (!clientId || filingSubmitting || filingJobId !== null) return;
@@ -743,20 +768,34 @@ export default function ITRComputationPage() {
       `acknowledgement PDF will be downloaded.\n\nProceed?`,
     );
     if (!ok) return;
+    // Open the viewer tab synchronously, still inside the click's user-gesture
+    // stack (before the `await` below) -- opening it after the network
+    // response comes back is what popup blockers treat as an unsolicited
+    // popup and silently kill. Pointed at the real PDF once it's ready.
+    const previewWindow = window.open('', '_blank');
     setFetchingAck(true);
     try {
       const blob = await filingSubmitApi.fetchAcknowledgement(clientId, ay, itrForm);
-      // Persist the PDF to the user's downloads via a synthetic anchor.
       const url = window.URL.createObjectURL(blob);
+      // Persist the PDF to the user's downloads via a synthetic anchor...
       const a = document.createElement('a');
       a.href = url;
       a.download = `${itrForm}_${ay}_Acknowledgement.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+      // ...and open the same PDF so it's immediately viewable, not just saved.
+      if (previewWindow) {
+        previewWindow.location.href = url;
+      } else {
+        window.open(url, '_blank');
+      }
+      // Revoke later, not immediately -- the viewer tab needs time to load
+      // the blob before its URL is invalidated.
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
       toast.success(`Acknowledgement PDF downloaded for AY ${ay}.`);
     } catch (err: any) {
+      previewWindow?.close();
       // The backend returns errors as JSON ({detail: "..."}), but because
       // the success path is responseType:'blob', axios delivers the error
       // body as a Blob too. Parse it to surface the "file the ITR first"
@@ -1088,17 +1127,16 @@ export default function ITRComputationPage() {
             id: 'employer-form16', customEmployerName: '', employerName: '', employerTAN: '',
             natureOfEmployment: '', employerAddress: '', employerCity: '', employerStateCode: '',
             employerPinCode: '', employerZipCode: '',
-            salaryNatureRows: [], perquisiteNatureRows: [], section10ExemptionRows: [],
+            section10ExemptionRows: [],
             basic: 0, da: 0, commission: 0, hra: 0, bonus: 0, allowances: 0, lta: 0,
             otherAllowance: 0, arrearSalary: 0, perquisites: 0, profitsInLieu: 0, rentPaid: 0,
             city: '', isMetroCity: false, isGovernmentEmployee: false, isDisabledEmployee: false,
             commutedPension: 0, gratuity: 0, leaveEncashment: 0, averageMonthlySalary: 0,
             yearsOfService: 0, unavailedLeaveDays: 0, actualLtaFare: 0, isDomesticTravel: false,
-            journeysInBlock: 0, ltaExempt: 0, numberOfChildren: 0, gratuityAlsoReceived: false,
+            journeysInBlock: 0, numberOfChildren: 0, gratuityAlsoReceived: false,
             transportAllowance: 0, childrenEducationAllowance: 0, hostelExpenditureAllowance: 0,
-            uniformAllowance: 0, entertainmentAllowance: 0, professionalTax: 0,
-            vrsCompensation: 0, retrenchmentCompensation: 0, otherExempt: 0, tdsDeducted: 0,
-            employerNPS: 0,
+            uniformAllowance: 0, uniformAllowanceExpenditure: 0, entertainmentAllowance: 0, professionalTax: 0,
+            vrsCompensation: 0, retrenchmentCompensation: 0, tdsDeducted: 0,
           };
           const patched = {
             ...first,
@@ -1292,18 +1330,22 @@ export default function ITRComputationPage() {
     );
   }
 
-  const tabs = [
-    '📋 Personal Info',
-    '💼 Salary Income',
-    '🏠 House Property',
-    '📈 Capital Gains',
-    '🏪 Business or Profession',
-    '💰 Other Sources',
-    '📋 Exempt Income',  // VR1-027, VR1-028 - CBDT mandatory
-    '➖ Deductions',
-    '🧾 TDS & Advance Tax',
-    '🧮 Tax Computation'
+  const tabs: { label: string; icon?: string }[] = [
+    { label: 'Personal Info', icon: personalInfoIcon },
+    { label: 'Salary Income', icon: salaryIncomeIcon },
+    { label: 'House Property', icon: housePropertyIcon },
+    { label: 'Capital Gains', icon: capitalGainsIcon },
+    { label: '🏪 Business or Profession' },
+    { label: 'Other Sources', icon: otherSourcesIcon },
+    { label: 'Exempt Income', icon: exemptIncomeIcon },
+    { label: '➖ Deductions' },
+    { label: '🧾 TDS & Advance Tax' },
+    ...(itrForm === 'ITR-2' ? [{ label: '🗂️ ITR-2 Schedules' }] : []),
+    { label: 'Tax Computation', icon: taxComputationIcon }
   ];
+
+  // Form changes can remove the conditional tab; keep the selected index valid.
+  const safeActiveTab = Math.min(activeTab, tabs.length - 1);
 
   return (
     <div>
@@ -1317,7 +1359,7 @@ export default function ITRComputationPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <button
-              onClick={() => navigate('/filing')}
+              onClick={() => navigate('/clients')}
               style={{
                 background: 'none',
                 border: 'none',
@@ -1425,18 +1467,19 @@ export default function ITRComputationPage() {
             </select>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 34 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 34, flexWrap: 'wrap' }}>
 
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               onClick={() => setShowImportMenu(!showImportMenu)}
               style={{
-                padding: '6px 12px',
-                background: 'var(--info)',
-                color: 'white',
+                padding: '8px 14px',
+                background: '#5BB981',
+                color: '#000000',
                 border: 'none',
                 borderRadius: 6,
-                fontSize: 12,
+                fontSize: 13,
+                fontWeight: 600,
                 cursor: 'pointer'
               }}
             >
@@ -1587,12 +1630,12 @@ export default function ITRComputationPage() {
             disabled={saving}
             style={{
               padding: '6px 12px',
-              background: saving ? 'var(--border)' : 'var(--gold)',
-              color: 'white',
+              background: saving ? 'var(--border)' : '#5BB981',
+              color: '#000000',
               border: 'none',
               borderRadius: 6,
-              fontSize: 12,
-              fontWeight: 500,
+              fontSize: 13,
+              fontWeight: 600,
               cursor: saving ? 'not-allowed' : 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -1608,12 +1651,12 @@ export default function ITRComputationPage() {
             disabled={validating}
             style={{
               padding: '6px 12px',
-              background: validating ? 'var(--border)' : 'var(--accent-blue)',
-              color: 'white',
+              background: validating ? 'var(--border)' : '#5BB981',
+              color: '#000000',
               border: 'none',
               borderRadius: 6,
-              fontSize: 12,
-              fontWeight: 500,
+              fontSize: 13,
+              fontWeight: 600,
               cursor: validating ? 'not-allowed' : 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -1630,11 +1673,11 @@ export default function ITRComputationPage() {
               title="Generate and download the official CBDT ITD-compliant JSON (ITR-1/ITR-4)"
               style={{
                 padding: '6px 12px',
-                background: 'var(--gold)',
-                color: 'white',
+                background: '#5BB981',
+                color: '#000000',
                 border: 'none',
                 borderRadius: 6,
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: 600,
                 cursor: 'pointer',
               }}
@@ -1645,33 +1688,43 @@ export default function ITRComputationPage() {
 
           <button
             onClick={handleDownloadPdf}
+            disabled={pdfDownloading}
+            title="Generate and download a CA-style Statement of Income PDF (computed figures, income-head summary, and supporting schedules) for ITR-1/ITR-2/ITR-4. Not yet available for ITR-3."
             style={{
               padding: '6px 12px',
-              background: 'var(--accent-teal)',
-              color: 'white',
+              background: pdfDownloading ? 'var(--border)' : '#5BB981',
+              color: '#000000',
               border: 'none',
               borderRadius: 6,
-              fontSize: 12,
-              cursor: 'pointer'
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: pdfDownloading ? 'wait' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
             }}
           >
+            {pdfDownloading && <Spinner size={12} />}
             PDF
           </button>
 
           <button
-            onClick={handleDownloadJson}
-            title="Download the saved canonical ReturnDraft as a JSON file"
+            onClick={handleLogin}
+            disabled={loginSubmitting}
+            title="Launch a visible browser, log in to the ITD portal with the client's PAN + password, and leave the browser open for follow-up after-login tasks"
             style={{
               padding: '6px 12px',
-              background: 'var(--accent-purple)',
-              color: 'white',
+              background: '#5BB981',
+              color: '#000000',
               border: 'none',
               borderRadius: 6,
-              fontSize: 12,
-              cursor: 'pointer'
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: loginSubmitting ? 'wait' : 'pointer',
+              opacity: loginSubmitting ? 0.6 : 1
             }}
           >
-            Draft JSON
+            {loginSubmitting ? 'Logging in…' : 'Login'}
           </button>
 
           {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (
@@ -1684,11 +1737,11 @@ export default function ITRComputationPage() {
                 padding: '6px 12px',
                 background: (filingSubmitting || filingJobId !== null)
                   ? 'var(--border)'
-                  : 'var(--accent-navy, #0b3d6b)',
-                color: 'white',
+                  : '#5BB981',
+                color: '#000000',
                 border: 'none',
                 borderRadius: 6,
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: 600,
                 cursor: (filingSubmitting || filingJobId !== null) ? 'not-allowed' : 'pointer',
                 display: 'flex',
@@ -1713,11 +1766,11 @@ export default function ITRComputationPage() {
                 padding: '6px 12px',
                 background: fetchingAck
                   ? 'var(--border)'
-                  : 'var(--accent-green, #1a7f4b)',
-                color: 'white',
+                  : '#5BB981',
+                color: '#000000',
                 border: 'none',
                 borderRadius: 6,
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: 600,
                 cursor: fetchingAck ? 'not-allowed' : 'pointer',
                 display: 'flex',
@@ -1809,10 +1862,9 @@ export default function ITRComputationPage() {
         </div>
       )}
       {backendTaxResult?.filingComputationStatus === 'PROVISIONAL_COMMON_INCOME_PREVIEW' && (
-        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d' }}>
-          <strong>Provisional preview only.</strong>{' '}
+        <CollapsibleWarning title="Provisional preview only">
           {backendTaxResult.filingComputationMessage}
-        </div>
+        </CollapsibleWarning>
       )}
 
       {validationReport && !validationReport.valid && (
@@ -1825,30 +1877,17 @@ export default function ITRComputationPage() {
       )}
 
       {validationReport && validationReport.valid && validationReport.warnings.length > 0 && (
-        <div role="status" style={{ marginBottom: 12, padding: 12, borderRadius: 6, color: 'var(--text-secondary)', background: 'var(--warn-bg, #fff8e1)' }}>
-          <strong>Warnings ({validationReport.warnings.length}):</strong>
+        <CollapsibleWarning title={`Warnings (${validationReport.warnings.length})`}>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
             {validationReport.warnings.map((w, i) => <li key={i} style={{ fontSize: 13 }}>{w}</li>)}
           </ul>
-        </div>
+        </CollapsibleWarning>
       )}
 
       {/* Reconciliation Discrepancy Warning Banner */}
       {reconDiscrepancies.length > 0 && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: 8,
-          padding: '10px 14px',
-          marginBottom: 12,
-          background: '#fff8e1',
-          border: '1px solid #f9a825',
-          borderRadius: 8,
-          fontSize: 12,
-          color: '#5d4037',
-        }}>
-          <span style={{ fontSize: 16, flexShrink: 0 }}>⚠️</span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+        <CollapsibleWarning title="⚠️ Reconciliation discrepancies">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {reconDiscrepancies.map((msg: string, i: number) => (
               <span key={i}>{msg}</span>
             ))}
@@ -1868,7 +1907,7 @@ export default function ITRComputationPage() {
               Dismiss
             </button>
           </div>
-        </div>
+        </CollapsibleWarning>
       )}
 
     {/* ── Eligibility Banner (CBDT) ──────────────────────────────────── */}
@@ -1948,38 +1987,47 @@ export default function ITRComputationPage() {
       })()}
 
       <div style={{
-        background: 'var(--navy)',
-        borderRadius: 'var(--radius)',
-        marginBottom: 16,
+        background: '#1e3a5f',
+        borderRadius: 'var(--radius) var(--radius) 0 0',
+        marginBottom: 0,
         display: 'flex',
-        overflowX: 'auto'
+        flexWrap: 'nowrap',
+        overflowX: 'auto',
+        border: '1px solid #0f2438',
+        borderBottom: '1px solid #0f2438'
       }}>
         {tabs.map((tab, idx) => (
           <button
             key={idx}
             onClick={() => setActiveTab(idx)}
             style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
               padding: '12px 16px',
-              background: activeTab === idx ? 'rgba(201, 148, 58, 0.15)' : 'transparent',
-              color: activeTab === idx ? 'var(--gold)' : 'var(--text-muted)',
+              background: safeActiveTab === idx ? 'rgba(201, 148, 58, 0.25)' : 'transparent',
+              color: safeActiveTab === idx ? '#FFFFFF' : '#CBD5E1',
               border: 'none',
-              borderBottom: activeTab === idx ? '3px solid var(--gold)' : '3px solid transparent',
+              borderBottom: safeActiveTab === idx ? '3px solid var(--gold)' : '3px solid transparent',
               fontSize: 13,
-              fontWeight: activeTab === idx ? 600 : 400,
+              fontWeight: safeActiveTab === idx ? 600 : 400,
               cursor: 'pointer',
-              whiteSpace: 'nowrap'
+              whiteSpace: 'nowrap',
+              flexShrink: 0
             }}
           >
-            {tab}
+            {tab.icon && <img src={tab.icon} alt="" className={`itr-tab-icon${tab.label === 'Capital Gains' ? ' itr-tab-icon-capital-gains' : ''}`} />}
+            {tab.label}
           </button>
         ))}
       </div>
 
       <div style={{
-        background: 'white',
-        padding: 24,
-        borderRadius: 'var(--radius)',
-        border: '1px solid var(--border)'
+        background: '#cfe2f3',
+        padding: 10,
+        borderRadius: '0 0 var(--radius) var(--radius)',
+        border: '1px solid #000',
+        borderTop: 0
       }}>
         {activeTab === 0 && editorModel && <PersonalInfoTab draft={editorModel.draft} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={(patch: any) => updateEditor((current) => ({
           ...current,
@@ -2000,7 +2048,21 @@ export default function ITRComputationPage() {
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
         {activeTab === 7 && editorModel && <DeductionsTab regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
         {activeTab === 8 && editorModel && <TDSTab taxResult={taxResult} managers={managers} editorModel={editorModel as any} />}
-        {activeTab === 9 && (!backendTaxResult && taxResultError
+        {itrForm === 'ITR-2' && safeActiveTab === 9 && editorModel && <ITR2SchedulesWorkspace
+          assessmentYear={effectiveAssessmentYear}
+          broughtForwardLossEntries={editorModel.draft.broughtForwardLossEntries} onBroughtForwardLossEntriesChange={(v) => updateEditor((m) => updateBroughtForwardLossEntries(m, v))}
+          scheduleSIEntries={editorModel.draft.scheduleSIEntries} onScheduleSIEntriesChange={(v) => updateEditor((m) => updateScheduleSIEntries(m, v))}
+          foreignSourceIncome={editorModel.draft.foreignSourceIncome} onForeignSourceIncomeChange={(v) => updateEditor((m) => updateForeignSourceIncome(m, v))}
+          foreignTaxRelief={editorModel.draft.foreignTaxRelief} onForeignTaxReliefChange={(v) => updateEditor((m) => updateForeignTaxRelief(m, v))}
+          foreignAssets={editorModel.draft.foreignAssets} onForeignAssetsChange={(v) => updateEditor((m) => updateForeignAssets(m, v))}
+          clubbedIncome={editorModel.draft.clubbedIncome} onClubbedIncomeChange={(v) => updateEditor((m) => updateClubbedIncome(m, v))}
+          passThroughIncomeEntries={editorModel.draft.passThroughIncomeEntries} onPassThroughIncomeEntriesChange={(v) => updateEditor((m) => updatePassThroughIncomeEntries(m, v))}
+          amt={editorModel.draft.amt} onAmtChange={(v) => updateEditor((m) => updateAmt(m, v))}
+          assetLiability={editorModel.draft.assetLiability} onAssetLiabilityChange={(v) => updateEditor((m) => updateAssetLiability(m, v))}
+          portugueseCivilCode={editorModel.draft.portugueseCivilCode} onPortugueseCivilCodeChange={(v) => updateEditor((m) => updatePortugueseCivilCode(m, v))}
+          esopDeferrals={editorModel.draft.esopDeferrals} onEsopDeferralsChange={(v) => updateEditor((m) => updateEsopDeferrals(m, v))}
+        />}
+        {safeActiveTab === (itrForm === 'ITR-2' ? 10 : 9) && (!backendTaxResult && taxResultError
           ? <div role="alert" style={{ padding: 24, textAlign: 'center', color: 'var(--error)' }}>Tax figures are unavailable until the first computation succeeds.</div>
           : <TaxComputationTab taxResult={taxResult} regime={regime} itrForm={itrForm} />)}
       </div>

@@ -11,12 +11,14 @@ from datetime import date
 
 from app.schemas.itr1 import (
     ITR1Input, SalaryIncome, HousePropertyIncome, OtherSourcesIncome,
-    Chapter6ADeductions, CapitalGainsIncome, Donation80G,
+    Chapter6ADeductions, CapitalGainsIncome, Donation80G, Schedule80G,
     AgeBracket, TaxRegime, PropertyType, TDS1Entry, TDS2Entry, TCSEntry,
     BankAccount, Schedule80D, Section80DDBDetails, Section80DDBUserType,
     SpecifiedDisease80DDB, Schedule80CEntry, Schedule80EEntry, Schedule80DD,
     Schedule80U, DisabilitySeverity, DependentRelationship,
     EducationLoanLenderType,
+    TDS3Entry,
+    LoanDetail,
 )
 from app.engine.validators.itr1.input_rules import validate_itr1_input
 from app.engine.validators.base import Severity
@@ -156,9 +158,31 @@ def test_R145_all_zero_breakup_is_warning_not_block():
     assert r145.severity == Severity.B
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 80C / 80CCC / 80CCD(1) Combined Limits
-# ═══════════════════════════════════════════════════════════════════════════════
+def test_R099_tds3_claim_requires_deducted_year():
+    """A claimed TDS3 credit without a deduction year must be blocked."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        tds3_entries=[TDS3Entry.model_construct(
+            tenant_pan="ABCDE1234F",
+            tenant_name="Tenant",
+            gross_receipt=Decimal("100000"),
+            tds_deducted=Decimal("10000"),
+            tds_claimed=Decimal("10000"),
+            tds_section="194IB",
+            deducted_yr="",
+        )],
+    )
+
+    results = validate_itr1_input(inp)
+
+    assert failed(results, "ITR1-R099")
+
+
 
 def test_R001_80c_combined_exceeds_150k_old_regime():
     """Rule 1: 80C+80CCC+80CCD(1) > Rs 1,50,000 in old regime is blocked."""
@@ -1186,8 +1210,12 @@ def test_new_regime_no_hp_loss_allowed():
 # Phase 2.5 — Section 10 Exempt Allowance Tests (R100-R112)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def test_R100_gratuity_exceeds_gross_salary():
-    '''Rule 100: Gratuity exempt > gross salary → blocked.'''
+def test_R100_gratuity_exceeding_current_year_salary_is_not_blocked():
+    '''ITR1-R100 (removed 2026-09-03, see Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §11.1's validator note): a career-end gratuity lump sum routinely and
+    correctly exceeds one year's running salary (e.g. 25 years of service),
+    so comparing it against salary_income.gross_salary has no statutory
+    basis and must not block filing.'''
     inp = ITR1Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
@@ -1197,7 +1225,7 @@ def test_R100_gratuity_exceeds_gross_salary():
         deductions_chapter6a=Chapter6ADeductions(),
     )
     results = validate_itr1_input(inp)
-    assert failed(results, "ITR1-R100")
+    assert not failed(results, "ITR1-R100")
 
 
 def test_R100_gratuity_within_salary_passes():
@@ -1212,7 +1240,16 @@ def test_R100_gratuity_within_salary_passes():
     assert not failed(results, "ITR1-R100")
 
 
-def test_R101_commuted_pension_exceeds_salary():
+def test_R101_commuted_pension_exceeding_current_year_salary_is_not_blocked():
+    '''ITR1-R101 (the locally-numbered check) stays removed -- but this exact
+    scenario is correctly caught under the official CBDT rule number instead:
+    see test_R068_commuted_pension_exceeds_gross_salary_blocked below. The
+    official Category A rules 68/69 (commuted pension / leave encashment
+    "cannot be more than Salary as per sec 17(1)") were reinstated as
+    ITR1-R068/R069 after the audit found them to be genuine, non-trivial
+    portal-upload gates -- distinct from the still-correctly-removed R100
+    (gratuity has no such CBDT rule) -- see
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §16.3.'''
     inp = ITR1Input(
         age_bracket=AgeBracket.SIXTY_TO_80,
         tax_regime=TaxRegime.OLD,
@@ -1222,10 +1259,14 @@ def test_R101_commuted_pension_exceeds_salary():
         deductions_chapter6a=Chapter6ADeductions(),
     )
     results = validate_itr1_input(inp)
-    assert failed(results, "ITR1-R101")
+    assert not failed(results, "ITR1-R101")
 
 
-def test_R102_leave_encashment_exceeds_salary():
+def test_R102_leave_encashment_exceeding_current_year_salary_is_not_blocked():
+    '''ITR1-R102 (the locally-numbered check) stays removed -- see
+    test_R101_commuted_pension_exceeding_current_year_salary_is_not_blocked's
+    docstring above; this scenario is correctly caught as ITR1-R069 instead,
+    see test_R069_leave_encashment_exceeds_gross_salary_blocked below.'''
     inp = ITR1Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
@@ -1235,7 +1276,95 @@ def test_R102_leave_encashment_exceeds_salary():
         deductions_chapter6a=Chapter6ADeductions(),
     )
     results = validate_itr1_input(inp)
-    assert failed(results, "ITR1-R102")
+    assert not failed(results, "ITR1-R102")
+
+
+def test_R068_commuted_pension_exceeds_gross_salary_blocked():
+    '''CBDT official rule 68: commuted pension received cannot exceed Salary
+    u/s 17(1). sal.gross_salary is section_17_1 only (see
+    app/engine/draft_to_itr1_input.py's salary mapper), a genuinely
+    independent quantity from commuted_pension_received, so this is a real
+    Category A portal-upload gate.'''
+    inp = ITR1Input(
+        age_bracket=AgeBracket.SIXTY_TO_80,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("300000"), commuted_pension_received=Decimal("400000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R068")
+
+
+def test_R068_commuted_pension_within_gross_salary_passes():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.SIXTY_TO_80,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), commuted_pension_received=Decimal("400000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R068")
+
+
+def test_R069_leave_encashment_exceeds_gross_salary_blocked():
+    '''CBDT official rule 69: earned leave encashment on retirement cannot
+    exceed Salary u/s 17(1) (separate from the ₹25L absolute cap in R142).'''
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("400000"), leave_encashment_received=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R069")
+
+
+def test_R069_leave_encashment_within_gross_salary_passes():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000"), leave_encashment_received=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R069")
+
+
+def test_R080_82_85_87_80g_table_bcd_use_official_rule_ids_not_table_a():
+    '''CBDT official rules 80-82 (table B/C/D cash-or-noncash mandatory) and
+    85-87 (table B/C/D cash+noncash cross-foot) were functionally applied to
+    all four donation tables but always reported under table A's rule IDs
+    (R079/R084) -- see Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §16.5. A Table B violation must now report as R080/R085, not R079/R084.'''
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(
+            amount_80g=Decimal("5000"),
+            donations_80g=[Donation80G(donation_category="B", non_cash_amount=Decimal("5000"))],
+        ),
+        schedule_80g=Schedule80G(
+            donations=[Donation80G(
+                donation_category="B", total_donation=Decimal("5000"),
+                cash_amount=Decimal("0"), non_cash_amount=Decimal("0"),
+            )],
+            total_eligible_amount=Decimal("2500"),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R080")
+    assert not failed(results, "ITR1-R079")
 
 
 def test_R103_vrs_exceeds_5l():
@@ -1277,19 +1406,56 @@ def test_R105_transport_allowance_exceeds_max():
     assert failed(results, "ITR1-R105")
 
 
+def test_R148_new_regime_transport_allowance_at_or_below_cap_is_allowed():
+    """Transport allowance up to Rs 38,400 must not trigger R148."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("500000"),
+            transport_allowance=Decimal("38400"),
+        ),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R148")
+
+
 def test_R107_lta_exempt_exceeds_received():
     inp = ITR1Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
-        salary_income=SalaryIncome(gross_salary=Decimal("500000"),
-                                    lta_amount_received=Decimal("20000"),
-                                    lta_exempt_amount=Decimal("30000")),
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("500000"),
+            lta_amount_received=Decimal("20000"),
+            lta_exempt_amount=Decimal("30000"),
+        ),
         house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
         other_sources_income=OtherSourcesIncome(),
         deductions_chapter6a=Chapter6ADeductions(),
     )
     results = validate_itr1_input(inp)
     assert failed(results, "ITR1-R107")
+
+
+def test_R149_new_regime_taxable_lta_receipt_is_allowed():
+    """Receiving LTA without claiming exemption must not trigger R149."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("500000"),
+            lta_amount_received=Decimal("25000"),
+            lta_exempt_amount=Decimal("0"),
+        ),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R149")
 
 
 def test_R108_new_regime_gratuity_disallowed():
@@ -1731,3 +1897,519 @@ def test_r119_collision_resolved_80gg_hra_exclusion_uses_unique_id():
     )
     results = validate_itr1_input(inp)
     assert failed(results, "ITR1-R119b")
+
+
+# ── nature_of_employment keyword-matching fixes (2026-09-03) ──────────────
+#
+# Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §14: every rule
+# below used to match keywords ("central government", "pension", "cg-") that
+# never appear in the raw official employment code (CGOV/SGOV/PSU/PE/PESG/
+# PEPS/PEO/OTH) `nature_of_employment` actually carries -- the same bug
+# already fixed for ITR1-R142. Each was either permanently dormant (never
+# caught a real invalid claim) or permanently blocking (fired regardless of
+# actual employment, hard-blocking legitimate CG/SG/pensioner/judge filers).
+
+def test_R120_real_cgov_employee_gets_14pct_cap_not_10pct():
+    """A genuine CGOV employee claiming 12% of salary as 80CCD(2) is legitimate
+    (within the 14% government cap) but was previously always routed to the
+    10% non-government cap check (ITR1-R119), since "central"/"government"
+    never matched the raw "CGOV" code -- a false-positive block."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("120000")),  # 12%
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R119")
+    assert not failed(results, "ITR1-R120")
+
+
+def test_R120_real_non_govt_employee_still_capped_at_10pct():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="OTH",
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("120000")),  # 12% > 10%
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R119")
+
+
+def test_R116_pensioner_blocked_from_80ccd2():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.SIXTY_TO_80, tax_regime=TaxRegime.OLD,
+        nature_of_employment="PE",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("10000")),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R116")
+
+
+def test_R002_pensioner_80ccd1_checked_against_20pct_gti_not_10pct_salary():
+    """A pensioner's 80CCD(1) claim must be checked against 20% of estimated
+    GTI (ITR1-R002), not the non-pensioner 10%-of-salary rule (ITR1-R003)."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.SIXTY_TO_80, tax_regime=TaxRegime.OLD,
+        nature_of_employment="PESG",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("60000")),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R003")
+
+
+def test_R187_real_cgov_agniveer_not_blocked():
+    """A genuine Central Government (Agniveer) employee claiming 80CCH was
+    previously always blocked, since "central government" never matched the
+    raw "CGOV" code."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("50000")),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R187")
+
+
+def test_R187_non_cgov_employee_still_blocked_from_80cch():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="PSU",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("50000")),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R187")
+
+
+def test_R187b_agniveer_age_uses_real_date_of_birth_not_placeholder():
+    """ITR1-R187b (80CCH: age 17-27 at joining) previously computed age as
+    (joining_date - 2000-01-01).days/365.25 -- a meaningless placeholder-date
+    computation, not the taxpayer's real age. A taxpayer born in 1975
+    joining in 2023 (real age ~48, clearly ineligible) was NOT flagged by
+    the old formula (~23 years, which falsely appeared within 17-27)."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("200000")),
+        agniveer_date_of_joining=date(2023, 1, 1),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(1975, 1, 1),
+            employer_category="CGOV", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R187b")
+
+
+def test_R187b_agniveer_real_age_within_range_not_blocked():
+    """A genuine Agniveer joining at a real age within 17-27 must not be
+    flagged."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("200000")),
+        agniveer_date_of_joining=date(2023, 1, 1),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(2002, 1, 1),
+            employer_category="CGOV", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R187b")
+
+
+def test_R191_seventh_proviso_foreign_travel_below_threshold_blocked():
+    """AmtSeventhProvisio139ii has a schema-mandated minimum of Rs 2,00,000
+    -- a taxpayer ticking the foreign-travel declaration but entering an
+    amount below that threshold would previously reach JSON generation
+    unblocked and produce schema-invalid output (nothing enforced the
+    minimum: ITR1FilingProfile's field only requires ge=0, and the
+    frontend amount input has no min attribute)."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress, SeventhProvisoDetails
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(1990, 1, 1),
+            employer_category="OTH", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+            seventh_proviso=SeventhProvisoDetails(
+                foreign_travel_flag=True, foreign_travel_amount=Decimal("50000"),
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R191")
+
+
+def test_R191_seventh_proviso_foreign_travel_at_threshold_not_blocked():
+    """Exactly Rs 2,00,000 (the schema's own minimum, inclusive) must pass."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress, SeventhProvisoDetails
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(1990, 1, 1),
+            employer_category="OTH", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+            seventh_proviso=SeventhProvisoDetails(
+                foreign_travel_flag=True, foreign_travel_amount=Decimal("200000"),
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R191")
+
+
+def test_R192_seventh_proviso_electricity_below_threshold_blocked():
+    """AmtSeventhProvisio139iii has a schema-mandated minimum of Rs 1,00,000
+    -- same gap as R191, for the electricity-expenditure declaration."""
+    from app.schemas.itr1 import ITR1FilingProfile, FilingAddress, SeventhProvisoDetails
+    addr = FilingAddress(
+        residence_no="1", locality_or_area="X", city_or_town_or_district="Delhi",
+        state_code="07", country_code="91", pin_code="110001",
+        mobile_no="9999999999", email="a@b.com",
+    )
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        filing_profile=ITR1FilingProfile(
+            pan="ABCDE1234F", surname="Test", date_of_birth=date(1990, 1, 1),
+            employer_category="OTH", primary_address=addr,
+            father_name="F", verification_place="Delhi",
+            seventh_proviso=SeventhProvisoDetails(
+                electricity_expenditure_flag=True,
+                electricity_expenditure_amount=Decimal("40000"),
+            ),
+        ),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R192")
+
+
+def test_judges_exemption_not_blocked_for_real_cgov_employee():
+    """R270/R301: a genuine CGOV employee (e.g. a Supreme/High Court judge)
+    claiming the Judge Salaries Act exemption was previously always
+    blocked -- the keyword check never matched the raw "CGOV" code."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        exempt_income_dropdowns=["Judge Salaries Act"],
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R270")
+    assert not failed(results, "ITR1-R301")
+
+
+def test_judges_exemption_still_blocked_for_non_govt_employee():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="OTH",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        exempt_income_dropdowns=["Judge Salaries Act"],
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R270")
+    assert failed(results, "ITR1-R301")
+
+
+def test_R267_cgov_gratuity_checked_against_25l_cap():
+    """A genuine CGOV employee's gratuity claim above Rs 25L was previously
+    never checked (dormant) since the keyword match never matched "CGOV"."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="CGOV",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R267")
+    assert not failed(results, "ITR1-R067")
+
+
+def test_R267_non_govt_gratuity_checked_against_20l_cap_not_25l():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="OTH",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2100000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R067")
+    assert not failed(results, "ITR1-R267")
+
+
+def test_R185_retrenchment_10_10b_blocked_for_cgov_and_pensioner():
+    """10(10B) is only for industrial workers under the ID Act -- never
+    allowed for CG/SG employees or pensioners. Previously always dormant
+    (never caught this) since the keywords never matched the raw codes."""
+    for code in ("CGOV", "PE"):
+        inp = ITR1Input(
+            age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+            nature_of_employment=code,
+            salary_income=SalaryIncome(gross_salary=Decimal("500000"), retrenchment_compensation=Decimal("100000")),
+            house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+            other_sources_income=OtherSourcesIncome(),
+            deductions_chapter6a=Chapter6ADeductions(),
+        )
+        results = validate_itr1_input(inp)
+        assert failed(results, "ITR1-R185"), f"expected R185 to fire for {code}"
+
+
+def test_R185_retrenchment_10_10b_not_blocked_for_non_govt_non_pensioner():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="OTH",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), retrenchment_compensation=Decimal("100000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R185")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ITR1-R246 — 24(b) per-property interest cross-foot (multi-property fix)
+# ═══════════════════════════════════════════════════════════════════════════
+# Previously compared the legacy single-property scalar's interest against
+# the SUM of loan_details_24b_list across every property, producing a false
+# positive for any genuine multi-property filer. See
+# Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §20.5/§21.
+
+def test_R246_single_property_matching_loan_passes():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="HDFC Bank",
+            loan_amount=Decimal("2000000"),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R246")
+
+
+def test_R246_single_property_mismatched_loan_fails():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="HDFC Bank",
+            loan_amount=Decimal("2000000"),
+            interest_paid_self_occupied=Decimal("100000"),
+        )],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R246")
+
+
+def test_R246_two_properties_each_matching_own_loan_no_longer_false_positive():
+    """The exact bug scenario: two properties, each with its own correctly
+    matching 24(b) loan. Previously blocked because property 1's interest
+    (Rs 50,000) was compared against the SUM of both properties' loans
+    (Rs 2,50,000) instead of just its own."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("1500000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("300000"),
+            home_loan_interest_paid=Decimal("50000"),
+        ),
+        house_properties=[
+            HousePropertyIncome(
+                property_type=PropertyType.LET_OUT,
+                annual_rent_received=Decimal("300000"),
+                home_loan_interest_paid=Decimal("50000"),
+            ),
+            HousePropertyIncome(
+                property_type=PropertyType.SELF_OCCUPIED,
+                home_loan_interest_paid=Decimal("200000"),
+            ),
+        ],
+        loan_details_24b_list=[
+            LoanDetail(
+                property_sequence_no=1, lender_name="Axis Bank",
+                loan_amount=Decimal("1500000"),
+                interest_paid_let_out=Decimal("50000"),
+            ),
+            LoanDetail(
+                property_sequence_no=2, lender_name="HDFC Bank",
+                loan_amount=Decimal("4000000"),
+                interest_paid_self_occupied=Decimal("200000"),
+            ),
+        ],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R246")
+
+
+def test_R246_two_properties_second_property_mismatch_still_caught():
+    """A genuine mismatch on the SECOND property must still be caught, and
+    must not be masked by the first property's correct loan."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("1500000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("300000"),
+            home_loan_interest_paid=Decimal("50000"),
+        ),
+        house_properties=[
+            HousePropertyIncome(
+                property_type=PropertyType.LET_OUT,
+                annual_rent_received=Decimal("300000"),
+                home_loan_interest_paid=Decimal("50000"),
+            ),
+            HousePropertyIncome(
+                property_type=PropertyType.SELF_OCCUPIED,
+                home_loan_interest_paid=Decimal("200000"),
+            ),
+        ],
+        loan_details_24b_list=[
+            LoanDetail(
+                property_sequence_no=1, lender_name="Axis Bank",
+                loan_amount=Decimal("1500000"),
+                interest_paid_let_out=Decimal("50000"),
+            ),
+            LoanDetail(
+                property_sequence_no=2, lender_name="HDFC Bank",
+                loan_amount=Decimal("4000000"),
+                interest_paid_self_occupied=Decimal("120000"),
+            ),
+        ],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    result = next(r for r in results if r.rule_id == "ITR1-R246" and not r.passed)
+    assert "Property 2" in result.message
+
+
+def test_R048b_pre_1999_loan_surfaces_informational_note():
+    """A self-occupied loan sanctioned before 01/04/1999 is correctly capped
+    at Rs 30,000 by the calculator; R048b explains why, informationally."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("500000"),
+            sanction_date=date(1997, 6, 1),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    result = get_result(results, "ITR1-R048b")
+    assert result is not None
+    assert result.passed  # informational, never blocking
+    assert "30,000" in result.message
+
+
+def test_R048b_post_1999_loan_does_not_fire():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("900000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("2000000"),
+            sanction_date=date(2015, 6, 1),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert get_result(results, "ITR1-R048b") is None

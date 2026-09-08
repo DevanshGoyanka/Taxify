@@ -169,17 +169,22 @@ Day-to-day operations: [`docs/runbook.md`](docs/runbook.md).
 │       ├── browser.py              # Playwright browser launcher
 │       ├── auth.py                 # Portal login automation
 │       ├── downloader.py           # Core PDF downloader
-│       ├── downloader_168.py       # Form 168 downloader
+│       ├── downloader_168.py       # Form 168 downloader (built, not yet wired into any job/router — future feature)
 │       ├── downloader_26as.py      # 26AS PDF downloader
 │       ├── downloader_ais_tis.py   # AIS/TIS PDF downloader
 │       ├── pdf_unlocker.py         # PDF password removal
-│       ├── ais_converter.py        # AIS PDF → JSON
-│       ├── as26_converter.py       # 26AS PDF → structured data
+│       ├── as26_converter.py       # 26AS PDF → structured data (legacy fallback for .txt uploads only; see below)
 │       ├── ais_json_decryptor.py   # AIS encrypted JSON decryption
-│       ├── ais_structure_report.py # AIS structural analysis
-│       ├── emailer.py              # Email PDFs to clients
+│       ├── ais_structure_report.py # AIS structural analysis (standalone CLI: `python -m automation.ais_structure_report`)
+│       ├── emailer.py              # Email PDFs to clients (built, not yet wired into any router — future feature)
 │       └── errors.py               # Automation error types
-├── ais_extractor/                  # ⚠ Standalone AIS PDF extraction tool (NOT wired to API)
+├── ais_extractor/                  # Primary AIS/TIS/26AS PDF-parsing package, wired into
+│                                    # app/routers/integration.py (extract_ais/extract_tis/
+│                                    # extract_26as) -- corrects a stale "NOT wired to API" claim
+│                                    # previously here, per a full-codebase dead-code audit
+│                                    # (2026-09-05); app/automation/ais_converter.py, which this
+│                                    # comment also previously listed as part of the pipeline, was
+│                                    # actually dead code (zero importers) and has been deleted.
 │   ├── extractor.py                # State-machine AIS PDF parser
 │   ├── as26_extractor.py           # 26AS PDF parser
 │   ├── tis_extractor.py            # TIS PDF parser
@@ -220,11 +225,9 @@ Day-to-day operations: [`docs/runbook.md`](docs/runbook.md).
 │   └── __init__.py
 ├── API_Testing/                    # ERI API testing scripts, DSC signing tools, keystores
 ├── Docs/                           # All project documentation + audit CSV/TXT artifacts
-│   ├── ec2-proxy-decision.md       # EC2 proxy architecture decision for ITD connectivity
-│   ├── ARCHITECTURE.md             # Full architecture reference (1,800+ lines)
-│   ├── frontend_integration_audit.md  # Complete field-level pipeline map (1,300+ lines)
-│   ├── REMAINING_ITEMS_TO_IMPLEMENT.md # CBDT rule gaps per ITR form
-│   ├── itr_schedule_audit.md       # ITR schedule implementation audit
+│   ├── ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md  # Verified end-to-end architecture reference
+│   ├── TAXIFY_ROADMAP_BY_BUILD_FLOW.md           # Build-sequenced feature roadmap + CBDT gaps
+│   ├── ERI_UAT_EXPANSION_PLAN.md                 # ITR-2/3/5/6/7 UAT certification phase plan
 │   └── audit_itr*.csv              # Generated schema-coverage audit output
 ├── .env                            # SECRET_KEY, FRONTEND_URL, ERI_* credentials (not committed)
 ├── .gitignore
@@ -312,12 +315,15 @@ All **error** responses share a unified shape regardless of status code:
 |--------|------|------|-------------|----------|
 | `GET` | `/pan/{pan}/validate` | No | — | `{ pan, valid, message }` |
 | `GET` | `/pan/{pan}/analyze` | No | — | PAN entity type breakdown |
-| `POST` | `/tax-summary/compute` | **Bearer** | Form data JSON | Full tax breakdown (salary, deductions, slab tax, cess, etc.) |
+| `POST` | `/tax-summary/compute` | **Bearer** | Form data JSON | Full tax breakdown (salary, deductions, slab tax, cess, etc.) — legacy; ITR-2 requests here get a provisional preview only, not a real computation. The live frontend uses `/v2/tax-summary/compute` instead. |
 | `POST` | `/api/tax/compute` | **Bearer** | Form data JSON | (Alias for `/tax-summary/compute`) |
-| `POST` | `/business-income/calculate` | No | `BusinessIncomeRequest` | `BusinessIncomeResponse` |
-| `POST` | `/business-income/validate` | No | `BusinessIncomeRequest` | `BusinessValidationResponse` |
-| `POST` | `/capital-gains/calculate` | No | `CapitalGainsRequest` | `CapitalGainsResponse` |
-| `POST` | `/capital-gains/calculate-batch` | No | `{ transactions: [...] }` | `{ transactions, summary }` |
+
+`/business-income/calculate`, `/business-income/validate`, `/capital-gains/calculate`, and
+`/capital-gains/calculate-batch` were removed 2026-09-05 (full-codebase dead-code audit): zero
+frontend callers (their only caller, `frontend/src/services/capitalGainsCalculationService.ts`,
+was itself dead — it even called three endpoints, `/capital-gains/validate`,
+`/capital-gains/calculate-exemption`, `/capital-gains/validate-batch`, that never existed on the
+backend at all) and zero test coverage.
 
 ### Portal Integrations
 
@@ -400,7 +406,9 @@ All **error** responses share a unified shape regardless of status code:
 | Rounding | `ROUND_HALF_EVEN` per slab; 288A/288B rounding on final figures |
 | ITD JSON | All four forms have CBDT-compliant ITD JSON builders in `app/engine/itd/` |
 
-**Three-layer compute pipeline:** Input schemas (Pydantic) → Calculator (dataclass result) → ITD JSON Builder (CBDT-compliant output)
+**Canonical draft compute pipeline:** `ReturnDraft` → complete form-specific preparation (filing profile, property profile, bank accounts, verification/representative details, and optional TRP) → complete typed input → input validation → calculator → calculation validation → summary and CBDT JSON → official schema validation. The prepared typed input is reused for both summary and JSON generation; JSON generation does not perform late profile enrichment from `ReturnDraft`.
+
+The lower-level form components remain: schema models (`app/schemas/`) → calculator result (`app/engine/calculators/`) → CBDT builder (`app/engine/itd/`). See [`Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`](Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md) for the verified route-level architecture and the ITR-2/ITR-3 production plan for migration status.
 
 ---
 
@@ -526,12 +534,11 @@ resolution fails without it.
 
 | Doc | Purpose |
 |---|---|
-| [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md) | Full architecture reference — 1,800+ lines covering every schedule, calculator, and ITD builder |
-| [`Docs/frontend_integration_audit.md`](Docs/frontend_integration_audit.md) | Field-level pipeline map: frontend → API → calculator → ITD JSON |
-| [`Docs/REMAINING_ITEMS_TO_IMPLEMENT.md`](Docs/REMAINING_ITEMS_TO_IMPLEMENT.md) | CBDT rule gaps per ITR form |
-| [`Docs/itr_schedule_audit.md`](Docs/itr_schedule_audit.md) | ITR schedule implementation audit |
-| `Docs/CBDT_FRONTEND_*.md` | CBDT ↔ frontend field audits for AY 2026-27 |
-| [`Docs/ec2-proxy-decision.md`](Docs/ec2-proxy-decision.md) | Historical: EC2 proxy for ITD connectivity |
+| [`Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md`](Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md) | Verified end-to-end architecture reference — every route, the full v2 canonical pipeline, Type-3 submission, DB persistence |
+| [`Docs/TAXIFY_ROADMAP_BY_BUILD_FLOW.md`](Docs/TAXIFY_ROADMAP_BY_BUILD_FLOW.md) | Build-sequenced feature roadmap and CBDT rule gaps per ITR form |
+| [`Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md`](Docs/DUAL_MODE_ERI_INTEGRATION_PLAN.md) | Type-2 vs Type-3 ERI architecture |
+| [`Docs/ERI_UAT_EXPANSION_PLAN.md`](Docs/ERI_UAT_EXPANSION_PLAN.md) | ITR-2/3/5/6/7 UAT certification phase plan |
+| [`Docs/ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md`](Docs/ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md) | How the canonical `ReturnDraft` v2 pipeline was built |
 
 ### Operations
 

@@ -8,17 +8,15 @@ export interface Identified { id: string; }
 export interface Employer extends Identified {
   customEmployerName: string; employerName: string; employerTAN: string; natureOfEmployment: NatureOfEmployment | '';
   employerAddress: string; employerCity: string; employerStateCode: StateCode | ''; employerPinCode: string; employerZipCode: string;
-  salaryNatureRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
-  perquisiteNatureRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
   section10ExemptionRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
   basic: Money; da: Money; commission: Money; hra: Money; bonus: Money; allowances: Money; lta: Money;
   otherAllowance: Money; arrearSalary: Money; perquisites: Money; profitsInLieu: Money; rentPaid: Money;
   city: string; isMetroCity: boolean; isGovernmentEmployee: boolean; isDisabledEmployee: boolean;
   commutedPension: Money; gratuity: Money; leaveEncashment: Money; averageMonthlySalary: Money; yearsOfService: number;
-  unavailedLeaveDays: number; actualLtaFare: Money; isDomesticTravel: boolean; journeysInBlock: number; ltaExempt: Money;
+  unavailedLeaveDays: number; actualLtaFare: Money; isDomesticTravel: boolean; journeysInBlock: number;
   numberOfChildren: number; gratuityAlsoReceived: boolean; transportAllowance: Money; childrenEducationAllowance: Money;
-  hostelExpenditureAllowance: Money; uniformAllowance: Money; entertainmentAllowance: Money; professionalTax: Money;
-  vrsCompensation: Money; retrenchmentCompensation: Money; otherExempt: Money; tdsDeducted: Money; employerNPS: Money;
+  hostelExpenditureAllowance: Money; uniformAllowance: Money; uniformAllowanceExpenditure: Money; entertainmentAllowance: Money; professionalTax: Money;
+  vrsCompensation: Money; retrenchmentCompensation: Money; tdsDeducted: Money;
 }
 export interface CoOwner { coOwnerSNo: number; name: string; pan: string; aadhaar: string; share: number; }
 export interface TenantDetail { tenantSNo: number; name: string; pan: string; aadhaar: string; panOrTan: string; }
@@ -139,6 +137,7 @@ export interface ChapterVIA {
   section80DDB: Money;
   section80DDBUserType: '1' | '2' | '';
   section80DDBNameOfSpecDisease: string;
+  section80DDBReimbursement: Money;
   section80E: Money;
   section80EE: Money;
   section80EEA: Money;
@@ -187,7 +186,7 @@ export interface BusinessDeductions {
 export const EMPTY_CHAPTER_VIA: ChapterVIA = {
   section80C: 0, section80CCC: 0, pensionContribution80CCC: 0, section80CCDEmployeeOrSE: 0, section80CCD1B: 0, section80CCDEmployer: 0, pranNumber: '',
   section80D: 0, section80DD: 0, section80DDNatureOfDisability: '', section80DDTypeOfDisability: '', section80DDDependentType: '', section80DDDependentPAN: '', section80DDDependentAadhaar: '', section80DDForm10IA: { filed: 'N', acknowledgementNumber: '', filingDate: null, formAckNum11A: '' }, section80DDUDIDNumber: '',
-  section80DDB: 0, section80DDBUserType: '', section80DDBNameOfSpecDisease: '',
+  section80DDB: 0, section80DDBUserType: '', section80DDBNameOfSpecDisease: '', section80DDBReimbursement: 0,
   section80E: 0, section80EE: 0, section80EEA: 0, section80EEAStampDutyValue: 0, section80EEB: 0,
   section80G: 0, section80GG: 0, section80GGRentPaid: 0, section80GGA: 0, section80GGC: 0,
   section80U: 0, section80UNatureOfDisability: '', section80UTypeOfDisability: '', section80UForm10IA: { filed: 'N', acknowledgementNumber: '', filingDate: null, formAckNum11A: '' }, section80UUDIDNumber: '',
@@ -318,8 +317,10 @@ export const EMPTY_TAX_CHALLAN: Omit<TaxChallan, 'id'> = {
 };
 
 export interface BankAccount extends Identified { bankName: string; accountNumber: string; ifscCode: string; accountType: 'SB' | 'CA' | 'CC' | 'OD' | 'NRO' | 'OTH'; useForRefund: boolean; }
-export type FilingSection = '139(1)' | '139(4)' | '142(1)' | '148' | '153C' | '139(5)' | '139(9)' | '119(2)(b)';
+export type FilingSection = '139(1)' | '139(4)' | '142(1)' | '148' | '153C' | '139(5)' | '139(9)' | '92CD' | '119(2)(b)';
 export interface SeventhProvisoClause extends Identified { nature: '1' | '2' | '3' | '4'; amount: Money; }
+export interface JurisdictionResidenceEntry extends Identified { jurisdictionCode: string; tin: string; }
+export type ConditionsResStatus = '' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
 export interface SeventhProviso {
   depositExceedsOneCrore: boolean; depositAmount: Money;
   foreignTravel: boolean; foreignTravelAmount: Money;
@@ -346,6 +347,26 @@ export interface FilingStatus {
   form10IEACurrentAYNewRegime: boolean; form10IEACurrentAYNewRegimeDate: string | null; form10IEACurrentAYNewRegimeAck: string;
   form10IEACurrentAYOldRegime: boolean; form10IEACurrentAYOldRegimeDate: string | null; form10IEACurrentAYOldRegimeAck: string;
   seventhProviso: SeventhProviso;
+  /** ITR-2 only: SEBI FII/FPI registration number, required when isFiiFpi is true. */
+  sebiRegistrationNumber: string;
+  /** ITR-2 only: whether the assessee is a Foreign Institutional Investor / Foreign Portfolio Investor. */
+  isFiiFpi: boolean;
+  /** ITR-2 only: whether the Portuguese Civil Code (Schedule 5A) applies to this assessee. */
+  portugueseCivilCodeApplies: boolean;
+  /** ITR-2 only: Legal Entity Identifier, 20 characters. */
+  leiNumber: string;
+  /** ITR-2 only: LEI validity expiry date (YYYY-MM-DD). */
+  leiValidUptoDate: string | null;
+  /** ITR-2 only: Section 6 residential-status basis code. */
+  conditionsResStatus: ConditionsResStatus;
+  /** ITR-2 only: jurisdiction(s) of residence and TIN, for NRI/RNOR. */
+  jurisdictionResidenceEntries: JurisdictionResidenceEntry[];
+  /** ITR-2 only: total days stayed in India during the previous year. */
+  totalStayIndiaPrevYr: number | null;
+  /** ITR-2 only: total days stayed in India during the 4 preceding years. */
+  totalStayIndia4PrecYr: number | null;
+  /** ITR-2 only: Section 115H benefit claim. */
+  benefitUs115H: boolean;
 }
 export type ExemptIncomeCategory = 'AGRI' | 'GOVC' | 'ISI' | 'SSRA' | 'SRSC' | 'SRST' | 'SRPC' | 'OTH' | 'OTHN';
 export type ExemptIncomeSubCategory = '10(1)' | '10(2)' | '10(2A)' | '10(4)(i)' | '10(4)(ii)' | '10(4B)' | '10(4C)' | '10(4E)' | '10(4F)' | '10(4G)' | '10(4H)' | '10(6B)' | '10(6BB)' | '10(6D)' | '10(8)' | '10(8A)' | '10(8B)' | '10(9)' | '10(10BB)' | '10(10BC)' | '10(10D)' | '10(11)' | '10(11A)' | '10(12)' | '10(12A)' | '10(12AA)' | '10(12AB)' | '10(12B)' | '10(12BA)' | '10(12C)' | '10(13)' | '10(15)' | '10(16)' | '10(17A)' | '10(18)' | '10(19)' | '10(19A)' | '10(23AA)' | '10(23FBB)' | '10(23FBC)' | '10(23FD)' | '10(23FF)' | '10(25)' | '10(26)' | '10(26AAA)' | '10(30)' | '10(31)' | '10(32)' | '10(33)' | '10(35)' | '10(35A)' | '10(36)' | '10(37)' | '10(37A)' | '10(43)' | '10(44)' | 'DMD' | 'Incmexmptcircular' | 'Incmexmptnotification' | 'Receiptnotincme' | 'Anyother1' | 'Anyother2' | 'Anyother3' | 'Anyother4';
@@ -424,6 +445,20 @@ export interface PersonalInfo {
   residentialStatus?: 'ROR' | 'RNOR' | 'NR';
   isDirector?: boolean;
   holdsUnlistedShares?: boolean;
+  companyDirectorEntries: CompanyDirectorEntry[];
+  unlistedEquityEntries: UnlistedEquityEntry[];
+}
+export type CompanyType = 'D' | 'F';
+export interface CompanyDirectorEntry extends Identified {
+  companyName: string; companyType: CompanyType; pan: string; sharesType: 'L' | 'U'; din: string;
+}
+export interface UnlistedEquityEntry extends Identified {
+  companyName: string; companyType: CompanyType; pan: string;
+  openingShares: Money; openingCost: Money;
+  acquiredShares: Money; dateOfAcquisition: string | null;
+  faceValuePerShare: Money; issuePricePerShare: Money; purchasePricePerShare: Money;
+  transferredShares: Money; transferSaleConsideration: Money;
+  closingShares: Money; closingCost: Money;
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +536,12 @@ export interface Scrip112A {
   totalDeductions?: number;
   /** Computed by the tax engine — taxable balance after ₹1.25L exemption. */
   balance?: number;
+  /** Added during the ITR-2 backend mapper work — the original shipped type
+   *  had no date fields, but CBDT Schedule 112A requires a transfer date per
+   *  scrip. Optional so existing construction sites are unaffected until
+   *  updated; a scrip missing this is skipped (not fabricated) by the mapper. */
+  dateOfAcquisition?: string | null;
+  dateOfTransfer?: string | null;
 }
 
 /** One scrip in Schedule 115AD (FII/FPI). Same shape as 112A. */
@@ -749,6 +790,31 @@ export interface ReturnDraft {
   /** Net profit from P&L when the user files regular books under Section 44AA/regular PGBP (non-presumptive). */
   bpNetProfit: Money;
   verification: Verification; taxReturnPreparer: TaxReturnPreparer; provenance: ImportProvenance[]; compatibility?: LegacyCompatibilityEnvelope; reconciliation: ReconciliationState;
+  // ── ITR-2/3 additive fields (ignored by ITR-1/ITR-4) ──────────────────
+  /** Schedule CFL opening rows, per origin AY. ITR-2/3 only. */
+  broughtForwardLossEntries: BroughtForwardLossEntry[];
+  /** Legacy CFL control totals, reconciliation only. ITR-2/3 only. */
+  carriedForwardLossEntries: CarriedForwardLossEntry[];
+  /** Schedule SI (special-rate income). ITR-2/3 only. */
+  scheduleSIEntries: ScheduleSIEntry[];
+  /** Schedule FSI. ITR-2/3 only. */
+  foreignSourceIncome: ForeignSourceIncomeEntry[];
+  /** Schedule TR. ITR-2/3 only. */
+  foreignTaxRelief: ForeignTaxReliefEntry[];
+  /** Schedule FA. ITR-2/3 only. */
+  foreignAssets: ForeignAssetEntry[];
+  /** Schedule SPI (clubbing of income). ITR-2/3 only. */
+  clubbedIncome: ClubbedIncomeEntry[];
+  /** Schedule PTI (pass-through income). ITR-2/3 only. */
+  passThroughIncomeEntries: PassThroughIncomeEntry[];
+  /** Schedule AMT + AMTC. ITR-2/3 only. */
+  amt: AMTDetails | null;
+  /** Schedule AL. ITR-2/3 only. */
+  assetLiability: AssetLiabilityDetails | null;
+  /** Schedule 5A (Portuguese Civil Code). ITR-2/3 only. */
+  portugueseCivilCode: PortugueseCivilCodeDetails | null;
+  /** Schedule ESOP. ITR-2/3 only. */
+  esopDeferrals: ESOPDeferralEntry[];
 }
 
 /** Canonical aggregate of brought-forward losses the user is carrying into the current year. */
@@ -763,3 +829,104 @@ export interface BroughtForwardLosses {
 export const EMPTY_BROUGHT_FORWARD_LOSSES: BroughtForwardLosses = {
   bfLossHP: 0, bfLossBusiness: 0, bfLossSTCG: 0, bfLossLTCG: 0, bfLossSpeculation: 0,
 };
+
+// ── ITR-2/3 additive schedules (FSI, TR, FA, SPI, PTI, AMT, AL, 5A, ESOP,
+// brought/carried-forward loss ledger) — ignored by ITR-1/ITR-4. Mirrors
+// app/schemas/return_draft.py's ITR-2/ITR-3 additive schedules block exactly.
+
+export type LossHead = 'HP' | 'STCG' | 'LTCG' | 'RaceHorse';
+export type ForeignReliefSection = '90' | '90A' | '91';
+export type ForeignAssetType =
+  | 'BANK_ACCOUNT' | 'CUSTODIAL_ACCOUNT' | 'EQUITY_DEBT_INTEREST' | 'CASH_VALUE_INSURANCE'
+  | 'FINANCIAL_INTEREST' | 'IMMOVABLE_PROPERTY' | 'SIGNING_AUTHORITY' | 'TRUST'
+  | 'OTHER_FOREIGN_INCOME' | 'OTHER_ASSET';
+export type ClubbedHeadOfIncome = 'SAL' | 'HP' | 'CG' | 'OS';
+export type PTIIncomeHead = 'HP' | 'STCG' | 'LTCG' | 'OS';
+
+/** Opening brought-forward loss balance for one origin AY (Schedule CFL opening rows). ITR-2/3. */
+export interface BroughtForwardLossEntry extends Identified {
+  assessmentYear: string; head: LossHead; subCategory: string;
+  originalLoss: Money; broughtForward: Money; dateOfFiling?: string | null;
+}
+
+/** Legacy CFL control total retained for reconciliation only. ITR-2/3. */
+export interface CarriedForwardLossEntry extends Identified {
+  assessmentYearOfLoss: string; head: LossHead; originalLoss: Money; lossRemaining: Money;
+}
+
+export type ScheduleSISection = '115BB' | '115BBE' | '115BBF' | '115BBG' | '115BBJ' | '115BBA' | '111';
+
+/** Schedule SI: special-rate income not generated by another schedule.
+ *  Distinct from OtherSources' SpecialRateIncomeEntry (sourceDescription/
+ *  sourceAmount, Schedule-5A codes) -- ITR-2's calculator needs grossIncome/
+ *  deductions/taxRatePct per section, which that existing type lacks. */
+export interface ScheduleSIEntry extends Identified {
+  section: ScheduleSISection; description: string;
+  grossIncome: Money; deductions: Money; taxRatePct?: number | null;
+}
+
+/** Schedule FSI: foreign-source income and foreign tax, per jurisdiction. */
+export interface ForeignSourceIncomeEntry extends Identified {
+  countryCode: string; taxIdentificationNo: string;
+  salaryIncome: Money; hpIncome: Money; cgIncome: Money; osIncome: Money;
+  taxPaidOutsideIndia: Money; taxPayableInIndia: Money; reliefSection: ForeignReliefSection;
+}
+
+/** Schedule TR: foreign tax relief claim for one jurisdiction (Sec 90/90A/91). */
+export interface ForeignTaxReliefEntry extends Identified {
+  countryCode: string; taxIdentificationNo: string;
+  incomeIncludedInThisReturn: Money; taxPaidOutsideIndia: Money; indianTaxPayable: Money;
+  reliefClaimed: Money; reliefSection: ForeignReliefSection; form67Filed: boolean;
+}
+
+/** Schedule FA: one foreign asset or account disclosure. */
+export interface ForeignAssetEntry extends Identified {
+  assetType: ForeignAssetType; countryCode: string; institutionOrEntityName: string;
+  address: string; accountOrAssetIdentifier: string; ownershipStatus: string;
+  openingOrAcquisitionDate: string; peakValue: Money; closingValue: Money;
+  grossIncome: Money; incomeOffered: Money; incomeHead?: ClubbedHeadOfIncome | null;
+}
+
+/** Schedule SPI: income clubbed under Section 64. */
+export interface ClubbedIncomeEntry extends Identified {
+  specifiedPersonName: string; pan: string; relationship: string;
+  amountIncluded: Money; headOfIncome: ClubbedHeadOfIncome;
+}
+
+/** Schedule PTI: pass-through income from a business trust or investment fund.
+ *  Distinct from HouseProperty.passThroughIncome / CG pass-through aggregates. */
+export interface PassThroughIncomeEntry extends Identified {
+  entityName: string; entityPAN: string; incomeHead: PTIIncomeHead;
+  section: string; incomeAmount: Money; tdsCredit: Money;
+}
+
+/** AMT credit brought forward from one assessment year. */
+export interface AMTCreditEntry extends Identified {
+  assessmentYear: string; creditBroughtForward: Money;
+}
+
+/** Alternate Minimum Tax additions and opening credit ledger. ITR-2/3. */
+export interface AMTDetails {
+  deduction10AA: Money; deduction80IAto80RRBExcept80P: Money;
+  deduction35ADNetDepreciation: Money; creditsBroughtForward: AMTCreditEntry[];
+}
+
+/** Schedule AL: assets and related liabilities (mandatory above the income threshold). */
+export interface AssetLiabilityDetails {
+  immovableProperty: Money; cashInHand: Money; bankDeposits: Money;
+  sharesAndSecurities: Money; insurancePolicies: Money; loansAndAdvances: Money;
+  jewellery: Money; art: Money; vehiclesBoatsAircraft: Money; relatedLiabilities: Money;
+}
+
+/** Schedule 5A: Portuguese Civil Code income apportionment facts. */
+export interface PortugueseCivilCodeDetails {
+  spouseName: string; spousePAN: string; spouseAadhaar: string;
+  hpAmountApportioned: Money; cgAmountApportioned: Money; osAmountApportioned: Money;
+  tdsApportioned: Money;
+}
+
+/** Eligible-startup ESOP tax deferral ledger entry (Sec 191(2)). */
+export interface ESOPDeferralEntry extends Identified {
+  employerPAN: string; dpiitRegistrationNumber: string; assessmentYear: string;
+  taxDeferredBroughtForward: Money; taxPayableCurrentYear: Money; balanceTaxCarriedForward: Money;
+}

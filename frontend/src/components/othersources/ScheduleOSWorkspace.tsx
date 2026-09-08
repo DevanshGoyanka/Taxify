@@ -17,7 +17,14 @@ interface ScheduleOSWorkspaceProps {
 }
 
 const genId = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`;
-const money = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0);
+// Backend monetary fields are Decimal-backed and travel over the wire as JSON
+// strings (e.g. "839"), not numbers -- summary totals below must parse those,
+// not silently zero them, or every section subtotal reads 0 for a freshly
+// loaded (not yet re-typed this session) draft despite real saved data.
+const money = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
 const inr = (value: number): string => `₹${Number(value || 0).toLocaleString('en-IN')}`;
 const sum = (values: readonly { grossAmount?: number; value?: number; amount?: number; sourceAmount?: number }[]): number => values.reduce((total, entry) => total + money(entry.grossAmount ?? entry.value ?? entry.amount ?? entry.sourceAmount), 0);
 
@@ -155,7 +162,7 @@ const wideFieldStyle: React.CSSProperties = { gridColumn: 'span 2' };
 const labelStyle: React.CSSProperties = { display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' };
 const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 };
 const selectStyle: React.CSSProperties = { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'white' };
-const addButtonStyle: React.CSSProperties = { padding: '6px 12px', background: 'var(--gold)', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' };
+const addButtonStyle: React.CSSProperties = { padding: '6px 12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' };
 const removeButtonStyle: React.CSSProperties = { padding: '4px 8px', background: 'var(--danger)', color: 'white', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' };
 const removeCircleButtonStyle: React.CSSProperties = { background: 'var(--danger)', color: 'white', border: 'none', width: 24, height: 24, borderRadius: '50%', cursor: 'pointer', fontSize: 14, padding: 0 };
 const emptyStyle: React.CSSProperties = { padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 6, marginBottom: 24 };
@@ -303,7 +310,7 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
     <FormWarning form={form} categories={incompatibilities} />
 
     {/* ═══ Section 1: Interest income (open) ═══ */}
-    <Section title="Interest income" subtitle="Sections 194A, 194K, 244A, 10(11)/10(12) provisos" badge={COMPACT_FORMS.has(form) ? form : undefined} defaultOpen={true} summary={inr(interestTotal)}>
+    <Section title="Interest income" subtitle="Sections 194A, 194K, 244A, 10(11)/10(12) provisos" badge={COMPACT_FORMS.has(form) ? form : undefined} badgeColor="var(--accent-blue)" defaultOpen={true} summary={inr(interestTotal)}>
       <div style={subSectionHeaderStyle}>
         <h3 style={sectionTitleStyle}>Interest Entries (CBDT Compliant)</h3>
         <button type="button" style={addButtonStyle} disabled={disabled} onClick={addInterest}>+ Add Interest Entry</button>
@@ -491,7 +498,7 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
     </Section>
 
     {/* ═══ Section 7: Advanced disclosures (collapsed) ═══ */}
-    <Section title="Advanced Other Sources disclosures" subtitle="Sections 68–69D, 89A, accumulated PF, DTAA, special-rate income" defaultOpen={false} badge={COMPACT_FORMS.has(form) ? 'ITR-2/3 only' : undefined} badgeColor="var(--accent-rose)">
+    <Section title="Advanced Other Sources disclosures" subtitle="Sections 68–69D, 89A, accumulated PF, DTAA, special-rate income" defaultOpen={false} badge={COMPACT_FORMS.has(form) ? 'ITR-2/3 only' : undefined} badgeColor="var(--accent-blue)">
       <FormWarning form={form} categories={['unexplained', 'dtaa', 'section89A', 'accumulatedPf', 'specialRate'].filter((c) => isCategoryPopulated(c as Category, os)) as Category[]} />
 
       {/* Unexplained income — sections 68–69D */}

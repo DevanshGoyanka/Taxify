@@ -59,7 +59,6 @@ from app.schemas.itr1 import (
     AssesseeType,
     AgeBracket,
     BankAccount,
-    BankAccountType,
     CapitalGainsIncome,
     Chapter6ADeductions,
     DependentRelationship,
@@ -145,31 +144,77 @@ def _age_bracket_from_dob(dob: str | None) -> AgeBracket:
 # Salary
 # ---------------------------------------------------------------------------
 
-def _map_salary(employers: list[Employer]) -> tuple[SalaryIncome, Decimal, Decimal]:
+def _map_salary(
+    employers: list[Employer], tax_regime: TaxRegime = TaxRegime.OLD,
+) -> tuple[SalaryIncome, Decimal, Decimal]:
     """Map canonical employer rows → ``SalaryIncome`` (aggregate).
 
     Returns ``(salary_input, section_17_1_salary, gross_salary)`` so the
     caller can surface the breakdown in the compute response without
-    re-walking the rows.
+    re-walking the rows. ``gross_salary`` here is the full combined total
+    (17(1)+17(2)+17(3)); ``SalaryIncome.gross_salary`` itself is the 17(1)
+    portion only — see the field's own docstring in ``app/schemas/itr1.py``
+    — because ``app/engine/schedules/salary.py::compute`` adds
+    ``perquisites_value``/``profits_in_lieu_of_salary`` on top of it to
+    build the calculator's own gross-salary total. Passing the already-
+    combined total into ``gross_salary`` here would double-count both.
 
-    HRA exemption is recomputed per-employer u/s 10(13A) from the three-
-    condition test (actual HRA, rent − 10% salary, 50%/40% salary) —
-    the engine never trusts a frontend-supplied exempt amount.  When an
-    employer has HRA but no rent/metro facts, the exemption for that row
-    is zero (mirrors the legacy per-employer recompute in tax.py).
+    HRA and LTA exemptions are each recomputed per-employer (u/s 10(13A)
+    and 10(5) respectively) from the underlying evidence — the engine
+    never trusts a frontend-supplied exempt amount. When an employer has
+    HRA but no rent/metro facts, or LTA but no fare/domestic-travel
+    evidence, the exemption for that row is zero (mirrors the legacy
+    per-employer recompute in tax.py for HRA).
+
+    Retirement/severance receipts (gratuity, leave encashment, commuted
+    pension, VRS, retrenchment compensation), the disabled-employee
+    transport exemption, the two Section 10(14) child-related allowances,
+    and the Section 10(6)/10(7)/10(10CC) exemption rows were previously
+    dropped here entirely — captured on ``EmployerEntryManager.tsx`` with a
+    real, rendered UI, but never read by this function, so the taxable
+    residual of a real gratuity/leave-encashment/VRS/retrenchment payout
+    never reached computed income at all (see
+    ``Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`` §11.1-§11.4).
     """
     from app.engine.common.hra import compute_hra_exemption
+    from app.engine.constants import OLD_REGIME_STANDARD_DEDUCTION, NEW_REGIME_STANDARD_DEDUCTION
 
     basic = sum((e.basic for e in employers), Decimal("0"))
     da = sum((e.da for e in employers), Decimal("0"))
     bonus = sum((e.bonus for e in employers), Decimal("0"))
     commission = sum((e.commission for e in employers), Decimal("0"))
     hra_received = sum((e.hra for e in employers), Decimal("0"))
+    lta_received = sum((e.lta for e in employers), Decimal("0"))
     other_allowance = sum((e.allowances for e in employers), Decimal("0"))
+    other_taxable_salary = sum((e.otherAllowance for e in employers), Decimal("0"))
+    arrear_salary = sum((e.arrearSalary for e in employers), Decimal("0"))
     perquisites = sum((e.perquisites for e in employers), Decimal("0"))
     profits_in_lieu = sum((e.profitsInLieu for e in employers), Decimal("0"))
+    # Uniform allowance's Section 10(14)(i)/Rule 2BB exemption is "actual
+    # expenditure incurred," not a fixed statutory rate. The received amount
+    # always reaches taxable income below (uniform_allowance folds into
+    # section_17_1, same as other_taxable_salary); the exemption itself is
+    # granted only up to whatever actual-expenditure evidence the taxpayer
+    # supplies (Employer.uniformAllowanceExpenditure), computed separately by
+    # schedules/salary.py::_exempt_uniform_allowance -- see
+    # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §11.9/§19.
+    uniform_allowance = sum((e.uniformAllowance for e in employers), Decimal("0"))
+    uniform_allowance_expenditure = sum(
+        (e.uniformAllowanceExpenditure for e in employers), Decimal("0"),
+    )
 
-    section_17_1 = basic + da + bonus + commission + hra_received + other_allowance
+    # Section 17(1) salary: every taxable cash-salary component captured on
+    # the Employer row except perquisites (17(2)) and profits in lieu
+    # (17(3)), which are tracked separately below. LTA received, "other
+    # taxable salary", arrears/advance salary, and uniform allowance were
+    # previously omitted here entirely — a real income-understatement bug,
+    # not just a missing exemption — confirmed by grep: none of
+    # employer.lta/.otherAllowance/.arrearSalary/.uniformAllowance was read
+    # anywhere else in the canonical pipeline.
+    section_17_1 = (
+        basic + da + bonus + commission + hra_received + lta_received
+        + other_allowance + other_taxable_salary + arrear_salary + uniform_allowance
+    )
     gross_salary = section_17_1 + perquisites + profits_in_lieu
 
     # Statutorily recompute the HRA exemption per employer (u/s 10(13A)).
@@ -189,20 +234,153 @@ def _map_salary(employers: list[Employer]) -> tuple[SalaryIncome, Decimal, Decim
         # When HRA > 0 but rent/metro facts are missing, exemption is zero
         # for that row — surfaced later as a validation issue, not trusted.
 
-    lta_exempt = sum((e.ltaExempt for e in employers), Decimal("0"))
+    # Statutorily recompute the LTA/LTC exemption per employer (u/s 10(5)):
+    # least of the amount received and the actual eligible fare incurred,
+    # for domestic travel only (foreign travel is never exempt). Previously
+    # this summed employer.ltaExempt directly — a raw scalar with no live
+    # frontend writer anywhere in the product, so the exemption was always
+    # zero regardless of what the taxpayer entered as travel evidence.
+    lta_exempt = Decimal("0")
+    for e in employers:
+        if e.lta > 0 and e.isDomesticTravel:
+            lta_exempt += min(e.lta, max(Decimal("0"), e.actualLtaFare))
+        # Foreign travel, or LTA with no fare evidence entered, is not
+        # exempt for that row — surfaced later as a validation issue.
+
     prof_tax = sum((e.professionalTax for e in employers), Decimal("0"))
     ent_allowance = sum((e.entertainmentAllowance for e in employers), Decimal("0"))
-    is_govt = any(e.isGovernmentEmployee for e in employers)
+    # Derived from natureOfEmployment (a required, already-wired field on
+    # every employer row) rather than the separate employer.isGovernmentEmployee
+    # scalar, which has no live frontend control anywhere in the product and
+    # was therefore always False — silently disallowing the Section 16(ii)
+    # entertainment-allowance deduction and forcing the lower 10% (rather
+    # than 14%) Section 80CCD(2) NPS cap for every actual government
+    # employee.
+    #
+    # Two distinct statutory "government employee" definitions exist here and
+    # must not be collapsed into one flag (confirmed against the official
+    # CBDT ITR-4 Validation Rules, rules 67/68, and Section 80CCD(2)):
+    #   - is_govt_or_psu (CGOV/SGOV/PSU): Section 16(ii) entertainment
+    #     allowance eligibility. PSU employees DO qualify for this one.
+    #   - is_cg_sg (CGOV/SGOV only): Section 10(10)/10(10A)/10(10AA) full
+    #     exemption (gratuity/commuted pension/leave encashment) and Section
+    #     80CCD(2)'s 14%-vs-10% cap. PSU and the pensioner codes
+    #     (PE/PESG/PEPS/PEO) do NOT qualify for either of these.
+    is_govt_or_psu = any(e.natureOfEmployment in {"CGOV", "SGOV", "PSU"} for e in employers)
+    is_cg_sg = any(e.natureOfEmployment in {"CGOV", "SGOV"} for e in employers)
+
+    # Retirement/severance payouts (10(10), 10(10A), 10(10AA), 10(10B), 10(10C)).
+    gratuity_received = sum((e.gratuity for e in employers), Decimal("0"))
+    commuted_pension_received = sum((e.commutedPension for e in employers), Decimal("0"))
+    leave_encashment_received = sum((e.leaveEncashment for e in employers), Decimal("0"))
+    vrs_compensation = sum((e.vrsCompensation for e in employers), Decimal("0"))
+    retrenchment_compensation = sum((e.retrenchmentCompensation for e in employers), Decimal("0"))
+
+    # average_monthly_salary/years_of_service/unavailed_leave_days are facts
+    # about a single retirement event, not independently additive across
+    # employer rows. Take them from whichever employer row reports the
+    # largest combined retirement payout (the common case is exactly one
+    # such row); a taxpayer with two genuinely separate retirement events in
+    # the same year is an edge case this aggregate SalaryIncome shape cannot
+    # represent precisely.
+    def _retirement_total(e: Employer) -> Decimal:
+        return e.gratuity + e.leaveEncashment + e.commutedPension + e.vrsCompensation + e.retrenchmentCompensation
+
+    primary_retirement_employer = max(employers, key=_retirement_total, default=None)
+    if primary_retirement_employer is not None and _retirement_total(primary_retirement_employer) <= 0:
+        primary_retirement_employer = None
+    average_monthly_salary = (
+        primary_retirement_employer.averageMonthlySalary if primary_retirement_employer else Decimal("0")
+    )
+    years_of_service = primary_retirement_employer.yearsOfService if primary_retirement_employer else 0
+    unavailed_leave_days = (
+        primary_retirement_employer.unavailedLeaveDays if primary_retirement_employer else 0
+    )
+    # Whether gratuity was also received determines the Section 10(10A)
+    # commuted-pension exemption fraction (1/3rd vs 1/2) -- captured on the
+    # frontend per-employer, conditionally shown alongside commuted pension
+    # (EmployerEntryManager.tsx:532-536), but previously never reached the
+    # calculator at all, so the exemption always used the flat 1/3rd
+    # fraction regardless of whether the taxpayer actually had a separate
+    # gratuity payout.
+    commuted_pension_employer = max(employers, key=lambda e: e.commutedPension, default=None)
+    is_gratuity_also_received = (
+        commuted_pension_employer.gratuityAlsoReceived
+        if commuted_pension_employer is not None and commuted_pension_employer.commutedPension > 0
+        else True
+    )
+
+    # Transport allowance (10(14), disabled employees) and the two
+    # per-child Section 10(14) allowances.
+    transport_allowance = sum((e.transportAllowance for e in employers), Decimal("0"))
+    cea_allowance = sum((e.childrenEducationAllowance for e in employers), Decimal("0"))
+    hostel_allowance = sum((e.hostelExpenditureAllowance for e in employers), Decimal("0"))
+    is_disabled_employee = any(e.isDisabledEmployee for e in employers)
+    number_of_children = max((e.numberOfChildren for e in employers), default=0)
+
+    # Section 10(6)/10(7)/10(10CC) exemption rows: a structured
+    # dropdown+amount list per employer, distinct from the scalar fields
+    # above.
+    sec10_6_embassy_exempt = Decimal("0")
+    sec10_7_foreign_allowance = Decimal("0")
+    sec10_10cc_perquisite_tax = Decimal("0")
+    for e in employers:
+        for row in e.section10ExemptionRows:
+            if row.natureCode == "10(6)":
+                sec10_6_embassy_exempt += row.amount
+            elif row.natureCode == "10(7)":
+                sec10_7_foreign_allowance += row.amount
+            elif row.natureCode == "10(10CC)":
+                sec10_10cc_perquisite_tax += row.amount
+
+    # standard_deduction_claimed: the engine computes the actual Section
+    # 16(ia) standard deduction itself (schedules/salary.py); this field
+    # exists only so ITR1-B004 can cross-check that a claim was made, and
+    # was previously left at 0, which fired that warning on every salaried
+    # return regardless of whether the deduction was correctly auto-applied.
+    standard_deduction_claimed = (
+        (OLD_REGIME_STANDARD_DEDUCTION if tax_regime == TaxRegime.OLD else NEW_REGIME_STANDARD_DEDUCTION)
+        if section_17_1 > 0 else Decimal("0")
+    )
 
     salary_input = SalaryIncome(
-        gross_salary=gross_salary,
+        gross_salary=section_17_1,
         perquisites_value=perquisites,
         profits_in_lieu_of_salary=profits_in_lieu,
         hra_exempt_amount=hra_exempt,
         lta_exempt_amount=lta_exempt,
+        lta_amount_received=lta_received,
+        standard_deduction_claimed=standard_deduction_claimed,
         professional_tax_paid=prof_tax,
         entertainment_allowance=ent_allowance,
-        is_government_employee=is_govt,
+        is_government_employee=is_govt_or_psu,
+        is_cg_sg_employee=is_cg_sg,
+        gratuity_received=gratuity_received,
+        commuted_pension_received=commuted_pension_received,
+        leave_encashment_received=leave_encashment_received,
+        vrs_compensation=vrs_compensation,
+        retrenchment_compensation=retrenchment_compensation,
+        transport_allowance=transport_allowance,
+        sec10_14i_prescribed_allowance=cea_allowance,
+        sec10_14ii_personal_allowance=hostel_allowance,
+        uniform_allowance_received=uniform_allowance,
+        uniform_allowance_actual_expenditure=uniform_allowance_expenditure,
+        sec10_6_embassy_exempt=sec10_6_embassy_exempt,
+        sec10_7_foreign_allowance=sec10_7_foreign_allowance,
+        sec10_10cc_perquisite_tax=sec10_10cc_perquisite_tax,
+        is_disabled_employee=is_disabled_employee,
+        number_of_children=number_of_children,
+        average_monthly_salary=average_monthly_salary,
+        years_of_service=years_of_service,
+        unavailed_leave_days=unavailed_leave_days,
+        is_gratuity_also_received=is_gratuity_also_received,
+    )
+    # Keep the breakdown total consistent with what schedules/salary.py now
+    # treats as gross (see the retirement-receipts comment on the ``gross``
+    # local in that module's compute()).
+    gross_salary += (
+        gratuity_received + commuted_pension_received + leave_encashment_received
+        + vrs_compensation + retrenchment_compensation
     )
     return salary_input, section_17_1, gross_salary
 
@@ -299,7 +477,6 @@ _INTEREST_NATURES = {
     "SECURITIES": "OTH",
     "OTHER": "OTH",
 }
-_SAVINGS_KINDS = {"SAVINGS_BANK", "POST_OFFICE"}
 
 _OTHER_INTEREST_DESCRIPTIONS = {
     "NSC": "NSC accrued interest",
@@ -673,10 +850,6 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
     donations, structured_80g = _map_donations(draft.deductions.section80G)
 
     via: ChapterVIA = draft.deductions.chapterVIA
-    interest_sb = sum(
-        (i.grossAmount for i in draft.otherSources.interest if i.kind in _SAVINGS_KINDS),
-        Decimal("0"),
-    )
 
     # New regime (u/s 115BAC) excludes almost all Chapter VI-A deductions
     # except employer NPS (80CCD(2)) and the new-regime-specific 80TTA/80TTB
@@ -739,6 +912,7 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
             details_80ddb = Section80DDBDetails(
                 user_type=via.section80DDBUserType,
                 disease=via.section80DDBNameOfSpecDisease,
+                reimbursement_amount=via.section80DDBReimbursement,
             )
 
     ded_input = Chapter6ADeductions(
@@ -779,28 +953,22 @@ def _map_deductions(draft: ReturnDraft, tax_regime: TaxRegime) -> tuple[Chapter6
 def _map_capital_gains(draft: ReturnDraft) -> CapitalGainsIncome | None:
     """Map the capital-gains schedule to the ITR-1 ``CapitalGainsIncome``.
 
-    ITR-1 permits LTCG u/s 112A only. The canonical draft carries the raw
-    ``capitalGainsSchedule`` dict; the authoritative ITR-1/ITR-4 source is
-    the structured ``simplified112A`` block (sale consideration minus cost
-    of acquisition, floored at 0).  A bare ``ltcg112A`` scalar is NOT
-    trusted — older import paths wrote a purchase cost into it,
-    fabricating a fake gain that blocked ITR-1 with
+    ITR-1 permits LTCG u/s 112A only. The canonical draft carries the typed
+    ``capitalGainsSchedule`` (``app.schemas.return_draft.CapitalGainsSchedule``);
+    the authoritative ITR-1/ITR-4 source is the structured ``simplified112A``
+    block (sale consideration minus cost of acquisition, floored at 0).  A bare
+    ``ltcg112A`` scalar is NOT trusted — older import paths wrote a purchase
+    cost into it, fabricating a fake gain that blocked ITR-1 with
     "LTCG u/s 112A of Rs 499975 exceeds Rs 125000".  A purchase with no
     sale is never a capital gain; only a positive (sale - cost) is.
     Full 112A portfolio computation remains in
     ``app.engine.schedules.restricted_112a`` (invoked by the Phase 2
     compute endpoint when canonical transaction evidence is present).
     """
-    sched = draft.capitalGainsSchedule or {}
-    simplified = sched.get("simplified112A") or {}
-    if simplified:
-        sale = Decimal(str(simplified.get("totalSaleConsideration", 0) or 0))
-        cost = Decimal(str(simplified.get("totalCostAcquisition", 0) or 0))
-        ltcg_112a = max(Decimal("0"), sale - cost)
-    else:
-        sale = Decimal("0")
-        cost = Decimal("0")
-        ltcg_112a = Decimal("0")
+    simplified = draft.capitalGainsSchedule.simplified112A
+    sale = simplified.totalSaleConsideration
+    cost = simplified.totalCostAcquisition
+    ltcg_112a = max(Decimal("0"), sale - cost)
     return CapitalGainsIncome(
         ltcg_112a=ltcg_112a,
         full_value_of_consideration=sale,
@@ -856,8 +1024,19 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
             continue
         tax = row.taxDeducted
         gross = row.grossAmount
-        claimed_total += tax
         section = (row.section or "").strip().upper()
+        is_salary_section = section in _SALARY_SECTIONS
+        # A TDS2 (non-salary) row's credit for THIS year is
+        # claimOutOfTotTDSOnAmtPaid, not the full amount deducted (Rule
+        # 37BA(3) lets a taxpayer spread TDS credit across years matching
+        # when the corresponding income is offered to tax) -- defaults to
+        # the full tax when the user doesn't specify a partial claim.
+        # claimed_total (-> ITR1Input.total_tds_claimed) is computed for
+        # every row here, including one later skipped below for an invalid
+        # TAN, matching this field's original scope: it reflects the
+        # taxpayer's total intended claim, not just what could be typed.
+        claimed_this_year = tax if is_salary_section else (row.claimOutOfTotTDSOnAmtPaid or tax)
+        claimed_total += claimed_this_year
         tan = (row.deductorTAN or "").strip().upper()
         # Strict engine models receive only filing-valid identifiers. The
         # raw malformed value remains untouched in the editable draft and
@@ -881,7 +1060,7 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
                 "message": "TAN must contain 4 letters, 5 digits and 1 letter (e.g. ABCD12345E).",
             })
             continue
-        if section in _SALARY_SECTIONS:
+        if is_salary_section:
             tds1.append(TDS1Entry(
                 employer_tan=tan,
                 employer_name=row.deductorName or None,
@@ -896,7 +1075,7 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
                 tds_section=section or "194A",
                 gross_amount=gross,
                 tds_deducted=tax,
-                tds_claimed_this_year=row.claimOutOfTotTDSOnAmtPaid or tax,
+                tds_claimed_this_year=claimed_this_year,
                 financial_year=row.financialYear or (
                     f"{row.deductedYr}-{str(int(row.deductedYr) + 1)[-2:]}"
                     if row.deductedYr else None
@@ -907,6 +1086,9 @@ def _map_tds(tds_rows: list[TdsCredit]) -> tuple[list[TDS1Entry], list[TDS2Entry
                 ),
                 brought_forward_tds=row.broughtFwdTDSAmt,
                 tds_credit_carried_forward=row.amtCarriedFwd,
+                ownership=row.tdsCreditName,
+                pan_of_other_person=row.panOfOtherPerson or None,
+                aadhaar_of_other_person=row.aadhaarOfOtherPerson or None,
             ))
             tds_other_total += tax
     tds_interest = sum(
@@ -939,6 +1121,9 @@ def _map_tds3(tds_rows: list[TdsCredit]) -> tuple[list[TDS3Entry], Decimal]:
                 else "OS"
             ),
             tds_credit_carried_forward=row.amtCarriedFwd,
+            ownership=row.tdsCreditName,
+            pan_of_other_person=row.panOfOtherPerson or None,
+            aadhaar_of_other_person=row.aadhaarOfOtherPerson or None,
         ))
         total += claimed
     return mapped, total
@@ -973,6 +1158,12 @@ def _map_tcs(tcs_rows: list[TcsCredit]) -> tuple[list[TCSEntry], Decimal, list[d
                 tcs_collected=collected,
                 tcs_credit_claimed=claimed,
                 financial_year=(f"{row.deductedYr}-{str(int(row.deductedYr) + 1)[-2:]}" if row.deductedYr else None),
+                ownership=row.tcsCreditOwner,
+                pan_of_spouse_or_other_person=row.panOfSpouseOrOthrPrsn or None,
+                tcs_collected_spouse_or_other=row.tcsAmtCollSpouseOrOthrHand,
+                tcs_credit_claimed_spouse_or_other=row.tcsClaimedAmtCollSpouseOrOthrHand,
+                brought_forward_tds=row.broughtFwdTDSAmt,
+                deducted_year=str(row.deductedYr) if row.deductedYr else None,
             ))
             total += claimed
     return mapped, total, issues
@@ -1036,31 +1227,26 @@ def _map_tax_payments(challans: list[TaxChallan]) -> tuple[list[TaxPaymentDetail
     return payment_entries, advance_total, sat_total, quarterly
 
 
-_BANK_TYPE_MAP = {
-    "SB": BankAccountType("savings"),
-    "CA": BankAccountType("current"),
-    "CC": BankAccountType("cash_credit"),
-    "OD": BankAccountType("overdraft"),
-    "NRO": BankAccountType("nro"),
-    "OTH": BankAccountType("other"),
-}
-
-
 def _map_bank_accounts(banks: list[DraftBankAccount]) -> list[BankAccount]:
-    mapped: list[BankAccount] = []
-    for idx, b in enumerate(banks):
-        # ``is_primary`` follows the explicit ``useForRefund`` flag only —
-        # ``build_itr1_json`` enforces "exactly one primary" so a defaulting
-        # fallback here would mask that validation.  The first account is no
-        # longer auto-primary when the flag is unset.
-        mapped.append(BankAccount(
-            bank_name=b.bankName or None,
-            account_number=b.accountNumber or None,
-            ifsc_code=b.ifscCode or None,
-            account_type=_BANK_TYPE_MAP.get(b.accountType, BankAccountType("savings")),
-            is_primary=b.useForRefund,
-        ))
-    return mapped
+    """Phase 5F: delegates to the shared ``app.engine.personal_profile``
+    normalizer/projection — this used to be a second, independent,
+    zero-validation bank-account mapping alongside the gateway's own
+    ``_itr4_bank_accounts``/(now) ``validate_bank_accounts_strict``. Kept as
+    a thin wrapper (same signature, same call sites in this file and in
+    ``draft_to_itr2_input.py``) so no caller needs to change.
+
+    ``is_primary`` follows the explicit ``useForRefund`` flag only —
+    ``build_itr1_json`` enforces "exactly one primary" so a defaulting
+    fallback here would mask that validation. No cleaning/validation is
+    applied here (raw, unstripped values) — matches this mapper's historical
+    behavior exactly; see ``project_bank_account_itr1``'s docstring.
+    """
+    from app.engine.personal_profile import normalize_bank_accounts, project_bank_account_itr1
+
+    return [
+        BankAccount(**project_bank_account_itr1(n))
+        for n in normalize_bank_accounts(banks)
+    ]
 
 
 def _map_dividend_quarterly_breakdown(draft: ReturnDraft) -> dict[str, Decimal]:
@@ -1107,7 +1293,7 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
     tax_regime = TaxRegime.OLD if draft.regime == "old" else TaxRegime.NEW
     age_bracket = _age_bracket_from_dob(draft.personal.dateOfBirth)
 
-    salary_input, section_17_1, gross_salary = _map_salary(draft.employers)
+    salary_input, section_17_1, gross_salary = _map_salary(draft.employers, tax_regime)
     hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
     loan_details_24b_list = _map_24b_loans(draft.houseProperties)
     os_input, total_interest, total_dividend, family_pension, total_winnings = _map_other_sources(draft)
@@ -1168,6 +1354,27 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         draft.verification.date,
     )
 
+    # Preserve the frontend's explicit ITR eligibility facts instead of
+    # silently converting every draft into an eligible resident individual.
+    assessee_type_by_code = {
+        "I": AssesseeType.INDIVIDUAL,
+        "H": AssesseeType.HUF,
+        "F": AssesseeType.FIRM,
+    }
+    try:
+        assessee_type = assessee_type_by_code[draft.personal.assesseeStatus]
+    except KeyError as exc:
+        raise DraftMappingError(
+            f"Unsupported assessee status: {draft.personal.assesseeStatus}"
+        ) from exc
+    has_foreign_income_or_assets = bool(
+        draft.foreignAssets
+        or draft.foreignSourceIncome
+        or draft.foreignTaxRelief
+        or draft.otherSources.dtaaIncome
+    )
+    is_resident = draft.personal.residentialStatus == "ROR"
+
     itr1_input = ITR1Input(
         filing_date=filing_date,
         due_date=due_date,
@@ -1189,11 +1396,11 @@ def draft_to_itr1_input(draft: ReturnDraft) -> tuple[Any, dict[str, Any]]:
         advance_tax_q2=quarterly[1],
         advance_tax_q3=quarterly[2],
         advance_tax_q4=quarterly[3],
-        assessee_type=AssesseeType.INDIVIDUAL,
-        is_resident=True,
-        is_director=False,
-        has_foreign_assets=False,
-        has_unlisted_equity=False,
+        assessee_type=assessee_type,
+        is_resident=is_resident,
+        is_director=draft.personal.isDirector,
+        has_foreign_assets=has_foreign_income_or_assets,
+        has_unlisted_equity=draft.personal.holdsUnlistedShares,
         nature_of_employment=(draft.employers[0].natureOfEmployment or None) if draft.employers else None,
         house_property_count=max(1, len(draft.houseProperties)),
         relief_89=Decimal("0"),

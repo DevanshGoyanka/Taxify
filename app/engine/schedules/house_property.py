@@ -23,14 +23,20 @@ properties, one in profit and one in loss) IS permitted. The loss is passed
 through as signed income_chargeable and blocked at the CYLA level.
 """
 
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 from dataclasses import dataclass
 from app.engine.constants import (
     HOUSE_PROPERTY_STANDARD_DEDUCTION,
     HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED,
+    HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED_PRE_1999,
 )
 from app.schemas.itr1 import HousePropertyIncome, PropertyType, TaxRegime
+
+# Sec 24(b) proviso cutoff: a self-occupied loan sanctioned before this date
+# is capped at Rs 30,000 instead of the usual Rs 2,00,000.
+_SEC_24B_PRE_1999_CUTOFF = date(1999, 4, 1)
 
 
 @dataclass
@@ -76,6 +82,7 @@ def compute(
     input_data: Optional[HousePropertyIncome],
     regime: TaxRegime,
     ownership_share_percentage: Decimal = Decimal("100"),
+    loan_sanction_dates: Optional[list[Optional[date]]] = None,
 ) -> HPResult:
     if not input_data:
         return HPResult()
@@ -85,18 +92,33 @@ def compute(
     if input_data.property_type == PropertyType.SELF_OCCUPIED:
         interest = input_data.home_loan_interest_paid
         if regime == TaxRegime.NEW:
+            allowed_interest = Decimal("0")
             hp_income = Decimal("0")
             loss_disallowed = -interest
             loss_cf = Decimal("0")
         else:
-            allowed_interest = min(interest, HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED)
+            interest_limit = HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED
+            if loan_sanction_dates and any(
+                d is not None and d < _SEC_24B_PRE_1999_CUTOFF
+                for d in loan_sanction_dates
+            ):
+                interest_limit = HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED_PRE_1999
+            allowed_interest = min(interest, interest_limit)
             hp_income = -allowed_interest
             loss_disallowed = Decimal("0")
             loss_cf = -interest - hp_income if interest > allowed_interest else Decimal("0")
 
         return HPResult(
             property_type=pt,
-            interest_on_loan=interest,
+            # interest_on_loan carries what was actually ALLOWED under
+            # Sec 24(b) (capped at Rs 2L old regime, nil under the new
+            # regime) rather than the raw amount the taxpayer paid --
+            # this field feeds the ITR-1/ITR-4 ITD-JSON IntOnBorwCap field
+            # and the live Tax Computation preview's totalDeduction figure
+            # directly, and both must agree with income_chargeable, which
+            # already reflected the cap/disallowance. See
+            # test_house_property_schedule.py's interest_on_loan tests.
+            interest_on_loan=allowed_interest,
             income_chargeable=hp_income,
             loss_disallowed=loss_disallowed,
             loss_carried_forward=loss_cf,

@@ -27,6 +27,31 @@ from app.engine.validators.base import ValidationResult, Severity
 
 _z = Decimal("0")
 
+# nature_of_employment (ITR1Input.nature_of_employment) carries the raw
+# official code -- CGOV/SGOV/PSU/PE/PESG/PEPS/PEO/OTH (see
+# app/engine/draft_to_itr1_input.py's ITR1Input construction and
+# frontend/src/domain/returns/cbdtEnums.ts's NATURE_OF_EMPLOYMENT_OPTIONS)
+# -- never a human-readable label. Every rule below that used to match
+# keywords like "central government"/"pension"/"cg-" against it (found
+# 2026-09-03 while auditing the validator suite for the same pattern that
+# produced the already-fixed ITR1-R142; see
+# Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §14) never
+# matched any real code, so each rule was either permanently dormant (never
+# catches a real invalid claim) or permanently blocking (fires for every
+# claim regardless of actual employment, hard-blocking legitimate
+# government-employee/pensioner/judge filers). These two sets are the
+# single source of truth for that classification going forward.
+_CG_SG_EMPLOYMENT_CODES = frozenset({"CGOV", "SGOV"})
+_PENSIONER_EMPLOYMENT_CODES = frozenset({"PE", "PESG", "PEPS", "PEO"})
+
+
+def _is_cg_sg_employee(nature_of_employment: str | None) -> bool:
+    return (nature_of_employment or "") in _CG_SG_EMPLOYMENT_CODES
+
+
+def _is_pensioner(nature_of_employment: str | None) -> bool:
+    return (nature_of_employment or "") in _PENSIONER_EMPLOYMENT_CODES
+
 
 def _norm_token(value: object) -> str:
     """Normalize a dropdown/list token for official duplicate-selection checks."""
@@ -153,20 +178,24 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     ))
 
     # R099: a claimed TDS2/TDS3/TCS credit must identify its deduction year.
-    for schedule_name, entries, claim_field in (
-        ("tds2_entries", inp.tds2_entries or [], "tds_claimed_this_year"),
-        ("tds3_entries", inp.tds3_entries or [], "tds_claimed_this_year"),
-        ("tcs_entries", inp.tcs_entries or [], "tcs_credit_claimed"),
+    # TDS3 uses the canonical fields ``tds_claimed`` and ``deducted_yr``;
+    # unlike TDS2/TCS it does not expose ``tds_claimed_this_year`` or
+    # ``financial_year``. Keep the schedule-specific field names here so a
+    # claimed TDS3 row cannot bypass this rule through getattr defaults.
+    for schedule_name, entries, claim_field, year_field in (
+        ("tds2_entries", inp.tds2_entries or [], "tds_claimed_this_year", "financial_year"),
+        ("tds3_entries", inp.tds3_entries or [], "tds_claimed", "deducted_yr"),
+        ("tcs_entries", inp.tcs_entries or [], "tcs_credit_claimed", "financial_year"),
     ):
         for index, entry in enumerate(entries):
             claim = getattr(entry, claim_field, _z)
-            year = getattr(entry, "financial_year", None)
-            if claim > _z and (not year or year in {"0", "0000-00"}):
+            year = getattr(entry, year_field, None)
+            if claim > _z and (not year or str(year) in {"0", "0000", "0000-00"}):
                 results.append(_make(
                     "ITR1-R099",
                     False,
-                    f"{schedule_name} row {index + 1}: financial year is mandatory when tax credit is claimed.",
-                    f"{schedule_name}[{index}].financial_year",
+                    f"{schedule_name} row {index + 1}: deduction year is mandatory when tax credit is claimed.",
+                    f"{schedule_name}[{index}].{year_field}",
                 ))
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -186,35 +215,38 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # ========================================================================
 
     if sal:
-        # R100: Gratuity exempt amount cannot exceed gross salary
-        if sal.gratuity_received > _z and sal.gratuity_received > sal.gross_salary:
-            results.append(_make(
-                "ITR1-R100", False,
-                f"Gratuity exempt amount (Rs {sal.gratuity_received}) exceeds "
-                f"gross salary (Rs {sal.gross_salary}). "
-                f"Exempt gratuity cannot be more than total salary earned.",
-                "salary_income.gratuity_received",
-            ))
-        # R101: Commuted pension cannot exceed gross salary
-        if sal.commuted_pension_received > _z and sal.commuted_pension_received > sal.gross_salary:
-            results.append(_make(
-                "ITR1-R101", False,
-                f"Commuted pension (Rs {sal.commuted_pension_received}) exceeds "
-                f"gross salary (Rs {sal.gross_salary}).",
-                "salary_income.commuted_pension_received",
-            ))
-        # R102: Leave encashment exempt cannot exceed gross salary
-        if sal.leave_encashment_received > _z and sal.leave_encashment_received > sal.gross_salary:
-            results.append(_make(
-                "ITR1-R102", False,
-                f"Leave encashment (Rs {sal.leave_encashment_received}) exceeds "
-                f"gross salary (Rs {sal.gross_salary}).",
-                "salary_income.leave_encashment_received",
-            ))
+        # R100/R101/R102 (removed 2026-09-03): these previously compared
+        # gratuity/commuted-pension/leave-encashment *received* against the
+        # CURRENT YEAR's Section 17(1) salary_income.gross_salary and
+        # blocked filing if the payout was larger. There is no such
+        # statutory test anywhere in the Income Tax Act — these are
+        # career-end lump sums that routinely and correctly exceed one
+        # year's running salary (e.g. 25 years of service commonly
+        # produces a gratuity several times the final year's salary). The
+        # check was dormant (these three SalaryIncome fields were never
+        # populated by any mapper) until this session wired them
+        # (Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §11.1),
+        # at which point it started hard-blocking the exact realistic
+        # retirement claims that fix exists to correctly tax. The real
+        # statutory caps (Rs 20L / 25L / proportional-to-average-salary
+        # formulas) are already enforced in app/engine/schedules/salary.py;
+        # removed rather than "corrected" since no valid replacement
+        # comparison exists.
         # R142: 10(10AA) > ₹25L for non-govt employees
         if sal.leave_encashment_received > 2_500_000 and inp.nature_of_employment:
-            emp_lower = inp.nature_of_employment.lower()
-            is_govt = any(kw in emp_lower for kw in ("central government", "state government", "cg-", "sg-"))
+            # inp.nature_of_employment carries the raw official code
+            # (CGOV/SGOV/PSU/PE/PESG/PEPS/PEO/OTH — see
+            # app/engine/draft_to_itr1_input.py's ITR1Input construction),
+            # not a human-readable label. The keyword match below against
+            # "central government"/"cg-" never matched any real code, so
+            # this rule always treated every employee as non-government —
+            # dormant until leave_encashment_received was wired (this
+            # session), which would have turned it into a live false block
+            # for real CGOV/SGOV employees. "Government employee" here
+            # means specifically CGOV/SGOV, matching the definition already
+            # established in section_80ccd2.py and this mapper's own
+            # is_government_employee derivation.
+            is_govt = inp.nature_of_employment in {"CGOV", "SGOV"}
             if not is_govt:
                 results.append(_make(
                     "ITR1-R142", False,
@@ -339,6 +371,32 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 f"Sec 10(7) foreign service allowance (Rs {sal.sec10_7_foreign_allowance}) "
                 f"exceeds gross salary (Rs {sal.gross_salary})",
                 "salary_income.sec10_7_foreign_allowance",
+            ))
+        # R068: 10(10A) commuted pension received ≤ gross salary 17(1).
+        # sal.gross_salary is section_17_1 only (app/engine/draft_to_itr1_input.py's
+        # salary mapper deliberately excludes gratuity/commuted-pension/leave-
+        # encashment/VRS/retrenchment from it) -- a genuinely independent quantity
+        # from commuted_pension_received, not a subset of it, so this is a real
+        # constraint the CBDT e-Filing portal enforces at upload (Category A),
+        # not a trivial always-true check. See
+        # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §16.3.
+        if sal.commuted_pension_received > _z and sal.commuted_pension_received > sal.gross_salary:
+            results.append(_make(
+                "ITR1-R068", False,
+                f"Commuted pension received (Rs {sal.commuted_pension_received}) exceeds "
+                f"salary u/s 17(1) (Rs {sal.gross_salary}). Exemption u/s 10(10A) cannot "
+                f"exceed salary earned.",
+                "salary_income.commuted_pension_received",
+            ))
+        # R069: 10(10AA) earned leave encashment on retirement ≤ gross salary 17(1).
+        if sal.leave_encashment_received > _z and sal.leave_encashment_received > sal.gross_salary:
+            results.append(_make(
+                "ITR1-R069", False,
+                f"Earned leave encashment on retirement (Rs {sal.leave_encashment_received}) "
+                f"exceeds salary u/s 17(1) (Rs {sal.gross_salary}). Exemption u/s 10(10AA) "
+                f"cannot exceed salary earned (maximum deduction for a non-Government "
+                f"employee, including PSU, is separately capped at Rs 25,00,000 — see R142).",
+                "salary_income.leave_encashment_received",
             ))
         # R073: Sec 10(10CC) ≤ perquisites u/s 17(2)
         if sal.sec10_10cc_perquisite_tax > _z and sal.sec10_10cc_perquisite_tax > sal.perquisites_value:
@@ -490,7 +548,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             ))
         else:
             # Rule 116: Pensioners cannot claim 80CCD(2)
-            if "pension" in emp.lower():
+            if _is_pensioner(emp):
                 results.append(_make(
                     "ITR1-R116", False,
                     f"80CCD(2) claimed (Rs {ch6a.amount_80ccd2}) but assessee is a pensioner "
@@ -500,7 +558,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
             # Rule 120: Old regime, CG/SG employer => 14% salary
             if is_old:
-                is_cg_sg = any(kw in emp.lower() for kw in ("central", "state", "government"))
+                is_cg_sg = _is_cg_sg_employee(emp)
                 if is_cg_sg:
                     max_ccd2 = sal.gross_salary * Decimal("0.14")
                     if ch6a.amount_80ccd2 > max_ccd2:
@@ -548,7 +606,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # Rule 3: 80CCD(1) <= 10% salary non-pensioner
     if ch6a and ch6a.amount_80ccd1 > 0 and is_old:
         emp = inp.nature_of_employment or ""
-        if "pension" not in emp.lower():
+        if not _is_pensioner(emp):
             max_ccd1 = sal.gross_salary * Decimal("0.10")
             if ch6a.amount_80ccd1 > max_ccd1:
                 results.append(_make(
@@ -561,7 +619,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # Rule 2: 80CCD(1) pensioner <= 20% GTI (pre-check with estimated GTI)
     if ch6a and ch6a.amount_80ccd1 > 0 and is_old:
         emp = inp.nature_of_employment or ""
-        if "pension" in emp.lower():
+        if _is_pensioner(emp):
             # Estimate GTI as sum of income heads (actual GTI comes post-computation)
             estimated_gti = (sal.gross_salary - sal.standard_deduction_claimed - sal.professional_tax_paid
                              + osi.savings_bank_interest + osi.fixed_deposit_interest
@@ -1174,8 +1232,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     ))
         # R187: 80CCH CG employee age 17-27 at joining
         if ch6a.amount_80cch > _z and inp.nature_of_employment:
-            emp_lower = inp.nature_of_employment.lower()
-            if "central government" not in emp_lower:
+            if inp.nature_of_employment != "CGOV":
                 results.append(_make(
                     "ITR1-R187", False,
                     f"80CCH Agniveer Corpus Fund claimed but assessee is not a Central "
@@ -1183,16 +1240,23 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     f"80CCH is only for Agniveer soldiers.",
                     "nature_of_employment",
                 ))
-            if inp.agniveer_date_of_joining:
-                from datetime import date as dt_date
-                age_years = (inp.agniveer_date_of_joining - date(2000, 1, 1)).days / 365.25
-                if age_years < 17 or age_years > 27:
-                    results.append(_make(
-                        "ITR1-R187b", False,
-                        f"80CCH: joining age ~{int(age_years)} years. "
-                        f"Must be between 17 and 27 years at joining.",
-                        "agniveer_date_of_joining",
-                    ))
+            # Age at joining must use the taxpayer's real date of birth, not
+            # a hardcoded reference date -- this previously computed
+            # (joining_date - 2000-01-01).days/365.25, a meaningless
+            # placeholder-date computation rather than an actual age (the
+            # same class of bug as the filing_date=date_of_birth wiring bug
+            # documented earlier in this audit).
+            if inp.agniveer_date_of_joining and inp.filing_profile:
+                dob = inp.filing_profile.date_of_birth
+                if dob:
+                    age_years = inp.agniveer_date_of_joining.year - dob.year
+                    if age_years < 17 or age_years > 27:
+                        results.append(_make(
+                            "ITR1-R187b", False,
+                            f"80CCH: joining age ~{age_years} years. "
+                            f"Must be between 17 and 27 years at joining.",
+                            "agniveer_date_of_joining",
+                        ))
 
     # ========================================================================
     # SECTION: 80EE / 80EEA / 80EEB (Home Loan / EV Loan)
@@ -1524,6 +1588,37 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "house_property_income.home_loan_interest_paid",
             ))
 
+    # Rule 48b: a self-occupied loan sanctioned before 01/04/1999 is capped
+    # at Rs 30,000 under the Sec 24(b) proviso, not the usual Rs 2,00,000 --
+    # schedules/house_property.py::compute() already applies this correctly
+    # via HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED_PRE_1999, but no
+    # validator previously surfaced *why* a taxpayer's claimed interest above
+    # Rs 30,000 gets silently capped lower than the Rs 2,00,000 they might
+    # expect. Informational only -- the computed result is already correct
+    # regardless of whether this fires.
+    if is_old and inp.loan_details_24b_list:
+        for index, hp_row in enumerate(inp.reconciled_house_properties()):
+            if hp_row.property_type != PropertyType.SELF_OCCUPIED:
+                continue
+            if hp_row.home_loan_interest_paid <= Decimal("30000"):
+                continue
+            property_loans = [
+                ld for ld in inp.loan_details_24b_list
+                if ld.property_sequence_no == index + 1
+            ]
+            if any(
+                ld.sanction_date and ld.sanction_date < date(1999, 4, 1)
+                for ld in property_loans
+            ):
+                results.append(_info(
+                    "ITR1-R048b",
+                    f"Property {index + 1}: self-occupied loan was sanctioned before "
+                    f"01/04/1999. Section 24(b)'s interest deduction for such loans is "
+                    f"capped at Rs 30,000, not the usual Rs 2,00,000 -- the computed "
+                    f"house property loss already reflects this lower cap correctly.",
+                    f"house_properties[{index}].home_loan_interest_paid",
+                ))
+
     # ========================================================================
     # SECTION: LTCG 112A
     # ========================================================================
@@ -1659,8 +1754,14 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # ========================================================================
 
     tds1_total = sum(e.tds_deducted for e in (inp.tds1_entries or []))
-    tds2_total = sum(e.tds_deducted for e in (inp.tds2_entries or []))
-    tds3_total = sum(e.tds_deducted for e in (inp.tds3_entries or []))
+    # total_tds must match what the calculator actually credits (§14: TDS2's
+    # tds_claimed_this_year, TDS3's tds_claimed -- both fall back to the full
+    # deducted amount when unset, mirroring app/engine/schedules/tds_tcs's
+    # compute_all()), not the raw deducted amount -- otherwise this cross-
+    # check would fire (or fail to fire) based on the wrong basis for any
+    # taxpayer with a genuine partial-year TDS claim.
+    tds2_total = sum((e.tds_claimed_this_year or e.tds_deducted) for e in (inp.tds2_entries or []))
+    tds3_total = sum((e.tds_claimed or e.tds_deducted) for e in (inp.tds3_entries or []))
     tcs_total = sum(e.tcs_collected for e in (inp.tcs_entries or []))
     total_tds = tds1_total + tds2_total + tds3_total
 
@@ -1760,8 +1861,12 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
             ))
 
     # R102: TDS3 col 7 total claimed = sum of individual values
+    # TDS3Entry's field is `tds_claimed`, not `tds_claimed_this_year` (that
+    # name belongs to TDS2Entry) -- the previous getattr always missed and
+    # silently defaulted to 0, permanently disabling this check regardless
+    # of any real TDS3 claim mismatch.
     tds3_claimed_sum = sum(
-        getattr(e, 'tds_claimed_this_year', _z)
+        getattr(e, 'tds_claimed', _z)
         for e in (inp.tds3_entries or [])
     )
     if inp.schedule_tds3_total_claimed and inp.schedule_tds3_total_claimed > _z and tds3_claimed_sum > _z:
@@ -1860,25 +1965,58 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     "tax_regime",
                 ))
 
-    # Rule 190: "Option to withdraw from New Tax Regime is not available after
-    # due date of filing of return as mentioned u/s 139(1)."
-    #
-    # Withdrawing means opting OUT of the new regime into the old one, which is
-    # why this is gated on is_old exactly like R151 and R189. The new regime is
-    # the default u/s 115BAC(1A) — a belated return that simply stays on it is
-    # not withdrawing from anything, so it must not be blocked here.
-    if is_old and inp.filing_section:
-        if inp.filing_section != "139(1)":
-            if inp.filing_date and inp.due_date:
-                if inp.filing_date > inp.due_date:
-                    results.append(_make(
-                        "ITR1-R190", False,
-                        f"Option to withdraw from the New Tax Regime is not available "
-                        f"after the due date u/s 139(1) (filing section: "
-                        f"{inp.filing_section}, date: {inp.filing_date}, due: "
-                        f"{inp.due_date}).",
-                        "tax_regime / filing_section",
-                    ))
+    # Rule 190: option to withdraw FROM the new regime (i.e. select Old Tax
+    # Regime) is not available after the 139(1) due date has passed -- the
+    # same underlying restriction R151 already enforces, gated the same way
+    # (is_old). As originally coded this fired for ANY regime whenever
+    # filing_section != "139(1)" and the return was filed late, incorrectly
+    # blocking a perfectly valid belated/revised NEW-regime filing --
+    # dormant until filing_date/due_date were actually wired through by the
+    # gateway (see
+    # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md), so this bug
+    # never fired in production before that fix.
+    if is_old and inp.filing_section and inp.filing_section != "139(1)":
+        if inp.filing_date and inp.due_date:
+            if inp.filing_date > inp.due_date:
+                results.append(_make(
+                    "ITR1-R190", False,
+                    f"Option to withdraw from the New Tax Regime (i.e. select Old Tax "
+                    f"Regime) is not available for belated/revised returns filed after "
+                    f"the due date (filing section: {inp.filing_section}, date: "
+                    f"{inp.filing_date})",
+                    "filing_section",
+                ))
+
+    # Rule 191/192: seventh-proviso-to-139(1) declared amounts must actually
+    # cross the statutory threshold that makes the declaration true.
+    # AmtSeventhProvisio139ii/AmtSeventhProvisio139iii carry a schema-level
+    # minimum (Rs 2,00,000 / Rs 1,00,000) that nothing in this codebase
+    # enforced before this rule -- ITR1FilingProfile's own Pydantic fields
+    # only require `ge=0`, and the frontend amount inputs have no `min`
+    # attribute either (PersonalInfoTab.tsx), so a taxpayer ticking "foreign
+    # travel exceeded Rs 2 lakh" and then entering e.g. Rs 50,000 would
+    # previously reach JSON generation unblocked and produce a
+    # schema-invalid document (app/engine/itd/itr1.py only omits the amount
+    # key when the flag is false; it does not check the amount itself
+    # against the schema's minimum when the flag is true).
+    if inp.filing_profile:
+        sp = inp.filing_profile.seventh_proviso
+        if sp.foreign_travel_flag and sp.foreign_travel_amount < 200_000:
+            results.append(_make(
+                "ITR1-R191", False,
+                f"Seventh proviso to section 139(1): foreign-travel expenditure is declared "
+                f"but the amount entered (Rs {sp.foreign_travel_amount}) is below the "
+                f"Rs 2,00,000 threshold that makes this declaration applicable.",
+                "filing_profile.seventh_proviso.foreign_travel_amount",
+            ))
+        if sp.electricity_expenditure_flag and sp.electricity_expenditure_amount < 100_000:
+            results.append(_make(
+                "ITR1-R192", False,
+                f"Seventh proviso to section 139(1): electricity expenditure is declared "
+                f"but the amount entered (Rs {sp.electricity_expenditure_amount}) is below "
+                f"the Rs 1,00,000 threshold that makes this declaration applicable.",
+                "filing_profile.seventh_proviso.electricity_expenditure_amount",
+            ))
 
     # ========================================================================
     # SECTION: Additional Active Validations (formerly informational)
@@ -2606,8 +2744,10 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # ========================================================================
 
     if is_new:
-        # Rule 148: Transport allowance only for VIsually Imaired (cap Rs 38,400)
-        if sal.transport_allowance > 0:
+        # Rule 148: Transport allowance is capped at Rs 38,400 under the
+        # new-regime rule; valid amounts at or below the statutory cap must
+        # not be rejected merely because they are positive.
+        if sal.transport_allowance > Decimal("38400"):
             results.append(_make(
                 "ITR1-R148", False,
                 f"Transport allowance of Rs {sal.transport_allowance} claimed under "
@@ -2616,8 +2756,10 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "salary_income.transport_allowance",
             ))
 
-        # Rule 149: LTA and HRA not available in new regime
-        if sal.lta_amount_received > _z or sal.lta_exempt_amount > _z:
+        # Rule 149: LTA exemption is not available in the new regime. Merely
+        # receiving taxable LTA does not constitute an exemption claim; only
+        # a positive exempt amount should trigger this blocking rule.
+        if sal.lta_exempt_amount > _z:
             results.append(_make(
                 "ITR1-R149", False,
                 f"LTA exemption claimed under new regime. LTA (Sec 10(5)) is not "
@@ -2644,7 +2786,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     if judges_key in inp.exempt_income_dropdowns:
         # Only judges covered under SC/HC Judges Act can claim this
         emp = inp.nature_of_employment or ""
-        if "central government" not in emp.lower() and "state government" not in emp.lower():
+        if not _is_cg_sg_employee(emp):
             results.append(_make(
                 "ITR1-R301", False,
                 f"Exempt income under 'Judge Salaries Act' selected but nature of "
@@ -2875,6 +3017,10 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     if ch6a and ch6a.donations_80g and inp.schedule_80g:
         cat_label = {"A": "100% without qualifying limit", "B": "50% without qualifying limit",
                      "C": "100% subject to qualifying limit", "D": "50% subject to qualifying limit"}
+        # R079-R082: per-table "cash or non-cash mandatory before total" rule ID,
+        # by table. R084-R087: per-table cash+non-cash cross-foot rule ID.
+        mandatory_rule_id = {"A": "ITR1-R079", "B": "ITR1-R080", "C": "ITR1-R081", "D": "ITR1-R082"}
+        crossfoot_rule_id = {"A": "ITR1-R084", "B": "ITR1-R085", "C": "ITR1-R086", "D": "ITR1-R087"}
         for cat in ("A", "B", "C", "D"):
             cat_donations = [d for d in inp.schedule_80g.donations if d.donation_category == cat]
             if cat_donations:
@@ -2886,7 +3032,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     if d.total_donation and d.total_donation > _z:
                         if d.cash_amount == _z and d.non_cash_amount == _z:
                             results.append(_make(
-                                "ITR1-R079", False,
+                                mandatory_rule_id[cat], False,
                                 f"80G Table {cat}: total donation of Rs {d.total_donation} entered "
                                 f"but neither cash nor non-cash amount provided",
                                 f"schedule_80g.donations",
@@ -2894,7 +3040,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     # R084-R087: per-row total = cash + non-cash
                     if d.total_donation and abs(d.cash_amount + d.non_cash_amount - d.total_donation) > Decimal("1"):
                         results.append(_make(
-                            f"ITR1-R084", False,
+                            crossfoot_rule_id[cat], False,
                             f"80G Table {cat}: total donation (Rs {d.total_donation}) != "
                             f"cash (Rs {d.cash_amount}) + non-cash (Rs {d.non_cash_amount}) "
                             f"= Rs {d.cash_amount + d.non_cash_amount}",
@@ -3011,8 +3157,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
     # --- R185: 10(10B) not allowed for CG/SG/pensioners ---
     if sal and sal.retrenchment_compensation > _z and inp.nature_of_employment:
-        emp_lower = inp.nature_of_employment.lower()
-        if any(kw in emp_lower for kw in ("central", "state", "pension", "cg-", "sg-")):
+        if _is_cg_sg_employee(inp.nature_of_employment) or _is_pensioner(inp.nature_of_employment):
             results.append(_make(
                 "ITR1-R185", False,
                 f"10(10B) retrenchment compensation of Rs {sal.retrenchment_compensation} "
@@ -3144,20 +3289,41 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 "loan_details_80eea",
             ))
 
-    # --- R246: 24(b) sum of individual rows = total interest ---
-    if inp.loan_details_24b_list and hp.home_loan_interest_paid > _z:
-        total_24b_interest = sum(
-            ld.interest_paid_self_occupied + ld.interest_paid_let_out
-            for ld in inp.loan_details_24b_list
-        )
-        if total_24b_interest > _z:
-            if abs(hp.home_loan_interest_paid - total_24b_interest) > Decimal("1"):
-                results.append(_make(
-                    "ITR1-R246", False,
-                    f"24(b) total interest claimed (Rs {hp.home_loan_interest_paid}) does not "
-                    f"equal sum of individual loan interest amounts (Rs {total_24b_interest})",
-                    "house_property_income.home_loan_interest_paid",
-                ))
+    # --- R246: 24(b) sum of individual rows = total interest, per property ---
+    # Each property's claimed home_loan_interest_paid must match only its OWN
+    # Section 24(b) loan rows (matched by property_sequence_no, 1-indexed --
+    # the same convention the calculator uses in
+    # app/engine/calculators/itr1.py's hp_results comprehension). Comparing
+    # a single property's interest against the sum across ALL properties'
+    # loans (the previous behavior here) produced a false-positive Category A
+    # block for any genuine multi-property filer where each property carries
+    # its own loan -- found while auditing schema coverage for multi-property
+    # drafts; see
+    # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §20.5/§21.
+    if inp.loan_details_24b_list:
+        for index, hp_row in enumerate(inp.reconciled_house_properties()):
+            if hp_row.home_loan_interest_paid <= _z:
+                continue
+            property_loans = [
+                ld for ld in inp.loan_details_24b_list
+                if ld.property_sequence_no == index + 1
+            ]
+            if not property_loans:
+                continue
+            total_24b_interest = sum(
+                ld.interest_paid_self_occupied + ld.interest_paid_let_out
+                for ld in property_loans
+            )
+            if total_24b_interest > _z:
+                if abs(hp_row.home_loan_interest_paid - total_24b_interest) > Decimal("1"):
+                    results.append(_make(
+                        "ITR1-R246", False,
+                        f"Property {index + 1}: 24(b) total interest claimed "
+                        f"(Rs {hp_row.home_loan_interest_paid}) does not equal sum of "
+                        f"individual loan interest amounts for this property "
+                        f"(Rs {total_24b_interest})",
+                        f"house_properties[{index}].home_loan_interest_paid",
+                    ))
 
     # --- R249-R251: 80EE/80EEA/80EEB per-row sum = VIA total ---
     if ch6a and ch6a.amount_80ee > _z and inp.loan_details_80ee_list:
@@ -3241,8 +3407,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
 
     # --- R267: Gratuity ≤ ₹25L for CG/SG employees ---
     if sal and sal.gratuity_received > _z and inp.nature_of_employment:
-        emp_lower = inp.nature_of_employment.lower()
-        is_cg_sg = any(kw in emp_lower for kw in ("central", "state")) and "government" in emp_lower
+        is_cg_sg = _is_cg_sg_employee(inp.nature_of_employment)
         if is_cg_sg and sal.gratuity_received > 2_500_000:
             results.append(_make(
                 "ITR1-R267", False,
@@ -3250,7 +3415,13 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                 f"Central/State Government employees.",
                 "salary_income.gratuity_received",
             ))
-        is_psu_private = any(kw in emp_lower for kw in ("psu", "private", "other", "pension"))
+        # Everyone not CG/SG (PSU, other private, pensioners) is capped at
+        # Rs 20L per Section 10(10) -- the complement of is_cg_sg, not a
+        # separate keyword guess (govt employees are fully exempt and never
+        # reach this branch; the calculator's own is_govt logic in
+        # app/engine/schedules/salary.py already applies this same CG/SG
+        # vs. non-CG/SG split for the actual exemption computation).
+        is_psu_private = not is_cg_sg
         if is_psu_private and sal.gratuity_received > 2_000_000:
             results.append(_make(
                 "ITR1-R067", False,
@@ -3348,11 +3519,12 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
         ))
 
     # --- R079-R082: 80G per-table cash/noncash mandatory for total deduction column ---
+    _r079_082_by_cat = {"A": "ITR1-R079", "B": "ITR1-R080", "C": "ITR1-R081", "D": "ITR1-R082"}
     if inp.schedule_80g:
         for i, d in enumerate(inp.schedule_80g.donations):
             if d.cash_amount == _z and d.non_cash_amount == _z and ch6a and ch6a.amount_80g > _z:
                 results.append(_make(
-                    "ITR1-R079", False,
+                    _r079_082_by_cat.get(d.donation_category, "ITR1-R079"), False,
                     f"80G donation row {i+1}: neither cash nor non-cash amount entered "
                     f"but 80G deduction claimed. Each donation row must have an amount.",
                     f"schedule_80g.donations[{i}]",
@@ -3501,8 +3673,7 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
     # --- R270: Judges exemption — only CG/SG employees ---
     judges_key = "Judge Salaries Act"
     if judges_key in inp.exempt_income_dropdowns:
-        emp_lower = (inp.nature_of_employment or "").lower()
-        if not any(govt in emp_lower for govt in ("central government", "state government", "cg-", "sg-")):
+        if not _is_cg_sg_employee(inp.nature_of_employment):
             results.append(_make(
                 "ITR1-R270", False,
                 f"Judge Salaries Act exemption claimed but nature of employment is "

@@ -64,22 +64,9 @@ def eri_login() -> Dict[str, Any]:
     headers = eri_headers()
     url = f"{get_eri_base_url().rstrip('/')}/login"
     
-    import time
-    print(f"DEBUG [LOGIN] URL: {url}")
-    print(f"DEBUG [LOGIN] Envelope keys: {list(envelope.keys())}")
-    print(f"DEBUG [LOGIN] Data b64 (first 80 chars): {envelope.get('data', '')[:80]}")
-    print(f"DEBUG [LOGIN] Sign b64 (first 80 chars): {envelope.get('sign', '')[:80]}")
-    print(f"DEBUG [LOGIN] Headers (without secrets): {{k: '***' if 'secret' in k.lower() else v for k, v in headers.items()}}")
-    
-    # Send actual HTTP call to the gateway
-    t0 = time.time()
-    with httpx.Client(timeout=120.0, verify=False) as client:
+    # Send the request without logging URLs, envelopes, headers, tokens, or response bodies.
+    with httpx.Client(timeout=120.0, verify=True) as client:
         response = client.post(url, json=envelope, headers=headers)
-        elapsed = time.time() - t0
-        
-        print(f"DEBUG [LOGIN] HTTP {response.status_code} in {elapsed:.1f}s")
-        print(f"DEBUG [LOGIN] Response headers: {dict(response.headers)}")
-        print(f"DEBUG [LOGIN] Response body: {response.text[:500]}")
 
         if response.status_code not in (200, 201):
             raise ERIApiError(f"HTTP_{response.status_code}", f"Login failed with HTTP {response.status_code}: {response.text}")
@@ -110,7 +97,7 @@ def eri_logout(auth_token: str) -> None:
     headers = eri_headers(auth_token)
     url = f"{get_eri_base_url().rstrip('/')}/auth/logout"
     
-    with httpx.Client(timeout=120.0, verify=False) as client:
+    with httpx.Client(timeout=120.0, verify=True) as client:
         response = client.post(url, json=envelope, headers=headers)
         
         if response.status_code not in (200, 201):

@@ -80,11 +80,13 @@ from app.engine.schedules.other_sources import compute as compute_os
 from app.engine.schedules.salary import compute as compute_salary
 from app.engine.schedules.special_rates import (
     SpecialRateEntry,
+    SpecialRateSection,
     SpecialRatesResult,
     aggregate as aggregate_si,
     compute_111a,
     compute_112,
     compute_112a_taxable,
+    compute_115ad_stcg_other,
     compute_115bbf,
     compute_115bbg,
     compute_115bbe,
@@ -97,6 +99,17 @@ from app.schemas.itr1 import AgeBracket, TaxRegime
 from app.schemas.itr2 import ITR2Input, ITR2FilingProfile, ResidentialStatus
 
 _ZERO = Decimal("0")
+_OS_HEAD_SI_SECTIONS = frozenset({
+    "115BB", "115BBE", "115BBF", "115BBG", "115BBJ", "115BBA", "111", "115E",
+    # Section 115A/115AC/115ACA/115AD "any other income chargeable at
+    # special rate" dropdown family -- confirmed part of the Other Sources
+    # head by the official form's own Part B-TI arithmetic (item 4:
+    # "4d Total (4a + 4b + 4c)" where 4b is literally "Income chargeable to
+    # tax at special rates (2 of Schedule OS)").
+    "5A1ai", "5A1aA", "5A1aii", "5A1aiia", "5A1aiiaa", "5A1aiiab",
+    "5A1aiiac", "5A1aiii", "5A1bA", "5AC1ab", "5AC1abD", "5ACA1a",
+    "5AD1i", "5AD1iP", "5AD1iDiv", "5A1aiiaaP", "5A1aiiaa2P",
+})
 
 
 @dataclass
@@ -256,6 +269,7 @@ def _classify_cg_transactions(
                 date_of_acquisition=tx.date_of_acquisition.isoformat() if tx.date_of_acquisition else "",
                 date_of_transfer=tx.date_of_transfer.isoformat(),
                 full_consideration=tx.full_consideration,
+                stamp_duty_value=tx.stamp_duty_value or Decimal("0"),
                 acquisition_cost=tx.cost_of_acquisition,
                 indexed_acquisition_cost=tx.indexed_cost,
                 improvement_cost=tx.improvement_cost,
@@ -354,6 +368,20 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         input_data.filing_profile is None
         or input_data.filing_profile.assessee_status.value == "I"
     )
+    # Section 112(1)(a) second-proviso eligibility (land/building LTCG
+    # comparison, capital_gains.py::compute_ltcg()) counts BOTH ordinary
+    # residents and not-ordinarily-residents (NOR is a species of "resident"
+    # under section 6 -- only a non-resident is excluded), distinct from
+    # `is_resident` above (used for the narrower section 87A rebate
+    # eligibility, deliberately left unchanged here).
+    is_resident_or_nor = input_data.residential_status != ResidentialStatus.NON_RESIDENT
+    # Section 115AD: an FII/FPI's OWN capital gains on securities are taxed
+    # under a completely separate code (Schedule CG's NRISecur115AD/
+    # NRISaleOfEquityShareUs112A/NRIOnSec112and115Dtls, Schedule SI's
+    # 5AD1biip/5ADii/5ADiii/5ADiiiP), not the ordinary 111A/112/112A
+    # buckets -- distinct from `is_resident_or_nor` above (FII/FPI is
+    # inherently a non-resident classification).
+    is_fii_fpi = bool(input_data.filing_profile and input_data.filing_profile.is_fii_fpi)
 
     # ── 1. Income Heads ──────────────────────────────────────────────────────
     sal = compute_salary(input_data.salary_income, regime)
@@ -372,10 +400,87 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     hp_loss_disallowed_total = sum((hp.loss_disallowed for hp in hp_results), _ZERO)
     r.hp_loss_disallowed = hp_loss_disallowed_total
     r.house_property_income = hp_total
+    # HP-head pass-through income (Schedule PTI, e.g. a REIT/InvIT's own
+    # house-property income passed through under section 115UA) retains its
+    # head in the unit holder's hands -- added here, before CYLA/BFLA, so a
+    # passed-through HP loss is subject to the same inter-head set-off cap
+    # as the assessee's own HP loss. Previously this income was disclosed in
+    # Schedule PTI's own JSON block but never reached GTI at all -- the same
+    # "computed but not included in GTI" bug pattern as several other
+    # Schedule OS/PTI categories fixed this session.
+    r.house_property_income += sum(
+        (p.income_amount for p in input_data.pti_entries if p.income_head == "HP"), _ZERO
+    )
     r.schedules["hp"] = hp_results
 
     os = compute_os(input_data.other_sources_income, regime)
     r.other_sources_income = os.income_chargeable
+    # Schedule-SI sections that are genuinely part of the Other Sources head
+    # for Total Income purposes -- lottery/gaming (115BB/115BBJ), unexplained
+    # income (115BBE), accumulated PF (111), patent royalty (115BBF), carbon
+    # credits (115BBG), non-resident sportsmen (115BBA). These must be
+    # included in GTI here, the same way 111A/112/112A/VDA capital-gains
+    # special-rate income is included via positive_regular_cg/vda_income
+    # below -- otherwise Total Income is understated and the later
+    # `ti - special_rate_income_for_slab` step (which already subtracts this
+    # same total via si_result.surcharge_full_income) removes income that
+    # was never added, incorrectly shrinking slab tax on unrelated income.
+    # Uses gross_income (not gross_income - deductions) to match exactly
+    # what compute_lottery()/compute_115bbe()/etc. below actually tax.
+    r.other_sources_income += sum(
+        (sie.gross_income for sie in input_data.si_entries if sie.section in _OS_HEAD_SI_SECTIONS),
+        _ZERO,
+    )
+    # Income from owning/maintaining race horses (Schedule OS's own
+    # "IncFromOwnHorse" sub-head) is slab-rate Other Sources income like any
+    # other OS category, just disclosed separately in the official form.
+    # Only a net profit is added to GTI here -- a race-horse activity loss
+    # cannot be set off against other income at all (section 74A(3)), so a
+    # negative balance is disclosed but not netted against other OS income;
+    # its carry-forward is a further, separately-scoped limitation.
+    if input_data.os_race_horse is not None:
+        r.other_sources_income += max(_ZERO, input_data.os_race_horse.balance)
+    # Income from letting machinery/plant/furniture (Section 56(2)(ii)/(iii),
+    # Schedule OS's "RentFromMachPlantBldgs") is ordinary slab-rate Other
+    # Sources income computed net of its own specific deductions --
+    # Expenses/Depreciation/interest u/s 57 reduce it, while amounts
+    # disallowed u/s 58 and deemed profits u/s 59 (a balancing charge on
+    # sale of assets used in the letting activity) add back to it. Floored
+    # at zero: a resulting loss would need its own carry-forward tracking,
+    # a further scoped-out limitation matching the race-horse treatment
+    # above.
+    if input_data.os_machinery_plant_rent:
+        ded = input_data.os_deductions
+        deductible = (ded.expenses + ded.depreciation + ded.interest_expense_us57) if ded else _ZERO
+        addbacks = (ded.amount_not_deductible_us58 + ded.profit_chargeable_us59) if ded else _ZERO
+        r.other_sources_income += max(
+            _ZERO, input_data.os_machinery_plant_rent - deductible + addbacks
+        )
+    # NRI/FII special-rate Other Sources income (Section 115A/115AC/115ACA/
+    # 115AD/115E family, Schedule OS's "OthersGrossDtls" dropdown) lives in
+    # its own `os_special_rate_entries` field, entirely separate from
+    # `input_data.si_entries` -- so it is NOT covered by the
+    # `_OS_HEAD_SI_SECTIONS` inclusion above and must be added to GTI here,
+    # using the same gross-amount-taxed convention.
+    r.other_sources_income += sum(
+        (spr.source_amount for spr in input_data.os_special_rate_entries), _ZERO
+    )
+    # DTAA-rate Other Sources income (Schedule OS's NRIDTAADtlsSchOS rows) --
+    # likewise a field entirely separate from `input_data.si_entries`/
+    # `_OS_HEAD_SI_SECTIONS`, so it needs the same independent GTI-inclusion
+    # step as the block above. Previously this income was disclosed but
+    # never reached GTI or Schedule SI at all.
+    r.other_sources_income += sum(
+        (dtaa.amount for dtaa in input_data.os_dtaa_entries), _ZERO
+    )
+    # OS-head pass-through income (Schedule PTI) -- STCG/LTCG-head PTI
+    # entries are already dispatched to Schedule SI above; HP-head is added
+    # to house_property_income above; OS-head retains its head as ordinary
+    # slab-rate Other Sources income in the unit holder's hands. Same
+    # previously-missing GTI-inclusion bug as the HP-head fix above.
+    r.other_sources_income += sum(
+        (p.income_amount for p in input_data.pti_entries if p.income_head == "OS"), _ZERO
+    )
     r.schedules["os"] = os
 
     # ── 2. Capital Gains ─────────────────────────────────────────────────────
@@ -394,7 +499,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         compute_stcg as _compute_stcg_merged,
         compute_vda as _compute_vda_income,
     )
-    cg_result = _compute_cg_schedule(input_data.cg_transactions)
+    cg_result = _compute_cg_schedule(input_data.cg_transactions, is_resident=is_resident_or_nor)
 
     # Merge explicit 112A scrips (Schedule 112A Part-A3) into the 112A basket
     # so the ₹1.25L threshold is applied once over the union of classified
@@ -430,6 +535,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             ltcg_112a_assets=ltcg_112a_assets,
             ltcg_land_building=ltcg_land,
             ltcg_other=ltcg_other_signed,
+            is_resident=is_resident_or_nor,
         )
         cg_result = _aggregate_cg(stcg_result, ltcg_result, _ZERO, cg_result.exemptions)
     else:
@@ -658,17 +764,77 @@ def compute(input_data: ITR2Input) -> ITR2Result:
 
     # Section 112A: use the taxable amount from the CG engine (threshold applied once)
     si_112a_entry = compute_112a_taxable(cg_112a_taxable)
+    if is_fii_fpi:
+        # Section 115AD(1)(b)(iii) proviso: same 12.5% rate, FII-specific
+        # SecCode/Schedule-CG field (NRISaleOfEquityShareUs112A instead of
+        # SaleOfEquityShareUs112A) -- relabeling only, tax is unaffected.
+        si_112a_entry.section = SpecialRateSection.S115AD_LTCG_112A.value
     si_entries.append(si_112a_entry)
 
     # Section 111A: listed equity STCG (at 20% for AY 2026-27)
     si_111a_entry = compute_111a(cg_111a_income)
+    if is_fii_fpi:
+        # Section 115AD(1)(b)(ii) proviso: same 20% rate, FII-specific
+        # SecCode/Schedule-CG field (EquityMFonSTT's MFSectionCode
+        # "5AD1biip" instead of "1A").
+        si_111a_entry.section = SpecialRateSection.S115AD_STCG_111A.value
     si_entries.append(si_111a_entry)
 
     # Section 112: other post-loss LTCG at 12.5%
     other_ltcg = post_loss_cg["112"]
     if other_ltcg > 0:
         si_112_entry = compute_112(other_ltcg)
+        # Section 112(1)(a) second-proviso relief (land/building, residents,
+        # pre-23-Jul-2024 acquisition) computed per-row in compute_ltcg().
+        # Capped at this bucket's own actual tax so the relief can never
+        # exceed what was actually charged here -- loss set-off/exemption
+        # consumption upstream (post_loss_cg, exemptions) may already have
+        # reduced this blended bucket below the raw land/building gain the
+        # relief figure was computed from; capping avoids over-relieving in
+        # that case rather than attempting an exact proportional allocation
+        # across land/building vs. other section-112 income, which
+        # post_loss_cg's blended-basket design does not track separately.
+        # (An FII assessee never has this relief anyway -- compute_ltcg()'s
+        # own is_resident gate already zeroes it for a non-resident.)
+        relief = min(ltcg_result.total_excess_tax_112_1a, si_112_entry.tax_amount)
+        if relief > _ZERO:
+            si_112_entry.tax_amount -= relief
+        if is_fii_fpi:
+            # Section 115AD(1)(iii): same 12.5% rate, FII-specific SecCode/
+            # Schedule-CG field (NRIOnSec112and115Dtls[SectionCode=5ADiii]
+            # instead of SaleofAssetNADtls).
+            #
+            # Known limitation: `other_ltcg` blends EVERY "generic other"
+            # LTCG asset type together (securities AND non-securities like
+            # jewellery/depreciable/foreign-asset) -- the same blended-
+            # basket design already noted above for the 112(1)(a) relief.
+            # If an FII/FPI assessee holds a non-securities LTCG asset in
+            # the same year (unusual -- SEBI FPI registration doesn't
+            # typically permit it, but the schema doesn't forbid entering
+            # one), this relabels their entire blended total to 5ADiii, so
+            # Schedule SI's "5ADiii" figure can overstate (and "21"
+            # understate) the true FII-securities-only split versus
+            # Schedule CG's own NRIOnSec112and115/SaleofAssetNADtls
+            # disclosure. The TAX AMOUNT is unaffected either way (both
+            # codes share the identical 12.5% rate) -- only the SecCode
+            # attribution can be imprecise in this edge case. Splitting it
+            # exactly would require tracking an FII-securities-vs-other
+            # sub-basket through CYLA/BFLA/post_loss_cg, a materially
+            # larger change than this fix's scope; not attempted here.
+            si_112_entry.section = SpecialRateSection.S115AD_LTCG_OTHER.value
         si_entries.append(si_112_entry)
+
+    # Section 115AD(1)(ii): an FII/FPI's OWN "other" STCG on securities
+    # (STT not paid, i.e. not 111A-equivalent) is a flat 30% special rate,
+    # unlike an ordinary taxpayer's identical basket, which is slab-rate.
+    # This basket is EXCLUDED from the ordinary slab-tax base below
+    # (special_rate_income_for_slab) precisely because of this dispatch.
+    # Same blended-basket limitation as the LTCG comment above applies here
+    # (post_loss_cg["normal_stcg"] mixes securities and non-securities
+    # asset types) -- tax amount unaffected, SecCode attribution only
+    # approximate if both are present in the same return.
+    if is_fii_fpi and post_loss_cg["normal_stcg"] > 0:
+        si_entries.append(compute_115ad_stcg_other(post_loss_cg["normal_stcg"]))
 
     # VDA at 30%
     if vda_income > 0:
@@ -693,6 +859,37 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         elif sie.section == "111":
             from app.engine.schedules.special_rates import compute_111
             si_entries.append(compute_111(sie.gross_income))
+
+    # Schedule OS "any other income chargeable at special rate" dropdown --
+    # the Section 115A/115AC/115ACA/115AD/115E/115BBF/115BBG family of
+    # NRI/FII-specific special-rate categories. 115BBF/115BBG/115E already
+    # have dedicated handlers (reused here for consistency with every other
+    # caller of those functions); every other code dispatches through the
+    # shared compute_other_special_rate_income() lookup table.
+    from app.engine.schedules.special_rates import compute_other_special_rate_income
+    for spr in input_data.os_special_rate_entries:
+        if spr.source_description == "5BBF":
+            si_entries.append(compute_115bbf(spr.source_amount))
+        elif spr.source_description == "5BBG":
+            si_entries.append(compute_115bbg(spr.source_amount))
+        elif spr.source_description == "5Ea":
+            from app.engine.schedules.special_rates import compute_115e_a
+            si_entries.append(compute_115e_a(spr.source_amount))
+        elif spr.source_description == "5BBA":
+            from app.engine.schedules.special_rates import compute_115bba
+            si_entries.append(compute_115bba(spr.source_amount))
+        else:
+            si_entries.append(compute_other_special_rate_income(spr.source_description, spr.source_amount))
+
+    # DTAA-rate Other Sources income (Schedule OS's NRIDTAADtlsSchOS detail
+    # rows, disclosure-only until now) → taxed via Schedule SI's dedicated
+    # "DTAAOS" code at each entry's own treaty-vs-Act beneficial rate
+    # (`applicable_rate`, per section 90(2)) -- unlike every other special
+    # rate in this module, this one is not a fixed statutory percentage but
+    # varies per DTAA article/country, hence the per-entry rate argument.
+    from app.engine.schedules.special_rates import compute_dtaa_os
+    for dtaa in input_data.os_dtaa_entries:
+        si_entries.append(compute_dtaa_os(dtaa.amount, dtaa.applicable_rate))
 
     # Pass-through income (Schedule PTI) → SI entries
     from app.engine.schedules.special_rates import (
@@ -723,6 +920,13 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # Full post-loss 111A/112/112A/VDA income is excluded from slab tax.
     # For 112A, the ₹1.25 lakh threshold is tax-free but remains special-rate
     # income and must not leak into the normal slab basket.
+    # An FII/FPI's "other" STCG on securities (post_loss_cg["normal_stcg"])
+    # is dispatched to Schedule SI above (section 115AD(1)(ii), always
+    # special-rate for FII/FPI, unlike every other taxpayer type where this
+    # same basket is slab-rate) -- its exclusion from the slab base already
+    # comes through `si_result.surcharge_full_income` below (that new SI
+    # entry's own `taxable_income`), the same mechanism already used for
+    # 115BB/115BBE/etc., so it must not be added a second time here.
     special_rate_income_for_slab = (
         post_loss_cg["111a"]
         + post_loss_cg["112"]
@@ -838,7 +1042,12 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # amount appearing as deducted/collected in an information statement.
     r.total_tds = sum((entry.tds_deducted for entry in input_data.tds1_entries), _ZERO)
     r.total_tds += sum((entry.tds_claimed_this_year for entry in input_data.tds2_entries), _ZERO)
-    r.total_tds += sum((entry.tds_claimed_this_year for entry in input_data.tds3_entries), _ZERO)
+    # TDS3Entry's field is `tds_claimed`, not `tds_claimed_this_year` (that
+    # name belongs to TDS2Entry) -- the old line here referenced a
+    # nonexistent attribute, an AttributeError that crashed compute()
+    # outright on any return with real tds3_entries data, before ever
+    # reaching the JSON builder. No prior test exercised this path.
+    r.total_tds += sum((entry.tds_claimed for entry in input_data.tds3_entries), _ZERO)
     r.total_tcs = sum((entry.tcs_credit_claimed for entry in input_data.tcs_entries), _ZERO)
 
     detailed_advance = sum(

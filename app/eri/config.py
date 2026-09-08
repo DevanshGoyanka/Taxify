@@ -117,28 +117,44 @@ def _read_int_env(name: str, default: int = 1) -> Optional[int]:
 def get_eri_credentials() -> ERICredentials:
     """Resolve the active ERI credential bundle from ``.env``.
 
-    Reads ``ERI_MODE`` (default ``"type3"``) and ``ERI_ENV`` (default
-    ``"production"``) to select the suffix, then reads the suffixed
-    variables for that ``(mode, environment)`` pair.
+    Reads ``ERI_MODE`` and ``ERI_ENV`` to select the suffix, then reads the
+    suffixed variables for that ``(mode, environment)`` pair. Neither has a
+    default: all four (mode, environment) credential sets coexist in the
+    same ``.env`` (see the module docstring), so silently guessing either
+    one wrong would resolve real credentials for the wrong pair rather than
+    failing to resolve at all -- the same "a wrong gateway must fail, not
+    be guessed" principle :func:`get_eri_base_url` already applies. This
+    matters concretely: a prior incident (Dual-Mode ERI Integration Plan
+    §"Recovery incident") blanked several `.env` secrets via a careless
+    full-file rewrite; had ``ERI_ENV`` been blanked the same way while a
+    default of "production" was in effect, credential resolution would have
+    silently targeted production instead of failing loudly.
 
     Returns:
         The resolved :class:`ERICredentials`.
 
     Raises:
-        ValueError: If ``ERI_MODE`` is not "type2"/"type3", if ``ERI_ENV``
-            is not "uat"/"production", or if a digest-iteration value is
+        ValueError: If ``ERI_MODE``/``ERI_ENV`` is unset or not one of
+            their two valid values, or if a digest-iteration value is
             non-numeric.
     """
-    mode_raw = (os.getenv("ERI_MODE", "type3") or "type3").strip().lower()
-    env_raw = (os.getenv("ERI_ENV", "production") or "production").strip().lower()
+    mode_raw = (os.getenv("ERI_MODE") or "").strip().lower()
+    env_raw = (os.getenv("ERI_ENV") or "").strip().lower()
 
     if mode_raw not in ("type2", "type3"):
         raise ValueError(
-            f"ERI_MODE must be 'type2' or 'type3', got {mode_raw!r}."
+            f"ERI_MODE must be 'type2' or 'type3', got {mode_raw!r}. "
+            "It is never defaulted -- an unset or blank ERI_MODE must fail "
+            "loudly rather than silently resolve credentials for a guessed mode."
         )
     if env_raw not in ("uat", "production"):
         raise ValueError(
-            f"ERI_ENV must be 'uat' or 'production', got {env_raw!r}."
+            f"ERI_ENV must be 'uat' or 'production', got {env_raw!r}. "
+            "It is never defaulted -- an unset or blank ERI_ENV must fail "
+            "loudly rather than silently resolve credentials for a guessed "
+            "environment (all four (mode, environment) credential sets "
+            "coexist in .env, so guessing wrong would resolve real "
+            "credentials for the wrong pair)."
         )
 
     mode: Mode = mode_raw  # type: ignore[assignment]
@@ -255,14 +271,23 @@ def assert_credentials_at_startup() -> None:
     """Startup guard: validate the active credential bundle is sane.
 
     Call once from ``app/main.py`` lifespan. Raises ``RuntimeError`` if a
-    production deployment is misconfigured (mock DSC, missing digest secret
-    in production).
+    production deployment is misconfigured (mock or ngrok DSC signing,
+    missing digest secret in production).
 
     Note: this previously also required ``ERI_AWS_SSH_HOST_TYPE2_PRODUCTION``
-    for Type-2 production, because egress had to leave from an IP that ITD had
-    whitelisted, via an SSH jump host. That whitelisting requirement no longer
-    applies — ERI endpoints accept the deployment IP directly — so the check
-    was removed rather than left demanding a jump host that is never used.
+    for Type-2 production. That check was removed because the SSH-jump-host
+    mechanism it validated was never actually wired up (no ``paramiko``
+    import exists anywhere in this codebase; ``aws_ssh_host``/``aws_ssh_user``/
+    ``aws_ssh_key_path`` are read from ``.env`` but have zero consumers) --
+    NOT because IP whitelisting itself stopped applying. It still does: the
+    official ITD ``List of UAT/Production URLs for Type 2`` PDFs both state
+    "IP address... whitelisted at our end" as precondition #1, and every
+    Type-2 UAT call this project has actually made against ITD was routed
+    through a whitelisted egress IP for exactly this reason. This docstring
+    previously claimed the opposite ("no longer applies... accept the
+    deployment IP directly") -- that was wrong; see
+    ``Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md`` for the corrected
+    whitelisting/relay architecture.
     """
     creds = get_eri_credentials()
 
@@ -271,6 +296,17 @@ def assert_credentials_at_startup() -> None:
             if creds.dsc_signing_mode == "mock":
                 raise RuntimeError(
                     "ERI_DSC_SIGNING_MODE=mock is forbidden in Type-2 production."
+                )
+            if creds.dsc_signing_mode == "ngrok":
+                # "mock" fails safely -- an invalid signature is simply
+                # rejected by ITD. "ngrok" is more dangerous: it transmits
+                # the full plain payload (real taxpayer PII, and live OTP/EVC
+                # values via everify.py) to an external signer URL. That has
+                # no place in a production deployment.
+                raise RuntimeError(
+                    "ERI_DSC_SIGNING_MODE=ngrok is forbidden in Type-2 production "
+                    "-- it transmits taxpayer PII/OTP payloads to an external "
+                    "signer endpoint and must only be used for local development."
                 )
         if not creds.digest_secret_key:
             raise RuntimeError(

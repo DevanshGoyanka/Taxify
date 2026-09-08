@@ -48,7 +48,7 @@ SOURCE_UPLOAD: str = "upload"
 
 def upsert_imported_document(
     db: Session,
-    client_id: Optional[int],
+    client_id: int,
     user_id: int,
     assessment_year: str,
     document_type: str,
@@ -66,9 +66,7 @@ def upsert_imported_document(
 
     Args:
         db: SQLAlchemy session.
-        client_id: Client DB id.  ``None`` is stored as ``0`` so the row is
-            still persisted (every upload should pass a real client id in
-            practice, but we degrade gracefully).
+        client_id: Required positive client DB id owned by the user.
         user_id: Owning user id.
         assessment_year: e.g. ``"2026-27"``.
         document_type: one of ``DOCUMENT_TYPES`` (``"ais"``/``"tis"``/
@@ -80,8 +78,9 @@ def upsert_imported_document(
     Returns:
         The persisted ``ImportedDocument`` row (refreshed).
     """
-    if client_id is None:
-        client_id = 0
+    if client_id <= 0:
+        raise ValueError("client_id must be a positive, user-owned client id")
+
     existing = (
         db.query(ImportedDocument)
         .filter(

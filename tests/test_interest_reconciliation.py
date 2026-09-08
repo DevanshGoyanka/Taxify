@@ -81,13 +81,20 @@ def test_234b_runs_until_self_assessment_payment_after_default_filing_date() -> 
 
 
 def test_late_filing_and_revised_return_fees() -> None:
-    """Apply 234A, 234F, and 234-I only under their respective conditions."""
+    """Apply 234A, 234F, and 234-I only under their respective conditions.
+
+    234F's pre-Finance-Act-2021 Rs 10,000 tier for filing after 31 December
+    was removed; the maximum is Rs 5,000 regardless of how late within the
+    belated-filing window the return is filed -- the official ITR-1 JSON
+    schema enforces this directly (LateFilingFee234F max 5,000). See
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md.
+    """
     due_date = date(2026, 7, 31)
     filing_date = date(2027, 1, 1)
     total_income = Decimal("600000")
 
     assert compute_234a(Decimal("27400"), filing_date, due_date) == Decimal("1644")
-    assert compute_234f(filing_date, due_date, total_income) == Decimal("10000")
+    assert compute_234f(filing_date, due_date, total_income) == Decimal("5000")
     assert compute_234i(filing_date, due_date, total_income, "139(5)") == Decimal("5000")
     assert compute_234i(
         filing_date,

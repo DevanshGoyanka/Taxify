@@ -30,13 +30,19 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       employerCategory: '', age: 30, assesseeStatus: 'I',
       landlineStdCode: '0', landlinePhoneNo: '0',
       secondaryAddressDifferent: false, alternateAddress: null,
+      companyDirectorEntries: [], unlistedEquityEntries: [],
     },
     filing: {
       filingSection: '139(1)', returnType: 'ORIGINAL',
       originalAcknowledgementNumber: '', originalFilingDate: null,
       noticeNumber: '', noticeDate: null, representative: null,
       form10IEAAcknowledgement: '', form10IEADate: null,
-      form10IEAEarlierAYOldRegime: 'NA', form10IEAAssessmentYear: '',
+      // "N" (not "NA"): ITR-4 Sl. No. A23 is mandatory Y/N for
+      // Individual/HUF (CBDT ITR-4 Validation Rules AY 2026-27 rule
+      // #260) -- "NA" is reserved for Firm status (rule #235) and is
+      // rejected live by ITD's Type-2 UAT validateItr for the far more
+      // common Individual/HUF case if left at this default.
+      form10IEAEarlierAYOldRegime: 'N', form10IEAAssessmentYear: '',
       form10IEAEarlierAYAckOldRegime: '', form10IEAEarlierAYNewRegime: 'N',
       form10IEANewRegimeAssessmentYear: '', form10IEAEarlierAYAckNewRegime: '',
       form10IEACurrentAYNewRegime: false, form10IEACurrentAYNewRegimeDate: null,
@@ -48,6 +54,10 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
         electricityExpenditure: false, electricityExpenditureAmount: 0,
         otherClauseIV: false, clauseIVDetails: [],
       },
+      sebiRegistrationNumber: '', isFiiFpi: false, portugueseCivilCodeApplies: false,
+      leiNumber: '', leiValidUptoDate: null,
+      conditionsResStatus: '', jurisdictionResidenceEntries: [],
+      totalStayIndiaPrevYr: null, totalStayIndia4PrecYr: null, benefitUs115H: false,
     },
     employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: { ...EMPTY_CAPITAL_GAINS_SCHEDULE },
     otherSources: {
@@ -70,8 +80,13 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
     taxes: { tds: [], tcs: [], challans: [] }, bankAccounts: [],
     lossesBroughtForward: { ...EMPTY_BROUGHT_FORWARD_LOSSES },
     bpNetProfit: 0,
-    verification: { capacity: 'SELF', place: '', date: null, declarationAccepted: false },
+    verification: { capacity: 'SELF', place: '', date: null, declarationAccepted: true },
     taxReturnPreparer: { used: false, identificationNumber: '', name: '', reimbursementFromGovernment: 0 },
     provenance: [], reconciliation: { evidence: [], discrepancies: [] },
+    broughtForwardLossEntries: [], carriedForwardLossEntries: [], scheduleSIEntries: [],
+    foreignSourceIncome: [], foreignTaxRelief: [], foreignAssets: [],
+    clubbedIncome: [], passThroughIncomeEntries: [],
+    amt: null, assetLiability: null, portugueseCivilCode: null,
+    esopDeferrals: [],
   };
 }

@@ -113,9 +113,9 @@ def load_saved_filing_draft(
         raise Type3JsonExportError(
             f"Saved draft form {saved} does not match requested form {requested}."
         )
-    if requested == "ITR-1" and "schemaVersion" not in payload:
+    if requested in {"ITR-1", "ITR-2"} and "schemaVersion" not in payload:
         raise Type3JsonExportError(
-            "ITR-1 filing requires a canonical /v2 saved draft."
+            f"{requested} filing requires a canonical /v2 saved draft."
         )
     return payload
 

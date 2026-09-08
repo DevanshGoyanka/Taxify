@@ -226,7 +226,19 @@ class SalaryIncome(BaseModel):
     )
     is_government_employee: bool = Field(
         default=False,
-        description="True if the employee is a Government employee (Central/State/PSU). Required for entertainment allowance deduction u/s 16(ii).",
+        description="True if the employee is a Government employee (Central/State/PSU). Required for entertainment allowance deduction u/s 16(ii) — this definition is deliberately broader than is_cg_sg_employee below.",
+    )
+    is_cg_sg_employee: bool = Field(
+        default=False,
+        description=(
+            "True only if the employer is specifically Central or State Government "
+            "(narrower than is_government_employee, which also includes PSU). "
+            "Section 10(10)/10(10A)/10(10AA) full-exemption eligibility (gratuity, "
+            "commuted pension, leave encashment) and Section 80CCD(2)'s 14%-vs-10% "
+            "salary cap are both CG/SG-only by statute; PSU employees do not qualify "
+            "for either, unlike the broader Section 16(ii) entertainment-allowance "
+            "eligibility above."
+        ),
     )
     gratuity_received: Decimal = Field(default=Decimal("0"), ge=0)
     commuted_pension_received: Decimal = Field(default=Decimal("0"), ge=0)
@@ -240,6 +252,68 @@ class SalaryIncome(BaseModel):
     sec10_10cc_perquisite_tax: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14i_prescribed_allowance: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14ii_personal_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    # Uniform allowance u/s 10(14)(i) / Rule 2BB(1)(f): exempt only to the
+    # extent of actual expenditure incurred, not a fixed statutory rate like
+    # CEA/hostel above -- kept as its own received/expenditure pair rather
+    # than folded into sec10_14i_prescribed_allowance so the engine cannot
+    # accidentally apply the wrong (fixed-rate) cap to it.
+    uniform_allowance_received: Decimal = Field(default=Decimal("0"), ge=0)
+    uniform_allowance_actual_expenditure: Decimal = Field(default=Decimal("0"), ge=0)
+    is_disabled_employee: bool = Field(
+        default=False,
+        description=(
+            "True if the employee has a disability recognised under the "
+            "Persons with Disabilities Act. Required for the Section 10(14) "
+            "disabled-employee transport allowance exemption (Rule 2BB)."
+        ),
+    )
+    number_of_children: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Number of children for whom Children Education Allowance / "
+            "Hostel Expenditure Allowance is claimed u/s 10(14). The "
+            "computation engine caps the statutory per-child rate at 2 "
+            "children regardless of the value supplied here."
+        ),
+    )
+    average_monthly_salary: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        description=(
+            "Average monthly salary over the last 10 months of service, "
+            "used as the base for the Section 10(10) gratuity and Section "
+            "10(10AA) leave-encashment statutory sub-limit tests."
+        ),
+    )
+    years_of_service: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Completed years of service at retirement/separation, used for "
+            "the Section 10(10) gratuity and Section 10(10AA) leave-"
+            "encashment statutory sub-limit tests."
+        ),
+    )
+    unavailed_leave_days: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Earned leave standing to the employee's credit (in days) at "
+            "retirement/separation, used for the Section 10(10AA) leave-"
+            "encashment cash-equivalent sub-limit test."
+        ),
+    )
+    is_gratuity_also_received: bool = Field(
+        default=True,
+        description=(
+            "True if gratuity was also received alongside commuted pension. "
+            "Determines the Section 10(10A) non-government exemption "
+            "fraction: 1/3rd if gratuity is also received, 1/2 if not. "
+            "Defaults to True (the lower, conservative fraction) when "
+            "unspecified."
+        ),
+    )
 
 
 
@@ -1080,6 +1154,8 @@ class ITR1Input(BaseModel):
             "backward-compatible single-property callers."
         ),
     )
+    # Deprecated compatibility projection. Canonical ITR-1 preparation stores
+    # the same value on filing_profile.tax_return_preparer.
     tax_return_preparer: Optional["TaxReturnPreparer"] = None
 
     @model_validator(mode="after")
@@ -1359,6 +1435,8 @@ class FilingAddress(PostalAddress):
         max_length=125,
         pattern=r"^([\.a-zA-Z0-9_\-])+@([a-zA-Z0-9_\-])+(([a-zA-Z0-9_\-])*\.([a-zA-Z0-9_\-])+)+$",
     )
+    landline_std_code: int = Field(default=0, ge=0, le=99999)
+    landline_phone_no: str = Field(default="0", pattern=r"^[0-9]{1,10}$")
 
 
 class SeventhProvisoDetails(BaseModel):
@@ -1436,7 +1514,11 @@ class ITR1FilingProfile(BaseModel):
     # Form 10-IEA acknowledgement when the assessee opts out of the new
     # regime via Form 10-IEA.  Empty string → emitted as "N" / omitted.
     form_10iea_acknowledgement: str = Field(default="", max_length=25)
-    form_10iea_date: Optional[date] = None
+    # Taxpayer-level filing data owned by the canonical personal profile.
+    # These fields are projected into the separate CBDT Refund and
+    # TaxReturnPreparer wire blocks by the JSON builder.
+    bank_accounts: List["BankAccount"] = Field(default_factory=list)
+    tax_return_preparer: Optional["TaxReturnPreparer"] = None
 
     @model_validator(mode="after")
     def validate_opt_out_requires_form_10iea(self) -> "ITR1FilingProfile":
@@ -1514,12 +1596,30 @@ class TDS3Entry(BaseModel):
     brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
     head_of_income: Literal["HP", "BP", "OS", "EI"] = "OS"
     tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
+    # Matches the official schema's TDSCreditName enum exactly ("S"/"O").
+    # The frontend already captures this (ReturnDraft.TdsCredit.tdsCreditName/
+    # panOfOtherPerson/aadhaarOfOtherPerson) -- it was simply dropped when
+    # mapped into this narrower canonical type, causing the ITR-2 builder to
+    # hardcode "Self" for every TDS3 credit regardless of the taxpayer's
+    # actual entry.
+    ownership: Literal["S", "O"] = "S"
+    pan_of_other_person: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    aadhaar_of_other_person: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
 
     @model_validator(mode="after")
     def validate_claimed_does_not_exceed_deducted(self) -> "TDS3Entry":
-        """Reject claimed credit that exceeds the deducted credit."""
-        if self.tds_claimed > self.tds_deducted:
-            raise ValueError("TDS3 claimed credit cannot exceed deducted credit")
+        """Reject claimed credit that exceeds deducted plus brought-forward credit.
+
+        CBDT rule 466/467: claimed credit is checked against deducted credit
+        *plus* brought-forward credit, not deducted alone — this model has a
+        real ``brought_forward_tds`` field precisely for a taxpayer claiming
+        TDS carried forward from an earlier year alongside this year's
+        deduction, so excluding it here would reject that legitimate case.
+        """
+        if self.tds_claimed > self.tds_deducted + self.brought_forward_tds:
+            raise ValueError(
+                "TDS3 claimed credit cannot exceed deducted credit plus brought-forward credit"
+            )
         return self
 
 
@@ -1968,6 +2068,11 @@ class TDS2Entry(BaseModel):
     deducted_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}$")
     brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
     tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
+    # Same rationale as TDS3Entry.ownership above -- already captured by the
+    # frontend, previously dropped in mapping.
+    ownership: Literal["S", "O"] = "S"
+    pan_of_other_person: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    aadhaar_of_other_person: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
 
 
 class TCSEntry(BaseModel):
@@ -1978,6 +2083,19 @@ class TCSEntry(BaseModel):
     tcs_collected: Decimal = Field(default=Decimal("0"), ge=0)
     tcs_credit_claimed: Decimal = Field(default=Decimal("0"), ge=0)
     financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
+    # Matches the official schema's TCSCreditOwner enum exactly ("1"/"2").
+    # ReturnDraft.TcsCredit already captures the full ownership split
+    # (tcsCreditOwner, panOfSpouseOrOthrPrsn, and the spouse-side collected/
+    # claimed amounts below) -- previously dropped when mapped into this
+    # narrower canonical type, causing the ITR-2 builder to hardcode "Self"
+    # and zero out the spouse-side amounts for every TCS credit.
+    ownership: Literal["1", "2"] = "1"
+    pan_of_spouse_or_other_person: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+    tcs_collected_spouse_or_other: Decimal = Field(default=Decimal("0"), ge=0)
+    tcs_credit_claimed_spouse_or_other: Decimal = Field(default=Decimal("0"), ge=0)
+    brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
+    tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
+    deducted_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}$")
 
 
 ITR1Input.model_rebuild()

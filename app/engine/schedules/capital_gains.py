@@ -5,14 +5,38 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from app.engine.constants import LTCG_112A_EXEMPTION, LTCG_112A_RATE_POST_JUL24
+from app.engine.constants import (
+    LTCG_112A_EXEMPTION,
+    LTCG_112A_RATE_POST_JUL24,
+    LTCG_OTHER_RATE,
+    LTCG_OTHER_RATE_POST_JUL24,
+)
 
 _ZERO = Decimal("0")
 _GRANDFATHERING_CUTOFF = date(2018, 2, 1)
+# Finance Act 2024's indexation-removal cutoff. The second proviso to
+# section 112(1)(a) protects a resident individual/HUF who acquired
+# land/building before this date from paying MORE tax under the new
+# 12.5%-without-indexation regime than the old 20%-with-indexation regime
+# would have required.
+_SECOND_PROVISO_112_1A_CUTOFF = date(2024, 7, 23)
 
 
 def _decimal(value: Optional[Decimal]) -> Decimal:
     return value if value is not None else _ZERO
+
+
+_LAND_BUILDING_EXEMPTION_SECTIONS = frozenset({"54", "54B", "54EC", "54F"})
+
+
+def _exemption_claim_total(claims: list, sections: frozenset) -> Decimal:
+    """Sum `investment_amount + cgas_deposit_amount` across matching claims."""
+    total = _ZERO
+    for claim in claims or []:
+        if getattr(claim, "section", None) in sections:
+            total += _decimal(getattr(claim, "investment_amount", None))
+            total += _decimal(getattr(claim, "cgas_deposit_amount", None))
+    return total
 
 
 def _parse_date(value: str) -> Optional[date]:
@@ -32,6 +56,7 @@ class CGAsset:
     date_of_acquisition: str = ""
     date_of_transfer: str = ""
     full_consideration: Decimal = _ZERO
+    stamp_duty_value: Decimal = _ZERO
     acquisition_cost: Decimal = _ZERO
     indexed_acquisition_cost: Decimal = _ZERO
     improvement_cost: Decimal = _ZERO
@@ -42,6 +67,32 @@ class CGAsset:
     exemption_applied: Decimal = _ZERO
     exemption_section: str = ""
     taxable_gain: Decimal = _ZERO
+    # This transaction's own section 54/54B/54EC/54F/115F exemption claims
+    # (the canonical `CapitalGainExemptionClaim` list, carried through from
+    # `CGTransaction.exemptions` by `_classify()`) -- used by the ITD
+    # builder to reduce THIS row's own disclosed post-exemption gain
+    # (e.g. LTCGonImmvblPrprty) and populate the per-claim DeducClaimDtls
+    # detail arrays. Does NOT affect the actual taxable total, which
+    # continues to use the pre-existing aggregate-level
+    # compute_exemptions()/eligible_exemption mechanism -- this is a
+    # disclosure-granularity addition only, not a tax recomputation.
+    exemptions: list = field(default_factory=list)
+    # This asset's own §54/54B/54EC/54F claim total (populated by
+    # compute_ltcg()/compute_stcg() from `exemptions` above) -- used for
+    # the section 112(1)(a) second-proviso relief comparison (which the
+    # official form bases on the POST-exemption "1e"/"1ea" figures, not
+    # the pre-exemption "1c"/"1ca") and exposed for the ITD builder's own
+    # disclosure so both stay consistent with each other.
+    exemption_total: Decimal = _ZERO
+    # Section 112(1)(a) second-proviso comparison track (LTCG land/building
+    # only, residents who acquired before 23-Jul-2024) -- populated by
+    # compute_ltcg() only when eib_applicable is True; zero/False otherwise,
+    # not a placeholder (genuinely not applicable for this transaction).
+    eib_applicable: bool = False
+    balance_for_eib: Decimal = _ZERO
+    tax_sec_112_1a: Decimal = _ZERO
+    tax_sec_112_1a_iib: Decimal = _ZERO
+    excess_amt_sec_112_1a: Decimal = _ZERO
 
 
 @dataclass
@@ -85,6 +136,11 @@ class STCGResult:
     income_app_rate: Decimal = _ZERO
     income_dtaa: Decimal = _ZERO
     total_stcg: Decimal = _ZERO
+    # Per-transaction land/building detail, preserved for Schedule CG's
+    # SaleofLandBuildDtls rows -- previously discarded after computing
+    # land_gain, leaving the official schedule's required detail array
+    # always empty even when land/building STCG was nonzero.
+    land_building: list = field(default_factory=list)
 
 
 @dataclass
@@ -97,6 +153,15 @@ class LTCGResult:
     income_125per_other: Decimal = _ZERO
     income_dtaa: Decimal = _ZERO
     total_ltcg: Decimal = _ZERO
+    # Same as STCGResult.land_building -- preserved for Schedule CG's
+    # LTCG SaleofLandBuildDtls rows.
+    land_building: list = field(default_factory=list)
+    # Aggregate section 112(1)(a) second-proviso relief across every
+    # eligible land/building row (sum of each asset's
+    # excess_amt_sec_112_1a) -- the amount of tax "required to be ignored"
+    # per the official form's item B1eii, applied against the actual
+    # section-112 Schedule SI tax by the form calculator.
+    total_excess_tax_112_1a: Decimal = _ZERO
 
 
 @dataclass
@@ -218,6 +283,39 @@ def compute_112a_tax(taxable_112a: Decimal) -> Decimal:
     return max(_ZERO, taxable_112a) * LTCG_112A_RATE_POST_JUL24 / Decimal("100")
 
 
+def deemed_consideration_50c(consideration: Decimal, stamp_duty_value: Decimal) -> Decimal:
+    """Apply section 50C's deemed full value of consideration for land/building.
+
+    Per the ITR-2 form's own instruction (Schedule CG, item 1(a)(iii)): "in
+    case (stamp value) does not exceed 1.10 times (consideration), take this
+    figure as (consideration), or else take (stamp value)." When no stamp
+    duty value is supplied, section 50C simply does not apply and the actual
+    consideration is used -- this is the common case and leaves every
+    existing computation unchanged.
+    """
+    stamp_duty_value = _decimal(stamp_duty_value)
+    consideration = _decimal(consideration)
+    if stamp_duty_value > _ZERO and stamp_duty_value > consideration * Decimal("1.10"):
+        return stamp_duty_value
+    return consideration
+
+
+def deemed_consideration_50ca(consideration: Decimal, fair_market_value: Decimal) -> Decimal:
+    """Apply section 50CA's deemed full value of consideration for unquoted shares.
+
+    Per the ITR-2 form's own instruction (Schedule CG, items 5(a)(i)(c) and
+    8(a)(i)(c)): "Full value of consideration in respect of unquoted shares
+    adopted as per section 50CA... (higher of a or b)" -- a straight
+    higher-of comparison with NO tolerance threshold, unlike section 50C's
+    "does not exceed 1.10 times" carve-out for land/building
+    (``deemed_consideration_50c``). When no FMV is supplied, section 50CA
+    simply does not apply and the actual consideration is used.
+    """
+    fair_market_value = _decimal(fair_market_value)
+    consideration = _decimal(consideration)
+    return max(consideration, fair_market_value)
+
+
 def compute_stcg(
     stcg_111a: Decimal = _ZERO,
     stcg_land_building: Optional[list[CGAsset]] = None,
@@ -236,18 +334,30 @@ def compute_stcg(
         Signed STCG baskets.
     """
     del is_post_jul24
-    land_gain = sum(
-        (
-            _decimal(asset.full_consideration)
-            - _decimal(asset.acquisition_cost)
-            - _decimal(asset.improvement_cost)
-            - _decimal(asset.expenditure_on_transfer)
-        )
-        for asset in stcg_land_building or []
-    )
+    # Set each asset's own .total_deductions/.balance in place so the ITD
+    # builder's per-row Schedule CG detail can read the exact same figures
+    # this land_gain sum uses, instead of independently recomputing gain
+    # with a formula that could drift out of sync.
+    land_gain = _ZERO
+    for asset in stcg_land_building or []:
+        deemed = deemed_consideration_50c(asset.full_consideration, getattr(asset, "stamp_duty_value", _ZERO))
+        total_ded = _decimal(asset.acquisition_cost) + _decimal(asset.improvement_cost) + _decimal(asset.expenditure_on_transfer)
+        asset.total_deductions = total_ded
+        asset.balance = deemed - total_ded
+        asset.taxable_gain = asset.balance
+        # STCG land/building can only claim section 54B (agricultural
+        # land) per the official form's own item 1d -- 54/54EC/54F are
+        # LTCG-only exemptions.
+        asset.exemption_total = _exemption_claim_total(asset.exemptions, frozenset({"54B"}))
+        land_gain += asset.balance
     other = land_gain + _decimal(stcg_other)
     section_111a = _decimal(stcg_111a)
-    return STCGResult(income_111a=section_111a, income_30per=other, total_stcg=section_111a + other)
+    return STCGResult(
+        income_111a=section_111a,
+        income_30per=other,
+        total_stcg=section_111a + other,
+        land_building=list(stcg_land_building or []),
+    )
 
 
 def compute_ltcg(
@@ -255,6 +365,7 @@ def compute_ltcg(
     ltcg_land_building: Optional[list[CGAsset]] = None,
     ltcg_other: Decimal = _ZERO,
     ltcg_dtaa: Decimal = _ZERO,
+    is_resident: bool = False,
 ) -> LTCGResult:
     """Compute signed long-term capital-gain baskets.
 
@@ -263,20 +374,71 @@ def compute_ltcg(
         ltcg_land_building: Long-term immovable-property transactions.
         ltcg_other: Other signed long-term gain.
         ltcg_dtaa: Signed DTAA long-term gain.
+        is_resident: Whether the assessee is a resident (RES or NOR, i.e.
+            not NRI) for the section 112(1)(a) second-proviso comparison
+            below. Defaults to False so callers that don't track residency
+            (ITR-1/4's restricted-112A-only projection, which never surfaces
+            land/building LTCG at all) get no behavior change.
 
     Returns:
         Signed LTCG baskets with the 112A threshold applied once.
     """
     gain_112a, exemption_112a, taxable_112a = compute_112a(ltcg_112a_assets)
-    land_gain = sum(
-        (
-            _decimal(asset.full_consideration)
-            - (_decimal(asset.indexed_acquisition_cost) or _decimal(asset.acquisition_cost))
-            - (_decimal(asset.indexed_improvement_cost) or _decimal(asset.improvement_cost))
-            - _decimal(asset.expenditure_on_transfer)
+    # Per the official ITR-2 form's own Schedule CG instructions (Part B
+    # item 1), the PRIMARY declared LTCG ("1c"/B1e) uses the NON-indexed
+    # cost only. The indexed cost feeds a separate section 112(1)(a) second
+    # proviso comparison ("1ca"/B1ea, "for the purpose of computing eiB")
+    # below -- it must never replace the primary basis, since doing so
+    # (this function's prior behavior) understates the declared gain
+    # whenever indexed cost exceeds actual cost, the normal case.
+    land_gain = _ZERO
+    total_excess_tax_112_1a = _ZERO
+    for asset in ltcg_land_building or []:
+        deemed = deemed_consideration_50c(asset.full_consideration, getattr(asset, "stamp_duty_value", _ZERO))
+        acquisition = _decimal(asset.acquisition_cost)
+        improvement = _decimal(asset.improvement_cost)
+        total_ded = acquisition + improvement + _decimal(asset.expenditure_on_transfer)
+        asset.total_deductions = total_ded
+        asset.balance = deemed - total_ded
+        asset.taxable_gain = asset.balance
+        # This asset's own §54/54B/54EC/54F claims -- used below for the
+        # EiB relief comparison (the form bases "ei(A)" on "1e", the
+        # POST-exemption figure) and by the ITD builder's own disclosure.
+        # Does NOT reduce `asset.balance`/`land_gain` themselves: the
+        # actual taxable total continues to use the pre-existing
+        # aggregate-level compute_exemptions()/eligible_exemption
+        # mechanism exactly once, so subtracting here too would double the
+        # exemption's effect on the real tax computation.
+        asset.exemption_total = _exemption_claim_total(asset.exemptions, _LAND_BUILDING_EXEMPTION_SECTIONS)
+        land_gain += asset.balance
+
+        # Section 112(1)(a) second proviso: a resident who acquired before
+        # the Finance Act 2024 indexation-removal cutoff is protected from
+        # paying MORE tax under the new 12.5%-non-indexed regime than the
+        # old 20%-with-indexation regime would have required. This is a
+        # per-row comparison of two TAX figures, not a substitute for the
+        # primary gain above -- "1ca"/BalanceForEiB exists "only for the
+        # purpose of computing eiB" per the form's own text.
+        acquired_date = _parse_date(asset.date_of_acquisition)
+        asset.eib_applicable = bool(
+            is_resident and acquired_date is not None and acquired_date < _SECOND_PROVISO_112_1A_CUTOFF
         )
-        for asset in ltcg_land_building or []
-    )
+        if asset.eib_applicable:
+            indexed_acquisition = _decimal(asset.indexed_acquisition_cost) or acquisition
+            indexed_improvement = _decimal(asset.indexed_improvement_cost) or improvement
+            indexed_total_ded = indexed_acquisition + indexed_improvement + _decimal(asset.expenditure_on_transfer)
+            # "In case of negative, to be considered as nil" (form item 1ca).
+            asset.balance_for_eib = max(_ZERO, deemed - indexed_total_ded)
+            # Per the form's own text, "ei(A)" is "1e*12.5%" and "ei(B)" is
+            # "1ea*20%" -- both POST-exemption ("1e"/"1ea" = "1c"/"1ca"
+            # minus "1d"), not the pre-exemption "1c"/"1ca" this comparison
+            # previously used before per-row exemption attribution existed.
+            primary_taxable = max(_ZERO, asset.balance - asset.exemption_total)
+            eib_taxable = max(_ZERO, asset.balance_for_eib - asset.exemption_total)
+            asset.tax_sec_112_1a = primary_taxable * LTCG_OTHER_RATE_POST_JUL24 / Decimal("100")
+            asset.tax_sec_112_1a_iib = eib_taxable * LTCG_OTHER_RATE / Decimal("100")
+            asset.excess_amt_sec_112_1a = max(_ZERO, asset.tax_sec_112_1a - asset.tax_sec_112_1a_iib)
+            total_excess_tax_112_1a += asset.excess_amt_sec_112_1a
     other = land_gain + _decimal(ltcg_other)
     dtaa = _decimal(ltcg_dtaa)
     return LTCGResult(
@@ -286,6 +448,8 @@ def compute_ltcg(
         income_125per_other=other,
         income_dtaa=dtaa,
         total_ltcg=gain_112a + other + dtaa,
+        land_building=list(ltcg_land_building or []),
+        total_excess_tax_112_1a=total_excess_tax_112_1a,
     )
 
 
@@ -692,11 +856,13 @@ def _classify(transactions) -> tuple:
                 date_of_acquisition=acquired_str,
                 date_of_transfer=transferred_str,
                 full_consideration=full_consideration,
+                stamp_duty_value=_decimal_attr(tx, "stamp_duty_value"),
                 acquisition_cost=cost,
                 indexed_acquisition_cost=_decimal_attr(tx, "indexed_cost"),
                 improvement_cost=_decimal_attr(tx, "improvement_cost"),
                 indexed_improvement_cost=_decimal_attr(tx, "indexed_improvement"),
                 expenditure_on_transfer=expenditure,
+                exemptions=list(getattr(tx, "exemptions", None) or []),
             )
             if is_short:
                 stcg_land.append(asset)
@@ -715,7 +881,7 @@ def _classify(transactions) -> tuple:
     )
 
 
-def compute(transactions) -> CGResult:
+def compute(transactions, is_resident: bool = False) -> CGResult:
     """Compute the complete capital-gains suite for AY 2026-27.
 
     This is the ONE form-agnostic entry point called by every form calculator
@@ -741,6 +907,11 @@ def compute(transactions) -> CGResult:
         transactions: Canonical CGTransaction rows (structurally typed — any
             object exposing the standard CG field names works, so the schedule
             does not import the ITR-2 schema).
+        is_resident: Whether the assessee is a resident, for the section
+            112(1)(a) second-proviso land/building comparison in
+            ``compute_ltcg()``. Defaults to False -- ITR-1/4's restricted
+            projection never surfaces land/building LTCG at all, so this is
+            a no-op for those callers.
 
     Returns:
         CGResult with signed LTCG/STCG baskets, exemptions claimed, and the
@@ -760,6 +931,7 @@ def compute(transactions) -> CGResult:
         ltcg_112a_assets=ltcg_112a_assets,
         ltcg_land_building=ltcg_land,
         ltcg_other=ltcg_other_signed,
+        is_resident=is_resident,
     )
     exemptions = compute_exemptions(
         section_54=_claim_total(transactions, "54"),

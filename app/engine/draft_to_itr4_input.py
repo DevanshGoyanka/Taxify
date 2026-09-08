@@ -291,7 +291,7 @@ def draft_to_itr4_input(
     age_bracket = _age_bracket_from_age(draft.personal.age)
 
     # Shared heads — one implementation, reused (audit Finding 14 fix).
-    salary_input, section_17_1, gross_salary = _map_salary(draft.employers)
+    salary_input, section_17_1, gross_salary = _map_salary(draft.employers, tax_regime)
     hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
     loan_details_24b_list = _map_24b_loans(draft.houseProperties)
     os_input, total_interest, total_dividend, family_pension, total_winnings = (
@@ -424,12 +424,14 @@ def draft_to_itr4_input(
         advance_tax_q2=quarterly[1] or None,
         advance_tax_q3=quarterly[2] or None,
         advance_tax_q4=quarterly[3] or None,
-        # This used to pass the taxpayer's DATE OF BIRTH as the filing date,
-        # with a comment claiming the gateway would replace it. No caller ever
-        # did, so every ITR-4 was judged as filed decades before its due date:
-        # never late, no 234A interest, no 234F fee.
-        filing_date=filing_date,
-        due_date=due_date,
+        # filing_date/due_date are set by filing_gateway_v2.compute_canonical_itr4
+        # from draft.verification.date -- not set here (was previously a
+        # date-of-birth placeholder that the gateway never actually
+        # overwrote, silently zeroing every return's 234A/B/C interest and
+        # 234F/234-I late fees; see
+        # Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md).
+        filing_date=None,
+        due_date=None,
         house_property_count=max(1, len(draft.houseProperties)),
         assessee_pan=draft.personal.pan or None,
         assessee_name=draft.personal.name or None,

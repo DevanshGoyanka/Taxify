@@ -47,7 +47,7 @@ def addClient(pan: str, dateOfBirth: str, otpSourceFlag: str, auth_token: str) -
     headers = eri_headers(auth_token)
     url = f"{get_eri_base_url().rstrip('/')}/addClient"
     
-    with httpx.Client(timeout=30.0, verify=False) as client:
+    with httpx.Client(timeout=30.0, verify=True) as client:
         response = client.post(url, json=envelope, headers=headers)
         if response.status_code not in (200, 201):
             raise ERIApiError(f"HTTP_{response.status_code}", f"addClient failed with HTTP {response.status_code}: {response.text}")
@@ -64,11 +64,17 @@ def validateClientOtp(pan: str, transactionId: str, otpSourceFlag: str, otp: str
         raise ValueError("ERI_USER_ID is not configured in the environment.")
         
     payload = {
+        # Empirically confirmed (2026-09-04, live UAT call, PAN SRGPZ2026C):
+        # a request using "Otp" (capital O, matching API_AddClientFlow_v1.1.pdf's
+        # own sample JSON) was rejected with errCd=EF40000/fieldName="otp"
+        # (lowercase) -- the live gateway's real field name is lowercase
+        # "otp". Do not "fix" this back to match the spec sample without
+        # re-verifying against a live call first.
         "serviceName": "EriValidateClientService",
         "pan": pan,
         "transactionId": transactionId,
         "otpSourceFlag": otpSourceFlag,
-        "Otp": otp,
+        "otp": otp,
         "validUpto": validUpto,
         "timeStamp": get_ist_timestamp()
     }
@@ -77,7 +83,7 @@ def validateClientOtp(pan: str, transactionId: str, otpSourceFlag: str, otp: str
     headers = eri_headers(auth_token)
     url = f"{get_eri_base_url().rstrip('/')}/validateClientOtp"
     
-    with httpx.Client(timeout=30.0, verify=False) as client:
+    with httpx.Client(timeout=30.0, verify=True) as client:
         response = client.post(url, json=envelope, headers=headers)
         if response.status_code not in (200, 201):
             raise ERIApiError(f"HTTP_{response.status_code}", f"validateClientOtp failed with HTTP {response.status_code}: {response.text}")
@@ -138,7 +144,7 @@ def addRegisterClient(
     headers = eri_headers(auth_token)
     url = f"{get_eri_base_url().rstrip('/')}/registerClient"
     
-    with httpx.Client(timeout=30.0, verify=False) as client:
+    with httpx.Client(timeout=30.0, verify=True) as client:
         response = client.post(url, json=envelope, headers=headers)
         if response.status_code not in (200, 201):
             raise ERIApiError(f"HTTP_{response.status_code}", f"addRegisterClient failed with HTTP {response.status_code}: {response.text}")
@@ -169,7 +175,7 @@ def validateRegOtp(pan: str, smsTransactionId: str, emailTransactionId: str, mob
     headers = eri_headers(auth_token)
     url = f"{get_eri_base_url().rstrip('/')}/validateRegOtp"
     
-    with httpx.Client(timeout=30.0, verify=False) as client:
+    with httpx.Client(timeout=30.0, verify=True) as client:
         response = client.post(url, json=envelope, headers=headers)
         if response.status_code not in (200, 201):
             raise ERIApiError(f"HTTP_{response.status_code}", f"validateRegOtp failed with HTTP {response.status_code}: {response.text}")

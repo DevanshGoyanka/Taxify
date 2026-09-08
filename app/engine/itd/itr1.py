@@ -26,6 +26,7 @@ from app.engine.schedules.deductions.section_80ggc import Section80GGCResult
 from app.engine.schedules.deductions.section_80c import Section80CResult
 from app.engine.schedules.deductions._loan_common import LoanDeductionResult
 from app.schemas.itr1 import (
+    BankAccount,
     BankAccountType,
     FilingAddress,
     ITR1FilingProfile,
@@ -624,6 +625,18 @@ def _tax_computation_itr1(
     Only total income, balance tax payable, and refund due are rounded to the
     nearest ₹10 under sections 288A/288B.
     """
+    # Official schema: NetTaxLiability = "Balance Tax After Relief" (Part D's
+    # D7 = D5 - D6, i.e. gross tax+cess minus Section 89 relief, computed
+    # BEFORE interest/fees are added) -- distinct from the calculator's own
+    # ``net_tax_liability`` internal variable, which is the FINAL total
+    # (D5-D6+D7+D8+D9+D10+D10a, i.e. Part D's D11/"Total Tax, Fee and
+    # Interest"). Reusing the calculator's total for this field understated
+    # nothing but mislabeled it: any return with Section 89 relief and/or
+    # late-filing interest/fees emitted a "Balance Tax After Relief" figure
+    # that had interest/fees baked in, and a "TotTaxPlusIntrstPay" that
+    # omitted the Section 89 relief subtraction entirely -- both wrong
+    # whenever relief_89 > 0 (the two only coincided when relief_89 == 0).
+    balance_tax_after_relief = max(Decimal("0"), gross_tax_liability - relief_89)
     return {
         "TotalTaxPayable": _to_rupees(slab_tax),
         "Rebate87A": _to_rupees(rebate_87a),
@@ -631,7 +644,7 @@ def _tax_computation_itr1(
         "EducationCess": _to_rupees(cess),
         "GrossTaxLiability": _to_rupees(gross_tax_liability),
         "Section89": _to_rupees(relief_89),
-        "NetTaxLiability": _to_rupees(net_tax_liability),
+        "NetTaxLiability": _to_rupees(balance_tax_after_relief),
         "TotalIntrstPay": _to_rupees(total_interest + late_fee_234f + fees_234i),
         "IntrstPay": {
             "IntrstPayUs234A": _to_rupees(interest_234a),
@@ -640,9 +653,7 @@ def _tax_computation_itr1(
             "LateFilingFee234F": _to_rupees(late_fee_234f),
             "FeeFurnish234I": _to_rupees(fees_234i),
         },
-        "TotTaxPlusIntrstPay": _to_rupees(
-            gross_tax_liability + total_interest + late_fee_234f + fees_234i
-        ),
+        "TotTaxPlusIntrstPay": _to_rupees(net_tax_liability),
     }
 
 
@@ -699,6 +710,25 @@ def _bank_row(
         "AccountType": account_type,
         "UseForRefund": "true" if use_for_refund else "false",
     }
+
+
+def _bank_accounts_from_accounts(accounts: list[BankAccount]) -> list[dict[str, Any]]:
+    """Serialize canonical-profile bank accounts to official ITR-1 rows."""
+    primary_count = sum(account.is_primary for account in accounts)
+    if primary_count != 1:
+        raise ValueError("Exactly one bank account must be selected for refund")
+    rows: list[dict[str, Any]] = []
+    for account in accounts:
+        if not account.bank_name:
+            raise ValueError("Every bank account requires bank_name for ITD JSON")
+        rows.append(_bank_row(
+            ifsc=account.ifsc_code,
+            bank_name=account.bank_name,
+            account_number=account.account_number,
+            account_type=BankAccountType(account.account_type).itd_code,
+            use_for_refund=account.is_primary,
+        ))
+    return rows
 
 
 def _bank_accounts_from_input(input_data: ITR1Input) -> list[dict[str, Any]]:
@@ -1281,8 +1311,17 @@ def _allowance_rows(input_data: Optional[ITR1Input], result: ITR1Result) -> list
     leave_encashment_exempt = getattr(sal_sched, "leave_encashment_exempt", salary.leave_encashment_received) if sal_sched else salary.leave_encashment_received
     vrs_exempt = getattr(sal_sched, "vrs_exempt", salary.vrs_compensation) if sal_sched else salary.vrs_compensation
     commuted_pension_exempt = getattr(sal_sched, "commuted_pension_exempt", salary.commuted_pension_received) if sal_sched else salary.commuted_pension_received
+    retrenchment_exempt = getattr(sal_sched, "retrenchment_exempt", salary.retrenchment_compensation) if sal_sched else salary.retrenchment_compensation
     transport_exempt = getattr(sal_sched, "transport_exempt", Decimal("0")) if sal_sched else Decimal("0")
     cea_exempt = getattr(sal_sched, "children_education_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    # Uniform allowance is also a 10(14)(i)/Rule 2BB(1) allowance and shares
+    # that single official JSON bucket with CEA -- the calculator keeps them
+    # on separate input fields and exemption formulas (see SalaryIncome's
+    # uniform_allowance_* fields), but the official schema has no separate
+    # code for it, so their computed-exempt amounts are combined here, at
+    # the output side, not the input side.
+    uniform_allowance_exempt = getattr(sal_sched, "uniform_allowance_exempt", Decimal("0")) if sal_sched else Decimal("0")
+    cea_exempt += uniform_allowance_exempt
     hostel_exempt = getattr(sal_sched, "hostel_exempt", Decimal("0")) if sal_sched else Decimal("0")
     hra_exempt = getattr(sal_sched, "hra_exempt", salary.hra_exempt_amount) if sal_sched else salary.hra_exempt_amount
     lta_exempt = getattr(sal_sched, "lta_exempt", salary.lta_exempt_amount) if sal_sched else salary.lta_exempt_amount
@@ -1293,7 +1332,7 @@ def _allowance_rows(input_data: Optional[ITR1Input], result: ITR1Result) -> list
         "10(10)": gratuity_exempt,
         "10(10A)": commuted_pension_exempt,
         "10(10AA)": leave_encashment_exempt,
-        "10(10B)(i)": salary.retrenchment_compensation,
+        "10(10B)(i)": retrenchment_exempt,
         "10(10C)": vrs_exempt,
         "10(10CC)": salary.sec10_10cc_perquisite_tax,
         "10(13A)": hra_exempt,
@@ -1510,10 +1549,18 @@ def _tcs_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
 def _tax_payments_from_input(input_data: ITR1Input) -> Optional[dict[str, Any]]:
     """Build Schedule IT from complete challan rows without fabricating data."""
     rows = []
-    for entry in input_data.tax_payment_entries:
-        if not entry.bsr_code or not entry.payment_date or not entry.challan_serial_number:
+    for index, entry in enumerate(input_data.tax_payment_entries, start=1):
+        missing = [
+            field for field, value in (
+                ("BSR code", entry.bsr_code),
+                ("payment date", entry.payment_date),
+                ("challan serial number", entry.challan_serial_number),
+            )
+            if not value
+        ]
+        if missing:
             raise ValueError(
-                "Tax payment entries require BSR code, payment date, and challan serial number"
+                f"Tax payment entry #{index} is missing: {', '.join(missing)}."
             )
         rows.append({
             "BSRCode": entry.bsr_code,
@@ -1771,7 +1818,11 @@ def build_itr1_json(
     )
 
     if input_data is not None:
-        bank_rows = _bank_accounts_from_input(input_data)
+        profile = input_data.filing_profile
+        if profile is not None and profile.bank_accounts:
+            bank_rows = _bank_accounts_from_accounts(profile.bank_accounts)
+        else:
+            bank_rows = _bank_accounts_from_input(input_data)
     elif bank_name and account_no and ifsc:
         bank_rows = [_bank_row(
             ifsc=ifsc,
@@ -1798,8 +1849,15 @@ def build_itr1_json(
         "Verification": ver,
     }
 
-    if input_data is not None and input_data.tax_return_preparer is not None:
-        itr1["TaxReturnPreparer"] = _tax_return_preparer(input_data.tax_return_preparer)
+    if input_data is not None:
+        profile = input_data.filing_profile
+        preparer = (
+            profile.tax_return_preparer
+            if profile is not None and profile.tax_return_preparer is not None
+            else input_data.tax_return_preparer
+        )
+        if preparer is not None:
+            itr1["TaxReturnPreparer"] = _tax_return_preparer(preparer)
 
     if input_data is not None:
         details_80c = ded_sched.section_details.get("80C") if ded_sched else None

@@ -369,6 +369,89 @@ def test_entertainment_allowance_govt_employee():
     # Salary = 200k - 50k - 5k = 145k
     assert res.salary_income == Decimal("145000")
 
+
+def test_entertainment_allowance_psu_employee_gets_deduction():
+    """PSU employees qualify for the Section 16(ii) entertainment allowance
+    deduction (official CBDT ITR-4 Validation Rules, rules 67/68: "For
+    Central, State Govt, & PSU employees...") even though they do NOT
+    qualify for the Section 80CCD(2) 14% cap or full retirement-benefit
+    exemptions -- is_government_employee (this test) is the broader,
+    16(ii)-scoped flag; is_cg_sg_employee is the narrower one those other
+    sections use."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("200000"),
+            entertainment_allowance=Decimal("7000"),
+            is_government_employee=True,
+            is_cg_sg_employee=False,
+        ),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    res = compute_itr1(itr_input)
+    # Salary = 200k - 50k (std ded) - 5k (entertainment, capped) = 145k
+    assert res.salary_income == Decimal("145000")
+
+
+def test_80ccd2_non_govt_employer_new_regime_gets_14pct_not_10pct():
+    """Finance (No. 2) Act 2024 raised the Section 80CCD(2) ceiling to 14%
+    of salary for ALL employers (not just Central/State Government) under
+    the new regime -- confirmed independently by this codebase's own
+    ITR1-R216/ITR4-R263 validators, which apply a flat 14% new-regime cap
+    with no employer-category distinction. A non-government employee with
+    a legitimate 13%-of-salary employer NPS contribution must get the full
+    amount under the new regime, not be capped at the old regime's 10%."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("1000000"),
+            is_government_employee=False,
+            is_cg_sg_employee=False,
+        ),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("130000")),  # 13% of 10L
+    )
+    res = compute_itr1(itr_input)
+    ccd2 = res.schedules["deductions"].section_details["80CCD(2)"]
+    assert ccd2.statutory_ceiling == Decimal("140000")  # 14% of 10L, not 10% (100000)
+    assert ccd2.allowed_deduction == Decimal("130000")  # full claim, within the 14% ceiling
+
+
+def test_80ccd2_non_govt_employer_old_regime_stays_at_10pct():
+    """Old regime keeps the pre-FA-2024 10% ceiling for non-government
+    employers -- only the new regime got the 14% increase."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("1000000"),
+            is_government_employee=False,
+            is_cg_sg_employee=False,
+        ),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("130000")),  # 13% of 10L
+    )
+    res = compute_itr1(itr_input)
+    ccd2 = res.schedules["deductions"].section_details["80CCD(2)"]
+    assert ccd2.statutory_ceiling == Decimal("100000")  # 10% of 10L
+    assert ccd2.allowed_deduction == Decimal("100000")  # capped, not the full 130000 claim
+
+
 def test_80ccd1b_limit():
     """80CCD1B claimed = ₹70,000 (exceeds ₹50,000 limit). Expected: Only ₹50,000 allowed."""
     itr_input = ITR1Input(
@@ -410,6 +493,57 @@ def test_80cce_pool_limit():
     # GTI = 400k - 50k = 350k, Pool capped at 150k, Taxable = 200k
     assert res.taxable_income == Decimal("200000")
     assert res.deductions_total == Decimal("150000")
+
+def test_eligibility_50_lakh_cap_excludes_112a_ltcg():
+    """Official CBDT ITR-1 Validation Rules (AY 2026-27), rule 117: "Total
+    income excluding LTCG C3(a)(iii) should not be greater than Rs 50
+    lakhs." The 112A gain is a SEPARATE Rs 1.25 lakh allowance on top of
+    the Rs 50 lakh regular-income cap, not counted against it -- combined
+    ceiling Rs 51.25 lakh, matching the official schema's
+    ITR1_IncomeDeductions.TotalIncome field maximum of exactly 5125000.
+    Rs 49,00,000 regular income + Rs 1,25,000 112A LTCG (Rs 50,25,000
+    combined) was previously rejected outright by an early eligibility
+    gate that wrongly compared the FULL combined GTI against a flat
+    Rs 50 lakh threshold."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("4950000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+        capital_gains=CapitalGainsIncome(ltcg_112a=Decimal("125000")),
+    )
+    res = compute_itr1(itr_input)
+    # salary_income (net of the Rs 50,000 old-regime standard deduction) =
+    # 4,90,00,000; + 1,25,000 112A gain = Rs 50,25,000 combined GTI.
+    assert res.errors == []
+    assert res.gross_total_income == Decimal("5025000")
+
+
+def test_eligibility_50_lakh_cap_still_rejects_regular_income_over_50l():
+    """Non-regression: Rs 50,00,001 of regular income alone (no 112A gain)
+    must still be rejected -- the fix narrows the check to exclude 112A,
+    it does not loosen the Rs 50 lakh cap on regular income itself."""
+    itr_input = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("5050001")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("0"),
+        ),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    res = compute_itr1(itr_input)
+    # salary_income net of the Rs 50,000 standard deduction = 50,00,001.
+    assert res.errors
+    assert "Ineligible for ITR-1" in res.errors[0]
+
 
 def test_json_output_keys():
     """Verify output contains required keys."""

@@ -80,6 +80,74 @@ def _base_input(**overrides) -> ITR4Input:
     return ITR4Input(**defaults)
 
 
+def test_R043_huf_claiming_80u_now_blocked():
+    """R043 (CBDT Sl 43: "HUF/Firm claiming 80U") -- 80U is the assessee's
+    OWN disability, which neither an HUF nor a Firm can have (unlike 80DD,
+    which concerns a dependent's disability and a HUF member is a valid
+    dependent per CBDT Sl 254, so 80DD stays available to HUF). Previously
+    this check only fired for Firm; an HUF claiming 80U was never
+    blocked."""
+    from app.schemas.itr1 import AssesseeType
+    inp = _base_input(
+        assessee_type=AssesseeType.HUF,
+        deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("75000")),
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R043")
+
+
+def test_R043_firm_claiming_80u_still_blocked():
+    """Firm claiming 80U must still be blocked (pre-existing behavior)."""
+    from app.schemas.itr1 import AssesseeType
+    inp = _base_input(
+        assessee_type=AssesseeType.FIRM,
+        deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("75000")),
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R043")
+
+
+def test_R043_individual_claiming_80u_not_blocked():
+    """Individuals remain eligible for 80U."""
+    from app.schemas.itr1 import AssesseeType
+    inp = _base_input(
+        assessee_type=AssesseeType.INDIVIDUAL,
+        deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("75000")),
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R043")
+
+
+def test_R225_80cch_cgov_employee_not_falsely_blocked():
+    """R225 (80CCH Agniveer Corpus Fund requires Central Government
+    employment) compared nature_of_employment against the literal string
+    "Central Government" -- but that field carries the raw official code
+    (CGOV/SGOV/PSU/...), never a human-readable label, so this never
+    matched any real code and unconditionally blocked every 80CCH claim,
+    including genuine CGOV employees. Same bug pattern as the 18 sites
+    already fixed this session (§5 of the ITR-4 audit doc); this one
+    escaped that sweep. ITR-1's equivalent (ITR1-R187) already compared
+    against "CGOV" correctly."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        nature_of_employment="CGOV",
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("200000")),
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R225")
+
+
+def test_R225_80cch_non_cgov_employee_still_blocked():
+    """Non-CGOV employment must still be blocked from claiming 80CCH."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        nature_of_employment="SGOV",
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("200000")),
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R225")
+
+
 def test_R270_80eea_requires_exhausted_section_24b_limit():
     """80EEA is available only after the self-occupied 24(b) cap is used."""
     deduction_row = ITR1Schedule80EEALoanEntry(
@@ -249,8 +317,8 @@ def test_R237_44ad_cash_within_5pct_passes():
     assert not failed(results, "ITR4-R237")
 
 
-def test_R239_44ad_turnover_split_mismatch():
-    """Rule 239: 44AD digital + cash != total."""
+def test_R240_44ad_turnover_split_mismatch():
+    """Rule 240: 44AD digital + cash != total."""
     inp = _base_input(
         business_income_44ad=PresumptiveBusinessIncome44AD(
             total_turnover=Decimal("500000"),
@@ -259,10 +327,10 @@ def test_R239_44ad_turnover_split_mismatch():
         ),
     )
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R239")
+    assert failed(results, "ITR4-R240")
 
 
-def test_R239_44ad_turnover_split_matches():
+def test_R240_44ad_turnover_split_matches():
     """44AD digital + cash == total passes."""
     inp = _base_input(
         business_income_44ad=PresumptiveBusinessIncome44AD(
@@ -272,7 +340,7 @@ def test_R239_44ad_turnover_split_matches():
         ),
     )
     results = validate_itr4_input(inp)
-    assert not failed(results, "ITR4-R239")
+    assert not failed(results, "ITR4-R240")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -331,8 +399,8 @@ def test_R238_44ada_cash_gt_5pct_above_50l():
     assert failed(results, "ITR4-R238")
 
 
-def test_R240_44ada_receipts_split_mismatch():
-    """Rule 240: 44ADA digital + cash != total."""
+def test_R239_44ada_receipts_split_mismatch():
+    """Rule 239: 44ADA digital + cash != total."""
     inp = ITR4Input(
         age_bracket=AgeBracket.BELOW_60,
         tax_regime=TaxRegime.OLD,
@@ -347,7 +415,7 @@ def test_R240_44ada_receipts_split_mismatch():
         other_sources_income=OtherSourcesIncome(),
     )
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R240")
+    assert failed(results, "ITR4-R239")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -532,10 +600,17 @@ def test_R145_80ccd1b_exceeds_50k():
 
 
 def test_R022a_80ccd1_pensioner_exceeds_20pct():
-    """Rule 22a: 80CCD(1) pensioner > 20% salary."""
+    """Rule 22a: 80CCD(1) pensioner > 20% salary.
+
+    nature_of_employment carries the raw official code (PE/PESG/PEPS/PEO),
+    never a human-readable label like "Pensioner" -- using the label here
+    previously made this test pass only by accident, matching the same
+    keyword-vs-raw-code bug already found and fixed in ITR-1's validators
+    (§14.5) and now also in ITR-4's (Docs/ITR4_FRONTEND_AND_SERIALIZATION_
+    AUDIT_AY2026_27.md)."""
     inp = _base_input(
         salary_income=SalaryIncome(gross_salary=Decimal("500000")),
-        nature_of_employment="Pensioner",
+        nature_of_employment="PE",
         deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("120000")),  # 20% of 5L=100000
     )
     results = validate_itr4_input(inp)
@@ -717,12 +792,16 @@ def test_R149_80ddb_senior_exceeds_100k():
 
 
 def test_R182_80u_exceeds_125k():
-    """Rule 182: 80U > Rs 1,25,000."""
+    """Rule 182: 80U > Rs 1,25,000. Implemented at the "-2" occurrence of
+    this ID -- input_rules.py has two independent R182 checks (this general
+    ceiling, and a separate severe-disability-must-be-exactly-125000 check
+    kept as plain "ITR4-R182"); the duplicate-ID audit renamed the second
+    one uniquely rather than removing either."""
     inp = _base_input(
         deductions_chapter6a=Chapter6ADeductions(amount_80u=Decimal("150000")),
     )
     results = validate_itr4_input(inp)
-    assert failed(results, "ITR4-R182")
+    assert failed(results, "ITR4-R182-2")
 
 
 def test_R182b_80u_not_valid_amount():
@@ -847,6 +926,26 @@ def test_R041_80ttb_exceeds_os_interest():
     inp = _base_input(
         age_bracket=AgeBracket.SIXTY_TO_80,
         other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("30000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ttb=Decimal("50000")),
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R041")
+
+
+def test_R041_dividend_income_does_not_pad_80ttb_interest_base():
+    """CBDT Sl 41: 80TTB is restricted to interest (savings+deposits), never
+    dividend income -- section_80ttb.py's calculator already correctly
+    excludes dividend from the interest base, but this validator's
+    cross-check previously included it, silently allowing a claim inflated
+    by dividend income to pass without a warning. Savings interest of
+    Rs 10,000 + dividend of Rs 40,000 must NOT license an Rs 50,000 80TTB
+    claim -- only Rs 10,000 of real interest exists."""
+    inp = _base_input(
+        age_bracket=AgeBracket.SIXTY_TO_80,
+        other_sources_income=OtherSourcesIncome(
+            savings_bank_interest=Decimal("10000"),
+            dividend_income=Decimal("40000"),
+        ),
         deductions_chapter6a=Chapter6ADeductions(amount_80ttb=Decimal("50000")),
     )
     results = validate_itr4_input(inp)
@@ -1858,3 +1957,308 @@ def test_R288_80dd_with_form_10ia_passes():
     )
     results = validate_itr4_input(inp)
     assert not failed(results, "ITR4-R288")
+
+
+# ── R289/R295: 24(b) row sum must match the ONE property ITR-4 computes ────
+# ITR-4 computes income for only property_sequence_no 1 (no house_properties
+# list, unlike ITR-1's up-to-two). loan_details_24b_list can still carry a
+# second property's loan tagged sequence_no 2 if a draft somehow has one
+# (nothing in the pipeline rejects that outright). Both R289 and R295
+# previously summed the WHOLE list regardless of sequence_no, producing a
+# false-positive block for exactly that case -- the same pattern already
+# fixed for ITR1-R246. See
+# Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md §3.2.
+
+def test_R289_single_property_matching_loan_passes():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="HDFC Bank",
+            loan_amount=Decimal("2000000"),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R289")
+    assert not failed(results, "ITR4-R295")
+
+
+def test_R289_genuine_mismatch_still_caught():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="HDFC Bank",
+            loan_amount=Decimal("2000000"),
+            interest_paid_self_occupied=Decimal("100000"),
+        )],
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R289")
+    assert failed(results, "ITR4-R295")
+
+
+def test_R289_second_property_loan_does_not_cause_false_positive():
+    """The exact bug scenario: a second property's loan (sequence_no 2)
+    must not be added into the sum checked against the one property ITR-4
+    actually computes income for."""
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[
+            LoanDetail(
+                property_sequence_no=1, lender_name="HDFC Bank",
+                loan_amount=Decimal("2000000"),
+                interest_paid_self_occupied=Decimal("150000"),
+            ),
+            LoanDetail(
+                property_sequence_no=2, lender_name="Axis Bank",
+                loan_amount=Decimal("1000000"),
+                interest_paid_let_out=Decimal("40000"),
+            ),
+        ],
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R289")
+    assert not failed(results, "ITR4-R295")
+
+
+def test_R154b_pre_1999_loan_surfaces_informational_note():
+    """A self-occupied loan sanctioned before 01/04/1999 is correctly capped
+    at Rs 30,000 by the calculator; R154b explains why, informationally."""
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("500000"),
+            sanction_date=date(1997, 6, 1),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+    )
+    results = validate_itr4_input(inp)
+    result = get_result(results, "ITR4-R154b")
+    assert result is not None
+    assert result.passed  # informational, never blocking
+    assert "30,000" in result.message
+
+
+def test_R154b_post_1999_loan_does_not_fire():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("150000"),
+        ),
+        loan_details_24b_list=[LoanDetail(
+            property_sequence_no=1, lender_name="SBI",
+            loan_amount=Decimal("2000000"),
+            sanction_date=date(2015, 6, 1),
+            interest_paid_self_occupied=Decimal("150000"),
+        )],
+    )
+    results = validate_itr4_input(inp)
+    assert get_result(results, "ITR4-R154b") is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# nature_of_employment keyword-vs-raw-code bug (10 sites, matching the
+# identical pattern already found and fixed in ITR-1's validators, §14.5).
+# Each test below checks both directions: a real CG/SG-employee or
+# pensioner code that must now correctly pass/fail, and a non-CG/SG/
+# non-pensioner code that must still behave the same as before. See
+# Docs/ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_R025_80ccd2_cgsg_employee_not_falsely_blocked_at_10pct():
+    """R025 (non-CG/SG 10% cap) previously fired for EVERY employee,
+    including genuine CG/SG ones, because "central government"/"state
+    government" never matched the raw code "CGOV". A CG/SG employee
+    claiming between 10% and 14% of salary must now correctly pass R025
+    (R047's 14% cap governs them instead)."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        nature_of_employment="CGOV",
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("120000")),  # 12% of 10L
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R025")
+
+
+def test_R025_non_cgsg_employee_still_capped_at_10pct():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        nature_of_employment="OTH",
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("120000")),  # 12% of 10L
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R025")
+
+
+def test_R047_cgsg_employee_14pct_cap_now_reachable():
+    """R047 (CG/SG 14% cap) was previously dormant -- "central government"
+    never matched "CGOV", so this rule could never fire even for a genuine
+    CG/SG employee exceeding 14%."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        nature_of_employment="CGOV",
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("150000")),  # 15% of 10L
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R047")
+
+
+def test_R073_cgsg_gratuity_20l_cap_now_reachable():
+    """R073 (non-CG/SG gratuity Rs 20L cap) previously fired for every
+    employee including genuine CG/SG ones (fully exempt, no 20L cap) --
+    now correctly does not fire for a real CGOV employee. The gratuity
+    check lives at the "-2" occurrence of this ID (see
+    test_R073_non_cgsg_gratuity_20l_cap_still_enforced above)."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2200000")),
+        nature_of_employment="CGOV",
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R073-2")
+
+
+def test_R073_non_cgsg_gratuity_20l_cap_still_enforced():
+    """The gratuity check lives at the "-2" occurrence of this ID -- R073's
+    plain ID is a separate, unrelated exempt-income-dropdown-breakdown
+    check; the duplicate-ID audit renamed this one uniquely rather than
+    removing either."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2200000")),
+        nature_of_employment="OTH",
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R073-2")
+
+
+def test_R317_cgsg_gratuity_25l_cap_now_reachable():
+    """R317 (CG/SG gratuity Rs 25L cap) was previously dormant."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2600000")),
+        nature_of_employment="SGOV",
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R317")
+
+
+def test_R075_cgsg_leave_encashment_not_falsely_blocked():
+    """R075 (non-govt leave encashment Rs 25L cap) previously fired for
+    every employee including genuine CG/SG ones (fully exempt)."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), leave_encashment_received=Decimal("2600000")),
+        nature_of_employment="SGOV",
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R075")
+
+
+def test_R185_cgsg_retrenchment_now_reachable():
+    """R185 (10(10B) retrenchment not for CG/SG/pensioners) was previously
+    dormant -- "central"/"state"/"pension" never matched the raw codes."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), retrenchment_compensation=Decimal("100000")),
+        nature_of_employment="CGOV",
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R185")
+
+
+def test_R185_pensioner_retrenchment_now_reachable():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), retrenchment_compensation=Decimal("100000")),
+        nature_of_employment="PE",
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R185")
+
+
+def test_R185_private_employee_retrenchment_not_blocked():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), retrenchment_compensation=Decimal("100000")),
+        nature_of_employment="OTH",
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R185")
+
+
+def test_R322_judge_exemption_cgsg_employee_not_falsely_blocked():
+    """R322 (Judge Salaries Act exemption, CG/SG only) previously fired for
+    EVERY filer claiming it, including genuine CGOV/SGOV judges, because
+    "central government"/"state government" never matched the raw code."""
+    inp = _base_input(
+        exempt_income_dropdowns=["Judge Salaries Act"],
+        nature_of_employment="CGOV",
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R322")
+
+
+def test_R322_non_cgsg_judge_exemption_still_blocked():
+    inp = _base_input(
+        exempt_income_dropdowns=["Judge Salaries Act"],
+        nature_of_employment="OTH",
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R322")
+
+
+def test_R263_new_regime_80ccd2_cgov_now_reachable():
+    """R263 (new regime 80CCD(2) 14% cap for PSU/CG/SG/Others) used "CG"/
+    "SG" instead of the real raw codes "CGOV"/"SGOV", so it was dormant for
+    genuine CG/SG employees specifically (PSU/OTH already worked). This
+    fix lives at the "-2" occurrence of this ID -- the duplicate-ID audit
+    renamed it uniquely rather than removing either implementation."""
+    inp = _base_input(
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        nature_of_employment="CGOV",
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("150000")),  # 15%
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R263-2")
+
+
+def test_R067_entertainment_allowance_cgov_now_reachable():
+    """R067 (entertainment allowance cap, CG/SG/PSU only) used "CG"/"SG"
+    instead of "CGOV"/"SGOV", so it was dormant for genuine CG/SG
+    employees. This fix lives at the "-2" occurrence of this ID -- the
+    duplicate-ID audit renamed it uniquely rather than removing either
+    implementation."""
+    inp = _base_input(
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), entertainment_allowance=Decimal("8000")),
+        nature_of_employment="CGOV",
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R067-2")
+
+
+def test_R068_entertainment_allowance_cgov_not_falsely_blocked():
+    """R068 has two implementations: one reading the correctly-derived
+    SalaryIncome.is_government_employee (via the shared _map_salary, fixed
+    during the ITR-1 audit's §5.2), and one (fixed here) reading
+    nature_of_employment directly. Setting is_government_employee too,
+    matching what the real mapper would produce for a CGOV employee, so
+    this test isolates the nature_of_employment-based check that changed."""
+    inp = _base_input(
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(
+            gross_salary=Decimal("500000"), entertainment_allowance=Decimal("3000"),
+            is_government_employee=True,
+        ),
+        nature_of_employment="CGOV",
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R068")

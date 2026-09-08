@@ -225,6 +225,13 @@ export type StartJobResponse = {
   message: string;
 }
 
+export type LoginPortalResponse = {
+  status: string;
+  client_id: string;
+  pan: string;
+  message: string;
+}
+
 export const itrAutomationApi = {
   /**
    * Start an ITD portal automation download job.
@@ -238,6 +245,16 @@ export const itrAutomationApi = {
       .post(`/clients/${clientId}/automation/import`, null, {
         params: { assessment_year: assessmentYear, job_type: jobType },
       })
+      .then((res) => res.data);
+  },
+
+  /**
+   * Launch a visible browser, log in to the ITD portal for the client, and
+   * leave the browser open so follow-up after-login tasks reuse the session.
+   */
+  loginPortal(clientId: string): Promise<LoginPortalResponse> {
+    return axiosInstance
+      .post(`/clients/${clientId}/automation/login`)
       .then((res) => res.data);
   },
 

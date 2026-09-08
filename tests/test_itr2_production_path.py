@@ -109,6 +109,11 @@ def test_tds2_uses_official_credit_shape_and_claimed_amount() -> None:
                 tds_deducted=Decimal("1000"),
                 tds_claimed_this_year=Decimal("700"),
                 financial_year="2024-25",
+                # AmtCarriedFwd is read from this explicit field now (real
+                # taxpayer-entered data, per _map_tds()), not recomputed as
+                # tds_deducted - tds_claimed_this_year -- see itr2.py's
+                # _schedule_tds2() docstring.
+                tds_credit_carried_forward=Decimal("300"),
             )
         ],
         bank_accounts=[

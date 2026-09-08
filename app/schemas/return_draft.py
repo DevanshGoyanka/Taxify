@@ -68,7 +68,7 @@ TaxChallanKind = Literal["ADVANCE_TAX", "SELF_ASSESSMENT"]
 BankAccountType = Literal["SB", "CA", "CC", "OD", "NRO", "OTH"]
 FilingSection = Literal[
     "139(1)", "139(4)", "142(1)", "148", "153C", "139(5)", "139(9)",
-    "119(2)(b)",
+    "92CD", "119(2)(b)",
 ]
 ReturnType = Literal["ORIGINAL", "REVISED"]
 VerificationCapacity = Literal["SELF", "REPRESENTATIVE", "KARTA", "PARTNER"]
@@ -163,6 +163,42 @@ class SeventhProvisoClause(Identified):
     amount: Money = Field(default=Decimal("0"))
 
 
+class JurisdictionResidenceEntry(Identified):
+    """One jurisdiction-of-residence + TIN row (ITR-2's ``JurisdictionResPrevYrDtls``)."""
+
+    jurisdictionCode: str = Field(default="", description="ITD numeric country code.")
+    tin: str = Field(default="", description="Taxpayer identification number in that jurisdiction.")
+
+
+class CompanyDirectorEntry(Identified):
+    """One company-directorship disclosure row (ITR-2's ``CompDirectorPrvYrDtls``)."""
+
+    companyName: str = Field(default="")
+    companyType: Literal["D", "F"] = Field(default="D", description="D = Domestic, F = Foreign.")
+    pan: str = Field(default="")
+    sharesType: Literal["L", "U"] = Field(default="L", description="L = Listed, U = Unlisted.")
+    din: str = Field(default="", description="Director Identification Number, 8 digits.")
+
+
+class UnlistedEquityEntry(Identified):
+    """One unlisted-equity holding row (ITR-2's ``HeldUnlistedEqShrPrYrDtls``)."""
+
+    companyName: str = Field(default="")
+    companyType: Literal["D", "F"] = Field(default="D", description="D = Domestic, F = Foreign.")
+    pan: str = Field(default="")
+    openingShares: Money = Field(default=Decimal("0"))
+    openingCost: Money = Field(default=Decimal("0"))
+    acquiredShares: Money = Field(default=Decimal("0"))
+    dateOfAcquisition: Optional[str] = Field(default=None)
+    faceValuePerShare: Money = Field(default=Decimal("0"))
+    issuePricePerShare: Money = Field(default=Decimal("0"))
+    purchasePricePerShare: Money = Field(default=Decimal("0"))
+    transferredShares: Money = Field(default=Decimal("0"))
+    transferSaleConsideration: Money = Field(default=Decimal("0"))
+    closingShares: Money = Field(default=Decimal("0"))
+    closingCost: Money = Field(default=Decimal("0"))
+
+
 class SeventhProviso(_StrictModel):
     """Seventh-proviso to Section 139(1) declarations."""
 
@@ -205,8 +241,6 @@ class Employer(Identified):
     employerStateCode: str = Field(default="")
     employerPinCode: str = Field(default="")
     employerZipCode: str = Field(default="")
-    salaryNatureRows: list[SalaryNatureRow] = Field(default_factory=list)
-    perquisiteNatureRows: list[SalaryNatureRow] = Field(default_factory=list)
     section10ExemptionRows: list[SalaryNatureRow] = Field(default_factory=list)
     basic: Money = Field(default=Decimal("0"))
     da: Money = Field(default=Decimal("0"))
@@ -233,20 +267,22 @@ class Employer(Identified):
     actualLtaFare: Money = Field(default=Decimal("0"))
     isDomesticTravel: bool = Field(default=False)
     journeysInBlock: int = Field(default=0)
-    ltaExempt: Money = Field(default=Decimal("0"))
     numberOfChildren: int = Field(default=0)
     gratuityAlsoReceived: bool = Field(default=False)
     transportAllowance: Money = Field(default=Decimal("0"))
     childrenEducationAllowance: Money = Field(default=Decimal("0"))
     hostelExpenditureAllowance: Money = Field(default=Decimal("0"))
     uniformAllowance: Money = Field(default=Decimal("0"))
+    # Actual amount spent on uniform, needed to substantiate the Sec 10(14)(i)/
+    # Rule 2BB(1)(f) exemption -- unlike CEA/hostel above, uniform allowance
+    # has no fixed statutory exemption rate; only actual expenditure incurred
+    # is exempt, so the exemption cannot be computed from uniformAllowance alone.
+    uniformAllowanceExpenditure: Money = Field(default=Decimal("0"))
     entertainmentAllowance: Money = Field(default=Decimal("0"))
     professionalTax: Money = Field(default=Decimal("0"))
     vrsCompensation: Money = Field(default=Decimal("0"))
     retrenchmentCompensation: Money = Field(default=Decimal("0"))
-    otherExempt: Money = Field(default=Decimal("0"))
     tdsDeducted: Money = Field(default=Decimal("0"))
-    employerNPS: Money = Field(default=Decimal("0"))
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +455,452 @@ class Presumptive44AE(Identified, BusinessIdentity):
 
 
 PresumptiveBusiness = Union[Presumptive44AD, Presumptive44ADA, Presumptive44AE]
+
+
+# ---------------------------------------------------------------------------
+# Capital Gains (Schedule CG)
+#
+# Mirrors frontend/src/domain/returns/types.ts::CapitalGainsSchedule exactly,
+# including its 2026-08-19 scope decision: stEquity, stNriUnlisted,
+# stOtherAssets, ltProviso112, ltNri112115, ltForeignAssets, ltOtherAssets,
+# stSlumpSale, ltSlumpSale, and buyBackLosses stay generic rows (frontend's
+# CapitalGainsEntryManager.tsx already edits them with its own field-spec
+# validation; re-typing them was explicitly out of scope there and stays out
+# of scope here — this is a mirror, not a redesign).
+# ---------------------------------------------------------------------------
+
+CGExemptionSection = Literal["54", "54B", "54EC", "54F", "115F", "54D", "54G", "54GA", ""]
+
+
+class Simplified112ABlock(_StrictModel):
+    """ITR-1/4 quick-entry 112A aggregate. Auto-populated from imported scrips."""
+
+    totalSaleConsideration: Money = Field(default=Decimal("0"))
+    totalCostAcquisition: Money = Field(default=Decimal("0"))
+
+
+class CGTransfereeDetail(Identified):
+    """A transferee detail nested inside an immovable-property gain row."""
+
+    name: str = Field(default="")
+    pan: str = Field(default="")
+    aadhaar: str = Field(default="")
+    panOrTan: str = Field(default="")
+    share: Money = Field(default=Decimal("0"))
+    amount: Money = Field(default=Decimal("0"))
+    address: str = Field(default="")
+    stateCode: str = Field(default="")
+    countryCode: str = Field(default="")
+    pinCode: str = Field(default="")
+    zipCode: str = Field(default="")
+
+
+class CGImprovementDetail(Identified):
+    """An improvement-cost detail nested inside a long-term immovable gain row."""
+
+    serialNumber: int = Field(default=0)
+    cost: Money = Field(default=Decimal("0"))
+    financialYear: str = Field(default="")
+    indexedCost: Optional[Money] = Field(default=None)
+
+
+class CGExemptionClaim(Identified):
+    """An exemption claim nested inside an immovable-property gain row."""
+
+    section: CGExemptionSection = Field(default="")
+    amount: Money = Field(default=Decimal("0"))
+
+
+class ImmovableAssetGain(Identified):
+    """One STCG/LTCG land-or-building row (Schedule CG A1/B1)."""
+
+    dateOfPurchase: Optional[str] = Field(default=None)
+    dateOfSale: str = Field(default="")
+    fullConsideration: Money = Field(default=Decimal("0"))
+    stampDutyValue: Optional[Money] = Field(default=None)
+    propertyAddress: Optional[str] = Field(default=None)
+    consideration50C: Optional[Money] = Field(default=None)
+    acquisitionCost: Money = Field(default=Decimal("0"))
+    improvementCost: Optional[Money] = Field(default=None)
+    transferExpenses: Money = Field(default=Decimal("0"))
+    deduction54B: Optional[Money] = Field(default=None)
+    totalDeductions: Optional[Money] = Field(default=None)
+    balance: Optional[Money] = Field(default=None)
+    capitalGain: Optional[Money] = Field(default=None)
+    indexedAcquisitionCost: Optional[Money] = Field(default=None)
+    indexedImprovementCost: Optional[Money] = Field(default=None)
+    improvementFinancialYear: Optional[str] = Field(default=None)
+    exemptionSection: CGExemptionSection = Field(default="")
+    exemptionAmount: Optional[Money] = Field(default=None)
+    transferees: list[CGTransfereeDetail] = Field(default_factory=list)
+    improvements: list[CGImprovementDetail] = Field(default_factory=list)
+    exemptions: list[CGExemptionClaim] = Field(default_factory=list)
+
+
+class Scrip112A(Identified):
+    """One scrip in Schedule 112A (listed equity / equity-oriented MF)."""
+
+    shareOnOrBefore: Literal["BE", "AE", ""] = Field(default="")
+    isin: str = Field(default="")
+    name: str = Field(default="")
+    quantity: Money = Field(default=Decimal("0"))
+    salePricePerUnit: Money = Field(default=Decimal("0"))
+    totalSaleValue: Money = Field(default=Decimal("0"))
+    costWithoutIndexation: Money = Field(default=Decimal("0"))
+    acquisitionCost: Money = Field(default=Decimal("0"))
+    fmvPerUnit: Money = Field(default=Decimal("0"))
+    totalFmv: Money = Field(default=Decimal("0"))
+    transferExpenses: Money = Field(default=Decimal("0"))
+    ltcgBeforeLower: Optional[Money] = Field(default=None)
+    totalDeductions: Optional[Money] = Field(default=None)
+    balance: Optional[Money] = Field(default=None)
+    dateOfAcquisition: Optional[str] = Field(
+        default=None,
+        description="Added during ITR-2 mapper work (Phase 3) — the original "
+        "shipped Scrip112A type had no date fields at all, but the CBDT "
+        "Schedule 112A JSON requires a transfer date per scrip. Optional so "
+        "existing scrip-construction call sites (mapCapitalGainsToDraftPatch.ts, "
+        "CapitalGainsEntryManager.tsx) are unaffected until they're updated to "
+        "capture it; the mapper skips (does not fabricate) a scrip missing this.",
+    )
+    dateOfTransfer: Optional[str] = Field(default=None)
+
+
+class Scrip115AD(Scrip112A):
+    """One scrip in Schedule 115AD (FII/FPI). Same shape as Scrip112A."""
+
+
+class VdaEntry(Identified):
+    """One Virtual Digital Asset transaction (Sec 115BBH)."""
+
+    dateOfAcquisition: str = Field(default="")
+    dateOfTransfer: str = Field(default="")
+    head: Literal["CG", "BI", ""] = Field(default="")
+    acquisitionCost: Money = Field(default=Decimal("0"))
+    consideration: Money = Field(default=Decimal("0"))
+    incomeFromVda: Optional[Money] = Field(default=None)
+
+
+class CapitalGainPurchase(Identified):
+    """A read-only purchase-reference row (AIS SFT-18(Pur)/SFT-17(Pur))."""
+
+    informationCode: str = Field(default="")
+    reportingSource: str = Field(default="")
+    securityName: str = Field(default="")
+    isin: str = Field(default="")
+    period: str = Field(default="")
+    purchaseAmount: Money = Field(default=Decimal("0"))
+    accountId: str = Field(default="")
+    status: str = Field(default="")
+
+
+class CGDtaaEntry(Identified):
+    """A DTAA-rate capital gains row (Schedule CG A6/B7)."""
+
+    amount: Money = Field(default=Decimal("0"))
+    itemNumber: Optional[str] = Field(default=None)
+    countryName: str = Field(default="")
+    countryCode: Optional[str] = Field(default=None)
+    article: str = Field(default="")
+    treatyRate: Optional[Money] = Field(default=None)
+    trcAvailable: Optional[bool] = Field(default=None)
+    itActSection: Optional[str] = Field(default=None)
+    itActRate: Optional[Money] = Field(default=None)
+    applicableRate: Optional[Money] = Field(default=None)
+
+
+class CGDeductionClaim(Identified):
+    """A s.54/54B/54EC/54F/115F/54D/54G/54GA deduction claim (Schedule CG F)."""
+
+    section: CGExemptionSection = Field(default="")
+    dateOfTransfer: str = Field(default="")
+    newAssetCost: Optional[Money] = Field(default=None)
+    dateOfPurchase: Optional[str] = Field(default=None)
+    amountDeposited: Optional[Money] = Field(default=None)
+    depositDate: Optional[str] = Field(default=None)
+    accountNumber: Optional[str] = Field(default=None)
+    ifsc: Optional[str] = Field(default=None)
+    amountDeducted: Money = Field(default=Decimal("0"))
+
+
+class CGUnutilizedDeposit(Identified):
+    """Prior-year unutilized CG deposit (s.54/54B/54D/54G/54GA reinvestment)."""
+
+    transferPreviousYear: str = Field(default="")
+    sectionClaimed: str = Field(default="")
+    yearAssetAcquired: Optional[str] = Field(default=None)
+    amountUtilized: Money = Field(default=Decimal("0"))
+    amountUnutilized: Money = Field(default=Decimal("0"))
+
+
+class CapitalGainsAggregates(_StrictModel):
+    """Pass-through STCG/LTCG aggregates for the schedule."""
+
+    stPassThrough: Money = Field(default=Decimal("0"))
+    stPassThrough20: Money = Field(default=Decimal("0"))
+    stPassThrough30: Money = Field(default=Decimal("0"))
+    stPassThroughApplicable: Money = Field(default=Decimal("0"))
+    ltPassThrough: Money = Field(default=Decimal("0"))
+    ltPassThrough112A: Money = Field(default=Decimal("0"))
+    ltPassThrough125: Money = Field(default=Decimal("0"))
+
+
+class CGSection48Block(_StrictModel):
+    """NRI STT paid/not-paid aggregates."""
+
+    nriSttPaid: Money = Field(default=Decimal("0"))
+    nriSttNotPaid: Money = Field(default=Decimal("0"))
+
+
+class CGNriProviso48Block(_StrictModel):
+    """NRI LTCG without indexation + s.54F."""
+
+    ltcgWithoutBenefit: Money = Field(default=Decimal("0"))
+    deduction54F: Money = Field(default=Decimal("0"))
+
+
+class CapitalGainsSchedule(_StrictModel):
+    """The fully-typed canonical Capital Gains Schedule."""
+
+    simplified112A: Simplified112ABlock = Field(default_factory=Simplified112ABlock)
+    stImmovable: list[ImmovableAssetGain] = Field(default_factory=list)
+    stEquity: list[dict[str, Any]] = Field(default_factory=list)
+    stNriUnlisted: list[dict[str, Any]] = Field(default_factory=list)
+    stOtherAssets: list[dict[str, Any]] = Field(default_factory=list)
+    stSlumpSale: list[dict[str, Any]] = Field(default_factory=list)
+    ltImmovable: list[ImmovableAssetGain] = Field(default_factory=list)
+    ltProviso112: list[dict[str, Any]] = Field(default_factory=list)
+    ltNri112115: list[dict[str, Any]] = Field(default_factory=list)
+    ltForeignAssets: list[dict[str, Any]] = Field(default_factory=list)
+    ltOtherAssets: list[dict[str, Any]] = Field(default_factory=list)
+    ltSlumpSale: list[dict[str, Any]] = Field(default_factory=list)
+    schedule112A: list[Scrip112A] = Field(default_factory=list)
+    schedule115AD: list[Scrip115AD] = Field(default_factory=list)
+    purchases: list[CapitalGainPurchase] = Field(default_factory=list)
+    vda: list[VdaEntry] = Field(default_factory=list)
+    stUnutilized: list[CGUnutilizedDeposit] = Field(default_factory=list)
+    ltUnutilized: list[CGUnutilizedDeposit] = Field(default_factory=list)
+    stDtaa: list[CGDtaaEntry] = Field(default_factory=list)
+    ltDtaa: list[CGDtaaEntry] = Field(default_factory=list)
+    buyBackLosses: list[dict[str, Any]] = Field(default_factory=list)
+    deductionClaims: list[CGDeductionClaim] = Field(default_factory=list)
+    stSection48: CGSection48Block = Field(default_factory=CGSection48Block)
+    ltNriProviso48: CGNriProviso48Block = Field(default_factory=CGNriProviso48Block)
+    ltNri112A: dict[str, Money] = Field(default_factory=dict)
+    stUnutilizedFlag: Literal["Y", "N", "X"] = Field(default="N")
+    ltUnutilizedFlag: Literal["Y", "N", "X"] = Field(default="N")
+    quarterly: dict[str, Money] = Field(default_factory=dict)
+    aggregates: CapitalGainsAggregates = Field(default_factory=CapitalGainsAggregates)
+    lossSetOff: dict[str, Money] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# ITR-2/ITR-3 additive schedules (FSI, TR, FA, SPI, PTI, AMT, AL, 5A, ESOP,
+# brought/carried-forward loss ledger) — ignored by the ITR-1/ITR-4 pipelines.
+# ---------------------------------------------------------------------------
+
+ResidentialStatus = Literal["ROR", "RNOR", "NR"]
+"""ITR-2/3 residential status. Matches frontend/eligibility.ts's existing,
+live, tested enum exactly — NOT the CBDT wire format (RES/NRI/NOR), which
+the ITR-2/3 draft-to-input mapper derives via ROR->RES, RNOR->NOR, NR->NRI,
+the same way every other mapper already translates draft-level values into
+CBDT-exact codes. Renaming eligibility.ts's already-shipped enum instead
+would touch live, tested form-recommendation logic for no benefit."""
+
+ScheduleSISection = Literal["115BB", "115BBE", "115BBF", "115BBG", "115BBJ", "115BBA", "111"]
+
+ForeignReliefSection = Literal["90", "90A", "91"]
+ForeignAssetType = Literal[
+    "BANK_ACCOUNT", "CUSTODIAL_ACCOUNT", "EQUITY_DEBT_INTEREST",
+    "CASH_VALUE_INSURANCE", "FINANCIAL_INTEREST", "IMMOVABLE_PROPERTY",
+    "SIGNING_AUTHORITY", "TRUST", "OTHER_FOREIGN_INCOME", "OTHER_ASSET",
+]
+ClubbedHeadOfIncome = Literal["SAL", "HP", "CG", "OS"]
+PTIIncomeHead = Literal["HP", "STCG", "LTCG", "OS"]
+LossHead = Literal["HP", "STCG", "LTCG", "RaceHorse"]
+
+
+class BroughtForwardLosses(_StrictModel):
+    """Canonical current-year aggregate of brought-forward losses.
+
+    Mirrors frontend/src/domain/returns/types.ts::BroughtForwardLosses
+    exactly. Not currently read by any ITR-1/4 mapper (the frontend type
+    itself is defined but not deeply wired yet either) — added here for
+    parity so ITR-2/3 has the same aggregate the frontend already models.
+    """
+
+    bfLossHP: Money = Field(default=Decimal("0"))
+    bfLossBusiness: Money = Field(default=Decimal("0"))
+    bfLossSTCG: Money = Field(default=Decimal("0"))
+    bfLossLTCG: Money = Field(default=Decimal("0"))
+    bfLossSpeculation: Money = Field(default=Decimal("0"))
+
+
+class BroughtForwardLossEntry(Identified):
+    """Opening brought-forward loss balance for one origin AY (Schedule CFL
+    opening rows). ITR-2/3 only — no frontend representation exists yet for
+    this per-AY shape (only the flat current-year aggregate above does)."""
+
+    assessmentYear: str = Field(default="")
+    head: LossHead = Field(default="HP")
+    subCategory: str = Field(default="")
+    originalLoss: Money = Field(default=Decimal("0"))
+    broughtForward: Money = Field(default=Decimal("0"))
+    dateOfFiling: Optional[str] = Field(default=None)
+
+
+class CarriedForwardLossEntry(Identified):
+    """Legacy CFL control total retained for reconciliation only. ITR-2/3."""
+
+    assessmentYearOfLoss: str = Field(default="")
+    head: LossHead = Field(default="HP")
+    originalLoss: Money = Field(default=Decimal("0"))
+    lossRemaining: Money = Field(default=Decimal("0"))
+
+
+class ScheduleSIEntry(Identified):
+    """Schedule SI: special-rate income not generated by another schedule.
+
+    Distinct from the existing ``OtherSources.specialRateIncome``
+    (``SpecialRateIncomeEntry`` — a simpler sourceDescription/sourceAmount
+    pair using Schedule-5A-style codes) — ITR-2's calculator dispatches
+    ``si_entries`` by ``.section`` to per-section compute functions and needs
+    ``grossIncome``/``deductions``/``taxRatePct``, which that existing type
+    doesn't carry. Found missing during Phase 3 (the mapper needs this field
+    and it wasn't added in Phase 2); documented as a Phase 2 addendum.
+    """
+
+    section: ScheduleSISection = Field(default="115BB")
+    description: str = Field(default="")
+    grossIncome: Money = Field(default=Decimal("0"))
+    deductions: Money = Field(default=Decimal("0"))
+    taxRatePct: Optional[Money] = Field(default=None)
+
+
+class ForeignSourceIncomeEntry(Identified):
+    """Schedule FSI: foreign-source income and foreign tax, per jurisdiction."""
+
+    countryCode: str = Field(default="")
+    taxIdentificationNo: str = Field(default="")
+    salaryIncome: Money = Field(default=Decimal("0"))
+    hpIncome: Money = Field(default=Decimal("0"))
+    cgIncome: Money = Field(default=Decimal("0"))
+    osIncome: Money = Field(default=Decimal("0"))
+    taxPaidOutsideIndia: Money = Field(default=Decimal("0"))
+    taxPayableInIndia: Money = Field(default=Decimal("0"))
+    reliefSection: ForeignReliefSection = Field(default="90")
+
+
+class ForeignTaxReliefEntry(Identified):
+    """Schedule TR: foreign tax relief claim for one jurisdiction (Sec 90/90A/91)."""
+
+    countryCode: str = Field(default="")
+    taxIdentificationNo: str = Field(default="")
+    incomeIncludedInThisReturn: Money = Field(default=Decimal("0"))
+    taxPaidOutsideIndia: Money = Field(default=Decimal("0"))
+    indianTaxPayable: Money = Field(default=Decimal("0"))
+    reliefClaimed: Money = Field(default=Decimal("0"))
+    reliefSection: ForeignReliefSection = Field(default="90")
+    form67Filed: bool = Field(default=False)
+
+
+class ForeignAssetEntry(Identified):
+    """Schedule FA: one foreign asset or account disclosure."""
+
+    assetType: ForeignAssetType = Field(default="OTHER_ASSET")
+    countryCode: str = Field(default="")
+    institutionOrEntityName: str = Field(default="")
+    address: str = Field(default="")
+    zipCode: str = Field(default="")
+    accountOrAssetIdentifier: str = Field(default="")
+    ownershipStatus: str = Field(default="")
+    openingOrAcquisitionDate: str = Field(default="")
+    peakValue: Money = Field(default=Decimal("0"))
+    closingValue: Money = Field(default=Decimal("0"))
+    grossIncome: Money = Field(default=Decimal("0"))
+    incomeOffered: Money = Field(default=Decimal("0"))
+    incomeHead: Optional[ClubbedHeadOfIncome] = Field(default=None)
+    natureOfAsset: str = Field(default="")
+    natureOfIncome: str = Field(default="")
+    incomeTaxScheduleItemNo: str = Field(default="")
+
+
+class ClubbedIncomeEntry(Identified):
+    """Schedule SPI: income clubbed under Section 64."""
+
+    specifiedPersonName: str = Field(default="")
+    pan: str = Field(default="")
+    relationship: str = Field(default="")
+    amountIncluded: Money = Field(default=Decimal("0"))
+    headOfIncome: ClubbedHeadOfIncome = Field(default="OS")
+
+
+class PassThroughIncomeEntry(Identified):
+    """Schedule PTI: pass-through income from a business trust or investment
+    fund. Named distinctly from HouseProperty.passThroughIncome and the
+    CapitalGainsAggregates pass-through fields — those are unrelated HP/CG
+    concepts that happen to share the phrase "pass-through"."""
+
+    entityName: str = Field(default="")
+    entityPAN: str = Field(default="")
+    incomeHead: PTIIncomeHead = Field(default="OS")
+    section: str = Field(default="")
+    incomeAmount: Money = Field(default=Decimal("0"))
+    tdsCredit: Money = Field(default=Decimal("0"))
+
+
+class AMTCreditEntry(Identified):
+    """AMT credit brought forward from one assessment year."""
+
+    assessmentYear: str = Field(default="")
+    creditBroughtForward: Money = Field(default=Decimal("0"))
+
+
+class AMTDetails(_StrictModel):
+    """Alternate Minimum Tax additions and opening credit ledger. ITR-2/3."""
+
+    deduction10AA: Money = Field(default=Decimal("0"))
+    deduction80IAto80RRBExcept80P: Money = Field(default=Decimal("0"))
+    deduction35ADNetDepreciation: Money = Field(default=Decimal("0"))
+    creditsBroughtForward: list[AMTCreditEntry] = Field(default_factory=list)
+
+
+class AssetLiabilityDetails(_StrictModel):
+    """Schedule AL: assets and related liabilities (mandatory above the income threshold)."""
+
+    immovableProperty: Money = Field(default=Decimal("0"))
+    cashInHand: Money = Field(default=Decimal("0"))
+    bankDeposits: Money = Field(default=Decimal("0"))
+    sharesAndSecurities: Money = Field(default=Decimal("0"))
+    insurancePolicies: Money = Field(default=Decimal("0"))
+    loansAndAdvances: Money = Field(default=Decimal("0"))
+    jewellery: Money = Field(default=Decimal("0"))
+    art: Money = Field(default=Decimal("0"))
+    vehiclesBoatsAircraft: Money = Field(default=Decimal("0"))
+    relatedLiabilities: Money = Field(default=Decimal("0"))
+
+
+class PortugueseCivilCodeDetails(_StrictModel):
+    """Schedule 5A: Portuguese Civil Code income apportionment facts."""
+
+    spouseName: str = Field(default="")
+    spousePAN: str = Field(default="")
+    spouseAadhaar: str = Field(default="")
+    hpAmountApportioned: Money = Field(default=Decimal("0"))
+    cgAmountApportioned: Money = Field(default=Decimal("0"))
+    osAmountApportioned: Money = Field(default=Decimal("0"))
+    tdsApportioned: Money = Field(default=Decimal("0"))
+
+
+class ESOPDeferralEntry(Identified):
+    """Eligible-startup ESOP tax deferral ledger entry (Sec 191(2))."""
+
+    employerPAN: str = Field(default="")
+    dpiitRegistrationNumber: str = Field(default="")
+    assessmentYear: str = Field(default="")
+    taxDeferredBroughtForward: Money = Field(default=Decimal("0"))
+    taxPayableCurrentYear: Money = Field(default=Decimal("0"))
+    balanceTaxCarriedForward: Money = Field(default=Decimal("0"))
 
 
 # ---------------------------------------------------------------------------
@@ -764,6 +1246,7 @@ class ChapterVIA(_StrictModel):
     section80DDB: Money = Field(default=Decimal("0"))
     section80DDBUserType: Section80DDBUserType = Field(default="")
     section80DDBNameOfSpecDisease: str = Field(default="")
+    section80DDBReimbursement: Money = Field(default=Decimal("0"))
     section80E: Money = Field(default=Decimal("0"))
     section80EE: Money = Field(default=Decimal("0"))
     section80EEA: Money = Field(default=Decimal("0"))
@@ -941,7 +1424,11 @@ class FilingStatus(_StrictModel):
         description="Date Form 10-IEA was filed for the current AY old-regime "
         "election (YYYY-MM-DD). ITR-4 only.",
     )
-    form10IEAEarlierAYOldRegime: Literal["Y", "N", "NA"] = Field(default="NA")
+    # Default "N" (not "NA"): Sl. No. A23 of Part A-General is mandatory
+    # Y/N for Individual/HUF (CBDT ITR-4 Validation Rules AY 2026-27 rule
+    # #260); "NA" is reserved for Firm status (rule #235). See the matching
+    # note on ITR4FilingProfile.form_10iea_earlier_ay_old_regime.
+    form10IEAEarlierAYOldRegime: Literal["Y", "N", "NA"] = Field(default="N")
     form10IEAAssessmentYear: Literal["", "2024-25", "2025-26"] = Field(default="")
     form10IEAEarlierAYAckOldRegime: str = Field(default="")
     form10IEAEarlierAYNewRegime: Literal["Y", "N"] = Field(default="N")
@@ -955,8 +1442,62 @@ class FilingStatus(_StrictModel):
     form10IEACurrentAYOldRegimeAck: str = Field(default="")
     seventhProviso: SeventhProviso = Field(
         default_factory=SeventhProviso,
-        description="Seventh-proviso to Section 139(1) declarations. ITR-4 "
-        "FilingStatus field; ignored by ITR-1.",
+        description="Seventh-proviso to Section 139(1) declarations. Shared "
+        "by ITR-4 and ITR-2 (ITR2FilingProfile.seventh_proviso_139 maps to "
+        "this same block's foreignTravelAmount/electricityExpenditureAmount/"
+        "depositAmount fields); ignored by ITR-1.",
+    )
+    # ── Additive ITR-2 fields (ignored by ITR-1/ITR-4) ────────────────────
+    sebiRegistrationNumber: str = Field(
+        default="",
+        description="SEBI FII/FPI registration number, required when isFiiFpi "
+        "is true. ITR-2 only.",
+    )
+    isFiiFpi: bool = Field(
+        default=False,
+        description="Whether the assessee is a Foreign Institutional Investor "
+        "/ Foreign Portfolio Investor. ITR-2 only.",
+    )
+    portugueseCivilCodeApplies: bool = Field(
+        default=False,
+        description="Whether the Portuguese Civil Code (Schedule 5A income "
+        "apportionment) applies to this assessee. ITR-2 only.",
+    )
+    leiNumber: str = Field(
+        default="",
+        description="Legal Entity Identifier — CBDT requires disclosure when "
+        "the refund claimed is INR 50 crore or more (not schema-enforced, "
+        "an instructional requirement). 20 characters exactly. ITR-2 only.",
+    )
+    leiValidUptoDate: Optional[str] = Field(
+        default=None,
+        description="LEI validity expiry date (YYYY-MM-DD). ITR-2 only.",
+    )
+    conditionsResStatus: Literal["", "1", "2", "3", "4", "5", "6", "7", "8", "9"] = Field(
+        default="",
+        description="Section 6 residential-status basis code ('' = not "
+        "specified). Only meaningful for NRI/RNOR. ITR-2 only.",
+    )
+    jurisdictionResidenceEntries: list[JurisdictionResidenceEntry] = Field(
+        default_factory=list,
+        description="Jurisdiction(s) of residence and TIN, for NRI/RNOR "
+        "taxpayers. ITR-2 only.",
+    )
+    totalStayIndiaPrevYr: Optional[int] = Field(
+        default=None, ge=0, le=365,
+        description="Total days stayed in India during the previous year. "
+        "ITR-2 only.",
+    )
+    totalStayIndia4PrecYr: Optional[int] = Field(
+        default=None, ge=0, le=1461,
+        description="Total days stayed in India during the 4 preceding "
+        "years. ITR-2 only.",
+    )
+    benefitUs115H: bool = Field(
+        default=False,
+        description="Section 115H benefit claim — an NRI who becomes "
+        "resident may continue special-rate treatment on specified "
+        "foreign-exchange investment income. ITR-2 only.",
     )
 
 
@@ -1020,6 +1561,35 @@ class PersonalInfo(_StrictModel):
         default=None,
         description="ITR-4 AlternateAddress block. Emitted only when "
         "secondaryAddressDifferent is true.",
+    )
+    # ── Additive ITR-2/3 fields (ignored by ITR-1/ITR-4) ──────────────────
+    residentialStatus: ResidentialStatus = Field(
+        default="ROR",
+        description="ITR-2/3 residential status (ROR/RNOR/NR). Already live on "
+        "the frontend (eligibility.ts); ITR-1 implicitly assumes ROR and "
+        "ignores this field. The ITR-2/3 mapper translates to the CBDT wire "
+        "codes RES/NRI/NOR.",
+    )
+    isDirector: bool = Field(
+        default=False,
+        description="Whether the assessee is a director in a company at any "
+        "time during the year. Already live on the frontend (ClientsPage "
+        "intake, eligibility.ts). ITR-2/3 only.",
+    )
+    holdsUnlistedShares: bool = Field(
+        default=False,
+        description="Whether the assessee held unlisted equity shares at any "
+        "time during the year. Already live on the frontend. ITR-2/3 only.",
+    )
+    companyDirectorEntries: list[CompanyDirectorEntry] = Field(
+        default_factory=list,
+        description="Company-directorship detail rows, required when "
+        "isDirector is true. ITR-2 only.",
+    )
+    unlistedEquityEntries: list[UnlistedEquityEntry] = Field(
+        default_factory=list,
+        description="Unlisted-equity holding detail rows, required when "
+        "holdsUnlistedShares is true. ITR-2 only.",
     )
 
 
@@ -1104,7 +1674,7 @@ class ReturnDraft(_StrictModel):
     houseProperties: list[HouseProperty] = Field(default_factory=list)
     housePropertyPassThroughIncome: Money = Field(default=Decimal("0"))
     businesses: list[PresumptiveBusiness] = Field(default_factory=list)
-    capitalGainsSchedule: dict = Field(default_factory=dict)
+    capitalGainsSchedule: CapitalGainsSchedule = Field(default_factory=CapitalGainsSchedule)
     otherSources: OtherSources = Field(default_factory=OtherSources)
     exemptIncome: ExemptIncomeSchedule = Field(default_factory=ExemptIncomeSchedule)
     deductions: Deductions = Field(default_factory=Deductions)
@@ -1114,6 +1684,20 @@ class ReturnDraft(_StrictModel):
     taxReturnPreparer: TaxReturnPreparer = Field(default_factory=TaxReturnPreparer)
     provenance: list[ImportProvenance] = Field(default_factory=list)
     reconciliation: ReconciliationState = Field(default_factory=ReconciliationState)
+    # ── Additive ITR-2/3 fields (ignored by ITR-1/ITR-4) ──────────────────
+    lossesBroughtForward: BroughtForwardLosses = Field(default_factory=BroughtForwardLosses)
+    broughtForwardLossEntries: list[BroughtForwardLossEntry] = Field(default_factory=list)
+    carriedForwardLossEntries: list[CarriedForwardLossEntry] = Field(default_factory=list)
+    scheduleSIEntries: list[ScheduleSIEntry] = Field(default_factory=list)
+    foreignSourceIncome: list[ForeignSourceIncomeEntry] = Field(default_factory=list)
+    foreignTaxRelief: list[ForeignTaxReliefEntry] = Field(default_factory=list)
+    foreignAssets: list[ForeignAssetEntry] = Field(default_factory=list)
+    clubbedIncome: list[ClubbedIncomeEntry] = Field(default_factory=list)
+    passThroughIncomeEntries: list[PassThroughIncomeEntry] = Field(default_factory=list)
+    amt: Optional[AMTDetails] = Field(default=None)
+    assetLiability: Optional[AssetLiabilityDetails] = Field(default=None)
+    portugueseCivilCode: Optional[PortugueseCivilCodeDetails] = Field(default=None)
+    esopDeferrals: list[ESOPDeferralEntry] = Field(default_factory=list)
 
 
 def create_empty_draft(assessment_year: str = "", form: ItrForm = "ITR-1", regime: TaxRegime = "new") -> ReturnDraft:
@@ -1153,3 +1737,117 @@ def draft_from_client_seed(client: object, assessment_year: str) -> ReturnDraft:
         dateOfBirth=getattr(client, "dob", None),
     )
     return draft
+
+
+# ---------------------------------------------------------------------------
+# Stored-payload migration — obsolete keys removed from this schema over
+# time still exist in previously-saved draft JSON. Since every model here
+# uses ``extra="forbid"``, ``ReturnDraft.model_validate()`` on a stored
+# payload that still carries a since-removed key raises immediately. This
+# is the SINGLE shared migration entry point every stored-payload reader
+# must call before validating — both the /v2 client-draft router
+# (``app/routers/client_itr_v2.py``) and the Type-3 filing/export path
+# (``app/eri/type3/json_exporter.py`` → ``app/engine/filing_orchestrator.py``)
+# load the exact same stored ``ClientITR.form_data`` shape, so a migration
+# added for one and not the other would silently break saved-draft filing
+# for the other path.
+# ---------------------------------------------------------------------------
+
+def migrate_stored_draft_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove obsolete keys/placeholders from previously valid v2 drafts.
+
+    Each step below is independent -- a stored payload may need any
+    combination of them -- and each is a no-op unless its specific obsolete
+    shape is actually present. Safe to call unconditionally on any payload,
+    stored or freshly constructed.
+    """
+    payload = _migrate_other_clause_iv_detail(payload)
+    payload = _migrate_employer_nps(payload)
+    payload = _migrate_employer_vestigial_salary_fields(payload)
+    return payload
+
+
+def _migrate_other_clause_iv_detail(payload: dict[str, Any]) -> dict[str, Any]:
+    """``otherClauseIVDetail`` was an optional free-text placeholder before the
+    official clause-(iv) row structure was introduced as ``clauseIVDetails``.
+    An empty legacy value carries no taxpayer data, so it can be removed
+    losslessly. A non-empty value is deliberately retained and will fail the
+    strict canonical validation rather than being silently discarded.
+    """
+    filing = payload.get("filing")
+    if not isinstance(filing, dict):
+        return payload
+    seventh_proviso = filing.get("seventhProviso")
+    if not isinstance(seventh_proviso, dict):
+        return payload
+    legacy_detail = seventh_proviso.get("otherClauseIVDetail")
+    if not isinstance(legacy_detail, str) or legacy_detail.strip():
+        return payload
+
+    migrated = dict(payload)
+    migrated_filing = dict(filing)
+    migrated_seventh_proviso = dict(seventh_proviso)
+    migrated_seventh_proviso.pop("otherClauseIVDetail", None)
+    migrated_filing["seventhProviso"] = migrated_seventh_proviso
+    migrated["filing"] = migrated_filing
+    return migrated
+
+
+def _migrate_employer_nps(payload: dict[str, Any]) -> dict[str, Any]:
+    """``employerNPS`` was a per-employer field with no live reader anywhere
+    in the canonical pipeline (Section 80CCD(2) employer-NPS contribution is
+    entered as a single return-level aggregate on
+    ``deductions.chapterVIA.section80CCDEmployer`` instead) -- removed from
+    the ``Employer`` schema entirely (Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §6.2). Strip it from every stored employer row unconditionally; it never
+    carried a value that reached any computation even when populated, so
+    there is no taxpayer data to preserve here (unlike ``otherClauseIVDetail``
+    above, which is a real free-text disclosure).
+    """
+    employers = payload.get("employers")
+    if not isinstance(employers, list) or not any(
+        isinstance(row, dict) and "employerNPS" in row for row in employers
+    ):
+        return payload
+
+    migrated = dict(payload)
+    migrated["employers"] = [
+        {key: value for key, value in row.items() if key != "employerNPS"}
+        if isinstance(row, dict) else row
+        for row in employers
+    ]
+    return migrated
+
+
+_EMPLOYER_VESTIGIAL_SALARY_KEYS = frozenset({
+    "ltaExempt", "otherExempt", "salaryNatureRows", "perquisiteNatureRows",
+})
+
+
+def _migrate_employer_vestigial_salary_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Four more per-employer fields removed for the same reason as
+    ``employerNPS`` above (Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md
+    §11.9): each had no live reader anywhere in the canonical pipeline, and
+    ``ltaExempt``/``salaryNatureRows``/``perquisiteNatureRows`` additionally
+    had no live frontend writer either (the LTA exemption is recomputed
+    from evidence -- ``actualLtaFare``/``isDomesticTravel`` -- since the
+    §5.1 P0 fix; ``salaryNatureRows``/``perquisiteNatureRows`` were always
+    written as ``[]`` by every mapper/importer, unlike the structurally
+    similar ``section10ExemptionRows``, which has a real UI and is kept).
+    None of the four ever carried a value that reached any computation, so
+    there is no taxpayer data to preserve.
+    """
+    employers = payload.get("employers")
+    if not isinstance(employers, list) or not any(
+        isinstance(row, dict) and _EMPLOYER_VESTIGIAL_SALARY_KEYS & row.keys()
+        for row in employers
+    ):
+        return payload
+
+    migrated = dict(payload)
+    migrated["employers"] = [
+        {key: value for key, value in row.items() if key not in _EMPLOYER_VESTIGIAL_SALARY_KEYS}
+        if isinstance(row, dict) else row
+        for row in employers
+    ]
+    return migrated

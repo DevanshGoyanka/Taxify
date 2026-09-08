@@ -1,10 +1,16 @@
 """Section 80CCD(2) — Employer NPS Contribution.
 
 Employer's contribution to NPS (Central/State Govt or other employer).
-Statutory ceiling:
-  - Government employees (Central/State): up to 14% of salary.
-  - Other employees: up to 10% of salary.
-Allowed in BOTH old and new regimes (Section 115BAC).
+Statutory ceiling, old regime: Government employees (Central/State) up to
+14% of salary; other employees up to 10% of salary.
+
+Finance (No. 2) Act 2024 raised the ceiling to 14% of salary for ALL
+employers (not just Central/State Government) specifically for assessees
+who have opted for the new regime u/s 115BAC — confirmed independently by
+this codebase's own ITR-1/ITR-4 validators (``ITR1-R216``, ``ITR4-R263``),
+which apply a flat 14% cap under the new regime with no employer-category
+distinction at all. Allowed in BOTH old and new regimes; only the rate
+differs by regime for non-government employers.
 
 "Salary" for this purpose means basic salary + dearness allowance
 (if forming part of retirement benefits per CBSDA). We approximate using
@@ -23,8 +29,9 @@ from app.schemas.itr1 import Chapter6ADeductions, TaxRegime
 _ZERO = Decimal("0")
 
 # Statutory ceilings on employer NPS contribution as a fraction of salary.
-_NPS_GOV_T_PCT = Decimal("0.14")   # 14% for Central/State Government employees
-_NPS_GOV_T_PCT_OTHER = Decimal("0.10")  # 10% for other employees
+_NPS_GOV_T_PCT = Decimal("0.14")   # 14% for Central/State Government employees (both regimes)
+_NPS_GOV_T_PCT_OTHER_OLD = Decimal("0.10")  # 10% for other employers, old regime
+_NPS_GOV_T_PCT_OTHER_NEW = Decimal("0.14")  # 14% for other employers, new regime (FA 2024)
 
 
 @dataclass(frozen=True)
@@ -47,10 +54,16 @@ def compute_details(
 
     Args:
         ded: Chapter VI-A deductions carrying amount_80ccd2.
-        regime: Tax regime — 80CCD(2) is allowed in both old and new regimes.
-        salary: Section 17(1) salary used to apply the 10%/14% ceiling.
-        is_government_employee: Whether the employer is Central/State
-            Government (14% ceiling applies); other employers use 10%.
+        regime: Tax regime — 80CCD(2) is allowed in both old and new regimes,
+            but the ceiling for non-government employers depends on which
+            (14% new regime, 10% old regime; Central/State Government
+            employers are 14% under both).
+        salary: Section 17(1) salary used to apply the ceiling.
+        is_government_employee: Whether the employer is specifically
+            Central/State Government (narrower than ITR-1's
+            SalaryIncome.is_government_employee, which also includes PSU
+            for Section 16(ii) purposes -- this parameter must receive the
+            CG/SG-only flag).
 
     Returns:
         A typed result with the statutory ceiling and the allowed
@@ -60,7 +73,12 @@ def compute_details(
     if ded is None or user_claim <= _ZERO:
         return Section80CCD2Result(user_claim=user_claim)
 
-    pct = _NPS_GOV_T_PCT if is_government_employee else _NPS_GOV_T_PCT_OTHER
+    if is_government_employee:
+        pct = _NPS_GOV_T_PCT
+    elif regime == TaxRegime.NEW:
+        pct = _NPS_GOV_T_PCT_OTHER_NEW
+    else:
+        pct = _NPS_GOV_T_PCT_OTHER_OLD
     ceiling = (salary * pct) if salary > _ZERO else user_claim
     allowed = min(user_claim, ceiling)
 

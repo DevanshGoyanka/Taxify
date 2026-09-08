@@ -143,7 +143,10 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
         ))
     expected_tds = sum(entry.tds_deducted for entry in inp.tds1_entries)
     expected_tds += sum(entry.tds_claimed_this_year for entry in inp.tds2_entries)
-    expected_tds += sum(entry.tds_claimed_this_year for entry in inp.tds3_entries)
+    # TDS3Entry's field is `tds_claimed`, not `tds_claimed_this_year` (that name
+    # belongs to TDS2Entry) -- same crash-causing typo found and fixed in
+    # app/engine/calculators/itr2.py::compute() and itd/itr2.py::_schedule_tds3().
+    expected_tds += sum(entry.tds_claimed for entry in inp.tds3_entries)
     expected_tcs = sum(entry.tcs_credit_claimed for entry in inp.tcs_entries)
     if _different(result.total_tds, expected_tds):
         results.append(_result(
@@ -164,15 +167,21 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
             "total_taxes_paid", str(expected_paid), str(result.total_taxes_paid),
         ))
 
+    # ITR2-CALC-018/019 compare against section-288B-rounded fields:
+    # balance_payable/refund_due are each round_to_nearest_10(...) of this
+    # raw difference (app/engine/calculators/itr2.py), so a flat ₹1
+    # tolerance false-positives on any return whose raw diff isn't already
+    # a multiple of 10 — mirrors the ₹10 tolerance ITR-1's equivalent rules
+    # (ITR1-R105/R106) already use for the same reason.
     payable_diff = result.net_tax_liability - result.total_taxes_paid
     expected_payable = max(_ZERO, payable_diff)
     expected_refund = max(_ZERO, -payable_diff)
-    if _different(result.balance_payable, expected_payable):
+    if _different(result.balance_payable, expected_payable, Decimal("10")):
         results.append(_result(
             "ITR2-CALC-018", "Balance payable does not reconcile with liability and taxes paid.",
             "balance_payable", str(expected_payable), str(result.balance_payable),
         ))
-    if _different(result.refund_due, expected_refund):
+    if _different(result.refund_due, expected_refund, Decimal("10")):
         results.append(_result(
             "ITR2-CALC-019", "Refund due does not reconcile with liability and taxes paid.",
             "refund_due", str(expected_refund), str(result.refund_due),
@@ -251,6 +260,18 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
                 "si.surcharge_cap_tax",
                 f"<= {max_capped_tax_at_15pct}", str(si.surcharge_cap_tax),
             ))
+
+    # CBDT rule 456: Schedule AL is mandatory once total income exceeds ₹1
+    # crore. Belongs here rather than input_rules.py — "total income" is a
+    # calculator output (`result.taxable_income`), not something present on
+    # the pre-compute ITR2Input.
+    if result.taxable_income > Decimal("10000000") and inp.asset_liability is None:
+        results.append(_result(
+            "ITR2-CALC-027",
+            "Schedule AL (assets and liabilities) is mandatory when total "
+            "income exceeds ₹1 crore.",
+            "asset_liability", "required", "not provided",
+        ))
 
     return results
 

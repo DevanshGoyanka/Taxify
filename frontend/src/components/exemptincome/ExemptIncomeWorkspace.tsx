@@ -4,6 +4,7 @@ import type {
   ExemptIncomeEntry, ExemptIncomeSchedule, ExemptIncomeSubCategory,
 } from '../../domain/returns/types';
 import type { ItrForm } from '../../domain/eligibility';
+import { CollapsibleWarning } from '../ui/CollapsibleWarning';
 
 interface ExemptIncomeWorkspaceProps {
   form: ItrForm;
@@ -16,7 +17,13 @@ interface CodeOption<T extends string> { value: T; label: string; }
 
 const MAX_MONEY = 99_999_999_999_999;
 const id = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`;
-const money = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+// Backend monetary fields are Decimal-backed and travel over the wire as
+// JSON strings (e.g. "839"), not numbers -- must parse those, not silently
+// zero them, or summary totals read 0 for a freshly loaded draft.
+const money = (value: unknown): number => {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
 const inr = (value: number): string => `₹${money(value).toLocaleString('en-IN')}`;
 
 const CATEGORY_OPTIONS: readonly CodeOption<ExemptIncomeCategory>[] = [
@@ -76,13 +83,22 @@ const styles = {
   primaryRow: { display: 'grid', gridTemplateColumns: 'minmax(180px, .8fr) minmax(280px, 1.6fr) minmax(150px, .65fr)', gap: 16, alignItems: 'end' } as React.CSSProperties,
   label: { display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' } as React.CSSProperties,
   input: { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'white' } as React.CSSProperties,
-  add: { padding: '6px 12px', background: 'var(--gold)', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' } as React.CSSProperties,
+  add: { padding: '6px 12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' } as React.CSSProperties,
   remove: { padding: '4px 8px', background: 'var(--danger)', color: 'white', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' } as React.CSSProperties,
   empty: { padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 6, marginBottom: 24 } as React.CSSProperties,
 };
 
+/** Renders a field label, turning a trailing " *" into a red asterisk. */
+function LabelText({ label }: { label: string }): React.JSX.Element {
+  const trimmed = label.trim();
+  if (trimmed.endsWith('*')) {
+    return <>{trimmed.slice(0, -1).trim()}<span style={{ color: 'var(--danger)' }}> *</span></>;
+  }
+  return <>{label}</>;
+}
+
 function Field({ label, value, onChange, readOnly = false, type = 'number', maxLength, placeholder, disabled }: { label: string; value: string | number; onChange?: (value: string) => void; readOnly?: boolean; type?: 'number' | 'text'; maxLength?: number; placeholder?: string; disabled?: boolean }): React.JSX.Element {
-  return <div><label style={styles.label}>{label}</label><input style={styles.input} type={type} value={value} readOnly={readOnly} disabled={disabled} max={type === 'number' ? MAX_MONEY : undefined} min={type === 'number' ? 0 : undefined} maxLength={maxLength} placeholder={placeholder} onChange={(event) => onChange?.(event.target.value)} /></div>;
+  return <div><label style={styles.label}><LabelText label={label} /></label><input style={styles.input} type={type} value={value} readOnly={readOnly} disabled={disabled} max={type === 'number' ? MAX_MONEY : undefined} min={type === 'number' ? 0 : undefined} maxLength={maxLength} placeholder={placeholder} onChange={(event) => onChange?.(event.target.value)} /></div>;
 }
 
 function Collapsible({ title, subtitle, defaultOpen, summary, children }: { title: string; subtitle: string; defaultOpen: boolean; summary?: string; children: React.ReactNode }): React.JSX.Element {
@@ -123,25 +139,25 @@ export default function ExemptIncomeWorkspace({ form, schedule, onChange, disabl
 
   if (isItr1) return <div>
     <div style={{ marginBottom: 16 }}><h3 style={styles.title}>Exempt Income (ExemptIncAgriOthUs10)</h3><div style={styles.subtitle}>AY 2026-27 · non-salary exempt income only; salary exemptions remain in Schedule S</div></div>
-    <div style={{ marginBottom: 16, padding: 12, background: 'var(--info-bg)', color: 'var(--info)', border: '1px solid var(--info)', borderRadius: 6, fontSize: 12 }}>ITR-1 reports agricultural and other section-10 exempt income here. Agricultural income under section 10(1) is allowed only up to ₹5,000 — exceeding that requires ITR-2. Equity LTCG up to the section 112A threshold belongs in Capital Gains.</div>
-    {incompatible.length > 0 && <div style={{ marginBottom: 16, padding: 12, background: 'var(--warning-bg)', color: 'var(--warning)', border: '1px solid var(--warning)', borderRadius: 6, fontSize: 12 }}>⚠ {incompatible.length} saved entr{incompatible.length === 1 ? 'y is' : 'ies are'} unsupported by ITR-1. Data is preserved; change form or classification before filing.</div>}
+    <CollapsibleWarning>ITR-1 reports agricultural and other section-10 exempt income here. Agricultural income under section 10(1) is allowed only up to ₹5,000 — exceeding that requires ITR-2. Equity LTCG up to the section 112A threshold belongs in Capital Gains.</CollapsibleWarning>
+    {incompatible.length > 0 && <CollapsibleWarning>⚠ {incompatible.length} saved entr{incompatible.length === 1 ? 'y is' : 'ies are'} unsupported by ITR-1. Data is preserved; change form or classification before filing.</CollapsibleWarning>}
     <div style={styles.sectionHeader}><h4 style={styles.panelTitle}>Exempt Income Entries</h4><button style={styles.add} disabled={disabled} onClick={addEntry}>+ Add Exempt Income</button></div>
     {schedule.otherExemptIncome.length === 0 && <div style={styles.empty}>No non-salary exempt-income entries.</div>}
     {schedule.otherExemptIncome.map((entry, index) => <div key={entry.id} style={styles.panel}>
       <div style={styles.panelHeader}><h4 style={styles.panelTitle}>Exempt Entry #{index + 1}</h4><button style={styles.remove} disabled={disabled} onClick={() => removeEntry(entry.id)}>Remove</button></div>
       <div style={styles.primaryRow}>
-        <div><label style={styles.label}>Category *</label><select style={styles.input} value={entry.category} disabled={disabled} onChange={(event) => updateEntry(entry.id, { category: event.target.value as ExemptIncomeCategory })}>{allowedCategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
-        <div><label style={styles.label}>Sub-category / section *</label><select style={styles.input} value={entry.subCategory} disabled={disabled} onChange={(event) => updateEntry(entry.id, { subCategory: event.target.value as ExemptIncomeSubCategory })}>{!allowedSubcategories.some((option) => option.value === entry.subCategory) && <option value={entry.subCategory}>Unsupported on ITR-1: {entry.subCategory}</option>}{allowedSubcategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+        <div><label style={styles.label}><LabelText label="Category *" /></label><select style={styles.input} value={entry.category} disabled={disabled} onChange={(event) => updateEntry(entry.id, { category: event.target.value as ExemptIncomeCategory })}>{allowedCategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+        <div><label style={styles.label}><LabelText label="Sub-category / section *" /></label><select style={styles.input} value={entry.subCategory} disabled={disabled} onChange={(event) => updateEntry(entry.id, { subCategory: event.target.value as ExemptIncomeSubCategory })}>{!allowedSubcategories.some((option) => option.value === entry.subCategory) && <option value={entry.subCategory}>Unsupported on ITR-1: {entry.subCategory}</option>}{allowedSubcategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
         <Field label="Amount (₹) *" value={entry.grossAmount || ''} disabled={disabled} onChange={(value) => updateEntry(entry.id, { grossAmount: money(Number(value)) })} />
       </div>
       <div style={{ marginTop: 16 }}><Field label="Description / source *" type="text" maxLength={125} value={entry.description} disabled={disabled} onChange={(value) => updateEntry(entry.id, { description: value })} /></div>
     </div>)}
-    <div style={styles.panel}><div style={styles.panelHeader}><h4 style={styles.panelTitle}>Exempt Income Review</h4><span style={{ padding: '2px 7px', borderRadius: 3, background: 'var(--info)', color: 'white', fontSize: 10, fontWeight: 600 }}>ExemptIncAgriOthUs10</span></div><div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}><span>Total exempt income</span><strong>{inr(othersTotal)}</strong></div></div>
+    <div style={styles.panel}><div style={styles.panelHeader}><h4 style={styles.panelTitle}>Exempt Income Review</h4></div><div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}><span>Total exempt income</span><strong>{inr(othersTotal)}</strong></div></div>
   </div>;
 
   return <div>
     <div style={{ marginBottom: 16 }}><h3 style={styles.title}>{form === 'ITR-4' ? 'Tax-Exempt Income Details' : 'Schedule EI — Exempt Income'}</h3><div style={styles.subtitle}>AY 2026-27 · non-salary exempt income only; salary exemptions remain in Schedule S</div></div>
-    {incompatible.length > 0 && <div style={{ marginBottom: 16, padding: 12, background: 'var(--warning-bg)', color: 'var(--warning)', border: '1px solid var(--warning)', borderRadius: 6, fontSize: 12 }}>⚠ {incompatible.length} saved entr{incompatible.length === 1 ? 'y is' : 'ies are'} unsupported by {form}. Data is preserved; change form or classification before filing.</div>}
+    {incompatible.length > 0 && <CollapsibleWarning>⚠ {incompatible.length} saved entr{incompatible.length === 1 ? 'y is' : 'ies are'} unsupported by {form}. Data is preserved; change form or classification before filing.</CollapsibleWarning>}
 
     {isFull && <Collapsible title="Agricultural income" subtitle="Schedule EI gross receipts, expenses, Rule 7/8 and mandatory land details above ₹5,000" defaultOpen summary={inr(netAgriculture)}>
       <div style={styles.grid}>
@@ -159,8 +175,8 @@ export default function ExemptIncomeWorkspace({ form, schedule, onChange, disabl
           <Field label="District *" type="text" maxLength={125} value={entry.nameOfDistrict} disabled={disabled} onChange={(value) => updateLand(entry.id, { nameOfDistrict: value })} />
           <Field label="PIN code *" type="text" maxLength={6} value={entry.pinCode} disabled={disabled} onChange={(value) => updateLand(entry.id, { pinCode: value.replace(/\D/g, '').slice(0, 6) })} />
           <Field label="Land measurement *" value={entry.measurementOfLand || ''} disabled={disabled} onChange={(value) => updateLand(entry.id, { measurementOfLand: money(Number(value)) })} />
-          <div><label style={styles.label}>Ownership *</label><select style={styles.input} value={entry.ownedFlag} disabled={disabled} onChange={(event) => updateLand(entry.id, { ownedFlag: event.target.value as 'O' | 'H' })}><option value="O">O — Owned</option><option value="H">H — Held on lease</option></select></div>
-          <div><label style={styles.label}>Irrigation *</label><select style={styles.input} value={entry.irrigatedFlag} disabled={disabled} onChange={(event) => updateLand(entry.id, { irrigatedFlag: event.target.value as 'IRG' | 'RF' })}><option value="IRG">IRG — Irrigated</option><option value="RF">RF — Rain-fed</option></select></div>
+          <div><label style={styles.label}><LabelText label="Ownership *" /></label><select style={styles.input} value={entry.ownedFlag} disabled={disabled} onChange={(event) => updateLand(entry.id, { ownedFlag: event.target.value as 'O' | 'H' })}><option value="O">O — Owned</option><option value="H">H — Held on lease</option></select></div>
+          <div><label style={styles.label}><LabelText label="Irrigation *" /></label><select style={styles.input} value={entry.irrigatedFlag} disabled={disabled} onChange={(event) => updateLand(entry.id, { irrigatedFlag: event.target.value as 'IRG' | 'RF' })}><option value="IRG">IRG — Irrigated</option><option value="RF">RF — Rain-fed</option></select></div>
         </div>
       </div>)}
     </Collapsible>}
@@ -171,8 +187,8 @@ export default function ExemptIncomeWorkspace({ form, schedule, onChange, disabl
       {schedule.otherExemptIncome.map((entry, index) => <div key={entry.id} style={styles.panel}>
         <div style={styles.panelHeader}><h4 style={styles.panelTitle}>Exempt Entry #{index + 1}</h4><button style={styles.remove} disabled={disabled} onClick={() => removeEntry(entry.id)}>Remove</button></div>
         <div style={styles.primaryRow}>
-          <div><label style={styles.label}>Category *</label><select style={styles.input} value={entry.category} disabled={disabled} onChange={(event) => updateEntry(entry.id, { category: event.target.value as ExemptIncomeCategory })}>{allowedCategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
-          <div><label style={styles.label}>Sub-category / section *</label><select style={styles.input} value={entry.subCategory} disabled={disabled} onChange={(event) => updateEntry(entry.id, { subCategory: event.target.value as ExemptIncomeSubCategory })}>{!allowedSubcategories.some((option) => option.value === entry.subCategory) && <option value={entry.subCategory}>Unsupported on {form}: {entry.subCategory}</option>}{allowedSubcategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+          <div><label style={styles.label}><LabelText label="Category *" /></label><select style={styles.input} value={entry.category} disabled={disabled} onChange={(event) => updateEntry(entry.id, { category: event.target.value as ExemptIncomeCategory })}>{allowedCategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+          <div><label style={styles.label}><LabelText label="Sub-category / section *" /></label><select style={styles.input} value={entry.subCategory} disabled={disabled} onChange={(event) => updateEntry(entry.id, { subCategory: event.target.value as ExemptIncomeSubCategory })}>{!allowedSubcategories.some((option) => option.value === entry.subCategory) && <option value={entry.subCategory}>Unsupported on {form}: {entry.subCategory}</option>}{allowedSubcategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
           <Field label="Amount (₹) *" value={entry.grossAmount || ''} disabled={disabled} onChange={(value) => updateEntry(entry.id, { grossAmount: money(Number(value)) })} />
         </div>
         <div style={{ marginTop: 16 }}><Field label="Description / source *" type="text" maxLength={125} value={entry.description} disabled={disabled} onChange={(value) => updateEntry(entry.id, { description: value })} /></div>
@@ -190,8 +206,8 @@ export default function ExemptIncomeWorkspace({ form, schedule, onChange, disabl
           <Field label="Country name *" type="text" maxLength={55} value={entry.countryName} disabled={disabled} onChange={(value) => updateDtaa(entry.id, { countryName: value })} />
           <Field label="Country code excluding India *" type="text" value={entry.countryCode} disabled={disabled} onChange={(value) => updateDtaa(entry.id, { countryCode: value })} />
           <Field label="DTAA article *" type="text" maxLength={16} value={entry.articleOfDtaa} disabled={disabled} onChange={(value) => updateDtaa(entry.id, { articleOfDtaa: value })} />
-          <div><label style={styles.label}>Head of income *</label><select style={styles.input} value={entry.headOfIncome} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { headOfIncome: event.target.value as DtaaExemptIncomeEntry['headOfIncome'] })}><option value="SA">SA — Salary</option><option value="HP">HP — House property</option>{form === 'ITR-3' && <option value="PG">PG — Business / profession</option>}<option value="CG">CG — Capital gains</option><option value="OS">OS — Other sources</option></select></div>
-          <div><label style={styles.label}>Tax residency certificate *</label><select style={styles.input} value={entry.trcFlag} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { trcFlag: event.target.value as 'Y' | 'N' })}><option value="Y">Y — Yes</option><option value="N">N — No</option></select></div>
+          <div><label style={styles.label}><LabelText label="Head of income *" /></label><select style={styles.input} value={entry.headOfIncome} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { headOfIncome: event.target.value as DtaaExemptIncomeEntry['headOfIncome'] })}><option value="SA">SA — Salary</option><option value="HP">HP — House property</option>{form === 'ITR-3' && <option value="PG">PG — Business / profession</option>}<option value="CG">CG — Capital gains</option><option value="OS">OS — Other sources</option></select></div>
+          <div><label style={styles.label}><LabelText label="Tax residency certificate *" /></label><select style={styles.input} value={entry.trcFlag} disabled={disabled} onChange={(event) => updateDtaa(entry.id, { trcFlag: event.target.value as 'Y' | 'N' })}><option value="Y">Y — Yes</option><option value="N">N — No</option></select></div>
         </div>
       </div>)}
     </Collapsible>}

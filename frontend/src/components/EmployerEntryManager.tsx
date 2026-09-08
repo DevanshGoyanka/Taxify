@@ -6,6 +6,7 @@ import {
   type StateCode,
 } from '../domain/returns/cbdtEnums';
 import { isValidTan, normalizeTan } from '../utils/taxIdentifiers';
+import { IndianNumberInput } from './IndianNumberInput';
 
 interface EmployerEntry {
   id: string;
@@ -47,6 +48,7 @@ interface EmployerEntry {
   childrenEducationAllowance?: number;
   hostelExpenditureAllowance?: number;
   uniformAllowance?: number;
+  uniformAllowanceExpenditure?: number;
   entertainmentAllowance?: number;
   professionalTax?: number;
   vrsCompensation?: number;
@@ -97,7 +99,7 @@ interface BackendResult {
   standardDeduction?: number;
   entertainmentAllowanceDed?: number;
   professionalTaxDed?: number;
-  totalSection16Deductions?: number;
+  deductionUs16?: number;
   totalTDSDeducted?: number;
 }
 
@@ -141,11 +143,16 @@ function generateId(): string {
   return 'salary-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
 }
 
-function money(value: number | undefined): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+// Backend monetary fields are Decimal-backed and travel over the wire as
+// JSON strings (e.g. "600000"), not numbers -- the locally-entered-gross
+// running total below must parse those, not silently zero them, or it reads
+// 0 for a freshly loaded (not yet re-typed this session) employer entry.
+function money(value: number | string | undefined): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-function formatINR(value: number | undefined): string {
+function formatINR(value: number | string | undefined): string {
   return Math.round(money(value)).toLocaleString('en-IN');
 }
 
@@ -167,15 +174,12 @@ function Field({
 }
 
 function AmountInput({ value, onChange }: { value: number | undefined; onChange: (v: number) => void }): React.JSX.Element {
-  return (
-    <input
-      type="text"
-      inputMode="numeric"
-      value={value ? String(value) : ''}
-      onChange={(e) => onChange(Number(e.target.value.replace(/\D/g, '')) || 0)}
-      style={INPUT_STYLE}
-    />
-  );
+  // Delegates to the shared IndianNumberInput rather than stripping
+  // non-digit characters itself -- the previous \D-strip implementation
+  // silently mangled any value containing a decimal point (e.g. "50000.50"
+  // became "5000050", a 100x error) instead of rounding it, and produced
+  // Indian lakh/crore comma formatting nowhere else this form's inputs did.
+  return <IndianNumberInput value={value ?? 0} onChange={onChange} style={INPUT_STYLE} />;
 }
 
 function TextInput({ value, onChange, maxLength }: { value: string | undefined; onChange: (v: string) => void; maxLength?: number }): React.JSX.Element {
@@ -373,13 +377,6 @@ function EmployerForm({
     money(entry.retrenchmentCompensation) > 0;
   const section10Rows = entry.section10ExemptionRows || [];
 
-  const gross =
-    money(entry.basic) + money(entry.da) + money(entry.hra) + money(entry.lta) +
-    money(entry.bonus) + money(entry.commission) + money(entry.allowances) +
-    money(entry.otherAllowance) + money(entry.arrearSalary) + money(entry.perquisites) +
-    money(entry.profitsInLieu) + money(entry.commutedPension) + money(entry.gratuity) +
-    money(entry.leaveEncashment) + money(entry.vrsCompensation) + money(entry.retrenchmentCompensation);
-
   // Sequential section numbers -- only visible sections get a number
   let seq = 0;
   const next = (): number => { seq += 1; return seq; };
@@ -394,7 +391,7 @@ function EmployerForm({
   const nTDS = next();
 
   return (
-    <div style={{ ...CARD_STYLE, padding: 20, marginBottom: 22, borderTop: '3px solid var(--gold)' }}>
+    <div style={{ ...CARD_STYLE, padding: 20, marginBottom: 22, border: '1px solid #000' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0 14px', borderBottom: '1px solid var(--border)' }}>
         <div>
           <h3 style={{ margin: 0, fontSize: 17, color: 'var(--navy)' }}>{entry.employerName?.trim() || 'Employer'}</h3>
@@ -506,6 +503,9 @@ function EmployerForm({
         <Field label="Children Education Allowance"><AmountInput value={entry.childrenEducationAllowance} onChange={(v) => onChange({ childrenEducationAllowance: v })} /></Field>
         <Field label="Hostel Expenditure Allowance"><AmountInput value={entry.hostelExpenditureAllowance} onChange={(v) => onChange({ hostelExpenditureAllowance: v })} /></Field>
         <Field label="Uniform Allowance"><AmountInput value={entry.uniformAllowance} onChange={(v) => onChange({ uniformAllowance: v })} /></Field>
+        <Field label="Uniform Allowance — Actual Amount Spent" help="Exempt u/s 10(14)(i) only up to actual expenditure incurred, not a fixed rate. Leave 0 if you have no expenditure evidence — the allowance will still be taxed in full either way.">
+          <AmountInput value={entry.uniformAllowanceExpenditure} onChange={(v) => onChange({ uniformAllowanceExpenditure: v })} />
+        </Field>
         <Field label="Eligible Children Count" help="Maximum two children for CEA / hostel allowance.">
           <AmountInput value={entry.numberOfChildren} onChange={(v) => onChange({ numberOfChildren: v })} />
         </Field>
@@ -563,11 +563,6 @@ function EmployerForm({
         description="Pulled from the TDS & Advance Tax tab, matched by employer TAN. Go to that tab to add or edit entries -- changes appear here immediately."
       />
       <EmployerTDSPanel employerTAN={entry.employerTAN} allTdsEntries={allTdsEntries} />
-
-      <div style={{ marginTop: 16, padding: 12, borderRadius: 6, background: 'var(--gold-pale)', border: '1px solid var(--gold-light)', fontSize: 12, color: '#7c530e' }}>
-        Locally entered gross salary for this employer: <strong>&#x20B9;{formatINR(gross)}</strong>.
-        Final exemptions and net taxable salary are calculated by the tax engine after computation.
-      </div>
     </div>
   );
 }
@@ -584,7 +579,7 @@ export function EmployerEntryManager({
   const hasBackendResult = backendResult !== null && backendResult !== undefined;
   const finalGross = money(backendResult?.grossSalary);
   const section10Exemptions = money(backendResult?.totalSection10Exempt);
-  const section16Deductions = money(backendResult?.totalSection16Deductions);
+  const section16Deductions = money(backendResult?.deductionUs16);
 
   const totalSalaryTDS = tdsEntries
     .filter((e) => (e.section === '192' || e.section === '192A') && e.claimedInReturn !== false)
@@ -603,7 +598,7 @@ export function EmployerEntryManager({
         <button
           type="button"
           onClick={addEmployer}
-          style={{ padding: '9px 14px', background: 'var(--gold)', color: '#fff', border: 0, borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
+          style={{ padding: '9px 14px', background: '#16a34a', color: '#fff', border: 0, borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
         >
           + Add employer
         </button>

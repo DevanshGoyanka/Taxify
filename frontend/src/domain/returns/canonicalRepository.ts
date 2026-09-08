@@ -57,6 +57,7 @@ export function createEmptyPersonalInfo(): PersonalInfo {
     employerCategory: '', age: 30, assesseeStatus: 'I',
     landlineStdCode: '0', landlinePhoneNo: '0',
     secondaryAddressDifferent: false, alternateAddress: null,
+    companyDirectorEntries: [], unlistedEquityEntries: [],
   };
 }
 
@@ -117,9 +118,22 @@ export function normalizeLoadedDraft(draft: ReturnDraft): ReturnDraft {
     verification: { ...defaults.verification, ...draft.verification },
     taxReturnPreparer: { ...defaults.taxReturnPreparer, ...draft.taxReturnPreparer },
     deductions: {
+      ...defaults.deductions,
       ...draft.deductions,
-      pensionContribution80CCC: draft.deductions.pensionContribution80CCC ?? [],
+      pensionContribution80CCC: draft.deductions?.pensionContribution80CCC ?? defaults.deductions.pensionContribution80CCC,
     },
+    broughtForwardLossEntries: draft.broughtForwardLossEntries !== undefined ? draft.broughtForwardLossEntries : defaults.broughtForwardLossEntries,
+    carriedForwardLossEntries: draft.carriedForwardLossEntries !== undefined ? draft.carriedForwardLossEntries : defaults.carriedForwardLossEntries,
+    scheduleSIEntries: draft.scheduleSIEntries !== undefined ? draft.scheduleSIEntries : defaults.scheduleSIEntries,
+    foreignSourceIncome: draft.foreignSourceIncome !== undefined ? draft.foreignSourceIncome : defaults.foreignSourceIncome,
+    foreignTaxRelief: draft.foreignTaxRelief !== undefined ? draft.foreignTaxRelief : defaults.foreignTaxRelief,
+    foreignAssets: draft.foreignAssets !== undefined ? draft.foreignAssets : defaults.foreignAssets,
+    clubbedIncome: draft.clubbedIncome !== undefined ? draft.clubbedIncome : defaults.clubbedIncome,
+    passThroughIncomeEntries: draft.passThroughIncomeEntries !== undefined ? draft.passThroughIncomeEntries : defaults.passThroughIncomeEntries,
+    amt: draft.amt !== undefined ? draft.amt : defaults.amt,
+    assetLiability: draft.assetLiability !== undefined ? draft.assetLiability : defaults.assetLiability,
+    portugueseCivilCode: draft.portugueseCivilCode !== undefined ? draft.portugueseCivilCode : defaults.portugueseCivilCode,
+    esopDeferrals: draft.esopDeferrals !== undefined ? draft.esopDeferrals : defaults.esopDeferrals,
   };
 }
 

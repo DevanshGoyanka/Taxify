@@ -68,4 +68,40 @@ describe('Schedule BP canonical adapter', () => {
       vehicleNumber: 'DL01AB1234', ownedLeasedHiredFlag: 'LEASE', ownedMonths: 2,
     });
   });
+
+  it('sums two Section 44AD entries correctly when fields arrive as backend-serialized strings', () => {
+    // Backend monetary fields travel over the wire as JSON strings on a
+    // loaded draft (e.g. digitalReceipts: "500000"), not numbers, even
+    // though ReturnDraft's own TS type says `number`. The prior
+    // implementation did `sum + row.digitalReceipts` directly -- with a
+    // string right-hand side, `+` is JS string concatenation, not
+    // addition. Confirmed live: adding a second Section 44AD business
+    // entry (whose own digitalReceipts/declaredIncome are correctly 0,
+    // since only the first entry carries the real aggregate figures) took
+    // a genuine Rs 5,00,000 turnover / Rs 35,000 presumptive income and
+    // corrupted them into Rs 50,00,000 / Rs 3,50,000: `0 + "500000"` =
+    // "0500000", then `"0500000" + "0"` = "05000000", which parses back
+    // to 5,000,000.
+    const fp = createEmptyFinancialParticulars();
+    const businesses = [
+      {
+        id: 'schedule-bp-44ad-0', scheme: '44AD' as const, businessName: 'OTHERS', natureCode: '21008', description: 'OTHERS',
+        digitalReceipts: '500000' as unknown as number, nonDigitalReceipts: '0' as unknown as number, otherModeReceipts: '0' as unknown as number,
+        digitalPresumptiveIncome: '35000' as unknown as number, nonDigitalPresumptiveIncome: '0' as unknown as number,
+        declaredIncome: '35000' as unknown as number, gstinTurnovers: [], financialParticulars: fp,
+      },
+      {
+        id: 'schedule-bp-44ad-1', scheme: '44AD' as const, businessName: 'Consulting Services', natureCode: '21008', description: '',
+        digitalReceipts: '0' as unknown as number, nonDigitalReceipts: '0' as unknown as number, otherModeReceipts: '0' as unknown as number,
+        digitalPresumptiveIncome: '0' as unknown as number, nonDigitalPresumptiveIncome: '0' as unknown as number,
+        declaredIncome: '0' as unknown as number, gstinTurnovers: [], financialParticulars: fp,
+      },
+    ];
+
+    const schedule = scheduleBpFromBusinesses(businesses);
+    expect(schedule.PersumptiveInc44AD?.GrsTrnOverBank).toBe(500000);
+    expect(schedule.PersumptiveInc44AD?.GrsTotalTrnOver).toBe(500000);
+    expect(schedule.PersumptiveInc44AD?.PersumptiveInc44AD6Per).toBe(35000);
+    expect(schedule.PersumptiveInc44AD?.TotPersumptiveInc44AD).toBe(35000);
+  });
 });

@@ -2,7 +2,10 @@
 
 **Status:** Active implementation tracker. Phase status updated as each phase completes manual testing.
 **Scope:** ITR-1 only. This is the template that ITR-2, ITR-3, ITR-4 will follow later.
-**Authority:** This file is the single source of truth for the refactor. The audit findings are in `ITR1_DATA_FLOW_AUDIT.md`.
+**Authority:** This file is the single source of truth for the refactor. The audit that
+motivated it documented the pre-migration flat-blob architecture; that audit doc is now
+superseded and removed — see `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md` for the current,
+verified architecture instead.
 
 ---
 

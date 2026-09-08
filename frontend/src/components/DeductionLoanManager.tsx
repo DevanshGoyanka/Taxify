@@ -14,6 +14,7 @@
 // UI style matches DonationEntryManager: collapsible cards with category badges.
 
 import React, { useState } from 'react';
+import { IndianNumberInput } from './IndianNumberInput';
 
 // ---- Per-loan entry ----
 interface LoanEntry {
@@ -190,9 +191,8 @@ export const DeductionLoanManager: React.FC<DeductionLoanManagerProps> = ({ data
             {sec.showStampDuty && (
               <div style={{ marginBottom: 12, padding: 12, background: '#fff8e1', borderRadius: 6, border: '1px solid #ffe082' }}>
                 <label style={{ ...labelStyle, color: '#e65100' }}>Stamp Duty Value of Property (max ₹45,00,000)</label>
-                <input type="number" value={data.section80EEA.stampDutyValue || ''}
-                  onChange={e => onChange({ ...data, section80EEA: { ...data.section80EEA, stampDutyValue: parseFloat(e.target.value) || 0 } })}
-                  placeholder="0" min={0} max={4500000}
+                <IndianNumberInput value={data.section80EEA.stampDutyValue || 0}
+                  onChange={v => onChange({ ...data, section80EEA: { ...data.section80EEA, stampDutyValue: v } })}
                   style={{ ...inputStyle, maxWidth: 300 }} />
                 <span style={{ fontSize: 10, color: '#888', marginLeft: 8 }}>Required for 80EEA eligibility</span>
               </div>
@@ -275,18 +275,18 @@ export const DeductionLoanManager: React.FC<DeductionLoanManagerProps> = ({ data
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 12 }}>
                         <div>
                           <label style={labelStyle}>Total Loan Amount (₹) *</label>
-                          <input type="number" value={loan.totalLoanAmt || ''} onChange={e => updateLoan(sec.key, loan.id, 'totalLoanAmt', parseFloat(e.target.value) || 0)}
-                            placeholder="0" min={0} style={{ ...inputStyle, fontWeight: 600 }} />
+                          <IndianNumberInput value={loan.totalLoanAmt || 0} onChange={v => updateLoan(sec.key, loan.id, 'totalLoanAmt', v)}
+                            style={{ ...inputStyle, fontWeight: 600 }} />
                         </div>
                         <div>
                           <label style={labelStyle}>Outstanding Amount (₹) *</label>
-                          <input type="number" value={loan.loanOutstandingAmt || ''} onChange={e => updateLoan(sec.key, loan.id, 'loanOutstandingAmt', parseFloat(e.target.value) || 0)}
-                            placeholder="0" min={0} style={inputStyle} />
+                          <IndianNumberInput value={loan.loanOutstandingAmt || 0} onChange={v => updateLoan(sec.key, loan.id, 'loanOutstandingAmt', v)}
+                            style={inputStyle} />
                         </div>
                         <div>
                           <label style={{ ...labelStyle, color: sec.color }}>{sec.interestLabel} (₹) *</label>
-                          <input type="number" value={loan.interestAmount || ''} onChange={e => updateLoan(sec.key, loan.id, 'interestAmount', parseFloat(e.target.value) || 0)}
-                            placeholder="0" min={0} style={{ ...inputStyle, background: `${sec.color}08`, fontWeight: 600, color: sec.color }} />
+                          <IndianNumberInput value={loan.interestAmount || 0} onChange={v => updateLoan(sec.key, loan.id, 'interestAmount', v)}
+                            style={{ ...inputStyle, background: `${sec.color}08`, fontWeight: 600, color: sec.color }} />
                         </div>
                         {sec.key === '80EE' && (
                           <div style={{ display: 'flex', alignItems: 'center', paddingTop: 20 }}>

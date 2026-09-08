@@ -10,6 +10,16 @@
 
 import React, { useState, useMemo } from 'react';
 import { INDIAN_STATE_CODE_OPTIONS, type StateCode } from '../domain/returns/cbdtEnums';
+import { IndianNumberInput } from './IndianNumberInput';
+
+/** Renders a field label, turning a trailing " *" into a red asterisk. */
+function LabelText({ label }: { label: string }): React.JSX.Element {
+  const trimmed = label.trim();
+  if (trimmed.endsWith('*')) {
+    return <>{trimmed.slice(0, -1).trim()}<span style={{ color: 'var(--danger)' }}> *</span></>;
+  }
+  return <>{label}</>;
+}
 
 // ---- 4 official 80G categories ----
 type DonationCategory = '100_NO_APPROVAL' | '50_NO_APPROVAL' | '100_APPROVAL_REQD' | '50_APPROVAL_REQD';
@@ -242,7 +252,7 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
                 {/* Row 1: Category + Donee Identity */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginBottom: 12 }}>
                   <div>
-                    <label style={labelStyle}>Category *</label>
+                    <label style={labelStyle}><LabelText label="Category *" /></label>
                     <select value={entry.category}
                       onChange={e => updateEntry(entry.id, 'category', e.target.value as DonationCategory)}
                       style={inputStyle}>
@@ -252,14 +262,14 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
                     </select>
                   </div>
                   <div>
-                    <label style={labelStyle}>Donee Name *</label>
+                    <label style={labelStyle}><LabelText label="Donee Name *" /></label>
                     <input type="text" value={entry.doneeName}
                       onChange={e => updateEntry(entry.id, 'doneeName', e.target.value)}
                       placeholder="e.g., PM CARES Fund" maxLength={125}
                       style={inputStyle} />
                   </div>
                   <div>
-                    <label style={labelStyle}>Donee PAN *</label>
+                    <label style={labelStyle}><LabelText label="Donee PAN *" /></label>
                     <input type="text" value={entry.doneePAN}
                       onChange={e => updateEntry(entry.id, 'doneePAN', e.target.value.toUpperCase())}
                       placeholder="AAAAA1234A" maxLength={10}
@@ -280,21 +290,21 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginBottom: 12 }}>
                   <div style={{ gridColumn: '1 / -1' }}>
-                    <label style={labelStyle}>Address *</label>
+                    <label style={labelStyle}><LabelText label="Address *" /></label>
                     <input type="text" value={entry.addrDetail}
                       onChange={e => updateEntry(entry.id, 'addrDetail', e.target.value)}
                       placeholder="Building, Street, Locality" maxLength={200}
                       style={inputStyle} />
                   </div>
                   <div>
-                    <label style={labelStyle}>City / Town / District *</label>
+                    <label style={labelStyle}><LabelText label="City / Town / District *" /></label>
                     <input type="text" value={entry.city}
                       onChange={e => updateEntry(entry.id, 'city', e.target.value)}
                       placeholder="City" maxLength={50}
                       style={inputStyle} />
                   </div>
                   <div>
-                    <label style={labelStyle}>State *</label>
+                    <label style={labelStyle}><LabelText label="State *" /></label>
                     <select value={entry.stateCode}
                       onChange={e => updateEntry(entry.id, 'stateCode', e.target.value as StateCode | '')}
                       style={inputStyle}>
@@ -305,7 +315,7 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
                     </select>
                   </div>
                   <div>
-                    <label style={labelStyle}>PIN Code *</label>
+                    <label style={labelStyle}><LabelText label="PIN Code *" /></label>
                     <input type="text" value={entry.pinCode}
                       onChange={e => updateEntry(entry.id, 'pinCode', e.target.value.replace(/\D/g, '').slice(0, 6))}
                       placeholder="6-digit PIN" maxLength={6}
@@ -320,18 +330,18 @@ export const DonationEntryManager: React.FC<DonationEntryManagerProps> = ({ entr
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 12 }}>
                   <div>
                     <label style={labelStyle}>Cash Amount (₹)</label>
-                    <input type="number" value={entry.donationAmtCash || ''}
-                      onChange={e => updateEntry(entry.id, 'donationAmtCash', parseFloat(e.target.value) || 0)}
-                      placeholder="0" min={0} style={inputStyle} />
+                    <IndianNumberInput value={entry.donationAmtCash || 0}
+                      onChange={v => updateEntry(entry.id, 'donationAmtCash', v)}
+                      style={inputStyle} />
                     {entry.donationAmtCash > 2000 && (
                       <span style={{ fontSize: 10, color: '#f44336' }}>⚠ Cash donations &gt; ₹2,000 not eligible for 80G</span>
                     )}
                   </div>
                   <div>
                     <label style={labelStyle}>Bank/Digital Amount (₹)</label>
-                    <input type="number" value={entry.donationAmtOtherMode || ''}
-                      onChange={e => updateEntry(entry.id, 'donationAmtOtherMode', parseFloat(e.target.value) || 0)}
-                      placeholder="0" min={0} style={inputStyle} />
+                    <IndianNumberInput value={entry.donationAmtOtherMode || 0}
+                      onChange={v => updateEntry(entry.id, 'donationAmtOtherMode', v)}
+                      style={inputStyle} />
                   </div>
                   <div>
                     <label style={labelStyle}>Total Donation</label>

@@ -9,6 +9,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { itrAutomationApi } from '../api/itrAutomation';
 import type { AutomationJob } from '../api/itrAutomation';
+import { PortalProgressCircle } from './PortalProgressCircle';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -112,16 +113,7 @@ export default function StatusPill({ jobId, onComplete, onFailed, onDismiss }: S
       title={isFail && job.error_message ? job.error_message.slice(0, 200) : undefined}
     >
       {!isDone && !isFail && (
-        <span
-          style={{
-            display: 'inline-block',
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            background: 'currentColor',
-            animation: 'pulse 1.2s ease-in-out infinite',
-          }}
-        />
+        <PortalProgressCircle phase={coarseStatus} size={18} />
       )}
       {isDone && (
         <svg width="10" height="10" viewBox="0 0 10 10" style={{ display: 'inline-block' }}>

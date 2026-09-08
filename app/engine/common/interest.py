@@ -124,6 +124,14 @@ def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
 
     Shortfall is computed cumulatively: if cumulative paid < cumulative required,
     interest is levied at 1% on the shortfall for 3 months (one quarter).
+
+    Section 234C(1)(b) proviso: no interest is charged for the 15 June or
+    15 September installment specifically if cumulative advance tax paid by
+    that date is at least 12% (June) or 36% (September) of the tax due on
+    returned income -- lower "safe harbor" thresholds than the 15%/45%
+    otherwise required for those two installments. This proviso applies
+    only to the June and September installments; December (75%) and March
+    (100%) have no such safe harbor and are enforced strictly.
     """
     if total_assessed_tax < Decimal("10000") or total_assessed_tax <= 0:
         return Decimal("0")
@@ -132,9 +140,11 @@ def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
 
     if is_presumptive_44ad_44ada:
         required_pcts = [Decimal("1.00")]
+        safe_harbor_pcts = [None]
         advance_tax_paid = [sum(advance_tax_paid, Decimal("0"))]
     else:
         required_pcts = [Decimal("0.15"), Decimal("0.45"), Decimal("0.75"), Decimal("1.00")]
+        safe_harbor_pcts = [Decimal("0.12"), Decimal("0.36"), None, None]
 
     total_interest = Decimal("0")
     cumulative_paid = Decimal("0")
@@ -142,6 +152,9 @@ def compute_234c(advance_tax_paid: list[Decimal], total_assessed_tax: Decimal,
     for i, req_pct in enumerate(required_pcts):
         paid = advance_tax_paid[i] if i < len(advance_tax_paid) else Decimal("0")
         cumulative_paid += paid
+        safe_harbor_pct = safe_harbor_pcts[i]
+        if safe_harbor_pct is not None and cumulative_paid >= total_assessed_tax * safe_harbor_pct:
+            continue
         required = total_assessed_tax * req_pct
         shortfall = required - cumulative_paid
         if shortfall > 0:
@@ -185,16 +198,20 @@ def compute_234i(filing_date: date, due_date: date, total_income: Decimal,
 def compute_234f(filing_date: date, due_date: date, total_income: Decimal) -> Decimal:
     """Late filing fee u/s 234F.
 
+    Post Finance Act 2021 (applicable AY 2021-22 onwards, still the law for
+    AY 2026-27), Section 234F has only two tiers -- the pre-2021 third tier
+    (Rs 10,000 for filing after 31 December) was removed; the maximum is now
+    Rs 5,000 regardless of how late within the belated-filing window the
+    return is filed. The official ITR-1 JSON schema enforces this directly
+    (LateFilingFee234F has `maximum: 5000`) -- confirmed by a schema
+    validation failure when the old Rs 10,000 tier was still implemented
+    here (found 2026-09-03 while fixing the filing_date wiring bug that had
+    kept this branch dormant; see
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md).
+
     - Filed on or before due date: Rs 0
-    - Filed after due date but on or before 31 Dec: Rs 5,000 (Rs 1,000 if TI <= 5L)
-    - Filed after 31 Dec: Rs 10,000
+    - Filed after due date: Rs 5,000 (Rs 1,000 if total income <= Rs 5,00,000)
     """
     if filing_date <= due_date:
         return _ZERO
-
-    fy_end_year = due_date.year
-    dec_31 = date(fy_end_year, 12, 31)
-
-    if filing_date <= dec_31:
-        return Decimal("1000") if total_income <= Decimal("500000") else Decimal("5000")
-    return Decimal("10000")
+    return Decimal("1000") if total_income <= Decimal("500000") else Decimal("5000")

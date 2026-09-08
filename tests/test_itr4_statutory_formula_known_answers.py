@@ -125,12 +125,55 @@ def test_interest_234c_known_answers_regular_and_presumptive() -> None:
     assert compute_234c([D("100000")], D("100000"), AY_START, True) == D("0")
 
 
+def test_interest_234c_section_1b_proviso_safe_harbor() -> None:
+    """Section 234C(1)(b) proviso: no interest for the June/September
+    installment specifically if cumulative advance tax paid by that date is
+    at least 12% (June) / 36% (September) of assessed tax, even though the
+    installment otherwise requires 15%/45%. December (75%) and March (100%)
+    have no such safe harbor and stay strictly enforced."""
+    # Paid exactly the 12% safe harbor by June, 45% cumulative by Sept
+    # (comfortably clears the 36% Sept safe harbor too), rest on time.
+    assert compute_234c(
+        [D("12000"), D("33000"), D("30000"), D("25000")], D("100000"), AY_START,
+    ) == D("0")
+    # One rupee short of the 12% June safe harbor -> Q1 shortfall interest
+    # applies (15% required - 11999 paid = 3001, x3 months = 90.03, rounded
+    # up to whole rupees).
+    assert compute_234c(
+        [D("11999"), D("33001"), D("30000"), D("25000")], D("100000"), AY_START,
+    ) == D("91")
+    # Q1 paid only 10% (below its own 12% safe harbor, so still charged on
+    # the full 15% shortfall = 5000 x3mo = 150), but cumulative after Q2
+    # reaches exactly 36% (10000+26000), meeting the September safe harbor
+    # independently -- Q2 itself owes nothing even though Q1 did. Confirms
+    # each installment's safe harbor is evaluated on its own, not "whichever
+    # quarter smooths it out".
+    assert compute_234c(
+        [D("10000"), D("26000"), D("39000"), D("25000")], D("100000"), AY_START,
+    ) == D("150")
+    # December (75%) has no safe harbor -- a taxpayer at exactly 36%
+    # cumulative by December (well above the September safe harbor, but
+    # short of the strict 75% December requirement) still owes interest on
+    # the December shortfall (75000-36000=39000 x3mo=1170).
+    assert compute_234c(
+        [D("12000"), D("24000"), D("0"), D("64000")], D("100000"), AY_START,
+    ) == D("1170")
+
+
 def test_late_and_revised_return_fees_known_answers() -> None:
-    """Verify 234F and 234-I AY 2026-27 fee thresholds and dates."""
+    """Verify 234F and 234-I AY 2026-27 fee thresholds and dates.
+
+    234F's pre-Finance-Act-2021 Rs 10,000 tier for filing after 31 December
+    was removed; the maximum is Rs 5,000 (Rs 1,000 if total income <=
+    Rs 5,00,000) regardless of how late within the belated-filing window
+    the return is filed -- the official ITR-1 JSON schema enforces this
+    directly (LateFilingFee234F max 5,000). See
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md.
+    """
     assert compute_234f(DUE_DATE, DUE_DATE, D("600000")) == D("0")
     assert compute_234f(date(2026, 10, 1), DUE_DATE, D("500000")) == D("1000")
     assert compute_234f(date(2026, 10, 1), DUE_DATE, D("500001")) == D("5000")
-    assert compute_234f(date(2027, 1, 1), DUE_DATE, D("500000")) == D("10000")
+    assert compute_234f(date(2027, 1, 1), DUE_DATE, D("500000")) == D("1000")
     assert compute_234i(date(2027, 1, 1), DUE_DATE, D("500000"), "139(5)") == D("1000")
     assert compute_234i(date(2027, 1, 1), DUE_DATE, D("500001"), "139(5)") == D("5000")
     assert compute_234i(date(2027, 1, 1), DUE_DATE, D("500001"), "139(1)") == D("0")

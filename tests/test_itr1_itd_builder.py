@@ -822,6 +822,27 @@ def test_builder_maps_real_tax_credit_and_challan_rows() -> None:
     assert list(Draft4Validator(schema).iter_errors(document)) == []
 
 
+def test_incomplete_challan_error_names_row_and_missing_fields() -> None:
+    """An incomplete challan row's error identifies the row and the exact
+    missing field(s) -- mirrors the identical fix in ITR-2's _schedule_it()
+    (audit §3.8). The old message ("Tax payment entries require BSR code,
+    payment date, and challan serial number") gave no indication of which
+    row or field was actually wrong.
+    """
+    body = _input().model_copy(update={
+        "tax_payment_entries": [
+            TaxPaymentDetail(
+                amount=Decimal("5000"), payment_type="advance",
+                payment_date=date(2025, 6, 15), bsr_code="1234ABC",
+                challan_serial_number="00001",
+            ),
+            TaxPaymentDetail(amount=Decimal("2000"), payment_type="advance"),
+        ],
+    })
+    with pytest.raises(ValueError, match=r"entry #2 is missing: BSR code, payment date, challan serial number"):
+        _build(body)
+
+
 def test_builder_preserves_compact_form_optional_schedule_fields() -> None:
     """Compact exempt income, declarations, 80CCH, and TDS years serialize exactly."""
     body = _input(amount_80c="0", amount_80d="0").model_copy(update={

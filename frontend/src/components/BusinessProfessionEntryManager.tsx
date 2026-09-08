@@ -3,6 +3,7 @@ import ITR4ScheduleBPManager, { type ITR4ScheduleBPData } from './business/ITR4S
 import type { ITR3BusinessCoreData } from './business/ITR3BusinessCoreManager';
 import type { ITR3AuxiliaryData } from './business/ITR3BusinessAuxiliaryManager';
 import ITR3BusinessWorkspace from './business/ITR3BusinessWorkspace';
+import { CollapsibleWarning } from './ui/CollapsibleWarning';
 
 /** Canonical frontend-only Business/Profession state for AY 2026-27. */
 export interface BusinessProfessionScheduleData {
@@ -35,10 +36,9 @@ export function BusinessProfessionEntryManager({ data = {}, onChange, selectedFo
   if (!itr3 && !itr4) {
     return <div>
       <Header selectedForm={safeForm || '—'} detail="Business income is not reportable in the selected form." />
-      <div style={{ marginBottom: 16, padding: '14px 16px', background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 8, fontSize: 13, color: '#92400e' }}>
-        <strong style={{ fontSize: 14, display: 'block', marginBottom: 4 }}>⚠ Switch to ITR-3 or ITR-4</strong>
-        <div>{safeForm || 'The selected form'} does not contain a Business or Profession schedule. Use ITR-3 for full PGBP/accounts or ITR-4 for eligible presumptive income under sections 44AD, 44ADA, or 44AE.</div>
-      </div>
+      <CollapsibleWarning title="⚠ Switch to ITR-3 or ITR-4">
+        {safeForm || 'The selected form'} does not contain a Business or Profession schedule. Use ITR-3 for full PGBP/accounts or ITR-4 for eligible presumptive income under sections 44AD, 44ADA, or 44AE.
+      </CollapsibleWarning>
     </div>;
   }
 

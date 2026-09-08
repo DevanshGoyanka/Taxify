@@ -96,6 +96,7 @@ def _filing_ready_itr4(scheme: str = "44AD") -> ReturnDraft:
     p.mobile = "9876543210"
     p.email = "rahul@example.com"
     draft.verification.place = "Delhi"
+    draft.verification.date = "2026-07-31"
     draft.verification.declarationAccepted = True
     draft.verification.capacity = "SELF"
     draft.bankAccounts = [BankAccount(
@@ -133,21 +134,144 @@ def _filing_ready_itr4(scheme: str = "44AD") -> ReturnDraft:
 
 # ── compute_canonical_itr4 ───────────────────────────────────────────────────
 
-def test_compute_canonical_itr4_returns_summary():
-    """compute_canonical_itr4 maps + computes once and returns a summary."""
+def test_compute_canonical_itr4_prepares_filing_data_before_calculation() -> None:
+    """Compute receives the complete ITR-4 profile and refund data."""
     draft = _filing_ready_itr4("44AD")
+    draft.taxReturnPreparer.used = True
+    draft.taxReturnPreparer.identificationNumber = "123456"
+    draft.taxReturnPreparer.name = "Registered Tax Preparer"
+    draft.taxReturnPreparer.reimbursementFromGovernment = Decimal("750")
+
     pipeline = compute_canonical_itr4(draft)
+
     assert isinstance(pipeline, ITR4PipelineResult)
     assert pipeline.computation.gross_total_income > 0
     assert "grossTotalIncome" in pipeline.summary
-    assert pipeline.summary["computedByFormEngine"] == "ITR-1"  # shared summary
+    # _summary_from_result() is shared with ITR-1, but computedByFormEngine
+    # must reflect the actual form computed, not the function's other caller
+    # -- previously hardcoded "ITR-1" regardless of which form ran (fixed
+    # 2026-09-07, see the ITR-1 Tax Computation tab data-flow fix).
+    assert pipeline.summary["computedByFormEngine"] == "ITR-4"
     assert pipeline.breakdown["presumptive_scheme"] == "44AD"
+    assert pipeline.typed_input.filing_profile is not None
+    assert pipeline.typed_input.filing_profile.pan == draft.personal.pan
+    assert pipeline.typed_input.filing_profile.verification_place == draft.verification.place
+    assert len(pipeline.typed_input.bank_accounts) == 1
+    assert pipeline.typed_input.bank_accounts[0].is_primary is True
+    assert pipeline.typed_input.tax_return_preparer is not None
+
+
+def test_itr4_filing_date_reaches_typed_input_from_verification_date() -> None:
+    """compute_canonical_itr4 must set filing_date/due_date on typed_input.
+
+    Previously the mapper set ITR4Input.filing_date to a date-of-birth
+    placeholder that the gateway's model_copy never overwrote (stale
+    "gateway sets filing_date" comment), so compute_itr4()'s interest/fee
+    gate always saw a "filing date" decades before the due date and
+    computed zero -- found 2026-09-03 auditing ITR-4, see
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md."""
+    from datetime import date
+    draft = _filing_ready_itr4("44AD")
+    pipeline = compute_canonical_itr4(draft)
+    assert pipeline.typed_input.filing_date == date(2026, 7, 31)
+    assert pipeline.typed_input.due_date == date(2026, 8, 31)
+
+
+def test_itr4_late_filing_computes_nonzero_interest_and_late_fee() -> None:
+    """A genuinely late-filed ITR-4 return must show real 234A interest and
+    a 234F late fee in the generated JSON, not the silent zero the
+    date-of-birth filing_date placeholder produced for every return."""
+    from app.engine.filing_gateway_v2 import generate_cbdt_json
+    draft = _filing_ready_itr4("44AD")
+    draft.verification.date = "2027-02-01"
+    draft.filing.filingSection = "139(4)"
+    # Push declared income well above the new-regime 87A rebate threshold so
+    # there is genuine tax payable for 234A to accrue interest on -- the
+    # fixture's default 6L declared income is fully rebated under the new
+    # regime, which would make 234A correctly (not buggily) zero and defeat
+    # the point of this regression test.
+    draft.businesses[0].declaredIncome = Decimal("2500000")
+
+    official, summary = generate_cbdt_json(draft)
+    intrst_pay = official["ITR"]["ITR4"]["TaxComputation"]["IntrstPay"]
+    assert intrst_pay["IntrstPayUs234A"] > 0
+    assert intrst_pay["LateFilingFee234F"] == 5000
+
+
+def test_itr4_net_tax_liability_json_field_excludes_interest_and_fees() -> None:
+    """Same shared-builder bug as ITR-1's equivalent test: the official
+    schema documents TaxComputation.NetTaxLiability as "Balance Tax After
+    Relief" (Part D's D7 = D5-D6), computed BEFORE interest/234F/234-I. A
+    prior bug populated it with the calculator's internal final-total
+    ``net_tax_liability`` instead, inflating it by the full interest+fees
+    amount for any late-filed return; TotTaxPlusIntrstPay was wrong the
+    other way (omitted Section 89 relief in its own formula)."""
+    from app.engine.filing_gateway_v2 import generate_cbdt_json
+    draft = _filing_ready_itr4("44AD")
+    draft.verification.date = "2027-02-01"
+    draft.filing.filingSection = "139(4)"
+    draft.businesses[0].declaredIncome = Decimal("2500000")
+
+    official, summary = generate_cbdt_json(draft)
+    tc = official["ITR"]["ITR4"]["TaxComputation"]
+
+    assert tc["IntrstPay"]["IntrstPayUs234A"] > 0
+
+    total_intrst_fee = (
+        tc["IntrstPay"]["IntrstPayUs234A"] + tc["IntrstPay"]["IntrstPayUs234B"]
+        + tc["IntrstPay"]["IntrstPayUs234C"] + tc["IntrstPay"]["LateFilingFee234F"]
+        + tc["IntrstPay"]["FeeFurnish234I"]
+    )
+    assert tc["NetTaxLiability"] == tc["GrossTaxLiability"] - tc["Section89"]
+    assert tc["TotTaxPlusIntrstPay"] == tc["NetTaxLiability"] + total_intrst_fee
+    assert tc["TotTaxPlusIntrstPay"] > tc["NetTaxLiability"]
+
+
+def test_itr4_json_reuses_prepared_input_without_late_enrichment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSON generation passes the same prepared profile to the builder."""
+    draft = _filing_ready_itr4("44AD")
+    captured: dict[str, object] = {}
+
+    def fake_build(result: object, typed_input: object) -> dict[str, object]:
+        captured["typed_input"] = typed_input
+        return {"ITR": {"ITR4": {"ok": True}}}
+
+    import app.engine.filing_gateway_v2 as gateway
+    monkeypatch.setattr(gateway, "build_itr4_json", fake_build)
+    monkeypatch.setattr(gateway, "validate_itr4_json", lambda document: None)
+
+    expected = compute_canonical_itr4(draft)
+    official, _summary = gateway.generate_cbdt_json(draft)
+
+    assert official["ITR"]["ITR4"]["ok"] is True
+    actual = captured["typed_input"]
+    assert getattr(actual, "filing_profile") == expected.typed_input.filing_profile
+    assert getattr(actual, "bank_accounts") == expected.typed_input.bank_accounts
 
 
 def test_compute_canonical_dispatches_itr1_and_itr4():
     """compute_canonical routes ITR-1 and ITR-4 to the correct pipeline."""
     itr1 = create_empty_draft("2026-27", "ITR-1", "new")
     itr1.employers = [Employer(id="e1", basic=Decimal("800000"))]
+    itr1.personal.pan = "ABCDE1234F"
+    itr1.personal.firstName = "Rahul"
+    itr1.personal.surnameOrOrgName = "Sharma"
+    itr1.personal.fatherName = "Mohan Sharma"
+    itr1.personal.dateOfBirth = "1980-05-15"
+    itr1.personal.flatNo = "12A"
+    itr1.personal.localityOrArea = "Central"
+    itr1.personal.city = "Delhi"
+    itr1.personal.stateCode = "07"
+    itr1.personal.pinCode = "110001"
+    itr1.personal.employerCategory = "OTH"
+    itr1.personal.mobile = "9876543210"
+    itr1.personal.email = "rahul@example.com"
+    itr1.verification.place = "Delhi"
+    itr1.verification.date = "2026-07-31"
+    itr1.verification.declarationAccepted = True
+    itr1.verification.capacity = "SELF"
     result1 = compute_canonical(itr1)
     assert isinstance(result1, ITR1PipelineResult)
 
@@ -157,11 +281,11 @@ def test_compute_canonical_dispatches_itr1_and_itr4():
 
 
 def test_compute_canonical_rejects_unsupported_form():
-    """ITR-2/3 are not yet supported by the v2 pipeline."""
-    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-2")
+    """ITR-3 is not yet supported by the v2 pipeline (ITR-2 is, since Phase 4)."""
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-3")
     with pytest.raises(FilingGatewayV2Error) as caught:
         compute_canonical(draft)
-    assert "ITR-1 and ITR-4 only" in caught.value.message
+    assert "ITR-1, ITR-2, and ITR-4 only" in caught.value.message
 
 
 # ── generate_cbdt_json (ITR-4 dispatch) ──────────────────────────────────────
@@ -296,6 +420,36 @@ def test_generate_itr4_schedule_bp_preserves_exact_canonical_fields() -> None:
     assert bp["FinanclPartclrOfBusiness"]["FixedAssets"] == 50000
 
 
+def test_generate_itr4_schedule_bp_income_chargeable_set_without_44ae() -> None:
+    """IncChargeableUnderBus must equal the 44AD/44ADA/44AE sum even when no
+    44AE (goods carriage) business is declared -- the field lives inside the
+    ``PersumptiveInc44AE`` block per the official schema, but per ITD's own
+    live ``validateItr`` error text it represents the aggregate "Income
+    chargeable under Business & Profession" across ALL three presumptive
+    schemes, not just 44AE. A prior version of the builder only computed it
+    inside the ``goods_44ae is not None`` branch, leaving it hardcoded at 0
+    for any return with 44AD/44ADA income and no 44AE business -- exactly
+    the common case -- which ITD's validator rejected with two cross-schedule
+    consistency errors (Sl. No E8 of Schedule BP vs. Part BTI Business
+    Income, and the 44AD+44ADA+44AE sum vs. IncChargeableUnderBus itself).
+    """
+    draft = _filing_ready_itr4("44AD")
+    business = draft.businesses[0]
+    business.digitalReceipts = Decimal("0")
+    business.nonDigitalReceipts = Decimal("400000")
+    business.declaredIncome = Decimal("32415")
+
+    official, _ = generate_cbdt_json(draft)
+    validate_itr4_json(official)
+    bp = official["ITR"]["ITR4"]["ScheduleBP"]
+    assert bp["PersumptiveInc44AD"]["TotPersumptiveInc44AD"] == 32415
+    assert bp["PersumptiveInc44AE"]["IncChargeableUnderBus"] == 32415
+    assert (
+        official["ITR"]["ITR4"]["IncomeDeductions"]["IncomeFromBusinessProf"]
+        == bp["PersumptiveInc44AE"]["IncChargeableUnderBus"]
+    )
+
+
 def test_generate_itr4_schedule_bp_supports_all_three_schemes() -> None:
     """Official Schedule BP emits concurrent 44AD, 44ADA, and 44AE blocks."""
     draft = _filing_ready_itr4("44AD")
@@ -388,6 +542,87 @@ def test_generate_itr4_emits_full_filing_status_and_trp() -> None:
     assert itr4["FilingStatus"]["AssesseeRep"]["RepName"] == "Priya Sharma"
     assert itr4["Verification"]["Capacity"] == "R"
     assert itr4["TaxReturnPreparer"]["IdentificationNoOfTRP"] == "T123456789"
+
+
+def test_generate_itr4_filing_status_form10iea_default_answers_only_a23b() -> None:
+    """Default draft (never filed Form 10-IEA) answers ONLY the A23(B)
+    branch, not the mutually exclusive A23(A) "re-entered new regime"
+    branch.
+
+    CBDT ITR-4 Validation Rules AY 2026-27 rules #260/#353-364: A23
+    (Form10IEAEarlierAYOldRegime) must be an explicit "Y"/"N" for
+    Individual/HUF (never the schema-legal-but-live-rejected "NA"
+    default), and answering "N" activates ONLY A23(B)
+    (F10IEACurrAYOldRegime) -- the A23(A) new-regime-cascade fields
+    (F10IEAEarlierAYNewRegime, F10IEACurrAYNewRegime) must not also be
+    emitted. A prior version of the builder emitted "NA" and both
+    branches unconditionally, which ITD's live Type-2 UAT validateItr
+    rejected with "It is mandatory to select an Option for 115BAC
+    question at sl.no.A23" and "Multiple question shall not be responded
+    in A23" (2026-09-04, PAN SRGPZ2026C).
+    """
+    draft = _filing_ready_itr4("44AD")
+    official, _ = generate_cbdt_json(draft)
+    fs = official["ITR"]["ITR4"]["FilingStatus"]
+    assert fs["Form10IEAEarlierAYOldRegime"] == "N"
+    assert fs["F10IEACurrAYOldRegime"] == "N"
+    assert "F10IEAEarlierAYNewRegime" not in fs
+    assert "F10IEACurrAYNewRegime" not in fs
+
+
+def test_generate_itr4_filing_status_form10iea_yes_branch_excludes_a23b() -> None:
+    """The A23(A) branch (filed 10-IEA earlier for old regime) must not
+    also emit the mutually exclusive A23(B) field.
+    """
+    draft = _filing_ready_itr4("44AD")
+    draft.filing.form10IEAEarlierAYOldRegime = "Y"
+
+    official, _ = generate_cbdt_json(draft)
+    fs = official["ITR"]["ITR4"]["FilingStatus"]
+    assert fs["Form10IEAEarlierAYOldRegime"] == "Y"
+    assert "F10IEAEarlierAYNewRegime" in fs
+    assert "F10IEACurrAYOldRegime" not in fs
+
+
+def test_generate_itr4_omits_schedule80c_when_no_80c_claim() -> None:
+    """Schedule80C must be entirely absent, not an empty placeholder, when
+    no Section 80C deduction is claimed.
+
+    CBDT ITR-4 Validation Rules AY 2026-27 rule #305: an Individual on the
+    new tax regime who has "filled" any of 80C/80E/80EE/80EEA/80EEB/10(13A)
+    is rejected -- confirmed live that the mere PRESENCE of an empty
+    Schedule80C object (Schedule80CDtls: [], TotalAmt: 0) counts as
+    "filled" and triggers ITD's Type-2 UAT validateItr rejection "Since you
+    have selected new tax regime deduction u/s 10(13A), 80C... are not
+    applicable to you" (2026-09-04, PAN SRGPZ2026C), even though nothing
+    was actually claimed. Every sibling deduction schedule already omits
+    itself when unclaimed; Schedule80C was the one outlier.
+    """
+    draft = _filing_ready_itr4("44AD")
+    official, _ = generate_cbdt_json(draft)
+    itr4 = official["ITR"]["ITR4"]
+    assert "Schedule80C" not in itr4
+
+
+def test_generate_itr4_defaults_alternate_address_to_primary() -> None:
+    """SecondaryAdd/AlternateAddress must always be present, defaulting to
+    a mirror of the primary address when no distinct secondary address is
+    supplied.
+
+    input_rules.py's rule R410 already flagged secondary address as
+    mandatory in Part A General Information, but only as an informational
+    check -- not a JSON-build-time default. ITD's live Type-2 UAT
+    validateItr confirmed this is a hard requirement, rejecting an
+    entirely-absent AlternateAddress with "Secondary address details are
+    not provided in Schedule Part A General information" (2026-09-04, PAN
+    SRGPZ2026C).
+    """
+    draft = _filing_ready_itr4("44AD")
+    official, _ = generate_cbdt_json(draft)
+    pi = official["ITR"]["ITR4"]["PersonalInfo"]
+    assert pi["SecondaryAdd"] == "Y"
+    assert pi["AlternateAddress"]["CityOrTownOrDistrict"] == pi["Address"]["CityOrTownOrDistrict"]
+    assert pi["AlternateAddress"]["PinCode"] == pi["Address"]["PinCode"]
 
 
 def test_generate_cbdt_json_itr4_emits_80eea_stamp_duty_value():
@@ -682,6 +917,18 @@ def test_generate_cbdt_json_itr4_rejects_missing_profile():
     assert "filing profile" in caught.value.message.lower()
 
 
+def test_compute_canonical_itr4_rejects_empty_employer_category() -> None:
+    """ITR4FilingProfile.employer_category must not silently fall back —
+    the adapter enforces this itself via require_field(), since the shared
+    personal_profile normalizer now leaves employer_category optional (it
+    is not a field ITR2FilingProfile has at all)."""
+    draft = _filing_ready_itr4("44AD")
+    draft.personal.employerCategory = ""
+    with pytest.raises(FilingGatewayV2Error) as caught:
+        compute_canonical_itr4(draft)
+    assert "personal.employerCategory" in " ".join(caught.value.errors)
+
+
 # ── ITR-1 unchanged (regression) ─────────────────────────────────────────────
 
 def test_generate_cbdt_json_itr1_still_works():
@@ -694,6 +941,7 @@ def test_generate_cbdt_json_itr1_still_works():
     p.firstName = "Rahul"
     p.surnameOrOrgName = "Sharma"
     p.fatherName = "Mohan Sharma"
+    p.employerCategory = "OTH"
     p.dateOfBirth = "1980-05-15"
     p.flatNo = "12A"
     p.localityOrArea = "Central"
@@ -703,6 +951,7 @@ def test_generate_cbdt_json_itr1_still_works():
     p.mobile = "9876543210"
     p.email = "rahul@example.com"
     draft.verification.place = "Delhi"
+    draft.verification.date = "2026-07-31"
     draft.verification.declarationAccepted = True
     draft.verification.capacity = "SELF"
     pipeline = compute_canonical(draft)

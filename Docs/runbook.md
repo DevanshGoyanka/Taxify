@@ -229,7 +229,13 @@ sudo systemctl restart taxify        # required — changes are read only at sta
 - Mode `640`, owner `root:ubuntu`. **Do not make it `600`** — the app calls `load_dotenv()` as
   `ubuntu` at `app/main.py:19` and will crash with `PermissionError` on startup.
 - `/opt/taxify/.env` is a symlink to it.
-- The app writes `/opt/taxify/.env.backup` on every start (`app/security/env_backup.py`).
+- `app/security/env_backup.py` provides a `backup_env()` function that copies `.env` →
+  `.env.backup` on startup, and an earlier deployment verified it running (see
+  `Docs/deployment-log.md`'s "INFO: .env backed up to ..." log line). **As of 2026-09-05,
+  `app/main.py`'s lifespan does not call it** — the current codebase does not actually write
+  `.env.backup` on startup. Either wire `backup_env()` into `app/main.py`'s `lifespan()` (before
+  `create_tables()`) to restore this safeguard, or do not rely on `.env.backup` existing until
+  that's done.
 - Never commit it. `.env` is gitignored.
 
 ### Switching to ERI production (when ITD issues credentials)

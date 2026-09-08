@@ -15,32 +15,16 @@ from app.schemas.itr1 import (
     DonationAddress, TDS1Entry, TDS2Entry,
     TCSEntry, TaxPaymentDetail, PropertyType, AgeBracket, TaxRegime,
 )
-from app.schemas.itr2 import (
-    ITR2Input,
-    CGAssetType,
-    CGTransaction,
-    ResidentialStatus as ITR2ResidentialStatus,
-    ReturnFileSection,
-)
 from app.schemas.itr4 import (
     ITR4Input, PresumptiveScheme, PresumptiveBusinessIncome44AD,
     PresumptiveProfessionalIncome44ADA, PresumptiveGoodsCarriage44AE,
     GoodsCarriageVehicle,
 )
 from app.engine.calculators.itr1 import compute as compute_itr1
-from app.engine.calculators.itr2 import compute as compute_itr2
 from app.engine.calculators.itr4 import compute as compute_itr4
-from app.engine.schedules.special_rates import compute_112a, compute_111a
 from app.engine.schedules.restricted_112a import compute_restricted_112a
 from app.engine.common.hra import compute_hra_exemption
 from app.engine.common.due_dates import get_due_date
-from app.engine.constants import (
-    PRESUMPTIVE_44AD_DIGITAL,
-    PRESUMPTIVE_44ADA_RATE,
-    SEC_44AD_TURNOVER_LIMIT,
-    SEC_44ADA_RECEIPTS_LIMIT,
-    LTCG_OTHER_RATE_POST_JUL24,
-)
 
 router = APIRouter(tags=["tax"])
 
@@ -122,27 +106,6 @@ def _records(payload: dict, key: str) -> list[dict]:
     return value
 
 
-def _itr2_filing_section(value: object) -> ReturnFileSection:
-    """Map UI filing-section text to ITR-2's official numeric enum."""
-    section_map = {
-        "139(1)": ReturnFileSection.ON_TIME_139_1,
-        "139(4)": ReturnFileSection.BELATED_139_4,
-        "142(1)": ReturnFileSection.NOTICE_142_1,
-        "148": ReturnFileSection.NOTICE_148,
-        "153C": ReturnFileSection.NOTICE_153C,
-        "139(5)": ReturnFileSection.REVISED_139_5,
-        "139(9)": ReturnFileSection.DEFECTIVE_139_9,
-        "119(2)(b)": ReturnFileSection.CONDONATION_119_2B,
-    }
-    raw = str(value or "139(1)").strip()
-    if raw in section_map:
-        return section_map[raw]
-    try:
-        return ReturnFileSection(int(raw))
-    except (TypeError, ValueError):
-        return ReturnFileSection.ON_TIME_139_1
-
-
 def _date(value: object, field_name: str) -> Optional[datetime.date]:
     """Parse an optional ISO date.
 
@@ -207,159 +170,6 @@ def compute_tax_summary(
     except Exception as exc:
         _logger.exception("compute_tax_summary unexpected error: %s", exc)
         raise
-
-
-def _compute_itr2_from_flat_payload(
-    payload: dict,
-    age_bracket: AgeBracket,
-    tax_regime: TaxRegime,
-    salary_input: SalaryIncome,
-    hp_input: HousePropertyIncome,
-    os_input: OtherSourcesIncome,
-    ded_input: Chapter6ADeductions,
-    capital_gain_rows: list[dict],
-    tds1_entries: list,
-    tds2_entries: list,
-    tcs_entries: list,
-    advance_tax_paid: Decimal,
-    self_assessment_paid: Decimal,
-    quarterly_advance: list[Decimal],
-    capital_gains_summary: dict | None,
-) -> "object":
-    """Map the flat frontend payload to ITR2Input and run the ITR-2 engine.
-
-    This mirrors the ITR-1/ITR-4 mapping pattern: the backend translates
-    the flat form data to the canonical Pydantic model, so the frontend
-    never needs a form-specific mapper.
-    """
-    from app.schemas.itr2 import CGTransaction as CGTx, CGAssetType
-
-    # Map capital-gain transactions from flat rows to canonical CGTransaction.
-    # The frontend stores each field under multiple alias keys (set via
-    # updateBoth) so we check all possible names for each field.
-    _ASSET_TYPE_MAP: dict[str, str] = {
-        "EQUITY_ORIENTED_MUTUAL_FUND": "equity_oriented_fund_112a",
-        "LISTED_EQUITY": "listed_equity_112a",
-        "BUSINESS_TRUST_UNIT": "business_trust_unit_112a",
-        "LAND_BUILDING": "land_building",
-        "UNLISTED_SHARES": "unlisted_shares",
-        "LISTED_SECURITY": "listed_security",
-        "DEBT_MUTUAL_FUND": "debt_mutual_fund",
-        "SPECIFIED_MUTUAL_FUND": "specified_mutual_fund_50aa",
-        "MARKET_LINKED_DEBENTURE": "market_linked_debenture_50aa",
-        "BONDS_DEBENTURES": "bonds_debentures",
-        "DEPRECIABLE_ASSET": "depreciable_asset",
-        "JEWELLERY": "jewellery",
-        "FOREIGN_ASSET": "foreign_asset",
-    }
-
-    def _first(row: dict, *keys: str, default=None):
-        """Return the first non-None/non-empty value among the keys."""
-        for k in keys:
-            v = row.get(k)
-            if v is not None and v != "" and v != 0:
-                return v
-        return default
-
-    cg_transactions: list[CGTx] = []
-    for row in capital_gain_rows:
-        # AIS SFT-18(Pur) purchase-only evidence rows are reference data:
-        # they carry a quarter (e.g. "Q2(Jul-Sep)") in place of a real
-        # transaction date and have no sale consideration.  They are not
-        # disposals to report in ITR-2 Schedule CG, so skip them here.
-        # The reconciled purchase totals are already reflected in the
-        # restricted-112A cost-of-acquisition aggregates computed above.
-        side = str(row.get("evidenceSide", "")).upper()
-        sale_value = _first(row, "saleValue", "saleCost", "fullValueOfConsideration", default=0)
-        is_purchase_only = side == "PURCHASE" or (
-            _money(sale_value) == 0
-            and bool(row.get("quarter"))
-        )
-        if is_purchase_only:
-            continue
-
-        raw_asset = str(row.get("assetType", "other")).upper()
-        mapped = _ASSET_TYPE_MAP.get(raw_asset, raw_asset.lower())
-        try:
-            asset_type = CGAssetType(mapped)
-        except ValueError:
-            asset_type = CGAssetType.OTHER
-
-        # Date of transfer — frontend uses transferDate / saleDate
-        raw_transfer = _first(row, "transferDate", "saleDate", "dateOfTransfer")
-        date_of_transfer = _date(raw_transfer, "dateOfTransfer") if raw_transfer else None
-        if date_of_transfer is None:
-            date_of_transfer = datetime.date(2026, 3, 31)
-
-        # Date of acquisition — frontend uses acquisitionDate / purchaseDate
-        raw_acq = _first(row, "acquisitionDate", "purchaseDate", "dateOfAcquisition")
-        date_of_acquisition = _date(raw_acq, "dateOfAcquisition") if raw_acq else None
-
-        # Sale consideration — frontend uses saleValue / saleCost
-        sale = _money(_first(row, "saleValue", "saleCost", "fullValueOfConsideration", default=0))
-        # Cost — frontend uses actualCost / purchaseCost
-        cost = _money(_first(row, "actualCost", "purchaseCost", "costOfAcquisition", default=0))
-        # Transfer expenses
-        exp = _money(_first(row, "transferExpenses", "expenses", "expenditureOnTransfer", default=0))
-        # STT on transfer
-        stt = row.get("sttPaidOnTransfer")
-        if stt is None:
-            stt = row.get("sttPaid")
-        # FMV 31-Jan-2018
-        raw_fmv = _first(row, "fmv31Jan2018", "fmvJan2018", "fairMarketValueJan2018")
-        fmv = _money(raw_fmv) if raw_fmv else None
-
-        cg_transactions.append(CGTx(
-            asset_type=asset_type,
-            description=str(row.get("description", row.get("assetDescription", ""))),
-            date_of_acquisition=date_of_acquisition,
-            date_of_transfer=date_of_transfer,
-            full_consideration=sale,
-            cost_of_acquisition=cost,
-            expenditure_on_transfer=exp,
-            is_stt_paid_on_transfer=stt if stt is not None else None,
-            fair_market_value_jan2018=fmv,
-        ))
-
-    # Map residential status
-    raw_res_status = str(payload.get("residentialStatus", "ROR")).upper()
-    if raw_res_status in {"ROR", "RES", "RESIDENT"}:
-        res_status = ITR2ResidentialStatus.RESIDENT
-    elif raw_res_status in {"NRI", "NR", "NON_RESIDENT"}:
-        res_status = ITR2ResidentialStatus.NON_RESIDENT
-    else:
-        res_status = ITR2ResidentialStatus.RESIDENT_NOT_ORDINARILY
-
-    itr2_input = ITR2Input(
-        age_bracket=age_bracket,
-        tax_regime=tax_regime,
-        residential_status=res_status,
-        salary_income=salary_input,
-        house_property_income=hp_input,
-        other_sources_income=os_input,
-        deductions_chapter6a=ded_input,
-        cg_transactions=cg_transactions,
-        tds1_entries=tds1_entries or [],
-        tds2_entries=tds2_entries or [],
-        tcs_entries=tcs_entries or [],
-        advance_tax_paid=advance_tax_paid,
-        self_assessment_tax_paid=self_assessment_paid,
-        advance_tax_q1=quarterly_advance[0],
-        advance_tax_q2=quarterly_advance[1],
-        advance_tax_q3=quarterly_advance[2],
-        advance_tax_q4=quarterly_advance[3],
-        filing_date=_date(payload.get("filingDate"), "filingDate"),
-        due_date=_date(payload.get("dueDate"), "dueDate"),
-        filing_section=_itr2_filing_section(payload.get("filingSection") or payload.get("filing_section")),
-        relief_89=_money(payload.get("relief89", payload.get("relief_89"))),
-    )
-    try:
-        return compute_itr2(itr2_input)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        )
 
 
 def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
@@ -486,7 +296,13 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         lta_exempt_amount=lta_exempt,
         professional_tax_paid=prof_tax,
         entertainment_allowance=ent_allowance,
+        # Legacy flat payload only carries one isGovernmentEmployee boolean —
+        # no CGOV/SGOV-vs-PSU distinction is available here, so both the
+        # broad (entertainment allowance) and narrow (gratuity/leave
+        # encashment/commuted pension/80CCD(2)) flags use the same value,
+        # preserving this endpoint's pre-existing behavior unchanged.
         is_government_employee=is_govt,
+        is_cg_sg_employee=is_govt,
     )
     
     # 2. Map every canonical housePropertyEntries row. The CBDT AY 2026-27
@@ -1157,30 +973,19 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
                 detail="Regular business income is outside ITR-4 presumptive computation.",
             )
         res = compute_itr4(itr4_in)
-    elif is_future_form and requested_form == "ITR-2":
-        # ── ITR-2 computation path ────────────────────────────────────────
-        # Map the flat frontend payload to the canonical ITR2Input, following
-        # the same pattern as ITR-1/ITR-4: the backend does the mapping.
-        res = _compute_itr2_from_flat_payload(
-            payload,
-            age_bracket,
-            tax_regime,
-            salary_input,
-            hp_input,
-            os_input,
-            ded_input,
-            capital_gain_rows,
-            tds1_entries,
-            tds2_entries,
-            tcs_entries,
-            advance_tax_paid,
-            self_assessment_paid,
-            quarterly_advance,
-            capital_gains_summary,
-        )
-        computation_form = "ITR-2"
-        filing_computation_status = "FORM_COMPUTATION"
     else:
+        # ITR-2 (and ITR-3) intentionally fall through here: this legacy
+        # flat-payload endpoint's own ITR-2 computation path has been
+        # retired -- the real, tested ITR-2 pipeline is the canonical
+        # ReturnDraft path (`POST /v2/tax-summary/compute`,
+        # `draft_to_itr2_input` -> `compute_itr2`), which is what the
+        # live frontend actually calls. An ITR-2 request landing on this
+        # endpoint gets the same "provisional common-income preview" via
+        # the ITR-1 engine that ITR-3 (which never had a flat-payload
+        # engine of its own) already receives -- `filing_computation_status`
+        # is already set to "PROVISIONAL_COMMON_INCOME_PREVIEW" for both
+        # by `is_future_form` above, so callers are correctly told not to
+        # treat this as a real computation for either form.
         res = compute_itr1(ITR1Input(**common_input))
 
     if res.errors:
@@ -1419,220 +1224,3 @@ def _compute_tax_summary_impl(payload: dict, regime: str, current_user: User):
         "taxRegime": regime
     }
 
-@router.post("/business-income/calculate")
-def calculate_business_income(request: dict, assessmentYear: str = "2026-27"):
-    """Compute presumptive business/professional income via the typed engine.
-
-    AY 2026-27 only.  This endpoint does NOT re-implement statutory rates;
-    it delegates to the presumptive constants and returns the statutory
-    income, never substituting a raw float computation for the engine.
-    """
-    if assessmentYear != "2026-27":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Business income calculation supports assessment year 2026-27 only.",
-        )
-
-    scheme = request.get("scheme", "Regular")
-    gross_turnover = float(request.get("grossTurnover", 0) or 0)
-    declared_income = float(request.get("declaredIncome", 0) or 0)
-    net_profit = float(request.get("netProfitPL", 0) or 0)
-
-    compliance_notes: list[str] = []
-
-    if scheme == "44AD":
-        # Sec 44AD: 6% of digital receipts / 8% of cash receipts; the lower
-        # of (statutory, declared) is accepted unless a higher income is
-        # voluntarily declared.  Actual engine computation lives in
-        # compute_itr4 — here we surface the statutory estimate.
-        statutory = gross_turnover * float(PRESUMPTIVE_44AD_DIGITAL)
-        taxable = max(statutory, declared_income)
-        compliance_notes.append(
-            "Presumptive rate of 6% applied for digital receipts (8% for cash). "
-            "Authoritative computation runs through the ITR-4 engine."
-        )
-    elif scheme == "44ADA":
-        statutory = gross_turnover * float(PRESUMPTIVE_44ADA_RATE)
-        taxable = max(statutory, declared_income)
-        compliance_notes.append(
-            "Presumptive rate of 50% applied for professional receipts. "
-            "Authoritative computation runs through the ITR-4 engine."
-        )
-    else:
-        statutory = 0.0
-        taxable = net_profit
-        compliance_notes.append(
-            "Regular scheme applied based on Profit & Loss statement."
-        )
-
-    return {
-        "scheme": scheme,
-        "assessmentYear": "2026-27",
-        "grossTurnover": gross_turnover,
-        "declaredIncome": declared_income,
-        "netProfitPL": net_profit,
-        "taxableIncome": taxable,
-        "adjustedTaxableIncome": taxable,
-        "presumptiveRate": (
-            float(PRESUMPTIVE_44AD_DIGITAL) if scheme == "44AD"
-            else (float(PRESUMPTIVE_44ADA_RATE) if scheme == "44ADA" else 0.0)
-        ),
-        "incomeType": "Professional" if scheme == "44ADA" else "Business",
-        "isLoss": taxable < 0,
-        "businessLoss": abs(taxable) if taxable < 0 else 0,
-        "complianceNotes": compliance_notes,
-    }
-
-
-@router.post("/business-income/validate")
-def validate_business_input(request: dict):
-    """Validate presumptive business income thresholds for AY 2026-27."""
-    scheme = request.get("scheme", "Regular")
-    gross_turnover = float(request.get("grossTurnover", 0) or 0)
-    errors: list[str] = []
-    warnings: list[str] = []
-
-    if scheme == "44AD" and gross_turnover > float(SEC_44AD_TURNOVER_LIMIT):
-        errors.append(
-            "Gross turnover exceeds the Section 44AD presumptive limit of Rs 3 crore."
-        )
-    elif scheme == "44ADA" and gross_turnover > float(SEC_44ADA_RECEIPTS_LIMIT):
-        errors.append(
-            "Gross receipts exceed the Section 44ADA presumptive limit of Rs 75 lakh."
-        )
-
-    return {
-        "isValid": len(errors) == 0,
-        "errors": errors,
-        "warnings": warnings,
-        "assessmentYear": "2026-27",
-    }
-
-
-@router.post("/capital-gains/calculate")
-def calculate_capital_gains(request: dict):
-    """Compute capital gains tax via the typed special-rates engine.
-
-    AY 2026-27 only.  Delegates to app.engine.schedules.special_rates so the
-    rates and exemptions are never hard-coded in the router.  No raw float
-    statutory arithmetic is performed here.
-    """
-    assessment_year = request.get("assessmentYear", "2026-27")
-    if assessment_year != "2026-27":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Capital gains calculation supports assessment year 2026-27 only.",
-        )
-
-    asset_type = request.get("assetType", "EQUITY")
-    purchase_cost = Decimal(str(request.get("purchaseCost", 0) or 0))
-    sale_cost = Decimal(str(request.get("saleCost", 0) or 0))
-    transfer_expenses = Decimal(str(request.get("transferExpenses", 0) or 0))
-
-    p_date_str = request.get("purchaseDate")
-    s_date_str = request.get("saleDate")
-    months = 0
-    if p_date_str and s_date_str:
-        try:
-            p_date = datetime.datetime.strptime(p_date_str, "%Y-%m-%d").date()
-            s_date = datetime.datetime.strptime(s_date_str, "%Y-%m-%d").date()
-            months = (s_date.year - p_date.year) * 12 + (s_date.month - p_date.month)
-        except Exception:
-            months = 0
-
-    is_equity = "EQUITY" in str(asset_type).upper() or "MUTUAL" in str(asset_type).upper()
-    threshold = 12 if is_equity else 24
-    is_ltcg = months >= threshold
-
-    gain = sale_cost - purchase_cost - transfer_expenses
-    taxable_gain = max(Decimal("0"), gain)
-
-    # Delegate the statutory rate/exemption to the typed engine module.
-    if is_equity and is_ltcg:
-        entry = compute_112a(taxable_gain)
-        tax_rate = entry.tax_rate_pct
-        tax_payable = entry.tax_amount
-        gain_type = "LTCG"
-        sec_ref = "112A"
-    elif is_equity:
-        entry = compute_111a(taxable_gain, is_post_jul24=True)
-        tax_rate = entry.tax_rate_pct
-        tax_payable = entry.tax_amount
-        gain_type = "STCG"
-        sec_ref = "111A"
-    else:
-        # Non-equity long-term: 12.5% (post-23-Jul-2024, w/o indexation);
-        # non-equity short-term: slab rate (engine computes on full return).
-        tax_rate = LTCG_OTHER_RATE_POST_JUL24 if is_ltcg else Decimal("0")
-        tax_payable = taxable_gain * tax_rate / Decimal("100") if is_ltcg else Decimal("0")
-        gain_type = "LTCG" if is_ltcg else "STCG"
-        sec_ref = "112" if is_ltcg else "Slab"
-
-    return {
-        "gainType": gain_type,
-        "longTerm": is_ltcg,
-        "holdingPeriodMonths": months,
-        "purchaseCost": float(purchase_cost),
-        "saleCost": float(sale_cost),
-        "costOfAcquisition": float(purchase_cost),
-        "indexedCost": float(purchase_cost),
-        "gain": float(gain),
-        "taxableGain": float(taxable_gain),
-        "taxRate": float(tax_rate),
-        "taxPayable": float(tax_payable),
-        "assessmentYear": "2026-27",
-        "scheduleCGReference": "Schedule CG",
-        "sectionReference": sec_ref,
-        "complianceNotes": [f"Holding period computed: {months} months."],
-    }
-
-
-@router.post("/capital-gains/calculate-batch")
-def calculate_capital_gains_batch(request: dict):
-    """Compute capital gains for a batch of transactions via the typed engine."""
-    txs = request.get("transactions", [])
-    results = []
-
-    stcg_111a = Decimal("0")
-    ltcg_112a = Decimal("0")
-    stcg_other = Decimal("0")
-    ltcg_112 = Decimal("0")
-    total_tax = Decimal("0")
-
-    for tx in txs:
-        calc = calculate_capital_gains(tx)
-        results.append(calc)
-
-        gain = Decimal(str(calc["taxableGain"]))
-        tax = Decimal(str(calc["taxPayable"]))
-        is_ltcg = calc["longTerm"]
-        sec = calc["sectionReference"]
-
-        if is_ltcg:
-            if sec == "112A":
-                ltcg_112a += gain
-            else:
-                ltcg_112 += gain
-        else:
-            if sec == "111A":
-                stcg_111a += gain
-            else:
-                stcg_other += gain
-        total_tax += tax
-
-    total_gains = stcg_111a + ltcg_112a + stcg_other + ltcg_112
-
-    return {
-        "transactions": results,
-        "summary": {
-            "stcg111A": float(stcg_111a),
-            "ltcg112A": float(ltcg_112a),
-            "stcgOther": float(stcg_other),
-            "ltcg112": float(ltcg_112),
-            "totalCapitalGains": float(total_gains),
-            "totalTax": float(total_tax),
-            "lossSetOff": 0.0,
-            "netCapitalGains": float(total_gains),
-            "remainingLoss": 0.0,
-        },
-    }

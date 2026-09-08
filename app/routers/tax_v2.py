@@ -29,11 +29,14 @@ def compute_tax_summary_v2(
     """Compute a tax summary directly from a canonical ReturnDraft.
 
     Routes the draft through the single canonical compute dispatcher
-    (:func:`compute_canonical`), which sends ITR-1 and ITR-4 through
-    their v2 pipelines (``compute_canonical_itr1`` /
-    ``compute_canonical_itr4``). ITR-2/3 are not yet supported by the v2
-    pipeline and raise a clear 422 — the legacy compute path remains
-    available for them via ``/tax-summary/compute`` until Phase 7.
+    (:func:`compute_canonical`), which sends ITR-1, ITR-2, and ITR-4
+    through their v2 pipelines (``compute_canonical_itr1`` /
+    ``compute_canonical_itr2`` / ``compute_canonical_itr4`` — as of Phase
+    5G, all three fully prepare the filing profile before compute, not
+    just ITR-1/ITR-4). ITR-3 is not yet supported by the v2 pipeline and
+    raises a clear 422 — the legacy compute path remains available for it
+    via ``/tax-summary/compute`` until Phase 8 builds ITR-3 on the shared
+    complete-preparation contract.
 
     Args:
         draft: Canonical typed return draft supplied as the direct JSON body.
@@ -100,9 +103,20 @@ def _resolve_client_id(raw: Optional[str], db: Session, current_user: User) -> O
     return client.id if client else None
 
 
+def _require_client_id(raw: Optional[str], db: Session, current_user: User) -> int:
+    """Resolve a required user-owned client identifier for persisted imports."""
+    client_id = _resolve_client_id(raw, db, current_user)
+    if client_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="A valid clientId belonging to the authenticated user is required for imports.",
+        )
+    return client_id
+
+
 def _upsert_imported_document(
     db: Session,
-    client_id: Optional[int],
+    client_id: int,
     user_id: int,
     assessment_year: str,
     document_type: str,
@@ -186,7 +200,7 @@ async def parse_reconcile(
     """
     parsers = _load_parsers()
     ay = assessmentYear or ""
-    client_db_id = _resolve_client_id(clientId, db, current_user)
+    client_db_id = _require_client_id(clientId, db, current_user)
 
     parsed: dict[str, Any] = {}
     raw_blobs: dict[str, bytes] = {}

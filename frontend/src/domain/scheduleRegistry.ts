@@ -87,9 +87,9 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
   {
     id: 'Verification',
     label: 'Verification',
-    forms: ALL,
+    forms: ['ITR-2', 'ITR-3', 'ITR-4'],
     required: true,
-    status: statusRecord(ALL, 'missing'),
+    status: statusRecord(['ITR-2', 'ITR-3', 'ITR-4'], 'missing'),
     description: 'Declaration accepted by the taxpayer — mandatory before filing.',
   },
   {
@@ -105,17 +105,17 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
   {
     id: 'PersonalInfo',
     label: 'Personal Information',
-    forms: ALL,
+    forms: ['ITR-2', 'ITR-3', 'ITR-4'],
     required: true,
-    status: statusRecord(ALL, 'available'),
+    status: statusRecord(['ITR-2', 'ITR-3', 'ITR-4'], 'available'),
     description: 'Name, PAN, Aadhaar, DOB, contact, and address.',
   },
   {
     id: 'FilingStatus',
     label: 'Filing Status',
-    forms: ALL,
+    forms: ['ITR-2', 'ITR-3', 'ITR-4'],
     required: true,
-    status: statusRecord(ALL, 'partial'),
+    status: statusRecord(['ITR-2', 'ITR-3', 'ITR-4'], 'partial'),
     description: 'Return type, due date, revised-return evidence, Form 10‑IEA elections.',
   },
 
@@ -123,33 +123,33 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
   {
     id: 'ScheduleS',
     label: 'Salary Income',
-    forms: ['ITR-1', 'ITR-2', 'ITR-3', 'ITR-4'],
+    forms: ['ITR-2', 'ITR-3', 'ITR-4'],
     required: (f) => f.hasSalary,
-    status: statusRecord(ALL, 'available'),
+    status: statusRecord(['ITR-2', 'ITR-3', 'ITR-4'], 'available'),
     description: 'Section 17(1/2/3) salary, allowances, perquisites, and employer details.',
   },
   {
     id: 'ScheduleHP',
     label: 'House Property',
-    forms: ALL,
+    forms: ['ITR-2', 'ITR-3', 'ITR-4'],
     required: false,
-    status: statusRecord(ALL, 'available'),
+    status: statusRecord(['ITR-2', 'ITR-3', 'ITR-4'], 'available'),
     description: 'Income / loss from house property — self‑occupied, let‑out, or deemed let‑out.',
   },
   {
     id: 'ScheduleOS',
     label: 'Other Sources',
-    forms: ALL,
+    forms: ['ITR-2', 'ITR-3', 'ITR-4'],
     required: false,
-    status: statusRecord(ALL, 'available'),
+    status: statusRecord(['ITR-2', 'ITR-3', 'ITR-4'], 'available'),
     description: 'Interest, dividends, family pension, gifts, and winnings.',
   },
   {
     id: 'ScheduleEI',
     label: 'Exempt Income',
-    forms: ALL,
+    forms: ['ITR-2', 'ITR-3', 'ITR-4'],
     required: false,
-    status: statusRecord(ALL, 'partial'),
+    status: statusRecord(['ITR-2', 'ITR-3', 'ITR-4'], 'partial'),
     description: 'Agricultural income, PPF interest, gratuity, VRS, and other exempt categories.',
   },
   {
@@ -165,9 +165,9 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
   {
     id: 'LTCG112A',
     label: 'LTCG u/s 112A',
-    forms: ['ITR-1', 'ITR-4'],
+    forms: ['ITR-4'],
     required: false,
-    status: statusRecord(['ITR-1', 'ITR-4'], 'available', { 'ITR-2': 'not-applicable', 'ITR-3': 'not-applicable' }),
+    status: statusRecord(['ITR-4'], 'available', { 'ITR-1': 'not-applicable', 'ITR-2': 'not-applicable', 'ITR-3': 'not-applicable' }),
     description: 'Restricted long‑term capital gains on listed equity / equity MF / business trust units.',
   },
   {
@@ -217,7 +217,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Brought Forward Losses',
     forms: ITR2_3,
     required: true,
-    status: statusRecord(ITR2_3, 'partial'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Brought‑forward loss detail and set‑off from prior years.',
   },
   {
@@ -235,7 +235,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Special Rate Income',
     forms: ITR2_3,
     required: false,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Income taxable at special rates under Sections 115BB / 115BBE / etc.',
   },
   {
@@ -243,7 +243,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Clubbing of Income',
     forms: ITR2_3,
     required: false,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Income of specified persons clubbed with the assessee.',
   },
   {
@@ -251,7 +251,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Pass‑Through Income',
     forms: ITR2_3,
     required: false,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Income from business trust / investment fund pass‑through.',
   },
 
@@ -261,7 +261,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Foreign Source Income',
     forms: ITR2_3,
     required: (f) => f.hasForeignIncomeOrAssets,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Income accrued / arising outside India.',
   },
   {
@@ -269,7 +269,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Foreign Tax Credit (TR)',
     forms: ITR2_3,
     required: (f) => f.hasForeignIncomeOrAssets,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Relief under DTAA / Section 90 / 91 for taxes paid abroad.',
   },
   {
@@ -277,7 +277,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Foreign Assets',
     forms: ITR2_3,
     required: (f) => f.hasForeignIncomeOrAssets,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Details of foreign bank accounts, property, trusts, and signing authority.',
   },
 
@@ -287,7 +287,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Alternate Minimum Tax',
     forms: ITR2_3,
     required: hasBusinessIncome,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'AMT computation under Section 115JC.',
   },
   {
@@ -295,7 +295,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'AMT Credit',
     forms: ITR2_3,
     required: hasBusinessIncome,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'AMT credit brought forward and utilised.',
   },
 
@@ -305,7 +305,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Asset‑Liability Schedule',
     forms: ITR2_3,
     required: (f) => f.totalIncome > 50_000_000,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Statement of assets and liabilities — mandatory when income exceeds ₹50 lakh.',
   },
   {
@@ -313,7 +313,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'Portuguese Civil Code',
     forms: ITR2_3,
     required: false,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Income apportionment under Portuguese Civil Code — Goa, Daman, and Diu.',
   },
   {
@@ -321,7 +321,7 @@ export const SCHEDULE_REGISTRY: readonly ScheduleDefinition[] = [
     label: 'ESOP Tax Deferral',
     forms: ITR2_3,
     required: false,
-    status: statusRecord(ITR2_3, 'missing'),
+    status: statusRecord(ITR2_3, 'missing', { 'ITR-2': 'available' }),
     description: 'Eligible startup ESOP tax deferral under Section 192(1C).',
   },
 
