@@ -16,6 +16,14 @@ from app.automation.timing import AutomationTimeline
 # inside `_ensure_browser` that previously turned a missing-binary error into
 # an opaque "future belongs to a different loop" ValueError (2026-09-08 incident).
 logger = logging.getLogger("taxify.automation.browser")
+# Ensure debug lifecycle logs are visible even before app/main.py's logging
+# config runs (e.g. when the module is imported by a standalone script or a
+# worker that bypasses the FastAPI lifespan). If the parent ``taxify`` logger
+# was already configured by main.py, this no-ops (level already set there).
+if not logger.level:
+    logger.setLevel(logging.INFO)
+if not logger.handlers:
+    logger.addHandler(logging.NullHandler())
 
 
 def _get_system_proxy() -> dict | None:
