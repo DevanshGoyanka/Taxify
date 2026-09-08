@@ -3,10 +3,19 @@ import sys
 import subprocess
 import threading
 import asyncio
+import logging
 
 from playwright.async_api import async_playwright
 
 from app.automation.timing import AutomationTimeline
+
+# Dedicated debug logger so browser lifecycle failures leave a clear trail in
+# the systemd journal.Independent of the request-scoped `log_callback` (which
+# only flows into the job's own status log), so launch/recovery failures are
+# visible even when no caller supplied a callback — e.g. the silent retry path
+# inside `_ensure_browser` that previously turned a missing-binary error into
+# an opaque "future belongs to a different loop" ValueError (2026-09-08 incident).
+logger = logging.getLogger("taxify.automation.browser")
 
 
 def _get_system_proxy() -> dict | None:
@@ -85,44 +94,102 @@ def _playwright_cli() -> str:
         return None   # signals: use sys.executable -m playwright
 
 
-async def _install_chromium(log_callback=None):
-    """Download Chromium into the stable AppData browsers directory."""
+def _chromium_binary_present(headless: bool) -> bool:
+    """Pre-flight check: is the Playwright Chromium binary (or headless-shell)
+    actually present on disk?
+
+    Playwright's ``channel="chrome"`` launch in modern-headless mode still
+    needs ``chromium_headless_shell-<build>/chrome-headless-shell`` even when
+    a system Google Chrome is installed — modern headless runs the headless
+    driver binary, not the full Chrome. After a Playwright pip upgrade the
+    build number in the path increments and the old binary is gone, so
+    ``launch()`` raises ``Executable doesn't exist at .../chromium_headless_shell-NNNN/``
+    — which previously triggered a broken recovery path that turned a clear
+    "missing binary" error into an opaque
+    ``ValueError: The future belongs to a different loop`` (2026-09-08 incident).
+    This check lets us install proactively *before* the launch attempt, keeping
+    the Playwright object loop binding clean.
+    """
+    browsers_dir = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or _playwright_browsers_dir()
+    try:
+        entries = os.listdir(browsers_dir)
+    except FileNotFoundError:
+        return False
+    # Playwright's binary dirs are named ``chromium-<build>`` (full) and
+    # ``chromium_headless_shell-<build>`` (headless driver). Any matching
+    # entry whose nested executable exists is good enough.
+    needed_prefix = "chromium_headless_shell-" if headless else "chromium-"
+    for name in entries:
+        if name.startswith(needed_prefix):
+            top = os.path.join(browsers_dir, name)
+            # Layout differs by platform; just confirm the dir is non-empty
+            # and contains an executable-like file.
+            try:
+                for root, _dirs, files in os.walk(top):
+                    if any(f.startswith("chrome") for f in files):
+                        return True
+            except OSError:
+                continue
+    return False
+
+
+async def _install_chromium(log_callback=None, headless: bool = True):
+    """Download Chromium (and, for modern headless mode, the headless-shell
+    driver) into the stable browsers directory.
+
+    Playwright splits the download into two packages: ``chromium`` (the full
+    browser) and ``chromium-headless-shell`` (the lightweight headless driver
+    that modern ``--headless=new`` mode actually launches). Both live under
+    ``PLAYWRIGHT_BROWSERS_PATH``. Installing only ``chromium`` leaves the
+    headless path broken — exactly the gap that caused the 2026-09-08
+    "Executable doesn't exist at .../chromium_headless_shell-1234/" failures.
+    """
     browsers_dir = _playwright_browsers_dir()
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browsers_dir
 
+    # Install the headless shell when launching headless, and the full
+    # chromium otherwise (interactive visible mode uses the full browser).
+    packages = ["chromium-headless-shell"] if headless else ["chromium"]
+    logger.info("Installing Playwright browser packages %s into %s", packages, browsers_dir)
     if log_callback:
-        log_callback("[Browser] Downloading Chromium — this only happens once, please wait...")
+        log_callback(
+            f"[Browser] Downloading {', '.join(packages)} — this only happens once, please wait..."
+        )
 
     try:
         from playwright._impl._driver import compute_driver_executable, get_driver_env
         driver_executable, driver_cli = compute_driver_executable()
-        cmd = [driver_executable, driver_cli, "install", "chromium"]
+        base_cmd = [driver_executable, driver_cli, "install"]
         env = {**os.environ, **get_driver_env(), "PLAYWRIGHT_BROWSERS_PATH": browsers_dir}
     except Exception as e:
-        # Fallback to system execution if playwright internals change
+        logger.warning("Playwright internals unavailable (%s); falling back to sys.executable", e)
         if log_callback:
             log_callback(f"[Browser] Internals error: {e}, falling back to system execution...")
         cli = _playwright_cli()
         if cli is None or cli == "playwright":
-            cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+            base_cmd = [sys.executable, "-m", "playwright", "install"]
         else:
             py = os.environ.get("PYTHONPATH_FOR_PLAYWRIGHT") or "python"
-            cmd = [py, cli, "install", "chromium"]
+            base_cmd = [py, cli, "install"]
         env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": browsers_dir}
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"Chromium install failed (exit {proc.returncode}):\n{stderr.decode()[:500]}"
+    for pkg in packages:
+        cmd = base_cmd + [pkg]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
         )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            tail = (stderr or b"").decode(errors="replace")[:500]
+            raise RuntimeError(
+                f"Playwright `{pkg}` install failed (exit {proc.returncode}):\n{tail}"
+            )
+        logger.info("Playwright package `%s` installed successfully", pkg)
     if log_callback:
-        log_callback("[Browser] Chromium installed successfully.")
+        log_callback(f"[Browser] {', '.join(packages)} installed successfully.")
 
 
 class BrowserManager:
@@ -191,7 +258,17 @@ class BrowserManager:
         """Run ``coro`` (an awaitable) on the dedicated Playwright loop/thread
         and return its result. Lets browser work run on a subprocess-capable
         Proactor loop regardless of the caller's event loop (e.g. uvicorn's
-        Selector loop under --reload)."""
+        Selector loop under --reload).
+
+        Note: the job worker and most routers currently call ``get_context``
+        directly (``await browser_manager.get_context(...)``) rather than via
+        ``dispatch``. That is fine on Linux (the default uvicorn loop spawns
+        subprocesses there) but means the dedicated background loop is only
+        exercised by callers that route through ``dispatch``. The loop-binding
+        bug fixed in ``_ensure_browser``'s recovery path (2026-09-08) does not
+        depend on which loop the caller is on — it was a stale
+        ``async_playwright`` object surviving a ``stop()``/``start()`` cycle.
+        """
         loop = self._ensure_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return await asyncio.wrap_future(future)
@@ -201,11 +278,23 @@ class BrowserManager:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = _playwright_browsers_dir()
 
     async def initialize(self, log_callback=None):
+        """Start the Playwright engine if not already running.
+
+        Idempotent: a no-op when ``self._playwright`` is set. The recovery path
+        in ``_ensure_browser`` clears ``_playwright`` (after ``stop()``) before
+        re-entering here, so a fresh ``async_playwright().start()`` always binds
+        to the currently-running loop — never reusing a stale Playwright object
+        from a prior loop binding (the 2026-09-08 "future belongs to a
+        different loop" regression).
+        """
         if self._playwright is None:
             self._set_browsers_env()
+            logger.info("Starting Playwright engine (PLAYWRIGHT_BROWSERS_PATH=%s)",
+                        os.environ.get("PLAYWRIGHT_BROWSERS_PATH"))
             if log_callback:
                 log_callback("[Browser] Starting Playwright engine...")
             self._playwright = await async_playwright().start()
+            logger.info("Playwright engine started.")
 
     # No --start-maximized: it fights the fixed 1600x900 viewport and distorts
     # the aspect ratio (collapsing the ITD nav). The competitor relies purely
@@ -228,8 +317,10 @@ class BrowserManager:
         Automatically picks up Windows system proxy from the registry.
         """
         proxy = _get_system_proxy()
-        if proxy and log_callback:
-            log_callback(f"[Browser] System proxy detected: {proxy['server']}")
+        if proxy:
+            logger.info("System proxy detected: %s", proxy["server"])
+            if log_callback:
+                log_callback(f"[Browser] System proxy detected: {proxy['server']}")
         args = list(self._LAUNCH_ARGS)
         if headless:
             # Force modern headless mode and suppress any leaked window on ARM64
@@ -245,13 +336,35 @@ class BrowserManager:
         )
         if proxy:
             launch_kwargs["proxy"] = proxy
+        # Pre-flight: modern --headless=new needs the chromium-headless-shell
+        # driver binary even when channel="chrome" is requested (Playwright
+        # runs the headless driver, not the system Chrome, for modern headless).
+        # Missing it is the root cause of the 2026-09-08 incident.
+        if headless and not _chromium_binary_present(headless=True):
+            logger.warning(
+                "chromium-headless-shell binary not found in %s — installing "
+                "before launch to avoid the 'future belongs to a different loop' "
+                "recovery path",
+                os.environ.get("PLAYWRIGHT_BROWSERS_PATH"),
+            )
+            if log_callback:
+                log_callback("[Browser] Headless driver missing — installing now...")
+            await _install_chromium(log_callback, headless=True)
+        elif not headless and not _chromium_binary_present(headless=False):
+            logger.info("Full chromium binary not found — installing before launch")
+            if log_callback:
+                log_callback("[Browser] Chromium not found — installing now...")
+            await _install_chromium(log_callback, headless=False)
+        logger.info("Launching browser (channel=chrome, headless=%s)", headless)
         try:
             browser = await self._playwright.chromium.launch(
                 channel="chrome", **launch_kwargs
             )
             self._channel = "chrome"
+            logger.info("Browser launched via channel=chrome")
             return browser
-        except Exception:
+        except Exception as e:
+            logger.warning("channel=chrome launch failed (%s); falling back to bundled Chromium", e)
             if log_callback:
                 log_callback(
                     "[Browser] WARNING: Google Chrome not found — using bundled Chromium. "
@@ -260,11 +373,21 @@ class BrowserManager:
                 )
             browser = await self._playwright.chromium.launch(**launch_kwargs)
             self._channel = "chromium"
+            logger.info("Browser launched via bundled chromium")
             return browser
 
     async def _ensure_browser(self, log_callback=None, interactive=True):
-        await self.initialize(log_callback)
         headless = not interactive
+        logger.info(
+            "_ensure_browser: interactive=%s headless=%s "
+            "playwright_set=%s browser_set=%s browser_connected=%s prev_headless=%s",
+            interactive, headless,
+            self._playwright is not None,
+            self._browser is not None,
+            bool(self._browser and self._browser.is_connected()),
+            getattr(self, "_headless", None),
+        )
+        await self.initialize(log_callback)
         # Relaunch when the singleton is missing/disconnected OR when the
         # caller needs a different visibility mode than the running browser.
         # An interactive (visible) ack/e-verify flow must not silently reuse
@@ -274,8 +397,14 @@ class BrowserManager:
             or not self._browser.is_connected()
             or self._headless != headless
         )
+        if not needs_relaunch:
+            logger.info("_ensure_browser: reusing existing connected browser (channel=%s)",
+                        getattr(self, "_channel", "chromium"))
         if needs_relaunch:
             if self._browser is not None and self._headless != headless:
+                logger.info("_ensure_browser: switching %s -> %s",
+                            "headless" if self._headless else "visible",
+                            "headless" if headless else "visible")
                 if log_callback:
                     log_callback(
                         f"[Browser] Switching from "
@@ -284,38 +413,91 @@ class BrowserManager:
                     )
                 try:
                     await self._browser.close()
-                except Exception:
-                    pass
+                except Exception as close_err:
+                    logger.warning("_ensure_browser: close of prior browser failed: %s", close_err)
                 self._browser = None
             try:
                 self._browser = await self._launch(headless, log_callback)
                 self._headless = headless
+                logger.info("_ensure_browser: launched via %s", getattr(self, "_channel", "chromium"))
                 if log_callback:
                     log_callback(f"[Browser] Launched via {getattr(self, '_channel', 'chromium')}")
             except Exception as e:
-                err_str = str(e).lower()
-                if any(k in err_str for k in ("executable", "not found", "doesn't exist", "none", "attribute")):
-                    if log_callback:
-                        log_callback("[Browser] Chromium not found — installing now...")
-                    # Stop playwright before reinstalling
-                    try:
-                        if self._playwright:
-                            await self._playwright.stop()
-                            self._playwright = None
-                    except Exception:
-                        pass
-
-                    await _install_chromium(log_callback)
-
-                    # Re-init and retry
-                    self._set_browsers_env()
-                    await self.initialize(log_callback)
-                    self._browser = await self._launch(headless, log_callback)
-                    self._headless = headless
-                else:
+                err_str = str(e)
+                err_lower = err_str.lower()
+                # Detect the specific "missing binary" failure shape. Note
+                # the keyword list deliberately EXCLUDES "none"/"attribute" —
+                # those matched too broadly and masked unrelated errors by
+                # routing every ValueError through the chromium-install path.
+                # The 2026-09-08 "different loop" failure was a symptom of
+                # this: the real cause (missing chromium-headless-shell) was
+                # caught here, but the recovery re-started Playwright in a
+                # broken loop state.
+                is_missing_binary = any(
+                    k in err_lower
+                    for k in ("executable", "not found", "doesn't exist",
+                              "no such file", "playwright install")
+                )
+                logger.error("_ensure_browser: launch failed (missing_binary=%s): %s",
+                             is_missing_binary, err_str, exc_info=True)
+                if not is_missing_binary:
                     if log_callback:
                         log_callback(f"[Error] Failed to launch browser: {e}")
                     raise
+                if log_callback:
+                    log_callback(f"[Browser] Binary missing — reinstalling ({e})...")
+                # Full teardown BEFORE reinstall: stop the Playwright transport
+                # cleanly so the subsequent ``async_playwright().start()`` rebinds
+                # to the current running loop instead of straddling a stale one.
+                # This is the exact point where the prior code produced
+                # "The future belongs to a different loop" — it cleared
+                # ``_playwright = None`` after ``stop()`` but left the door
+                # open for a half-torn-down transport; ``_full_teardown``
+                # guarantees a clean slate.
+                await self._full_teardown(log_callback)
+
+                # Reinstall the correct package for the launch mode (headless
+                # mode needs chromium-headless-shell; visible mode needs the
+                # full chromium). The previous code always installed
+                # ``chromium`` regardless of mode, so a headless launch stayed
+                # broken even after recovery.
+                await _install_chromium(log_callback, headless=headless)
+
+                # Re-init and retry on a clean Playwright object.
+                self._set_browsers_env()
+                await self.initialize(log_callback)
+                self._browser = await self._launch(headless, log_callback)
+                self._headless = headless
+                logger.info("_ensure_browser: recovered and launched via %s after reinstall",
+                            getattr(self, "_channel", "chromium"))
+
+    async def _full_teardown(self, log_callback=None):
+        """Fully stop and null out the Playwright object and browser.
+
+        Guarantees that the next ``initialize()`` call starts from a clean
+        slate — no transport, no connection, no stale loop binding. The
+        recovery path in ``_ensure_browser`` must call this before reinstalling
+        Chromium; without it, ``stop()`` can leave a half-closed transport
+        whose pending futures are bound to a loop that no longer matches the
+        one ``launch()`` is awaited on, surfacing as
+        ``ValueError: The future belongs to a different loop`` (2026-09-08).
+        """
+        logger.info("_full_teardown: stopping browser=%s playwright=%s",
+                    self._browser is not None, self._playwright is not None)
+        try:
+            if self._browser is not None:
+                await self._browser.close()
+        except Exception as e:
+            logger.warning("_full_teardown: browser.close failed: %s", e)
+        try:
+            if self._playwright is not None:
+                await self._playwright.stop()
+        except Exception as e:
+            logger.warning("_full_teardown: playwright.stop failed: %s", e)
+        finally:
+            self._browser = None
+            self._playwright = None
+            logger.info("_full_teardown: complete")
 
     async def get_context(
         self,
@@ -335,12 +517,16 @@ class BrowserManager:
         """
         if timeline is not None:
             timeline.mark("context requested")
+        logger.info("get_context: interactive=%s", interactive)
         try:
             await self._ensure_browser(log_callback, interactive)
         except Exception as e:
+            logger.warning("get_context: first attempt failed (%s) — tearing down and retrying", e, exc_info=True)
             if log_callback:
                 log_callback(f"[Browser] Retrying after error: {e}")
-            self._browser = None
+            # Full teardown (not just nulling the browser) so the retry's
+            # ``async_playwright().start()`` binds to the current loop cleanly.
+            await self._full_teardown(log_callback)
             await self._ensure_browser(log_callback, interactive)
 
         # Match the competitor's working context exactly: fixed 1600x900 viewport,
@@ -360,12 +546,13 @@ class BrowserManager:
             ctx = await self._browser.new_context(**_context_kwargs)
         except Exception as e:
             # Browser object is stale (disconnected Chrome process) — force a full restart.
+            logger.warning("get_context: new_context failed (%s) — full restart", e, exc_info=True)
             if log_callback:
                 log_callback(f"[Browser] Context creation failed ({e}), restarting browser...")
-            self._browser = None
-            self._playwright = None
+            await self._full_teardown(log_callback)
             await self._ensure_browser(log_callback, interactive)
             ctx = await self._browser.new_context(**_context_kwargs)
+        logger.info("get_context: context ready")
 
         # Spoof automation-detection properties
         await ctx.add_init_script("""() => {
@@ -379,16 +566,7 @@ class BrowserManager:
         return ctx
 
     async def close(self):
-        try:
-            if self._browser:
-                await self._browser.close()
-            if self._playwright:
-                await self._playwright.stop()
-        except Exception:
-            pass
-        finally:
-            self._browser = None
-            self._playwright = None
+        await self._full_teardown()
 
 
 # Shared global instance
