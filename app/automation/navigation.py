@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -11,6 +12,17 @@ from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
 
 Clock = Callable[[], float]
 LogCallback = Callable[[str], None]
+
+# Debug logger for portal navigation — surfaces e-File / Income Tax Returns
+# menu discovery failures (2026-09-08 incident: ack-fetch hit
+# "e-File dashboard menu was not found before navigation timeout" with no
+# diagnostic detail). Independent of the job-scoped `log` callback so
+# failures are traceable in the systemd journal even from background paths.
+_nav_logger = logging.getLogger("taxify.automation.navigation")
+if not _nav_logger.level:
+    _nav_logger.setLevel(logging.INFO)
+if not _nav_logger.handlers:
+    _nav_logger.addHandler(logging.NullHandler())
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,29 +306,42 @@ async def navigate_income_tax_returns(
 
     deadline = MonotonicDeadline.after(timeout_ms)
 
-    # Step 1: Find and click e-File menu
+    # Step 1: Find and click e-File menu.
+    # Per-step discovery budget: the portal's Angular dashboard can take
+    # several seconds to render the e-File menu after login (the 2026-09-08
+    # incident timed out at the old 2s cap). Give each step up to 15s, but
+    # never more than the overall remaining deadline.
+    step_budget = min(15_000, deadline.remaining_ms)
     if log is not None:
         log("[NAV] Finding e-File menu.")
+    _nav_logger.info("navigate_income_tax_returns: e-File menu search (step_budget=%dms, remaining=%dms)",
+                    step_budget, deadline.remaining_ms)
     efile = await _nav_find_semantic(
         page,
         _re.compile(r"^\s*e-File\s*$", _re.IGNORECASE),
         ("a#e-File", "//*[normalize-space(.)='e-File']"),
-        min(2_000, deadline.remaining_ms),
+        step_budget,
     )
     if efile is None:
+        _nav_logger.error("navigate_income_tax_returns: e-File menu NOT found after %dms", step_budget)
         raise RuntimeError("e-File dashboard menu was not found before navigation timeout.")
+    _nav_logger.info("navigate_income_tax_returns: e-File menu found, clicking")
     try:
         await efile.click(timeout=max(1, min(750, deadline.remaining_ms)))
-    except Exception:
+    except Exception as e:
+        _nav_logger.warning("navigate_income_tax_returns: e-File click failed (%s), retrying with force", e)
         try:
             await efile.click(force=True, timeout=max(1, min(750, deadline.remaining_ms)))
-        except Exception:
+        except Exception as e2:
+            _nav_logger.error("navigate_income_tax_returns: e-File force-click failed: %s", e2)
             raise RuntimeError("e-File menu click failed.")
     await _asyncio.sleep(0.5)
 
     # Step 2: Find and click Income Tax Returns submenu
+    step_budget = min(15_000, deadline.remaining_ms)
     if log is not None:
         log("[NAV] Finding Income Tax Returns submenu.")
+    _nav_logger.info("navigate_income_tax_returns: Income Tax Returns submenu search (step_budget=%dms)", step_budget)
     returns = await _nav_find_semantic(
         page,
         _re.compile(r"^\s*Income\s+Tax\s+Returns\s*$", _re.IGNORECASE),
@@ -324,23 +349,28 @@ async def navigate_income_tax_returns(
             "//*[normalize-space(.)='Income Tax Returns']",
             "//*[text()='Income Tax Returns']",
         ),
-        min(2_000, deadline.remaining_ms),
+        step_budget,
     )
     if returns is None:
+        _nav_logger.error("navigate_income_tax_returns: Income Tax Returns submenu NOT found after %dms", step_budget)
         raise RuntimeError(
             "Income Tax Returns submenu was not found before navigation timeout."
         )
+    _nav_logger.info("navigate_income_tax_returns: submenu found, clicking")
     try:
         await returns.click(timeout=max(1, min(750, deadline.remaining_ms)))
-    except Exception:
+    except Exception as e:
+        _nav_logger.warning("navigate_income_tax_returns: submenu click failed (%s), retrying with hover", e)
         try:
             await returns.hover(timeout=max(1, min(750, deadline.remaining_ms)))
-        except Exception:
+        except Exception as e2:
+            _nav_logger.error("navigate_income_tax_returns: submenu hover failed: %s", e2)
             raise RuntimeError("Income Tax Returns submenu click failed.")
     await _asyncio.sleep(0.5)
 
     if log is not None:
         log("[NAV] Income Tax Returns submenu ready.")
+    _nav_logger.info("navigate_income_tax_returns: submenu ready")
     return returns
 
 
@@ -357,7 +387,9 @@ async def _nav_find_semantic(
     ``get_by_text``, then XPath fallbacks, polling under one shared deadline.
     """
     deadline = MonotonicDeadline.after(timeout_ms)
+    _attempt = 0
     while True:
+        _attempt += 1
         candidates: list[Any] = []
         for role in ("link", "button", "menuitem"):
             try:
@@ -373,13 +405,21 @@ async def _nav_find_semantic(
                 candidates.append(page.locator(xpath).first)
             except Exception:
                 pass
-        for candidate in candidates:
+        for idx, candidate in enumerate(candidates):
             try:
                 if await candidate.is_visible(timeout=1):
+                    _nav_logger.info("_nav_find_semantic: matched candidate #%d for %r (attempt %d)",
+                                    idx, name.pattern, _attempt)
                     return candidate
             except Exception:
                 continue
         if deadline.expired:
+            try:
+                url = page.url
+            except Exception:
+                url = "<unknown>"
+            _nav_logger.warning("_nav_find_semantic: %r NOT visible after %dms (%d attempts); page.url=%s",
+                                name.pattern, timeout_ms, _attempt, url)
             return None
         await deadline.sleep(0.05)
 

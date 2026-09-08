@@ -522,7 +522,27 @@ class BrowserManager:
 
         Returns:
             A configured Playwright browser context.
+
+        Note:
+            On a headless deployment (EC2 with no physical display), a visible
+            browser launched with ``interactive=True`` opens an ``about:blank``
+            window in the xvfb virtual framebuffer that the operator cannot
+            see or interact with — the ack-fetch and direct-submit flows then
+            hang waiting for the visible browser to be interacted with
+            (2026-09-08 incident). Set ``TAXIFY_FORCE_HEADLESS=1`` on the
+            deployment to downgrade every ``interactive=True`` request to
+            headless, so those flows run unattended without hanging. The
+            import job worker already uses ``interactive=False`` and is
+            unaffected.
         """
+        # Deployment guard: force headless when the flag is set. This is the
+        # single chokepoint that covers ack-fetch, direct-submit, and any
+        # future caller that requests a visible browser on a headless box.
+        if interactive and os.environ.get("TAXIFY_FORCE_HEADLESS", "").lower() in ("1", "true", "yes", "on"):
+            logger.info("get_context: downgrading interactive=True -> headless (TAXIFY_FORCE_HEADLESS set)")
+            if log_callback:
+                log_callback("[Browser] Running headless on server (TAXIFY_FORCE_HEADLESS).")
+            interactive = False
         if timeline is not None:
             timeline.mark("context requested")
         logger.info("get_context: interactive=%s", interactive)
