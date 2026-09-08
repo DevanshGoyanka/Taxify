@@ -110,13 +110,6 @@ export interface WinningsEntry {
   dateOfWinning?: string;
 }
 
-export const WINNINGS_INFO: Record<WinningsType, { label: string; section: string; taxRate: number; tdsThreshold: number }> = {
-  LOTTERY: { label: 'Lottery/Betting', section: '194B', taxRate: 30, tdsThreshold: 10000 },
-  BETTING: { label: 'Betting/Gambling', section: '194B', taxRate: 30, tdsThreshold: 10000 },
-  CARD_GAME: { label: 'Card Game/Puzzle', section: '194B', taxRate: 30, tdsThreshold: 10000 },
-  HORSE_RACE: { label: 'Horse Race', section: '194BB', taxRate: 30, tdsThreshold: 10000 },
-};
-
 // ==================== FAMILY PENSION ====================
 
 export interface FamilyPensionEntry {

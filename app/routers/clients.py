@@ -1,6 +1,8 @@
+import datetime
 import re
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
@@ -10,6 +12,69 @@ from app.schemas.clients import ClientCreate, ClientUpdate, ClientResponse, Clie
 from app.schemas.security.portal_crypto import encrypt_portal_password, decrypt_portal_password
 
 router = APIRouter(prefix="/clients", tags=["clients"])
+
+
+def resolve_owned_client(identifier: str | int, user_id: int, db: Session) -> Client:
+    """Resolve an owned client by stable public ID or legacy integer ID."""
+    identifier_text = str(identifier).strip()
+    query = db.query(Client).filter(Client.user_id == user_id)
+    if identifier_text.isdigit():
+        query = query.filter(Client.id == int(identifier_text))
+    else:
+        query = query.filter(Client.public_id == identifier_text)
+    client = query.first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found.")
+    return client
+
+
+def ensure_client_active(client: Client) -> None:
+    """Reject mutations against an archived client until it is restored."""
+    if client.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CLIENT_ARCHIVED",
+                "message": "Restore this client before making changes.",
+                "clientId": client.public_id,
+            },
+        )
+
+
+def client_years(client_id: int, db: Session) -> List[ClientYearResponse]:
+    """Return persisted assessment years for a client, newest first."""
+    itrs = (
+        db.query(ClientITR)
+        .filter(ClientITR.client_id == client_id)
+        .order_by(ClientITR.year.desc())
+        .all()
+    )
+    return [
+        ClientYearResponse(year=itr.year, itrType=itr.itr_type, status=itr.status)
+        for itr in itrs
+    ]
+
+
+def serialize_client(client: Client, db: Session, years: Optional[List[ClientYearResponse]] = None) -> ClientResponse:
+    """Build the public client response without exposing portal credentials."""
+    return ClientResponse(
+        id=client.id,
+        publicId=client.public_id,
+        pan=client.pan,
+        name=client.name,
+        firstName=client.first_name,
+        middleName=client.middle_name,
+        surname=client.surname,
+        email=client.email,
+        mobile=client.mobile,
+        aadhaar=client.aadhaar,
+        dob=client.dob,
+        archived=client.archived_at is not None,
+        archivedAt=client.archived_at,
+        years=client_years(client.id, db) if years is None else years,
+        createdAt=client.created_at,
+        updatedAt=client.updated_at,
+    )
 
 def parse_pan(pan: str):
     pan = pan.strip().upper()
@@ -51,10 +116,13 @@ def list_clients(
     search: Optional[str] = None,
     assessmentYear: Optional[str] = None,
     status_filter: Optional[str] = None,
+    include_archived: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(Client).filter(Client.user_id == current_user.id)
+    if not include_archived:
+        query = query.filter(Client.archived_at.is_(None))
     if search:
         query = query.filter(
             (Client.name.ilike(f"%{search}%")) | (Client.pan.ilike(f"%{search}%"))
@@ -89,20 +157,7 @@ def list_clients(
             # Default fallback for list view
             years_list.append(ClientYearResponse(year="2026-27", itrType="ITR-1", status="Not Started"))
 
-        response.append(
-            ClientResponse(
-                id=client.id,
-                pan=client.pan,
-                name=client.name,
-                email=client.email,
-                mobile=client.mobile,
-                aadhaar=client.aadhaar,
-                dob=client.dob,
-                years=years_list,
-                createdAt=client.created_at,
-                updatedAt=client.updated_at
-            )
-        )
+        response.append(serialize_client(client, db, years_list))
     return response
 
 @router.post("", response_model=ClientResponse)
@@ -111,12 +166,24 @@ def create_client(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # Check if client with PAN already exists for this user
-    existing = db.query(Client).filter(Client.user_id == current_user.id, Client.pan == payload.pan).first()
+    # Preserve archived clients and their historical returns. Re-creation must
+    # restore the original stable identity instead of allocating a new client.
+    existing = (
+        db.query(Client)
+        .filter(Client.user_id == current_user.id, Client.pan == payload.pan)
+        .first()
+    )
     if existing:
+        code = "CLIENT_ARCHIVED" if existing.archived_at is not None else "CLIENT_ALREADY_EXISTS"
         raise HTTPException(
-            status_code=400,
-            detail=f"Client with PAN {payload.pan} already exists."
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": code,
+                "message": "An archived client with this PAN can be restored."
+                if existing.archived_at is not None
+                else "A client with this PAN already exists.",
+                "clientId": existing.public_id,
+            },
         )
     encrypted_pw = None
     if payload.portal_password:
@@ -126,6 +193,9 @@ def create_client(
         user_id=current_user.id,
         pan=payload.pan.upper(),
         name=payload.name,
+        first_name=payload.firstName,
+        middle_name=payload.middleName,
+        surname=payload.surname,
         email=payload.email,
         mobile=payload.mobile,
         aadhaar=payload.aadhaar,
@@ -133,86 +203,67 @@ def create_client(
         portal_password=encrypted_pw,
     )
     db.add(client)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "CLIENT_ALREADY_EXISTS", "message": "A client with this PAN already exists."},
+        ) from exc
     db.refresh(client)
-    
-    # Auto-create a default ClientITR row for 2026-27
-    default_itr = ClientITR(
-        client_id=client.id,
-        year="2026-27",
-        itr_type="ITR-1",
-        status="Not Started",
-        form_data="{}",
-        computed_result="{}"
-    )
-    db.add(default_itr)
-    db.commit()
-    
-    years_list = [ClientYearResponse(year="2026-27", itrType="ITR-1", status="Not Started")]
-    
-    return ClientResponse(
-        id=client.id,
-        pan=client.pan,
-        name=client.name,
-        email=client.email,
-        mobile=client.mobile,
-        aadhaar=client.aadhaar,
-        dob=client.dob,
-        years=years_list,
-        createdAt=client.created_at,
-        updatedAt=client.updated_at
-    )
+
+    # Assessment-year workspaces are created only when the user starts a return.
+    years_list: List[ClientYearResponse] = []
+    return serialize_client(client, db, years_list)
 
 @router.get("/{client_id}", response_model=ClientResponse)
 def get_client(
-    client_id: int,
+    client_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    client = db.query(Client).filter(Client.id == client_id, Client.user_id == current_user.id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
-        
-    itrs = db.query(ClientITR).filter(ClientITR.client_id == client.id).order_by(ClientITR.year.desc()).all()
-    years_list = [
-        ClientYearResponse(
-            year=itr.year,
-            itrType=itr.itr_type,
-            status=itr.status
-        )
-        for itr in itrs
-    ]
-    if not years_list:
-        years_list.append(ClientYearResponse(year="2026-27", itrType="ITR-1", status="Not Started"))
-
-    return ClientResponse(
-        id=client.id,
-        pan=client.pan,
-        name=client.name,
-        email=client.email,
-        mobile=client.mobile,
-        aadhaar=client.aadhaar,
-        dob=client.dob,
-        years=years_list,
-        createdAt=client.created_at,
-        updatedAt=client.updated_at
-    )
+    client = resolve_owned_client(client_id, current_user.id, db)
+    return serialize_client(client, db)
 
 @router.put("/{client_id}", response_model=ClientResponse)
 def update_client(
-    client_id: int,
+    client_id: str,
     payload: ClientUpdate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    client = db.query(Client).filter(Client.id == client_id, Client.user_id == current_user.id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
-        
-    if payload.pan is not None:
-        client.pan = payload.pan.upper()
+    client = resolve_owned_client(client_id, current_user.id, db)
+    ensure_client_active(client)
+
+    if payload.pan is not None and payload.pan != client.pan:
+        duplicate = (
+            db.query(Client)
+            .filter(
+                Client.user_id == current_user.id,
+                Client.pan == payload.pan,
+                Client.id != client.id,
+            )
+            .first()
+        )
+        if duplicate:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "PAN_ASSIGNED_TO_ANOTHER_CLIENT",
+                    "message": "This PAN is already assigned to another client.",
+                    "clientId": duplicate.public_id,
+                },
+            )
+        client.pan = payload.pan
     if payload.name is not None:
         client.name = payload.name
+    if payload.firstName is not None:
+        client.first_name = payload.firstName
+    if payload.middleName is not None:
+        client.middle_name = payload.middleName
+    if payload.surname is not None:
+        client.surname = payload.surname
     if payload.email is not None:
         client.email = payload.email
     if payload.mobile is not None:
@@ -224,78 +275,73 @@ def update_client(
     if payload.portal_password is not None:
         client.portal_password = encrypt_portal_password(payload.portal_password) if payload.portal_password else None
         
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "CLIENT_ALREADY_EXISTS", "message": "A client with this PAN already exists."},
+        ) from exc
     db.refresh(client)
-    
-    itrs = db.query(ClientITR).filter(ClientITR.client_id == client.id).order_by(ClientITR.year.desc()).all()
-    years_list = [
-        ClientYearResponse(
-            year=itr.year,
-            itrType=itr.itr_type,
-            status=itr.status
-        )
-        for itr in itrs
-    ]
-    if not years_list:
-        years_list.append(ClientYearResponse(year="2026-27", itrType="ITR-1", status="Not Started"))
-
-    return ClientResponse(
-        id=client.id,
-        pan=client.pan,
-        name=client.name,
-        email=client.email,
-        mobile=client.mobile,
-        aadhaar=client.aadhaar,
-        dob=client.dob,
-        years=years_list,
-        createdAt=client.created_at,
-        updatedAt=client.updated_at
-    )
+    return serialize_client(client, db)
 
 @router.delete("/{client_id}")
 def delete_client(
-    client_id: int,
+    client_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    client = db.query(Client).filter(Client.id == client_id, Client.user_id == current_user.id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
-    db.delete(client)
-    db.commit()
-    return {"message": "Client deleted successfully."}
+    """Archive a client while preserving every historical return."""
+    client = resolve_owned_client(client_id, current_user.id, db)
+    if client.archived_at is None:
+        client.archived_at = datetime.datetime.now(datetime.timezone.utc)
+        db.commit()
+    return {"message": "Client archived successfully.", "clientId": client.public_id}
+
+
+@router.post("/{client_id}/restore", response_model=ClientResponse)
+def restore_client(
+    client_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Restore an archived client under the same stable identity."""
+    client = resolve_owned_client(client_id, current_user.id, db)
+    if client.archived_at is not None:
+        client.archived_at = None
+        db.commit()
+        db.refresh(client)
+    return serialize_client(client, db)
 
 @router.get("/{client_id}/years")
 def get_client_years(
-    client_id: int,
+    client_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    client = db.query(Client).filter(Client.id == client_id, Client.user_id == current_user.id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
+    client = resolve_owned_client(client_id, current_user.id, db)
         
     itrs = db.query(ClientITR).filter(ClientITR.client_id == client.id).order_by(ClientITR.year.desc()).all()
     return [itr.year for itr in itrs] or ["2026-27"]
 
 @router.get("/{client_id}/pan-analysis")
 def get_client_pan_analysis(
-    client_id: int,
+    client_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    client = db.query(Client).filter(Client.id == client_id, Client.user_id == current_user.id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found.")
+    client = resolve_owned_client(client_id, current_user.id, db)
     return parse_pan(client.pan)
 
 @router.post("/{client_id}/itr-classification")
 def classify_itr(
-    client_id: int,
+    client_id: str,
     income_profile: dict,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    resolve_owned_client(client_id, current_user.id, db)
     # Recommended ITR logic
     # If business income/professional income present -> ITR-4, else ITR-1
     has_business = income_profile.get("hasBusinessIncome", False) or income_profile.get("eligibleFor44AD", False)
@@ -313,13 +359,20 @@ def classify_itr(
         "classificationReason": reason
     }
 
-def get_decrypted_portal_password(client_id: int, db: Session) -> Optional[str]:
-    """
-    Retrieve and decrypt the portal password for a given client ID.
+def get_decrypted_portal_password(client_identifier: str | int, db: Session) -> Optional[str]:
+    """Retrieve and decrypt a client's stored portal password.
 
-    This is an internal helper for the automation module and is not exposed.
+    Args:
+        client_identifier: Client public ID or legacy numeric database ID.
+        db: Active SQLAlchemy database session.
+
+    Returns:
+        The decrypted password when present; otherwise ``None``.
     """
-    client = db.query(Client).filter(Client.id == client_id).first()
+    identifier = str(client_identifier)
+    client = db.query(Client).filter(Client.public_id == identifier).first()
+    if client is None and identifier.isdigit():
+        client = db.query(Client).filter(Client.id == int(identifier)).first()
     if not client or not client.portal_password:
         return None
     return decrypt_portal_password(client.portal_password)

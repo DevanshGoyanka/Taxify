@@ -1,66 +1,283 @@
-import re
 import asyncio
-from playwright.async_api import Page, BrowserContext
+from collections.abc import Callable, Sequence
+
+from playwright.async_api import BrowserContext, Locator, Page
+
 from app.automation.downloader import update_browser_status
+from app.automation.timing import AutomationTimeline
 
 
-async def _dump_inputs(page: Page, log):
-    """Log every visible input/button on page for post-failure diagnosis."""
+LogCallback = Callable[[str], None]
+
+
+def _authentication_error(body_text: str, url: str = "") -> RuntimeError | None:
+    """Classify terminal authentication states from portal text and URL.
+
+    Args:
+        body_text: Visible portal text. It must not be logged by this helper.
+        url: Current portal URL used only to detect an OTP route.
+
+    Returns:
+        A safe RuntimeError for a terminal state, otherwise ``None``.
+    """
+    text = body_text.lower()
+    lowered_url = url.lower()
+    if "account has been locked" in text or (
+        "e-filing account" in text and "locked" in text
+    ):
+        return RuntimeError(
+            "ACCOUNT LOCKED: This e-filing account has been locked due to security reasons. "
+            "The client must unlock their account at the ITD portal before it can be automated."
+        )
+    if "pan does not exist" in text or "pan is not registered" in text:
+        return RuntimeError(
+            "AUTHENTICATION FAILED: PAN does not exist on the ITD portal. "
+            "Please verify the PAN is correct and registered at eportal.incometax.gov.in."
+        )
+    if "otpoptions" in lowered_url or any(
+        marker in text
+        for marker in (
+            "enter otp",
+            "otp has been sent",
+            "one time password",
+            "captcha",
+            "verify you are human",
+        )
+    ):
+        return RuntimeError(
+            "AUTHENTICATION FAILED: The ITD portal requires OTP or human verification. "
+            "Automated login cannot continue; log in manually or update the portal settings."
+        )
+    return None
+
+
+async def _dump_inputs(page: Page, log: LogCallback) -> None:
+    """Log value-free control metadata after a terminal login failure.
+
+    Args:
+        page: Failed Playwright login page.
+        log: Credential-safe logging callback.
+    """
     try:
         info = await page.evaluate("""() => {
             const out = [];
             for (const el of document.querySelectorAll('input, button, a, [role="button"]')) {
                 const r = el.getBoundingClientRect();
                 if (r.width === 0 && r.height === 0) continue;
+                const isInput = el.tagName.toLowerCase() === 'input';
                 out.push({
                     tag: el.tagName.toLowerCase(),
                     type: el.getAttribute('type') || '',
                     id: el.id || '',
                     placeholder: el.getAttribute('placeholder') || '',
-                    text: (el.innerText || el.value || '').trim().replace(/\\s+/g,' ').slice(0,60),
+                    text: isInput
+                        ? ''
+                        : (el.innerText || '').trim().replace(/\\s+/g,' ').slice(0,60),
                 });
             }
-            return { url: location.href, controls: out };
+            return { controls: out };
         }""")
-        log("[Auth] --- Page diagnostics ---")
-        log(f"[Auth] URL: {info['url']}")
-        for c in info.get("controls", []):
-            log(f"[Auth]   {c}")
+        log("[Auth] --- Page diagnostics (values omitted) ---")
+        for control in info.get("controls", []):
+            log(f"[Auth]   {control}")
         log("[Auth] --- End diagnostics ---")
-    except Exception as e:
-        log(f"[Auth] dumpInputs failed: {e}")
+    except Exception as exc:
+        log(f"[Auth] diagnostics unavailable: {type(exc).__name__}")
 
 
-async def _click_btn(page: Page, log, timeout=5000) -> bool:
-    """Click the first enabled Continue / Submit button. Returns True if clicked."""
-    for sel in (
+async def _first_visible(
+    page: Page,
+    selectors: Sequence[str],
+    timeout: int,
+    poll_interval: float = 0.05,
+) -> Locator | None:
+    """Return the first visible locator under one shared elapsed deadline.
+
+    Args:
+        page: Playwright page containing candidate controls.
+        selectors: Alternative selectors representing the same semantic control.
+        timeout: Total timeout in milliseconds across all selectors.
+        poll_interval: Delay between non-blocking scans in seconds.
+
+    Returns:
+        The first visible locator, or ``None`` when the shared deadline expires.
+    """
+    if timeout <= 0 or not selectors:
+        return None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + (timeout / 1000)
+    while True:
+        for selector in selectors:
+            candidates = page.locator(selector)
+            try:
+                count = await candidates.count()
+            except Exception:
+                continue
+            for index in range(count):
+                locator = candidates.nth(index)
+                try:
+                    if (
+                        await locator.is_visible(timeout=0)
+                        and await locator.is_enabled(timeout=0)
+                    ):
+                        return locator
+                except Exception:
+                    continue
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return None
+        await asyncio.sleep(min(poll_interval, remaining))
+
+
+async def _click_btn(
+    page: Page,
+    log: LogCallback,
+    timeout: int = 5000,
+    selectors: Sequence[str] = (
         "button:has-text('Continue')",
         "button[type='submit']",
-    ):
+    ),
+) -> bool:
+    """Click the first enabled semantic button under one shared deadline.
+
+    Args:
+        page: Playwright page containing the button.
+        log: Credential-safe logging callback.
+        timeout: Total timeout in milliseconds across all alternatives.
+        selectors: Alternative selectors for the same semantic action.
+
+    Returns:
+        ``True`` if a button was clicked, otherwise ``False``.
+    """
+    button = await _first_visible(page, selectors, timeout)
+    if button is None:
+        return False
+    log("[Auth] Clicking portal Continue control.")
+    try:
+        # Wait for the button to be stable and enabled before clicking.
+        # Angular's form-submit button is disabled until the form is valid
+        # and touched; clicking too early can fire before the CSRF interceptor
+        # is ready, causing "Request is not authenticated" on the first submit.
         try:
-            btn = page.locator(sel).first
-            if await btn.is_visible(timeout=timeout):
-                log(f"[Auth]   clicking: {sel}")
-                await btn.click(timeout=timeout)
-                return True
+            await button.wait_for(state="stable", timeout=min(2000, timeout))
         except Exception:
             pass
-    return False
+        await button.click(timeout=max(1, timeout))
+        return True
+    except Exception:
+        return False
+
+
+async def _advance_from_sam(
+    page: Page,
+    log: LogCallback,
+    timeout: int = 15000,
+    poll_interval: float = 0.05,
+) -> str:
+    """Advance from SAM without waiting after the next stage is already ready.
+
+    The ITD portal varies between requiring a Continue click and advancing
+    automatically after the SAM checkbox is selected. This helper races the
+    next-stage controls against an actionable Continue button under one shared
+    deadline.
+
+    Args:
+        page: Playwright page on the SAM step.
+        log: Credential-safe logging callback.
+        timeout: Total elapsed deadline in milliseconds.
+        poll_interval: Delay between non-blocking scans in seconds.
+
+    Returns:
+        ``"next-stage"`` when password/method controls are ready,
+        ``"clicked"`` when Continue was clicked, or ``"timeout"``.
+    """
+    if timeout <= 0:
+        return "timeout"
+    next_stage_selectors = (
+        "id=loginPasswordField",
+        "xpath=//label[contains(normalize-space(.), 'Password') and not(contains(normalize-space(.), 'OTP'))]",
+        "input[type='radio']#mat-radio-0-input",
+        "input[type='radio']:first-of-type",
+    )
+    continue_selectors = (
+        "button:has-text('Continue')",
+        "button[type='submit']",
+    )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + (timeout / 1000)
+
+    while True:
+        next_stage = await _first_visible(
+            page,
+            next_stage_selectors,
+            timeout=1,
+            poll_interval=0,
+        )
+        if next_stage is not None:
+            return "next-stage"
+
+        continue_button = await _first_visible(
+            page,
+            continue_selectors,
+            timeout=1,
+            poll_interval=0,
+        )
+        if continue_button is not None:
+            log("[Auth] Clicking SAM Continue control.")
+            try:
+                await continue_button.click(timeout=2000)
+                return "clicked"
+            except Exception:
+                pass
+
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return "timeout"
+        await asyncio.sleep(min(poll_interval, remaining))
 
 
 # ── Main login function ───────────────────────────────────────────────────────
 
-async def login_itd(user_id: str, password: str, log_callback, context: BrowserContext,
-                    is_running=None) -> Page:
-    uid_masked = (user_id[:3] + "XXXXXXX") if user_id and len(user_id) >= 3 else "UNKNOWN"
+async def login_itd(
+    user_id: str,
+    password: str,
+    log_callback: LogCallback,
+    context: BrowserContext,
+    is_running: Callable[[], bool] | None = None,
+    timeline: AutomationTimeline | None = None,
+) -> Page:
+    """Log in to ITD using the proven PAN, SAM, password sequence.
 
+    Args:
+        user_id: Taxpayer PAN used as the ITD user ID.
+        password: ITD portal password. It is never logged.
+        log_callback: Credential-safe progress logger.
+        context: Isolated Playwright browser context.
+        is_running: Optional cancellation predicate.
+        timeline: Optional monotonic workflow timeline.
+
+    Returns:
+        Authenticated ITD dashboard page.
+    """
+    uid_masked = (user_id[:3] + "XXXXXXX") if user_id and len(user_id) >= 3 else "UNKNOWN"
+    auth_timeline = timeline or AutomationTimeline(log_callback)
+
+    auth_timeline.mark("login page requested")
     log_callback("[Auth] Opening new page for ITD login...")
     page = await context.new_page()
     await update_browser_status(page, "Auth: Connecting to ITD Portal...")
     page.on("dialog", lambda d: asyncio.create_task(d.dismiss()))
 
     try:
-        return await _do_login(page, user_id, uid_masked, password, log_callback, is_running)
+        return await _do_login(
+            page,
+            user_id,
+            uid_masked,
+            password,
+            log_callback,
+            is_running,
+            auth_timeline,
+        )
     except Exception:
         # Close the orphaned login page so failed clients don't leak tabs.
         try:
@@ -70,13 +287,24 @@ async def login_itd(user_id: str, password: str, log_callback, context: BrowserC
         raise
 
 
-async def _do_login(page, user_id, uid_masked, password, log_callback, is_running=None):
+async def _do_login(
+    page: Page,
+    user_id: str,
+    uid_masked: str,
+    password: str,
+    log_callback: LogCallback,
+    is_running: Callable[[], bool] | None = None,
+    timeline: AutomationTimeline | None = None,
+) -> Page:
+    """Execute the established ITD login sequence on an existing page."""
+    auth_timeline = timeline or AutomationTimeline(log_callback)
 
     _ITD_LOGIN = "https://eportal.incometax.gov.in/iec/foservices/#/login"
     for _nav_attempt in range(1, 4):
         try:
             log_callback(f"[Auth] Loading ITD Portal{f' (retry {_nav_attempt})' if _nav_attempt > 1 else ''}...")
             await page.goto(_ITD_LOGIN, wait_until="domcontentloaded", timeout=90000)
+            auth_timeline.mark("login page ready")
             break
         except Exception as _nav_err:
             err_str = str(_nav_err)
@@ -119,6 +347,7 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
     await update_browser_status(page, f"Auth: Entering User ID ({uid_masked})...")
 
     await page.fill("id=panAdhaarUserId", user_id)
+    auth_timeline.mark("PAN submitted")
     await asyncio.sleep(0.5)
 
     # ── Step 2: Click Continue after PAN ─────────────────────────────────────
@@ -129,14 +358,9 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
     await asyncio.sleep(1)
     try:
         page_text = (await page.inner_text("body")).lower()
-        if "account has been locked" in page_text or "e-filing account" in page_text and "locked" in page_text:
-            raise RuntimeError(
-                "ACCOUNT LOCKED: This e-filing account has been locked due to security reasons. "
-                "The client must unlock their account at the ITD portal before it can be automated.")
-        if "pan does not exist" in page_text or "pan is not registered" in page_text:
-            raise RuntimeError(
-                "AUTHENTICATION FAILED: PAN does not exist on the ITD portal. "
-                "Please verify the PAN is correct and registered at eportal.incometax.gov.in.")
+        terminal_error = _authentication_error(page_text, page.url)
+        if terminal_error is not None:
+            raise terminal_error
     except RuntimeError:
         raise
     except Exception:
@@ -159,14 +383,9 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
         # Fast-fail if locked account or invalid PAN error appears during the wait
         try:
             page_text = (await page.inner_text("body")).lower()
-            if "account has been locked" in page_text or ("e-filing account" in page_text and "locked" in page_text):
-                raise RuntimeError(
-                    "ACCOUNT LOCKED: This e-filing account has been locked due to security reasons. "
-                    "The client must unlock their account at the ITD portal before it can be automated.")
-            if "pan does not exist" in page_text or "pan is not registered" in page_text:
-                raise RuntimeError(
-                    "AUTHENTICATION FAILED: PAN does not exist on the ITD portal. "
-                    "Please verify the PAN is correct and registered at eportal.incometax.gov.in.")
+            terminal_error = _authentication_error(page_text, page.url)
+            if terminal_error is not None:
+                raise terminal_error
         except RuntimeError:
             raise
         except Exception:
@@ -205,6 +424,7 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
         raise RuntimeError("SAM page (Step 2) did not appear after PAN entry.")
 
     log_callback("[Auth] SAM page ready — ticking checkbox...")
+    auth_timeline.mark("SAM ready")
     try:
         await page.check("id=passwordCheckBox-input", force=True)
     except Exception:
@@ -213,32 +433,41 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
             if (cb && !cb.checked) cb.click();
         }""")
 
-    # ── Step 4: Select Password login method ─────────────────────────────────
-    log_callback("[Auth] Clicking Continue on SAM page...")
-    await _click_btn(page, log_callback, timeout=15000)
+    # ── Step 4: Advance to Password login method ──────────────────────────────
+    log_callback("[Auth] Advancing from SAM page...")
+    sam_advance = await _advance_from_sam(page, log_callback, timeout=15000)
+    if sam_advance == "timeout":
+        await _dump_inputs(page, log_callback)
+        raise RuntimeError("ITD portal did not advance beyond the SAM page.")
 
-    # After SAM Continue the portal may show a method-selection page
+    # After SAM the portal may show a method-selection page
     # (#/login/otpOptions) with Password and OTP radios, OR may skip straight
     # to the password field. Wait briefly to see which page we land on.
     log_callback("[Auth] Waiting for method selection or password field...")
     await update_browser_status(page, "Auth: Selecting login method...")
 
-    _method_selected = False
-    for _sel in (
-        # Angular Material radio label — portal renders "Password" as label text
+    method_selectors = (
         "xpath=//label[contains(normalize-space(.), 'Password') and not(contains(normalize-space(.), 'OTP'))]",
-        # Fallback: first mat-radio input (Password is always radio 0)
         "input[type='radio']#mat-radio-0-input",
         "input[type='radio']:first-of-type",
-    ):
+    )
+    password_field = page.locator("id=loginPasswordField").first
+    try:
+        password_already_visible = await password_field.is_visible(timeout=0)
+    except Exception:
+        password_already_visible = False
+    method_control = (
+        None
+        if password_already_visible
+        else await _first_visible(page, method_selectors, timeout=4000)
+    )
+    _method_selected = method_control is not None
+    if method_control is not None:
         try:
-            await page.wait_for_selector(_sel, state="visible", timeout=4000)
-            await page.locator(_sel).first.click(force=True)
-            log_callback(f"[Auth] Password method selected via: {_sel}")
-            _method_selected = True
-            break
+            await method_control.click(force=True)
+            log_callback("[Auth] Password login method selected.")
         except Exception:
-            pass
+            _method_selected = False
 
     if _method_selected:
         # Method selection page needs its own Continue click
@@ -258,13 +487,33 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
         raise RuntimeError("Password field did not appear after selecting login method.")
 
     log_callback("[Auth] Entering password...")
-    await page.fill("id=loginPasswordField", password)
+    # IMPORTANT: page.fill() sets the DOM .value directly and does NOT trigger
+    # Angular's reactive-form change detection. If we click Continue in the
+    # same instant, Angular has not yet bound the password to its form model,
+    # so the backend receives an empty/invalid credential payload and rejects
+    # with "Request is not authenticated". That rejection triggers the retry,
+    # which hits the Max-attempts popup and places the session in a restricted
+    # state where filing is disabled. Use press_sequentially (real per-key
+    # events), then press Tab to blur the field — this triggers Angular's
+    # form validation, marks the control as touched/dirty, and ensures the
+    # ngSubmit handler (with CSRF interceptor) is ready before we click.
+    password_input = page.locator("id=loginPasswordField").first
+    try:
+        await password_input.click(timeout=2000)
+    except Exception:
+        pass
+    await password_input.press_sequentially(password, delay=30)
+    # Blur the field to trigger Angular's reactive-form validation chain
+    try:
+        await password_input.press("Tab")
+    except Exception:
+        pass
+    await asyncio.sleep(0.5)
+    auth_timeline.mark("password submitted")
 
-    # Guard: if portal already navigated to OTP page before password submit
-    if "otpOptions" in page.url or "otpoptions" in page.url.lower():
-        raise RuntimeError(
-            "AUTHENTICATION FAILED: This account has 2FA (OTP) enabled on the ITD portal. "
-            "Automated login is not possible. The client must disable 2FA or log in manually.")
+    terminal_error = _authentication_error("", page.url)
+    if terminal_error is not None:
+        raise terminal_error
 
     # ── Step 6: Submit with up to 4 attempts ─────────────────────────────────
     log_callback("[Auth] Submitting credentials...")
@@ -275,13 +524,24 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
             log_callback(f"[Auth] Submit attempt {attempt}/4...")
             await asyncio.sleep(3)
 
-        clicked = await _click_btn(page, log_callback, timeout=10000)
-        if not clicked:
-            log_callback("[Auth] Continue not found — pressing Enter")
-            try:
-                await page.locator("id=loginPasswordField").first.press("Enter")
-            except Exception:
-                pass
+        # Submit via Enter on the password field to fire Angular's ngSubmit
+        # handler (which includes the CSRF interceptor). A button click does
+        # not reliably trigger ngSubmit on Angular reactive forms — it can
+        # fire before the form is in a valid/touched state, causing the
+        # backend to reject with "Request is not authenticated".
+        log_callback("[Auth] Submitting via Enter on password field.")
+        try:
+            await page.locator("id=loginPasswordField").first.press("Enter")
+        except Exception:
+            # Fallback: click the Continue/Submit button if Enter fails
+            log_callback("[Auth] Enter failed — clicking Continue button.")
+            clicked = await _click_btn(page, log_callback, timeout=10000)
+            if not clicked:
+                log_callback("[Auth] Continue not found — pressing Enter again")
+                try:
+                    await page.locator("id=loginPasswordField").first.press("Enter")
+                except Exception:
+                    pass
 
         # Wait up to 7.5s for URL change or known error
         for _ in range(15):
@@ -290,11 +550,9 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
             if "dashboard" in page.url.lower():
                 return True
 
-            # 2FA OTP page — portal is requiring OTP after password (2FA enabled on account)
-            if "otpOptions" in page.url or "otpoptions" in page.url.lower():
-                raise RuntimeError(
-                    "AUTHENTICATION FAILED: This account has 2FA (OTP) enabled on the ITD portal. "
-                    "Automated login is not possible. The client must disable 2FA or log in manually.")
+            terminal_error = _authentication_error("", page.url)
+            if terminal_error is not None:
+                raise terminal_error
 
             # loginMaxAttemptsPopup — too many attempts; click "Login Here"
             try:
@@ -307,11 +565,14 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
                     try:
                         await page.wait_for_url(
                             lambda u: "dashboard" in u.lower(), timeout=10000)
-                        # ITD throttles the session after a max-attempts popup — the 
+                        # ITD throttles the session after a max-attempts popup — the
                         # Angular router may silently drop navigation events for a few
-                        # seconds. Wait for the portal to fully recover before returning.
+                        # seconds, and crucially the portal can place the session in
+                        # a restricted state where filing actions are disabled
+                        # (class="disabledRoute"). Wait long enough for the portal
+                        # to fully restore session privileges before returning.
                         log_callback("[Auth] Rate-limit recovered — waiting for session to stabilise...")
-                        await asyncio.sleep(6)
+                        await asyncio.sleep(12)
                         return True
                     except Exception:
                         return False
@@ -387,13 +648,27 @@ async def _do_login(page, user_id, uid_masked, password, log_callback, is_runnin
         log_callback("[Auth] Waiting extra time for nav menu to render...")
         await asyncio.sleep(8)
 
-    log_callback(f"[Auth] Dashboard ready: {page.url}")
+    auth_timeline.mark("dashboard ready")
+    log_callback("[Auth] Dashboard ready.")
     return page
 
 
 # ── Logout ────────────────────────────────────────────────────────────────────
 
-async def logout_itd(page: Page, log_callback):
+async def logout_itd(
+    page: Page,
+    log_callback: LogCallback,
+    timeline: AutomationTimeline | None = None,
+) -> None:
+    """Log out from ITD and close the owned page.
+
+    Args:
+        page: Authenticated ITD page owned by this workflow.
+        log_callback: Credential-safe progress logger.
+        timeline: Optional monotonic workflow timeline.
+    """
+    auth_timeline = timeline or AutomationTimeline(log_callback)
+    auth_timeline.mark("logout started")
     try:
         log_callback("[Auth] Initiating logout...")
         await update_browser_status(page, "Auth: Logging out...")
@@ -460,6 +735,7 @@ async def logout_itd(page: Page, log_callback):
     except Exception as e:
         log_callback(f"[Auth] Logout warning: {e}")
     finally:
+        auth_timeline.mark("logout completed")
         try:
             await page.close()
         except Exception:

@@ -1,0 +1,533 @@
+                  Application Programming Interface Specifications
+
+                       Integrated e-filing and CPC 2.0 Project
+
+
+
+
+API Name                          getPrefill
+
+API Description                   API used to get Prefill data
+Version History
+
+Version        Date                         Description
+1.0       29-10-2021   Initial Draft
+1.1       17-11-2021   Exception scenarios added
+Table of Contents
+1.      Overview......................................................................................................................... 4
+2.      About API ....................................................................................................................... 4
+3.      Target Audience and Pre-requisites................................................................................... 4
+4.      RequestPrefillOTP API Details......................................................................................... 5
+     4.1 API Usage Scenario ....................................................................................................... 5
+     4.2 API Request process....................................................................................................... 5
+     4.3 API Protocol .................................................................................................................. 5
+        4.3.1 Request Header: ...................................................................................................... 6
+        4.3.2 Request Body: ......................................................................................................... 6
+        4.3.3 Details of data attribute:........................................................................................... 6
+     4.4 Response Parameters ...................................................................................................... 7
+     4.5 requestPrefillOTP API - Sample Request format ............................................................. 8
+     4.6 requestPrefillOTP API - Sample Response format........................................................... 8
+5.      getPrefill API Details ....................................................................................................... 8
+     5.1 API Usage Scenario ....................................................................................................... 8
+     5.2 API Request process....................................................................................................... 9
+     5.3 API Protocol .................................................................................................................. 9
+        5.3.1 Request Header: ...................................................................................................... 9
+        5.3.2 Request Body: ......................................................................................................... 9
+        5.3.3 Details of data attribute:......................................................................................... 10
+     5.4 Response Parameters .................................................................................................... 11
+     5.5 getPrefill API - Sample Request format ........................................................................ 12
+     5.6 getPrefill API - Sample Response format ...................................................................... 12
+6.      API Exception Details .................................................................................................... 13
+1.Overview
+As noted in the ERI Specification Overview document the interaction during the initiation phase
+involves fetching the prefill information for the taxpayer. This document describes the API
+specification for the same.
+Note: The requests for get prefill data will be tracked and measured for this API response will be
+applicable to block and legal action.
+
+
+Initiation Phase
+
+
+
+
+2.About API
+Requester          Type-2 or Type-3 ERI
+Provider           ItrWeb
+                   These APIs shall be used to fetch prefill data for the taxpayer.
+                   There will be two calls to get Prefill data. One is to request for the prefill data
+Description
+                   where OTP will be sent to taxpayer and second call is to get prefill data after
+                   providing OTP value by the taxpayer.
+Mode of
+Integration
+                   Real Time
+(Real time /
+Batch)
+Processing         Fetches the prefill data as per the schema published in the income tax portal
+Details            ERI can fetch prefill data only for current assessment year 2021
+Pre-Processing
+               User should have established a session using the Login API specifications.
+Details
+                   requestPrefillOTP
+Service Name
+                   getPrefill
+API URL            TBD
+
+
+
+
+3.Target Audience and Pre-requisites
+This is technical document and is target to ERIs working in their application and interested to
+integrate their application with IEC 2.0 platform.
+The pre-requisites to call this API is that ERI is already registered with IEC 2.0 platform. They
+have valid credentials to call the API.
+
+
+4.RequestPrefillOTP API Details
+This service is used by ERI to request for getPrefill of taxpayer. This API will submit the request
+from ERI and send OTP to taxpayer to get consent. The ERI can get prefill data for taxpayer
+only when the consent is given by the taxpayer by entering OTP. Request for prefill can be
+performed only when taxpayer is already added as its client.
+
+4.1 API Usage Scenario
+This API is called taxpayer is already registered to eFiling system and he/she is already added as
+client of ERI. Where ERI wants to submit a request to get prefill data from the eFiling system for
+their client.
+When ERI submits request to get prefill for their client, there are two high level activities are
+performed:
+
+   1. Client (taxpayer) will get OTP on her/his mobile and email address. OTP will be sent
+      from eFiling system to primary mobile number and primary email address of the taxpayer
+      or Aadhaar OTP will be sent depending upon the option provided in API request.
+   2. ERI application requests the taxpayer to provide the OTP in their application. This OTP
+      value should be used to get the taxpayer's consent and pass in getPrefill API request.
+
+Above two steps are two disconnected API calls and OTP value sent from using
+requestPrefillOTP API which is step 1 above is then used as part of the getPrefill API to get the
+taxpayer's consent and get the prefill data.
+
+4.2 API Request process
+ERI application must have already establish the login session and auth token with eFiling system
+using the login API. Application will initiate requestPrefillOTP request as below:
+
+   1. ERI application will capture the taxpayer's details as explained as part of the request
+      attribute details.
+   2. Application will initiate request to requestPrefillOTP API to submit the request
+
+4.3 API Protocol
+requestPrefillOTP API is exposed as REST API over the HTTPS. The input data should be sent
+as JSON document using Content-Type "application/json".
+The request will consist of request header and request body:
+4.3.1 Request Header:
+
+Header is mandatory and will consists of following values:
+Mandatory Request Header Parameters:
+
+Header Name Header Value
+Content-type     application/json
+clientId         clientId value which is provided to ERI as part of the registration
+clientSecret     clientSecret value which is provided to ERI as part of the registration
+authToken        Auth token from the Login Flow
+accessMode       "API"
+
+
+
+
+4.3.2 Request Body:
+
+Request body will consist of below attributes:
+
+   1. data: data attribute will be Base64 encoded string of API request json. Details of request
+      json attributes are explained in request data element details.
+   2. sign:
+
+   •   The API request data attribute should be digitally signed for the message integrity and
+       non-repudiation purposes.
+   •   Digital signing should always be performed by the ERI from value of data attribute which
+       was generated from request json.
+   •   The signature should be generated using a valid X.509 certificate
+   •   signature value should be generated from data field using ERI's DSC private key.
+   •   ERI should share their DSC public key with ITD to validate the signature.
+
+3. eriUserId: It is mandatory and valid value is user ID of the ERI
+
+
+
+4.3.3 Details of data attribute:
+
+Below are the request parameters, which is request json used to create data attribute as
+explained above data attribute of the request body:
+
+Name of the           Data      Max       Is
+                                                          Description
+Parameter             type      length    Mandatory
+                                                    It is mandatory and valid value is
+serviceName          String    60       Yes
+                                                    "EriGetPrefill"
+                                                    Valid PAN of the taxpayer whose
+Pan                  String    10       Yes
+                                                    prefill information is sought
+                                                    Assessment year for which the prefill
+assessmentYear       String    4        Yes
+                                                    information is sought
+                                                    OTP Options user has selected for
+                                                    getting consent from the taxpayer:
+otpSourceFlag        String    1        Yes         Valid values are:
+                                                    "E" for eFiling OTP
+                                                    "A" for Aadhaar OTP
+
+
+
+
+4.4 Response Parameters
+Name of the                    Max    Is
+                Data type                       Description
+Parameter                      length Mandatory
+                                                 List of information messages. There can
+                                                 be one or more messages. The messages
+                                                 array will be null if there are no messages.
+messages        List<String>          Yes
+                                                 ["messages": []
+
+                                                 This is an array which has 4 sub
+                                                 parameters – code, type, desc, fieldName
+                                                 Error/message code depending on
+code            String         7      yes
+                                                 validation response
+type            String         10     yes        It describes type of message
+                                                 It describes Error/message if validation is
+desc            String         50     yes
+                                                 passed/failed
+                                                 It describes the field name, when not
+fieldName       String         50     no
+                                                 applicable null will be returned
+                                                 List of errors. The value will be null if
+errors          List<Error>           Yes
+                                                 there is no error."errors": []
+                                                 Indicates whether requestPrefillOTP call
+                                                 is successful. Possible value is true or
+successFlag     Boolean               Yes
+                                                 false.
+                                                 "successFlag": true
+transactionId String           20       Yes           Unique number generated
+                                                      http codes corresponding to response.
+                                                      Possible value is "SUBMITTED" or
+httpStatus      String         20       Yes
+                                                      "REJECTED"
+                                                      "httpStatus": "SUBMITTED"
+
+
+
+
+4.5 requestPrefillOTP API - Sample Request format
+{
+"data": "",
+"sign": "",
+"eriUserId": ""
+}
+data tag will be Base64Encoded string from following request json
+{
+"serviceName": "",
+"pan": "",
+"assessmentYear": "",
+"otpSourceFlag": ""
+}
+
+4.6 requestPrefillOTP API - Sample Response format
+{
+"messages": [],
+"errors": [],
+"successFlag": true,
+"transactionId": "1324t56",
+"httpStatus": "SUBMITTED"
+}
+
+
+
+
+5.getPrefill API Details
+This service is used by ERI to provide taxpayer's consent and get prefill for the taxpayer.
+
+5.1 API Usage Scenario
+This API is called taxpayer is already registered to eFiling system and he/she is already added as
+client of ERI. Where ERI wants to provide taxpayer's consent with OTP value and get prefill
+data from the eFiling system.
+When ERI provides OTP value from taxpayer and get prefill for them, there are two high level
+activities are performed:
+
+   1. Taxpayer will get the OTP based on the request was made to requestPrefillOTP API
+      earlier.
+   2. Taxpayer will provide the OTP values as their consent.
+   3. API will provide the prefill data based on the consent given by the taxpayer.
+
+5.2 API Request process
+ERI application must have already establish the login session and auth token with eFiling system
+using the login API. Application will initiate getPrefill request as below:
+
+   1. ERI application will capture the taxpayer's OTP values as their consent.
+   2. Application will initiate request to GetPrefill API to get prefill data for the taxpayer.
+
+5.3 API Protocol
+GetPrefill API is exposed as REST API over the HTTPS. The input data should be sent as JSON
+document using Content-Type "application/json".
+The request will consist of request header and request body:
+
+5.3.1 Request Header:
+
+Header is mandatory and will consists of following values:
+Mandatory Request Header Parameters:
+
+Header Name Header Value
+Content-type     application/json
+clientId         clientId value which is provided to ERI as part of the registration
+clientSecret     clientSecret value which is provided to ERI as part of the registration
+authToken        Auth token from the Login Flow
+accessMode       "API"
+
+
+
+
+5.3.2 Request Body:
+
+Request body will consist of below attributes:
+data: data attribute will be Base64 encoded string of API request json. Details of request json
+attributes are explained in request data element details.
+
+sign:
+
+   •    The API request data attribute should be digitally signed for the message integrity and
+        non-repudiation purposes.
+   •    Digital signing should always be performed by the ERI from value of data attribute which
+        was generated from request json.
+   •    The signature should be generated using a valid X.509 certificate
+   •    signature value should be generated from data field using ERI's DSC private key.
+   •    ERI should share their DSC public key with ITD to validate the signature.
+
+eriUserId: It is mandatory and valid value is user ID of the ERI
+
+
+
+5.3.3 Details of data attribute:
+
+Below are the request parameters, which is request json used to create data attribute as
+explained above data attribute of the request body:
+
+Name of the          Data      Max       Is
+                                                         Description
+Parameter            type      length    Mandatory
+                                                        It is mandatory and valid value is
+serviceName          String    60        Yes
+                                                        "EriGetPrefill"
+                                                        Valid PAN of the taxpayer whose prefill
+Pan                  String    10        yes
+                                                        information is sought
+                                                        Assessment year for which the prefill
+assessmentYear       String    4         yes
+                                                        information is sought
+                                                        OTP Options user has selected for
+                                                        getting consent from the taxpayer:
+otpSourceFlag        String    1         Yes            Valid values are:
+                                                        "E" for eFiling OTP
+                                                        "A" for Aadhaar OTP
+                                                        OTP value for Aadhaar OTP or mobile
+mobileOtp            String    6         Yes
+                                                        OTP value for eFiling OTP
+                                                        It is mandatory only in case
+emailOtp             String    6         No             otpSourceFlag i.e., "E". Email OTP
+                                                        value
+                                                  Transaction ID which was received from
+TransactionId      String               Yes       previous service call to
+                                                  requestPrefillOtp
+
+
+
+
+5.4 Response Parameters
+Name of the                    Max      Is
+                Data type                         Description
+Parameter                      length   Mandatory
+                                                   List of information messages. There can
+                                                   be one or more messages. The messages
+                                                   array will be null if there are no
+                                                   messages.
+messages        List<String>            Yes
+                                                   "messages": []
+
+                                                   This is an array which has 4 sub
+                                                   parameters – code, type, desc,
+                                                   fieldname
+                                                   Error/message code depending on
+code            String         7        yes
+                                                   validation response
+Type            String         10       yes        It describes type of message
+                                                   It describes Error/message if validation
+desc            String         50       yes
+                                                   is passed/failed
+                                                   It describes the field name, when not
+fieldName       String         50       no
+                                                   applicable null will be returned
+                                                   List of errors. The value will be null if
+                                                   there is no error.
+errors          List<Error>             Yes
+                                                   "errors": []
+                                                   Indicates whether GetPrefill call is
+                                                   successful. Possible value is true or
+successFlag     Boolean                 Yes
+                                                   false.
+                                                   "successFlag": true
+transactionId   String         20       Yes        Unique number generated
+                                                         Prefill data json. It will be encrypted
+                                                         which can be decrypted using the key
+                                                         shared with ERIs.
+prefill           json                     Yes
+                                                         Kindly refer to the JSON schema for
+                                                         the prefill information published on the
+                                                         income tax portal
+
+
+
+
+5.5 getPrefill API - Sample Request format
+{
+"data": "",
+"sign": "",
+"eriUserId": ""
+}
+data tag will be Base64Encoded string from following request json
+{
+"serviceName": "",
+"pan": "",
+"assessmentYear": "",
+"otpSourceFlag": "",
+"mobileOtp": "",
+"emailOtp": "",
+"transactionId": ""
+}
+
+5.6 getPrefill API - Sample Response format
+{
+
+"messages": [],
+
+"errors": [],
+
+"successFlag": true,
+
+"transactionId": "1324t56",
+
+“Prefill”:”
+kqAQF7c0wTJ3z94pAv8wQQ7eZxXSPLYkqQP8tPq2QywUz5mLvWK4k78FHW8vvL1aZ6BbbKMH3ygCJrVDLFeZX6yOvbS
+j6Jdfh8/ifo82hKg9M2yYeab5tg0vHzqDveXVsCqe7u7oLX9DZA9a4rTrMM/zM7Y98dJjhEpzvnoalWlDEBDrfuAXDuN5JwL
+SYiDkKZhiekkYY+EKOs6GHtYPrca1sL9B310Aciq0ixiEPKvt5l7czQTm4IuNLAD6TIWhuQVfe1wp5fydj9S6f1CmqIzZl319Jh4
+2SGFSpjRQ+KwqsnppTdY2/q6O8CvYt0MebwytWHadTL4RllEqENFdR1r+ScgVkMgYX/M5jMDuY6NhzNRlgRwogT5cbe/
+d2C15vwNm3WNeqmnhRgZwNnPYdoUjoN4cG6LCpfPNZ5PF829JyQSoA55Xt1XrIKVz00gDwzzCFGz7Rsf3csCAKlI0e fwt
+1lpX+NdYKHhjBYhPaR0dg2iablN8tm843HuzG7833I22lMqdahxH4B3r0Pl6qn3iiQodMLpNXBc6miJvmLF4pyrSn4KmYA
+Q8BmM0cqqiCtq9lj2PO3xe8HP4eMbdw45cCxRCflRd53B2AAzS9+xYmanIkI/NgRkFSwRBreVgWLv+TYkwx2brbg7N1qO
+ulCCD0UGrBvKkVYxUXJqwhcm2pZx1sMIACkYQW5KdzR4ZHE4fl2w+OIobgiT/68xbFZPM4CDpxuhB7oEIUVphiCuXkQkL
+7B5CsaipzcK9kJdqp8FnQrFYGE1A9qzagAQevSpZuIPLsEMryj8ZK5ke7R8MfNvh3KzUT4/Fzic4zzJ82ELnQj0HOM Byw42s O
+myUFgLHki+D81pREyLiO7EowIsphvFMz6YhVaU6Ro3c7LtyVG7Xvs4XDek/Hwg3MmGd2DUTI51TRA7MXcmKEj/RIEN9aj
+8FDQkTazya7YoScBN2qk4CJYFa73wsLpgOFeMhXbDiMeEEHQZrjZIVUJeybDDWe/Lt+8DwtpeBQcN/l6WL nlzTh2Opcsilt
+3V0pz67BK+JcCuPxtgcxFwl3dGlXXsDn6itBhp/wQN9yPjHW5A8+dW2f3gaRbjTkvY5CUg3xcfoyScb/7IBcTlfuil5E37Y3UPr
+VSjZWaO3jsDKbxTDLmOCYBtkq1/a0O6VBtTgKam4Zb/rvs6hwxnzbop0NdAkcSlWpISWGYsrHW+qdu5JStK86c945f0Uk
+kBKR9Z8GDt5krwO0ITlaDLNz3NPsKbEU6uVw3PTiWsDiUy8OgiJKSTsnPjeIXjN1/XJtGoOvOneIn1opwLWrs2PDQWO+cur
+ehoyljES6mNl43YAOHHFdBS9hqcC+fgMYPRdxlESdlbzWTF3cApu1J4Bs84GSAUyRs1NAuzFVnfmFiqwsj8qrUd9Dj5izMp
+qv3h3NGBYfCpFOUN43MFpp7CRsAL21o9wqpfyBVfaJR8FnwmZfRkqwuzmZwTQVnhNJk59Nv/uTqZqLamZqgU0z2Z1K
+dXMG0vJzVn5Cj0jBBoDfZ/Gc8qMb/hE3L9lkY8hB1R6426Cf/IZLAV3wMORQ2MoD/pW0Qt O8fAd7tMftMVSvIfvY/DIjktsu
+IEkmJDgdy1IfcmWicqyJ8JKImCWZa2RZBBEdFE6EzSXNkQQxHbJdDE9hzMXPvshgaN2anaTdDmOcB4CSiA4FJl3urz0PY0
+3zHIQW85IU8vdLGGtG/9RJAd5Y5g+oDoy1/m0Z/rz1xJzvtRmKAHclyqDfWqPS/oaEQnz7p60nhus4HdAsJNG4z4NmHm
+EjjL6OilaKEZrKJ1JSE7Y+9OvqsxYYhZBV7jzOcf2o4MgOBSZd7q89D2NN8xyEFvOg3FJw8aGjUG7pmW4/NYvD0H9ubbjOj
+GES0GvJimtERE8qIdy/JwHEgnRPqpTtxwO1gcuBXO+EjSaUuado8bMKLC5DHZFItjymwRBWgfQzj4b/PyP7FmPKgtyXMw
+R2BgINvDIlEUvYGo4wWYOSEpyNgcOfU50xcNbVYnMXbhwps/pqS+gJn0Zs9JzA3K9JNDywIuQzWJlQYD7wc6SfNIs8Rl9
+CetsaYk7h9nm6sn0oMewWoSFuoqiwHU+TZV6XZOMRI/oJwdFiE3P0z73vcuHBXpS1FXK1begYCkbGxwyPFUuSkavfRiYE
+pBtGsSQw1SQFjH/7LaIfFeP5vFSYASWtjmcarj5xc9bejjvu2T2Qm3bcZF1OmyFqHtj70n4yxj1OTs3/3RXI0SQu8YHYwiRa40t
+m92fe41747+ETDKVqnVBokfokG6KvLUjADchOyCn7s26BVu0VIfWEgdILrHH4efDVbKm5g8jMU/IpXGXNaMJmBi5jgYrq
+UATT+EpNQS7NnEbV10CieRuVg1+dF9p9kDFEZUx2U62/LzXmfseM3N2imHsFEjf5m6QLp6zn+WC9mcCOc/lW4MU+JiJ
+upwzXMXrh7Cz/5V1MBD7O2pi749SyPOnTI7TkOxH1fpiZgnVkmCnvnniChX84jqtwXfa7A6iBYh5X187liwl5T2YI8wWlfoW
+D1sLGMWy6666ewaDt+MdpJBIwq2oRiEbclz0d4FDZQuXFn+ancU6rhSVhWoe47oElaNjeX4Hcts/26xEOEZSf67QNzHZw
+HWoeX5cV3FIdaobYuW72Shmcv5l0ua0Rt8DtaFWBIsgCAFbUaPRch/do3D2HA6o0Bn/kXx/JHEPpAbKWIfwR+e2nEE7tG
+m13tl0Q79pPjUcHOETxbNZmFasJHSuDIEIwIVJwfC+NByh0oXeySj/V23YPfvIAtZof6Zj6qtsiK4h2BBgOnJo rH+zGRnl4anD
+rp6gjl2fShEL+eHeMcm/tM6Y4Mx0DBc= ”
+
+
+}
+
+
+
+
+6.API Exception Details
+
+                               Error                                                 Message
+Scenario                                    Error Message
+                               Code                                                  Type
+When PAN is not in a valid
+                               EF00011      Please enter a valid PAN Number.         ERROR
+format
+When Pan Entered does not
+                          EF00047           The PAN does not exist.                  ERROR
+exist.
+When OTP is sent
+successfully based on given EF40010         OTP has been sent successfully.          REMARK
+request
+When OTP generation fails    EF40014    OTP Generation failed.                   ERROR
+When any attributes are
+                             EF40000    JSON data invalid.                       ERROR
+missing in request JSON
+When user does not enter
+                             EF00014    Please Enter OTP Number.                 ERROR
+OTP number.
+When the OTP is incorrect.   EF00016    The OTP has expired.                     ERROR
+When email OTP entered is               The Email OTP you have provided is
+                          EF00072                                                ERROR
+incorrect.                              incorrect. Please retry
+When mobile OTP entered                 The Mobile OTP you have provided is
+                             EF00073                                        ERROR
+is incorrect.                           incorrect. Please retry
+When OTP entered is                     The OTP you have provided is
+                             EF00096                                             ERROR
+incorrect.                              incorrect. Please retry
+When user does not enter
+                             EF500033 Please enter email OTP.                    ERROR
+email OTP number.
+When user does not enter
+                             EF500032 Please enter mobile OTP.                   ERROR
+mobile OTP number.
+When user does not enter
+                             EF500034 Please enter Aadhaar OTP.                  ERROR
+Aadhaar OTP number.
+When user does not enter
+                             EF500031 Please enter OTP source flag.              ERROR
+OTP source flag.
+                                   Please select correct AY. Prefill can be
+When AY is enter wrong or
+                          EF500052 done through this channel starting       ERROR
+previous year.
+                                   from AY 2021-22.
+                                   Please select correct AY. You cannot
+When AY is enter wrong or
+                          EF500035 get prefill data for future Assessment        ERROR
+future year.
+                                   Year.
+PAN and Aadhaar is not
+                             EF00099    Your PAN and Aadhaar is not linked.      ERROR
+linked
+When user does not enter                Request cannot be processed as
+                             EF500036                                            ERROR
+transactionId.                          Transaction Id is Null.
+When ERI client linkage                 The PAN is not a valid client for this
+                             EF500058                                            ERROR
+fails                                   ERI.
+When attributes are
+incorrect in json request    EF20123    Invalid Request Data                     ERROR
+data
+When user tries to generate
+                                        You have exceeded the limit to receive
+e-filing OTP more than 5      EF00152                                          ERROR
+                                        OTP. Please try again in 8 hours.
+times
+When user enters wrong e-
+                                        You have exceeded the Number of
+fling OTP for more than 3     EF00153                                       ERROR
+                                        attempts to enter Correct OTP.
+times
+

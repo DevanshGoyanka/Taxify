@@ -1,0 +1,438 @@
+                        ERI API Specifications
+
+                  Integrated e-filing and CPC 2.0 Project
+
+
+
+
+API Name                Login
+
+API Description         APIs for performing User Authentication
+Version History
+
+Version        Date                         Description
+1.0       29-10-2021   Initial Draft
+1.1       17-11-2021   Exception scenarios added
+Table of Contents
+1. Overview............................................................................................................................. 4
+2. About API ........................................................................................................................... 4
+3. Target Audience and Pre-requisites ...................................................................................... 5
+4. login API Details ................................................................................................................. 5
+   4.1 API Usage Scenario ....................................................................................................... 5
+   4.2 API Request process....................................................................................................... 5
+   4.3 API Protocol .................................................................................................................. 5
+   4.4 Request Parameters ........................................................................................................ 5
+       4.4.1 Request Header: ...................................................................................................... 5
+       4.4.2 Request Body: Description....................................................................................... 6
+       4.4.3 Details of data attribute:........................................................................................... 6
+   4.5 Response Parameters ...................................................................................................... 7
+   4.6.login API - Sample Request format................................................................................. 8
+   4.7 API Usage Scenario ....................................................................................................... 9
+   4.8 API Request process....................................................................................................... 9
+   4.9 API Protocol .................................................................................................................. 9
+   4.10 Request Parameters ...................................................................................................... 9
+       4.10.1 Request Header: .................................................................................................... 9
+       4.10.2 Request Body: ..................................................................................................... 10
+       4.10.3 Details of data attribute: ....................................................................................... 10
+   4.11 logout API - Sample Request format ........................................................................... 11
+   4.12 logout API Response .................................................................................................. 11
+5. API Exception Details........................................................................................................ 11
+1. Overview
+Electronic Return Intermediaries shall begin the interaction with the eFiling system by
+establishing a session by invoking the login APIs. As noted in the ERI Specifications document,
+type-2 ERIs shall create a session using their own credentials while the Type-3 ERIs shall use the
+taxpayer or ERI-Type1 credentials.
+
+
+2. About API
+Requester        Type-2 or Type-3 ERI
+Provider         LoginApi
+                 Login API supports multiple modes of authentication which can be broadly
+                 classified into two categories
+
+                    1. Single Call (Password Based) - There will be single call for ERI 2
+                    2. Multiple Calls (OTP Based) - There will be multiple calls for individual
+                       taxpayers when ERI 3
+
+                        In the second category, the caller needs to make two calls, first to
+Description             request for an OTP and subsequent call to submit the OTP. The request
+                        payload shall be common for both the calls. The system shall
+                        intelligently interpret the intent based on the parameters passed. For
+                        e.g. if the password is supplied, then the system will assume that the
+                        caller intends to login using password. If the password and otp is
+                        missing, then the system shall treat it as a request for an OTP. Finally,
+                        if the password is blank and OTP is supplied, the system shall attempt
+                        to log the user in using the OTP.
+
+Mode of
+Integration
+                 Real Time
+(Real time /
+Batch)
+Processing       All validations regarding User Id, Password, OTP must be passed for
+Details          successful authentication
+Pre-
+Processing       User should be registered with e-filing portal and should have active profile
+Details
+Service
+                 EriLoginService
+Name
+API URL          TBD
+3. Target Audience and Pre-requisites
+This is technical document and is target to ERIs working in their application and interested to
+integrate their application with IEC 2.0 platform.
+The pre-requisites to call this API is that ERI is already registered with IEC 2.0 platform. They
+have valid credentials to call the API.
+
+
+4. login API Details
+This service is used to login and stablish the session with eFiling system from ERI application.
+
+4.1 API Usage Scenario
+ERI application pass their credentials to login API to get the session stablish with eFiling system.
+This is required to call any other eFiling API from ERI application. ERI user must be registered
+with eFiling system and should have valid credentials.
+
+4.2 API Request process
+ERI application must pass the ERI credential to establish the login session. Application will
+initiate addClient request as below:
+
+   1. ERI application will pass ERI user id and password to login API.
+   2. Login API will validate the credentials and respond with authToken.
+   3. ERI can use the auth token to call subsequent APIs after post login.
+
+4.3 API Protocol
+addClient API is exposed as REST API over the HTTPS. The input data should be sent as JSON
+document using Content-Type "application/json".
+
+4.4 Request Parameters
+The request will consist of request header and request body:
+
+4.4.1 Request Header:
+
+Header is mandatory and will consists of following values:
+
+
+Mandatory Request Header Parameters:
+Header Name Header Value
+Content-type      application/json
+clientId          clientId value which is provided to ERI as part of the registration
+clientSecret      clientSecret value which is provided to ERI as part of the registration
+accessMode        "API"
+
+
+
+
+4.4.2 Request Body: Description
+
+Request body will consist of below attributes:
+
+data: data attribute will be Base64 encoded string of API request json. Details of request json
+attributes are explained in request data element details.
+
+signature:
+
+   •     The API request data attribute should be digitally signed for the message integrity and
+         non-repudiation purposes.
+   •     Digital signing should always be performed by the ERI from value of data attribute which
+         was generated from request json.
+   •     The signature should be generated using a valid X.509 certificate
+   •     signature value should be generated from data field using ERI's DSC private key.
+   •     ERI should share their DSC public key with ITD to validate the signature.
+
+eriUserId:
+
+   •     It is mandatory and valid value is user ID of the ERI
+
+4.4.3 Details of data attribute:
+
+Below are the request parameters, which is request json used to create data attribute as
+explained above data attribute of the request body:
+
+Name of the         Data     Max      Is
+                                                     Description
+Parameter           type     length   Mandatory
+serviceName         String   60       yes            It is mandatory value is "EriLoginService"
+                                                     ERI user Id for ERI 2
+entity              String   10       yes
+                                                     taxpayer user ID/PAN for ERI 3
+                                                     Encrypted Password associated with the
+pass                String   50       yes
+                                                     User using symmetric key
+                                                      This is mandatory only for ERI 3
+                                                      Checks for Option user has selected for otp:
+otpSourceFlag      String    1            no
+                                                      "E" for eFiling OTP
+                                                      "A" for Aadhaar OTP
+                                                      This is only for ERI 3 where taxpayer will
+                                                      pass OTP after receiving OTP. It is not
+otp                String    6            no
+                                                      mandatory. It is mandatory when
+                                                      Transaction Id is provided.
+                                                      This is only for ERI 3 where taxpayer will
+                                                      pass OTP after receiving OTP. It is
+transactionId      String    20           No          mandatory when otp is provided.
+                                                      Transaction no. which was provided while
+                                                      OTP generation
+
+
+Request Parameter logic for different flows:
+Login API supports multiple modes of authentication which can be broadly classified into two
+categories
+
+   1. Single Call (Password Based) There will be single call for ERI 2
+   2. Multiple Calls (OTP Based) There will be multiple calls for individual taxpayers when
+      ERI 3
+
+In the second category, the caller needs to make two calls, first to request for an OTP and
+subsequent call to submit the OTP. The request payload shall be common for both the calls. The
+system shall intelligently interpret the intent based on the parameters passed. For e.g. if the
+password is supplied, then the system will assume that the caller intends to login using password.
+Below is the details of password and OTP options:
+Option 1: UserId/password validation: If password is provided, then it will be considered as
+password to be validated.
+Option 2: UserId/password and OTP request: If password and otpSourceFlag both are
+provided, then password will be validated and on successful userid/password then otp will be
+sent to taxpayer based on the value of otpSourceFlag
+Option 3: OTP validation: If OTP is provided, then it will be considered as OTP to be
+validated. In this case value of otpSourceFlag and transactionId to be provided. When OTP value
+is provided then password should not be provided.
+
+4.5 Response Parameters
+Name of the         Data         Max           Is
+                                                           Description
+Parameter           type         length        Mandatory
+entity              String       60            yes         User id used for Login
+                                                     This is an array which has 4 sub
+messages             Array             yes           parameters – code, type, desc,
+                                                     fieldName
+                                                     Error/message code depending on
+code                 String   7        yes
+                                                     validation response
+type                 String   10       yes           It describes type of message
+                                                     It describes Error/message if validation
+desc                 String   50       yes
+                                                     is passed/failed
+                                                     It describes the field name, when not
+fieldName            String   50       no
+                                                     applicable null will be returned
+                                                     Transaction no. generated post
+transactionId        String   20       yes
+                                                     successful login
+                                                     It is random number generated to
+autkn                String   32       yes
+                                                     authorize user for post login services
+
+
+
+
+4.6.login API - Sample Request format
+{
+"data": "",
+"sign": "",
+
+"eriUserId:""
+}
+data tag will be Base64Encoded string from following request json
+{
+  "serviceName": "EriLoginService",
+  "entity": "ERA2343353",
+   "pass": " TXlwYXNzd29yZEAxMjM="
+}
+
+login API - Sample Response format
+
+{
+"messages": [
+{
+"code": "EF00000",
+"type": "INFO",
+"desc": "OK",
+"fieldName": null
+}
+],
+"errors": [],
+"entity": " ERA2343353",
+"desc": "”,
+“transactionId” “”,
+"autkn": "dGVzdFVzZXJEZXY4QGluZm9zeXMuY29t”
+}
+
+Logout API Details
+
+This service is used to logout the ERI session from ERI application.
+
+4.7 API Usage Scenario
+ERI application already have logged in and has auth token. ERI application wants to logout from
+eFiling system
+
+4.8 API Request process
+ERI application already have auth token and wants to logout from the eFiling system.
+Application will initiate addClient request as below:
+
+   1. ERI application will auth token and call the logout API.
+   2. Login API will remove the validity of the auth token and kill the session for given auth
+      token. Once logout then same auth token cannot be used to validate the session.
+
+4.9 API Protocol
+Login API is exposed as REST API over the HTTPS. The input data should be sent as JSON
+document using Content-Type "application/json".
+
+4.10 Request Parameters
+The request will consist of request header and request body:
+
+4.10.1 Request Header:
+
+Header is mandatory and will consists of following values:
+
+Mandatory Request Header Parameters:
+
+Header Name Header Value
+Content-type     application/json
+clientId          clientId value which is provided to ERI as part of the registration
+clientSecret      clientSecret value which is provided to ERI as part of the registration
+authToken         Auth token from the Login Flow
+accessMode        "API"
+
+
+
+
+4.10.2 Request Body:
+
+Request body will consist of below attributes:
+
+data: data attribute will be Base64 encoded string of API request json. Details of request json
+attributes are explained in request data element details.
+
+sign:
+
+   •     The API request data attribute should be digitally signed for the message integrity and
+         non-repudiation purposes.
+   •     Digital signing should always be performed by the ERI from value of data attribute which
+         was generated from request json.
+   •     The signature should be generated using a valid X.509 certificate
+   •     signature value should be generated from data field using ERI's DSC private key.
+   •     ERI should share their DSC public key with ITD to validate the signature.
+
+eriUserId: It is mandatory and valid value is user ID of the ERI
+
+
+
+4.10.3 Details of data attribute:
+Below are the request parameters, which is request json used to create data attribute as
+explained above data attribute of the request body:
+
+Name of the           Data      Max         Is
+                                                            Description
+Parameter             type      length      Mandatory
+                                                           It is mandatory and valid value is
+serviceName           String    60          yes
+                                                           "EriLogoutService"
+                                                           Valid User Id for ERI 2
+entity                String    10          yes            Valid PAN for taxpayer in case of
+                                                           ERI3
+pan                   String    10          Yes            Valid PAN of the taxpayer
+4.11 logout API - Sample Request format
+{
+"data": "",
+"sign": "",
+"eriUserId": ""
+}
+data tag will be Base64Encoded string from following request json
+{
+"serviceName": "EriLogoutService",
+"entity": "ERIP124345",
+"pan": ""
+}
+
+4.12 logout API Response
+There is no response data. Caller must check the HTTP status of 200.
+
+
+5. API Exception Details
+                    Error                                                           Message
+Scenario                        Error string                   detail
+                    code                                                            Type
+                                                               If in response, we get
+                                                               this code then user
+Successful                                                     navigates to next
+                    EF00000     OK                                                    INFO
+scenario                                                       page else we show
+                                                               corresponding error
+                                                               message
+                                PAN does not exist, please This means user id is
+When User enters
+                 EF00036        register this PAN or try   PAN and user does REMARK
+PAN in user ID
+                                with some other PAN.       not exist
+                                This Aadhaar number is
+                                not linked to any registered
+                                                               This means user id is
+When User enters                PAN. Please link your
+                                                               Aadhaar Number and
+Aadhaar Number EF00026          registered PAN with this                               ERROR
+                                                               it is not linked to any
+in user ID                      Aadhaar number to login
+                                                               active PAN profile
+                                through Aadhaar number.
+                                Else, login through PAN
+                              The OTP has expired, on
+                              clicking of OK button you If User enters any
+When User enters
+                 EF00016      will be navigated to the    OTP which has           REMARK
+OTP to validate
+                              previous screen to generate already expired
+                              new OTP.
+When User enters                                            When user enters
+                 EF00028      Invalid OTP, please retry.                          ERROR
+OTP to validate                                             wrong OTP
+                              Your UserId has been
+                                                          userId/account
+When User Id is               deactivated, kindly contact
+                    EF00032                               entered by user is      REMARK
+entered                       helpdesk for more
+                                                          deactivated
+                              information.
+                              Your User Id/account has
+                                                            When user enters
+                              been locked, you can try
+When user enters                                            Incorrect password
+                    EF00042   after <4 hours> or contact                          REMARK
+password                                                    for continuous 6
+                              e-filing helpdesk to unlock
+                                                            times
+                              your account
+                              Your e-filing account has
+too many invalid
+                              been locked\deactivated.
+credentials
+                    EF00079   Please contact e-filing                             ERROR
+attempts and
+                              helpdesk <Helpdesk Toll
+account locked
+                              Free number>
+                                                            When user enter a
+                              The PAN entered is
+                                                            PAN which is
+When PAN                      inactive. Please contact
+                    EF00098                                 inactive (will be     ERROR
+entered is inactive           your Accessing Officer to
+                                                            applicable for Type
+                              activate the PAN.
+                                                            3)
+When invalid
+                                                            Incorrect
+userId/password     EF500060 Invalid UserId/Password                              ERROR
+                                                            UserId/Password
+is entered
+When attributes
+                                                            When request data is
+are incorrect in    EF20123   Invalid Request Data                               ERROR
+                                                            invalid
+json request data
+When any
+attributes are
+                   EF40000    JSON data invalid.            JSON data invalid.    ERROR
+missing in request
+JSON
+

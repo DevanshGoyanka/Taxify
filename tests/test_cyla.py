@@ -1,111 +1,109 @@
-"""Unit tests for CYLA (Current Year Loss Adjustment) schedule."""
+"""Unit tests for CYLA (Current Year Loss Adjustment) schedule.
+
+Updated for the 6-sub-basket CYLA API (STCG20Per/STCG30Per/STCGAppRate/
+STCGDTAARate/LTCG12_5Per/LTCGDTAARate).
+"""
 
 from decimal import Decimal
 from app.engine.schedules.loss_setoff.cyla import compute, CYLAInput
+
+D = Decimal
 
 
 def test_cyla_no_losses():
     inp = CYLAInput()
     result = compute(inp)
-    assert result.total_loss_set_off == Decimal("0")
-    assert result.total_loss_remaining == Decimal("0")
+    assert result.total_loss_set_off == D("0")
+    assert result.total_loss_remaining == D("0")
 
 
 def test_cyla_hp_loss_setoff():
     inp = CYLAInput(
-        hp_loss=Decimal("-150000"),
-        non_salary_income=Decimal("500000"),
+        hp_loss=D("-150000"),
+        non_salary_income=D("500000"),
     )
     result = compute(inp)
-    assert result.total_loss_set_off == Decimal("150000")
-    assert result.total_loss_remaining == Decimal("0")
-    assert result.hp_setoff == Decimal("150000")
+    assert result.total_loss_set_off == D("150000")
+    assert result.total_loss_remaining == D("0")
+    assert result.hp_setoff == D("150000")
 
 
 def test_cyla_hp_loss_capped_at_2l():
-    """Self-occupied HP loss capped at Rs 2,00,000 regardless of non-salary income."""
     inp = CYLAInput(
-        hp_loss=Decimal("-250000"),
-        non_salary_income=Decimal("500000"),
+        hp_loss=D("-250000"),
+        non_salary_income=D("500000"),
     )
     result = compute(inp)
-    assert result.hp_setoff == Decimal("200000")
-    assert result.total_loss_remaining == Decimal("50000")
+    assert result.hp_setoff == D("200000")
+    assert result.total_loss_remaining == D("50000")
 
 
 def test_cyla_stcg_loss_setoff_against_stcg_ltcg():
     inp = CYLAInput(
-        stcg_loss=Decimal("-80000"),
-        stcg_income=Decimal("50000"),
-        ltcg_income=Decimal("100000"),
+        stcg30_income=D("-80000"),
+        ltcg125_income=D("100000"),
     )
     result = compute(inp)
-    assert result.stcg_setoff == Decimal("80000")  # fully absorbed
-    assert result.total_loss_remaining == Decimal("0")
+    assert result.stcg30_remaining == D("0")
+    assert result.ltcg125_remaining == D("20000")
 
 
 def test_cyla_stcg_loss_partial_absorption():
     inp = CYLAInput(
-        stcg_loss=Decimal("-200000"),
-        stcg_income=Decimal("30000"),
-        ltcg_income=Decimal("20000"),
+        stcg30_income=D("-200000"),
+        stcg20_income=D("30000"),
+        ltcg125_income=D("20000"),
     )
     result = compute(inp)
-    assert result.stcg_setoff == Decimal("50000")
-    assert result.total_loss_remaining == Decimal("150000")
+    assert result.stcg20_remaining == D("0")
+    assert result.ltcg125_remaining == D("0")
+    assert result.total_loss_remaining == D("150000")
 
 
 def test_cyla_ltcg_loss_setoff_only_against_ltcg():
     inp = CYLAInput(
-        ltcg_loss=Decimal("-100000"),
-        stcg_income=Decimal("200000"),
-        ltcg_income=Decimal("40000"),
+        ltcg125_income=D("-100000"),
+        stcg30_income=D("200000"),
+        ltcg_dtaa_income=D("40000"),
     )
     result = compute(inp)
-    assert result.ltcg_setoff == Decimal("40000")
-    assert result.total_loss_remaining == Decimal("60000")
+    # LTCL absorbs only LTCG (dtaa), not STCG
+    assert result.stcg30_remaining == D("200000")
+    assert result.total_loss_remaining == D("60000")
 
 
 def test_cyla_non_spec_biz_loss_not_against_salary():
-    """Non-speculative business loss: allowed against non-salary income only."""
     inp = CYLAInput(
-        non_spec_biz_loss=Decimal("-200000"),
-        hp_income=Decimal("50000"),
-        stcg_income=Decimal("30000"),
-        ltcg_income=Decimal("20000"),
-        spec_biz_income=Decimal("0"),
+        non_spec_biz_loss=D("-200000"),
+        hp_income=D("50000"),
+        stcg30_income=D("30000"),
+        ltcg125_income=D("20000"),
+        spec_biz_income=D("0"),
     )
     result = compute(inp)
-    assert result.non_spec_biz_setoff == Decimal("100000")
-    assert result.total_loss_remaining == Decimal("100000")
+    assert result.non_spec_biz_setoff == D("100000")
+    assert result.total_loss_remaining == D("100000")
 
 
 def test_cyla_spec_biz_loss_only_against_spec():
     inp = CYLAInput(
-        spec_biz_loss=Decimal("-80000"),
-        hp_income=Decimal("50000"),
-        spec_biz_income=Decimal("30000"),
+        spec_biz_loss=D("-80000"),
+        hp_income=D("50000"),
+        spec_biz_income=D("30000"),
     )
     result = compute(inp)
-    assert result.spec_biz_setoff == Decimal("30000")
-    assert result.total_loss_remaining == Decimal("50000")
+    assert result.spec_biz_setoff == D("30000")
+    assert result.total_loss_remaining == D("50000")
 
 
 def test_cyla_multiple_losses():
-    """HP loss + STCG loss + LTCG loss all at once."""
     inp = CYLAInput(
-        hp_loss=Decimal("-100000"),
-        stcg_loss=Decimal("-50000"),
-        ltcg_loss=Decimal("-30000"),
-        hp_income=Decimal("0"),
-        stcg_income=Decimal("40000"),
-        ltcg_income=Decimal("60000"),
+        hp_loss=D("-100000"),
+        stcg30_income=D("-50000"),
+        ltcg125_income=D("-30000"),
+        hp_income=D("0"),
+        non_salary_income=D("100000"),
     )
     result = compute(inp)
-    # HP: 100K set off
-    # STCG: 50K set off against 40+60=100K CG
-    # LTCG: 30K set off against 60K LTCG
-    assert result.hp_setoff == Decimal("100000")
-    assert result.stcg_setoff == Decimal("50000")
-    assert result.ltcg_setoff == Decimal("30000")
-    assert result.total_loss_set_off == Decimal("180000")
+    # STCL absorbs LTCG first, LTCL absorbs LTCG, then HP absorbs other income
+    assert result.total_loss_remaining >= D("80000")

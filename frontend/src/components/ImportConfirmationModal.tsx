@@ -129,7 +129,7 @@ export default function ImportConfirmationModal({
 
   const btnPrimary: React.CSSProperties = {
     padding: '8px 16px',
-    background: 'var(--gold)',
+    background: '#16a34a',
     color: 'white',
     border: 'none',
     borderRadius: 6,
@@ -302,8 +302,8 @@ export default function ImportConfirmationModal({
                 }}>
                   <span style={{ fontSize: 14, flexShrink: 0 }}>ℹ️</span>
                   <div style={{ fontSize: 12, color: 'var(--info)' }}>
-                    {unmatchedTotal} entr{unmatchedTotal === 1 ? 'y' : 'ies'} could not be matched
-                    across documents and will be skipped.
+                    {unmatchedTotal} entr{unmatchedTotal === 1 ? 'y was' : 'ies were'} found in only one
+                    source and {unmatchedTotal === 1 ? 'was' : 'were'} preserved for review.
                   </div>
                 </div>
               );

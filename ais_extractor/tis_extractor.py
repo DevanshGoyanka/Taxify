@@ -762,18 +762,46 @@ def entry_to_dict(e: TISEntry) -> dict:
 
 
 def tis_to_frontend_json(doc: TISDocument, indent: int = 2) -> str:
-    output = {
-        "metadata": asdict(doc.metadata),
-        "income_heads": doc.income_head_groups,
-        "overview": [asdict(o) for o in doc.overview],
-        "reconciliation": doc.reconciliation,
-        "summary": {
-            "total_categories": len(doc.entries),
-            "total_details": sum(len(e.details) for e in doc.entries),
-        },
-    }
-    return json.dumps(output, indent=indent, ensure_ascii=False)
+    """Serialise a TISDocument to the frontend JSON contract.
+
+    Delegates to the pdfplumber-backed implementation so the JSON shape is
+    identical regardless of import path.
+    """
+    return tis_to_frontend_json_doc(doc, indent)
+
+
+def tis_to_frontend_json_doc(doc: TISDocument, indent: int = 2) -> str:
+    """Serialise via the pdfplumber-backed implementation."""
+    from .tis_pdfplumber import tis_to_frontend_json as _tis_to_json
+
+    return _tis_to_json(doc, indent)
 
 
 def extract_tis(pdf_path: str) -> TISDocument:
-    return TISExtractor(pdf_path).extract()
+    """Extract a TIS PDF via the pdfplumber-based implementation.
+
+    The pdfplumber extractor (``ais_extractor.tis_pdfplumber``) replaces the
+    PyMuPDF line-state-machine parsing core because pdfplumber recovers proper
+    cell boundaries and the summary/detail row pairing.  The
+    ``TISDocument`` / ``TISEntry`` / ``TISDetailRow`` dataclass contract and
+    the JSON serialisation are unchanged, so callers (``reconciliation.py``,
+    the frontend mappers) work unchanged.  The legacy ``TISExtractor`` class
+    above is retained for reference but is no longer the live path.
+    """
+    from .tis_pdfplumber import extract_tis as _extract_tis
+
+    return _extract_tis(pdf_path)
+
+
+def tis_to_frontend_json_doc(doc: TISDocument, indent: int = 2) -> str:
+    """Serialise via the pdfplumber-backed implementation."""
+    from .tis_pdfplumber import tis_to_frontend_json as _tis_to_json
+
+    return _tis_to_json(doc, indent)
+
+
+# Keep the legacy serialiser name functional for any caller that imports it
+# directly; delegate to the pdfplumber-backed implementation so the JSON shape
+# is identical regardless of import path.
+def tis_to_frontend_json(doc: TISDocument, indent: int = 2) -> str:
+    return tis_to_frontend_json_doc(doc, indent)

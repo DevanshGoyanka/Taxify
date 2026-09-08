@@ -1,0 +1,78 @@
+                                 List of UAT URLs for Type 2 – ERIs
+
+
+
+      Please find below the List of UAT- URLs for the APIs currently available for Type 2 ERI Users
+      for Integration and Testing. Please note before you attempt to Hit these APIs, ensure that:
+      1) IP address, Email & Mobiles are whitelisted at our end.
+
+      2) Public-key certificates are successfully updated at our end. ( All Certificate validations must be
+      completed.)
+
+      3)UAT      API       credentials     are     configured      (Client-ID      and      Client-Secret)
+
+      For the payload details for the below APIs can be downloaded from the ITD portal, Link for your
+      reference:https://www.incometax.gov.in/iec/foportal/api-specifications
+
+      For any further queries please contact erihelp@incometax.gov.in, highlighting the relevant
+      Environment (UAT/Prod) in the subject line.
+
+
+
+Sl      API name               Endpoint          Link
+No.
+
+1       Login                  login             https://uatocpservices.incometax.gov.in/iec-
+                                                 uat/uat/eriapi/login
+
+2       AddClient              addClient         https://uatocpservices.incometax.gov.in/iec-
+                                                 uat/uat/eriapi/addClient
+
+3       ValidateClientOTP      validateClient https://uatocpservices.incometax.gov.in/iec-
+                               Otp            uat/uat/eriapi/validateClientOtp
+
+4       RegisterClient         registerClient    https://uatocpservices.incometax.gov.in/iec-
+                                                 uat/uat/eriapi/registerClient
+
+5       ValidateregisterOT validateRegO          https://uatocpservices.incometax.gov.in/iec-
+        P                  tp                    uat/uat/eriapi/validateRegOtp
+
+6       Request Prefill        requestPrefill    https://uatocpservices.incometax.gov.in/iec-
+                               OTP               uat/uat/eriapi/requestPrefillOTP
+
+                                                                                                  Page | 1
+7    Get Prefill       getPrefill    https://uatocpservices.incometax.gov.in/iec-
+                                     uat/uat/eriapi/getPrefill
+
+8    Validate ITR      validate      https://uatocpservices.incometax.gov.in/iec-
+                                     uat/uat/eriapi/validate
+
+9    Submit ITR        submit        https://uatocpservices.incometax.gov.in/iec-
+                                     uat/uat/eriapi/submit
+
+10   Acknowledge       getAcknowle   https://uatocpservices.incometax.gov.in/iec-
+                       dgement       uat/uat/eriapi/getAcknowledgement
+
+11   Everify Update    updateVerMo   https://uatocpservices.incometax.gov.in/iec-
+     Vermode           de            uat/uat/eriapi/updateVerMode
+
+12   Everify Genarte   generateEvc   https://uatocpservices.incometax.gov.in/iec-
+     Mode                            uat/uat/eriapi/generateEvc
+
+13   Everify EVC       verifyEvc     https://uatocpservices.incometax.gov.in/iec-
+                                     uat/uat/eriapi/verifyEvc
+
+14   Logout            logout        https://uatocpservices.incometax.gov.in/iec-
+                                     uat/uat/eriapi/logout
+
+15   DownloadITR       downloadItr   https://uatocpservices.incometax.gov.in/iec-
+                                     uat/uat/eriapi/downloadItr
+
+16   Lifecycle ERI     lifecycle     https://uatocpservices.incometax.gov.in/iec-
+                                     uat/uat/eriapi/lifecycle
+
+
+
+
+                                                                               Page | 2
+

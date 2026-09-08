@@ -1,46 +1,148 @@
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Optional, List
 from datetime import datetime
 
+
+PAN_PATTERN = r"^[A-Z]{3}[PCHFATBLJG][A-Z][0-9]{4}[A-Z]$"
+
+
 class ClientBase(BaseModel):
-    pan: str = Field(..., max_length=10)
-    name: str = Field(..., max_length=255)
+    """Base client schema accepting both camelCase and snake_case input.
+
+    All name fields use ``AliasChoices`` so the frontend can send
+    ``firstName`` (camelCase) and internal callers can pass
+    ``first_name`` (snake_case).  The Python attribute name is camelCase
+    to match the JSON wire format.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pan: str = Field(..., min_length=10, max_length=10, pattern=PAN_PATTERN)
+    name: str = Field(default="", max_length=255)
+    firstName: str = Field(
+        default="",
+        max_length=25,
+        validation_alias=AliasChoices("firstName", "first_name"),
+    )
+    middleName: str = Field(
+        default="",
+        max_length=25,
+        validation_alias=AliasChoices("middleName", "middle_name"),
+    )
+    surname: str = Field(default="", max_length=75)
     email: Optional[str] = None
     mobile: Optional[str] = None
     aadhaar: Optional[str] = None
     dob: Optional[str] = None
+
+    @field_validator("pan", mode="before")
+    @classmethod
+    def normalize_pan(cls, value: object) -> object:
+        """Normalize PAN before pattern validation and persistence."""
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("name", "firstName", "middleName", "surname", mode="before")
+    @classmethod
+    def normalize_name_parts(cls, value: object) -> object:
+        """Strip whitespace from each name part."""
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def derive_name_from_parts(self) -> "ClientBase":
+        """Derive the full ``name`` from the three name parts.
+
+        ``surname`` is the mandatory CBDT name field.  When the caller
+        supplies name parts but leaves ``name`` blank, derive it.  When
+        the caller supplies only ``name`` (legacy path), leave the parts
+        empty.  Raises if neither ``name`` nor ``surname`` is provided.
+        """
+        if not self.name and (self.firstName or self.middleName or self.surname):
+            self.name = " ".join(
+                part for part in (self.firstName, self.middleName, self.surname) if part
+            )
+        if not self.name and not self.surname:
+            raise ValueError("Either name or surname must be provided")
+        return self
+
 
 class ClientCreate(ClientBase):
     portal_password: Optional[str] = None
 
+
 class ClientUpdate(BaseModel):
-    pan: Optional[str] = None
-    name: Optional[str] = None
+    """Partial update schema accepting both camelCase and snake_case."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pan: Optional[str] = Field(default=None, min_length=10, max_length=10, pattern=PAN_PATTERN)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    firstName: Optional[str] = Field(
+        default=None,
+        max_length=25,
+        validation_alias=AliasChoices("firstName", "first_name"),
+    )
+    middleName: Optional[str] = Field(
+        default=None,
+        max_length=25,
+        validation_alias=AliasChoices("middleName", "middle_name"),
+    )
+    surname: Optional[str] = Field(default=None, max_length=75)
     email: Optional[str] = None
     mobile: Optional[str] = None
     aadhaar: Optional[str] = None
     dob: Optional[str] = None
     portal_password: Optional[str] = None
+
+    @field_validator("pan", mode="before")
+    @classmethod
+    def normalize_pan(cls, value: object) -> object:
+        """Normalize an updated PAN before validation."""
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("name", "firstName", "middleName", "surname", mode="before")
+    @classmethod
+    def normalize_name(cls, value: object) -> object:
+        """Remove surrounding whitespace from an updated client name."""
+        return value.strip() if isinstance(value, str) else value
+
 
 class ClientYearResponse(BaseModel):
     year: str
     itrType: str
     status: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
 
 class ClientResponse(BaseModel):
+    """Response schema serializing to camelCase JSON for the frontend.
+
+    Fields use ``AliasChoices`` so ``from_attributes=True`` can read
+    ``first_name`` from the ORM model while the Python attribute and JSON
+    output key are both ``firstName``.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     id: int
+    publicId: str
     pan: str
     name: str
+    firstName: str = Field(
+        default="",
+        validation_alias=AliasChoices("first_name", "firstName"),
+    )
+    middleName: str = Field(
+        default="",
+        validation_alias=AliasChoices("middle_name", "middleName"),
+    )
+    surname: str = Field(default="", validation_alias=AliasChoices("surname"))
     email: Optional[str] = None
     mobile: Optional[str] = None
     aadhaar: Optional[str] = None
     dob: Optional[str] = None
-    years: List[ClientYearResponse] = []
+    archived: bool = False
+    archivedAt: Optional[datetime] = None
+    years: List[ClientYearResponse] = Field(default_factory=list)
     createdAt: datetime
     updatedAt: datetime
-
-    class Config:
-        from_attributes = True

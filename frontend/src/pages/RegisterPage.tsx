@@ -1,11 +1,20 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import taxifyBlackLogo from '../../svgs/taxify black.png';
 import toast from 'react-hot-toast';
 import { authApi } from '../api/auth';
 import { tokenManager } from '../api/tokenManager';
 import { Spinner } from '../components/ui/Spinner';
+import { useSeo } from '../hooks/useSeo';
 
 export default function RegisterPage() {
+  useSeo({
+    title: 'Create an Account',
+    description:
+      'Create an ITR Bharo account to compute, validate and file Indian income tax returns ITR-1 to ITR-4 for AY 2026-27.',
+    path: '/register',
+  });
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -73,6 +82,9 @@ export default function RegisterPage() {
         background: 'white'
       }}>
         <div style={{ width: 400, maxWidth: '90%' }}>
+          <Link to="/" aria-label="Taxify home" style={{ display: 'inline-flex', marginBottom: 18 }}>
+            <img src={taxifyBlackLogo} alt="Taxify" style={{ display: 'block', width: 116, height: 'auto' }} />
+          </Link>
           <h2 className="crimson" style={{ fontSize: 28, marginBottom: 8 }}>Create Account</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: 32 }}>
             Register to get started with IncomeTax ERP

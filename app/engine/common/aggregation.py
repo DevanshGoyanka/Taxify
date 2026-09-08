@@ -16,23 +16,27 @@ def aggregate_tax(
     late_fee_234f: Decimal,
     total_taxes_paid: Decimal,
 ) -> dict:
-    """Aggregate all tax components into final payable/refund."""
+    """Aggregate all tax components into final payable/refund.
+
+    Tax credits (TDS/TCS/advance tax/SAT) are whole-rupee amounts and must not
+    be rounded under section 288B before being netted against liability. Section
+    288B rounding is applied only to the final balance payable or refund due.
+    """
 
     total_tax_before_relief = slab_tax + special_rate_tax
     tax_after_rebate = max(Decimal("0"), total_tax_before_relief - rebate)
     tax_after_relief = max(Decimal("0"), tax_after_rebate - relief_89 - relief_90_91)
 
-    # Round to nearest 10 per section 288B
-    gross_tax_liability = round_to_nearest_10(tax_after_relief + surcharge + cess)
-    aggregate_liability = round_to_nearest_10(gross_tax_liability + total_interest + late_fee_234f)
-    total_taxes_paid_rounded = round_to_nearest_10(total_taxes_paid)
+    gross_tax_liability = tax_after_relief + surcharge + cess
+    aggregate_liability = gross_tax_liability + total_interest + late_fee_234f
 
-    if aggregate_liability > total_taxes_paid_rounded:
-        balance_payable = aggregate_liability - total_taxes_paid_rounded
+    diff = aggregate_liability - total_taxes_paid
+    if diff > 0:
+        balance_payable = round_to_nearest_10(diff)
         refund = Decimal("0")
     else:
         balance_payable = Decimal("0")
-        refund = total_taxes_paid_rounded - aggregate_liability
+        refund = round_to_nearest_10(-diff)
 
     return {
         "slab_tax": slab_tax,
@@ -48,7 +52,7 @@ def aggregate_tax(
         "interest_234abc": total_interest,
         "late_fee_234f": late_fee_234f,
         "aggregate_liability": aggregate_liability,
-        "total_taxes_paid": total_taxes_paid_rounded,
+        "total_taxes_paid": total_taxes_paid,
         "balance_payable": balance_payable,
         "refund": refund,
     }

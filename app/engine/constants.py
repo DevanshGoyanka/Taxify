@@ -51,6 +51,68 @@ OLD_REGIME_STANDARD_DEDUCTION: Final[Decimal] = Decimal("50000")    # Sec 16(ia)
 NEW_REGIME_STANDARD_DEDUCTION: Final[Decimal] = Decimal("75000")    # Sec 16(ia) - Finance Act 2024
 
 # =============================================================================
+# SECTION 10 EXEMPTION CEILINGS (Salary)
+# =============================================================================
+
+# Sec 10(10) — Gratuity: non-govt capped at Rs 20 lakh (FA 2018).
+GRATUITY_EXEMPTION_LIMIT: Final[Decimal] = Decimal("2000000")
+
+# Sec 10(10AA) — Leave encashment on retirement: non-govt capped at Rs 25 lakh (FA 2023).
+LEAVE_ENCASHMENT_EXEMPTION_LIMIT: Final[Decimal] = Decimal("2500000")
+
+# Sec 10(10C) — VRS / retrenchment compensation: capped at Rs 5 lakh.
+VRS_COMPENSATION_EXEMPTION_LIMIT: Final[Decimal] = Decimal("500000")
+
+# Sec 10(14)(ii) read with Rule 2BB(1)(f) -- transport allowance for a
+# blind/deaf-and-dumb/orthopedically-handicapped employee to meet commuting
+# expenses: Rs 3,200/month = Rs 38,400/year. (The general, non-disability
+# transport allowance this constant's old Rs 1,600/month figure actually
+# described was withdrawn by Finance Act 2018, folded into the standard
+# deduction -- it is not a live exemption for AY 2026-27 at all. Confirmed
+# against the primary source: CBDT ITR-4 Validation Rules rule 186, "10(14)
+# (ii) transport allowance for physically handicapped should not exceed
+# Rs 38,400" -- this codebase's own validator (ITR4-R105/ITR1 equivalent)
+# already hardcoded the correct 38,400 figure directly, while this
+# constant -- the one the calculator actually used -- was wrong, silently
+# halving the exemption for every disabled employee claiming it.)
+TRANSPORT_ALLOWANCE_DISABLED_LIMIT: Final[Decimal] = Decimal("38400")
+
+# Sec 10(14) — Children Education Allowance: Rs 100/month per child (max 2) = Rs 1,200/year.
+CHILDREN_EDUCATION_ALLOWANCE_LIMIT: Final[Decimal] = Decimal("1200")
+CHILDREN_EDUCATION_ALLOWANCE_PER_CHILD: Final[Decimal] = Decimal("100")
+CHILDREN_EDUCATION_MAX_CHILDREN: Final[int] = 2
+
+# Sec 10(14) — Hostel Expenditure Allowance: Rs 300/month per child (max 2) = Rs 3,600/year.
+HOSTEL_ALLOWANCE_LIMIT: Final[Decimal] = Decimal("3600")
+HOSTEL_ALLOWANCE_PER_CHILD: Final[Decimal] = Decimal("300")
+
+# Sec 10(10A) — Commuted pension, non-govt: 1/3rd if gratuity is also
+# received, 1/2 if not (a higher, more generous fraction when there is no
+# separate gratuity payout to rely on).
+COMMUTED_PENSION_WITH_GRATUITY_PCT: Final[Decimal] = Decimal("1") / Decimal("3")
+COMMUTED_PENSION_WITHOUT_GRATUITY_PCT: Final[Decimal] = Decimal("1") / Decimal("2")
+
+# Sec 10(10) — Gratuity, non-govt, employees NOT covered under the Payment of
+# Gratuity Act 1972: half a month's average salary (last 10 months) per
+# completed year of service. (Employees covered under the Act instead use
+# 15/26 x last-drawn salary x years — a more generous multiple — but that
+# needs a "covered under the Act" fact this product does not capture; using
+# the lower non-covered multiple is the conservative choice when that fact
+# is unknown, matching this codebase's "never over-grant an exemption
+# without evidence" convention.)
+GRATUITY_NON_COVERED_SALARY_MULTIPLE: Final[Decimal] = Decimal("0.5")
+
+# Sec 10(10AA) — Leave encashment, non-govt: cash equivalent of leave capped
+# at 30 days earned per completed year of service, and separately capped at
+# 10 months' average salary.
+LEAVE_ENCASHMENT_MAX_DAYS_PER_YEAR: Final[int] = 30
+LEAVE_ENCASHMENT_MAX_MONTHS_AVERAGE_SALARY: Final[Decimal] = Decimal("10")
+
+# Sec 10(5) — LTA exemption: two journeys per block of four calendar years.
+# No per-journey statutory cap; the exemption is the actual fare cost (economy air / AC rail).
+# The cap is structural (block-year carry-forward), not a rupee ceiling.
+
+# =============================================================================
 # REBATE u/s 87A
 # =============================================================================
 
@@ -107,10 +169,12 @@ SURCHARGE_SLABS_NEW_REGIME: Final[list] = [
 # Presumptive rate depends on payment mode
 PRESUMPTIVE_44AD_DIGITAL: Final[Decimal] = Decimal("0.06")        # 6% of gross receipts (digital)
 PRESUMPTIVE_44AD_CASH: Final[Decimal] = Decimal("0.08")           # 8% of gross receipts (cash)
+SEC_44AD_TURNOVER_LIMIT: Final[Decimal] = Decimal("30000000")     # Rs 3 crore (Section 44AD threshold, FA 2024)
 
-# Section 44ADA - Professionals (gross receipts up to Rs 50 Lakh)
+# Section 44ADA - Professionals (gross receipts up to Rs 75 Lakh)
 # Flat 50% of gross receipts as presumptive income
 PRESUMPTIVE_44ADA_RATE: Final[Decimal] = Decimal("0.50")          # 50% of professional gross
+SEC_44ADA_RECEIPTS_LIMIT: Final[Decimal] = Decimal("7500000")     # Rs 75 lakh (Section 44ADA threshold)
 
 # Section 44AE - Goods carriage (per vehicle)
 # Presumptive income per vehicle per year (monthly x 12)
@@ -202,6 +266,10 @@ SECTION_80U_SEVERE_LIMIT: Final[Decimal] = Decimal("125000")     # Severely disa
 
 HOUSE_PROPERTY_STANDARD_DEDUCTION: Final[Decimal] = Decimal("0.30") # 30% of NAV (Sec 24(a))
 HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED: Final[Decimal] = Decimal("200000")  # Sec 24(b) - Self-occupied
+# Sec 24(b) proviso: the Rs 2,00,000 self-occupied cap applies only to loans
+# sanctioned on/after 1 April 1999 for purchase or construction; a loan
+# sanctioned before that date is capped at Rs 30,000 instead.
+HOUSE_PROPERTY_INTEREST_LIMIT_SELF_OCCUPIED_PRE_1999: Final[Decimal] = Decimal("30000")
 
 # =============================================================================
 # CAPITAL GAINS - Special Rates (AY 2026-27)

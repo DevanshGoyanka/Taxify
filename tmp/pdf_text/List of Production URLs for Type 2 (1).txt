@@ -1,0 +1,58 @@
+                            List of Production URLs for Type 2 – ERIs
+
+
+
+Please find below the List of Production- URLs for the APIs currently available for Type 2 ERI Users. Please
+note       before       you         attempt     to      Hit       these       APIs,        ensure       that:
+1) IP addresses are whitelisted at our end.
+
+2) Public-key certificates are successfully updated at our end. ( All Certificate validations must be
+completed.)
+
+3)Production      API       credentials     are      configured      (Client-ID       and         Client-Secret)
+
+For the payload details for the below APIs can be downloaded from the ITD portal, Link for your
+reference:https://www.incometax.gov.in/iec/foportal/api-specifications
+
+For any further queries please contact erihelp@incometax.gov.in, highlighting the relevant Environment
+(UAT/Prod) in the subject line.
+
+ Sl     API name                    Link
+ No.
+
+ 1      Login                       https://services.incometax.gov.in/iec/api/eriapi/login
+
+ 2      AddClient                   https://services.incometax.gov.in/iec/api/eriapi/addClient
+
+ 3      ValidateClientOTP           https://services.incometax.gov.in/iec/api/eriapi/validateClientOtp
+
+ 4      RegisterClient              https://services.incometax.gov.in/iec/api/eriapi/registerClient
+
+ 5      ValidateregisterOTP         https://services.incometax.gov.in/iec/api/eriapi/validateRegOtp
+
+ 6      Request Prefill             https://services.incometax.gov.in/iec/api/eriapi/requestPrefillOTP
+
+ 7      Get Prefill                 https://services.incometax.gov.in/iec/api/eriapi/getPrefill
+
+ 8      Validate ITR                https://services.incometax.gov.in/iec/api/eriapi/validate
+
+
+
+
+                                                                                                       Page | 1
+9    Submit ITR             https://services.incometax.gov.in/iec/api/eriapi/submit
+
+10   Acknowledge            https://services.incometax.gov.in/iec/api/eriapi/getAcknowledgement
+
+11   Everify       Update   https://services.incometax.gov.in/iec/api/eriapi/updateVerMode
+     Vermode
+
+12   Everify Genarte Mode   https://services.incometax.gov.in/iec/api/eriapi/generateEvc
+
+13   Everify EVC            https://services.incometax.gov.in/iec/api/eriapi/verifyEvc
+
+
+
+
+                                                                                             Page | 2
+

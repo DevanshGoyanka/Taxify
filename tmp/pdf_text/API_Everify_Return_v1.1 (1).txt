@@ -1,0 +1,741 @@
+     Application Programming Interface Specifications
+
+                  Integrated e-filing and CPC 2.0 Project
+
+
+
+
+API Name                e-Verify Return
+
+                        API used to e-Verify filed returns using Electronic
+API Description
+                        Verification Code (EVC) or Aadhaar OTP.
+Version History
+
+Version        Date                         Description
+1.0       29-10-2021   Initial Draft
+1.1       17-11-2021   Exception scenarios added
+Table of Contents
+1. Overview............................................................................................................................. 5
+2. About API ........................................................................................................................... 5
+3. Target Audience and Pre-requisites ...................................................................................... 6
+4. EriUpdateVerMode API Details ........................................................................................... 6
+   4.1 API Usage Scenario ....................................................................................................... 6
+   4.2 API Request process....................................................................................................... 6
+   4.3 API Protocol .................................................................................................................. 6
+   4.4 Request Parameters ........................................................................................................ 6
+       4.4.1 Request Header: ...................................................................................................... 7
+       4.4.2 Request Body: ......................................................................................................... 7
+       4.4.3 Details of data attribute:........................................................................................... 7
+   4.5 Response Parameters ...................................................................................................... 8
+   4.6 UpdateVerMode API - Sample Request format ............................................................... 9
+   4.7 UpdateVerMode API - Sample Response format............................................................. 9
+5. GenerateEvc API Details ..................................................................................................... 9
+   5.1 API Usage Scenario ....................................................................................................... 9
+   5.2 API Request process..................................................................................................... 10
+   5.3 API Protocol ................................................................................................................ 10
+   5.4 Request Parameters ...................................................................................................... 10
+       5.4.1 Request Header: .................................................................................................... 10
+       5.4.2 Request Body: ....................................................................................................... 10
+       5.4.3 Details of data attribute:......................................................................................... 11
+   5.5 Response Parameters .................................................................................................... 12
+   5.6 GenerateEvc API - Sample Request format ................................................................... 12
+   5.7 GenerateEvc API - Sample Response format................................................................. 13
+6. VerifyEvc API Details ....................................................................................................... 13
+   6.1 API Usage Scenario ..................................................................................................... 13
+   6.2 API Request process..................................................................................................... 13
+   6.3 API Protocol ................................................................................................................ 14
+   6.4 Request Parameters ...................................................................................................... 14
+       6.4.1 Request Header: .................................................................................................... 14
+       6.4.2 Request Body: ....................................................................................................... 14
+       6.4.3 Details of data attribute:......................................................................................... 15
+   6.5 Response Parameters .................................................................................................... 15
+   6.6 VerifyEvc API - Sample Request format....................................................................... 16
+   6.7 VerifyEvc API - Sample Response format..................................................................... 17
+7. API Exception Details........................................................................................................ 17
+1. Overview
+As noted in the ERI Specification Overview document the interaction during the submission
+phase includes 3 key steps in addition to the Login and Logout.
+
+
+
+
+This document describes the APIs available to e-verify filed returns using Electronic Verification
+Code (EVC) or Aadhaar OTP.
+
+   •   EVC can be generated by the user using Aadhaar OTP, Bank Account, Demat account.
+   •   If taxpayer selects the option to verify return later, he/she can verify return electronically
+       using e-verify return functionality or by sending ITR-V to CPC by post.
+   •   If return is filed by ERI than unregistered/registered taxpayer can verify return
+       electronically using e-verify return functionality at Home page or by sending ITR-V to
+       CPC by post.
+
+
+2. About API
+Requester            ERI type 2 or ERI type 3
+Provider             eVerifyApi
+Description          Collection of APIs to enable ERI type-2 and Type-3 to e-Verify IT returns
+Mode of
+Integration
+                     Real Time
+(Real time /
+Batch)
+Processing           It will give a platform to verify return electronically using e-verify return
+Details              functionality or by sending ITR-V to CPC by post
+Pre-Processing       Caller must have a validated return with ARN Number
+Details              Taxpayer should have submitted the ITR through this ERI
+                     updateVerMode
+Service Name         generateEVC
+                     verifyEVC
+API URL              TBD
+3. Target Audience and Pre-requisites
+This is technical document and target audiences are ERIs working in their application and
+interested to integrate their application with IEC 2.0 platform.
+The pre-requisites to call this API is that ERI is already registered with IEC 2.0 platform. They
+have valid credentials to call the API.
+
+
+4. EriUpdateVerMode API Details
+This service is used to update the ITR verification mode of the taxpayer, where taxpayer has
+already submitted the ITR.
+
+4.1 API Usage Scenario
+Taxpayer update verification mode for their ITR once it is submitted using submitITR API.
+When ERI application submits the call this API below are the activities are performed:
+
+   1. Taxpayer can choose option to verify the ITR "LATER" where he/she can verify their
+      return later using any one of the modes which are available in eFiling portal or through
+      ERI.
+   2. Taxpayer can also choose the option to verify the ITR "ITRV" where he/she can send
+      ITR-V through offline mode by post.
+
+4.2 API Request process
+ERI application must have already establish the login session and auth token with eFiling system
+using the login API. Application will initiate call with API as below:
+
+   1. ERI application will capture the taxpayer's choice for verification mode as per request
+      parameters are defined.
+   2. ERI Application will call EriUpdateVerMode API and send the request.
+   3. eFiling system will update the verification mode provided by the ERI application.
+
+4.3 API Protocol
+EriUpdateVerMode API is exposed as REST API over the HTTPS. The input data should be sent
+as JSON document using Content-Type "application/json".
+
+4.4 Request Parameters
+The request will consist of request header and request body:
+4.4.1 Request Header:
+
+Header is mandatory and will consists of following values:
+Mandatory Request Header Parameters:
+
+Header Name Header Value
+Content-type     application/json
+clientId         clientId value which is provided to ERI as part of the registration
+clientSecret     clientSecret value which is provided to ERI as part of the registration
+authToken        Auth token from the Login Flow
+accessMode       "API"
+
+
+
+
+4.4.2 Request Body:
+
+Request body will consist of below attributes:
+
+   1. data: data attribute will be Base64 encoded string of API request json. Details of request
+      json attributes are explained in request data element details.
+   2. eriUserId: It is mandatory and valid value is user ID of the ERI
+   3. sign:
+
+   •   The API request data attribute should be digitally signed for the message integrity and
+       non-repudiation purposes.
+   •   Digital signing should always be performed by the ERI from value of data attribute which
+       was generated from request json.
+   •   The signature should be generated using a valid X.509 certificate
+   •   signature value should be generated from data field using ERI's DSC private key.
+   •   ERI should share their DSC public key with ITD to validate the signature.
+
+
+
+4.4.3 Details of data attribute:
+Below are the request parameters, which is request json used to create data attribute as
+explained above data attribute of the request body:
+
+Name of the         Data       Max        Is
+                                                         Description
+Parameter           type       length     Mandatory
+                                                  It is mandatory and valid value is
+serviceName      String      60       Yes
+                                                  "EriUpdateVerMode"
+Pan              String      10       Yes         Valid PAN of the taxpayer.
+                                                  Valid values are:
+verMode          String      10       Yes         "LATER" for later
+                                                  "ITRV" for ITR-V
+ackNum           String      15       Yes         Acknowledgement number of the ITR
+                                                  Assessment year value format it
+Ay               String      4        Yes
+                                                  "YYYY"
+                                                  Form code
+                                                  "1" for ITR 1
+                                                  "2" for ITR 2
+                                                  "3" for ITR 3
+formCode         String      1        Yes
+                                                  "4" for ITR 4
+                                                  "5" for ITR 5
+                                                  "6" for ITR 6
+                                                  "7" for ITR 7
+
+
+
+
+4.5 Response Parameters
+Name of the                  Max      Is
+              Data type                         Description
+Parameter                    length   Mandatory
+                                                 List of information messages. There can
+                                                 be one or more messages. The messages
+Messages      List<String>            Yes
+                                                 array will be null if there are no
+                                                 messages.
+                                                 This is a not mandatory field. List of
+Errors        List<Error>             No         errors. The value will be null if there is
+                                                 no error.
+                                                 Indicates whether EriUpdateVerMode
+                                                 call is successful. Possible value is true
+successFlag   Boolean                 Yes
+                                                 or false.
+                                                 "successFlag": true
+                                                 http codes corresponding to response.
+httpStatus    String         20       No
+                                                 Possible value is "OK"
+4.6 UpdateVerMode API - Sample Request format
+
+{
+"data": "",
+"sign": "",
+"eriUserId": ""
+}
+data tag will be Base64Encoded string from following request json
+{
+"serviceName": "",
+"pan": "",
+"verMode": "",
+"ackNum": "",
+"ay": "",
+"formCode”:""
+}
+
+4.7 UpdateVerMode API - Sample Response format
+
+
+{
+"messages": [],
+"errors": [],
+"successFlag": true,
+"transactionId": "1324t56",
+"httpStatus": "OK"
+}
+
+
+
+
+5. GenerateEvc API Details
+This API is used to generate EVC online using one of the verifications online.
+
+5.1 API Usage Scenario
+Taxpayer can verify their ITR once it is submitted using submitITR API.
+When ERI application submits the call this API below are the activities are performed:
+
+   1. Taxpayer can choose option to verify the ITR through Aadhaar OTP where PAN is linked
+      to Aadhaar and Aadhaar has valid mobile number.
+   2. Taxpayer can also choose option to verify the ITR through Bank EVC where bank
+      account is linked to PAN and EVC is enabled.
+   3. Taxpayer can also choose option to verify the ITR through DEMAT EVC where
+      DEMAT is linked to PAN and EVC is enabled.
+
+5.2 API Request process
+ERI application must have already establish the login session and auth token with eFiling system
+using the login API. Application will initiate call with API as below:
+
+   1. ERI application will capture the taxpayer's choice for verification mode as per request
+      parameters are defined.
+   2. ERI Application will call GenerateEvc API and send the request.
+   3. eFiling system will send the OTP or EVC depending on the verification mode is chosen
+      by the taxpayer.
+
+5.3 API Protocol
+GenerateEvc API is exposed as REST API over the HTTPS. The input data should be se nt as
+JSON document using Content-Type "application/json".
+
+5.4 Request Parameters
+The request will consist of request header and request body:
+
+5.4.1 Request Header:
+
+Header is mandatory and will consists of following values:
+Mandatory Request Header Parameters:
+
+Header Name Header Value
+Content-type     application/json
+clientId         clientId value which is provided to ERI as part of the registration
+clientSecret     clientSecret value which is provided to ERI as part of the registration
+authToken        Auth token from the Login Flow
+accessMode       "API"
+
+
+
+
+5.4.2 Request Body:
+Request body will consist of below attributes:
+
+     1. data: data attribute will be Base64 encoded string of API request json. Details of request
+        json attributes are explained in request data element details.
+     2. eriUserId: It is mandatory and valid value is user ID of the ERI
+     3. sign:
+
+     •   The API request data attribute should be digitally signed for the message integrity and
+         non-repudiation purposes.
+     •   Digital signing should always be performed by the ERI from value of data attribute which
+         was generated from request json.
+     •   The signature should be generated using a valid X.509 certificate
+     •   signature value should be generated from data field using ERI's DSC private key.
+     •   ERI should share their DSC public key with ITD to validate the signature.
+
+5.4.3 Details of data attribute:
+
+Below are the request parameters, which is request json used to create data attribute as
+explained above data attribute of the request body:
+
+Name of the          Data     Max        Is
+                                                   Description
+Parameter            type     length     Mandatory
+                                                        It is mandatory and valid value is
+serviceName          String   60         Yes
+                                                        "EriGenerateEvcService"
+pan                  String   10         Yes            Valid PAN of the taxpayer
+                                                        Verification mode. Valid values are:
+                                                        "AADHAAR" for Aadhaar OTP
+                                                        "BANKEVC" for EVC through bank
+verMode              String   10         Yes
+                                                        account
+                                                        "DEMATEVC" for EVC through
+                                                        DEMAT account
+ackNum               String   15         Yes            Acknowledgement number
+                                                        Assessment year valid format is
+ay                   String   4          Yes
+                                                        "YYYY"
+                                                        Form code
+                                                        "1" for ITR 1
+                                                        "2" for ITR 2
+                                                        "3" for ITR 3
+formCode             String   1          Yes
+                                                        "4" for ITR 4
+                                                        "5" for ITR 5
+                                                        "6" for ITR 6
+                                                        "7" for ITR 7
+5.5 Response Parameters
+Name of the                     Max      Is
+                 Data type                         Description
+Parameter                       length   Mandatory
+                                                     List of information messages. There can
+                                                     be one or more messages. The messages
+messages         List<String>            Yes         array will be null if there are no
+                                                     messages.
+
+                                                     This is not a mandatory field. List of
+                                                     errors. The value will be null if there is
+errors           List<Error>             No
+                                                     no error.
+
+                                                     Indicates whether generateEVC call is
+                                                     successful. Possible value is true or
+successFlag      Boolean                 Yes
+                                                     false.
+                                                     "successFlag": true
+entity           String                  No          This field is only for positive response.
+                                                     This field is only for positive response.
+                                                     Transaction ID received from UIDAI or
+                                                     eFiling system at the time of OTP
+transactionId    String                  No          generation
+                                                     Mandatory for Aadhaar OTP Validation
+                                                     but not required for Bank or Demat
+                                                     EVC verification
+autkn            String         15       No          This field is only for positive response.
+                                                     This is a not mandatory field. http codes
+httpStatus       String         20       No          corresponding to response.
+                                                     Possible value is "OK"
+
+
+
+
+5.6 GenerateEvc API - Sample Request format
+
+{
+"data": "",
+"sign": "",
+"eriUserId": ""
+}
+data tag will be Base64Encoded string from following request json
+{
+"serviceName": "",
+"eriUserId": "",
+"pan": "",
+"verMode": "",
+"ackNum": "",
+"ay": "",
+"formCode":""
+}
+
+5.7 GenerateEvc API - Sample Response format
+{
+"messages": [],
+"errors": [],
+"successFlag": true,
+"transactionId": "1324t56",
+"httpStatus": "OK"
+}
+
+
+
+
+6. VerifyEvc API Details
+This API is used to verify the ITR using Aadhaar OTP or EVC
+
+6.1 API Usage Scenario
+ERI can submit their choice for verification mode for their client.
+When ERI application submits the call this API below are the activities are performed:
+
+   1. Taxpayer already has the OTP or EVC based on the generateEVC API called was made
+      earlier.
+   2. Taxpayer will provide the OTP or EVC to verify the return.
+
+6.2 API Request process
+ERI application must have already establish the login session and auth token with eFiling system
+using the login API. Application will initiate call with API as below:
+
+   1. ERI application will capture the OTP or EVC value from the taxpayer.
+   2. ERI application will call EriVerifyEvc API to verify the return for the taxpayer.
+6.3 API Protocol
+EriVerifyEvc API is exposed as REST API over the HTTPS. The input data should be sent as
+JSON document using Content-Type "application/json".
+
+6.4 Request Parameters
+The request will consist of request header and request body:
+
+6.4.1 Request Header:
+
+Header is mandatory and will consists of following values:
+Mandatory Request Header Parameters:
+
+Header Name Header Value
+Content-type     application/json
+clientId         clientId value which is provided to ERI as part of the registration
+clientSecret     clientSecret value which is provided to ERI as part of the registration
+authToken        Auth token from the Login Flow
+accessMode       "API"
+
+
+
+
+6.4.2 Request Body:
+
+Request body will consist of below attributes:
+
+   1. data: data attribute will be Base64 encoded string of API request json. Details of request
+      json attributes are explained in request data element details.
+   2. eriUserId: It is mandatory and valid value is user ID of the ERI
+   3. sign:
+
+   •   The API request data attribute should be digitally signed for the message integrity and
+       non-repudiation purposes.
+   •   Digital signing should always be performed by the ERI from value of data attribute which
+       was generated from request json.
+   •   The signature should be generated using a valid X.509 certificate
+   •   signature value should be generated from data field using ERI's DSC private key.
+   •   ERI should share their DSC public key with ITD to validate the signature.
+6.4.3 Details of data attribute:
+
+Below are the request parameters, which is request json used to create data attribute as
+explained above data attribute of the request body:
+
+Name of the      Data     Max      Is
+                                             Description
+Parameter        type     length   Mandatory
+                                                It is mandatory and valid value is
+serviceName      String   60       Yes
+                                                "EriVerifyEvcService"
+                                                Valid PAN of the taxpayer who is being
+pan              String   10       Yes
+                                                added as client by the ERI
+ay               String   4        Yes          Assessment year. Valid format is "YYYY"
+                                                Form code
+                                                "1" for ITR 1
+                                                "2" for ITR 2
+                                                "3" for ITR 3
+formCode         String   1        Yes
+                                                "4" for ITR 4
+                                                "5" for ITR 5
+                                                "6" for ITR 6
+                                                "7" for ITR 7
+                                                Acknowledgement number generated at the
+ackNum           String   15       Yes
+                                                time of ITR submission
+                                                Transaction ID received from UIDAI or
+transactionId    String            Yes
+                                                eFiling system at the time of OTP generation
+                                                Verification mode. Valid values are:
+                                                "AADHAAR" for Aadhaar OTP
+                                                "BANKEVC" for EVC through bank
+verMode          String            Yes
+                                                account
+                                                "DEMATEVC" for EVC through DMAT
+                                                account
+                                                It is mandatory only in case verMode is
+otpValue         String   6        Yes          "AADHAAR". Aadhaar OTP value will be
+                                                6-digit number.
+                                                It is mandatory only in case verMode is
+evcValue         String   10       Yes          "BANKEVC" or "DEMATEVC". Value will
+                                                be 10-alphanumeric.
+
+
+
+
+6.5 Response Parameters
+Name of the                    Max      Is
+                Data type                         Description
+Parameter                      length   Mandatory
+                                                     List of information messages. There can
+                                                     be one or more messages. The messages
+                                                     array will be null if there are no
+messages        List<String>            Yes
+                                                     messages.
+
+                                                     "messages": []
+                                                     This is not a mandatory field. List of
+                                                     errors. The value will be null if there is
+errors          List<Error>             No           no error.
+
+                                                     "errors": []
+                                                     Indicates whether EriVerifyEvc call is
+                                                     successful. Possible value is true or
+successFlag     Boolean                 Yes
+                                                     false.
+                                                     "successFlag": true
+                                                     http codes corresponding to response.
+httpStatus      String         20       No
+                                                     Possible value is "OK"
+
+
+
+
+6.6 VerifyEvc API - Sample Request format
+
+{
+"data": "",
+"sign": "",
+"eriUserId": ""
+}
+data tag will be Base64Encoded string from following request json
+{
+"serviceName": "",
+"eriUserId": "",
+"pan": "",
+"verMode": "",
+"ay": "",
+"formCode:"",
+"ackNum": "",
+"transactionId": "",
+"otpValue": "",
+"evcValue ": ""
+}
+6.7 VerifyEvc API - Sample Response format
+{
+"messages": [],
+"errors": [],
+"successFlag": true,
+"transactionId": "132456",
+"httpStatus": "OK"
+}
+
+
+
+
+7. API Exception Details
+                        Error                                                 Message
+Scenario                          Details                Error String
+                        code                                                  Type
+Invalid Json data       EF40000   When json is invalid   JSON data invalid.   ERROR
+Pan has no record in              When entered pan has No record found for
+                        EF00009                                               ERROR
+DB                                no record in DB      the entered PAN.
+When transactionId                When transactionId
+                                                         "txn" value did not
+associated with                   associated with
+                        EF00224                          match with "txn" value ERROR
+Aadhaar OTP is not                Aadhaar OTP is not
+                                                         of Request OTP API.
+same                              same
+                                  When user enters
+OTP validation failed EF40012                            OTP validation failed. ERROR
+                                  incorrect OTP
+OTP generation                    When user generation OTP Generation
+                        EF40014                                               ERROR
+Failed                            fails                failed.
+When                              When entered         No records found for
+Acknowledgement                   Acknowledgement      this
+                     EF00156                                                  ERROR
+number does not have              number does not have Acknowledgement
+any record                        record in DB         number, Please Retry
+When expected values              When expected values
+are not provided for              are not provided for
+e.g., absence of     EF00001      e.g., absence of                            ERROR
+                                                       Please enter valid
+ackNum while                      ackNum while
+                                                       values.
+validation                        validation
+                                                            To generate EVC, you
+When individual pan               When individual pan       need to validate and
+selects EVC through               selects EVC through       enable EVC on your
+bank account and        EF00101   bank account and          bank account.        ERROR
+account is not EVC                account is not EVC
+enabled                           enabled
+
+                                                            Please inform your
+When other than                   When other than
+                                                            Principal Contact to
+individual pan tries to           individual pan tries to
+                                                            validate his bank
+generate EVC                      generate EVC
+                        EF00102                             account and enable       ERROR
+through bank, but                 through bank, but
+                                                            EVC by logging in to
+account is not EVC                account is not EVC
+                                                            e-filing portal using
+enabled and validated             enabled and validated
+                                                            his credentials.
+When individual pan               When individual pan
+                                                            To generate EVC, you
+selects EVC through               selects EVC through
+                                                            need to validate and
+demat account and       EF00104   demat account and                              ERROR
+                                                            enable EVC on your
+account is not EVC                account is not EVC
+                                                            demat account.
+enabled                           enabled
+When other than                   When other than           Please inform your
+individual pan tries to           individual pan tries to   Principal Contact to
+generate EVC                      generate EVC              validate his Demat
+through demat           EF00105   through demat             account and enable       ERROR
+account, but account              account, but account      EVC on it by logging
+is not EVC enabled                is not EVC enabled        in to e-filing portal
+and validated                     and validated             using his credentials.
+When otp is expired               When otp is expired       OTP has expired,
+while hitting e-        EF00128   while hitting e-          please generate new      ERROR
+verification services             verification services     OTP.
+When user enters                  When user enters
+invalid otp                       invalid otp               Invalid OTP. Please
+                        EF00028                                                      ERROR
+while hitting e-                  while hitting e-          retry.
+verification services             verification services
+When entered EVC is               When entered EVC is Invalid EVC. Please
+                    EF00108                                                          ERROR
+invalid                           invalid             retry.
+When user wants to                When user wants to
+generate Aadhaar                  generate Aadhaar
+                                                            Your PAN and
+OTP but Aadhaar is      EF00099   OTP but Aadhaar is                               ERROR
+                                                            Aadhaar is not linked.
+not linked with PAN               not linked with PAN
+(for registered user)             (for registered user)
+                                                        Please inform your
+When other than                 When other than         Principal Contact to
+individual register             individual register     complete Aadhaar
+pan does not have     EF00100   pan does not have       PAN linking process       ERROR
+linking between                 linking between         by logging in to e-
+Aadhaar and PAN                 Aadhaar and PAN         filing portal using his
+                                                        credentials
+                                                        Aadhaar OTP is
+                                When error code
+                                                        already generated.
+When error code                 received from UIDAI
+                                                        Please use the same
+received from UIDAI EF00226     Is 953                                            ERROR
+                                                        for verification or try
+is 953                          (this error will come
+                                                        to generate new OTP
+                                from UIDAI side)
+                                                        after half an hour.
+When PAN is not in a            Please enter a valid    When PAN is not in a
+                     EF00011                                                      ERROR
+valid format                    PAN Number.             valid format
+When Pan Entered                The PAN does not        When Pan Entered
+                      EF00047                                                     ERROR
+does not exist.                 exist.                  does not exist.
+                                The PAN entered is      The PAN entered is
+                                inactive. Please        inactive. Please
+When the user is
+                      EF00098   contact your            contact your              ERROR
+inactive.
+                                Accessing Officer to    Accessing Officer to
+                                activate the PAN.       activate the PAN.
+When no record                  No record found for     No record found for
+                      EF00009                                                     INFO
+found for PAN.                  the entered PAN.        the entered PAN.
+                                                   Details are not as per
+When provided                                      Acknowledgement
+                               No Details found as
+incorrect input for                                number. Please
+                      EF500054 per acknowledgement                                ERROR
+PAN, AY and Form                                   provide correct input
+                               number
+Name                                               for PAN, AY and
+                                                   Form Name
+                               Bank EVC and Demat
+                                                     Please provide correct
+When incorrect                 EVC will not be
+                                                     verification mode for
+verification mode     EF500055 verified as incorrect                        ERROR
+                                                     which EVC is
+provided                       verification mode
+                                                     generated
+                               provided
+                                EVC will not be         EVC has expired.
+When EVC has
+                      EF00107   verified as EVC has     Please generate new       ERROR
+expired
+                                expired                 EVC.
+                                  Aadhaar OTP will not Please link your
+When Aadhaar is not               be verified as        Aadhaar to your PAN
+                        EF00232                                                  ERROR
+linked with PAN                   Aadhaar is not linked to verify return using
+                                  with PAN              Aadhaar OTP.
+When ERI user who               E-verify cannot be        This ITR cannot be e-
+created the ITR is not          done for this ITR as it   verified as it is not
+                       EF500051                                                  ERROR
+the one who is                  is not submitted          submitted through this
+accessing now                   through this ERI.         ERI.
+When ITR is already               ITR is already          Your ITR is already E-
+                        EF40055                                                  REMARK
+Verified                          verified.               Verified.
+                                 When the PAN is not
+When ERI client                                           The PAN is not a valid
+                        EF500058 a valid client of                               ERROR
+linkage fails                                             client for this ERI.
+                                 logged in ERI user
+When attributes are
+                                  When request data is
+incorrect in json       EF20123                           Invalid Request Data   ERROR
+                                  invalid
+request data
+When a user request                                    You have exceeded
+EVC for 6 th time for            When limit to receive the limit to receive
+                        EF500093                                                 ERROR
+same service within              EVC is over           EVC. Please try again
+72 hours                                               after some time.
+                                                          You have exceeded
+When user enters               When number of             the number of
+incorrect EVC for 4th EF500094 attempts to enter          attempts to enter      ERROR
+time                           correct EVC is over        correct EVC. Please
+                                                          generate new EVC.
+

@@ -1,135 +1,177 @@
+"""ERI Type-2 router tests aligned with the Dual-Mode ERI Integration Plan.
+
+Phase 1 of the ERI plan moved the Type-2 modules to ``app/eri/type2/`` and
+added a mode guard (``_require_type2_mode``) so the Type-2 routes return
+HTTP 503 when ``ERI_MODE != "type2"``. These tests exercise the Type-2
+route handlers in ``ERI_MODE=type2`` (guard passes → patched Type-2
+functions are called) and assert the 503 mode-guard behaviour in
+``ERI_MODE=type3``.
+"""
+
+from __future__ import annotations
+
 import os
+
 import pytest
-from unittest.mock import patch
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
 from fastapi.datastructures import Headers
+from unittest.mock import patch
 
 from app.db.models import User
 from app.routers.integration import (
-    login_eri,
-    logout_eri,
     eri_add_client_route,
     eri_validate_client_otp_route,
+    eri_validate_reg_otp_route,
+    eri_validate_itr_route,
+    eri_submit_itr_route,
+    eri_update_ver_mode_route,
+    eri_generate_evc_route,
+    eri_verify_evc_route,
+    eri_get_acknowledgement_route,
+    login_eri,
+    logout_eri,
     eri_register_client_route,
-    eri_validate_reg_otp_route
 )
 from app.schemas.eri import (
-    ERILoginRequest,
-    ERILogoutRequest,
     ERIAddClientRequest,
-    ERIValidateClientOtpRequest,
     ERIRegisterClientRequest,
-    ERIValidateRegOtpRequest
+    ERIValidateClientOtpRequest,
+    ERIValidateRegOtpRequest,
+    ERIUpdateVerModeRequest,
+    ERIGenerateEvcRequest,
+    ERIVerifyEvcRequest,
+    ERIAcknowledgementRequest,
+    ERIValidateItrRequest,
+    ERISubmitItrRequest,
 )
+from app.eri.exceptions import ERIApiError
 
-# Set env variables for test consistency
-os.environ["ERI_USER_ID"] = "TEST_ERI_USER_ID"
-os.environ["ERI_PASSWORD"] = "test_password"
-os.environ["ERI_SYMMETRIC_KEY"] = "test_symmetric_key_base64=="
-os.environ["ERI_CLIENT_ID"] = "test_client_id"
-os.environ["ERI_CLIENT_SECRET"] = "test_client_secret"
+# Suffix-qualified Type-2 UAT credentials so ``get_eri_credentials()``
+# resolves cleanly and the ``_require_type2_mode`` guard passes. Per the
+# ERI plan §3.1, all four credential sets live in .env under suffix-
+# qualified names; the tests mirror that contract.
+os.environ["ERI_MODE"] = "type2"
+os.environ["ERI_ENV"] = "uat"
+os.environ["ERI_SW_ID_TYPE2_UAT"] = "SW20014242"
+os.environ["ERI_DIGEST_SECRET_KEY_TYPE2_UAT"] = "4448ffc0cec1a25d"
+os.environ["ERI_DIGEST_ITERATIONS_TYPE2_UAT"] = "1344"
+os.environ["ERI_CLIENT_ID_TYPE2_UAT"] = "test_client_id"
+os.environ["ERI_CLIENT_SECRET_TYPE2_UAT"] = "test_client_secret"
+os.environ["ERI_USER_ID_TYPE2_UAT"] = "TEST_ERI_USER_ID"
+os.environ["ERI_PASSWORD_TYPE2_UAT"] = "test_password"
+os.environ["ERI_BASE_URL_TYPE2_UAT"] = "https://uatocpservices.incometax.gov.in/iec-uat/uat/eriapi"
 os.environ["ERI_DSC_SIGNING_MODE"] = "token"
 
 
 @pytest.fixture
-def mock_user():
+def mock_user() -> User:
+    """Return a minimal authenticated user for route dependencies."""
     return User(id=1, email="test@example.com")
 
 
 class MockRequest:
-    """Simulates FastAPI Request object for extracting headers."""
-    def __init__(self, headers_dict: dict):
+    """Simulates the FastAPI ``Request`` object for header extraction."""
+
+    def __init__(self, headers_dict: dict) -> None:
+        """Initialize with a headers mapping."""
         self.headers = Headers(headers_dict)
 
 
-@patch('app.eri.login.eri_login')
-def test_eri_login_route(mock_eri_login, mock_user):
+@patch("app.eri.type2.login.eri_login")
+def test_eri_login_route(mock_eri_login, mock_user) -> None:
+    """Login route returns the patched ERI login payload."""
     mock_eri_login.return_value = {
         "authToken": "mock_auth_token_ERIP013181",
-        "transactionId": "mock_login_tx_12345"
+        "transactionId": "mock_login_tx_12345",
     }
-    
+
     res = login_eri(current_user=mock_user)
-    
+
     assert res["success"] is True
     assert res["authToken"] == "mock_auth_token_ERIP013181"
     assert "transactionId" in res
 
 
-@patch('app.eri.login.eri_login')
-def test_eri_login_route_defaults(mock_eri_login, mock_user):
+@patch("app.eri.type2.login.eri_login")
+def test_eri_login_route_defaults(mock_eri_login, mock_user) -> None:
+    """Login route returns success with a default authToken."""
     mock_eri_login.return_value = {
         "authToken": "mock_auth_token_ERIP013181",
-        "transactionId": "mock_login_tx_12345"
+        "transactionId": "mock_login_tx_12345",
     }
-    
+
     res = login_eri(current_user=mock_user)
-    
+
     assert res["success"] is True
     assert res["authToken"] == "mock_auth_token_ERIP013181"
 
 
-@patch('app.eri.login.eri_logout')
-def test_eri_logout_route(mock_eri_logout, mock_user):
+@patch("app.eri.type2.login.eri_logout")
+def test_eri_logout_route(mock_eri_logout, mock_user) -> None:
+    """Logout route returns success when an auth token is supplied."""
     mock_eri_logout.return_value = None
     mock_req = MockRequest({"Authorization": "Bearer mock_token_123"})
-    
+
     res = logout_eri(req=mock_req, current_user=mock_user)
     assert res["success"] is True
     assert "message" in res
 
 
-def test_eri_logout_route_missing_auth(mock_user):
+def test_eri_logout_route_missing_auth(mock_user) -> None:
+    """Logout without an auth token raises 401 in Type-2 mode."""
     mock_req = MockRequest({})
-    
+
     with pytest.raises(HTTPException) as exc_info:
         logout_eri(req=mock_req, current_user=mock_user)
     assert exc_info.value.status_code == 401
 
 
-@patch('app.eri.add_client.addClient')
-def test_eri_add_client_route(mock_add_client, mock_user):
+@patch("app.eri.type2.add_client.addClient")
+def test_eri_add_client_route(mock_add_client, mock_user) -> None:
+    """Add-client route forwards the patched payload."""
     mock_add_client.return_value = {
         "successFlag": True,
         "transactionId": "mock_add_client_tx_ABCDE1234F",
-        "httpStatus": "SUBMITTED"
+        "httpStatus": "SUBMITTED",
     }
     req = ERIAddClientRequest(pan="ABCDE1234F", dateOfBirth="1990-01-01", otpSourceFlag="E")
     mock_req = MockRequest({"authToken": "mock_token_123"})
-    
+
     res = eri_add_client_route(req=mock_req, request=req, current_user=mock_user)
     assert res["successFlag"] is True
     assert "transactionId" in res
     assert res["httpStatus"] == "SUBMITTED"
 
 
-@patch('app.eri.add_client.validateClientOtp')
-def test_eri_validate_client_otp_route(mock_validate_client, mock_user):
+@patch("app.eri.type2.add_client.validateClientOtp")
+def test_eri_validate_client_otp_route(mock_validate_client, mock_user) -> None:
+    """Validate-client-OTP route forwards the patched payload."""
     mock_validate_client.return_value = {
         "successFlag": True,
-        "httpStatus": "ACCEPTED"
+        "httpStatus": "ACCEPTED",
     }
     req = ERIValidateClientOtpRequest(
         pan="ABCDE1234F",
         transactionId="tx123",
         otpSourceFlag="E",
         otp="123456",
-        validUpto="2027-01-01"
+        validUpto="2027-01-01",
     )
     mock_req = MockRequest({"Authorization": "Bearer mock_token_123"})
-    
+
     res = eri_validate_client_otp_route(req=mock_req, request=req, current_user=mock_user)
     assert res["successFlag"] is True
     assert res["httpStatus"] == "ACCEPTED"
 
 
-@patch('app.eri.add_client.addRegisterClient')
-def test_eri_register_client_route(mock_add_register, mock_user):
+@patch("app.eri.type2.add_client.addRegisterClient")
+def test_eri_register_client_route(mock_add_register, mock_user) -> None:
+    """Register-client route forwards the patched payload."""
     mock_add_register.return_value = {
         "successFlag": True,
         "smsTransactionId": "mock_sms_tx",
         "emailTransactionId": "mock_email_tx",
-        "httpStatus": "SUBMITTED"
+        "httpStatus": "SUBMITTED",
     }
     req = ERIRegisterClientRequest(
         pan="ABCDE1234F",
@@ -141,21 +183,22 @@ def test_eri_register_client_route(mock_add_register, mock_user):
         priMobileNum="9876543210",
         priEmailId="john@example.com",
         addrLine1Txt="Flat 101",
-        addrLine2Txt="Building A"
+        addrLine2Txt="Building A",
     )
     mock_req = MockRequest({"authToken": "mock_token_123"})
-    
+
     res = eri_register_client_route(req=mock_req, request=req, current_user=mock_user)
     assert res["successFlag"] is True
     assert "smsTransactionId" in res
     assert "emailTransactionId" in res
 
 
-@patch('app.eri.add_client.validateRegOtp')
-def test_eri_validate_reg_otp_route(mock_validate_reg, mock_user):
+@patch("app.eri.type2.add_client.validateRegOtp")
+def test_eri_validate_reg_otp_route(mock_validate_reg, mock_user) -> None:
+    """Validate-registration-OTP route forwards the patched payload."""
     mock_validate_reg.return_value = {
         "successFlag": True,
-        "httpStatus": "ACCEPTED"
+        "httpStatus": "ACCEPTED",
     }
     req = ERIValidateRegOtpRequest(
         pan="ABCDE1234F",
@@ -163,10 +206,252 @@ def test_eri_validate_reg_otp_route(mock_validate_reg, mock_user):
         emailTransactionId="email123",
         mobileOtp="111111",
         emailOtp="222222",
-        validUpto="2027-01-01"
+        validUpto="2027-01-01",
     )
     mock_req = MockRequest({"Authorization": "Bearer mock_token_123"})
-    
+
     res = eri_validate_reg_otp_route(req=mock_req, request=req, current_user=mock_user)
     assert res["successFlag"] is True
     assert res["httpStatus"] == "ACCEPTED"
+
+
+def _sample_validate_itr_request(**overrides) -> ERIValidateItrRequest:
+    fields = dict(
+        pan="ABCDE1234F",
+        formName="ITR-1",
+        formCode="1",
+        ay="2026",
+        filingTypeCd="O",
+        filingMode="OF",
+        incomeTaxSecCd="11",
+        submittedBy="ERI",
+        formData='{"ITR":{"ITR1":{}}}',
+    )
+    fields.update(overrides)
+    return ERIValidateItrRequest(**fields)
+
+
+@patch("app.eri.type2.validate.validate_itr")
+def test_eri_validate_itr_route(mock_validate_itr, mock_user) -> None:
+    """Validate-ITR route forwards the patched payload."""
+    mock_validate_itr.return_value = {
+        "successFlag": False,
+        "errors": [],
+        "transactionNo": "ITR000000004862",
+    }
+    req = _sample_validate_itr_request()
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_validate_itr_route(req=mock_req, request=req, current_user=mock_user)
+    assert res["transactionNo"] == "ITR000000004862"
+    mock_validate_itr.assert_called_once()
+    _, kwargs = mock_validate_itr.call_args
+    assert kwargs["pan"] == "ABCDE1234F"
+    assert kwargs["form_name"] == "ITR-1"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_validate_itr_route_missing_auth(mock_user) -> None:
+    """Validate-ITR without an auth token raises 401 in Type-2 mode."""
+    req = _sample_validate_itr_request()
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_validate_itr_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+@patch("app.eri.type2.validate.validate_itr")
+def test_eri_validate_itr_route_surfaces_field_error(mock_validate_itr, mock_user) -> None:
+    """A validate/submit-shaped ERIApiError (errCd/errFld) surfaces its
+    field_name in the route's error detail -- this is the shape
+    parse_response_envelope now recognizes (see test_eri_envelope.py),
+    distinct from the login/addClient/everify {code,desc,fieldName} shape."""
+    mock_validate_itr.side_effect = ERIApiError(
+        code="AssesseeName_001",
+        desc="OTH",
+        field_name="ITR.ITR1.PersonalInfo.AssesseeName",
+    )
+    req = _sample_validate_itr_request()
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_validate_itr_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 400
+    assert "AssesseeName_001" in exc_info.value.detail
+    assert "ITR.ITR1.PersonalInfo.AssesseeName" in exc_info.value.detail
+
+
+@patch("app.eri.type2.submit.submit_itr")
+def test_eri_submit_itr_route(mock_submit_itr, mock_user) -> None:
+    """Submit-ITR route forwards the patched payload, including the ARN."""
+    mock_submit_itr.return_value = {
+        "successFlag": True,
+        "errors": [],
+        "arnNumber": "111202010240326",
+        "transactionNo": "ITR000000004863",
+    }
+    req = ERISubmitItrRequest(**_sample_validate_itr_request().model_dump())
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_submit_itr_route(req=mock_req, request=req, current_user=mock_user)
+    assert res["arnNumber"] == "111202010240326"
+    mock_submit_itr.assert_called_once()
+    _, kwargs = mock_submit_itr.call_args
+    assert kwargs["form_code"] == "1"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_submit_itr_route_missing_auth(mock_user) -> None:
+    """Submit-ITR without an auth token raises 401 in Type-2 mode."""
+    req = ERISubmitItrRequest(**_sample_validate_itr_request().model_dump())
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_submit_itr_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+# ── E-verify and acknowledgement routes: wired but previously untested ─────
+# (found while continuing the ITR-4 Type-2 UAT implementation -- these
+# routes existed in app/routers/integration.py with zero test coverage.)
+
+
+@patch("app.eri.type2.everify.update_ver_mode")
+def test_eri_update_ver_mode_route(mock_update_ver_mode, mock_user) -> None:
+    """Update-ver-mode route forwards the patched payload."""
+    mock_update_ver_mode.return_value = {"successFlag": True, "httpStatus": "ACCEPTED"}
+    req = ERIUpdateVerModeRequest(pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4", verMode="LATER")
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_update_ver_mode_route(req=mock_req, request=req, current_user=mock_user)
+    assert res["successFlag"] is True
+    mock_update_ver_mode.assert_called_once()
+    kwargs = mock_update_ver_mode.call_args.kwargs
+    assert kwargs["pan"] == "ABCDE1234F"
+    assert kwargs["ack_num"] == "123456789012345"
+    assert kwargs["ver_mode"] == "LATER"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_update_ver_mode_route_missing_auth(mock_user) -> None:
+    req = ERIUpdateVerModeRequest(pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4", verMode="LATER")
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_update_ver_mode_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+@patch("app.eri.type2.everify.generate_evc")
+def test_eri_generate_evc_route(mock_generate_evc, mock_user) -> None:
+    """Generate-EVC route forwards the patched payload."""
+    mock_generate_evc.return_value = {"successFlag": True, "transactionId": "tx1"}
+    req = ERIGenerateEvcRequest(pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4", verMode="AADHAAR")
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_generate_evc_route(req=mock_req, request=req, current_user=mock_user)
+    assert res["transactionId"] == "tx1"
+    kwargs = mock_generate_evc.call_args.kwargs
+    assert kwargs["ver_mode"] == "AADHAAR"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_generate_evc_route_missing_auth(mock_user) -> None:
+    req = ERIGenerateEvcRequest(pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4", verMode="AADHAAR")
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_generate_evc_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+@patch("app.eri.type2.everify.verify_evc")
+def test_eri_verify_evc_route(mock_verify_evc, mock_user) -> None:
+    """Verify-EVC route forwards the patched payload, including OTP/EVC values."""
+    mock_verify_evc.return_value = {"successFlag": True, "httpStatus": "SUCCESS"}
+    req = ERIVerifyEvcRequest(
+        pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4",
+        verMode="AADHAAR", transactionId="tx1", otpValue="123456",
+    )
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_verify_evc_route(req=mock_req, request=req, current_user=mock_user)
+    assert res["successFlag"] is True
+    kwargs = mock_verify_evc.call_args.kwargs
+    assert kwargs["transaction_id"] == "tx1"
+    assert kwargs["otp_value"] == "123456"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_verify_evc_route_missing_auth(mock_user) -> None:
+    req = ERIVerifyEvcRequest(
+        pan="ABCDE1234F", ackNum="123456789012345", ay="2026", formCode="4",
+        verMode="AADHAAR", transactionId="tx1", otpValue="123456",
+    )
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_verify_evc_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+@patch("app.eri.type2.acknowledgement.get_acknowledgement")
+def test_eri_get_acknowledgement_route(mock_get_ack, mock_user) -> None:
+    """Get-acknowledgement route returns raw PDF bytes as a Response, unlike
+    every other Type-2 route (which return JSON dicts)."""
+    mock_get_ack.return_value = b"%PDF-1.4 fake pdf bytes"
+    req = ERIAcknowledgementRequest(pan="ABCDE1234F", ackNumber="111202010240326")
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    res = eri_get_acknowledgement_route(req=mock_req, request=req, current_user=mock_user)
+    assert res.body == b"%PDF-1.4 fake pdf bytes"
+    assert res.media_type == "application/pdf"
+    kwargs = mock_get_ack.call_args.kwargs
+    assert kwargs["pan"] == "ABCDE1234F"
+    assert kwargs["ack_number"] == "111202010240326"
+    assert kwargs["auth_token"] == "mock_token_123"
+
+
+def test_eri_get_acknowledgement_route_missing_auth(mock_user) -> None:
+    req = ERIAcknowledgementRequest(pan="ABCDE1234F", ackNumber="111202010240326")
+    mock_req = MockRequest({})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_get_acknowledgement_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 401
+
+
+@patch("app.eri.type2.acknowledgement.get_acknowledgement")
+def test_eri_get_acknowledgement_route_surfaces_eri_api_error(mock_get_ack, mock_user) -> None:
+    """A JSON error response (not a PDF) from get_acknowledgement() surfaces
+    as a clean 400, not an unhandled exception -- exercises the same
+    ERIApiError import this whole route family depends on (see SS12.6 of
+    Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md for the bug this class of test
+    already caught once)."""
+    from app.eri.exceptions import ERIApiError
+    mock_get_ack.side_effect = ERIApiError(code="EF00047", desc="The PAN does not exist.")
+    req = ERIAcknowledgementRequest(pan="ABCDE1234F", ackNumber="111202010240326")
+    mock_req = MockRequest({"authToken": "mock_token_123"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        eri_get_acknowledgement_route(req=mock_req, request=req, current_user=mock_user)
+    assert exc_info.value.status_code == 400
+    assert "EF00047" in exc_info.value.detail
+
+
+# ── Mode-guard (Phase 1 B2): Type-2 routes return 503 in Type-3 mode ───────
+
+
+def test_type2_routes_return_503_in_type3_mode(mock_user, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per ERI plan §B2: Type-2 routes must 503 when ERI_MODE != type2."""
+    monkeypatch.setenv("ERI_MODE", "type3")
+    monkeypatch.setenv("ERI_ENV", "uat")
+    monkeypatch.setenv("ERI_SW_ID_TYPE3_UAT", "SW20014122")
+    monkeypatch.setenv("ERI_DIGEST_SECRET_KEY_TYPE3_UAT", "d96d4ce17e20a6ba")
+    monkeypatch.setenv("ERI_DIGEST_ITERATIONS_TYPE3_UAT", "1038")
+
+    with pytest.raises(HTTPException) as exc_info:
+        login_eri(current_user=mock_user)
+    assert exc_info.value.status_code == 503
+    assert "Type-2" in exc_info.value.detail

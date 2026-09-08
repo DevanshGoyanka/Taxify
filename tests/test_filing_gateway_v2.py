@@ -1,0 +1,781 @@
+"""Tests for the Phase 2 canonical filing gateway."""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any
+
+import pytest
+
+import app.engine.filing_gateway_v2 as gateway
+from app.schemas.return_draft import (
+    AlternateAddress,
+    BankAccount,
+    CapitalGainsSchedule,
+    Category80D,
+    CoOwner,
+    Employer,
+    HomeLoan,
+    HouseProperty,
+    InterestIncome,
+    OtherIncomeEntry,
+    PensionContribution80CCC,
+    Policy80D,
+    ReconciliationDiscrepancy,
+    ReconciliationEvidence,
+    ReturnDraft,
+    RepresentativeAssessee,
+    Schedule80GGCEntry,
+    SeventhProvisoClause,
+    TenantDetail,
+    create_empty_draft,
+)
+
+
+def _filing_ready_draft() -> ReturnDraft:
+    """Create a minimally filing-ready canonical ITR-1 draft."""
+    draft = create_empty_draft("2026-27", "ITR-1", "new")
+    draft.personal.name = "Rahul Sharma"
+    draft.personal.firstName = "Rahul"
+    draft.personal.surnameOrOrgName = "Sharma"
+    draft.personal.fatherName = "Mohan Sharma"
+    draft.personal.pan = "ABCDE1234F"
+    draft.personal.email = "rahul@example.com"
+    draft.personal.mobile = "9876543210"
+    draft.personal.dateOfBirth = "1990-01-15"
+    draft.personal.flatNo = "12A"
+    draft.personal.localityOrArea = "Central Delhi"
+    draft.personal.city = "Delhi"
+    draft.personal.stateCode = "07"
+    draft.personal.countryCode = "91"
+    draft.personal.pinCode = "110001"
+    draft.personal.employerCategory = "OTH"
+    draft.verification.place = "Delhi"
+    # A return filed under 139(1) declares a filing date on or before the due
+    # date; without one the fixture is judged against the day the suite runs.
+    draft.verification.date = "2026-07-31"
+    draft.verification.declarationAccepted = True
+    draft.employers = [Employer(id="e1", basic=Decimal("800000"))]
+    draft.bankAccounts = [BankAccount(
+        id="b1",
+        bankName="State Bank of India",
+        accountNumber="1234567890",
+        ifscCode="SBIN0001234",
+        accountType="SB",
+        useForRefund=True,
+    )]
+    return draft
+
+
+def test_itr1_compute_prepares_profile_before_calculation() -> None:
+    """Compute receives the complete profile, bank accounts, and TRP data."""
+    draft = _filing_ready_draft()
+    draft.taxReturnPreparer.used = True
+    draft.taxReturnPreparer.identificationNumber = "123456"
+    draft.taxReturnPreparer.name = "Registered Tax Preparer"
+    draft.taxReturnPreparer.reimbursementFromGovernment = Decimal("750")
+
+    pipeline = gateway.compute_canonical_itr1(draft)
+    profile = pipeline.typed_input.filing_profile
+
+    assert profile is not None
+    assert profile.pan == draft.personal.pan
+    assert profile.verification_place == draft.verification.place
+    assert profile.bank_accounts == pipeline.typed_input.bank_accounts
+    assert profile.tax_return_preparer is not None
+    assert profile.tax_return_preparer.identification_number == "123456"
+    assert pipeline.typed_input.property_profiles
+
+
+def test_itr1_rejects_itr4_only_verification_capacity() -> None:
+    """ITR-1 must not silently map Karta or Partner verification to Self."""
+    draft = _filing_ready_draft()
+    draft.verification.capacity = "KARTA"
+
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.generate_cbdt_json(draft)
+
+    assert caught.value.message == "ITR-1 verification capacity is invalid."
+
+
+def test_incomplete_24b_loan_raises_readable_error_not_unserializable_crash() -> None:
+    """Found live: adding a Section 24(b) home loan row via the House
+    Property tab's "+ Add" button (which starts every field blank,
+    including the required loanAccountNo) and computing immediately, before
+    filling in the loan's account/reference number, must raise a
+    FilingGatewayV2Error with a real, JSON-serializable list of error
+    strings -- not crash while trying to build the HTTP error response.
+
+    Root cause: pydantic.ValidationError.errors is a *method*, not a list
+    attribute, but shares its name with FilingGatewayV2Error.errors (a
+    plain list) and DraftMappingError (no .errors at all). The prior
+    getattr(exc, "errors", None) duck-typing returned the unbound method
+    object itself for a real ValidationError (always truthy), which
+    reached app/main.py's http_exception_handler and crashed
+    json.dumps() with "Object of type builtin_function_or_method is not
+    JSON serializable" -- hiding the real "account/reference number is
+    required" message behind a generic "Network Error" for the taxpayer."""
+    draft = _filing_ready_draft()
+    draft.houseProperties = [HouseProperty(
+        id="hp1", propertyType="SELF_OCCUPIED",
+        homeLoans=[HomeLoan(lenderName="Test Bank", loanAccountNo="")],
+    )]
+
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.compute_canonical_itr1(draft)
+
+    assert caught.value.errors
+    assert all(isinstance(e, str) for e in caught.value.errors)
+    # The underlying Pydantic field name should be surfaced, not swallowed.
+    assert any("account_or_reference_number" in e for e in caught.value.errors)
+    # Must not itself be a builtin_function_or_method or any other
+    # non-JSON-serializable object -- the exact crash this reproduces.
+    import json
+    json.dumps({"message": caught.value.message, "errors": caught.value.errors})
+
+
+def test_summary_exposes_full_tax_computation_breakdown_at_top_level() -> None:
+    """TaxComputationTab.tsx (the live Tax Computation tab every ITR-1/ITR-4
+    filer sees) reads rebate87A/taxPayableOnRebate/grossTaxLiability/
+    section89/interest234A-C/lateFee234F/fees234I/basicExemptionLimit/
+    normalRateIncome/totalIncomeBefore288A directly off the top level of
+    the compute-v2 summary object -- previously _summary_from_result()
+    only exposed a small subset of these (mostly nested under
+    "breakdown", under different key names, or not at all), so the tab
+    silently showed Rs 0 for real, non-zero computed values any time the
+    true figure wasn't coincidentally already zero. This taxpayer's real
+    tax before rebate is fully wiped out by the new-regime Section 87A
+    rebate, so rebate87A/taxPayableOnRebate specifically exercise the
+    exact "real nonzero value, previously silently dropped" scenario."""
+    draft = _filing_ready_draft()
+    pipeline = gateway.compute_canonical_itr1(draft)
+    summary = pipeline.summary
+    result = pipeline.computation
+
+    assert result.tax_before_rebate > 0
+    assert result.rebate_87a > 0
+    assert summary["computedByFormEngine"] == "ITR-1"
+    assert summary["rebate87A"] == float(result.rebate_87a)
+    assert summary["taxPayableOnRebate"] == float(result.tax_after_rebate)
+    assert summary["grossTaxLiability"] == float(result.gross_tax_liability)
+    assert summary["section89"] == float(result.relief_89)
+    assert summary["cess"] == float(result.health_education_cess)
+    assert summary["surcharge"] == float(result.surcharge)
+    assert summary["interest234A"] == float(result.interest_234a)
+    assert summary["interest234B"] == float(result.interest_234b)
+    assert summary["interest234C"] == float(result.interest_234c)
+    assert summary["lateFee234F"] == float(result.late_fee_234f)
+    assert summary["fees234I"] == float(result.fees_234i)
+    assert summary["basicExemptionLimit"] == float(result.basic_exemption_limit)
+    assert summary["normalRateIncome"] == float(result.normal_rate_income)
+    assert summary["incomeChargeableAboveBasicExemption"] == float(
+        result.income_chargeable_above_basic_exemption
+    )
+    assert summary["totalIncomeBefore288A"] == float(result.total_income_before_288a)
+    assert summary["roundingAdjustment288A"] == float(result.rounding_adjustment_288a)
+    assert summary["grossSalary"] == float(result.salary_gross)
+    assert summary["standardDeduction"] == float(result.salary_deduction_us16ia)
+    assert summary["deductionBreakdown"] == summary["breakdown"]["deductions"]
+    assert summary["capitalGains112A"] == float(result.capital_gains_112a)
+
+
+def test_generate_reuses_one_computation_for_summary_and_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generation calls compute_itr1 exactly once and reuses its result."""
+    draft = _filing_ready_draft()
+    real_compute = gateway.compute_itr1
+    calls = 0
+    seen: dict[str, Any] = {}
+
+    def spy_compute(typed_input: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return real_compute(typed_input)
+
+    def fake_build(result: Any, typed_input: Any) -> dict[str, Any]:
+        seen["result"] = result
+        seen["typed_input"] = typed_input
+        return {"ITR": {"ITR1": {"ok": True}}}
+
+    monkeypatch.setattr(gateway, "compute_itr1", spy_compute)
+    monkeypatch.setattr(gateway, "build_itr1_json", fake_build)
+    monkeypatch.setattr(gateway, "validate_itr1_json", lambda document: None)
+
+    official, summary = gateway.generate_cbdt_json(draft)
+    assert calls == 1
+    assert official["ITR"]["ITR1"]["ok"] is True
+    assert summary["grossTotalIncome"] == float(seen["result"].gross_total_income)
+    assert seen["typed_input"].filing_profile.pan == "ABCDE1234F"
+    assert seen["typed_input"].property_profile.address_detail == "12A"
+
+
+def test_generation_produces_official_schema_valid_json() -> None:
+    """A filing-ready canonical draft passes the real official validator."""
+    official, summary = gateway.generate_cbdt_json(_filing_ready_draft())
+    gateway.validate_itr1_json(official)
+    assert "ITR" in official
+    assert summary["computedByFormEngine"] == "ITR-1"
+
+
+def test_itr1_filing_date_reaches_typed_input_from_verification_date() -> None:
+    """compute_canonical_itr1 must set filing_date/due_date on typed_input.
+
+    Previously never set (the mapper leaves ITR1Input.filing_date at its
+    None default and the gateway's model_copy didn't add it), so
+    compute_itr1()'s `if filing_date and due_date:` gate never ran and
+    234A/234B/234C interest and 234F/234-I late fees were silently zero for
+    every return regardless of actual filing date -- found 2026-09-03, see
+    Docs/ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md."""
+    from datetime import date
+    draft = _filing_ready_draft()
+    pipeline = gateway.compute_canonical_itr1(draft)
+    assert pipeline.typed_input.filing_date == date(2026, 7, 31)
+    assert pipeline.typed_input.due_date == date(2026, 7, 31)
+
+
+def test_itr1_late_filing_computes_nonzero_interest_and_late_fee() -> None:
+    """A genuinely late-filed return must show real 234A interest and a
+    234F late fee in the generated JSON, not the silent zero the filing_date
+    wiring bug produced for every return."""
+    draft = _filing_ready_draft()
+    draft.verification.date = "2027-01-15"
+    draft.filing.filingSection = "139(4)"
+    draft.employers = [Employer(
+        id="e1", basic=Decimal("1500000"), tdsDeducted=Decimal("0"),
+    )]
+
+    official, summary = gateway.generate_cbdt_json(draft)
+    intrst_pay = official["ITR"]["ITR1"]["ITR1_TaxComputation"]["IntrstPay"]
+    assert intrst_pay["IntrstPayUs234A"] > 0
+    assert intrst_pay["LateFilingFee234F"] == 5000
+
+
+def test_itr1_net_tax_liability_json_field_excludes_interest_and_fees() -> None:
+    """The official schema documents ITR1_TaxComputation.NetTaxLiability as
+    "Balance Tax After Relief" -- Part D's D7 = D5-D6 (gross tax+cess minus
+    Section 89 relief), computed BEFORE interest/234F/234-I are added. A
+    prior bug reused the calculator's internal ``net_tax_liability`` (which
+    is the FINAL total, D5-D6+D8+D9+D10+D11+D11a) for this field instead,
+    silently inflating "Balance Tax After Relief" by the full interest+fees
+    amount for any late-filed or interest-bearing return. TotTaxPlusIntrstPay
+    (the field that should carry that final total) was correspondingly wrong
+    the other way, since its own formula omitted Section 89 relief."""
+    draft = _filing_ready_draft()
+    draft.verification.date = "2027-01-15"
+    draft.filing.filingSection = "139(4)"
+    draft.employers = [Employer(
+        id="e1", basic=Decimal("1500000"), tdsDeducted=Decimal("0"),
+    )]
+
+    official, summary = gateway.generate_cbdt_json(draft)
+    tc = official["ITR"]["ITR1"]["ITR1_TaxComputation"]
+
+    assert tc["IntrstPay"]["IntrstPayUs234A"] > 0
+    assert tc["TotalIntrstPay"] > 0
+
+    # NetTaxLiability must equal GrossTaxLiability - Section89, NOT include
+    # any interest/fees.
+    assert tc["NetTaxLiability"] == tc["GrossTaxLiability"] - tc["Section89"]
+
+    # TotTaxPlusIntrstPay must be the true final total: NetTaxLiability plus
+    # everything in IntrstPay (234A/B/C + 234F + 234-I).
+    assert tc["TotTaxPlusIntrstPay"] == tc["NetTaxLiability"] + tc["TotalIntrstPay"]
+
+
+def test_summary_tax_computation_fields_match_the_real_generated_json_exactly() -> None:
+    """The live Tax Computation tab's summary fields (§34 of the ITR-1
+    audit doc) must not merely be non-zero -- for every field that has a
+    real official ITR1_TaxComputation/TaxPaid/Refund JSON counterpart, the
+    summary value must be byte-for-byte identical to what
+    generate_cbdt_json() actually emits for the exact same draft. This is
+    only guaranteed because both are built from the one canonical
+    `pipeline.computation` object (compute_itr1() is called exactly once
+    per compute_canonical_itr1()); this test proves it holds rather than
+    asserting it as an architectural claim. Uses the same late-filing
+    fixture as the two tests above (real, non-zero 234A interest and 234F
+    late fee -- not a scenario where every field being zero would mask a
+    drift bug)."""
+    draft = _filing_ready_draft()
+    draft.verification.date = "2027-01-15"
+    draft.filing.filingSection = "139(4)"
+    draft.employers = [Employer(
+        id="e1", basic=Decimal("1500000"), tdsDeducted=Decimal("0"),
+    )]
+
+    official, summary = gateway.generate_cbdt_json(draft)
+    tc = official["ITR"]["ITR1"]["ITR1_TaxComputation"]
+    tax_paid = official["ITR"]["ITR1"]["TaxPaid"]
+
+    # Sanity: this scenario genuinely exercises non-zero interest/fees/
+    # rebate, not a degenerate all-zero case.
+    assert tc["IntrstPay"]["IntrstPayUs234A"] > 0
+    assert tc["IntrstPay"]["LateFilingFee234F"] > 0
+
+    assert summary["rebate87A"] == tc["Rebate87A"]
+    assert summary["taxPayableOnRebate"] == tc["TaxPayableOnRebate"]
+    assert summary["grossTaxLiability"] == tc["GrossTaxLiability"]
+    assert summary["section89"] == tc["Section89"]
+    assert summary["cess"] == tc["EducationCess"]
+    assert summary["interest234A"] == tc["IntrstPay"]["IntrstPayUs234A"]
+    assert summary["interest234B"] == tc["IntrstPay"]["IntrstPayUs234B"]
+    assert summary["interest234C"] == tc["IntrstPay"]["IntrstPayUs234C"]
+    assert summary["lateFee234F"] == tc["IntrstPay"]["LateFilingFee234F"]
+    assert summary["netTaxLiability"] == tc["TotTaxPlusIntrstPay"]
+    assert summary["totalTaxesPaid"] == tax_paid["TaxesPaid"]["TotalTaxesPaid"]
+    assert summary["balTaxPayable"] == tax_paid["BalTaxPayable"]
+
+    # And it must be strictly greater than NetTaxLiability, since real
+    # interest/fees were incurred -- the two fields must NOT be equal here
+    # (that equality is exactly what the bug produced when relief_89 == 0,
+    # since it made both fields collapse to gross_tax_liability + interest
+    # + fees, masking the mislabeling).
+    assert tc["TotTaxPlusIntrstPay"] > tc["NetTaxLiability"]
+
+
+def test_itr1_emits_exact_refund_verification_and_creation_metadata() -> None:
+    """Filing identity, bank data, and system metadata reach exact JSON paths."""
+    draft = _filing_ready_draft()
+    official, summary = gateway.generate_cbdt_json(draft)
+    itr1 = official["ITR"]["ITR1"]
+
+    assert itr1["Refund"] == {
+        "RefundDue": round(summary["refundDue"] / 10) * 10,
+        "BankAccountDtls": {
+            "AddtnlBankDetails": [{
+                "IFSCCode": "SBIN0001234",
+                "BankName": "State Bank of India",
+                "BankAccountNo": "1234567890",
+                "AccountType": "SB",
+                "UseForRefund": "true",
+            }],
+        },
+    }
+    assert itr1["Verification"] == {
+        "Declaration": {
+            "AssesseeVerName": "Rahul Sharma",
+            "FatherName": "Mohan Sharma",
+            "AssesseeVerPAN": "ABCDE1234F",
+        },
+        "Capacity": "S",
+        "Place": "Delhi",
+    }
+    assert itr1["CreationInfo"]["SWVersionNo"] == "1.0"
+    assert itr1["CreationInfo"]["SWCreatedBy"].startswith("SW")
+    assert itr1["CreationInfo"]["JSONCreatedBy"] == itr1["CreationInfo"]["SWCreatedBy"]
+    assert len(itr1["CreationInfo"]["JSONCreationDate"]) == 10
+    assert itr1["CreationInfo"]["IntermediaryCity"] == "Akola"
+    assert itr1["CreationInfo"]["Digest"] == "-" or len(itr1["CreationInfo"]["Digest"]) == 44
+
+
+def test_generation_emits_canonical_property_ownership_and_tenants() -> None:
+    """Canonical ITR-1 property identities survive into exact official rows."""
+    draft = _filing_ready_draft()
+    draft.houseProperties = [HouseProperty(
+        id="hp-1",
+        propertyType="LET_OUT",
+        address="18 Market Road",
+        city="Delhi",
+        state="07",
+        pinCode="110001",
+        propertyOwnerType="OT",
+        propertyOwnerOther="Estate",
+        isCoOwned=True,
+        ownershipType="JOINT",
+        ownershipShare=Decimal("70"),
+        coOwners=[CoOwner(
+            coOwnerSNo=9,
+            name="Priya Sharma",
+            pan="PQRSX1234Y",
+            aadhaar="123456789012",
+            share=Decimal("30"),
+        )],
+        tenantDetails=[TenantDetail(
+            tenantSNo=8,
+            name="Tenant One",
+            pan="LMNOP1234Q",
+            aadhaar="234567890123",
+            panOrTan="DELA12345B",
+        )],
+        annualRent=Decimal("300000"),
+        unrealizedRent=Decimal("20000"),
+        municipalTaxesPaid=Decimal("10000"),
+    )]
+
+    official, summary = gateway.generate_cbdt_json(draft)
+    gateway.validate_itr1_json(official)
+    prop = official["ITR"]["ITR1"]["ITR1_IncomeDeductions"]["PropertyDetails"][0]
+    assert prop["PropertyOwnerOther"] == "Estate"
+    assert prop["PropCoOwnedFlg"] == "YES"
+    assert prop["AsseseeShareProperty"] == 70
+    assert prop["CoOwners"][0] == {
+        "CoOwnersSNo": 1,
+        "NameCoOwner": "Priya Sharma",
+        "PAN_CoOwner": "PQRSX1234Y",
+        "Aadhaar_CoOwner": "123456789012",
+        "PercentShareProperty": 30,
+    }
+    assert prop["TenantDetails"][0]["TenantSNo"] == 1
+    assert prop["TenantDetails"][0]["PANTANofTenant"] == "DELA12345B"
+    assert prop["Rentdetails"] == {
+        "AnnualLetableValue": 300000,
+        "RentNotRealized": 20000,
+        "LocalTaxes": 10000,
+        "TotalUnrealizedAndTax": 30000,
+        "BalanceALV": 270000,
+        "AnnualOfPropOwned": 189000,
+        "ThirtyPercentOfBalance": 56700,
+        "IntOnBorwCap": 0,
+        "TotalDeduct": 56700,
+        "IncomeOfHP": 132300,
+    }
+    assert summary["housePropertyDetails"] == [{
+        "propertySequenceNo": 1,
+        "annualLettableValue": 300000.0,
+        "rentNotRealized": 20000.0,
+        "localTaxes": 10000.0,
+        "totalUnrealizedAndTax": 30000.0,
+        "balanceALV": 270000.0,
+        "annualOfPropOwned": 189000.0,
+        "thirtyPercentOfBalance": 56700.0,
+        "interestOnBorrowedCapital": 0.0,
+        "totalDeduction": 56700.0,
+        "arrearsUnrealizedRentReceived": 0.0,
+        "incomeOfHP": 132300.0,
+    }]
+
+
+def test_generation_emits_exact_compact_other_source_rows() -> None:
+    """Official categories and OTH descriptions survive canonical generation."""
+    draft = _filing_ready_draft()
+    draft.otherSources.interest = [
+        InterestIncome(id="tax", kind="IT_REFUND", grossAmount=Decimal("300")),
+        InterestIncome(id="pf", kind="PF_10_11_FIRST", grossAmount=Decimal("400")),
+    ]
+    draft.otherSources.otherIncome = [OtherIncomeEntry(
+        id="other", nature="OTHER",
+        description="Consulting honorarium", amount=Decimal("600"),
+    )]
+
+    official, _ = gateway.generate_cbdt_json(draft)
+    gateway.validate_itr1_json(official)
+    rows = official["ITR"]["ITR1"]["ITR1_IncomeDeductions"]["OthersInc"][
+        "OthersIncDtlsOthSrc"
+    ]
+    assert rows == [
+        {"OthSrcNatureDesc": "TAX", "OthSrcOthAmount": 300},
+        {"OthSrcNatureDesc": "10(11)(iP)", "OthSrcOthAmount": 400},
+        {
+            "OthSrcNatureDesc": "OTH",
+            "OthSrcOthAmount": 600,
+            "OthSrcOthNatOfInc": "Consulting honorarium",
+        },
+    ]
+
+
+def test_generation_emits_conditional_80ccc_and_80d_evidence() -> None:
+    """Canonical detail rows survive through official JSON and schema validation."""
+    draft = _filing_ready_draft()
+    draft.regime = "old"
+    draft.personal.dateOfBirth = "1955-01-15"
+    draft.employers[0].natureOfEmployment = "OTH"
+    draft.deductions.pensionContribution80CCC = [PensionContribution80CCC(
+        id="ccc-1",
+        identifierType="PRAN",
+        identifierName="PRAN123456",
+        amount=Decimal("10000"),
+    )]
+    draft.deductions.chapterVIA.section80CCC = Decimal("10000")
+    draft.deductions.section80D.selfSeniorCitizen = "Y"
+    draft.deductions.section80D.selfFamilySenior = Category80D(
+        policies=[Policy80D(
+            id="policy-1",
+            insurerName="Health Insurer",
+            policyNo="POLICY123",
+            premiumAmount=Decimal("10000"),
+        )],
+        medicalExpense=Decimal("20000"),
+    )
+    draft.deductions.chapterVIA.section80D = Decimal("30000")
+
+    official, _ = gateway.generate_cbdt_json(draft)
+    gateway.validate_itr1_json(official)
+    itr1 = official["ITR"]["ITR1"]
+    assert itr1["ITR1_IncomeDeductions"]["UsrDeductUndChapVIA"][
+        "PensionContribution80CCC"
+    ][0]["NameofIdentifier"] == "PRAN123456"
+    assert itr1["Schedule80D"]["Sec80DSelfFamSrCtznHealth"][
+        "MedicalExpSlfFamSrCtzn"
+    ] == 20000
+
+
+def test_generation_requires_canonical_filing_fields() -> None:
+    """Missing official profile data is rejected with actionable details."""
+    draft = create_empty_draft("2026-27")
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.generate_cbdt_json(draft)
+    assert "required" in " ".join(caught.value.errors).lower()
+
+
+def test_generation_requires_explicit_personal_employer_category() -> None:
+    """Mandatory CBDT EmployerCategory must not silently fall back to OTH."""
+    draft = _filing_ready_draft()
+    draft.personal.employerCategory = ""
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.generate_cbdt_json(draft)
+    assert "personal.employerCategory" in " ".join(caught.value.errors)
+
+
+def test_generation_emits_selected_personal_employer_category() -> None:
+    """The personal category is independent of the number of employer rows."""
+    draft = _filing_ready_draft()
+    draft.personal.employerCategory = "CGOV"
+    draft.employers = []
+    official, _ = gateway.generate_cbdt_json(draft)
+    assert official["ITR"]["ITR1"]["PersonalInfo"]["EmployerCategory"] == "CGOV"
+
+
+def test_generation_emits_complete_conditional_filing_profile() -> None:
+    """Alternate address, seventh proviso, representative and TRP survive."""
+    draft = _filing_ready_draft()
+    draft.personal.mobileCountryCode = "91"
+    draft.personal.secondaryAddressDifferent = True
+    draft.personal.alternateAddress = AlternateAddress(
+        residenceNo="44",
+        localityOrArea="South",
+        cityOrTownOrDistrict="Delhi",
+        stateCode="07",
+        countryCode="91",
+        pinCode="110002",
+    )
+    draft.filing.seventhProviso.foreignTravel = True
+    draft.filing.seventhProviso.foreignTravelAmount = Decimal("250000")
+    draft.filing.seventhProviso.electricityExpenditure = True
+    draft.filing.seventhProviso.electricityExpenditureAmount = Decimal("150000")
+    draft.filing.seventhProviso.otherClauseIV = True
+    draft.filing.seventhProviso.clauseIVDetails = [
+        SeventhProvisoClause(id="sp-1", nature="1", amount=Decimal("50000"))
+    ]
+    draft.verification.capacity = "REPRESENTATIVE"
+    draft.filing.representative = RepresentativeAssessee(
+        name="Priya Sharma",
+        email="priya@example.com",
+        mobileCountryCode="91",
+        mobile="9876500000",
+    )
+    draft.taxReturnPreparer.used = True
+    draft.taxReturnPreparer.identificationNumber = "T123456789"
+    draft.taxReturnPreparer.name = "Tax Preparer"
+    draft.taxReturnPreparer.reimbursementFromGovernment = Decimal("500")
+
+    official, _ = gateway.generate_cbdt_json(draft)
+    itr1 = official["ITR"]["ITR1"]
+    assert itr1["PersonalInfo"]["SecondaryAdd"] == "Y"
+    assert itr1["PersonalInfo"]["AlternateAddress"]["PinCode"] == 110002
+    assert itr1["FilingStatus"]["SeventhProvisio139"] == "Y"
+    assert itr1["FilingStatus"]["IncrExpAggAmt2LkTrvFrgnCntryFlg"] == "Y"
+    assert itr1["FilingStatus"]["AmtSeventhProvisio139ii"] == 250000
+    assert itr1["FilingStatus"]["IncrExpAggAmt1LkElctrctyPrYrFlg"] == "Y"
+    assert itr1["FilingStatus"]["AmtSeventhProvisio139iii"] == 150000
+    assert itr1["FilingStatus"]["clauseiv7provisio139i"] == "Y"
+    assert itr1["FilingStatus"]["clauseiv7provisio139iDtls"][0] == {
+        "clauseiv7provisio139iNature": "1",
+        "clauseiv7provisio139iAmount": 50000,
+    }
+    assert itr1["FilingStatus"]["AsseseeRepFlg"] == "Y"
+    assert itr1["FilingStatus"]["AssesseeRep"]["RepName"] == "Priya Sharma"
+    assert itr1["FilingStatus"]["AssesseeRep"]["RepEmailID"] == "priya@example.com"
+    assert itr1["FilingStatus"]["AssesseeRep"]["CountryCodeRepMobileNo"] == 91
+    assert itr1["FilingStatus"]["AssesseeRep"]["RepMobileNo"] == 9876500000
+    assert itr1["FilingStatus"]["ItrFilingDueDate"] == "2026-07-31"
+    assert itr1["Verification"]["Capacity"] == "R"
+    assert itr1["TaxReturnPreparer"] == {
+        "IdentificationNoOfTRP": "T123456789",
+        "NameOfTRP": "Tax Preparer",
+        "ReImbFrmGov": 500,
+    }
+    gateway.validate_itr1_json(official)
+
+
+def test_generation_rejects_unsupported_filing_section() -> None:
+    """Official generation rejects filing sections outside the CBDT enum."""
+    draft = _filing_ready_draft()
+    draft.filing.filingSection = "NOT_A_REAL_SECTION"
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.generate_cbdt_json(draft)
+    assert "ReturnFileSec" in " ".join(caught.value.errors) or caught.value.message
+
+
+def test_generation_accepts_revised_filing_section() -> None:
+    """Filing section 139(5) (revised return) maps to CBDT code 17."""
+    draft = _filing_ready_draft()
+    draft.filing.filingSection = "139(5)"
+    draft.filing.returnType = "REVISED"
+    draft.filing.originalAcknowledgementNumber = "123456789012345"
+    draft.filing.originalFilingDate = "2026-06-30"
+
+    official, _ = gateway.generate_cbdt_json(draft)
+    gateway.validate_itr1_json(official)
+    status = official["ITR"]["ITR1"]["FilingStatus"]
+    assert status["ReturnFileSec"] == 17
+    assert status["ReceiptNo"] == "123456789012345"
+    assert status["OrigRetFiledDate"] == "2026-06-30"
+
+
+def test_generation_emits_notice_filing_fields() -> None:
+    """Notice filings preserve their selected section, number, and date."""
+    draft = _filing_ready_draft()
+    draft.filing.filingSection = "148"
+    draft.filing.noticeNumber = "NOTICE/148/2026/001"
+    draft.filing.noticeDate = "2026-05-15"
+
+    official, _ = gateway.generate_cbdt_json(draft)
+    gateway.validate_itr1_json(official)
+    status = official["ITR"]["ITR1"]["FilingStatus"]
+    assert status["ReturnFileSec"] == 14
+    assert status["NoticeNo"] == "NOTICE/148/2026/001"
+    assert status["NoticeDateUnderSec"] == "2026-05-15"
+
+
+def test_generation_emits_complete_schedule_80ggc() -> None:
+    """Canonical 80GGC input must reach every official row and total field."""
+    draft = _filing_ready_draft()
+    draft.regime = "old"
+    draft.employers[0].natureOfEmployment = "OTH"
+    draft.deductions.schedule80GGC = [Schedule80GGCEntry(
+        id="ggc-1",
+        cashAmount=Decimal("500"),
+        otherModeAmount=Decimal("10000"),
+        contributionDate="2025-06-01",
+        transactionRef="UTR-80GGC-001",
+        ifscCode="SBIN0001234",
+        politicalPartyName="National Reform Party",
+        politicalPartyPAN="AAACP1234D",
+    )]
+    draft.deductions.chapterVIA.section80GGC = Decimal("10000")
+
+    official, _ = gateway.generate_cbdt_json(draft)
+    gateway.validate_itr1_json(official)
+    assert official["ITR"]["ITR1"]["Schedule80GGC"] == {
+        "Schedule80GGCDetails": [{
+            "DonationDate": "2025-06-01",
+            "DonationAmtCash": 500,
+            "DonationAmtOtherMode": 10000,
+            "TransactionRefNum": "UTR-80GGC-001",
+            "IFSCCode": "SBIN0001234",
+            "DonationAmt": 10500,
+            "EligibleDonationAmt": 10000,
+            "PoliticalPartyName": "National Reform Party",
+            "PoliticalPartyPAN": "AAACP1234D",
+        }],
+        "TotalDonationAmtCash80GGC": 500,
+        "TotalDonationAmtOtherMode80GGC": 10000,
+        "TotalDonationsUs80GGC": 10500,
+        "TotalEligibleDonationAmt80GGC": 10000,
+    }
+
+
+def test_compute_canonical_itr1_rejects_pending_reconciliation() -> None:
+    """Pending reconciliation discrepancies block the canonical gateway."""
+    draft = _filing_ready_draft()
+    draft.reconciliation.discrepancies.append(ReconciliationDiscrepancy(
+        id="reconciliation-1",
+        category="interest from savings bank",
+        description="AIS/TIS mismatch.",
+        aisAmount=Decimal("157"),
+        tisAcceptedAmount=Decimal("90"),
+        as26Amount=Decimal("0"),
+        difference=Decimal("67"),
+        status="PENDING",
+    ))
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.compute_canonical_itr1(draft)
+    assert "reconciliation" in " ".join(caught.value.errors).lower()
+
+
+def test_compute_canonical_itr1_allows_confirmed_reconciliation() -> None:
+    """A confirmed discrepancy no longer blocks the gateway."""
+    draft = _filing_ready_draft()
+    draft.reconciliation.discrepancies.append(ReconciliationDiscrepancy(
+        id="reconciliation-1",
+        category="interest from savings bank",
+        description="AIS/TIS mismatch.",
+        aisAmount=Decimal("157"),
+        tisAcceptedAmount=Decimal("90"),
+        as26Amount=Decimal("0"),
+        difference=Decimal("67"),
+        status="CONFIRMED_AIS",
+    ))
+    result = gateway.compute_canonical_itr1(draft)
+    assert result.computation.gross_total_income >= Decimal("0")
+
+
+def test_compute_canonical_itr1_rejects_out_of_scope_import_evidence() -> None:
+    """Imported taxable evidence outside ITR-1 forces form escalation."""
+    draft = _filing_ready_draft()
+    draft.reconciliation.evidence.append(ReconciliationEvidence(
+        id="ais-sft-012-1",
+        source="AIS",
+        sourceCode="SFT-012",
+        sourceSection="B2",
+        incomeHead="Capital gains",
+        category="Sale of immovable property",
+        description="Property sale evidence.",
+        sourceName="Sub-registrar",
+        sourceIdentifier="",
+        role="OUT_OF_SCOPE_TAXABLE",
+        relatedTab="CAPITAL_GAINS",
+        canonicalDestination="none",
+        evidenceKind="SOURCE_DETAIL",
+        reportedAmount=Decimal("5000000"),
+        processedAmount=Decimal("5000000"),
+        acceptedAmount=Decimal("0"),
+        taxAmount=Decimal("0"),
+        status="SFT-012",
+        requiresReview=True,
+        raw={"information_code": "SFT-012"},
+    ))
+    with pytest.raises(gateway.FilingGatewayV2Error) as caught:
+        gateway.compute_canonical_itr1(draft)
+    message = f"{caught.value} {' '.join(caught.value.errors)}".lower()
+    assert "outside itr-1" in message
+    assert "sft-012" in message
+
+
+def test_compute_canonical_itr1_purchase_only_does_not_fabricate_112a_gain() -> None:
+    """A purchase-only MF entry (no sale) must never be treated as a 112A gain.
+
+    Reproduces the bug where a client with a ₹4,99,975 MF purchase and no sale
+    was blocked with "LTCG u/s 112A of Rs 499975 exceeds Rs 125000 limit".
+    A purchase is an acquisition, not a disposal — there is no gain event.
+    """
+    draft = _filing_ready_draft()
+    # Simulate the simplified 112A block with only a cost (purchase) and no sale.
+    draft.capitalGainsSchedule = CapitalGainsSchedule(
+        simplified112A={
+            "totalSaleConsideration": 0,
+            "totalCostAcquisition": Decimal("499975"),
+        },
+    )
+    result = gateway.compute_canonical_itr1(draft)
+    # The gain must be 0 (sale - cost floored at 0), so ITR-1 stays eligible.
+    assert result.computation.capital_gains_112a == Decimal("0")
+    assert not result.computation.errors
+
+
+def test_summary_capital_gains_112a_matches_the_real_generated_json_exactly() -> None:
+    """summary["capitalGains112A"] (the new Tax Computation tab income-head
+    row, §34 of the ITR-1 audit doc) must be byte-for-byte identical to
+    the official LTCG112A.LongCap112A JSON field for the same draft --
+    both are sourced from the identical result.capital_gains_112a."""
+    draft = _filing_ready_draft()
+    draft.capitalGainsSchedule = CapitalGainsSchedule(
+        simplified112A={
+            "totalSaleConsideration": Decimal("300000"),
+            "totalCostAcquisition": Decimal("200000"),
+        },
+    )
+    official, summary = gateway.generate_cbdt_json(draft)
+    assert summary["capitalGains112A"] > 0
+    assert summary["capitalGains112A"] == official["ITR"]["ITR1"]["LTCG112A"]["LongCap112A"]
+

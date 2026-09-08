@@ -1,144 +1,191 @@
-"""
-Schedule BFLA: Brought Forward Loss Adjustment (Section 72-74).
+"""Brought-forward loss adjustment under sections 72 through 74.
 
-Carried-forward losses set off against current-year income per IT Act rules.
-
-Carry-forward periods:
-  - HP loss: 8 years; set off against HP income only.
-  - Non-speculative business: 8 years; set off against business income only.
-  - Speculative business: 4 years; set off against speculative business only.
-  - STCG: 8 years; set off against STCG + LTCG.
-  - LTCG: 8 years; set off against LTCG only.
-  - Unabsorbed depreciation (u/s 32): indefinite; any income except salary.
-
-ITR forms: ITR-2, ITR-3 only.
+Implements the statutory brought-forward loss set-off with six CG
+sub-baskets matching the official ITR-2 Schedule BFLA schema.
 """
 
-from decimal import Decimal
 from dataclasses import dataclass, field
-from datetime import date
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+_ZERO = Decimal("0")
+_MAX_CARRY_FWD: dict[str, int] = {"HP": 8, "NonSpeculative": 8, "Speculative": 4, "STCG": 8, "LTCG": 8}
 
 
-def _ay_to_fiscal_year_end(ay_str: str) -> int:
-    """Convert 'AY 2026-27' or '2026-27' to integer fiscal year (2026)."""
-    s = ay_str.replace("AY", "").replace(" ", "").strip()
-    return int(s.split("-")[0])
+def _ay_start(assessment_year: str) -> int:
+    """Parse the starting year from an assessment-year label."""
+    cleaned = assessment_year.upper().replace("AY", "").replace(" ", "")
+    if not cleaned:
+        return 0
+    try:
+        return int(cleaned.split("-")[0])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _amount(value: Any) -> Decimal:
+    """Coerce any value into a nonnegative Decimal."""
+    try:
+        return abs(Decimal(str(value)))
+    except (InvalidOperation, TypeError, ValueError):
+        return _ZERO
+
+
+def _field(item: object, name: str, default: Any = "") -> Any:
+    """Get a field from a dict or dataclass-like object."""
+    return item.get(name, default) if isinstance(item, dict) else getattr(item, name, default)
 
 
 @dataclass
 class BFLossEntry:
+    """One brought-forward loss and its current-year disposition."""
+
     assessment_year: str = ""
     head: str = ""
     sub_category: str = ""
-    original_loss: Decimal = Decimal("0")
-    brought_forward: Decimal = Decimal("0")
-    set_off_this_year: Decimal = Decimal("0")
-    remaining_carry_forward: Decimal = Decimal("0")
+    original_loss: Decimal = _ZERO
+    brought_forward: Decimal = _ZERO
+    set_off_this_year: Decimal = _ZERO
+    remaining_carry_forward: Decimal = _ZERO
 
 
 @dataclass
 class BFLAInput:
-    hp_income: Decimal = Decimal("0")
-    non_spec_biz_income: Decimal = Decimal("0")
-    spec_biz_income: Decimal = Decimal("0")
-    stcg_income: Decimal = Decimal("0")
-    ltcg_income: Decimal = Decimal("0")
-    bf_losses: list = field(default_factory=list)      # list[dict] from schema
+    """Post-CYLA income pools and brought-forward losses.
+
+    CG sub-basket incomes are the post-CYLA residual amounts split across
+    six statutory rate baskets.
+    """
+
+    hp_income: Decimal = _ZERO
+    non_spec_biz_income: Decimal = _ZERO
+    spec_biz_income: Decimal = _ZERO
+    stcg20_income: Decimal = _ZERO
+    stcg30_income: Decimal = _ZERO
+    stcg_app_income: Decimal = _ZERO
+    stcg_dtaa_income: Decimal = _ZERO
+    ltcg125_income: Decimal = _ZERO
+    ltcg_dtaa_income: Decimal = _ZERO
+    bf_losses: list[object] = field(default_factory=list)
     current_ay: str = "2026-27"
 
 
 @dataclass
 class BFLAResult:
-    entries: list = field(default_factory=list)
-    total_bf_loss_set_off: Decimal = Decimal("0")
-    total_bf_remaining: Decimal = Decimal("0")
-    hp_setoff: Decimal = Decimal("0")
-    biz_setoff: Decimal = Decimal("0")
-    cg_setoff: Decimal = Decimal("0")
+    """Brought-forward set-offs, still-valid carry-forward losses, and
+    per-basket residual incomes for the JSON builder."""
 
-
-_MAX_CARRY_FWD: dict[str, int] = {
-    "HP": 8,
-    "NonSpeculative": 8,
-    "Speculative": 4,
-    "STCG": 8,
-    "LTCG": 8,
-}
+    entries: list[BFLossEntry] = field(default_factory=list)
+    total_bf_loss_set_off: Decimal = _ZERO
+    total_bf_remaining: Decimal = _ZERO
+    hp_setoff: Decimal = _ZERO
+    biz_setoff: Decimal = _ZERO
+    cg_setoff: Decimal = _ZERO
+    # Per-basket residual income after BFLA (for builder)
+    stcg20_remaining: Decimal = _ZERO
+    stcg30_remaining: Decimal = _ZERO
+    stcg_app_remaining: Decimal = _ZERO
+    stcg_dtaa_remaining: Decimal = _ZERO
+    ltcg125_remaining: Decimal = _ZERO
+    ltcg_dtaa_remaining: Decimal = _ZERO
 
 
 def compute(bf: BFLAInput) -> BFLAResult:
-    """Apply brought-forward loss set-off."""
-    entries = []
-    total_set_off = Decimal("0")
-    total_remaining = Decimal("0")
-    hp_setoff = Decimal("0")
-    biz_setoff = Decimal("0")
-    cg_setoff = Decimal("0")
+    """Set off oldest valid brought-forward losses against post-CYLA pools.
 
-    # Track consumed income per head so later entries see reduced pools
-    hp_consumed = Decimal("0")
-    nsb_consumed = Decimal("0")
-    sb_consumed = Decimal("0")
-    cg_consumed = Decimal("0")
+    Args:
+        bf: Current post-CYLA incomes, losses, and assessment year.
 
-    current_fy = _ay_to_fiscal_year_end(bf.current_ay)
+    Returns:
+        Entries including expired markers; expired amounts are not presented as
+        carry-forward balances. Per-basket residual incomes are populated.
+    """
+    hp_pool = max(_ZERO, bf.hp_income)
+    nsb_pool = max(_ZERO, bf.non_spec_biz_income)
+    spec_pool = max(_ZERO, bf.spec_biz_income)
+    stcg20_pool = max(_ZERO, bf.stcg20_income)
+    stcg30_pool = max(_ZERO, bf.stcg30_income)
+    stcg_app_pool = max(_ZERO, bf.stcg_app_income)
+    stcg_dtaa_pool = max(_ZERO, bf.stcg_dtaa_income)
+    ltcg125_pool = max(_ZERO, bf.ltcg125_income)
+    ltcg_dtaa_pool = max(_ZERO, bf.ltcg_dtaa_income)
+    current_year = _ay_start(bf.current_ay)
+    indexed = list(enumerate(bf.bf_losses or []))
+    indexed.sort(key=lambda pair: (_ay_start(str(_field(pair[1], "assessment_year", ""))) or 9999, pair[0]))
 
-    for item in bf.bf_losses:
-        head = item.get("head", "") if isinstance(item, dict) else getattr(item, "head", "")
-        amount = abs(Decimal(str(item.get("brought_forward", 0)))) if isinstance(item, dict) else abs(getattr(item, "brought_forward", Decimal("0")))
-        ay_str = item.get("assessment_year", "") if isinstance(item, dict) else getattr(item, "assessment_year", "")
+    entries: list[BFLossEntry] = []
+    hp_setoff = biz_setoff = cg_setoff = _ZERO
+    total_setoff = total_remaining = _ZERO
 
-        loss_fy = _ay_to_fiscal_year_end(ay_str) if ay_str else 0
-        max_years = _MAX_CARRY_FWD.get(head, 8)
-        if loss_fy and (current_fy - loss_fy) > max_years:
-            remaining = amount
-            total_remaining += remaining
-            entries.append(BFLossEntry(
-                assessment_year=ay_str, head=head, sub_category="EXPIRED",
-                original_loss=amount, brought_forward=amount,
-            ))
+    for _, item in indexed:
+        head = str(_field(item, "head", ""))
+        ay = str(_field(item, "assessment_year", ""))
+        subcategory = str(_field(item, "sub_category", ""))
+        brought = _amount(_field(item, "brought_forward", _ZERO))
+        original = _amount(_field(item, "original_loss", brought))
+        loss_year = _ay_start(ay)
+        limit = _MAX_CARRY_FWD.get(head)
+        expired = limit is not None and loss_year > 0 and current_year > 0 and current_year - loss_year > limit
+        if expired:
+            entries.append(BFLossEntry(ay, head, "EXPIRED", original, brought, _ZERO, _ZERO))
             continue
 
+        setoff = _ZERO
         if head == "HP":
-            set_off = min(amount, bf.hp_income - hp_consumed)
-            hp_setoff += set_off
-            hp_consumed += set_off
+            setoff = min(brought, hp_pool)
+            hp_pool -= setoff
+            hp_setoff += setoff
         elif head == "NonSpeculative":
-            set_off = min(amount, bf.non_spec_biz_income - nsb_consumed)
-            biz_setoff += set_off
-            nsb_consumed += set_off
+            setoff = min(brought, nsb_pool)
+            nsb_pool -= setoff
+            biz_setoff += setoff
         elif head == "Speculative":
-            set_off = min(amount, bf.spec_biz_income - sb_consumed)
-            biz_setoff += set_off
-            sb_consumed += set_off
+            setoff = min(brought, spec_pool)
+            spec_pool -= setoff
+            biz_setoff += setoff
         elif head == "STCG":
-            set_off = min(amount, (bf.stcg_income + bf.ltcg_income) - cg_consumed)
-            cg_setoff += set_off
-            cg_consumed += set_off
+            # STCG BF loss absorbs STCG baskets first, then LTCG baskets
+            cg_pools = [stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool, ltcg125_pool, ltcg_dtaa_pool]
+            remaining_bf = brought
+            for i in range(len(cg_pools)):
+                used = min(remaining_bf, cg_pools[i])
+                cg_pools[i] -= used
+                remaining_bf -= used
+                setoff += used
+                if remaining_bf <= _ZERO:
+                    break
+            stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool, ltcg125_pool, ltcg_dtaa_pool = cg_pools
+            cg_setoff += setoff
         elif head == "LTCG":
-            set_off = min(amount, bf.ltcg_income - cg_consumed)
-            cg_setoff += set_off
-            cg_consumed += set_off
-        else:
-            set_off = Decimal("0")
+            # LTCG BF loss absorbs LTCG baskets only
+            ltcg_pools = [ltcg125_pool, ltcg_dtaa_pool]
+            remaining_bf = brought
+            for i in range(len(ltcg_pools)):
+                used = min(remaining_bf, ltcg_pools[i])
+                ltcg_pools[i] -= used
+                remaining_bf -= used
+                setoff += used
+                if remaining_bf <= _ZERO:
+                    break
+            ltcg125_pool, ltcg_dtaa_pool = ltcg_pools
+            cg_setoff += setoff
 
-        remaining = amount - set_off
-        entries.append(BFLossEntry(
-            assessment_year=ay_str, head=head,
-            sub_category=item.get("sub_category", "") if isinstance(item, dict) else getattr(item, "sub_category", ""),
-            original_loss=abs(Decimal(str(item.get("original_loss", 0)))) if isinstance(item, dict) else abs(getattr(item, "original_loss", Decimal("0"))),
-            brought_forward=amount,
-            set_off_this_year=set_off,
-            remaining_carry_forward=remaining,
-        ))
-        total_set_off += set_off
+        remaining = brought - setoff
+        entries.append(BFLossEntry(ay, head, subcategory, original, brought, setoff, remaining))
+        total_setoff += setoff
         total_remaining += remaining
 
     return BFLAResult(
         entries=entries,
-        total_bf_loss_set_off=total_set_off,
+        total_bf_loss_set_off=total_setoff,
         total_bf_remaining=total_remaining,
         hp_setoff=hp_setoff,
         biz_setoff=biz_setoff,
         cg_setoff=cg_setoff,
+        stcg20_remaining=stcg20_pool,
+        stcg30_remaining=stcg30_pool,
+        stcg_app_remaining=stcg_app_pool,
+        stcg_dtaa_remaining=stcg_dtaa_pool,
+        ltcg125_remaining=ltcg125_pool,
+        ltcg_dtaa_remaining=ltcg_dtaa_pool,
     )

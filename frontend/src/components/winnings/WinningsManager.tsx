@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { WinningsEntry, WinningsType } from '../../types/scheduleOS';
+import { IndianNumberInput } from '../IndianNumberInput';
 
 interface WinningsManagerProps {
   entries: WinningsEntry[];
@@ -53,7 +54,8 @@ export function WinningsManager({ entries = [], onChange }: WinningsManagerProps
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ fontWeight: 600, fontSize: 13 }}>₹{entry.grossAmount.toLocaleString('en-IN')}</span>
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>TDS: ₹{(entry.tdsDeducted || 0).toLocaleString('en-IN')}</span>
-              <span style={{ fontSize: 11, color: '#c62828' }}>Tax: ₹{Math.round(entry.grossAmount * 0.30).toLocaleString('en-IN')}</span>
+              {/* Tax is computed by the backend engine u/s 115BB; the
+                  frontend does not perform statutory tax calculations. */}
             </div>
           </div>
 
@@ -70,15 +72,15 @@ export function WinningsManager({ entries = [], onChange }: WinningsManagerProps
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
                   <span style={{ fontSize: 10, color: '#888' }}>₹</span>
-                  <input type="number" value={entry.grossAmount || ''}
-                    onChange={(e) => updateEntry(entry.id, { grossAmount: parseFloat(e.target.value) || 0 })}
+                  <IndianNumberInput value={entry.grossAmount || 0}
+                    onChange={(v) => updateEntry(entry.id, { grossAmount: v })}
                     placeholder="Gross Amount"
                     style={{ width: '100%', padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
                   <span style={{ fontSize: 10, color: '#888' }}>TDS ₹</span>
-                  <input type="number" value={entry.tdsDeducted || ''}
-                    onChange={(e) => updateEntry(entry.id, { tdsDeducted: parseFloat(e.target.value) || 0 })}
+                  <IndianNumberInput value={entry.tdsDeducted || 0}
+                    onChange={(v) => updateEntry(entry.id, { tdsDeducted: v })}
                     placeholder="TDS"
                     style={{ width: '100%', padding: 4, border: '1px solid #ddd', borderRadius: 3, fontSize: 12 }} />
                 </div>

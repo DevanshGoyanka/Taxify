@@ -3,15 +3,18 @@ Core security utilities: password hashing and JWT token management.
 
 SECRET_KEY is read from the environment (loaded from .env via python-dotenv).
 Tokens use HS256 and expire after 24 hours.
+
+Password hashing uses bcrypt directly (not passlib) to avoid version
+incompatibilities with Python 3.14+.
 """
 
 import os
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 from dotenv import load_dotenv
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 load_dotenv()
 
@@ -19,17 +22,16 @@ SECRET_KEY: str = os.environ["SECRET_KEY"]   # raises KeyError immediately if mi
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def hash_password(password: str) -> str:
     """Return a bcrypt hash of *password*. Never store plaintext."""
-    return _pwd_context.hash(password)
+    password_bytes = password.encode("utf-8")
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     """Return True if *plain* matches the *hashed* bcrypt digest."""
-    return _pwd_context.verify(plain, hashed)
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
 def create_access_token(user_id: int) -> str:

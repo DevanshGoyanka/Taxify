@@ -3,7 +3,17 @@
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
-from app.schemas.itr1 import Chapter6ADeductions, AgeBracket, TaxRegime, OtherSourcesIncome
+from app.schemas.itr1 import (
+    Chapter6ADeductions,
+    AgeBracket,
+    TaxRegime,
+    OtherSourcesIncome,
+    Schedule80GGA,
+    Schedule80GGC,
+    Schedule80DD,
+    Schedule80U,
+    Schedule80D,
+)
 from app.engine.schedules.deductions import (
     section_80c,
     section_80ccd1b,
@@ -35,10 +45,45 @@ from app.engine.schedules.deductions import (
 class DeductionResult:
     total: Decimal = Decimal("0")
     breakdown: dict = None
+    section_details: dict = None
 
     def __post_init__(self):
         if self.breakdown is None:
             self.breakdown = {}
+        if self.section_details is None:
+            self.section_details = {}
+
+
+def _cap_breakdown_to_gti(result: DeductionResult, gti: Decimal) -> None:
+    """Normalize component keys and allocate the GTI cap across deductions."""
+    combined_key = "80C+80CCC+80CCD(1)"
+    combined = result.breakdown.get(combined_key, Decimal("0"))
+    amount_80ccc = result.breakdown.get("80CCC", Decimal("0"))
+    amount_80ccd1 = result.breakdown.get("80CCD(1)", Decimal("0"))
+    normalized: dict[str, Decimal] = {}
+    for key, amount in result.breakdown.items():
+        if key == combined_key:
+            amount_80c = max(Decimal("0"), combined - amount_80ccc - amount_80ccd1)
+            if amount_80c > 0:
+                normalized["80C"] = amount_80c
+            continue
+        if key in {"80CCC", "80CCD(1)"}:
+            if amount > 0:
+                normalized[key] = amount
+            continue
+        normalized[key] = amount
+
+    remaining = max(Decimal("0"), gti)
+    capped: dict[str, Decimal] = {}
+    for key, amount in normalized.items():
+        allowed = min(amount, remaining)
+        if allowed > 0:
+            capped[key] = allowed
+            remaining -= allowed
+        if remaining <= 0:
+            break
+    result.breakdown = capped
+    result.total = sum(capped.values(), Decimal("0"))
 
 
 def compute_all(
@@ -53,11 +98,30 @@ def compute_all(
     is_parents_senior: bool = False,
     is_80dd_severe: bool = False,
     is_80u_severe: bool = False,
+    use_structured_80ddb: bool = False,
+    hra_exempt_amount: Decimal = Decimal("0"),
+    schedule_80gga: Optional[Schedule80GGA] = None,
+    schedule_80ggc: Optional[Schedule80GGC] = None,
+    assessee_pan: Optional[str] = None,
+    schedule_80c_entries: Optional[list] = None,
+    schedule_80e_entries: Optional[list] = None,
+    loan_rows_80ee: Optional[list] = None,
+    loan_rows_80eea: Optional[list] = None,
+    loan_rows_80eeb: Optional[list] = None,
+    property_stamp_duty_value_80eea: Optional[Decimal] = None,
+    schedule_80dd: Optional[Schedule80DD] = None,
+    schedule_80u: Optional[Schedule80U] = None,
+    schedule_80d: Optional[Schedule80D] = None,
+    salary: Decimal = Decimal("0"),
+    is_government_employee: bool = False,
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
     ``cg_112a_income`` and ``cg_111a_income`` are the taxable portions of those CG
     categories.  They are excluded from adjusted GTI for 80G/80GG per CBDT rules.
+
+    ``hra_exempt_amount`` is used to determine 80GG eligibility (80GG is not
+    available when HRA exemption is claimed under s.10(13A)).
     """
     if not ded or gti <= 0:
         return DeductionResult()
@@ -69,44 +133,83 @@ def compute_all(
             result.breakdown[key] = val
 
     # --- Sections allowed in BOTH regimes ---
-    r_80ccd2 = section_80ccd2.compute(ded, regime)
+    details_80ccd2 = section_80ccd2.compute_details(
+        ded, regime, salary=salary, is_government_employee=is_government_employee
+    )
+    result.section_details["80CCD(2)"] = details_80ccd2
+    r_80ccd2 = details_80ccd2.allowed_deduction
     _add("80CCD(2)", r_80ccd2, allow_new_regime=True)
 
-    r_80cch = section_80cch.compute(ded, regime)
+    details_80cch = section_80cch.compute_details(ded, regime)
+    result.section_details["80CCH"] = details_80cch
+    r_80cch = details_80cch.allowed_deduction
     _add("80CCH", r_80cch, allow_new_regime=True)
 
     if regime == TaxRegime.NEW:
         result.total = min(r_80ccd2 + r_80cch, gti)
+        if result.total < r_80ccd2 + r_80cch:
+            _cap_breakdown_to_gti(result, gti)
         return result
 
     # --- Old regime only deductions ---
     r_80c = section_80c.compute(ded, regime)
     _add("80C+80CCC+80CCD(1)", r_80c)
-    # Also store 80CCC and 80CCD(1) individually for ITD JSON line-item breakout
+    details_80c = section_80c.compute_details(ded, schedule_80c_entries, regime)
+    result.section_details["80C"] = details_80c
+    # Store 80CCC and 80CCD(1) individually for ITD JSON line-item breakout.
     r_80ccc = section_80c.compute_80ccc(ded, regime)
     _add("80CCC", r_80ccc)
     r_80ccd1 = section_80c.compute_80ccd1(ded, regime)
     _add("80CCD(1)", r_80ccd1)
 
-    r_80ccd1b = section_80ccd1b.compute(ded, regime)
+    details_80ccd1b = section_80ccd1b.compute_details(ded, regime)
+    result.section_details["80CCD(1B)"] = details_80ccd1b
+    r_80ccd1b = details_80ccd1b.allowed_deduction
     _add("80CCD(1B)", r_80ccd1b)
 
-    r_80d = section_80d.compute(ded, age_bracket, regime, is_parents_senior=is_parents_senior)
+    details_80d = section_80d.compute_details(
+        ded,
+        age_bracket,
+        regime,
+        schedule=schedule_80d,
+        is_parents_senior=is_parents_senior,
+    )
+    result.section_details["80D"] = details_80d
+    r_80d = details_80d.allowed_deduction
     _add("80D", r_80d)
 
-    r_80dd = section_80dd.compute(ded, regime, is_severe=is_80dd_severe)
+    details_80dd = section_80dd.compute_details(
+        ded, schedule_80dd, regime, is_severe=is_80dd_severe,
+    )
+    result.section_details["80DD"] = details_80dd
+    r_80dd = details_80dd.allowed_deduction
     _add("80DD", r_80dd)
 
-    r_80ddb = section_80ddb.compute(ded, age_bracket, regime)
+    details_80ddb = section_80ddb.compute_details(
+        ded,
+        age_bracket,
+        regime,
+        use_structured_details=use_structured_80ddb,
+    )
+    result.section_details["80DDB"] = details_80ddb
+    r_80ddb = details_80ddb.allowed_deduction
     _add("80DDB", r_80ddb)
 
-    r_80u = section_80u.compute(ded, regime, is_severe=is_80u_severe)
+    details_80u = section_80u.compute_details(
+        ded, schedule_80u, regime, is_severe=is_80u_severe,
+    )
+    result.section_details["80U"] = details_80u
+    r_80u = details_80u.allowed_deduction
     _add("80U", r_80u)
 
-    r_80tta = section_80tta.compute(ded, os_input, age_bracket, regime)
+    details_80tta = section_80tta.compute_details(ded, os_input, age_bracket, regime)
+    result.section_details["80TTA"] = details_80tta
+    r_80tta = details_80tta.allowed_deduction
     _add("80TTA", r_80tta)
 
-    r_80ttb = section_80ttb.compute(ded, os_input, age_bracket, regime)
+    details_80ttb = section_80ttb.compute_details(ded, os_input, age_bracket, regime)
+    result.section_details["80TTB"] = details_80ttb
+    r_80ttb = details_80ttb.allowed_deduction
     _add("80TTB", r_80ttb)
 
     r_80e = section_80e.compute(ded, regime)
@@ -146,18 +249,82 @@ def compute_all(
     # Per CBDT: adjusted GTI for 80G/80GG excludes LTCG 112A and STCG 111A
     adjusted_gti = max(Decimal("0"), gti - deductions_before_80g - cg_112a_income - cg_111a_income)
 
-    r_80g = section_80g.compute(ded, adjusted_gti, regime)
-    _add("80G", r_80g)
-
-    r_80gg = section_80gg.compute(ded, adjusted_gti, regime)
+    # 80GG is computed first because an allowed 80GG deduction reduces the
+    # adjusted GTI used by Section 80G's shared 10% qualifying ceiling.
+    details_80gg = section_80gg.compute_details(
+        ded,
+        adjusted_gti,
+        regime,
+        hra_exempt_amount=hra_exempt_amount,
+    )
+    result.section_details["80GG"] = details_80gg
+    r_80gg = details_80gg.allowed_deduction
     _add("80GG", r_80gg)
 
-    r_80gga = section_80gga.compute(ded, regime)
+    adjusted_gti_80g = max(Decimal("0"), adjusted_gti - r_80gg)
+    details_80g = section_80g.compute_details(ded, adjusted_gti_80g, regime)
+    result.section_details["80G"] = details_80g
+    r_80g = details_80g.allowed_deduction
+    _add("80G", r_80g)
+
+    consumed_before_80gga = deductions_before_80g + r_80gg + r_80g
+    available_80gga = max(Decimal("0"), gti - consumed_before_80gga)
+    details_80gga = section_80gga.compute_details(
+        ded,
+        schedule_80gga,
+        available_80gga,
+        regime,
+    )
+    result.section_details["80GGA"] = details_80gga
+    r_80gga = details_80gga.allowed_deduction
     _add("80GGA", r_80gga)
 
-    r_80ggc = section_80ggc.compute(ded, regime)
+    consumed_before_80ggc = consumed_before_80gga + r_80gga
+    available_80ggc = max(Decimal("0"), gti - consumed_before_80ggc)
+    details_80ggc = section_80ggc.compute_details(
+        ded,
+        schedule_80ggc,
+        available_80ggc,
+        regime,
+        assessee_pan,
+    )
+    result.section_details["80GGC"] = details_80ggc
+    r_80ggc = details_80ggc.allowed_deduction
     _add("80GGC", r_80ggc)
 
     total = deductions_before_80g + r_80g + r_80gg + r_80gga + r_80ggc
     result.total = min(total, gti)
+    if result.total < total:
+        _cap_breakdown_to_gti(result, gti)
+
+    # Compute typed loan-deduction results using the GTI-capped amounts so
+    # that per-row allocation lives in the dedicated modules, not the builder.
+    capped_80e = result.breakdown.get("80E", Decimal("0"))
+    if capped_80e > 0:
+        details_80e = section_80e.compute_details(
+            ded, schedule_80e_entries, capped_80e, regime,
+        )
+        result.section_details["80E"] = details_80e
+
+    capped_80ee = result.breakdown.get("80EE", Decimal("0"))
+    if capped_80ee > 0:
+        details_80ee = section_80ee.compute_details(
+            ded, loan_rows_80ee, capped_80ee, regime,
+        )
+        result.section_details["80EE"] = details_80ee
+
+    capped_80eea = result.breakdown.get("80EEA", Decimal("0"))
+    if capped_80eea > 0:
+        details_80eea = section_80eea.compute_details(
+            ded, loan_rows_80eea, capped_80eea, regime,
+        )
+        result.section_details["80EEA"] = details_80eea
+
+    capped_80eeb = result.breakdown.get("80EEB", Decimal("0"))
+    if capped_80eeb > 0:
+        details_80eeb = section_80eeb.compute_details(
+            ded, loan_rows_80eeb, capped_80eeb, regime,
+        )
+        result.section_details["80EEB"] = details_80eeb
+
     return result

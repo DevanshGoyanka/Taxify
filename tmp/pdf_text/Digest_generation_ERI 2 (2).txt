@@ -1,0 +1,196 @@
+                                                     Integrated e-Filing &
+                                           Centralized Processing Center
+                                                       SOP- ERI Onboarding document
+
+
+
+
+           Integrated e-Filing & Centralized
+                  Processing Center
+                 Standard Operating Procedure
+                ERI Type 3 Onboarding document
+
+                   IEC2.0 Programme | ERI Operations
+
+
+
+
+Confidential                                                                   Page
+                                 1 of 6
+                                                                        Integrated e-Filing &
+                                                              Centralized Processing Center
+                                                                         SOP- ERI Onboarding document
+
+
+Revision history
+                                    Reviewed    Approved
+Version Date             Author                               Description
+                                    By          By
+
+                         Saigopal   Sudhindra                 Initial SOP for Rect T13 communication
+1.0      05-March-2026                          Sudhindra B
+                         S Shenoi   B                         processing
+
+
+
+
+ Confidential                                                                                      Page
+                                                 2 of 6
+                                                                                                                             Integrated e-Filing &
+                                                                                                                   Centralized Processing Center
+                                                                                                                                          SOP- ERI Onboarding document
+
+
+Table of Contents
+   1. What is a Type 3 ERI? ............................................................................................................................................................................ 4
+   2. Scope of a Type 3 ERI ............................................................................................................................................................................. 4
+   3. Steps for Integration & UAT Sanity Testing .................................................................................................................................. 4
+   4. Actions Required from Type 3 ERIs for Every Assessment Year (AY) .............................................................................. 4
+5. Digest Generation Guide for ERI Users – ............................................................................................................................................ 5
+   5.1 What is the Digest Value? .................................................................................................................................................................. 5
+   5.3. How is the Digest Generated? (Step-by-Step) .......................................................................................................................... 5
+   5.4 Visual Diagram of Digest Generation Process ........................................................................................................................... 6
+   5.5 Key Inputs Required ............................................................................................................................................................................ 6
+   5.6 Best Practices for ERI Users ............................................................................................................................................................ 6
+   5.7 Contact for Support .............................................................................................................................................................................. 6
+
+
+
+
+  Confidential                                                                                                                                                                            Page
+                                                                                            3 of 6
+                                                                             Integrated e-Filing &
+                                                                   Centralized Processing Center
+                                                                             SOP- ERI Onboarding document
+
+
+1. What is a Type 3 ERI?
+A Type 3 ERI (e‑Return Intermediary) is an organisation authorised by the Income Tax Department (ITD)
+to build a schema‑based offline utility that assists taxpayers in preparing their Income Tax Returns (ITRs).
+Type 3 ERIs do not receive any API access. Their responsibility is to generate valid ITR JSON files strictly
+based on the latest schemas published on the ITD portal, which taxpayers later upload using Offline Mode.
+
+2. Scope of a Type 3 ERI
+• JSON generation based on schemas published on the ITD portal.
+• No access to e‑Filing APIs, validation APIs, or pre‑fill APIs.
+• Development of a software utility to collect and validate taxpayer data as per schema.
+• Taxpayer uploads the JSON in Offline Mode on the ITD portal.
+• Ensure annual updates and compliance with ITD schema changes.
+
+3. Steps for Integration & UAT Sanity Testing
+
+Step 1: Request UAT credentials by emailing erihelp@incometax.gov.in. The ERI Technical Operation Team
+provides UAT credentials and test data.
+Step 2: Generate UAT JSONs based on latest schemas using UAT credentials and provided test data.
+Step 3: Submit JSONs for validation for each ITR you intend to support.
+Step 4: ERI Technical Operation Team performs sanity checks on the JSON generated with UAT Credentials
+(schema, structure, mandatory fields). Turnaround: 1–2 working days.
+Step 5: After successful testing and ITD approval, ERI Technical Operation Team enables the SW_ID for the
+specific ITR and AY. ERI users will be informed post enablement through email from
+erihelp@incometax.gov.in
+
+4. Actions Required from Type 3 ERIs for Every Assessment Year (AY)
+• Download latest schemas as soon as they are published.
+• Update your utility to comply with new AY schemas.
+• Proactively generate UAT JSONs using UAT credentials and new test data. (UAT credentials are ERI_ID,
+SW_ID, Secret Key & Iteration).
+• Submit to ERI Technical Operation Team for UAT sanity by sharing the JSONs through
+erihelp@incometax.gov.in
+• After approval, SW_ID is enabled for the specific ITR and AY (no additional action required).
+• Perform internal QA for accuracy and schema alignment.
+Please note, Enabling ITRs is purely voluntary process from the ERI users. ERI Users may choose the ITRs,
+based on their business requirements. It’s not mandatory that every ERI user must enable all ITRs for given
+AY.
+
+
+
+ Confidential                                                                                           Page
+                                                       4 of 6
+                                                                            Integrated e-Filing &
+                                                                  Centralized Processing Center
+                                                                               SOP- ERI Onboarding document
+
+
+5. Digest Generation Guide for ERI Users –
+
+This section explains what the “Digest” value is, why it is important, and how it is generated in the Income
+Tax Return (ITR) JSON file. It is written for ERI users and stakeholders their reference.
+
+
+   5.1 What is the Digest Value?
+    The Digest is a unique security code embedded in the ITR JSON file. It ensures the integrity of the data
+    by confirming that the file has not been altered after generation think of it as a digital fingerprint for
+    your ITR file.
+
+
+   5.2. Why is the Digest Important?
+   It guarantees data authenticity, prevents tampering or unauthorized changes.
+   It is required for validation during submission.
+
+
+   5.3. How is the Digest Generated? (Step-by-Step)
+   Step 1: Read the Input JSON
+
+   Step 2: Minify the JSON
+
+   Step 3: Locate Digest Field, Find the position of the "Digest" field in the JSON.
+
+             Replace the value with a placeholder (e.g., "-").
+   Step 4: Load the Secret key and Iteration
+
+   Step 5: Generate New Digest, Using HMAC-SHA256 algorithm:
+
+           1. Initialize with the secret key.
+           2. Hash the modified JSON string.
+           3. Repeat hashing for the specified number of iterations
+              (Iteration value provided with credentials).
+           4. Encode the final hash in Base64 format.
+
+   Step 6: Update JSON
+
+   Replace the placeholder with the newly generated digest.
+
+   Save the updated JSON to a new file.
+
+
+
+
+ Confidential                                                                                             Page
+                                                      5 of 6
+                                                                          Integrated e-Filing &
+                                                                Centralized Processing Center
+                                                                           SOP- ERI Onboarding document
+
+
+  5.4 Visual Diagram of Digest Generation Process
+
+
+
+
+  5.5 Key Inputs Required
+  ITR JSON file with fields like Digest and SWCreatedBy.
+  SWCreatedBy code (e.g., “SW20013802”) – identifies the ERI system.
+
+  Secret key & iteration count – predefined for each ERI code (managed securely).
+
+
+   5.6 Best Practices for ERI Users
+  Do not manually edit the Digest value.
+
+  Ensure the JSON file structure remains unchanged—spacing and formatting can affect theDigest.
+  Remove all extra spaces in the JSON that are not part of variable values.
+
+  Always use the official utility or API provided for Digest generation.
+
+  Keep your secret keys confidential and follow organizational security guidelines.
+
+
+  5.7 Contact for Support
+  For assistance, please reach out to ERI Helpdesk at: erihelp@incometax.gov.in.
+
+
+
+
+Confidential                                                                                       Page
+                                                   6 of 6
+

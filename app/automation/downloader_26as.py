@@ -1,113 +1,59 @@
 import os, asyncio, zipfile, shutil, re
 from playwright.async_api import Page, Frame
 from app.automation.downloader import update_browser_status
+from app.automation.navigation import (
+    PortalHandle,
+    find_frame_global,
+    navigate_income_tax_returns,
+    race_portal_navigation,
+)
+from app.automation.years import TaxYearContext
 
 
 async def _find_frame(page: Page, selector: str, timeout: int = 3000) -> Frame | None:
-    """Return the first frame (including main) where selector is visible."""
-    for frame in page.frames:
-        try:
-            await frame.locator(selector).first.wait_for(state="visible", timeout=timeout)
-            return frame
-        except Exception:
-            continue
-    return None
-
-
-async def _open_hamburger(page: Page, log_callback):
-    """
-    Open the collapsed nav (☰ = #hamburgerOpen) so e-File becomes clickable.
-    a#e-File exists in the DOM but only works once the panel is open, so click
-    the hamburger first whenever the button is present. Scroll to top first
-    in case the page is scrolled down and the nav bar is out of view.
-    """
-    try:
-        await page.evaluate("window.scrollTo(0, 0)")
-        await asyncio.sleep(0.5)
-    except Exception:
-        pass
-
-    for sel in ("#hamburgerOpen", "button[aria-label*='menu' i]", ".hamburger"):
-        try:
-            btn = page.locator(sel).first
-            if await btn.is_visible(timeout=500):
-                log_callback(f"[26AS] Opening hamburger menu: {sel}")
-                try:
-                    await btn.click(timeout=3000)
-                except Exception:
-                    await btn.click(force=True, timeout=3000)
-                await asyncio.sleep(1)
-                return
-        except Exception:
-            continue
+    """Return the first visible frame under one shared elapsed timeout."""
+    return await find_frame_global(page, selector, timeout_ms=timeout)
 
 
 async def download_26as(page: Page, assessment_year: str, download_dir: str, log_callback, pan: str = "", dob: str = "") -> tuple[bool, str, str]:
+    portal_handle: PortalHandle | None = None
     try:
-        await _open_hamburger(page, log_callback)
-        
-        # The ITD portal often leaves a full-screen loading spinner/overlay active 
-        # for a few seconds which intercepts pointer events. Wait for it to clear.
-        try:
-            await page.locator(".customLoaderBackdrop").wait_for(state="hidden", timeout=30000)
-        except Exception:
-            pass
-            
-        log_callback("[26AS] Hovering over e-File menu...")
-        # Retry the full wait+hover cycle — dashboard Angular nav may take time to
-        # mount even after the overlay clears. Each attempt waits up to 30s for the
-        # element to appear, then tries to hover it.
-        for _attempt in range(4):
-            try:
-                efile = page.locator("//*[normalize-space(.)='e-File']").first
-                await efile.wait_for(state="visible", timeout=30000)
-                await efile.hover(timeout=10000)
-                break
-            except Exception:
-                if _attempt == 3:
-                    raise
-                log_callback(f"[26AS] e-File menu not ready (attempt {_attempt + 1}/4) — waiting...")
-                # Nudge the page to help Angular finish rendering the nav
-                try:
-                    await page.keyboard.press("Escape")
-                    await page.evaluate("window.scrollTo(0, 0)")
-                except Exception:
-                    pass
-                await asyncio.sleep(5)
-        await asyncio.sleep(1.0)
-        log_callback("[26AS] Hovering over Income Tax Returns...")
-        returns = page.locator("//*[text()='Income Tax Returns']").first
-        await returns.wait_for(state="visible", timeout=30000)
-        await returns.hover()
-        await asyncio.sleep(1.0)
+        tax_years = TaxYearContext.from_assessment_year(assessment_year)
+        await navigate_income_tax_returns(page, timeout_ms=30000, log=log_callback)
         log_callback("[26AS] Clicking View Form 26AS — waiting for TRACES to load...")
         await update_browser_status(page, "26AS: Opening TRACES portal...")
         view_26as = page.locator("//*[contains(text(),'View Form 26AS')]").first
         await view_26as.wait_for(state="visible", timeout=30000)
 
-        # TRACES may open in a new tab or navigate in the same tab
+        async def _trigger_traces() -> None:
+            await view_26as.click()
+
+        async def _confirm_traces() -> None:
+            confirm_btn = page.locator(
+                "button", has_text=re.compile(r"confirm|proceed", re.IGNORECASE)
+            ).first
+            try:
+                await confirm_btn.wait_for(state="visible", timeout=4000)
+                await confirm_btn.click()
+                log_callback("[26AS] Confirmed TRACES redirect popup on ITD portal.")
+            except Exception:
+                return
+
+        portal_handle = await race_portal_navigation(
+            origin_page=page,
+            trigger=_trigger_traces,
+            portal_url=re.compile(r"(?:tdscpc|traces)", re.IGNORECASE),
+            timeout_ms=40000,
+            confirm=_confirm_traces,
+        )
+        traces_page = portal_handle.target_page
         try:
-            async with page.context.expect_page(timeout=40000) as new_page_info:
-                await view_26as.click()
-                
-                # The ITD portal sometimes shows a "Disclaimer" popup asking to confirm 
-                # the redirect to TRACES. We MUST click "Confirm" if it appears, otherwise
-                # the new tab will never spawn and expect_page will time out.
-                try:
-                    confirm_btn = page.locator("button", has_text=re.compile(r"confirm|proceed", re.IGNORECASE)).first
-                    await confirm_btn.wait_for(state="visible", timeout=4000)
-                    await confirm_btn.click()
-                    log_callback("[26AS] Confirmed TRACES redirect popup on ITD portal.")
-                except Exception:
-                    # No confirm popup appeared, which is fine
-                    pass
-                    
-            traces_page = await new_page_info.value
             await traces_page.wait_for_load_state("domcontentloaded", timeout=40000)
-            log_callback("[26AS] TRACES opened in a new tab.")
         except Exception:
-            traces_page = page
-            await page.wait_for_load_state("domcontentloaded", timeout=40000)
+            pass
+        if portal_handle.child_tab:
+            log_callback("[26AS] TRACES opened in a new tab.")
+        else:
             log_callback("[26AS] TRACES loaded in the same tab.")
 
         log_callback(f"[26AS] TRACES portal ready. Frames: {len(traces_page.frames)}")
@@ -213,7 +159,6 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
                     msg_text = (await msg_el.first.inner_text()).strip()
                     if msg_text:
                         log_callback(f"[Warning] TRACES on-demand message: {msg_text[:120]}")
-                        await traces_page.close()
                         return False, (
                             "26AS too large for inline download — login to tdscpc.gov.in "
                             "to place a download request, then download the TXT manually."
@@ -221,10 +166,8 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
             except Exception:
                 continue
 
-        # fiscal_year is used throughout for consistent file naming.
-        # For AY 2026-27: fiscal_year = "2025-26" → fy_str = "2025_26"
-        # Consistent with AIS and TIS downloaders (all three docs use FY naming).
-        fy_str = assessment_year.replace("-", "_")
+        # 26AS uses the current AY in TRACES and the corresponding FY in filenames.
+        fy_str = tax_years.fiscal_year_filename
         prefix = f"{pan}-" if pan else ""
         os.makedirs(download_dir, exist_ok=True)
 
@@ -265,8 +208,7 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
             # Password is DOB in ddmmyyyy format (e.g. 01-01-1980 → 11101980)
             if zipfile.is_zipfile(tmp_path):
                 zip_pwd = dob.replace("-", "").encode() if dob else None
-                pwd_display = zip_pwd.decode() if zip_pwd else "(no DOB)"
-                log_callback(f"[26AS] Unlocking ZIP with password: {pwd_display}")
+                log_callback("[26AS] Unlocking ZIP with a vault-derived password candidate.")
                 with zipfile.ZipFile(tmp_path, "r") as zf:
                     names = zf.namelist()
                     txt_name = next((n for n in names if n.lower().endswith(".txt")), names[0])
@@ -291,9 +233,8 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
                 pass
             _txt_warning = str(txt_err)
             if "bad password" in _txt_warning.lower():
-                pwd_display = dob.replace("-", "") if dob else "(no DOB)"
                 log_callback(
-                    f"[Warning] TXT ZIP unlock failed — wrong password (tried: {pwd_display}). "
+                    "[Warning] TXT ZIP unlock failed — no password candidate matched. "
                     f"Verify DOB in vault matches PAN card (format: DDMMYYYY).{zip_hint}"
                 )
             else:
@@ -301,7 +242,6 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
 
         await update_browser_status(traces_page, "TRACES: 26AS Download Complete!")
         await asyncio.sleep(1)
-        await traces_page.close()
         # _saved_txt is empty if TXT extraction failed
         txt_warn = "" if _saved_txt else "PDF saved but TXT extraction failed — check DOB in vault"
         return True, txt_warn, _saved_txt
@@ -321,3 +261,12 @@ async def download_26as(page: Page, assessment_year: str, download_dir: str, log
         else:
             reason = err[:80] if len(err) <= 80 else err[:77] + "..."
         return False, reason, ""
+    finally:
+        if portal_handle is not None:
+            try:
+                await portal_handle.cleanup()
+            except Exception as cleanup_error:
+                log_callback(
+                    f"[26AS] Warning: Could not restore ITD anchor after TRACES "
+                    f"({cleanup_error})."
+                )

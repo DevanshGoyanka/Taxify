@@ -1,0 +1,152 @@
+# Implementation Plan
+
+- [ ] 1. Write bug condition exploration test
+  - **Property 1: Bug Condition** - ITR Computation Compliance Verification
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the compliance gaps exist
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate all 11 compliance gaps exist vs official ITR utility
+  - **Scoped PBT Approach**: Create comprehensive test cases covering all edge-case scenarios from Bug Condition in design
+  - Test CBDT rounding discrepancies (₹4,99,995 → ₹5,00,000 vs ₹4,99,990)
+  - Test 87A-112A interaction failures (LTCG ₹1,00,000 + slab tax ₹8,000 → incorrect ₹12,500 rebate vs ₹8,000 cap)  
+  - Test marginal relief calculation errors (income ₹50,05,000 → ₹500 difference from official utility)
+  - Test agricultural income eligibility issues (agricultural income ₹2,20,000 → incorrect ITR-1 eligibility determination)
+  - Test clubbing provision mapping gaps, Schedule EI completeness, relief interactions
+  - Test TDS/challan reconciliation and refund calculation discrepancies
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS (this is correct - it proves the compliance gaps exist)
+  - Document counterexamples found to understand root causes for each of the 11 gaps
+  - Mark task complete when test is written, run, and failures are documented
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 1.10, 1.11_
+
+- [ ] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Standard Case Accuracy Preservation
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for standard non-edge cases
+  - Write property-based tests capturing observed behavior patterns from Preservation Requirements
+  - Test standard salary income computation preservation
+  - Test house property income without complex scenarios preservation  
+  - Test other sources income from savings accounts preservation
+  - Test Chapter VI-A deductions (80C, 80D) preservation
+  - Test basic tax computation without rebate/relief preservation
+  - Test standard TDS entries processing preservation
+  - Test JSON serialization correctness preservation
+  - Test computation flow separation of concerns preservation
+  - Test basic ITR-1 eligibility for simple cases preservation
+  - Test standard cess and surcharge calculations preservation
+  - Property-based testing generates many test cases for stronger guarantees
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10_
+
+- [ ] 3. Fix for ITR computation compliance verification across 11 identified gaps
+
+  - [ ] 3.1 Enhanced CBDT rounding functions and application logic
+    - Add comprehensive rounding functions for all prescribed stages per section 288A/288B
+    - Implement `cbdt_round_at_stage()` function with proper CBDT notification requirements
+    - Add `apply_288a_rounding()` for taxable income rounding with correct sequencing
+    - Create `apply_intermediate_rounding()` for mid-calculation rounding requirements
+    - Update `app/engine/common/rounding.py` with enhanced rounding utilities
+    - _Bug_Condition: hasComplexRoundingScenario(input) from design_
+    - _Expected_Behavior: CBDT rounding applied at every prescribed stage exactly as per CBDT notifications_
+    - _Preservation: Standard calculations without complex rounding scenarios remain unchanged_
+    - _Requirements: 1.1, 2.1_
+
+  - [ ] 3.2 87A rebate and 112A tax interaction fixes
+    - Modify rebate calculation to properly handle special-rate income interactions
+    - Update rebate eligibility logic to exclude 112A tax from rebate base
+    - Add validation that rebate cannot exceed slab tax when special-rate income is present
+    - Implement proper sequencing of rebate vs special-rate tax calculations
+    - Update `app/engine/common/rebate.py` rebate computation function
+    - _Bug_Condition: has87A112AInteraction(input) from design_
+    - _Expected_Behavior: Correct eligibility limits and interaction rules as per Income Tax Act provisions_
+    - _Preservation: Basic tax computation without rebate or relief continues accurately_
+    - _Requirements: 1.2, 2.2_
+
+  - [ ] 3.3 Marginal relief calculation precision improvements
+    - Update marginal relief calculations to match official utility exactly
+    - Implement precise marginal relief formula per latest CBDT guidelines
+    - Add proper rounding sequence for marginal relief calculations
+    - Fix threshold detection and relief application logic
+    - Update `app/engine/common/surcharge.py` surcharge calculation functions
+    - _Bug_Condition: hasMarginalReliefScenario(input) from design_
+    - _Expected_Behavior: Relief amounts that match official ITR utility exactly_
+    - _Preservation: Standard cess and surcharge calculations continue applying rates correctly_
+    - _Requirements: 1.3, 2.3_
+
+  - [ ] 3.4 Agricultural income integration for ITR-1 eligibility
+    - Add proper agricultural income handling for ITR-1 eligibility determination
+    - Implement `compute_agricultural_income_rate()` function for eligibility checks
+    - Add combined income threshold validation logic
+    - Update ITR-1 eligibility validation to include agricultural income considerations
+    - Update `app/engine/calculators/itr1.py` main computation function
+    - _Bug_Condition: hasAgriculturalIncomeForEligibility(input) from design_
+    - _Expected_Behavior: Correct form eligibility based on agricultural income thresholds_
+    - _Preservation: Basic ITR-1 eligibility for simple cases continues validating correctly_
+    - _Requirements: 1.4, 2.4_
+
+  - [ ] 3.5 Clubbing provisions enhancement and Schedule EI mapping completion
+    - Enhance clubbing provision mapping to computation engine
+    - Add comprehensive clubbing provision detection and application
+    - Implement proper income source mapping for clubbing scenarios
+    - Complete Schedule EI mapping with all missing exempt income categories
+    - Add all missing exempt income categories per ITR schema requirements
+    - Update `app/engine/calculators/itr1.py` and `app/engine/itd/itr1.py`
+    - _Bug_Condition: hasComplexClubbingProvisions(input) OR hasIncompleteScheduleEIMapping(input) from design_
+    - _Expected_Behavior: Complete mapping for all clubbing provisions and exempt income categories_
+    - _Preservation: JSON serialization continues maintaining correct field mapping and structure_
+    - _Requirements: 1.5, 1.6, 2.5, 2.6_
+
+  - [ ] 3.6 Relief u/s 89, 90/90A/91 comprehensive support
+    - Add comprehensive relief u/s 89, 90/90A/91 calculation support
+    - Implement proper relief calculation interactions with regular tax computation
+    - Add verification mechanisms for international tax relief claims
+    - Update JSON generation to include all relief fields per ITD schema
+    - Create or enhance relief calculation modules
+    - _Bug_Condition: hasRelief89Interaction(input) OR hasInternationalTaxRelief(input) from design_
+    - _Expected_Behavior: Correct interaction with regular tax computation and proper verification_
+    - _Preservation: Computation flow through all layers continues maintaining separation of concerns_
+    - _Requirements: 1.7, 1.8, 2.7, 2.8_
+
+  - [ ] 3.7 TDS/challan reconciliation and refund calculation improvements
+    - Improve tax paid challan reconciliation accuracy
+    - Implement precise matching algorithms for TDS/advance tax entries
+    - Add enhanced validation for challan amounts vs computed tax
+    - Fix refund amount calculation discrepancies vs official utility
+    - Create or enhance `app/engine/common/aggregation.py` reconciliation functions
+    - _Bug_Condition: hasChallanReconciliationIssues(input) OR hasRefundCalculationDiscrepancy(input) from design_
+    - _Expected_Behavior: Correct matching and exact reconciliation with official ITR utility computation_
+    - _Preservation: Standard TDS entries continue matching and reconciling correctly with Form 16/16A_
+    - _Requirements: 1.10, 1.11, 2.10, 2.11_
+
+  - [ ] 3.8 ITR-1 eligibility validation enhancement
+    - Enhance ITR-1 eligibility checks for edge cases with multiple income sources
+    - Add comprehensive validation logic for complex eligibility scenarios
+    - Update eligibility determination to handle all edge cases correctly
+    - Implement proper validation for multiple income source interactions
+    - Update eligibility validation functions in computation engine
+    - _Bug_Condition: hasComplexITR1Eligibility(input) from design_
+    - _Expected_Behavior: Correct validation for all edge cases with multiple income sources_
+    - _Preservation: Basic ITR-1 eligibility for simple cases continues validating correctly_
+    - _Requirements: 1.9, 2.9_
+
+  - [ ] 3.9 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - ITR Computation Compliance Verification
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior for all 11 compliance areas
+    - When this test passes, it confirms all expected behaviors are satisfied
+    - Run bug condition exploration test from step 1
+    - **EXPECTED OUTCOME**: Test PASSES (confirms all 11 compliance gaps are fixed)
+    - Verify calculations now match official ITR utility within ₹1 tolerance
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11_
+
+  - [ ] 3.10 Verify preservation tests still pass
+    - **Property 2: Preservation** - Standard Case Accuracy Preservation
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions in standard cases)
+    - Confirm all preservation tests still pass after fix (no regressions)
+
+- [ ] 4. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.

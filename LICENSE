@@ -1,0 +1,31 @@
+Copyright (c) 2026 Taxify. All Rights Reserved.
+
+PROPRIETARY AND CONFIDENTIAL
+
+This software and its source code, documentation, schemas, and associated
+materials (the "Software") are the proprietary and confidential property of
+the copyright holder.
+
+No permission is granted to any person to use, copy, modify, merge, publish,
+distribute, sublicense, sell, or create derivative works of the Software, in
+whole or in part, without the prior express written permission of the
+copyright holder.
+
+Unauthorised copying, distribution, reverse engineering, or use of the
+Software, via any medium, is strictly prohibited.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+Note on third-party components: this repository depends on separately licensed
+open-source packages (see requirements.txt and frontend/package.json). Those
+components remain under their own licences. Official CBDT/ITD schemas and
+reference documents included under Docs/ and "Reference Docs by CBDT & ITD/"
+are the property of the Income Tax Department, Government of India, and are
+reproduced for interoperability purposes only.

@@ -1,0 +1,649 @@
+  Application Programming Interface Specifications
+
+             Integrated e-filing and CPC 2.0 Project
+
+
+
+
+API Name            Submit API Flow
+
+API Description     API used to submit ITRs for current year
+Version History
+
+Version        Date                         Description
+1.0       29-10-2021   Initial Draft
+1.1       17-11-2021   Exception scenarios added
+Table of Contents
+1. Overview............................................................................................................................. 4
+2. About API ........................................................................................................................... 4
+3. Target Audience and Pre-requisites ...................................................................................... 4
+4. validateItr and submitItr API Details .................................................................................... 4
+   4.1 API Usage Scenario ....................................................................................................... 5
+   4.2 API Request process....................................................................................................... 5
+   4.3 API Protocol .................................................................................................................. 5
+   4.4 Request Parameters ........................................................................................................ 5
+       4.4.1 Request Header: ...................................................................................................... 5
+       4.4.2 Request Body: ......................................................................................................... 6
+       4.4.3 Details of data attribute:........................................................................................... 6
+   4.5 Response Parameters ...................................................................................................... 8
+   4.6 validateItr API - Sample Request format ......................................................................... 8
+   4.7 validateItr API - Sample Response format..................................................................... 11
+   4.7 submitItr API - Sample Request format......................................................................... 12
+   4.8 submitItr API- Sample Response format ....................................................................... 14
+5. API Exception Details........................................................................................................ 15
+1. Overview
+As noted in the ERI Specification Overview document the interaction during the submission
+phase includes 3 key steps in addition to the Login and Logout. This document defines the
+specification for the Validate and Submit calls as highlighted in the figure below. The
+verification calls are described in a separate document as they are complex and include multiple
+variations.
+
+
+
+
+2. About API
+Requester                Type-2 or Type-3 ERI
+Provider                 ItrWeb
+Description              These APIs shall be used to validate and submit the ITRs
+Mode of Integration
+                    Real Time
+(Real time / Batch)
+Processing Details       ERI can submit ITR only for current assessment year 2021
+Pre-Processing           User should have established a session using the Login API
+Details                  specifications.
+Service Name             ItrService
+                         http<hostname>/itrweb/auth/v0.1/returns/submit
+API URL
+                         http://<hostname>//itrweb/auth/v0.1/returns/validate
+
+
+
+
+3. Target Audience and Pre-requisites
+This is technical document and target audiences are ERIs working in their application and
+interested to integrate their application with IEC 2.0 platform.
+The pre-requisites to call this API is that ERI is already registered with IEC 2.0 platform. They
+have valid credentials to call the API.
+
+
+4. validateItr and submitItr API Details
+This service is used to validate income tax return from the taxpayer, where taxpayer has already
+registered.
+There are two API endpoints, and both will have same request and response parameters.
+
+   1. validateItr API: this API endpoint will validate the ITR and provide response to ERI
+      application. It will not update anything in eFiling system.
+   2. submitItr API: this API endpoint will validate the ITR and submit in eFiling system if
+      validation is successful.
+
+4.1 API Usage Scenario
+ERI can submit their choice for verification mode for their client.
+When ERI application calls API to validate ITR from the taxpayer and below are the activities
+are performed:
+
+   1. Taxpayer fills income tax return details through ERI application.
+   2. Taxpayer submits income tax return to eFiling system to validate.
+
+4.2 API Request process
+ERI application must have already establish the login session and auth token with eFiling system
+using the login API. Application will initiate call with API as below:
+
+   1. ERI application will capture the taxpayer's income tax return details.
+   2. ERI Application will call validateItr or submit ITR API and send the request.
+   3. eFiling system will validate the ITR and provides the success or failure messages to the
+      ERI application as response.
+
+4.3 API Protocol
+validateItr API is exposed as REST API over the HTTPS. The input data should be sent as JSON
+document using Content-Type "application/json".
+
+4.4 Request Parameters
+The request will consist of request header and request body:
+
+4.4.1 Request Header:
+
+Header is mandatory and will consists of following values:
+Mandatory Request Header Parameters:
+
+Header Name Header Value
+Content-type     application/json
+clientId         clientId value which is provided to ERI as part of the registration
+clientSecret     clientSecret value which is provided to ERI as part of the registration
+authToken        Auth token from the Login Flow
+accessMode       "API"
+
+
+
+
+4.4.2 Request Body:
+
+Request body will consist of below attributes:
+
+data: data attribute will be Base64 encoded string of API request json. Details of request json
+attributes are explained in request data element details.
+
+sign:
+
+   •    The API request data attribute should be digitally signed for the message integrity and
+        non-repudiation purposes.
+   •    Digital signing should always be performed by the ERI from value of data attribute which
+        was generated from request json.
+   •    The signature should be generated using a valid X.509 certificate
+   •    signature value should be generated from data field using ERI's DSC private key.
+   •    ERI should share their DSC public key with ITD to validate the signature.
+
+eriUserId: It is mandatory and valid value is user ID of the ERI
+
+4.4.3 Details of data attribute:
+
+Below are the request parameters, which is request json used to create data attribute as explained
+above data attribute of the request body:
+
+
+Note: request and response parameters are same for both validateItr and submitItr API.
+
+Name of the        Data     Max       Is
+                                                      Description
+Parameter          type     length    Mandatory
+                                                     It is mandatory and valid value is
+serviceName        String   60        Yes            "EriValidateItr" for Validate and
+                                                     "EriItrSubmit" for Submit
+                                                Valid PAN of the taxpayer which is already
+Pan              String   10        No
+                                                added as client to the ERI
+Header           Json     -         Yes         See Description in table below
+                                                Kindly refer to the Schema published on
+formData         Json               Yes         the Income Tax Portal for each of the ITR
+                                                forms
+
+
+Elements under the Header Tag:
+
+Name of the         Data       Max        Is
+                                                      Description
+Parameter           type       length     Mandatory
+                                                      Name of the form
+                                                      Possible Values:
+formName            String     5          yes
+                                                      ITR-1, ITR-2, ITR-3, ITR-4, ITR-5,
+                                                      ITR-6, ITR-7
+                                                      ITR form Number 1 to 7 in string
+formCode            String     1          yes
+                                                      format
+mimeType            String     4          yes         mimeType will be json
+                                                      Valid PAN of the taxpayer for whom
+entityNum           String     10         yes
+                                                      the form is being submitted
+                                                      Type of Assessee
+entityType          String     1          yes
+                                                      “P”
+                                                      Assessment year for which the form is
+Ay                  String     4          yes         being submitted.
+                                                      Valid format is "YYYY"
+                                                      UserID of the ERI for ERI 2
+createdBy           String     10         yes
+                                                      PAN of taxpayer for ERI 3
+                                                      O – Original
+filingTypeCd        String     1          yes
+                                                      R – Revised
+filingMode          String     2          yes         Valid value is "OF”
+                                                      11- for Original
+                                                      17- for Revised
+incomeTaxSecCd      String                yes
+                                                      12- for Belated (after due date of
+                                                      filing)
+                                                        SLF – in case being done by taxpayer
+                                                        himself using Type 3 ERI software
+submittedBy          String      3            yes
+                                                        ERI – in case the return is being
+                                                        prepared by Type 2 ERI
+
+
+
+
+4.5 Response Parameters
+
+                                     Max      Is
+Name of the       Data type                             Description
+                                     length   Mandatory
+Parameter
+Header            Object                      Yes        Contains formName
+formName          Object                      no         Null
+Messages          List<String>                 Yes       List of errors "messages": []
+errors            List<Error>                  Yes       List of errors "errors": []
+                                                         Unique number generated. ARN
+arnNumber         String             15       Yes        number is null in case of
+                                                         validateItr API
+                                                         Indicates whether ITR
+                                                         submitted/validate or not.
+                                                         True in case ITR is validated or
+successFlag       Boolean                     Yes
+                                                         submitted
+                                                         False in case ITR is not
+                                                         validate/submitted
+transactionNo     String                      Yes        Unique number generated
+httpStatus        String                      Yes        http codes corresponding to response
+
+
+
+
+4.6 validateItr API - Sample Request format
+
+
+{
+"data": "",
+"sign": "",
+"eriUserId": ""
+}
+data tag will be Base64Encoded string from following request json
+
+{
+"serviceName":" EriValidateItr",
+"header":{
+"formName":"ITR-1",
+"formCode":"1",
+"mimeType": "json",
+"entityNum":"TNTPP9566H",
+"entityType":"p",
+"ay":"2021",
+"createdBy":"Tushar",
+"filingTypeCd":"O",
+"filingMode":"OF",
+"incomeTaxSecCd":"11",
+"submittedBy":"ERI"
+},
+"formData":"{'ITR':{'ITR1':{'CreationInfo':{'SWVersionNo':'R1','SWCreatedBy':'SW28450842',
+'XMLCreatedBy':'SW92202020','XMLCreationDate':'1991-02-
+02','IntermediaryCity':'delhi','Digest':'Ir7WR/VU+X+It08A31seF5opRKRiyaoALC/42Ck7uCg='
+},'Form_ITR1':{'FormName':'ITR-1','Description':'For Indls having Income from Salary Pension
+family pension and
+Interest','AssessmentYear':'2020','SchemaVer':'Ver1.0.1','FormVer':'Ver1.0'},'PersonalInfo':{'Ass
+esseeName':{'FirstName':'Sahana','MiddleName':'','SurNameOrOrgName':'T'},'Address':{'Reside
+nceNo':'4','ResidenceName':'SrinidhiResidency','RoadOrStreet':'RoadNumber5','LocalityOrArea':
+'Vikrampuri','CityOrTownOrDistrict':'Hyderabad','StateCode':'36','CountryCode':'91','PinCode':5
+00009,'ZipCode':'','CountryCodeMobile':91,'MobileNo':9876543210,'EmailAddress':'ankit.gupta
+@gmail.com'},'PAN':'TNTPP9566H','DOB':'1990-06-
+09','EmployerCategory':'CGOV','AadhaarCardNo':'121212121212'},'FilingStatus':{'ReturnFileSe
+c':18,'SeventhProvisio139':'N','ReceiptNo':'123456789123456','NoticeNo':'398309901','OrigRetF
+iledDate':'2020-04-02','NoticeDateUnderSec':'2020-04-
+02'},'ITR1_IncomeDeductions':{'AllwncExemptUs10':{'AllwncExemptUs10Dtls':[{'SalNatureD
+esc':'10(5)','SalOthAmount':5000},{'SalNatureDesc':'10(10)','SalOthAmount':7000}],'TotalAllwn
+cExemptUs10':12000},'OthersInc':{'OthersIncDtlsOthSrc':[{'OthSrcNatureDesc':'IFD','OthSrcOt
+hAmount':5000}]},'UsrDeductUndChapVIA':{'Section80C':80000,'Section80CCC':50000,'Sectio
+n80CCDEmployeeOrSE':20000,'Section80CCD1B':0,'Section80CCDEmployer':20000,'Section8
+0D':0,'Section80DDUsrType':'2','Section80DD':15000,'Section80DDBUsrType':'1','Section80DD
+B':7000,'Section80E':20000,'Section80EE':0,'Section80EEA':0,'Section80EEB':0,'Section80G':0,'
+Section80GG':0,'Section80GGA':0,'Section80GGC':0,'Section80UUsrType':'2','Section80U':150
+00,'Section80TTA':10000,'Section80TTB':0,'TotalChapVIADeductions':237000},'DeductUndCh
+apVIA':{'Section80C':80000,'Section80CCC':50000,'Section80CCDEmployeeOrSE':20000,'Sect
+ion80CCD1B':0,'Section80CCDEmployer':20000,'Section80D':0,'Section80DD':125000,'Section
+80DDB':7000,'Section80E':20000,'Section80EE':0,'Section80EEA':0,'Section80EEB':0,'Section8
+0G':0,'Section80GG':0,'Section80GGA':0,'Section80GGC':0,'Section80U':125000,'Section80TT
+A':0,'Section80TTB':0,'TotalChapVIADeductions':447000},'ExemptIncAgriOthUs10':{'ExemptI
+ncAgriOthUs10Total':0},'GrossSalary':2025000,'Salary':2000000,'PerquisitesValue':15000,'Profi
+tsInSalary':10000,'NetSalary':2013000,'DeductionUs16':60000,'DeductionUs16ia':50000,'Enterta
+inmentAlw16ii':5000,'ProfessionalTaxUs16iii':5000,'IncomeFromSal':1953000,'TypeOfHP':'L','
+GrossRentReceived':200000,'AnnualValue':200000,'StandardDeduction':60000,'TotalIncomeOf
+HP':140000,'IncomeOthSrc':5000,'GrossTotIncome':2098000,'DepPayInvClmUndDednVIA':'N','
+TotalIncome':1651000},'Schedule80G':{'TotalDonationsUs80G':0,'Don100Percent':{'TotDon100
+PercentCash':0,'TotDon100PercentOtherMode':0,'TotDon100Percent':0,'TotEligibleDon100Perce
+nt':0},'Don50PercentNoApprReqd':{'TotDon50PercentNoApprReqdCash':0,'TotDon50PercentN
+oApprReqdOtherMode':0,'TotDon50PercentNoApprReqd':0,'TotEligibleDon50Percent':0},'Don1
+00PercentApprReqd':{'TotDon100PercentApprReqdCash':0,'TotDon100PercentApprReqdOther
+Mode':0,'TotDon100PercentApprReqd':0,'TotEligibleDon100PercentApprReqd':0},'Don5 0Perce
+ntApprReqd':{'TotDon50PercentApprReqdCash':0,'TotDon50PercentApprReqdOtherMode':0,'T
+otDon50PercentApprReqd':0,'TotEligibleDon50PercentApprReqd':0},'TotalDonationsUs80GCas
+h':0,'TotalDonationsUs80GOtherMode':0,'TotalEligibleDonationsUs80G':0},'ITR1_Tax Computa
+tion':{'IntrstPay':{'IntrstPayUs234A':4222,'IntrstPayUs234B':11083,'IntrstPayUs234C':10292,'La
+teFilingFee234F':0},'TotalTaxPayable':307800,'Rebate87A':0,'TaxPayableOnRebate':307800,'Ed
+ucationCess':12312,'GrossTaxLiability':320112,'Section89':0,'NetTaxLiability':320112,'TotalIntr
+stPay':25597,'TotTaxPlusIntrstPay':345709},'TaxPaid':{'TaxesPaid':{'AdvanceTax':19000,'TDS':
+64000,'TCS':26000,'SelfAssessmentTax':0,'TotalTaxesPaid':109000},'BalTaxPayable':236709},'
+Refund':{'BankAccountDtls':{'AddtnlBankDetails':[{'IFSCCode':'UTIB0002766','BankName':'A
+xisBank','BankAccountNo':'567854676789678','UseForRefund':'true'}]},'RefundDue':0},'Schedu
+leDI':{'InvstDpstPymntDtlSysCalc':{'Section80C':80000,'Section80CCC':50000,'Section80CCD
+EmployeeOrSE':20000,'Section80CCD1B':0,'Section80CCDEmployer':20000,'Section80D':0,'Se
+ction80DD':125000,'Section80DDB':7000,'Section80E':20000,'Section80EE':0,'Section80EEA':0
+,'Section80EEB':0,'Section80G':0,'Section80GG':0,'Section80GGA':0,'Section80GGC':0,'Eligible
+AmountDedTotal':322000}},'Schedule80GGA':{'TotalDonationAmtCash80GGA':0,'TotalDonati
+onAmtOtherMode80GGA':0,'TotalDonationsUs80GGA':0,'TotalEligibleDonationAmt80GGA':0
+},'Schedule80D':{'Sec80DSelfFamSrCtznHealth':{'SeniorCitizenFlag':'N','SelfAndFamily':0,'Self
+AndFamilySeniorCitizen':0,'ParentsSeniorCitizenFlag':'N','Parents':0,'ParentsSeniorCitizen':0,'Eli
+gibleAmountOfDedn':0}},'TDSonSalaries':{'TDSonSalary':[{'EmployerOrDeductorOrCollectDe
+tl':{'TAN':'HYDS03028F','EmployerOrDeductorOrCollecterName':'Tribunalpvtltd'},'IncChrgSal'
+:100000,'TotalTDSSal':10000}],'TotalTDSonSalaries':10000},'TDSonOthThanSals':{'TDSonOth
+ThanSal':[{'EmployerOrDeductorOrCollectDetl':{'TAN':'HYDS03028F','EmployerOrDeductorO
+rCollecterName':'Tribunalpvtltd'},'AmtForTaxDeduct':100000,'DeductedYr':'2019','TotTDSOnA
+mtPaid':9000,'ClaimOutOfTotTDSOnAmtPaid':9000},{'EmployerOrDeductorOrCollectDetl':{'T
+AN':'HYDS03028K','EmployerOrDeductorOrCollecterName':'ABCD'},'AmtForTaxDeduct':200
+00,'DeductedYr':'2019','TotTDSOnAmtPaid':8000,'ClaimOutOfTotTDSOnAmtPaid':8000},{'Em
+ployerOrDeductorOrCollectDetl':{'TAN':'HYDD03028F','EmployerOrDeductorOrCollecterNam
+e':'PQR'},'AmtForTaxDeduct':100000,'DeductedYr':'2019','TotTDSOnAmtPaid':6000,'ClaimOut
+OfTotTDSOnAmtPaid':6000}],'TotalTDSonOthThanSals':23000},'ScheduleTDS3Dtls':{'TDS3D
+etails':[{'PANofTenant':'AAAPL1234C','NameOfTenant':'Shivani','GrsRcptToTaxDeduct':20000
+0,'DeductedYr':'2019','TDSDeducted':28000,'TDSClaimed':20000},{'PANofTenant':'ADRCV45
+79C','NameOfTenant':'Akhila','GrsRcptToTaxDeduct':100000,'DeductedYr':'2019','TDSDeducte
+d':15000,'TDSClaimed':10000},{'PANofTenant':'BDRCV4579D','NameOfTenant':'Akhil','GrsRc
+ptToTaxDeduct':15000,'DeductedYr':'2019','TDSDeducted':15000,'TDSClaimed':1000}],'TotalT
+DS3Details':31000},'ScheduleTCS':{'TCS':[{'EmployerOrDeductorOrCollectDetl':{'TAN':'AGR
+S03028F','EmployerOrDeductorOrCollecterName':'Tribunalpvtltd'},'AmtTaxCollected':100000,'
+CollectedYr':'2019','TotalTCS':10000,'AmtTCSClaimedThisYear':9000},{'EmployerOrDeductor
+OrCollectDetl':{'TAN':'HYDS03028F','EmployerOrDeductorOrCollecterName':'ABC'},'AmtTax
+Collected':15000,'CollectedYr':'2019','TotalTCS':20000,'AmtTCSClaimedThisYear':9000},{'Em
+ployerOrDeductorOrCollectDetl':{'TAN':'HYDS03028H','EmployerOrDeductorOrCollecterNam
+e':'XYZ'},'AmtTaxCollected':9000,'CollectedYr':'2019','TotalTCS':10000,'AmtTCSClaimedThis
+Year':8000}],'TotalSchTCS':26000},'TaxPayments':{'TaxPayment':[{'BSRCode':'5650987','Date
+Dep':'2019-08-19','SrlNoOfChaln':12345,'Amt':10000},{'BSRCode':'5650989','DateDep':'2019-
+09-
+10','SrlNoOfChaln':52672,'Amt':9000}],'TotalTaxPayments':19000},'Verification':{'Declaration':
+{'AssesseeVerName':'AnkitGupta','FatherName':'PraneethGupta','AssesseeVerPAN':'BURPG123
+4P'},'Capacity':'S','Place':'hyd'}}}}"
+}
+
+
+
+
+4.7 validateItr API - Sample Response format
+
+
+Response 1: When Validated Successfully
+{
+"serviceName":"EriValidateItr",
+"pan": "ACEPR7859X",
+   "header": {
+      "formName": null
+   },
+   "messages": [],
+   "errors": [],
+   "arnNumber": null,
+   "id": null,
+   "successFlag": false,
+   "transactionNo": "ITR000000004862",
+   "httpStatus": null
+Response 2: When error in validation
+{
+"serviceName":"EriValidateItr",
+"pan": "ACEPR7859X",
+  "header": {
+      "formName": null
+   },
+   "messages": [],
+   "errors": [
+      {
+        "errCd": "AssesseeName_001",
+        "errFld": "ITR.ITR1.PersonalInfo.AssesseeName",
+        "errCtg": "OTH",
+           "asPerItr": 0,
+           "asComputed": 0,
+           "variance": 0,
+           "schId": null
+      }
+    ],
+    "arnNumber": null,
+    "id": null,
+    "successFlag": false,
+    "transactionNo": null,
+    "formPath": null,
+    "httpStatus": null
+}
+
+
+
+
+4.7 submitItr API - Sample Request format
+{
+"serviceName":"EriItrSubmit",
+
+"header": {
+
+           "formName": "ITR-1",
+
+           "formCode": "1",
+
+           "mimeType": "json",
+
+           "entityNum": "ABCPC9999X",
+
+           "entityType": "p",
+
+           "ay": "2021",
+
+           "createdBy": "ERIP123456",
+
+           "filingTypeCd": "O",
+
+           "filingMode": "OF",
+
+           "incomeTaxSecCd": "11",
+
+           "submittedBy": "ERI"
+
+      },
+      "formData": "{'ITR': {'ITR1': {'CreationInfo': {'SWVersionNo': '1.63','SWCreatedBy':
+'SW19001101', 'JSONCreatedBy': 'SW19001101','JSONCreationDate': '2021-07-
+24','IntermediaryCity': 'Jalandhar','Digest':
+'DfW9hW+Kv1uZD1BMnkDQy8HITd6triabaavHtb69nDA='},'Form_ITR1': {'FormName':
+'ITR-1','FormVer': 'Ver1.2','SchemaVer': 'Ver1.2','AssessmentYear': '2021','Description': 'For
+Indls having Income from Salary, Pension, family pension and Interest'},'PersonalInfo':
+{'AssesseeName': {'FirstName': 'Sourav','SurNameOrOrgName': 'Gupta'},'Address':
+{'ResidenceNo': 'TESTING','LocalityOrArea': 'TESTING','CityOrTownOrDistrict':
+'Jalandhar','StateCode': '26','CountryCode': '91','PinCode': 144001,'CountryCodeMobile':
+91,'MobileNo': 9000000000,'EmailAddress': 'divumani95@gmail.com'},'PAN':
+'ABCPC9999X','DOB': '1995-01-01','EmployerCategory': 'OTH'},'FilingStatus':
+{'ReturnFileSec': 11,'NewTaxRegime': 'N','SeventhProvisio139': 'N'},'ITR1_ IncomeDeductions':
+{'GrossSalary': 360000,'Salary': 360000,'PerquisitesValue': 0,'ProfitsInSalary': 0,'NetSalary':
+360000,'DeductionUs16': 50000,'DeductionUs16ia': 50000,'EntertainmentAlw16ii':
+0,'ProfessionalTaxUs16iii': 0,'IncomeFromSal': 310000,'GrossRentReceived':
+0,'TaxPaidlocalAuth': 0,'AnnualValue': 0,'StandardDeduction': 0,'InterestPayable':
+0,'ArrearsUnrealizedRentRcvd': 0,'TotalIncomeOfHP': 0,'IncomeOthSrc': 10000,'OthersInc':
+{'OthersIncDtlsOthSrc': [{'OthSrcNatureDesc': 'SAV','OthSrcOthAmount':
+10000}]},'GrossTotIncome': 320000,'UsrDeductUndChapVIA': {'Section80C':
+0,'Section80CCC': 0,'Section80CCDEmployeeOrSE': 0,'Section80CCD1B':
+0,'Section80CCDEmployer': 0,'Section80D': 0,'Section80DD': 0,'Section80DDB': 0,'Section80E':
+0,'Section80EE': 0,'Section80EEA': 0,'Section80EEB': 0,'Section80G': 0,'Section80GG':
+0,'Section80GGA': 0,'Section80GGC': 0,'Section80U': 0,'Section80TTA': 10000,'Section80TTB':
+0,'TotalChapVIADeductions': 10000},'DeductUndChapVIA': {'Section80C': 0,'Section80CCC':
+0,'Section80CCDEmployeeOrSE': 0,'Section80CCD1B': 0,'Section80CCDEmployer':
+0,'Section80D': 0,'Section80DD': 0,'Section80DDB': 0,'Section80E': 0,'Section80EE':
+0,'Section80EEA': 0,'Section80EEB': 0,'Section80G': 0,'Section80GG': 0,'Section80GGA':
+0,'Section80GGC': 0,'Section80U': 0,'Section80TTA': 10000,'Section80TTB':
+0,'TotalChapVIADeductions': 10000},'TotalIncome': 310000},'ITR1_TaxComputation':
+{'TotalTaxPayable': 3000,'Rebate87A': 3000,'TaxPayableOnRebate': 0,'EducationCess':
+0,'GrossTaxLiability': 0,'Section89': 0,'NetTaxLiability': 0,'TotalIntrstPay': 0,'IntrstPay':
+{'IntrstPayUs234A': 0,'IntrstPayUs234B': 0,'IntrstPayUs234C': 0,'LateFilingFee234F':
+0},'TotTaxPlusIntrstPay': 0},'TaxPaid': {'TaxesPaid': {'AdvanceTax': 0,'TDS': 0,'TCS':
+0,'SelfAssessmentTax': 0,'TotalTaxesPaid': 0},'BalTaxPayable': 0},'Refund': {'RefundDue':
+0,'BankAccountDtls': {'AddtnlBankDetails': [{'UseForRefund': 'true','BankAccountNo':
+'123445','IFSCCode': 'HDFC0001391','BankName': 'HDFC BANK, VIJAY NAGAR,
+JALANDHAR'}]}},'Schedule80D': {'Sec80DSelfFamSrCtznHealth': {'SeniorCitizenFlag':
+'N','SelfAndFamily': 0,'HealthInsPremSlfFam': 0,'PrevHlthChckUpSlfFam':
+0,'SelfAndFamilySeniorCitizen': 0,'HlthInsPremSlfFamSrCtzn':
+0,'PrevHlthChckUpSlfFamSrCtzn': 0,'MedicalExpSlfFamSrCtzn': 0,'ParentsSeniorCitizenFlag':
+'N','Parents': 0,'HlthInsPremParents': 0,'PrevHlthChckUpParents': 0,'ParentsSeniorCitizen':
+0,'HlthInsPremParentsSrCtzn': 0,'PrevHlthChckUpParentsSrCtzn': 0,'MedicalExpParentsSrCtzn':
+0,'EligibleAmountOfDedn': 0}},'Verification': {'Declaration': {'AssesseeVerName': 'Sourav
+Gupta','FatherName': 'RAVINDER SINGH','AssesseeVerPAN': 'ABCPC9999X'},'Capacity':
+'S','Place': 'Jalandhar'}}}}"
+    }
+
+}
+
+4.8 submitItr API- Sample Response format
+Response 1: When Submitted Successfully
+{
+"serviceName":"EriItrSubmit",
+"pan": "ACEPR7859X",
+  "header": {
+     "formName": null
+  },
+  "messages": [],
+  "errors": [],
+  "arnNumber": "100156160290920",
+  "id": null,
+  "successFlag": true,
+  "transactionNo": "ITR000000004591",
+  "formPath": null,
+  "httpStatus": "ACCEPTED"
+}
+Response 2: When error in Submit
+{
+"serviceName":"EriValidateItr",
+"pan": "ACEPR7859X",
+  "header": {
+     "formName": null
+  },
+  "messages": [],
+  "errors": [
+     {
+        "errCd": "DOB_001",
+        "errFld": "ITR.ITR1.PersonalInfo.DOB",
+        "errCtg": "OTH",
+        "asPerItr": 0,
+        "asComputed": 0,
+        "variance": 0,
+        "schId": null
+     }
+  ],
+  "arnNumber": null,
+  "id": null,
+  "successFlag": false,
+  "transactionNo": null,
+  "formPath": null,
+    "httpStatus": null
+}
+
+
+
+
+5. API Exception Details
+                         Error                                                    Message
+Scenario                           Error String
+                         Code                                                     Type
+                                   DOB/DOI mentioned in xml does not match
+Data in ITR is wrong     EF20001                                                  ERROR
+                                   with DOB/DOI of logged in PAN
+Validation of value
+                         EF20002   No Record found in user profile table          ERROR
+given in the request
+                                   PAN of the User in the xml/json mentioned in
+                                   verification part is not same as of the User
+Data in ITR is wrong     EF20003                                                ERROR
+                                   logged in. Kindly make sure both PAN are
+                                   same
+                                   Invalid PAN. PAN format should be First 5
+Validation of value
+                         EF20004   Alphabets, next 4 digits, then 1 Alphabet in   ERROR
+given in the request
+                                   Part A General Information.
+                                   Name of the User in the xml/json mentioned
+                                   in verification part is not same as name
+Data in ITR is wrong     EF20005                                                  ERROR
+                                   mentioned in PAN. Kindly make sure both
+                                   names are same
+                                   PAN cannot be null or empty. Please enter
+Data in ITR is wrong     EF20008                                                  ERROR
+                                   correct PAN
+                                   FormName cannot be null or empty .Please
+Data in ITR is wrong     EF20009                                                  ERROR
+                                   enter correct FormName
+Data in ITR is wrong     EF20010   Incorrect formName                             ERROR
+Data in ITR is wrong     EF20011   Assessment Year cannot be null or empty        ERROR
+                                   Filing section mentioned in the return
+Data in ITR is wrong     EF20027   mentioned does not match with the filing Type ERROR
+                                   selected
+                                   You cannot file revised return under section
+Data in ITR is wrong     EF20029                                                  ERROR
+                                   142(1)(i), 148, 153A & 153C.
+                                 PAN mentioned in verification part of
+                                 xml/json is not same as of the PAN of
+Data in ITR is wrong   EF20030                                                      ERROR
+                                 Principal contact mentioned under Profile.
+                                 Kindly make sure both PAN are same.
+                                 Kindly enter the acknowledgement number for
+Data in ITR is wrong   EF20033                                               ERROR
+                                 original return.
+Data in ITR is wrong   EF20034   Aadhaar number entered is invalid.                 ERROR
+Data in ITR is wrong   EF20036   Minor cannot file the return.                      ERROR
+Data in ITR is wrong   EF20037   Receipt no. is mandatory.                          ERROR
+                                 Invalid Receipt number. Please retry and enter
+Data in ITR is wrong   EF20038                                                  ERROR
+                                 correct acknowledgement number.
+                                 PAN mentioned in the return in verification
+Data in ITR is wrong   EF20041   part does not match with PAN of authorized         ERROR
+                                 person.
+                                 PAN mentioned in the return in verification
+Data in ITR is wrong   EF20042   part does not match with PAN of authorized         ERROR
+                                 person.
+Validation of value
+                       EF20044   Contact person details not available.              ERROR
+given in the request
+Data in ITR is wrong   EF20048   You are not eligible to file the revised return.   ERROR
+                                 Name" of taxpayer in ITR does not match with
+Data in ITR is wrong   EF20049                                                ERROR
+                                 the "Name" as per the PAN data base."
+                                 Name entered in ITR form does not match
+Data in ITR is wrong   EF20050   with the name provided in the PAN database/        ERROR
+                                 Aadhaar Data Base
+                                 IFSC under "Bank Details" is not matching
+Data in ITR is wrong   EF20052                                                      ERROR
+                                 with the RBI database
+Validation of value
+                       EF20080   MimeType cannot be null                            ERROR
+given in the request
+Validation of value              MimeType entered is not valid. Please enter a
+                       EF20081                                                 ERROR
+given in the request             valid value
+Validation of value
+                       EF20082   EntityType entered is not valid                    ERROR
+given in the request
+Validation of value
+                       EF20083   CreatedBy cannot be null                           ERROR
+given in the request
+Validation of value
+                       EF20088    FilingTypeCode cannot be null                  ERROR
+given in the request
+Validation of value
+                       EF20089    FilingTypeCode entered is not valid            ERROR
+given in the request
+Validation of value
+                       EF20090    FilingMode cannot be null                      ERROR
+given in the request
+Validation of value
+                       EF20091    FilingMode entered is not valid                ERROR
+given in the request
+Validation of value
+                       EF20092    IncomeTaxSecCd cannot be null                  ERROR
+given in the request
+Validation of value
+                       EF20093    IncomeTaxSecCd entered is not valid            ERROR
+given in the request
+Validation of value
+                       EF20094    SubmittedBy cannot be null                     ERROR
+given in the request
+Validation of value
+                       EF20095    SubmittedBy entered is not valid               ERROR
+given in the request
+Data in ITR is wrong   EF20135    You are not eligible to file ITR7              ERROR
+                                  You cannot file return under section<…> as
+Data in ITR is wrong   EF20136    the time limit to file the return under this   ERROR
+                                  section is over
+When software Id is               The software Id is not linked with the ERI
+                       EF500059                                                  ERROR
+not linked with ERI               User
+When ERI client
+                       EF500058 The PAN is not a valid client for this ERI.      ERROR
+linkage fails
+When attributes are
+incorrect in json      EF20123    Invalid Request Data                           ERROR
+request data
+When entityNum and
+Pan specified in the              The PAN mentioned in the submitted ITR is
+                       EF500091                                                  ERROR
+ITR are not the same              different from the logged-in PAN
+values
+                                Please select correct AY. Returns can be filed
+When user provides
+                       EF500052 through this channel starting from AY 2021- ERROR
+AY prior to 2021-22
+                                22.
+

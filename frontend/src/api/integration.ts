@@ -35,10 +35,13 @@ export const integrationApi = {
     return multipartPost('/integration/tis/import', file, { pan, dob });
   },
   
-  import26AS: async (file: File, clientId: number): Promise<Form26ASData> => {
+  import26AS: async (file: File, clientId: number, pan?: string, dob?: string, assessmentYear?: string): Promise<Form26ASData> => {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('clientId', clientId.toString());
+    if (pan) fd.append('pan', pan);
+    if (dob) fd.append('dob', dob);
+    if (assessmentYear) fd.append('assessmentYear', assessmentYear);
     const { data } = await axiosInstance.post('/integration/26as/import', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
@@ -55,41 +58,7 @@ export const integrationApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
-  
-  autoPopulateFromForm16: async (itrData: any, form16Data: any) => {
-    const { data } = await axiosInstance.post('/integration/autopopulate/form16', {
-      formData: itrData,
-      form16Data: form16Data
-    });
-    return data;
-  },
-  
-  autoPopulateFromAIS: async (itrData: any, aisData: any) => {
-    const { data } = await axiosInstance.post('/integration/autopopulate/ais', {
-      formData: itrData,
-      aisData: aisData
-    });
-    return data;
-  },
-  
-  autoPopulateAll: async (
-    clientId: number,
-    year: string,
-    aisData?: AISData,
-    form26ASData?: Form26ASData,
-    tisData?: TISData
-  ) => {
-    const { data } = await axiosInstance.post('/prefill/autoPopulateAll', {
-      clientId,
-      year,
-      aisData,
-      form26ASData,
-      tisData,
-      itrType: 'ITR-1'
-    });
-    return data;
-  },
-  
+
   getReconciliationReport: async (
     aisData: AISData,
     data26AS: Form26ASData,
@@ -102,12 +71,22 @@ export const integrationApi = {
     });
     return data;
   },
-  
-  autoPopulateFromPrefill: async (itrData: any, prefillData: any) => {
-    const { data } = await axiosInstance.post('/prefill/autopopulate', {
-      formData: itrData,
-      prefillData: prefillData
-    });
+
+  /**
+   * Server-side reconcile (P6 fix): loads the persisted import set for the
+   * client+AY from `imported_document` and reconciles on the backend. This
+   * avoids silent TDS/TCS credit loss when the frontend's in-memory state
+   * is dropped (page refresh) between upload and reconcile. Prefer this over
+   * `getReconciliationReport` whenever a clientId+assessmentYear is available.
+   */
+  getReconciliationReportFromServer: async (
+    clientId: number,
+    assessmentYear: string
+  ): Promise<ReconciliationReport> => {
+    const { data } = await axiosInstance.get(
+      `/integration/reconciliation/client/${clientId}`,
+      { params: { assessmentYear } }
+    );
     return data;
   },
 };

@@ -8,16 +8,16 @@ itr4.py, etc.
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 import os
 from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
 
-from app.engine.common.rounding import vba_round, round_to_nearest_10
+from app.engine.common.rounding import (
+    round_to_nearest_10,
+    round_to_nearest_rupee,
+    vba_round,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -25,12 +25,22 @@ from app.engine.common.rounding import vba_round, round_to_nearest_10
 # ---------------------------------------------------------------------------
 
 def _to_rupees(val: Decimal) -> int:
-    """Rupee Decimal to integer whole rupees (banker's rounding, VBA-compatible)."""
-    return int(vba_round(val))
+    """Emit a monetary amount as whole rupees using statutory half-up rounding.
+
+    Income-tax intermediate fields (tax components, interest components, TDS,
+    advance tax) are not rounded under section 288B; they are reported in
+    whole rupees. For consistency with CBDT field semantics, 50 paise rounds
+    upward rather than to the nearest even rupee.
+    """
+    return int(round_to_nearest_rupee(val))
 
 
 def _to_rupees_rounded10(val: Decimal) -> int:
-    """Rupee Decimal to nearest Rs 10 (Section 288A/288B)."""
+    """Apply Sections 288A/288B: nearest ₹10, with ₹5 rounded upward.
+
+    Reserved for fields that the Act explicitly requires to be rounded to the
+    nearest ₹10: total income, balance tax payable, and refund due.
+    """
     return int(round_to_nearest_10(val))
 
 
@@ -51,69 +61,23 @@ def _today() -> str:
 
 
 def _compute_digest(data: dict) -> str:
-    """Compute ITD-compliant Digest using iterative HMAC-SHA256.
+    """Compute the official ITR JSON ``Digest`` via the ERI flow.
 
-    Per SOP Section 5.3:
-      1. Serialize then minify the dict to JSON (all interstitial spaces removed)
-      2. Replace "Digest" value with placeholder "-"
-      3. HMAC-SHA256 with secret key (UTF-8 encoded), repeated N iterations
-      4. Base64-encode the final hash
+    This is a thin delegate to :func:`app.eri.digest.compute_digest` — the
+    SINGLE canonical Digest computation in Taxify. Per the ERI onboarding
+    SOP ("Digest_generation_ERI 2 (2).pdf" §5.3) and the Dual-Mode ERI
+    Integration Plan §3/§A2, the Digest MUST be computed strictly by the
+    ERI flow using the secret key + iteration count for the active
+    ``(ERI_MODE, ERI_ENV)`` credential bundle. There is no other Digest
+    computation path and no non-ERI source for these credentials.
 
-    Reads from environment variables:
-      ERI_DIGEST_SECRET_KEY   — HMAC secret key string, UTF-8 encoded as key bytes
-      ERI_DIGEST_ITERATIONS   — number of HMAC iterations (default: 1)
+    Raises:
+        ERIDigestError: If the active ERI credential bundle cannot be
+            resolved or has no digest secret. A placeholder ``-`` Digest
+            is never returned — generation fails loudly instead.
     """
-    import re
-
-    secret_key = os.getenv("ERI_DIGEST_SECRET_KEY", "")
-    if not secret_key:
-        # Fallback: simple SHA-256 hex digest for dev/testing only
-        raw = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
-        return hashlib.sha256(raw.encode()).hexdigest()
-
-    iterations = int(os.getenv("ERI_DIGEST_ITERATIONS", "1"))
-    placeholder = "-"
-    digest_regex = r'"Digest"\s*:\s*"[^"]*"'
-
-    # Step 1: Serialize to JSON
-    raw = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
-
-    # Step 2: Minify — remove all interstitial whitespace outside quoted strings
-    result: list[str] = []
-    in_string = False
-    escape = False
-    for ch in raw:
-        if in_string:
-            if escape:
-                escape = False
-                result.append(ch)
-            elif ch == '\\':
-                escape = True
-                result.append(ch)
-            elif ch == '"':
-                in_string = False
-                result.append(ch)
-            else:
-                result.append(ch)
-        else:
-            if ch in (' ', '\t', '\n', '\r'):
-                continue
-            if ch == '"':
-                in_string = True
-            result.append(ch)
-    minified = ''.join(result)
-
-    # Step 3: Replace Digest value with placeholder
-    minified = re.sub(digest_regex, f'"Digest":"{placeholder}"', minified)
-
-    # Step 4+5: HMAC-SHA256 with secret key (UTF-8 bytes), iterated N times
-    key_bytes = secret_key.encode("utf-8")
-    payload = minified.encode("utf-8")
-    for _ in range(iterations):
-        payload = hmac.new(key_bytes, payload, hashlib.sha256).digest()
-
-    # Step 6: Base64 encode the final hash
-    return base64.b64encode(payload).decode("utf-8")
+    from app.eri.digest import compute_digest
+    return compute_digest(data)
 
 
 # ---------------------------------------------------------------------------
@@ -121,21 +85,65 @@ def _compute_digest(data: dict) -> str:
 # ---------------------------------------------------------------------------
 
 _SW_VERSION = "1.0"
-_SW_CODE = os.getenv("ERI_SW_ID", "SW00000001")
+
+
+def _resolve_sw_id() -> str:
+    """Resolve the SWCreatedBy for the active (mode, environment) pair.
+
+    Reads via :func:`app.eri.config.get_eri_credentials` so the SW_ID
+    stamped in CreationInfo matches the environment whose digest secret
+    was used to compute the Digest.
+
+    Raises:
+        ERIConfigurationError: If the active ERI credential bundle cannot
+            be resolved. The ``SWCreatedBy`` MUST always flow from the
+            selected ERI credentials — there is no non-ERI source for
+            this identity, so generation fails loudly instead of stamping
+            a hardcoded placeholder SW_ID.
+    """
+    from app.eri.config import ERIConfigurationError, get_eri_credentials
+    try:
+        creds = get_eri_credentials()
+    except ERIConfigurationError:
+        raise
+    except Exception as exc:
+        raise ERIConfigurationError(
+            f"Could not resolve ERI credentials for SWCreatedBy: {exc}"
+        ) from exc
+    if not creds.sw_id:
+        raise ERIConfigurationError(
+            f"ERI_SW_ID_{creds.mode.upper()}_{creds.environment.upper()} is not set. "
+            "CreationInfo.SWCreatedBy must flow from the selected ERI credentials."
+        )
+    return creds.sw_id
 
 
 # ---------------------------------------------------------------------------
 # CreationInfo, Form_ITRx, Verification — identical across all forms
 # ---------------------------------------------------------------------------
 
+def _resolve_intermediary_city() -> str:
+    """Resolve the intermediary city stamped in CreationInfo.IntermediaryCity.
+
+    Reads ``ERI_INTERMEDIARY_CITY`` from the environment (set in .env). This
+    is a single unsuffixed variable because the intermediary (the e-filing
+    return preparer) is the same entity across all four (mode, environment)
+    credential sets — Type-2 UAT/Production and Type-3 UAT/Production — so
+    the city does not vary per credential bundle. Defaults to "Akola" when
+    unset so generation never fails on this field.
+    """
+    raw = (os.getenv("ERI_INTERMEDIARY_CITY") or "").strip()
+    return raw or "Akola"
+
+
 def _creation_info() -> dict:
     return {
         "SWVersionNo": _SW_VERSION,
-        "SWCreatedBy": _SW_CODE,
-        "JSONCreatedBy": _SW_CODE,
+        "SWCreatedBy": _resolve_sw_id(),
+        "JSONCreatedBy": _resolve_sw_id(),
         "JSONCreationDate": _today(),
-        "IntermediaryCity": "Delhi",
-        "Digest": "-" * 44,
+        "IntermediaryCity": _resolve_intermediary_city(),
+        "Digest": "-",   # placeholder, replaced by _compute_digest at builder end
     }
 
 
@@ -153,7 +161,7 @@ def _verification(
     assessee_name: str,
     father_name: str,
     pan: str,
-    place: str = "Delhi",
+    place: Optional[str] = None,
     capacity: str = "S",
 ) -> dict:
     return {
@@ -163,7 +171,10 @@ def _verification(
             "AssesseeVerPAN": _str_or(pan, "AAAAA0000A"),
         },
         "Capacity": capacity,
-        "Place": _str_or(place, "Delhi"),
+        # The assessee's verification place defaults to the intermediary
+        # city (ERI_INTERMEDIARY_CITY) so even test paths that omit `place`
+        # stamp Akola (not the old hardcoded Delhi).
+        "Place": _str_or(place, _resolve_intermediary_city()),
     }
 
 
@@ -171,11 +182,25 @@ def _verification(
 # TaxReturnPreparer — identical across all forms
 # ---------------------------------------------------------------------------
 
-def _tax_return_preparer() -> dict:
+def _tax_return_preparer(trp: Optional[Any] = None) -> Optional[dict]:
+    """Build the official ``TaxReturnPreparer`` node.
+
+    Returns ``None`` when no TRP is involved (the field is omitted entirely
+    from the ITD JSON in that case, matching the schema's non-required
+    status). When a typed ``TaxReturnPreparer`` model is supplied, its
+    data is emitted faithfully. The legacy zero-argument call is preserved
+    as a placeholder path for tests that still rely on it.
+    """
+    if trp is None:
+        return {
+            "IdentificationNoOfTRP": "T000000000",
+            "NameOfTRP": "Tax Preparer",
+            "ReImbFrmGov": 0,
+        }
     return {
-        "IdentificationNoOfTRP": "T000000000",
-        "NameOfTRP": "Tax Preparer",
-        "ReImbFrmGov": 0,
+        "IdentificationNoOfTRP": trp.identification_number,
+        "NameOfTRP": trp.name,
+        "ReImbFrmGov": _to_rupees(trp.reimbursement_from_government),
     }
 
 

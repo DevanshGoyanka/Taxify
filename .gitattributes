@@ -1,0 +1,37 @@
+# Normalise line endings. Without this, files authored on Windows land on the
+# Linux host with CRLF — which breaks shell scripts (`bad interpreter: ^M`) and
+# silently appends \r to every value in a systemd EnvironmentFile.
+* text=auto eol=lf
+
+# Windows-only files keep CRLF
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Scripts that run on the server MUST be LF
+*.sh    text eol=lf
+*.service text eol=lf
+
+# Binary — never touch
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.zip   binary
+*.jar   binary
+*.db    binary
+*.sqlite binary
+*.sqlite3 binary
+*.pfx   binary
+*.p12   binary
+*.jks   binary
+*.woff  binary
+*.woff2 binary
+
+# Keep generated/vendored output out of diffs and language stats
+frontend/dist/**   linguist-generated=true
+schemas/**         linguist-vendored=true
+Docs/**            linguist-documentation=true
+"Reference Docs by CBDT & ITD/**" linguist-vendored=true
