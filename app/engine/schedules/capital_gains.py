@@ -258,13 +258,27 @@ def compute_112a(assets: Optional[list[CG112AAsset]]) -> tuple[Decimal, Decimal,
     for asset in assets or []:
         sale = _decimal(asset.total_sale_value)
         actual_cost = _decimal(asset.cost_acq_without_index)
-        deductions = _decimal(asset.total_deductions) + _decimal(asset.expenditure)
         effective_cost = actual_cost
         if _is_grandfathering_eligible(asset):
             fmv = _decimal(asset.total_fmv)
             if fmv > _ZERO:
                 effective_cost = max(actual_cost, min(fmv, sale))
-        total_gain += sale - effective_cost - deductions
+        expenditure = _decimal(asset.expenditure)
+        # `asset.total_deductions` is NOT read here -- it is a redundant,
+        # disclosure-only summary field (validated elsewhere,
+        # app/engine/validators/itr2/input_rules.py's ITR2-IN-112A-006, to
+        # equal cost_acq_without_index + expenditure whenever a caller
+        # supplies it) rather than a third independent cost component.
+        # Subtracting it here on top of effective_cost/expenditure -- which
+        # already fully account for the same cost and expenditure -- was
+        # double- (for a plain scrip) or effectively triple-counting (for a
+        # grandfathered one) the deduction, turning real gains into
+        # fabricated losses. Schedule 112A/115AD's own JSON `TotalDeductions`
+        # field is independently and correctly built from
+        # `deemed_cost + expense` in `_112a_style_schedule()`
+        # (`app/engine/itd/itr2.py`), which never reads this field either --
+        # confirming it has no legitimate role as a compute input.
+        total_gain += sale - effective_cost - expenditure
 
     exemption = min(total_gain, LTCG_112A_EXEMPTION) if total_gain > _ZERO else _ZERO
     taxable = total_gain - exemption

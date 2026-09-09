@@ -40,6 +40,7 @@ from app.schemas.return_draft import (
     ReturnDraft,
     Scrip112A,
     ScheduleSIEntry,
+    SalaryNatureRow,
     Section89AEntry,
     SpecialRateIncomeEntry,
     TaxChallan,
@@ -86,6 +87,23 @@ def test_minimal_itr2_draft_maps_and_computes() -> None:
     result = compute_itr2(itr2_input)
     assert result.gross_total_income > 0
     assert not result.errors
+
+
+def test_remaining_section10_exemption_rows_reduce_taxable_salary_for_itr2_too() -> None:
+    """draft_to_itr2_input() reuses draft_to_itr1_input.py's own _map_salary()
+    wholesale -- the EIC/10(17)/10(14)(i)/10(14)(ii)/115BAC-variant
+    undertaxation fix therefore applies to ITR-2 through the exact same
+    shared code path, not a separate ITR-2-specific mapping."""
+    draft = _filing_ready_itr2_draft()
+    draft.employers[0].section10ExemptionRows = [
+        SalaryNatureRow(id="r1", natureCode="10(17)", amount=Decimal("30000")),
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.salary_income.other_section10_exempt == Decimal("30000")
+
+    result = compute_itr2(itr2_input)
+    sal_result = result.schedules["salary"]
+    assert sal_result.exempt_allowances >= Decimal("30000")
 
 
 def test_112a_scrip_with_date_is_mapped_and_taxed() -> None:
@@ -520,7 +538,12 @@ def test_pass_through_income_is_disclosed_and_not_double_counted() -> None:
     """PASS_THROUGH-tagged otherIncome is backed out of the generic
     aggregate (it is disclosure-only, already taxed as ordinary income
     elsewhere per the frontend's own "at normal rate" label) but not lost
-    -- it reaches os_pass_through_income for NatofPassThrghIncome."""
+    -- it reaches os_pass_through_income for NatofPassThrghIncome. The
+    remaining "OTHER"-natured row is likewise backed out of the generic
+    aggregate: it is taxed exclusively via os_other_income_entries (see
+    the os_other_income_entries undertaxation-gap fix), not the generic
+    aggregate too -- otherwise it would be double-counted the same way
+    PASS_THROUGH almost was."""
     draft = _filing_ready_itr2_draft()
     draft.otherSources.otherIncome = [
         OtherIncomeEntry(id="o1", nature="PASS_THROUGH", amount=Decimal("15000")),
@@ -528,8 +551,9 @@ def test_pass_through_income_is_disclosed_and_not_double_counted() -> None:
     ]
     itr2_input, _breakdown = draft_to_itr2_input(draft)
     assert itr2_input.os_pass_through_income == Decimal("15000")
-    assert itr2_input.other_sources_income.other_income == Decimal("5000")
+    assert itr2_input.other_sources_income.other_income == Decimal("0")
     assert len(itr2_input.os_other_income_entries) == 1
+    assert itr2_input.os_other_income_entries[0].amount == Decimal("5000")
 
 
 def test_pf_interest_proviso_kinds_map_to_dedicated_fields() -> None:

@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from enum import Enum, IntEnum
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -19,9 +19,19 @@ from app.schemas.itr1 import (
     Chapter6ADeductions,
     FilingAddress,
     HousePropertyIncome,
+    ITR1Schedule80EEALoanEntry,
+    ITR1Schedule80EEBLoanEntry,
+    ITR1Schedule80EELoanEntry,
     OtherSourcesIncome,
     PostalAddress,
     SalaryIncome,
+    Schedule80CEntry,
+    Schedule80D,
+    Schedule80DD,
+    Schedule80EEntry,
+    Schedule80GGA,
+    Schedule80GGC,
+    Schedule80U,
     TDS1Entry,
     TDS2Entry,
     TDS3Entry,
@@ -205,6 +215,13 @@ class ITR2FilingProfile(StrictModel):
     verification_capacity: Literal["S", "R", "K", "A"] = "S"
     assessee_representative: Optional[AssesseeRepresentativeProfile] = None
     tax_return_preparer: Optional[TaxReturnPreparerProfile] = None
+    # The official Verification.Declaration.AssesseeVerPAN pattern requires
+    # an individual's own PAN (4th character "P") -- an HUF's own `pan`
+    # (4th character "H") cannot satisfy it. Required for every HUF filing
+    # regardless of verification_capacity (K or R): the person actually
+    # holding the PAN used in the declaration is the Karta either way,
+    # never the HUF entity itself.
+    karta_pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{3}P[A-Z][0-9]{4}[A-Z]$")
 
     @model_validator(mode="after")
     def validate_conditional_filing_facts(self) -> "ITR2FilingProfile":
@@ -257,6 +274,12 @@ class ITR2FilingProfile(StrictModel):
             raise ValueError("Tax Return Preparer identification number is required")
         if self.assessee_status == AssesseeStatus.HUF and self.verification_capacity not in {"K", "R"}:
             raise ValueError("HUF ITR-2 verification requires Karta or representative capacity")
+        if self.assessee_status == AssesseeStatus.HUF and self.karta_pan is None:
+            raise ValueError(
+                "HUF ITR-2 filing requires karta_pan (the Karta's own individual PAN) for the "
+                "Verification declaration — the HUF's own pan cannot satisfy the official "
+                "schema's individual-only AssesseeVerPAN pattern"
+            )
         if self.residential_status == ResidentialStatus.NON_RESIDENT and self.benefit_us_115h:
             raise ValueError("Section 115H benefit cannot be claimed by a non-resident")
         if self.residential_status == ResidentialStatus.RESIDENT and self.benefit_us_115h:
@@ -676,7 +699,10 @@ class ESOPDeferralInput(StrictModel):
     """Eligible-startup ESOP tax deferral ledger entry."""
 
     employer_pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
-    dpiit_registration_number: str = Field(min_length=1, max_length=50)
+    # Official schema's DPIITRegNo requires "DIPP[0-9]{3,5}" -- previously
+    # unconstrained, so any other format passed Pydantic and failed only at
+    # ITD submission instead of at this schema boundary.
+    dpiit_registration_number: str = Field(pattern=r"^DIPP[0-9]{3,5}$")
     assessment_year: str = Field(pattern=r"^20(2[1-6])-[0-9]{2}$")
     tax_deferred_brought_forward: Decimal = Field(default=Decimal("0"), ge=0)
     tax_payable_current_year: Decimal = Field(default=Decimal("0"), ge=0)
@@ -686,12 +712,52 @@ class ESOPDeferralInput(StrictModel):
 class EmployerFilingDetail(StrictModel):
     """Official employer identity and address for one Schedule S row."""
 
-    employer_tan: str = Field(pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
+    employer_tan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{4}[0-9]{5}[A-Z]$")
     employer_name: str = Field(min_length=1, max_length=125)
     nature_of_employment: Literal["CGOV", "SGOV", "PSU", "PE", "PESG", "PEPS", "PEO", "OTH"] = "OTH"
     address_detail: str = Field(min_length=1, max_length=200)
     city_or_town_or_district: str = Field(min_length=1, max_length=50)
     state_code: str = Field(pattern=r"^(0[1-9]|[12][0-9]|3[0-7]|99)$")
+    pin_code: Optional[str] = Field(default=None, pattern=r"^[1-9][0-9]{5}$")
+    zip_code: Optional[str] = Field(default=None, min_length=1, max_length=8)
+    # Schedule S detail captured independently of TDS credits. These fields
+    # preserve the employer-level evidence required by the official form when
+    # a return has no TDS1 row (and prevent aggregate HRA data being repeated
+    # incorrectly across multiple employers).
+    actual_hra_received: Decimal = Field(default=Decimal("0"), ge=0)
+    actual_rent_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    salary_for_hra: Decimal = Field(default=Decimal("0"), ge=0)
+    is_metro_city: bool = False
+    section10_exemption_rows: list[dict[str, Any]] = Field(default_factory=list)
+    nature_of_salary_rows: list[dict[str, Any]] = Field(default_factory=list)
+    nature_of_perquisites_rows: list[dict[str, Any]] = Field(default_factory=list)
+    nature_of_profit_in_lieu_rows: list[dict[str, Any]] = Field(default_factory=list)
+    income_notified_89a: Decimal = Field(default=Decimal("0"), ge=0)
+    income_notified_other_89a: Decimal = Field(default=Decimal("0"), ge=0)
+    income_notified_prior_year_89a: Decimal = Field(default=Decimal("0"), ge=0)
+    # Typed (not a raw dict list) so a country code outside {US, UK, CA} is
+    # rejected at the schema boundary rather than reaching the ITD builder
+    # -- the same official NOT89AType structure OSSection89A.country_entries
+    # below uses, reused here rather than duplicated.
+    income_notified_89a_country_rows: List[OS89ACountryEntry] = Field(default_factory=list)
+
+    @field_validator("section10_exemption_rows")
+    @classmethod
+    def validate_section10_rows(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Reject malformed schedule-detail rows before official serialization."""
+        for row in value:
+            if not isinstance(row, dict):
+                raise ValueError("section10_exemption_rows must contain objects")
+            if not row.get("SalNatureDesc") or not row.get("SalOthNatOfInc"):
+                raise ValueError("section10 exemption rows require nature and description")
+        return value
+
+    @model_validator(mode="after")
+    def validate_postal_code(self) -> "EmployerFilingDetail":
+        """Require the appropriate postal value when supplied for an employer."""
+        if self.pin_code is not None and self.zip_code is not None:
+            raise ValueError("Employer address cannot contain both pin_code and zip_code")
+        return self
 
 
 class HomeLoanDetail(StrictModel):
@@ -739,6 +805,14 @@ class PropertyFilingDetail(StrictModel):
     pin_code: Optional[str] = Field(default=None, pattern=r"^[1-9][0-9]{5}$")
     zip_code: Optional[str] = Field(default=None, min_length=1, max_length=8)
     property_owner: Literal["SE", "MI", "SP", "OT"] = "SE"
+    # Official schema's "PropertyOwnerOther" -- required disclosure of WHO
+    # "Others" refers to when property_owner == "OT". Previously had no
+    # field at all on this model despite the frontend
+    # (HousePropertyEntryManager.tsx) already capturing it and
+    # HouseProperty.propertyOwnerOther (return_draft.py) already carrying
+    # it -- the value was silently dropped before ever reaching this typed
+    # input, let alone the ITD JSON.
+    property_owner_other: Optional[str] = Field(default=None, max_length=50)
     co_owned: bool = False
     assessee_share_percent: Decimal = Field(default=Decimal("100"), ge=0, le=100)
     home_loan_details: List[HomeLoanDetail] = Field(default_factory=list)
@@ -762,6 +836,16 @@ class PropertyFilingDetail(StrictModel):
         exactly the class of bug already found and fixed once in Schedule HP."""
         if self.co_owned and not self.co_owner_details:
             raise ValueError("co_owned=True requires at least one co_owner_details entry")
+        return self
+
+    @model_validator(mode="after")
+    def validate_property_owner_other(self) -> "PropertyFilingDetail":
+        """An "Other" property owner must be described -- a bare "OT" flag
+        with no description is exactly the same class of bug the
+        co_owned/co_owner_details validator above already guards against,
+        just for a scalar description instead of a detail-row list."""
+        if self.property_owner == "OT" and not self.property_owner_other:
+            raise ValueError("property_owner='OT' requires property_owner_other to be set")
         return self
 
 
@@ -790,6 +874,15 @@ class OSGiftBreakdown(StrictModel):
     immovable_property_inadequate_consideration: Decimal = Field(default=Decimal("0"), ge=0)
     other_property_without_consideration: Decimal = Field(default=Decimal("0"), ge=0)
     other_property_inadequate_consideration: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class OSAccumulatedPFEntry(StrictModel):
+    """One assessment-year row of accumulated recognised-PF balance taxable
+    u/s 111 (official ``TaxAccmltdBalRecPFDtls``)."""
+
+    assessment_year: str = Field(pattern=r"^20[0-9]{2}-[0-9]{2}$")
+    income_benefit: Decimal = Field(default=Decimal("0"), ge=0)
+    tax_benefit: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class OSUnexplainedIncome(StrictModel):
@@ -945,6 +1038,7 @@ class ITR2Input(StrictModel):
     os_gift_breakdown: Optional[OSGiftBreakdown] = None
     os_pf_income_benefit: Decimal = Field(default=Decimal("0"), ge=0)
     os_pf_tax_benefit: Decimal = Field(default=Decimal("0"), ge=0)
+    os_pf_accumulated_entries: List[OSAccumulatedPFEntry] = Field(default_factory=list)
     os_unexplained_income: Optional[OSUnexplainedIncome] = None
     os_section_89a: Optional[OSSection89A] = None
     os_other_income_entries: List[OSOtherIncomeEntry] = Field(default_factory=list)
@@ -966,6 +1060,14 @@ class ITR2Input(StrictModel):
 
     cg_transactions: List[CGTransaction] = Field(default_factory=list)
     cg_112a_scrips: List[CG112AScrip] = Field(default_factory=list)
+    # Scrips from an FII/FPI assessee's own Schedule-115AD-proviso rows,
+    # kept separate from cg_112a_scrips so the ITD builder can route them to
+    # the distinct official "Schedule115AD" table (rather than folding them
+    # into the resident-taxpayer "Schedule112A" table, which shares an
+    # identical row shape but is a different official schedule). The
+    # calculator unions both lists for tax computation -- the split only
+    # matters for disclosure routing.
+    cg_115ad_scrips: List[CG112AScrip] = Field(default_factory=list)
     vda_transactions: List[VDATransaction] = Field(default_factory=list)
     bf_losses: List[BFLossItem] = Field(default_factory=list)
     cf_losses: List[CFLLossItem] = Field(default_factory=list)
@@ -983,6 +1085,33 @@ class ITR2Input(StrictModel):
     esop_deferrals: List[ESOPDeferralInput] = Field(default_factory=list)
 
     deductions_chapter6a: Optional[Chapter6ADeductions] = None
+    # Structured Chapter VI-A detail schedules -- Section80D's per-insurer
+    # policy rows, Schedule80GGA/80GGC's per-donee/per-contribution rows,
+    # and Schedule80DD/80U's disability/dependent detail. Section 80G's own
+    # per-donation detail needs no separate field here: it already flows
+    # through `deductions_chapter6a.donations_80g`, read directly by
+    # `compute_all()`'s own Section 80G eligibility computation. Mirrors
+    # ITR1Input's identically-named fields, wired the same way in
+    # `app/engine/calculators/itr2.py` and consumed by `itd/itr2.py`'s
+    # `_schedule_80*()` builders.
+    schedule_80d: Optional[Schedule80D] = None
+    schedule_80gga: Optional[Schedule80GGA] = None
+    schedule_80ggc: Optional[Schedule80GGC] = None
+    schedule_80dd: Optional[Schedule80DD] = None
+    schedule_80u: Optional[Schedule80U] = None
+    # Section 80C per-instrument rows and 80E/80EE/80EEA/80EEB per-loan
+    # rows -- five more official Chapter VI-A detail schedules
+    # (Schedule80C/80E/80EE/80EEA/80EEB) that were never wired into
+    # ITR2Input at all, the same "computed but discarded" gap the six
+    # fields above were fixed for. Mirrors ITR1Input's identically-named
+    # fields, wired the same way in `app/engine/calculators/itr2.py` and
+    # consumed by `itd/itr2.py`'s `_schedule_80c()`/`_schedule_deduction_loan()`.
+    schedule_80c_entries: List[Schedule80CEntry] = Field(default_factory=list)
+    schedule_80e_entries: List[Schedule80EEntry] = Field(default_factory=list)
+    loan_details_80ee_list: List[ITR1Schedule80EELoanEntry] = Field(default_factory=list)
+    loan_details_80eea_list: List[ITR1Schedule80EEALoanEntry] = Field(default_factory=list)
+    loan_details_80eeb_list: List[ITR1Schedule80EEBLoanEntry] = Field(default_factory=list)
+    property_stamp_duty_value_80eea: Optional[Decimal] = Field(default=None, ge=0, le=4_500_000)
     tds1_entries: List[TDS1Entry] = Field(default_factory=list)
     tds2_entries: List[TDS2Entry] = Field(default_factory=list)
     tds3_entries: List[TDS3Entry] = Field(default_factory=list)
@@ -1016,7 +1145,7 @@ class ITR2Input(StrictModel):
         property_count = int(self.house_property_income is not None) + len(self.house_properties)
         if self.property_filing_details and len(self.property_filing_details) != property_count:
             raise ValueError("property_filing_details must contain one row per house property")
-        if self.employer_filing_details and len(self.employer_filing_details) != len(self.tds1_entries):
+        if self.employer_filing_details and self.tds1_entries and len(self.employer_filing_details) != len(self.tds1_entries):
             raise ValueError("employer_filing_details must contain one row per TDS1 employer")
         if self.tds3_filing_details and len(self.tds3_filing_details) != len(self.tds3_entries):
             raise ValueError("tds3_filing_details must contain one row per TDS3 entry")

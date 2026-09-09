@@ -13,7 +13,13 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
 
-from app.engine.calculators.itr2 import ITR2Result
+from app.engine.calculators.itr2 import ITR2Result, PTI_OS_SPECIAL_RATE_SECTIONS
+from app.engine.constants import (
+    SECTION_80DD_LIMIT,
+    SECTION_80DD_SEVERE_LIMIT,
+    SECTION_80U_LIMIT,
+    SECTION_80U_SEVERE_LIMIT,
+)
 from app.engine.schedules.capital_gains import _exemption_claim_total, deemed_consideration_50c
 from app.engine.itd.country_codes import country_name as _country_name
 from app.engine.itd.common import (
@@ -27,6 +33,7 @@ from app.engine.itd.common import (
 )
 from app.schemas.itr1 import BankAccountType
 from app.schemas.itr2 import (
+    AssesseeStatus,
     ForeignAssetEntry,
     ForeignAssetType,
     ITR2Input,
@@ -55,18 +62,6 @@ def _required_profile(input_data: ITR2Input) -> ITR2FilingProfile:
 def _positive_val(obj: Any, attr: str) -> Decimal:
     """Return max(0, getattr(obj, attr)) safely."""
     return max(_ZERO, getattr(obj, attr, _ZERO))
-
-
-def _z6() -> dict[str, int]:
-    """All-zero CG loss set-off matrix."""
-    return {
-        "StclSetoff20Per": 0,
-        "StclSetoff30Per": 0,
-        "StclSetoffAppRate": 0,
-        "StclSetoffDTAARate": 0,
-        "LtclSetOff12_5Per": 0,
-        "LtclSetOffDTAARate": 0,
-    }
 
 
 def _date_range(
@@ -338,13 +333,20 @@ def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
     hp_inc = max(z, result.house_property_income)
     os_inc = max(z, result.other_sources_income)
 
-    # Per-basket income and set-offs from the typed CYLA result
-    stcg20_inc = _positive_val(cyla, "stcg20_income") if cyla else z
-    stcg30_inc = _positive_val(cyla, "stcg30_income") if cyla else z
-    stcg_app_inc = _positive_val(cyla, "stcg_app_income") if cyla else z
-    stcg_dtaa_inc = _positive_val(cyla, "stcg_dtaa_income") if cyla else z
-    ltcg125_inc = _positive_val(cyla, "ltcg125_income") if cyla else z
-    ltcg_dtaa_inc = _positive_val(cyla, "ltcg_dtaa_income") if cyla else z
+    # Per-basket income and set-offs from the typed CYLA result. The six
+    # gross-income figures live on `cyla.cg_gross_income` (a dict, added for
+    # Table E) -- `CYLAResult` itself has no `stcg20_income`/etc attributes
+    # at all (those names exist only on `CYLAInput`, what's passed IN to
+    # compute(), not what it returns); reading them via `_positive_val()`'s
+    # getattr-with-default previously fell through to 0 silently for every
+    # bucket, regardless of real capital-gains income.
+    cg_gross = getattr(cyla, "cg_gross_income", None) or {} if cyla else {}
+    stcg20_inc = cg_gross.get("stcg20", z)
+    stcg30_inc = cg_gross.get("stcg30", z)
+    stcg_app_inc = cg_gross.get("stcg_app", z)
+    stcg_dtaa_inc = cg_gross.get("stcg_dtaa", z)
+    ltcg125_inc = cg_gross.get("ltcg125", z)
+    ltcg_dtaa_inc = cg_gross.get("ltcg_dtaa", z)
 
     stcg20_setoff = getattr(cyla, "stcg20_setoff", z) if cyla else z
     stcg30_setoff = getattr(cyla, "stcg30_setoff", z) if cyla else z
@@ -497,9 +499,27 @@ def _schedule_cfl(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[st
         output[key] = {"CarryFwdLossDetail": detail}
     # LossSummaryDetail (the aggregate wrapper) allows OthSrcLossRaceHorseCF
     # unconditionally regardless of loss age, unlike the per-year slots.
-    all_summary = summary(flattened, include_race_horse=True)
-    output["TotalOfBFLossesEarlierYrs"] = {"LossSummaryDetail": all_summary}
-    output["TotalLossCFSummary"] = {"LossSummaryDetail": all_summary}
+    #
+    # Form rows: ix "Total of earlier year losses" (TotalOfBFLossesEarlierYrs)
+    # covers ONLY the genuine brought-forward AY2018-19..2025-26 entries; xi
+    # "2026-27 (Current year losses)" (CurrentAYloss) is this year's own
+    # fresh unabsorbed loss, disclosed separately; xii "Total loss carried
+    # forward to future years" (TotalLossCFSummary) is ix+xi combined -- the
+    # full, unfiltered ``flattened`` total. Previously ``flattened`` was
+    # never split: both TotalOfBFLossesEarlierYrs and TotalLossCFSummary read
+    # the same unfiltered total (so a fresh current-year loss was mislabeled
+    # as an "earlier year" loss and CurrentAYloss, the schema's own dedicated
+    # slot for it, was never emitted at all).
+    current_ay_entries = [e for e in flattened if e.assessment_year_of_loss == "2026-27"]
+    earlier_year_entries = [e for e in flattened if e.assessment_year_of_loss != "2026-27"]
+    output["TotalOfBFLossesEarlierYrs"] = {
+        "LossSummaryDetail": summary(earlier_year_entries, include_race_horse=True)
+    }
+    if current_ay_entries:
+        output["CurrentAYloss"] = {
+            "LossSummaryDetail": summary(current_ay_entries, include_race_horse=True)
+        }
+    output["TotalLossCFSummary"] = {"LossSummaryDetail": summary(flattened, include_race_horse=True)}
     return output
 
 
@@ -521,7 +541,14 @@ _SALARY_EXEMPTION_ROWS: tuple[tuple[str, str, str], ...] = (
     ("transport_exempt", "10(14)(ii)", "Transport allowance"),
     ("children_education_exempt", "10(14)(ii)", "Children education allowance"),
     ("hostel_exempt", "10(14)(ii)", "Hostel expenditure allowance"),
-    ("uniform_allowance_exempt", "10(14)(ii)", "Uniform allowance"),
+    # Unlike transport/CEA/hostel above (fixed statutory-rate allowances,
+    # correctly 10(14)(ii): "granted to meet personal expenses... or to
+    # compensate for increased cost of living"), uniform allowance is
+    # exempt only to the extent of actual expenditure incurred
+    # (`_exempt_uniform_allowance()`'s own docstring: "u/s 10(14)(i) / Rule
+    # 2BB(1)(f)") -- matching the official schema's own 10(14)(i)
+    # description ("...to the extent actually incurred..."), not 10(14)(ii).
+    ("uniform_allowance_exempt", "10(14)(i)", "Uniform allowance"),
 )
 
 
@@ -531,20 +558,18 @@ def _schedule_s(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str,
     if source is None:
         return None
     if not input_data.tds1_entries:
-        raise ValueError("Salary income present but no TDS1 employer entries provided")
-    if len(input_data.employer_filing_details) != len(input_data.tds1_entries):
+        if not input_data.employer_filing_details:
+            raise ValueError("Salary income requires at least one employer filing detail")
+    if input_data.tds1_entries and len(input_data.employer_filing_details) != len(input_data.tds1_entries):
         raise ValueError("Schedule S requires one employer_filing_details row per TDS1 employer")
     sal = result.schedules.get("salary")
     if sal is None:
         raise ValueError("Salary income present but no computed SalaryResult is available")
 
-    # gross_total (from tds1_entries, per-employer Form 16 figures) and
-    # sal.gross_salary (from the aggregate SalaryIncome the calculator
-    # actually taxes) are two independently editable inputs with no runtime
-    # cross-check tying them together elsewhere. Cross-foot here rather than
-    # silently disclosing whichever number happens to be smaller.
+    # TDS is a credit schedule and may legitimately be empty. When TDS1 rows
+    # exist, retain the strict cross-foot against the salary income they claim.
     gross_total = sum((e.income_chargeable for e in input_data.tds1_entries), _ZERO)
-    if _to_rupees(gross_total) != _to_rupees(sal.gross_salary):
+    if input_data.tds1_entries and _to_rupees(gross_total) != _to_rupees(sal.gross_salary):
         raise ValueError(
             f"Schedule S cannot cross-foot: tds1_entries income_chargeable "
             f"({gross_total}) does not match the taxed salary income's real gross "
@@ -552,74 +577,177 @@ def _schedule_s(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str,
             "the same underlying salary facts."
         )
 
-    # ValueOfPerquisites/ProfitsinLieuOfSalary are official per-employer
-    # fields, but SalaryIncome (and hence source.perquisites_value/
-    # profits_in_lieu_of_salary) is a single aggregate covering every
-    # employer -- only attributable to a specific employer's row when there
-    # is exactly one. GrossSalary = Salary (17(1)) + ValueOfPerquisites
-    # (17(2)) + ProfitsinLieuOfSalary (17(3)) is the official relationship;
-    # the previous code assumed perquisites/profits were always zero.
-    single_employer = len(input_data.tds1_entries) == 1
+    # TDS-backed rows preserve their exact TDS identity. With no TDS, build
+    # Schedule S directly from employer filing details so salary-only returns
+    # remain serializable.
+    if input_data.tds1_entries:
+        employer_rows = list(zip(input_data.tds1_entries, input_data.employer_filing_details))
+    else:
+        employer_rows = [(None, detail) for detail in input_data.employer_filing_details]
+
+    single_employer = len(employer_rows) == 1
     employers = []
-    for entry, detail in zip(input_data.tds1_entries, input_data.employer_filing_details):
-        if not entry.employer_name or not entry.employer_tan:
-            raise ValueError("Schedule S requires employer name and TAN")
-        if detail.employer_tan != entry.employer_tan or detail.employer_name != entry.employer_name:
+    # Real per-employer Section 10 exemption rows (10(6)/10(7)/10(10CC)/EIC/
+    # 10(17)/10(14)(i)/10(14)(ii)/etc., a frontend-captured dropdown+amount
+    # list -- EmployerEntryManager.tsx's own "Section 10 Exemption" row
+    # editor) collected across ALL employers, for merging into the final
+    # AllwncExemptUs10Dtls array below. These codes are disjoint from
+    # _SALARY_EXEMPTION_ROWS's own set (LTA/gratuity/pension/leave/
+    # retrenchment/VRS/transport/CEA/hostel/uniform, none of which this
+    # editor offers), so no double-counting risk in merging the two.
+    frontend_section10_rows: list[dict[str, Any]] = []
+    for entry, detail in employer_rows:
+        employer_name = entry.employer_name if entry is not None else detail.employer_name
+        employer_tan = entry.employer_tan if entry is not None else detail.employer_tan
+        if not employer_name:
+            raise ValueError("Schedule S requires employer name")
+        if entry is not None and (
+            detail.employer_tan != entry.employer_tan
+            or detail.employer_name != entry.employer_name
+        ):
             raise ValueError("Schedule S employer filing details must match TDS1 identity")
-        gross = entry.income_chargeable
+        gross = entry.income_chargeable if entry is not None else sal.gross_salary
         perquisites = source.perquisites_value if single_employer else _ZERO
         profits_in_lieu = source.profits_in_lieu_of_salary if single_employer else _ZERO
-        base_salary = gross - perquisites - profits_in_lieu
+        notified_89a = detail.income_notified_89a
+        notified_other_89a = detail.income_notified_other_89a
+        notified_prior_89a = detail.income_notified_prior_year_89a
+        gross_components = perquisites + profits_in_lieu + notified_89a + notified_other_89a + notified_prior_89a
+        if entry is not None and _to_rupees(gross) != _to_rupees(
+            (gross - gross_components) + gross_components
+        ):
+            raise ValueError(f"Schedule S employer {employer_name!r}: gross component reconciliation failed")
+        base_salary = gross - gross_components
         if base_salary < _ZERO:
             raise ValueError(
-                f"Schedule S employer {entry.employer_name!r}: perquisites "
+                f"Schedule S employer {employer_name!r}: perquisites "
                 f"({perquisites}) plus profits in lieu ({profits_in_lieu}) exceed "
                 f"gross salary ({gross})."
             )
-        employers.append({
-            "NameOfEmployer": entry.employer_name,
+        address: dict[str, Any] = {
+            "AddrDetail": detail.address_detail,
+            "CityOrTownOrDistrict": detail.city_or_town_or_district,
+            "StateCode": detail.state_code,
+        }
+        if detail.pin_code is not None:
+            address["PinCode"] = int(detail.pin_code)
+        elif detail.zip_code is not None:
+            address["ZipCode"] = detail.zip_code
+        row: dict[str, Any] = {
+            "NameOfEmployer": employer_name,
             "NatureOfEmployment": detail.nature_of_employment,
-            "AddressDetail": {"AddrDetail": detail.address_detail, "CityOrTownOrDistrict": detail.city_or_town_or_district, "StateCode": detail.state_code},
-            "TANofEmployer": entry.employer_tan,
+            "AddressDetail": address,
             "Salarys": {
                 "GrossSalary": _to_rupees(gross),
                 "Salary": _to_rupees(base_salary),
-                "NatureOfSalary": {"OthersIncDtls": []},
+                "NatureOfSalary": {"OthersIncDtls": detail.nature_of_salary_rows},
                 "ValueOfPerquisites": _to_rupees(perquisites),
-                "NatureOfPerquisites": {"OthersIncDtls": []},
+                "NatureOfPerquisites": {"OthersIncDtls": detail.nature_of_perquisites_rows},
                 "ProfitsinLieuOfSalary": _to_rupees(profits_in_lieu),
-                "IncomeNotified89A": 0,
-                "IncomeNotifiedOther89A": 0,
+                "NatureOfProfitInLieuOfSalary": {"OthersIncDtls": detail.nature_of_profit_in_lieu_rows},
+                "IncomeNotified89A": _to_rupees(detail.income_notified_89a),
+                # Official schema keys are NOT89ACountrycode/NOT89AAmount (the
+                # same NOT89AType structure Schedule OS's own
+                # IncomeNotified89ATypeOS uses) -- was previously passed
+                # straight through with no key transform at all, unlike the
+                # three sibling row types immediately above.
+                "IncomeNotified89AType": [
+                    {"NOT89ACountrycode": row.country_code, "NOT89AAmount": _to_rupees(row.amount)}
+                    for row in detail.income_notified_89a_country_rows
+                ],
+                "IncomeNotifiedOther89A": _to_rupees(detail.income_notified_other_89a),
+                "IncomeNotifiedPrYr89A": _to_rupees(detail.income_notified_prior_year_89a),
             },
-        })
+        }
+        # Previously built here, then never attached to the output at all --
+        # discarded once the loop moved on, so this real frontend-captured
+        # data silently vanished from the filed JSON. Collected into the
+        # return-scope list instead, guarding against "OTH" (offered by the
+        # frontend dropdown as a free-text catch-all, but not a valid
+        # official SalNatureDesc code -- the schema's enum has no generic
+        # "other" bucket for this specific array).
+        for section10_row in detail.section10_exemption_rows:
+            amount = section10_row.get("SalOthAmount", 0)
+            if amount <= 0:
+                continue
+            code = section10_row["SalNatureDesc"]
+            if code == "OTH":
+                raise ValueError(
+                    f"Schedule S employer {employer_name!r}: Section 10 exemption row uses "
+                    "code \"OTH\", which has no official ITD schema code -- select a specific "
+                    "Section 10 sub-clause instead."
+                )
+            frontend_section10_rows.append({
+                "SalNatureDesc": code,
+                "SalOthNatOfInc": section10_row["SalOthNatOfInc"],
+                "SalOthAmount": amount,
+            })
+        row["Salarys"]["NatureOfSalary"] = {"OthersIncDtls": detail.nature_of_salary_rows}
+        if employer_tan:
+            row["TANofEmployer"] = employer_tan
+        employers.append(row)
+
+    employer_gross_total = sum((e["Salarys"]["GrossSalary"] for e in employers), 0)
+    if employer_gross_total != _to_rupees(sal.gross_salary):
+        raise ValueError("Schedule S gross reconciliation failed: employer totals do not equal computed gross salary")
+
+    section13a_details = input_data.employer_filing_details
+    if len({detail.is_metro_city for detail in section13a_details}) > 1:
+        raise ValueError("Schedule S Section 10(13A) cannot represent mixed metro and non-metro employers")
+    hra_received = sum((detail.actual_hra_received for detail in section13a_details), _ZERO)
+    rent_paid = sum((detail.actual_rent_paid for detail in section13a_details), _ZERO)
+    hra_salary = sum((detail.salary_for_hra for detail in section13a_details), _ZERO)
+    is_metro = section13a_details[0].is_metro_city
+    rent_minus_ten = max(_ZERO, rent_paid - hra_salary * Decimal("0.1"))
+    salary_rate = hra_salary * (Decimal("0.5") if is_metro else Decimal("0.4"))
+    hra_calc = min(hra_received, rent_minus_ten, salary_rate)
+    if input_data.tax_regime.value == "new":
+        hra_received = rent_paid = hra_salary = salary_rate = hra_calc = _ZERO
+    if _to_rupees(hra_calc) != _to_rupees(source.hra_exempt_amount) and source.hra_exempt_amount > _ZERO:
+        raise ValueError("Schedule S Section 10(13A) exemption reconciliation failed")
 
     exemption_rows = [
         {"SalNatureDesc": code, "SalOthNatOfInc": label, "SalOthAmount": _to_rupees(amount)}
         for field, code, label in _SALARY_EXEMPTION_ROWS
         if (amount := getattr(sal, field)) > _ZERO
-    ]
+    ] + frontend_section10_rows
+    section13a_detail = section13a_details[0]
+    relief_89a = _to_rupees(result.relief_89)
+    total_gross_salary = employer_gross_total
+    total_exempt = _to_rupees(sal.exempt_allowances)
+    salary_89a_relief = _to_rupees(sal.salary_89a_relief)
+    total_exempt_non_89a = _to_rupees(sal.exempt_allowances_excluding_89a)
+    net_salary = total_gross_salary - total_exempt_non_89a - salary_89a_relief
+    deduction_u16 = _to_rupees(sal.deductions_u16)
+    income_under_salary = net_salary - deduction_u16
+    if income_under_salary != _to_rupees(result.salary_income):
+        # Section 89 relief is supplied by the return-level Form 10E input;
+        # the salary calculator cannot infer it from salary facts.
+        expected_income_under_salary = _to_rupees(sal.income_chargeable)
+        if income_under_salary != expected_income_under_salary:
+            raise ValueError("Schedule S salary equation reconciliation failed")
 
     return {
         "Salaries": employers,
-        "TotalGrossSalary": _to_rupees(sal.gross_salary),
+        "TotalGrossSalary": total_gross_salary,
         "AllwncExemptUs10": {"AllwncExemptUs10Dtls": exemption_rows},
-        "AllwncExtentExemptUs10": _to_rupees(sal.exempt_allowances),
-        "NetSalary": _to_rupees(sal.net_salary),
-        "DeductionUS16": _to_rupees(sal.deductions_u16),
+        "AllwncExtentExemptUs10": total_exempt_non_89a,
+        "NetSalary": net_salary,
+        "DeductionUS16": deduction_u16,
         "DeductionUnderSection16ia": _to_rupees(sal.standard_deduction),
         "EntertainmntalwncUs16ii": _to_rupees(sal.entertainment_allowance),
         "ProfessionalTaxUs16iii": _to_rupees(sal.professional_tax),
-        "Increliefus89A": _to_rupees(result.relief_89),
+        "Increliefus89A": relief_89a,
         "Section10_13A": {
-            "Placeofwork": "2",
-            "ActlHRARecv": 0,
-            "ActlRentPaid": 0,
-            "DtlsSalUsSec171": 0,
-            "ActlRentPaid10Per": 0,
-            "Sal40Or50Per": 0,
-            "EligbleExmpAllwncUs13A": _to_rupees(source.hra_exempt_amount),
+            "Placeofwork": "1" if section13a_detail.is_metro_city else "2",
+            "ActlHRARecv": _to_rupees(section13a_detail.actual_hra_received),
+            "ActlRentPaid": _to_rupees(section13a_detail.actual_rent_paid),
+            "DtlsSalUsSec171": _to_rupees(hra_salary),
+            "ActlRentPaid10Per": _to_rupees(rent_minus_ten),
+            "Sal40Or50Per": _to_rupees(salary_rate),
+            "EligbleExmpAllwncUs13A": _to_rupees(hra_calc),
         },
-        "TotIncUnderHeadSalaries": _to_rupees(result.salary_income),
+        "TotIncUnderHeadSalaries": income_under_salary,
     }
 
 
@@ -700,8 +828,21 @@ def _schedule_hp(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
             "AddressDetailWithZipCode": address,
             "PropertyOwner": detail.property_owner,
             "PropCoOwnedFlg": "YES" if detail.co_owned else "NO",
+            **(
+                {"PropertyOwnerOther": detail.property_owner_other}
+                if detail.property_owner == "OT"
+                else {}
+            ),
             "AsseseeShareProperty": float(detail.assessee_share_percent),
-            "ifLetOut": "S" if ptype == "S" else "L",
+            # Official schema enum is exactly {"L", "D", "S"} (Let Out /
+            # Deemed Let Out / Self Occupied), matching PropertyType.value
+            # verbatim -- was previously collapsed to "S"/"L" only, so a
+            # deemed-let-out property (section 23(4), owner has more
+            # properties than the self-occupied-exempt limit) was
+            # misrepresented as ordinary "Let Out". ITR-1's own builder
+            # (`itd/itr1.py:277`) already passes `.property_type.value`
+            # straight through unchanged.
+            "ifLetOut": ptype,
             "Rentdetails": {
                 "AnnualLetableValue": _to_rupees(source.annual_rent_received),
                 "RentNotRealized": rent_not_realized,
@@ -867,7 +1008,6 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
     if source:
         block["DividendGross"] = _to_rupees(source.dividend_income)
         block["DividendOthThan22e"] = _to_rupees(source.dividend_income)
-        block["InterestGross"] = _to_rupees(source.savings_bank_interest + source.fixed_deposit_interest + source.interest_on_it_refund)
         block["IntrstFrmSavingBank"] = _to_rupees(source.savings_bank_interest)
         block["IntrstFrmTermDeposit"] = _to_rupees(source.fixed_deposit_interest)
         block["IntrstFrmIncmTaxRefund"] = _to_rupees(source.interest_on_it_refund)
@@ -888,10 +1028,37 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         block["Anyotherpropwithoutcons562x"] = _to_rupees(gift.other_property_without_consideration)
         block["Anyotherpropinadeqcons562x"] = _to_rupees(gift.other_property_inadequate_consideration)
     if input_data.os_pf_income_benefit or input_data.os_pf_tax_benefit:
+        # TaxAccmltdBalRecPFDtls is the form's own per-assessment-year
+        # sub-table -- previously always [] even when the user entered full
+        # per-year detail, since draft_to_itr2_input.py collapsed it to the
+        # aggregate totals alone before it ever reached ITR2Input.
         block["TaxAccumulatedBalRecPF"] = {
+            "TaxAccmltdBalRecPFDtls": [
+                {
+                    "AssessmentYear": e.assessment_year,
+                    "IncomeBenefit": _to_rupees(e.income_benefit),
+                    "TaxBenefit": _to_rupees(e.tax_benefit),
+                }
+                for e in input_data.os_pf_accumulated_entries
+            ],
             "TotalIncomeBenefit": _to_rupees(input_data.os_pf_income_benefit),
             "TotalTaxBenefit": _to_rupees(input_data.os_pf_tax_benefit),
         }
+
+    # Item 2e: OS-head Schedule PTI income that retains a special-rate
+    # character in the unit holder's hands (section 115UA(2)/115UB(1)
+    # proviso) -- already correctly taxed via the calculator's own
+    # PTI_OS_SPECIAL_RATE_SECTIONS-keyed dispatch (calculators/itr2.py);
+    # this is purely the matching disclosure total, using the identical
+    # section-code set so it can never disagree with what was actually
+    # taxed.
+    block["PassThrIncOSChrgblSplRate"] = _to_rupees(sum(
+        (
+            p.income_amount for p in input_data.pti_entries
+            if p.income_head == "OS" and p.section in PTI_OS_SPECIAL_RATE_SECTIONS
+        ),
+        _ZERO,
+    ))
 
     # Section 68/69/69A/69B/69C/69D unexplained-income breakdown -- the
     # combined total already reached GTI via the "115BBE" Schedule-SI entry
@@ -1008,12 +1175,59 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
     # IncChargeableSpecialRates aggregates every OS sub-category taxed at a
     # special (non-slab) rate rather than the "chargeable at applicable
     # rate" head -- lottery/game-show (115BB), online-games (115BBJ),
-    # unexplained income (115BBE), and the 115A-family NRI/FII rows above.
+    # unexplained income (115BBE), the 115A-family NRI/FII rows above,
+    # accumulated PF income u/s 111 (2c, TaxAccumulatedBalRecPF -- already
+    # correctly taxed via the calculator's own `_OS_HEAD_SI_SECTIONS`
+    # dispatch, just previously never folded into this disclosure total),
+    # and pass-through OS income chargeable at special rates (2e,
+    # PassThrIncOSChrgblSplRate -- now dispatched by the calculator's own
+    # PTI_OS_SPECIAL_RATE_SECTIONS-keyed loop, see `block`'s own assignment
+    # above).
     block["IncChargeableSpecialRates"] = (
         block["LtryPzzlChrgblUs115BB"]
         + block["IncChrgblUs115BBJ"]
         + block["IncChrgblUs115BBE"]
         + block["OthersGross"]
+        + block["TaxAccumulatedBalRecPF"]["TotalIncomeBenefit"]
+        + block["PassThrIncOSChrgblSplRate"]
+    )
+    # Form item "1b": Interest, Gross (bi+bii+biii+biv+bv+bvi+bvii+bviii+bix).
+    # Previously only bi+bii+biii (savings/FD/refund interest) -- the other
+    # six sibling sub-items (pass-through interest, the four PF-proviso
+    # buckets, and "interest from others") were all correctly populated a
+    # few lines above but never folded into their own declared header total,
+    # even though the underlying amounts DO reach taxable income (via
+    # result.other_sources_income, either directly for os_pass_through_income
+    # or through the still-open "untraceable channel" this document's own
+    # §20.5 finding describes for the PF-proviso/NSC/bonds categories).
+    # Computed from the block's own final values, not independently
+    # re-derived, so it can never itself drift from them.
+    block["InterestGross"] = (
+        block["IntrstFrmSavingBank"]
+        + block["IntrstFrmTermDeposit"]
+        + block["IntrstFrmIncmTaxRefund"]
+        + block["NatofPassThrghIncome"]
+        + block["IntrstSec10XIFirstProviso"]
+        + block["IntrstSec10XISecondProviso"]
+        + block["IntrstSec10XIIFirstProviso"]
+        + block["IntrstSec10XIISecondProviso"]
+        + block["IntrstFrmOthers"]
+    )
+    # Form item "1": Gross income chargeable to tax at normal applicable
+    # rates (1a+1b+1c+1d+1e). Was hardcoded to 0 unconditionally, while its
+    # five components (Dividends/Interest/Rent/56(2)(x)/Any other income)
+    # were all correctly populated a few lines above -- a visible
+    # self-contradiction against item "6" (BalanceNoRaceHorse below), which
+    # already correctly derives from the real calculator total that this
+    # sum is supposed to feed into. Computed from the block's own final
+    # values (all five are stable by this point in the function), not
+    # independently re-derived, so it can never itself drift from them.
+    block["GrossIncChrgblTaxAtAppRate"] = (
+        block["DividendGross"]
+        + block["InterestGross"]
+        + block["RentFromMachPlantBldgs"]
+        + block["Tot562x"]
+        + block["AnyOtherIncome"]
     )
 
     lottery_q = input_data.os_lottery_quarters
@@ -1190,6 +1404,118 @@ def _other_assets_block(
     }
 
 
+def _cg_loss_setoff_table(result: ITR2Result) -> dict[str, Any]:
+    """Build Schedule CG's own Table E (`CurrYrLosses`) -- the
+    within-Schedule-CG section-70 current-year capital-loss set-off matrix
+    (STCL against any CG rate bucket, LTCL against LTCG only). Previously
+    hardcoded to all-zero regardless of real data; sourced from the CYLA
+    engine's own intra-head computation (``cyla.py``'s ``cg_setoff_matrix``
+    and siblings), a snapshot taken before that same engine's later,
+    separate section-71 cross-head absorption of business/HP losses runs.
+    Part B-TI's own capital-gains figures are independently sourced from
+    ``post_loss_cg`` and unaffected by this table either way -- see
+    ``_partb_ti()``.
+    """
+    cyla = result.schedules.get("cyla")
+    income = getattr(cyla, "cg_gross_income", None) or {}
+    loss = getattr(cyla, "cg_gross_loss", None) or {}
+    matrix = getattr(cyla, "cg_setoff_matrix", None) or {}
+    remaining = getattr(cyla, "cg_intra_head_remaining", None) or {}
+    setoff_total = getattr(cyla, "cg_source_setoff_total", None) or {}
+    loss_remaining = getattr(cyla, "cg_source_loss_remaining", None) or {}
+
+    def gross_loss(name: str) -> int:
+        return _to_rupees(loss.get(name, _ZERO))
+
+    def gross_income(name: str) -> int:
+        return _to_rupees(income.get(name, _ZERO))
+
+    def net_remaining(name: str) -> int:
+        return _to_rupees(remaining.get(name, _ZERO))
+
+    def setoff(source: str, target: str) -> int:
+        return _to_rupees(matrix.get((source, target), _ZERO))
+
+    def total_setoff(name: str) -> int:
+        return _to_rupees(setoff_total.get(name, _ZERO))
+
+    def total_remaining(name: str) -> int:
+        return _to_rupees(loss_remaining.get(name, _ZERO))
+
+    return {
+        "InLossSetOff": {
+            "StclSetoff20Per": gross_loss("stcg20"),
+            "StclSetoff30Per": gross_loss("stcg30"),
+            "StclSetoffAppRate": gross_loss("stcg_app"),
+            "StclSetoffDTAARate": gross_loss("stcg_dtaa"),
+            "LtclSetOff12_5Per": gross_loss("ltcg125"),
+            "LtclSetOffDTAARate": gross_loss("ltcg_dtaa"),
+        },
+        "InStcg20Per": {
+            "CurrYearIncome": gross_income("stcg20"),
+            "StclSetoff30Per": setoff("stcg30", "stcg20"),
+            "StclSetoffAppRate": setoff("stcg_app", "stcg20"),
+            "StclSetoffDTAARate": setoff("stcg_dtaa", "stcg20"),
+            "CurrYrCapGain": net_remaining("stcg20"),
+        },
+        "InStcg30Per": {
+            "CurrYearIncome": gross_income("stcg30"),
+            "StclSetoff20Per": setoff("stcg20", "stcg30"),
+            "StclSetoffAppRate": setoff("stcg_app", "stcg30"),
+            "StclSetoffDTAARate": setoff("stcg_dtaa", "stcg30"),
+            "CurrYrCapGain": net_remaining("stcg30"),
+        },
+        "InStcgAppRate": {
+            "CurrYearIncome": gross_income("stcg_app"),
+            "StclSetoff20Per": setoff("stcg20", "stcg_app"),
+            "StclSetoff30Per": setoff("stcg30", "stcg_app"),
+            "StclSetoffDTAARate": setoff("stcg_dtaa", "stcg_app"),
+            "CurrYrCapGain": net_remaining("stcg_app"),
+        },
+        "InStcgDTAARate": {
+            "CurrYearIncome": gross_income("stcg_dtaa"),
+            "StclSetoff20Per": setoff("stcg20", "stcg_dtaa"),
+            "StclSetoff30Per": setoff("stcg30", "stcg_dtaa"),
+            "StclSetoffAppRate": setoff("stcg_app", "stcg_dtaa"),
+            "CurrYrCapGain": net_remaining("stcg_dtaa"),
+        },
+        "InLtcg12_5Per": {
+            "CurrYearIncome": gross_income("ltcg125"),
+            "StclSetoff20Per": setoff("stcg20", "ltcg125"),
+            "StclSetoff30Per": setoff("stcg30", "ltcg125"),
+            "StclSetoffAppRate": setoff("stcg_app", "ltcg125"),
+            "StclSetoffDTAARate": setoff("stcg_dtaa", "ltcg125"),
+            "LtclSetOffDTAARate": setoff("ltcg_dtaa", "ltcg125"),
+            "CurrYrCapGain": net_remaining("ltcg125"),
+        },
+        "InLtcgDTAARate": {
+            "CurrYearIncome": gross_income("ltcg_dtaa"),
+            "StclSetoff20Per": setoff("stcg20", "ltcg_dtaa"),
+            "StclSetoff30Per": setoff("stcg30", "ltcg_dtaa"),
+            "StclSetoffAppRate": setoff("stcg_app", "ltcg_dtaa"),
+            "StclSetoffDTAARate": setoff("stcg_dtaa", "ltcg_dtaa"),
+            "LtclSetOff12_5Per": setoff("ltcg125", "ltcg_dtaa"),
+            "CurrYrCapGain": net_remaining("ltcg_dtaa"),
+        },
+        "TotLossSetOff": {
+            "StclSetoff20Per": total_setoff("stcg20"),
+            "StclSetoff30Per": total_setoff("stcg30"),
+            "StclSetoffAppRate": total_setoff("stcg_app"),
+            "StclSetoffDTAARate": total_setoff("stcg_dtaa"),
+            "LtclSetOff12_5Per": total_setoff("ltcg125"),
+            "LtclSetOffDTAARate": total_setoff("ltcg_dtaa"),
+        },
+        "LossRemainSetOff": {
+            "StclSetoff20Per": total_remaining("stcg20"),
+            "StclSetoff30Per": total_remaining("stcg30"),
+            "StclSetoffAppRate": total_remaining("stcg_app"),
+            "StclSetoffDTAARate": total_remaining("stcg_dtaa"),
+            "LtclSetOff12_5Per": total_remaining("ltcg125"),
+            "LtclSetOffDTAARate": total_remaining("ltcg_dtaa"),
+        },
+    }
+
+
 def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str, Any]]:
     """Serialize Schedule CG from actual classified transactions."""
     if not input_data.cg_transactions and not input_data.cg_112a_scrips and not input_data.vda_transactions:
@@ -1219,25 +1545,52 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
 
     # 111A equity rows (or, for an FII/FPI, the 115AD(1)(b)(ii) proviso
     # equivalent -- same 20% rate, distinct MFSectionCode/SecCode).
+    #
+    # Official schema: "EquityMFonSTT" is an array capped at maxItems: 2,
+    # one row per MFSectionCode ("1A" ordinary / "5AD1biip" FII-FPI), and
+    # each row's own "EquityMFonSTTDtls" (EquityOrUnitSec94TypeMFonSTT) is
+    # AGGREGATE-ONLY -- no scrip identifier field exists at all. Previously
+    # appended one row PER TRANSACTION instead, so any taxpayer with 3+
+    # STT-paid equity/MF STCG transactions in the year produced a
+    # schema-invalid array (outright validateItr rejection, not a
+    # disclosure-quality issue) -- the common case for retail equity
+    # investors. `is_fii_fpi` is a single filing-profile-level flag (not
+    # per-transaction), so every matching transaction for a given filer
+    # always shares the same MFSectionCode -- at most one aggregate row is
+    # ever needed, never two, for a single return.
+    #
+    # Also fixes an incidental bug found while rewriting this exact
+    # formula: BalanceCG/CapgainonAssets previously omitted improvement_cost
+    # from the subtraction even though DeductSec48.TotalDedn (computed one
+    # line below it) already included it -- the two fields disagreed on
+    # what "total deduction" meant for the identical transaction.
     equity_111a_rows = []
-    for tx in input_data.cg_transactions:
-        if tx.asset_type.value in ("listed_equity_111a", "equity_oriented_fund_111a"):
-            gain = tx.full_consideration - tx.cost_of_acquisition - tx.expenditure_on_transfer
-            equity_111a_rows.append({
-                "MFSectionCode": "5AD1biip" if is_fii_fpi else "1A",
-                "EquityMFonSTTDtls": {
-                    "FullConsideration": _to_rupees(tx.full_consideration),
-                    "DeductSec48": {
-                        "AquisitCost": _to_rupees(tx.cost_of_acquisition),
-                        "ImproveCost": _to_rupees(tx.improvement_cost),
-                        "ExpOnTrans": _to_rupees(tx.expenditure_on_transfer),
-                        "TotalDedn": _to_rupees(tx.cost_of_acquisition + tx.improvement_cost + tx.expenditure_on_transfer),
-                    },
-                    "BalanceCG": _to_rupees(gain),
-                    "LossSec94of7Or94of8": 0,
-                    "CapgainonAssets": _to_rupees(gain),
+    matching_111a_txs = [
+        tx for tx in input_data.cg_transactions
+        if tx.asset_type.value in ("listed_equity_111a", "equity_oriented_fund_111a")
+    ]
+    if matching_111a_txs:
+        total_consideration = sum((tx.full_consideration for tx in matching_111a_txs), z)
+        total_acquisition_cost = sum((tx.cost_of_acquisition for tx in matching_111a_txs), z)
+        total_improvement_cost = sum((tx.improvement_cost for tx in matching_111a_txs), z)
+        total_expenditure = sum((tx.expenditure_on_transfer for tx in matching_111a_txs), z)
+        total_deduction = total_acquisition_cost + total_improvement_cost + total_expenditure
+        balance_cg = total_consideration - total_deduction
+        equity_111a_rows.append({
+            "MFSectionCode": "5AD1biip" if is_fii_fpi else "1A",
+            "EquityMFonSTTDtls": {
+                "FullConsideration": _to_rupees(total_consideration),
+                "DeductSec48": {
+                    "AquisitCost": _to_rupees(total_acquisition_cost),
+                    "ImproveCost": _to_rupees(total_improvement_cost),
+                    "ExpOnTrans": _to_rupees(total_expenditure),
+                    "TotalDedn": _to_rupees(total_deduction),
                 },
-            })
+                "BalanceCG": _to_rupees(balance_cg),
+                "LossSec94of7Or94of8": 0,
+                "CapgainonAssets": _to_rupees(balance_cg),
+            },
+        })
 
     # Generic "other assets" bucket, split for FII/FPI: securities-type
     # transactions route to the 115AD-specific fields below; non-security
@@ -1282,7 +1635,6 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "CapgainonAssets": _to_rupees(gain_112a - ded_54f_112a),
     }
 
-    z6 = _z6()
     exemptions = getattr(cg, "exemptions", None) if cg else None
     total_54 = getattr(exemptions, "section_54", z) if exemptions else z
     total_54b = getattr(exemptions, "section_54b", z) if exemptions else z
@@ -1353,19 +1705,9 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
             "DeducClaimDtlsUs54F": _deduction_claim_detail_rows(input_data.cg_transactions, "54F"),
             "TotDeductClaim": _to_rupees(total_exempt),
         },
-        "CurrYrLosses": {
-            "InLossSetOff": dict(z6),
-            "InStcg20Per": {"CurrYearIncome": 0, "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "CurrYrCapGain": 0},
-            "InStcg30Per": {"CurrYearIncome": 0, "StclSetoff20Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "CurrYrCapGain": 0},
-            "InStcgAppRate": {"CurrYearIncome": 0, "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffDTAARate": 0, "CurrYrCapGain": 0},
-            "InStcgDTAARate": {"CurrYearIncome": 0, "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "CurrYrCapGain": 0},
-            "InLtcg12_5Per": {"CurrYearIncome": 0, "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "LtclSetOffDTAARate": 0, "CurrYrCapGain": 0},
-            "InLtcgDTAARate": {"CurrYearIncome": 0, "StclSetoff20Per": 0, "StclSetoff30Per": 0, "StclSetoffAppRate": 0, "StclSetoffDTAARate": 0, "LtclSetOff12_5Per": 0, "CurrYrCapGain": 0},
-            "TotLossSetOff": dict(z6),
-            "LossRemainSetOff": dict(z6),
-        },
+        "CurrYrLosses": _cg_loss_setoff_table(result),
         "IncmFromVDATrnsf": vda_inc,
-        "AccruOrRecOfCG": _accrued_cg(),
+        "AccruOrRecOfCG": _accrued_cg(input_data, result),
         "SumOfCGIncm": total_cg,
         "TotScheduleCGFor23": total_cg,
     }
@@ -1572,15 +1914,126 @@ def _nri_foreign_asset() -> dict[str, int]:
     return {"SaleonSpecAsset": 0, "DednSpecAssetus115": 0, "BalonSpeciAsset": 0}
 
 
-def _accrued_cg() -> dict[str, Any]:
-    dr = _date_range()
+def _cg_quarter_index(transfer_date: Any) -> int:
+    """Return which of the official form's 5 accrual periods (0-4) a
+    transfer date falls in -- Table F's own period definitions: upto
+    15/6, 16/6-15/9, 16/9-15/12, 16/12-15/3, 16/3-31/3."""
+    month, day = transfer_date.month, transfer_date.day
+    if month in (4, 5) or (month == 6 and day <= 15):
+        return 0
+    if (month == 6 and day > 15) or month in (7, 8) or (month == 9 and day <= 15):
+        return 1
+    if (month == 9 and day > 15) or month in (10, 11) or (month == 12 and day <= 15):
+        return 2
+    if (month == 12 and day > 15) or month in (1, 2) or (month == 3 and day <= 15):
+        return 3
+    return 4
+
+
+def _accrued_cg(input_data: ITR2Input, result: ITR2Result) -> dict[str, Any]:
+    """Build Schedule CG's own Table F (`AccruOrRecOfCG`) -- which of the
+    official form's 5 periods each rate bucket's gain actually accrued in.
+    Previously always the zero default regardless of real transaction
+    dates, despite every transaction's own transfer date already being
+    captured and used elsewhere in this same schedule for the STCG/LTCG
+    classification split itself.
+
+    Land/building reuses the calculator's own already-computed per-asset
+    signed gain (``asset.balance``, which already reflects section 50C
+    deeming and indexation) rather than re-deriving it. Generic-other and
+    section 112A/115AD scrip gains use a simplified per-transaction
+    formula that does not replicate section 50CA deeming (unlisted shares)
+    or section 112A grandfathering -- both are narrow refinements applied
+    at the aggregate level elsewhere in this schedule, not preserved
+    per-transaction, and reproducing them exactly per-transaction would
+    not even reconcile back to those aggregate figures (50CA deeming in
+    particular is not distributive over a sum). This table has no
+    downstream consumer -- an informational disclosure supporting the
+    taxpayer's own section 234C interest position, not re-read by any
+    other part of this JSON (unlike Table E/`CurrYrLosses`, whose own
+    figures Part B-TI's form instructions explicitly cite) -- so an
+    honestly-labeled approximation here is preferable to fabricating exact
+    figures this pipeline cannot actually derive per-transaction. The
+    always-zero applicable-rate/DTAA buckets match every other Schedule
+    CG/Part B-TI disclosure in this builder, which has no data source for
+    those buckets either.
+    """
+    from app.engine.schedules.capital_gains import _is_short_term, _parse_date
+
+    buckets: dict[str, list[Decimal]] = {
+        "stcg20": [_ZERO] * 5,
+        "stcg30": [_ZERO] * 5,
+        "ltcg125": [_ZERO] * 5,
+        "vda": [_ZERO] * 5,
+    }
+
+    def add(bucket: str, transfer_date: Any, amount: Decimal) -> None:
+        # Table F discloses accrual of GAIN specifically (its own schema
+        # fields are non-negative) -- a loss-making transaction has no gain
+        # to accrue in any quarter, matching how a signed loss doesn't
+        # reduce another quarter's own disclosed figure either.
+        amount = max(_ZERO, amount)
+        if transfer_date is None or amount == _ZERO:
+            return
+        buckets[bucket][_cg_quarter_index(transfer_date)] += amount
+
+    for tx in input_data.cg_transactions:
+        asset_type = tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type
+        is_111a = asset_type in ("listed_equity_111a", "equity_oriented_fund_111a")
+        if not is_111a and asset_type not in _GENERIC_OTHER_ASSET_TYPES:
+            continue  # land/building (below) or 112A (via cg_112a_scrips/cg_115ad_scrips)
+        gain = tx.full_consideration - tx.cost_of_acquisition - tx.improvement_cost - tx.expenditure_on_transfer
+        if is_111a:
+            add("stcg20", tx.date_of_transfer, gain)
+            continue
+        is_short = True
+        if tx.date_of_acquisition is not None:
+            is_short = _is_short_term(asset_type, tx.date_of_acquisition, tx.date_of_transfer)
+        elif tx.explicit_long_term is not None:
+            is_short = not tx.explicit_long_term
+        add("stcg30" if is_short else "ltcg125", tx.date_of_transfer, gain)
+
+    cg = result.schedules.get("cg")
+    stcg = getattr(cg, "stcg", None) if cg else None
+    ltcg = getattr(cg, "ltcg", None) if cg else None
+    for asset in (getattr(stcg, "land_building", []) if stcg else []):
+        add("stcg30", _parse_date(asset.date_of_transfer), asset.balance)
+    for asset in (getattr(ltcg, "land_building", []) if ltcg else []):
+        add("ltcg125", _parse_date(asset.date_of_transfer), asset.balance)
+
+    for scrip in (*input_data.cg_112a_scrips, *input_data.cg_115ad_scrips):
+        # `scrip.total_deductions` is a redundant disclosure-only summary
+        # field (validated, when supplied, to equal cost + expenditure --
+        # see the identical fix and rationale in
+        # capital_gains.py::compute_112a()) and must not also be subtracted
+        # here alongside cost_acq_without_index/expenditure_on_transfer, or
+        # this simplified approximation double-counts the same deduction.
+        gain = scrip.total_sale_value - scrip.cost_acq_without_index - scrip.expenditure_on_transfer
+        add("ltcg125", scrip.date_of_transfer, gain)
+
+    # VDA transfers (section 115BBH, 30% flat) -- each transaction already
+    # carries its own date_of_transfer and directly computable income
+    # (mirroring _schedule_vda()'s own income-derivation formula), unlike
+    # the always-zero applicable-rate/DTAA buckets below, which have no
+    # data source anywhere in this builder. Previously omitted entirely
+    # rather than even zero-filled, despite the schema's own dedicated
+    # VDATrnsfGainsUnder30Per field for exactly this.
+    for vda in input_data.vda_transactions:
+        income = (
+            vda.income_from_vda if vda.income_from_vda is not None
+            else max(_ZERO, vda.consideration_received - vda.acquisition_cost)
+        )
+        add("vda", vda.date_of_transfer, income)
+
+    zero_dr = _date_range()
     return {
-        "ShortTermUnder20Per": dr,
-        "ShortTermUnder30Per": dr,
-        "ShortTermUnderAppRate": dr,
-        "ShortTermUnderDTAARate": dr,
-        "LongTermUnder12_5Per": dr,
-        "LongTermUnderDTAARate": dr,
+        "ShortTermUnder20Per": _date_range(*buckets["stcg20"]),
+        "ShortTermUnder30Per": _date_range(*buckets["stcg30"]),
+        "ShortTermUnderAppRate": zero_dr,
+        "ShortTermUnderDTAARate": zero_dr,
+        "LongTermUnder12_5Per": _date_range(*buckets["ltcg125"]),
+        "LongTermUnderDTAARate": zero_dr,
+        "VDATrnsfGainsUnder30Per": _date_range(*buckets["vda"]),
     }
 
 
@@ -1588,10 +2041,20 @@ def _accrued_cg() -> dict[str, Any]:
 # Schedule 112A
 # ============================================================================
 
-def _schedule_112a(input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize all section 112A scrip rows with signed balances."""
+_112A_ELIGIBLE_TX_TYPES = frozenset({"listed_equity_112a", "equity_oriented_fund_112a", "business_trust_unit_112a"})
+
+
+def _112a_source_rows(
+    explicit_scrips: list, transactions: list
+) -> list[dict[str, Any]]:
+    """Build the common per-row working dicts shared by Schedule112A and
+    Schedule115AD from a set of explicit ``CG112AScrip`` rows plus any
+    112A-eligible ``CGTransaction`` rows entered through the generic
+    capital-gains editor (not just the dedicated scrip-editor rows) --
+    matching how ``_schedule_112a()`` always sourced both before this
+    function was split out."""
     source_rows: list[dict[str, Any]] = []
-    for item in input_data.cg_112a_scrips:
+    for item in explicit_scrips:
         source_rows.append({
             "is_before": item.is_before_31jan2018,
             "isin": item.isin_code,
@@ -1605,9 +2068,8 @@ def _schedule_112a(input_data: ITR2Input) -> Optional[dict[str, Any]]:
             "expense": item.expenditure_on_transfer,
             "balance": item.balance,
         })
-    eligible_types = {"listed_equity_112a", "equity_oriented_fund_112a", "business_trust_unit_112a"}
-    for tx in input_data.cg_transactions:
-        if tx.asset_type.value not in eligible_types:
+    for tx in transactions:
+        if tx.asset_type.value not in _112A_ELIGIBLE_TX_TYPES:
             continue
         quantity = tx.quantity or Decimal("1")
         price = tx.sale_price_per_unit if tx.sale_price_per_unit is not None else tx.full_consideration / quantity
@@ -1625,6 +2087,15 @@ def _schedule_112a(input_data: ITR2Input) -> Optional[dict[str, Any]]:
             "expense": tx.expenditure_on_transfer,
             "balance": None,
         })
+    return source_rows
+
+
+def _112a_style_schedule(source_rows: list[dict[str, Any]], suffix: str) -> Optional[dict[str, Any]]:
+    """Build a Schedule112A- or Schedule115AD-shaped object from source
+    rows. Both official schedules share an identical per-row type
+    (``Schedule112A115ADType``) and an identical set of aggregate fields,
+    differing only by a ``112A``/``115AD`` field-name suffix -- so one
+    shared builder serves both schedules."""
     if not source_rows:
         return None
     rows = []
@@ -1657,18 +2128,66 @@ def _schedule_112a(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     expenses = sum(Decimal(str(r["ExpExclCnctTransfer"])) for r in rows)
     deductions = sum(r["TotalDeductions"] for r in rows)
     balance = sum(r["Balance"] for r in rows)
+    # Sum the rows' own (already row-clamped) LTCGBeforelowerB1B2 values,
+    # not a bucket-level max(0, sale-cost) recomputation -- when scrips mix
+    # gains and losses, clamping each row to 0 before summing gives a
+    # different (correct, schema-consistent) total than clamping the
+    # summed bucket totals afterward (e.g. two scrips +20,000/-20,000: the
+    # loss row clamps to 0 individually, so the true sum is 20,000, not the
+    # bucket formula's max(0, 0) = 0).
+    ltcg_before_lower_b1b2 = sum(r["LTCGBeforelowerB1B2"] for r in rows)
     return {
-        "Schedule112ADtls": rows,
-        "SaleValue112A": sale,
-        "CostAcqWithoutIndx112A": raw_cost,
-        "AcquisitionCost112A": _to_rupees(acquisition),
-        "LTCGBeforelowerB1B2112A": max(0, sale - raw_cost),
-        "FairMktValueCapAst112A": fmv,
-        "ExpExclCnctTransfer112A": _to_rupees(expenses),
-        "Deductions112A": deductions,
-        "Balance112A": balance,
-        "TotalBalance112A": balance,
+        f"Schedule{suffix}Dtls": rows,
+        f"SaleValue{suffix}": sale,
+        f"CostAcqWithoutIndx{suffix}": raw_cost,
+        f"AcquisitionCost{suffix}": _to_rupees(acquisition),
+        f"LTCGBeforelowerB1B2{suffix}": ltcg_before_lower_b1b2,
+        f"FairMktValueCapAst{suffix}": fmv,
+        f"ExpExclCnctTransfer{suffix}": _to_rupees(expenses),
+        f"Deductions{suffix}": deductions,
+        f"Balance{suffix}": balance,
+        f"TotalBalance{suffix}": balance,
     }
+
+
+def _schedule_112a(input_data: ITR2Input) -> Optional[dict[str, Any]]:
+    """Serialize the resident-taxpayer Schedule 112A scrip table.
+
+    Routing between this and ``_schedule_115ad()`` is entirely determined
+    by the assessee's own FII/FPI status (matching how ``_schedule_cg()``'s
+    aggregate-level 112A routing already works) -- not by which of
+    ``cg_112a_scrips``/``cg_115ad_scrips`` a given scrip happens to sit in.
+    Both explicit-scrip lists are unioned here so a scrip is never silently
+    dropped from disclosure just because it arrived through the "wrong"
+    list for a caller that doesn't distinguish them (the calculator itself
+    already unions both for tax computation, for the same reason). An
+    assessee is never both FII/FPI and not in the same return, so exactly
+    one of this function and ``_schedule_115ad()`` ever returns non-None.
+    """
+    is_fii_fpi = bool(input_data.filing_profile and input_data.filing_profile.is_fii_fpi)
+    if is_fii_fpi:
+        return None
+    explicit_scrips = [*input_data.cg_112a_scrips, *input_data.cg_115ad_scrips]
+    source_rows = _112a_source_rows(explicit_scrips, input_data.cg_transactions)
+    return _112a_style_schedule(source_rows, "112A")
+
+
+def _schedule_115ad(input_data: ITR2Input) -> Optional[dict[str, Any]]:
+    """Serialize the FII/FPI-specific Schedule 115AD scrip table -- the
+    official form's "115AD(1)(b)(iii) proviso" table, structurally
+    identical to Schedule 112A but for exactly this taxpayer population.
+    Previously never built at all; FII/FPI scrips fell into
+    ``_schedule_112a()`` (the resident taxpayer's table) despite the
+    frontend/draft already modeling the split via
+    ``CapitalGainsSchedule.schedule115AD``. See ``_schedule_112a()``'s own
+    docstring for why both explicit-scrip lists are unioned here too.
+    """
+    is_fii_fpi = bool(input_data.filing_profile and input_data.filing_profile.is_fii_fpi)
+    if not is_fii_fpi:
+        return None
+    explicit_scrips = [*input_data.cg_112a_scrips, *input_data.cg_115ad_scrips]
+    source_rows = _112a_source_rows(explicit_scrips, input_data.cg_transactions)
+    return _112a_style_schedule(source_rows, "115AD")
 
 
 # ============================================================================
@@ -1697,55 +2216,710 @@ def _schedule_vda(input_data: ITR2Input) -> Optional[dict[str, Any]]:
 # Schedule VIA — Chapter VI-A deductions
 # ============================================================================
 
+# Maps the deduction engine's internal breakdown keys to the official
+# Schedule VIA named field. Internal keys with no official ITR-2 field at
+# all (80-IA/80-IB/80-IC/10AA/80RA -- business-income-linked sections that
+# cannot arise on this form, since ITR-2 excludes profits and gains of
+# business or profession) are deliberately absent; see the fail-loud check
+# in _schedule_via() below if one somehow appears with a nonzero amount.
+_VIA_SECTION_TO_FIELD: dict[str, str] = {
+    "80C": "Section80C",
+    "80CCC": "Section80CCC",
+    "80CCD(1)": "Section80CCDEmployeeOrSE",
+    "80CCD(1B)": "Section80CCD1B",
+    "80CCD(2)": "Section80CCDEmployer",
+    "80CCH": "AnyOthSec80CCH",
+    "80D": "Section80D",
+    "80DD": "Section80DD",
+    "80DDB": "Section80DDB",
+    "80U": "Section80U",
+    "80TTA": "Section80TTA",
+    "80TTB": "Section80TTB",
+    "80E": "Section80E",
+    "80EE": "Section80EE",
+    "80EEA": "Section80EEA",
+    "80EEB": "Section80EEB",
+    "80G": "Section80G",
+    "80GG": "Section80GG",
+    "80GGA": "Section80GGA",
+    "80GGC": "Section80GGC",
+}
+
+
 def _schedule_via(result: ITR2Result) -> Optional[dict[str, Any]]:
-    """Serialize Schedule VIA with per-section breakdown from deduction schedule."""
+    """Serialize Schedule VIA with the real per-section breakdown.
+
+    ``result.schedules["deductions"].breakdown`` already holds each
+    section's own statutory-capped, GTI-capped amount (see
+    ``app/engine/schedules/deductions/__init__.py``'s ``_add()``, where
+    every section module's own ``compute_details().allowed_deduction`` is
+    already post-cap, and ``_cap_breakdown_to_gti()``, which applies the
+    aggregate GTI-availability cap on top) -- exactly the figure the
+    official schema's ``DeductUndChapVIA`` wants for each named section
+    field. ``UsrDeductUndChapVIA`` is meant to carry the taxpayer's own
+    claimed (pre-cap) amount; this codebase does not separately track a
+    raw, uncapped figure per section today (each section module already
+    enforces its own statutory cap before returning ``allowed_deduction``,
+    and the frontend/Pydantic input layer already bounds most sections at
+    or below their statutory limit before compute ever runs), so both
+    objects are populated from the same capped breakdown here -- an
+    honest interim state: in every case this pipeline can currently
+    produce, "claimed" and "allowed" already coincide, since nothing
+    upstream lets a taxpayer submit an amount this codebase would then
+    reduce. A genuinely separate raw-claim figure would need each of the
+    ~20 section modules under app/engine/schedules/deductions/ to report
+    its own pre-cap input alongside allowed_deduction -- not attempted
+    here.
+    """
     if result.deductions_total <= 0:
         return None
     ded = result.schedules.get("deductions")
     breakdown = getattr(ded, "breakdown", {}) if ded else {}
-    details = getattr(ded, "section_details", {}) if ded else {}
 
-    # Map engine breakdown keys to official Schedule VIA section codes
-    via_section_map = {
-        "80C": "A1",
-        "80CCC": "A2",
-        "80CCD(1)": "A3a",
-        "80CCD(1B)": "A4",
-        "80CCD(2)": "A5",
-        "80CCH": "A8",
-        "80D": "B",
-        "80DD": "D",
-        "80DDB": "E",
-        "80U": "G",
-        "80TTA": "G1a",
-        "80TTB": "G1b",
-        "80E": "H",
-        "80EE": "EE",
-        "80EEA": "EEA",
-        "80EEB": "EEB",
-        "80G": "G",
-        "80GG": "GG",
-        "80GGA": "GGA",
-        "80GGC": "GGC",
-        "80-IA": "C1",
-        "80-IB": "C2",
-        "80-IC": "C3",
-        "10AA": "A6",
-        "80RA": "RA",
+    # "80C" is only present as its own key once _cap_breakdown_to_gti()
+    # has run, which only happens when the aggregate GTI cap actually
+    # binds (app/engine/schedules/deductions/__init__.py). In the common
+    # case (deductions comfortably below GTI) the raw combined key
+    # "80C+80CCC+80CCD(1)" -- the shared ₹1.5L section-80CCE ceiling
+    # amount -- is what's actually present instead, and would otherwise
+    # look like an unrepresentable section. Decompose it the same way
+    # ITR-1's own working Schedule VIA builder already does
+    # (itd/itr1.py's deduction() closure): subtract out whatever is
+    # separately recorded under "80CCC"/"80CCD(1)" to avoid double-
+    # counting them once under the combined key and again under their
+    # own.
+    combined_80c_key = "80C+80CCC+80CCD(1)"
+    if "80C" not in breakdown and combined_80c_key in breakdown:
+        breakdown = dict(breakdown)
+        breakdown["80C"] = max(
+            Decimal("0"),
+            breakdown.pop(combined_80c_key)
+            - breakdown.get("80CCC", Decimal("0"))
+            - breakdown.get("80CCD(1)", Decimal("0")),
+        )
+
+    unmapped = {
+        key: amount for key, amount in breakdown.items()
+        if key not in _VIA_SECTION_TO_FIELD and amount > 0
     }
-    via_entries: list[dict[str, Any]] = []
+    if unmapped:
+        raise ValueError(
+            f"Schedule VIA cannot represent deduction section(s) {sorted(unmapped)} -- "
+            "no official ITR-2 schema field mapping exists for them (these are "
+            "business-income-linked sections that should never reach ITR-2's "
+            "deduction breakdown)."
+        )
+
+    section_fields: dict[str, int] = {}
     for key, amount in breakdown.items():
-        code = via_section_map.get(key, "OTH")
-        via_entries.append({
-            "Section": code,
-            "Amount": _to_rupees(amount),
-        })
+        field = _VIA_SECTION_TO_FIELD.get(key)
+        if field is not None and amount > 0:
+            section_fields[field] = _to_rupees(amount)
+
+    # Required even when unclaimed (schema: DeductUndChapVIA.required
+    # includes Section80D/Section80G/Section80GGA alongside the total).
+    deduct_und_chap_via: dict[str, Any] = {
+        "Section80D": section_fields.get("Section80D", 0),
+        "Section80G": section_fields.get("Section80G", 0),
+        "Section80GGA": section_fields.get("Section80GGA", 0),
+    }
+    for field, amount in section_fields.items():
+        deduct_und_chap_via.setdefault(field, amount)
+    # Sum the already-rounded per-section rupee figures actually emitted,
+    # rather than independently rounding result.deductions_total, so this
+    # schedule's own total always cross-foots against its own section
+    # fields (the same "sibling fields must agree" discipline that a
+    # missing cross-foot elsewhere in this codebase has already been
+    # found to violate -- see the ITR2_FRONTEND_AND_SERIALIZATION_AUDIT
+    # doc's Schedule OS GrossIncChrgblTaxAtAppRate finding).
+    deduct_und_chap_via["TotalChapVIADeductions"] = sum(section_fields.values())
 
     return {
-        "UsrDeductUndChapVIA": {"TotalChapVIADeductions": _to_rupees(result.deductions_total)},
-        "DeductUndChapVIA": {"TotalChapVIADeductions": _to_rupees(result.deductions_total)},
-        "DeductUndChapVIAList": via_entries,
+        "UsrDeductUndChapVIA": dict(deduct_und_chap_via),
+        "DeductUndChapVIA": deduct_und_chap_via,
     }
+
+
+# ============================================================================
+# Chapter VI-A detail schedules — 80D, 80G, 80GGA, 80GGC, 80DD, 80U
+#
+# Beyond ScheduleVIA's aggregate per-section figures (above), the official
+# schema separately requires six independent top-level schedules carrying
+# donee/insurer/dependent-level disclosure for these same sections. The
+# eligibility computation itself (per-section statutory caps, GTI capping,
+# per-row allocation) already runs identically to ITR-1/ITR-4 via the
+# shared `app/engine/schedules/deductions/` engine
+# (`app/engine/calculators/itr2.py`'s own `compute_deductions()` call) --
+# these builders only serialize that already-computed result, mirroring
+# `app/engine/itd/itr1.py`'s proven, production implementation of the same
+# six schedules field-for-field (confirmed identical against ITR-2's own
+# official schema). Two deliberate differences from ITR-1's version:
+# Schedule80DD/80U here also emit `Form10IAFilingDate`/`FormAckNum11A`
+# (ITR-2/ITR-3-only schema fields ITR-1/ITR-4 don't have -- the frontend's
+# own `DeductionsWorkspace.tsx` already gates these fields on `fullForm10IA
+# = form === 'ITR-2' || form === 'ITR-3'`), and Schedule80DD here allows an
+# HUF-member dependent (ITR-1 rejects it since ITR-1 is individual-only;
+# ITR-2 also files for HUF assessees, for whom this is a valid dependent).
+# ============================================================================
+
+def _policy_insurance_details(policies: Optional[list], section_code: str) -> list[dict[str, Any]]:
+    """Build ``Sch80DInsDtls`` rows for one 80D bucket from policy entries."""
+    rows: list[dict[str, Any]] = []
+    for p in policies or []:
+        if str(getattr(p, "section", "1a")) != section_code:
+            continue
+        insurer = (getattr(p, "insurer_name", None) or "").strip() or "Not Provided"
+        policy_no = (getattr(p, "policy_number", None) or "").strip() or "Not Provided"
+        amount = _to_rupees(getattr(p, "premium_paid", _ZERO) or _ZERO)
+        rows.append({
+            "InsurerName": insurer[:125],
+            "PolicyNo": policy_no[:75],
+            "HealthInsAmt": amount,
+        })
+    return rows
+
+
+def _schedule_80d(
+    senior_flag_self: str,
+    senior_flag_parents: str,
+    self_premium: Decimal,
+    parents_premium: Decimal,
+    preventive_self: Decimal,
+    preventive_parents: Decimal,
+    eligible_deduction: Decimal,
+    eligible_self: Optional[Decimal] = None,
+    eligible_parents: Optional[Decimal] = None,
+    medical_expense_self_senior: Decimal = _ZERO,
+    medical_expense_parents_senior: Decimal = _ZERO,
+    policies: Optional[list] = None,
+) -> dict[str, Any]:
+    """Serialize a computed Section 80D result without recalculating eligibility."""
+    self_aggregate = (
+        eligible_self if eligible_self is not None
+        else self_premium + preventive_self + medical_expense_self_senior
+    )
+    parents_aggregate = (
+        eligible_parents if eligible_parents is not None
+        else parents_premium + preventive_parents + medical_expense_parents_senior
+    )
+    self_non_senior_rows = _policy_insurance_details(policies, "1a")
+    self_senior_rows = _policy_insurance_details(policies, "1b")
+    parents_non_senior_rows = _policy_insurance_details(policies, "2a")
+    parents_senior_rows = _policy_insurance_details(policies, "2b")
+    return {
+        "Sec80DSelfFamSrCtznHealth": {
+            "SeniorCitizenFlag": senior_flag_self,
+            "SelfAndFamily": _to_rupees(self_aggregate) if senior_flag_self == "N" else 0,
+            "HealthInsPremSlfFam": _to_rupees(self_premium) if senior_flag_self == "N" else 0,
+            "Sec80DSelfFamHIDtls": {
+                "Sch80DInsDtls": self_non_senior_rows,
+                "TotalPayments": _to_rupees(self_premium) if senior_flag_self == "N" else 0,
+            },
+            "PrevHlthChckUpSlfFam": _to_rupees(preventive_self) if senior_flag_self == "N" else 0,
+            "SelfAndFamilySeniorCitizen": _to_rupees(self_aggregate) if senior_flag_self == "Y" else 0,
+            "HlthInsPremSlfFamSrCtzn": _to_rupees(self_premium) if senior_flag_self == "Y" else 0,
+            "Sec80DSelfFamSrCtznHIDtls": {
+                "Sch80DInsDtls": self_senior_rows,
+                "TotalPayments": _to_rupees(self_premium) if senior_flag_self == "Y" else 0,
+            },
+            "PrevHlthChckUpSlfFamSrCtzn": _to_rupees(preventive_self) if senior_flag_self == "Y" else 0,
+            "MedicalExpSlfFamSrCtzn": (
+                _to_rupees(medical_expense_self_senior) if senior_flag_self == "Y" else 0
+            ),
+            "ParentsSeniorCitizenFlag": senior_flag_parents,
+            "Parents": _to_rupees(parents_aggregate) if senior_flag_parents == "N" else 0,
+            "HlthInsPremParents": _to_rupees(parents_premium) if senior_flag_parents == "N" else 0,
+            "Sec80DParentsHIDtls": {
+                "Sch80DInsDtls": parents_non_senior_rows,
+                "TotalPayments": _to_rupees(parents_premium) if senior_flag_parents == "N" else 0,
+            },
+            "PrevHlthChckUpParents": _to_rupees(preventive_parents) if senior_flag_parents == "N" else 0,
+            "ParentsSeniorCitizen": _to_rupees(parents_aggregate) if senior_flag_parents == "Y" else 0,
+            "HlthInsPremParentsSrCtzn": _to_rupees(parents_premium) if senior_flag_parents == "Y" else 0,
+            "Sec80DParentsSrCtznHIDtls": {
+                "Sch80DInsDtls": parents_senior_rows,
+                "TotalPayments": _to_rupees(parents_premium) if senior_flag_parents == "Y" else 0,
+            },
+            "PrevHlthChckUpParentsSrCtzn": _to_rupees(preventive_parents) if senior_flag_parents == "Y" else 0,
+            "MedicalExpParentsSrCtzn": (
+                _to_rupees(medical_expense_parents_senior) if senior_flag_parents == "Y" else 0
+            ),
+            "EligibleAmountOfDedn": _to_rupees(eligible_deduction),
+        }
+    }
+
+
+def _donation_address_80g(address: Any) -> dict[str, Any]:
+    """Serialize one official donation-recipient address (80G/80GGA)."""
+    return {
+        "AddrDetail": address.address_line,
+        "CityOrTownOrDistrict": address.city_or_district,
+        "StateCode": address.state_code,
+        "PinCode": address.pin_code,
+    }
+
+
+def _schedule_80g(details: Any) -> dict[str, Any]:
+    """Serialize a computed Section 80G result without recalculating eligibility."""
+    category_specs = {
+        "100_without_limit": (
+            "Don100Percent", "TotDon100PercentCash",
+            "TotDon100PercentOtherMode", "TotDon100Percent",
+            "TotEligibleDon100Percent",
+        ),
+        "50_without_limit": (
+            "Don50PercentNoApprReqd", "TotDon50PercentNoApprReqdCash",
+            "TotDon50PercentNoApprReqdOtherMode", "TotDon50PercentNoApprReqd",
+            "TotEligibleDon50Percent",
+        ),
+        "100_with_limit": (
+            "Don100PercentApprReqd", "TotDon100PercentApprReqdCash",
+            "TotDon100PercentApprReqdOtherMode", "TotDon100PercentApprReqd",
+            "TotEligibleDon100PercentApprReqd",
+        ),
+        "50_with_limit": (
+            "Don50PercentApprReqd", "TotDon50PercentApprReqdCash",
+            "TotDon50PercentApprReqdOtherMode", "TotDon50PercentApprReqd",
+            "TotEligibleDon50PercentApprReqd",
+        ),
+    }
+    schedule: dict[str, Any] = {}
+    emitted_eligible = 0
+    for category_key, keys in category_specs.items():
+        category = details.categories.get(category_key)
+        if category is None or not category.rows:
+            continue
+        rows = []
+        category_eligible = _to_rupees(category.eligible_amount)
+        allocated = 0
+        for index, computed in enumerate(category.rows):
+            source = computed.source
+            if not source.donee_name or not source.donee_pan or source.address is None:
+                raise ValueError("Complete donee identity and address are required for Schedule 80G")
+            eligible = (
+                category_eligible - allocated
+                if index == len(category.rows) - 1
+                else min(_to_rupees(computed.eligible_amount), category_eligible - allocated)
+            )
+            allocated += eligible
+            row = {
+                "DoneeWithPanName": source.donee_name,
+                "DoneePAN": source.donee_pan,
+                "AddressDetail": _donation_address_80g(source.address),
+                "DonationAmtCash": _to_rupees(source.cash_amount),
+                "DonationAmtOtherMode": _to_rupees(source.non_cash_amount),
+                "DonationAmt": _to_rupees(computed.gross_amount),
+                "EligibleDonationAmt": eligible,
+            }
+            if source.approval_reference_number:
+                row["ArnNbr"] = source.approval_reference_number
+            if source.transaction_ref:
+                row["TransactionRefNum"] = source.transaction_ref
+            if source.ifsc_code:
+                row["IFSCCode"] = source.ifsc_code
+            rows.append(row)
+        object_key, cash_key, other_key, gross_key, eligible_key = keys
+        schedule[object_key] = {
+            "DoneeWithPan": rows,
+            cash_key: sum(row["DonationAmtCash"] for row in rows),
+            other_key: sum(row["DonationAmtOtherMode"] for row in rows),
+            gross_key: sum(row["DonationAmt"] for row in rows),
+            eligible_key: sum(row["EligibleDonationAmt"] for row in rows),
+        }
+        emitted_eligible += schedule[object_key][eligible_key]
+    schedule.update({
+        "TotalDonationsUs80GCash": _to_rupees(details.cash_amount),
+        "TotalDonationsUs80GOtherMode": _to_rupees(details.other_mode_amount),
+        "TotalDonationsUs80G": _to_rupees(details.gross_amount),
+        "TotalEligibleDonationsUs80G": emitted_eligible,
+    })
+    if emitted_eligible != _to_rupees(details.allowed_deduction):
+        raise ValueError("Schedule 80G eligible rows do not cross-foot")
+    return schedule
+
+
+def _schedule_80gga(details: Any) -> dict[str, Any]:
+    """Serialize a computed Section 80GGA result without eligibility logic."""
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated_eligible = 0
+    eligible_indices = [
+        index for index, computed in enumerate(details.rows)
+        if computed.eligible_amount > 0
+    ]
+    final_eligible_index = eligible_indices[-1] if eligible_indices else None
+    rows: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        cash = _to_rupees(computed.source.cash_amount)
+        other = _to_rupees(computed.source.other_mode_amount)
+        if index == final_eligible_index:
+            eligible = eligible_rupees - allocated_eligible
+        elif computed.eligible_amount > 0:
+            eligible = min(
+                _to_rupees(computed.eligible_amount),
+                eligible_rupees - allocated_eligible,
+            )
+            allocated_eligible += eligible
+        else:
+            eligible = 0
+        rows.append({
+            "RelevantClauseUndrDedClaimed": computed.source.relevant_clause.value,
+            "NameOfDonee": computed.source.donee_name,
+            "AddressDetail": _donation_address_80g(computed.source.address),
+            "DoneePAN": computed.source.donee_pan,
+            "DonationAmtCash": cash,
+            "DonationAmtOtherMode": other,
+            "DonationAmt": cash + other,
+            "EligibleDonationAmt": eligible,
+        })
+    emitted_eligible = sum(row["EligibleDonationAmt"] for row in rows)
+    if emitted_eligible != eligible_rupees:
+        raise ValueError("Schedule 80GGA eligible rows do not cross-foot")
+    return {
+        "DonationDtlsSciRsrchRuralDev": rows,
+        "TotalDonationAmtCash80GGA": sum(row["DonationAmtCash"] for row in rows),
+        "TotalDonationAmtOtherMode80GGA": sum(row["DonationAmtOtherMode"] for row in rows),
+        "TotalDonationsUs80GGA": sum(row["DonationAmt"] for row in rows),
+        "TotalEligibleDonationAmt80GGA": emitted_eligible,
+    }
+
+
+def _schedule_80ggc(details: Any) -> dict[str, Any]:
+    """Serialize a computed Section 80GGC result without eligibility logic."""
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated_eligible = 0
+    eligible_indices = [
+        index for index, computed in enumerate(details.rows)
+        if computed.eligible_amount > 0
+    ]
+    final_eligible_index = eligible_indices[-1] if eligible_indices else None
+    rows: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        source = computed.source
+        cash = _to_rupees(source.cash_amount)
+        other = _to_rupees(source.other_mode_amount)
+        if index == final_eligible_index:
+            eligible = eligible_rupees - allocated_eligible
+        elif computed.eligible_amount > 0:
+            eligible = min(
+                _to_rupees(computed.eligible_amount),
+                eligible_rupees - allocated_eligible,
+            )
+            allocated_eligible += eligible
+        else:
+            eligible = 0
+        if source.contribution_date is None:
+            raise ValueError("Schedule 80GGC requires a contribution date")
+        row: dict[str, Any] = {
+            "DonationDate": source.contribution_date.isoformat(),
+            "DonationAmtCash": cash,
+            "DonationAmtOtherMode": other,
+            "DonationAmt": cash + other,
+            "EligibleDonationAmt": eligible,
+        }
+        if source.transaction_ref:
+            row["TransactionRefNum"] = source.transaction_ref
+        if source.ifsc_code:
+            row["IFSCCode"] = source.ifsc_code
+        if source.political_party_name:
+            row["PoliticalPartyName"] = source.political_party_name
+        if source.political_party_pan:
+            row["PoliticalPartyPAN"] = source.political_party_pan
+        rows.append(row)
+    emitted_eligible = sum(row["EligibleDonationAmt"] for row in rows)
+    if emitted_eligible != eligible_rupees:
+        raise ValueError("Schedule 80GGC eligible rows do not cross-foot")
+    return {
+        "Schedule80GGCDetails": rows,
+        "TotalDonationAmtCash80GGC": sum(row["DonationAmtCash"] for row in rows),
+        "TotalDonationAmtOtherMode80GGC": sum(row["DonationAmtOtherMode"] for row in rows),
+        "TotalDonationsUs80GGC": sum(row["DonationAmt"] for row in rows),
+        "TotalEligibleDonationAmt80GGC": emitted_eligible,
+    }
+
+
+def _disability_schedule_fields(schedule: Any, computed_deduction: Decimal, section: str) -> dict[str, Any]:
+    """Map and cross-foot fields shared by official 80DD and 80U schedules."""
+    amount = _to_rupees(computed_deduction)
+    limits = {
+        "80DD": (SECTION_80DD_LIMIT, SECTION_80DD_SEVERE_LIMIT),
+        "80U": (SECTION_80U_LIMIT, SECTION_80U_SEVERE_LIMIT),
+    }
+    normal_limit, severe_limit = limits[section]
+    expected = severe_limit if schedule.disability_type.value == "severe" else normal_limit
+    expected_rupees = _to_rupees(expected)
+    if _to_rupees(schedule.deduction_amount) != expected_rupees:
+        raise ValueError(
+            f"Schedule {section} deduction must be Rs {expected_rupees} for the selected severity"
+        )
+    if amount <= 0 or amount > expected_rupees:
+        raise ValueError(
+            f"Schedule {section} computed deduction must be positive and not exceed Rs {expected_rupees}"
+        )
+    mapped: dict[str, Any] = {
+        "NatureOfDisability": schedule.disability_type.itd_code,
+        "TypeOfDisability": schedule.disability_category.itd_code,
+        "DeductionAmount": amount,
+    }
+    if schedule.form_10ia_ack_number:
+        mapped["Form10IAAckNum"] = schedule.form_10ia_ack_number
+    if schedule.udid_number:
+        mapped["UDIDNum"] = schedule.udid_number
+    # ITR-2/ITR-3-only fields (see this section's own module docstring).
+    if schedule.form_10ia_filing_date:
+        mapped["Form10IAFilingDate"] = _date(schedule.form_10ia_filing_date)
+    if schedule.form_ack_num_11a:
+        mapped["FormAckNum11A"] = schedule.form_ack_num_11a
+    return mapped
+
+
+def _schedule_80dd(schedule: Any, computed_deduction: Decimal) -> dict[str, Any]:
+    """Build the official Section 80DD dependent-disability schedule."""
+    if schedule is None:
+        raise ValueError("A positive Section 80DD claim requires Schedule 80DD details")
+    if schedule.dependent_relationship is None:
+        raise ValueError("Schedule 80DD requires dependent_relationship")
+    mapped = _disability_schedule_fields(schedule, computed_deduction, "80DD")
+    mapped["DependentType"] = schedule.dependent_relationship.itd_code
+    if schedule.dependent_pan:
+        mapped["DependentPan"] = schedule.dependent_pan
+    if schedule.dependent_aadhaar:
+        mapped["DependentAadhaar"] = schedule.dependent_aadhaar
+    return mapped
+
+
+def _schedule_80u(schedule: Any, computed_deduction: Decimal) -> dict[str, Any]:
+    """Build the official Section 80U self-disability schedule."""
+    if schedule is None:
+        raise ValueError("A positive Section 80U claim requires Schedule 80U details")
+    return _disability_schedule_fields(schedule, computed_deduction, "80U")
+
+
+def _schedule_80c(details: Any) -> dict[str, Any]:
+    """Serialize a computed Section 80C result without recalculating eligibility."""
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated_eligible = 0
+    rows: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        source = computed.source
+        if not source.identifier_number:
+            raise ValueError("Schedule 80C entries require identifier_number")
+        if index == len(details.rows) - 1:
+            eligible = eligible_rupees - allocated_eligible
+        else:
+            eligible = min(
+                _to_rupees(computed.eligible_amount),
+                eligible_rupees - allocated_eligible,
+            )
+            allocated_eligible += eligible
+        rows.append({
+            "IdentificationNo": source.identifier_number,
+            "Amount": eligible,
+        })
+    emitted = sum(row["Amount"] for row in rows)
+    if emitted != eligible_rupees:
+        raise ValueError("Schedule 80C eligible rows do not cross-foot")
+    return {
+        "Schedule80CDtls": rows,
+        "TotalAmt": emitted,
+    }
+
+
+def _schedule_deduction_loan(
+    details: Any,
+    *,
+    section: str,
+    property_stamp_duty_value: Optional[Decimal] = None,
+) -> dict[str, Any]:
+    """Serialize a computed loan-deduction result (80E/80EE/80EEA/80EEB)
+    without recalculating -- one shared builder for all four sections,
+    which differ only in field-name suffix and 80EEB's extra
+    ``VehicleRegNo``/80EEA's extra ``PropStmpDtyVal``, matching the
+    official schema's own near-identical per-row shape across all four.
+    """
+    if section not in {"80E", "80EE", "80EEA", "80EEB"}:
+        raise ValueError(f"Unsupported deduction loan section: {section}")
+    if not details.rows:
+        raise ValueError(
+            f"A positive Section {section} claim requires official loan rows"
+        )
+    eligible_rupees = _to_rupees(details.allowed_deduction)
+    allocated = 0
+    interest_key = f"Interest{section}"
+    mapped: list[dict[str, Any]] = []
+    for index, computed in enumerate(details.rows):
+        entry = computed.source
+        if index == len(details.rows) - 1:
+            row_interest = eligible_rupees - allocated
+        else:
+            row_interest = min(
+                _to_rupees(computed.eligible_interest),
+                eligible_rupees - allocated,
+            )
+            allocated += row_interest
+        row = {
+            "LoanTknFrom": entry.loan_taken_from.value,
+            "BankOrInstnName": entry.lender_name,
+            "LoanAccNoOfBankOrInstnRefNo": entry.account_or_reference_number,
+            "DateofLoan": entry.loan_date.isoformat(),
+            "TotalLoanAmt": _to_rupees(entry.total_loan_amount),
+            "LoanOutstndngAmt": _to_rupees(entry.outstanding_loan_amount),
+            interest_key: row_interest,
+        }
+        if section == "80EEB":
+            row["VehicleRegNo"] = entry.vehicle_registration_number
+        mapped.append(row)
+
+    total = sum(row[interest_key] for row in mapped)
+    if total != eligible_rupees:
+        raise ValueError(f"Schedule {section} emitted rows do not cross-foot")
+    schedule = {
+        f"Schedule{section}Dtls": mapped,
+        f"TotalInterest{section}": total,
+    }
+    if section == "80EEA":
+        if property_stamp_duty_value is None:
+            raise ValueError("Schedule 80EEA requires property stamp-duty value")
+        schedule["PropStmpDtyVal"] = _to_rupees(property_stamp_duty_value)
+    return schedule
+
+
+def _chapter6a_detail_schedules(result: ITR2Result, input_data: ITR2Input) -> dict[str, Optional[dict[str, Any]]]:
+    """Build the eleven Chapter VI-A detail schedules from the already-
+    computed per-section eligibility result -- see this section's own
+    module docstring for the full rationale and ITR-1 precedent this
+    mirrors. Every section follows the same "required detail if claimed,
+    rejected detail if not claimed" discipline.
+    """
+    ded = result.schedules.get("deductions")
+    section_details = getattr(ded, "section_details", {}) if ded else {}
+
+    def claimed(section: str) -> Decimal:
+        breakdown = getattr(ded, "breakdown", {}) if ded else {}
+        if section == "80C":
+            # "80C" is only present as its own key once
+            # _cap_breakdown_to_gti() has run (the aggregate GTI cap
+            # actually binds) -- in the common case (deductions
+            # comfortably below GTI) the raw combined key
+            # "80C+80CCC+80CCD(1)" is what's present instead, matching
+            # _schedule_via()'s own identical decomposition.
+            direct = breakdown.get("80C")
+            if direct is not None:
+                return direct
+            combined = breakdown.get("80C+80CCC+80CCD(1)", _ZERO)
+            return max(
+                _ZERO,
+                combined - breakdown.get("80CCC", _ZERO) - breakdown.get("80CCD(1)", _ZERO),
+            )
+        return breakdown.get(section, _ZERO)
+
+    out: dict[str, Optional[dict[str, Any]]] = {}
+
+    details_80d = section_details.get("80D")
+    if claimed("80D") > 0:
+        if details_80d is None:
+            raise ValueError("Section 80D computation details are missing")
+        schedule_80d = details_80d.source
+        self_flag = (
+            "S" if schedule_80d and schedule_80d.not_claiming_self
+            else "Y" if details_80d.senior_self
+            else "N"
+        )
+        parents_flag = (
+            "P" if schedule_80d and schedule_80d.not_claiming_parents
+            else "Y" if details_80d.senior_parents
+            else "N"
+        )
+        out["Schedule80D"] = _schedule_80d(
+            senior_flag_self=self_flag,
+            senior_flag_parents=parents_flag,
+            self_premium=details_80d.self_premium,
+            parents_premium=details_80d.parents_premium,
+            preventive_self=details_80d.preventive_self,
+            preventive_parents=details_80d.preventive_parents,
+            eligible_deduction=details_80d.allowed_deduction,
+            eligible_self=details_80d.eligible_self,
+            eligible_parents=details_80d.eligible_parents,
+            medical_expense_self_senior=(
+                schedule_80d.medical_expense_self_senior if schedule_80d else _ZERO
+            ),
+            medical_expense_parents_senior=(
+                schedule_80d.medical_expense_parents_senior if schedule_80d else _ZERO
+            ),
+            policies=(schedule_80d.policies if schedule_80d else None),
+        )
+
+    details_80g = section_details.get("80G")
+    if claimed("80G") > 0:
+        if details_80g is None or not details_80g.categories:
+            raise ValueError("Complete official Schedule 80G donation rows are required")
+        out["Schedule80G"] = _schedule_80g(details_80g)
+    elif input_data.deductions_chapter6a and input_data.deductions_chapter6a.donations_80g:
+        raise ValueError("Schedule 80G rows require a positive eligible deduction")
+
+    details_80gga = section_details.get("80GGA")
+    if claimed("80GGA") > 0:
+        if details_80gga is None or not details_80gga.rows:
+            raise ValueError("Complete official Schedule 80GGA donation rows are required")
+        out["Schedule80GGA"] = _schedule_80gga(details_80gga)
+    elif input_data.schedule_80gga and input_data.schedule_80gga.donations:
+        raise ValueError("Schedule 80GGA rows require a positive eligible deduction")
+
+    details_80ggc = section_details.get("80GGC")
+    if claimed("80GGC") > 0:
+        if details_80ggc is None or not details_80ggc.rows:
+            raise ValueError("Complete official Schedule 80GGC contribution rows are required")
+        out["Schedule80GGC"] = _schedule_80ggc(details_80ggc)
+    elif input_data.schedule_80ggc and input_data.schedule_80ggc.contributions:
+        raise ValueError("Schedule 80GGC rows require a positive eligible deduction")
+
+    if claimed("80DD") > 0:
+        out["Schedule80DD"] = _schedule_80dd(input_data.schedule_80dd, claimed("80DD"))
+    elif input_data.schedule_80dd is not None:
+        raise ValueError("Schedule 80DD details require a positive 80DD deduction")
+
+    if claimed("80U") > 0:
+        out["Schedule80U"] = _schedule_80u(input_data.schedule_80u, claimed("80U"))
+    elif input_data.schedule_80u is not None:
+        raise ValueError("Schedule 80U details require a positive 80U deduction")
+
+    details_80c = section_details.get("80C")
+    if claimed("80C") > 0:
+        if details_80c is None or not details_80c.rows:
+            raise ValueError("A positive Section 80C claim requires Schedule 80C detail rows")
+        out["Schedule80C"] = _schedule_80c(details_80c)
+    elif input_data.schedule_80c_entries:
+        raise ValueError("Schedule 80C rows require a positive eligible deduction")
+
+    details_80e = section_details.get("80E")
+    if claimed("80E") > 0:
+        if details_80e is None or not details_80e.rows:
+            raise ValueError("A positive Section 80E claim requires official loan rows")
+        out["Schedule80E"] = _schedule_deduction_loan(details_80e, section="80E")
+    elif input_data.schedule_80e_entries:
+        raise ValueError("Schedule 80E rows require a positive eligible deduction")
+
+    loan_rows_by_section = {
+        "80EE": input_data.loan_details_80ee_list,
+        "80EEA": input_data.loan_details_80eea_list,
+        "80EEB": input_data.loan_details_80eeb_list,
+    }
+    for section, loan_rows in loan_rows_by_section.items():
+        details_loan = section_details.get(section)
+        eligible = claimed(section)
+        if eligible > 0:
+            if details_loan is None or not details_loan.rows:
+                raise ValueError(f"A positive Section {section} claim requires official loan rows")
+            out[f"Schedule{section}"] = _schedule_deduction_loan(
+                details_loan,
+                section=section,
+                property_stamp_duty_value=(
+                    input_data.property_stamp_duty_value_80eea if section == "80EEA" else None
+                ),
+            )
+        elif loan_rows:
+            raise ValueError(f"Schedule {section} rows require a positive eligible deduction")
+
+    return out
 
 
 # ============================================================================
@@ -1834,12 +3008,43 @@ def _schedule_ei(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         return None
     interest_inc = _ZERO
     others = _ZERO
-    total_exempt = _ZERO
     if exempt:
         interest_inc = exempt.ppf_interest + exempt.sukanya_samriddhi_interest + exempt.tax_free_bond_interest + exempt.nre_interest
         others = exempt.share_of_profit_from_firm + exempt.other_exempt
-        total_exempt = interest_inc + others
-    total_exempt += result.net_agricultural_income
+    # Form item 4 ("Income claimed as not chargeable to tax as per DTAA")
+    # is "III Total Income from DTAA claimed as not chargeable to tax" --
+    # the SUM of the paired detail rows immediately above it
+    # (IncNotChrgblAsPerDTAADtls), not a duplicate of item 1 (InterestInc).
+    # No mapper populates that detail array for ITR-2 yet, so this is
+    # correctly 0 until one exists -- computed from the array itself so it
+    # self-corrects automatically the day it does, rather than needing a
+    # second, independently-maintained sum.
+    inc_not_chrgbl_as_per_dtaa_dtls: list[dict[str, Any]] = []
+    inc_not_chrgbl_to_tax = sum(
+        (row.get("AmountOfIncome", _ZERO) for row in inc_not_chrgbl_as_per_dtaa_dtls), _ZERO
+    )
+    # Item 5 ("Pass through income claimed as not chargeable to tax") has no
+    # backing concept in this engine's PTI data model either -- every
+    # PTIEntry today represents taxable pass-through income (routed to its
+    # own head/Schedule SI), not a "not chargeable" classification -- so
+    # this also stays 0 pending that same not-yet-built infrastructure.
+    pass_thr_inc_not_chrgbl_tax = _ZERO
+    # Form item 6 "Total (1+2+3+4+5)".
+    total_exempt = (
+        interest_inc + result.net_agricultural_income + others
+        + inc_not_chrgbl_to_tax + pass_thr_inc_not_chrgbl_tax
+    )
+    # Item 3's own OthersIncDtls detail row -- previously always [] even
+    # though the real free-text description (ExemptIncome.other_description)
+    # and its scalar amount (other_exempt, already correctly folded into
+    # item 3's "Others" total above) were both captured.
+    others_inc_dtls = (
+        [{
+            "Description": (exempt.other_description if exempt else None) or "Other exempt income",
+            "OthAmount": _to_rupees(exempt.other_exempt),
+        }]
+        if exempt and exempt.other_exempt > 0 else []
+    )
     return {
         "InterestInc": _to_rupees(interest_inc),
         "GrossAgriRecpt": _to_rupees(agri.gross_agricultural_income if agri else _ZERO),
@@ -1847,11 +3052,11 @@ def _schedule_ei(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         "UnabAgriLossPrev8": 0,
         "NetAgriIncOrOthrIncRule7": _to_rupees(result.net_agricultural_income),
         "ExcNetAgriInc": {"ExcNetAgriIncDtls": []},
-        "OthersInc": {"OthersIncDtls": []},
+        "OthersInc": {"OthersIncDtls": others_inc_dtls},
         "Others": _to_rupees(others),
-        "IncNotChrgblAsPerDTAA": {"IncNotChrgblAsPerDTAADtls": []},
-        "IncNotChrgblToTax": _to_rupees(interest_inc),
-        "PassThrIncNotChrgblTax": 0,
+        "IncNotChrgblAsPerDTAA": {"IncNotChrgblAsPerDTAADtls": inc_not_chrgbl_as_per_dtaa_dtls},
+        "IncNotChrgblToTax": _to_rupees(inc_not_chrgbl_to_tax),
+        "PassThrIncNotChrgblTax": _to_rupees(pass_thr_inc_not_chrgbl_tax),
         "TotalExemptInc": _to_rupees(total_exempt),
     }
 
@@ -1929,21 +3134,31 @@ def _schedule_tr1(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     if not input_data.tr1_entries:
         return None
     rows = []
+    # dtaa/non_dtaa were previously computed by re-searching every entry
+    # sharing a row's own country_code for ANY DTAA-type (90/90A) or
+    # non-DTAA (91) relief_section -- a per-COUNTRY test, not a per-ROW
+    # one. Two rows for the same country under different relief sections
+    # (a taxpayer with two income sources in one country under different
+    # TINs, one DTAA-relieved and one unilaterally-relieved) would each
+    # match BOTH tests, so both rows' relief got summed into BOTH dtaa and
+    # non_dtaa -- overstating TotalTaxReliefOutsideIndia. Each row already
+    # carries its own relief_section directly; read that instead.
+    dtaa = 0
+    non_dtaa = 0
     for item in input_data.tr1_entries:
+        relief = _to_rupees(item.relief_claimed)
         rows.append({
             "CountryName": _country_name(item.country_code),
             "CountryCodeExcludingIndia": item.country_code,
             "TaxIdentificationNo": item.tax_identification_no,
             "TaxPaidOutsideIndia": _to_rupees(item.tax_paid_outside_india),
-            "TaxReliefOutsideIndia": _to_rupees(item.relief_claimed),
+            "TaxReliefOutsideIndia": relief,
             "ReliefClaimedUsSection": item.relief_section,
         })
-    # Compared against CountryName here previously -- harmless only because
-    # CountryName used to equal the raw country_code too; now that
-    # CountryName is a real looked-up name, this must key off the code
-    # field instead.
-    dtaa = sum(r["TaxReliefOutsideIndia"] for r in rows if any(e.relief_section in {"90", "90A"} for e in input_data.tr1_entries if e.country_code == r["CountryCodeExcludingIndia"]))
-    non_dtaa = sum(r["TaxReliefOutsideIndia"] for r in rows if any(e.relief_section == "91" for e in input_data.tr1_entries if e.country_code == r["CountryCodeExcludingIndia"]))
+        if item.relief_section in ("90", "90A"):
+            dtaa += relief
+        else:
+            non_dtaa += relief
     return {
         "ScheduleTR": rows,
         "TotalTaxPaidOutsideIndia": sum(r["TaxPaidOutsideIndia"] for r in rows),
@@ -2123,47 +3338,118 @@ def _schedule_amt(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[st
     amt = result.schedules.get("amt")
     if amt is None or not getattr(amt, "amt_applicable", False):
         return None
+    # `AMTResult` (app/engine/schedules/amt.py) has no `total_deductions`
+    # field at all -- reading it via getattr(..., default=0) always fell
+    # through to zero, wrong on every return this schedule is even built
+    # for (amt_applicable is only True when a real, nonzero addback
+    # exists). The real figure is exactly recoverable without touching
+    # amt.py: adjusted_total_income = taxable_income + addition_total (see
+    # compute()'s own `adjusted_income = income + addition_total`, where
+    # `income` is exactly `result.taxable_income` at the calculator's own
+    # call site) -- both terms are already-rounded/unrounded Decimals with
+    # no intermediate rounding on either side, so the subtraction is exact.
+    adjusted_total_income = getattr(amt, "adjusted_total_income", _ZERO)
+    deduction_claim = adjusted_total_income - result.taxable_income
     return {
         "TotalIncItemPartBTI": _to_rupees(result.taxable_income),
-        "DeductionClaimUndrAnySec": _to_rupees(getattr(amt, "total_deductions", _ZERO)),
-        "AdjustedUnderSec115JC": _to_rupees(getattr(amt, "adjusted_total_income", _ZERO)),
+        "DeductionClaimUndrAnySec": _to_rupees(deduction_claim),
+        "AdjustedUnderSec115JC": _to_rupees(adjusted_total_income),
         "TaxPayableUnderSec115JC": _to_rupees(getattr(amt, "amt_tax", _ZERO)),
     }
 
 
+# The schema's AssYr enum on ScheduleAMTCDtls covers only prior years
+# (2013-14 through 2025-26) -- the current AY's own AMT figures live in
+# ScheduleAMT/the top-level TaxSection115JC block instead, never as a row
+# here. AMTCreditItem.assessment_year is Pydantic-typed as any
+# "YYYY-YY"-shaped string (broader than this closed set), so an
+# out-of-range year is only caught here, at serialization time.
+_AMTC_VALID_PRIOR_YEARS = frozenset({
+    "2013-14", "2014-15", "2015-16", "2016-17", "2017-18", "2018-19",
+    "2019-20", "2020-21", "2021-22", "2022-23", "2023-24", "2024-25", "2025-26",
+})
+
+
 def _schedule_amtc(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize Schedule AMTC from brought-forward credit ledger."""
+    """Serialize Schedule AMTC from the brought-forward AMT credit ledger.
+
+    Each ``ScheduleAMTCDtls`` row previously used entirely invented field
+    names (``AssessmentYear``/``AmtTaxCreditBF``/``TaxSection115JD``/
+    ``AmtTaxCreditUtilisedCY``/``AmtCreditCF``) that match none of the
+    schema's six actual, all-required field names
+    (``AssYr``/``Gross``/``AmtCreditSetOfEy``/``AmtCreditBalBroughtFwd``/
+    ``AmtCreditUtilized``/``BalAmtCreditCarryFwd``) -- every row was
+    unconditionally schema-invalid.
+    """
     amt_in = input_data.amt_input
     if amt_in is None or not amt_in.amt_credits:
         return None
-    rows = []
-    total_bf = _ZERO
+
+    rows: list[dict[str, Any]] = []
+    total_gross = _ZERO
+    total_bal_bf = _ZERO
     total_utilised = _ZERO
-    for credit in amt_in.amt_credits:
+    # This year's AMT-tax offset capacity is consumed oldest-credit-first
+    # (FIFO), matching the official form's own chronological year ordering.
+    # The previous code applied the FULL result.amt_tax independently to
+    # EVERY row instead of tracking how much capacity earlier (older) rows
+    # had already consumed -- a genuine double-counting bug for any return
+    # with more than one year of brought-forward credit, separate from the
+    # field-naming bug above and fixed in the same pass since it feeds the
+    # same AmtCreditUtilized figure being renamed here.
+    remaining_capacity = max(_ZERO, result.amt_tax)
+    for credit in sorted(amt_in.amt_credits, key=lambda c: c.assessment_year):
+        if credit.assessment_year not in _AMTC_VALID_PRIOR_YEARS:
+            raise ValueError(
+                f"Schedule AMTC assessment_year {credit.assessment_year!r} is not one of the "
+                f"official schema's valid prior years {sorted(_AMTC_VALID_PRIOR_YEARS)}."
+            )
+        bal_brought_forward = credit.credit_brought_forward
+        utilised = min(bal_brought_forward, remaining_capacity)
+        remaining_capacity -= utilised
+        carry_forward = bal_brought_forward - utilised
         rows.append({
-            "AssessmentYear": credit.assessment_year,
-            "AmtTaxCreditBF": _to_rupees(credit.credit_brought_forward),
-            "TaxSection115JD": _to_rupees(result.amt_tax),
-            "AmtTaxCreditUtilisedCY": _to_rupees(min(credit.credit_brought_forward, result.amt_tax)),
-            "AmtCreditCF": _to_rupees(max(_ZERO, credit.credit_brought_forward - result.amt_tax)),
+            "AssYr": credit.assessment_year,
+            # AMTCreditItem captures only the resulting balance brought
+            # forward into this year, not a separate original-year "Gross"
+            # figure or how much was already set off in still-earlier
+            # years -- that finer breakdown isn't tracked anywhere in this
+            # codebase today. Treating the known balance as both Gross and
+            # AmtCreditBalBroughtFwd (with AmtCreditSetOfEy at 0) is an
+            # honest degenerate mapping: the schema's own implied identity
+            # (Gross - AmtCreditSetOfEy == AmtCreditBalBroughtFwd) holds
+            # exactly, it just can't disclose an already-partially-utilized
+            # year's original size separately from its current balance.
+            "Gross": _to_rupees(bal_brought_forward),
+            "AmtCreditSetOfEy": 0,
+            "AmtCreditBalBroughtFwd": _to_rupees(bal_brought_forward),
+            "AmtCreditUtilized": _to_rupees(utilised),
+            "BalAmtCreditCarryFwd": _to_rupees(carry_forward),
         })
-        total_bf += credit.credit_brought_forward
-    total_utilised = sum(Decimal(str(r["AmtTaxCreditUtilisedCY"])) for r in rows)
-    total_cf = max(_ZERO, total_bf - total_utilised)
+        total_gross += bal_brought_forward
+        total_bal_bf += bal_brought_forward
+        total_utilised += utilised
+
+    total_cf = total_bal_bf - total_utilised
     return {
         "ScheduleAMTCDtls": rows,
         "CurrAssYr": "2026-27",
         "TaxSection115JC": _to_rupees(result.amt_tax),
         "TaxOthProvisions": _to_rupees(result.gross_tax_liability - result.amt_tax),
-        "AmtTaxCreditAvailable": _to_rupees(total_bf),
+        "AmtTaxCreditAvailable": _to_rupees(total_bal_bf),
         "TaxSection115JD": _to_rupees(result.amt_tax),
         "AmtLiabilityAvailable": _to_rupees(result.amt_tax),
         "TotAmtCreditUtilisedCY": _to_rupees(total_utilised),
         "CurrYrCreditCarryFwd": _to_rupees(total_cf),
         "CurrYrAmtCreditFwd": _to_rupees(total_cf),
-        "TotAMTGross": _to_rupees(total_bf),
-        "TotSetOffEys": len(rows),
-        "TotBalBF": _to_rupees(total_bf),
+        "TotAMTGross": _to_rupees(total_gross),
+        # "Total of AMT credit set-off in earlier years" -- a real monetary
+        # total (was previously len(rows), a row count, not an amount).
+        # Correctly 0 given AmtCreditSetOfEy is 0 on every row per the
+        # data-model limitation noted above; will self-correct once/if a
+        # genuine per-year set-off figure is ever captured.
+        "TotSetOffEys": sum(row["AmtCreditSetOfEy"] for row in rows),
+        "TotBalBF": _to_rupees(total_bal_bf),
         "TotBalAMTCreditCF": _to_rupees(total_cf),
     }
 
@@ -2211,6 +3497,18 @@ def _schedule_pti(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         stcg = item.income_amount if item.income_head == "STCG" else _ZERO
         ltcg = item.income_amount if item.income_head == "LTCG" else _ZERO
         os = item.income_amount if item.income_head == "OS" else _ZERO
+        # Route to the same 111A/112A-vs-"Others" sub-bucket the calculator
+        # itself taxes this entry under (calculators/itr2.py's own PTI
+        # dispatch loop: `pti.section == "111A"` for STCG,
+        # `"112A" in pti.section.upper()` for LTCG) -- previously always
+        # zeroed Sec111A/Sec112A and routed the full amount into "Others"
+        # regardless of `item.section`, misrepresenting a 111A/112A PTI
+        # entry as "Others" and disagreeing with Schedule SI's own line
+        # items for the identical income.
+        stcg_111a = stcg if item.section == "111A" else _ZERO
+        stcg_other = stcg if item.section != "111A" else _ZERO
+        ltcg_112a = ltcg if "112A" in item.section.upper() else _ZERO
+        ltcg_other = ltcg if "112A" not in item.section.upper() else _ZERO
         rows.append({
             "InvstmntCvrdUs115UA115UB": "A" if item.section == "115UA" else "B" if item.section == "115UB" else "C",
             "BusinessName": item.entity_name,
@@ -2218,11 +3516,11 @@ def _schedule_pti(input_data: ITR2Input) -> Optional[dict[str, Any]]:
             "IncFromHP": regular(hp, item.tds_credit if hp else _ZERO),
             "CapitalGainsPTI": {
                 "ShortTermCG": regular(stcg),
-                "STCG_Sec111A": regular(),
-                "STCG_Others": regular(stcg, item.tds_credit if stcg else _ZERO),
+                "STCG_Sec111A": regular(stcg_111a, item.tds_credit if stcg_111a else _ZERO),
+                "STCG_Others": regular(stcg_other, item.tds_credit if stcg_other else _ZERO),
                 "LongTermCG": regular(ltcg),
-                "LTCG_Sec112A": regular(),
-                "LTCG_Others": regular(ltcg, item.tds_credit if ltcg else _ZERO),
+                "LTCG_Sec112A": regular(ltcg_112a, item.tds_credit if ltcg_112a else _ZERO),
+                "LTCG_Others": regular(ltcg_other, item.tds_credit if ltcg_other else _ZERO),
             },
             "IncClmdPTI": {"TotalSec23FBB": other(), "Sec23FBB": other()},
             "IncOthSrc": other(os, item.tds_credit if os else _ZERO),
@@ -2427,6 +3725,7 @@ def _schedule_tds3(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         row: dict[str, Any] = {
             "TDSCreditName": entry.ownership,
             "PANOfBuyerTenant": detail.buyer_tenant_pan,
+            **({"AadhaarOfBuyerTenant": entry.tenant_aadhaar} if entry.tenant_aadhaar else {}),
             "TDSSection": entry.tds_section or "195",
             "DeductedYr": deducted_year,
             "BroughtFwdTDSAmt": _to_rupees(entry.brought_forward_tds),
@@ -2504,24 +3803,56 @@ def _schedule_tcs(input_data: ITR2Input) -> Optional[dict[str, Any]]:
 # Part B-TI — Total Income (required)
 # ============================================================================
 
-def _partb_ti(result: ITR2Result) -> dict[str, Any]:
+def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     """Serialize Part B-TI from computed income heads."""
     post_loss = result.schedules.get("post_loss_cg", {})
-    stcg_20 = _to_rupees(post_loss.get("normal_stcg", _ZERO))
+    # ``post_loss_cg_baskets()``'s own dict keys are the SI engine's naming,
+    # not the schema's: "normal_stcg" is the 30%-normal-rate bucket (taxed at
+    # slab/applicable rate for an ordinary taxpayer, 30% flat under
+    # 115AD(1)(ii) for an FII/FPI) and "111a" is the true 20%-flat 111A
+    # bucket -- routing below mirrors how ``_schedule_cg()``/``_schedule_115ad()``
+    # already branch on ``is_fii_fpi`` for the equivalent Schedule CG fields.
+    is_fii_fpi = bool(input_data.filing_profile and input_data.filing_profile.is_fii_fpi)
     stcg_111a = _to_rupees(post_loss.get("111a", _ZERO))
+    stcg_normal = _to_rupees(post_loss.get("normal_stcg", _ZERO))
+    stcg_20 = stcg_111a
+    stcg_30 = stcg_normal if is_fii_fpi else 0
+    stcg_app_rate = 0 if is_fii_fpi else stcg_normal
     ltcg_112 = _to_rupees(post_loss.get("112", _ZERO))
     ltcg_112a_gross = _to_rupees(post_loss.get("112a_gross", _ZERO))
-    total_stcg = stcg_20 + stcg_111a
+    total_stcg = stcg_111a + stcg_normal
     total_ltcg = ltcg_112 + ltcg_112a_gross
     total_cg = total_stcg + total_ltcg + _to_rupees(result.vda_income)
+    # Form items 4a/4b/4c (schema IncFromOS.OtherSrcThanOwnRaceHorse/
+    # IncChargblSplRate/FromOwnRaceHorse) are, per the official form, "6 of
+    # Schedule OS" / "2 of Schedule OS" / "8e of Schedule OS" -- sourced from
+    # _schedule_os()'s own already-computed totals so this split can never
+    # drift from what Schedule OS itself discloses (CBDT rules 500-502
+    # require exactly this consistency). Was previously 0/0 with the entire
+    # blended total dumped into 4a alone.
+    os_schedule = _schedule_os(result, input_data)
+    os_special_rate = os_schedule["IncOthThanOwnRaceHorse"]["IncChargeableSpecialRates"] if os_schedule else 0
+    os_excl_race_horse_total = os_schedule["TotOthSrcNoRaceHorse"] if os_schedule else 0
+    os_race_horse_income = max(0, os_schedule["IncFromOwnHorse"]["BalanceOwnRaceHorse"]) if os_schedule else 0
+    os_normal_rate = max(0, os_excl_race_horse_total - os_special_rate)
+    # Form items 10/13 (schema IncChargeTaxSplRate111A112/
+    # IncChargeableTaxSplRates) are both explicitly "total of column (i) of
+    # schedule SI" per the form text and CBDT rule 374/376 -- the full
+    # Schedule SI total (all special-rate income: 111A/112/112A, VDA,
+    # lottery/gaming/unexplained-income/patent-royalty/carbon-credits/
+    # sportsman, NRI/FII special-rate OS, DTAA-OS, PTI), not just the
+    # CG-only 111A+112+112A(+VDA) subset previously summed here directly
+    # from post_loss_cg.
+    si_result = result.schedules.get("si")
+    total_special_rate_income = _to_rupees(getattr(si_result, "total_special_rate_income", _ZERO))
     return {
         "Salaries": _to_rupees(result.salary_income),
         "IncomeFromHP": _to_rupees(max(_ZERO, result.house_property_income)),
         "CapGain": {
             "ShortTerm": {
                 "ShortTerm20Per": stcg_20,
-                "ShortTerm30Per": 0,
-                "ShortTermAppRate": stcg_111a,
+                "ShortTerm30Per": stcg_30,
+                "ShortTermAppRate": stcg_app_rate,
                 "ShortTermSplRateDTAA": 0,
                 "TotalShortTerm": total_stcg,
             },
@@ -2535,19 +3866,19 @@ def _partb_ti(result: ITR2Result) -> dict[str, Any]:
             "TotalCapGains": total_cg,
         },
         "IncFromOS": {
-            "OtherSrcThanOwnRaceHorse": _to_rupees(result.other_sources_income),
-            "IncChargblSplRate": 0,
-            "FromOwnRaceHorse": 0,
+            "OtherSrcThanOwnRaceHorse": os_normal_rate,
+            "IncChargblSplRate": os_special_rate,
+            "FromOwnRaceHorse": os_race_horse_income,
             "TotIncFromOS": _to_rupees(result.other_sources_income),
         },
         "CurrentYearLoss": _to_rupees(result.cyla_total_set_off),
         "BalanceAfterSetoffLosses": _to_rupees(max(_ZERO, result.gti_before_loss_setoff - result.cyla_total_set_off)),
         "BroughtFwdLossesSetoff": _to_rupees(result.bfla_total_set_off),
         "GrossTotalIncome": _to_rupees(result.gross_total_income),
-        "IncChargeTaxSplRate111A112": _to_rupees(post_loss.get("111a", _ZERO) + post_loss.get("112", _ZERO) + post_loss.get("112a_gross", _ZERO)),
+        "IncChargeTaxSplRate111A112": total_special_rate_income,
         "DeductionsUnderScheduleVIA": _to_rupees(result.deductions_total),
         "TotalIncome": _to_rupees_rounded10(result.taxable_income),
-        "IncChargeableTaxSplRates": _to_rupees(post_loss.get("111a", _ZERO) + post_loss.get("112", _ZERO) + post_loss.get("112a_gross", _ZERO) + result.vda_income),
+        "IncChargeableTaxSplRates": total_special_rate_income,
         "NetAgricultureIncomeOrOtherIncomeForRate": _to_rupees(result.net_agricultural_income),
         "AggregateIncome": _to_rupees(result.aggregate_income),
         "LossesOfCurrentYearCarriedFwd": _to_rupees(result.cyla_remaining),
@@ -2590,6 +3921,40 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
         },
     }
     total_interest = result.interest_234a + result.interest_234b + result.interest_234c
+    # Form item 12 "Net tax liability (10 - 11d)" is computed BEFORE
+    # interest/fees -- distinct from item 14's "Aggregate liability (12 +
+    # 13e)", which adds them. Same bug class CLAUDE.md documents as already
+    # fixed for ITR-1 (`itd/itr1.py:628-639`): reusing the calculator's own
+    # ``net_tax_liability`` (which is item 14's fully-aggregated FINAL total,
+    # interest/fees included) for item 12 mislabeled it, and made item 12
+    # identical to item 14 (AggregateTaxInterestLiability, below) whenever
+    # any interest/fee applied -- a direct self-contradiction, since item 12
+    # must be strictly less than item 14 in that case.
+    #
+    # Items 8-10 (GrossTaxPayable -> AMT-credit adjustment -> item 10) are a
+    # separately-tracked gap (Schedule AMTC/115JD credit ledger not yet
+    # wired -- see this file's own `TaxPayAfterCreditUs115JD` comment below)
+    # under which item 10 always passes through equal to item 7
+    # (GrossTaxLiability) today, matching how `GrossTaxPayable` already
+    # degenerates to `GrossTaxLiability` while item 1d is 0. Mirroring that
+    # same pass-through here keeps this fix scoped to the item-12-vs-item-14
+    # mislabeling only; it will self-correct once the AMT-credit chain is
+    # wired, exactly like `GrossTaxPayable`'s own comment already notes.
+    balance_tax_after_relief = max(
+        _ZERO, result.gross_tax_liability - result.relief_89 - result.relief_90_91
+    )
+    # Form item "1d" (Total tax payable on deemed total income u/s 115JC,
+    # 1a+1b+1c -- 1a itself being Schedule AMT's own item 4
+    # TaxPayableUnderSec115JC, 1b/1c its own surcharge/cess) is not yet
+    # computed by this builder; tracked as a separate, known gap (the
+    # Schedule AMTC/Part B-TTI AMT-credit linkage). Sourcing "GrossTaxPayable"
+    # (item "8", the higher of 1d and item 7 GrossTaxLiability) from this
+    # same placeholder, rather than a second independent hardcoded value,
+    # keeps the two fields internally consistent and correct for the
+    # (overwhelming majority of) returns AMT doesn't apply to -- where 1d is
+    # genuinely 0, "8" correctly degenerates to GrossTaxLiability -- and lets
+    # this figure self-correct automatically once 1d itself is wired up.
+    tax_payable_deemed_total_income = 0
     return {
         "ComputationOfTaxLiability": {
             "TaxPayableOnTI": {
@@ -2613,26 +3978,48 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
             "TotalSurcharge": _to_rupees(result.surcharge),
             "EducationCess": _to_rupees(result.health_education_cess),
             "GrossTaxLiability": _to_rupees(result.gross_tax_liability),
-            "GrossTaxPayable": 0,
+            # Form item "8": higher of 1d (tax_payable_deemed_total_income)
+            # and item 7 (GrossTaxLiability) -- was hardcoded 0 regardless
+            # of GrossTaxLiability, contradicting its own sibling field one
+            # line above on every return with any tax liability at all.
+            "GrossTaxPayable": max(tax_payable_deemed_total_income, _to_rupees(result.gross_tax_liability)),
+            # "GrossTaxPay" (distinct from "GrossTaxPayable" above, and
+            # unrelated in meaning) is the eligible-startup ESOP-deferred-tax
+            # structure (17(2)(vi)/80-IAC) -- see Schedule ESOP.
             "GrossTaxPay": {"TaxInc17": 0, "TaxDeferred17": 0, "TaxDeferredPayableCY": 0},
             "CreditUS115JD": 0,
             "TaxPayAfterCreditUs115JD": 0,
-            "NetTaxLiability": _to_rupees(result.net_tax_liability),
+            "NetTaxLiability": _to_rupees(balance_tax_after_relief),
             "IntrstPay": {
                 "IntrstPayUs234A": _to_rupees(result.interest_234a),
                 "IntrstPayUs234B": _to_rupees(result.interest_234b),
                 "IntrstPayUs234C": _to_rupees(result.interest_234c),
                 "LateFilingFee234F": _to_rupees(result.late_fee_234f),
-                "FeeFurnish234I": 0,
-                "TotalIntrstPay": _to_rupees(total_interest),
+                # Form item "13da"/"FeeFurnish234I" (fee u/s 234-I for
+                # furnishing a revised return) -- was hardcoded 0 even though
+                # the calculator already computes it (``result.fees_234i``);
+                # TotalIntrstPay below sums it in, so leaving this sibling
+                # disclosure field at 0 would itself no longer cross-foot.
+                "FeeFurnish234I": _to_rupees(result.fees_234i),
+                # Form item "13e" = 13a+13b+13c+13d+13da -- previously
+                # summed only 234A/B/C (13a-13c), silently excluding the
+                # 234F late-filing fee (13d, disclosed one field above) and
+                # the 234-I fee (13da) from its own declared formula.
+                "TotalIntrstPay": _to_rupees(total_interest + result.late_fee_234f + result.fees_234i),
             },
             "AggregateTaxInterestLiability": _to_rupees(result.net_tax_liability),
         },
-        "TaxPayDeemedTotIncUs115JC": 0,
+        "TaxPayDeemedTotIncUs115JC": tax_payable_deemed_total_income,
         "TotalTaxPayablDeemedTotInc": 0,
         "Surcharge": _to_rupees(result.surcharge),
         "HealthEduCess": _to_rupees(result.health_education_cess),
-        "AssetOutIndiaFlag": "NO",
+        # Form item 19 / schema description: "any interest in any asset
+        # (including financial interest in any entity)/signing authority in
+        # any account located outside India" -- Schedule FA is exactly the
+        # disclosure this flag cross-references ("Ensure Schedule FA is
+        # filled up if the answer is Yes"), so it must track whether any
+        # real Schedule FA entry exists, not a hardcoded "No" regardless.
+        "AssetOutIndiaFlag": "YES" if input_data.foreign_assets else "NO",
         "TaxPaid": {
             "TaxesPaid": {
                 "AdvanceTax": _to_rupees(result.total_advance_tax),
@@ -2654,7 +4041,14 @@ def _verification_block(input_data: ITR2Input) -> dict[str, Any]:
     """Serialize verification from the filing profile."""
     profile = _required_profile(input_data)
     name = " ".join(part for part in (profile.first_name, profile.middle_name, profile.surname_or_org_name) if part)
-    return _verification(name, profile.father_name, profile.pan, profile.verification_place, profile.verification_capacity)
+    # The schema's AssesseeVerPAN pattern requires an individual's own PAN
+    # (4th character "P") -- an HUF's own `pan` (4th character "H") cannot
+    # satisfy it. ITR2FilingProfile's own validator guarantees karta_pan is
+    # set whenever assessee_status is HUF, so this is safe unconditionally.
+    verification_pan = (
+        profile.karta_pan if profile.assessee_status == AssesseeStatus.HUF else profile.pan
+    )
+    return _verification(name, profile.father_name, verification_pan, profile.verification_place, profile.verification_capacity)
 
 
 # ============================================================================
@@ -2681,7 +4075,7 @@ def build_itr2_json(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]
         "PartA_GEN1": _part_a_gen1(input_data),
         "ScheduleCYLA": _schedule_cyla(result),
         "ScheduleBFLA": _schedule_bfla(result),
-        "PartB-TI": _partb_ti(result),
+        "PartB-TI": _partb_ti(result, input_data),
         "PartB_TTI": _partb_tti(result, input_data),
         "Verification": _verification_block(input_data),
     }
@@ -2698,6 +4092,7 @@ def build_itr2_json(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]
         "ScheduleOS": _schedule_os(result, input_data),
         "ScheduleCGFor23": _schedule_cg(input_data, result),
         "Schedule112A": _schedule_112a(input_data),
+        "Schedule115AD": _schedule_115ad(input_data),
         "ScheduleVDA": _schedule_vda(input_data),
         "ScheduleCFL": _schedule_cfl(result, input_data),
         "ScheduleVIA": _schedule_via(result),
@@ -2718,6 +4113,7 @@ def build_itr2_json(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]
         "ScheduleTDS2": _schedule_tds2(input_data),
         "ScheduleTDS3": _schedule_tds3(input_data),
         "ScheduleTCS": _schedule_tcs(input_data),
+        **_chapter6a_detail_schedules(result, input_data),
     }
     itr2.update({k: v for k, v in optional.items() if v is not None})
     # Digest is computed over the COMPLETE ITR document (the whole

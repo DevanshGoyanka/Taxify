@@ -450,6 +450,41 @@ def test_section10_exemption_rows_mapped() -> None:
     assert sal.sec10_10cc_perquisite_tax == Decimal("5000")
 
 
+def test_remaining_section10_exemption_rows_reach_the_calculator_not_just_disclosure() -> None:
+    """The same employer.section10ExemptionRows editor also offers six more
+    codes (EIC/10(17)/10(14)(i)/10(14)(ii)/their 115BAC variants) with no
+    dedicated ceiling formula anywhere in this engine -- previously these
+    were silently dropped by _map_salary() itself, never reaching
+    SalaryIncome at all, so a judge/MP/MLA using this exact control paid
+    real, incorrect additional tax on income the Act exempts."""
+    from app.schemas.return_draft import Employer as EmployerT, SalaryNatureRow
+    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-1", regime="old")
+    draft.personal = PersonalInfo(pan="ABCDE1234F", dateOfBirth="1990-01-15")
+    draft.employers = [EmployerT(
+        id="e1", employerName="Acme", basic=Decimal("500000"),
+        section10ExemptionRows=[
+            SalaryNatureRow(id="r1", natureCode="EIC", amount=Decimal("15000")),
+            SalaryNatureRow(id="r2", natureCode="10(17)", amount=Decimal("25000")),
+            SalaryNatureRow(id="r3", natureCode="10(14)(i)", amount=Decimal("3000")),
+            SalaryNatureRow(id="r4", natureCode="10(14)(ii)", amount=Decimal("2000")),
+            SalaryNatureRow(id="r5", natureCode="10(14)(i)(115BAC)", amount=Decimal("1000")),
+            SalaryNatureRow(id="r6", natureCode="10(14)(ii)(115BAC)", amount=Decimal("500")),
+        ],
+    )]
+    itr1_input, _ = draft_to_itr1_input(draft)
+    sal = itr1_input.salary_income
+    assert sal.other_section10_exempt == Decimal("46500")  # 15000+25000+3000+2000+1000+500
+
+    result = compute_itr1(itr1_input)
+    sal_result = result.schedules["salary"]
+    assert sal_result.exempt_allowances >= Decimal("46500")
+    # The exemption must actually reduce taxable salary income, not just be
+    # tallied into an unused field.
+    assert sal_result.income_chargeable == (
+        Decimal("500000") - sal_result.exempt_allowances - sal_result.deductions_u16
+    )
+
+
 def test_standard_deduction_claimed_mapped_to_regime_cap() -> None:
     """SalaryIncome.standard_deduction_claimed must report the regime
     statutory cap when there is salary -- previously always 0, which fired

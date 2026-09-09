@@ -70,6 +70,7 @@ from app.schemas.itr2 import (
     ITR2FilingProfile,
     ITR2Input,
     JurisdictionResidenceEntry,
+    OS89ACountryEntry,
     PropertyFilingDetail,
     ResidentialStatus as ITR2ResidentialStatus,
     SeventhProvisoClauseEntry,
@@ -1486,6 +1487,7 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
             verification_capacity={"SELF": "S", "REPRESENTATIVE": "R", "KARTA": "K"}[verification.capacity],
             assessee_representative=representative,
             tax_return_preparer=tax_return_preparer,
+            karta_pan=(filing.kartaPan.strip().upper() or None),
         )
     except (ValidationError, ValueError) as exc:
         raise FilingGatewayV2Error("ITR-2 filing profile is invalid.", [str(exc)]) from exc
@@ -1557,6 +1559,7 @@ def _itr2_property_filing_details(draft: ReturnDraft) -> list[PropertyFilingDeta
                 pin_code=pin,
                 zip_code=zip_code,
                 property_owner=row.propertyOwnerType,
+                property_owner_other=row.propertyOwnerOther[:50] or None,
                 co_owned=row.isCoOwned,
                 assessee_share_percent=row.ownershipShare if row.isCoOwned else Decimal("100"),
                 home_loan_details=home_loan_details,
@@ -1626,7 +1629,11 @@ def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDeta
                     income_notified_89a=employer.incomeNotified89A,
                     income_notified_other_89a=employer.incomeNotifiedOther89A,
                     income_notified_prior_year_89a=employer.incomeNotifiedPriorYear89A,
-                    income_notified_89a_country_rows=list(employer.incomeNotified89ACountryRows),
+                    income_notified_89a_country_rows=[
+                        OS89ACountryEntry(country_code=row["countryCode"], amount=row["amount"])
+                        for row in employer.incomeNotified89ACountryRows
+                        if row.get("countryCode") and row.get("amount")
+                    ],
                 ))
             except (ValidationError, ValueError) as exc:
                 raise FilingGatewayV2Error(
@@ -1669,7 +1676,11 @@ def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDeta
                 income_notified_89a=employer.incomeNotified89A if employer else Decimal("0"),
                 income_notified_other_89a=employer.incomeNotifiedOther89A if employer else Decimal("0"),
                 income_notified_prior_year_89a=employer.incomeNotifiedPriorYear89A if employer else Decimal("0"),
-                income_notified_89a_country_rows=list(employer.incomeNotified89ACountryRows) if employer else [],
+                income_notified_89a_country_rows=[
+                    OS89ACountryEntry(country_code=item["countryCode"], amount=item["amount"])
+                    for item in (employer.incomeNotified89ACountryRows if employer else [])
+                    if item.get("countryCode") and item.get("amount")
+                ],
             ))
         except (ValidationError, ValueError) as exc:
             raise FilingGatewayV2Error(

@@ -110,6 +110,22 @@ _OS_HEAD_SI_SECTIONS = frozenset({
     "5A1aiiac", "5A1aiii", "5A1bA", "5AC1ab", "5AC1abD", "5ACA1a",
     "5AD1i", "5AD1iP", "5AD1iDiv", "5A1aiiaaP", "5A1aiiaa2P",
 })
+# The narrower subset of _OS_HEAD_SI_SECTIONS that OS-head Schedule PTI
+# entries (pass-through income from a business trust/investment fund,
+# section 115UA(2)/115UB(1) proviso: retains the SAME head and rate the
+# fund itself earned it under) can plausibly carry -- excludes the NRI
+# 115A-family "any other income chargeable at special rate" dropdown
+# codes (`OSSpecialRateEntry`'s own disclosure surface for a taxpayer's
+# OWN directly-received NRI-specific income, e.g. GDR dividends/FCCB
+# interest -- not obviously a category a pass-through fund's underlying
+# income would itself be classified under) and 115E (Section 115E
+# investment income is itself an NRI-direct-receipt category, same
+# reasoning). Exported for `itd/itr2.py`'s own PassThrIncOSChrgblSplRate
+# disclosure to stay in lockstep with this exact dispatch, single source
+# of truth.
+PTI_OS_SPECIAL_RATE_SECTIONS = frozenset({
+    "115BB", "115BBE", "115BBF", "115BBG", "115BBJ", "115BBA", "111",
+})
 
 
 @dataclass
@@ -386,6 +402,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # ── 1. Income Heads ──────────────────────────────────────────────────────
     sal = compute_salary(input_data.salary_income, regime)
     r.salary_income = sal.income_chargeable
+    r.relief_89 = input_data.relief_89 + sal.salary_89a_relief
     r.schedules["salary"] = sal
 
     # Support both single house_property_income and multiple house_properties
@@ -481,6 +498,45 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     r.other_sources_income += sum(
         (p.income_amount for p in input_data.pti_entries if p.income_head == "OS"), _ZERO
     )
+    # "Any other income" detail rows (Schedule OS item 1e, official
+    # OthersIncDtlOS/AnyOtherIncome) are disclosed by _schedule_os() but were
+    # never summed into GTI at all -- a real undertaxation gap: the taxpayer's
+    # own disclosed "any other income" amount was shown on the filed return
+    # but not actually taxed. Ordinary slab-rate Other Sources income, same
+    # GTI-inclusion treatment as every other OS sub-head above.
+    r.other_sources_income += sum(
+        (entry.amount for entry in input_data.os_other_income_entries), _ZERO
+    )
+    # Pass-through income at normal rate (Schedule OS item 1b(iv), official
+    # NatofPassThrghIncome) -- a sibling of the os_other_income_entries bug
+    # above and the same root cause: draft_to_itr2_input.py correctly backs
+    # this amount out of the generic other_income aggregate (to avoid
+    # double-counting it there, alongside os_machinery_plant_rent), but
+    # unlike os_machinery_plant_rent/os_other_income_entries it was never
+    # added back anywhere -- disclosed in the filed JSON but never taxed.
+    # Ordinary slab-rate Other Sources income, same GTI-inclusion treatment
+    # as every other OS sub-head above.
+    r.other_sources_income += input_data.os_pass_through_income
+    # Section 10(11)/10(12) first/second-proviso PF interest (Budget 2021's
+    # taxable-above-threshold PF interest, Schedule OS items 1b(v)-(viii))
+    # and NSC/bonds/securities/miscellaneous interest (item 1b(ix),
+    # "IntrstFrmOthers") -- the same "untraceable channel" bug pattern as
+    # os_pass_through_income above: draft_to_itr2_input.py's own
+    # `_map_os_pf_interest_provisos()`/`_map_os_interest_from_others()`
+    # correctly extract these into their own dedicated ITR2Input fields for
+    # disclosure, but the underlying amount previously reached GTI ONLY via
+    # the generic, untraceable `other_income` aggregate (never independently
+    # verifiable against these five fields' own disclosed totals). Now
+    # explicitly added here too, mirroring os_pass_through_income's own fix
+    # -- draft_to_itr2_input.py backs the identical amount out of
+    # `other_income` to avoid double-counting.
+    r.other_sources_income += (
+        input_data.os_pf_interest_10_11_first_proviso
+        + input_data.os_pf_interest_10_11_second_proviso
+        + input_data.os_pf_interest_10_12_first_proviso
+        + input_data.os_pf_interest_10_12_second_proviso
+        + input_data.os_interest_from_others
+    )
     r.schedules["os"] = os
 
     # ── 2. Capital Gains ─────────────────────────────────────────────────────
@@ -501,16 +557,20 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     )
     cg_result = _compute_cg_schedule(input_data.cg_transactions, is_resident=is_resident_or_nor)
 
-    # Merge explicit 112A scrips (Schedule 112A Part-A3) into the 112A basket
-    # so the ₹1.25L threshold is applied once over the union of classified
-    # scrips and explicit scrips.  VDA (§115BBH) is kept outside the regular
-    # loss-netting and folded in after aggregation.
-    if input_data.cg_112a_scrips:
+    # Merge explicit 112A scrips (Schedule 112A Part-A3, plus any FII/FPI
+    # Schedule-115AD-proviso scrips -- both taxed identically for 112A
+    # purposes, they only route to different disclosure schedules in the
+    # JSON builder) into the 112A basket so the ₹1.25L threshold is applied
+    # once over the union of classified scrips and explicit scrips.  VDA
+    # (§115BBH) is kept outside the regular loss-netting and folded in
+    # after aggregation.
+    explicit_112a_scrips = [*input_data.cg_112a_scrips, *input_data.cg_115ad_scrips]
+    if explicit_112a_scrips:
         (
             ltcg_112a_assets, stcg_land, ltcg_land,
             stcg_111a_signed, stcg_other_signed, ltcg_other_signed,
         ) = _cg_classify(input_data.cg_transactions)
-        for scrip in input_data.cg_112a_scrips:
+        for scrip in explicit_112a_scrips:
             ltcg_112a_assets.append(_CG112AAsset(
                 isin_code=scrip.isin_code,
                 share_name=scrip.share_unit_name,
@@ -727,16 +787,19 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     cg_112a_taxable = post_loss_cg["112a_taxable"]
     cg_111a_income = post_loss_cg["111a"]
 
-    # Determine senior flags
+    # Determine senior flags. schedule_80dd/schedule_80u are ITR2Input's own
+    # top-level structured schedules (Chapter6ADeductions.schedule_80dd/
+    # schedule_80u are never populated by _map_deductions() for either
+    # ITR-1 or ITR-2 -- reading them here was a dead branch that made
+    # is_80dd_severe/is_80u_severe always False regardless of the real
+    # disability severity the taxpayer selected).
     is_parents_senior = False
-    is_80dd_severe = False
-    is_80u_severe = False
     if ded_input := input_data.deductions_chapter6a:
         is_parents_senior = getattr(ded_input, "has_parents_senior", False)
-        if schedule_80dd := getattr(ded_input, "schedule_80dd", None):
-            is_80dd_severe = "severe" in str(getattr(schedule_80dd, "disability_type", "")).lower()
-        if schedule_80u := getattr(ded_input, "schedule_80u", None):
-            is_80u_severe = "severe" in str(getattr(schedule_80u, "disability_type", "")).lower()
+    schedule_80dd = input_data.schedule_80dd
+    schedule_80u = input_data.schedule_80u
+    is_80dd_severe = schedule_80dd is not None and schedule_80dd.disability_type.value == "severe"
+    is_80u_severe = schedule_80u is not None and schedule_80u.disability_type.value == "severe"
 
     ded = compute_deductions(
         input_data.deductions_chapter6a,
@@ -749,6 +812,23 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         is_parents_senior=is_parents_senior,
         is_80dd_severe=is_80dd_severe,
         is_80u_severe=is_80u_severe,
+        schedule_80gga=input_data.schedule_80gga,
+        schedule_80ggc=input_data.schedule_80ggc,
+        schedule_80dd=schedule_80dd,
+        schedule_80u=schedule_80u,
+        schedule_80d=input_data.schedule_80d,
+        assessee_pan=(input_data.filing_profile.pan if input_data.filing_profile else None),
+        # Section 80C per-instrument rows and 80E/80EE/80EEA/80EEB per-loan
+        # rows -- five more official Chapter VI-A detail schedules that
+        # were never wired for ITR-2 at all (same "computed but discarded"
+        # gap the six fields above were fixed for). compute_all() already
+        # accepts all of these; only the ITR-2 call site never passed them.
+        schedule_80c_entries=input_data.schedule_80c_entries,
+        schedule_80e_entries=input_data.schedule_80e_entries,
+        loan_rows_80ee=input_data.loan_details_80ee_list,
+        loan_rows_80eea=input_data.loan_details_80eea_list,
+        loan_rows_80eeb=input_data.loan_details_80eeb_list,
+        property_stamp_duty_value_80eea=input_data.property_stamp_duty_value_80eea,
     )
     r.schedules["deductions"] = ded
     r.deductions_total = ded.total
@@ -911,6 +991,38 @@ def compute(input_data: ITR2Input) -> ITR2Result:
                 si_entries.append(_compute_pti_ltcg112a(pti.income_amount))
             elif pti.income_head == "LTCG":
                 si_entries.append(_compute_pti_ltcg125(pti.income_amount))
+            # OS-head pass-through income that retains a special-rate
+            # character in the unit holder's hands (section 115UA(2)/
+            # 115UB(1) proviso: pass-through income keeps the same head AND
+            # rate the business trust/investment fund itself earned it
+            # under) -- Schedule OS item "2e" (PassThrIncOSChrgblSplRate).
+            # Reuses the identical section-code dispatch already
+            # established for `input_data.si_entries` above (the ordinary,
+            # non-PTI OS-head special-rate categories); an OS-head PTI
+            # entry whose `section` isn't one of these still correctly
+            # falls through to the unconditional other_sources_income
+            # addition below (slab rate), matching an ordinary OS-head PTI
+            # entry today. GTI inclusion needs no separate change here --
+            # the existing `other_sources_income += ... income_head == "OS"`
+            # addition already counts every OS-head PTI entry regardless of
+            # rate; the special-rate exclusion from the slab-tax base
+            # happens automatically via `si_result.surcharge_full_income`
+            # below, the same mechanism already relied on for the ordinary
+            # si_entries dispatch.
+            elif pti.income_head == "OS" and pti.section == "115BB":
+                si_entries.append(compute_lottery(pti.income_amount))
+            elif pti.income_head == "OS" and pti.section == "115BBE":
+                si_entries.append(compute_115bbe(pti.income_amount))
+            elif pti.income_head == "OS" and pti.section == "115BBF":
+                si_entries.append(compute_115bbf(pti.income_amount))
+            elif pti.income_head == "OS" and pti.section == "115BBG":
+                si_entries.append(compute_115bbg(pti.income_amount))
+            elif pti.income_head == "OS" and pti.section == "115BBJ":
+                si_entries.append(_compute_115bbj(pti.income_amount))
+            elif pti.income_head == "OS" and pti.section == "115BBA":
+                si_entries.append(_compute_115bba(pti.income_amount))
+            elif pti.income_head == "OS" and pti.section == "111":
+                si_entries.append(_compute_111(pti.income_amount))
 
     si_result: SpecialRatesResult = aggregate_si(si_entries)
     r.special_rate_tax = si_result.total_special_rate_tax
@@ -1035,7 +1147,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     for tr1 in input_data.tr1_entries:
         r.relief_90_91 += tr1.relief_claimed
     r.relief_90_91 = min(r.relief_90_91, r.gross_tax_liability)
-    r.relief_89 = input_data.relief_89
+    r.relief_89 = input_data.relief_89 + sal.salary_89a_relief
 
     # ── 20. Tax Credits ──────────────────────────────────────────────────────
     # Filing tax credits use the amount claimed in this return, not merely the

@@ -5,10 +5,16 @@ export type TaxRegime = 'old' | 'new';
 export type Money = number;
 export interface Identified { id: string; }
 
+export interface SalaryNatureRow extends Identified { natureCode: string; otherDescription: string; amount: Money; }
+export type Section89ACountry = 'US' | 'UK' | 'CA';
+export interface Section89ACountryRow extends Identified { countryCode: Section89ACountry; amount: Money; }
 export interface Employer extends Identified {
   customEmployerName: string; employerName: string; employerTAN: string; natureOfEmployment: NatureOfEmployment | '';
   employerAddress: string; employerCity: string; employerStateCode: StateCode | ''; employerPinCode: string; employerZipCode: string;
   section10ExemptionRows: Array<{ id: string; natureCode: string; otherDescription: string; amount: Money }>;
+  salaryNatureRows?: SalaryNatureRow[]; perquisiteNatureRows?: SalaryNatureRow[]; profitInLieuNatureRows?: SalaryNatureRow[];
+  incomeNotified89A?: Money; incomeNotifiedOther89A?: Money; incomeNotifiedPriorYear89A?: Money;
+  incomeNotified89ACountryRows?: Section89ACountryRow[];
   basic: Money; da: Money; commission: Money; hra: Money; bonus: Money; allowances: Money; lta: Money;
   otherAllowance: Money; arrearSalary: Money; perquisites: Money; profitsInLieu: Money; rentPaid: Money;
   city: string; isMetroCity: boolean; isGovernmentEmployee: boolean; isDisabledEmployee: boolean;
@@ -367,6 +373,8 @@ export interface FilingStatus {
   totalStayIndia4PrecYr: number | null;
   /** ITR-2 only: Section 115H benefit claim. */
   benefitUs115H: boolean;
+  /** ITR-2 only: PAN of the Karta verifying an HUF return (required when verification.capacity is Karta — an HUF's own PAN cannot be used for the Verification declaration). */
+  kartaPan: string;
 }
 export type ExemptIncomeCategory = 'AGRI' | 'GOVC' | 'ISI' | 'SSRA' | 'SRSC' | 'SRST' | 'SRPC' | 'OTH' | 'OTHN';
 export type ExemptIncomeSubCategory = '10(1)' | '10(2)' | '10(2A)' | '10(4)(i)' | '10(4)(ii)' | '10(4B)' | '10(4C)' | '10(4E)' | '10(4F)' | '10(4G)' | '10(4H)' | '10(6B)' | '10(6BB)' | '10(6D)' | '10(8)' | '10(8A)' | '10(8B)' | '10(9)' | '10(10BB)' | '10(10BC)' | '10(10D)' | '10(11)' | '10(11A)' | '10(12)' | '10(12A)' | '10(12AA)' | '10(12AB)' | '10(12B)' | '10(12BA)' | '10(12C)' | '10(13)' | '10(15)' | '10(16)' | '10(17A)' | '10(18)' | '10(19)' | '10(19A)' | '10(23AA)' | '10(23FBB)' | '10(23FBC)' | '10(23FD)' | '10(23FF)' | '10(25)' | '10(26)' | '10(26AAA)' | '10(30)' | '10(31)' | '10(32)' | '10(33)' | '10(35)' | '10(35A)' | '10(36)' | '10(37)' | '10(37A)' | '10(43)' | '10(44)' | 'DMD' | 'Incmexmptcircular' | 'Incmexmptnotification' | 'Receiptnotincme' | 'Anyother1' | 'Anyother2' | 'Anyother3' | 'Anyother4';

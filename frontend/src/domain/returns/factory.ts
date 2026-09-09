@@ -58,6 +58,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       leiNumber: '', leiValidUptoDate: null,
       conditionsResStatus: '', jurisdictionResidenceEntries: [],
       totalStayIndiaPrevYr: null, totalStayIndia4PrecYr: null, benefitUs115H: false,
+      kartaPan: '',
     },
     employers: [], houseProperties: [], housePropertyPassThroughIncome: 0, businesses: [], capitalGainsSchedule: { ...EMPTY_CAPITAL_GAINS_SCHEDULE },
     otherSources: {

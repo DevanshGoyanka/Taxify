@@ -126,16 +126,35 @@ ITR-3's build-out onto the same complete-preparation contract is tracked phase-b
 including a "Delivered" note per completed phase, in
 `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` — read that first for their current status.
 ITR-2's pipeline is architecturally wired (that plan's Phases 1-7 delivered) but not yet
-production-ready on correctness grounds — `Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`
-is the living audit-fix-reaudit document tracking this separately (mirroring how the ITR-1/4
-audit docs got those two forms production-ready), currently mid-cycle
-(`C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`). Its Schedule CG fix pass (2026-09-04)
-is a useful precedent before touching `app/engine/itd/itr2.py`'s Schedule CG serializer again: a
-finding described as "missing detail" turned out on re-verification to be a schema-blocking
-wrong-field-name bug for land/building rows specifically (no test had ever exercised that path),
-plus a genuine section 112(1)(a) indexed-cost-primacy defect found and deliberately left
-documented-but-unfixed rather than rushed — don't assume a "missing mapping"-shaped finding in
-this file is only a completeness gap without checking the exact schema field names/types first.
+production-ready overall — `Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` is the
+living audit-fix-reaudit document tracking this separately (mirroring how the ITR-1/4 audit
+docs got those two forms production-ready), governed by
+`C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`. **Update (2026-09-09): that plan's
+Phase 8 — a full top-to-bottom re-audit against the official form/schema, independent of every
+earlier finding — is now fully closed: all 26 findings it surfaced across Part A/Verification/
+Part B-TI/Part B-TTI, Schedule S/HP/CYLA/BFLA/CFL, Schedule CG/VDA/112A/115AD/SI, Schedule OS/PTI/
+EI, and Foreign/AL/AMT/AMTC/5A/ESOP/tax-payment schedules are fixed and verified (see the audit
+doc's own top-of-file progress log for the fix-by-fix history).** This does *not* mean ITR-2 is
+production-ready: the plan's later phases (validator coverage growth, ITD-builder test-density
+parity, legacy-path deletion, production hardening, lifting the Type-2 submission gate, and
+finally a live ERI Type-2 UAT round) remain open — read the plan file for exactly which phase is
+next before assuming ITR-2 is filing-ready. Two precedents from this fix cycle worth knowing
+before touching `app/engine/itd/itr2.py`/`app/engine/calculators/itr2.py` again: (1) the Schedule
+CG fix pass (2026-09-04) — a finding described as "missing detail" turned out on re-verification
+to be a schema-blocking wrong-field-name bug for land/building rows specifically (no test had
+ever exercised that path), plus a genuine section 112(1)(a) indexed-cost-primacy defect found and
+deliberately left documented-but-unfixed rather than rushed — don't assume a "missing
+mapping"-shaped finding in this file is only a completeness gap without checking the exact schema
+field names/types first; (2) a real, repeatedly-hit `_to_rupees()` pitfall (`app/engine/itd/
+common.py`): it returns a plain Python `int`, not `Decimal`, and `.quantize()`s its input
+internally — so `sum(some_generator, 0)` (plain int start) crashes when the generator is empty
+(the int has no `.quantize` method) while `sum(some_generator, Decimal("0"))` fed straight into
+`_to_rupees()` is the correct call, but an accumulator built entirely from `_ZERO`/`Decimal("0")`
+and passed to the JSON *without* going through `_to_rupees()` first silently produces a `Decimal`
+that fails strict `jsonschema` `type: integer` validation even when numerically whole — always
+route a fresh accumulator through `_to_rupees()` exactly once, matching how every other field in
+these builders already does it, not zero times (schema-invalid `Decimal`) or via a plain-int
+`sum()` start (crashes `_to_rupees()` on an empty generator).
 
 ### v2 canonical pipeline (`ReturnDraft`)
 

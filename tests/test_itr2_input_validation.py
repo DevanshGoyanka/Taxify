@@ -452,7 +452,7 @@ def test_TDS_009_claim_without_tds3_receipt_fails():
 
 def test_ESOP_001_balance_arithmetic_fails():
     inp = _base_input(esop_deferrals=[ESOPDeferralInput(
-        employer_pan="ABCDE1234F", dpiit_registration_number="DPIIT1",
+        employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
         assessment_year="2025-26", tax_deferred_brought_forward=Decimal("100"),
         tax_payable_current_year=Decimal("20"), balance_tax_carried_forward=Decimal("90"),
     )])

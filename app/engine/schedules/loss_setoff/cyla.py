@@ -91,6 +91,27 @@ class CYLAResult:
     stcg_dtaa_remaining: Decimal = _ZERO
     ltcg125_remaining: Decimal = _ZERO
     ltcg_dtaa_remaining: Decimal = _ZERO
+    # Section-70 intra-Schedule-CG set-off detail (current-year capital
+    # losses against current-year capital gains ONLY -- distinct from this
+    # same function's own later section-71 cross-head absorption of
+    # business/HP losses into the same CG pools, and computed as a
+    # snapshot taken before that later step runs). Matches the official
+    # ITR-2 form's own Schedule CG "Table E" (item E), keyed by the same
+    # six bucket names used above (without the "stcg_"/"ltcg_" income/
+    # setoff/remaining suffixes): stcg20, stcg30, stcg_app, stcg_dtaa,
+    # ltcg125, ltcg_dtaa.
+    cg_gross_income: dict = field(default_factory=dict)
+    cg_gross_loss: dict = field(default_factory=dict)
+    # (source_bucket, target_bucket) -> amount of `source`'s current-year
+    # loss set off against `target`'s current-year gain.
+    cg_setoff_matrix: dict = field(default_factory=dict)
+    # Per-TARGET-bucket gain remaining after intra-head set-off only (i.e.
+    # before section-71 cross-head absorption runs) -- Table E's own
+    # "CurrYrCapGain" per row.
+    cg_intra_head_remaining: dict = field(default_factory=dict)
+    # Per-SOURCE-bucket totals -- Table E's "TotLossSetOff"/"LossRemainSetOff".
+    cg_source_setoff_total: dict = field(default_factory=dict)
+    cg_source_loss_remaining: dict = field(default_factory=dict)
 
 
 def _positive(value: Decimal) -> Decimal:
@@ -137,64 +158,80 @@ def compute(cy: CYLAInput) -> CYLAResult:
         if amount > _ZERO:
             entries.append(CylaLossEntry(head, sub_category, amount, setoff, amount - setoff))
 
-    # Intra-head CG loss set-off: STCL (all sub-baskets) before LTCL.
-    # STCL can absorb STCG and then LTCG within CG. Per-basket tracking:
-    # each STCL sub-basket absorbs its own income first, then other STCG
-    # baskets, then LTCG baskets. LTCL absorbs LTCG only.
-    stcg_loss_total = (
-        _loss(cy.stcg20_income) + _loss(cy.stcg30_income)
-        + _loss(cy.stcg_app_income) + _loss(cy.stcg_dtaa_income)
+    # Intra-head CG loss set-off (section 70): each STCL sub-basket absorbs
+    # other STCG buckets, then LTCG buckets; each LTCL sub-basket absorbs
+    # LTCG buckets only. A bucket's own gain/loss are mutually exclusive by
+    # construction (max(0, x) and max(0, -x) can never both be nonzero), so
+    # there is no "self-setoff" case -- every absorption is into a
+    # different bucket. Tracked here as a full source-bucket x
+    # target-bucket matrix (not just aggregate totals) because the
+    # official form's own Schedule CG "Table E" (`CurrYrLosses`) discloses
+    # exactly this detail, per bucket pair. When more than one loss
+    # sub-basket is nonzero at once, sources are processed in the same
+    # fixed bucket order as targets below -- a deterministic convention
+    # this engine must pick somewhere, since neither the buckets' own sign
+    # nor the statute dictates which specific loss source gets priority
+    # access to shared target capacity when it's insufficient for all
+    # sources (mirrors the FIFO convention already used for AMT credit
+    # utilization). This waterfall is associative in the AGGREGATE: the
+    # final remaining amount in each TARGET bucket is the same regardless
+    # of source-processing order (only the per-source attribution differs),
+    # so this refactor changes no existing aggregate/remaining value below.
+    _STCG_ORDER = ("stcg20", "stcg30", "stcg_app", "stcg_dtaa")
+    _LTCG_ORDER = ("ltcg125", "ltcg_dtaa")
+    cg_income_raw = {
+        "stcg20": cy.stcg20_income, "stcg30": cy.stcg30_income,
+        "stcg_app": cy.stcg_app_income, "stcg_dtaa": cy.stcg_dtaa_income,
+        "ltcg125": cy.ltcg125_income, "ltcg_dtaa": cy.ltcg_dtaa_income,
+    }
+    cg_gross_income = {name: _positive(value) for name, value in cg_income_raw.items()}
+    cg_gross_loss = {name: _loss(value) for name, value in cg_income_raw.items()}
+    cg_pool = dict(cg_gross_income)
+    cg_setoff_matrix: dict = {}
+
+    def _absorb_cg(source: str, targets: tuple) -> None:
+        remaining = cg_gross_loss[source]
+        if remaining <= _ZERO:
+            return
+        for target in targets:
+            if target == source:
+                continue
+            used = min(remaining, cg_pool[target])
+            if used > _ZERO:
+                cg_pool[target] -= used
+                cg_setoff_matrix[(source, target)] = used
+                remaining -= used
+            if remaining <= _ZERO:
+                break
+
+    for source in _STCG_ORDER:
+        _absorb_cg(source, _STCG_ORDER + _LTCG_ORDER)
+    for source in _LTCG_ORDER:
+        _absorb_cg(source, _LTCG_ORDER)
+
+    cg_intra_head_remaining = dict(cg_pool)
+    cg_source_setoff_total = {
+        source: sum((amt for (src, _tgt), amt in cg_setoff_matrix.items() if src == source), _ZERO)
+        for source in _STCG_ORDER + _LTCG_ORDER
+    }
+    cg_source_loss_remaining = {
+        source: cg_gross_loss[source] - cg_source_setoff_total[source]
+        for source in _STCG_ORDER + _LTCG_ORDER
+    }
+
+    stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool = (
+        cg_pool["stcg20"], cg_pool["stcg30"], cg_pool["stcg_app"], cg_pool["stcg_dtaa"]
     )
-    # Track per-basket STCL
-    stcl_20 = _loss(cy.stcg20_income)
-    stcl_30 = _loss(cy.stcg30_income)
-    stcl_app = _loss(cy.stcg_app_income)
-    stcl_dtaa = _loss(cy.stcg_dtaa_income)
+    ltcg125_pool, ltcg_dtaa_pool = cg_pool["ltcg125"], cg_pool["ltcg_dtaa"]
 
-    # Absorb own basket first
-    absorbed_20 = min(stcl_20, stcg20_pool); stcg20_pool -= absorbed_20; stcl_20 -= absorbed_20
-    absorbed_30 = min(stcl_30, stcg30_pool); stcg30_pool -= absorbed_30; stcl_30 -= absorbed_30
-    absorbed_app = min(stcl_app, stcg_app_pool); stcg_app_pool -= absorbed_app; stcl_app -= absorbed_app
-    absorbed_dtaa = min(stcl_dtaa, stcg_dtaa_pool); stcg_dtaa_pool -= absorbed_dtaa; stcl_dtaa -= absorbed_dtaa
-
-    # Cross-absorb STCL into other STCG baskets
-    ltcl_125 = _loss(cy.ltcg125_income)
-    ltcl_dtaa = _loss(cy.ltcg_dtaa_income)
-    remaining_stcl = stcl_20 + stcl_30 + stcl_app + stcl_dtaa
-    stcg_baskets = [stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool]
-    for i in range(len(stcg_baskets)):
-        used = min(remaining_stcl, stcg_baskets[i])
-        stcg_baskets[i] -= used
-        remaining_stcl -= used
-        if remaining_stcl <= _ZERO:
-            break
-    stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool = stcg_baskets
-
-    # STCL absorbs LTCG
-    ltcg_baskets = [ltcg125_pool, ltcg_dtaa_pool]
-    for i in range(len(ltcg_baskets)):
-        used = min(remaining_stcl, ltcg_baskets[i])
-        ltcg_baskets[i] -= used
-        remaining_stcl -= used
-        if remaining_stcl <= _ZERO:
-            break
-    ltcg125_pool, ltcg_dtaa_pool = ltcg_baskets
-
-    total_stcg_setoff = stcg_loss_total - remaining_stcl
+    stcg_loss_total = cg_gross_loss["stcg20"] + cg_gross_loss["stcg30"] + cg_gross_loss["stcg_app"] + cg_gross_loss["stcg_dtaa"]
+    total_stcg_setoff = sum((cg_source_setoff_total[s] for s in _STCG_ORDER), _ZERO)
     # Record aggregate STCG entry; per-basket breakdown is available via result fields
     if stcg_loss_total > _ZERO:
         record("STCG", "STCG", stcg_loss_total, total_stcg_setoff)
 
-    # LTCL absorbs LTCG only — cross-basket within LTCG
-    ltcl_total = ltcl_125 + ltcl_dtaa
-    ltcl_remaining = ltcl_total
-    ltcg125_absorbed = min(ltcl_remaining, ltcg125_pool)
-    ltcg125_pool -= ltcg125_absorbed
-    ltcl_remaining -= ltcg125_absorbed
-    ltcg_dtaa_absorbed = min(ltcl_remaining, ltcg_dtaa_pool)
-    ltcg_dtaa_pool -= ltcg_dtaa_absorbed
-    ltcl_remaining -= ltcg_dtaa_absorbed
-    total_ltcg_setoff = ltcl_total - ltcl_remaining
+    ltcl_total = cg_gross_loss["ltcg125"] + cg_gross_loss["ltcg_dtaa"]
+    total_ltcg_setoff = sum((cg_source_setoff_total[s] for s in _LTCG_ORDER), _ZERO)
     if ltcl_total > _ZERO:
         record("LTCG", "LTCG", ltcl_total, total_ltcg_setoff)
 
@@ -280,4 +317,10 @@ def compute(cy: CYLAInput) -> CYLAResult:
         stcg_dtaa_remaining=stcg_dtaa_pool,
         ltcg125_remaining=ltcg125_pool,
         ltcg_dtaa_remaining=ltcg_dtaa_pool,
+        cg_gross_income=cg_gross_income,
+        cg_gross_loss=cg_gross_loss,
+        cg_setoff_matrix=cg_setoff_matrix,
+        cg_intra_head_remaining=cg_intra_head_remaining,
+        cg_source_setoff_total=cg_source_setoff_total,
+        cg_source_loss_remaining=cg_source_loss_remaining,
     )

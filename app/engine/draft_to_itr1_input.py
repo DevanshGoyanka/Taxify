@@ -189,7 +189,14 @@ def _map_salary(
     arrear_salary = sum((e.arrearSalary for e in employers), Decimal("0"))
     perquisites = sum((e.perquisites for e in employers), Decimal("0"))
     profits_in_lieu = sum((e.profitsInLieu for e in employers), Decimal("0"))
-    # Uniform allowance's Section 10(14)(i)/Rule 2BB exemption is "actual
+    income_notified_89a = sum((e.incomeNotified89A for e in employers), Decimal("0"))
+    income_notified_other_89a = sum((e.incomeNotifiedOther89A for e in employers), Decimal("0"))
+    income_notified_prior_year_89a = sum((e.incomeNotifiedPriorYear89A for e in employers), Decimal("0"))
+    income_notified_89a_country_rows = [
+        dict(row) for e in employers for row in e.incomeNotified89ACountryRows
+    ]
+    relief_89a = Decimal("0")
+        # Uniform allowance's Section 10(14)(i)/Rule 2BB exemption is "actual
     # expenditure incurred," not a fixed statutory rate. The received amount
     # always reaches taxable income below (uniform_allowance folds into
     # section_17_1, same as other_taxable_salary); the exemption itself is
@@ -323,6 +330,21 @@ def _map_salary(
     sec10_6_embassy_exempt = Decimal("0")
     sec10_7_foreign_allowance = Decimal("0")
     sec10_10cc_perquisite_tax = Decimal("0")
+    # The SAME row editor also offers six further codes with no dedicated
+    # ceiling formula anywhere in this engine (EIC judges' exempt income,
+    # 10(17) MP/MLA/MLC allowance, and the generic 10(14)(i)/10(14)(ii)
+    # "not otherwise entered" rows plus their two 115BAC/new-regime
+    # variants) -- these were previously captured on the frontend, disclosed
+    # in the filed JSON (once wired), but never actually subtracted from
+    # taxable salary anywhere, so the taxpayer was taxed on income the Act
+    # exempts. None of the six have a statutory ceiling this engine models
+    # (unlike CEA/hostel/uniform, which share the 10(14) family but ARE
+    # capped elsewhere via sec10_14i_prescribed_allowance/
+    # sec10_14ii_personal_allowance -- do not conflate the two: those two
+    # fields are already reserved for CEA/hostel, not this generic bucket),
+    # so -- matching sec10_6/7/10cc's own direct pass-through treatment --
+    # the full disclosed amount is the exempt amount.
+    other_section10_exempt = Decimal("0")
     for e in employers:
         for row in e.section10ExemptionRows:
             if row.natureCode == "10(6)":
@@ -331,6 +353,11 @@ def _map_salary(
                 sec10_7_foreign_allowance += row.amount
             elif row.natureCode == "10(10CC)":
                 sec10_10cc_perquisite_tax += row.amount
+            elif row.natureCode in (
+                "EIC", "10(17)", "10(14)(i)", "10(14)(ii)",
+                "10(14)(i)(115BAC)", "10(14)(ii)(115BAC)",
+            ):
+                other_section10_exempt += row.amount
 
     # standard_deduction_claimed: the engine computes the actual Section
     # 16(ia) standard deduction itself (schedules/salary.py); this field
@@ -346,6 +373,11 @@ def _map_salary(
         gross_salary=section_17_1,
         perquisites_value=perquisites,
         profits_in_lieu_of_salary=profits_in_lieu,
+        income_notified_89a=income_notified_89a,
+        income_notified_other_89a=income_notified_other_89a,
+        income_notified_prior_year_89a=income_notified_prior_year_89a,
+        income_notified_89a_country_rows=income_notified_89a_country_rows,
+        relief_89a=relief_89a,
         hra_exempt_amount=hra_exempt,
         lta_exempt_amount=lta_exempt,
         lta_amount_received=lta_received,
@@ -367,6 +399,7 @@ def _map_salary(
         sec10_6_embassy_exempt=sec10_6_embassy_exempt,
         sec10_7_foreign_allowance=sec10_7_foreign_allowance,
         sec10_10cc_perquisite_tax=sec10_10cc_perquisite_tax,
+        other_section10_exempt=other_section10_exempt,
         is_disabled_employee=is_disabled_employee,
         number_of_children=number_of_children,
         average_monthly_salary=average_monthly_salary,
@@ -783,6 +816,8 @@ def _map_disability_schedules(via: ChapterVIA) -> tuple[Schedule80DD | None, Sch
             dependent_aadhaar=via.section80DDDependentAadhaar or None,
             form_10ia_ack_number=via.section80DDForm10IA.acknowledgementNumber or None,
             udid_number=via.section80DDUDIDNumber or None,
+            form_10ia_filing_date=_to_date(via.section80DDForm10IA.filingDate),
+            form_ack_num_11a=via.section80DDForm10IA.formAckNum11A or None,
         )
     schedule_80u = None
     if via.section80U > 0:
@@ -792,6 +827,8 @@ def _map_disability_schedules(via: ChapterVIA) -> tuple[Schedule80DD | None, Sch
             deduction_amount=via.section80U,
             form_10ia_ack_number=via.section80UForm10IA.acknowledgementNumber or None,
             udid_number=via.section80UUDIDNumber or None,
+            form_10ia_filing_date=_to_date(via.section80UForm10IA.filingDate),
+            form_ack_num_11a=via.section80UForm10IA.formAckNum11A or None,
         )
     return schedule_80dd, schedule_80u
 

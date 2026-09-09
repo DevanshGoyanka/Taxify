@@ -56,6 +56,8 @@ class SalaryResult:
     professional_tax: Decimal = Decimal("0")
     deductions_u16: Decimal = Decimal("0")
     income_chargeable: Decimal = Decimal("0")
+    salary_89a_relief: Decimal = Decimal("0")
+    exempt_allowances_excluding_89a: Decimal = Decimal("0")
     # Per-exemption breakdown for ITD JSON / display.
     gratuity_exempt: Decimal = Decimal("0")
     leave_encashment_exempt: Decimal = Decimal("0")
@@ -207,7 +209,9 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
     # income entirely rather than merely losing its exemption.
     gross = (
         input_data.gross_salary + input_data.perquisites_value
-        + input_data.profits_in_lieu_of_salary + input_data.gratuity_received
+        + input_data.profits_in_lieu_of_salary + input_data.income_notified_89a
+        + input_data.income_notified_other_89a + input_data.income_notified_prior_year_89a
+        + input_data.gratuity_received
         + input_data.commuted_pension_received + input_data.leave_encashment_received
         + input_data.vrs_compensation + input_data.retrenchment_compensation
     )
@@ -247,6 +251,9 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         input_data.uniform_allowance_actual_expenditure,
     )
 
+    section_89a_relief = min(input_data.income_notified_prior_year_89a, gross)
+    # The prior-year amount is an exemption in the salary schedule. It must
+    # not also be subtracted from gross a second time by the serializer.
     exempt_allowances = sum((
         hra_exempt,
         lta_exempt,
@@ -258,10 +265,12 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         input_data.sec10_6_embassy_exempt,
         input_data.sec10_7_foreign_allowance,
         input_data.sec10_10cc_perquisite_tax,
+        input_data.other_section10_exempt,
         transport_exempt,
         children_education_exempt,
         hostel_exempt,
         uniform_allowance_exempt,
+        section_89a_relief,
     ), Decimal("0"))
 
     if regime == TaxRegime.OLD:
@@ -331,6 +340,8 @@ def compute(input_data: Optional[SalaryIncome], regime: TaxRegime) -> SalaryResu
         professional_tax=prof_tax,
         deductions_u16=std_ded + ent_allowance + prof_tax,
         income_chargeable=max(Decimal("0"), chargeable),
+        salary_89a_relief=section_89a_relief,
+        exempt_allowances_excluding_89a=exempt_allowances - section_89a_relief,
         gratuity_exempt=gratuity_exempt,
         leave_encashment_exempt=leave_encashment_exempt,
         vrs_exempt=vrs_exempt,

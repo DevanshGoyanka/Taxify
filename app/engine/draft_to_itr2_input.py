@@ -80,6 +80,7 @@ from app.schemas.itr2 import (
     ITR2Input,
     LossHead as ITR2LossHead,
     OS89ACountryEntry,
+    OSAccumulatedPFEntry,
     OSDeductions,
     OSDividendEntry,
     OSDtaaEntry,
@@ -103,8 +104,13 @@ from app.schemas.return_draft import ReturnDraft
 # Shared form-agnostic helpers — one implementation of each shared head.
 from app.engine.draft_to_itr1_input import (
     _age_bracket_from_dob,
+    _map_80d_schedule,
+    _map_80gga,
+    _map_80ggc,
     _map_bank_accounts,
+    _map_deduction_loans,
     _map_deductions,
+    _map_disability_schedules,
     _map_house_properties,
     _map_other_sources,
     _map_salary,
@@ -143,22 +149,17 @@ def _map_residential_status(value: str) -> ITR2ResidentialStatus:
 # Capital gains — full Schedule CG (112A/115AD scrips, land/building, VDA)
 # ---------------------------------------------------------------------------
 
-def _map_112a_scrips(draft: ReturnDraft) -> tuple[list[CG112AScrip], int]:
-    """Map Schedule 112A + 115AD scrips into ``CG112AScrip`` rows.
-
-    The calculator unions ``cg_transactions`` and ``cg_112a_scrips`` before
-    applying the ₹1.25L 112A threshold, so this list — not a duplicate
-    presence in ``cg_transactions`` — is the 112A/115AD source of truth.
+def _map_112a_scrip_rows(rows) -> tuple[list[CG112AScrip], int]:
+    """Map one Schedule-112A-shaped row list into ``CG112AScrip`` rows.
 
     Returns:
         ``(scrips, skipped_count)`` — scrips missing ``dateOfTransfer`` are
         excluded rather than assigned a fabricated date; ``skipped_count``
         surfaces how many so the gap is visible, not silent.
     """
-    schedule = draft.capitalGainsSchedule
     scrips: list[CG112AScrip] = []
     skipped = 0
-    for row in (*schedule.schedule112A, *schedule.schedule115AD):
+    for row in rows:
         transfer_date = _to_date(row.dateOfTransfer)
         if transfer_date is None:
             skipped += 1
@@ -180,6 +181,26 @@ def _map_112a_scrips(draft: ReturnDraft) -> tuple[list[CG112AScrip], int]:
             stt_paid_on_transfer=True,
         ))
     return scrips, skipped
+
+
+def _map_112a_scrips(draft: ReturnDraft) -> tuple[list[CG112AScrip], list[CG112AScrip], int]:
+    """Map Schedule 112A and Schedule 115AD scrips into ``CG112AScrip`` rows,
+    kept as two separate lists (not unioned) so the ITD builder can route
+    each to its own official schedule (``Schedule112A`` for residents,
+    ``Schedule115AD`` for an FII/FPI assessee's proviso rows) — they share
+    an identical row shape but are two distinct top-level schedules in the
+    official JSON. The calculator still unions both for tax computation
+    (see ``app/engine/calculators/itr2.py``'s 112A merge point), so this
+    split only affects disclosure routing, not the taxable amount.
+
+    Returns:
+        ``(scrips_112a, scrips_115ad, skipped_count)`` — the combined count
+        of rows from both sources skipped for missing ``dateOfTransfer``.
+    """
+    schedule = draft.capitalGainsSchedule
+    scrips_112a, skipped_112a = _map_112a_scrip_rows(schedule.schedule112A)
+    scrips_115ad, skipped_115ad = _map_112a_scrip_rows(schedule.schedule115AD)
+    return scrips_112a, scrips_115ad, skipped_112a + skipped_115ad
 
 
 def _map_immovable_gains(draft: ReturnDraft) -> list[CGTransaction]:
@@ -537,19 +558,33 @@ def _map_os_winnings_to_si(winnings: list) -> list[ITR2ScheduleSIEntry]:
     ]
 
 
-def _map_os_accumulated_pf(entries: list) -> tuple[Optional[ITR2ScheduleSIEntry], Decimal, Decimal]:
-    """Aggregate accumulated-PF rows into a section-111 SI entry + totals.
+def _map_os_accumulated_pf(
+    entries: list,
+) -> tuple[Optional[ITR2ScheduleSIEntry], Decimal, Decimal, list[OSAccumulatedPFEntry]]:
+    """Aggregate accumulated-PF rows into a section-111 SI entry + totals +
+    the real per-assessment-year detail rows.
 
     Section 111 income is taxed at slab rate (``compute_111`` is a 0%-rate
     Schedule-SI disclosure entry, not a flat special rate) but must still be
     disclosed in Schedule SI and in ``TaxAccumulatedBalRecPF``'s
-    ``TotalIncomeBenefit``/``TotalTaxBenefit`` pair. Returns
-    ``(si_entry_or_none, total_income_benefit, total_tax_benefit)``.
+    ``TotalIncomeBenefit``/``TotalTaxBenefit`` pair -- and, per the official
+    schema's own ``TaxAccmltdBalRecPFDtls`` sub-table, its per-year
+    breakdown too (previously collapsed to the aggregate totals alone, even
+    when the user entered full per-year detail). Returns
+    ``(si_entry_or_none, total_income_benefit, total_tax_benefit,
+    per_year_entries)``.
     """
-    total_income = sum((e.incomeBenefit for e in entries or []), _ZERO)
-    total_tax = sum((e.taxBenefit for e in entries or []), _ZERO)
+    real_entries = [e for e in (entries or []) if e.incomeBenefit > 0 or e.taxBenefit > 0]
+    total_income = sum((e.incomeBenefit for e in real_entries), _ZERO)
+    total_tax = sum((e.taxBenefit for e in real_entries), _ZERO)
     si_entry = ITR2ScheduleSIEntry(section="111", gross_income=total_income) if total_income > 0 else None
-    return si_entry, total_income, total_tax
+    per_year_entries = [
+        OSAccumulatedPFEntry(
+            assessment_year=e.assessmentYear, income_benefit=e.incomeBenefit, tax_benefit=e.taxBenefit,
+        )
+        for e in real_entries
+    ]
+    return si_entry, total_income, total_tax, per_year_entries
 
 
 def _compute_os_gifts(gifts: list) -> tuple[Decimal, Optional[OSGiftBreakdown]]:
@@ -906,16 +941,77 @@ def draft_to_itr2_input(
     # own deductions; pass-through as pure disclosure), so their gross
     # amounts must be backed out here to avoid taxing machinery-rent income
     # twice: once undeducted via this generic aggregate, once (correctly,
-    # net of deductions) via os_machinery_plant_rent.
+    # net of deductions) via os_machinery_plant_rent. The remaining generic
+    # "any other income" rows are ALSO backed out here, for the identical
+    # reason: they are separately disclosed (and, per this fix, separately
+    # taxed) via `os_other_income_entries`/`AnyOtherIncome` below -- summing
+    # them into this generic aggregate too would double-tax them.
     os_machinery_plant_rent = _map_os_machinery_plant_rent(draft)
     os_pass_through_income = _map_os_pass_through_income(draft)
-    if os_machinery_plant_rent or os_pass_through_income:
+    os_other_income_entries = _map_os_other_income_entries(draft)
+    os_other_income_entries_total = sum((e.amount for e in os_other_income_entries), _ZERO)
+    # Section 10(11)/10(12) first/second-proviso PF interest and NSC/bonds/
+    # securities/miscellaneous interest (`draft.otherSources.interest` rows,
+    # not the `otherIncome` rows the three fields above come from) are ALSO
+    # folded into `other_interest`/`other_income` by `_map_other_sources()`'s
+    # own generic "anything that isn't savings/FD/refund" bucket -- back
+    # them out here too, for the identical double-counting reason, now that
+    # they're separately added back via their own dedicated ITR2Input fields
+    # in the calculator (see calculators/itr2.py's os_pf_interest_10_11_*/
+    # os_interest_from_others addition).
+    (
+        os_pf_interest_10_11_first, os_pf_interest_10_11_second,
+        os_pf_interest_10_12_first, os_pf_interest_10_12_second,
+    ) = _map_os_pf_interest_provisos(draft)
+    os_interest_from_others = _map_os_interest_from_others(draft)
+    if (
+        os_machinery_plant_rent or os_pass_through_income or os_other_income_entries_total
+        or os_pf_interest_10_11_first or os_pf_interest_10_11_second
+        or os_pf_interest_10_12_first or os_pf_interest_10_12_second
+        or os_interest_from_others
+    ):
         os_input = os_input.model_copy(update={
             "other_income": max(
-                _ZERO, os_input.other_income - os_machinery_plant_rent - os_pass_through_income
+                _ZERO,
+                os_input.other_income
+                - os_machinery_plant_rent
+                - os_pass_through_income
+                - os_other_income_entries_total
+                - os_pf_interest_10_11_first
+                - os_pf_interest_10_11_second
+                - os_pf_interest_10_12_first
+                - os_pf_interest_10_12_second
+                - os_interest_from_others,
             )
         })
     ded_input, structured_80g, schedule_80c_entries = _map_deductions(draft, tax_regime)
+    # Structured Chapter VI-A detail schedules (80D per-insurer policy rows,
+    # 80GGA/80GGC per-row donation/contribution detail, 80DD/80U disability
+    # detail) -- previously never mapped for ITR-2 at all, unlike ITR-1/4
+    # which already wire these same shared mapper functions. Section 80G's
+    # own per-donation detail needs no separate mapping call here: it
+    # already flows through `ded_input.donations_80g` via `_map_deductions()`.
+    via = draft.deductions.chapterVIA
+    schedule_80d = _map_80d_schedule(draft.deductions.section80D) if tax_regime == TaxRegime.OLD else None
+    schedule_80gga = _map_80gga(draft) if tax_regime == TaxRegime.OLD else None
+    schedule_80ggc = _map_80ggc(draft) if tax_regime == TaxRegime.OLD else None
+    schedule_80dd, schedule_80u = (
+        _map_disability_schedules(via) if tax_regime == TaxRegime.OLD else (None, None)
+    )
+    # Section 80E/80EE/80EEA/80EEB per-loan rows -- five more official
+    # Chapter VI-A detail schedules (Schedule80C is already captured above
+    # as `schedule_80c_entries`, just never passed to ITR2Input until now)
+    # that were never wired for ITR-2 at all, unlike ITR-1/4 which already
+    # use this same shared mapper.
+    if tax_regime == TaxRegime.OLD:
+        schedule_80e_entries, loan_details_80ee_list, loan_details_80eea_list, loan_details_80eeb_list = (
+            _map_deduction_loans(draft)
+        )
+    else:
+        schedule_80e_entries, loan_details_80ee_list, loan_details_80eea_list, loan_details_80eeb_list = [], [], [], []
+    property_stamp_duty_value_80eea = (
+        draft.deductions.loans.section80EEAStampDutyValue if loan_details_80eea_list else None
+    )
 
     tds1, tds2, tds_salary, tds_interest, tds_other, claimed_tds, tds_issues = (
         _map_tds(draft.taxes.tds)
@@ -929,14 +1025,14 @@ def draft_to_itr2_input(
 
     # ITR-2-specific: full Schedule CG, VDA, brought-forward losses, SI,
     # agricultural/exempt income, FSI/TR/FA/SPI/PTI/AMT.
-    cg_112a_scrips, scrips_skipped = _map_112a_scrips(draft)
+    cg_112a_scrips, cg_115ad_scrips, scrips_skipped = _map_112a_scrips(draft)
     cg_transactions = _map_immovable_gains(draft)
     vda_transactions = _map_vda_transactions(draft)
     bf_losses = _map_bf_losses(draft)
     si_entries = _map_si_entries(draft)
     si_entries += _map_os_winnings_to_si(draft.otherSources.winnings)
-    pf_si_entry, os_pf_income_benefit, os_pf_tax_benefit = _map_os_accumulated_pf(
-        draft.otherSources.accumulatedPf
+    pf_si_entry, os_pf_income_benefit, os_pf_tax_benefit, os_pf_accumulated_entries = (
+        _map_os_accumulated_pf(draft.otherSources.accumulatedPf)
     )
     if pf_si_entry is not None:
         si_entries.append(pf_si_entry)
@@ -957,17 +1053,14 @@ def draft_to_itr2_input(
         else:
             si_entries.append(ITR2ScheduleSIEntry(section="115BBE", gross_income=unexplained_total))
     os_section_89a = _map_os_section_89a(draft)
-    os_other_income_entries = _map_os_other_income_entries(draft)
     os_dividend_entries = _map_os_dividend_entries(draft)
     os_dtaa_entries = _map_os_dtaa_entries(draft)
     os_dtaa_aggregate = draft.otherSources.dtaaAggregates.totalAmountTaxUsDtaa
     os_deductions = _map_os_deductions(draft)
     os_race_horse = _map_os_race_horse(draft.otherSources.winnings)
-    (
-        os_pf_interest_10_11_first, os_pf_interest_10_11_second,
-        os_pf_interest_10_12_first, os_pf_interest_10_12_second,
-    ) = _map_os_pf_interest_provisos(draft)
-    os_interest_from_others = _map_os_interest_from_others(draft)
+    # os_pf_interest_10_11_first/second, os_pf_interest_10_12_first/second,
+    # and os_interest_from_others are already computed above (needed there
+    # to back them out of the generic other_income aggregate).
     os_special_rate_entries = _map_os_special_rate_entries(draft)
     os_lottery_quarters, os_gaming_quarters = _map_os_winning_quarters(draft.otherSources.winnings)
     agricultural_income = _map_agricultural_income(draft)
@@ -994,6 +1087,7 @@ def draft_to_itr2_input(
         os_gift_breakdown=os_gift_breakdown,
         os_pf_income_benefit=os_pf_income_benefit,
         os_pf_tax_benefit=os_pf_tax_benefit,
+        os_pf_accumulated_entries=os_pf_accumulated_entries,
         os_unexplained_income=os_unexplained_income,
         os_section_89a=os_section_89a,
         os_other_income_entries=os_other_income_entries,
@@ -1014,6 +1108,7 @@ def draft_to_itr2_input(
         os_pass_through_income=os_pass_through_income,
         cg_transactions=cg_transactions,
         cg_112a_scrips=cg_112a_scrips,
+        cg_115ad_scrips=cg_115ad_scrips,
         vda_transactions=vda_transactions,
         bf_losses=bf_losses,
         si_entries=si_entries,
@@ -1029,6 +1124,17 @@ def draft_to_itr2_input(
         schedule_5a=schedule_5a,
         esop_deferrals=esop_deferrals,
         deductions_chapter6a=ded_input,
+        schedule_80d=schedule_80d,
+        schedule_80gga=schedule_80gga,
+        schedule_80ggc=schedule_80ggc,
+        schedule_80dd=schedule_80dd,
+        schedule_80u=schedule_80u,
+        schedule_80c_entries=schedule_80c_entries,
+        schedule_80e_entries=schedule_80e_entries,
+        loan_details_80ee_list=loan_details_80ee_list,
+        loan_details_80eea_list=loan_details_80eea_list,
+        loan_details_80eeb_list=loan_details_80eeb_list,
+        property_stamp_duty_value_80eea=property_stamp_duty_value_80eea,
         tds1_entries=tds1,
         tds2_entries=tds2,
         tds3_entries=tds3_entries,

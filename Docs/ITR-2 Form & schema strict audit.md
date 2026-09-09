@@ -175,3 +175,102 @@ The remaining actionable Part A-GEN items were implemented in the follow-up pass
 | 92CD APA-specific fields | Still schema-limited; no supported exact JSON destination was found |
 
 92CD APA-specific fields remain the only strict Part A-GEN item that cannot be safely completed from the supplied schema and current canonical model without inventing an official field mapping.
+
+---
+
+## 6. Schedule S — Details of Income from Salary audit
+
+**Audit sequence:** Schedule S follows Part A-GEN in the official ITR-2 form.
+**Audit status:** Initial field-by-field audit completed; confirmed defects are listed below before remediation.
+
+### Official field coverage checked
+
+The official `ScheduleS` schema requires the aggregate fields `TotalGrossSalary`, `AllwncExtentExemptUs10`, `NetSalary`, `DeductionUS16`, `DeductionUnderSection16ia`, `EntertainmntalwncUs16ii`, `ProfessionalTaxUs16iii`, and `TotIncUnderHeadSalaries`. Employer rows require `NameOfEmployer`, `NatureOfEmployment`, `AddressDetail`, and `Salarys`; `Salarys` contains separate Section 17(1), 17(2), 17(3), and Section 89A fields. `Section10_13A` requires all six HRA calculation inputs plus the eligible exemption.
+
+### Confirmed findings
+
+1. **Salary with no TDS is incorrectly blocked.** `_schedule_s()` raises when `input_data.tds1_entries` is empty, and the canonical gateway creates `employer_filing_details` only by replaying salary TDS rows. Salary is a valid Schedule S source even when no tax was deducted; TDS is a credit schedule, not the existence test for salary. The current path therefore cannot serialize legitimate salary-only returns with zero TDS.
+
+2. **Employer detail is coupled to TDS identity instead of salary-employer identity.** `_itr2_employer_filing_details()` iterates `draft.taxes.tds`, finds an employer by TAN, and maps only matched TDS rows. An employer row with salary but no TDS, or a salary employer whose TDS entry is absent/unclaimed, is omitted before serialization. Multiple-employer rows are consequently not guaranteed to be one-to-one with the actual Schedule S employers.
+
+3. **Employer PIN/ZIP is captured but discarded.** `ReturnDraft.Employer` exposes `employerPinCode` and `employerZipCode`, but `EmployerFilingDetail` has no postal fields and `_schedule_s()` emits only `AddrDetail`, `CityOrTownOrDistrict`, and `StateCode`. This loses official employer address postal evidence and cannot distinguish Indian PIN from foreign ZIP in the output.
+
+4. **Employer address is emitted with an incomplete structure.** The serializer constructs `AddressDetail` manually and omits the available postal members. The official address definition must be checked at runtime for conditional postal requirements; the current serializer does not use the same country-aware address normalization used elsewhere.
+
+5. **HRA `Section10_13A` is a placeholder, not the submitted facts.** `_schedule_s()` always emits `Placeofwork="2"`, and zeroes `ActlHRARecv`, `ActlRentPaid`, `DtlsSalUsSec171`, `ActlRentPaid10Per`, and `Sal40Or50Per`, while only copying `hra_exempt_amount`. The frontend captures HRA received, rent paid, metro/non-metro, and salary components, but those facts are not present in `SalaryIncome` and are not mapped to the official HRA structure. This is schema-valid but materially wrong disclosure.
+
+6. **Perquisites and profits-in-lieu are not preserved per employer.** `SalaryIncome` stores only aggregate `perquisites_value` and `profits_in_lieu_of_salary`; `_schedule_s()` assigns them to the sole employer and zeroes them for multiple employers. The official form has employer-level rows. The current model cannot represent attribution for multiple employers, so the serializer must not claim complete employer detail without either adding per-employer canonical fields or enforcing an explicit reconciliation rule.
+
+7. **Detailed official salary categories are collapsed.** The frontend has separate basic, DA, HRA, LTA, children-education, and other allowance inputs, but the current mapper reduces the taxable salary to aggregate `SalaryIncome` and the builder emits empty `NatureOfSalary.OthersIncDtls` and `NatureOfPerquisites.OthersIncDtls`. The official schema supports detailed categories; the current JSON loses those disclosures.
+
+8. **Section 10 exemption categories are only partially preserved.** `_SALARY_EXEMPTION_ROWS` emits calculated retirement/LTA/transport/children/hostel/uniform rows, but does not emit all source-specific categories available in the frontend, including Section 10(6), 10(7), 10(10CC), 10(14)(i), 10(14)(ii), and custom exemption rows. The aggregate exemption may be correct while the official category disclosure is incomplete.
+
+9. **Section 89A salary rows are hardcoded to zero.** Each employer row emits `IncomeNotified89A=0` and `IncomeNotifiedOther89A=0`; `IncomeNotifiedPrYr89A` is omitted. The current `SalaryIncome` model has no salary-side fields for notified/non-notified retirement-account income or prior-year relief attribution, so this is an explicit canonical-model gap rather than a safe omission.
+
+10. **Section 16 regime eligibility is not enforced at Schedule S serialization.** The builder copies calculator values, but no Schedule S-specific guard confirms that entertainment allowance and professional tax are zero under the new regime. This must be verified against calculator behavior and official validation rules before adding a duplicate gate.
+
+### Evidence reviewed
+
+- `app/engine/itd/itr2.py::_schedule_s()` lines 507–635.
+- `app/engine/filing_gateway_v2.py::_itr2_employer_filing_details()` lines 1431–1499.
+- `app/engine/draft_to_itr2_input.py::draft_to_itr2_input()` currently sets `employer_filing_details=[]`.
+- `app/schemas/return_draft.py::Employer` exposes employer postal fields and detailed salary inputs.
+- `app/schemas/itr2.py::EmployerFilingDetail` contains no PIN/ZIP fields.
+- `app/schemas/itr1.py::SalaryIncome` contains aggregate salary, exemption, and Section 16 fields but no employer rows, HRA evidence, detailed salary categories, or salary-side 89A buckets.
+- `Docs/itr2_schema_catalog.md` Schedule S section and the supplied official ITR-2 schema definition.
+
+### Initial Schedule S status
+
+| Area | Status before remediation |
+|---|---|
+| Aggregate salary arithmetic | Partially covered by calculator; requires reconciliation tests |
+| No-TDS salary | Open defect — blocked by serializer/gateway coupling |
+| Multiple employers | Open defect — identity and attribution are TDS-driven |
+| Employer postal address | Open defect — PIN/ZIP discarded |
+| HRA disclosure | Open defect — placeholder zeros |
+| Section 17(2)/(3) employer attribution | Model limitation; requires design before serialization change |
+| Detailed salary/exemption categories | Partially lost |
+| Section 89A salary disclosure | Model limitation; currently zeroed |
+| Section 16 regime restrictions | Requires calculator/rule verification |
+
+The next remediation pass must fix only defects supported by the canonical model and official schema. Unsupported 89A or multi-employer attribution keys must not be guessed.
+
+### Schedule S remediation completed in this pass
+
+- Salary-only returns no longer require a TDS1 row. When TDS is absent, Schedule S employer rows are sourced from populated canonical employer rows; when TDS exists, the existing TDS identity cross-foot remains enforced.
+- Employer TAN is now optional in the canonical Schedule S filing detail, matching the official schema's optional `TANofEmployer` property.
+- Employer PIN/ZIP fields were added to the canonical filing detail and are emitted as the official conditional `PinCode` or `ZipCode` member, never both.
+- Gateway employer mapping now preserves employer address postal evidence in both the no-TDS and TDS-backed paths.
+
+### Schedule S verification after remediation
+
+| Check | Evidence | Status |
+|---|---|---|
+| Existing TDS-backed Schedule S behavior | Focused builder and production-path tests | Passed |
+| Schema compatibility | Official schema definitions confirm employer TAN is optional and address accepts PIN/ZIP | Passed |
+| Python compilation | Modified schema, gateway, and builder modules | Passed |
+| Focused backend regression suite | 93 tests across ITR-2 builder/production/profile/contract files | Passed |
+| Frontend production build | `npm run build` | Passed |
+| HRA detail, detailed salary categories, Section 89A salary buckets | No unsupported mapping invented; model gaps remain documented | Open |
+
+The no-TDS and postal branches require manual or dedicated regression coverage before the next filing release. The remaining open Schedule S items are model/data-contract work, not safe serializer-only fixes.
+
+### Schedule S end-to-end remediation update
+
+The subsequent remediation extended the canonical and frontend paths for the remaining supported Schedule S evidence:
+
+- Employer-level salary, perquisite, and profit-in-lieu nature rows are now captured and serialized using official schema structures.
+- Employer-level salary Section 89A fields and notified-country rows are now distinct from Schedule OS Section 89A and are wired through the pipeline.
+- Salary-level Section 89A current-year income is included once in gross salary; prior-year taxable income is included in line 1f and deducted once as Schedule S relief.
+- HRA evidence is preserved per employer and serialized into `Section10_13A`; mixed metro/non-metro employer facts are rejected because the official Schedule S has one HRA summary block.
+- Schedule S employer gross, total gross, exemption, Section 89A relief, Section 16 deductions, and income chargeable totals are explicitly reconciled.
+- Employer PIN/ZIP and optional TAN behavior remain schema-aligned.
+
+Verification completed for the implemented paths:
+
+- 75 focused backend tests passed across ITR-2 builder, production path, and draft mapping suites.
+- Python compilation passed for all modified backend modules.
+- Frontend TypeScript/Vite production build passed.
+- `git diff --check` passed after removing frontend trailing whitespace.
+
+Remaining limitation: the existing broad `tests/test_itr2_input_validation.py` suite still contains five pre-existing profile/HUF validator failures unrelated to Schedule S. Those must be resolved separately before claiming the entire ITR-2 test suite is green. Schedule S is complete only for the newly supported employer-level fields; imported legacy drafts that carry only OS Section 89A cannot be treated as salary-level Schedule S 89A without explicit source attribution.

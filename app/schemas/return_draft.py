@@ -242,6 +242,13 @@ class Employer(Identified):
     employerPinCode: str = Field(default="")
     employerZipCode: str = Field(default="")
     section10ExemptionRows: list[SalaryNatureRow] = Field(default_factory=list)
+    salaryNatureRows: list[SalaryNatureRow] = Field(default_factory=list)
+    perquisiteNatureRows: list[SalaryNatureRow] = Field(default_factory=list)
+    profitInLieuNatureRows: list[SalaryNatureRow] = Field(default_factory=list)
+    incomeNotified89A: Money = Field(default=Decimal("0"))
+    incomeNotifiedOther89A: Money = Field(default=Decimal("0"))
+    incomeNotifiedPriorYear89A: Money = Field(default=Decimal("0"))
+    incomeNotified89ACountryRows: list[dict[str, str | Money]] = Field(default_factory=list)
     basic: Money = Field(default=Decimal("0"))
     da: Money = Field(default=Decimal("0"))
     commission: Money = Field(default=Decimal("0"))
@@ -1498,6 +1505,13 @@ class FilingStatus(_StrictModel):
         description="Section 115H benefit claim — an NRI who becomes "
         "resident may continue special-rate treatment on specified "
         "foreign-exchange investment income. ITR-2 only.",
+    )
+    kartaPan: str = Field(
+        default="",
+        description="PAN of the Karta verifying an HUF return (Verification "
+        "declaration's AssesseeVerPAN pattern requires an individual's own "
+        "PAN, category 'P' — an HUF's own PAN, category 'H', cannot "
+        "satisfy it). Required when the assessee is an HUF. ITR-2 only.",
     )
 
 

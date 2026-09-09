@@ -20,7 +20,7 @@ Disqualifiers (must use ITR-2 or ITR-3 instead):
 
 from decimal import Decimal
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Any
 from datetime import date
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -177,6 +177,11 @@ class SalaryIncome(BaseModel):
         ge=0,
         description="Profits in lieu of salary under Section 17(3)",
     )
+    income_notified_89a: Decimal = Field(default=Decimal("0"), ge=0)
+    income_notified_other_89a: Decimal = Field(default=Decimal("0"), ge=0)
+    income_notified_prior_year_89a: Decimal = Field(default=Decimal("0"), ge=0)
+    income_notified_89a_country_rows: list[dict[str, Any]] = Field(default_factory=list)
+    relief_89a: Decimal = Field(default=Decimal("0"), ge=0)
     hra_exempt_amount: Decimal = Field(
         default=Decimal("0"),
         ge=0,
@@ -252,6 +257,16 @@ class SalaryIncome(BaseModel):
     sec10_10cc_perquisite_tax: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14i_prescribed_allowance: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14ii_personal_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    # Direct pass-through exemption for the remaining Section 10 codes the
+    # employer "Section 10 Exemption" row editor offers (EIC judges' exempt
+    # income, 10(17) MP/MLA/MLC allowance, and the generic 10(14)(i)/
+    # 10(14)(ii) "not otherwise entered" rows plus their two 115BAC/
+    # new-regime variants) -- none of them have a dedicated statutory
+    # ceiling formula in this engine, unlike CEA/hostel (which share the
+    # 10(14) family but are tracked separately via
+    # sec10_14i_prescribed_allowance/sec10_14ii_personal_allowance above;
+    # do not conflate the two).
+    other_section10_exempt: Decimal = Field(default=Decimal("0"), ge=0)
     # Uniform allowance u/s 10(14)(i) / Rule 2BB(1)(f): exempt only to the
     # extent of actual expenditure incurred, not a fixed statutory rate like
     # CEA/hostel above -- kept as its own received/expenditure pair rather
@@ -1815,6 +1830,12 @@ class DisabilityScheduleBase(BaseModel):
     deduction_amount: Decimal = Field(default=Decimal("0"), ge=0)
     form_10ia_ack_number: Optional[str] = Field(default=None, max_length=15)
     udid_number: Optional[str] = Field(default=None, max_length=18)
+    # ITR-2/ITR-3's official Schedule80DD/Schedule80U additionally carry
+    # Form10IAFilingDate/FormAckNum11A (ITR-1/ITR-4's schemas only have
+    # Form10IAAckNum) -- optional on every form, so adding them here is
+    # backward compatible; only ITR-2's own builder populates them today.
+    form_10ia_filing_date: Optional[date] = None
+    form_ack_num_11a: Optional[str] = Field(default=None, max_length=15)
 
     @field_validator("disability_type", mode="before")
     @classmethod
@@ -2064,7 +2085,12 @@ class TDS2Entry(BaseModel):
     tds_deducted: Decimal = Field(default=Decimal("0"), ge=0)
     tds_claimed_this_year: Decimal = Field(default=Decimal("0"), ge=0)
     financial_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}-[0-9]{2}$")
-    head_of_income: Optional[str] = Field(default=None)
+    # Official schema's own TDSOthThanSalaryDtls.HeadOfIncome enum (distinct
+    # from TDS3's own TDS3onOthThanSalDtls.HeadOfIncome, which has no "NA")
+    # -- previously a bare Optional[str], so a value outside this closed
+    # enum reached the builder validly per Pydantic but failed the official
+    # schema only at ITD submission.
+    head_of_income: Optional[Literal["HP", "CG", "OS", "EI", "NA"]] = None
     deducted_year: Optional[str] = Field(default=None, pattern=r"^20[0-9]{2}$")
     brought_forward_tds: Decimal = Field(default=Decimal("0"), ge=0)
     tds_credit_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)

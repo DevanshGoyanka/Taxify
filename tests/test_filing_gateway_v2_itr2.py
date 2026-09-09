@@ -187,6 +187,24 @@ def test_generate_cbdt_json_itr2_property_details_match_house_property_count() -
     assert schedule_hp is not None
 
 
+def test_generate_cbdt_json_itr2_transforms_income_notified_89a_country_rows() -> None:
+    """employer.incomeNotified89ACountryRows is a raw frontend dict list
+    ({"countryCode": ..., "amount": ...}, TS-only field, no UI wiring yet)
+    -- filing_gateway_v2.py must transform it into a typed OS89ACountryEntry
+    so the ITD builder can emit the official NOT89ACountrycode/NOT89AAmount
+    keys, not the frontend's own field names, end to end from a raw draft
+    through to the filed JSON."""
+    draft = _filing_ready_itr2_draft()
+    draft.employers[0].incomeNotified89A = Decimal("50000")
+    draft.employers[0].incomeNotified89ACountryRows = [
+        {"id": "r1", "countryCode": "UK", "amount": Decimal("50000")},
+    ]
+    draft.taxes.tds[0].grossAmount = Decimal("1550000")  # basic + incomeNotified89A
+    official_json, _summary = generate_cbdt_json(draft)
+    rows = official_json["ITR"]["ITR2"]["ScheduleS"]["Salaries"][0]["Salarys"]["IncomeNotified89AType"]
+    assert rows == [{"NOT89ACountrycode": "UK", "NOT89AAmount": 50000}]
+
+
 def test_generate_cbdt_json_itr2_wires_real_home_loan_co_owner_and_tenant_rows() -> None:
     """The frontend already has a complete UI for HouseProperty.homeLoans/
     coOwners/tenantDetails (HousePropertyEntryManager.tsx) -- but
