@@ -2205,6 +2205,57 @@ def test_R267_non_govt_gratuity_checked_against_20l_cap_not_25l():
     assert not failed(results, "ITR1-R267")
 
 
+def test_R267_cg_pensioner_gratuity_checked_against_25l_cap_not_20l():
+    """Regression: a CG-Pensioner (nature_of_employment == "PE") was
+    silently misclassified into the ₹20L bucket by the old is_cg_sg-only
+    (CGOV/SGOV) split -- the official CBDT rule text (Validation Rules
+    AY 2026-27 PDF, rule #67 + #267) assigns CG-Pensioners/SG-Pensioners to
+    the ₹25L bucket alongside active CGOV/SGOV employees. Found 2026-09-11
+    while porting this exact check into ITR-2 (Docs/
+    ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md, Phase 6c, row #28)."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="PE",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2100000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert not failed(results, "ITR1-R067")
+    assert not failed(results, "ITR1-R267")
+
+
+def test_R267_sg_pensioner_gratuity_exceeding_25l_cap_fails():
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="PESG",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2600000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R267")
+    assert not failed(results, "ITR1-R067")
+
+
+def test_R067_psu_pensioner_gratuity_still_checked_against_20l_cap():
+    """PSU-Pensioners (PEPS) and Others-Pensioners (PEO) stay in the ₹20L
+    bucket -- only CG/SG-Pensioners (PE/PESG) move to ₹25L."""
+    inp = ITR1Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        nature_of_employment="PEPS",
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2100000")),
+        house_property_income=HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED),
+        other_sources_income=OtherSourcesIncome(),
+        deductions_chapter6a=Chapter6ADeductions(),
+    )
+    results = validate_itr1_input(inp)
+    assert failed(results, "ITR1-R067")
+    assert not failed(results, "ITR1-R267")
+
+
 def test_R185_retrenchment_10_10b_blocked_for_cgov_and_pensioner():
     """10(10B) is only for industrial workers under the ID Act -- never
     allowed for CG/SG employees or pensioners. Previously always dormant

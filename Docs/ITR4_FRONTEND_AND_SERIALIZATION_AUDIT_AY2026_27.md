@@ -1126,3 +1126,47 @@ fix and its reasoning are identical for both forms.
 
 **Verification**: same test run as ITR-1 doc §32.5 (`salary.py` is shared code, so one test run
 covers both forms) — full backend suite green at the same baseline, no regressions.
+
+## 18. Real bug found and fixed: `ITR4-R073-2`/`ITR4-R317` (gratuity ceiling) missed CG/SG-Pensioners,
+found while porting the identical check into ITR-2 (2026-09-11)
+
+While implementing ITR-2's own gratuity exemption ceiling (Chapter VI-A/Schedule S Phase 6c of
+`C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`, tracked in
+`Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md`, row #28), the official CBDT Validation Rules
+AY 2026-27 PDF for ITR-2 was re-extracted directly and cross-checked against ITR-1's and ITR-4's
+own PDFs for the identical Section 10(10) gratuity provision (rule #73 + #317 in ITR-4's own PDF).
+All three forms' PDFs state the same rule: the ₹25,00,000 exemption ceiling applies to FOUR
+nature-of-employment categories — "Central Government", "State Government", "CG-Pensioners",
+"SG-Pensioners" — not just active CGOV/SGOV employees; everyone else (PSU, PSU-Pensioners,
+Others-Pensioners, Others) is capped at ₹20,00,000.
+
+`ITR4-R073-2` (`app/engine/validators/itr4/input_rules.py`, added during §5's fix as the
+surviving, non-duplicate implementation) and `ITR4-R317` (same file) only implemented a 2-category
+split via `_is_cg_sg_employee(nature_of_employment)`, which covers `{"CGOV", "SGOV"}` only — a
+CG-Pensioner (`"PE"`) or SG-Pensioner (`"PESG"`) claim was silently checked against the ₹20L
+bucket instead of the correct ₹25L. This is the same class of bug §5 already fixed once for this
+file (a `nature_of_employment` category-matching defect), but a distinct instance of it: §5's fix
+correctly routed both checks through `_is_cg_sg_employee`/`_is_pensioner`, but neither helper
+alone (nor their combination, which `_is_pensioner` genuinely needs for other rules like
+`ITR4-R185`'s retrenchment-compensation eligibility block) can express this specific rule's
+4-category-per-bucket split — the gap was in the rule's own category set, not in whether the raw
+code vs. a label was being compared.
+
+**Fix**: added a gratuity-specific `_GRATUITY_25L_CATEGORIES = frozenset({"CGOV", "SGOV", "PE",
+"PESG"})` module-level set (`app/engine/validators/itr4/input_rules.py`, alongside
+`_CG_SG_EMPLOYMENT_CODES`/`_PENSIONER_EMPLOYMENT_CODES`), and switched both `ITR4-R073-2`'s and
+`ITR4-R317`'s condition to test membership in that set instead of calling
+`_is_cg_sg_employee()`. Deliberately a new, local set rather than widening
+`_CG_SG_EMPLOYMENT_CODES` itself, which other rules in this file correctly rely on for the
+genuinely different CG/SG-vs-everyone split.
+
+**Verification**: `test_R317_cg_pensioner_gratuity_checked_against_25l_cap_not_20l`,
+`test_R317_sg_pensioner_gratuity_exceeding_25l_cap_fails`,
+`test_R073_psu_pensioner_gratuity_still_checked_against_20l_cap` (the last confirming
+PSU-Pensioners/Others-Pensioners correctly stay in the ₹20L bucket, i.e. the fix didn't
+over-widen the ₹25L bucket), all in `tests/test_itr4_input_validation.py` — the two new-25L-bucket
+tests confirmed failing pre-fix via `git stash`. The identical fix was applied to ITR-1's
+equivalent `ITR1-R267`/`ITR1-R067` in the same pass — see
+`ITR1_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`'s update note under its own §31 finding for
+that write-up. Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` regression: 854 passed, same 6
+pre-existing ITR-2 baseline failures only, unrelated to this fix.

@@ -54,6 +54,21 @@ from app.engine.validators.base import ValidationResult, Severity
 _CG_SG_EMPLOYMENT_CODES = frozenset({"CGOV", "SGOV"})
 _PENSIONER_EMPLOYMENT_CODES = frozenset({"PE", "PESG", "PEPS", "PEO"})
 
+# Gratuity-specific category set (CBDT Sl 73 + 317, official Validation
+# Rules AY 2026-27 PDF): the ₹25L ceiling applies to FOUR categories --
+# "Central Government", "State Government", "CG-Pensioners", "SG-Pensioners"
+# -- not just active CGOV/SGOV employees. Found 2026-09-11 while porting this
+# exact check into ITR-2 (Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md,
+# Phase 6c, row #28): the gratuity checks below used to split purely on
+# _is_cg_sg_employee (CGOV/SGOV only), silently misclassifying CG-Pensioners
+# ("PE") and SG-Pensioners ("PESG") into the ₹20L bucket instead -- confirmed
+# against the raw re-extracted PDF text, not a guess. Deliberately a local
+# set, not a change to _CG_SG_EMPLOYMENT_CODES/_is_cg_sg_employee itself:
+# that helper is correctly used elsewhere in this file for a genuinely
+# different, CG/SG-vs-everyone split (e.g. Section 10(10B) retrenchment-
+# compensation eligibility).
+_GRATUITY_25L_CATEGORIES = frozenset({"CGOV", "SGOV", "PE", "PESG"})
+
 
 def _is_cg_sg_employee(nature_of_employment: str | None) -> bool:
     return (nature_of_employment or "") in _CG_SG_EMPLOYMENT_CODES
@@ -1907,11 +1922,13 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # SUB-SECTION: Gratuity Per-Category Cap (CBDT Sl 73 + 317)
     # ═══════════════════════════════════════════════════════════════════════════
 
-    # Sl 73: Gratuity ≤ ₹20L non-CG/SG
+    # Sl 73: Gratuity ≤ ₹20L for PSU/PSU-Pensioners/Others-Pensioners/Others
+    # (i.e. not in the ₹25L bucket -- see _GRATUITY_25L_CATEGORIES above)
     if sal and sal.gratuity_received > z and inp.nature_of_employment:
-        if not _is_cg_sg_employee(inp.nature_of_employment) and sal.gratuity_received > Decimal("2000000"):
+        if inp.nature_of_employment not in _GRATUITY_25L_CATEGORIES and sal.gratuity_received > Decimal("2000000"):
             results.append(_make("ITR4-R073-2", False,
-                f"Gratuity (Rs {sal.gratuity_received}) exceeds ₹20L for non-CG/SG",
+                f"Gratuity (Rs {sal.gratuity_received}) exceeds ₹20L for PSU, PSU-Pensioners, "
+                f"Others-Pensioners, or Others employment categories",
                 "salary_income.gratuity_received"))
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -2858,10 +2875,11 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
     # ═══════════════════════════════════════════════════════════════════════════
 
     if sal and sal.gratuity_received > z and inp.nature_of_employment:
-        if _is_cg_sg_employee(inp.nature_of_employment):
+        if inp.nature_of_employment in _GRATUITY_25L_CATEGORIES:
             if sal.gratuity_received > Decimal("2500000"):
                 results.append(_make("ITR4-R317", False,
-                    f"Gratuity (Rs {sal.gratuity_received}) exceeds ₹25L for CG/SG",
+                    f"Gratuity (Rs {sal.gratuity_received}) exceeds ₹25L for Central/State "
+                    f"Government employees or CG/SG-Pensioners",
                     "salary_income.gratuity_received"))
 
     # ═══════════════════════════════════════════════════════════════════════════

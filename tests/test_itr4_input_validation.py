@@ -2153,6 +2153,46 @@ def test_R317_cgsg_gratuity_25l_cap_now_reachable():
     assert failed(results, "ITR4-R317")
 
 
+def test_R317_cg_pensioner_gratuity_checked_against_25l_cap_not_20l():
+    """Regression: a CG-Pensioner (nature_of_employment == "PE") was
+    silently misclassified into the ₹20L bucket by the old
+    _is_cg_sg_employee-only (CGOV/SGOV) split -- the official CBDT rule
+    text (Validation Rules AY 2026-27 PDF, rule #73 + #317) assigns
+    CG-Pensioners/SG-Pensioners to the ₹25L bucket alongside active
+    CGOV/SGOV employees. Found 2026-09-11 while porting this exact check
+    into ITR-2 (Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md, Phase 6c,
+    row #28)."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2100000")),
+        nature_of_employment="PE",
+    )
+    results = validate_itr4_input(inp)
+    assert not failed(results, "ITR4-R073-2")
+    assert not failed(results, "ITR4-R317")
+
+
+def test_R317_sg_pensioner_gratuity_exceeding_25l_cap_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2600000")),
+        nature_of_employment="PESG",
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R317")
+    assert not failed(results, "ITR4-R073-2")
+
+
+def test_R073_psu_pensioner_gratuity_still_checked_against_20l_cap():
+    """PSU-Pensioners (PEPS) and Others-Pensioners (PEO) stay in the ₹20L
+    bucket -- only CG/SG-Pensioners (PE/PESG) move to ₹25L."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), gratuity_received=Decimal("2100000")),
+        nature_of_employment="PEPS",
+    )
+    results = validate_itr4_input(inp)
+    assert failed(results, "ITR4-R073-2")
+    assert not failed(results, "ITR4-R317")
+
+
 def test_R075_cgsg_leave_encashment_not_falsely_blocked():
     """R075 (non-govt leave encashment Rs 25L cap) previously fired for
     every employee including genuine CG/SG ones (fully exempt)."""

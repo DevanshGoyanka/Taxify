@@ -2443,6 +2443,28 @@ inspection, to already be handled correctly here:
 - `ITR1-R267`/`ITR1-R067` (gratuity caps) already correctly implement the CG/SG-vs-everyone-else
   split (₹25L / ₹20L) using `_is_cg_sg_employee`, mirroring the calculator's own split in
   `app/engine/schedules/salary.py`.
+  > **Update (2026-09-11): this specific claim was incomplete — fixed.** The official CBDT
+  > Validation Rules AY 2026-27 PDF (rule #67 + #267), re-extracted directly while porting this
+  > exact check into ITR-2 (`Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md`, Phase 6c, row #28),
+  > assigns the ₹25L ceiling to FOUR categories — "Central Government", "State Government",
+  > "CG-Pensioners", "SG-Pensioners" — not just active CGOV/SGOV employees. `_is_cg_sg_employee`
+  > only covers `{"CGOV", "SGOV"}`, so a CG-Pensioner (`"PE"`) or SG-Pensioner (`"PESG"`) claim was
+  > silently checked against the ₹20L bucket instead of ₹25L — a real, live under/over-restriction
+  > bug in already-shipped code, not just an incomplete rule count. Fixed by adding a
+  > gratuity-specific `_gratuity_25l_categories = frozenset({"CGOV", "SGOV", "PE", "PESG"})` set
+  > local to this one check (`app/engine/validators/itr1/input_rules.py:3408-3436`) — deliberately
+  > not a change to `_is_cg_sg_employee`/`_is_pensioner` themselves, which remain correct for the
+  > genuinely different CG/SG-vs-everyone split other rules in this file need (e.g. Section 10(10B)
+  > retrenchment-compensation eligibility). Tests:
+  > `test_R267_cg_pensioner_gratuity_checked_against_25l_cap_not_20l`,
+  > `test_R267_sg_pensioner_gratuity_exceeding_25l_cap_fails`,
+  > `test_R067_psu_pensioner_gratuity_still_checked_against_20l_cap` (the last confirming
+  > PSU-Pensioners/Others-Pensioners correctly stay in the ₹20L bucket), all in
+  > `tests/test_itr1_input_validation.py`; the two new-25L-bucket tests confirmed failing pre-fix
+  > via `git stash`. The identical fix was applied to ITR-4's equivalent `ITR4-R073-2`/`ITR4-R317`
+  > in the same pass — see `ITR4_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md` §18 for that
+  > write-up. Full `test_itr1_*`/`test_itr2_*`/`test_itr4_*` regression green (854 passed,
+  > same 6 pre-existing ITR-2 baseline failures only, unrelated to this fix).
 
 **One stale docstring fixed** (not a functional bug — the code was already correct): `salary.py`'s
 `_exempt_transport()` docstring still said *"Rs 19,200/yr for disabled employees"*, left over from

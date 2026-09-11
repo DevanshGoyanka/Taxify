@@ -3405,28 +3405,36 @@ def validate_itr1_input(inp: ITR1Input) -> list[ValidationResult]:
                     "schedule_10_13a",
                 ))
 
-    # --- R267: Gratuity ≤ ₹25L for CG/SG employees ---
+    # --- R267/R067: Gratuity ≤ ₹25L (CG/SG + CG/SG-Pensioners) or ₹20L
+    # (PSU/PSU-Pensioners/Others-Pensioners/Others) ---
+    # The official CBDT rule text (Validation Rules AY 2026-27 PDF, rule #67
+    # + #267) assigns the ₹25L ceiling to FOUR categories -- "Central
+    # Government", "State Government", "CG-Pensioners", "SG-Pensioners" --
+    # not just active CGOV/SGOV employees. Found 2026-09-11 while porting
+    # this exact check into ITR-2 (Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.
+    # md, Phase 6c, row #28): this code's own `is_cg_sg = _is_cg_sg_employee`
+    # split (CGOV/SGOV only) silently misclassified CG-Pensioners ("PE") and
+    # SG-Pensioners ("PESG") into the ₹20L bucket instead -- confirmed
+    # against the raw re-extracted PDF text, not a guess. This is a local,
+    # gratuity-specific category set, not a change to `_is_cg_sg_employee`/
+    # `_is_pensioner` themselves: those two helpers are correctly used
+    # elsewhere in this file for a genuinely different, CG/SG-vs-everyone
+    # split (e.g. Section 10(10B) retrenchment-compensation eligibility).
+    _gratuity_25l_categories = frozenset({"CGOV", "SGOV", "PE", "PESG"})
     if sal and sal.gratuity_received > _z and inp.nature_of_employment:
-        is_cg_sg = _is_cg_sg_employee(inp.nature_of_employment)
-        if is_cg_sg and sal.gratuity_received > 2_500_000:
+        is_25l_bucket = inp.nature_of_employment in _gratuity_25l_categories
+        if is_25l_bucket and sal.gratuity_received > 2_500_000:
             results.append(_make(
                 "ITR1-R267", False,
                 f"Gratuity claimed (Rs {sal.gratuity_received}) exceeds ₹25,00,000 limit for "
-                f"Central/State Government employees.",
+                f"Central/State Government employees or CG/SG-Pensioners.",
                 "salary_income.gratuity_received",
             ))
-        # Everyone not CG/SG (PSU, other private, pensioners) is capped at
-        # Rs 20L per Section 10(10) -- the complement of is_cg_sg, not a
-        # separate keyword guess (govt employees are fully exempt and never
-        # reach this branch; the calculator's own is_govt logic in
-        # app/engine/schedules/salary.py already applies this same CG/SG
-        # vs. non-CG/SG split for the actual exemption computation).
-        is_psu_private = not is_cg_sg
-        if is_psu_private and sal.gratuity_received > 2_000_000:
+        if not is_25l_bucket and sal.gratuity_received > 2_000_000:
             results.append(_make(
                 "ITR1-R067", False,
                 f"Gratuity claimed (Rs {sal.gratuity_received}) exceeds ₹20,00,000 limit for "
-                f"non-Government employees.",
+                f"PSU, PSU-Pensioners, Others-Pensioners, or Others employment categories.",
                 "salary_income.gratuity_received",
             ))
 
