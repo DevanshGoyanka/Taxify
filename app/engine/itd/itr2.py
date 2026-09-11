@@ -333,38 +333,63 @@ def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
     hp_inc = max(z, result.house_property_income)
     os_inc = max(z, result.other_sources_income)
 
-    # Per-basket income and set-offs from the typed CYLA result. The six
-    # gross-income figures live on `cyla.cg_gross_income` (a dict, added for
-    # Table E) -- `CYLAResult` itself has no `stcg20_income`/etc attributes
-    # at all (those names exist only on `CYLAInput`, what's passed IN to
-    # compute(), not what it returns); reading them via `_positive_val()`'s
-    # getattr-with-default previously fell through to 0 silently for every
-    # bucket, regardless of real capital-gains income.
-    cg_gross = getattr(cyla, "cg_gross_income", None) or {} if cyla else {}
-    stcg20_inc = cg_gross.get("stcg20", z)
-    stcg30_inc = cg_gross.get("stcg30", z)
-    stcg_app_inc = cg_gross.get("stcg_app", z)
-    stcg_dtaa_inc = cg_gross.get("stcg_dtaa", z)
-    ltcg125_inc = cg_gross.get("ltcg125", z)
-    ltcg_dtaa_inc = cg_gross.get("ltcg_dtaa", z)
+    # Per-basket "current year income" figures for Schedule CYLA's own six
+    # CG rows must be Table E's own Column-8 (post-Section-70-intra-CG-
+    # netting) output (`cyla.cg_intra_head_remaining`) -- CONFIRMED against
+    # the official CBDT Validation Rules PDF (rules #257/#258/#259/#263/
+    # #567/#568: "In Schedule CYLA [bucket] should be equal to Sl.No.8[x]
+    # of item E of Schedule CG", where "Sl.No.8" is Table E's own Column 8,
+    # per rule #563's "Column 8 of each row should be equal to
+    # 1-(2+3+4+5+6+7)" -- i.e. the intra-CG-netted remaining figure, not
+    # the raw pre-netting gross figure) -- Phase 6h, 2026-09-11. Table E's
+    # Section-70 intra-CG netting runs FIRST; its output is what Schedule
+    # CYLA's own Section-71 cross-head netting is meant to start FROM, per
+    # the form's own pipeline sequencing. `cg_gross_income` (used here
+    # previously) is Table E's own INPUT, not its output, and using it
+    # instead made Schedule CYLA silently disagree with Table E on the same
+    # bucket whenever any intra-CG (STCG-vs-STCG or LTCG-vs-LTCG) loss was
+    # set off -- a real, CBDT-rule-violating disclosure bug, not a design
+    # choice; confirmed genuinely fixable, unlike Part B-TI's own separate
+    # divergence from Table E (rules #496/#497/#565/#566), which reflects a
+    # legitimately LATER pipeline stage (cross-head AND brought-forward
+    # absorption) that Table E was never meant to show and Part B-TI
+    # correctly cannot use Table E's narrower basis without becoming wrong
+    # itself -- see this function's own module-level notes in
+    # Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md, Phase 6h, for the full
+    # investigation and why that half is deliberately left undisclosed-
+    # inconsistent rather than "fixed" into incorrectness.
+    cg_intra_remaining = getattr(cyla, "cg_intra_head_remaining", None) or {} if cyla else {}
+    stcg20_inc = cg_intra_remaining.get("stcg20", z)
+    stcg30_inc = cg_intra_remaining.get("stcg30", z)
+    stcg_app_inc = cg_intra_remaining.get("stcg_app", z)
+    stcg_dtaa_inc = cg_intra_remaining.get("stcg_dtaa", z)
+    ltcg125_inc = cg_intra_remaining.get("ltcg125", z)
+    ltcg_dtaa_inc = cg_intra_remaining.get("ltcg_dtaa", z)
 
-    stcg20_setoff = getattr(cyla, "stcg20_setoff", z) if cyla else z
-    stcg30_setoff = getattr(cyla, "stcg30_setoff", z) if cyla else z
-    stcg_app_setoff = getattr(cyla, "stcg_app_setoff", z) if cyla else z
-    stcg_dtaa_setoff = getattr(cyla, "stcg_dtaa_setoff", z) if cyla else z
-    ltcg125_setoff = getattr(cyla, "ltcg125_setoff", z) if cyla else z
-    ltcg_dtaa_setoff = getattr(cyla, "ltcg_dtaa_setoff", z) if cyla else z
+    # Col4 ("current year's income remaining after set-off") is CYLAResult's
+    # own already-correct final per-basket pool (post-intra-CG AND
+    # cross-head absorption) -- the exact same figures `_post_loss_cg_
+    # baskets()` sources from for the real tax computation, so Schedule
+    # CYLA's own disclosed "remaining" figure is now guaranteed consistent
+    # with what the return actually gets taxed on (before BFLA's further,
+    # separate brought-forward-loss stage).
+    stcg20_after = getattr(cyla, "stcg20_remaining", z) if cyla else z
+    stcg30_after = getattr(cyla, "stcg30_remaining", z) if cyla else z
+    stcg_app_after = getattr(cyla, "stcg_app_remaining", z) if cyla else z
+    stcg_dtaa_after = getattr(cyla, "stcg_dtaa_remaining", z) if cyla else z
+    ltcg125_after = getattr(cyla, "ltcg125_remaining", z) if cyla else z
+    ltcg_dtaa_after = getattr(cyla, "ltcg_dtaa_remaining", z) if cyla else z
 
     hp_remaining = abs(min(z, result.house_property_income)) if result.house_property_income < z else z
     return {
         "Salary": {"IncCYLA": _inc_cyla(salary, z, z, salary)},
         "HP": {"IncCYLA": _inc_cyla_hp(hp_inc, z, hp_inc)},
-        "STCG20Per": {"IncCYLA": _inc_cyla(stcg20_inc, z, z, max(z, stcg20_inc - stcg20_setoff))},
-        "STCG30Per": {"IncCYLA": _inc_cyla(stcg30_inc, z, z, max(z, stcg30_inc - stcg30_setoff))},
-        "STCGAppRate": {"IncCYLA": _inc_cyla(stcg_app_inc, z, z, max(z, stcg_app_inc - stcg_app_setoff))},
-        "STCGDTAARate": {"IncCYLA": _inc_cyla(stcg_dtaa_inc, z, z, max(z, stcg_dtaa_inc - stcg_dtaa_setoff))},
-        "LTCG12_5Per": {"IncCYLA": _inc_cyla(ltcg125_inc, z, z, max(z, ltcg125_inc - ltcg125_setoff))},
-        "LTCGDTAARate": {"IncCYLA": _inc_cyla(ltcg_dtaa_inc, z, z, max(z, ltcg_dtaa_inc - ltcg_dtaa_setoff))},
+        "STCG20Per": {"IncCYLA": _inc_cyla(stcg20_inc, z, z, stcg20_after)},
+        "STCG30Per": {"IncCYLA": _inc_cyla(stcg30_inc, z, z, stcg30_after)},
+        "STCGAppRate": {"IncCYLA": _inc_cyla(stcg_app_inc, z, z, stcg_app_after)},
+        "STCGDTAARate": {"IncCYLA": _inc_cyla(stcg_dtaa_inc, z, z, stcg_dtaa_after)},
+        "LTCG12_5Per": {"IncCYLA": _inc_cyla(ltcg125_inc, z, z, ltcg125_after)},
+        "LTCGDTAARate": {"IncCYLA": _inc_cyla(ltcg_dtaa_inc, z, z, ltcg_dtaa_after)},
         "IncOSDTAA": {"IncCYLA": _inc_cyla(z, z, z, z)},
         "OthSrcExclRaceHorse": {"IncCYLA": _inc_cyla_os(os_inc, hp_setoff, max(z, os_inc - hp_setoff))},
         "OthSrcRaceHorse": {"IncCYLA": _inc_cyla(z, z, z, z)},

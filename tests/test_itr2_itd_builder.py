@@ -1107,6 +1107,18 @@ def test_schedule_cg_table_e_reflects_real_intra_head_loss_setoff() -> None:
     assert stcg20_row["CurrYearIncome"] == 0  # this bucket has a loss, not a gain
     assert stcg20_row["CurrYrCapGain"] == 0
 
+    # Regression for Phase 6h: Schedule CYLA's own STCG30Per figure
+    # previously read the RAW pre-intra-CG-netting gross income (80000,
+    # cg_gross_income) instead of Table E's own Column-8 post-netting
+    # output (30000, cg_intra_head_remaining) -- silently disagreeing with
+    # Table E on the identical bucket, contradicting CBDT rule #257 ("In
+    # Schedule CYLA Short term capital gain @30% should be equal to
+    # SL.no. 8iii of item E of Schedule CG"). No cross-head loss exists in
+    # this fixture, so the "after set-off" figure is unchanged at 30000.
+    document_cyla = document["ITR"]["ITR2"]["ScheduleCYLA"]["STCG30Per"]["IncCYLA"]
+    assert document_cyla["IncOfCurYrUnderThatHead"] == 30000
+    assert document_cyla["IncOfCurYrAfterSetOff"] == 30000
+
     assert table_e["TotLossSetOff"]["StclSetoff20Per"] == 50000
     assert table_e["LossRemainSetOff"]["StclSetoff20Per"] == 0  # fully absorbed
 
@@ -1114,6 +1126,41 @@ def test_schedule_cg_table_e_reflects_real_intra_head_loss_setoff() -> None:
     # post_loss_cg and correctly reflect the same net position either way.
     short_term = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["ShortTerm"]
     assert short_term["TotalShortTerm"] == 30000
+
+
+def test_schedule_cyla_stcg_before_and_after_setoff_both_correct_with_cross_head_loss() -> None:
+    """Companion to the intra-head test above: with NO intra-CG loss but a
+    real cross-head (HP) loss, IncOfCurYrUnderThatHead (Table E's Column-8
+    basis) should be untouched by the cross-head absorption (no intra-CG
+    netting occurred here), while IncOfCurYrAfterSetOff must still reflect
+    the real HP-loss absorption -- confirming Phase 6h's fix (sourcing the
+    "before" figure from cg_intra_head_remaining) did not regress the
+    already-correct cross-head "after" figure, which is unrelated Table-E
+    machinery and must keep matching what Part B-TI actually taxes."""
+    input_data = _input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED,
+            home_loan_interest_paid=Decimal("350000"),
+        ),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="12 MG Road", city_or_town_or_district="Pune",
+                state_code="27", pin_code="411001",
+            ),
+        ],
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_SECURITY,
+                date_of_acquisition=date(2024, 6, 1), date_of_transfer=date(2025, 1, 1),
+                full_consideration=Decimal("280000"), cost_of_acquisition=Decimal("80000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    stcg30 = document["ITR"]["ITR2"]["ScheduleCYLA"]["STCG30Per"]["IncCYLA"]
+    assert stcg30["IncOfCurYrUnderThatHead"] == 200000  # 280000 - 80000, no intra-CG loss
+    assert stcg30["IncOfCurYrAfterSetOff"] == 0  # 200000 - 200000 HP loss absorbed (capped at -200000)
 
 
 def test_schedule_cg_table_f_buckets_gains_by_real_transfer_date_quarter() -> None:
