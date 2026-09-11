@@ -1667,10 +1667,10 @@ export default function ITRComputationPage() {
             Validate
           </button>
 
-          {itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (
+          {itrForm !== 'ITR-3' && (
             <button
               onClick={handleGenerateCbdtJson}
-              title="Generate and download the official CBDT ITD-compliant JSON (ITR-1/ITR-4)"
+              title="Generate and download the official CBDT ITD-compliant JSON (ITR-1/ITR-2/ITR-4)"
               style={{
                 padding: '6px 12px',
                 background: '#5BB981',

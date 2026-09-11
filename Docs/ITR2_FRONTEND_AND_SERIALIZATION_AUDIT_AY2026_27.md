@@ -6054,6 +6054,32 @@ filing-ready based on a check that never touches the JSON the ITD would actually
 Type-3 portal automation to surface it. ITR-3 has the same gap and is out of scope per this plan's
 own boundary, but is worth flagging for whoever picks that form up next.
 
+> **Fix status (2026-09-11): fixed and verified — un-hid the button, matching ITR-1/4 exactly.**
+> Confirmed `handleValidate` (`ITRComputationPage.tsx:526`) is one shared function across every
+> form, not ITR-specific — it's calculator-only for ITR-1/ITR-4 too, not just ITR-2. The real,
+> existing ITR-1/4 pattern is that "Validate" stays deliberately calculator-only, and the separate
+> "CBDT JSON" button is the actual trigger for real JSON generation + schema validation; ITR-2's gap
+> was never that "Validate" itself was ITR-2-specific-wrong, it was that the "CBDT JSON" button
+> (line 1670) was hidden for ITR-2 alone while staying visible for ITR-1/4. Removed the
+> `itrForm !== 'ITR-2'` exclusion so ITR-2 now gets the identical button ITR-1/4 already have, and
+> updated its title text (`'ITR-1/ITR-4'` → `'ITR-1/ITR-2/ITR-4'`). ITR-3 stays hidden, unchanged,
+> per this plan's own scope boundary.
+>
+> **Verified live end-to-end**, not just by code inspection: restarted the dev servers, logged back
+> into the app, opened the same test client (SUNIT RAMASHANKAR GOYANKA) this entire §22 investigation
+> was conducted against, and clicked the now-visible "CBDT JSON" button directly. The real
+> `POST /v2/clients/{id}/itr/2026-27/generate-cbdt-json` call returned `200 OK` — the same client
+> that started this section with `ValueError: Salary income requires at least one employer filing
+> detail` now generates a complete, official JSON with `ScheduleHP`/`ScheduleS`/`ScheduleTDS2` all
+> present and `TDSSection` correctly reading `"94A"` (translated live from the stored `"194A"`) —
+> direct confirmation that all four other §22 fixes and this one work together correctly in the real
+> running application, not just in isolation under pytest.
+>
+> **This closes every finding in §22.** The `npm run build` gate for this frontend change and the
+> full `test_itr2_*`/`test_itr1_*`/`test_itr4_*` regression suite were both already green from the
+> preceding four fixes; this change touches only a JSX conditional and a title string, no new test
+> needed beyond the live verification above.
+
 ## 22.2 CRITICAL — every ITR-2 return with zero house properties fails CBDT JSON generation, unconditionally
 
 Root cause spans two files and is 100%-reproducible, independent of any specific client's data:
