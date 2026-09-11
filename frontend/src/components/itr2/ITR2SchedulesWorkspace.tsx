@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import type {
-  AMTDetails, AssetLiabilityDetails, BroughtForwardLossEntry,
+  AMTCreditEntry, AMTDetails, AssetLiabilityDetails, BroughtForwardLossEntry,
   ClubbedIncomeEntry, ESOPDeferralEntry, ForeignAssetEntry, ForeignSourceIncomeEntry,
   ForeignTaxReliefEntry, PassThroughIncomeEntry, PortugueseCivilCodeDetails, ReturnDraft,
   ScheduleSIEntry,
@@ -45,6 +45,7 @@ export const createForeignAssetEntry = (): ForeignAssetEntry => ({ id: uid('fa')
 export const createClubbedIncomeEntry = (): ClubbedIncomeEntry => ({ id: uid('spi'), specifiedPersonName: '', pan: '', relationship: '', amountIncluded: 0, headOfIncome: 'OS' });
 export const createPassThroughIncomeEntry = (): PassThroughIncomeEntry => ({ id: uid('pti'), entityName: '', entityPAN: '', incomeHead: 'OS', section: '', incomeAmount: 0, tdsCredit: 0 });
 export const createAmtDetails = (): AMTDetails => ({ deduction10AA: 0, deduction80IAto80RRBExcept80P: 0, deduction35ADNetDepreciation: 0, creditsBroughtForward: [] });
+export const createAmtCreditEntry = (): AMTCreditEntry => ({ id: uid('amtc'), assessmentYear: '', creditBroughtForward: 0 });
 export const createAssetLiabilityDetails = (): AssetLiabilityDetails => ({ immovableProperty: 0, cashInHand: 0, bankDeposits: 0, sharesAndSecurities: 0, insurancePolicies: 0, loansAndAdvances: 0, jewellery: 0, art: 0, vehiclesBoatsAircraft: 0, relatedLiabilities: 0 });
 export const createPortugueseCivilCodeDetails = (): PortugueseCivilCodeDetails => ({ spouseName: '', spousePAN: '', spouseAadhaar: '', hpAmountApportioned: 0, cgAmountApportioned: 0, osAmountApportioned: 0, tdsApportioned: 0 });
 export const createESOPDeferralEntry = (): ESOPDeferralEntry => ({ id: uid('esop'), employerPAN: '', dpiitRegistrationNumber: '', assessmentYear: '', taxDeferredBroughtForward: 0, taxPayableCurrentYear: 0, balanceTaxCarriedForward: 0 });
@@ -58,6 +59,7 @@ const isMoney = (key: string): boolean => /amount|income|loss|value|tax|deductio
 export function validationFor(section: string, row: Row, assessmentYear: string): string[] {
   const errors: string[] = [];
   if (section === 'BFLA' && row.assessmentYear && !AY.test(String(row.assessmentYear))) errors.push('Assessment year must use YYYY-YY format.');
+  if (section === 'AMTC' && row.assessmentYear && !AY.test(String(row.assessmentYear))) errors.push('Assessment year must use YYYY-YY format.');
   for (const [key, value] of Object.entries(row)) if (isMoney(key) && typeof value === 'number' && value < 0) errors.push(`${label(key)} cannot be negative.`);
   if (section === 'BFLA' && money(row.broughtForward) > money(row.originalLoss)) errors.push('Brought-forward loss cannot exceed original loss.');
   if (section === 'SI' && ['115BB', '115BBE', '115BBJ'].includes(String(row.section)) && money(row.deductions) > 0) errors.push('Deductions are not permitted for this special-rate section.');
@@ -127,6 +129,15 @@ export function ITR2SchedulesWorkspace(props: ITR2SchedulesWorkspaceProps): Reac
     <ListSection title="Schedule SPI — Clubbed income" code="SPI" rows={props.clubbedIncome as unknown as Row[]} onChange={props.onClubbedIncomeChange as unknown as ListCallback<Row>} factory={createClubbedIncomeEntry as unknown as () => Row} fields={['specifiedPersonName', 'pan', 'relationship', 'amountIncluded', 'headOfIncome']} assessmentYear={props.assessmentYear} />
     <ListSection title="Schedule PTI — Pass-through income" code="PTI" rows={props.passThroughIncomeEntries as unknown as Row[]} onChange={props.onPassThroughIncomeEntriesChange as unknown as ListCallback<Row>} factory={createPassThroughIncomeEntry as unknown as () => Row} fields={['entityName', 'entityPAN', 'incomeHead', 'section', 'incomeAmount', 'tdsCredit']} assessmentYear={props.assessmentYear} />
     <NullableSection title="Schedule AMT / AMTC" code="AMT" value={props.amt} onChange={props.onAmtChange} factory={createAmtDetails} fields={['deduction10AA', 'deduction80IAto80RRBExcept80P', 'deduction35ADNetDepreciation']} assessmentYear={props.assessmentYear} />
+    {props.amt && <ListSection
+      title="Schedule AMTC — AMT credit brought forward"
+      code="AMTC"
+      rows={props.amt.creditsBroughtForward as unknown as Row[]}
+      onChange={(rows) => props.onAmtChange({ ...props.amt!, creditsBroughtForward: rows as unknown as AMTCreditEntry[] })}
+      factory={createAmtCreditEntry as unknown as () => Row}
+      fields={['assessmentYear', 'creditBroughtForward']}
+      assessmentYear={props.assessmentYear}
+    />}
     <NullableSection title="Schedule AL — Assets and liabilities" code="AL" value={props.assetLiability} onChange={props.onAssetLiabilityChange} factory={createAssetLiabilityDetails} fields={['immovableProperty', 'cashInHand', 'bankDeposits', 'sharesAndSecurities', 'insurancePolicies', 'loansAndAdvances', 'jewellery', 'art', 'vehiclesBoatsAircraft', 'relatedLiabilities']} assessmentYear={props.assessmentYear} />
     <NullableSection title="Schedule 5A — Portuguese Civil Code" code="5A" value={props.portugueseCivilCode} onChange={props.onPortugueseCivilCodeChange} factory={createPortugueseCivilCodeDetails} fields={['spouseName', 'spousePAN', 'spouseAadhaar', 'hpAmountApportioned', 'cgAmountApportioned', 'osAmountApportioned', 'tdsApportioned']} assessmentYear={props.assessmentYear} />
     <ListSection title="Schedule ESOP — Tax deferrals" code="ESOP" rows={props.esopDeferrals as unknown as Row[]} onChange={props.onEsopDeferralsChange as unknown as ListCallback<Row>} factory={createESOPDeferralEntry as unknown as () => Row} fields={['employerPAN', 'dpiitRegistrationNumber', 'assessmentYear', 'taxDeferredBroughtForward', 'taxPayableCurrentYear', 'balanceTaxCarriedForward']} assessmentYear={props.assessmentYear} />

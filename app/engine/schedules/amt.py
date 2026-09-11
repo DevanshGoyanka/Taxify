@@ -1,15 +1,18 @@
 """Alternate Minimum Tax computation under sections 115JC and 115JD."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 from app.engine.common.cess import compute as compute_cess
 from app.engine.common.surcharge import compute as compute_surcharge
 
 AMT_RATE: Decimal = Decimal("0.185")
 AMT_INCOME_THRESHOLD: Decimal = Decimal("2000000")
+# Section 115JD(3): brought-forward AMT credit may be carried forward and set
+# off for 15 assessment years (extended from 10 by Finance Act 2022).
+AMTC_MAX_CARRY_FWD_YEARS = 15
 _ZERO = Decimal("0")
 
 
@@ -50,6 +53,15 @@ class AMTResult:
     amt_applicable: bool = False
     amt_credit: Decimal = _ZERO
     final_tax: Decimal = _ZERO
+    # True whenever the section 115JC comparison was genuinely made this year
+    # (qualifying addback deductions present, old regime, adjusted total
+    # income above the threshold) -- independent of amt_applicable, which
+    # additionally requires AMT to have actually WON the comparison. Schedule
+    # AMTC's own Sl.1-3 (this year's 115JC tax vs. this year's normal-
+    # provisions tax, and the resulting credit-utilization capacity) need
+    # real figures every year the chapter is "in play", not just years AMT
+    # binds -- False only on the early base_result return below.
+    chapter_xii_ba_applicable: bool = False
 
 
 def _normalize_additions(
@@ -156,4 +168,98 @@ def compute(
         amt_applicable=amt_applies,
         amt_credit=max(_ZERO, amt_total - regular_tax) if amt_applies else _ZERO,
         final_tax=amt_total if amt_applies else regular_tax,
+        chapter_xii_ba_applicable=True,
     )
+
+
+@dataclass
+class AMTCEntry:
+    """One brought-forward AMT credit entry and its current-year disposition."""
+
+    assessment_year: str = ""
+    brought_forward: Decimal = _ZERO
+    utilised: Decimal = _ZERO
+    remaining_carry_forward: Decimal = _ZERO
+    expired: bool = False
+
+
+@dataclass
+class AMTCResult:
+    """Section 115JD credit utilization against this year's utilization cap.
+
+    Entries are ordered oldest-assessment-year-first (FIFO), matching the
+    statute's own "utilize the oldest credit first" convention already used
+    for ordinary carried-forward losses (app/engine/schedules/loss_setoff/
+    bfla.py). ``total_utilised`` feeds the actual tax reduction; the builder
+    formats the same per-entry breakdown for Schedule AMTC's own disclosure
+    rows -- single source of truth, both derived from this one computation.
+    """
+
+    entries: list[AMTCEntry] = field(default_factory=list)
+    total_utilised: Decimal = _ZERO
+    total_remaining: Decimal = _ZERO
+
+
+def _ay_start(assessment_year: str) -> int:
+    """Parse the starting year from an assessment-year label, e.g. "2024-25"."""
+    cleaned = assessment_year.upper().replace("AY", "").replace(" ", "")
+    if not cleaned:
+        return 0
+    try:
+        return int(cleaned.split("-")[0])
+    except (TypeError, ValueError):
+        return 0
+
+
+def compute_amtc(credits: Iterable[Any], cap: Decimal, current_ay: str) -> AMTCResult:
+    """Apply this year's AMT-credit utilization cap to brought-forward credit.
+
+    Section 115JD(2): brought-forward credit is usable only in a year normal-
+    provisions tax exceeds 115JC tax, capped at that excess (``cap``, Schedule
+    AMTC Sl.3) -- never below what 115JC would have demanded even this year.
+    Oldest unexpired credit is consumed first (FIFO), matching this file's
+    own 15-year expiry window (section 115JD(3)) -- mirrors the identical
+    oldest-first convention and expiry-window pattern already used for
+    ordinary carried-forward losses (``app/engine/schedules/loss_setoff/
+    bfla.py``'s ``_MAX_CARRY_FWD``/``_ay_start``).
+
+    Args:
+        credits: Brought-forward credit rows (``assessment_year``,
+            ``credit_brought_forward`` attributes -- e.g. ``AMTCreditItem``).
+        cap: Section 115JD(2) utilization ceiling for the current year -- the
+            excess of this year's normal-provisions tax over this year's
+            115JC tax, zero in a year AMT itself binds (there is no "spare"
+            capacity to absorb old credit when 115JC tax is the higher one).
+        current_ay: The filing assessment year, e.g. "2026-27".
+
+    Returns:
+        Oldest-first entries with each one's utilized/remaining amount
+        (expired entries carry zero utilized/remaining), and the aggregate
+        utilized total the calculator applies to reduce tax payable.
+    """
+    current_year = _ay_start(current_ay)
+    remaining_capacity = max(_ZERO, Decimal(cap))
+    ordered = sorted(credits, key=lambda c: _ay_start(str(getattr(c, "assessment_year", ""))))
+
+    entries: list[AMTCEntry] = []
+    total_utilised = _ZERO
+    total_remaining = _ZERO
+    for credit in ordered:
+        ay = str(getattr(credit, "assessment_year", ""))
+        brought_forward = Decimal(getattr(credit, "credit_brought_forward", _ZERO))
+        loss_year = _ay_start(ay)
+        expired = (
+            loss_year > 0 and current_year > 0
+            and current_year - loss_year > AMTC_MAX_CARRY_FWD_YEARS
+        )
+        if expired:
+            entries.append(AMTCEntry(ay, brought_forward, _ZERO, _ZERO, expired=True))
+            continue
+        utilised = min(brought_forward, remaining_capacity)
+        remaining_capacity -= utilised
+        remaining = brought_forward - utilised
+        entries.append(AMTCEntry(ay, brought_forward, utilised, remaining))
+        total_utilised += utilised
+        total_remaining += remaining
+
+    return AMTCResult(entries=entries, total_utilised=total_utilised, total_remaining=total_remaining)

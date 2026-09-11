@@ -3126,6 +3126,41 @@ def _amt_triggering_input(*, deduction_10aa: Decimal, amt_credits: list) -> ITR2
     )
 
 
+def test_ordinary_return_unaffected_by_amt_credit_chain_restructuring() -> None:
+    """Regression for Phase 6i-4: the calculator's rebate/surcharge/cess/AMT
+    step ordering was restructured (surcharge/cess now computed BEFORE AMT,
+    not after) so item 7 (gross_tax_liability) stays pure and AMT's own
+    applicability comparison uses a fully surcharge-inclusive figure. For a
+    return with NO AMT-triggering deductions at all, this must be a
+    complete no-op: gross_tax_payable degenerates to gross_tax_liability,
+    amt_credit_utilised/amt_tax/esop_deferred_payable_this_year are all
+    zero, and net_tax_liability equals the classical
+    tax-relief+interest+fees formula unchanged."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("800000")),
+    )
+    result = compute(input_data)
+    assert result.amt_tax == Decimal("0")
+    assert result.amt_credit_utilised == Decimal("0")
+    assert result.esop_deferred_payable_this_year == Decimal("0")
+    assert result.gross_tax_payable == result.gross_tax_liability
+    expected_net_liability = max(Decimal("0"),
+        result.gross_tax_liability
+        - result.relief_89 - result.relief_90_91
+        + result.total_interest + result.late_fee_234f + result.fees_234i
+    )
+    assert result.net_tax_liability == expected_net_liability
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    assert "ScheduleAMT" not in document["ITR"]["ITR2"]
+    assert "ScheduleAMTC" not in document["ITR"]["ITR2"]
+    tti = document["ITR"]["ITR2"]["PartB_TTI"]
+    assert tti["ComputationOfTaxLiability"]["GrossTaxPayable"] == tti["ComputationOfTaxLiability"]["GrossTaxLiability"]
+    assert tti["ComputationOfTaxLiability"]["CreditUS115JD"] == 0
+    assert tti["TaxPayDeemedTotIncUs115JC"] == 0
+    assert tti["TotalTaxPayablDeemedTotInc"] == 0
+
+
 def test_schedule_amt_deduction_claim_reflects_the_real_addback_not_zero() -> None:
     """``ScheduleAMT.DeductionClaimUndrAnySec`` (form item, the section-10AA/
     80-IA-to-80RRB/35AD addback that adjusted total income is built from)
@@ -3169,48 +3204,121 @@ def test_schedule_amtc_uses_correct_official_field_names_and_schema_validates() 
     assert row["Gross"] == 50000
     assert row["AmtCreditSetOfEy"] == 0
     assert row["AmtCreditBalBroughtFwd"] == 50000
-    assert row["AmtCreditUtilized"] == 50000  # fully absorbed -- amt_tax comfortably exceeds 50000
-    assert row["BalAmtCreditCarryFwd"] == 0
+    # Regression for Phase 6i-4: AMT BINDS this year for this fixture
+    # (confirmed -- result.gross_tax_liability == 0 here, well below
+    # amt_tax), which per section 115JD means brought-forward credit is NOT
+    # usable this year at all (there is no "spare" normal-tax capacity to
+    # absorb it against) -- it must carry forward completely unchanged.
+    # Previously (pre-fix) this exact scenario wrongly treated
+    # amt_applicable=True as the utilization signal and fully absorbed it.
+    assert row["AmtCreditUtilized"] == 0
+    assert row["BalAmtCreditCarryFwd"] == 50000
     assert "AssessmentYear" not in row and "AmtTaxCreditBF" not in row and "AmtCreditCF" not in row
+
+
+def test_schedule_amtc_generates_new_credit_when_amt_binds_without_utilizing_old_credit() -> None:
+    """Regression for Phase 6i-4: a year AMT binds GENERATES new credit
+    (Schedule AMTC's own "Current AY" row / CurrYrAmtCreditFwd) -- it does
+    not, and statutorily cannot, also utilize brought-forward credit in the
+    same year (there is no normal-tax "excess" over 115JC tax to absorb it
+    against when 115JC tax is the higher figure)."""
+    input_data = _amt_triggering_input(
+        deduction_10aa=Decimal("2500000"),
+        amt_credits=[AMTCreditItem(assessment_year="2023-24", credit_brought_forward=Decimal("50000"))],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    amtc = document["ITR"]["ITR2"]["ScheduleAMTC"]
+    assert amtc["TotAmtCreditUtilisedCY"] == 0
+    # New credit generated this year == amt_tax - gross_tax_liability (item
+    # 1d - item 7, only when 1d > 7) -- confirmed empirically for this
+    # fixture at 482924.
+    assert amtc["CurrYrAmtCreditFwd"] == 482924
+    # Sl.6 = old unutilized (50000, unchanged) + this year's new (482924).
+    assert amtc["CurrYrCreditCarryFwd"] == 532924
+    assert amtc["TotBalAMTCreditCF"] == 50000
+
+
+def test_schedule_amtc_utilizes_brought_forward_credit_in_a_year_amt_does_not_bind() -> None:
+    """The core Phase 6i-4 fix: brought-forward AMT credit is usable in a
+    year the chapter is in play (qualifying addback deductions, old regime,
+    ATI > 20L) but AMT does NOT bind (normal-provisions tax exceeds 115JC
+    tax) -- capped at that excess, per section 115JD(2). Previously this
+    exact scenario utilized nothing at all: the old formula's capacity
+    (``result.amt_tax``, the pre-fix bookkeeping delta) was zero in exactly
+    this kind of year, the reverse of the statutory condition."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("5000000")),
+        amt_input=AMTInput(
+            deduction_10aa=Decimal("100000"),
+            amt_credits=[AMTCreditItem(assessment_year="2023-24", credit_brought_forward=Decimal("50000"))],
+        ),
+    )
+    result = compute(input_data)
+    amt = result.schedules.get("amt")
+    assert amt.chapter_xii_ba_applicable is True
+    assert amt.amt_applicable is False
+    assert result.amt_credit_utilised == Decimal("50000")  # fully absorbed, comfortably within cap
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    amtc = document["ITR"]["ITR2"]["ScheduleAMTC"]
+    row = amtc["ScheduleAMTCDtls"][0]
+    assert row["AmtCreditUtilized"] == 50000
+    assert row["BalAmtCreditCarryFwd"] == 0
+    assert amtc["TotAmtCreditUtilisedCY"] == 50000
+    assert amtc["CurrYrAmtCreditFwd"] == 0  # AMT doesn't bind -- no new credit generated
+    tti = document["ITR"]["ITR2"]["PartB_TTI"]["ComputationOfTaxLiability"]
+    assert tti["CreditUS115JD"] == 50000
+    # The utilized credit must actually reduce the amount payable, not just
+    # be disclosed -- this is the genuine tax-computation fix, not only a
+    # JSON-disclosure one.
+    assert tti["TaxPayAfterCreditUs115JD"] == tti["GrossTaxPayable"] - 50000
 
 
 def test_schedule_amtc_applies_fifo_across_multiple_years_not_double_counting() -> None:
     """Multiple years of brought-forward AMT credit are utilized oldest-
-    year-first against this year's available AMT-tax offset capacity, not
-    each row independently claiming the full capacity -- the previous code
-    applied ``result.amt_tax`` in full to every row regardless of how much
-    earlier (older) rows had already consumed, over-crediting utilization
-    for any return with more than one year of brought-forward credit."""
-    input_data = _amt_triggering_input(
-        deduction_10aa=Decimal("5000000"),
-        amt_credits=[
-            # Deliberately out of chronological order in the input -- the
-            # builder must still process oldest first.
-            AMTCreditItem(assessment_year="2023-24", credit_brought_forward=Decimal("500000")),
-            AMTCreditItem(assessment_year="2022-23", credit_brought_forward=Decimal("900000")),
-        ],
+    year-first against this year's available utilization CAP (the excess of
+    normal-provisions tax over 115JC tax this year), not each row
+    independently claiming the full capacity -- and not against the wrong
+    capacity signal (a prior bug used ``result.amt_tax`` -- the pre-fix
+    bookkeeping delta, nonzero only in years AMT BINDS -- as if it were the
+    utilization cap, which is backwards)."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("5000000")),
+        amt_input=AMTInput(
+            deduction_10aa=Decimal("100000"),
+            amt_credits=[
+                # Deliberately out of chronological order in the input --
+                # the builder must still process oldest first.
+                AMTCreditItem(assessment_year="2023-24", credit_brought_forward=Decimal("300000")),
+                AMTCreditItem(assessment_year="2022-23", credit_brought_forward=Decimal("200000")),
+            ],
+        ),
     )
     result = compute(input_data)
-    assert result.amt_tax == Decimal("1060316")  # confirmed empirically for this fixture
+    assert result.gross_tax_liability == Decimal("1365000")  # confirmed empirically for this fixture
+    assert result.amt_tax == Decimal("1079364")
     document = build_itr2_json(result, input_data)
     _assert_schema_valid(document)
     amtc = document["ITR"]["ITR2"]["ScheduleAMTC"]
     rows_by_year = {r["AssYr"]: r for r in amtc["ScheduleAMTCDtls"]}
 
-    # Older year (2022-23) absorbs its full 900000 first.
-    assert rows_by_year["2022-23"]["AmtCreditUtilized"] == 900000
+    # Utilization cap = 1365000 - 1079364 = 285636. Older year (2022-23)
+    # absorbs its full 200000 first.
+    assert rows_by_year["2022-23"]["AmtCreditUtilized"] == 200000
     assert rows_by_year["2022-23"]["BalAmtCreditCarryFwd"] == 0
-    # Remaining capacity (1060316 - 900000 = 160316) is all that's left for
-    # the newer year -- NOT the full 500000 a per-row-independent
-    # (pre-fix) computation would have given it.
-    assert rows_by_year["2023-24"]["AmtCreditUtilized"] == 160316
-    assert rows_by_year["2023-24"]["BalAmtCreditCarryFwd"] == 339684
+    # Remaining capacity (285636 - 200000 = 85636) is all that's left for
+    # the newer year -- NOT the full 300000 a per-row-independent
+    # computation would have given it.
+    assert rows_by_year["2023-24"]["AmtCreditUtilized"] == 85636
+    assert rows_by_year["2023-24"]["BalAmtCreditCarryFwd"] == 214364
 
-    assert amtc["TotAMTGross"] == 1400000
-    assert amtc["TotBalBF"] == 1400000
-    assert amtc["TotAmtCreditUtilisedCY"] == 1060316
-    assert amtc["TotBalAMTCreditCF"] == 339684
-    assert amtc["CurrYrCreditCarryFwd"] == 339684
+    assert amtc["TotAMTGross"] == 500000
+    assert amtc["TotBalBF"] == 500000
+    assert amtc["TotAmtCreditUtilisedCY"] == 285636
+    assert amtc["TotBalAMTCreditCF"] == 214364
+    assert amtc["CurrYrCreditCarryFwd"] == 214364
     # A real monetary total (was previously len(rows) == 2, a row count).
     assert amtc["TotSetOffEys"] == 0
 

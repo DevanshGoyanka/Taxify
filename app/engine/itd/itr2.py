@@ -3422,16 +3422,24 @@ def _schedule_al(input_data: ITR2Input) -> Optional[dict[str, Any]]:
 # ============================================================================
 
 def _schedule_amt(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize Schedule AMT from computed AMT result."""
+    """Serialize Schedule AMT from computed AMT result.
+
+    Emitted whenever the section 115JC comparison was genuinely made this
+    year (``chapter_xii_ba_applicable``), not only when AMT actually binds
+    (``amt_applicable``) -- confirmed against the official form directly
+    (Schedule AMT itself has no "if applicable" gate on its own four items;
+    the form only starts conditioning behaviour once Schedule AMTC computes
+    Sl.3 from Sl.1/Sl.2, which needs Sl.1 -- Schedule AMT's own Sl.4 -- to be
+    real every such year, not just years AMT wins).
+    """
     amt = result.schedules.get("amt")
-    if amt is None or not getattr(amt, "amt_applicable", False):
+    if amt is None or not getattr(amt, "chapter_xii_ba_applicable", False):
         return None
     # `AMTResult` (app/engine/schedules/amt.py) has no `total_deductions`
     # field at all -- reading it via getattr(..., default=0) always fell
     # through to zero, wrong on every return this schedule is even built
-    # for (amt_applicable is only True when a real, nonzero addback
-    # exists). The real figure is exactly recoverable without touching
-    # amt.py: adjusted_total_income = taxable_income + addition_total (see
+    # for. The real figure is exactly recoverable without touching amt.py:
+    # adjusted_total_income = taxable_income + addition_total (see
     # compute()'s own `adjusted_income = income + addition_total`, where
     # `income` is exactly `result.taxable_income` at the calculator's own
     # call site) -- both terms are already-rounded/unrounded Decimals with
@@ -3442,16 +3450,24 @@ def _schedule_amt(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[st
         "TotalIncItemPartBTI": _to_rupees(result.taxable_income),
         "DeductionClaimUndrAnySec": _to_rupees(deduction_claim),
         "AdjustedUnderSec115JC": _to_rupees(adjusted_total_income),
-        "TaxPayableUnderSec115JC": _to_rupees(getattr(amt, "amt_tax", _ZERO)),
+        # Sl.4 "Tax payable under section 115JC [18.5% of (3)]" -- confirmed
+        # against the official form directly: Schedule AMT itself has no
+        # surcharge/cess line items at all (those are added separately as
+        # Part B-TTI's own items 1b/1c, applied to 1a = this same Sl.4
+        # figure) -- previously read amt.amt_tax (surcharge+cess inclusive),
+        # which is the item-1d total, not Sl.4/item-1a's own raw figure.
+        "TaxPayableUnderSec115JC": _to_rupees(getattr(amt, "amt_tax_before_surcharge_and_cess", _ZERO)),
     }
 
 
 # The schema's AssYr enum on ScheduleAMTCDtls covers only prior years
-# (2013-14 through 2025-26) -- the current AY's own AMT figures live in
-# ScheduleAMT/the top-level TaxSection115JC block instead, never as a row
-# here. AMTCreditItem.assessment_year is Pydantic-typed as any
-# "YYYY-YY"-shaped string (broader than this closed set), so an
-# out-of-range year is only caught here, at serialization time.
+# (2013-14 through 2025-26) -- the current AY's own newly-generated credit
+# is disclosed via the top-level CurrYrAmtCreditFwd field instead, never as
+# a ScheduleAMTCDtls row (that array is schema-capped at 13 items, exactly
+# matching AY2013-14 through AY2025-26, with no 14th slot for it).
+# AMTCreditItem.assessment_year is Pydantic-typed as any "YYYY-YY"-shaped
+# string (broader than this closed set), so an out-of-range year is only
+# caught here, at serialization time.
 _AMTC_VALID_PRIOR_YEARS = frozenset({
     "2013-14", "2014-15", "2015-16", "2016-17", "2017-18", "2018-19",
     "2019-20", "2020-21", "2021-22", "2022-23", "2023-24", "2024-25", "2025-26",
@@ -3459,87 +3475,105 @@ _AMTC_VALID_PRIOR_YEARS = frozenset({
 
 
 def _schedule_amtc(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize Schedule AMTC from the brought-forward AMT credit ledger.
+    """Serialize Schedule AMTC from the calculator's own AMTC computation.
 
-    Each ``ScheduleAMTCDtls`` row previously used entirely invented field
-    names (``AssessmentYear``/``AmtTaxCreditBF``/``TaxSection115JD``/
-    ``AmtTaxCreditUtilisedCY``/``AmtCreditCF``) that match none of the
-    schema's six actual, all-required field names
-    (``AssYr``/``Gross``/``AmtCreditSetOfEy``/``AmtCreditBalBroughtFwd``/
-    ``AmtCreditUtilized``/``BalAmtCreditCarryFwd``) -- every row was
-    unconditionally schema-invalid.
+    Confirmed against the official form directly (Reference Docs by CBDT &
+    ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf, Schedule AMTC page): Sl.1 =
+    this year's 115JC tax (Part B-TTI item 1d), Sl.2 = this year's
+    normal-provisions tax (Part B-TTI item 7), Sl.3 = (Sl.2-Sl.1) if
+    Sl.2>Sl.1 else 0 -- the utilization CAP, computed every year the 115JC
+    comparison is made, not gated on AMT winning. The brought-forward-credit
+    table (rows i-xiii) plus a distinct "Current AY" row (xiv, holding this
+    year's own newly-generated credit, not a brought-forward balance) are
+    disclosed by the calculator's own single FIFO computation
+    (``result.schedules["amtc"]``, ``app/engine/schedules/amt.py::
+    compute_amtc()``) -- the same total this schedule discloses is the exact
+    total already subtracted from the actual tax payable
+    (``result.amt_credit_utilised``), not a second, independently-derived
+    figure that could silently disagree with it.
     """
-    amt_in = input_data.amt_input
-    if amt_in is None or not amt_in.amt_credits:
+    amt = result.schedules.get("amt")
+    if amt is None or not getattr(amt, "chapter_xii_ba_applicable", False):
         return None
 
+    amtc = result.schedules.get("amtc")
     rows: list[dict[str, Any]] = []
     total_gross = _ZERO
     total_bal_bf = _ZERO
-    total_utilised = _ZERO
-    # This year's AMT-tax offset capacity is consumed oldest-credit-first
-    # (FIFO), matching the official form's own chronological year ordering.
-    # The previous code applied the FULL result.amt_tax independently to
-    # EVERY row instead of tracking how much capacity earlier (older) rows
-    # had already consumed -- a genuine double-counting bug for any return
-    # with more than one year of brought-forward credit, separate from the
-    # field-naming bug above and fixed in the same pass since it feeds the
-    # same AmtCreditUtilized figure being renamed here.
-    remaining_capacity = max(_ZERO, result.amt_tax)
-    for credit in sorted(amt_in.amt_credits, key=lambda c: c.assessment_year):
-        if credit.assessment_year not in _AMTC_VALID_PRIOR_YEARS:
-            raise ValueError(
-                f"Schedule AMTC assessment_year {credit.assessment_year!r} is not one of the "
-                f"official schema's valid prior years {sorted(_AMTC_VALID_PRIOR_YEARS)}."
-            )
-        bal_brought_forward = credit.credit_brought_forward
-        utilised = min(bal_brought_forward, remaining_capacity)
-        remaining_capacity -= utilised
-        carry_forward = bal_brought_forward - utilised
-        rows.append({
-            "AssYr": credit.assessment_year,
+    if amtc is not None:
+        for entry in amtc.entries:
+            if entry.assessment_year not in _AMTC_VALID_PRIOR_YEARS:
+                raise ValueError(
+                    f"Schedule AMTC assessment_year {entry.assessment_year!r} is not one of "
+                    f"the official schema's valid prior years {sorted(_AMTC_VALID_PRIOR_YEARS)}."
+                )
             # AMTCreditItem captures only the resulting balance brought
             # forward into this year, not a separate original-year "Gross"
-            # figure or how much was already set off in still-earlier
-            # years -- that finer breakdown isn't tracked anywhere in this
+            # figure or how much was already set off in still-earlier years
+            # -- that finer breakdown isn't tracked anywhere in this
             # codebase today. Treating the known balance as both Gross and
             # AmtCreditBalBroughtFwd (with AmtCreditSetOfEy at 0) is an
             # honest degenerate mapping: the schema's own implied identity
             # (Gross - AmtCreditSetOfEy == AmtCreditBalBroughtFwd) holds
             # exactly, it just can't disclose an already-partially-utilized
-            # year's original size separately from its current balance.
-            "Gross": _to_rupees(bal_brought_forward),
-            "AmtCreditSetOfEy": 0,
-            "AmtCreditBalBroughtFwd": _to_rupees(bal_brought_forward),
-            "AmtCreditUtilized": _to_rupees(utilised),
-            "BalAmtCreditCarryFwd": _to_rupees(carry_forward),
-        })
-        total_gross += bal_brought_forward
-        total_bal_bf += bal_brought_forward
-        total_utilised += utilised
+            # year's original size separately from its current balance. An
+            # expired (>15-assessment-year-old) entry discloses its full
+            # original balance as still "brought forward" with zero
+            # utilized/carried-forward -- the official schema has no
+            # dedicated "expired" flag, so this is the closest honest
+            # representation: the credit no longer legally exists, not that
+            # it was somehow all utilized or is still available.
+            bal_brought_forward = entry.brought_forward
+            rows.append({
+                "AssYr": entry.assessment_year,
+                "Gross": _to_rupees(bal_brought_forward),
+                "AmtCreditSetOfEy": 0,
+                "AmtCreditBalBroughtFwd": _to_rupees(bal_brought_forward),
+                "AmtCreditUtilized": _to_rupees(entry.utilised),
+                "BalAmtCreditCarryFwd": _to_rupees(entry.remaining_carry_forward),
+            })
+            total_gross += bal_brought_forward
+            total_bal_bf += bal_brought_forward
 
-    total_cf = total_bal_bf - total_utilised
-    return {
-        "ScheduleAMTCDtls": rows,
+    total_utilised = result.amt_credit_utilised
+    # Sl.6, "Amount of AMT liability available for credit in subsequent
+    # assessment years [total of 4(D)]" -- sum of EVERY row's own carry-
+    # forward column, i-xiii (old, unutilized) PLUS row xiv (this year's own
+    # newly-generated credit, amt.amt_credit) -- confirmed distinct from
+    # CurrYrAmtCreditFwd (row xiv's own value alone) by the two fields' near-
+    # identical names and the form's own row-xiv-vs-Sl.6 distinction.
+    old_credit_carry_forward = total_bal_bf - total_utilised
+    current_year_new_credit = getattr(amt, "amt_credit", _ZERO)
+    grand_total_carry_forward = old_credit_carry_forward + current_year_new_credit
+    tax_115jc = result.amt_tax
+    tax_other_provisions = result.gross_tax_liability
+    credit_available_this_year = max(_ZERO, tax_other_provisions - tax_115jc)
+    document: dict[str, Any] = {
         "CurrAssYr": "2026-27",
-        "TaxSection115JC": _to_rupees(result.amt_tax),
-        "TaxOthProvisions": _to_rupees(result.gross_tax_liability - result.amt_tax),
-        "AmtTaxCreditAvailable": _to_rupees(total_bal_bf),
-        "TaxSection115JD": _to_rupees(result.amt_tax),
-        "AmtLiabilityAvailable": _to_rupees(result.amt_tax),
+        "TaxSection115JC": _to_rupees(tax_115jc),
+        "TaxOthProvisions": _to_rupees(tax_other_provisions),
+        "AmtTaxCreditAvailable": _to_rupees(credit_available_this_year),
+        "TaxSection115JD": _to_rupees(tax_115jc),
+        "AmtLiabilityAvailable": _to_rupees(credit_available_this_year),
         "TotAmtCreditUtilisedCY": _to_rupees(total_utilised),
-        "CurrYrCreditCarryFwd": _to_rupees(total_cf),
-        "CurrYrAmtCreditFwd": _to_rupees(total_cf),
+        "CurrYrCreditCarryFwd": _to_rupees(grand_total_carry_forward),
+        "CurrYrAmtCreditFwd": _to_rupees(current_year_new_credit),
         "TotAMTGross": _to_rupees(total_gross),
         # "Total of AMT credit set-off in earlier years" -- a real monetary
-        # total (was previously len(rows), a row count, not an amount).
-        # Correctly 0 given AmtCreditSetOfEy is 0 on every row per the
-        # data-model limitation noted above; will self-correct once/if a
-        # genuine per-year set-off figure is ever captured.
+        # total, correctly 0 given AmtCreditSetOfEy is 0 on every row per
+        # the data-model limitation noted above; will self-correct once/if
+        # a genuine per-year set-off figure is ever captured.
         "TotSetOffEys": sum(row["AmtCreditSetOfEy"] for row in rows),
         "TotBalBF": _to_rupees(total_bal_bf),
-        "TotBalAMTCreditCF": _to_rupees(total_cf),
+        "TotBalAMTCreditCF": _to_rupees(old_credit_carry_forward),
     }
+    # ScheduleAMTCDtls is optional on the official schema, but minItems: 1
+    # when present -- omit it entirely rather than emit an empty array when
+    # there's no brought-forward credit at all (chapter in play, first year
+    # of AMT liability with nothing carried in yet).
+    if rows:
+        document["ScheduleAMTCDtls"] = rows
+    return document
 
 
 # ============================================================================
@@ -4012,6 +4046,11 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     # from post_loss_cg.
     si_result = result.schedules.get("si")
     total_special_rate_income = _to_rupees(getattr(si_result, "total_special_rate_income", _ZERO))
+    amt_for_ti = result.schedules.get("amt")
+    deemed_income_115jc = (
+        getattr(amt_for_ti, "adjusted_total_income", _ZERO)
+        if getattr(amt_for_ti, "chapter_xii_ba_applicable", False) else _ZERO
+    )
     return {
         "Salaries": _to_rupees(result.salary_income),
         "IncomeFromHP": _to_rupees(max(_ZERO, result.house_property_income)),
@@ -4049,7 +4088,10 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
         "NetAgricultureIncomeOrOtherIncomeForRate": _to_rupees(result.net_agricultural_income),
         "AggregateIncome": _to_rupees(result.aggregate_income),
         "LossesOfCurrentYearCarriedFwd": _to_rupees(result.cyla_remaining),
-        "DeemedIncomeUs115JC": 0,
+        # Item 17, "Deemed income under section 115JC (3 of Schedule AMT)" --
+        # real whenever the 115JC comparison was made this year, not only
+        # when AMT actually binds (matches _schedule_amt()'s own gate).
+        "DeemedIncomeUs115JC": _to_rupees(deemed_income_115jc),
         "TotalTI": _to_rupees_rounded10(result.taxable_income),
     }
 
@@ -4098,30 +4140,37 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     # any interest/fee applied -- a direct self-contradiction, since item 12
     # must be strictly less than item 14 in that case.
     #
-    # Items 8-10 (GrossTaxPayable -> AMT-credit adjustment -> item 10) are a
-    # separately-tracked gap (Schedule AMTC/115JD credit ledger not yet
-    # wired -- see this file's own `TaxPayAfterCreditUs115JD` comment below)
-    # under which item 10 always passes through equal to item 7
-    # (GrossTaxLiability) today, matching how `GrossTaxPayable` already
-    # degenerates to `GrossTaxLiability` while item 1d is 0. Mirroring that
-    # same pass-through here keeps this fix scoped to the item-12-vs-item-14
-    # mislabeling only; it will self-correct once the AMT-credit chain is
-    # wired, exactly like `GrossTaxPayable`'s own comment already notes.
-    balance_tax_after_relief = max(
-        _ZERO, result.gross_tax_liability - result.relief_89 - result.relief_90_91
+    # Items 1a-1d, 8, 9, 10, 12 (Phase 6i-4): confirmed against the official
+    # form directly (Reference Docs by CBDT & ITD/Official ITR FORMS/
+    # ITR-2-2026-Eng.pdf, Part B-TTI page). 1a = Schedule AMT's own Sl.4 (raw
+    # 18.5% figure, no surcharge/cess); 1b/1c = that figure's own surcharge/
+    # cess (added here, not inside Schedule AMT); 1d = 1a+1b+1c, the fully-
+    # inclusive 115JC tax = result.amt_tax (real whenever the chapter is "in
+    # play" this year, not only when AMT binds -- see calculators/itr2.py's
+    # own comment on this field). 8 = higher of 1d and 7 (result.
+    # gross_tax_payable, computed once in the calculator, never a second,
+    # independently-hardcoded value here). 9 = brought-forward AMT credit
+    # utilized this year (result.amt_credit_utilised, only nonzero when the
+    # chapter is in play but AMT does NOT bind, i.e. 7 > 1d). 10 = 8a + 8c -
+    # 9, where 8a = 8 (8b, this year's NEW eligible-startup ESOP deferral, is
+    # zero in this engine today -- ESOPDeferralInput has no field for the
+    # gross pre-deferral perquisite figure, a separate, already-documented
+    # gap) and 8c = TaxDeferredPayableCY (real, already-computed ESOP data,
+    # previously sitting in GrossTaxPay's own block but never reaching the
+    # actual tax-payable arithmetic at all).
+    amt = result.schedules.get("amt")
+    chapter_active = getattr(amt, "chapter_xii_ba_applicable", False)
+    tax_1a = getattr(amt, "amt_tax_before_surcharge_and_cess", _ZERO) if chapter_active else _ZERO
+    surcharge_1b = getattr(amt, "amt_surcharge", _ZERO) if chapter_active else _ZERO
+    cess_1c = getattr(amt, "amt_cess", _ZERO) if chapter_active else _ZERO
+    total_1d = result.amt_tax
+    tax_pay_after_credit_10 = max(
+        _ZERO,
+        result.gross_tax_payable + result.esop_deferred_payable_this_year - result.amt_credit_utilised,
     )
-    # Form item "1d" (Total tax payable on deemed total income u/s 115JC,
-    # 1a+1b+1c -- 1a itself being Schedule AMT's own item 4
-    # TaxPayableUnderSec115JC, 1b/1c its own surcharge/cess) is not yet
-    # computed by this builder; tracked as a separate, known gap (the
-    # Schedule AMTC/Part B-TTI AMT-credit linkage). Sourcing "GrossTaxPayable"
-    # (item "8", the higher of 1d and item 7 GrossTaxLiability) from this
-    # same placeholder, rather than a second independent hardcoded value,
-    # keeps the two fields internally consistent and correct for the
-    # (overwhelming majority of) returns AMT doesn't apply to -- where 1d is
-    # genuinely 0, "8" correctly degenerates to GrossTaxLiability -- and lets
-    # this figure self-correct automatically once 1d itself is wired up.
-    tax_payable_deemed_total_income = 0
+    balance_tax_after_relief = max(
+        _ZERO, tax_pay_after_credit_10 - result.relief_89 - result.relief_90_91
+    )
     return {
         "ComputationOfTaxLiability": {
             "TaxPayableOnTI": {
@@ -4145,34 +4194,25 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
             "TotalSurcharge": _to_rupees(result.surcharge),
             "EducationCess": _to_rupees(result.health_education_cess),
             "GrossTaxLiability": _to_rupees(result.gross_tax_liability),
-            # Form item "8": higher of 1d (tax_payable_deemed_total_income)
-            # and item 7 (GrossTaxLiability) -- was hardcoded 0 regardless
-            # of GrossTaxLiability, contradicting its own sibling field one
-            # line above on every return with any tax liability at all.
-            "GrossTaxPayable": max(tax_payable_deemed_total_income, _to_rupees(result.gross_tax_liability)),
+            "GrossTaxPayable": _to_rupees(result.gross_tax_payable),
             # "GrossTaxPay" (distinct from "GrossTaxPayable" above, and
             # unrelated in meaning) is the eligible-startup ESOP-deferred-tax
-            # structure (17(2)(vi)/80-IAC) -- see Schedule ESOP. TaxDeferredPayableCY
-            # ("tax deferred earlier now becoming payable this year") is
-            # real, already-computed data -- the exact same
-            # sum(tax_payable_current_year) Schedule ESOP's own
-            # TotalTaxAttributedAmt already uses (_schedule_esop(),
-            # ~line 3638), recomputed here rather than threaded through the
-            # function signature since both derive from the identical
-            # input_data.esop_deferrals list. TaxInc17 ("tax on income u/s
-            # 17" -- the gross ESOP perquisite tax BEFORE any deferral) and
-            # TaxDeferred17 (the deferred portion) stay 0: unlike
-            # TaxDeferredPayableCY, ESOPDeferralInput has no field for the
-            # gross pre-deferral perquisite figure at all -- would need new
-            # schema/frontend work to represent honestly, not just wiring.
+            # structure (17(2)(vi)/80-IAC) -- see Schedule ESOP.
+            # TaxDeferredPayableCY (item 8c) is real, already-computed data,
+            # now also feeding item 10's own "8a+8c-9" formula above (not
+            # just disclosed here in isolation as before). TaxInc17 (8a
+            # disclosed alone) and TaxDeferred17 (8b, this year's NEW
+            # deferral) stay 0: unlike TaxDeferredPayableCY, ESOPDeferralInput
+            # has no field for the gross pre-deferral perquisite figure at
+            # all -- would need new schema/frontend work to represent
+            # honestly, not just wiring (a separate, already-documented gap,
+            # not expanded by this fix).
             "GrossTaxPay": {
                 "TaxInc17": 0, "TaxDeferred17": 0,
-                "TaxDeferredPayableCY": _to_rupees(
-                    sum((e.tax_payable_current_year for e in input_data.esop_deferrals), _ZERO)
-                ),
+                "TaxDeferredPayableCY": _to_rupees(result.esop_deferred_payable_this_year),
             },
-            "CreditUS115JD": 0,
-            "TaxPayAfterCreditUs115JD": 0,
+            "CreditUS115JD": _to_rupees(result.amt_credit_utilised),
+            "TaxPayAfterCreditUs115JD": _to_rupees(tax_pay_after_credit_10),
             "NetTaxLiability": _to_rupees(balance_tax_after_relief),
             "IntrstPay": {
                 "IntrstPayUs234A": _to_rupees(result.interest_234a),
@@ -4193,10 +4233,21 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
             },
             "AggregateTaxInterestLiability": _to_rupees(result.net_tax_liability),
         },
-        "TaxPayDeemedTotIncUs115JC": tax_payable_deemed_total_income,
-        "TotalTaxPayablDeemedTotInc": 0,
-        "Surcharge": _to_rupees(result.surcharge),
-        "HealthEduCess": _to_rupees(result.health_education_cess),
+        # PartB_TTI's own top-level "TaxPayDeemedTotIncUs115JC"/"Surcharge"/
+        # "HealthEduCess"/"TotalTaxPayablDeemedTotInc" are items 1a/1b/1c/1d
+        # -- confirmed by the field-name match against the official form's
+        # own text ("Tax Pay[able on] Deemed Tot[al] Inc[ome] Under Sec
+        # 115JC" = item 1a; "Total Tax Payabl[e] Deemed Tot[al] Inc[ome]" =
+        # item 1d) and by their position as siblings of each other, distinct
+        # from ComputationOfTaxLiability's own "TotalSurcharge"/
+        # "EducationCess" (the NORMAL-provisions items 5iv/6). Previously
+        # "Surcharge"/"HealthEduCess" here duplicated the normal-provisions
+        # figures (result.surcharge/health_education_cess) -- the AMT-side
+        # surcharge/cess, not the normal-provisions ones.
+        "TaxPayDeemedTotIncUs115JC": _to_rupees(tax_1a),
+        "TotalTaxPayablDeemedTotInc": _to_rupees(total_1d),
+        "Surcharge": _to_rupees(surcharge_1b),
+        "HealthEduCess": _to_rupees(cess_1c),
         # Form item 19 / schema description: "any interest in any asset
         # (including financial interest in any entity)/signing authority in
         # any account located outside India" -- Schedule FA is exactly the

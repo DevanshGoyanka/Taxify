@@ -64,6 +64,23 @@ describe('validationFor — Schedule BFLA', () => {
   });
 });
 
+describe('validationFor — Schedule AMTC (brought-forward AMT credit)', () => {
+  it('rejects a malformed assessment year', () => {
+    const row: Row = { id: 'amtc-1', assessmentYear: 'not-a-year', creditBroughtForward: 50000 };
+    expect(validationFor('AMTC', row, '2026-27')).toContain('Assessment year must use YYYY-YY format.');
+  });
+
+  it('accepts a valid entry', () => {
+    const row: Row = { id: 'amtc-2', assessmentYear: '2023-24', creditBroughtForward: 50000 };
+    expect(validationFor('AMTC', row, '2026-27')).toEqual([]);
+  });
+
+  it('flags a negative brought-forward credit', () => {
+    const row: Row = { id: 'amtc-3', assessmentYear: '2023-24', creditBroughtForward: -1000 };
+    expect(validationFor('AMTC', row, '2026-27').some((message) => message.includes('cannot be negative'))).toBe(true);
+  });
+});
+
 describe('validationFor — Schedule SI', () => {
   it('rejects deductions on a special-rate-only section', () => {
     const row: Row = { id: 'si-1', section: '115BB', deductions: 500 };

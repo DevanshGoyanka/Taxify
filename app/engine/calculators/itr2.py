@@ -53,7 +53,9 @@ from app.engine.constants import (
 )
 from app.engine.schedules.agricultural import compute as compute_agri
 from app.engine.schedules.agricultural import compute_partial_integration_tax
-from app.engine.schedules.amt import AMTAddition, AMTAdditionSection, compute as compute_amt
+from app.engine.schedules.amt import (
+    AMTAddition, AMTAdditionSection, compute as compute_amt, compute_amtc,
+)
 from app.engine.schedules.capital_gains import (
     CG112AAsset,
     CGAsset,
@@ -176,6 +178,19 @@ class ITR2Result:
     surcharge: Decimal = _ZERO
     health_education_cess: Decimal = _ZERO
     gross_tax_liability: Decimal = _ZERO
+    # Part B-TTI item 8, "Gross tax payable" = higher of item 1d
+    # (amt_tax) and item 7 (gross_tax_liability) -- a field of its own,
+    # distinct from gross_tax_liability, which stays the pure
+    # normal-provisions figure even in an AMT-applicable year.
+    gross_tax_payable: Decimal = _ZERO
+    # Section 115JD brought-forward AMT credit utilized THIS year (Part
+    # B-TTI item 9 / Schedule AMTC Sl.5) -- only nonzero in a year the AMT
+    # chapter is in play but does not bind (item 7 > item 1d).
+    amt_credit_utilised: Decimal = _ZERO
+    # Part B-TTI item 8c, "Tax deferred from earlier years but payable
+    # during current AY" (Schedule Tax Deferred on ESOP) -- feeds item 10's
+    # "8a + 8c - 9" formula.
+    esop_deferred_payable_this_year: Decimal = _ZERO
 
     # Relief and interest
     relief_89: Decimal = _ZERO
@@ -1101,7 +1116,55 @@ def compute(input_data: ITR2Input) -> ITR2Result:
 
     r.slab_tax = slab_tax
 
-    # ── 14. AMT ──────────────────────────────────────────────────────────────
+    # ── 14. Total tax before relief/rebate (normal provisions only) ──────────
+    # Part B-TTI items 2-7 (tax on total income -> rebate -> surcharge ->
+    # cess -> "Gross tax liability") are a PURE normal-provisions computation
+    # per the official form -- confirmed by reading the form directly
+    # (Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf,
+    # Part B-TTI page): AMT has no influence anywhere in this chain. AMT is
+    # instead a fully separate parallel computation (Schedule AMT/Part
+    # B-TTI items 1a-1d) that only MERGES with this chain at item 8 ("Gross
+    # tax payable" = higher of 1d and 7) -- computed below, after this block,
+    # once item 7 (r.gross_tax_liability) is final and never touched again.
+    r.total_tax_before_relief = slab_tax + r.special_rate_tax
+    r.tax_before_rebate = r.total_tax_before_relief
+
+    # ── 15. Rebate u/s 87A ───────────────────────────────────────────────────
+    rebate = compute_rebate(
+        ti,
+        r.tax_before_rebate,
+        slab_tax,
+        regime,
+        is_resident_individual=is_resident and is_individual,
+    )
+    r.rebate_87a = rebate
+    r.tax_after_rebate = max(_ZERO, r.tax_before_rebate - rebate)
+
+    # ── 16. Surcharge ───────────────────────────────────────────────────────
+    surcharge = compute_surcharge(
+        ti,
+        r.tax_after_rebate,
+        regime,
+        age,
+        sr_tax=si_result.surcharge_cap_tax,
+        sr_surcharge_full_tax=si_result.surcharge_full_tax,
+        sr_income=si_result.surcharge_cap_income,
+        sr_surcharge_full_income=si_result.surcharge_full_income,
+    )
+    r.surcharge = surcharge
+
+    # ── 17. Cess ─────────────────────────────────────────────────────────────
+    cess = compute_cess(r.tax_after_rebate + surcharge)
+    r.health_education_cess = cess
+    # Item 7, "Gross tax liability" -- pure normal-provisions tax, NEVER
+    # overwritten by AMT (a prior version of this code overwrote this with
+    # amt_result.final_tax whenever AMT applied, conflating item 7 with item
+    # 8; the bottom-line final tax was still correct via final_tax, but item
+    # 7's own disclosure -- and Schedule AMTC's own Sl.2, which must read
+    # this exact figure every year the 115JC comparison is made -- was not).
+    r.gross_tax_liability = r.tax_after_rebate + surcharge + cess
+
+    # ── 18. AMT ──────────────────────────────────────────────────────────────
     # Build AMT additions from typed inputs
     amt_additions: list[AMTAddition] = []
     amt_in = input_data.amt_input
@@ -1126,76 +1189,80 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             if val > 0:
                 amt_additions.append(AMTAddition(section, val))
 
-    # AMT comparison uses tax before cess
-    tax_before_cess = slab_tax + r.special_rate_tax
+    # AMT's own applicability comparison (amt_total > regular_tax) must use a
+    # fully surcharge-and-cess-inclusive "regular tax" figure -- item 7 above
+    # already is exactly that, computed via the same compute_surcharge()/
+    # compute_cess() calls used everywhere else in this file, so no separate
+    # surcharge logic needs to exist inside amt.py at all. Previously this
+    # call passed slab_tax + special_rate_tax (BEFORE rebate, surcharge, AND
+    # cess) with regular_tax_includes_cess=False, which only added cess
+    # inside amt.py, never surcharge -- an apples-to-oranges comparison
+    # against amt_total (which does include its own surcharge), understating
+    # regular_tax and making AMT wrongly more likely to bind for any
+    # taxpayer where surcharge is material.
     amt_result = compute_amt(
         ti,
-        tax_before_cess,
+        r.gross_tax_liability,
         amt_additions or None,
         regime,
         age,
-        regular_tax_includes_cess=False,
+        regular_tax_includes_cess=True,
     )
-    r.amt_tax = _ZERO
-    if amt_result.amt_applicable:
-        r.amt_tax = amt_result.amt_tax - tax_before_cess
+    # Item 1d, "Total tax payable on deemed total income (1a+1b+1c)" -- real
+    # whenever the chapter is "in play" this year (qualifying addback
+    # deductions, old regime, ATI above the threshold), not only when AMT
+    # actually binds -- Schedule AMTC's own Sl.1 needs this real figure every
+    # such year to compute the credit-utilization cap (Sl.3), including years
+    # AMT does NOT bind, which is exactly when old credit becomes usable.
+    r.amt_tax = amt_result.amt_tax if amt_result.chapter_xii_ba_applicable else _ZERO
+    if amt_result.chapter_xii_ba_applicable:
         r.schedules["amt"] = amt_result
+    # Item 8, "Gross tax payable" = higher of 1d and 7 -- a field of its own,
+    # not a conditional overwrite of item 7.
+    r.gross_tax_payable = max(r.gross_tax_liability, r.amt_tax)
 
-    # ── 15. Total tax before relief/rebate ───────────────────────────────────
-    r.total_tax_before_relief = slab_tax + r.special_rate_tax + r.amt_tax
-    r.tax_before_rebate = r.total_tax_before_relief
+    # ── 19. AMT credit (section 115JD) ────────────────────────────────────────
+    # Schedule AMTC's own brought-forward-credit table is disclosed every
+    # year the chapter is in play AND real brought-forward credit exists,
+    # regardless of whether AMT binds this year -- the table shows the
+    # ledger's state (utilized/carried-forward per row) either way. The
+    # utilization CAP (item 7 - item 1d, Schedule AMTC Sl.3) naturally comes
+    # out to zero whenever AMT binds this year (item 1d > item 7), so no
+    # separate "does AMT apply" branch is needed here -- compute_amtc()'s own
+    # min() clamp already yields zero utilization for every row in that case,
+    # while a year AMT DOES bind instead GENERATES new credit
+    # (amt_result.amt_credit, Schedule AMTC's own "Current AY" row), which
+    # cannot be utilized in the same year it's created.
+    r.amt_credit_utilised = _ZERO
+    if amt_result.chapter_xii_ba_applicable and amt_in and amt_in.amt_credits:
+        utilisation_cap = max(_ZERO, r.gross_tax_liability - r.amt_tax)
+        amtc_result = compute_amtc(amt_in.amt_credits, utilisation_cap, "2026-27")
+        r.amt_credit_utilised = amtc_result.total_utilised
+        r.schedules["amtc"] = amtc_result
 
-    # ── 16. Rebate u/s 87A ───────────────────────────────────────────────────
-    rebate = compute_rebate(
-        ti,
-        r.tax_before_rebate,
-        slab_tax,
-        regime,
-        is_resident_individual=is_resident and is_individual,
-    )
-    r.rebate_87a = rebate
-    r.tax_after_rebate = max(_ZERO, r.tax_before_rebate - rebate)
-
-    # ── 17. Surcharge ───────────────────────────────────────────────────────
-    surcharge = compute_surcharge(
-        ti,
-        r.tax_after_rebate,
-        regime,
-        age,
-        sr_tax=si_result.surcharge_cap_tax,
-        sr_surcharge_full_tax=si_result.surcharge_full_tax,
-        sr_income=si_result.surcharge_cap_income,
-        sr_surcharge_full_income=si_result.surcharge_full_income,
-    )
-    r.surcharge = surcharge
-
-    # ── 18. Cess ─────────────────────────────────────────────────────────────
-    cess = compute_cess(r.tax_after_rebate + surcharge)
-    r.health_education_cess = cess
-    r.gross_tax_liability = r.tax_after_rebate + surcharge + cess
-
-    # Apply AMT final tax if applicable (AMT includes its own surcharge + cess)
-    if amt_result.amt_applicable:
-        r.gross_tax_liability = amt_result.final_tax
-
-    # ── 19. Foreign Tax Relief ───────────────────────────────────────────────
+    # ── 20. Foreign Tax Relief ───────────────────────────────────────────────
     # Section 90/90A (bilateral treaty relief) and Section 91 (unilateral
     # relief, no treaty) are disclosed as two separate Part B-TTI fields
     # (TaxRelief.Section90/Section91 -- the official schema has no distinct
     # Section90A field, so 90 and 90A share "Section90") -- previously the
     # combined total was always dumped entirely into Section90 with
     # Section91 hardcoded to zero, regardless of each entry's own
-    # relief_section. The combined, gross-tax-liability-capped total
-    # (relief_90_91) still drives the actual tax computation unchanged; the
-    # split below is for disclosure only, capped proportionally so it
-    # always sums back to the same capped total.
+    # relief_section. The combined total (relief_90_91) still drives the
+    # actual tax computation unchanged; the split below is for disclosure
+    # only, capped proportionally so it always sums back to the same capped
+    # total. Capped at gross_tax_payable (item 8, higher of 1d and 7), not
+    # gross_tax_liability (item 7 alone) -- item 11 relief is subtracted from
+    # item 10 (post-AMT-credit tax payable), which in an AMT-applicable year
+    # is item 8-derived, not item 7 alone; using item 7 here would under-cap
+    # relief in exactly that case, now that items 7 and 8 are no longer
+    # accidentally the same value.
     raw_relief_90_90a = sum(
         (tr1.relief_claimed for tr1 in input_data.tr1_entries if tr1.relief_section in ("90", "90A")), _ZERO,
     )
     raw_relief_91 = sum(
         (tr1.relief_claimed for tr1 in input_data.tr1_entries if tr1.relief_section == "91"), _ZERO,
     )
-    r.relief_90_91 = min(raw_relief_90_90a + raw_relief_91, r.gross_tax_liability)
+    r.relief_90_91 = min(raw_relief_90_90a + raw_relief_91, r.gross_tax_payable)
     raw_total = raw_relief_90_90a + raw_relief_91
     if raw_total > _ZERO and r.relief_90_91 < raw_total:
         _scale = r.relief_90_91 / raw_total
@@ -1246,14 +1313,29 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     r.total_self_assessment_tax = detailed_self_assessment or input_data.self_assessment_tax_paid
     r.total_taxes_paid = r.total_tds + r.total_tcs + r.total_advance_tax + r.total_self_assessment_tax
 
-    # ── 21. Interest and Late Fee ─────────────────────────────────────────────
+    # ── 21. Tax payable after AMT credit (item 10, "8a + 8c - 9") ────────────
+    # 8a = item 8 minus 8b (tax deferred THIS year on 80-IAC eligible-startup
+    # ESOP perquisites); 8c = tax deferred from EARLIER years now payable.
+    # ESOPDeferralInput has no field for 8b's own gross pre-deferral
+    # perquisite figure at all (a separate, already-documented gap -- see
+    # Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md, "Additional bugs
+    # noticed"), so 8b is treated as zero here (8a = item 8) -- an inherited
+    # simplification, not a new one. 8c is real, already-correct data.
+    r.esop_deferred_payable_this_year = sum(
+        (e.tax_payable_current_year for e in input_data.esop_deferrals), _ZERO,
+    )
+    tax_payable_after_amt_credit = max(_ZERO,
+        r.gross_tax_payable + r.esop_deferred_payable_this_year - r.amt_credit_utilised
+    )
+
+    # ── 22. Interest and Late Fee ─────────────────────────────────────────────
     filing_date = input_data.filing_date
     due_date = input_data.due_date or (get_due_date("ITR-2") if filing_date else None)
 
     if filing_date and due_date:
         assessed_tax = max(
             _ZERO,
-            r.gross_tax_liability - r.relief_90_91 - r.relief_89 - r.total_tds - r.total_tcs,
+            tax_payable_after_amt_credit - r.relief_90_91 - r.relief_89 - r.total_tds - r.total_tcs,
         )
         ay_start = date(due_date.year, 4, 1)
         r.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
@@ -1285,9 +1367,17 @@ def compute(input_data: ITR2Input) -> ITR2Result:
 
     r.total_interest = r.interest_234a + r.interest_234b + r.interest_234c
 
-    # ── 22. Final Payable/Refund ─────────────────────────────────────────────
+    # ── 23. Final Payable/Refund ─────────────────────────────────────────────
+    # Item 12, "Net tax liability (10 - 11d)" -- sourced from
+    # tax_payable_after_amt_credit (item 10), not gross_tax_liability (item
+    # 7) alone: brought-forward AMT credit utilized this year must actually
+    # reduce the amount payable, not just be disclosed. For the overwhelming
+    # majority of returns (no AMT-triggering deductions),
+    # tax_payable_after_amt_credit == gross_tax_liability (gross_tax_payable
+    # degenerates to it, amt_credit_utilised and esop_deferred_payable_this_
+    # year are both zero), so this is a no-op for those returns.
     net_liability = (
-        r.gross_tax_liability
+        tax_payable_after_amt_credit
         - r.relief_89
         - r.relief_90_91
         + r.total_interest

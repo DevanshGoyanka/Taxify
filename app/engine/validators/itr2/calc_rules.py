@@ -120,10 +120,15 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
             "aggregate_income", str(expected_aggregate), str(result.aggregate_income),
         ))
 
-    expected_tax_before_relief = result.slab_tax + result.special_rate_tax + result.amt_tax
+    # Phase 6i-4: AMT no longer folds into this chain at all -- confirmed
+    # against the official form directly, Part B-TTI items 2-7 (which this
+    # identity mirrors) are a pure normal-provisions computation; AMT is a
+    # fully separate parallel computation (items 1a-1d) that only merges in
+    # later, at item 8 ("Gross tax payable" = higher of 1d and 7).
+    expected_tax_before_relief = result.slab_tax + result.special_rate_tax
     if _different(result.total_tax_before_relief, expected_tax_before_relief):
         results.append(_result(
-            "ITR2-CALC-009", "Total tax before relief must equal slab, special-rate, and AMT tax.",
+            "ITR2-CALC-009", "Total tax before relief must equal slab and special-rate tax.",
             "total_tax_before_relief", str(expected_tax_before_relief), str(result.total_tax_before_relief),
         ))
     expected_after_rebate = max(_ZERO, result.tax_before_rebate - result.rebate_87a)
@@ -138,17 +143,25 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
             "ITR2-CALC-011", "Health and education cess must be 4% of tax plus surcharge.",
             "health_education_cess", str(expected_cess), str(result.health_education_cess),
         ))
+    # Phase 6i-4: gross_tax_liability (item 7) is now ALWAYS the pure
+    # normal-provisions figure -- previously overwritten to the AMT figure
+    # whenever AMT applied, which is why this check used to skip
+    # reconciliation entirely in AMT years (amt_schedule is not None). No
+    # skip is needed any more; this identity now holds unconditionally.
     expected_gross_tax = result.tax_after_rebate + result.surcharge + result.health_education_cess
-    amt_schedule = result.schedules.get("amt")
-    if amt_schedule is None and _different(result.gross_tax_liability, expected_gross_tax):
+    if _different(result.gross_tax_liability, expected_gross_tax):
         results.append(_result(
             "ITR2-CALC-012", "Gross tax liability does not reconcile with tax, surcharge, and cess.",
             "gross_tax_liability", str(expected_gross_tax), str(result.gross_tax_liability),
         ))
-    if result.relief_89 + result.relief_90_91 > result.gross_tax_liability:
+    # Capped at gross_tax_payable (item 8, higher of 1d and 7), not
+    # gross_tax_liability (item 7 alone) -- relief u/s 89/90/91 (item 11) is
+    # subtracted from item 10 (post-AMT-credit tax payable), which in an
+    # AMT-applicable year is item-8-derived, not item 7 alone.
+    if result.relief_89 + result.relief_90_91 > result.gross_tax_payable:
         results.append(_result(
-            "ITR2-CALC-013", "Tax relief cannot exceed gross tax liability.",
-            "relief_90_91", f"combined relief <= {result.gross_tax_liability}",
+            "ITR2-CALC-013", "Tax relief cannot exceed gross tax payable.",
+            "relief_90_91", f"combined relief <= {result.gross_tax_payable}",
             str(result.relief_89 + result.relief_90_91),
         ))
 
@@ -297,10 +310,14 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
     # findings for the official scenario text each closes.
 
     # B/D #1: Form 29C is mandatory when AMT tax exceeds normal tax.
-    # result.amt_tax is already exactly "AMT tax minus tax-before-cess" and
-    # is only nonzero when AMT actually applied (compute(), the "AMT" step) --
-    # so amt_tax > 0 is precisely this scenario.
-    if result.amt_tax > _ZERO:
+    # Phase 6i-4: result.amt_tax is now item 1d (real whenever the 115JC
+    # comparison is merely MADE this year, not only when AMT actually
+    # binds) -- the Form-29C-mandatory condition specifically needs AMT to
+    # have BOUND (item 1d > item 7), i.e. amt_applicable, not just
+    # chapter_xii_ba_applicable. Equivalently: result.gross_tax_payable >
+    # result.gross_tax_liability, since item 8 only exceeds item 7 when 1d
+    # does.
+    if result.gross_tax_payable > result.gross_tax_liability:
         results.append(_advisory(
             "ITR2-CALC-028",
             "AMT tax exceeds normal tax -- Form 29C (report under section "
@@ -311,10 +328,15 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
     # B/D #2: flag when AMT's own adjusted total income is at or below ₹50
     # lakh (below the level surcharge ordinarily applies at) but a surcharge
     # is nonetheless shown in Part B-TTI -- worth a second look, not
-    # necessarily wrong.
+    # necessarily wrong. Gated on amt_applicable specifically (AMT actually
+    # bound this year, matching Schedule AMT's own disclosure condition),
+    # not just chapter_xii_ba_applicable -- the schedules["amt"] object is
+    # now stored whenever the 115JC comparison was merely made, which is
+    # broader than this advisory's own intent.
     amt_schedule = result.schedules.get("amt")
     if (
         amt_schedule is not None
+        and getattr(amt_schedule, "amt_applicable", False)
         and getattr(amt_schedule, "adjusted_total_income", _ZERO) <= Decimal("5000000")
         and result.surcharge > _ZERO
     ):
