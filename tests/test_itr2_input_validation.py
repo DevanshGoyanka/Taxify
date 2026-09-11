@@ -1146,6 +1146,32 @@ def test_DTAA_001_no_advisory_for_non_resident():
     assert not emitted(validate_itr2_input(inp), "ITR2-IN-DTAA-001")
 
 
+def test_DTAA_002_applicable_rate_at_lower_of_treaty_and_it_act_passes():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        os_dtaa_entries=[_dtaa_entry(
+            rate_as_per_treaty=Decimal("15"), rate_as_per_it_act=Decimal("20"),
+            applicable_rate=Decimal("15"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-DTAA-002")
+
+
+def test_DTAA_002_applicable_rate_exceeding_lower_of_treaty_and_it_act_fails():
+    """Regression for Phase 6e: OSDtaaEntry.applicable_rate was a
+    free-standing field with no check against min(treaty rate, IT Act
+    rate) -- the whole point of a tax treaty is relief, never a worse rate
+    than either side's own figure."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        os_dtaa_entries=[_dtaa_entry(
+            rate_as_per_treaty=Decimal("15"), rate_as_per_it_act=Decimal("20"),
+            applicable_rate=Decimal("18"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-002")
+
+
 def _tds2(**overrides) -> TDS2Entry:
     fields = dict(deductor_tan="MUMA12345B", tds_section="194A", gross_amount=Decimal("100000"))
     fields.update(overrides)

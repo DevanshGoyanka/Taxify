@@ -1371,6 +1371,34 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             "os_dtaa_entries", severity=Severity.D,
         ))
 
+    # CBDT rule 127 (Sch CG A8 Col.10, Phase 6e, 2026-09-11): the applicable
+    # DTAA rate a taxpayer claims cannot exceed the lower of the treaty rate
+    # and the domestic IT Act rate -- the whole point of a tax treaty is
+    # relief, never a rate worse than either side's own figure.
+    # OSDtaaEntry.applicable_rate is a free-standing field with no
+    # model_validator or pre-compute check comparing it to
+    # min(rate_as_per_treaty, rate_as_per_it_act). No distinct Schedule-CG-
+    # side DTAA table is representable in ITR2Input at all (the official
+    # schema's own NRICgDTAA/NRITaxUsDTAALtcgType block -- a genuinely
+    # separate structure from this OS table, keyed by CG-specific item codes
+    # like "A1e"/"A2e_111A" -- has no corresponding ITR2Input field and the
+    # calculator's compute_stcg()/compute_ltcg() dtaa parameters are never
+    # populated from any real transaction data anywhere in this pipeline;
+    # this is a genuinely separate, deeper architectural gap, deliberately
+    # not addressed by this rule -- see Docs/
+    # ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md Phase 6e for the full write-up
+    # and why it needs its own dedicated phase, not a validator addition.
+    for index, entry in enumerate(inp.os_dtaa_entries):
+        _dtaa_ceiling = min(entry.rate_as_per_treaty, entry.rate_as_per_it_act)
+        if entry.applicable_rate > _dtaa_ceiling:
+            results.append(_result(
+                "ITR2-IN-DTAA-002", False,
+                "The applicable DTAA rate cannot exceed the lower of the treaty "
+                "rate and the IT Act rate.",
+                f"os_dtaa_entries[{index}].applicable_rate", f"<= {_dtaa_ceiling}",
+                str(entry.applicable_rate),
+            ))
+
     # B/D #12/#13: TDS section codes 194Q/194C/194R/194M under Schedule
     # TDS2/TDS3 indicate business-type income, which may not belong on
     # ITR-2. Checked against the raw user-facing section string
