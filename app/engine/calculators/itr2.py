@@ -180,6 +180,13 @@ class ITR2Result:
     # Relief and interest
     relief_89: Decimal = _ZERO
     relief_90_91: Decimal = _ZERO
+    # Disclosure-only split of relief_90_91 by relief_section (bilateral
+    # treaty relief u/s 90/90A vs unilateral relief u/s 91) -- relief_90_91
+    # itself remains the combined, gross-tax-liability-capped figure the
+    # tax computation actually uses; these two are for Part B-TTI's separate
+    # Section90/Section91 disclosure fields only. Always sum to relief_90_91.
+    relief_90_90a: Decimal = _ZERO
+    relief_91: Decimal = _ZERO
     interest_234a: Decimal = _ZERO
     interest_234b: Decimal = _ZERO
     interest_234c: Decimal = _ZERO
@@ -1161,10 +1168,31 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         r.gross_tax_liability = amt_result.final_tax
 
     # ── 19. Foreign Tax Relief ───────────────────────────────────────────────
-    r.relief_90_91 = _ZERO
-    for tr1 in input_data.tr1_entries:
-        r.relief_90_91 += tr1.relief_claimed
-    r.relief_90_91 = min(r.relief_90_91, r.gross_tax_liability)
+    # Section 90/90A (bilateral treaty relief) and Section 91 (unilateral
+    # relief, no treaty) are disclosed as two separate Part B-TTI fields
+    # (TaxRelief.Section90/Section91 -- the official schema has no distinct
+    # Section90A field, so 90 and 90A share "Section90") -- previously the
+    # combined total was always dumped entirely into Section90 with
+    # Section91 hardcoded to zero, regardless of each entry's own
+    # relief_section. The combined, gross-tax-liability-capped total
+    # (relief_90_91) still drives the actual tax computation unchanged; the
+    # split below is for disclosure only, capped proportionally so it
+    # always sums back to the same capped total.
+    raw_relief_90_90a = sum(
+        (tr1.relief_claimed for tr1 in input_data.tr1_entries if tr1.relief_section in ("90", "90A")), _ZERO,
+    )
+    raw_relief_91 = sum(
+        (tr1.relief_claimed for tr1 in input_data.tr1_entries if tr1.relief_section == "91"), _ZERO,
+    )
+    r.relief_90_91 = min(raw_relief_90_90a + raw_relief_91, r.gross_tax_liability)
+    raw_total = raw_relief_90_90a + raw_relief_91
+    if raw_total > _ZERO and r.relief_90_91 < raw_total:
+        _scale = r.relief_90_91 / raw_total
+        r.relief_90_90a = raw_relief_90_90a * _scale
+        r.relief_91 = r.relief_90_91 - r.relief_90_90a
+    else:
+        r.relief_90_90a = raw_relief_90_90a
+        r.relief_91 = raw_relief_91
     r.relief_89 = input_data.relief_89 + sal.salary_89a_relief
 
     # ── 20. Tax Credits ──────────────────────────────────────────────────────
@@ -1178,7 +1206,22 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # outright on any return with real tds3_entries data, before ever
     # reaching the JSON builder. No prior test exercised this path.
     r.total_tds += sum((entry.tds_claimed for entry in input_data.tds3_entries), _ZERO)
-    r.total_tcs = sum((entry.tcs_credit_claimed for entry in input_data.tcs_entries), _ZERO)
+    # Both tcs_credit_claimed ("TCSAmtCollOwnHand" -- TCS collected under the
+    # taxpayer's own PAN) and tcs_credit_claimed_spouse_or_other
+    # ("TCSAmtCollSpouseOrOthrHand" -- TCS collected under a spouse/other
+    # person's PAN but legitimately claimable by this taxpayer, Rule
+    # 37-I(3)) represent amounts THIS taxpayer is claiming as their own tax
+    # credit -- confirmed against the official schema's own
+    # "TCSCreditOwner: 1-Self; 2-Spouse or Other Person" description, which
+    # distinguishes whose PAN the TCS was collected against, not whose
+    # return benefits from the claim. Schedule TCS's own builder
+    # (_schedule_tcs's TotalSchTCS, app/engine/itd/itr2.py:3911-3915) already
+    # correctly sums both fields; omitting the spouse-side amount here made
+    # Part B-TTI silently disagree with Schedule TCS's own total.
+    r.total_tcs = sum(
+        (entry.tcs_credit_claimed + entry.tcs_credit_claimed_spouse_or_other for entry in input_data.tcs_entries),
+        _ZERO,
+    )
 
     detailed_advance = sum(
         (entry.amount for entry in input_data.tax_payment_entries if entry.payment_type == "advance"),

@@ -1557,6 +1557,30 @@ def test_tds2_tds3_tcs_carry_ownership_and_brought_forward_data() -> None:
     assert payload["ScheduleTCS"]["TotalSchTCS"] == 8500  # 6000 own + 2500 spouse
 
 
+def test_result_total_tcs_includes_spouse_or_other_person_claim() -> None:
+    """Regression for Phase 6g: result.total_tcs (the figure Part B-TTI's
+    tax-payable computation actually subtracts) previously summed only
+    tcs_credit_claimed, omitting tcs_credit_claimed_spouse_or_other --
+    silently disagreeing with Schedule TCS's own builder, which already
+    correctly sums both (TotalSchTCS). Both fields represent amounts THIS
+    taxpayer is claiming (TCSCreditOwner distinguishes whose PAN the TCS
+    was collected against, not whose return benefits)."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("500000")),
+        tcs_entries=[
+            TCSEntry(
+                collector_tan="DELA00002B", tcs_section="206C",
+                gross_amount=Decimal("100000"), tcs_collected=Decimal("10000"),
+                tcs_credit_claimed=Decimal("6000"), financial_year="2024-25",
+                ownership="2", pan_of_spouse_or_other_person="DDDPD3456E",
+                tcs_credit_claimed_spouse_or_other=Decimal("2500"),
+            )
+        ],
+    )
+    result = compute(input_data)
+    assert result.total_tcs == Decimal("8500")
+
+
 def test_schedule_tds3_serializes_the_buyer_tenants_aadhaar() -> None:
     """``TDS3Entry.tenant_aadhaar`` was correctly mapped from the draft but
     had no path to the JSON at all -- ``_schedule_tds3()`` built
@@ -3322,6 +3346,13 @@ def test_schedule_esop_aggregates_same_year_entries_instead_of_dropping_them() -
     assert esop["ScheduleESOP2627_Type"]["BalanceTaxCF"] == 17000  # 8000 + 3000 + 6000
     assert esop["TotalTaxAttributedAmt"] == 22000  # 10000 + 5000 + 7000
 
+    # Regression for Phase 6g: Part B-TTI's GrossTaxPay.TaxDeferredPayableCY
+    # was hardcoded to 0 regardless of the real ESOP deferral data,
+    # contradicting Schedule ESOP's own correctly-computed
+    # TotalTaxAttributedAmt one schedule over.
+    gross_tax_pay = document["ITR"]["ITR2"]["PartB_TTI"]["ComputationOfTaxLiability"]["GrossTaxPay"]
+    assert gross_tax_pay["TaxDeferredPayableCY"] == 22000
+
 
 def test_esop_deferral_rejects_dpiit_registration_number_with_wrong_format() -> None:
     """``ESOPDeferralInput.dpiit_registration_number`` previously had no
@@ -3548,6 +3579,42 @@ def test_schedule_tr1_dtaa_split_is_not_double_counted_across_mixed_relief_secti
     assert tr1["TaxReliefOutsideIndiaDTAA"] == 8000
     assert tr1["TaxReliefOutsideIndiaNotDTAA"] == 4000
     assert tr1["TotalTaxReliefOutsideIndia"] == 12000  # not 24000 (double-counted)
+
+
+def test_partb_tti_tax_relief_splits_section_90_from_section_91() -> None:
+    """Regression for Phase 6g: Part B-TTI's TaxRelief block previously
+    dumped the entire combined foreign-tax-relief total into Section90
+    (bilateral treaty relief u/s 90/90A) with Section91 (unilateral relief,
+    no treaty) hardcoded to zero, regardless of each TR1Entry's own
+    relief_section -- even though that field is real, user-suppliable data.
+    The combined total driving the actual tax computation is unchanged;
+    only the disclosure split was wrong."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("2000000")),
+        fsi_entries=[
+            FSICountryEntry(country_code="44", tax_identification_no="UK-TIN-1", salary_income=Decimal("100000")),
+            FSICountryEntry(country_code="33", tax_identification_no="FR-TIN-1", salary_income=Decimal("50000")),
+        ],
+        tr1_entries=[
+            TR1Entry(
+                country_code="44", tax_identification_no="UK-TIN-1",
+                tax_paid_outside_india=Decimal("10000"), indian_tax_payable=Decimal("8000"),
+                relief_claimed=Decimal("8000"), relief_section="90",
+            ),
+            TR1Entry(
+                country_code="33", tax_identification_no="FR-TIN-1",
+                tax_paid_outside_india=Decimal("5000"), indian_tax_payable=Decimal("4000"),
+                relief_claimed=Decimal("4000"), relief_section="91",
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    relief = document["ITR"]["ITR2"]["PartB_TTI"]["ComputationOfTaxLiability"]["TaxRelief"]
+    assert relief["Section90"] == 8000
+    assert relief["Section91"] == 4000
+    assert relief["TotTaxRelief"] == relief["Section89"] + 8000 + 4000
 
 
 def test_schedule_fa_fsi_tr_derive_real_country_name_from_the_code() -> None:

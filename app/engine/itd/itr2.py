@@ -4082,8 +4082,8 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
             },
             "TaxRelief": {
                 "Section89": _to_rupees(result.relief_89),
-                "Section90": _to_rupees(result.relief_90_91),
-                "Section91": 0,
+                "Section90": _to_rupees(result.relief_90_90a),
+                "Section91": _to_rupees(result.relief_91),
                 "TotTaxRelief": _to_rupees(result.relief_89 + result.relief_90_91),
             },
             "Rebate87A": _to_rupees(result.rebate_87a),
@@ -4102,8 +4102,25 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
             "GrossTaxPayable": max(tax_payable_deemed_total_income, _to_rupees(result.gross_tax_liability)),
             # "GrossTaxPay" (distinct from "GrossTaxPayable" above, and
             # unrelated in meaning) is the eligible-startup ESOP-deferred-tax
-            # structure (17(2)(vi)/80-IAC) -- see Schedule ESOP.
-            "GrossTaxPay": {"TaxInc17": 0, "TaxDeferred17": 0, "TaxDeferredPayableCY": 0},
+            # structure (17(2)(vi)/80-IAC) -- see Schedule ESOP. TaxDeferredPayableCY
+            # ("tax deferred earlier now becoming payable this year") is
+            # real, already-computed data -- the exact same
+            # sum(tax_payable_current_year) Schedule ESOP's own
+            # TotalTaxAttributedAmt already uses (_schedule_esop(),
+            # ~line 3638), recomputed here rather than threaded through the
+            # function signature since both derive from the identical
+            # input_data.esop_deferrals list. TaxInc17 ("tax on income u/s
+            # 17" -- the gross ESOP perquisite tax BEFORE any deferral) and
+            # TaxDeferred17 (the deferred portion) stay 0: unlike
+            # TaxDeferredPayableCY, ESOPDeferralInput has no field for the
+            # gross pre-deferral perquisite figure at all -- would need new
+            # schema/frontend work to represent honestly, not just wiring.
+            "GrossTaxPay": {
+                "TaxInc17": 0, "TaxDeferred17": 0,
+                "TaxDeferredPayableCY": _to_rupees(
+                    sum((e.tax_payable_current_year for e in input_data.esop_deferrals), _ZERO)
+                ),
+            },
             "CreditUS115JD": 0,
             "TaxPayAfterCreditUs115JD": 0,
             "NetTaxLiability": _to_rupees(balance_tax_after_relief),

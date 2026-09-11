@@ -1235,6 +1235,53 @@ def test_OS_004_race_horse_balance_matching_formula_passes():
     assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-004")
 
 
+def test_OS_005_individual_claiming_89a_relief_passes():
+    inp = _base_input(
+        filing_profile=_filing_profile(AssesseeStatus.INDIVIDUAL),
+        os_section_89a=OSSection89A(income_notified=Decimal("200000"), relief=Decimal("50000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-005")
+
+
+def test_OS_005_huf_claiming_89a_relief_fails():
+    """Regression for Phase 6g: Section 89A (foreign-retirement-account
+    income deferral) is only available to individuals -- nothing prevented
+    an HUF from claiming it."""
+    huf_profile = ITR2FilingProfile(
+        pan="ABCPN1234F", assessee_status=AssesseeStatus.HUF, surname_or_org_name="Nair HUF",
+        date_of_birth_or_formation=date(1985, 6, 15), father_name="Ramesh Nair",
+        verification_place="Mumbai", verification_capacity="K", karta_pan="ABCPX1234F",
+        primary_address=FilingAddress(
+            residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
+            state_code="27", mobile_no="9876543210", email="priya@example.com",
+        ),
+    )
+    inp = _base_input(
+        filing_profile=huf_profile,
+        os_section_89a=OSSection89A(income_notified=Decimal("200000"), relief=Decimal("50000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-005")
+
+
+def test_OS_006_89a_relief_within_notified_income_passes():
+    inp = _base_input(os_section_89a=OSSection89A(income_notified=Decimal("200000"), relief=Decimal("200000")))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-006")
+
+
+def test_OS_006_89a_relief_exceeding_notified_income_fails():
+    """Regression for Phase 6g: OSSection89A.relief had no cap against
+    income_notified anywhere -- also structurally closes CBDT rule #226
+    (relief allowed only if income is offered in Sl.1e), since a nonzero
+    relief against a zero income_notified fails this same check."""
+    inp = _base_input(os_section_89a=OSSection89A(income_notified=Decimal("100000"), relief=Decimal("150000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-006")
+
+
+def test_OS_006_89a_relief_without_notified_income_fails():
+    inp = _base_input(os_section_89a=OSSection89A(income_notified=Decimal("0"), relief=Decimal("1")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-006")
+
+
 def test_OS_004_race_horse_balance_not_matching_formula_fails():
     """Regression for Phase 6f: OSRaceHorseActivity.balance is trusted as
     raw user input with no recomputation from its own components (receipts

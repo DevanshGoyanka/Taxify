@@ -974,6 +974,41 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "os_race_horse.balance", str(_expected_balance), str(rh.balance),
             ))
 
+    # CBDT rule 59 (Phase 6g, 2026-09-11): Section 89A (foreign-retirement-
+    # account income deferral) is only available to individuals -- an HUF
+    # cannot claim it. Checked against filing_profile.assessee_status
+    # (Individual='I'/HUF='H'), the same field the existing HUF-restricted
+    # deduction checks (ITR2-IN-VIA-002/003) already key off.
+    if (
+        inp.os_section_89a is not None
+        and inp.filing_profile is not None
+        and inp.filing_profile.assessee_status == AssesseeStatus.HUF
+        and (inp.os_section_89a.income_notified > _ZERO or inp.os_section_89a.relief > _ZERO)
+    ):
+        results.append(_result(
+            "ITR2-IN-OS-005", False,
+            "Section 89A (retirement benefit account income deferral) cannot be "
+            "claimed by an HUF.",
+            "os_section_89a", "present only for AssesseeStatus.INDIVIDUAL",
+            f"assessee_status={inp.filing_profile.assessee_status}",
+        ))
+
+    # CBDT rules 60/224/226: Section 89A relief cannot exceed the notified
+    # income it's claimed against (form Sl.1e, "Income from retirement
+    # benefit account maintained in a notified country u/s 89A") -- this
+    # single comparison also structurally closes rule #226 ("relief allowed
+    # only if income is offered in Sl.1e"), since a nonzero relief against a
+    # zero income_notified always fails the same `relief > income_notified`
+    # check.
+    if inp.os_section_89a is not None and inp.os_section_89a.relief > inp.os_section_89a.income_notified:
+        results.append(_result(
+            "ITR2-IN-OS-006", False,
+            "Section 89A relief cannot exceed the income offered under "
+            "retirement benefit account income (Sl.1e).",
+            "os_section_89a.relief", f"<= {inp.os_section_89a.income_notified}",
+            str(inp.os_section_89a.relief),
+        ))
+
     for index, si in enumerate(inp.si_entries or []):
         if si.section == "115BBJ" and si.deductions > _ZERO:
             results.append(_result(
