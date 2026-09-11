@@ -2165,6 +2165,60 @@ def test_schedule_os_serializes_race_horse_activity_and_includes_net_profit_in_g
     assert result.other_sources_income == Decimal("200000")
 
 
+def test_schedule_cyla_bfla_racehorse_rows_carry_real_setoff_figures() -> None:
+    """Regression for Phase 6i-2: OthSrcRaceHorse's own CYLA/BFLA rows were
+    unconditionally hardcoded to zero (rows #246/#261) regardless of real
+    race-horse profit, and a machinery/plant-letting net loss was silently
+    discarded rather than set off against it first (CBDT rule #267). With a
+    200000 race-horse profit and a 40000 non-racehorse OS loss (machinery
+    rent 10000 net of 50000 expenses), the loss must be set off against
+    race-horse profit first, leaving 160000 disclosed as the race-horse
+    row's own post-setoff income -- and OthSrcExclRaceHorse must exclude
+    the race-horse profit entirely (rule #260), not the pre-fix merged
+    total."""
+    input_data = _input(
+        os_race_horse=OSRaceHorseActivity(
+            receipts=Decimal("500000"), deduction_us57=Decimal("300000"),
+            balance=Decimal("200000"),
+        ),
+        os_machinery_plant_rent=Decimal("10000"),
+        os_deductions=OSDeductions(expenses=Decimal("50000")),
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+
+    assert result.other_sources_income == Decimal("200000")
+    # GTI-level check: the 40000 OS loss must actually reduce taxable
+    # income (not just the disclosure), matching the amount the CYLA row
+    # itself shows was absorbed -- gross racehorse profit (200000) less the
+    # OS loss it absorbed (40000).
+    assert result.gross_total_income == Decimal("160000")
+
+    cyla = document["ITR"]["ITR2"]["ScheduleCYLA"]
+    racehorse_cyla = cyla["OthSrcRaceHorse"]["IncCYLA"]
+    assert racehorse_cyla["IncOfCurYrUnderThatHead"] == 200000
+    assert racehorse_cyla["OthSrcLossNoRaceHorseSetoff"] == 40000
+    assert racehorse_cyla["IncOfCurYrAfterSetOff"] == 160000
+
+    excl_cyla = cyla["OthSrcExclRaceHorse"]["IncCYLA"]
+    assert excl_cyla["IncOfCurYrUnderThatHead"] == 0
+    assert excl_cyla["IncOfCurYrAfterSetOff"] == 0
+
+    assert cyla["TotalCurYr"]["TotOthSrcLossNoRaceHorse"] == 40000
+    assert cyla["TotalLossSetOff"]["TotOthSrcLossNoRaceHorseSetoff"] == 40000
+    assert cyla["LossRemAftSetOff"]["BalOthSrcLossNoRaceHorseAftSetoff"] == 0
+
+    bfla = document["ITR"]["ITR2"]["ScheduleBFLA"]
+    racehorse_bfla = bfla["OthSrcRaceHorse"]["IncBFLA"]
+    assert racehorse_bfla["IncOfCurYrUndHeadFromCYLA"] == 160000
+    assert racehorse_bfla["IncOfCurYrAfterSetOffBFLosses"] == 160000
+
+    excl_bfla = bfla["OthSrcExclRaceHorse"]["IncBFLA"]
+    assert excl_bfla["IncOfCurYrUndHeadFromCYLA"] == 0
+    assert excl_bfla["IncOfCurYrAfterSetOffBFLosses"] == 0
+
+
 def test_schedule_os_serializes_machinery_rent_and_pass_through_income() -> None:
     """RentFromMachPlantBldgs and NatofPassThrghIncome reach the JSON --
     previously always hardcoded to zero even though the frontend

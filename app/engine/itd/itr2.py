@@ -332,6 +332,17 @@ def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
     salary = max(z, result.salary_income)
     hp_inc = max(z, result.house_property_income)
     os_inc = max(z, result.other_sources_income)
+    # `os_inc` above is deliberately racehorse-inclusive (matches
+    # `result.other_sources_income`'s own gross, pre-set-off convention --
+    # see the calculator's own note on this). The OthSrcExclRaceHorse row
+    # needs the racehorse-EXCLUSIVE figure (CBDT rule #260); derive it by
+    # subtracting the original gross racehorse profit, recovered as
+    # racehorse_setoff + racehorse_remaining since CYLA's own racehorse
+    # pool only ever decreases from that starting value.
+    racehorse_setoff = getattr(cyla, "racehorse_setoff", z) if cyla else z
+    racehorse_remaining = getattr(cyla, "racehorse_remaining", z) if cyla else z
+    racehorse_gross = racehorse_setoff + racehorse_remaining
+    os_inc_excl_rh = os_inc - racehorse_gross
 
     # Per-basket "current year income" figures for Schedule CYLA's own six
     # CG rows must be Table E's own Column-8 (post-Section-70-intra-CG-
@@ -391,19 +402,23 @@ def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
         "LTCG12_5Per": {"IncCYLA": _inc_cyla(ltcg125_inc, z, z, ltcg125_after)},
         "LTCGDTAARate": {"IncCYLA": _inc_cyla(ltcg_dtaa_inc, z, z, ltcg_dtaa_after)},
         "IncOSDTAA": {"IncCYLA": _inc_cyla(z, z, z, z)},
-        "OthSrcExclRaceHorse": {"IncCYLA": _inc_cyla_os(os_inc, hp_setoff, max(z, os_inc - hp_setoff))},
-        "OthSrcRaceHorse": {"IncCYLA": _inc_cyla(z, z, z, z)},
+        "OthSrcExclRaceHorse": {
+            "IncCYLA": _inc_cyla_os(os_inc_excl_rh, hp_setoff, max(z, os_inc_excl_rh - hp_setoff))
+        },
+        "OthSrcRaceHorse": {
+            "IncCYLA": _inc_cyla(racehorse_gross, z, racehorse_setoff, racehorse_remaining)
+        },
         "LossRemAftSetOff": {
             "BalHPlossCurYrAftSetoff": _to_rupees(hp_remaining),
-            "BalOthSrcLossNoRaceHorseAftSetoff": 0,
+            "BalOthSrcLossNoRaceHorseAftSetoff": _to_rupees(getattr(cyla, "os_loss_remaining", z) if cyla else z),
         },
         "TotalCurYr": {
             "TotHPlossCurYr": _to_rupees(hp_remaining),
-            "TotOthSrcLossNoRaceHorse": 0,
+            "TotOthSrcLossNoRaceHorse": _to_rupees(getattr(cyla, "os_loss_total", z) if cyla else z),
         },
         "TotalLossSetOff": {
             "TotHPlossCurYrSetoff": _to_rupees(hp_setoff),
-            "TotOthSrcLossNoRaceHorseSetoff": 0,
+            "TotOthSrcLossNoRaceHorseSetoff": _to_rupees(getattr(cyla, "os_loss_setoff_total", z) if cyla else z),
         },
     }
 
@@ -424,6 +439,14 @@ def _schedule_bfla(result: ITR2Result) -> dict[str, Any]:
 
     # Per-basket post-CYLA incomes and BF set-offs
     cyla = result.schedules.get("cyla")
+    # Same racehorse-exclusion derivation as _schedule_cyla() -- OthSrcExclRaceHorse
+    # never receives a brought-forward set-off (no BF-loss head targets it),
+    # so its BFLA figure is unchanged from CYLA's own os_inc_excl_rh.
+    racehorse_setoff_cyla = getattr(cyla, "racehorse_setoff", z) if cyla else z
+    racehorse_remaining_cyla = getattr(cyla, "racehorse_remaining", z) if cyla else z
+    os_inc_excl_rh = os_inc - racehorse_setoff_cyla - racehorse_remaining_cyla
+    racehorse_bf_setoff = getattr(bfla, "racehorse_setoff", z) if bfla else z
+    racehorse_bf_remaining = getattr(bfla, "racehorse_remaining", z) if bfla else racehorse_remaining_cyla
     stcg20_cyla = _positive_val(cyla, "stcg20_remaining") if cyla else z
     stcg30_cyla = _positive_val(cyla, "stcg30_remaining") if cyla else z
     stcg_app_cyla = _positive_val(cyla, "stcg_app_remaining") if cyla else z
@@ -449,8 +472,10 @@ def _schedule_bfla(result: ITR2Result) -> dict[str, Any]:
         "LTCG12_5Per": {"IncBFLA": _inc_bfla(ltcg125_cyla, max(z, ltcg125_cyla - ltcg125_after), ltcg125_after)},
         "LTCGDTAARate": {"IncBFLA": _inc_bfla(ltcg_dtaa_cyla, max(z, ltcg_dtaa_cyla - ltcg_dtaa_after), ltcg_dtaa_after)},
         "IncOSDTAA": {"IncBFLA": _inc_bfla_no_bf(z, z)},
-        "OthSrcExclRaceHorse": {"IncBFLA": _inc_bfla_no_bf(os_inc, os_inc)},
-        "OthSrcRaceHorse": {"IncBFLA": _inc_bfla(z, z, z)},
+        "OthSrcExclRaceHorse": {"IncBFLA": _inc_bfla_no_bf(os_inc_excl_rh, os_inc_excl_rh)},
+        "OthSrcRaceHorse": {
+            "IncBFLA": _inc_bfla(racehorse_remaining_cyla, racehorse_bf_setoff, racehorse_bf_remaining)
+        },
         "IncomeOfCurrYrAftCYLABFLA": _to_rupees(result.gross_total_income),
         "TotalBFLossSetOff": {"TotBFLossSetoff": _to_rupees(result.bfla_total_set_off)},
     }

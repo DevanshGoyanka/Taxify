@@ -467,28 +467,36 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # Income from owning/maintaining race horses (Schedule OS's own
     # "IncFromOwnHorse" sub-head) is slab-rate Other Sources income like any
     # other OS category, just disclosed separately in the official form.
-    # Only a net profit is added to GTI here -- a race-horse activity loss
-    # cannot be set off against other income at all (section 74A(3)), so a
-    # negative balance is disclosed but not netted against other OS income;
-    # its carry-forward is a further, separately-scoped limitation.
+    # The gross (pre-set-off) profit is added to GTI here, unchanged --
+    # `result.other_sources_income` is deliberately racehorse-inclusive
+    # throughout (Schedule OS's own summary and Part B-TI both rely on
+    # this), and the aggregate CYLA/BFLA set-off subtraction at
+    # `gti_after` below is what actually nets out whatever a non-racehorse
+    # OS loss absorbs against it (see the CYLAInput construction further
+    # down). `racehorse_profit_in_os` is kept for that CYLAInput wiring.
+    racehorse_profit_in_os = _ZERO
     if input_data.os_race_horse is not None:
-        r.other_sources_income += max(_ZERO, input_data.os_race_horse.balance)
+        racehorse_profit_in_os = max(_ZERO, input_data.os_race_horse.balance)
+        r.other_sources_income += racehorse_profit_in_os
     # Income from letting machinery/plant/furniture (Section 56(2)(ii)/(iii),
     # Schedule OS's "RentFromMachPlantBldgs") is ordinary slab-rate Other
     # Sources income computed net of its own specific deductions --
     # Expenses/Depreciation/interest u/s 57 reduce it, while amounts
     # disallowed u/s 58 and deemed profits u/s 59 (a balancing charge on
-    # sale of assets used in the letting activity) add back to it. Floored
-    # at zero: a resulting loss would need its own carry-forward tracking,
-    # a further scoped-out limitation matching the race-horse treatment
-    # above.
+    # sale of assets used in the letting activity) add back to it. Only the
+    # positive net is added to GTI here (unchanged); a resulting loss
+    # (`os_loss_amount`) is today's only representable current-year
+    # "normal" Other Sources loss and is routed into CYLA below instead of
+    # being silently discarded -- CBDT rule #267 requires it be set off
+    # against race-horse profit first, then (per Section 71) cross-head.
+    os_loss_amount = _ZERO
     if input_data.os_machinery_plant_rent:
         ded = input_data.os_deductions
         deductible = (ded.expenses + ded.depreciation + ded.interest_expense_us57) if ded else _ZERO
         addbacks = (ded.amount_not_deductible_us58 + ded.profit_chargeable_us59) if ded else _ZERO
-        r.other_sources_income += max(
-            _ZERO, input_data.os_machinery_plant_rent - deductible + addbacks
-        )
+        mp_rent_net = input_data.os_machinery_plant_rent - deductible + addbacks
+        r.other_sources_income += max(_ZERO, mp_rent_net)
+        os_loss_amount = max(_ZERO, -mp_rent_net)
     # NRI/FII special-rate Other Sources income (Section 115A/115AC/115ACA/
     # 115AD/115E family, Schedule OS's "OthersGrossDtls" dropdown) lives in
     # its own `os_special_rate_entries` field, entirely separate from
@@ -700,6 +708,8 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         non_spec_biz_income=_ZERO,
         spec_biz_loss=_ZERO,
         spec_biz_income=_ZERO,
+        racehorse_income=racehorse_profit_in_os,
+        os_loss=os_loss_amount,
     )
     cyla = compute_cyla(cy_input)
     r.cyla_total_set_off = cyla.total_loss_set_off
@@ -728,6 +738,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         stcg_dtaa_income=cyla.stcg_dtaa_remaining,
         ltcg125_income=cyla.ltcg125_remaining,
         ltcg_dtaa_income=cyla.ltcg_dtaa_remaining,
+        racehorse_income=cyla.racehorse_remaining,
         bf_losses=bf_loss_items,
         current_ay="2026-27",
     )

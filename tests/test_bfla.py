@@ -114,3 +114,65 @@ def test_bfla_speculative_4_year_expiry():
     )
     result = compute(inp)
     assert result.total_bf_loss_set_off == D("0")
+
+
+def test_bfla_racehorse_setoff_against_current_racehorse_income():
+    """Section 74A(3): a brought-forward race-horse-activity loss may only
+    be set off against current-year race-horse profit (post-CYLA
+    remaining), never any other pool."""
+    inp = BFLAInput(
+        racehorse_income=D("80000"),
+        current_ay="2026-27",
+        bf_losses=[{
+            "assessment_year": "2024-25",
+            "head": "RaceHorse",
+            "sub_category": "",
+            "original_loss": D("50000"),
+            "brought_forward": D("50000"),
+        }],
+    )
+    result = compute(inp)
+    assert result.racehorse_setoff == D("50000")
+    assert result.racehorse_remaining == D("30000")
+    assert result.total_bf_loss_set_off == D("50000")
+    assert result.total_bf_remaining == D("0")
+
+
+def test_bfla_racehorse_loss_without_current_racehorse_income_passes_through_unset_off():
+    """No current-year race-horse profit to absorb against -- the loss
+    simply carries forward unset-off this year (matches the pre-fix
+    behaviour `test_schedule_cfl_reports_race_horse_loss_instead_of_
+    dropping_it` in tests/test_itr2_itd_builder.py documents, now for the
+    correctly-reasoned reason -- an explicit "RaceHorse" branch with an
+    empty pool -- rather than the previous no-branch-matches accident)."""
+    inp = BFLAInput(
+        current_ay="2026-27",
+        bf_losses=[{
+            "assessment_year": "2024-25",
+            "head": "RaceHorse",
+            "sub_category": "",
+            "original_loss": D("40000"),
+            "brought_forward": D("40000"),
+        }],
+    )
+    result = compute(inp)
+    assert result.racehorse_setoff == D("0")
+    assert result.total_bf_loss_set_off == D("0")
+    assert result.total_bf_remaining == D("40000")
+
+
+def test_bfla_racehorse_4_year_expiry():
+    inp = BFLAInput(
+        racehorse_income=D("100000"),
+        current_ay="2026-27",
+        bf_losses=[{
+            "assessment_year": "2021-22",
+            "head": "RaceHorse",
+            "sub_category": "",
+            "original_loss": D("50000"),
+            "brought_forward": D("50000"),
+        }],
+    )
+    result = compute(inp)
+    assert result.racehorse_setoff == D("0")
+    assert result.total_bf_loss_set_off == D("0")

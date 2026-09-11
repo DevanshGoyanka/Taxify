@@ -63,6 +63,21 @@ class CYLAInput:
     hp_income: Decimal = _ZERO
     non_spec_biz_income: Decimal = _ZERO
     spec_biz_income: Decimal = _ZERO
+    # Schedule OS's "IncFromOwnHorse" sub-head (racehorse activity) and any
+    # other current-year Other Sources loss (today: only the Section
+    # 56(2)(ii)/(iii) machinery/plant-letting net figure can go negative,
+    # every other OS component is schema-floored at >=0). Both passed as
+    # positive magnitudes (matching hp_income's own convention -- NOT
+    # hp_loss/non_spec_biz_loss/spec_biz_loss, which despite this class's
+    # own docstring above are actually passed as NEGATIVE signed values,
+    # per `_loss()`'s `max(_ZERO, -value)` definition and this file's own
+    # test suite, e.g. `hp_loss=D("-150000")` in tests/test_cyla.py).
+    # `non_salary_income` above stays racehorse-inclusive (unchanged) since
+    # it is also the HP/business-loss absorption-capacity pool; the new
+    # racehorse-vs-os_loss step below additionally drains it by whatever it
+    # absorbs, so the same rupee of racehorse profit can't be claimed twice.
+    racehorse_income: Decimal = _ZERO
+    os_loss: Decimal = _ZERO
 
 
 @dataclass
@@ -84,6 +99,16 @@ class CYLAResult:
     ltcg_dtaa_setoff: Decimal = _ZERO
     non_spec_biz_setoff: Decimal = _ZERO
     spec_biz_setoff: Decimal = _ZERO
+    # Racehorse profit / non-racehorse OS loss (Section 70 intra-OS-head,
+    # CBDT rule #267, then Section 71 cross-head for any remainder) --
+    # racehorse_setoff/racehorse_remaining feed Schedule CYLA/BFLA's own
+    # "OthSrcRaceHorse" row; os_loss_total/os_loss_setoff_total/
+    # os_loss_remaining feed the sibling "TotOthSrcLossNoRaceHorse" family.
+    racehorse_setoff: Decimal = _ZERO
+    racehorse_remaining: Decimal = _ZERO
+    os_loss_total: Decimal = _ZERO
+    os_loss_setoff_total: Decimal = _ZERO
+    os_loss_remaining: Decimal = _ZERO
     # Per-basket residual income after CG loss set-off (for builder)
     stcg20_remaining: Decimal = _ZERO
     stcg30_remaining: Decimal = _ZERO
@@ -235,6 +260,23 @@ def compute(cy: CYLAInput) -> CYLAResult:
     if ltcl_total > _ZERO:
         record("LTCG", "LTCG", ltcl_total, total_ltcg_setoff)
 
+    # Racehorse profit / non-racehorse Other Sources loss (section 70,
+    # intra-OS-head): CBDT rule #267 -- "Normal OS loss should be set off
+    # first against the Profit from the activity of owning and maintaining
+    # race horses" -- confirmed by the official schema itself, which
+    # reserves the OthSrcLossNoRaceHorseSetoff field only on Schedule
+    # CYLA's OthSrcRaceHorse row, not on OthSrcExclRaceHorse. other_pool
+    # already counted this racehorse profit (via non_salary_income), so it
+    # is drained by the same amount here to keep its remaining
+    # HP/business-loss-absorption capacity correct -- otherwise the same
+    # rupee of racehorse profit could be claimed twice.
+    racehorse_pool = _positive(cy.racehorse_income)
+    os_loss_total = _positive(cy.os_loss)
+    racehorse_setoff = min(os_loss_total, racehorse_pool)
+    racehorse_pool -= racehorse_setoff
+    other_pool -= racehorse_setoff
+    os_loss_remaining = os_loss_total - racehorse_setoff
+
     # Speculative business loss
     spec_loss = _loss(cy.spec_biz_loss)
     spec_setoff = min(spec_loss, spec_pool)
@@ -287,7 +329,42 @@ def compute(cy: CYLAInput) -> CYLAResult:
     stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool, ltcg125_pool, ltcg_dtaa_pool = cg_pools
     record("HP", "HouseProperty", hp_loss, hp_setoff)
 
-    total_setoff = hp_setoff + total_stcg_setoff + total_ltcg_setoff + nsb_setoff + spec_setoff
+    # Any non-racehorse OS loss racehorse profit couldn't fully absorb
+    # cascades cross-head (section 71) -- real income that could
+    # statutorily be set off against other heads, not just quarantined
+    # against racehorse profit. ITR-2 filers never have business income
+    # (non_spec_biz_income/loss are always _ZERO from the calculator), so
+    # the only remaining targets are HP, the six CG buckets, and the
+    # combined salary+OS "other" pool. Ordering (hp -> cg -> other) is a
+    # deterministic convention this engine must pick somewhere -- no CBDT
+    # rule dictates a specific cross-head sequence beyond racehorse-first
+    # (rule #267) -- matching this file's own documented precedent for
+    # CG-source ordering above.
+    os_loss_cross_setoff = _ZERO
+    for pool_name in ("hp", "cg", "other"):
+        if pool_name == "cg":
+            for i in range(len(cg_pools)):
+                used = min(os_loss_remaining - os_loss_cross_setoff, cg_pools[i])
+                cg_pools[i] -= used
+                os_loss_cross_setoff += used
+        else:
+            pool = {"hp": hp_pool, "other": other_pool}[pool_name]
+            used = min(os_loss_remaining - os_loss_cross_setoff, pool)
+            os_loss_cross_setoff += used
+            if pool_name == "hp":
+                hp_pool -= used
+            else:
+                other_pool -= used
+    stcg20_pool, stcg30_pool, stcg_app_pool, stcg_dtaa_pool, ltcg125_pool, ltcg_dtaa_pool = cg_pools
+    os_loss_setoff_total = racehorse_setoff + os_loss_cross_setoff
+    os_loss_remaining -= os_loss_cross_setoff
+    # No carry-forward exists for non-racehorse OS loss under the Act, so
+    # any os_loss_remaining left here simply lapses; recorded under head
+    # "OS" (not HP/STCG/LTCG) so the calculator's CFL-conversion filter
+    # correctly excludes it from Schedule CFL.
+    record("OS", "OtherSourcesLoss", os_loss_total, os_loss_setoff_total)
+
+    total_setoff = hp_setoff + total_stcg_setoff + total_ltcg_setoff + nsb_setoff + spec_setoff + os_loss_setoff_total
     total_remaining = sum((entry.remaining_loss for entry in entries), _ZERO)
 
     # Compute per-basket setoff (original income - remaining)
@@ -311,6 +388,11 @@ def compute(cy: CYLAInput) -> CYLAResult:
         ltcg_dtaa_setoff=ltcg_dtaa_setoff,
         non_spec_biz_setoff=nsb_setoff,
         spec_biz_setoff=spec_setoff,
+        racehorse_setoff=racehorse_setoff,
+        racehorse_remaining=racehorse_pool,
+        os_loss_total=os_loss_total,
+        os_loss_setoff_total=os_loss_setoff_total,
+        os_loss_remaining=os_loss_remaining,
         stcg20_remaining=stcg20_pool,
         stcg30_remaining=stcg30_pool,
         stcg_app_remaining=stcg_app_pool,

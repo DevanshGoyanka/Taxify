@@ -9,7 +9,13 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 _ZERO = Decimal("0")
-_MAX_CARRY_FWD: dict[str, int] = {"HP": 8, "NonSpeculative": 8, "Speculative": 4, "STCG": 8, "LTCG": 8}
+_MAX_CARRY_FWD: dict[str, int] = {
+    "HP": 8, "NonSpeculative": 8, "Speculative": 4, "STCG": 8, "LTCG": 8,
+    # Section 74A(3): a brought-forward race-horse-activity loss may only
+    # be carried forward and set off (against future race-horse profit
+    # only) for 4 assessment years.
+    "RaceHorse": 4,
+}
 
 
 def _ay_start(assessment_year: str) -> int:
@@ -66,6 +72,11 @@ class BFLAInput:
     stcg_dtaa_income: Decimal = _ZERO
     ltcg125_income: Decimal = _ZERO
     ltcg_dtaa_income: Decimal = _ZERO
+    # Schedule OS's racehorse-activity income remaining after Schedule
+    # CYLA's own intra-OS-head set-off (CYLAResult.racehorse_remaining) --
+    # the only pool a brought-forward "RaceHorse"-head loss may absorb
+    # into, per section 74A(3)'s quarantine.
+    racehorse_income: Decimal = _ZERO
     bf_losses: list[object] = field(default_factory=list)
     current_ay: str = "2026-27"
 
@@ -81,6 +92,8 @@ class BFLAResult:
     hp_setoff: Decimal = _ZERO
     biz_setoff: Decimal = _ZERO
     cg_setoff: Decimal = _ZERO
+    racehorse_setoff: Decimal = _ZERO
+    racehorse_remaining: Decimal = _ZERO
     # Per-basket residual income after BFLA (for builder)
     stcg20_remaining: Decimal = _ZERO
     stcg30_remaining: Decimal = _ZERO
@@ -109,12 +122,13 @@ def compute(bf: BFLAInput) -> BFLAResult:
     stcg_dtaa_pool = max(_ZERO, bf.stcg_dtaa_income)
     ltcg125_pool = max(_ZERO, bf.ltcg125_income)
     ltcg_dtaa_pool = max(_ZERO, bf.ltcg_dtaa_income)
+    racehorse_pool = max(_ZERO, bf.racehorse_income)
     current_year = _ay_start(bf.current_ay)
     indexed = list(enumerate(bf.bf_losses or []))
     indexed.sort(key=lambda pair: (_ay_start(str(_field(pair[1], "assessment_year", ""))) or 9999, pair[0]))
 
     entries: list[BFLossEntry] = []
-    hp_setoff = biz_setoff = cg_setoff = _ZERO
+    hp_setoff = biz_setoff = cg_setoff = racehorse_setoff = _ZERO
     total_setoff = total_remaining = _ZERO
 
     for _, item in indexed:
@@ -169,6 +183,12 @@ def compute(bf: BFLAInput) -> BFLAResult:
                     break
             ltcg125_pool, ltcg_dtaa_pool = ltcg_pools
             cg_setoff += setoff
+        elif head == "RaceHorse":
+            # Section 74A(3): quarantined -- absorbs only into current-year
+            # racehorse profit remaining after CYLA, never any other pool.
+            setoff = min(brought, racehorse_pool)
+            racehorse_pool -= setoff
+            racehorse_setoff += setoff
 
         remaining = brought - setoff
         entries.append(BFLossEntry(ay, head, subcategory, original, brought, setoff, remaining))
@@ -182,6 +202,8 @@ def compute(bf: BFLAInput) -> BFLAResult:
         hp_setoff=hp_setoff,
         biz_setoff=biz_setoff,
         cg_setoff=cg_setoff,
+        racehorse_setoff=racehorse_setoff,
+        racehorse_remaining=racehorse_pool,
         stcg20_remaining=stcg20_pool,
         stcg30_remaining=stcg30_pool,
         stcg_app_remaining=stcg_app_pool,
