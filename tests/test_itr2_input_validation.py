@@ -35,6 +35,7 @@ from app.schemas.itr2 import (
     AssesseeStatus,
     CG112AScrip,
     CGAssetType,
+    CGDtaaEntry,
     CGTransaction,
     ITR2FilingProfile,
     ITR2Input,
@@ -1235,6 +1236,64 @@ def test_DTAA_002_applicable_rate_exceeding_lower_of_treaty_and_it_act_fails():
         )],
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-002")
+
+
+def _cg_dtaa_entry(**overrides) -> CGDtaaEntry:
+    fields = dict(
+        amount=Decimal("50000"), item_no_incl="A5e", country_name="United States",
+        country_code="US", dtaa_article="11", rate_as_per_treaty=Decimal("15"),
+        sec_it_act="112", rate_as_per_it_act=Decimal("20"),
+    )
+    fields.update(overrides)
+    return CGDtaaEntry(**fields)
+
+
+def test_DTAA_003_stcg_applicable_rate_at_lower_of_treaty_and_it_act_passes():
+    """Phase 6i-5: CGDtaaEntry.applicable_rate is capped at min(treaty rate,
+    IT Act rate) for the STCG-side DTAA table, mirroring ITR2-IN-DTAA-002's
+    already-shipped OS-side check."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_stcg_dtaa_entries=[_cg_dtaa_entry(
+            rate_as_per_treaty=Decimal("15"), rate_as_per_it_act=Decimal("20"),
+            applicable_rate=Decimal("15"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-DTAA-003")
+
+
+def test_DTAA_003_stcg_applicable_rate_exceeding_lower_of_treaty_and_it_act_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_stcg_dtaa_entries=[_cg_dtaa_entry(
+            rate_as_per_treaty=Decimal("15"), rate_as_per_it_act=Decimal("20"),
+            applicable_rate=Decimal("18"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-003")
+
+
+def test_DTAA_004_ltcg_applicable_rate_at_lower_of_treaty_and_it_act_passes():
+    """Same check, LTCG side (Schedule CG item B11)."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_ltcg_dtaa_entries=[_cg_dtaa_entry(
+            rate_as_per_treaty=Decimal("10"), rate_as_per_it_act=Decimal("12.5"),
+            applicable_rate=Decimal("10"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-DTAA-004")
+
+
+def test_DTAA_004_ltcg_applicable_rate_exceeding_lower_of_treaty_and_it_act_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_ltcg_dtaa_entries=[_cg_dtaa_entry(
+            rate_as_per_treaty=Decimal("10"), rate_as_per_it_act=Decimal("12.5"),
+            applicable_rate=Decimal("12"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-004")
 
 
 # ─── Phase 6f: Schedule OS ───────────────────────────────────────────────────

@@ -59,6 +59,23 @@ def test_signed_baskets_and_vda_loss_isolation() -> None:
     assert result.total_capital_gains == D("80")
 
 
+def test_compute_stcg_dtaa_parameter_is_a_no_op_by_default() -> None:
+    """Phase 6i-5 added an optional ``stcg_dtaa`` parameter to
+    ``compute_stcg()`` (mirroring ``compute_ltcg()``'s own already-shipped
+    ``ltcg_dtaa``) -- every existing caller (this shared, form-agnostic
+    ``compute()`` entry point is used by ITR-1/2/3/4 alike) must see
+    byte-for-byte identical behavior when it isn't passed."""
+    without_dtaa = compute_stcg(stcg_111a=D("50000"), stcg_other=D("20000"))
+    with_zero_dtaa = compute_stcg(stcg_111a=D("50000"), stcg_other=D("20000"), stcg_dtaa=D("0"))
+    assert without_dtaa == with_zero_dtaa
+    assert without_dtaa.income_dtaa == D("0")
+    assert without_dtaa.total_stcg == D("70000")
+
+    with_dtaa = compute_stcg(stcg_111a=D("50000"), stcg_other=D("20000"), stcg_dtaa=D("15000"))
+    assert with_dtaa.income_dtaa == D("15000")
+    assert with_dtaa.total_stcg == D("85000")
+
+
 def test_ltcg_loss_cannot_absorb_stcg_income() -> None:
     result = aggregate(compute_stcg(stcg_111a=D("100")), compute_ltcg(ltcg_other=D("-80")))
     assert result.total_capital_gains == D("100")

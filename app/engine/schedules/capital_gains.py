@@ -335,6 +335,7 @@ def compute_stcg(
     stcg_land_building: Optional[list[CGAsset]] = None,
     stcg_other: Decimal = _ZERO,
     is_post_jul24: bool = True,
+    stcg_dtaa: Decimal = _ZERO,
 ) -> STCGResult:
     """Compute signed short-term capital-gain baskets.
 
@@ -343,6 +344,10 @@ def compute_stcg(
         stcg_land_building: Short-term immovable-property transactions.
         stcg_other: Other signed short-term gain.
         is_post_jul24: Retained compatibility flag for the applicable 111A rate.
+        stcg_dtaa: Signed DTAA-rate STCG (official Schedule CG item A8b) --
+            mirrors ``compute_ltcg()``'s own already-shipped ``ltcg_dtaa``
+            parameter; defaults to zero so every existing caller (ITR-1/3/4)
+            is unaffected.
 
     Returns:
         Signed STCG baskets.
@@ -366,10 +371,12 @@ def compute_stcg(
         land_gain += asset.balance
     other = land_gain + _decimal(stcg_other)
     section_111a = _decimal(stcg_111a)
+    dtaa = _decimal(stcg_dtaa)
     return STCGResult(
         income_111a=section_111a,
         income_30per=other,
-        total_stcg=section_111a + other,
+        income_dtaa=dtaa,
+        total_stcg=section_111a + other + dtaa,
         land_building=list(stcg_land_building or []),
     )
 

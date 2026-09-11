@@ -1582,7 +1582,20 @@ def _cg_loss_setoff_table(result: ITR2Result) -> dict[str, Any]:
 
 def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str, Any]]:
     """Serialize Schedule CG from actual classified transactions."""
-    if not input_data.cg_transactions and not input_data.cg_112a_scrips and not input_data.vda_transactions:
+    # Phase 6i-5: a taxpayer with ONLY NRI-proviso-48/115F bare entries or
+    # DTAA claim rows (no ordinary cg_transactions/112A scrips/VDA) still
+    # has real, taxed capital-gains data -- the presence gate must include
+    # these or the schedule would silently vanish while Part B-TI still
+    # shows a nonzero CapGain figure with no supporting disclosure.
+    has_nri_cg_data = (
+        input_data.cg_nri_stcg_stt_paid > _ZERO or input_data.cg_nri_stcg_stt_not_paid > _ZERO
+        or input_data.cg_nri_ltcg_without_indexation > _ZERO or input_data.cg_nri_115f_sale_value > _ZERO
+        or input_data.cg_stcg_dtaa_entries or input_data.cg_ltcg_dtaa_entries
+    )
+    if (
+        not input_data.cg_transactions and not input_data.cg_112a_scrips
+        and not input_data.vda_transactions and not has_nri_cg_data
+    ):
         return None
     cg = result.schedules.get("cg")
     z = _ZERO
@@ -1706,10 +1719,58 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     total_54f = getattr(exemptions, "section_54f", z) if exemptions else z
     total_exempt = getattr(exemptions, "total_exemption", z) if exemptions else z
 
+    # Schedule CG items A8/B11 -- DTAA-rate capital-gains claims (official
+    # NRIDTAADtls). "Not chargeable in India" (A8a/B11a, rate_as_per_treaty
+    # == 0 / NIL -- the form's own literal instruction for that column) is
+    # excluded from the taxable STCG/LTCG total entirely (a treaty
+    # exemption); "chargeable at DTAA special rate" (A8b/B11b) is already
+    # counted in the underlying item and only re-tagged here for rate
+    # disclosure -- both totals are real regardless.
+    def _cg_dtaa_rows(entries) -> list[dict[str, Any]]:
+        return [
+            {
+                "DTAAamt": _to_rupees(e.amount),
+                "ItemNoincl": e.item_no_incl,
+                "CountryName": e.country_name,
+                "CountryCodeExcludingIndia": e.country_code,
+                "DTAAarticle": e.dtaa_article,
+                "RateAsPerTreaty": float(e.rate_as_per_treaty),
+                "TaxRescertifiedFlag": e.tax_residency_certificate,
+                "SecITAct": e.sec_it_act,
+                "RateAsPerITAct": float(e.rate_as_per_it_act),
+                "ApplicableRate": float(e.applicable_rate),
+            }
+            for e in entries
+        ]
+
+    stcg_dtaa_rows = _cg_dtaa_rows(input_data.cg_stcg_dtaa_entries)
+    stcg_dtaa_not_chargeable = sum(
+        (e.amount for e in input_data.cg_stcg_dtaa_entries if not e.chargeable_in_india), _ZERO,
+    )
+    stcg_dtaa_chargeable = sum(
+        (e.amount for e in input_data.cg_stcg_dtaa_entries if e.chargeable_in_india), _ZERO,
+    )
+    ltcg_dtaa_rows = _cg_dtaa_rows(input_data.cg_ltcg_dtaa_entries)
+    ltcg_dtaa_not_chargeable = sum(
+        (e.amount for e in input_data.cg_ltcg_dtaa_entries if not e.chargeable_in_india), _ZERO,
+    )
+    ltcg_dtaa_chargeable = sum(
+        (e.amount for e in input_data.cg_ltcg_dtaa_entries if e.chargeable_in_india), _ZERO,
+    )
+
     stcg_block: dict[str, Any] = {
         "SaleofLandBuild": {"SaleofLandBuildDtls": stcg_land_rows},
         "EquityMFonSTT": equity_111a_rows,
-        "NRITransacSec48Dtl": {"NRItaxSTTPaid": 0, "NRItaxSTTNotPaid": 0},
+        # Schedule CG item A3 -- "for NON-RESIDENT, not being an FII, from
+        # sale of shares or debentures of an Indian company (to be computed
+        # with foreign exchange adjustment under first proviso to section
+        # 48)". Confirmed by reading the official form directly: A3a/A3b
+        # are bare, off-form-computed rupee figures, not per-transaction
+        # detail.
+        "NRITransacSec48Dtl": {
+            "NRItaxSTTPaid": _to_rupees(input_data.cg_nri_stcg_stt_paid),
+            "NRItaxSTTNotPaid": _to_rupees(input_data.cg_nri_stcg_stt_not_paid),
+        },
         "NRISecur115AD": fii_stcg_securities if fii_stcg_securities is not None else _equity_or_unit_sec94(),
         "SaleOnOtherAssets": stcg_other_ordinary,
         "UnutilizedStcgFlag": "N",
@@ -1719,8 +1780,9 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "PassThrIncNatureSTCG20Per": 0,
         "PassThrIncNatureSTCG30Per": 0,
         "PassThrIncNatureSTCGAppRate": 0,
-        "TotalAmtNotTaxUsDTAAStcg": 0,
-        "TotalAmtTaxUsDTAAStcg": 0,
+        **({"NRICgDTAA": {"NRIDTAADtls": stcg_dtaa_rows}} if stcg_dtaa_rows else {}),
+        "TotalAmtNotTaxUsDTAAStcg": _to_rupees(stcg_dtaa_not_chargeable),
+        "TotalAmtTaxUsDTAAStcg": _to_rupees(stcg_dtaa_chargeable),
         "CapitalLossBuyBackShares": {"CapitalLossBuyBackSharesDtls": [], "TotalCapitalLossBuyBackShares": 0},
         "TotalSTCG": _to_rupees(getattr(stcg, "total_stcg", z) if stcg else z),
     }
@@ -1732,9 +1794,9 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         },
         "Proviso112Applicable": [],
         "SaleOfEquityShareUs112A": _equity_share_112a() if is_fii_fpi else equity_share_112a_block,
-        "NRIProvisoSec48": _nri_proviso_48(),
+        "NRIProvisoSec48": _nri_proviso_48(input_data),
         "NRISaleOfEquityShareUs112A": equity_share_112a_block if is_fii_fpi else _equity_share_112a(),
-        "NRISaleofForeignAsset": _nri_foreign_asset(),
+        "NRISaleofForeignAsset": _nri_foreign_asset(input_data),
         "SaleofAssetNADtls": {"SaleofAssetNA": ltcg_other_ordinary},
         **(
             {"NRIOnSec112and115": {"NRIOnSec112and115Dtls": [
@@ -1749,9 +1811,10 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "PassThrIncNatureLTCG": 0,
         "PassThrIncNatureLTCGUs112A12_5Per": 0,
         "PassThrIncNatureLTCG12_5Per": 0,
-        "TotalAmtNotTaxUsDTAALtcg": 0,
+        **({"NRICgDTAA": {"NRIDTAADtls": ltcg_dtaa_rows}} if ltcg_dtaa_rows else {}),
+        "TotalAmtNotTaxUsDTAALtcg": _to_rupees(ltcg_dtaa_not_chargeable),
         "CapitalLossBuyBackShares": {"TotalCapitalLossBuyBackShares": 0},
-        "TotalAmtTaxUsDTAALtcg": 0,
+        "TotalAmtTaxUsDTAALtcg": _to_rupees(ltcg_dtaa_chargeable),
         "TotalLTCG": _to_rupees(getattr(ltcg, "total_ltcg", z) if ltcg else z),
     }
     total_stcg = _to_rupees(getattr(stcg, "total_stcg", z) if stcg else z)
@@ -1970,12 +2033,34 @@ def _equity_share_112a() -> dict[str, int]:
     return {"BalanceCG": 0, "DeductionUs54F": 0, "CapgainonAssets": 0}
 
 
-def _nri_proviso_48() -> dict[str, int]:
-    return {"LTCGWithoutBenefit": 0, "DeductionUs54F": 0, "BalanceCG": 0}
+def _nri_proviso_48(input_data: ITR2Input) -> dict[str, int]:
+    """Schedule CG item B4 -- "for NON-RESIDENTS, from sale of unlisted
+    shares or listed debenture of Indian company (to be computed with
+    foreign exchange adjustment under first proviso to section 48)".
+    Confirmed by reading the official form directly: B4a is a bare,
+    off-form-computed rupee figure, not a per-transaction breakdown."""
+    ltcg_without_benefit = input_data.cg_nri_ltcg_without_indexation
+    deduction_54f = input_data.cg_nri_ltcg_deduction_54f
+    return {
+        "LTCGWithoutBenefit": _to_rupees(ltcg_without_benefit),
+        "DeductionUs54F": _to_rupees(deduction_54f),
+        "BalanceCG": _to_rupees(max(_ZERO, ltcg_without_benefit - deduction_54f)),
+    }
 
 
-def _nri_foreign_asset() -> dict[str, int]:
-    return {"SaleonSpecAsset": 0, "DednSpecAssetus115": 0, "BalonSpeciAsset": 0}
+def _nri_foreign_asset(input_data: ITR2Input) -> dict[str, int]:
+    """Schedule CG item B7 -- "sale of foreign exchange asset by
+    NON-RESIDENT INDIAN (if opted under chapter XII-A)", section 115F.
+    Same bare direct-entry pattern as B4, aggregated across the draft's own
+    generic ``ltForeignAssets`` row list (the form's own B7 is a single
+    pair, 7a/7b, not per-row)."""
+    sale_value = input_data.cg_nri_115f_sale_value
+    deduction = input_data.cg_nri_115f_deduction
+    return {
+        "SaleonSpecAsset": _to_rupees(sale_value),
+        "DednSpecAssetus115": _to_rupees(deduction),
+        "BalonSpeciAsset": _to_rupees(max(_ZERO, sale_value - deduction)),
+    }
 
 
 def _cg_quarter_index(transfer_date: Any) -> int:
@@ -3048,6 +3133,10 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
         # DTAA-rate Other Sources income (compute_dtaa_os()) -- same
         # identity-mapping rationale as the block above.
         "DTAAOS": "DTAAOS",
+        # DTAA-rate STCG/LTCG (Schedule CG items A8b/B11b, Phase 6i-5) --
+        # same identity-mapping rationale; distinct official SecCode values
+        # from DTAAOS (confirmed via the schema's own SecCode enum text).
+        "DTAASTCG": "DTAASTCG", "DTAALTCG": "DTAALTCG",
         # Section 115AD FII/FPI capital-gains codes (calculators/itr2.py
         # relabels the ordinary 111A/112/112A entries' `.section` to these
         # when the filing profile is flagged FII/FPI) -- same identity-
@@ -4021,8 +4110,15 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     stcg_app_rate = 0 if is_fii_fpi else stcg_normal
     ltcg_112 = _to_rupees(post_loss.get("112", _ZERO))
     ltcg_112a_gross = _to_rupees(post_loss.get("112a_gross", _ZERO))
-    total_stcg = stcg_111a + stcg_normal
-    total_ltcg = ltcg_112 + ltcg_112a_gross
+    # Schedule CG items A8b/B11b (Phase 6i-5) -- DTAA-special-rate STCG/LTCG,
+    # each its own post-loss basket (see _post_loss_cg_baskets), previously
+    # hardcoded to 0 regardless of real data, silently understating
+    # TotalShortTerm/TotalLongTerm/TotalCapGains whenever a real DTAA claim
+    # existed even though the income was already taxed via Schedule SI.
+    stcg_dtaa = _to_rupees(post_loss.get("stcg_dtaa", _ZERO))
+    ltcg_dtaa = _to_rupees(post_loss.get("ltcg_dtaa", _ZERO))
+    total_stcg = stcg_111a + stcg_normal + stcg_dtaa
+    total_ltcg = ltcg_112 + ltcg_112a_gross + ltcg_dtaa
     total_cg = total_stcg + total_ltcg + _to_rupees(result.vda_income)
     # Form items 4a/4b/4c (schema IncFromOS.OtherSrcThanOwnRaceHorse/
     # IncChargblSplRate/FromOwnRaceHorse) are, per the official form, "6 of
@@ -4059,12 +4155,12 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
                 "ShortTerm20Per": stcg_20,
                 "ShortTerm30Per": stcg_30,
                 "ShortTermAppRate": stcg_app_rate,
-                "ShortTermSplRateDTAA": 0,
+                "ShortTermSplRateDTAA": stcg_dtaa,
                 "TotalShortTerm": total_stcg,
             },
             "LongTerm": {
                 "LongTerm12_5Per": ltcg_112,
-                "LongTermSplRateDTAA": 0,
+                "LongTermSplRateDTAA": ltcg_dtaa,
                 "TotalLongTerm": total_ltcg,
             },
             "ShortTermLongTermTotal": total_cg,

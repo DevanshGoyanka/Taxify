@@ -1560,6 +1560,32 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 str(entry.applicable_rate),
             ))
 
+    # CBDT rule 127's own capital-gains sibling (Phase 6i-5, 2026-09-12):
+    # the comment above predicted this exact gap ("no corresponding
+    # ITR2Input field... a genuinely separate, deeper architectural gap") --
+    # now closed. Same ceiling check as ITR2-IN-DTAA-002, applied to the two
+    # new CG-side DTAA entry lists (Schedule CG items A8/B11).
+    for index, entry in enumerate(inp.cg_stcg_dtaa_entries):
+        _dtaa_ceiling = min(entry.rate_as_per_treaty, entry.rate_as_per_it_act)
+        if entry.applicable_rate > _dtaa_ceiling:
+            results.append(_result(
+                "ITR2-IN-DTAA-003", False,
+                "The applicable DTAA rate cannot exceed the lower of the treaty "
+                "rate and the IT Act rate.",
+                f"cg_stcg_dtaa_entries[{index}].applicable_rate", f"<= {_dtaa_ceiling}",
+                str(entry.applicable_rate),
+            ))
+    for index, entry in enumerate(inp.cg_ltcg_dtaa_entries):
+        _dtaa_ceiling = min(entry.rate_as_per_treaty, entry.rate_as_per_it_act)
+        if entry.applicable_rate > _dtaa_ceiling:
+            results.append(_result(
+                "ITR2-IN-DTAA-004", False,
+                "The applicable DTAA rate cannot exceed the lower of the treaty "
+                "rate and the IT Act rate.",
+                f"cg_ltcg_dtaa_entries[{index}].applicable_rate", f"<= {_dtaa_ceiling}",
+                str(entry.applicable_rate),
+            ))
+
     # B/D #12/#13: TDS section codes 194Q/194C/194R/194M under Schedule
     # TDS2/TDS3 indicate business-type income, which may not belong on
     # ITR-2. Checked against the raw user-facing section string

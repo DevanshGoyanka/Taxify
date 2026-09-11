@@ -396,6 +396,42 @@ class CGTransaction(StrictModel):
         return self
 
 
+class CGDtaaEntry(StrictModel):
+    """One DTAA-rate capital-gains claim row (official ``NRIDTAADtls``,
+    Schedule CG items A8/B11 -- applicable for non-residents only). Shared
+    by both the STCG (A8) and LTCG (B11) tables, matching
+    ``return_draft.py``'s own single ``CGDtaaEntry`` shape reused for both
+    ``stDtaa``/``ltDtaa``. Whether this entry is "not chargeable to tax in
+    India" (A8a/B11a, subtracted from the STCG/LTCG total) or "chargeable
+    at a special DTAA rate" (A8b/B11b, already counted in the underlying
+    item, just re-tagged for rate purposes) is derived from
+    ``rate_as_per_treaty == 0`` -- the form's own literal instruction for
+    that column is "Enter NIL, if not chargeable" -- rather than a separate
+    boolean, matching what the frontend/draft schema actually capture."""
+
+    amount: Decimal = Field(ge=0)
+    item_no_incl: str = Field(min_length=1)
+    country_name: str = Field(min_length=1, max_length=55)
+    country_code: str = Field(min_length=1)
+    dtaa_article: str = Field(min_length=1, max_length=16)
+    rate_as_per_treaty: Decimal = Field(ge=0, le=100)
+    # Official schema field "SecITAct" -- the Income Tax Act section this
+    # entry would otherwise be taxed under absent the DTAA claim (e.g.
+    # "111A", "112"). Required by NRITaxUsDTAAStcgType/LtcgType; unlike
+    # OSDtaaEntry's own NRIDTAADtlsSchOS builder (which omits it -- a
+    # separate, already-shipped, out-of-scope gap), Schedule CG's row shape
+    # genuinely requires this field for schema validity.
+    sec_it_act: str = Field(min_length=1, max_length=10)
+    rate_as_per_it_act: Decimal = Field(ge=0, le=100)
+    tax_residency_certificate: Literal["Y", "N"] = "N"
+    applicable_rate: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+
+    @property
+    def chargeable_in_india(self) -> bool:
+        """False (A8a/B11a, "not chargeable") when the treaty rate is NIL."""
+        return self.rate_as_per_treaty > 0
+
+
 class CG112AScrip(StrictModel):
     """Per-scrip Schedule 112A disposal detail."""
 
@@ -1082,6 +1118,27 @@ class ITR2Input(StrictModel):
     # calculator unions both lists for tax computation -- the split only
     # matters for disclosure routing.
     cg_115ad_scrips: List[CG112AScrip] = Field(default_factory=list)
+    # Schedule CG items A3/B4 -- "for NON-RESIDENT, not being an FII, from
+    # sale of shares or debentures of an Indian company" -- are bare
+    # direct-entry figures on the official form itself (no per-transaction
+    # cost-basis breakdown; the first-proviso-to-section-48 foreign-exchange
+    # adjustment is computed off-form by the taxpayer, confirmed by reading
+    # the form directly), so these are scalars, not a transaction list.
+    cg_nri_stcg_stt_paid: Decimal = Field(default=Decimal("0"), ge=0)  # A3a
+    cg_nri_stcg_stt_not_paid: Decimal = Field(default=Decimal("0"), ge=0)  # A3b
+    cg_nri_ltcg_without_indexation: Decimal = Field(default=Decimal("0"), ge=0)  # B4a
+    cg_nri_ltcg_deduction_54f: Decimal = Field(default=Decimal("0"), ge=0)  # B4b
+    # Schedule CG item B7 -- "sale of foreign exchange asset by NON-RESIDENT
+    # INDIAN (if opted under chapter XII-A)", section 115F -- same bare
+    # direct-entry pattern, aggregated across the draft's own
+    # ``ltForeignAssets`` row list since the official form's own B7 is a
+    # single pair (7a/7b), not a per-row breakdown.
+    cg_nri_115f_sale_value: Decimal = Field(default=Decimal("0"), ge=0)  # B7a
+    cg_nri_115f_deduction: Decimal = Field(default=Decimal("0"), ge=0)  # B7b
+    # Schedule CG items A8/B11 -- DTAA-rate capital-gains claims (official
+    # NRIDTAADtls, applicable for non-residents only).
+    cg_stcg_dtaa_entries: List[CGDtaaEntry] = Field(default_factory=list)
+    cg_ltcg_dtaa_entries: List[CGDtaaEntry] = Field(default_factory=list)
     vda_transactions: List[VDATransaction] = Field(default_factory=list)
     bf_losses: List[BFLossItem] = Field(default_factory=list)
     cf_losses: List[CFLLossItem] = Field(default_factory=list)

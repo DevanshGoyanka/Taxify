@@ -58,6 +58,7 @@ from app.schemas.itr2 import (
     BFLossItem,
     CG112AScrip,
     CGAssetType,
+    CGDtaaEntry,
     CGTransaction,
     CapitalGainExemptionClaim,
     CoOwnerDetail,
@@ -1308,6 +1309,233 @@ def test_land_building_applies_section_50c_stamp_duty_deeming() -> None:
     assert row["PropertyValuation"] == 1500000
     assert row["FullConsideration50C"] == 1500000  # deemed value, not the lower actual consideration
     assert row["Balance"] == 900000  # 1500000 - 600000, not 1000000 - 600000
+
+
+def test_nri_proviso_48_stt_paid_feeds_111a_stt_not_paid_feeds_generic_bucket() -> None:
+    """Schedule CG item A3 -- for a non-resident, not FII, sale of shares/
+    debentures of an Indian company, computed off-form with the section-48
+    first-proviso foreign-exchange adjustment. A3a (STT paid) is a genuine
+    111A-rate transaction; A3b (STT not paid) is ordinary slab/applicable-
+    rate STCG. Both were previously hardcoded zero placeholders."""
+    input_data = _input(
+        filing_profile=_profile().model_copy(update={"residential_status": ResidentialStatus.NON_RESIDENT}),
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_nri_stcg_stt_paid=Decimal("200000"),
+        cg_nri_stcg_stt_not_paid=Decimal("80000"),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    stcg_block = document["ITR"]["ITR2"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg_block["NRITransacSec48Dtl"]["NRItaxSTTPaid"] == 200000
+    assert stcg_block["NRITransacSec48Dtl"]["NRItaxSTTNotPaid"] == 80000
+    assert stcg_block["TotalSTCG"] == 280000
+
+    part_b_ti_stcg = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["ShortTerm"]
+    assert part_b_ti_stcg["ShortTerm20Per"] == 200000  # STT-paid -> 111A
+    assert part_b_ti_stcg["ShortTermAppRate"] == 80000  # STT-not-paid -> generic bucket
+    assert part_b_ti_stcg["TotalShortTerm"] == 280000
+
+
+def test_nri_ltcg_proviso_48_net_of_54f_deduction() -> None:
+    """Schedule CG item B4 -- for a non-resident, from sale of unlisted
+    shares or listed debentures of an Indian company, computed off-form
+    with the section-48 first-proviso foreign-exchange adjustment, net of
+    any section 54F exemption claimed against it."""
+    input_data = _input(
+        filing_profile=_profile().model_copy(update={"residential_status": ResidentialStatus.NON_RESIDENT}),
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_nri_ltcg_without_indexation=Decimal("900000"),
+        cg_nri_ltcg_deduction_54f=Decimal("300000"),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    proviso = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]["NRIProvisoSec48"]
+    assert proviso["LTCGWithoutBenefit"] == 900000
+    assert proviso["DeductionUs54F"] == 300000
+    assert proviso["BalanceCG"] == 600000
+
+    part_b_ti_ltcg = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["LongTerm"]
+    assert part_b_ti_ltcg["LongTerm12_5Per"] == 600000
+    assert part_b_ti_ltcg["TotalLongTerm"] == 600000
+
+
+def test_nri_115f_foreign_asset_net_of_deduction() -> None:
+    """Schedule CG item B7 -- sale of a foreign exchange asset by a
+    non-resident Indian under Chapter XII-A (section 115F), aggregated
+    across every ``ltForeignAssets`` draft row by the mapper into one
+    bare sale-value/deduction pair (the form's own B7 has no per-row
+    detail)."""
+    input_data = _input(
+        filing_profile=_profile().model_copy(update={"residential_status": ResidentialStatus.NON_RESIDENT}),
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_nri_115f_sale_value=Decimal("500000"),
+        cg_nri_115f_deduction=Decimal("120000"),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    asset = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]["NRISaleofForeignAsset"]
+    assert asset["SaleonSpecAsset"] == 500000
+    assert asset["DednSpecAssetus115"] == 120000
+    assert asset["BalonSpeciAsset"] == 380000
+
+    part_b_ti_ltcg = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["LongTerm"]
+    assert part_b_ti_ltcg["LongTerm12_5Per"] == 380000
+    assert part_b_ti_ltcg["TotalLongTerm"] == 380000
+
+
+def test_cg_dtaa_not_chargeable_entry_excluded_from_stcg_total() -> None:
+    """Schedule CG item A8a -- a DTAA claim row with ``rate_as_per_treaty
+    == 0`` ("Enter NIL, if not chargeable" -- the form's own literal
+    instruction) is a genuine treaty exemption: the amount must vanish
+    from the taxable STCG total entirely (and from Table E), not just be
+    separately disclosed alongside an unreduced total."""
+    input_data = _input(
+        filing_profile=_profile().model_copy(update={"residential_status": ResidentialStatus.NON_RESIDENT}),
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_SECURITY,
+                date_of_acquisition=date(2024, 6, 1), date_of_transfer=date(2025, 1, 1),
+                full_consideration=Decimal("300000"), cost_of_acquisition=Decimal("200000"),
+            ),
+        ],
+        cg_stcg_dtaa_entries=[
+            CGDtaaEntry(
+                amount=Decimal("60000"), item_no_incl="A5e", country_name="Mauritius",
+                country_code="65", dtaa_article="13", rate_as_per_treaty=Decimal("0"),
+                sec_it_act="112", rate_as_per_it_act=Decimal("20"),
+                tax_residency_certificate="Y", applicable_rate=Decimal("0"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    stcg_block = document["ITR"]["ITR2"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg_block["TotalAmtNotTaxUsDTAAStcg"] == 60000
+    assert stcg_block["TotalAmtTaxUsDTAAStcg"] == 0
+    # 300000 - 200000 = 100000 gross STCG, minus the 60000 treaty-exempt
+    # portion -> 40000 genuinely taxable.
+    assert stcg_block["TotalSTCG"] == 40000
+
+    table_e = document["ITR"]["ITR2"]["ScheduleCGFor23"]["CurrYrLosses"]
+    assert table_e["InStcgDTAARate"]["CurrYearIncome"] == 0
+    assert table_e["InStcg30Per"]["CurrYrCapGain"] == 40000
+
+    part_b_ti_stcg = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["ShortTerm"]
+    assert part_b_ti_stcg["TotalShortTerm"] == 40000
+
+
+def test_cg_dtaa_special_rate_ltcg_taxed_at_its_own_rate_via_schedule_si() -> None:
+    """Schedule CG item B11b -- an LTCG DTAA claim row with a nonzero
+    treaty rate is a RECLASSIFICATION, not an exemption: the amount is
+    already counted in the B4c total and must land in the DTAA bucket in
+    both the CYLA/Table-E disclosure AND actually be taxed at its own
+    applicable_rate via Schedule SI's dedicated DTAALTCG code -- not
+    silently folded into the ordinary 12.5% section-112 rate, and not
+    silently dropped."""
+    input_data = _input(
+        filing_profile=_profile().model_copy(update={"residential_status": ResidentialStatus.NON_RESIDENT}),
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_nri_ltcg_without_indexation=Decimal("500000"),
+        cg_ltcg_dtaa_entries=[
+            CGDtaaEntry(
+                amount=Decimal("500000"), item_no_incl="B4ciii", country_name="Singapore",
+                country_code="65", dtaa_article="13", rate_as_per_treaty=Decimal("10"),
+                sec_it_act="112", rate_as_per_it_act=Decimal("12.5"),
+                tax_residency_certificate="Y", applicable_rate=Decimal("10"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    ltcg_block = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]
+    assert ltcg_block["NRIProvisoSec48"]["BalanceCG"] == 500000
+    assert ltcg_block["TotalAmtTaxUsDTAALtcg"] == 500000
+    assert ltcg_block["TotalAmtNotTaxUsDTAALtcg"] == 0
+    assert ltcg_block["TotalLTCG"] == 500000  # already-counted re-tag, not additional income
+
+    si_rows = document["ITR"]["ITR2"]["ScheduleSI"]["SplCodeRateTax"]
+    dtaa_row = next(row for row in si_rows if row["SecCode"] == "DTAALTCG")
+    assert dtaa_row["SplRatePercent"] == 10.0
+    assert dtaa_row["SplRateInc"] == 500000
+    assert dtaa_row["SplRateIncTax"] == 50000  # 500000 * 10%, NOT 500000 * 12.5%
+    # No ordinary-rate section-112 row should carry this amount.
+    assert not any(row["SecCode"] == "21" and row["SplRateInc"] > 0 for row in si_rows)
+
+    table_e = document["ITR"]["ITR2"]["ScheduleCGFor23"]["CurrYrLosses"]
+    assert table_e["InLtcgDTAARate"]["CurrYearIncome"] == 500000
+    assert table_e["InLtcg12_5Per"]["CurrYearIncome"] == 0
+
+    cyla_ltcg_dtaa = document["ITR"]["ITR2"]["ScheduleCYLA"]["LTCGDTAARate"]["IncCYLA"]
+    assert cyla_ltcg_dtaa["IncOfCurYrUnderThatHead"] == 500000
+
+    part_b_ti_ltcg = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["LongTerm"]
+    assert part_b_ti_ltcg["LongTermSplRateDTAA"] == 500000
+    assert part_b_ti_ltcg["LongTerm12_5Per"] == 0
+    assert part_b_ti_ltcg["TotalLongTerm"] == 500000
+
+
+def test_nri_proviso_48_and_dtaa_entries_together_no_double_counting() -> None:
+    """A mixed return with both NRI-proviso-48 bare entries (A3/B4) and
+    DTAA claim rows (A8/B11) drawn from the same underlying generic
+    bucket must not double-count: the DTAA-special LTCG amount is a
+    re-tag of income already inside B4c, and the DTAA-not-chargeable STCG
+    amount is a genuine subtraction from A3b, not an independent figure
+    layered on top."""
+    input_data = _input(
+        filing_profile=_profile().model_copy(update={"residential_status": ResidentialStatus.NON_RESIDENT}),
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_nri_stcg_stt_paid=Decimal("100000"),  # A3a -> 111A
+        cg_nri_stcg_stt_not_paid=Decimal("30000"),  # A3b -> generic bucket
+        cg_nri_ltcg_without_indexation=Decimal("800000"),  # B4c
+        cg_stcg_dtaa_entries=[
+            CGDtaaEntry(
+                amount=Decimal("30000"), item_no_incl="A3b", country_name="UAE",
+                country_code="65", dtaa_article="13", rate_as_per_treaty=Decimal("0"),
+                sec_it_act="111A", rate_as_per_it_act=Decimal("20"),
+                tax_residency_certificate="N", applicable_rate=Decimal("0"),
+            ),
+        ],
+        cg_ltcg_dtaa_entries=[
+            CGDtaaEntry(
+                amount=Decimal("200000"), item_no_incl="B4ciii", country_name="UK",
+                country_code="65", dtaa_article="14", rate_as_per_treaty=Decimal("15"),
+                sec_it_act="112", rate_as_per_it_act=Decimal("12.5"),
+                tax_residency_certificate="Y", applicable_rate=Decimal("12.5"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+
+    stcg_block = document["ITR"]["ITR2"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg_block["TotalAmtNotTaxUsDTAAStcg"] == 30000
+    # A3b (30000) is fully absorbed by the DTAA-not-chargeable carve-out --
+    # TotalSTCG stays at the plain A3a (111A) figure only.
+    assert stcg_block["TotalSTCG"] == 100000
+
+    ltcg_block = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]
+    assert ltcg_block["NRIProvisoSec48"]["BalanceCG"] == 800000
+    assert ltcg_block["TotalAmtTaxUsDTAALtcg"] == 200000
+    # The 200000 DTAA-special amount is already inside the 800000 B4c
+    # total -- TotalLTCG must stay at 800000, not 1000000.
+    assert ltcg_block["TotalLTCG"] == 800000
+
+    si_rows = document["ITR"]["ITR2"]["ScheduleSI"]["SplCodeRateTax"]
+    dtaa_ltcg_row = next(row for row in si_rows if row["SecCode"] == "DTAALTCG")
+    assert dtaa_ltcg_row["SplRateInc"] == 200000
+    assert dtaa_ltcg_row["SplRatePercent"] == 12.5
+    section_112_row = next(row for row in si_rows if row["SecCode"] == "21")
+    # The remaining 600000 (800000 - 200000 DTAA-special) is still taxed
+    # at the ordinary 12.5% section-112 rate, not silently dropped.
+    assert section_112_row["SplRateInc"] == 600000
+
+    part_b_ti_stcg = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["ShortTerm"]
+    assert part_b_ti_stcg["TotalShortTerm"] == 100000
+    part_b_ti_ltcg = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["LongTerm"]
+    assert part_b_ti_ltcg["LongTermSplRateDTAA"] == 200000
+    assert part_b_ti_ltcg["LongTerm12_5Per"] == 600000
+    assert part_b_ti_ltcg["TotalLongTerm"] == 800000
 
 
 def test_land_building_section_112_1a_relief_reduces_actual_si_tax() -> None:

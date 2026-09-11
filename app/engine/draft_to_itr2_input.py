@@ -71,6 +71,7 @@ from app.schemas.itr2 import (
     BFLossItem,
     CG112AScrip,
     CGAssetType,
+    CGDtaaEntry,
     CGTransaction,
     ESOPDeferralInput,
     ExemptIncome,
@@ -253,6 +254,63 @@ def _map_vda_transactions(draft: ReturnDraft) -> list[VDATransaction]:
             consideration_received=row.consideration,
         ))
     return transactions
+
+
+def _map_cg_dtaa_entries(draft: ReturnDraft) -> tuple[list[CGDtaaEntry], list[CGDtaaEntry]]:
+    """Map DTAA-rate capital-gains claim rows (Schedule CG items A8/B11,
+    official ``NRIDTAADtls``). Mirrors ``_map_os_dtaa_entries``'s own
+    string-default-for-missing-value convention."""
+    schedule = draft.capitalGainsSchedule
+
+    def _map_rows(rows) -> list[CGDtaaEntry]:
+        return [
+            CGDtaaEntry(
+                amount=row.amount,
+                item_no_incl=row.itemNumber or "NA",
+                country_name=row.countryName or "Unspecified",
+                country_code=row.countryCode or "9999",
+                dtaa_article=row.article or "NA",
+                rate_as_per_treaty=row.treatyRate or Decimal("0"),
+                sec_it_act=row.itActSection or "NA",
+                rate_as_per_it_act=row.itActRate or Decimal("0"),
+                tax_residency_certificate="Y" if row.trcAvailable else "N",
+                applicable_rate=row.applicableRate or Decimal("0"),
+            )
+            for row in rows
+            if row.amount > 0
+        ]
+
+    return _map_rows(schedule.stDtaa), _map_rows(schedule.ltDtaa)
+
+
+def _map_cg_nri_proviso_48(draft: ReturnDraft) -> dict[str, Decimal]:
+    """Map Schedule CG items A3 (STCG)/B4 (LTCG)/B7 (115F) NRI bare-entry
+    figures. Confirmed against the official form directly (Reference Docs
+    by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf) that these are
+    single, off-form-computed rupee amounts -- no per-transaction detail is
+    disclosed for A3/B4/B7, unlike the rest of Schedule CG -- so this reads
+    the draft's own scalar/aggregate fields directly rather than mapping a
+    transaction list. B7's own official form item is a single pair (7a/7b),
+    so ``ltForeignAssets`` (a generic dict-row list at the draft layer,
+    since the frontend left it generic -- see this module's own "known
+    gaps" docstring) is summed across all rows, not mapped row-by-row."""
+    schedule = draft.capitalGainsSchedule
+    sec48 = schedule.stSection48
+    proviso48 = schedule.ltNriProviso48
+    sale_115f = sum(
+        (Decimal(str(row.get("saleValue") or 0)) for row in schedule.ltForeignAssets), Decimal("0"),
+    )
+    deduction_115f = sum(
+        (Decimal(str(row.get("deduction115F") or 0)) for row in schedule.ltForeignAssets), Decimal("0"),
+    )
+    return {
+        "cg_nri_stcg_stt_paid": sec48.nriSttPaid,
+        "cg_nri_stcg_stt_not_paid": sec48.nriSttNotPaid,
+        "cg_nri_ltcg_without_indexation": proviso48.ltcgWithoutBenefit,
+        "cg_nri_ltcg_deduction_54f": proviso48.deduction54F,
+        "cg_nri_115f_sale_value": sale_115f,
+        "cg_nri_115f_deduction": deduction_115f,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1046,6 +1104,8 @@ def draft_to_itr2_input(
     # agricultural/exempt income, FSI/TR/FA/SPI/PTI/AMT.
     cg_112a_scrips, cg_115ad_scrips, scrips_skipped = _map_112a_scrips(draft)
     cg_transactions = _map_immovable_gains(draft)
+    cg_stcg_dtaa_entries, cg_ltcg_dtaa_entries = _map_cg_dtaa_entries(draft)
+    cg_nri_proviso_48 = _map_cg_nri_proviso_48(draft)
     vda_transactions = _map_vda_transactions(draft)
     bf_losses = _map_bf_losses(draft)
     si_entries = _map_si_entries(draft)
@@ -1128,6 +1188,9 @@ def draft_to_itr2_input(
         cg_transactions=cg_transactions,
         cg_112a_scrips=cg_112a_scrips,
         cg_115ad_scrips=cg_115ad_scrips,
+        cg_stcg_dtaa_entries=cg_stcg_dtaa_entries,
+        cg_ltcg_dtaa_entries=cg_ltcg_dtaa_entries,
+        **cg_nri_proviso_48,
         vda_transactions=vda_transactions,
         bf_losses=bf_losses,
         si_entries=si_entries,

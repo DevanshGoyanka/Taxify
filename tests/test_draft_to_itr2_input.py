@@ -23,6 +23,9 @@ from app.schemas.return_draft import (
     AMTCreditEntry,
     AMTDetails,
     BroughtForwardLossEntry,
+    CGDtaaEntry,
+    CGNriProviso48Block,
+    CGSection48Block,
     ClubbedIncomeEntry,
     DividendIncome,
     DtaaIncomeEntry,
@@ -173,6 +176,64 @@ def test_immovable_ltcg_and_vda_map_and_compute() -> None:
     assert len(itr2_input.cg_transactions) == 1
     assert itr2_input.cg_transactions[0].explicit_long_term is True
     assert len(itr2_input.vda_transactions) == 1
+
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    assert result.gross_total_income > 0
+
+
+def test_nri_dtaa_and_proviso48_fields_reach_itr2_input() -> None:
+    """Phase 6i-5: draft_to_itr2_input() must map Schedule CG's NRI-specific
+    bare-entry blocks (stSection48/ltNriProviso48/ltForeignAssets, items
+    A3/B4/B7) and DTAA claim tables (stDtaa/ltDtaa, items A8/B11) into
+    ITR2Input -- previously entirely absent from the mapper despite being
+    fully captured by the frontend draft (zero references anywhere in this
+    file before this fix)."""
+    draft = _filing_ready_itr2_draft()
+    draft.capitalGainsSchedule.stSection48 = CGSection48Block(
+        nriSttPaid=Decimal("150000"), nriSttNotPaid=Decimal("40000"),
+    )
+    draft.capitalGainsSchedule.ltNriProviso48 = CGNriProviso48Block(
+        ltcgWithoutBenefit=Decimal("700000"), deduction54F=Decimal("100000"),
+    )
+    draft.capitalGainsSchedule.ltForeignAssets = [
+        {"saleValue": "300000", "deduction115F": "50000"},
+        {"saleValue": "200000", "deduction115F": "20000"},
+    ]
+    draft.capitalGainsSchedule.stDtaa = [CGDtaaEntry(
+        id="d1", amount=Decimal("25000"), itemNumber="A3b", countryName="Singapore",
+        countryCode="65", article="13", treatyRate=Decimal("10"), trcAvailable=True,
+        itActSection="111A", itActRate=Decimal("20"), applicableRate=Decimal("10"),
+    )]
+    draft.capitalGainsSchedule.ltDtaa = [CGDtaaEntry(
+        id="d2", amount=Decimal("60000"), itemNumber="B4ciii", countryName="UK",
+        countryCode="65", article="14", treatyRate=Decimal("0"), trcAvailable=False,
+        itActSection="112", itActRate=Decimal("12.5"), applicableRate=Decimal("0"),
+    )]
+
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+
+    assert itr2_input.cg_nri_stcg_stt_paid == Decimal("150000")
+    assert itr2_input.cg_nri_stcg_stt_not_paid == Decimal("40000")
+    assert itr2_input.cg_nri_ltcg_without_indexation == Decimal("700000")
+    assert itr2_input.cg_nri_ltcg_deduction_54f == Decimal("100000")
+    assert itr2_input.cg_nri_115f_sale_value == Decimal("500000")  # 300000 + 200000
+    assert itr2_input.cg_nri_115f_deduction == Decimal("70000")  # 50000 + 20000
+
+    assert len(itr2_input.cg_stcg_dtaa_entries) == 1
+    stcg_entry = itr2_input.cg_stcg_dtaa_entries[0]
+    assert stcg_entry.amount == Decimal("25000")
+    assert stcg_entry.country_name == "Singapore"
+    assert stcg_entry.sec_it_act == "111A"
+    assert stcg_entry.tax_residency_certificate == "Y"
+    assert stcg_entry.chargeable_in_india is True
+
+    assert len(itr2_input.cg_ltcg_dtaa_entries) == 1
+    ltcg_entry = itr2_input.cg_ltcg_dtaa_entries[0]
+    assert ltcg_entry.amount == Decimal("60000")
+    assert ltcg_entry.rate_as_per_treaty == Decimal("0")
+    assert ltcg_entry.chargeable_in_india is False
+    assert ltcg_entry.tax_residency_certificate == "N"
 
     result = compute_itr2(itr2_input)
     assert not result.errors

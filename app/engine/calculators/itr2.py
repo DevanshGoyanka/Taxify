@@ -88,6 +88,8 @@ from app.engine.schedules.special_rates import (
     compute_111a,
     compute_112,
     compute_112a_taxable,
+    compute_dtaa_ltcg,
+    compute_dtaa_stcg,
     compute_115ad_stcg_other,
     compute_115bbf,
     compute_115bbg,
@@ -370,14 +372,22 @@ def _post_loss_cg_baskets(
     other_ltcg = bfla.ltcg125_remaining  # post-BFLA LTCG (includes 112A)
     section_112a = max(_ZERO, ltcg.income_112a)  # gross 112A before losses
 
-    # Allocate CYLA/BFLA losses against 112A vs other LTCG proportionally
-    total_ltcg_before = max(_ZERO, ltcg.income_112a) + max(_ZERO, ltcg.income_125per_other) + max(_ZERO, ltcg.income_dtaa)
+    # Allocate CYLA/BFLA losses against 112A vs other LTCG proportionally.
+    # DTAA-rate LTCG (Phase 6i-5) is deliberately excluded from this split --
+    # it is its own separate CYLA/BFLA sub-basket (ltcg_dtaa_income/
+    # bfla.ltcg_dtaa_remaining), never blended into the ltcg125 CYLA pool
+    # (CYLAInput.ltcg125_income = ltcg_125_signed + ltcg_112a_gross only), so
+    # including it here would misattribute DTAA income as "loss absorbed"
+    # against 112A/other-LTCG whenever both DTAA and 112A income exist in
+    # the same return, understating 112A and overstating other-LTCG with no
+    # real loss involved.
+    total_ltcg_before = max(_ZERO, ltcg.income_112a) + max(_ZERO, ltcg.income_125per_other)
     if total_ltcg_before > _ZERO:
         ltcg_loss_absorbed = max(_ZERO, total_ltcg_before) - other_ltcg
         # Absorb losses proportionally from 112A and other LTCG
         ratio_112a = max(_ZERO, ltcg.income_112a) / total_ltcg_before
         section_112a = max(_ZERO, ltcg.income_112a) - ltcg_loss_absorbed * ratio_112a
-        other_ltcg = max(_ZERO, ltcg.income_125per_other + ltcg.income_dtaa) - ltcg_loss_absorbed * (1 - ratio_112a)
+        other_ltcg = max(_ZERO, ltcg.income_125per_other) - ltcg_loss_absorbed * (1 - ratio_112a)
 
     # HP loss absorbed from CG (after non-CG income) — already handled in CYLA
     # per-basket residuals, so no additional allocation needed here.
@@ -394,6 +404,12 @@ def _post_loss_cg_baskets(
         "112": other_ltcg,
         "112a_gross": section_112a,
         "112a_taxable": max(_ZERO, section_112a - LTCG_112A_EXEMPTION),
+        # DTAA-rate STCG/LTCG (Phase 6i-5) -- each its own independent CYLA/
+        # BFLA sub-basket, post-loss/post-brought-forward remaining amount
+        # (mirroring "111a"'s CYLA-level and "112"'s BFLA-level precedent
+        # respectively).
+        "stcg_dtaa": cyla.stcg_dtaa_remaining,
+        "ltcg_dtaa": bfla.ltcg_dtaa_remaining,
     }
 
 
@@ -641,6 +657,66 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         stcg_result = cg_result.stcg
         ltcg_result = cg_result.ltcg
 
+    # NRI proviso-48 (Schedule CG A3/B4/B7 -- "for NON-RESIDENT, not being
+    # an FII, sale of shares/debentures ... to be computed with foreign
+    # exchange adjustment under first proviso to section 48", and section
+    # 115F) and DTAA-rate capital gains (A8/B11) -- confirmed by reading the
+    # official form directly that A3/B4/B7 are bare, off-form-computed
+    # rupee amounts (no per-transaction detail disclosed), applied once
+    # here regardless of which branch above produced stcg_result/
+    # ltcg_result (mutated in place, so this also updates cg_result.stcg/
+    # .ltcg -- the same objects -- before cg_result is reconstructed below).
+    #
+    # DTAA: "not chargeable in India" (A8a/B11a) vanishes from taxable
+    # income entirely (treaty exemption, per the form's own A9="...-A8a..."
+    # /B12="...-B11a..." formulas); "chargeable at DTAA special rate"
+    # (A8b/B11b) is a RECLASSIFICATION, not new income -- already counted in
+    # the underlying item, just re-tagged for rate purposes via Schedule SI.
+    # Scoping decision: both are treated as sourced from the generic "other"
+    # STCG/LTCG bucket, not dispatched per-item_no_incl to 111A/112A/FII-
+    # specific buckets (Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md,
+    # "Additional bugs noticed" item 8, documents this explicitly).
+    stcg_dtaa_not_chargeable = sum(
+        (e.amount for e in input_data.cg_stcg_dtaa_entries if not e.chargeable_in_india), _ZERO,
+    )
+    stcg_dtaa_special = sum(
+        (e.amount for e in input_data.cg_stcg_dtaa_entries if e.chargeable_in_india), _ZERO,
+    )
+    ltcg_dtaa_not_chargeable = sum(
+        (e.amount for e in input_data.cg_ltcg_dtaa_entries if not e.chargeable_in_india), _ZERO,
+    )
+    ltcg_dtaa_special = sum(
+        (e.amount for e in input_data.cg_ltcg_dtaa_entries if e.chargeable_in_india), _ZERO,
+    )
+    nri_stcg_111a = input_data.cg_nri_stcg_stt_paid  # A3a
+    nri_stcg_other = input_data.cg_nri_stcg_stt_not_paid  # A3b
+    nri_ltcg_proviso48 = max(_ZERO,
+        input_data.cg_nri_ltcg_without_indexation - input_data.cg_nri_ltcg_deduction_54f)  # B4c
+    # B7 (115F) is taxed at 12.5% under section 115E -- numerically the same
+    # rate as ordinary non-112A LTCG post-Budget-2024, so folded into
+    # income_125per_other for tax correctness. Deliberately deferred: the
+    # official form's own separate Schedule SI "115E" disclosure row for
+    # this specific sub-source is not distinctly tagged (see this plan's
+    # own documented scoping decision) -- the amount is taxed correctly,
+    # just not disclosed under its own section-115E label.
+    nri_ltcg_115f = max(_ZERO,
+        input_data.cg_nri_115f_sale_value - input_data.cg_nri_115f_deduction)  # B7c
+
+    stcg_result.income_111a += nri_stcg_111a
+    stcg_result.income_30per += nri_stcg_other - stcg_dtaa_not_chargeable - stcg_dtaa_special
+    stcg_result.income_dtaa += stcg_dtaa_special
+    stcg_result.total_stcg = (
+        stcg_result.income_111a + stcg_result.income_30per
+        + stcg_result.income_app_rate + stcg_result.income_dtaa
+    )
+    ltcg_result.income_125per_other += (
+        nri_ltcg_proviso48 + nri_ltcg_115f - ltcg_dtaa_not_chargeable - ltcg_dtaa_special
+    )
+    ltcg_result.income_dtaa += ltcg_dtaa_special
+    ltcg_result.total_ltcg = (
+        ltcg_result.income_112a + ltcg_result.income_125per_other + ltcg_result.income_dtaa
+    )
+
     # VDA (§115BBH) — outside the regular loss-netting.
     vda_entries: list[VDAEntry] = []
     for vda in input_data.vda_transactions:
@@ -693,11 +769,17 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # ── 5. CYLA: Current Year Loss Set-off ───────────────────────────────────
     # Map CG baskets into 6 statutory sub-baskets for CYLA/BFLA/CG schedule.
     # STCG: 111A (20%) goes to stcg20; other STCG (30% normal rate) to stcg30;
-    # applicable-rate and DTAA baskets are zero unless explicitly classified.
+    # applicable-rate is zero unless explicitly classified; DTAA-rate STCG
+    # (Phase 6i-5) now has its own dedicated bucket, no longer folded into
+    # stcg30 -- previously stcg_result.income_dtaa was added into
+    # stcg_30_signed here WHILE ALSO being read (as always-zero) into its
+    # own stcg_dtaa_signed below, a latent double-bucketing bug that stayed
+    # invisible only because income_dtaa was never populated with a real
+    # value until this phase.
     stcg_111a_signed = stcg_result.income_111a
-    stcg_30_signed = stcg_result.income_30per + stcg_result.income_app_rate + stcg_result.income_dtaa
+    stcg_30_signed = stcg_result.income_30per + stcg_result.income_app_rate
     stcg_app_signed = _ZERO  # applicable-rate STCG (e.g. 15% pre-Jul 2024 111A)
-    stcg_dtaa_signed = _ZERO  # DTAA-rate STCG
+    stcg_dtaa_signed = stcg_result.income_dtaa  # DTAA-rate STCG
     ltcg_125_signed = ltcg_result.income_125per_other  # section 112 at 12.5%
     ltcg_112a_gross = ltcg_result.income_112a  # 112A before threshold
     ltcg_dtaa_signed = ltcg_result.income_dtaa  # DTAA-rate LTCG
@@ -954,6 +1036,38 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             # larger change than this fix's scope; not attempted here.
             si_112_entry.section = SpecialRateSection.S115AD_LTCG_OTHER.value
         si_entries.append(si_112_entry)
+
+    # Schedule CG items A8b/B11b -- STCG/LTCG chargeable at a DTAA special
+    # rate (official Schedule SI codes DTAASTCG/DTAALTCG, distinct from
+    # Schedule OS's own DTAAOS). Each entry carries its own applicable_rate
+    # (min of treaty/Act, per section 90(2)), so a separate SI row is
+    # emitted per chargeable entry rather than one blended flat-rate entry
+    # -- mirroring the identical per-entry os_dtaa_entries dispatch below.
+    # The taxable amount is scaled down proportionally when CYLA/BFLA
+    # absorbed a cross-head loss against this basket (post_loss_cg[...] <
+    # the raw entered total) -- an approximation when multiple entries at
+    # different rates share one basket (matching this module's own
+    # documented "blended basket" precedent for FII 112/normal_stcg above)
+    # rather than an exact per-transaction loss allocation.
+    stcg_dtaa_taxable = post_loss_cg["stcg_dtaa"]
+    stcg_dtaa_gross = sum(
+        (e.amount for e in input_data.cg_stcg_dtaa_entries if e.chargeable_in_india), _ZERO,
+    )
+    if stcg_dtaa_taxable > _ZERO and stcg_dtaa_gross > _ZERO:
+        stcg_dtaa_ratio = min(Decimal("1"), stcg_dtaa_taxable / stcg_dtaa_gross)
+        for dtaa in input_data.cg_stcg_dtaa_entries:
+            if dtaa.chargeable_in_india and dtaa.amount > _ZERO:
+                si_entries.append(compute_dtaa_stcg(dtaa.amount * stcg_dtaa_ratio, dtaa.applicable_rate))
+
+    ltcg_dtaa_taxable = post_loss_cg["ltcg_dtaa"]
+    ltcg_dtaa_gross = sum(
+        (e.amount for e in input_data.cg_ltcg_dtaa_entries if e.chargeable_in_india), _ZERO,
+    )
+    if ltcg_dtaa_taxable > _ZERO and ltcg_dtaa_gross > _ZERO:
+        ltcg_dtaa_ratio = min(Decimal("1"), ltcg_dtaa_taxable / ltcg_dtaa_gross)
+        for dtaa in input_data.cg_ltcg_dtaa_entries:
+            if dtaa.chargeable_in_india and dtaa.amount > _ZERO:
+                si_entries.append(compute_dtaa_ltcg(dtaa.amount * ltcg_dtaa_ratio, dtaa.applicable_rate))
 
     # Section 115AD(1)(ii): an FII/FPI's OWN "other" STCG on securities
     # (STT not paid, i.e. not 111A-equivalent) is a flat 30% special rate,
