@@ -45,6 +45,8 @@ from app.schemas.itr2 import (
     ReturnFileSection,
     ResidentialStatus,
     FSICountryEntry,
+    OSDtaaEntry,
+    OSSection89A,
     TR1Entry,
     ScheduleSIEntry,
     VDATransaction,
@@ -53,6 +55,13 @@ from app.schemas.itr2 import (
 
 def failed(results, rule_id: str) -> bool:
     return any(r.rule_id == rule_id and not r.passed for r in results)
+
+
+def emitted(results, rule_id: str) -> bool:
+    """True if a rule with this ID appears at all -- used for the
+    non-blocking Severity.D advisories, which are `passed=True`
+    (informational), not failures."""
+    return any(r.rule_id == rule_id for r in results)
 
 
 def _base_input(**overrides) -> ITR2Input:
@@ -953,3 +962,201 @@ def test_FE_001_mismatched_employer_and_tds1_counts_cannot_even_be_constructed()
                 income_chargeable=Decimal("600000"), tds_deducted=Decimal("0"),
             )],
         )
+
+
+# ── Category B/D advisories (Phase 6a) ──────────────────────────────────────
+
+def _fsi_entry(**overrides) -> FSICountryEntry:
+    fields = dict(
+        country_code="US", tax_identification_no="123-45-6789",
+        os_income=Decimal("100000"), tax_paid_outside_india=Decimal("20000"),
+        tax_payable_in_india=Decimal("20000"),
+    )
+    fields.update(overrides)
+    return FSICountryEntry(**fields)
+
+
+def test_FORM_004_form67_reminder_emitted_when_relief_claimed_without_filing():
+    inp = _base_input(
+        fsi_entries=[_fsi_entry()],
+        tr1_entries=[TR1Entry(
+            country_code="US", tax_identification_no="123-45-6789",
+            income_included_in_this_return=Decimal("100000"),
+            tax_paid_outside_india=Decimal("20000"), indian_tax_payable=Decimal("20000"),
+            relief_claimed=Decimal("15000"), relief_section="90", form67_filed=False,
+        )],
+    )
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-FORM-004")
+
+
+def test_FORM_004_no_reminder_when_form67_already_filed():
+    inp = _base_input(
+        fsi_entries=[_fsi_entry()],
+        tr1_entries=[TR1Entry(
+            country_code="US", tax_identification_no="123-45-6789",
+            income_included_in_this_return=Decimal("100000"),
+            tax_paid_outside_india=Decimal("20000"), indian_tax_payable=Decimal("20000"),
+            relief_claimed=Decimal("15000"), relief_section="90", form67_filed=True,
+        )],
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-FORM-004")
+
+
+def test_FORM_005_form3cfa_reminder_emitted_for_115bbf_income():
+    inp = _base_input(si_entries=[ScheduleSIEntry(section="115BBF", gross_income=Decimal("500000"))])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-FORM-005")
+
+
+def test_FORM_005_no_reminder_for_other_si_sections():
+    inp = _base_input(si_entries=[ScheduleSIEntry(section="115BB", gross_income=Decimal("500000"))])
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-FORM-005")
+
+
+def _dtaa_entry(**overrides) -> OSDtaaEntry:
+    fields = dict(
+        amount=Decimal("50000"), nature_of_income="1ai", country_name="United States",
+        country_code="US", dtaa_article="11", rate_as_per_treaty=Decimal("15"),
+        rate_as_per_it_act=Decimal("20"), item_no_incl="1ai",
+    )
+    fields.update(overrides)
+    return OSDtaaEntry(**fields)
+
+
+def test_DTAA_001_resident_claiming_os_dtaa_rate_emits_advisory():
+    inp = _base_input(residential_status=ResidentialStatus.RESIDENT, os_dtaa_entries=[_dtaa_entry()])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-DTAA-001")
+
+
+def test_DTAA_001_no_advisory_for_non_resident():
+    inp = _base_input(residential_status=ResidentialStatus.NON_RESIDENT, os_dtaa_entries=[_dtaa_entry()])
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-DTAA-001")
+
+
+def _tds2(**overrides) -> TDS2Entry:
+    fields = dict(deductor_tan="MUMA12345B", tds_section="194A", gross_amount=Decimal("100000"))
+    fields.update(overrides)
+    return TDS2Entry(**fields)
+
+
+def _tds3(**overrides) -> TDS3Entry:
+    fields = dict(tenant_pan="ABCPN1234F", tenant_name="Tenant Name", tds_section="195")
+    fields.update(overrides)
+    return TDS3Entry(**fields)
+
+
+def test_TDS_013_business_indicating_section_under_tds2_emits_advisory():
+    inp = _base_input(tds2_entries=[_tds2(tds_section="194Q")])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-TDS-013")
+
+
+def test_TDS_013_no_advisory_for_ordinary_interest_tds():
+    inp = _base_input(tds2_entries=[_tds2(tds_section="194A")])
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-TDS-013")
+
+
+def test_TDS_014_business_indicating_section_under_tds3_emits_advisory():
+    inp = _base_input(tds3_entries=[_tds3(tds_section="194C")])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-TDS-014")
+
+
+def test_TDS_014_no_advisory_for_ordinary_tds3_section():
+    inp = _base_input(tds3_entries=[_tds3(tds_section="195")])
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-TDS-014")
+
+
+def test_TDS_015_vda_tds_without_vda_transaction_emits_advisory():
+    inp = _base_input(tds2_entries=[_tds2(tds_section="194S")])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-TDS-015")
+
+
+def test_TDS_015_no_advisory_when_vda_transaction_is_disclosed():
+    inp = _base_input(
+        tds2_entries=[_tds2(tds_section="194S")],
+        vda_transactions=[VDATransaction(
+            date_of_acquisition=date(2025, 4, 1), date_of_transfer=date(2025, 6, 1),
+            acquisition_cost=Decimal("10000"), consideration_received=Decimal("15000"),
+        )],
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-TDS-015")
+
+
+def test_TDS_016_lottery_tds_without_115bb_income_emits_advisory():
+    inp = _base_input(tds2_entries=[_tds2(tds_section="194B")])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-TDS-016")
+
+
+def test_TDS_016_no_advisory_when_115bb_income_disclosed():
+    inp = _base_input(
+        tds2_entries=[_tds2(tds_section="194B")],
+        si_entries=[ScheduleSIEntry(section="115BB", gross_income=Decimal("10000"))],
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-TDS-016")
+
+
+def test_TDS_017_race_horse_tds_without_115bb_income_emits_advisory():
+    inp = _base_input(tds2_entries=[_tds2(tds_section="194BB")])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-TDS-017")
+
+
+def test_TDS_017_no_advisory_when_115bb_income_disclosed():
+    inp = _base_input(
+        tds2_entries=[_tds2(tds_section="194BB")],
+        si_entries=[ScheduleSIEntry(section="115BB", gross_income=Decimal("10000"))],
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-TDS-017")
+
+
+def test_TDS_018_online_games_tds_without_115bbj_income_emits_advisory():
+    inp = _base_input(tds2_entries=[_tds2(tds_section="194BA")])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-TDS-018")
+
+
+def test_TDS_018_no_advisory_when_115bbj_income_disclosed():
+    inp = _base_input(
+        tds2_entries=[_tds2(tds_section="194BA")],
+        si_entries=[ScheduleSIEntry(section="115BBJ", gross_income=Decimal("10000"))],
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-TDS-018")
+
+
+def test_FORM_006_form10ee_reminder_emitted_for_section_89a_income():
+    inp = _base_input(os_section_89a=OSSection89A(income_notified=Decimal("200000")))
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-FORM-006")
+
+
+def test_FORM_006_no_reminder_without_section_89a_income():
+    inp = _base_input(os_section_89a=OSSection89A())
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-FORM-006")
+
+
+def test_TDS_019_section_194m_emits_advisory():
+    inp = _base_input(tds2_entries=[_tds2(tds_section="194M")])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-TDS-019")
+
+
+def test_TDS_019_no_advisory_for_other_sections():
+    inp = _base_input(tds2_entries=[_tds2(tds_section="194A")])
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-TDS-019")
+
+
+def test_CG_012_indexed_cost_mismatch_emits_advisory():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LISTED_SECURITY,
+        date_of_acquisition=date(2015, 4, 1), date_of_transfer=date(2020, 6, 1),
+        full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("100000"),
+        indexed_cost=Decimal("999999"),
+    )])
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-CG-012")
+
+
+def test_CG_012_no_advisory_when_indexed_cost_matches_formula():
+    from app.engine.schedules.capital_gains import _indexed_cost
+    acq, xfer = date(2015, 4, 1), date(2020, 6, 1)
+    correct = _indexed_cost(Decimal("100000"), acq.isoformat(), xfer.isoformat())
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LISTED_SECURITY,
+        date_of_acquisition=acq, date_of_transfer=xfer,
+        full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("100000"),
+        indexed_cost=correct,
+    )])
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-CG-012")

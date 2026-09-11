@@ -7,7 +7,7 @@ from typing import Any
 
 from app.engine.calculators.itr2 import ITR2Result
 from app.engine.validators.base import Severity, ValidationReport, ValidationResult
-from app.schemas.itr2 import ITR2Input
+from app.schemas.itr2 import ITR2Input, ReturnFileSection
 
 _ZERO = Decimal("0")
 _TOLERANCE = Decimal("1")
@@ -29,6 +29,23 @@ def _result(
         field_path=field_path,
         expected=expected,
         actual=actual,
+    )
+
+
+def _advisory(rule_id: str, message: str, field_path: str) -> ValidationResult:
+    """Build a non-blocking Category B/D reminder (Severity.D, passed=True) --
+    matches input_rules.py's ITR2-IN-FORM-001/002 pattern, needed here
+    because these particular advisories depend on computed result fields
+    (AMT tax, capital-gains loss aggregates) that don't exist on the raw
+    ITR2Input pre-computation validators can see."""
+    return ValidationResult(
+        rule_id=rule_id,
+        severity=Severity.D,
+        passed=True,
+        message=message,
+        field_path=field_path,
+        expected=None,
+        actual=None,
     )
 
 
@@ -272,6 +289,62 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
             "income exceeds ₹1 crore.",
             "asset_liability", "required", "not provided",
         ))
+
+    # ── Category B/D advisories (Phase 6a) ──────────────────────────────────
+    # Non-blocking Severity.D reminders needing computed result fields (AMT
+    # tax, CG loss aggregates) not present on the pre-compute ITR2Input --
+    # see Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md's Category B/D
+    # findings for the official scenario text each closes.
+
+    # B/D #1: Form 29C is mandatory when AMT tax exceeds normal tax.
+    # result.amt_tax is already exactly "AMT tax minus tax-before-cess" and
+    # is only nonzero when AMT actually applied (compute(), the "AMT" step) --
+    # so amt_tax > 0 is precisely this scenario.
+    if result.amt_tax > _ZERO:
+        results.append(_advisory(
+            "ITR2-CALC-028",
+            "AMT tax exceeds normal tax -- Form 29C (report under section "
+            "115JC) is mandatory to sustain this computation.",
+            "amt_tax",
+        ))
+
+    # B/D #2: flag when AMT's own adjusted total income is at or below ₹50
+    # lakh (below the level surcharge ordinarily applies at) but a surcharge
+    # is nonetheless shown in Part B-TTI -- worth a second look, not
+    # necessarily wrong.
+    amt_schedule = result.schedules.get("amt")
+    if (
+        amt_schedule is not None
+        and getattr(amt_schedule, "adjusted_total_income", _ZERO) <= Decimal("5000000")
+        and result.surcharge > _ZERO
+    ):
+        results.append(_advisory(
+            "ITR2-CALC-029",
+            "Total income under section 115JC (Schedule AMT) is ₹50,00,000 or "
+            "less, but a surcharge is entered in Part B-TTI -- please "
+            "re-check.",
+            "surcharge",
+        ))
+
+    # B/D #26: a belated return (filed u/s 139(4)) cannot carry forward
+    # current-year capital losses -- flag when the CG schedule's own
+    # current-year loss aggregate is positive on a belated return.
+    if (
+        inp.filing_profile is not None
+        and inp.filing_profile.return_file_section == ReturnFileSection.BELATED_139_4
+    ):
+        cg_schedule = result.schedules.get("cg")
+        current_year_cg_loss = getattr(
+            getattr(cg_schedule, "current_year_losses", None), "total_cg_loss", _ZERO
+        )
+        if current_year_cg_loss > _ZERO:
+            results.append(_advisory(
+                "ITR2-CALC-030",
+                "Current-year capital losses (STCL/LTCL) cannot be more than "
+                "zero for a return filed under section 139(4) (belated) -- "
+                "these losses cannot be carried forward.",
+                "cg.current_year_losses.total_cg_loss",
+            ))
 
     return results
 

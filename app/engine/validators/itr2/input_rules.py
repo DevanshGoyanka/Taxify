@@ -1118,6 +1118,161 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             f"len == {len(inp.tds3_filing_details)}",
         ))
 
+    # ── Category B/D advisories (Phase 6a) ──────────────────────────────────
+    # Non-blocking Severity.D reminders, matching the ITR2-IN-FORM-001/002
+    # pattern -- `passed=True` (informational), not a rejection. Wired to
+    # existing fields per Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md's
+    # Category B/D findings; each was a real, representable scenario with no
+    # advisory reading the data before this pass.
+
+    # B/D #3: Form 67 is required to sustain a foreign-tax-relief claim u/s
+    # 90/90A/91 -- TR1Entry.form67_filed already captures exactly this fact.
+    for index, tr1 in enumerate(inp.tr1_entries or []):
+        if tr1.relief_claimed > _ZERO and not tr1.form67_filed:
+            results.append(_result(
+                "ITR2-IN-FORM-004", True,
+                "Foreign tax relief is claimed -- Form 67 must be filed separately "
+                "to sustain this claim.",
+                f"tr1_entries[{index}].relief_claimed", severity=Severity.D,
+            ))
+
+    # B/D #4: Form 3CFA is required within the due date when income is
+    # returned under Section 115BBF (patent royalty).
+    for index, si in enumerate(inp.si_entries or []):
+        if si.section == "115BBF" and si.gross_income > _ZERO:
+            results.append(_result(
+                "ITR2-IN-FORM-005", True,
+                "Income is returned under Section 115BBF -- Form 3CFA must be "
+                "furnished within the due date to sustain this claim.",
+                f"si_entries[{index}].gross_income", severity=Severity.D,
+            ))
+
+    # B/D #8/#18 (duplicate-in-substance in the official catalog): a resident
+    # taxpayer cannot claim a DTAA-preferential rate via Schedule OS's own
+    # NRI-facing DTAA table (OSDtaaEntry models the official
+    # "NRIDTAADtlsSchOS" block by name) -- residents claim DTAA relief
+    # through Schedule TR/FSI instead.
+    if inp.residential_status == ResidentialStatus.RESIDENT and inp.os_dtaa_entries:
+        results.append(_result(
+            "ITR2-IN-DTAA-001", True,
+            "Resident taxpayers cannot claim a DTAA-preferential rate via "
+            "Schedule OS -- DTAA benefit is claimed through Schedule TR and FSI "
+            "instead. Please re-check the claim.",
+            "os_dtaa_entries", severity=Severity.D,
+        ))
+
+    # B/D #12/#13: TDS section codes 194Q/194C/194R/194M under Schedule
+    # TDS2/TDS3 indicate business-type income, which may not belong on
+    # ITR-2. Checked against the raw user-facing section string
+    # (TDS2Entry/TDS3Entry.tds_section) -- the same layer every other
+    # TDS-section rule in this file already reads, before any schema-code
+    # translation happens at JSON-build time.
+    _BUSINESS_INDICATING_TDS_SECTIONS = {"194Q", "194C", "194R", "194M"}
+    for index, entry in enumerate(inp.tds2_entries or []):
+        if entry.tds_section in _BUSINESS_INDICATING_TDS_SECTIONS:
+            results.append(_result(
+                "ITR2-IN-TDS-013", True,
+                f"TDS section {entry.tds_section} under Schedule TDS2 indicates "
+                "business-type income -- please confirm ITR-2 is the correct form.",
+                f"tds2_entries[{index}].tds_section", severity=Severity.D,
+            ))
+    for index, entry in enumerate(inp.tds3_entries or []):
+        if entry.tds_section in _BUSINESS_INDICATING_TDS_SECTIONS:
+            results.append(_result(
+                "ITR2-IN-TDS-014", True,
+                f"TDS section {entry.tds_section} under Schedule TDS3 indicates "
+                "business-type income -- please confirm ITR-2 is the correct form.",
+                f"tds3_entries[{index}].tds_section", severity=Severity.D,
+            ))
+
+    # B/D #14/#15/#16/#17: TDS suggests income of a specific special-rate
+    # nature was derived, but the return doesn't offer any matching income.
+    # Conservative by design (flags "zero of this income type declared at
+    # all", not an exact amount reconciliation) -- correct for an advisory
+    # that must not false-fire on partial, still-being-entered data.
+    has_194s_tds = any(
+        e.tds_section == "194S" for e in (list(inp.tds2_entries or []) + list(inp.tds3_entries or []))
+    )
+    if has_194s_tds and not inp.vda_transactions:
+        results.append(_result(
+            "ITR2-IN-TDS-015", True,
+            "TDS under section 194S suggests virtual digital asset income was "
+            "derived this year, but no VDA transaction is disclosed -- please "
+            "confirm the income has been fully offered to tax.",
+            "vda_transactions", severity=Severity.D,
+        ))
+    si_sections_present = {si.section for si in (inp.si_entries or [])}
+    for tds_section, si_section, rule_id, label in (
+        ("194B", "115BB", "ITR2-IN-TDS-016", "winnings from lotteries/crossword puzzles/card games"),
+        ("194BB", "115BB", "ITR2-IN-TDS-017", "income from owning and maintaining race horses"),
+        ("194BA", "115BBJ", "ITR2-IN-TDS-018", "winnings from online games"),
+    ):
+        has_tds = any(
+            e.tds_section == tds_section
+            for e in (list(inp.tds2_entries or []) + list(inp.tds3_entries or []))
+        )
+        if has_tds and si_section not in si_sections_present:
+            results.append(_result(
+                rule_id, True,
+                f"TDS under section {tds_section} suggests {label} was derived "
+                f"this year, but no matching Section {si_section} income is "
+                "disclosed in Schedule SI -- please confirm the income has been "
+                "fully offered to tax.",
+                "si_entries", severity=Severity.D,
+            ))
+
+    # B/D #19: Form 10EE is required to sustain a claim for relief u/s 89A
+    # (notified foreign-retirement-account income), mirroring the Form
+    # 10E/89 pattern above.
+    if inp.os_section_89a is not None and (
+        inp.os_section_89a.income_notified > _ZERO
+        or inp.os_section_89a.relief > _ZERO
+    ):
+        results.append(_result(
+            "ITR2-IN-FORM-006", True,
+            "Section 89A notified income/relief is claimed -- Form 10EE must be "
+            "filed separately to sustain this claim.",
+            "os_section_89a", severity=Severity.D,
+        ))
+
+    # B/D #22: TDS deducted and claimed under section 194M specifically
+    # flags a business-type payment (by an individual/HUF not otherwise
+    # liable to deduct TDS) inconsistent with filing ITR-2.
+    for index, entry in enumerate(inp.tds2_entries or []):
+        if entry.tds_section == "194M":
+            results.append(_result(
+                "ITR2-IN-TDS-019", True,
+                "TDS has been deducted and claimed under section 194M, but "
+                "ITR-2 has been filed -- please confirm ITR-2 is the correct form.",
+                f"tds2_entries[{index}].tds_section", severity=Severity.D,
+            ))
+
+    # B/D #25: cross-check the taxpayer-entered indexed cost of acquisition
+    # against the statutory CII formula, using the exact same helper the
+    # calculator itself uses (app/engine/schedules/capital_gains.py) so this
+    # advisory can never disagree with what the engine actually computes --
+    # deliberately not re-deriving the "does indexation still apply
+    # post-July-2024" policy question here, only consistency with the
+    # engine's own existing formula.
+    for index, tx in enumerate(inp.cg_transactions or []):
+        if tx.indexed_cost <= _ZERO or tx.date_of_acquisition is None:
+            continue
+        from app.engine.schedules.capital_gains import _indexed_cost
+        expected = _indexed_cost(
+            tx.cost_of_acquisition,
+            tx.date_of_acquisition.isoformat(),
+            tx.date_of_transfer.isoformat(),
+        )
+        if abs(tx.indexed_cost - expected) > Decimal("1"):
+            results.append(_result(
+                "ITR2-IN-CG-012", True,
+                "Indexed cost of acquisition does not match Cost of acquisition "
+                "x CII(year of sale)/CII(year of acquisition) -- please ensure "
+                "correct computation in Schedule CG.",
+                f"cg_transactions[{index}].indexed_cost",
+                str(expected), str(tx.indexed_cost), severity=Severity.D,
+            ))
+
     return results
 
 
