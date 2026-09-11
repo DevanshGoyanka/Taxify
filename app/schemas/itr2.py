@@ -742,6 +742,13 @@ class EmployerFilingDetail(StrictModel):
     income_notified_89a: Decimal = Field(default=Decimal("0"), ge=0)
     income_notified_other_89a: Decimal = Field(default=Decimal("0"), ge=0)
     income_notified_prior_year_89a: Decimal = Field(default=Decimal("0"), ge=0)
+    # This employer's own share of SalaryIncome.gratuity_received/
+    # commuted_pension_received (both scalars, summed across all employers
+    # for the calculator/JSON -- CBDT rule #38/#39 needs the per-employer
+    # attribution, not the aggregate, to detect a double-claim; see
+    # ITR2-IN-SAL-016/017 in input_rules.py).
+    gratuity_received: Decimal = Field(default=Decimal("0"), ge=0)
+    commuted_pension_received: Decimal = Field(default=Decimal("0"), ge=0)
     # Typed (not a raw dict list) so a country code outside {US, UK, CA} is
     # rejected at the schema boundary rather than reaching the ITD builder
     # -- the same official NOT89AType structure OSSection89A.country_entries

@@ -242,6 +242,42 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     "salary_income.gratuity_received", "<= 2000000", str(sal.gratuity_received),
                 ))
 
+        # CBDT rules #38/#39: gratuity/commuted-pension exemption u/s 17(1)
+        # is not allowed against more than one employer. gratuity_received/
+        # commuted_pension_received above are return-wide scalars (summed
+        # across employers for the calculator/JSON, which genuinely only
+        # need the aggregate -- confirmed against the official schema's own
+        # single schedule-level AllwncExemptUs10 block, Phase 6i-3), so the
+        # per-employer attribution needed here instead comes from
+        # EmployerFilingDetail.gratuity_received/commuted_pension_received
+        # (populated by filing_gateway_v2.py::_itr2_employer_filing_details
+        # from the frontend's own per-employer Employer.gratuity/
+        # commutedPension fields, which were already captured end-to-end
+        # and simply never reached this validator). Gating on the AMOUNT
+        # (two or more employers each nonzero), not merely on employer
+        # count, is what resolves the false-positive worry an earlier pass
+        # raised for this exact rule ("a naive multi-employer gate would
+        # false-positive on a mid-year job change") -- an ordinary job
+        # change has gratuity on at most one employer row, since gratuity
+        # requires 5+ years' service and a same-year new hire can never
+        # qualify.
+        gratuity_claimants = [d for d in inp.employer_filing_details if d.gratuity_received > _ZERO]
+        if len(gratuity_claimants) > 1:
+            results.append(_result(
+                "ITR2-IN-SAL-016", False,
+                "Gratuity exemption u/s 17(1) cannot be claimed against more than one employer.",
+                "employer_filing_details[].gratuity_received", "<= 1 employer",
+                f"{len(gratuity_claimants)} employers",
+            ))
+        pension_claimants = [d for d in inp.employer_filing_details if d.commuted_pension_received > _ZERO]
+        if len(pension_claimants) > 1:
+            results.append(_result(
+                "ITR2-IN-SAL-017", False,
+                "Commuted pension exemption u/s 17(1) cannot be claimed against more than one employer.",
+                "employer_filing_details[].commuted_pension_received", "<= 1 employer",
+                f"{len(pension_claimants)} employers",
+            ))
+
         # CBDT rule 62: Section 10(10B) retrenchment-compensation exemption is
         # not available to Central/State Government employees or any pensioner
         # category -- it is reserved for industrial workers covered by the

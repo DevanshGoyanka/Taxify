@@ -89,6 +89,21 @@ def test_minimal_itr2_draft_maps_and_computes() -> None:
     assert not result.errors
 
 
+def test_standard_deduction_not_duplicated_across_multiple_employers() -> None:
+    """Regression check for Phase 6i-3 (per the user's explicit request):
+    _map_salary() sums every employer's gross salary components into ONE
+    SalaryIncome before compute_salary() runs once, so the new-regime
+    section 16(ia) standard deduction must stay capped at a single 75000
+    total across two employers, not 75000-per-employer (150000)."""
+    draft = _filing_ready_itr2_draft()
+    draft.employers.append(Employer(id="e2", basic=Decimal("1200000"), tdsDeducted=Decimal("90000")))
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+
+    result = compute_itr2(itr2_input)
+    sal_result = result.schedules["salary"]
+    assert sal_result.standard_deduction == Decimal("75000")
+
+
 def test_remaining_section10_exemption_rows_reduce_taxable_salary_for_itr2_too() -> None:
     """draft_to_itr2_input() reuses draft_to_itr1_input.py's own _map_salary()
     wholesale -- the EIC/10(17)/10(14)(i)/10(14)(ii)/115BAC-variant

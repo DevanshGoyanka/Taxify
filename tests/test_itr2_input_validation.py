@@ -1622,6 +1622,55 @@ def test_SAL_015_hra_exemption_exceeding_formula_fails():
     assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-015")
 
 
+# ─── Phase 6i-3: gratuity/commuted-pension per-employer attribution ────────
+
+def test_SAL_016_gratuity_claimed_against_two_employers_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("2500000"), gratuity_received=Decimal("2000000")),
+        employer_filing_details=[
+            _employer_detail(employer_name="Employer A", gratuity_received=Decimal("1000000")),
+            _employer_detail(employer_name="Employer B", gratuity_received=Decimal("1000000")),
+        ],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-016")
+
+
+def test_SAL_016_gratuity_claimed_against_only_one_of_two_employers_passes():
+    """A mid-year job change is the common legitimate multi-employer case --
+    gratuity requires 5+ years' service, so a same-year new hire can never
+    also show gratuity, and this must not false-positive."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("2500000"), gratuity_received=Decimal("1000000")),
+        employer_filing_details=[
+            _employer_detail(employer_name="Old Employer", gratuity_received=Decimal("1000000")),
+            _employer_detail(employer_name="New Employer"),
+        ],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-016")
+
+
+def test_SAL_017_commuted_pension_claimed_against_two_employers_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("1500000"), commuted_pension_received=Decimal("600000")),
+        employer_filing_details=[
+            _employer_detail(employer_name="Employer A", commuted_pension_received=Decimal("300000")),
+            _employer_detail(employer_name="Employer B", commuted_pension_received=Decimal("300000")),
+        ],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-017")
+
+
+def test_SAL_017_commuted_pension_claimed_against_only_one_of_two_employers_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("1500000"), commuted_pension_received=Decimal("300000")),
+        employer_filing_details=[
+            _employer_detail(employer_name="Old Employer", commuted_pension_received=Decimal("300000")),
+            _employer_detail(employer_name="New Employer"),
+        ],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-017")
+
+
 # ─── Phase 6c: Section 80CCH PRAN + hard cap + percentage cap ───────────────
 
 def test_VIA_013_80cch_with_pran_passes_pran_check():

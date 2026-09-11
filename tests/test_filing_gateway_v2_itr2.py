@@ -554,3 +554,31 @@ def test_generate_cbdt_json_itr2_succeeds_with_no_salary_and_no_house_property()
     itr2_json = official_json["ITR"]["ITR2"]
     assert "ScheduleS" not in itr2_json
     assert "ScheduleHP" not in itr2_json
+
+
+def test_employer_filing_details_carries_per_employer_gratuity_and_pension() -> None:
+    """Regression for Phase 6i-3 (CBDT rules #38/#39): gratuity/commuted-
+    pension were captured per employer by the frontend/draft schema all
+    along (Employer.gratuity/commutedPension) but never reached
+    EmployerFilingDetail, the only per-employer carrier
+    ITR2-IN-SAL-016/017 can read -- both employers' own amounts must land
+    on their own row, not a shared/duplicated total."""
+    draft = _filing_ready_itr2_draft()
+    draft.employers.append(Employer(
+        id="e2", basic=Decimal("800000"), tdsDeducted=Decimal("40000"),
+        employerName="Beta Corp", employerTAN="DELB54321C",
+        employerCity="Delhi", employerStateCode="07", employerAddress="Tower B",
+        commutedPension=Decimal("250000"),
+    ))
+    draft.employers[0].gratuity = Decimal("1000000")
+    draft.taxes.tds.append(TdsCredit(
+        id="t2", section="192", deductorName="Beta Corp", deductorTAN="DELB54321C",
+        grossAmount=Decimal("800000"), taxDeducted=Decimal("40000"), schedule="TDS1",
+    ))
+    pipeline = compute_canonical_itr2(draft)
+    details = {d.employer_tan: d for d in pipeline.typed_input.employer_filing_details}
+    assert len(details) == 2
+    assert details["MUMA12345B"].gratuity_received == Decimal("1000000")
+    assert details["MUMA12345B"].commuted_pension_received == Decimal("0")
+    assert details["DELB54321C"].gratuity_received == Decimal("0")
+    assert details["DELB54321C"].commuted_pension_received == Decimal("250000")

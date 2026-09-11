@@ -1634,6 +1634,8 @@ def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDeta
                         for row in employer.incomeNotified89ACountryRows
                         if row.get("countryCode") and row.get("amount")
                     ],
+                    gratuity_received=employer.gratuity,
+                    commuted_pension_received=employer.commutedPension,
                 ))
             except (ValidationError, ValueError) as exc:
                 raise FilingGatewayV2Error(
@@ -1681,6 +1683,8 @@ def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDeta
                     for item in (employer.incomeNotified89ACountryRows if employer else [])
                     if item.get("countryCode") and item.get("amount")
                 ],
+                gratuity_received=employer.gratuity if employer else Decimal("0"),
+                commuted_pension_received=employer.commutedPension if employer else Decimal("0"),
             ))
         except (ValidationError, ValueError) as exc:
             raise FilingGatewayV2Error(
