@@ -1125,6 +1125,11 @@ class ITR2Input(StrictModel):
     deduction_80qqb: Decimal = Field(default=Decimal("0"), ge=0)
     royalty_income_80qqb: Decimal = Field(default=Decimal("0"), ge=0)
     deduction_80rrb: Decimal = Field(default=Decimal("0"), ge=0)
+    # PRAN is mandatory for a Section 80CCH (Agniveer Corpus Fund) claim --
+    # ITR-1 already has this field (app/schemas/itr1.py's ITR1Input.pran_number)
+    # reading the same shared ReturnDraft field (draft.deductions.chapterVIA.
+    # pranNumber); ITR2Input never read it at all (Phase 6c, 2026-09-11).
+    pran_number: Optional[str] = Field(default=None, max_length=12)
     tds1_entries: List[TDS1Entry] = Field(default_factory=list)
     tds2_entries: List[TDS2Entry] = Field(default_factory=list)
     tds3_entries: List[TDS3Entry] = Field(default_factory=list)

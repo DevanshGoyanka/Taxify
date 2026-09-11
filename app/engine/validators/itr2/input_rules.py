@@ -118,15 +118,33 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             ))
 
     # ── Schedule S (Salary) — Phase 5A ─────────────────────────────────────
-    # Only checks pass-through exemption claims the engine does NOT itself cap
-    # or compute from a statutory formula (gratuity/leave-encashment/VRS/
-    # retrenchment/commuted-pension exemptions are all engine-computed from
-    # gross-received amounts with their own statutory ceiling — see
-    # app/engine/schedules/salary.py — so there is no user-suppliable "exempt
-    # amount" for those that could violate a cap; re-validating them here
-    # would be redundant). HRA's CBDT cap (50% of Basic+DA) is not checked:
-    # SalaryIncome has no Basic/DA breakout to check it against — a known,
-    # documented gap, not approximated with a fabricated proxy.
+    # Checks pass-through exemption claims the engine does NOT itself cap or
+    # compute from a statutory formula (leave-encashment/VRS/commuted-pension
+    # exemptions are all engine-computed from gross-received amounts with
+    # their own statutory ceiling — see app/engine/schedules/salary.py — so
+    # there is no user-suppliable "exempt amount" for those that could
+    # violate a cap; re-validating them here would be redundant). Gratuity
+    # and retrenchment compensation are genuine exceptions (Phase 6c,
+    # 2026-09-11): salary.py's own _exempt_gratuity()/is_cg_sg_employee flag
+    # has no pensioner granularity, so it cannot enforce the CBDT rule's real
+    # 4-category ₹20L/₹25L split, and retrenchment compensation has no
+    # eligibility gate in the calculator at all — both need a pre-compute
+    # validator instead, sourced from employer_filing_details[].
+    # nature_of_employment (the only field carrying the CBDT 8-way category),
+    # since gratuity_received/retrenchment_compensation are single scalars
+    # not attributed to one employer -- the "any employer matches" reading
+    # mirrors the already-shipped ITR2-IN-VIA-010 (80CCH central-employment
+    # check)'s handling of the identical structural mismatch. HRA's own
+    # ceiling is NOT re-checked here as a genuine gap (the prior version of
+    # this comment claimed "SalaryIncome has no Basic/DA breakout" -- stale:
+    # EmployerFilingDetail.salary_for_hra/actual_hra_received/actual_rent_paid/
+    # is_metro_city carry exactly that breakout, populated by
+    # filing_gateway_v2.py::_itr2_employer_filing_details from the frontend's
+    # own Basic/DA employer fields, and app/engine/itd/itr2.py's own Schedule
+    # 10(13A) builder (~line 706) already hard-`raise`s on a mismatch against
+    # the identical three-way min() formula) -- ITR2-IN-SAL-015 below exists
+    # only to surface that same reconciliation as a friendly pre-compute
+    # message instead of a raw builder exception, not to add new coverage.
     sal = inp.salary_income
     if sal is not None:
         gross_salary_total = sal.gross_salary + sal.perquisites_value + sal.profits_in_lieu_of_salary
@@ -199,6 +217,93 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     "ITR2-IN-SAL-008", False,
                     "Professional tax u/s 16(iii) cannot be claimed under the new tax regime.",
                     "salary_income.professional_tax_paid", _ZERO, str(sal.professional_tax_paid),
+                ))
+
+        # CBDT rule 28: gratuity exemption u/s 10(10) is capped at ₹25,00,000
+        # for Central/State Government employees and CG/SG-Pensioners
+        # (CGOV/SGOV/PE/PESG), ₹20,00,000 for everyone else (PSU/PSU-Pensioners/
+        # Others-Pensioners/Others) -- see this section's own comment above for
+        # why employer_filing_details, not is_cg_sg_employee, is the source.
+        if sal.gratuity_received > _ZERO and inp.employer_filing_details:
+            _gratuity_25l_categories = {"CGOV", "SGOV", "PE", "PESG"}
+            if any(d.nature_of_employment in _gratuity_25l_categories for d in inp.employer_filing_details):
+                if sal.gratuity_received > Decimal("2500000"):
+                    results.append(_result(
+                        "ITR2-IN-SAL-011", False,
+                        "Gratuity exemption u/s 10(10) cannot exceed ₹25,00,000 for Central/"
+                        "State Government employees or CG/SG-Pensioners.",
+                        "salary_income.gratuity_received", "<= 2500000", str(sal.gratuity_received),
+                    ))
+            elif sal.gratuity_received > Decimal("2000000"):
+                results.append(_result(
+                    "ITR2-IN-SAL-012", False,
+                    "Gratuity exemption u/s 10(10) cannot exceed ₹20,00,000 for PSU, "
+                    "PSU-Pensioners, Others-Pensioners, or Others employment categories.",
+                    "salary_income.gratuity_received", "<= 2000000", str(sal.gratuity_received),
+                ))
+
+        # CBDT rule 62: Section 10(10B) retrenchment-compensation exemption is
+        # not available to Central/State Government employees or any pensioner
+        # category -- it is reserved for industrial workers covered by the
+        # Industrial Disputes Act. Uses the fuller 6-category list ITR-1/ITR-4's
+        # own already-shipped validators apply (CGOV/SGOV/PE/PESG/PEPS/PEO), not
+        # ITR-2's own official rule text's narrower 4-category wording
+        # (CGOV/SGOV/PE/PESG only) -- Section 10(10B) is one Income Tax Act
+        # provision, not form-specific, and ITR-1's rule #185 and ITR-4's rule
+        # #223 both independently state all six categories, so the narrower
+        # ITR-2 rule text is treated as an incomplete transcription rather than
+        # a deliberately different rule for this one form.
+        if sal.retrenchment_compensation > _ZERO and inp.employer_filing_details:
+            _retrenchment_ineligible_categories = {"CGOV", "SGOV", "PE", "PESG", "PEPS", "PEO"}
+            if any(d.nature_of_employment in _retrenchment_ineligible_categories for d in inp.employer_filing_details):
+                results.append(_result(
+                    "ITR2-IN-SAL-013", False,
+                    "Section 10(10B) retrenchment-compensation exemption is not available to "
+                    "Government employees or pensioners; it is limited to industrial workers "
+                    "covered by the Industrial Disputes Act.",
+                    "salary_income.retrenchment_compensation", "0 for CG/SG/pensioner employment",
+                    str(sal.retrenchment_compensation),
+                ))
+
+        # CBDT rule 47: only one of Section 10(10B) (retrenchment compensation)
+        # or Section 10(10C) (VRS compensation) can be claimed. ITR2Input has
+        # one scalar field per section (not a per-row dropdown), so this
+        # collapses to "not both nonzero" -- matching ITR-1's ITR1-R123-style
+        # and ITR-4's already-shipped R214/R223 mutual-exclusion checks.
+        if sal.retrenchment_compensation > _ZERO and sal.vrs_compensation > _ZERO:
+            results.append(_result(
+                "ITR2-IN-SAL-014", False,
+                "Only one of Section 10(10B) retrenchment compensation or Section 10(10C) "
+                "VRS compensation can be claimed, not both.",
+                "salary_income", "retrenchment_compensation == 0 or vrs_compensation == 0",
+                f"retrenchment={sal.retrenchment_compensation}, vrs={sal.vrs_compensation}",
+            ))
+
+        # CBDT rules 29/602-606: HRA exemption u/s 10(13A) must equal the least
+        # of (a) actual HRA received, (b) actual rent paid less 10% of Basic+DA,
+        # and (c) 50%/40% of Basic+DA (metro/non-metro), aggregated across all
+        # employers. app/engine/itd/itr2.py's own Schedule 10(13A) builder
+        # already enforces this exact reconciliation and raises ValueError on
+        # mismatch (~line 706) -- this validator exists only to surface the
+        # identical check earlier as a clean pre-compute message. Metro status
+        # is taken from the first employer, matching the builder's own
+        # `is_metro = section13a_details[0].is_metro_city` (which is itself
+        # only reachable because the builder separately rejects mixed
+        # metro/non-metro employers).
+        if inp.tax_regime == TaxRegime.OLD and sal.hra_exempt_amount > _ZERO and inp.employer_filing_details:
+            _hra_received_total = sum((d.actual_hra_received for d in inp.employer_filing_details), _ZERO)
+            _rent_paid_total = sum((d.actual_rent_paid for d in inp.employer_filing_details), _ZERO)
+            _basic_da_total = sum((d.salary_for_hra for d in inp.employer_filing_details), _ZERO)
+            _is_metro = inp.employer_filing_details[0].is_metro_city
+            _rent_minus_ten_pct = max(_ZERO, _rent_paid_total - _basic_da_total * Decimal("0.1"))
+            _basic_da_rate = _basic_da_total * (Decimal("0.5") if _is_metro else Decimal("0.4"))
+            _allowed_hra = min(_hra_received_total, _rent_minus_ten_pct, _basic_da_rate)
+            if sal.hra_exempt_amount != _allowed_hra:
+                results.append(_result(
+                    "ITR2-IN-SAL-015", False,
+                    "HRA exemption u/s 10(13A) must equal the least of actual HRA received, "
+                    "rent paid less 10% of Basic+DA, and 40%/50% of Basic+DA.",
+                    "salary_income.hra_exempt_amount", str(_allowed_hra), str(sal.hra_exempt_amount),
                 ))
 
     # ── Schedule HP (House Property) — Phase 5A ────────────────────────────
@@ -997,6 +1102,40 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     "ITR2-IN-VIA-011", False,
                     "Section 80CCH is available only for age 17 through 27 on 1 April 2025.",
                     "filing_profile.date_of_birth_or_formation", "age 17..27", str(age),
+                ))
+        # CBDT rules (ITR-1's own already-shipped ITR1-R186/R186h; ITR-4's
+        # ITR4-R073-2/R317): 80CCH also requires a PRAN number and is capped
+        # at the lower of 46.2% of Salary u/s 17(1) and ₹2,88,000. ITR-2's own
+        # official validation-rules PDF states a conflicting "60% of salary"
+        # figure (rule #347) with no absolute cap at all -- since Section
+        # 80CCH is one Income Tax Act provision, not form-specific, and two
+        # of the three examined forms' official PDFs (ITR-1, ITR-4)
+        # independently agree on 46.2%/₹2,88,000, that figure is treated as
+        # correct and ITR-2's "60%" text as an isolated drafting error in
+        # CBDT's own PDF, not followed. This corrects
+        # Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md's 2026-09-11 (Phase 6b)
+        # retraction of this same finding, made without checking the primary
+        # PDF sources directly -- see that doc's updated note.
+        if not inp.pran_number:
+            results.append(_result(
+                "ITR2-IN-VIA-013", False,
+                "Section 80CCH (Agniveer Corpus Fund) claim requires a PRAN number.",
+                "pran_number", "present", "absent",
+            ))
+        if ch6a.amount_80cch > Decimal("288000"):
+            results.append(_result(
+                "ITR2-IN-VIA-014", False,
+                "Section 80CCH deduction cannot exceed ₹2,88,000.",
+                "deductions_chapter6a.amount_80cch", "<= 288000", str(ch6a.amount_80cch),
+            ))
+        if sal is not None and sal.gross_salary > _ZERO:
+            _cch_limit = sal.gross_salary * Decimal("0.462")
+            if ch6a.amount_80cch > _cch_limit:
+                results.append(_result(
+                    "ITR2-IN-VIA-015", False,
+                    f"Section 80CCH deduction exceeds 46.2% of Salary u/s 17(1) "
+                    f"(₹{sal.gross_salary}) = ₹{_cch_limit}.",
+                    "deductions_chapter6a.amount_80cch", f"<= {_cch_limit}", str(ch6a.amount_80cch),
                 ))
 
     # CBDT rule 662: every CGAS claim must point to a disclosed CGAS bank

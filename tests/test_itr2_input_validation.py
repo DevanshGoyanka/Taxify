@@ -1191,3 +1191,188 @@ def test_CG_012_no_advisory_when_indexed_cost_matches_formula():
         indexed_cost=correct,
     )])
     assert not emitted(validate_itr2_input(inp), "ITR2-IN-CG-012")
+
+
+# ─── Phase 6c: Schedule S (salary) genuine gaps ─────────────────────────────
+
+def test_SAL_011_gratuity_within_25l_ceiling_for_cg_employee_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("2000000"), gratuity_received=Decimal("2500000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="CGOV")],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-011")
+
+
+def test_SAL_011_gratuity_exceeding_25l_ceiling_for_sg_pensioner_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("2000000"), gratuity_received=Decimal("3000000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="PESG")],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-011")
+
+
+def test_SAL_012_gratuity_within_20l_ceiling_for_psu_employee_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("2000000"), gratuity_received=Decimal("2000000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="PSU")],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-012")
+
+
+def test_SAL_012_gratuity_exceeding_20l_ceiling_for_others_fails():
+    """Regression for Phase 6c: ITR-2 had zero gratuity-ceiling validator at
+    all -- unlike ITR-1/ITR-4, which at least implement the coarser
+    is_cg_sg-vs-not split (missing the CG/SG-Pensioner nuance ITR-2's own
+    validator now correctly implements)."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("3000000"), gratuity_received=Decimal("2500000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="OTH")],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-012")
+
+
+def test_SAL_013_retrenchment_compensation_for_private_employee_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), retrenchment_compensation=Decimal("300000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="OTH")],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-013")
+
+
+def test_SAL_013_retrenchment_compensation_for_cg_pensioner_fails():
+    """Regression for Phase 6c: Section 10(10B) retrenchment-compensation
+    exemption is not available to Government employees/pensioners -- ITR-2
+    had no eligibility gate at all (salary.py's retrenchment_exempt() takes
+    no is_govt/is_cg_sg parameter, unlike its gratuity/leave-encashment/
+    commuted-pension siblings)."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), retrenchment_compensation=Decimal("300000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="PE")],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-013")
+
+
+def test_SAL_014_only_vrs_compensation_claimed_passes():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("500000"), vrs_compensation=Decimal("300000"),
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-014")
+
+
+def test_SAL_014_vrs_and_retrenchment_compensation_both_claimed_fails():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("500000"),
+        vrs_compensation=Decimal("100000"), retrenchment_compensation=Decimal("100000"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-014")
+
+
+def test_SAL_015_hra_exemption_matching_formula_passes():
+    # Basic+DA = 300000; 50% (metro) = 150000; rent - 10% = 200000-30000 = 170000;
+    # HRA received = 120000. min(120000, 170000, 150000) = 120000.
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), hra_exempt_amount=Decimal("120000")),
+        employer_filing_details=[_employer_detail(
+            actual_hra_received=Decimal("120000"), actual_rent_paid=Decimal("200000"),
+            salary_for_hra=Decimal("300000"), is_metro_city=True,
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-015")
+
+
+def test_SAL_015_hra_exemption_exceeding_formula_fails():
+    """Regression for Phase 6c: app/engine/itd/itr2.py's own Schedule
+    10(13A) builder already hard-`raise`s ValueError on this exact mismatch
+    -- this validator surfaces the identical check as a clean pre-compute
+    message instead of a raw builder crash."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), hra_exempt_amount=Decimal("160000")),
+        employer_filing_details=[_employer_detail(
+            actual_hra_received=Decimal("200000"), actual_rent_paid=Decimal("200000"),
+            salary_for_hra=Decimal("300000"), is_metro_city=True,
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-015")
+
+
+# ─── Phase 6c: Section 80CCH PRAN + hard cap + percentage cap ───────────────
+
+def test_VIA_013_80cch_with_pran_passes_pran_check():
+    profile = ITR2FilingProfile.model_construct(date_of_birth_or_formation=date(2005, 1, 1))
+    inp = _base_input(
+        filing_profile=profile,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("100000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="CGOV")],
+        pran_number="123456789012",
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-013")
+
+
+def test_VIA_013_80cch_without_pran_fails():
+    profile = ITR2FilingProfile.model_construct(date_of_birth_or_formation=date(2005, 1, 1))
+    inp = _base_input(
+        filing_profile=profile,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("100000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="CGOV")],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-013")
+
+
+def test_VIA_014_80cch_within_absolute_cap_passes():
+    profile = ITR2FilingProfile.model_construct(date_of_birth_or_formation=date(2005, 1, 1))
+    inp = _base_input(
+        filing_profile=profile,
+        salary_income=SalaryIncome(gross_salary=Decimal("10000000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("288000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="CGOV")],
+        pran_number="123456789012",
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-014")
+
+
+def test_VIA_014_80cch_exceeding_absolute_cap_fails():
+    """Regression for Phase 6c: this un-retracts and corrects the Phase 6b
+    (2026-09-11) decision to retract the 80CCH cap finding -- that retraction
+    was made without checking the primary CBDT PDF sources directly. ITR-1's
+    ITR1-R186h and ITR-4's equivalent already enforce this identical
+    ₹2,88,000 absolute cap; ITR-2 had none."""
+    profile = ITR2FilingProfile.model_construct(date_of_birth_or_formation=date(2005, 1, 1))
+    inp = _base_input(
+        filing_profile=profile,
+        salary_income=SalaryIncome(gross_salary=Decimal("10000000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("300000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="CGOV")],
+        pran_number="123456789012",
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-014")
+
+
+def test_VIA_015_80cch_within_46_2_pct_of_salary_passes():
+    profile = ITR2FilingProfile.model_construct(date_of_birth_or_formation=date(2005, 1, 1))
+    inp = _base_input(
+        filing_profile=profile,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("200000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="CGOV")],
+        pran_number="123456789012",
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-015")
+
+
+def test_VIA_015_80cch_exceeding_46_2_pct_of_salary_fails():
+    """Regression for Phase 6c: ITR-2's own official PDF text states a
+    conflicting '60% of salary' figure (rule #347) with no absolute cap
+    mentioned -- deliberately not followed since Section 80CCH is one Income
+    Tax Act provision and ITR-1/ITR-4's official PDFs both independently
+    state 46.2%/₹2,88,000 instead; see this rule's own code comment."""
+    profile = ITR2FilingProfile.model_construct(date_of_birth_or_formation=date(2005, 1, 1))
+    inp = _base_input(
+        filing_profile=profile,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80cch=Decimal("250000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="CGOV")],
+        pran_number="123456789012",
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-015")

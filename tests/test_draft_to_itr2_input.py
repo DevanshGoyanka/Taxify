@@ -621,3 +621,15 @@ def test_section_80qqb_and_80rrb_reach_itr2_input() -> None:
     ded = result.schedules["deductions"]
     assert ded.breakdown["80QQB"] == Decimal("200000")
     assert ded.breakdown["80RRB"] == Decimal("100000")
+
+
+def test_pran_number_reaches_itr2_input() -> None:
+    """Regression for Phase 6c: draft.deductions.chapterVIA.pranNumber (the
+    same shared ReturnDraft field ITR-1's own mapper already reads for its
+    ITR1Input.pran_number) was never read into ITR2Input at all -- ITR2Input
+    had no pran_number field, so a Section 80CCH (Agniveer Corpus Fund) PRAN
+    entered on the frontend had it silently discarded."""
+    draft = _filing_ready_itr2_draft()
+    draft.deductions.chapterVIA.pranNumber = "123456789012"
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.pran_number == "123456789012"

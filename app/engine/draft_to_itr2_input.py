@@ -1163,6 +1163,7 @@ def draft_to_itr2_input(
         deduction_80qqb=draft.deductions.chapterVIA.section80QQB,
         royalty_income_80qqb=draft.deductions.chapterVIA.section80QQBRoyaltyIncome,
         deduction_80rrb=draft.deductions.chapterVIA.section80RRB,
+        pran_number=draft.deductions.chapterVIA.pranNumber or None,
         tds1_entries=tds1,
         tds2_entries=tds2,
         tds3_entries=tds3_entries,
