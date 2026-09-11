@@ -479,3 +479,59 @@ def test_itr2_filing_profile_rejects_deposit_flag_below_statutory_minimum() -> N
     draft.filing.seventhProviso.depositAmount = Decimal("500000")
     with pytest.raises(FilingGatewayV2Error):
         generate_cbdt_json(draft)
+
+
+def _zero_salary_zero_hp_itr2_draft() -> ReturnDraft:
+    """An ordinary ITR-2 filer with no salary and no house property -- e.g.
+    someone filing purely for capital gains, other-sources income, or foreign
+    asset disclosure. A very common, non-edge-case ITR-2 shape."""
+    draft = create_empty_draft("2026-27", "ITR-2", "new")
+    draft.personal = PersonalInfo(
+        name="Sunit Goyanka", firstName="Sunit", surnameOrOrgName="Goyanka",
+        fatherName="Ramashankar Goyanka", pan="ACUPG3482G", dateOfBirth="1970-01-01",
+        residentialStatus="ROR", flatNo="12", localityOrArea="MG Road",
+        city="Mumbai", stateCode="27", pinCode="400001", mobile="9876543210",
+        email="sunit@example.com",
+    )
+    draft.otherSources.interest = [InterestIncome(
+        id="i1", kind="SAVINGS_BANK", grossAmount=Decimal("8000"),
+    )]
+    draft.bankAccounts = [BankAccount(
+        id="b1", bankName="HDFC Bank", accountNumber="000123456789",
+        ifscCode="HDFC0000123", accountType="SB", useForRefund=True,
+    )]
+    draft.filing.filingSection = "139(1)"
+    draft.verification.declarationAccepted = True
+    draft.verification.capacity = "SELF"
+    draft.verification.place = "Mumbai"
+    draft.verification.date = "2026-07-15"
+    return draft
+
+
+def test_compute_canonical_itr2_succeeds_with_no_salary_and_no_house_property() -> None:
+    """Regression for audit §22.2: a mapper bug fabricated a truthy placeholder
+    HousePropertyIncome/SalaryIncome for the zero-rows case (both fields are
+    Optional on ITR2Input specifically because ITR-2, unlike ITR-1, does not
+    require either head), which then made the ITD builder demand employer/
+    property filing-detail rows that could never exist for a client who
+    legitimately has neither -- blocking CBDT JSON generation for every such
+    filer. draft_to_itr2_input.py must now guard on real row count and pass
+    through None/[] rather than calling the shared ITR-1 mapper unconditionally."""
+    draft = _zero_salary_zero_hp_itr2_draft()
+    pipeline = compute_canonical_itr2(draft)
+    assert pipeline.typed_input.salary_income is None
+    assert pipeline.typed_input.house_property_income is None
+    assert pipeline.typed_input.house_properties == []
+
+
+def test_generate_cbdt_json_itr2_succeeds_with_no_salary_and_no_house_property() -> None:
+    """Same scenario as above, through the full JSON-generation + schema-
+    validation path -- this is the end-to-end proof, not just the typed-input
+    check. Confirmed live via the running app before this fix: the real
+    backend raised "ValueError: Salary income requires at least one employer
+    filing detail" for a client with these exact facts."""
+    draft = _zero_salary_zero_hp_itr2_draft()
+    official_json, _summary = generate_cbdt_json(draft)
+    itr2_json = official_json["ITR"]["ITR2"]
+    assert "ScheduleS" not in itr2_json
+    assert "ScheduleHP" not in itr2_json

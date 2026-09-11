@@ -6,6 +6,23 @@
 **Excluded:** Validators and validator-related working-tree changes  
 **Status:** Not production-ready for complete real-world ITR-2 filing
 
+> **Update (2026-09-11): new §22, a live E2E audit (real browser, real backend, real client) —
+> not a code-reading pass like every section before it.** Found that despite §20's 26 findings all
+> being fixed (see the twenty-fourth-fix update below), CBDT JSON generation for ITR-2 is still
+> broken for nearly every realistic filer: every return with zero house properties unconditionally
+> fails (§22.2, likely the single most severe finding in this document), every return with any
+> common-section (194A/194/194C/...) Schedule TDS2 credit fails official schema validation
+> (§22.4), and the "Validate" button never actually exercises real JSON generation or schema
+> validation for ITR-2 at all (§22.1) — so a preparer today has no reliable in-app signal that
+> their return can generate a valid CBDT JSON. See §22 for full live evidence and fix directions
+> (not yet applied — audit only, per this pass's explicit scope).
+>
+> **Update (2026-09-11, fix cycle, first fix): §22.2 is fixed and verified, along with a companion
+> bug in the identical pattern affecting Schedule S** — every ITR-2 filer with no salary and/or no
+> house property (a large, ordinary fraction of real filers) can now generate CBDT JSON. See §22.2's
+> own fix note for full evidence, including the two new regression tests and the confirmed-zero
+> impact on ITR-1/4 (505/505 green). §22.1, §22.3, §22.4, §22.5 remain open.
+
 > **Progress update (2026-09-04)**: this audit has moved from read-only findings-only into the
 > same iterative audit-fix-reaudit cycle ITR-1/ITR-4's own audit docs used, per
 > `C:\Users\Devansh\.claude\plans\zippy-juggling-sprout.md`. Phases 1-3 of that plan are now
@@ -5959,3 +5976,269 @@ That success does not establish ITR-2 filing completeness. The implementation cu
 > that cycle (fix §20's findings one at a time with the same test-first/`git stash`-verified/full-
 > regression discipline every fix in this document has used, then re-audit again) is this
 > document's own recommended next step.
+>
+> **Update (2026-09-11): this section's own narrative was never carried forward to its conclusion —
+> the top-of-document status log (updates dated 2026-09-09, "Phase 8 fix cycle, first fix" through
+> "twenty-fourth and final fix") records all 26 of §20's findings as fixed and verified, ending
+> "The Phase 8 re-audit cycle is complete."** This paragraph's "NOT production-ready" verdict
+> predates that fix cycle and was simply never updated in this section specifically — a
+> documentation gap, not a code regression. See §22 for a new, independent E2E audit (live
+> browser + real backend calls, not code-reading) conducted 2026-09-11, which found a fresh set of
+> CBDT-JSON-generation-blocking defects in the v2 pipeline's filing-detail/schema layer — a
+> different layer than §20 examined, and evidence that "Phase 8 clean" does not yet mean
+> "ITR-2 CBDT JSON generation works end-to-end for a real client."
+
+# 22. E2E functional audit — live app, real backend, real client (2026-09-11)
+
+**Method:** unlike every prior section of this document (static code/schema reading), this audit
+was conducted live against the running application — `frontend-dev`/`backend-dev` dev servers,
+logged in as a real user, driving an actual ITR-2 test client (SUNIT RAMASHANKAR GOYANKA, PAN
+`ACUPG3482G`, client UUID `561af3e8-783d-435f-9e2e-978355c0369f`, AY 2026-27, New Regime) through
+the browser, plus direct authenticated `fetch()` calls to backend endpoints the UI does not expose
+a button for. This surfaces defects no static schema/builder-pairing read can find, because it
+exercises the *actual* `ReturnDraft → typed input → CBDT JSON` path with real stored data, not a
+hand-constructed fixture. Scope: (1) is the "Validate" button actually proof that a return is
+CBDT-JSON-generatable, (2) is Tax Computation display wired to real backend values, (3) is the PDF
+download wired, (4) does a real generated JSON pass the official schema.
+
+## 22.1 CRITICAL — "Validate" never calls real CBDT JSON generation or schema validation for ITR-2/ITR-3
+
+`ITRComputationPage.tsx`'s `handleValidate` (~line 526) calls only
+`validateCbdtFrontendFields(draft)` (frontend field checks) and `itrV2.compute(...)` →
+`POST /v2/tax-summary/compute` (`app/routers/tax_v2.py`'s `compute_tax_summary_v2`, which calls
+`compute_canonical(draft).summary` — the calculator only, no JSON assembly, no schema check). The
+*only* code path that builds the real official JSON and runs `validate_itr2_json()` against the
+schema is `handleGenerateCbdtJson` (~line 577), calling `itrV2.generate()` →
+`POST /v2/clients/{id}/itr/{year}/generate-cbdt-json` (`app/routers/client_itr_v2.py:173` →
+`generate_cbdt_json(draft)`). But the "CBDT JSON" button that triggers `handleGenerateCbdtJson` is
+explicitly hidden for ITR-2 (and ITR-3):
+
+```tsx
+{itrForm !== 'ITR-3' && itrForm !== 'ITR-2' && (
+  <button onClick={handleGenerateCbdtJson} title="... ITR-1/ITR-4">CBDT JSON</button>
+)}
+```
+(`frontend/src/pages/ITRComputationPage.tsx:1670-1687`)
+
+**Consequence, live-reproduced:** clicking "Validate" on the test client returned a clean pass
+(after fixing one legitimate frontend field error, employer category) while the *same client*,
+called via `generate-cbdt-json` directly through the browser console (bypassing the missing
+button), failed with a real `422` — first `ValueError: Salary income requires at least one
+employer filing detail`, then after adding data, three more distinct real failures (§22.2-§22.4
+below). **"Validate" passing means nothing about whether the return can actually generate a valid
+CBDT JSON for ITR-2** — the two checks are on entirely different, non-overlapping code paths, and
+only the weaker one is reachable from the UI. Any ITR-2 preparer today believes their return is
+filing-ready based on a check that never touches the JSON the ITD would actually receive.
+
+**Fix direction (not applied — audit only):** either wire `handleGenerateCbdtJson` into
+`handleValidate` itself for ITR-2 (matching what "Validate" implies to a user), or un-hide the
+"CBDT JSON" button for ITR-2 so a preparer has *some* UI path to the real check before relying on
+Type-3 portal automation to surface it. ITR-3 has the same gap and is out of scope per this plan's
+own boundary, but is worth flagging for whoever picks that form up next.
+
+## 22.2 CRITICAL — every ITR-2 return with zero house properties fails CBDT JSON generation, unconditionally
+
+Root cause spans two files and is 100%-reproducible, independent of any specific client's data:
+
+1. `_map_house_properties()` (`app/engine/draft_to_itr1_input.py:454-462`, a helper shared by both
+   ITR-1's and ITR-2's mappers) fabricates a placeholder row for the empty case instead of
+   signaling "no house property":
+   ```python
+   def _map_house_properties(properties: list[HouseProperty]) -> tuple[HousePropertyIncome, list[HousePropertyIncome]]:
+       if not properties:
+           hp = HousePropertyIncome(property_type=PropertyType.SELF_OCCUPIED)
+           return hp, [hp]
+       ...
+   ```
+   `draft_to_itr2_input.py:1084` then does
+   `house_property_income=hp_input if len(hp_inputs) <= 1 else None` — since `hp_inputs` always
+   has length ≥ 1 (even for zero real properties), `house_property_income` is **never None**, even
+   when `draft.houseProperties == []`. Pydantic `BaseModel` instances have no `__bool__`/`__len__`
+   override, so `HousePropertyIncome(property_type=SELF_OCCUPIED)` — all other fields at their
+   zero/default values — is truthy.
+2. `_schedule_hp()` (`app/engine/itd/itr2.py:758-764`) treats that truthy placeholder as "a real
+   house property exists":
+   ```python
+   sources = ([input_data.house_property_income] if input_data.house_property_income else []) + list(input_data.house_properties)
+   if not sources:
+       return None
+   if len(input_data.property_filing_details) != len(sources):
+       raise ValueError("Schedule HP requires one property_filing_details row per property")
+   ```
+3. `_itr2_property_filing_details()` (`app/engine/filing_gateway_v2.py:1496-1573`) correctly
+   returns `[]` for zero real properties — its own docstring says so explicitly ("returning an
+   empty list when there are no properties, rather than a placeholder row, keeps that count
+   correct in the common no-house-property case"). This is the *correct* half of the contract;
+   `_map_house_properties` is the half that violates it.
+
+Result: `len(sources) == 1` (the phantom placeholder) vs `len(property_filing_details) == 0` (the
+correct empty list) → the `!=` check fires → `ValueError` raised — **for every ITR-2 client with
+no house property**, which is a large, ordinary fraction of real filers (anyone filing purely for
+capital gains, other-sources income, or foreign-asset disclosure, e.g. the test client used here,
+who initially had zero house properties). This was live-reproduced exactly as described: the test
+client's `generate-cbdt-json` call failed with precisely this message and error class while
+`draft.houseProperties` was confirmed empty via direct API read.
+
+**This is almost certainly the single most severe finding across both this document and §20** —
+it is not conditional on any specific schedule's data being wrong, it blocks the base case that
+every ITR-2 filer without a declared house property hits by default.
+
+**Fix direction (not applied — audit only):** `_map_house_properties([])` should return
+`(None, [])`, not a fabricated placeholder — mirroring `_itr2_property_filing_details`'s own
+already-correct "empty means empty" contract. Check callers in ITR-1's own pipeline before
+changing the shared helper's return contract (ITR-1 requires exactly one house property and may
+rely on always getting a non-None placeholder back — this needs to be confirmed, not assumed,
+before this shared function is touched, since a change with no ITR-2-specific override could
+silently affect ITR-1's already-production behavior).
+
+> **Fix status (2026-09-11): fixed and verified — plus a companion bug found and fixed in the same
+> sitting.** Confirmed `ITR1Input.house_property_income` (`app/schemas/itr1.py:1010`) is a
+> **required** field — ITR-1 genuinely needs `_map_house_properties([])`'s non-None placeholder, so
+> the shared helper itself was correctly left untouched. The actual fix lives entirely on the
+> ITR-2 side: `draft_to_itr2_input.py` now checks `if draft.houseProperties:` before calling
+> `_map_house_properties()`, using `(None, [])` directly otherwise — `ITR2Input.house_property_income`
+> is `Optional` specifically to support this case (`app/schemas/itr2.py:1035`), so no schema change
+> was needed, only guarding the call site.
+>
+> **Companion bug, same root cause, different schedule**: `_map_salary(draft.employers, ...)`
+> (shared with ITR-1 via `draft_to_itr1_input.py:146`) has the identical defect — it returns a real,
+> non-None, all-zero `SalaryIncome` for an empty `employers` list rather than `None`, and
+> `salary_income=salary_input` was assigned unconditionally at the `ITR2Input` construction site,
+> exactly mirroring the HP bug (`ITR2Input.salary_income` is also `Optional`,
+> `app/schemas/itr2.py:1034`). This is what actually produced the *first* error seen during this
+> session's live E2E testing ("Salary income requires at least one employer filing detail") before
+> a house property was even reached — not a separate test-data-completeness issue as first assumed
+> during live exploration, but the same shared-mapper-placeholder bug pattern hitting Schedule S
+> instead of Schedule HP. Fixed identically: guard on `if draft.employers:` before calling
+> `_map_salary()`.
+>
+> Two new regression tests in `tests/test_filing_gateway_v2_itr2.py`
+> (`test_compute_canonical_itr2_succeeds_with_no_salary_and_no_house_property`,
+> `test_generate_cbdt_json_itr2_succeeds_with_no_salary_and_no_house_property`) cover both fixes
+> together with a client shaped like the one used for this session's live testing (other-sources
+> interest income only, no salary, no house property) — confirmed failing on pre-fix code via
+> `git stash` with the exact live-reproduced error message, passing post-fix. Full
+> `test_itr1_*.py`/`test_itr4_*.py`/`test_itr2_*.py` regression run: 505/505 ITR-1/4 tests green
+> (zero impact — the shared helpers' own contracts were never touched), and the 6 ITR-2 test
+> failures present both before and after this fix are the project's pre-existing baseline failures
+> (unrelated to this change, confirmed via the same `git stash` comparison).
+
+## 22.3 HIGH — `ITR2-IN-FE-001` input-validator is stricter than the ITD builder it's meant to gate, incorrectly blocking zero-TDS salaried returns
+
+`app/engine/validators/itr2/input_rules.py:1086-1093`:
+```python
+if inp.employer_filing_details and len(inp.employer_filing_details) != len(inp.tds1_entries):
+    results.append(_result("ITR2-IN-FE-001", False,
+        "employer_filing_details count must match tds1_entries count.", ...))
+```
+This fires whenever `employer_filing_details` is non-empty and its length differs from
+`tds1_entries`' length — **even when `tds1_entries` is legitimately empty** (a salaried employee
+whose employer deducted zero TDS: first job, income below the TDS threshold, or a Section 197
+lower/nil-deduction certificate — all ordinary, common scenarios). The ITD builder's own
+`_schedule_s()` (`app/engine/itd/itr2.py:560-564`) is deliberately laxer and correct on this exact
+point: it requires `employer_filing_details` non-empty when `tds1_entries` is empty, but does
+*not* additionally demand equal counts in that case — only when `tds1_entries` is itself non-empty
+does the count-match requirement apply (line 563-564). `ITR2-IN-FE-001` doesn't carry that same
+`tds1_entries`-non-empty guard, so it rejects a return the builder itself would have accepted.
+
+**Live-reproduced:** adding one employer with ₹6,00,000 basic salary and zero matching TDS rows to
+the test client and calling `generate-cbdt-json` returned `422` with exactly
+`"employer_filing_details count must match tds1_entries count."` before any TDS-192 entry existed;
+adding a matching TDS-192 row made the same call proceed past this check.
+
+**Fix direction (not applied — audit only):** add the same `inp.tds1_entries and` guard
+`_schedule_s()` already uses: `if inp.tds1_entries and len(inp.employer_filing_details) !=
+len(inp.tds1_entries)`.
+
+## 22.4 CRITICAL — Schedule TDS2 fails official schema validation for the most common real-world case (bank-deducted 194A interest TDS)
+
+Live-reproduced via the actual `jsonschema` validation the backend runs
+(`validate_itr2_json()` against `Reference Docs by CBDT & ITD/Official JSON Schema/
+ITR-2_2026_Main_V1.1 (2).json`), on the test client's two genuine SBI/other-party 194A interest-TDS
+rows (imported from real AIS-style data). `generate-cbdt-json` returned `422` with:
+
+```
+ITR2SchemaValidationError: ITR.ITR2.ScheduleTDS2.TDSOthThanSalaryDtls.0.DeductedYr: 2025 is not
+one of [2024, 2023, ..., 2008]; ... is greater than the maximum of 2024
+ITR.ITR2.ScheduleTDS2.TDSOthThanSalaryDtls.0.TDSSection: '194A' is not one of ['92A', '92B', ...,
+'94A', ..., '195', ...]
+```
+(and identically for row `.1`).
+
+Two independent, both-CRITICAL, both-universal-reach bugs in `_schedule_tds2()`
+(`app/engine/itd/itr2.py:3669-3705`):
+
+1. **`TDSSection` (line 3688) is emitted verbatim from user/import-entered data** (`"194A"`, the
+   everyday human-readable section name) **with no translation to the CBDT internal short-code
+   enum** the schema actually requires (`"94A"`, `"94C"`, `"94J-A"`/`"94J-B"`, etc. — the schema's
+   own enum, quoted above, never contains a `"1"`-prefixed 3-digit code). This breaks Schedule TDS2
+   for essentially every real ITR-2 return with any bank/company-deducted TDS reported under the
+   common section names (194A interest, 194 dividends, 194C contractor payments, etc.) — 194A
+   alone (savings/FD interest) is close to universal for any taxpayer with a bank account.
+2. **`DeductedYr` (line 3684, `deducted_year = int((entry.financial_year or "2024-25").split("-")[0])`)
+   unconditionally derives and emits a year from the entry's own reporting `financial_year`** —
+   for an AY 2026-27 return (FY 2025-26), that's `2025`. But the schema's own `DeductedYr`
+   definition (`Reference Docs.../ITR-2_2026_Main_V1.1 (2).json`, `definitions.DeductedYr`) caps at
+   `maximum: 2024`, `enum: [2024 ... 2008]` — i.e. this field is defined to describe TDS
+   *brought forward from an earlier year*, not the return's own current financial year. The builder
+   should omit this field (or use the entry's actual prior deduction year) when the TDS was
+   deducted in the current FY and is not itself a brought-forward credit — not unconditionally
+   populate it from `financial_year` for every row. As written, **any ITR-2 return with any
+   Schedule TDS2 entry for the current filing year fails schema validation outright**, since
+   `int(financial_year.split("-")[0])` for the current AY's own FY is always > 2024 and always
+   fails the enum/maximum check.
+
+Combined with §22.2, this means CBDT JSON generation for ITR-2 is not close to working for a
+realistic taxpayer profile today: a filer needs zero house properties (§22.2) *and* zero non-salary
+TDS credits (§22.4) simultaneously to have any chance of reaching a clean JSON — which excludes
+nearly every real return with a bank account.
+
+**Fix direction (not applied — audit only):** (1) build a `TDS_SECTION_TO_CBDT_CODE` mapping table
+(194A→94A, 194→94, 194C→94C, 194J→94J-A/94J-B depending on professional-vs-technical-services
+sub-classification, etc. — needs the full section list cross-referenced against the schema's own
+enum, not guessed) and apply it wherever a user/import-entered section string reaches any TDS
+schedule (TDS2 here; check TDS1/TDS3 for the same raw pass-through — TDS3's `entry.tds_section or
+"195"` at line 3729 is the same pattern and needs the same audit even though `"195"` itself happens
+to be schema-valid). (2) Only populate `DeductedYr` when the credit is genuinely brought forward
+from an earlier year (needs a real "is this brought forward" signal on `TDS2Entry` — check whether
+`brought_forward_tds > 0` is a reliable proxy, or whether a dedicated field is needed).
+
+## 22.5 MEDIUM — Tax Computation display: `totalIncomeBefore288A`/`roundingAdjustment288A` always show ₹0 for ITR-2, contradicting the correctly-populated row directly below
+
+`ITRComputationTabs.tsx:990-1004`'s "Total Income and Section 288A reconciliation" table reads
+`taxResult.totalIncomeBefore288A` and `taxResult.roundingAdjustment288A` — both always `undefined`
+for ITR-2 (rendering as ₹0 via the `INR()`/`signedINR()` formatters), because
+`_itr2_summary_from_result()` (`app/engine/filing_gateway_v2.py:1745-1857`, the ITR-2-only summary
+builder — deliberately separate from ITR-1/4's shared `_summary_from_result()` at line 271, per
+that function's own docstring, since `ITR2Result`'s attributes are named differently) has no such
+keys in its return dict at all, unlike `_summary_from_result()` which surfaces them via
+`getattr(result, ..., fallback)` (lines 415-426). The row directly below in the same table,
+`ROUNDED TOTAL INCOME` (using `totalIncome`), is correctly populated — so the two rows visibly
+contradict each other on screen: a real total income figure immediately followed by a ₹0
+"before 288A rounding" figure that implies no rounding occurred, when in fact rounding to the
+nearest ₹10 always happens per `app/engine/common/`'s shared rounding logic. Live-confirmed on the
+test client: `totalIncome` displayed a real computed figure while both 288A fields showed ₹0.
+
+**Fix direction (not applied — audit only):** add the same `getattr`-guarded fields to
+`_itr2_summary_from_result()`, pulling from whatever `ITR2Result` attributes hold the pre-rounding
+total and the rounding delta (needs tracing `compute_itr2()`'s own rounding step — likely in
+`app/engine/calculators/itr2.py` — to find the right source attributes; do not assume they share
+ITR-1/4's exact attribute names, per this function's own documented naming-divergence rationale).
+
+## 22.6 Confirmed working
+
+- **PDF download** (`handleDownloadPdf`, ITR-1/2/4): live-tested on the same client, returned
+  `200 OK` from `download-pdf`. Wired correctly for ITR-2.
+- **Compute Tax page → backend wiring**: `POST /v2/tax-summary/compute` is real, live, and returns
+  genuine calculated figures (confirmed via the test client's real Other Sources income reaching
+  the response) — the *wiring* is correct; §22.5 is a display-field-coverage gap, not a broken
+  connection.
+
+## 22.7 Scope note for Phase 2 (validator gap-mapping)
+
+§22.2-§22.4 are ITD-builder/filing-gateway defects, not validator gaps — no CBDT validation rule
+would ever have caught them, because they are schema-shape/cross-schedule-count defects in code
+that runs *before* the validator suite in the compute/generate pipeline (see
+`_generate_cbdt_json_itr2()`'s own ordering, `app/engine/filing_gateway_v2.py:1939+`). They're
+recorded here, not deferred to Phase 2's validator matrix, for that reason. §22.3 *is* a validator
+defect and is in scope for Phase 2's re-verification of `input_rules.py`.

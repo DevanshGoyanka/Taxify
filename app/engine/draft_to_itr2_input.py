@@ -929,8 +929,26 @@ def draft_to_itr2_input(
     residential_status = _map_residential_status(draft.personal.residentialStatus)
 
     # Shared heads — one implementation, reused (audit Finding 14 fix).
-    salary_input, section_17_1, gross_salary = _map_salary(draft.employers, tax_regime)
-    hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
+    #
+    # Both _map_salary/_map_house_properties are shared with ITR-1, which requires
+    # exactly one HousePropertyIncome/SalaryIncome and so needs a non-None
+    # placeholder back for the "zero rows" case (ITR1Input.house_property_income
+    # is a required field). ITR-2 has no such requirement -- salary_income and
+    # house_property_income are both Optional -- so calling either shared mapper
+    # unconditionally and assigning its result straight through fabricates a
+    # truthy, all-zero object that downstream ITD-builder code (_schedule_s,
+    # _schedule_hp) then treats as "this taxpayer has real salary/HP data,
+    # go find its filing-detail rows," raising ValueError on a client who
+    # legitimately has neither. Guard on the real row count first so a taxpayer
+    # with zero employers/properties gets a genuine None, not a placeholder.
+    if draft.employers:
+        salary_input, section_17_1, gross_salary = _map_salary(draft.employers, tax_regime)
+    else:
+        salary_input, section_17_1, gross_salary = None, _ZERO, _ZERO
+    if draft.houseProperties:
+        hp_input, hp_inputs = _map_house_properties(draft.houseProperties)
+    else:
+        hp_input, hp_inputs = None, []
     os_input, total_interest, total_dividend, family_pension, total_winnings = (
         _map_other_sources(draft)
     )
