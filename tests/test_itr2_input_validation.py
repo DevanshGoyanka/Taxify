@@ -338,6 +338,120 @@ def test_HP_007_zero_share_with_interest_fails():
     assert failed(validate_itr2_input(inp), "ITR2-IN-HP-007")
 
 
+# ─── Phase 6d: Schedule HP co-ownership (share sum, bounds, PAN cross-check) ─
+
+def test_HP_010_co_owner_shares_summing_to_100_passes():
+    inp = _base_input(
+        house_property_income=_ONE_LET_OUT_PROPERTY,
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("60"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner", percent_share=Decimal("40"))],
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-010")
+
+
+def test_HP_010_co_owner_shares_not_summing_to_100_fails():
+    """Regression for Phase 6d: ITR2-IN-HP-004 only checked the assessee's
+    own share is < 100 when co-owned, never summed it against every
+    CoOwnerDetail.percent_share -- a co-owned property whose shares don't
+    actually add up to 100% could reach the JSON unchecked."""
+    inp = _base_input(
+        house_property_income=_ONE_LET_OUT_PROPERTY,
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("60"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner", percent_share=Decimal("30"))],
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-010")
+
+
+def test_HP_011_co_owner_with_percent_share_passes():
+    inp = _base_input(
+        house_property_income=_ONE_LET_OUT_PROPERTY,
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("60"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner", percent_share=Decimal("40"))],
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-011")
+
+
+def test_HP_011_co_owner_missing_percent_share_fails():
+    """Regression for Phase 6d: CoOwnerDetail.percent_share is Optional at
+    the schema level -- a co-owned property could name a co-owner with no
+    share at all and reach the JSON unchecked."""
+    inp = _base_input(
+        house_property_income=_ONE_LET_OUT_PROPERTY,
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("60"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner")],
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-011")
+
+
+def test_HP_012_co_owner_share_within_bounds_passes():
+    inp = _base_input(
+        house_property_income=_ONE_LET_OUT_PROPERTY,
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("50"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner", percent_share=Decimal("50"))],
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-012")
+
+
+def test_HP_012_co_owner_share_of_zero_fails():
+    inp = _base_input(
+        house_property_income=_ONE_LET_OUT_PROPERTY,
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("100"),
+            co_owner_details=[CoOwnerDetail(name="Co-owner", percent_share=Decimal("0"))],
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-012")
+
+
+def test_HP_013_co_owner_pan_differing_from_assessee_passes():
+    profile = ITR2FilingProfile.model_construct(pan="ABCDE1234F", date_of_birth_or_formation=date(1990, 1, 1))
+    inp = _base_input(
+        filing_profile=profile,
+        house_property_income=_ONE_LET_OUT_PROPERTY,
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("50"),
+            co_owner_details=[CoOwnerDetail(
+                name="Co-owner", pan="ZYXWV9876G", percent_share=Decimal("50"),
+            )],
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-013")
+
+
+def test_HP_013_co_owner_pan_matching_assessee_fails():
+    """Regression for Phase 6d: no cross-check anywhere compared
+    CoOwnerDetail.pan against the filer's own filing_profile.pan --
+    mirrors ITR-4's own already-shipped ITR4-R351-2."""
+    profile = ITR2FilingProfile.model_construct(pan="ABCDE1234F", date_of_birth_or_formation=date(1990, 1, 1))
+    inp = _base_input(
+        filing_profile=profile,
+        house_property_income=_ONE_LET_OUT_PROPERTY,
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="A", city_or_town_or_district="City", state_code="27",
+            pin_code="400001", co_owned=True, assessee_share_percent=Decimal("50"),
+            co_owner_details=[CoOwnerDetail(
+                name="Co-owner", pan="ABCDE1234F", percent_share=Decimal("50"),
+            )],
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-013")
 
 
 def test_FSI_003_nonresident_fsi_fails():

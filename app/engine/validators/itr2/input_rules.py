@@ -365,6 +365,59 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     f"{path}.assessee_share_percent", "> 0 when interest is claimed",
                     f"share={detail.assessee_share_percent}, interest={hp.home_loan_interest_paid}",
                 ))
+        # CBDT rules 68/751/752/549 (Phase 6d, 2026-09-11): co-owned property
+        # shares — sum-to-100 across the assessee and every co-owner, each
+        # co-owner's own share within (0, 100), and percent_share treated as
+        # effectively required (the schema only requires co_owner_details to
+        # be non-empty when co_owned=True, not that each row's percent_share
+        # is populated). Mirrors the pattern ITR-4's own already-shipped
+        # ITR4-R405/R406/R346 apply to its typed property_profile.co_owners.
+        if detail.co_owned:
+            _missing_share_indices = [
+                j for j, co in enumerate(detail.co_owner_details) if co.percent_share is None
+            ]
+            if _missing_share_indices:
+                results.append(_result(
+                    "ITR2-IN-HP-011", False,
+                    "Every co-owner row must state its percentage share when the "
+                    "property is co-owned.",
+                    f"{path}.co_owner_details[*].percent_share", "present",
+                    f"missing at indices {_missing_share_indices}",
+                ))
+            for j, co in enumerate(detail.co_owner_details):
+                if co.percent_share is not None and not (_ZERO < co.percent_share < Decimal("100")):
+                    results.append(_result(
+                        "ITR2-IN-HP-012", False,
+                        "A co-owner's percentage share must be greater than 0% and less than 100%.",
+                        f"{path}.co_owner_details[{j}].percent_share", "0 < share < 100",
+                        str(co.percent_share),
+                    ))
+            if not _missing_share_indices:
+                _co_owner_total = sum(
+                    (co.percent_share for co in detail.co_owner_details), _ZERO,
+                )
+                _combined_share = detail.assessee_share_percent + _co_owner_total
+                if _combined_share != Decimal("100"):
+                    results.append(_result(
+                        "ITR2-IN-HP-010", False,
+                        "A co-owned property's assessee share plus every co-owner's "
+                        "share must sum to 100%.",
+                        f"{path}", "== 100",
+                        f"assessee={detail.assessee_share_percent}, "
+                        f"co-owners={_co_owner_total}, total={_combined_share}",
+                    ))
+            _filer_pan = getattr(inp.filing_profile, "pan", None)
+            if _filer_pan:
+                _matching_pan_indices = [
+                    j for j, co in enumerate(detail.co_owner_details) if co.pan == _filer_pan
+                ]
+                if _matching_pan_indices:
+                    results.append(_result(
+                        "ITR2-IN-HP-013", False,
+                        "A co-owner's PAN cannot be the same as the assessee's own PAN.",
+                        f"{path}.co_owner_details[*].pan", f"!= {_filer_pan}",
+                        f"matched at indices {_matching_pan_indices}",
+                    ))
 
     # CBDT rule 757: unrealised rent cannot exceed the gross rent/lettable
     # value reported for the property. This is independently user-suppliable
