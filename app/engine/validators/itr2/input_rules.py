@@ -1083,7 +1083,16 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             ))
 
     # Filing-evidence count checks
-    if inp.employer_filing_details and len(inp.employer_filing_details) != len(inp.tds1_entries):
+    #
+    # Audit finding §22.3: this used to require len(employer_filing_details)
+    # == len(tds1_entries) whenever employer_filing_details was non-empty,
+    # even when tds1_entries was legitimately empty (a salaried employee
+    # whose employer deducted zero TDS -- first job, income below the TDS
+    # threshold, a Section 197 nil-deduction certificate). _schedule_s()
+    # (app/engine/itd/itr2.py) only enforces the count match when
+    # tds1_entries is itself non-empty -- ported that same guard here so the
+    # validator doesn't reject a return the builder would have accepted.
+    if inp.tds1_entries and len(inp.employer_filing_details) != len(inp.tds1_entries):
         results.append(_result(
             "ITR2-IN-FE-001", False,
             "employer_filing_details count must match tds1_entries count.",

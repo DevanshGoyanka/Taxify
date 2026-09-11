@@ -29,6 +29,11 @@
 > applied on the backend) and correctly omit `DeductedYr` for current-year credits instead of
 > emitting a value the schema's own enum can never accept. See §22.4's own fix note. §22.1, §22.3,
 > §22.5 remain open.
+>
+> **Update (2026-09-11, fix cycle, third fix): §22.3 is fixed and verified** — `ITR2-IN-FE-001` no
+> longer rejects a legitimate zero-TDS salaried employee. See §22.3's own fix note, including the
+> discovery that the true count-mismatch case was already unconstructable at the schema level, so
+> the old validator's stricter form only ever produced a false positive. §22.1, §22.5 remain open.
 
 > **Progress update (2026-09-04)**: this audit has moved from read-only findings-only into the
 > same iterative audit-fix-reaudit cycle ITR-1/ITR-4's own audit docs used, per
@@ -6156,6 +6161,19 @@ adding a matching TDS-192 row made the same call proceed past this check.
 **Fix direction (not applied — audit only):** add the same `inp.tds1_entries and` guard
 `_schedule_s()` already uses: `if inp.tds1_entries and len(inp.employer_filing_details) !=
 len(inp.tds1_entries)`.
+
+> **Fix status (2026-09-11): fixed and verified.** Ported `_schedule_s()`'s exact guard into
+> `ITR2-IN-FE-001` (`app/engine/validators/itr2/input_rules.py:1086`). Investigating the true
+> count-mismatch case this rule originally guarded against turned up something worth recording:
+> `ITR2Input.validate_cross_schedule_contract` (`app/schemas/itr2.py:1148`) already has the
+> identical `and self.tds1_entries` guard at construction time, so a genuinely mismatched,
+> non-empty-`tds1_entries` state was already unconstructable — the old validator's only *live*
+> effect was the false positive on the legitimate zero-TDS case, never a real protection its stricter
+> form added. Two new tests in `tests/test_itr2_input_validation.py`
+> (`test_FE_001_zero_tds_salaried_employee_with_employer_detail_passes`, confirmed failing pre-fix
+> via `git stash`; `test_FE_001_mismatched_employer_and_tds1_counts_cannot_even_be_constructed`,
+> documenting the schema-level guarantee). Full regression: same 6 pre-existing baseline ITR-2
+> failures only; ITR-1/4 unaffected (this file is ITR-2-only).
 
 ## 22.4 CRITICAL — Schedule TDS2 fails official schema validation for the most common real-world case (bank-deducted 194A interest TDS)
 

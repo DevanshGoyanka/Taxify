@@ -40,6 +40,7 @@ from app.schemas.itr2 import (
     ESOPDeferralInput,
     CapitalGainExemptionClaim,
     CoOwnerDetail,
+    EmployerFilingDetail,
     PropertyFilingDetail,
     ReturnFileSection,
     ResidentialStatus,
@@ -906,3 +907,49 @@ def test_FORM_002_no_80gg_emits_nothing():
     inp = _base_input(deductions_chapter6a=Chapter6ADeductions())
     results = validate_itr2_input(inp)
     assert not [r for r in results if r.rule_id == "ITR2-IN-FORM-002"]
+
+
+def _employer_detail(**overrides) -> EmployerFilingDetail:
+    fields = dict(
+        employer_name="Test Employer Pvt Ltd", address_detail="123 Test Street",
+        city_or_town_or_district="Mumbai", state_code="19",
+    )
+    fields.update(overrides)
+    return EmployerFilingDetail(**fields)
+
+
+def test_FE_001_zero_tds_salaried_employee_with_employer_detail_passes():
+    """Regression for audit §22.3: a salaried employee whose employer
+    deducted zero TDS (first job, income below the TDS threshold, a Section
+    197 nil-deduction certificate) is a legitimate, common scenario --
+    ITR2-IN-FE-001 used to require len(employer_filing_details) ==
+    len(tds1_entries) unconditionally once employer_filing_details was
+    non-empty, rejecting this case even though the real ITD builder
+    (_schedule_s(), app/engine/itd/itr2.py) only enforces the count match
+    when tds1_entries is itself non-empty."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        employer_filing_details=[_employer_detail()],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-FE-001")
+
+
+def test_FE_001_mismatched_employer_and_tds1_counts_cannot_even_be_constructed():
+    """The count-match case this rule guards against is already blocked one
+    layer up, at ITR2Input's own construction time
+    (ITR2Input.validate_cross_schedule_contract, app/schemas/itr2.py:1148),
+    which carries the identical `and self.tds1_entries` guard -- so a
+    mismatched, non-empty-tds1_entries state can never reach the validator
+    in the first place. This confirms the fix above closes ITR2-IN-FE-001's
+    only remaining live effect (which was a false positive on the
+    zero-TDS-entries case, not a real protection)."""
+    from app.schemas.itr1 import TDS1Entry
+    with pytest.raises(ValueError, match="employer_filing_details must contain one row per TDS1 employer"):
+        _base_input(
+            salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+            employer_filing_details=[_employer_detail(), _employer_detail()],
+            tds1_entries=[TDS1Entry(
+                employer_tan="MUMA12345B", employer_name="Test Employer Pvt Ltd",
+                income_chargeable=Decimal("600000"), tds_deducted=Decimal("0"),
+            )],
+        )
