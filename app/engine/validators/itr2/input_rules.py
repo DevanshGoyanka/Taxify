@@ -346,6 +346,24 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             "deductions_chapter6a", "80EE == 0 or 80EEA == 0",
             f"80EE={ch6a.amount_80ee}, 80EEA={ch6a.amount_80eea}",
         ))
+    # Section 80EE loan-principal ceiling (₹35,00,000) -- ported from ITR-1's
+    # own ITR1-R227 (app/engine/validators/itr1/input_rules.py:2405-2409),
+    # which ITR-2 was missing entirely despite ITR2Input.loan_details_80ee_list
+    # carrying the identical total_loan_amount field (Docs/
+    # ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md Phase 6b). This is one item out
+    # of ITR-1's own richer 80EE/80EEA/80EEB loan-row validation cluster
+    # (date-range/missing-rows/interest-total checks) -- ITR-2 is missing
+    # that whole cluster, not just this one check; logged as a forward
+    # pointer for a future targeted pass rather than expanding this phase's
+    # scope to port all of it now.
+    for index, row in enumerate(inp.loan_details_80ee_list or []):
+        if row.total_loan_amount > Decimal("3500000"):
+            results.append(_result(
+                "ITR2-IN-VIA-009", False,
+                f"Schedule 80EE row {index + 1} loan amount exceeds ₹35,00,000.",
+                f"loan_details_80ee_list[{index}].total_loan_amount",
+                "<= 3500000", str(row.total_loan_amount),
+            ))
     if ch6a is not None and inp.residential_status == ResidentialStatus.NON_RESIDENT:
         _nri_disallowed = {
             "80DD": ch6a.amount_80dd,

@@ -1149,6 +1149,37 @@ def test_CG_012_indexed_cost_mismatch_emits_advisory():
     assert emitted(validate_itr2_input(inp), "ITR2-IN-CG-012")
 
 
+def _loan_80ee_entry(**overrides):
+    from app.schemas.itr1 import EducationLoanLenderType, ITR1Schedule80EELoanEntry
+    fields = dict(
+        loan_taken_from=EducationLoanLenderType.BANK, lender_name="HDFC Bank",
+        account_or_reference_number="HL123456", loan_date=date(2016, 6, 1),
+        total_loan_amount=Decimal("2000000"), outstanding_loan_amount=Decimal("1500000"),
+        interest_paid=Decimal("50000"),
+    )
+    fields.update(overrides)
+    return ITR1Schedule80EELoanEntry(**fields)
+
+
+def test_VIA_009_80ee_loan_amount_within_ceiling_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ee=Decimal("50000")),
+        loan_details_80ee_list=[_loan_80ee_entry(total_loan_amount=Decimal("3000000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-009")
+
+
+def test_VIA_009_80ee_loan_amount_exceeding_ceiling_fails():
+    """Regression for Phase 6b: ITR-2 was missing the ₹35,00,000 Section 80EE
+    loan-principal ceiling ITR-1/ITR-4 already enforce (ITR1-R227) for the
+    identical loan_details_80ee_list.total_loan_amount field."""
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ee=Decimal("50000")),
+        loan_details_80ee_list=[_loan_80ee_entry(total_loan_amount=Decimal("4000000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-009")
+
+
 def test_CG_012_no_advisory_when_indexed_cost_matches_formula():
     from app.engine.schedules.capital_gains import _indexed_cost
     acq, xfer = date(2015, 4, 1), date(2020, 6, 1)

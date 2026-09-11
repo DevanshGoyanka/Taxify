@@ -1153,6 +1153,16 @@ def draft_to_itr2_input(
         loan_details_80eea_list=loan_details_80eea_list,
         loan_details_80eeb_list=loan_details_80eeb_list,
         property_stamp_duty_value_80eea=property_stamp_duty_value_80eea,
+        # Section 80QQB/80RRB (royalty income) -- not part of the shared,
+        # deliberately-minimal Chapter6ADeductions `_map_deductions()` builds
+        # (that class excludes them for ITR-1's salaried-filer scope), so
+        # read directly from the draft here instead. Previously never read
+        # at all: a taxpayer who filled either claim on the frontend had it
+        # silently vanish before compute or filing (Docs/
+        # ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md Phase 6b).
+        deduction_80qqb=draft.deductions.chapterVIA.section80QQB,
+        royalty_income_80qqb=draft.deductions.chapterVIA.section80QQBRoyaltyIncome,
+        deduction_80rrb=draft.deductions.chapterVIA.section80RRB,
         tds1_entries=tds1,
         tds2_entries=tds2,
         tds3_entries=tds3_entries,

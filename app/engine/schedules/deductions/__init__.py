@@ -38,6 +38,7 @@ from app.engine.schedules.deductions import (
     section_80ic,
     section_10aa,
     section_80ra,
+    section_80qqb_rrb,
 )
 
 
@@ -114,6 +115,9 @@ def compute_all(
     schedule_80d: Optional[Schedule80D] = None,
     salary: Decimal = Decimal("0"),
     is_government_employee: bool = False,
+    deduction_80qqb: Decimal = Decimal("0"),
+    royalty_income_80qqb: Decimal = Decimal("0"),
+    deduction_80rrb: Decimal = Decimal("0"),
 ) -> DeductionResult:
     """Compute all applicable Chapter VI-A deductions and return total + breakdown.
 
@@ -123,7 +127,15 @@ def compute_all(
     ``hra_exempt_amount`` is used to determine 80GG eligibility (80GG is not
     available when HRA exemption is claimed under s.10(13A)).
     """
-    if not ded or gti <= 0:
+    # `ded` may legitimately be None (a filer with royalty income and no
+    # other Chapter VI-A claim at all still needs 80QQB/80RRB computed) --
+    # every individual section module below already treats `ded=None` as
+    # "zero for this section" (each does `ded.amount_x if ded else _ZERO`),
+    # so only the GTI guard is a real precondition here. The original
+    # `if not ded: return DeductionResult()` shortcut silently discarded
+    # 80QQB/80RRB (which aren't part of Chapter6ADeductions at all -- see
+    # section_80qqb_rrb.py's own docstring) for exactly that filer.
+    if gti <= 0:
         return DeductionResult()
 
     result = DeductionResult()
@@ -224,6 +236,16 @@ def compute_all(
     r_80eeb = section_80eeb.compute(ded, regime)
     _add("80EEB", r_80eeb)
 
+    details_80qqb = section_80qqb_rrb.compute_80qqb_details(deduction_80qqb, royalty_income_80qqb, regime)
+    result.section_details["80QQB"] = details_80qqb
+    r_80qqb = details_80qqb.allowed_deduction
+    _add("80QQB", r_80qqb)
+
+    details_80rrb = section_80qqb_rrb.compute_80rrb_details(deduction_80rrb, regime)
+    result.section_details["80RRB"] = details_80rrb
+    r_80rrb = details_80rrb.allowed_deduction
+    _add("80RRB", r_80rrb)
+
     # --- Business-specific deductions (ITR-3 only, old regime) ---
     r_80ia = section_80ia.compute(ded, regime)
     _add("80-IA", r_80ia, allow_new_regime=True)
@@ -244,6 +266,7 @@ def compute_all(
         r_80c + r_80ccd1b + r_80ccd2 + r_80cch
         + r_80d + r_80dd + r_80ddb + r_80u
         + r_80tta + r_80ttb + r_80e + r_80ee + r_80eea + r_80eeb
+        + r_80qqb + r_80rrb
         + r_80ia + r_80ib + r_80ic + r_10aa + r_80ra
     )
     # Per CBDT: adjusted GTI for 80G/80GG excludes LTCG 112A and STCG 111A

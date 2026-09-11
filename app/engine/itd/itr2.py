@@ -2243,6 +2243,8 @@ _VIA_SECTION_TO_FIELD: dict[str, str] = {
     "80GG": "Section80GG",
     "80GGA": "Section80GGA",
     "80GGC": "Section80GGC",
+    "80QQB": "Section80QQB",
+    "80RRB": "Section80RRB",
 }
 
 
@@ -2363,18 +2365,40 @@ def _schedule_via(result: ITR2Result) -> Optional[dict[str, Any]]:
 # ============================================================================
 
 def _policy_insurance_details(policies: Optional[list], section_code: str) -> list[dict[str, Any]]:
-    """Build ``Sch80DInsDtls`` rows for one 80D bucket from policy entries."""
+    """Build ``Sch80DInsDtls`` rows for one 80D bucket from policy entries.
+
+    ``InsurerName``/``PolicyNo`` are both required by the official schema
+    (``Sch80DInsDtls.required``) for every row -- ``InsurancePolicy.
+    insurer_name``/``policy_number`` are Optional at the Pydantic level
+    (a real, user-suppliable claim can genuinely reach this function with
+    either left blank), so a missing value here must reject the claim, not
+    substitute a fabricated "Not Provided" placeholder string. Emitting a
+    fabricated string previously risked a live ITD rejection or defect
+    notice, since the official JSON would carry made-up evidentiary data
+    rather than what the taxpayer actually entered.
+    """
     rows: list[dict[str, Any]] = []
     for p in policies or []:
         if str(getattr(p, "section", "1a")) != section_code:
             continue
-        insurer = (getattr(p, "insurer_name", None) or "").strip() or "Not Provided"
-        policy_no = (getattr(p, "policy_number", None) or "").strip() or "Not Provided"
-        amount = _to_rupees(getattr(p, "premium_paid", _ZERO) or _ZERO)
+        premium = getattr(p, "premium_paid", _ZERO) or _ZERO
+        if premium <= _ZERO:
+            continue
+        insurer = (getattr(p, "insurer_name", None) or "").strip()
+        policy_no = (getattr(p, "policy_number", None) or "").strip()
+        missing = [
+            field for field, value in (("insurer name", insurer), ("policy number", policy_no))
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"Schedule 80D policy (section {section_code}, premium {premium}) is "
+                f"missing: {', '.join(missing)}."
+            )
         rows.append({
             "InsurerName": insurer[:125],
             "PolicyNo": policy_no[:75],
-            "HealthInsAmt": amount,
+            "HealthInsAmt": _to_rupees(premium),
         })
     return rows
 

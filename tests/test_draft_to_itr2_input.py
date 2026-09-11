@@ -595,3 +595,29 @@ def test_new_regime_zeroes_old_regime_only_deductions() -> None:
     assert itr2_input.tax_regime.value == "new"
     result = compute_itr2(itr2_input)
     assert not result.errors
+
+
+def test_section_80qqb_and_80rrb_reach_itr2_input() -> None:
+    """Regression for Phase 6b: section80QQB/section80RRB/
+    section80QQBRoyaltyIncome (draft.deductions.chapterVIA.*) were never
+    read by draft_to_itr2_input() at all -- a taxpayer who filled either
+    claim on the frontend had it silently vanish before compute or filing.
+    Also the exact test that would have caught this fix's own first
+    attempt using the wrong field path (draft.deductions.section80QQB
+    instead of the real draft.deductions.chapterVIA.section80QQB) --
+    ITR2Input-level tests alone (which skip draft_to_itr2_input entirely)
+    do not exercise this mapping at all."""
+    draft = _filing_ready_itr2_draft()
+    draft.regime = "old"
+    draft.deductions.chapterVIA.section80QQB = Decimal("250000")
+    draft.deductions.chapterVIA.section80QQBRoyaltyIncome = Decimal("200000")
+    draft.deductions.chapterVIA.section80RRB = Decimal("100000")
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.deduction_80qqb == Decimal("250000")
+    assert itr2_input.royalty_income_80qqb == Decimal("200000")
+    assert itr2_input.deduction_80rrb == Decimal("100000")
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    ded = result.schedules["deductions"]
+    assert ded.breakdown["80QQB"] == Decimal("200000")
+    assert ded.breakdown["80RRB"] == Decimal("100000")

@@ -3932,3 +3932,98 @@ def test_schedule_tds2_emits_deducted_yr_only_when_genuinely_brought_forward() -
     _assert_schema_valid(document)
     row = document["ITR"]["ITR2"]["ScheduleTDS2"]["TDSOthThanSalaryDtls"][0]
     assert row["DeductedYr"] == 2023
+
+
+def test_schedule_80d_rejects_policy_missing_insurer_or_policy_number() -> None:
+    """Regression for Phase 6b: a Schedule 80D policy row with a real
+    premium but no insurer name/policy number used to silently fabricate
+    the literal string "Not Provided" for the official schema's own
+    required InsurerName/PolicyNo fields -- a live ITD-rejection risk,
+    since the filed JSON would carry made-up evidentiary data instead of
+    what the taxpayer actually entered. Must now reject the claim
+    outright instead."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80d_self_family=Decimal("20000")),
+        schedule_80d=Schedule80D(
+            premium_1a_non_senior=Decimal("20000"),
+            policies=[InsurancePolicy(section="1a", premium_paid=Decimal("20000"), insurer_name="ABC Insurance")],
+        ),
+    )
+    result = compute(input_data)
+    with pytest.raises(ValueError, match="policy number"):
+        build_itr2_json(result, input_data)
+
+
+def test_schedule_80d_accepts_policy_with_complete_evidence() -> None:
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80d_self_family=Decimal("20000")),
+        schedule_80d=Schedule80D(
+            premium_1a_non_senior=Decimal("20000"),
+            policies=[InsurancePolicy(
+                section="1a", premium_paid=Decimal("20000"),
+                insurer_name="ABC Insurance", policy_number="POL123",
+            )],
+        ),
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+
+
+def test_section_80qqb_and_80rrb_reach_the_official_json() -> None:
+    """Regression for Phase 6b: section80QQB/section80RRB are captured on
+    the frontend draft (and even round-tripped by the filed-return parser)
+    but were never read into ITR2Input at all -- a taxpayer who filled
+    either claim on the frontend had it silently vanish before compute or
+    filing. 80QQB is additionally capped against the lower of the claim,
+    the actual royalty income, and the ₹3,00,000 statutory ceiling."""
+    input_data = _input(
+        tax_regime=TaxRegime.OLD,
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("500000")),
+        deduction_80qqb=Decimal("350000"), royalty_income_80qqb=Decimal("280000"),
+        deduction_80rrb=Decimal("100000"),
+    )
+    result = compute(input_data)
+    ded = result.schedules["deductions"]
+    # 80QQB capped at the royalty income (280000), which is itself below
+    # the 3L ceiling -- proves the royalty-income cap actually binds, not
+    # just the flat ceiling.
+    assert ded.breakdown["80QQB"] == Decimal("280000")
+    assert ded.breakdown["80RRB"] == Decimal("100000")
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    via = document["ITR"]["ITR2"]["ScheduleVIA"]["DeductUndChapVIA"]
+    assert via["Section80QQB"] == 280000
+    assert via["Section80RRB"] == 100000
+
+
+def test_section_80qqb_capped_at_flat_ceiling_when_no_royalty_income_recorded() -> None:
+    """80RRB has no royalty-income field on the frontend draft at all -- only
+    the flat ₹3,00,000 ceiling applies. Same for 80QQB when royalty income
+    is left unset (0), matching how the frontend might omit the paired
+    field for older/imported data."""
+    input_data = _input(
+        tax_regime=TaxRegime.OLD,
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("1000000")),
+        deduction_80qqb=Decimal("500000"), royalty_income_80qqb=Decimal("0"),
+        deduction_80rrb=Decimal("500000"),
+    )
+    result = compute(input_data)
+    ded = result.schedules["deductions"]
+    assert ded.breakdown["80QQB"] == Decimal("300000")
+    assert ded.breakdown["80RRB"] == Decimal("300000")
+
+
+def test_section_80qqb_80rrb_not_available_under_new_regime() -> None:
+    input_data = _input(
+        tax_regime=TaxRegime.NEW,
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("500000")),
+        deduction_80qqb=Decimal("200000"), royalty_income_80qqb=Decimal("200000"),
+        deduction_80rrb=Decimal("200000"),
+    )
+    result = compute(input_data)
+    ded = result.schedules["deductions"]
+    assert "80QQB" not in ded.breakdown
+    assert "80RRB" not in ded.breakdown

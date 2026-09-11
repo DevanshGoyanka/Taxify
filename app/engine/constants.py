@@ -227,6 +227,12 @@ SECTION_80EEA_LIMIT: Final[Decimal] = Decimal("150000")          # Rs 1.5 lakh
 # Section 80EEB - Electric vehicle loan interest
 SECTION_80EEB_LIMIT: Final[Decimal] = Decimal("150000")          # Rs 1.5 lakh
 
+# Section 80QQB - Royalty income of authors; Section 80RRB - Royalty on
+# patents. Both capped at the lower of the actual royalty income and this
+# flat statutory ceiling.
+SECTION_80QQB_LIMIT: Final[Decimal] = Decimal("300000")          # Rs 3 lakh
+SECTION_80RRB_LIMIT: Final[Decimal] = Decimal("300000")          # Rs 3 lakh
+
 # Section 80G - Donations (various percentages and limits)
 SECTION_80G_100_PERCENT_LIMIT: Final[str] = "Without Limit"       # 100% without limit
 SECTION_80G_50_PERCENT_LIMIT: Final[str] = "Subject to 10%"       # 50% with 10% of GTI cap

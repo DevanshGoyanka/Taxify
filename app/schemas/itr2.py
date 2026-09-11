@@ -1112,6 +1112,19 @@ class ITR2Input(StrictModel):
     loan_details_80eea_list: List[ITR1Schedule80EEALoanEntry] = Field(default_factory=list)
     loan_details_80eeb_list: List[ITR1Schedule80EEBLoanEntry] = Field(default_factory=list)
     property_stamp_duty_value_80eea: Optional[Decimal] = Field(default=None, ge=0, le=4_500_000)
+    # Section 80QQB (royalty income of authors) and 80RRB (royalty on
+    # patents) -- captured on the frontend draft (Deductions.section80QQB/
+    # section80QQBRoyaltyIncome/section80RRB) and even round-tripped by the
+    # filed-return parser, but never read into ITR2Input at all before this
+    # fix (Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md Phase 6b) -- a
+    # taxpayer who filled either claim on the frontend had it silently
+    # vanish before compute or filing. Not part of the shared
+    # Chapter6ADeductions (that class is deliberately minimal for ITR-1's
+    # salaried-filer scope, per its own docstring), so these live here
+    # directly, matching the loan_details_80ee_list precedent above.
+    deduction_80qqb: Decimal = Field(default=Decimal("0"), ge=0)
+    royalty_income_80qqb: Decimal = Field(default=Decimal("0"), ge=0)
+    deduction_80rrb: Decimal = Field(default=Decimal("0"), ge=0)
     tds1_entries: List[TDS1Entry] = Field(default_factory=list)
     tds2_entries: List[TDS2Entry] = Field(default_factory=list)
     tds3_entries: List[TDS3Entry] = Field(default_factory=list)

@@ -838,6 +838,13 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         loan_rows_80eea=input_data.loan_details_80eea_list,
         loan_rows_80eeb=input_data.loan_details_80eeb_list,
         property_stamp_duty_value_80eea=input_data.property_stamp_duty_value_80eea,
+        # Section 80QQB/80RRB (royalty income) -- captured on the frontend
+        # draft but never reached ITR2Input at all before this fix (Docs/
+        # ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md Phase 6b); not part of
+        # Chapter6ADeductions, so passed as separate kwargs.
+        deduction_80qqb=input_data.deduction_80qqb,
+        royalty_income_80qqb=input_data.royalty_income_80qqb,
+        deduction_80rrb=input_data.deduction_80rrb,
     )
     r.schedules["deductions"] = ded
     r.deductions_total = ded.total
