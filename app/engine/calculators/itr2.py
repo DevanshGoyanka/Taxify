@@ -155,6 +155,15 @@ class ITR2Result:
     deductions_total: Decimal = _ZERO
     taxable_income: Decimal = _ZERO
     aggregate_income: Decimal = _ZERO
+    # Pre-rounding total income and the delta rounding u/s 288A applied to
+    # reach taxable_income -- same fields/naming as ITR1Result (see
+    # app/engine/filing_gateway_v2.py's _summary_from_result(), which reads
+    # them via getattr for ITR-1/4). Audit §22.5: _itr2_summary_from_result()
+    # had no equivalent, so the Tax Computation page always rendered ₹0 for
+    # these two fields, immediately above the correctly-populated rounded
+    # total income row.
+    total_income_before_288a: Decimal = _ZERO
+    rounding_adjustment_288a: Decimal = _ZERO
 
     # Tax
     slab_tax: Decimal = _ZERO
@@ -837,6 +846,8 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     income_before = max(_ZERO, gti_after - ded.total)
     ti = round_to_nearest_10(income_before)
     r.taxable_income = ti
+    r.total_income_before_288a = income_before
+    r.rounding_adjustment_288a = ti - income_before
     r.aggregate_income = ti + r.net_agricultural_income
 
     # ── 12. Special Rate Income Tax (Schedule SI) ────────────────────────────

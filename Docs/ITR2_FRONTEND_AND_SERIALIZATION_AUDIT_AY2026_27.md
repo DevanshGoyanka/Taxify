@@ -34,6 +34,12 @@
 > longer rejects a legitimate zero-TDS salaried employee. See §22.3's own fix note, including the
 > discovery that the true count-mismatch case was already unconstructable at the schema level, so
 > the old validator's stricter form only ever produced a false positive. §22.1, §22.5 remain open.
+>
+> **Update (2026-09-11, fix cycle, fourth fix): §22.5 is fixed and verified** — the Tax Computation
+> page no longer shows a self-contradictory ₹0 next to the correctly-populated rounded total
+> income. See §22.5's own fix note. **§22.1 is the only item left open in all of §22** — a product
+> decision (wire "Validate" into real JSON generation for ITR-2, or un-hide the "CBDT JSON" button)
+> rather than a pure bug fix, deliberately left for the user to confirm before implementing.
 
 > **Progress update (2026-09-04)**: this audit has moved from read-only findings-only into the
 > same iterative audit-fix-reaudit cycle ITR-1/ITR-4's own audit docs used, per
@@ -6277,6 +6283,22 @@ test client: `totalIncome` displayed a real computed figure while both 288A fiel
 total and the rounding delta (needs tracing `compute_itr2()`'s own rounding step — likely in
 `app/engine/calculators/itr2.py` — to find the right source attributes; do not assume they share
 ITR-1/4's exact attribute names, per this function's own documented naming-divergence rationale).
+
+> **Fix status (2026-09-11): fixed and verified.** Traced the rounding step to
+> `calculators/itr2.py`'s "Taxable Income (u/s 288A)" section: `income_before = max(0, gti_after -
+> ded.total)` then `ti = round_to_nearest_10(income_before)`, matching ITR1Result's own
+> `total_income_before_288a`/`rounding_adjustment_288a` naming, added the same two fields to
+> `ITR2Result`, and populated them at that exact point (neither was captured anywhere before this
+> fix — `income_before` was a local variable only). Wired both into
+> `_itr2_summary_from_result()` (`filing_gateway_v2.py`) as `totalIncomeBefore288A`/
+> `roundingAdjustment288A`, matching the JSON key names `ITRComputationTabs.tsx` already reads.
+> New regression test in `test_filing_gateway_v2_itr2.py`, confirmed failing pre-fix via `git
+> stash`. Full regression: same 6 pre-existing baseline ITR-2 failures only; 505/505 ITR-1/4 green.
+>
+> **This closes every item in §22 except §22.1** (whether "Validate" should call real JSON
+> generation for ITR-2, or the hidden "CBDT JSON" button should be un-hidden instead) — a product
+> decision the fix direction itself flagged as needing confirmation before implementing, not a pure
+> bug fix like the other four.
 
 ## 22.6 Confirmed working
 

@@ -1799,6 +1799,14 @@ def _itr2_summary_from_result(
         "grossTotIncome": _decimal_float(result.gross_total_income),
         "totalDeductions": _decimal_float(result.deductions_total),
         "totalIncome": _decimal_float(result.taxable_income),
+        # Audit §22.5: ITR2Result now carries these two fields (added
+        # alongside this fix -- see calculators/itr2.py's rounding step),
+        # matching ITR1Result's own naming; previously absent here entirely,
+        # so ITRComputationTabs.tsx's "Total Income and Section 288A
+        # reconciliation" table always rendered ₹0 for both, immediately
+        # above the correctly-populated "totalIncome" row above.
+        "totalIncomeBefore288A": _decimal_float(result.total_income_before_288a),
+        "roundingAdjustment288A": _decimal_float(result.rounding_adjustment_288a),
         "totalTaxPayable": _decimal_float(result.tax_before_rebate),
         "netTaxLiability": _decimal_float(result.net_tax_liability),
         "totalTaxLiability": _decimal_float(result.net_tax_liability),

@@ -84,6 +84,25 @@ def test_compute_canonical_itr2_returns_summary() -> None:
     assert not pipeline.computation.errors
 
 
+def test_compute_canonical_itr2_summary_includes_288a_reconciliation_fields() -> None:
+    """Regression for audit §22.5: totalIncomeBefore288A/roundingAdjustment288A
+    were absent from _itr2_summary_from_result() entirely (unlike the shared
+    ITR-1/4 summary builder), so ITRComputationTabs.tsx's "Total Income and
+    Section 288A reconciliation" table always rendered ₹0 for both, directly
+    contradicting the correctly-populated "totalIncome" row right below --
+    rounding to the nearest ₹10 always happens, so a real return should never
+    show a ₹0 pre-rounding total next to a nonzero rounded one."""
+    draft = _filing_ready_itr2_draft()
+    pipeline = compute_canonical_itr2(draft)
+    assert pipeline.summary["totalIncome"] > 0
+    assert pipeline.summary["totalIncomeBefore288A"] > 0
+    # The rounding delta must be small (rounding to the nearest ₹10 is at
+    # most ±9) and the two figures must actually reconcile.
+    delta = pipeline.summary["totalIncome"] - pipeline.summary["totalIncomeBefore288A"]
+    assert abs(delta) < 10
+    assert pipeline.summary["roundingAdjustment288A"] == pytest.approx(delta)
+
+
 def test_compute_canonical_itr2_rejects_pending_reconciliation() -> None:
     """A pending AIS/TIS discrepancy blocks compute with a clear message."""
     from app.schemas.return_draft import ReconciliationDiscrepancy
