@@ -130,7 +130,12 @@ def test_tds2_uses_official_credit_shape_and_claimed_amount() -> None:
     validate_itr2_json(document)
     row = document["ITR"]["ITR2"]["ScheduleTDS2"]["TDSOthThanSalaryDtls"][0]
     assert row["TANOfDeductor"] == "DELA00001A"
-    assert row["DeductedYr"] == 2024
+    # DeductedYr is correctly absent here: entry.financial_year describes
+    # this credit's own current filing year, not a genuinely brought-forward
+    # year (that's entry.deducted_year, a separate field -- see audit §22.4
+    # and tests/test_itr2_itd_builder.py's dedicated DeductedYr coverage).
+    # The schema's own DeductedYr enum caps at 2024 with no current-AY value.
+    assert "DeductedYr" not in row
     assert row["TaxDeductCreditDtls"]["TaxClaimedOwnHands"] == 700
     assert row["AmtCarriedFwd"] == 300
 

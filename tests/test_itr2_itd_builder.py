@@ -3877,3 +3877,58 @@ def test_gross_tax_payable_reflects_real_gross_tax_liability() -> None:
     computation = document["ITR"]["ITR2"]["PartB_TTI"]["ComputationOfTaxLiability"]
     assert computation["GrossTaxPayable"] == computation["GrossTaxLiability"] > 0
     assert computation["GrossTaxPay"] == {"TaxInc17": 0, "TaxDeferred17": 0, "TaxDeferredPayableCY": 0}
+
+
+def test_schedule_tds2_translates_section_code_and_omits_current_year_deducted_yr() -> None:
+    """Regression for audit §22.4: the builder previously emitted
+    entry.tds_section verbatim ("194A") instead of the schema's own
+    TDSSection enum code ("94A") -- the schema's enum never contains a
+    "1"-prefixed 3-digit code, so this broke Schedule TDS2 for essentially
+    every real return with common bank/company-deducted TDS. It also
+    unconditionally derived DeductedYr from the entry's own current-year
+    financial_year, but the schema's DeductedYr enum caps at 2024 and the
+    field exists only to disclose TDS genuinely brought forward from an
+    earlier year -- live-reproduced against the real schema file before
+    this fix with exactly this 194A/current-year combination."""
+    input_data = _input(
+        tds2_entries=[TDS2Entry(
+            deductor_tan="MUMS89569E", deductor_name="State Bank of India",
+            tds_section="194A", gross_amount=Decimal("261841"),
+            tds_deducted=Decimal("26191"), tds_claimed_this_year=Decimal("26191"),
+            financial_year="2025-26",
+        )],
+        bank_accounts=[BankAccount(
+            account_number="1234567890", ifsc_code="SBIN0000001",
+            bank_name="State Bank of India", account_type="savings", is_primary=True,
+        )],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleTDS2"]["TDSOthThanSalaryDtls"][0]
+    assert row["TDSSection"] == "94A"
+    assert "DeductedYr" not in row
+
+
+def test_schedule_tds2_emits_deducted_yr_only_when_genuinely_brought_forward() -> None:
+    """The dedicated TDS2Entry.deducted_year field (the frontend's "Deducted
+    Year (FY tax deducted)" control) is the correct signal for a TDS credit
+    genuinely carried forward from an earlier year -- when set, it must
+    reach the JSON; the schema's own enum tops out at 2024, so this only
+    makes sense for a real earlier year, never the current AY."""
+    input_data = _input(
+        tds2_entries=[TDS2Entry(
+            deductor_tan="MUMS89569E", deductor_name="State Bank of India",
+            tds_section="194A", gross_amount=Decimal("100000"),
+            tds_deducted=Decimal("10000"), tds_claimed_this_year=Decimal("5000"),
+            financial_year="2025-26", deducted_year="2023",
+            brought_forward_tds=Decimal("10000"),
+        )],
+        bank_accounts=[BankAccount(
+            account_number="1234567890", ifsc_code="SBIN0000001",
+            bank_name="State Bank of India", account_type="savings", is_primary=True,
+        )],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleTDS2"]["TDSOthThanSalaryDtls"][0]
+    assert row["DeductedYr"] == 2023

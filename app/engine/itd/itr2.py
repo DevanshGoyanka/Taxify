@@ -3647,6 +3647,69 @@ def _schedule_it(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     return {"TaxPayment": rows, "TotalTaxPayments": sum(r["Amt"] for r in rows)}
 
 
+# Income-tax Act section label (e.g. "194A", as captured by TDS2Entry/TDS3Entry
+# .tds_section) -> the official schema's TDSSection enum code (e.g. "94A").
+# Ported from frontend/src/domain/returns/tdsSections.ts's TDS_SECTION_TO_SCHEMA
+# -- keep the two in sync; that file is the original source of truth (built
+# against the schema's own enum + description text, Reference Docs by CBDT &
+# ITD/Official JSON Schema/ITR-2_2026_Main_V1.1 (2).json). Audit finding §22.4:
+# the builder previously emitted entry.tds_section verbatim, which is never a
+# schema-valid code for any "194"/"196"-prefixed section (the schema's own
+# enum never contains a "1"-prefixed 3-digit code) -- this broke Schedule TDS2
+# for essentially every real ITR-2 return with common bank/company-deducted
+# TDS (194A interest alone is close to universal for any taxpayer with a bank
+# account).
+_TDS_SECTION_TO_SCHEMA: dict[str, str] = {
+    "92A": "92A", "92B": "92B", "92C": "92C",
+    "192": "92B",  # salary -- non-govt default; TDS1 rows never reach this table
+    "192A": "192A",
+    "193": "193",
+    "194": "194",
+    "194A": "94A",
+    "194B": "94B", "194BA": "94BA",
+    "194BB": "4BB",
+    "194C": "94C",
+    "194D": "94D",
+    "194DA": "4DA",
+    "194E": "94E",
+    "194EE": "4EE",
+    "194F": "4F",
+    "194G": "4G",
+    "194H": "4H",
+    "194I(a)": "4-IA", "194I(b)": "4-IB",
+    "194IA": "4IA",
+    "194IB": "4IB",
+    "194IC": "4IC",
+    "194J(a)": "94J-A", "194J(b)": "94J-B",
+    "194K": "94K",
+    "194LA": "4LA",
+    "194LB": "4LB",
+    "194LC": "4LC1",
+    "194LBA": "4BA1",
+    "194LBB": "LBB",
+    "194LBC": "LBC",
+    "194LD": "4LD",
+    "194M": "94M",
+    "194N": "94N",
+    "194O": "94O",
+    "194P": "94P",
+    "194Q": "94Q",
+    "195": "195",
+    "196A": "96A", "196B": "96B", "196C": "96C", "196D": "96D", "196DA": "96DA",
+}
+
+
+def _official_tds_section(section: str) -> str:
+    """Translate a user-facing TDS section label to the schema's TDSSection code.
+
+    Falls back to the stripped raw value when it isn't in the table -- a code
+    already in schema form (e.g. imported from a filed return) passes through
+    unchanged rather than being mangled.
+    """
+    key = (section or "").strip()
+    return _TDS_SECTION_TO_SCHEMA.get(key, key)
+
+
 def _schedule_tds1(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     """Serialize Schedule TDS1 from real employer entries."""
     if not input_data.tds1_entries:
@@ -3681,12 +3744,10 @@ def _schedule_tds2(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         return None
     rows = []
     for entry in input_data.tds2_entries:
-        deducted_year = int((entry.financial_year or "2024-25").split("-")[0])
         row: dict[str, Any] = {
             "TDSCreditName": entry.ownership,
             "TANOfDeductor": entry.deductor_tan,
-            "TDSSection": entry.tds_section,
-            "DeductedYr": deducted_year,
+            "TDSSection": _official_tds_section(entry.tds_section),
             "BroughtFwdTDSAmt": _to_rupees(entry.brought_forward_tds),
             "TaxDeductCreditDtls": {
                 "TaxDeductedOwnHands": _to_rupees(entry.tds_deducted),
@@ -3696,6 +3757,17 @@ def _schedule_tds2(input_data: ITR2Input) -> Optional[dict[str, Any]]:
             "HeadOfIncome": entry.head_of_income or "OS",
             "AmtCarriedFwd": _to_rupees(entry.tds_credit_carried_forward),
         }
+        # DeductedYr is not required by the schema (only TDSCreditName/
+        # TANOfDeductor/TDSSection/TaxDeductCreditDtls/AmtCarriedFwd are) and
+        # its own enum caps at 2024 with no current-AY value ever included --
+        # it exists to disclose TDS genuinely brought forward from an earlier
+        # year, not the current year's own credit. entry.deducted_year is the
+        # dedicated field the frontend's "Deducted Year (FY tax deducted)"
+        # control writes for exactly that case; only emit the key when it's
+        # actually set, instead of always deriving a (schema-invalid, for the
+        # current AY) year from entry.financial_year.
+        if entry.deducted_year:
+            row["DeductedYr"] = int(entry.deducted_year)
         if entry.ownership == "O":
             if entry.pan_of_other_person:
                 row["PANofOtherPerson"] = entry.pan_of_other_person
@@ -3726,8 +3798,7 @@ def _schedule_tds3(input_data: ITR2Input) -> Optional[dict[str, Any]]:
             "TDSCreditName": entry.ownership,
             "PANOfBuyerTenant": detail.buyer_tenant_pan,
             **({"AadhaarOfBuyerTenant": entry.tenant_aadhaar} if entry.tenant_aadhaar else {}),
-            "TDSSection": entry.tds_section or "195",
-            "DeductedYr": deducted_year,
+            "TDSSection": _official_tds_section(entry.tds_section or "195"),
             "BroughtFwdTDSAmt": _to_rupees(entry.brought_forward_tds),
             "TaxDeductCreditDtls": {
                 "TaxDeductedOwnHands": _to_rupees(entry.tds_deducted),
@@ -3745,6 +3816,14 @@ def _schedule_tds3(input_data: ITR2Input) -> Optional[dict[str, Any]]:
             "HeadOfIncome": detail.head_of_income,
             "AmtCarriedFwd": _to_rupees(entry.tds_credit_carried_forward),
         }
+        # DeductedYr is not required by TDS3's schema either, and shares the
+        # same enum (max 2024, no current-AY value) as TDS2's -- unlike
+        # TDS2Entry, TDS3Entry.deducted_yr is non-Optional (defaults to the
+        # current AY's own "2025", per its own Field default), so the signal
+        # here is the *value* itself, not presence: only emit the key when
+        # it's a real, schema-valid earlier year.
+        if deducted_year <= 2024:
+            row["DeductedYr"] = deducted_year
         if entry.ownership == "O":
             if entry.pan_of_other_person:
                 row["PANofOtherPerson"] = entry.pan_of_other_person

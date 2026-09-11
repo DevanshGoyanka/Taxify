@@ -22,6 +22,13 @@
 > house property (a large, ordinary fraction of real filers) can now generate CBDT JSON. See §22.2's
 > own fix note for full evidence, including the two new regression tests and the confirmed-zero
 > impact on ITR-1/4 (505/505 green). §22.1, §22.3, §22.4, §22.5 remain open.
+>
+> **Update (2026-09-11, fix cycle, second fix): §22.4 is fixed and verified for both TDS2 and
+> TDS3** — Schedule TDS2/TDS3 now emit the correct schema section code (ported from a
+> frontend mapping table that already existed and was already schema-verified, but had never been
+> applied on the backend) and correctly omit `DeductedYr` for current-year credits instead of
+> emitting a value the schema's own enum can never accept. See §22.4's own fix note. §22.1, §22.3,
+> §22.5 remain open.
 
 > **Progress update (2026-09-04)**: this audit has moved from read-only findings-only into the
 > same iterative audit-fix-reaudit cycle ITR-1/ITR-4's own audit docs used, per
@@ -6202,6 +6209,34 @@ schedule (TDS2 here; check TDS1/TDS3 for the same raw pass-through — TDS3's `e
 to be schema-valid). (2) Only populate `DeductedYr` when the credit is genuinely brought forward
 from an earlier year (needs a real "is this brought forward" signal on `TDS2Entry` — check whether
 `brought_forward_tds > 0` is a reliable proxy, or whether a dedicated field is needed).
+
+> **Fix status (2026-09-11): fixed and verified for both TDS2 and TDS3.** The section-code
+> translation table turned out not to need building from scratch: `frontend/src/domain/returns/
+> tdsSections.ts`'s `TDS_SECTION_TO_SCHEMA` already exists, is complete, and is presumably already
+> schema-verified (it's used for the frontend's own TDS section dropdown) — the bug was that the
+> backend's JSON builder never called it, so the equivalent translation had never been ported to
+> Python. Ported it as `_TDS_SECTION_TO_SCHEMA`/`_official_tds_section()` in
+> `app/engine/itd/itr2.py`, applied in both `_schedule_tds2()` and `_schedule_tds3()` (the TDS3
+> `entry.tds_section or "195"` pass-through this note originally flagged for the same audit had the
+> identical bug, fixed identically).
+>
+> For `DeductedYr`: `TDS2Entry` already has a dedicated `deducted_year: Optional[str]` field (the
+> frontend's own "Deducted Year (FY tax deducted)" control writes it) that was being read by
+> nothing — `_schedule_tds2()` derived `DeductedYr` from `financial_year` instead, unconditionally.
+> Confirmed `DeductedYr` is not in either `TDSOthThanSalaryDtls`'s or `TDS3onOthThanSalDtls`'s own
+> `required` list in the schema, so the fix simply omits the key when there's no genuine
+> brought-forward year: for TDS2, only when `entry.deducted_year` is set; for TDS3 (whose
+> `deducted_yr` field is non-Optional, defaulting to the current AY), only when the value itself is
+> `<= 2024` (the schema's own max).
+>
+> Four new regression tests (two in `tests/test_itr2_itd_builder.py` covering the 194A-translation/
+> current-year-omission and genuine-brought-forward-emission cases; one pre-existing test in
+> `tests/test_itr2_production_path.py` updated — its own `DeductedYr == 2024` assertion was itself
+> built on the pre-fix bug's behavior and needed correcting, not preserving), all confirmed failing
+> pre-fix via `git stash` with the exact live-reproduced schema-validation errors. Full
+> `test_itr2_*.py`/`test_itr1_*.py`/`test_itr4_*.py` regression: only the same 6 pre-existing
+> baseline ITR-2 failures remain (unrelated, confirmed via `git stash` comparison); 505/505
+> ITR-1/4 tests green.
 
 ## 22.5 MEDIUM — Tax Computation display: `totalIncomeBefore288A`/`roundingAdjustment288A` always show ₹0 for ITR-2, contradicting the correctly-populated row directly below
 
