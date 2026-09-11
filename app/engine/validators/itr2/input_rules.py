@@ -1449,6 +1449,28 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 f"tr1_entries[{index}].relief_claimed", severity=Severity.D,
             ))
 
+    # B/D #21 (Phase 6i-1, 2026-09-11): Form 10F is mandatory for a
+    # non-resident to claim the benefit of a DTAA treaty-preferential rate
+    # -- without it, the TRC flag itself is considered "No" regardless of
+    # what's claimed. Narrower than Form 67's own condition above: only
+    # sections 90/90A are treaty-based (91 is unilateral relief, no treaty
+    # involved, so Form 10F/TRC are not applicable there), and only a
+    # non-resident is in scope, per the rule's own literal text. Deferred
+    # in Phase 6a since `form_10f_filed` didn't exist on TR1Entry yet.
+    for index, tr1 in enumerate(inp.tr1_entries or []):
+        if (
+            inp.residential_status == ResidentialStatus.NON_RESIDENT
+            and tr1.relief_section in ("90", "90A")
+            and tr1.relief_claimed > _ZERO
+            and not tr1.form_10f_filed
+        ):
+            results.append(_result(
+                "ITR2-IN-FORM-007", True,
+                "Form 10F must be filed to claim a DTAA treaty-preferential rate as a "
+                "non-resident -- without it, the TRC claim is treated as 'No'.",
+                f"tr1_entries[{index}].relief_claimed", severity=Severity.D,
+            ))
+
     # B/D #4: Form 3CFA is required within the due date when income is
     # returned under Section 115BBF (patent royalty).
     for index, si in enumerate(inp.si_entries or []):

@@ -353,6 +353,7 @@ def _map_tr1_entries(draft: ReturnDraft) -> list[TR1Entry]:
             relief_claimed=min(row.reliefClaimed, row.taxPaidOutsideIndia, row.indianTaxPayable),
             relief_section=row.reliefSection,
             form67_filed=row.form67Filed,
+            form_10f_filed=row.form10FFiled,
         )
         for row in draft.foreignTaxRelief
         if row.countryCode and row.taxIdentificationNo

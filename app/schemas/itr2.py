@@ -568,6 +568,13 @@ class TR1Entry(StrictModel):
     relief_claimed: Decimal = Field(default=Decimal("0"), ge=0)
     relief_section: Literal["90", "90A", "91"] = "90"
     form67_filed: bool = False
+    # Form 10F is a self-declaration filed with the ITD, supplementing the
+    # tax_residency_certificate above -- a distinct compliance document, not
+    # derivable from the TRC flag itself. CBDT rule (Category B/D #21):
+    # "FORM 10F is mandatory for Non residents to claim benefit of
+    # preferable (treaty) rate; TRC flag considered 'No' if Form 10F
+    # absent." (Phase 6i-1, 2026-09-11.)
+    form_10f_filed: bool = False
 
     @model_validator(mode="after")
     def validate_relief_limit(self) -> "TR1Entry":

@@ -885,6 +885,7 @@ export interface ForeignTaxReliefEntry extends Identified {
   countryCode: string; taxIdentificationNo: string;
   incomeIncludedInThisReturn: Money; taxPaidOutsideIndia: Money; indianTaxPayable: Money;
   reliefClaimed: Money; reliefSection: ForeignReliefSection; form67Filed: boolean;
+  form10FFiled: boolean;
 }
 
 /** Schedule FA: one foreign asset or account disclosure. */

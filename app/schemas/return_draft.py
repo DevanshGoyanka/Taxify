@@ -809,6 +809,7 @@ class ForeignTaxReliefEntry(Identified):
     reliefClaimed: Money = Field(default=Decimal("0"))
     reliefSection: ForeignReliefSection = Field(default="90")
     form67Filed: bool = Field(default=False)
+    form10FFiled: bool = Field(default=False)
 
 
 class ForeignAssetEntry(Identified):

@@ -633,3 +633,25 @@ def test_pran_number_reaches_itr2_input() -> None:
     draft.deductions.chapterVIA.pranNumber = "123456789012"
     itr2_input, _breakdown = draft_to_itr2_input(draft)
     assert itr2_input.pran_number == "123456789012"
+
+
+def test_form10f_filed_reaches_itr2_input() -> None:
+    """Regression for Phase 6i-1: ForeignTaxReliefEntry.form10FFiled was
+    never read into ITR2Input's TR1Entry.form_10f_filed at all -- the field
+    didn't exist on either side until this fix, so this is also the
+    mapper-level test that confirms the wiring, not just the schema field."""
+    draft = _filing_ready_itr2_draft()
+    draft.foreignSourceIncome = [ForeignSourceIncomeEntry(
+        id="fsi1", countryCode="US", taxIdentificationNo="123-45-6789",
+        salaryIncome=Decimal("500000"), taxPaidOutsideIndia=Decimal("75000"),
+        taxPayableInIndia=Decimal("90000"),
+    )]
+    draft.foreignTaxRelief = [ForeignTaxReliefEntry(
+        id="tr1", countryCode="US", taxIdentificationNo="123-45-6789",
+        incomeIncludedInThisReturn=Decimal("500000"),
+        taxPaidOutsideIndia=Decimal("75000"), indianTaxPayable=Decimal("90000"),
+        reliefClaimed=Decimal("75000"), form10FFiled=True,
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert len(itr2_input.tr1_entries) == 1
+    assert itr2_input.tr1_entries[0].form_10f_filed is True

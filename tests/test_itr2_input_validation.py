@@ -1118,6 +1118,69 @@ def test_FORM_004_no_reminder_when_form67_already_filed():
     assert not emitted(validate_itr2_input(inp), "ITR2-IN-FORM-004")
 
 
+def test_FORM_007_form10f_reminder_emitted_for_nonresident_treaty_relief_without_filing():
+    """Regression for Phase 6i-1: TR1Entry had no way to record whether Form
+    10F was filed at all -- Category B/D row #21 was deliberately deferred
+    in Phase 6a for exactly this reason."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        fsi_entries=[_fsi_entry()],
+        tr1_entries=[TR1Entry(
+            country_code="US", tax_identification_no="123-45-6789",
+            income_included_in_this_return=Decimal("100000"),
+            tax_paid_outside_india=Decimal("20000"), indian_tax_payable=Decimal("20000"),
+            relief_claimed=Decimal("15000"), relief_section="90", form_10f_filed=False,
+        )],
+    )
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-FORM-007")
+
+
+def test_FORM_007_no_reminder_when_form10f_already_filed():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        fsi_entries=[_fsi_entry()],
+        tr1_entries=[TR1Entry(
+            country_code="US", tax_identification_no="123-45-6789",
+            income_included_in_this_return=Decimal("100000"),
+            tax_paid_outside_india=Decimal("20000"), indian_tax_payable=Decimal("20000"),
+            relief_claimed=Decimal("15000"), relief_section="90", form_10f_filed=True,
+        )],
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-FORM-007")
+
+
+def test_FORM_007_no_reminder_for_section_91_unilateral_relief():
+    """Section 91 is unilateral relief (no treaty involved), so Form
+    10F/TRC are not applicable -- only 90/90A are treaty-based."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        fsi_entries=[_fsi_entry()],
+        tr1_entries=[TR1Entry(
+            country_code="US", tax_identification_no="123-45-6789",
+            income_included_in_this_return=Decimal("100000"),
+            tax_paid_outside_india=Decimal("20000"), indian_tax_payable=Decimal("20000"),
+            relief_claimed=Decimal("15000"), relief_section="91", form_10f_filed=False,
+        )],
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-FORM-007")
+
+
+def test_FORM_007_no_reminder_for_resident():
+    """Form 10F is mandatory for NON-residents specifically, per the rule's
+    own literal text -- a resident claiming DTAA relief is out of scope."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.RESIDENT,
+        fsi_entries=[_fsi_entry()],
+        tr1_entries=[TR1Entry(
+            country_code="US", tax_identification_no="123-45-6789",
+            income_included_in_this_return=Decimal("100000"),
+            tax_paid_outside_india=Decimal("20000"), indian_tax_payable=Decimal("20000"),
+            relief_claimed=Decimal("15000"), relief_section="90", form_10f_filed=False,
+        )],
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-FORM-007")
+
+
 def test_FORM_005_form3cfa_reminder_emitted_for_115bbf_income():
     inp = _base_input(si_entries=[ScheduleSIEntry(section="115BBF", gross_income=Decimal("500000"))])
     assert emitted(validate_itr2_input(inp), "ITR2-IN-FORM-005")
