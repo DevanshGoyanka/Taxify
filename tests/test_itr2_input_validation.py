@@ -23,6 +23,7 @@ from app.schemas.itr1 import (
     DependentRelationship,
     FilingAddress,
     HousePropertyIncome,
+    OtherSourcesIncome,
     PropertyType,
     SalaryIncome,
     TaxRegime,
@@ -45,6 +46,7 @@ from app.schemas.itr2 import (
     ReturnFileSection,
     ResidentialStatus,
     FSICountryEntry,
+    OSDeductions,
     OSDtaaEntry,
     OSSection89A,
     TR1Entry,
@@ -1170,6 +1172,81 @@ def test_DTAA_002_applicable_rate_exceeding_lower_of_treaty_and_it_act_fails():
         )],
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-002")
+
+
+# ─── Phase 6f: Schedule OS ───────────────────────────────────────────────────
+
+def test_OS_001_interest_expense_within_20pct_of_dividend_passes():
+    inp = _base_input(
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("100000")),
+        os_deductions=OSDeductions(interest_expense_us57=Decimal("20000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-001")
+
+
+def test_OS_001_interest_expense_exceeding_20pct_of_dividend_fails():
+    """Regression for Phase 6f: OSDeductions.interest_expense_us57 had no
+    cap against dividend income anywhere -- CBDT rule 216 states this
+    claim cannot exceed 20% of dividend income."""
+    inp = _base_input(
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("100000")),
+        os_deductions=OSDeductions(interest_expense_us57=Decimal("25000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-001")
+
+
+def _pf_entry(**overrides):
+    from app.schemas.itr2 import OSAccumulatedPFEntry
+    fields = dict(assessment_year="2024-25", income_benefit=Decimal("10000"), tax_benefit=Decimal("2000"))
+    fields.update(overrides)
+    return OSAccumulatedPFEntry(**fields)
+
+
+def test_OS_002_003_pf_totals_matching_detail_rows_passes():
+    inp = _base_input(
+        os_pf_income_benefit=Decimal("10000"), os_pf_tax_benefit=Decimal("2000"),
+        os_pf_accumulated_entries=[_pf_entry()],
+    )
+    results = validate_itr2_input(inp)
+    assert not failed(results, "ITR2-IN-OS-002")
+    assert not failed(results, "ITR2-IN-OS-003")
+
+
+def test_OS_002_003_pf_totals_disagreeing_with_detail_rows_fails():
+    """Regression for Phase 6f: TaxAccumulatedBalRecPF's header totals
+    (os_pf_income_benefit/os_pf_tax_benefit) were never reconciled against
+    their own per-assessment-year detail rows anywhere."""
+    inp = _base_input(
+        os_pf_income_benefit=Decimal("99999"), os_pf_tax_benefit=Decimal("88888"),
+        os_pf_accumulated_entries=[_pf_entry()],
+    )
+    results = validate_itr2_input(inp)
+    assert failed(results, "ITR2-IN-OS-002")
+    assert failed(results, "ITR2-IN-OS-003")
+
+
+def test_OS_004_race_horse_balance_matching_formula_passes():
+    from app.schemas.itr2 import OSRaceHorseActivity
+    inp = _base_input(os_race_horse=OSRaceHorseActivity(
+        receipts=Decimal("100000"), deduction_us57=Decimal("30000"),
+        amount_not_deductible_us58=Decimal("5000"), profit_chargeable_us59=Decimal("2000"),
+        balance=Decimal("77000"),
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-004")
+
+
+def test_OS_004_race_horse_balance_not_matching_formula_fails():
+    """Regression for Phase 6f: OSRaceHorseActivity.balance is trusted as
+    raw user input with no recomputation from its own components (receipts
+    - deduction u/s 57 + amounts not deductible u/s 58 + profits
+    chargeable u/s 59), the form's own stated Sl.8e formula."""
+    from app.schemas.itr2 import OSRaceHorseActivity
+    inp = _base_input(os_race_horse=OSRaceHorseActivity(
+        receipts=Decimal("100000"), deduction_us57=Decimal("30000"),
+        amount_not_deductible_us58=Decimal("5000"), profit_chargeable_us59=Decimal("2000"),
+        balance=Decimal("999999"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-004")
 
 
 def _tds2(**overrides) -> TDS2Entry:

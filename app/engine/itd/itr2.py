@@ -1101,7 +1101,21 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
 
     deductions = input_data.os_deductions
     if deductions is not None:
-        total_deductions = deduction_57iia + deductions.expenses + deductions.depreciation
+        # Interest expenditure on dividend (Sl 3aii, `IntExp57`) is the raw
+        # claim -- rule #216 caps it at 20% of dividend income, checked
+        # separately as a pre-compute validator (ITR2-IN-OS-001). The TOTAL
+        # must use the post-cap ELIGIBLE amount (Sl 3aiia, "Eligible Interest
+        # expenditure u/s 57(1) -- Computed Amount", `interest_expense_
+        # eligible_us57`/`UsrIntExp57`), matching the frontend's own already-
+        # correct total-deductions formula (ScheduleOSWorkspace.tsx:296:
+        # `expenses + interestExpenseEligibleUs57 + familyPensionDeductionUs57iia
+        # + depreciation`) -- the backend builder previously summed neither
+        # interest-expense field at all, silently under-totaling `Deductions`
+        # for every taxpayer with dividend-related interest expense.
+        total_deductions = (
+            deduction_57iia + deductions.expenses + deductions.depreciation
+            + deductions.interest_expense_eligible_us57
+        )
         block["Deductions"] = {
             "DeductionUs57iia": _to_rupees(deduction_57iia),
             "Depreciation": _to_rupees(deductions.depreciation),

@@ -906,6 +906,74 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
     # sections 115BB/115BBE — 115BBJ (online game winnings, same Section 58(4)
     # disallowance) is the one section it does NOT cover, so that's the only
     # one left for this rule to add.
+    # CBDT rule 216 (Phase 6f, 2026-09-11): interest expenditure claimed on
+    # dividend income u/s 57(1) cannot exceed 20% of dividend income --
+    # a genuine, checkable gap the "almost nothing left to validate" comment
+    # above didn't address, since OSDeductions.interest_expense_us57 is a
+    # real user-suppliable field independent of anything else in this
+    # section. Checked against the raw CLAIMED figure (`interest_expense_
+    # us57`, form Sl 3aii, JSON `IntExp57`), not the system-computed ELIGIBLE
+    # figure (`interest_expense_eligible_us57`, Sl 3aiia, `UsrIntExp57`) --
+    # the eligible amount is by definition already capped, so validating it
+    # against the same 20% ceiling would be redundant; the claim is the one
+    # value that can genuinely violate this rule.
+    if inp.other_sources_income is not None and inp.os_deductions is not None:
+        _dividend_income = inp.other_sources_income.dividend_income
+        _dividend_cap = _dividend_income * Decimal("0.20")
+        if inp.os_deductions.interest_expense_us57 > _dividend_cap:
+            results.append(_result(
+                "ITR2-IN-OS-001", False,
+                "Interest expenditure claimed on dividend income u/s 57(1) "
+                "cannot exceed 20% of dividend income.",
+                "os_deductions.interest_expense_us57", f"<= {_dividend_cap}",
+                str(inp.os_deductions.interest_expense_us57),
+            ))
+
+    # CBDT rule 211/212 (Phase 6f, 2026-09-11): TaxAccumulatedBalRecPF's
+    # header totals (os_pf_income_benefit/os_pf_tax_benefit) and its own
+    # per-assessment-year detail rows (os_pf_accumulated_entries) are two
+    # independently user-suppliable figures with no reconciliation anywhere
+    # -- a taxpayer (or a buggy frontend) could submit header totals that
+    # don't actually sum from the detail rows and the builder would emit an
+    # internally inconsistent block without complaint, same failure mode as
+    # the already-known Schedule 80D per-policy-breakup gap (see "Additional
+    # bugs noticed" item 2 in the gap-mapping doc).
+    if inp.os_pf_accumulated_entries:
+        _pf_income_total = sum((e.income_benefit for e in inp.os_pf_accumulated_entries), _ZERO)
+        _pf_tax_total = sum((e.tax_benefit for e in inp.os_pf_accumulated_entries), _ZERO)
+        if inp.os_pf_income_benefit != _pf_income_total:
+            results.append(_result(
+                "ITR2-IN-OS-002", False,
+                "Accumulated PF income benefit total must equal the sum of its "
+                "per-assessment-year detail rows.",
+                "os_pf_income_benefit", str(_pf_income_total), str(inp.os_pf_income_benefit),
+            ))
+        if inp.os_pf_tax_benefit != _pf_tax_total:
+            results.append(_result(
+                "ITR2-IN-OS-003", False,
+                "Accumulated PF tax benefit total must equal the sum of its "
+                "per-assessment-year detail rows.",
+                "os_pf_tax_benefit", str(_pf_tax_total), str(inp.os_pf_tax_benefit),
+            ))
+
+    # CBDT rule 194 (Phase 6f, 2026-09-11): Schedule OS Sl.8e (race-horse
+    # activity balance) must equal 8a-8b+8c+8d (receipts - deduction u/s 57
+    # + amounts not deductible u/s 58 + profits chargeable u/s 59) -- the
+    # form's own stated formula. OSRaceHorseActivity.balance is a raw,
+    # independently user-suppliable field the calculator and builder both
+    # trust as-is with no reconciliation against its own components.
+    if inp.os_race_horse is not None:
+        rh = inp.os_race_horse
+        _expected_balance = rh.receipts - rh.deduction_us57 + rh.amount_not_deductible_us58 + rh.profit_chargeable_us59
+        if rh.balance != _expected_balance:
+            results.append(_result(
+                "ITR2-IN-OS-004", False,
+                "Race-horse activity balance must equal receipts less deduction "
+                "u/s 57 plus amounts not deductible u/s 58 plus profits "
+                "chargeable u/s 59.",
+                "os_race_horse.balance", str(_expected_balance), str(rh.balance),
+            ))
+
     for index, si in enumerate(inp.si_entries or []):
         if si.section == "115BBJ" and si.deductions > _ZERO:
             results.append(_result(

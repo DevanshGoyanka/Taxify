@@ -4027,3 +4027,28 @@ def test_section_80qqb_80rrb_not_available_under_new_regime() -> None:
     ded = result.schedules["deductions"]
     assert "80QQB" not in ded.breakdown
     assert "80RRB" not in ded.breakdown
+
+
+def test_schedule_os_tot_deductions_includes_eligible_interest_expense() -> None:
+    """Regression for Phase 6f: TotDeductions previously omitted interest
+    expenditure entirely (neither the raw claim nor the eligible/computed
+    amount), even though the sibling IntExp57 field one line over carries
+    the exact figure that should be included -- matching the frontend's own
+    already-correct total-deductions formula (ScheduleOSWorkspace.tsx:296),
+    which sums interestExpenseEligibleUs57, not the raw claim."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(
+            income_56_2_x=Decimal("500000"), dividend_income=Decimal("100000"),
+        ),
+        os_deductions=OSDeductions(
+            expenses=Decimal("2000"), depreciation=Decimal("1000"),
+            interest_expense_us57=Decimal("20000"),
+            interest_expense_eligible_us57=Decimal("15000"),
+        ),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    block = document["ITR"]["ITR2"]["ScheduleOS"]["IncOthThanOwnRaceHorse"]
+    assert block["Deductions"]["IntExp57"] == 20000
+    assert block["Deductions"]["UsrIntExp57"] == 15000
+    assert block["Deductions"]["TotDeductions"] == 2000 + 1000 + 15000
