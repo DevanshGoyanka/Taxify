@@ -429,6 +429,18 @@ def test_gift_below_fifty_thousand_threshold_is_exempt() -> None:
     assert itr2_input.os_gift_breakdown is None
 
 
+def test_pti_exempt_income_reaches_exempt_income_schedule() -> None:
+    """``draft.exemptIncome.passThroughIncomeNotChargeableToTax`` was
+    captured on the frontend/draft schema but never read by the mapper at
+    all -- ``_map_exempt_income`` only ever looked at ``otherExemptIncome``,
+    so this figure (and Schedule EI's own item 5) was silently dropped."""
+    draft = _filing_ready_itr2_draft()
+    draft.exemptIncome.passThroughIncomeNotChargeableToTax = Decimal("15000")
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.exempt_income is not None
+    assert itr2_input.exempt_income.pti_exempt_income == Decimal("15000")
+
+
 def test_unexplained_income_maps_to_115bbe_si_entry_and_is_taxed() -> None:
     """Schedule OS unexplained income (§68/69/etc) reaches a real 115BBE
     Schedule-SI entry and is taxed -- previously had no path into

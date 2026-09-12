@@ -2736,6 +2736,80 @@ def test_schedule_ei_others_inc_dtls_reports_real_description_not_empty_array() 
     assert no_desc_others == [{"Description": "Other exempt income", "OthAmount": 5000}]
 
 
+def test_schedule_ei_pass_through_income_reports_declared_pti_exempt_amount() -> None:
+    """Item 5 (``PassThrIncNotChrgblTax``) was hardcoded 0 with no backing
+    field anywhere -- ``SchedulePTIDtls`` genuinely has no exempt-income
+    concept (every PTI row is inherently taxable), so this is captured as
+    its own standalone declared figure (``ExemptIncome.pti_exempt_income``)
+    instead, and must reach item 6's own total."""
+    input_data = _input(
+        exempt_income=ExemptIncome(
+            other_exempt=Decimal("3000"), pti_exempt_income=Decimal("25000"),
+        ),
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    ei = document["ITR"]["ITR2"]["ScheduleEI"]
+    assert ei["PassThrIncNotChrgblTax"] == 25000
+    assert ei["TotalExemptInc"] == 3000 + 25000
+
+
+def test_schedule_esop_tax_split_reflects_new_deferral_this_year() -> None:
+    """Part B-TTI items 8a/8b (``TaxInc17``/``TaxDeferred17``) were both
+    hardcoded 0 unconditionally, even for an ordinary return with no ESOP
+    situation at all -- where "tax without including [a perquisite that
+    doesn't exist]" should equal the ordinary total tax (item 7) itself.
+    A genuinely new deferral this assessment year splits item 7 into
+    8a (excluding the new perquisite's tax) and 8b (that tax itself)."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("2000000")),
+        esop_deferrals=[
+            ESOPDeferralInput(
+                employer_pan="AAACS1234A",
+                dpiit_registration_number="DIPP12345",
+                assessment_year="2026-27",
+                gross_perquisite_tax=Decimal("40000"),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    assert result.gross_tax_liability > Decimal("40000")
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    gross_tax_pay = document["ITR"]["ITR2"]["PartB_TTI"]["ComputationOfTaxLiability"]["GrossTaxPay"]
+    expected_liability = int(result.gross_tax_liability)
+    assert gross_tax_pay["TaxDeferred17"] == 40000
+    assert gross_tax_pay["TaxInc17"] == expected_liability - 40000
+    assert gross_tax_pay["TaxInc17"] + gross_tax_pay["TaxDeferred17"] == expected_liability
+
+
+def test_schedule_esop_tax_split_ignores_prior_year_brought_forward_entries() -> None:
+    """An entry for an EARLIER assessment year (already in the
+    brought-forward ledger) has no "new perquisite this year" to split out
+    -- items 8a/8b must not treat its ``gross_perquisite_tax`` (left at its
+    default 0 for such entries in practice, but checked here explicitly) as
+    a fresh deferral."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("2000000")),
+        esop_deferrals=[
+            ESOPDeferralInput(
+                employer_pan="AAACS1234A",
+                dpiit_registration_number="DIPP12345",
+                assessment_year="2024-25",
+                tax_payable_current_year=Decimal("5000"),
+                gross_perquisite_tax=Decimal("99999"),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    gross_tax_pay = document["ITR"]["ITR2"]["PartB_TTI"]["ComputationOfTaxLiability"]["GrossTaxPay"]
+    assert gross_tax_pay["TaxDeferred17"] == 0
+    assert gross_tax_pay["TaxInc17"] == int(result.gross_tax_liability)
+
+
 def test_schedule_os_tax_accumulated_bal_rec_pf_reports_real_per_year_breakdown() -> None:
     """``TaxAccmltdBalRecPFDtls`` (the form's own per-assessment-year
     accumulated-PF sub-table) was always ``[]``, even when the aggregate
@@ -4440,7 +4514,13 @@ def test_gross_tax_payable_reflects_real_gross_tax_liability() -> None:
     _assert_schema_valid(document)
     computation = document["ITR"]["ITR2"]["PartB_TTI"]["ComputationOfTaxLiability"]
     assert computation["GrossTaxPayable"] == computation["GrossTaxLiability"] > 0
-    assert computation["GrossTaxPay"] == {"TaxInc17": 0, "TaxDeferred17": 0, "TaxDeferredPayableCY": 0}
+    # With no eligible-startup ESOP deferral at all, "tax without including
+    # [a perquisite that doesn't exist]" (TaxInc17, item 8a) correctly
+    # equals the ordinary total tax (item 7) itself, not 0 -- a taxpayer
+    # with no such concession has nothing to exclude.
+    assert computation["GrossTaxPay"] == {
+        "TaxInc17": computation["GrossTaxLiability"], "TaxDeferred17": 0, "TaxDeferredPayableCY": 0,
+    }
 
 
 def test_schedule_tds2_translates_section_code_and_omits_current_year_deducted_yr() -> None:

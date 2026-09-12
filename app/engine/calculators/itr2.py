@@ -199,6 +199,14 @@ class ITR2Result:
     # during current AY" (Schedule Tax Deferred on ESOP) -- feeds item 10's
     # "8a + 8c - 9" formula.
     esop_deferred_payable_this_year: Decimal = _ZERO
+    # Part B-TTI items 8a/8b: "Tax on income without including [ESOP
+    # perquisite]" and "Tax deferred - relatable to [that perquisite]" for
+    # eligible-startup ESOP deferrals newly created THIS year. Together they
+    # split item 7 (gross_tax_liability) into a without-perquisite figure
+    # (8a) and the incremental tax attributable to the deferred perquisite
+    # (8b) -- 8a + 8b == item 7 whenever a new deferral exists this year.
+    esop_tax_excluding_new_perquisite: Decimal = _ZERO
+    esop_tax_deferred_this_year: Decimal = _ZERO
 
     # Relief and interest
     relief_89: Decimal = _ZERO
@@ -1282,6 +1290,32 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # 7's own disclosure -- and Schedule AMTC's own Sl.2, which must read
     # this exact figure every year the 115JC comparison is made -- was not).
     r.gross_tax_liability = r.tax_after_rebate + surcharge + cess
+
+    # ── Part B-TTI items 8a/8b: eligible-startup ESOP deferral tax split ──────
+    # Official schema descriptions: "TaxInc17" (8a) is "Tax on income without
+    # including income on perquisites referred in section 17(2)(vi)...";
+    # "TaxDeferred17" (8b) is "Tax deferred - relatable to income on
+    # perquisites...". Both are themselves TAX amounts, not the underlying
+    # perquisite income -- `ESOPDeferralInput.gross_perquisite_tax` is
+    # declared directly in that unit (the employer's own section 192(1C)
+    # computation, which the taxpayer reports as given, not one this engine
+    # re-derives from a slab-rate what-if on reduced income). 8a is item 7
+    # minus the declared deferred-tax amount (capped so 8a stays >= 0); 8b is
+    # the declared amount itself. Only entries for THIS assessment year
+    # represent a newly-created deferral; prior-year entries already in the
+    # brought-forward ledger have no "new perquisite this year" to split out.
+    esop_new_perquisite = sum(
+        (e.gross_perquisite_tax for e in input_data.esop_deferrals
+         if e.assessment_year == "2026-27"),
+        _ZERO,
+    )
+    if esop_new_perquisite > _ZERO:
+        esop_tax_deferred = min(esop_new_perquisite, r.gross_tax_liability)
+        r.esop_tax_deferred_this_year = esop_tax_deferred
+        r.esop_tax_excluding_new_perquisite = r.gross_tax_liability - esop_tax_deferred
+    else:
+        r.esop_tax_excluding_new_perquisite = r.gross_tax_liability
+        r.esop_tax_deferred_this_year = _ZERO
 
     # ── 18. AMT ──────────────────────────────────────────────────────────────
     # Build AMT additions from typed inputs

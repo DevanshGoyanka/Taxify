@@ -67,6 +67,7 @@ from app.schemas.itr2 import (
     OSDeductions,
     OSDividendEntry,
     OSDtaaEntry,
+    OSGiftBreakdown,
     OSQuarterlyAmount,
     OSSection89A,
     OSSpecialRateEntry,
@@ -2042,6 +2043,59 @@ def test_OS_016_expenses_claimed_with_qualifying_os_income_passes():
         os_deductions=OSDeductions(expenses=Decimal("2000")),
     )
     assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-016")
+
+
+def test_OS_017_gift_breakdown_matches_income_56_2_x_passes():
+    inp = _base_input(
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("75000")),
+        os_gift_breakdown=OSGiftBreakdown(aggregate_without_consideration=Decimal("75000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-017")
+
+
+def test_OS_017_gift_breakdown_missing_entirely_fails():
+    inp = _base_input(other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("75000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-017")
+
+
+def test_OS_017_gift_breakdown_sum_mismatch_fails():
+    inp = _base_input(
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("75000")),
+        os_gift_breakdown=OSGiftBreakdown(
+            aggregate_without_consideration=Decimal("50000"),
+            other_property_without_consideration=Decimal("10000"),
+        ),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-017")
+
+
+def test_OS_017_no_gift_income_at_all_passes():
+    inp = _base_input()
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-017")
+
+
+def test_VIA_034_senior_citizen_old_regime_80tta_claim_emits_advisory():
+    inp = _base_input(
+        age_bracket=AgeBracket.SIXTY_TO_80,
+        deductions_chapter6a=Chapter6ADeductions(amount_80tta=Decimal("8000")),
+    )
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-VIA-034")
+
+
+def test_VIA_034_non_senior_old_regime_80tta_claim_no_advisory():
+    inp = _base_input(
+        age_bracket=AgeBracket.BELOW_60,
+        deductions_chapter6a=Chapter6ADeductions(amount_80tta=Decimal("8000")),
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-VIA-034")
+
+
+def test_VIA_034_senior_citizen_no_80tta_claim_no_advisory():
+    inp = _base_input(
+        age_bracket=AgeBracket.SIXTY_TO_80,
+        deductions_chapter6a=Chapter6ADeductions(amount_80tta=Decimal("0")),
+    )
+    assert not emitted(validate_itr2_input(inp), "ITR2-IN-VIA-034")
 
 
 def test_OS_007_non_resident_claiming_115ac_dividend_passes():

@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.engine.validators.base import Severity, ValidationResult
-from app.schemas.itr1 import PropertyType, TaxRegime
+from app.schemas.itr1 import AgeBracket, PropertyType, TaxRegime
 from app.schemas.itr2 import AssesseeStatus, CGAssetType, ITR2Input, ResidentialStatus, ReturnFileSection
 
 _ZERO = Decimal("0")
@@ -622,6 +622,32 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "deductions_chapter6a", "all listed sections == 0",
                 ", ".join(f"{k}={v}" for k, v in sorted(claimed.items())),
             ))
+
+    # CBDT rule #323 (old regime; likely a PDF mis-transcription of "80TTA is
+    # not allowed to senior citizen" per this row's own gap-mapping note,
+    # since the literal text as printed contradicts settled law -- 80TTB is
+    # FOR senior citizens, not disallowed to them). The underlying scenario
+    # this rule and its sibling #322 both point at is real regardless of the
+    # exact wording: `section_80tta.py` already silently zeroes a senior
+    # citizen's 80TTA claim (Section 80TTA is superseded by the richer
+    # Section 80TTB for senior citizens), but nothing told the taxpayer why
+    # their claim vanished -- #322's own note flags this as "silent-drop not
+    # surfaced to user". Advisory, not blocking: the computed tax is already
+    # correct either way, this only surfaces the reason.
+    if (
+        ch6a is not None
+        and inp.tax_regime == TaxRegime.OLD
+        and ch6a.amount_80tta > _ZERO
+        and inp.age_bracket in (AgeBracket.SIXTY_TO_80, AgeBracket.ABOVE_80)
+    ):
+        results.append(_result(
+            "ITR2-IN-VIA-034", True,
+            "Section 80TTA is not available to a senior citizen (superseded by the richer "
+            "Section 80TTB) -- this claim will not be allowed and has been computed as zero.",
+            "deductions_chapter6a.amount_80tta", "0 for a senior citizen",
+            str(ch6a.amount_80tta), severity=Severity.D,
+        ))
+
     if ch6a is not None and inp.filing_profile is not None and inp.filing_profile.assessee_status == AssesseeStatus.HUF:
         _huf_disallowed = {
             "80CCD(1)": ch6a.amount_80ccd1,
@@ -1277,6 +1303,33 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "Expenses/depreciation u/s 57 cannot be claimed unless corresponding Other "
                 "Sources income (other than family pension) is offered.",
                 "os_deductions", "> 0 only with offered OS income", "0",
+            ))
+
+    # CBDT rule #197: Schedule OS Sl.1d (income_56_2_x, the section 56(2)(x)
+    # taxable-gift aggregate) must equal the sum of its own five sub-item
+    # breakdown fields (os_gift_breakdown). Both are independently
+    # user-suppliable on `ITR2Input` (the mapper derives them together from
+    # one source when going through the draft pipeline, but nothing at the
+    # schema or validator level stops a caller constructing `ITR2Input`
+    # directly -- e.g. a filed-return re-import -- from setting them
+    # inconsistently).
+    if osi is not None and osi.income_56_2_x > _ZERO:
+        _gift_bd = inp.os_gift_breakdown
+        _gift_bd_total = (
+            (_gift_bd.aggregate_without_consideration
+             + _gift_bd.immovable_property_without_consideration
+             + _gift_bd.immovable_property_inadequate_consideration
+             + _gift_bd.other_property_without_consideration
+             + _gift_bd.other_property_inadequate_consideration)
+            if _gift_bd is not None else _ZERO
+        )
+        if osi.income_56_2_x != _gift_bd_total:
+            results.append(_result(
+                "ITR2-IN-OS-017", False,
+                "Schedule OS Sl.1d (income chargeable u/s 56(2)(x)) must equal the sum of its "
+                "own five taxable-gift-category breakdown items.",
+                "other_sources_income.income_56_2_x", str(_gift_bd_total),
+                str(osi.income_56_2_x),
             ))
 
     # ── Schedule OS / Schedule SI / CYLA-BFLA-CFL — Phase 5D ───────────────

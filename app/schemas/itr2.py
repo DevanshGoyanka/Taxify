@@ -555,6 +555,14 @@ class ExemptIncome(StrictModel):
     share_of_profit_from_firm: Decimal = Field(default=Decimal("0"), ge=0)
     other_exempt: Decimal = Field(default=Decimal("0"), ge=0)
     other_description: Optional[str] = Field(default=None, max_length=125)
+    # Item 5 of Schedule EI: pass-through income (from a business trust or
+    # investment fund, e.g. exempt REIT/InvIT distributions) claimed as not
+    # chargeable to tax. Deliberately a standalone scalar, not a field on
+    # `PTIEntry` -- the official `SchedulePTIDtls` row schema has no field to
+    # carry an exempt amount at all (every `PTIEntry` is inherently taxable,
+    # routed to its own income head), so there is no Schedule-PTI location
+    # this could instead live in or be cross-checked against.
+    pti_exempt_income: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class FSICountryEntry(StrictModel):
@@ -750,6 +758,14 @@ class ESOPDeferralInput(StrictModel):
     tax_deferred_brought_forward: Decimal = Field(default=Decimal("0"), ge=0)
     tax_payable_current_year: Decimal = Field(default=Decimal("0"), ge=0)
     balance_tax_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
+    # Only meaningful for an entry representing THIS year's own new ESOP
+    # allotment being deferred for the first time (assessment_year == the
+    # current AY) -- the tax computed on the section 17(2)(vi) perquisite
+    # value itself, before any deferral. Part B-TTI items 8a/8b
+    # ("TaxInc17"/"TaxDeferred17") need this split; a prior-year entry
+    # already in the brought-forward ledger has no "new perquisite this
+    # year" of its own and leaves this at its default 0.
+    gross_perquisite_tax: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class EmployerFilingDetail(StrictModel):

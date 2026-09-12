@@ -368,13 +368,15 @@ def _map_exempt_income(draft: ReturnDraft) -> Optional[ExemptIncome]:
     """
     entries = draft.exemptIncome.otherExemptIncome
     total = sum((row.grossAmount for row in entries), Decimal("0"))
-    if total <= 0:
+    pti_exempt = draft.exemptIncome.passThroughIncomeNotChargeableToTax
+    if total <= 0 and pti_exempt <= 0:
         return None
     return ExemptIncome(
         other_exempt=total,
         other_description="; ".join(
             row.description for row in entries if row.description
         )[:125] or None,
+        pti_exempt_income=pti_exempt,
     )
 
 

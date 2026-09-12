@@ -3214,12 +3214,14 @@ def _schedule_ei(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
     inc_not_chrgbl_to_tax = sum(
         (row.get("AmountOfIncome", _ZERO) for row in inc_not_chrgbl_as_per_dtaa_dtls), _ZERO
     )
-    # Item 5 ("Pass through income claimed as not chargeable to tax") has no
-    # backing concept in this engine's PTI data model either -- every
-    # PTIEntry today represents taxable pass-through income (routed to its
-    # own head/Schedule SI), not a "not chargeable" classification -- so
-    # this also stays 0 pending that same not-yet-built infrastructure.
-    pass_thr_inc_not_chrgbl_tax = _ZERO
+    # Item 5 ("Pass through income claimed as not chargeable to tax").
+    # `PTIEntry`/official `SchedulePTIDtls` have no field for this at all --
+    # every PTI row is inherently taxable, routed to its own income head --
+    # so there is no Schedule-PTI figure this could be cross-checked
+    # against; captured instead as its own standalone declared amount
+    # (`ExemptIncome.pti_exempt_income`), the same way every other Schedule
+    # EI item above is a direct declared figure, not a derived one.
+    pass_thr_inc_not_chrgbl_tax = exempt.pti_exempt_income if exempt else _ZERO
     # Form item 6 "Total (1+2+3+4+5)".
     total_exempt = (
         interest_inc + result.net_agricultural_income + others
@@ -4308,17 +4310,18 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
             # "GrossTaxPay" (distinct from "GrossTaxPayable" above, and
             # unrelated in meaning) is the eligible-startup ESOP-deferred-tax
             # structure (17(2)(vi)/80-IAC) -- see Schedule ESOP.
-            # TaxDeferredPayableCY (item 8c) is real, already-computed data,
-            # now also feeding item 10's own "8a+8c-9" formula above (not
-            # just disclosed here in isolation as before). TaxInc17 (8a
-            # disclosed alone) and TaxDeferred17 (8b, this year's NEW
-            # deferral) stay 0: unlike TaxDeferredPayableCY, ESOPDeferralInput
-            # has no field for the gross pre-deferral perquisite figure at
-            # all -- would need new schema/frontend work to represent
-            # honestly, not just wiring (a separate, already-documented gap,
-            # not expanded by this fix).
+            # TaxDeferredPayableCY (item 8c) feeds item 10's own "8a+8c-9"
+            # formula above. TaxInc17 (8a)/TaxDeferred17 (8b) now derive from
+            # `ESOPDeferralInput.gross_perquisite_tax` for entries newly
+            # created this assessment year (see the calculator's own
+            # esop_tax_excluding_new_perquisite/esop_tax_deferred_this_year
+            # computation for the full reasoning) -- both stay item-7-and-0
+            # respectively when no such entry exists, matching prior
+            # behaviour exactly for every return without a brand-new
+            # ESOP deferral this year.
             "GrossTaxPay": {
-                "TaxInc17": 0, "TaxDeferred17": 0,
+                "TaxInc17": _to_rupees(result.esop_tax_excluding_new_perquisite),
+                "TaxDeferred17": _to_rupees(result.esop_tax_deferred_this_year),
                 "TaxDeferredPayableCY": _to_rupees(result.esop_deferred_payable_this_year),
             },
             "CreditUS115JD": _to_rupees(result.amt_credit_utilised),
