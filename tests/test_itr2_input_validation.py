@@ -49,6 +49,7 @@ from app.schemas.itr2 import (
     FSICountryEntry,
     OS89ACountryEntry,
     OSDeductions,
+    OSDividendEntry,
     OSDtaaEntry,
     OSSection89A,
     TR1Entry,
@@ -1848,6 +1849,47 @@ def test_SAL_024_unique_89a_countries_per_employer_pass():
         ])],
     )
     assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-024")
+
+
+# ─── Phase 6j-3: Section 115H gating (#153/#154/#155) ───────────────────────
+
+def test_OS_007_resident_claiming_115ac_dividend_without_115h_fails():
+    inp = _base_input(
+        filing_profile=_filing_profile().model_copy(update={
+            "residential_status": ResidentialStatus.RESIDENT, "benefit_us_115h": False,
+        }),
+        residential_status=ResidentialStatus.RESIDENT,
+        os_dividend_entries=[OSDividendEntry(section="115AC", amount=Decimal("10000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-007")
+
+
+def test_OS_007_rnor_claiming_115ac_dividend_with_115h_passes():
+    """Section 115H itself is only available to RNOR (ITR2FilingProfile's own
+    model_validator: "Section 115H benefit requires RNOR resident status"),
+    not a fully Resident-and-Ordinarily-Resident taxpayer -- ITR2-IN-OS-007's
+    own residential_status == RESIDENT check therefore targets the
+    ResidentialStatus.RESIDENT (ROR) enum value specifically, which can never
+    legitimately claim 115AC at all since it can never hold benefit_us_115h."""
+    inp = _base_input(
+        filing_profile=_filing_profile().model_copy(update={
+            "residential_status": ResidentialStatus.NOT_ORDINARILY_RESIDENT, "benefit_us_115h": True,
+        }),
+        residential_status=ResidentialStatus.NOT_ORDINARILY_RESIDENT,
+        os_dividend_entries=[OSDividendEntry(section="115AC", amount=Decimal("10000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-007")
+
+
+def test_OS_007_non_resident_claiming_115ac_dividend_passes():
+    inp = _base_input(
+        filing_profile=_filing_profile().model_copy(update={
+            "residential_status": ResidentialStatus.NON_RESIDENT,
+        }),
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        os_dividend_entries=[OSDividendEntry(section="115AC", amount=Decimal("10000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-007")
 
 
 # ─── Phase 6c: Section 80CCH PRAN + hard cap + percentage cap ───────────────

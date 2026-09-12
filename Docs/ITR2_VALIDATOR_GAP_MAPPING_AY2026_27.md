@@ -616,8 +616,29 @@ found only because this pass required reading that code closely.
 | 152 | Sch CG B11 Col.10 Applicable Rate ≠ lower of Col.6/Col.9 | Missing — genuine gap | Same reasoning as #127 — no derived-rate validator found for any DTAA applicable-rate field | — |
 > **Fix status (2026-09-12, Phase 6i-5): fixed.** This is the LTCG-side (B11) counterpart to #127's STCG-side (A8) rule — distinct row, distinct fix. New rule `ITR2-IN-DTAA-004` (`app/engine/validators/itr2/input_rules.py`) caps `applicable_rate` at `min(rate_as_per_treaty, rate_as_per_it_act)` for every `ITR2Input.cg_ltcg_dtaa_entries` row (`ITR2-IN-DTAA-003` is the sibling STCG/A8-side check closing #127). See "Additional bugs noticed" item 8's closing fix-status note for the full write-up.
 | 153 | Resident cannot claim benefit u/s 112(1)(c) at B5ie without 115H option | Missing — genuine gap | `app/schemas/itr2.py:283-286` (only blocks a *plain Resident* from setting `benefit_us_115h=True` at all, and blocks NRI from setting it) | No check anywhere ties an actual Schedule-CG 112(1)(c)-rate claim to the `benefit_us_115h` flag's value — confirmed via a full grep of `input_rules.py` for "115h"/"115H"/"112(1)(c)" (no matches). |
+> **Fix status (2026-09-12, Phase 6j-3): reclassified — Not representable, not merely
+> unimplemented.** Confirmed via a full grep of `CGAssetType`/`CGTransaction` (`app/schemas/
+> itr2.py`) for any 112(1)(c) classification: none exists. Section 112(1)(c) is the rate
+> election for unlisted securities held by a non-resident-turned-resident — this engine's
+> `CGAssetType` enum has no distinct tag for it (it would fall into the generic "other assets"
+> bucket, indistinguishable from an ordinary resident's identical asset type), so no CG
+> transaction can be identified as claiming this specific rate in the first place. Reclassified
+> to "Not representable / out of scope" (the schema architecturally cannot construct the state
+> this rule checks, not merely lacking a validator for a state it can construct).
 | 154 | Sch OS: Resident cannot claim benefit u/s 115AC without 115H option | Missing — genuine gap | `app/schemas/itr2.py:950-964` (`OSDividendEntry.section` includes literal `"115AC"`) | Same gap as #153 — nothing gates an `OSDividendEntry(section="115AC")` claim on `benefit_us_115h`; confirmed via grep (no "115AC" reference anywhere in `input_rules.py`). |
+> **Fix status (2026-09-12, Phase 6j-3): fixed.** New rule `ITR2-IN-OS-007`
+> (`app/engine/validators/itr2/input_rules.py`) rejects an `OSDividendEntry(section="115AC")`
+> claim when `filing_profile.residential_status == RESIDENT` (ROR) and `benefit_us_115h` is not
+> set — confirmed `ITR2FilingProfile`'s own model validator restricts `benefit_us_115h=True` to
+> RNOR specifically, so a plain ROR taxpayer can never legitimately hold this claim at all. Test:
+> `test_OS_007_resident_claiming_115ac_dividend_without_115h_fails`, confirmed failing pre-fix via
+> `git stash`.
 | 155 | Resident cannot claim benefit u/s 115AC at B5iie without 115H option | Missing — genuine gap | Same as #153/#154 | Same underlying gap, Schedule-CG-side instance of the OS-side #154 finding. |
+> **Fix status (2026-09-12, Phase 6j-3): reclassified — Not representable, same reasoning as
+> #153.** This is the Schedule-CG-side instance of 115AC (bonds/GDRs purchased in foreign
+> currency); confirmed no `CGAssetType`/`CGTransaction` field distinguishes a 115AC-rate CG claim
+> from an ordinary one, so the state this rule checks cannot be constructed. Reclassified to "Not
+> representable / out of scope".
 | 156 | Sch CG D1f = sum D(1a+1b+1c+1d+1e) | Indirect calculator/schema/builder coverage — proof pending | `app/engine/itd/itr2.py:1407-1516` (`_cg_loss_setoff_table`, Table D/E), sourced directly from `result.schedules["cyla"]`'s own matrix/dict lookups | Every field here is a direct lookup into the CYLA engine's own pre-computed dict (`cg_gross_income`/`cg_gross_loss`/`cg_setoff_matrix`/etc.), not an independently entered aggregate — but the CYLA engine's own internal cross-footing (that `cg_source_setoff_total` really does sum its own matrix row) was not independently traced in `app/engine/schedules/loss_setoff/cyla.py` in this pass, hence "proof pending" rather than fully verified. |
 | 157 | Sch CG Eviii = sum (ii+iii+iv+v+vi+vii) | Indirect calculator/schema/builder coverage — proof pending | Same `_cg_loss_setoff_table` structure, `"TotLossSetOff"` block (`app/engine/itd/itr2.py:1500-1507`) | Same caveat as #156. |
 | 158 | Sch CG Eix Total = sum (Capital Loss to be set off − Total loss set off) | Indirect calculator/schema/builder coverage — proof pending | `"LossRemainSetOff"` block (`app/engine/itd/itr2.py:1508-1515`) | Same caveat as #156. |

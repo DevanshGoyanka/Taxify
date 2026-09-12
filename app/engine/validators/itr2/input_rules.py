@@ -1023,6 +1023,30 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             "tr1_entries", "empty", f"{len(inp.tr1_entries)} entries",
         ))
 
+    # CBDT rule 154: a plain Resident (not claiming Section 115H's "continue
+    # to be taxed as a non-resident on assets acquired while non-resident"
+    # option) cannot hold a dividend claim under Section 115AC, which is
+    # reserved for non-residents (or residents electing 115H). Rules 153/155
+    # (the Schedule-CG-side 112(1)(c)/115AC instances of this same
+    # eligibility gate) are Not representable, not merely unimplemented --
+    # confirmed via a full grep of `CGAssetType`/`CGTransaction` for any
+    # 112(1)(c)/115AC-specific classification: none exists, so no CG
+    # transaction in this schema can be identified as claiming either rate
+    # in the first place. See the gap-mapping doc's own reclassification note
+    # for rows #153/#155.
+    if (
+        inp.filing_profile is not None
+        and inp.filing_profile.residential_status == ResidentialStatus.RESIDENT
+        and not inp.filing_profile.benefit_us_115h
+        and any(entry.section == "115AC" for entry in inp.os_dividend_entries)
+    ):
+        results.append(_result(
+            "ITR2-IN-OS-007", False,
+            "A Resident cannot claim dividend income under Section 115AC without electing "
+            "the Section 115H benefit.",
+            "os_dividend_entries[].section", "not 115AC unless benefit_us_115h", "115AC",
+        ))
+
     # ── Schedule OS / Schedule SI / CYLA-BFLA-CFL — Phase 5D ───────────────
     # Schedule OS (`OtherSourcesIncome`) has almost nothing left to validate:
     # it is a flat gross-income-bucket model shared with ITR-1, and ITR-1's
