@@ -1969,6 +1969,75 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 f"<= {entry.tcs_collected}", str(entry.tcs_credit_claimed),
             ))
 
+    # CBDT rules 469/475: TDS2/TDS3/TCS credit ownership marked "Other" (or
+    # "spouse/other" for TCS) requires the other person's PAN.
+    for index, entry in enumerate(inp.tds2_entries or []):
+        if entry.ownership == "O" and not entry.pan_of_other_person:
+            results.append(_result(
+                "ITR2-IN-TDS-020", False,
+                "A TDS credit relating to another person requires that person's PAN.",
+                f"tds2_entries[{index}].pan_of_other_person", "present", "absent",
+            ))
+    for index, entry in enumerate(inp.tds3_entries or []):
+        if entry.ownership == "O" and not entry.pan_of_other_person:
+            results.append(_result(
+                "ITR2-IN-TDS-020", False,
+                "A TDS credit relating to another person requires that person's PAN.",
+                f"tds3_entries[{index}].pan_of_other_person", "present", "absent",
+            ))
+    for index, entry in enumerate(inp.tcs_entries or []):
+        if entry.ownership == "2" and not entry.pan_of_spouse_or_other_person:
+            results.append(_result(
+                "ITR2-IN-TCS-002", False,
+                "A TCS credit relating to a spouse/other person requires that person's PAN.",
+                f"tcs_entries[{index}].pan_of_spouse_or_other_person", "present", "absent",
+            ))
+
+    # CBDT rule 473: mirrors TDS2's already-shipped ITR2-IN-TDS-006 -- a TCS
+    # row cannot report both brought-forward TCS and current-year collection
+    # together; they belong in separate rows.
+    for index, entry in enumerate(inp.tcs_entries or []):
+        if entry.brought_forward_tds > _ZERO and entry.tcs_collected > _ZERO:
+            results.append(_result(
+                "ITR2-IN-TCS-005", False,
+                "Current-year TCS and brought-forward TCS must be reported in separate TCS "
+                "rows.",
+                f"tcs_entries[{index}]", "not both current-year and brought-forward credit",
+                f"brought_forward={entry.brought_forward_tds}, collected={entry.tcs_collected}",
+            ))
+
+    # CBDT rule 474: the full statutory TCS ceiling -- claimed in own hands
+    # PLUS spouse/other-person hands cannot exceed collected (own hands) plus
+    # collected (spouse/other hands) plus brought-forward. `ITR2-IN-TCS-001`
+    # above only checks the narrower `tcs_credit_claimed <= tcs_collected`
+    # pair, omitting brought-forward and the spouse/other dimension entirely.
+    for index, entry in enumerate(inp.tcs_entries or []):
+        _tcs_claimed_total = entry.tcs_credit_claimed + entry.tcs_credit_claimed_spouse_or_other
+        _tcs_ceiling = entry.tcs_collected + entry.tcs_collected_spouse_or_other + entry.brought_forward_tds
+        if _tcs_claimed_total > _tcs_ceiling:
+            results.append(_result(
+                "ITR2-IN-TCS-003", False,
+                "Total TCS credit claimed (own hands plus spouse/other person) cannot exceed "
+                "TCS collected (own plus spouse/other) plus brought-forward TCS.",
+                f"tcs_entries[{index}]", f"<= {_tcs_ceiling}", str(_tcs_claimed_total),
+            ))
+
+    # CBDT rule 478: TCS credit carried forward must equal collected plus
+    # brought-forward minus claimed this year (column 5+6-7).
+    for index, entry in enumerate(inp.tcs_entries or []):
+        _tcs_expected_cf = max(
+            _ZERO,
+            entry.tcs_collected + entry.brought_forward_tds - entry.tcs_credit_claimed,
+        )
+        if entry.tds_credit_carried_forward != _tcs_expected_cf:
+            results.append(_result(
+                "ITR2-IN-TCS-004", False,
+                "TCS credit carried forward must equal collected plus brought-forward minus "
+                "claimed this year.",
+                f"tcs_entries[{index}].tds_credit_carried_forward",
+                str(_tcs_expected_cf), str(entry.tds_credit_carried_forward),
+            ))
+
     # Filing-evidence count checks
     #
     # Audit finding §22.3: this used to require len(employer_filing_details)

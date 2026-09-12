@@ -38,6 +38,7 @@ from app.schemas.itr1 import (
     Schedule80GGC,
     Schedule80U,
     TaxRegime,
+    TCSEntry,
     TDS2Entry,
     TDS3Entry,
 )
@@ -2226,6 +2227,69 @@ def test_VIA_029_80g_donation_missing_donee_pan_fails():
         donations_80g=[Donation80G(cash_amount=Decimal("5000"))],
     ))
     assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-029")
+
+
+# ─── Phase 6j-12: TDS/TCS ownership and ceiling checks ──────────────────────
+
+def test_TDS_020_tds2_other_person_credit_missing_pan_fails():
+    inp = _base_input(tds2_entries=[TDS2Entry(
+        deductor_tan="ABCD12345E", tds_section="194A", gross_amount=Decimal("50000"),
+        tds_deducted=Decimal("5000"), tds_claimed_this_year=Decimal("5000"), ownership="O",
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-020")
+
+
+def test_TDS_020_tds2_self_credit_passes():
+    inp = _base_input(tds2_entries=[TDS2Entry(
+        deductor_tan="ABCD12345E", tds_section="194A", gross_amount=Decimal("50000"),
+        tds_deducted=Decimal("5000"), tds_claimed_this_year=Decimal("5000"), ownership="S",
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-TDS-020")
+
+
+def test_TCS_002_other_person_credit_missing_pan_fails():
+    inp = _base_input(tcs_entries=[TCSEntry(
+        collector_tan="ABCD12345E", tcs_section="206C", gross_amount=Decimal("50000"),
+        tcs_collected=Decimal("5000"), tcs_credit_claimed_spouse_or_other=Decimal("5000"),
+        ownership="2",
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TCS-002")
+
+
+def test_TCS_003_full_ceiling_exceeded_fails():
+    inp = _base_input(tcs_entries=[TCSEntry(
+        collector_tan="ABCD12345E", tcs_section="206C", gross_amount=Decimal("50000"),
+        tcs_collected=Decimal("5000"), tcs_credit_claimed=Decimal("5000"),
+        tcs_credit_claimed_spouse_or_other=Decimal("3000"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TCS-003")
+
+
+def test_TCS_004_carried_forward_mismatch_fails():
+    inp = _base_input(tcs_entries=[TCSEntry(
+        collector_tan="ABCD12345E", tcs_section="206C", gross_amount=Decimal("50000"),
+        tcs_collected=Decimal("10000"), tcs_credit_claimed=Decimal("4000"),
+        tds_credit_carried_forward=Decimal("1000"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TCS-004")
+
+
+def test_TCS_004_carried_forward_correct_passes():
+    inp = _base_input(tcs_entries=[TCSEntry(
+        collector_tan="ABCD12345E", tcs_section="206C", gross_amount=Decimal("50000"),
+        tcs_collected=Decimal("10000"), tcs_credit_claimed=Decimal("4000"),
+        tds_credit_carried_forward=Decimal("6000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-TCS-004")
+
+
+def test_TCS_005_brought_forward_and_current_year_in_same_row_fails():
+    inp = _base_input(tcs_entries=[TCSEntry(
+        collector_tan="ABCD12345E", tcs_section="206C", gross_amount=Decimal("50000"),
+        tcs_collected=Decimal("5000"), brought_forward_tds=Decimal("2000"),
+        tcs_credit_claimed=Decimal("5000"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TCS-005")
 
 
 def test_FSI_004_salary_relief_exceeding_actual_gross_salary_fails():
