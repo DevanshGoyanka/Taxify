@@ -53,6 +53,7 @@ from app.schemas.itr2 import (
     CGTransaction,
     ITR2FilingProfile,
     ITR2Input,
+    AMTInput,
     ESOPDeferralInput,
     CapitalGainExemptionClaim,
     CoOwnerDetail,
@@ -2390,6 +2391,32 @@ def test_PROFILE_006_regime_optout_after_due_date_fails():
         filing_date=date(2026, 8, 15), due_date=date(2026, 7, 31),
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-006")
+
+
+# ─── Phase 6j-13: AMT Sl.2a auto-derivation (#421) ──────────────────────────
+
+def test_AMT_003_80ia_addition_not_matching_actual_claims_fails():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ia=Decimal("100000")),
+        amt_input=AMTInput(deduction_80ia_to_80rrb_except_80p=Decimal("50000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-AMT-003")
+
+
+def test_AMT_003_80ia_addition_matching_actual_claims_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ia=Decimal("100000")),
+        amt_input=AMTInput(deduction_80ia_to_80rrb_except_80p=Decimal("100000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-AMT-003")
+
+
+def test_AMT_004_10aa_addition_not_matching_actual_claim_fails():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_10aa=Decimal("200000")),
+        amt_input=AMTInput(deduction_10aa=Decimal("150000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-AMT-004")
 
 
 def test_FSI_004_salary_relief_exceeding_actual_gross_salary_fails():

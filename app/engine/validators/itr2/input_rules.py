@@ -2067,6 +2067,42 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "amt_input.amt_credit_utilised", f"<= {amt.amt_credit_brought_forward}",
                 str(amt.amt_credit_utilised),
             ))
+        # CBDT rule 421: Schedule AMT Sl.2a (Chapter VI-A "C"-heading
+        # additions) must equal the sum of the taxpayer's own actual claimed
+        # 80-IA-to-80RRB-except-80P deductions -- these ARE genuinely
+        # itemized elsewhere on `Chapter6ADeductions` (unlike this rule's
+        # own evidence text, which described a single opaque manual
+        # aggregate; the real gap is that `amt_input.deduction_*` is a
+        # SEPARATE, independently-editable field never cross-checked
+        # against the taxpayer's own actual claims).
+        if ch6a is not None:
+            # The rule's own literal text names 80QQB/80RRB specifically
+            # (`ITR2Input.deduction_80qqb`/`deduction_80rrb`, Phase 6b) --
+            # included alongside every other field this codebase actually
+            # tracks within the official 80-IA-to-80-RRB-except-80P range
+            # (`Chapter6ADeductions.amount_80ia`/`80ib`/`80ic`/`80ra`) for the
+            # most complete, defensible reading of what `AMTInput`'s own
+            # field name promises, rather than the rule's narrower two-
+            # section text alone.
+            _expected_80ia_addition = (
+                ch6a.amount_80ia + ch6a.amount_80ib + ch6a.amount_80ic + ch6a.amount_80ra
+                + inp.deduction_80qqb + inp.deduction_80rrb
+            )
+            if amt.deduction_80ia_to_80rrb_except_80p != _expected_80ia_addition:
+                results.append(_result(
+                    "ITR2-IN-AMT-003", False,
+                    "Schedule AMT's 80-IA-to-80RRB addition must equal the sum of the "
+                    "taxpayer's own actual claimed 80IA/80IB/80IC/80RA deductions.",
+                    "amt_input.deduction_80ia_to_80rrb_except_80p",
+                    str(_expected_80ia_addition), str(amt.deduction_80ia_to_80rrb_except_80p),
+                ))
+            if amt.deduction_10aa != ch6a.amount_10aa:
+                results.append(_result(
+                    "ITR2-IN-AMT-004", False,
+                    "Schedule AMT's Section 10AA addition must equal the taxpayer's own "
+                    "actual claimed Section 10AA deduction.",
+                    "amt_input.deduction_10aa", str(ch6a.amount_10aa), str(amt.deduction_10aa),
+                ))
 
     # CBDT rule 466/467: claimed cannot exceed deducted PLUS brought-forward —
     # not deducted alone. `draft_to_itr1_input._map_tds` maps a real,
