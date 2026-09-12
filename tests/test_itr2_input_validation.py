@@ -52,6 +52,8 @@ from app.schemas.itr2 import (
     OSDividendEntry,
     OSDtaaEntry,
     OSSection89A,
+    OSSpecialRateEntry,
+    PTIEntry,
     TR1Entry,
     ScheduleSIEntry,
     VDATransaction,
@@ -1879,6 +1881,86 @@ def test_OS_007_rnor_claiming_115ac_dividend_with_115h_passes():
         os_dividend_entries=[OSDividendEntry(section="115AC", amount=Decimal("10000"))],
     )
     assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-007")
+
+
+def _os_dtaa_entry(**overrides) -> OSDtaaEntry:
+    fields = dict(
+        amount=Decimal("1000"), nature_of_income="1ai", country_name="Singapore",
+        country_code="65", dtaa_article="11", rate_as_per_treaty=Decimal("10"),
+        rate_as_per_it_act=Decimal("20"), item_no_incl="1ai",
+    )
+    fields.update(overrides)
+    return OSDtaaEntry(**fields)
+
+
+def test_OS_008_dtaa_dividend_claim_exceeding_declared_dividend_income_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("5000")),
+        os_dtaa_entries=[_os_dtaa_entry(nature_of_income="1ai", amount=Decimal("6000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-008")
+
+
+def test_OS_008_dtaa_dividend_claim_within_declared_dividend_income_passes():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("10000")),
+        os_dtaa_entries=[_os_dtaa_entry(nature_of_income="1ai", amount=Decimal("6000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-008")
+
+
+def test_OS_008_dtaa_115bb_claim_exceeding_si_entries_gross_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        si_entries=[ScheduleSIEntry(section="115BB", gross_income=Decimal("1000"))],
+        os_dtaa_entries=[_os_dtaa_entry(nature_of_income="2ai", amount=Decimal("2000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-008")
+
+
+def test_OS_009_89a_income_notified_not_matching_country_rows_fails():
+    inp = _base_input(os_section_89a=OSSection89A(
+        income_notified=Decimal("10000"),
+        country_entries=[OS89ACountryEntry(country_code="US", amount=Decimal("6000"))],
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-009")
+
+
+def test_OS_009_89a_income_notified_matching_country_rows_passes():
+    inp = _base_input(os_section_89a=OSSection89A(
+        income_notified=Decimal("6000"),
+        country_entries=[OS89ACountryEntry(country_code="US", amount=Decimal("6000"))],
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-009")
+
+
+def test_OS_010_duplicate_89a_country_in_schedule_os_fails():
+    inp = _base_input(os_section_89a=OSSection89A(
+        income_notified=Decimal("12000"),
+        country_entries=[
+            OS89ACountryEntry(country_code="US", amount=Decimal("6000")),
+            OS89ACountryEntry(country_code="US", amount=Decimal("6000")),
+        ],
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-010")
+
+
+def test_OS_011_non_resident_claiming_115bbf_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        si_entries=[ScheduleSIEntry(section="115BBF", gross_income=Decimal("50000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-011")
+
+
+def test_OS_011_resident_claiming_115bbf_passes():
+    inp = _base_input(
+        residential_status=ResidentialStatus.RESIDENT,
+        si_entries=[ScheduleSIEntry(section="115BBF", gross_income=Decimal("50000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-011")
 
 
 def test_OS_007_non_resident_claiming_115ac_dividend_passes():

@@ -1047,6 +1047,93 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             "os_dividend_entries[].section", "not 115AC unless benefit_us_115h", "115AC",
         ))
 
+    # CBDT rules 199-205/229 (Phase 6j-5): Schedule OS's DTAA claim table
+    # (`os_dtaa_entries`) tags each row with which Sl.1/2 source item it's
+    # drawn from (`nature_of_income`) -- the sum of DTAA-tagged amounts for a
+    # given source item cannot exceed that source item's own declared gross
+    # total (a DTAA claim re-tags/exempts part of an existing item, it can
+    # never exceed it). One reusable helper covers all eight source items.
+    osi = inp.other_sources_income
+
+    def _si_gross(section: str) -> Decimal:
+        return sum((sie.gross_income for sie in inp.si_entries if sie.section == section), _ZERO)
+
+    _dtaa_source_totals: dict[str, tuple[Decimal, str]] = {
+        "1ai": (osi.dividend_income if osi else _ZERO, "other_sources_income.dividend_income"),
+        "1b": (
+            (osi.savings_bank_interest + osi.fixed_deposit_interest + osi.interest_on_it_refund)
+            if osi else _ZERO,
+            "other_sources_income (interest fields)",
+        ),
+        "1c": (inp.os_machinery_plant_rent, "os_machinery_plant_rent"),
+        "1d": (osi.income_56_2_x if osi else _ZERO, "other_sources_income.income_56_2_x"),
+        "2ai": (_si_gross("115BB"), 'si_entries (section "115BB")'),
+        "2aii": (_si_gross("115BBJ"), 'si_entries (section "115BBJ")'),
+        "2d": (
+            sum((e.source_amount for e in inp.os_special_rate_entries), _ZERO),
+            "os_special_rate_entries",
+        ),
+        "2e": (
+            sum((p.income_amount for p in inp.pti_entries if p.income_head == "OS"), _ZERO),
+            "pti_entries (OS head)",
+        ),
+    }
+    for _nature, (_source_total, _source_label) in _dtaa_source_totals.items():
+        _dtaa_total = sum(
+            (e.amount for e in inp.os_dtaa_entries if e.nature_of_income == _nature), _ZERO,
+        )
+        if _dtaa_total > _source_total:
+            results.append(_result(
+                "ITR2-IN-OS-008", False,
+                f"DTAA-tagged Other Sources income for item {_nature} cannot exceed its own "
+                f"declared source total ({_source_label}).",
+                f'os_dtaa_entries[nature_of_income="{_nature}"]', f"<= {_source_total}",
+                str(_dtaa_total),
+            ))
+
+    # CBDT rule 227: Section 89A income_notified must equal the sum of its
+    # own per-country detail rows -- mirrors the sibling
+    # `FSICountryEntry.derive_and_validate_total` precedent, but OSSection89A
+    # has no such schema-level validator, so this is a pre-compute check
+    # instead.
+    if inp.os_section_89a is not None:
+        _s89a = inp.os_section_89a
+        _country_total = sum((e.amount for e in _s89a.country_entries), _ZERO)
+        if _s89a.income_notified != _country_total:
+            results.append(_result(
+                "ITR2-IN-OS-009", False,
+                "Section 89A notified income must equal the sum of its own per-country "
+                "detail rows.",
+                "os_section_89a.income_notified", str(_country_total), str(_s89a.income_notified),
+            ))
+
+        # CBDT rule 232: the same Section 89A notified-income country cannot
+        # be selected more than once in Schedule OS's own country list
+        # (distinct from row #65's per-employer Schedule-S instance of the
+        # identical check).
+        _s89a_countries = [e.country_code for e in _s89a.country_entries]
+        _s89a_dupes = {c for c in _s89a_countries if _s89a_countries.count(c) > 1}
+        if _s89a_dupes:
+            results.append(_result(
+                "ITR2-IN-OS-010", False,
+                "The same Section 89A notified-income country cannot be selected more than "
+                "once.",
+                "os_section_89a.country_entries", "unique country_code",
+                ", ".join(sorted(_s89a_dupes)),
+            ))
+
+    # CBDT rule 198: Section 115BBF (patent royalty income) is available to
+    # a resident patentee only -- a non-resident cannot hold this claim.
+    if (
+        inp.residential_status == ResidentialStatus.NON_RESIDENT
+        and any(sie.section == "115BBF" for sie in inp.si_entries)
+    ):
+        results.append(_result(
+            "ITR2-IN-OS-011", False,
+            "A non-resident cannot claim income under Section 115BBF (patent royalty).",
+            "si_entries[].section", "not 115BBF for a non-resident", "115BBF",
+        ))
+
     # ── Schedule OS / Schedule SI / CYLA-BFLA-CFL — Phase 5D ───────────────
     # Schedule OS (`OtherSourcesIncome`) has almost nothing left to validate:
     # it is a flat gross-income-bucket model shared with ITR-1, and ITR-1's
