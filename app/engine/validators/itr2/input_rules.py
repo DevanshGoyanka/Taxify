@@ -647,6 +647,28 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "deductions_chapter6a", "all listed sections == 0",
                 ", ".join(f"{k}={v}" for k, v in sorted(claimed_huf.items())),
             ))
+    if inp.filing_profile is not None and inp.filing_profile.assessee_status == AssesseeStatus.HUF:
+        # CBDT rule 516: Section 89 relief (arrears/advance salary) is an
+        # individual-only concession, not available to a HUF assessee.
+        # Independent of `ch6a` (relief_89 is a top-level ITR2Input field,
+        # not a Chapter VI-A deduction) -- deliberately not nested inside
+        # the `ch6a is not None` block above, unlike #592's own 80D check.
+        if inp.relief_89 > _ZERO:
+            results.append(_result(
+                "ITR2-IN-FORM-008", False,
+                "Section 89 relief (arrears/advance salary) cannot be claimed by a HUF "
+                "assessee.",
+                "relief_89", _ZERO, str(inp.relief_89),
+            ))
+        # CBDT rule 546: the eligible-startup ESOP tax-deferral concession
+        # (Section 191(2A)) is available only to an individual employee, not
+        # a HUF.
+        if inp.esop_deferrals:
+            results.append(_result(
+                "ITR2-IN-FORM-009", False,
+                "Schedule Tax Deferred on ESOP is not applicable to a HUF assessee.",
+                "esop_deferrals", "empty", f"{len(inp.esop_deferrals)} entries",
+            ))
     if ch6a is not None and inp.tax_regime == TaxRegime.OLD and ch6a.amount_80ee > _ZERO and ch6a.amount_80eea > _ZERO:
         results.append(_result(
             "ITR2-IN-VIA-004", False,
@@ -1867,6 +1889,114 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     f"deductions_chapter6a.donations_80g[{_idx}]",
                     "donee_name and address present", "missing",
                 ))
+
+    # CBDT rules 277/313: a donee's PAN cannot equal the filer's own PAN (or
+    # Karta's PAN for a HUF) at either Schedule 80G or Schedule 80GGA.
+    _filer_pans = set()
+    if inp.filing_profile is not None:
+        _own_pan = getattr(inp.filing_profile, "pan", None)
+        _own_karta_pan = getattr(inp.filing_profile, "karta_pan", None)
+        if _own_pan:
+            _filer_pans.add(_own_pan)
+        if _own_karta_pan:
+            _filer_pans.add(_own_karta_pan)
+    if _filer_pans and ch6a is not None:
+        for _idx, _don in enumerate(ch6a.donations_80g or []):
+            if _don.donee_pan and _don.donee_pan in _filer_pans:
+                results.append(_result(
+                    "ITR2-IN-VIA-031", False,
+                    "A Schedule 80G donee's PAN cannot be the same as the assessee's own PAN.",
+                    f"deductions_chapter6a.donations_80g[{_idx}].donee_pan",
+                    "!= assessee PAN", _don.donee_pan,
+                ))
+        if inp.schedule_80gga is not None:
+            for _idx, _don in enumerate(inp.schedule_80gga.donations):
+                if _don.donee_pan in _filer_pans:
+                    results.append(_result(
+                        "ITR2-IN-VIA-032", False,
+                        "A Schedule 80GGA donee's PAN cannot be the same as the assessee's own "
+                        "PAN.",
+                        f"schedule_80gga.donations[{_idx}].donee_pan",
+                        "!= assessee PAN", _don.donee_pan,
+                    ))
+
+    # CBDT rule 290: the same donee PAN cannot appear in more than one
+    # Schedule 80G qualifying-percentage/limit block (`donation_category`),
+    # except the CBDT-published exempt PAN "AAAAR1077P" (PM National Relief
+    # Fund and similarly always-100%-eligible funds are exempted from this
+    # check on the official form itself).
+    if ch6a is not None and ch6a.donations_80g:
+        _pan_categories: dict[str, set[str]] = {}
+        for _don in ch6a.donations_80g:
+            if _don.donee_pan and _don.donee_pan != "AAAAR1077P":
+                _pan_categories.setdefault(_don.donee_pan, set()).add(_don.donation_category)
+        for _pan, _cats in _pan_categories.items():
+            if len(_cats) > 1:
+                results.append(_result(
+                    "ITR2-IN-VIA-033", False,
+                    "The same donee PAN cannot appear in more than one Schedule 80G "
+                    "qualifying-percentage/limit block.",
+                    "deductions_chapter6a.donations_80g[].donee_pan",
+                    "one donation_category per PAN", f"{_pan}: {sorted(_cats)}",
+                ))
+
+    # CBDT rule 747: the representative assessee's own contact details
+    # cannot match the taxpayer's own (a representative is, by definition,
+    # a distinct person acting on the assessee's behalf).
+    _rep = getattr(inp.filing_profile, "assessee_representative", None) if inp.filing_profile is not None else None
+    _own = getattr(inp.filing_profile, "primary_address", None) if inp.filing_profile is not None else None
+    if _rep is not None and _own is not None:
+        if _rep.email.strip().lower() == _own.email.strip().lower():
+            results.append(_result(
+                "ITR2-IN-PROFILE-004", False,
+                "The representative assessee's email cannot match the taxpayer's own email.",
+                "filing_profile.assessee_representative.email", "!= own email", _rep.email,
+            ))
+        if _rep.mobile_no == _own.mobile_no:
+            results.append(_result(
+                "ITR2-IN-PROFILE-005", False,
+                "The representative assessee's mobile number cannot match the taxpayer's own.",
+                "filing_profile.assessee_representative.mobile_no", "!= own mobile_no",
+                _rep.mobile_no,
+            ))
+
+    # CBDT rules 520/521: a Schedule IT payment's own chosen classification
+    # (advance tax vs. self-assessment tax) must agree with its own
+    # payment_date against the financial-year-end cutoff, rather than
+    # trusting a manually-selected tag the calculator's own classification
+    # already relies on unchecked.
+    _fy_end = _financial_year_end(inp)
+    for _idx, _pmt in enumerate(inp.tax_payment_entries):
+        if _pmt.payment_date is None:
+            continue
+        if _pmt.payment_type == "self_assessment" and _pmt.payment_date <= _fy_end:
+            results.append(_result(
+                "ITR2-IN-IT-001", False,
+                "A payment dated on or before the financial year end cannot be tagged "
+                "self-assessment tax.",
+                f"tax_payment_entries[{_idx}].payment_type", "advance", "self_assessment",
+            ))
+        if _pmt.payment_type == "advance" and _pmt.payment_date > _fy_end:
+            results.append(_result(
+                "ITR2-IN-IT-002", False,
+                "A payment dated after the financial year end cannot be tagged advance tax.",
+                f"tax_payment_entries[{_idx}].payment_type", "self_assessment", "advance",
+            ))
+
+    # CBDT rule 550: opting out of the new tax regime is not available after
+    # the section 139(1) due date.
+    if (
+        inp.filing_profile is not None
+        and inp.filing_profile.opted_out_new_tax_regime
+        and inp.filing_date is not None and inp.due_date is not None
+        and inp.filing_date > inp.due_date
+    ):
+        results.append(_result(
+            "ITR2-IN-PROFILE-006", False,
+            "Opting out of the new tax regime is not available after the section 139(1) due "
+            "date.",
+            "filing_profile.opted_out_new_tax_regime", False, True,
+        ))
 
     # CBDT rule 662: every CGAS claim must point to a disclosed CGAS bank
     # account, matched by account number and account type.

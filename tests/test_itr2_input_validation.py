@@ -31,6 +31,7 @@ from app.schemas.itr1 import (
     PoliticalContribution,
     PropertyType,
     SalaryIncome,
+    TaxPaymentDetail,
     Schedule80CEntry,
     Schedule80D,
     Schedule80DD,
@@ -44,6 +45,7 @@ from app.schemas.itr1 import (
 )
 from app.schemas.itr2 import (
     AgeBracket,
+    AssesseeRepresentativeProfile,
     AssesseeStatus,
     CG112AScrip,
     CGAssetType,
@@ -2290,6 +2292,104 @@ def test_TCS_005_brought_forward_and_current_year_in_same_row_fails():
         tcs_credit_claimed=Decimal("5000"),
     )])
     assert failed(validate_itr2_input(inp), "ITR2-IN-TCS-005")
+
+
+# ─── Phase 6j-14: remaining Part-A/misc rows ────────────────────────────────
+
+def test_VIA_031_80g_donee_pan_matches_assessee_pan_fails():
+    inp = _base_input(
+        filing_profile=_filing_profile(),
+        deductions_chapter6a=Chapter6ADeductions(
+            donations_80g=[Donation80G(cash_amount=Decimal("5000"), donee_pan="ABCPN1234F")],
+        ),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-031")
+
+
+def test_VIA_033_80g_same_pan_in_two_categories_fails():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(donations_80g=[
+        Donation80G(cash_amount=Decimal("5000"), donee_pan="AAAPD1234D", donation_category="A"),
+        Donation80G(cash_amount=Decimal("3000"), donee_pan="AAAPD1234D", donation_category="B"),
+    ]))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-033")
+
+
+def test_VIA_033_exempt_pan_across_categories_passes():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(donations_80g=[
+        Donation80G(cash_amount=Decimal("5000"), donee_pan="AAAAR1077P", donation_category="A"),
+        Donation80G(cash_amount=Decimal("3000"), donee_pan="AAAAR1077P", donation_category="B"),
+    ]))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-033")
+
+
+def _huf_profile_full() -> ITR2FilingProfile:
+    return ITR2FilingProfile(
+        pan="ABCPN1234F", assessee_status=AssesseeStatus.HUF, surname_or_org_name="Nair HUF",
+        date_of_birth_or_formation=date(1985, 6, 15), father_name="Ramesh Nair",
+        verification_place="Mumbai", verification_capacity="K", karta_pan="ABCPX1234F",
+        primary_address=FilingAddress(
+            residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
+            state_code="27", mobile_no="9876543210", email="priya@example.com",
+        ),
+    )
+
+
+def test_FORM_008_huf_claiming_relief_89_fails():
+    inp = _base_input(filing_profile=_huf_profile_full(), relief_89=Decimal("5000"))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-FORM-008")
+
+
+def test_IT_001_self_assessment_dated_before_fy_end_fails():
+    inp = _base_input(tax_payment_entries=[TaxPaymentDetail(
+        amount=Decimal("5000"), payment_type="self_assessment",
+        payment_date=date(2026, 1, 15), bsr_code="1234567", challan_serial_number="12345",
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-IT-001")
+
+
+def test_IT_002_advance_tax_dated_after_fy_end_fails():
+    inp = _base_input(tax_payment_entries=[TaxPaymentDetail(
+        amount=Decimal("5000"), payment_type="advance",
+        payment_date=date(2026, 6, 15), bsr_code="1234567", challan_serial_number="12345",
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-IT-002")
+
+
+def test_IT_001_002_correctly_dated_payments_pass():
+    inp = _base_input(tax_payment_entries=[
+        TaxPaymentDetail(
+            amount=Decimal("5000"), payment_type="advance",
+            payment_date=date(2025, 12, 15), bsr_code="1234567", challan_serial_number="12345",
+        ),
+        TaxPaymentDetail(
+            amount=Decimal("3000"), payment_type="self_assessment",
+            payment_date=date(2026, 6, 1), bsr_code="7654321", challan_serial_number="54321",
+        ),
+    ])
+    results = validate_itr2_input(inp)
+    assert not failed(results, "ITR2-IN-IT-001")
+    assert not failed(results, "ITR2-IN-IT-002")
+
+
+def test_PROFILE_004_representative_email_matches_own_fails():
+    profile = _filing_profile().model_copy(update={
+        "verification_capacity": "R",
+        "assessee_representative": AssesseeRepresentativeProfile(
+            name="Rep Name", email="priya@example.com",
+            mobile_country_code=91, mobile_no="9876543210",
+        ),
+    })
+    inp = _base_input(filing_profile=profile)
+    assert failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-004")
+
+
+def test_PROFILE_006_regime_optout_after_due_date_fails():
+    profile = _filing_profile().model_copy(update={"opted_out_new_tax_regime": True})
+    inp = _base_input(
+        filing_profile=profile,
+        filing_date=date(2026, 8, 15), due_date=date(2026, 7, 31),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-006")
 
 
 def test_FSI_004_salary_relief_exceeding_actual_gross_salary_fails():
