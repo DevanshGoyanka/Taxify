@@ -328,6 +328,57 @@ def test_112a_and_vda_rows_are_complete_signed_and_schema_valid() -> None:
     assert payload["ScheduleVDA"]["TotIncCapGain"] == 150
 
 
+def test_schedule_112a_cost_acq_without_indx_is_the_grandfathering_formula() -> None:
+    """CBDT rules #85/86: Schedule 112A's Col.7 (CostAcqWithoutIndx) is the
+    higher-of(Col.8, Col.9) grandfathering formula, and Col.8
+    (AcquisitionCost) is the plain original cost -- previously swapped
+    (see _112a_style_schedule()'s own docstring for the full derivation).
+    Grandfathered case: acquired before 31-Jan-2018, cost=1000, fmv=3000,
+    sale=5000 -> Col.9 = min(sale, fmv) = 3000, Col.7 = max(cost, Col.9)
+    = max(1000, 3000) = 3000."""
+    input_data = _input(
+        cg_112a_scrips=[
+            CG112AScrip(
+                isin_code="INE000A00001", share_unit_name="GRANDFATHERED SCRIP",
+                is_before_31jan2018=True,
+                date_of_acquisition=date(2016, 1, 1), date_of_transfer=date(2025, 5, 1),
+                num_shares_units=Decimal("10"), sale_price_per_share=Decimal("500"),
+                total_sale_value=Decimal("5000"), cost_acq_without_index=Decimal("1000"),
+                fmv_per_share=Decimal("300"), total_fmv=Decimal("3000"),
+            )
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["Schedule112A"]["Schedule112ADtls"][0]
+    assert row["CostAcqWithoutIndx"] == 3000
+    assert row["AcquisitionCost"] == 1000
+    payload = document["ITR"]["ITR2"]["Schedule112A"]
+    assert payload["CostAcqWithoutIndx112A"] == 3000
+    assert payload["AcquisitionCost112A"] == 1000
+
+
+def test_schedule_112a_cost_acq_without_indx_is_plain_cost_when_not_grandfathered() -> None:
+    """Acquired after 31-Jan-2018: no grandfathering applies, so Col.7 and
+    Col.8 both equal the plain cost."""
+    input_data = _input(
+        cg_112a_scrips=[
+            CG112AScrip(
+                isin_code="INE000A00001", share_unit_name="ORDINARY SCRIP",
+                is_before_31jan2018=False,
+                date_of_acquisition=date(2020, 1, 1), date_of_transfer=date(2025, 5, 1),
+                num_shares_units=Decimal("10"), sale_price_per_share=Decimal("500"),
+                total_sale_value=Decimal("5000"), cost_acq_without_index=Decimal("1000"),
+            )
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["Schedule112A"]["Schedule112ADtls"][0]
+    assert row["CostAcqWithoutIndx"] == 1000
+    assert row["AcquisitionCost"] == 1000
+
+
 def test_equity_mf_on_stt_aggregates_transactions_instead_of_one_row_each() -> None:
     """``EquityMFonSTT`` (Schedule CG's 111A STCG detail) is a schema array
     capped at ``maxItems: 2``, one row per ``MFSectionCode``, and each row's
@@ -2646,6 +2697,69 @@ def test_schedule_os_dtaa_entries_are_taxed_via_si_at_applicable_rate_and_reach_
     assert result.other_sources_income == Decimal("100000")
 
 
+def test_schedule_os_balance_no_race_horse_excludes_dtaa_and_special_rate_income() -> None:
+    """CBDT rule #206: Schedule OS item 6 (BalanceNoRaceHorse, "Net income
+    from other sources chargeable at NORMAL applicable rates") must equal
+    (1 - 3 + 4 + 5 - 5a - DTAA related to 1) -- it previously included the
+    calculator's raw other_sources_income total (normal-rate AND
+    special-rate income blended together), silently overstating this
+    field by exactly the DTAA/special-rate amount. A savings-bank interest
+    entry (normal-rate) plus a DTAA-rate OS entry (special-rate, taxed
+    separately via Schedule SI): item 6 must reflect only the interest."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("40000")),
+        os_dtaa_entries=[
+            OSDtaaEntry(
+                amount=Decimal("100000"), nature_of_income="1b",
+                country_name="Singapore", country_code="65", dtaa_article="12",
+                rate_as_per_treaty=Decimal("10"), rate_as_per_it_act=Decimal("20"),
+                tax_residency_certificate="Y", item_no_incl="5A1bA",
+                applicable_rate=Decimal("10"),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    os_block = document["ITR"]["ITR2"]["ScheduleOS"]["IncOthThanOwnRaceHorse"]
+    assert os_block["IncChargeableSpecialRates"] == 100000
+    assert os_block["BalanceNoRaceHorse"] == 40000
+    assert document["ITR"]["ITR2"]["ScheduleOS"]["TotOthSrcNoRaceHorse"] == 40000
+    # Part B-TI's parallel figure must stay consistent with Schedule OS's
+    # own item 6, not double-subtract the special-rate bucket a second time.
+    part_b_ti = document["ITR"]["ITR2"]["PartB-TI"]
+    assert part_b_ti["IncFromOS"]["OtherSrcThanOwnRaceHorse"] == 40000
+
+
+def test_partial_integration_of_agricultural_income_follows_official_form_formula() -> None:
+    """CBDT rule #523 / official ITR-2 form Part B-TTI items 2a-2d
+    (ITR-2-2026-Eng.pdf): "Tax at normal rates on 15 of Part B-TI" (2a) is
+    tax on AGGREGATE income (non-agri + net agri); "Rebate on agricultural
+    income" (2c) is tax on (agri + basic exemption); "Tax Payable on Total
+    Income" (2d) = 2a + 2b - 2c. The calculator previously computed slab
+    tax on non-agri income ALONE and then ADDED the Finance Act's own
+    (Step1-Step2) delta on top, double-counting non-agri income's own tax.
+    Known-answer case (NAI=600000, agri=100000, old regime, below-60):
+    Step1=tax(700000)=52500, Step2=tax(350000)=5000, so the correct final
+    figure is 52500-5000=47500, not the old code's 32500+47500=80000."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("600000")),
+        agricultural_income=AgriculturalIncome(gross_agricultural_income=Decimal("100000")),
+    )
+    result = compute(input_data)
+    assert result.net_agricultural_income == Decimal("100000")
+    assert result.slab_tax == Decimal("52500")
+    assert result.partial_integration_tax == Decimal("5000")
+    assert result.total_tax_before_relief == Decimal("47500")
+
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    tax_on_ti = document["ITR"]["ITR2"]["PartB_TTI"]["ComputationOfTaxLiability"]["TaxPayableOnTI"]
+    assert tax_on_ti["TaxAtNormalRatesOnAggrInc"] == 52500
+    assert tax_on_ti["RebateOnAgriInc"] == 5000
+    assert tax_on_ti["TaxPayableOnTotInc"] == 47500
+
+
 def test_schedule_os_serializes_nri_special_rate_entries_and_taxes_them_via_si() -> None:
     """Section 115A/115AC/115ACA/115AD/115E "any other income chargeable at
     special rate" rows (Schedule OS's OthersGrossDtls dropdown) previously
@@ -3967,6 +4081,43 @@ def test_schedule_cfl_reports_race_horse_loss_instead_of_dropping_it() -> None:
     year_detail = cfl["LossCFFromPrev2ndYearFromAY"]["CarryFwdLossDetail"]
     assert year_detail["OthSrcLossRaceHorseCF"] == 40000
     assert cfl["TotalLossCFSummary"]["LossSummaryDetail"]["OthSrcLossRaceHorseCF"] == 40000
+
+
+def test_schedule_cfl_adj_tot_bf_loss_in_bfla_reflects_real_bfla_setoff() -> None:
+    """CBDT rule #247: Schedule CFL row "x" ("Adjustment of above losses in
+    Schedule BFLA") was never emitted at all -- AdjTotBFLossInBFLA.
+    LossSummaryDetail.TotalHPPTILossCF must equal Schedule BFLA's own HP
+    row's "brought forward loss set off" (Sl.2ii of BFLA), per the official
+    gazetted form (ITR-2-2026-Eng.pdf)'s own column reference for this row."""
+    input_data = _input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT, annual_rent_received=Decimal("120000"),
+        ),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="1 MG Road", city_or_town_or_district="Pune",
+                state_code="27", pin_code="411001",
+            ),
+        ],
+        bf_losses=[
+            BFLossItem(
+                # Larger than the ~84000 net HP income so a real balance
+                # remains to carry forward -- ScheduleCFL is only emitted
+                # at all when some loss survives (fully-absorbed bf losses
+                # leave no CFL entry, a separate, correct behavior).
+                assessment_year="2024-25", head=LossHead.HOUSE_PROPERTY,
+                original_loss=Decimal("100000"), brought_forward=Decimal("100000"),
+                date_of_filing=date(2024, 7, 31),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    bfla_hp_setoff = document["ITR"]["ITR2"]["ScheduleBFLA"]["HP"]["IncBFLA"]["BFlossPrevYrUndSameHeadSetoff"]
+    assert bfla_hp_setoff == 84000
+    cfl_adj = document["ITR"]["ITR2"]["ScheduleCFL"]["AdjTotBFLossInBFLA"]["LossSummaryDetail"]
+    assert cfl_adj["TotalHPPTILossCF"] == bfla_hp_setoff == 84000
 
 
 def test_schedule_cfl_requires_date_of_filing_instead_of_silently_omitting_it() -> None:

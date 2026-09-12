@@ -52,7 +52,7 @@ from app.engine.constants import (
     VDA_RATE,
 )
 from app.engine.schedules.agricultural import compute as compute_agri
-from app.engine.schedules.agricultural import compute_partial_integration_tax
+from app.engine.schedules.agricultural import compute_partial_integration_components
 from app.engine.schedules.amt import (
     AMTAddition, AMTAdditionSection, compute as compute_amt, compute_amtc,
 )
@@ -1235,11 +1235,20 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     normal_income = max(_ZERO, ti - special_rate_income_for_slab)
     slab_tax = compute_slab_tax(normal_income, age, regime)
 
-    # Partial integration of agricultural income (old regime only)
+    # Partial integration of agricultural income (old regime only). The
+    # Finance Act's own 3-step method computes Step 1 ("tax at normal rates
+    # on Aggregate Income", official form Part B-TTI item 2a) and Step 2
+    # ("Rebate on agricultural income", item 2c) SEPARATELY -- Step 1
+    # REPLACES the plain slab_tax(normal_income) above (it does not add to
+    # it), and Step 2 is subtracted downstream when total_tax_before_relief
+    # is computed (item 2d = 2a+2b-2c, confirmed directly against the
+    # official ITR-2 form PDF, Part B-TTI). The previous `slab_tax += pit`
+    # (pit = Step1-Step2) double-counted normal_income's own tax and never
+    # separately disclosed either step.
     r.partial_integration_tax = _ZERO
     if regime == TaxRegime.OLD and r.net_agricultural_income > Decimal("5000"):
         basic_exemption = _get_basic_exemption(age)
-        pit = compute_partial_integration_tax(
+        tax_on_aggregate, tax_on_agri_plus_exemption = compute_partial_integration_components(
             normal_income,
             r.net_agricultural_income,
             basic_exemption,
@@ -1247,8 +1256,8 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             age,
             regime,
         )
-        r.partial_integration_tax = pit
-        slab_tax += pit
+        r.partial_integration_tax = tax_on_agri_plus_exemption
+        slab_tax = tax_on_aggregate
 
     r.slab_tax = slab_tax
 
@@ -1262,14 +1271,29 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # B-TTI items 1a-1d) that only MERGES with this chain at item 8 ("Gross
     # tax payable" = higher of 1d and 7) -- computed below, after this block,
     # once item 7 (r.gross_tax_liability) is final and never touched again.
-    r.total_tax_before_relief = slab_tax + r.special_rate_tax
+    # CBDT rule #523's own formula (Normal Tax + Special Tax - Rebate on
+    # Agricultural Income) applies here too, not just in the ITD JSON
+    # disclosure: when partial integration applies, `slab_tax` is Step 1
+    # (tax on aggregate income) and `r.partial_integration_tax` is Step 2
+    # (the rebate) -- both must combine here, or the real downstream tax
+    # pipeline (rebate 87A, surcharge, cess) would be computed from an
+    # overstated total tax that never had the agricultural rebate applied.
+    r.total_tax_before_relief = max(
+        _ZERO, slab_tax + r.special_rate_tax - r.partial_integration_tax
+    )
     r.tax_before_rebate = r.total_tax_before_relief
 
     # ── 15. Rebate u/s 87A ───────────────────────────────────────────────────
+    # compute_rebate()'s own `slab_tax` parameter is documented as "tax on
+    # normal-rate income only" (it caps the 87A rebate, which cannot exceed
+    # normal-rate tax) -- when partial integration applies, that figure is
+    # slab_tax(=Step 1, tax on aggregate income) less the agricultural
+    # rebate (Step 2), not Step 1 alone.
+    normal_rate_tax_after_agri_rebate = max(_ZERO, slab_tax - r.partial_integration_tax)
     rebate = compute_rebate(
         ti,
         r.tax_before_rebate,
-        slab_tax,
+        normal_rate_tax_after_agri_rebate,
         regime,
         is_resident_individual=is_resident_or_nor and is_individual,
     )

@@ -54,7 +54,7 @@ from app.engine.schedules.deductions import compute_all as compute_deductions
 from app.engine.schedules.tds_tcs import compute_all as compute_tds_tcs
 from app.engine.schedules.agricultural import (
     compute as compute_agri,
-    compute_partial_integration_tax,
+    compute_partial_integration_components,
 )
 from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234i, compute_234f
 from app.engine.common.due_dates import get_due_date, get_default_filing_date
@@ -551,30 +551,45 @@ def compute(input_data: ITR4Input) -> ITR4Result:
     result.slab_tax = slab_tax
 
     # Partial integration of agricultural income (old regime only, net agri > Rs 5,000).
+    # ITR-4's own official form (ITR-4-2026-Eng.pdf, item D20) explicitly
+    # restricts ITR-4 eligibility to net agricultural income <= Rs 5,000
+    # ("If agricultural income is more than Rs. 5,000/-, use ITR 3/5") --
+    # this branch should be unreachable for a validly-eligible ITR-4 filing,
+    # but is kept correct defensively in case eligibility gating elsewhere
+    # is bypassed.
     # F7 FIX: NAI (non-agricultural income) for partial integration = TI (total
     # taxable income), NOT normal_income. 112A LTCG is non-agricultural income
     # and must be included in NAI per Finance Act Part I First Schedule.
-    pi_tax = Decimal("0")
+    # The Finance Act's own 3-step method computes Step 1 (tax on aggregate
+    # income) and Step 2 (rebate, tax on agri+exemption) SEPARATELY --
+    # Step 1 replaces slab_tax(normal_income) above, and Step 2 is
+    # subtracted downstream when total_tax_before_relief is computed (see
+    # app/engine/calculators/itr2.py's identical fix for the full
+    # derivation/worked-example evidence, and the official ITR-2 form's own
+    # Part B-TTI items 2a-2d, which state this exact formula).
+    pi_rebate = Decimal("0")
     if (regime == TaxRegime.OLD and result.net_agricultural_income > Decimal("5000")
             and ti > 0):
         from app.engine.constants import BASIC_EXEMPTION_LIMITS
         basic_exemption = BASIC_EXEMPTION_LIMITS.get(age.value, Decimal("250000"))
-        pi_tax = compute_partial_integration_tax(
+        tax_on_aggregate, tax_on_agri_plus_exemption = compute_partial_integration_components(
             ti, result.net_agricultural_income,
             basic_exemption, compute_slab_tax,
             age, regime,
         )
-    result.partial_integration_tax = pi_tax
-    slab_tax += pi_tax
+        pi_rebate = tax_on_agri_plus_exemption
+        slab_tax = tax_on_aggregate
+    result.partial_integration_tax = pi_rebate
     result.slab_tax = slab_tax
 
 
     # ── 10. Special rate tax (112A @ 12.5% on taxable portion) ────────────────
     result.special_rate_tax = cg_112a_tax
-    result.tax_before_rebate = slab_tax + cg_112a_tax
+    result.tax_before_rebate = max(Decimal("0"), slab_tax + cg_112a_tax - pi_rebate)
 
     # ── 11. Rebate u/s 87A ───────────────────────────────────────────────────
-    rebate = compute_rebate(ti, result.tax_before_rebate, slab_tax, regime)
+    normal_rate_tax_after_agri_rebate = max(Decimal("0"), slab_tax - pi_rebate)
+    rebate = compute_rebate(ti, result.tax_before_rebate, normal_rate_tax_after_agri_rebate, regime)
     result.rebate_87a = rebate
     result.tax_after_rebate = max(Decimal("0"), result.tax_before_rebate - rebate)
 

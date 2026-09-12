@@ -494,7 +494,9 @@ def _schedule_bfla(result: ITR2Result) -> dict[str, Any]:
 # Schedule CFL
 # ============================================================================
 
-def _schedule_cfl(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str, Any]]:
+def _schedule_cfl(
+    result: ITR2Result, input_data: ITR2Input, bfla_json: dict[str, Any],
+) -> Optional[dict[str, Any]]:
     """Build Schedule CFL from typed carry-forward results and actual filing dates."""
     cfl_collections = result.schedules.get("cfl", [])
     flattened = [entry for collection in cfl_collections for entry in collection.entries]
@@ -579,6 +581,30 @@ def _schedule_cfl(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[st
             "LossSummaryDetail": summary(current_ay_entries, include_race_horse=True)
         }
     output["TotalLossCFSummary"] = {"LossSummaryDetail": summary(flattened, include_race_horse=True)}
+    # CBDT rule #247: row "x" ("Adjustment of above losses in Schedule
+    # BFLA") -- the official gazetted form (ITR-2-2026-Eng.pdf, Schedule
+    # CFL) shows this row's House-property/race-horse columns each
+    # reference one single BFLA row ("2ii of Schedule BFLA", "2x of
+    # Schedule BFLA"), while its STCL/LTCL columns are the SUM of BFLA's
+    # six capital-gains rows' own brought-forward-loss-set-off amounts
+    # (rows iii-viii) -- exactly the identity rule #247 itself states
+    # ("BFLA Sl.2(iii+iv+v+vi+vii+viii) = CFL Sl.4(x)+5(x)"). Read directly
+    # from the already-built ScheduleBFLA JSON (not recomputed
+    # independently) so the two schedules can never drift apart.
+    def _bf_setoff(key: str) -> Decimal:
+        return Decimal(str(bfla_json.get(key, {}).get("IncBFLA", {}).get("BFlossPrevYrUndSameHeadSetoff", 0)))
+
+    output["AdjTotBFLossInBFLA"] = {
+        "LossSummaryDetail": {
+            "TotalHPPTILossCF": _to_rupees(_bf_setoff("HP")),
+            "TotalSTCGPTILossCF": _to_rupees(
+                _bf_setoff("STCG20Per") + _bf_setoff("STCG30Per")
+                + _bf_setoff("STCGAppRate") + _bf_setoff("STCGDTAARate")
+            ),
+            "TotalLTCGPTILossCF": _to_rupees(_bf_setoff("LTCG12_5Per") + _bf_setoff("LTCGDTAARate")),
+            "OthSrcLossRaceHorseCF": _to_rupees(_bf_setoff("OthSrcRaceHorse")),
+        }
+    }
     return output
 
 
@@ -1277,6 +1303,24 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         + block["PassThrIncOSChrgblSplRate"]
         + _to_rupees(result.os_dtaa_income)
     )
+    # CBDT rule #206: item "6" (BalanceNoRaceHorse) is labeled "Net income
+    # from other sources CHARGEABLE AT NORMAL APPLICABLE RATES" -- it must
+    # exclude every special-rate component folded into
+    # IncChargeableSpecialRates above (lottery/115BBJ/115BBE/PF/PTI-special/
+    # DTAA), not just carry the calculator's raw other_sources_income total
+    # (which mixes normal- and special-rate OS income together) minus race
+    # horse income. The rule's own formula only names "DTAA" explicitly
+    # because the other Item-2 components (lottery/115BBJ/etc.) are already
+    # separate, never-overlapping line items on the real form -- DTAA-rate
+    # income is the one case actually at risk of leaking into item 1/item 6
+    # via the calculator's single blended other_sources_income bucket.
+    # Subtracting the full IncChargeableSpecialRates bucket (not just DTAA)
+    # both matches the rule's intent exactly and keeps this figure
+    # consistent with Part B-TI's own parallel OtherSrcThanOwnRaceHorse
+    # computation (itd/itr2.py's _part_b_ti(), which already does the same
+    # subtraction from this same TotOthSrcNoRaceHorse figure).
+    os_excl_race_horse = os_excl_race_horse - block["IncChargeableSpecialRates"]
+    block["BalanceNoRaceHorse"] = _to_rupees(os_excl_race_horse)
     # Form item "1b": Interest, Gross (bi+bii+biii+biv+bv+bvi+bvii+bviii+bix).
     # Previously only bi+bii+biii (savings/FD/refund interest) -- the other
     # six sibling sub-items (pass-through interest, the four PF-proviso
@@ -1302,12 +1346,12 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
     # Form item "1": Gross income chargeable to tax at normal applicable
     # rates (1a+1b+1c+1d+1e). Was hardcoded to 0 unconditionally, while its
     # five components (Dividends/Interest/Rent/56(2)(x)/Any other income)
-    # were all correctly populated a few lines above -- a visible
-    # self-contradiction against item "6" (BalanceNoRaceHorse below), which
-    # already correctly derives from the real calculator total that this
-    # sum is supposed to feed into. Computed from the block's own final
-    # values (all five are stable by this point in the function), not
-    # independently re-derived, so it can never itself drift from them.
+    # were all correctly populated a few lines above. Computed from the
+    # block's own final values (all five are stable by this point in the
+    # function), not independently re-derived, so it can never itself drift
+    # from them. (Item "6"/BalanceNoRaceHorse, set later once
+    # IncChargeableSpecialRates is known, is fixed separately -- see its own
+    # CBDT rule #206 comment; it does not simply equal item 1.)
     block["GrossIncChrgblTaxAtAppRate"] = (
         block["DividendGross"]
         + block["InterestGross"]
@@ -1346,7 +1390,10 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         },
         "IncOthThanOwnRaceHorse": block,
         "NOT89A": _date_range(),
-        "TotOthSrcNoRaceHorse": _to_rupees(os_excl_race_horse),
+        # Official schema requires TotOthSrcNoRaceHorse >= 0 (unlike the
+        # signed BalanceNoRaceHorse above, which the same official schema
+        # allows negative).
+        "TotOthSrcNoRaceHorse": _to_rupees(max(_ZERO, os_excl_race_horse)),
     }
     return result_dict
 
@@ -2277,30 +2324,42 @@ def _112a_style_schedule(source_rows: list[dict[str, Any]], suffix: str) -> Opti
     differing only by a ``112A``/``115AD`` field-name suffix -- so one
     shared builder serves both schedules.
 
-    CBDT rules #85/86/92/93 (ITR-2 official Validation Rules PDF) read
-    "Col. 7 Cost of acquisition without indexation should be higher of
-    Col. 8 and Col. 9" -- which by label would suggest the ``deemed_cost``
-    grandfathering formula below (``max(cost, min(fmv, sale))``) belongs in
-    the ``CostAcqWithoutIndx`` output key, not ``AcquisitionCost``. This was
-    investigated (2026-09-12): the official ITR-2 JSON schema
-    (``Reference Docs by CBDT & ITD/Official JSON Schema/ITR-2_2026_Main_
-    V1.1 (2).json``) confirms both keys exist as separate mandatory fields
-    on ``Schedule112A115ADType`` but carries no field-level description text
-    to resolve which is which, and the gazetted ITR-2 form PDF (``Official
-    ITR FORMS/ITR-2-2026-Eng.pdf``) does not print Schedule 112A's own
-    per-scrip column table (only cross-references it from Schedule CG). No
-    primary source available in this repo definitively confirms which key
-    the grandfathering formula belongs in -- current code's split (raw
-    ``item["cost"]`` -> ``CostAcqWithoutIndx``, ``deemed_cost`` ->
-    ``AcquisitionCost``) is applied consistently at both row and aggregate
-    level, so this is not an obviously-accidental swap either. Do not change
-    this assignment without either (a) a live ITD ``validateItr``/portal
-    test distinguishing the two field values, or (b) locating an actual
-    field-description source -- guessing from the JSON key name alone risks
-    the exact class of bug this codebase has already been burned by (see
-    CLAUDE.md's note on ``ITR{N}_TaxComputation.NetTaxLiability``). Rules
-    #85/86/92/93 remain tracked as Partially Implemented pending that
-    verification, not Implemented or silently "fixed"."""
+    CBDT rules #85/86/92/93 (ITR-2 official Validation Rules PDF) read "Col.
+    7 Cost of acquisition without indexation should be higher of Col. 8 and
+    Col. 9". Resolved (2026-09-13) using the FULL adjacent rule cluster
+    (#84-90), not #85/86 in isolation:
+
+    - #84: Col.6 (TotSaleValue) = Col.4 (quantity) * Col.5 (price/unit)
+    - #87: Col.11 (TotFairMktValueCapAst) = Col.4 * Col.10 (fmv/unit)
+    - #85: Col.7 = higher(Col.8, Col.9)
+    - #86: Col.9 = lower(Col.6, Col.11) when acquired before 31-Jan-2018
+      -- i.e. Col.9 = min(sale, fmv), so Col.7 = max(Col.8, min(sale, fmv)),
+      which is exactly this function's own ``deemed_cost`` grandfathering
+      formula below -- Col.8 must therefore be the plain, un-grandfathered
+      original cost (``item["cost"]``).
+    - #88: Col.13 (TotalDeductions) = Col.7 + Col.12 -- this is numerically
+      identical to the existing ``deductions = deemed_cost + expense``
+      regardless of which JSON key Col.7's value is stored under, so it
+      does NOT independently disambiguate the swap (a dead end the prior
+      investigation pass didn't have visibility into either).
+
+    The literal field name ``CostAcqWithoutIndx`` is itself an
+    abbreviation of Col.7's own official label ("Cost of Acquisition
+    WITHOUT INDEXation") -- and this is corroborated by a type-consistency
+    pattern across every field on ``Schedule112A115ADType``: every OTHER
+    "Col.X = formula of earlier columns" aggregate field (TotSaleValue,
+    TotFairMktValueCapAst, TotalDeductions, Balance) is schema-typed as a
+    rupee-rounded ``integer``, exactly like ``CostAcqWithoutIndx`` -- while
+    every raw/input-style field (NumSharesUnits, SalePricePerShareUnit,
+    FairMktValuePerShareunit, ExpExclCnctTransfer) is a decimal ``number``
+    with ``multipleOf: 0.0001``, exactly like ``AcquisitionCost``. The
+    previous code had this backwards: ``CostAcqWithoutIndx`` held the raw
+    cost (Col.8) and ``AcquisitionCost`` held the grandfathering formula
+    (Col.7). Swapped below to match. No live ITD ``validateItr`` call has
+    confirmed this (still the strongest possible verification per CLAUDE.md's
+    ``NetTaxLiability`` precedent), but the combined field-label-match +
+    rule-cluster-derivation + schema-type-consistency evidence is
+    considered sufficient to close rules #85/86/92/93 as Implemented."""
     if not source_rows:
         return None
     rows = []
@@ -2317,8 +2376,11 @@ def _112a_style_schedule(source_rows: list[dict[str, Any]], suffix: str) -> Opti
             "NumSharesUnits": float(item["quantity"]),
             "SalePricePerShareUnit": float(item["price"]),
             "TotSaleValue": _to_rupees(item["sale"]),
-            "CostAcqWithoutIndx": _to_rupees(item["cost"]),
-            "AcquisitionCost": float(deemed_cost),
+            # Col.7 (deemed/grandfathered cost) -> CostAcqWithoutIndx;
+            # Col.8 (plain original cost) -> AcquisitionCost. See this
+            # function's own docstring for the full derivation.
+            "CostAcqWithoutIndx": _to_rupees(deemed_cost),
+            "AcquisitionCost": float(item["cost"]),
             "LTCGBeforelowerB1B2": _to_rupees(max(_ZERO, item["sale"] - item["cost"])),
             "FairMktValuePerShareunit": float(item["fmv_per_unit"]),
             "TotFairMktValueCapAst": _to_rupees(item["fmv"]),
@@ -2327,8 +2389,8 @@ def _112a_style_schedule(source_rows: list[dict[str, Any]], suffix: str) -> Opti
             "Balance": _to_rupees(balance),
         })
     sale = sum(r["TotSaleValue"] for r in rows)
-    raw_cost = sum(r["CostAcqWithoutIndx"] for r in rows)
-    acquisition = sum(Decimal(str(r["AcquisitionCost"])) for r in rows)
+    deemed_cost_total = sum(r["CostAcqWithoutIndx"] for r in rows)
+    plain_cost_total = sum(Decimal(str(r["AcquisitionCost"])) for r in rows)
     fmv = sum(r["TotFairMktValueCapAst"] for r in rows)
     expenses = sum(Decimal(str(r["ExpExclCnctTransfer"])) for r in rows)
     deductions = sum(r["TotalDeductions"] for r in rows)
@@ -2344,8 +2406,8 @@ def _112a_style_schedule(source_rows: list[dict[str, Any]], suffix: str) -> Opti
     return {
         f"Schedule{suffix}Dtls": rows,
         f"SaleValue{suffix}": sale,
-        f"CostAcqWithoutIndx{suffix}": raw_cost,
-        f"AcquisitionCost{suffix}": _to_rupees(acquisition),
+        f"CostAcqWithoutIndx{suffix}": deemed_cost_total,
+        f"AcquisitionCost{suffix}": _to_rupees(plain_cost_total),
         f"LTCGBeforelowerB1B2{suffix}": ltcg_before_lower_b1b2,
         f"FairMktValueCapAst{suffix}": fmv,
         f"ExpExclCnctTransfer{suffix}": _to_rupees(expenses),
@@ -4277,7 +4339,12 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     os_special_rate = os_schedule["IncOthThanOwnRaceHorse"]["IncChargeableSpecialRates"] if os_schedule else 0
     os_excl_race_horse_total = os_schedule["TotOthSrcNoRaceHorse"] if os_schedule else 0
     os_race_horse_income = max(0, os_schedule["IncFromOwnHorse"]["BalanceOwnRaceHorse"]) if os_schedule else 0
-    os_normal_rate = max(0, os_excl_race_horse_total - os_special_rate)
+    # CBDT rule #206's fix (see _schedule_os()'s own BalanceNoRaceHorse
+    # comment) made TotOthSrcNoRaceHorse itself already exclude every
+    # special-rate component -- it previously still included them, which is
+    # why this line used to subtract os_special_rate a second time here.
+    # Subtracting it again now would double-count the exclusion.
+    os_normal_rate = os_excl_race_horse_total
     # Form items 10/13 (schema IncChargeTaxSplRate111A112/
     # IncChargeableTaxSplRates) are both explicitly "total of column (i) of
     # schedule SI" per the form text and CBDT rule 374/376 -- the full
@@ -4413,13 +4480,27 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     balance_tax_after_relief = max(
         _ZERO, tax_pay_after_credit_10 - result.relief_89 - result.relief_90_91
     )
+    # CBDT rule #523: TaxPayableOnTotInc = Normal Tax + Special Tax - Rebate
+    # on Agricultural Income. When partial integration applies,
+    # result.slab_tax already holds Step 1 (tax on aggregate income,
+    # matching this field's own "AggrInc" name) and
+    # result.partial_integration_tax holds Step 2 (the rebate) -- see
+    # app/engine/calculators/itr2.py's own comment for the full derivation.
+    # Previously this formula omitted the rebate subtraction entirely,
+    # which (before that calculator fix) coincidentally produced a
+    # differently-wrong number rather than an internally-inconsistent one;
+    # now that slab_tax/partial_integration_tax hold the two distinct
+    # statutory steps, the subtraction must actually happen here.
+    tax_payable_on_total_income = max(
+        _ZERO, result.slab_tax + result.special_rate_tax - result.partial_integration_tax
+    )
     return {
         "ComputationOfTaxLiability": {
             "TaxPayableOnTI": {
                 "TaxAtNormalRatesOnAggrInc": _to_rupees(result.slab_tax),
                 "TaxAtSpecialRates": _to_rupees(result.special_rate_tax),
                 "RebateOnAgriInc": _to_rupees(result.partial_integration_tax),
-                "TaxPayableOnTotInc": _to_rupees(result.slab_tax + result.special_rate_tax),
+                "TaxPayableOnTotInc": _to_rupees(tax_payable_on_total_income),
             },
             "TaxRelief": {
                 "Section89": _to_rupees(result.relief_89),
@@ -4556,12 +4637,13 @@ def build_itr2_json(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]
         ValueError: If mandatory identity, refund, or schedule evidence is absent.
     """
     profile = _required_profile(input_data)
+    bfla_json = _schedule_bfla(result)
     itr2: dict[str, Any] = {
         "CreationInfo": _creation_info(),
         "Form_ITR2": _form_itr("ITR-2"),
         "PartA_GEN1": _part_a_gen1(input_data),
         "ScheduleCYLA": _schedule_cyla(result),
-        "ScheduleBFLA": _schedule_bfla(result),
+        "ScheduleBFLA": bfla_json,
         "PartB-TI": _partb_ti(result, input_data),
         "PartB_TTI": _partb_tti(result, input_data),
         "Verification": _verification_block(input_data),
@@ -4581,7 +4663,7 @@ def build_itr2_json(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]
         "Schedule112A": _schedule_112a(input_data),
         "Schedule115AD": _schedule_115ad(input_data),
         "ScheduleVDA": _schedule_vda(input_data),
-        "ScheduleCFL": _schedule_cfl(result, input_data),
+        "ScheduleCFL": _schedule_cfl(result, input_data, bfla_json),
         "ScheduleVIA": _schedule_via(result, input_data),
         "ScheduleSI": _schedule_si(result),
         "ScheduleEI": _schedule_ei(result, input_data),

@@ -54,7 +54,7 @@ from app.engine.schedules.special_rates import (
     aggregate as aggregate_si,
 )
 from app.engine.schedules.agricultural import (
-    compute as compute_agri, compute_partial_integration_tax,
+    compute as compute_agri, compute_partial_integration_components,
 )
 from app.engine.schedules.deductions import compute_all as compute_deductions
 from app.engine.schedules.tds_tcs import compute_all as compute_tds_tcs
@@ -468,15 +468,20 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     normal_income = max(z, ti - si_result.total_special_rate_income)
     slab_tax = compute_slab_tax(normal_income, age, regime)
 
+    # Finance Act 3-step method: Step 1 (tax on aggregate income) REPLACES
+    # slab_tax(normal_income) above; Step 2 (tax on agri+exemption) is the
+    # separately-disclosed "rebate" -- see app/engine/calculators/itr2.py's
+    # identical fix for the full derivation. `slab_tax += pit` previously
+    # double-counted normal_income's own tax.
     r.partial_integration_tax = z
     if regime == TaxRegime.OLD and r.net_agricultural_income > Decimal("5000"):
         basic_exemption = _get_basic_exemption(age)
-        pit = compute_partial_integration_tax(
+        tax_on_aggregate, tax_on_agri_plus_exemption = compute_partial_integration_components(
             normal_income, r.net_agricultural_income, basic_exemption,
             compute_slab_tax, age, regime,
         )
-        r.partial_integration_tax = pit
-        slab_tax += pit
+        r.partial_integration_tax = tax_on_agri_plus_exemption
+        slab_tax = tax_on_aggregate
 
     r.slab_tax = slab_tax
 
@@ -484,11 +489,22 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.amt_tax = z
 
     # ── 19. Total tax before relief ─────────────────────────────────────
-    r.total_tax_before_relief = slab_tax + r.special_rate_tax + r.amt_tax
+    # CBDT rule #523 / official form Part B-TTI item 2d ("Tax Payable on
+    # Total Income = 2a + 2b - 2c") applies here too -- when partial
+    # integration applies, slab_tax is Step 1 and r.partial_integration_tax
+    # is Step 2 (the rebate), so both must combine, not just slab_tax alone
+    # (see app/engine/calculators/itr2.py's identical fix).
+    r.total_tax_before_relief = max(
+        z, slab_tax + r.special_rate_tax - r.partial_integration_tax + r.amt_tax
+    )
     r.tax_before_rebate = r.total_tax_before_relief
 
     # ── 20. Rebate 87A ──────────────────────────────────────────────────
-    rebate = compute_rebate(ti, r.tax_before_rebate, slab_tax, regime)
+    # compute_rebate()'s `slab_tax` argument is "tax on normal-rate income
+    # only" -- after partial integration that is Step 1 less the
+    # agricultural rebate (Step 2), not Step 1 alone.
+    normal_rate_tax_after_agri_rebate = max(z, slab_tax - r.partial_integration_tax)
+    rebate = compute_rebate(ti, r.tax_before_rebate, normal_rate_tax_after_agri_rebate, regime)
     r.rebate_87a = rebate
     r.tax_after_rebate = max(z, r.tax_before_rebate - rebate)
 

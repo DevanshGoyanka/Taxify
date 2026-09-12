@@ -882,15 +882,28 @@ def _partb_ti(result: ITR3Result) -> dict:
 
 
 def _partb_tti(result: ITR3Result) -> dict:
+    # CBDT rule #523 / official form Part B-TTI items 2a-2d/4 (ITR-2-2026-
+    # Eng.pdf): "Tax Payable on Total Income (2d) = 2a + 2b - 2c" and
+    # "Tax payable after rebate (4) = 2d - 3(Rebate87A)" -- previously both
+    # omitted their own rebate subtraction entirely. See
+    # app/engine/calculators/itr2.py's identical fix for the full
+    # derivation of why result.slab_tax/partial_integration_tax hold Step 1
+    # ("tax at normal rates on Aggregate Income") and Step 2 ("Rebate on
+    # agricultural income") separately.
+    z = Decimal("0")
+    tax_payable_on_total_income = max(
+        z, result.slab_tax + result.special_rate_tax - result.partial_integration_tax
+    )
+    tax_payable_after_rebate = max(z, tax_payable_on_total_income - result.rebate_87a)
     return {
         "ComputationOfTaxLiability": {
             "TaxPayableOnTI": {
                 "TaxAtNormalRatesOnAggrInc": _to_rupees(result.slab_tax),
                 "TaxAtSpecialRates": _to_rupees(result.special_rate_tax),
                 "RebateOnAgriInc": _to_rupees(result.partial_integration_tax),
-                "TaxPayableOnTotInc": _to_rupees(result.slab_tax + result.special_rate_tax),
+                "TaxPayableOnTotInc": _to_rupees(tax_payable_on_total_income),
                 "Rebate87A": _to_rupees(result.rebate_87a),
-                "TaxPayableOnRebate": _to_rupees(result.slab_tax + result.special_rate_tax),
+                "TaxPayableOnRebate": _to_rupees(tax_payable_after_rebate),
                 "Surcharge25ofSI": 0,
                 "SurchargeOnAboveCrore": 0,
                 "Surcharge25ofSIBeforeMarginal": 0,

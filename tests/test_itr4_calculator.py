@@ -241,6 +241,37 @@ def test_itr4_no_income():
     assert res.taxable_income == Decimal("0")
     assert res.net_tax_liability == Decimal("0")
 
+def test_itr4_partial_integration_of_agricultural_income_follows_official_form_formula():
+    """CBDT rule #523 / official ITR form Part B-TTI items 2a-2d: "Tax at
+    normal rates on Aggregate Income" (2a) is tax on (non-agri + net agri)
+    income; "Rebate on agricultural income" (2c) is tax on (agri + basic
+    exemption); "Tax Payable on Total Income" (2d) = 2a + 2b - 2c. The
+    calculator previously computed slab tax on non-agri income ALONE and
+    then ADDED the Finance Act's own (Step1-Step2) delta on top, double-
+    counting non-agri income's own tax (see app/engine/calculators/
+    itr2.py's identical fix for the full derivation). Known-answer case
+    (NAI=600000, agri=100000, old regime, below-60): Step1=tax(700000)
+    =52500, Step2=tax(350000)=5000, so the correct final figure is
+    52500-5000=47500, not the old code's 32500+47500=80000."""
+    itr_input = ITR4Input(
+        age_bracket=AgeBracket.BELOW_60,
+        tax_regime=TaxRegime.OLD,
+        presumptive_scheme=PresumptiveScheme.S44AD,
+        business_income_44ad=PresumptiveBusinessIncome44AD(
+            total_turnover=Decimal("0"), digital_turnover=Decimal("0"), cash_turnover=Decimal("0")),
+        # 650000 gross salary less the old-regime Rs 50,000 standard
+        # deduction gives the intended NAI of 600,000.
+        salary_income=SalaryIncome(gross_salary=Decimal("650000")),
+        agriculture_income=Decimal("100000"),
+    )
+    result = compute_itr4(itr_input)
+    assert result.taxable_income == Decimal("600000")
+    assert result.net_agricultural_income == Decimal("100000")
+    assert result.slab_tax == Decimal("52500")
+    assert result.partial_integration_tax == Decimal("5000")
+    assert result.tax_before_rebate == Decimal("47500")
+
+
 def test_itr4_eligibility_50_lakh_cap_excludes_112a_ltcg():
     """Same rule as ITR-1 (official CBDT Validation Rules, both forms):
     the Rs 50 lakh eligibility cap excludes the 112A LTCG gain -- it is a

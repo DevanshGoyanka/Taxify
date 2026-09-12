@@ -1734,7 +1734,7 @@ def validate_itr4_input(inp: ITR4Input) -> list[ValidationResult]:
 
     # R071: Agricultural income > ₹5,000 is ELIGIBLE for ITR-4 — it triggers
     # partial integration u/s 10(1) (Finance Act, Part I First Schedule).
-    # The calculator handles this via compute_partial_integration_tax.
+    # The calculator handles this via compute_partial_integration_components.
     # This is informational only, NOT a blocking error.
     if inp.agriculture_income > Decimal("5000"):
         results.append(_info(
