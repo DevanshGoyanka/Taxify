@@ -2228,6 +2228,30 @@ def test_VIA_029_80g_donation_missing_donee_pan_fails():
     assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-029")
 
 
+def test_FSI_004_salary_relief_exceeding_actual_gross_salary_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        fsi_entries=[FSICountryEntry(
+            country_code="US", tax_identification_no="123-45-6789",
+            salary_income=Decimal("600000"), tax_paid_outside_india=Decimal("50000"),
+            tax_payable_in_india=Decimal("60000"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-FSI-004")
+
+
+def test_FSI_004_salary_relief_within_actual_gross_salary_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("800000")),
+        fsi_entries=[FSICountryEntry(
+            country_code="US", tax_identification_no="123-45-6789",
+            salary_income=Decimal("600000"), tax_paid_outside_india=Decimal("50000"),
+            tax_payable_in_india=Decimal("60000"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-FSI-004")
+
+
 def test_VIA_030_80g_non_cash_donation_missing_donee_name_fails():
     inp = _base_input(deductions_chapter6a=Chapter6ADeductions(
         donations_80g=[Donation80G(non_cash_amount=Decimal("5000"), donee_pan="AAAPD1234D")],

@@ -965,6 +965,45 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             "fsi_entries", "empty", f"{len(inp.fsi_entries)} entries",
         ))
 
+    # CBDT rules 446/447/448: a Schedule FSI relief claim against a given
+    # income head cannot exceed what that same head actually discloses
+    # elsewhere in the return -- summed across every fsi_entries row, since
+    # more than one country can carry income under the same head.
+    if inp.fsi_entries:
+        _fsi_salary_total = sum((fsi.salary_income for fsi in inp.fsi_entries), _ZERO)
+        _actual_salary = sal.gross_salary if sal is not None else _ZERO
+        if _fsi_salary_total > _actual_salary:
+            results.append(_result(
+                "ITR2-IN-FSI-004", False,
+                "Schedule FSI salary income claimed for relief cannot exceed Schedule Salary's "
+                "own gross salary.",
+                "fsi_entries[].salary_income", f"<= {_actual_salary}", str(_fsi_salary_total),
+            ))
+        _fsi_hp_total = sum((fsi.hp_income for fsi in inp.fsi_entries), _ZERO)
+        _actual_hp = sum((hp.annual_rent_received for hp in hp_rows), _ZERO) if hp_rows else _ZERO
+        if _fsi_hp_total > _actual_hp:
+            results.append(_result(
+                "ITR2-IN-FSI-005", False,
+                "Schedule FSI house-property income claimed for relief cannot exceed the "
+                "return's own disclosed house-property income.",
+                "fsi_entries[].hp_income", f"<= {_actual_hp}", str(_fsi_hp_total),
+            ))
+        _fsi_cg_total = sum((fsi.cg_income for fsi in inp.fsi_entries), _ZERO)
+        _actual_cg = sum(
+            (
+                tx.full_consideration - tx.cost_of_acquisition
+                for tx in inp.cg_transactions
+            ),
+            _ZERO,
+        ) if inp.cg_transactions else _ZERO
+        if _fsi_cg_total > max(_ZERO, _actual_cg):
+            results.append(_result(
+                "ITR2-IN-FSI-006", False,
+                "Schedule FSI capital-gains income claimed for relief cannot exceed the "
+                "return's own disclosed capital gains.",
+                "fsi_entries[].cg_income", f"<= {max(_ZERO, _actual_cg)}", str(_fsi_cg_total),
+            ))
+
     tr_by_country: dict[str, tuple[Decimal, Decimal]] = {}
     tr_by_identity: dict[tuple[str, str], tuple[Decimal, Decimal, Decimal]] = {}
     for index, tr in enumerate(inp.tr1_entries or []):
