@@ -2419,6 +2419,42 @@ def test_AMT_004_10aa_addition_not_matching_actual_claim_fails():
     assert failed(validate_itr2_input(inp), "ITR2-IN-AMT-004")
 
 
+# ─── Phase 6j-4: Schedule 112A/115AD grandfathering cutoff (#174) ───────────
+
+def test_CG_109_112a_scrip_fmv_nonzero_after_cutoff_fails():
+    inp = _base_input(cg_112a_scrips=[CG112AScrip(
+        isin_code="INE000A00001", share_unit_name="TEST SCRIP",
+        is_before_31jan2018=False,
+        date_of_transfer=date(2025, 5, 1), num_shares_units=Decimal("10"),
+        sale_price_per_share=Decimal("100"), total_sale_value=Decimal("1000"),
+        cost_acq_without_index=Decimal("500"), fmv_per_share=Decimal("80"),
+        total_fmv=Decimal("800"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-109")
+
+
+def test_CG_110_115ad_scrip_fmv_nonzero_after_cutoff_fails():
+    inp = _base_input(cg_115ad_scrips=[CG112AScrip(
+        isin_code="INE000A00001", share_unit_name="TEST SCRIP",
+        is_before_31jan2018=False,
+        date_of_transfer=date(2025, 5, 1), num_shares_units=Decimal("10"),
+        sale_price_per_share=Decimal("100"), total_sale_value=Decimal("1000"),
+        cost_acq_without_index=Decimal("500"), total_fmv=Decimal("800"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-110")
+
+
+def test_CG_109_112a_scrip_zero_fmv_after_cutoff_passes():
+    inp = _base_input(cg_112a_scrips=[CG112AScrip(
+        isin_code="INE000A00001", share_unit_name="TEST SCRIP",
+        is_before_31jan2018=False,
+        date_of_transfer=date(2025, 5, 1), num_shares_units=Decimal("10"),
+        sale_price_per_share=Decimal("100"), total_sale_value=Decimal("1000"),
+        cost_acq_without_index=Decimal("500"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-109")
+
+
 def test_FSI_004_salary_relief_exceeding_actual_gross_salary_fails():
     inp = _base_input(
         salary_income=SalaryIncome(gross_salary=Decimal("500000")),

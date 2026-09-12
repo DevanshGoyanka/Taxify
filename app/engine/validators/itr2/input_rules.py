@@ -1998,6 +1998,24 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             "filing_profile.opted_out_new_tax_regime", False, True,
         ))
 
+    # CBDT rules 173/174: a Schedule 112A/115AD scrip acquired on or after
+    # 1 February 2018 (`is_before_31jan2018=False`) has no grandfathering
+    # FMV comparison to make -- Col.10/11 (fmv_per_share/total_fmv) must be
+    # blank/zero for such a scrip, since they have no computational effect
+    # once `is_before_31jan2018` is false and disclosing a nonzero value
+    # anyway would misrepresent the scrip as grandfathering-eligible.
+    for _label, _scrip_list in (("cg_112a_scrips", inp.cg_112a_scrips), ("cg_115ad_scrips", inp.cg_115ad_scrips)):
+        for _idx, _scrip in enumerate(_scrip_list):
+            if not _scrip.is_before_31jan2018 and (_scrip.fmv_per_share > _ZERO or _scrip.total_fmv > _ZERO):
+                results.append(_result(
+                    "ITR2-IN-CG-109" if _label == "cg_112a_scrips" else "ITR2-IN-CG-110",
+                    False,
+                    "FMV/total FMV must be zero for a scrip acquired on or after 1 February "
+                    "2018 (not eligible for section 112A/115AD grandfathering).",
+                    f"{_label}[{_idx}].fmv_per_share/total_fmv", "0 when not is_before_31jan2018",
+                    f"fmv_per_share={_scrip.fmv_per_share}, total_fmv={_scrip.total_fmv}",
+                ))
+
     # CBDT rule 662: every CGAS claim must point to a disclosed CGAS bank
     # account, matched by account number and account type.
     for index, tx in enumerate(inp.cg_transactions or []):
