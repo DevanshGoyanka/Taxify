@@ -368,6 +368,63 @@ def validate_itr2_calculation(inp: ITR2Input, result: ITR2Result) -> list[Valida
                 "cg.current_year_losses.total_cg_loss",
             ))
 
+    # CBDT rule #348: Section 80CCD(1) (employee's own NPS contribution) is
+    # limited to 10% of salary for a salaried individual, or 20% of gross
+    # total income otherwise -- a statutory sub-ceiling independent of, and
+    # checked before, the shared ₹1,50,000 80CCE pool cap that
+    # section_80c.py's compute_80ccd1() already applies. Needs the computed
+    # GTI, so this is a post-computation check, not a pre-compute one.
+    ch6a = inp.deductions_chapter6a
+    if ch6a is not None and ch6a.amount_80ccd1 > _ZERO:
+        _has_salary = inp.salary_income is not None and inp.salary_income.gross_salary > _ZERO
+        if _has_salary:
+            _80ccd1_ceiling = inp.salary_income.gross_salary * Decimal("0.10")
+        else:
+            _80ccd1_ceiling = result.gross_total_income * Decimal("0.20")
+        if ch6a.amount_80ccd1 > _80ccd1_ceiling:
+            results.append(_result(
+                "ITR2-CALC-031",
+                "Deduction u/s 80CCD(1) cannot exceed 10% of salary (salaried) or 20% of "
+                "gross total income (otherwise).",
+                "deductions_chapter6a.amount_80ccd1", str(_80ccd1_ceiling),
+                str(ch6a.amount_80ccd1),
+            ))
+
+    # CBDT rule #538: "Income details" and "Tax computation" must be
+    # disclosed wherever "Taxes Paid" details have been disclosed -- a
+    # return claiming TDS/TCS/advance-tax/self-assessment-tax credits with
+    # zero gross total income anywhere is a genuine data-quality gap. Uses
+    # the already-computed GTI rather than re-enumerating every individual
+    # income-bearing field on ITR2Input.
+    _has_tax_payment_disclosure = bool(
+        inp.tds1_entries or inp.tds2_entries or inp.tds3_entries or inp.tcs_entries
+        or inp.tax_payment_entries or inp.advance_tax_paid > _ZERO
+        or inp.self_assessment_tax_paid > _ZERO
+    )
+    if _has_tax_payment_disclosure and result.gross_total_income <= _ZERO:
+        results.append(_result(
+            "ITR2-CALC-032",
+            "Income details and tax computation must be disclosed wherever Taxes Paid "
+            "details have been disclosed -- this return has tax-payment entries but zero "
+            "gross total income.",
+            "gross_total_income", "> 0", str(result.gross_total_income),
+        ))
+
+    # CBDT rule #445: if net agricultural income for the year exceeds
+    # Rs.5,00,000, at least one agricultural-land detail row is mandatory.
+    # Needs the computed net_agricultural_income, so this is a
+    # post-computation check even though the underlying data
+    # (AgriculturalIncome.land_details) is itself pre-compute input.
+    if result.net_agricultural_income > Decimal("500000"):
+        agri = inp.agricultural_income
+        if agri is None or not agri.land_details:
+            results.append(_result(
+                "ITR2-CALC-033",
+                "Agricultural land details are mandatory when net agricultural income for "
+                "the year exceeds ₹5,00,000.",
+                "agricultural_income.land_details", "at least one row", "none",
+            ))
+
     return results
 
 

@@ -31,6 +31,7 @@ from app.schemas.itr1 import (
     TDS1Entry,
 )
 from app.schemas.itr2 import (
+    AgriculturalIncome,
     CG112AScrip,
     CGAssetType,
     CGTransaction,
@@ -481,6 +482,72 @@ def test_no_negative_tax():
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 cluster 1: Schedule Salary structurally-guaranteed caps
+# (CBDT rules #30/#36/#56/#66 -- no pre-compute validator needed, the
+# calculator already enforces each statutory ceiling by construction, and
+# the ITD builder reads the calculator's capped result field, not the raw
+# claim -- see app/engine/schedules/salary.py's _exempt_transport()/
+# _exempt_vrs() and the entertainment-allowance min() formula in compute()).
+# ---------------------------------------------------------------------------
+
+def test_entertainment_allowance_capped_at_statutory_formula():
+    """CBDT rule #36: entertainment allowance u/s 16(ii) is the least of
+    Rs 5,000, 1/5th of salary, and 20% of salary, for CG/SG/PSU employees
+    under the old regime -- verify a raw claim exceeding the formula is
+    silently capped, not passed through."""
+    inp = _minimal_input(
+        salary_income=SalaryIncome(
+            gross_salary=D("100000"), is_government_employee=True,
+            entertainment_allowance=D("50000"),  # raw claim far above any cap
+        ),
+    )
+    r = compute(inp)
+    sal = r.schedules["salary"]
+    # min(5000, (100000-50000)/5=10000, 100000*0.20=20000) = 5000
+    assert sal.entertainment_allowance == D("5000")
+
+
+def test_transport_allowance_disabled_capped_at_38400():
+    """CBDT rule #56: transport allowance exemption for a disabled employee
+    u/s 10(14)(ii) cannot exceed Rs 38,400/year."""
+    inp = _minimal_input(
+        salary_income=SalaryIncome(
+            gross_salary=D("500000"), is_disabled_employee=True,
+            transport_allowance=D("100000"),  # raw claim far above the cap
+        ),
+    )
+    r = compute(inp)
+    sal = r.schedules["salary"]
+    assert sal.transport_exempt == D("38400")
+
+
+def test_net_agricultural_income_subtracts_unabsorbed_loss():
+    """CBDT rule #436: Net Agricultural income = Gross receipts -
+    Expenditure - Unabsorbed agricultural loss of the previous eight
+    assessment years -- the third term was previously never subtracted at
+    all."""
+    inp = _minimal_input(agricultural_income=AgriculturalIncome(
+        gross_agricultural_income=D("800000"), agricultural_deductions=D("100000"),
+        unabsorbed_agricultural_loss_previous_8_years=D("200000"),
+    ))
+    r = compute(inp)
+    assert r.net_agricultural_income == D("500000")  # 800000 - 100000 - 200000
+
+
+def test_retrenchment_compensation_capped_at_5_lakh():
+    """CBDT rules #30/#66: retrenchment compensation exemption u/s
+    10(10B)(ii) cannot exceed Rs 5,00,000."""
+    inp = _minimal_input(
+        salary_income=SalaryIncome(
+            gross_salary=D("1000000"), retrenchment_compensation=D("800000"),
+        ),
+    )
+    r = compute(inp)
+    sal = r.schedules["salary"]
+    assert sal.retrenchment_exempt == D("500000")
+
+
+# ---------------------------------------------------------------------------
 # Rebate eligibility
 # ---------------------------------------------------------------------------
 
@@ -492,6 +559,40 @@ def test_rebate_nri_eligible_but_low_income():
     )
     r = compute(inp)
     # NRI is not eligible for 87A rebate
+    assert r.rebate_87a == D("0")
+
+
+def test_rebate_rnor_low_income_eligible():
+    """CBDT rule #535: RNOR (Resident but Not Ordinarily Resident) is a
+    species of "resident" under section 6 -- only a non-resident is
+    excluded from Section 87A. Previously this calculator's stricter
+    ``== RESIDENT`` eligibility check denied RNOR the rebate
+    unconditionally; fixed 2026-09-12 to match ordinary-resident treatment.
+    """
+    inp = _minimal_input(
+        tax_regime=TaxRegime.NEW,
+        residential_status=ResidentialStatus.NOT_ORDINARILY_RESIDENT,
+        salary_income=SalaryIncome(gross_salary=D("1000000")),
+    )
+    r = compute(inp)
+    # TI = 925K <= 12L new-regime rebate threshold -> rebate applies, same
+    # as an ordinary resident with identical income (test_salary_new_regime_rebate).
+    assert r.rebate_87a > D("0")
+    assert r.tax_after_rebate == D("0")
+
+
+def test_rebate_rnor_old_regime_above_5l_ineligible():
+    """CBDT rule #535's own explicit carve-out: old regime, RNOR, total
+    income above Rs.5L -> rebate is NOT available (same as an ordinary
+    resident above the old-regime threshold) -- the fix must not make RNOR
+    eligible unconditionally, only on the same terms as a resident.
+    """
+    inp = _minimal_input(
+        tax_regime=TaxRegime.OLD,
+        residential_status=ResidentialStatus.NOT_ORDINARILY_RESIDENT,
+        salary_income=SalaryIncome(gross_salary=D("800000")),
+    )
+    r = compute(inp)
     assert r.rebate_87a == D("0")
 
 

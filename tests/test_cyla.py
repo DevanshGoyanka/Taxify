@@ -182,3 +182,29 @@ def test_cyla_no_os_loss_or_racehorse_income_is_a_no_op():
     assert result.os_loss_setoff_total == D("0")
     assert result.os_loss_remaining == D("0")
     assert not [e for e in result.entries if e.head == "OS"]
+
+
+# ─── CBDT rules #660/#762/#771/#775 (Phase 2 cluster 4): a loss must be
+# FULLY set off whenever sufficient absorbing income exists elsewhere --
+# these confirm the invariant is structurally guaranteed by the CYLA
+# waterfall algorithm itself, not something a separate post-compute
+# validator needs to re-check. ───────────────────────────────────────────
+
+def test_cyla_os_loss_fully_absorbed_when_income_exceeds_loss():
+    """CBDT rule #771: when income available for set-off (elsewhere) exceeds
+    a non-racehorse OS loss, the whole loss must be absorbed, none carried
+    forward."""
+    inp = CYLAInput(os_loss=D("50000"), hp_income=D("30000"), non_salary_income=D("40000"))
+    result = compute(inp)
+    assert result.os_loss_setoff_total == D("50000")
+    assert result.os_loss_remaining == D("0")
+
+
+def test_cyla_stcg_loss_fully_absorbed_when_gains_exceed_loss():
+    """CBDT rule #775: Schedule CG Table E -- the entire current-year
+    capital loss must be set off whenever available capital gains (any
+    basket) exceed it, none carried forward as remaining loss."""
+    inp = CYLAInput(stcg20_income=D("-40000"), stcg30_income=D("60000"))
+    result = compute(inp)
+    assert result.total_loss_set_off == D("40000")
+    assert result.total_loss_remaining == D("0")

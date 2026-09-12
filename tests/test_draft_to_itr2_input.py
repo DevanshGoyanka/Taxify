@@ -20,9 +20,11 @@ from app.engine.calculators.itr2 import compute as compute_itr2
 from app.engine.draft_to_itr2_input import draft_to_itr2_input
 from app.schemas.return_draft import (
     AccumulatedPfEntry,
+    AgriculturalLandParcel,
     AMTCreditEntry,
     AMTDetails,
     BroughtForwardLossEntry,
+    DtaaExemptIncomeEntry,
     CGDtaaEntry,
     CGNriProviso48Block,
     CGSection48Block,
@@ -30,6 +32,7 @@ from app.schemas.return_draft import (
     DividendIncome,
     DtaaIncomeEntry,
     Employer,
+    ExemptIncomeEntry,
     ForeignAssetEntry,
     ForeignSourceIncomeEntry,
     ForeignTaxReliefEntry,
@@ -180,6 +183,24 @@ def test_immovable_ltcg_and_vda_map_and_compute() -> None:
     result = compute_itr2(itr2_input)
     assert not result.errors
     assert result.gross_total_income > 0
+
+
+def test_improvement_financial_year_reaches_itr2_input() -> None:
+    """CBDT rule #186: draft.improvementFinancialYear was already collected
+    by the frontend but never read into ITR2Input -- a malformed value must
+    map to None rather than crashing the pipeline."""
+    draft = _filing_ready_itr2_draft()
+    draft.capitalGainsSchedule.ltImmovable = [ImmovableAssetGain(
+        id="p1", dateOfSale="2025-11-01", dateOfPurchase="2015-04-01",
+        fullConsideration=Decimal("8000000"), acquisitionCost=Decimal("3000000"),
+        improvementCost=Decimal("500000"), improvementFinancialYear="2018-19",
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.cg_transactions[0].year_of_improvement == "2018-19"
+
+    draft.capitalGainsSchedule.ltImmovable[0].improvementFinancialYear = "FY 2018-2019"
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.cg_transactions[0].year_of_improvement is None
 
 
 def test_nri_dtaa_and_proviso48_fields_reach_itr2_input() -> None:
@@ -441,6 +462,69 @@ def test_pti_exempt_income_reaches_exempt_income_schedule() -> None:
     assert itr2_input.exempt_income.pti_exempt_income == Decimal("15000")
 
 
+def test_other_exempt_income_preserves_per_clause_classification() -> None:
+    """CBDT rules #698-745 (Phase 4): the frontend already captures each
+    exempt-income row's own category/subCategory, but _map_exempt_income()
+    previously rolled every row into a single undifferentiated
+    other_exempt/other_description pair, discarding the per-clause
+    classification entirely before it reached ITR2Input."""
+    draft = _filing_ready_itr2_draft()
+    draft.exemptIncome.otherExemptIncome = [
+        ExemptIncomeEntry(category="SRPC", subCategory="10(16)", description="Scholarship", grossAmount=Decimal("20000")),
+        ExemptIncomeEntry(category="OTH", subCategory="10(17A)", description="Award", grossAmount=Decimal("5000")),
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.exempt_income is not None
+    assert itr2_input.exempt_income.other_exempt == Decimal("25000")
+    entries = itr2_input.exempt_income.other_exempt_entries
+    assert len(entries) == 2
+    assert entries[0].category == "SRPC"
+    assert entries[0].sub_category == "10(16)"
+    assert entries[0].description == "Scholarship"
+    assert entries[0].amount == Decimal("20000")
+    assert entries[1].sub_category == "10(17A)"
+
+
+def test_agricultural_land_parcels_reach_agricultural_income_schedule() -> None:
+    """CBDT rule #445: per-parcel land detail was previously never mapped
+    despite the frontend already collecting it."""
+    draft = _filing_ready_itr2_draft()
+    draft.exemptIncome.grossAgriculturalReceipts = Decimal("800000")
+    draft.exemptIncome.agriculturalLandParcels = [
+        AgriculturalLandParcel(
+            nameOfDistrict="Nashik", pinCode="422001", measurementOfLand=Decimal("2.5"),
+            ownedFlag="O", irrigatedFlag="IRG",
+        ),
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.agricultural_income is not None
+    land = itr2_input.agricultural_income.land_details
+    assert len(land) == 1
+    assert land[0].name_of_district == "Nashik"
+    assert land[0].pin_code == "422001"
+    assert land[0].owned_flag == "O"
+
+
+def test_dtaa_exempt_income_reaches_exempt_income_schedule() -> None:
+    """CBDT rule #434: item 4's own DTAA-not-chargeable detail rows were
+    previously never mapped despite the frontend already collecting them."""
+    draft = _filing_ready_itr2_draft()
+    draft.exemptIncome.dtaaExemptIncome = [
+        DtaaExemptIncomeEntry(
+            amountOfIncome=Decimal("30000"), natureOfIncome="Pension",
+            countryName="United Kingdom", countryCode="35", articleOfDtaa="18",
+            headOfIncome="OS", trcFlag="Y",
+        ),
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.exempt_income is not None
+    dtaa = itr2_input.exempt_income.dtaa_exempt_entries
+    assert len(dtaa) == 1
+    assert dtaa[0].amount == Decimal("30000")
+    assert dtaa[0].nature_of_income == "Pension"
+    assert dtaa[0].tax_residency_certificate == "Y"
+
+
 def test_unexplained_income_maps_to_115bbe_si_entry_and_is_taxed() -> None:
     """Schedule OS unexplained income (§68/69/etc) reaches a real 115BBE
     Schedule-SI entry and is taxed -- previously had no path into
@@ -700,10 +784,16 @@ def test_section_80qqb_and_80rrb_reach_itr2_input() -> None:
     draft.deductions.chapterVIA.section80QQB = Decimal("250000")
     draft.deductions.chapterVIA.section80QQBRoyaltyIncome = Decimal("200000")
     draft.deductions.chapterVIA.section80RRB = Decimal("100000")
+    draft.deductions.chapterVIA.section80QQBForm10CCDAckNum = "ACK123456"
+    draft.deductions.chapterVIA.section80RRBForm10CCEAckNum = "ACK654321"
     itr2_input, _breakdown = draft_to_itr2_input(draft)
     assert itr2_input.deduction_80qqb == Decimal("250000")
     assert itr2_input.royalty_income_80qqb == Decimal("200000")
     assert itr2_input.deduction_80rrb == Decimal("100000")
+    # CBDT rules #648/#649: Form 10CCD/10CCE acknowledgement numbers, also
+    # collected by the frontend but never read into ITR2Input until now.
+    assert itr2_input.form_10ccd_ack_number_80qqb == "ACK123456"
+    assert itr2_input.form_10cce_ack_number_80rrb == "ACK654321"
     result = compute_itr2(itr2_input)
     assert not result.errors
     ded = result.schedules["deductions"]

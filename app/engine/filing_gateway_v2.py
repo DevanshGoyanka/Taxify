@@ -546,13 +546,27 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
         )
     try:
         typed_input, breakdown = draft_to_itr1_input(draft)
-        profiles = _property_profiles(draft)
-        filing_profile = _filing_profile(draft)
+        try:
+            profiles = _property_profiles(draft)
+        except FilingGatewayV2Error:
+            # Address not yet complete -- fine for preview compute; the
+            # official CBDT JSON genuinely requires it, so this is
+            # re-enforced strictly in _generate_cbdt_json_itr1 instead.
+            profiles = []
+        try:
+            filing_profile = _filing_profile(draft)
+        except FilingGatewayV2Error:
+            # Personal-profile fields (DOB, PAN, address, etc.) not yet
+            # complete -- fine for preview compute; the official CBDT JSON
+            # genuinely requires them, re-enforced strictly in
+            # _generate_cbdt_json_itr1 instead.
+            filing_profile = None
         tax_return_preparer = _itr1_tax_return_preparer(draft)
-        filing_profile = filing_profile.model_copy(update={
-            "bank_accounts": typed_input.bank_accounts,
-            "tax_return_preparer": tax_return_preparer,
-        })
+        if filing_profile is not None:
+            filing_profile = filing_profile.model_copy(update={
+                "bank_accounts": typed_input.bank_accounts,
+                "tax_return_preparer": tax_return_preparer,
+            })
         # filing_date is the date the return declares it is filed on --
         # verification.date, the same value _reject_section_after_due_date
         # judges the filing section against and that becomes the CBDT
@@ -566,7 +580,7 @@ def compute_canonical_itr1(draft: ReturnDraft) -> ITR1PipelineResult:
         due_date = get_due_date("ITR-1", draft.assessmentYear or "2026-27")
         typed_input = typed_input.model_copy(update={
             "filing_profile": filing_profile,
-            "property_profile": profiles[0],
+            "property_profile": profiles[0] if profiles else None,
             "property_profiles": profiles,
             "tax_return_preparer": tax_return_preparer,
             "filing_date": filing_date,
@@ -2076,6 +2090,14 @@ def _generate_cbdt_json_itr1(draft: ReturnDraft) -> tuple[dict[str, Any], dict[s
     """ITR-1 official JSON generation (the original generate_cbdt_json body)."""
     pipeline = compute_canonical_itr1(draft)
     typed_input = pipeline.typed_input
+    if typed_input.property_profile is None:
+        # Preview compute tolerates a missing address; the official CBDT
+        # JSON does not -- re-raise the actionable error here instead.
+        _property_profiles(draft)
+    if typed_input.filing_profile is None:
+        # Same tolerance/strictness split as property_profile above, for
+        # the personal-profile fields (DOB, PAN, address, etc.).
+        _filing_profile(draft)
 
     from app.engine.validators.itr1 import (
         run_input_validation,

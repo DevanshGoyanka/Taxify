@@ -65,6 +65,7 @@ from typing import Any, Optional
 from app.schemas.itr1 import TaxRegime
 from app.schemas.itr2 import (
     AgriculturalIncome,
+    AgriculturalLandDetail,
     AMTCreditItem,
     AMTInput,
     AssetLiabilityInput,
@@ -75,6 +76,9 @@ from app.schemas.itr2 import (
     CGTransaction,
     ESOPDeferralInput,
     ExemptIncome,
+    ExemptIncomeDtaaEntry,
+    ExemptIncomeOtherEntry,
+    Schedule80CCCEntry,
     ForeignAssetEntry as ITR2ForeignAssetEntry,
     ForeignAssetType as ITR2ForeignAssetType,
     FSICountryEntry,
@@ -149,6 +153,24 @@ def _map_residential_status(value: str) -> ITR2ResidentialStatus:
 # ---------------------------------------------------------------------------
 # Capital gains — full Schedule CG (112A/115AD scrips, land/building, VDA)
 # ---------------------------------------------------------------------------
+
+def _normalize_fy_label(value: Optional[str]) -> Optional[str]:
+    """Validate a free-text "financial year" field against the official
+    ``YYYY-YY`` shape (CGTransaction.year_of_improvement's own pattern).
+
+    The frontend's ``improvementFinancialYear`` is unconstrained free text,
+    so historical rows may hold something else entirely (a plain year, an
+    "FY " prefix, blank). Returning ``None`` for anything that doesn't fit
+    -- rather than raising -- means a malformed value surfaces as
+    ITR2-IN-CG-115 asking the user to fix it, instead of crashing the whole
+    compute pipeline for an unrelated return.
+    """
+    if not value or len(value) != 7 or value[4] != "-":
+        return None
+    if not (value[:4].isdigit() and value[5:].isdigit()):
+        return None
+    return value
+
 
 def _map_112a_scrip_rows(rows) -> tuple[list[CG112AScrip], int]:
     """Map one Schedule-112A-shaped row list into ``CG112AScrip`` rows.
@@ -227,6 +249,7 @@ def _map_immovable_gains(draft: ReturnDraft) -> list[CGTransaction]:
                 indexed_cost=row.indexedAcquisitionCost or Decimal("0"),
                 improvement_cost=row.improvementCost or Decimal("0"),
                 indexed_improvement=row.indexedImprovementCost or Decimal("0"),
+                year_of_improvement=_normalize_fy_label(row.improvementFinancialYear),
                 expenditure_on_transfer=row.transferExpenses,
                 explicit_long_term=is_long_term,
                 deduction_us54=row.exemptionAmount or Decimal("0") if row.exemptionSection == "54" else Decimal("0"),
@@ -353,23 +376,46 @@ def _map_agricultural_income(draft: ReturnDraft) -> Optional[AgriculturalIncome]
     return AgriculturalIncome(
         gross_agricultural_income=ei.grossAgriculturalReceipts,
         agricultural_deductions=ei.agriculturalExpenses,
+        # CBDT rule #436 (Phase 4, 2026-09-12): previously never mapped
+        # despite the frontend already collecting it.
+        unabsorbed_agricultural_loss_previous_8_years=ei.unabsorbedAgriculturalLossPreviousEightYears,
+        # CBDT rule #445 (Phase 4, 2026-09-12): per-parcel land detail,
+        # previously never mapped despite the frontend already collecting
+        # it (draft.exemptIncome.agriculturalLandParcels).
+        land_details=[
+            AgriculturalLandDetail(
+                name_of_district=row.nameOfDistrict,
+                pin_code=row.pinCode,
+                measurement_of_land=row.measurementOfLand,
+                owned_flag=row.ownedFlag,
+                irrigated_flag=row.irrigatedFlag,
+            )
+            for row in ei.agriculturalLandParcels
+            if row.nameOfDistrict and row.pinCode
+        ],
     )
 
 
 def _map_exempt_income(draft: ReturnDraft) -> Optional[ExemptIncome]:
     """Map ``otherExemptIncome`` into ``ExemptIncome``.
 
-    Deliberately not bucketed by CBDT subcategory code (ppf/sukanya/bonds/
-    NRE/firm-share) — several of those codes have no unambiguous match in
-    the existing ``ExemptIncomeSubCategory`` list, and guessing risks
-    misclassifying real exempt income. Everything rolls into ``other_exempt``
-    with the total preserved exactly; refining the per-category bucketing is
-    a follow-up once real user data shows which subcodes actually appear.
+    CBDT rules #698-745 (Phase 4, 2026-09-12): the frontend's
+    ExemptIncomeWorkspace.tsx already captures each entry's own
+    category/subCategory/description/amount, matching the official
+    OthersIncDtlEI row shape exactly (confirmed against the official JSON
+    schema) -- previously this mapper discarded that per-clause
+    classification entirely, rolling everything into the single
+    `other_exempt`/`other_description` aggregate below. Both are now
+    populated: `other_exempt_entries` preserves each row for per-clause
+    disclosure and dedup checking; `other_exempt`/`other_description` stay
+    exactly as before for every existing consumer of the aggregate.
     """
     entries = draft.exemptIncome.otherExemptIncome
     total = sum((row.grossAmount for row in entries), Decimal("0"))
     pti_exempt = draft.exemptIncome.passThroughIncomeNotChargeableToTax
-    if total <= 0 and pti_exempt <= 0:
+    dtaa_entries = draft.exemptIncome.dtaaExemptIncome
+    has_dtaa = any(row.amountOfIncome > 0 for row in dtaa_entries)
+    if total <= 0 and pti_exempt <= 0 and not has_dtaa:
         return None
     return ExemptIncome(
         other_exempt=total,
@@ -377,6 +423,36 @@ def _map_exempt_income(draft: ReturnDraft) -> Optional[ExemptIncome]:
             row.description for row in entries if row.description
         )[:125] or None,
         pti_exempt_income=pti_exempt,
+        other_exempt_entries=[
+            ExemptIncomeOtherEntry(
+                category=row.category,
+                sub_category=row.subCategory,
+                description=row.description or "Other exempt income",
+                amount=row.grossAmount,
+            )
+            for row in entries if row.grossAmount > 0
+        ],
+        # CBDT rule #434 (Phase 4, 2026-09-12): item 4's own DTAA-not-
+        # chargeable detail rows, previously never mapped despite the
+        # frontend already collecting them (draft.exemptIncome.dtaaExemptIncome).
+        dtaa_exempt_entries=[
+            ExemptIncomeDtaaEntry(
+                amount=row.amountOfIncome,
+                nature_of_income=row.natureOfIncome or "Not specified",
+                country_name=row.countryName or "Not specified",
+                country_code=row.countryCode or "91",
+                dtaa_article=row.articleOfDtaa or "NA",
+                # ITR-2 has no Business/Profession head at all -- "PG" can
+                # only appear from a stale ITR-3 draft's leftover data.
+                # Passed through as-is (not silently remapped to another
+                # head) so ExemptIncomeDtaaEntry's own Literal validation
+                # raises a clear, actionable DraftMappingError instead of
+                # quietly changing what the taxpayer disclosed.
+                head_of_income=row.headOfIncome,  # type: ignore[arg-type]
+                tax_residency_certificate=row.trcFlag,
+            )
+            for row in draft.exemptIncome.dtaaExemptIncome if row.amountOfIncome > 0
+        ],
     )
 
 
@@ -481,6 +557,12 @@ def _map_spi_entries(draft: ReturnDraft) -> list[SPIEntry]:
 
 
 def _map_pti_entries(draft: ReturnDraft) -> list[PTIEntry]:
+    # `exempt_income_23fbb` has no frontend field yet (PassThroughIncomeEntry
+    # in types.ts captures only entityName/entityPAN/incomeHead/section/
+    # incomeAmount/tdsCredit) -- defaults to 0 here until one exists.
+    # ITR2-IN-EI-002 correctly forbids claiming a nonzero Schedule EI Sl.5
+    # in the meantime rather than letting it silently diverge from Schedule
+    # PTI's always-zero exempt total.
     return [
         PTIEntry(
             entity_name=row.entityName,
@@ -1088,6 +1170,16 @@ def draft_to_itr2_input(
         )
     else:
         schedule_80e_entries, loan_details_80ee_list, loan_details_80eea_list, loan_details_80eeb_list = [], [], [], []
+    # CBDT rules #693/#758: per-row Section 80CCC pension-fund detail, mirroring
+    # ITR-1/ITR-4's identical mapping of this same draft field.
+    schedule_80ccc_entries = [
+        Schedule80CCCEntry(
+            identifier_type=row.identifierType,
+            identifier_name=row.identifierName,
+            amount=row.amount,
+        )
+        for row in draft.deductions.pensionContribution80CCC
+    ] if tax_regime == TaxRegime.OLD else []
     property_stamp_duty_value_80eea = (
         draft.deductions.loans.section80EEAStampDutyValue if loan_details_80eea_list else None
     )
@@ -1214,6 +1306,7 @@ def draft_to_itr2_input(
         schedule_80dd=schedule_80dd,
         schedule_80u=schedule_80u,
         schedule_80c_entries=schedule_80c_entries,
+        schedule_80ccc_entries=schedule_80ccc_entries,
         schedule_80e_entries=schedule_80e_entries,
         loan_details_80ee_list=loan_details_80ee_list,
         loan_details_80eea_list=loan_details_80eea_list,
@@ -1229,6 +1322,8 @@ def draft_to_itr2_input(
         deduction_80qqb=draft.deductions.chapterVIA.section80QQB,
         royalty_income_80qqb=draft.deductions.chapterVIA.section80QQBRoyaltyIncome,
         deduction_80rrb=draft.deductions.chapterVIA.section80RRB,
+        form_10ccd_ack_number_80qqb=draft.deductions.chapterVIA.section80QQBForm10CCDAckNum or None,
+        form_10cce_ack_number_80rrb=draft.deductions.chapterVIA.section80RRBForm10CCEAckNum or None,
         pran_number=draft.deductions.chapterVIA.pranNumber or None,
         tds1_entries=tds1,
         tds2_entries=tds2,

@@ -4,7 +4,18 @@ Deduction for contributions to the Agniveer Corpus Fund (Agneepath Scheme).
 Section 80CCH has NO statutory rupee ceiling — the full contribution amount
 is deductible.
 
-Allowed in BOTH old and new regimes (Section 115BAC).
+Allowed in BOTH old and new regimes (Section 115BAC). Section 80CCH(2) of
+the Income Tax Act explicitly states this deduction applies "whether or not
+the assessee has exercised the option under sub-section (1A) of section
+115BAC" — i.e. an express statutory carve-out from the new regime's general
+Chapter VI-A restriction, the same treatment given to Section 80CCD(2).
+
+CBDT rule #350 in ITR-2's own official validation-rules PDF (AY 2026-27)
+claims "Deduction u/s 80CCH(1) is not allowed in New (Default) Tax Regime
+u/s 115BAC" — this contradicts the statute's own explicit carve-out above
+and is treated as a drafting error in CBDT's PDF, not followed, matching the
+precedent set by rules #323/#347 (see app/engine/validators/itr2/
+input_rules.py's own comments on those). No regime gating is added here.
 """
 
 from __future__ import annotations

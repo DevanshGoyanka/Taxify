@@ -1261,6 +1261,9 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
     # PassThrIncOSChrgblSplRate -- now dispatched by the calculator's own
     # PTI_OS_SPECIAL_RATE_SECTIONS-keyed loop, see `block`'s own assignment
     # above).
+    # CBDT rule #208: Sl.no 2 (this total) must fold in 2f (DTAA-rate OS
+    # income, result.os_dtaa_income) alongside 2a/2b/2c/2d/2e above -- this
+    # component was previously omitted entirely.
     block["IncChargeableSpecialRates"] = (
         block["LtryPzzlChrgblUs115BB"]
         + block["IncChrgblUs115BBJ"]
@@ -1268,6 +1271,7 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         + block["OthersGross"]
         + block["TaxAccumulatedBalRecPF"]["TotalIncomeBenefit"]
         + block["PassThrIncOSChrgblSplRate"]
+        + _to_rupees(result.os_dtaa_income)
     )
     # Form item "1b": Interest, Gross (bi+bii+biii+biv+bv+bvi+bvii+bviii+bix).
     # Previously only bi+bii+biii (savings/FD/refund interest) -- the other
@@ -1994,11 +1998,20 @@ def _cg_land_building_row_ltcg(asset: Any) -> dict[str, Any]:
         "AquisitCost": _to_rupees(asset.acquisition_cost),
         "AquisitCostIndex": _to_rupees(asset.indexed_acquisition_cost),
         # Unlike STCG's flat ImproveCost, the LTCG schema's CostOfImprovements
-        # is a nested object with an (unused here -- no year-by-year
-        # breakdown captured) per-improvement detail array plus indexed/
-        # non-indexed totals.
+        # is a nested object with a per-improvement detail array (one
+        # aggregate row when year_of_improvement is known -- CBDT rule #186)
+        # plus indexed/non-indexed totals.
         "CostOfImprovements": {
-            "CostOfImprovementsDtls": [],
+            "CostOfImprovementsDtls": (
+                [{
+                    "slno": 1,
+                    "ImproveCost": _to_rupees(asset.improvement_cost),
+                    "ImproveDate": asset.year_of_improvement,
+                    "CostOfImpIndex": _to_rupees(asset.indexed_improvement_cost),
+                }]
+                if asset.improvement_cost > 0 and asset.year_of_improvement
+                else []
+            ),
             "TotalImprovecost": _to_rupees(asset.improvement_cost),
             "TotalindexImprovecost": _to_rupees(asset.indexed_improvement_cost),
         },
@@ -2258,7 +2271,32 @@ def _112a_style_schedule(source_rows: list[dict[str, Any]], suffix: str) -> Opti
     rows. Both official schedules share an identical per-row type
     (``Schedule112A115ADType``) and an identical set of aggregate fields,
     differing only by a ``112A``/``115AD`` field-name suffix -- so one
-    shared builder serves both schedules."""
+    shared builder serves both schedules.
+
+    CBDT rules #85/86/92/93 (ITR-2 official Validation Rules PDF) read
+    "Col. 7 Cost of acquisition without indexation should be higher of
+    Col. 8 and Col. 9" -- which by label would suggest the ``deemed_cost``
+    grandfathering formula below (``max(cost, min(fmv, sale))``) belongs in
+    the ``CostAcqWithoutIndx`` output key, not ``AcquisitionCost``. This was
+    investigated (2026-09-12): the official ITR-2 JSON schema
+    (``Reference Docs by CBDT & ITD/Official JSON Schema/ITR-2_2026_Main_
+    V1.1 (2).json``) confirms both keys exist as separate mandatory fields
+    on ``Schedule112A115ADType`` but carries no field-level description text
+    to resolve which is which, and the gazetted ITR-2 form PDF (``Official
+    ITR FORMS/ITR-2-2026-Eng.pdf``) does not print Schedule 112A's own
+    per-scrip column table (only cross-references it from Schedule CG). No
+    primary source available in this repo definitively confirms which key
+    the grandfathering formula belongs in -- current code's split (raw
+    ``item["cost"]`` -> ``CostAcqWithoutIndx``, ``deemed_cost`` ->
+    ``AcquisitionCost``) is applied consistently at both row and aggregate
+    level, so this is not an obviously-accidental swap either. Do not change
+    this assignment without either (a) a live ITD ``validateItr``/portal
+    test distinguishing the two field values, or (b) locating an actual
+    field-description source -- guessing from the JSON key name alone risks
+    the exact class of bug this codebase has already been burned by (see
+    CLAUDE.md's note on ``ITR{N}_TaxComputation.NetTaxLiability``). Rules
+    #85/86/92/93 remain tracked as Partially Implemented pending that
+    verification, not Implemented or silently "fixed"."""
     if not source_rows:
         return None
     rows = []
@@ -2411,7 +2449,7 @@ _VIA_SECTION_TO_FIELD: dict[str, str] = {
 }
 
 
-def _schedule_via(result: ITR2Result) -> Optional[dict[str, Any]]:
+def _schedule_via(result: ITR2Result, input_data: Optional[ITR2Input] = None) -> Optional[dict[str, Any]]:
     """Serialize Schedule VIA with the real per-section breakdown.
 
     ``result.schedules["deductions"].breakdown`` already holds each
@@ -2499,8 +2537,22 @@ def _schedule_via(result: ITR2Result) -> Optional[dict[str, Any]]:
     # doc's Schedule OS GrossIncChrgblTaxAtAppRate finding).
     deduct_und_chap_via["TotalChapVIADeductions"] = sum(section_fields.values())
 
+    usr_deduct_und_chap_via = dict(deduct_und_chap_via)
+    # CBDT rules #693/#758: per-row Section 80CCC pension-fund detail
+    # (official schema: UsrDeductUndChapVIA.PensionContribution80CCC only --
+    # DeductUndChapVIA has no such array).
+    if input_data is not None and input_data.schedule_80ccc_entries:
+        usr_deduct_und_chap_via["PensionContribution80CCC"] = [
+            {
+                "TypeofIdentifier": entry.identifier_type,
+                "NameofIdentifier": entry.identifier_name,
+                "Amount": _to_rupees(entry.amount),
+            }
+            for entry in input_data.schedule_80ccc_entries
+        ]
+
     return {
-        "UsrDeductUndChapVIA": dict(deduct_und_chap_via),
+        "UsrDeductUndChapVIA": usr_deduct_und_chap_via,
         "DeductUndChapVIA": deduct_und_chap_via,
     }
 
@@ -3206,45 +3258,84 @@ def _schedule_ei(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
     # is "III Total Income from DTAA claimed as not chargeable to tax" --
     # the SUM of the paired detail rows immediately above it
     # (IncNotChrgblAsPerDTAADtls), not a duplicate of item 1 (InterestInc).
-    # No mapper populates that detail array for ITR-2 yet, so this is
-    # correctly 0 until one exists -- computed from the array itself so it
-    # self-corrects automatically the day it does, rather than needing a
-    # second, independently-maintained sum.
-    inc_not_chrgbl_as_per_dtaa_dtls: list[dict[str, Any]] = []
+    # CBDT rule #434 (Phase 4, 2026-09-12): the mapper now populates
+    # ExemptIncome.dtaa_exempt_entries, so this self-corrects automatically
+    # as the comment here originally anticipated.
+    inc_not_chrgbl_as_per_dtaa_dtls: list[dict[str, Any]] = [
+        {
+            "AmountOfIncome": _to_rupees(row.amount),
+            "NatureOfIncome": row.nature_of_income,
+            "CountryName": row.country_name,
+            "CountryCodeExcludingIndia": row.country_code,
+            "ArticleOfDTAA": row.dtaa_article,
+            "HeadOfIncome": row.head_of_income,
+            "TRCFlag": row.tax_residency_certificate,
+        }
+        for row in (exempt.dtaa_exempt_entries if exempt else [])
+    ]
     inc_not_chrgbl_to_tax = sum(
         (row.get("AmountOfIncome", _ZERO) for row in inc_not_chrgbl_as_per_dtaa_dtls), _ZERO
     )
     # Item 5 ("Pass through income claimed as not chargeable to tax").
-    # `PTIEntry`/official `SchedulePTIDtls` have no field for this at all --
-    # every PTI row is inherently taxable, routed to its own income head --
-    # so there is no Schedule-PTI figure this could be cross-checked
-    # against; captured instead as its own standalone declared amount
-    # (`ExemptIncome.pti_exempt_income`), the same way every other Schedule
-    # EI item above is a direct declared figure, not a derived one.
+    # CBDT rule #432 requires this to equal Schedule PTI's own exempt total
+    # (IncClmdPTI.TotalSec23FBB summed across pti_entries) -- `PTIEntry.
+    # exempt_income_23fbb` now carries that per-entity figure and
+    # `ITR2-IN-EI-002` (input_rules.py) enforces the cross-schedule equality
+    # pre-compute, so the two numbers can never diverge by the time this
+    # builder runs.
     pass_thr_inc_not_chrgbl_tax = exempt.pti_exempt_income if exempt else _ZERO
     # Form item 6 "Total (1+2+3+4+5)".
     total_exempt = (
         interest_inc + result.net_agricultural_income + others
         + inc_not_chrgbl_to_tax + pass_thr_inc_not_chrgbl_tax
     )
-    # Item 3's own OthersIncDtls detail row -- previously always [] even
-    # though the real free-text description (ExemptIncome.other_description)
-    # and its scalar amount (other_exempt, already correctly folded into
-    # item 3's "Others" total above) were both captured.
-    others_inc_dtls = (
-        [{
+    # Item 3's own OthersIncDtls detail rows -- CBDT rules #698-745
+    # (Phase 4, 2026-09-12): one row per other_exempt_entries item, each
+    # carrying its own official Category/SubCategory, so the per-clause
+    # classification the frontend already captures is no longer collapsed
+    # into a single undifferentiated total. Falls back to the old
+    # single-row-with-no-Category/SubCategory shape only when
+    # other_exempt_entries is empty (e.g. an ExemptIncome constructed
+    # directly, bypassing the mapper) so `other_exempt`'s total is never
+    # silently dropped from disclosure.
+    if exempt and exempt.other_exempt_entries:
+        others_inc_dtls = [
+            {
+                "Category": row.category,
+                "SubCategory": row.sub_category,
+                "Description": row.description,
+                "OthAmount": _to_rupees(row.amount),
+            }
+            for row in exempt.other_exempt_entries
+        ]
+    elif exempt and exempt.other_exempt > 0:
+        others_inc_dtls = [{
             "Description": (exempt.other_description if exempt else None) or "Other exempt income",
             "OthAmount": _to_rupees(exempt.other_exempt),
         }]
-        if exempt and exempt.other_exempt > 0 else []
-    )
+    else:
+        others_inc_dtls = []
+    # CBDT rule #445 (Phase 4, 2026-09-12): per-parcel agricultural land
+    # detail, previously always [] regardless of AgriculturalIncome.
+    # land_details -- the mapper now populates that field from the
+    # frontend's already-collected agriculturalLandParcels.
+    exc_net_agri_inc_dtls = [
+        {
+            "NameOfDistrict": land.name_of_district,
+            "PinCode": int(land.pin_code),
+            "MeasurementOfLand": float(land.measurement_of_land),
+            "AgriLandOwnedFlag": land.owned_flag,
+            "AgriLandIrrigatedFlag": land.irrigated_flag,
+        }
+        for land in (agri.land_details if agri else [])
+    ]
     return {
         "InterestInc": _to_rupees(interest_inc),
         "GrossAgriRecpt": _to_rupees(agri.gross_agricultural_income if agri else _ZERO),
         "ExpIncAgri": _to_rupees(agri.agricultural_deductions if agri else _ZERO),
-        "UnabAgriLossPrev8": 0,
+        "UnabAgriLossPrev8": _to_rupees(agri.unabsorbed_agricultural_loss_previous_8_years if agri else _ZERO),
         "NetAgriIncOrOthrIncRule7": _to_rupees(result.net_agricultural_income),
-        "ExcNetAgriInc": {"ExcNetAgriIncDtls": []},
+        "ExcNetAgriInc": {"ExcNetAgriIncDtls": exc_net_agri_inc_dtls},
         "OthersInc": {"OthersIncDtls": others_inc_dtls},
         "Others": _to_rupees(others),
         "IncNotChrgblAsPerDTAA": {"IncNotChrgblAsPerDTAADtls": inc_not_chrgbl_as_per_dtaa_dtls},
@@ -3397,7 +3488,15 @@ def _fa_inc_tax_sch_no(item: ForeignAssetEntry, label: str) -> str:
 
 
 def _schedule_fa(input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize foreign-asset disclosures by category."""
+    """Serialize foreign-asset disclosures by category.
+
+    CBDT rule #746 ("Schedule FA has to be filled if Sl.19 of Part B-TTI
+    [``AssetOutIndiaFlag``] is 'Yes'") is structurally guaranteed: both this
+    schedule's presence and ``AssetOutIndiaFlag`` (set below, near
+    ``"AssetOutIndiaFlag": "YES" if input_data.foreign_assets else "NO"``)
+    derive from the exact same ``input_data.foreign_assets`` list, so they
+    can never disagree.
+    """
     if not input_data.foreign_assets:
         return None
     result: dict[str, Any] = {
@@ -3708,7 +3807,21 @@ def _schedule_spi(input_data: ITR2Input) -> Optional[dict[str, Any]]:
 # ============================================================================
 
 def _schedule_pti(input_data: ITR2Input) -> Optional[dict[str, Any]]:
-    """Serialize actual pass-through income rows."""
+    """Serialize actual pass-through income rows.
+
+    CBDT rules #654-657/#441/#658 (Col.9=Col.7-Col.8; ShortTermCG=
+    STCG_Sec111A+STCG_Others; LongTermCG=LTCG_Sec112A+LTCG_Others; IncOthSrc=
+    OS_Dividend+OS_Others; IncClmdPTI total=Sec23FBB+SecB+SecC) are all
+    structurally guaranteed here, not merely asserted: every "regular()" row
+    sets NetIncomeLoss=amount and AmountOfInc-CurrYrLossShareByInvstFund=
+    max(0,amount)-max(0,-amount)=amount identically, so Col.9=Col.7-Col.8
+    always; each CG/OS split (stcg_111a/stcg_other, ltcg_112a/ltcg_other,
+    OS_Dividend=0/OS_Others=os) is built as two mutually exclusive branches of
+    the same source amount, so the two halves always sum back to the whole;
+    IncClmdPTI's SecB/SecC are omitted (optional in the official schema) and
+    TotalSec23FBB==Sec23FBB by construction below, so the a+b+c identity
+    holds too. No separate cross-check code is needed for these six rules.
+    """
     if not input_data.pti_entries:
         return None
 
@@ -3749,7 +3862,10 @@ def _schedule_pti(input_data: ITR2Input) -> Optional[dict[str, Any]]:
                 "LTCG_Sec112A": regular(ltcg_112a, item.tds_credit if ltcg_112a else _ZERO),
                 "LTCG_Others": regular(ltcg_other, item.tds_credit if ltcg_other else _ZERO),
             },
-            "IncClmdPTI": {"TotalSec23FBB": other(), "Sec23FBB": other()},
+            "IncClmdPTI": {
+                "TotalSec23FBB": other(item.exempt_income_23fbb),
+                "Sec23FBB": other(item.exempt_income_23fbb),
+            },
             "IncOthSrc": other(os, item.tds_credit if os else _ZERO),
             "OS_Dividend": other(),
             "OS_Others": other(os, item.tds_credit if os else _ZERO),
@@ -3793,7 +3909,6 @@ def _schedule_esop(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     if not input_data.esop_deferrals:
         return None
     first = input_data.esop_deferrals[0]
-    esop_event = {"SecurityType": "NS", "ScheduleESOPEventDtlsType": [], "CeasedEmployee": "N"}
 
     # Each AY block's schema fields (TaxDeferredBFEarlierAY, TaxPayableCurrentAY,
     # BalanceTaxCF) are single scalars, not an array -- multiple entries
@@ -3802,10 +3917,15 @@ def _schedule_esop(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     # `{e.assessment_year: e for e in ...}` dict comprehension instead kept
     # only the last entry for a given year, silently discarding every
     # earlier same-year entry's deferred/payable/carried-forward amounts.
-    aggregated_by_ay: dict[str, dict[str, Decimal]] = {}
+    # SecurityType/CeasedEmployee are categorical, not additive -- the first
+    # entry for a given AY is the representative row (real-world usage is
+    # almost always one entry per AY).
+    aggregated_by_ay: dict[str, dict[str, Any]] = {}
     for e in input_data.esop_deferrals:
         bucket = aggregated_by_ay.setdefault(
-            e.assessment_year, {"bf": _ZERO, "payable": _ZERO, "cf": _ZERO}
+            e.assessment_year,
+            {"bf": _ZERO, "payable": _ZERO, "cf": _ZERO,
+             "security_type": e.security_type, "ceased_employee": e.ceased_employee},
         )
         bucket["bf"] += e.tax_deferred_brought_forward
         bucket["payable"] += e.tax_payable_current_year
@@ -3814,7 +3934,13 @@ def _schedule_esop(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     def ay_block(ay_label: str, tax_key: str) -> dict[str, Any]:
         bucket = aggregated_by_ay.get(ay_label)
         if bucket is None:
+            esop_event = {"SecurityType": "NS", "ScheduleESOPEventDtlsType": [], "CeasedEmployee": "N"}
             return {"AssessmentYear": ay_label, "TaxDeferredBFEarlierAY": 0, "ScheduleESOPEventDtls": esop_event, tax_key: 0, "TaxPayableCurrentAY": 0, "BalanceTaxCF": 0}
+        esop_event = {
+            "SecurityType": bucket["security_type"],
+            "ScheduleESOPEventDtlsType": [],
+            "CeasedEmployee": "Y" if bucket["ceased_employee"] else "N",
+        }
         return {
             "AssessmentYear": ay_label,
             "TaxDeferredBFEarlierAY": _to_rupees(bucket["bf"]),
@@ -4443,7 +4569,7 @@ def build_itr2_json(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]
         "Schedule115AD": _schedule_115ad(input_data),
         "ScheduleVDA": _schedule_vda(input_data),
         "ScheduleCFL": _schedule_cfl(result, input_data),
-        "ScheduleVIA": _schedule_via(result),
+        "ScheduleVIA": _schedule_via(result, input_data),
         "ScheduleSI": _schedule_si(result),
         "ScheduleEI": _schedule_ei(result, input_data),
         "ScheduleFSI": _schedule_fsi(input_data),

@@ -61,6 +61,11 @@ class CGAsset:
     indexed_acquisition_cost: Decimal = _ZERO
     improvement_cost: Decimal = _ZERO
     indexed_improvement_cost: Decimal = _ZERO
+    # CBDT rule #186: the official LTCG land/building schema's
+    # CostOfImprovements.CostOfImprovementsDtls detail array requires an AY
+    # "ImproveDate" per improvement event whenever any improvement cost is
+    # declared -- carried through from CGTransaction.year_of_improvement.
+    year_of_improvement: str = ""
     expenditure_on_transfer: Decimal = _ZERO
     total_deductions: Decimal = _ZERO
     balance: Decimal = _ZERO
@@ -882,6 +887,7 @@ def _classify(transactions) -> tuple:
                 indexed_acquisition_cost=_decimal_attr(tx, "indexed_cost"),
                 improvement_cost=_decimal_attr(tx, "improvement_cost"),
                 indexed_improvement_cost=_decimal_attr(tx, "indexed_improvement"),
+                year_of_improvement=str(_attr(tx, "year_of_improvement", "") or ""),
                 expenditure_on_transfer=expenditure,
                 exemptions=list(getattr(tx, "exemptions", None) or []),
             )

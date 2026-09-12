@@ -17,10 +17,10 @@ from app.engine.calculators.itr2 import compute as compute_itr2, ITR2Result
 from app.engine.schedules.amt import AMTResult
 from app.engine.schedules.capital_gains import CGResult, CurrentYearLossCG
 from app.engine.validators.itr2.calc_rules import run_calc_validation
-from app.schemas.itr1 import FilingAddress, SalaryIncome, TaxRegime
+from app.schemas.itr1 import Chapter6ADeductions, FilingAddress, SalaryIncome, TaxRegime
 from app.schemas.itr2 import (
-    AgeBracket, AMTInput, AssetLiabilityInput, ITR2FilingProfile, ITR2Input,
-    OtherSourcesIncome, ReturnFileSection,
+    AgeBracket, AgriculturalIncome, AgriculturalLandDetail, AMTInput, AssetLiabilityInput,
+    ITR2FilingProfile, ITR2Input, OtherSourcesIncome, ReturnFileSection,
 )
 
 
@@ -173,3 +173,104 @@ def test_CALC_030_no_advisory_for_belated_return_with_no_cg_loss():
         current_year_losses=CurrentYearLossCG(total_cg_loss=Decimal("0")),
     )})
     assert not emitted(run_calc_validation(inp, result), "ITR2-CALC-030")
+
+
+def test_CALC_031_80ccd1_exceeds_10_pct_of_salary_fails():
+    """CBDT rule #348: Section 80CCD(1) is limited to 10% of salary for a
+    salaried individual (a sub-ceiling independent of the shared 80CCE pool
+    cap that section_80c.py's compute_80ccd1() already applies)."""
+    inp = ITR2Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("100000")),
+    )
+    result = compute_itr2(inp)
+    assert failed(run_calc_validation(inp, result), "ITR2-CALC-031")
+
+
+def test_CALC_031_80ccd1_within_10_pct_of_salary_passes():
+    inp = ITR2Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("40000")),
+    )
+    result = compute_itr2(inp)
+    assert not failed(run_calc_validation(inp, result), "ITR2-CALC-031")
+
+
+def test_CALC_031_80ccd1_within_20_pct_of_gti_for_non_salaried_passes():
+    inp = ITR2Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("1000000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("150000")),
+    )
+    result = compute_itr2(inp)
+    assert not failed(run_calc_validation(inp, result), "ITR2-CALC-031")
+
+
+def test_CALC_032_tax_payment_disclosed_with_zero_gti_fails():
+    """CBDT rule #538: tax-payment details disclosed with zero gross total
+    income anywhere is a genuine data-quality gap."""
+    from app.schemas.itr1 import TDS2Entry
+    inp = ITR2Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        tds2_entries=[TDS2Entry(
+            deductor_tan="MUMA12345B", deductor_name="Bank", tds_section="194A",
+            gross_amount=Decimal("10000"), tds_deducted=Decimal("1000"),
+            tds_claimed_this_year=Decimal("1000"),
+        )],
+    )
+    result = compute_itr2(inp)
+    assert failed(run_calc_validation(inp, result), "ITR2-CALC-032")
+
+
+def test_CALC_032_tax_payment_disclosed_with_positive_gti_passes():
+    inp = ITR2Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        advance_tax_paid=Decimal("10000"),
+    )
+    result = compute_itr2(inp)
+    assert not failed(run_calc_validation(inp, result), "ITR2-CALC-032")
+
+
+def test_CALC_032_no_tax_payment_and_zero_gti_passes():
+    inp = ITR2Input(age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD)
+    result = compute_itr2(inp)
+    assert not failed(run_calc_validation(inp, result), "ITR2-CALC-032")
+
+
+def test_CALC_033_high_agricultural_income_without_land_details_fails():
+    """CBDT rule #445: agricultural land details are mandatory when net
+    agricultural income for the year exceeds Rs.5,00,000."""
+    inp = ITR2Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        agricultural_income=AgriculturalIncome(gross_agricultural_income=Decimal("800000")),
+    )
+    result = compute_itr2(inp)
+    assert result.net_agricultural_income > Decimal("500000")
+    assert failed(run_calc_validation(inp, result), "ITR2-CALC-033")
+
+
+def test_CALC_033_high_agricultural_income_with_land_details_passes():
+    inp = ITR2Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        agricultural_income=AgriculturalIncome(
+            gross_agricultural_income=Decimal("800000"),
+            land_details=[AgriculturalLandDetail(
+                name_of_district="Nashik", pin_code="422001",
+                measurement_of_land=Decimal("2.5"), owned_flag="O", irrigated_flag="IRG",
+            )],
+        ),
+    )
+    result = compute_itr2(inp)
+    assert not failed(run_calc_validation(inp, result), "ITR2-CALC-033")
+
+
+def test_CALC_033_low_agricultural_income_without_land_details_passes():
+    inp = ITR2Input(
+        age_bracket=AgeBracket.BELOW_60, tax_regime=TaxRegime.OLD,
+        agricultural_income=AgriculturalIncome(gross_agricultural_income=Decimal("100000")),
+    )
+    result = compute_itr2(inp)
+    assert not failed(run_calc_validation(inp, result), "ITR2-CALC-033")

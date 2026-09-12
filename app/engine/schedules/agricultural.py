@@ -29,6 +29,7 @@ from dataclasses import dataclass
 class AgriculturalIncomeResult:
     gross_agricultural_income: Decimal = Decimal("0")
     agricultural_income_deductions: Decimal = Decimal("0")
+    unabsorbed_loss_previous_8_years: Decimal = Decimal("0")
     net_agricultural_income: Decimal = Decimal("0")
     share_from_firm: Decimal = Decimal("0")
     total_net_agricultural_income: Decimal = Decimal("0")
@@ -74,15 +75,23 @@ def compute(
     gross_agri: Optional[Decimal] = None,
     agri_deductions: Optional[Decimal] = None,
     share_from_firm: Optional[Decimal] = None,
+    unabsorbed_loss_previous_8_years: Optional[Decimal] = None,
 ) -> AgriculturalIncomeResult:
     gross = gross_agri or Decimal("0")
     ded = agri_deductions or Decimal("0")
-    net = max(Decimal("0"), gross - ded)
+    unabsorbed_loss = unabsorbed_loss_previous_8_years or Decimal("0")
+    # CBDT rule #436: Net Agricultural income = Gross receipts - Expenditure
+    # - Unabsorbed agricultural loss of the previous eight assessment years
+    # -- the third term was previously never subtracted at all (no
+    # parameter existed to carry it), even though the frontend already
+    # captures it (ExemptIncomeSchedule.unabsorbedAgriculturalLossPreviousEightYears).
+    net = max(Decimal("0"), gross - ded - unabsorbed_loss)
     share = share_from_firm or Decimal("0")
 
     return AgriculturalIncomeResult(
         gross_agricultural_income=gross,
         agricultural_income_deductions=ded,
+        unabsorbed_loss_previous_8_years=unabsorbed_loss,
         net_agricultural_income=net,
         share_from_firm=share,
         total_net_agricultural_income=net + share,

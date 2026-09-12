@@ -34,6 +34,7 @@ from app.schemas.itr1 import (
     OtherSourcesIncome,
     PoliticalContribution,
     PropertyType,
+    Schedule80CCCEntry,
     Schedule80CEntry,
     Schedule80D,
     Schedule80DD,
@@ -63,8 +64,11 @@ from app.schemas.itr2 import (
     CapitalGainExemptionClaim,
     CoOwnerDetail,
     EmployerFilingDetail,
+    AgriculturalLandDetail,
     ESOPDeferralInput,
     ExemptIncome,
+    ExemptIncomeDtaaEntry,
+    ExemptIncomeOtherEntry,
     ForeignAssetEntry,
     ForeignAssetType,
     FSICountryEntry,
@@ -575,6 +579,28 @@ def test_schedule_via_serializes_real_per_section_amounts_not_only_a_total() -> 
         assert "DeductUndChapVIAList" not in via
 
 
+def test_schedule_via_reports_80ccc_per_row_pension_fund_detail() -> None:
+    """CBDT rules #693/#758: UsrDeductUndChapVIA.PensionContribution80CCC
+    must carry the real per-row identifier/amount detail."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccc=Decimal("50000")),
+        schedule_80ccc_entries=[Schedule80CCCEntry(
+            amount=Decimal("50000"), identifier_type="PRAN", identifier_name="123456789012",
+        )],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    usr_via = document["ITR"]["ITR2"]["ScheduleVIA"]["UsrDeductUndChapVIA"]
+    rows = usr_via["PensionContribution80CCC"]
+    assert len(rows) == 1
+    assert rows[0]["TypeofIdentifier"] == "PRAN"
+    assert rows[0]["NameofIdentifier"] == "123456789012"
+    assert rows[0]["Amount"] == 50000
+    assert "PensionContribution80CCC" not in document["ITR"]["ITR2"]["ScheduleVIA"]["DeductUndChapVIA"]
+
+
 def test_schedule_via_omits_unclaimed_sections_and_matches_zero_deduction() -> None:
     """No deduction claimed -- Schedule VIA is correctly omitted entirely
     (not emitted as an empty/zeroed placeholder)."""
@@ -1014,6 +1040,31 @@ def test_land_building_stcg_and_ltcg_rows_are_schema_valid_with_correct_fields()
     assert ltcg_row["TaxSec1121aiiB"] == 690000
     assert ltcg_row["ExcessAmtSec1121a"] == 0
     assert cg["LongTermCapGain23"]["SaleofLandBuild"]["TotalExcessTax"] == 0
+
+
+def test_ltcg_land_building_reports_cost_of_improvements_detail_row() -> None:
+    """CBDT rule #186: CostOfImprovementsDtls (the official per-event array)
+    was hardcoded empty even when a real improvement cost was declared --
+    now carries one row once year_of_improvement is known."""
+    input_data = _input(
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LAND_BUILDING,
+                date_of_acquisition=date(2015, 4, 1), date_of_transfer=date(2025, 6, 1),
+                full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+                improvement_cost=Decimal("500000"), indexed_improvement=Decimal("650000"),
+                year_of_improvement="2018-19",
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    ltcg_row = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]["SaleofLandBuild"]["SaleofLandBuildDtls"][0]
+    dtls = ltcg_row["CostOfImprovements"]["CostOfImprovementsDtls"]
+    assert len(dtls) == 1
+    assert dtls[0]["ImproveDate"] == "2018-19"
+    assert dtls[0]["ImproveCost"] == 500000
+    assert dtls[0]["CostOfImpIndex"] == 650000
 
 
 def test_schedule_cyla_reports_real_capital_gains_income_not_zero() -> None:
@@ -1946,6 +1997,27 @@ def test_inc_chargeable_special_rates_includes_accumulated_pf_income() -> None:
     assert os_block["IncChargeableSpecialRates"] == 80000  # 50000 lottery + 30000 accumulated PF
 
 
+def test_inc_chargeable_special_rates_includes_dtaa_os_income() -> None:
+    """CBDT rule #208: Sl.no 2 must fold in 2f (DTAA-rate OS income,
+    result.os_dtaa_income) alongside 2a-2e -- this component was previously
+    omitted from IncChargeableSpecialRates entirely."""
+    profile = _profile().model_copy(update={"residential_status": ResidentialStatus.NON_RESIDENT})
+    input_data = _input(
+        filing_profile=profile,
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        si_entries=[ScheduleSIEntry(section="115BB", gross_income=Decimal("50000"))],
+        os_dtaa_entries=[OSDtaaEntry(
+            amount=Decimal("20000"), nature_of_income="1b", country_name="United States",
+            country_code="2", dtaa_article="11", rate_as_per_treaty=Decimal("15"),
+            rate_as_per_it_act=Decimal("20"), item_no_incl="56", applicable_rate=Decimal("15"),
+        )],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    os_block = document["ITR"]["ITR2"]["ScheduleOS"]["IncOthThanOwnRaceHorse"]
+    assert os_block["IncChargeableSpecialRates"] == 70000  # 50000 lottery + 20000 DTAA
+
+
 def test_schedule_os_gross_inc_chrgbl_tax_at_app_rate_sums_its_own_components() -> None:
     """Schedule OS item "1" (``GrossIncChrgblTaxAtAppRate``, "Gross income
     chargeable to tax at normal applicable rates (1a+1b+1c+1d+1e)") was
@@ -2736,6 +2808,80 @@ def test_schedule_ei_others_inc_dtls_reports_real_description_not_empty_array() 
     assert no_desc_others == [{"Description": "Other exempt income", "OthAmount": 5000}]
 
 
+def test_schedule_ei_others_inc_dtls_reports_per_clause_rows() -> None:
+    """CBDT rules #698-745 (Phase 4): when other_exempt_entries is
+    populated, each row must appear as its own OthersIncDtlEI entry with
+    its real Category/SubCategory -- not collapsed into one undifferentiated
+    row (the old fallback path this supersedes, still exercised by the
+    other_exempt_entries-empty test immediately above)."""
+    input_data = _input(
+        exempt_income=ExemptIncome(
+            other_exempt=Decimal("25000"),
+            other_exempt_entries=[
+                ExemptIncomeOtherEntry(
+                    category="SRPC", sub_category="10(16)",
+                    description="Scholarship", amount=Decimal("20000"),
+                ),
+                ExemptIncomeOtherEntry(
+                    category="OTH", sub_category="10(17A)",
+                    description="Award", amount=Decimal("5000"),
+                ),
+            ],
+        ),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    others_inc = document["ITR"]["ITR2"]["ScheduleEI"]["OthersInc"]["OthersIncDtls"]
+    assert others_inc == [
+        {"Category": "SRPC", "SubCategory": "10(16)", "Description": "Scholarship", "OthAmount": 20000},
+        {"Category": "OTH", "SubCategory": "10(17A)", "Description": "Award", "OthAmount": 5000},
+    ]
+
+
+def test_schedule_ei_reports_dtaa_not_chargeable_detail_rows() -> None:
+    """CBDT rule #434: item 4's IncNotChrgblAsPerDTAADtls must reflect real
+    detail rows and item 4's own total, not a hardcoded empty array."""
+    input_data = _input(
+        exempt_income=ExemptIncome(dtaa_exempt_entries=[
+            ExemptIncomeDtaaEntry(
+                amount=Decimal("30000"), nature_of_income="Pension",
+                country_name="United Kingdom", country_code="35", dtaa_article="18",
+                head_of_income="OS", tax_residency_certificate="Y",
+            ),
+        ]),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    ei = document["ITR"]["ITR2"]["ScheduleEI"]
+    assert ei["IncNotChrgblAsPerDTAA"]["IncNotChrgblAsPerDTAADtls"] == [{
+        "AmountOfIncome": 30000, "NatureOfIncome": "Pension", "CountryName": "United Kingdom",
+        "CountryCodeExcludingIndia": "35", "ArticleOfDTAA": "18", "HeadOfIncome": "OS",
+        "TRCFlag": "Y",
+    }]
+    assert ei["IncNotChrgblToTax"] == 30000
+
+
+def test_schedule_ei_reports_agricultural_land_detail_rows() -> None:
+    """CBDT rule #445: ExcNetAgriIncDtls must reflect real per-parcel rows,
+    not a hardcoded empty array."""
+    input_data = _input(
+        agricultural_income=AgriculturalIncome(
+            gross_agricultural_income=Decimal("800000"),
+            land_details=[AgriculturalLandDetail(
+                name_of_district="Nashik", pin_code="422001",
+                measurement_of_land=Decimal("2.5"), owned_flag="O", irrigated_flag="IRG",
+            )],
+        ),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    ei = document["ITR"]["ITR2"]["ScheduleEI"]
+    assert ei["ExcNetAgriInc"]["ExcNetAgriIncDtls"] == [{
+        "NameOfDistrict": "Nashik", "PinCode": 422001, "MeasurementOfLand": 2.5,
+        "AgriLandOwnedFlag": "O", "AgriLandIrrigatedFlag": "IRG",
+    }]
+
+
 def test_schedule_ei_pass_through_income_reports_declared_pti_exempt_amount() -> None:
     """Item 5 (``PassThrIncNotChrgblTax``) was hardcoded 0 with no backing
     field anywhere -- ``SchedulePTIDtls`` genuinely has no exempt-income
@@ -2753,6 +2899,27 @@ def test_schedule_ei_pass_through_income_reports_declared_pti_exempt_amount() ->
     ei = document["ITR"]["ITR2"]["ScheduleEI"]
     assert ei["PassThrIncNotChrgblTax"] == 25000
     assert ei["TotalExemptInc"] == 3000 + 25000
+
+
+def test_schedule_pti_reports_exempt_income_23fbb_in_inc_clmd_pti() -> None:
+    """CBDT rule #432: Schedule PTI's own IncClmdPTI.TotalSec23FBB/Sec23FBB
+    must carry the per-entity exempt income, matching Schedule EI Sl.5
+    (``ExemptIncome.pti_exempt_income``) via ``ITR2-IN-EI-002``."""
+    input_data = _input(
+        exempt_income=ExemptIncome(pti_exempt_income=Decimal("5000")),
+        pti_entries=[PTIEntry(
+            entity_name="ABC Trust", entity_pan="ABCTR1234E", income_head="OS",
+            section="115UA", income_amount=Decimal("0"), exempt_income_23fbb=Decimal("5000"),
+        )],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    pti_row = document["ITR"]["ITR2"]["SchedulePTI"]["SchedulePTIDtls"][0]
+    assert pti_row["IncClmdPTI"]["TotalSec23FBB"]["AmountOfInc"] == 5000
+    assert pti_row["IncClmdPTI"]["Sec23FBB"]["AmountOfInc"] == 5000
+    ei = document["ITR"]["ITR2"]["ScheduleEI"]
+    assert ei["PassThrIncNotChrgblTax"] == 5000
 
 
 def test_schedule_esop_tax_split_reflects_new_deferral_this_year() -> None:
@@ -2808,6 +2975,28 @@ def test_schedule_esop_tax_split_ignores_prior_year_brought_forward_entries() ->
     gross_tax_pay = document["ITR"]["ITR2"]["PartB_TTI"]["ComputationOfTaxLiability"]["GrossTaxPay"]
     assert gross_tax_pay["TaxDeferred17"] == 0
     assert gross_tax_pay["TaxInc17"] == int(result.gross_tax_liability)
+
+
+def test_schedule_esop_reports_real_security_type_and_ceased_employee() -> None:
+    """CBDT rules #482/#483: ScheduleESOPEventDtls.SecurityType/CeasedEmployee
+    were previously hardcoded 'NS'/'N' for every entry regardless of the
+    truth -- must now reflect the actual declared values."""
+    input_data = _input(
+        esop_deferrals=[
+            ESOPDeferralInput(
+                employer_pan="AAACS1234A", dpiit_registration_number="DIPP12345",
+                assessment_year="2024-25", tax_deferred_brought_forward=Decimal("1000"),
+                tax_payable_current_year=Decimal("1000"), balance_tax_carried_forward=Decimal("0"),
+                security_type="FS", ceased_employee=True,
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    block = document["ITR"]["ITR2"]["ScheduleESOP"]["ScheduleESOP2425_Type"]
+    assert block["ScheduleESOPEventDtls"]["SecurityType"] == "FS"
+    assert block["ScheduleESOPEventDtls"]["CeasedEmployee"] == "Y"
 
 
 def test_schedule_os_tax_accumulated_bal_rec_pf_reports_real_per_year_breakdown() -> None:

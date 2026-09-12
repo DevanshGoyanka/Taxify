@@ -117,6 +117,29 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "filing_profile", "one seventh-proviso amount > 0", "all amounts are zero",
             ))
 
+        # CBDT rules #177/#187 (ITR-2 official Validation Rules PDF): explicit
+        # 112A-style scrip disposals must be reported through either Schedule
+        # 112A (resident/ordinary taxpayers) or Schedule 115AD(1)(b)(iii)
+        # proviso (FII/FPI taxpayers) -- never both, since the two schedules
+        # serve mutually exclusive taxpayer categories even though the
+        # calculator merges them into one basket for tax purposes (see
+        # app/engine/calculators/itr2.py's own comment on
+        # explicit_112a_scrips). is_fii_fpi determines which one applies.
+        if profile.is_fii_fpi and inp.cg_112a_scrips:
+            results.append(_result(
+                "ITR2-IN-CG-111", False,
+                "An FII/FPI taxpayer must report listed-equity LTCG scrips via Schedule "
+                "115AD(1)(b)(iii) proviso, not Schedule 112A.",
+                "cg_112a_scrips", "empty for FII/FPI", f"{len(inp.cg_112a_scrips)} row(s)",
+            ))
+        if not profile.is_fii_fpi and inp.cg_115ad_scrips:
+            results.append(_result(
+                "ITR2-IN-CG-112", False,
+                "Schedule 115AD(1)(b)(iii) proviso scrips are for FII/FPI taxpayers only; "
+                "use Schedule 112A instead.",
+                "cg_115ad_scrips", "empty for non-FII/FPI", f"{len(inp.cg_115ad_scrips)} row(s)",
+            ))
+
     # ── Schedule S (Salary) — Phase 5A ─────────────────────────────────────
     # Checks pass-through exemption claims the engine does NOT itself cap or
     # compute from a statutory formula (leave-encashment/VRS/commuted-pension
@@ -158,6 +181,54 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     "salary_income.standard_deduction_claimed", str(allowed_standard),
                     str(sal.standard_deduction_claimed),
                 ))
+        else:
+            # CBDT rule #596: new-regime standard deduction sibling of
+            # ITR2-IN-SAL-009 above. schedules/salary.py's compute()
+            # already self-caps this structurally (min(NEW_REGIME_
+            # STANDARD_DEDUCTION, net_before_std)) so the tax result is
+            # always correct regardless -- this only surfaces an excess
+            # pre-compute claim, same as SAL-009 does for the old regime.
+            # Uses gross_salary_total (not the calculator's own net-of-
+            # surviving-exemptions figure) as the "net salary" upper bound
+            # to avoid duplicating the new-regime exemption-survival logic
+            # here -- a real excess claim still exceeds this looser bound.
+            _new_regime_allowed_standard = min(Decimal("75000"), gross_salary_total)
+            if sal.standard_deduction_claimed > _new_regime_allowed_standard:
+                results.append(_result(
+                    "ITR2-IN-SAL-030", False,
+                    "New-regime standard deduction cannot exceed ₹75,000 or net salary, "
+                    "whichever is lower.",
+                    "salary_income.standard_deduction_claimed",
+                    f"<= {_new_regime_allowed_standard}", str(sal.standard_deduction_claimed),
+                ))
+            # CBDT rule #686: the Section 10 exemption for a judge covered
+            # under the Supreme/High Court Judges (Salaries) Act (official
+            # SalNatureDesc code "EIC") is not available under the new
+            # regime -- the same per-employer Section 10 exemption editor
+            # used for LTA/embassy/etc. already lets a taxpayer select "EIC"
+            # with an amount.
+            for _emp_idx, _detail in enumerate(inp.employer_filing_details or []):
+                for _row in _detail.section10_exemption_rows:
+                    if _row.get("SalNatureDesc") == "EIC" and _row.get("SalOthAmount", 0) > 0:
+                        results.append(_result(
+                            "ITR2-IN-SAL-032", False,
+                            "The judge's Section 10 exemption (EIC) cannot be claimed under the "
+                            "new tax regime.",
+                            f"employer_filing_details[{_emp_idx}].section10_exemption_rows",
+                            "0", str(_row.get("SalOthAmount")),
+                        ))
+        # CBDT rule #37: ITR-2's own official validation-rules PDF states a
+        # conflicting ₹5,000 figure for this same Section 16(iii) professional-
+        # tax deduction. Article 276(2) of the Constitution caps state-levied
+        # professional tax at ₹2,500/year, and ITR-1's own official validation-
+        # rules PDF independently states ₹2,500 for the identical statutory
+        # provision (see app/engine/validators/itr1/input_rules.py's own
+        # "Rule 37"/"B3" professional-tax checks). Since Section 16(iii) is one
+        # Income Tax Act provision, not form-specific, and both the
+        # Constitutional cap and the other examined form's PDF agree on
+        # ₹2,500, that figure is treated as correct and ITR-2's "₹5,000" text
+        # as an isolated drafting error in CBDT's own PDF, not followed —
+        # mirrors the precedent set by rules #323/#347 elsewhere in this file.
         if sal.professional_tax_paid > Decimal("2500"):
             results.append(_result(
                 "ITR2-IN-SAL-010", False,
@@ -198,6 +269,22 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "Entertainment allowance deduction u/s 16(ii) is allowed only for government employees.",
                 "salary_income.entertainment_allowance", _ZERO, str(sal.entertainment_allowance),
             ))
+        # CBDT rule #55 (old regime; not implemented): its literal text
+        # claims Section 10(14)(i) Rule-2BB(1)(a)-(c) allowances and the
+        # 10(14)(ii) handicapped-transport allowance "cannot be claimed as
+        # exempt" when the OLD regime is selected -- the mirror image of
+        # rule #54 below (new regime), which correctly disallows the same
+        # family under the NEW regime per settled law. Both allowances are
+        # genuinely OLD-regime-only exemptions (this app's own frontend
+        # offers separate "(115BAC)" -suffixed codes specifically for the
+        # new-regime-disallowed variants -- see
+        # EmployerEntryManager.tsx's SECTION_10_OTHER_EXEMPTIONS), so #55 as
+        # literally written would incorrectly zero out a legitimate old-
+        # regime claim. Treated as a CBDT PDF drafting/transcription error
+        # (rule #54's content duplicated with the regime label flipped),
+        # matching the #37/#323/#347/#350 precedent elsewhere in this file.
+        # Not implemented; do not add regime gating here without a primary-
+        # source recheck.
         if inp.tax_regime == TaxRegime.NEW:
             if sal.hra_exempt_amount > _ZERO or sal.lta_exempt_amount > _ZERO:
                 results.append(_result(
@@ -326,21 +413,34 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
         # `is_metro = section13a_details[0].is_metro_city` (which is itself
         # only reachable because the builder separately rejects mixed
         # metro/non-metro employers).
-        if inp.tax_regime == TaxRegime.OLD and sal.hra_exempt_amount > _ZERO and inp.employer_filing_details:
-            _hra_received_total = sum((d.actual_hra_received for d in inp.employer_filing_details), _ZERO)
-            _rent_paid_total = sum((d.actual_rent_paid for d in inp.employer_filing_details), _ZERO)
-            _basic_da_total = sum((d.salary_for_hra for d in inp.employer_filing_details), _ZERO)
-            _is_metro = inp.employer_filing_details[0].is_metro_city
-            _rent_minus_ten_pct = max(_ZERO, _rent_paid_total - _basic_da_total * Decimal("0.1"))
-            _basic_da_rate = _basic_da_total * (Decimal("0.5") if _is_metro else Decimal("0.4"))
-            _allowed_hra = min(_hra_received_total, _rent_minus_ten_pct, _basic_da_rate)
-            if sal.hra_exempt_amount != _allowed_hra:
+        if inp.tax_regime == TaxRegime.OLD and sal.hra_exempt_amount > _ZERO:
+            # CBDT rule #605: a claim with no Table 10(13A) rows at all was
+            # previously silently skipped by this whole block (the old guard
+            # required `inp.employer_filing_details` to be non-empty before
+            # running any check), so a bare hra_exempt_amount claim with zero
+            # supporting detail was never caught. Split into its own check.
+            if not inp.employer_filing_details:
                 results.append(_result(
-                    "ITR2-IN-SAL-015", False,
-                    "HRA exemption u/s 10(13A) must equal the least of actual HRA received, "
-                    "rent paid less 10% of Basic+DA, and 40%/50% of Basic+DA.",
-                    "salary_income.hra_exempt_amount", str(_allowed_hra), str(sal.hra_exempt_amount),
+                    "ITR2-IN-SAL-025", False,
+                    "Table 10(13A) of Schedule Salary must be filled to claim HRA exemption "
+                    "u/s 10(13A).",
+                    "employer_filing_details", "at least one row", "none",
                 ))
+            else:
+                _hra_received_total = sum((d.actual_hra_received for d in inp.employer_filing_details), _ZERO)
+                _rent_paid_total = sum((d.actual_rent_paid for d in inp.employer_filing_details), _ZERO)
+                _basic_da_total = sum((d.salary_for_hra for d in inp.employer_filing_details), _ZERO)
+                _is_metro = inp.employer_filing_details[0].is_metro_city
+                _rent_minus_ten_pct = max(_ZERO, _rent_paid_total - _basic_da_total * Decimal("0.1"))
+                _basic_da_rate = _basic_da_total * (Decimal("0.5") if _is_metro else Decimal("0.4"))
+                _allowed_hra = min(_hra_received_total, _rent_minus_ten_pct, _basic_da_rate)
+                if sal.hra_exempt_amount != _allowed_hra:
+                    results.append(_result(
+                        "ITR2-IN-SAL-015", False,
+                        "HRA exemption u/s 10(13A) must equal the least of actual HRA received, "
+                        "rent paid less 10% of Basic+DA, and 40%/50% of Basic+DA.",
+                        "salary_income.hra_exempt_amount", str(_allowed_hra), str(sal.hra_exempt_amount),
+                    ))
 
         # CBDT rule 31: Schedule S's own "Total amount of exempt allowances
         # u/s 10 (other than HRA)" cannot exceed gross salary less HRA --
@@ -360,6 +460,26 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "salary_income", f"<= {_non_hra_ceiling}", str(_non_hra_exempt_total),
             ))
 
+        # CBDT rule #606: the sum of Table 10(13A)'s own Basic salary, DA,
+        # and actual HRA received (all captured per-employer on
+        # EmployerFilingDetail, aggregated the same way ITR2-IN-SAL-015
+        # already does above) cannot exceed gross salary u/s 17(1) -- a
+        # data-entry consistency check independent of whether an HRA
+        # exemption is actually being claimed (unlike SAL-015, which only
+        # runs when hra_exempt_amount > 0).
+        if inp.employer_filing_details:
+            _table_10_13a_total = sum((
+                d.salary_for_hra + d.actual_hra_received for d in inp.employer_filing_details
+            ), _ZERO)
+            if _table_10_13a_total > gross_salary_total:
+                results.append(_result(
+                    "ITR2-IN-SAL-026", False,
+                    "Sum of Basic salary, DA, and actual HRA received (Table 10(13A)) cannot "
+                    "exceed gross salary u/s 17(1).",
+                    "employer_filing_details[].salary_for_hra/actual_hra_received",
+                    f"<= {gross_salary_total}", str(_table_10_13a_total),
+                ))
+
         # CBDT rule 44: Section 10(10A) commuted-pension exemption is a
         # fraction of the amount actually received (schedules/salary.py's own
         # _exempt_commutted_pension() formula structurally cannot exceed
@@ -373,6 +493,16 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "Commuted pension received cannot exceed total salary u/s 17(1).",
                 "salary_income.commuted_pension_received", f"<= {gross_salary_total}",
                 str(sal.commuted_pension_received),
+            ))
+
+        # CBDT rule #60: Section 89A relief cannot exceed the income notified
+        # from the retirement benefit account (Sl.1d) it relates to.
+        if sal.relief_89a > sal.income_notified_89a:
+            results.append(_result(
+                "ITR2-IN-SAL-029", False,
+                "Section 89A relief cannot exceed the income notified from the retirement "
+                "benefit account (Sl.1d).",
+                "salary_income.relief_89a", f"<= {sal.income_notified_89a}", str(sal.relief_89a),
             ))
 
         # CBDT rules 49/50: the generic "Section 10(14)(i)/(ii) allowance not
@@ -451,6 +581,61 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     "employer_filing_details[].income_notified_89a_country_rows",
                     "unique country_code", ", ".join(sorted(_country_dupes)),
                 ))
+
+            # CBDT rule #51: the same Section 10 "other exemption" code
+            # (natureCode, e.g. "10(6)"/"EIC"/"10(17)" -- see
+            # EmployerEntryManager.tsx's SECTION_10_OTHER_EXEMPTIONS) cannot
+            # be selected more than once per employer -- the fixed-set
+            # exemptions in _SALARY_EXEMPTION_ROWS (itd/itr2.py) are scalar
+            # fields and cannot be duplicated by construction, but this
+            # free-form row list can.
+            _sec10_codes = [row.get("SalNatureDesc") for row in _detail.section10_exemption_rows]
+            _sec10_dupes = {c for c in _sec10_codes if c and _sec10_codes.count(c) > 1}
+            if _sec10_dupes:
+                results.append(_result(
+                    "ITR2-IN-SAL-027", False,
+                    "The same Section 10 exemption code cannot be selected more than once "
+                    "per employer.",
+                    "employer_filing_details[].section10_exemption_rows", "unique SalNatureDesc",
+                    ", ".join(sorted(_sec10_dupes)),
+                ))
+
+            # CBDT rule #601: the "EIC" (Judges' exempt income) Section 10
+            # exemption code is available only when the employer's own
+            # nature_of_employment is Central or State Government.
+            if any(row.get("SalNatureDesc") == "EIC" for row in _detail.section10_exemption_rows):
+                if _detail.nature_of_employment not in {"CGOV", "SGOV"}:
+                    results.append(_result(
+                        "ITR2-IN-SAL-028", False,
+                        "The judges'-exempt-income (EIC) Section 10 exemption is available only "
+                        "for a Central or State Government employer.",
+                        "employer_filing_details[].nature_of_employment", "CGOV or SGOV",
+                        _detail.nature_of_employment,
+                    ))
+
+            # CBDT rule #54: the plain (non-"(115BAC)") "10(14)(i)"/
+            # "10(14)(ii)" codes and "10(17)" MP/MLA/MLC allowance are old-
+            # regime-only -- the frontend's own separate "(115BAC)"-suffixed
+            # codes exist specifically for the new-regime-allowed variant
+            # (see EmployerEntryManager.tsx's SECTION_10_OTHER_EXEMPTIONS),
+            # confirming the plain codes must be blocked under the new
+            # regime. Distinct from #55 (deliberately not implemented,
+            # documented deferral above) -- #54 has no such contradiction.
+            if inp.tax_regime == TaxRegime.NEW:
+                _old_regime_only_codes = {"10(14)(i)", "10(14)(ii)", "10(17)"}
+                _new_regime_blocked = {
+                    row.get("SalNatureDesc") for row in _detail.section10_exemption_rows
+                    if row.get("SalNatureDesc") in _old_regime_only_codes
+                    and row.get("SalOthAmount", 0) > 0
+                }
+                if _new_regime_blocked:
+                    results.append(_result(
+                        "ITR2-IN-SAL-031", False,
+                        "These Section 10 exemption codes cannot be claimed under the new tax "
+                        "regime: " + ", ".join(sorted(_new_regime_blocked)) + ".",
+                        "employer_filing_details[].section10_exemption_rows",
+                        "none of 10(14)(i)/10(14)(ii)/10(17)", ", ".join(sorted(_new_regime_blocked)),
+                    ))
 
     # ── Schedule HP (House Property) — Phase 5A ────────────────────────────
     hp_rows = list(inp.house_properties)
@@ -564,6 +749,19 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                         f"{path}.co_owner_details[*].pan", f"!= {_filer_pan}",
                         f"matched at indices {_matching_pan_indices}",
                     ))
+            # CBDT rule #549: co-owner PAN is mandatory (name is already
+            # schema-required -- CoOwnerDetail.name has no default/None
+            # option, so it can never actually be missing).
+            _missing_pan_indices = [
+                j for j, co in enumerate(detail.co_owner_details) if not co.pan
+            ]
+            if _missing_pan_indices:
+                results.append(_result(
+                    "ITR2-IN-HP-017", False,
+                    "Every co-owner row must state its PAN when the property is co-owned.",
+                    f"{path}.co_owner_details[*].pan", "present",
+                    f"missing at indices {_missing_pan_indices}",
+                ))
 
     # CBDT rule 757: unrealised rent cannot exceed the gross rent/lettable
     # value reported for the property. This is independently user-suppliable
@@ -621,6 +819,26 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 + ", ".join(sorted(claimed)) + ".",
                 "deductions_chapter6a", "all listed sections == 0",
                 ", ".join(f"{k}={v}" for k, v in sorted(claimed.items())),
+            ))
+    # CBDT rule #342's own text also names 80QQB/80RRB -- both live as
+    # top-level ITR2Input fields, not on ch6a (see the earlier VIA-037/
+    # VIA-038 comment), so this check does not need `ch6a is not None`
+    # (unlike ITR2-IN-VIA-001 above, which iterates ch6a's own fields).
+    if inp.tax_regime == TaxRegime.NEW:
+        _new_regime_disallowed_qqb_rrb = {
+            "80QQB": inp.deduction_80qqb, "80RRB": inp.deduction_80rrb,
+        }
+        claimed_qqb_rrb = {
+            section: amount for section, amount in _new_regime_disallowed_qqb_rrb.items()
+            if amount > _ZERO
+        }
+        if claimed_qqb_rrb:
+            results.append(_result(
+                "ITR2-IN-VIA-048", False,
+                "These deductions cannot be claimed under the new tax regime: "
+                + ", ".join(sorted(claimed_qqb_rrb)) + ".",
+                "deduction_80qqb/deduction_80rrb", "both == 0",
+                ", ".join(f"{k}={v}" for k, v in sorted(claimed_qqb_rrb.items())),
             ))
 
     # CBDT rule #323 (old regime; likely a PDF mis-transcription of "80TTA is
@@ -686,6 +904,17 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "assessee.",
                 "relief_89", _ZERO, str(inp.relief_89),
             ))
+        # CBDT rule #59: Section 89A relief (income from a notified
+        # retirement benefit account in a notified country) is likewise an
+        # individual-only concession, not available to a HUF assessee --
+        # distinct from relief_89 above (Section 89, already checked; lives
+        # on salary_income, not as a top-level ITR2Input field like relief_89).
+        if inp.salary_income is not None and inp.salary_income.relief_89a > _ZERO:
+            results.append(_result(
+                "ITR2-IN-FORM-010", False,
+                "Section 89A relief cannot be claimed by a HUF assessee.",
+                "salary_income.relief_89a", _ZERO, str(inp.salary_income.relief_89a),
+            ))
         # CBDT rule 546: the eligible-startup ESOP tax-deferral concession
         # (Section 191(2A)) is available only to an individual employee, not
         # a HUF.
@@ -720,6 +949,23 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 f"Schedule 80EE row {index + 1} loan amount exceeds ₹35,00,000.",
                 f"loan_details_80ee_list[{index}].total_loan_amount",
                 "<= 3500000", str(row.total_loan_amount),
+            ))
+    # CBDT rule #620: Sections 80EE/80EEA are claimable only once the
+    # Section 24(b) home-loan-interest deduction has been exhausted at its
+    # own statutory self-occupied ceiling (₹2,00,000) -- 80EE/80EEA sit on
+    # top of, not instead of, 24(b). Uses the same ₹2,00,000 figure
+    # house_property.py's own self-occupied interest cap already applies.
+    if ch6a is not None and (ch6a.amount_80ee > _ZERO or ch6a.amount_80eea > _ZERO):
+        _hp_24b_interest_total = sum(
+            (hp.home_loan_interest_paid for hp in hp_rows), _ZERO
+        )
+        if _hp_24b_interest_total < Decimal("200000"):
+            results.append(_result(
+                "ITR2-IN-VIA-047", False,
+                "Deduction u/s 80EE/80EEA can be claimed only once the Section 24(b) "
+                "home-loan-interest limit (₹2,00,000) is exhausted.",
+                "house_properties[].home_loan_interest_paid", ">= 200000",
+                str(_hp_24b_interest_total),
             ))
     if ch6a is not None and inp.residential_status == ResidentialStatus.NON_RESIDENT:
         _nri_disallowed = {
@@ -856,6 +1102,22 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "Date of sale/transfer of land or building cannot be after 31 March "
                 "of the financial year.",
                 f"{path}.date_of_transfer", f"<= {_financial_year_end(inp)}", str(tx.date_of_transfer),
+            ))
+        # CBDT rule #186: year of improvement is mandatory whenever
+        # improvement cost is declared on a land/building sale (the PDF
+        # names Sl.B1, the LTCG row specifically; applied to every
+        # land/building transaction here since short/long-term
+        # classification is only resolved later, at compute time, and
+        # requiring the field a little more broadly is the safe direction).
+        if (
+            tx.asset_type == CGAssetType.LAND_BUILDING
+            and tx.improvement_cost > _ZERO and not tx.year_of_improvement
+        ):
+            results.append(_result(
+                "ITR2-IN-CG-115", False,
+                "Year of improvement is mandatory when cost of improvement is declared for a "
+                "land or building sale.",
+                f"{path}.year_of_improvement", "present", "absent",
             ))
         if tx.deduction_us54ec > Decimal("5000000"):
             results.append(_result(
@@ -1242,6 +1504,115 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 f"os_dividend_entries[{_idx}]", str(_div.amount), str(_div_quarters_total),
             ))
 
+    # CBDT rules #219-223/#231: os_dividend_entries is PURELY a disclosure/
+    # quarterly-breakdown structure -- the calculator never reads it at all
+    # for tax computation (confirmed by grep). The actual NRI/FII special-
+    # rate dividend income that gets TAXED lives in the separate
+    # os_special_rate_entries (source_description-coded) list, dispatched
+    # to Schedule SI independently. Without this cross-check, a taxpayer's
+    # disclosed dividend quarterly breakdown (Sl.10) could silently diverge
+    # from the corresponding Sl.2d/2e amount that was actually taxed --
+    # mapping confirmed against the official schema's own SourceDescription
+    # enum description text (Reference Docs by CBDT & ITD/Official JSON
+    # Schema/ITR-2_2026_Main_V1.1.json), not guessed.
+    _dividend_section_to_source_description = {
+        "115A1ai": "5A1ai", "115A1aA": "5A1aA", "115AC": "5AC1abD",
+        "115ACA": "5ACA1a", "115AD1i": "5AD1iDiv",
+    }
+    for _div_section, _src_desc in _dividend_section_to_source_description.items():
+        _div_total = sum(
+            (e.amount for e in inp.os_dividend_entries if e.section == _div_section), _ZERO
+        )
+        _src_total = sum(
+            (e.source_amount for e in inp.os_special_rate_entries if e.source_description == _src_desc),
+            _ZERO,
+        )
+        if _div_total != _src_total:
+            results.append(_result(
+                "ITR2-IN-OS-018", False,
+                f"Schedule OS Sl.10's dividend quarterly breakdown for section {_div_section} "
+                "must equal the corresponding dividend income selected at Sl.2d/2e.",
+                f"os_dividend_entries[section={_div_section}].amount", str(_src_total),
+                str(_div_total),
+            ))
+    # CBDT rule #219: same cross-check for the DTAA-rate dividend bucket,
+    # against os_dtaa_entries' own dividend-tagged rows (nature_of_income
+    # "2d"/"2e" per OSDtaaEntry's own Literal, a confident mapping since
+    # those two codes are dedicated dividend sub-items, not guessed).
+    _div_dtaa_total = sum(
+        (e.amount for e in inp.os_dividend_entries if e.section == "DTAA"), _ZERO
+    )
+    _dtaa_dividend_total = sum(
+        (e.amount for e in inp.os_dtaa_entries if e.nature_of_income in ("2d", "2e")), _ZERO
+    )
+    if _div_dtaa_total != _dtaa_dividend_total:
+        results.append(_result(
+            "ITR2-IN-OS-019", False,
+            "Schedule OS Sl.10's DTAA-rate dividend quarterly breakdown must equal the "
+            "dividend income selected at Sl.2f of Schedule OS.",
+            "os_dividend_entries[section=DTAA].amount", str(_dtaa_dividend_total),
+            str(_div_dtaa_total),
+        ))
+    # CBDT rule #214: the plain ("194", ordinary domestic dividend) Sl.10
+    # quarterly breakdown must equal gross dividend income less DTAA
+    # dividend (other than 2(22)(e)) less the eligible interest expenditure
+    # u/s 57 attributable to dividend.
+    if osi is not None:
+        _plain_div_total = sum(
+            (e.amount for e in inp.os_dividend_entries if e.section == "194"), _ZERO
+        )
+        _div_interest_expense = inp.os_deductions.interest_expense_eligible_us57 if inp.os_deductions else _ZERO
+        _expected_plain_div = max(
+            _ZERO, osi.dividend_income - _div_dtaa_total - _div_interest_expense,
+        )
+        _has_plain_div_row = any(e.section == "194" for e in inp.os_dividend_entries)
+        if _has_plain_div_row and _plain_div_total != _expected_plain_div:
+            results.append(_result(
+                "ITR2-IN-OS-020", False,
+                "Schedule OS Sl.10's plain-dividend quarterly breakdown must equal gross "
+                "dividend income less DTAA dividend (other than 2(22)(e)) less eligible "
+                "interest expenditure u/s 57 attributable to dividend.",
+                "os_dividend_entries[section=194].amount", str(_expected_plain_div),
+                str(_plain_div_total),
+            ))
+
+    # CBDT rules #698-745: the same Section 10 "other exempt income"
+    # sub-category (SubCategory dropdown) cannot be selected more than once
+    # on Schedule EI -- one generic check covers all ~48 individually-
+    # numbered PDF rows, one per sub-category code, matching the pattern
+    # already used for ITR2-IN-SAL-027's identical dedup check on Schedule
+    # S's own "other exemption" rows.
+    if inp.exempt_income is not None:
+        _ei_sub_categories = [e.sub_category for e in inp.exempt_income.other_exempt_entries]
+        _ei_dupes = {c for c in _ei_sub_categories if _ei_sub_categories.count(c) > 1}
+        if _ei_dupes:
+            results.append(_result(
+                "ITR2-IN-EI-001", False,
+                "The same Section 10 exempt-income sub-category cannot be selected more than "
+                "once in Schedule EI.",
+                "exempt_income.other_exempt_entries", "unique sub_category",
+                ", ".join(sorted(_ei_dupes)),
+            ))
+
+        # CBDT rule #432: Schedule EI Sl.5 ("Pass through income not
+        # chargeable to tax") must equal the exempt income actually declared
+        # inside Schedule PTI itself (IncClmdPTI.TotalSec23FBB, summed
+        # across pti_entries). No frontend field yet feeds
+        # PTIEntry.exempt_income_23fbb, so this currently forbids claiming a
+        # nonzero Sl.5 at all rather than allowing it to silently diverge
+        # from Schedule PTI's own (always-zero) total.
+        _pti_exempt_total = sum(
+            (p.exempt_income_23fbb for p in inp.pti_entries), _ZERO
+        )
+        if inp.exempt_income.pti_exempt_income != _pti_exempt_total:
+            results.append(_result(
+                "ITR2-IN-EI-002", False,
+                "Schedule EI Sl.5 (pass-through income not chargeable to tax) must equal the "
+                "exempt income declared in Schedule PTI.",
+                "exempt_income.pti_exempt_income", str(_pti_exempt_total),
+                str(inp.exempt_income.pti_exempt_income),
+            ))
+
     # CBDT rules 213/230: the lottery/online-gaming quarterly breakdowns
     # (used for 234C interest support, distinct from the per-row dividend
     # breakdown above) must sum to their own corresponding Schedule-SI gross
@@ -1530,6 +1901,175 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             "A positive Section 80DD deduction requires Schedule 80DD disability details.",
             "deductions_chapter6a.schedule_80dd", "present", "absent",
         ))
+    # CBDT rule #314: a Section 80GGA claim requires Schedule 80GGA donation
+    # details -- old regime only, since 80GGA is unavailable under the new
+    # regime (matching ITR2-IN-VIA-001's own new-regime disallowed-sections
+    # list). `schedule_80gga` is a top-level ITR2Input field, not nested on
+    # `ch6a` (see app/schemas/itr2.py's own comment on why 80QQB/80RRB/80GGA
+    # live outside the shared Chapter6ADeductions class).
+    if (
+        ch6a is not None and ch6a.amount_80gga > _ZERO
+        and inp.tax_regime == TaxRegime.OLD and inp.schedule_80gga is None
+    ):
+        results.append(_result(
+            "ITR2-IN-VIA-035", False,
+            "A positive Section 80GGA deduction requires Schedule 80GGA donation details.",
+            "schedule_80gga", "present", "absent",
+        ))
+    # CBDT rule #331: the Chapter VI-A Section 80GGA claim must match
+    # Schedule 80GGA's own row-derived total -- section_80gga.py's
+    # compute_details() only takes min(user_claim, statutory, GTI), which
+    # silently absorbs a mismatch rather than flagging it.
+    if (
+        ch6a is not None and ch6a.amount_80gga > _ZERO
+        and inp.schedule_80gga is not None and inp.schedule_80gga.donations
+    ):
+        _gga_schedule_total = sum((
+            d.cash_amount + d.other_mode_amount for d in inp.schedule_80gga.donations
+        ), _ZERO)
+        if ch6a.amount_80gga != _gga_schedule_total:
+            results.append(_result(
+                "ITR2-IN-VIA-036", False,
+                "The Section 80GGA deduction claimed in Chapter VI-A must equal the total of "
+                "Schedule 80GGA's own donation rows.",
+                "deductions_chapter6a.amount_80gga", str(_gga_schedule_total),
+                str(ch6a.amount_80gga),
+            ))
+
+    # ── Sections 80QQB/80RRB (royalty deductions) -- CBDT rules #333-341/
+    # #760/#761. `deduction_80qqb`/`royalty_income_80qqb`/`deduction_80rrb`
+    # are top-level ITR2Input fields, not on `ch6a` (see
+    # app/engine/schedules/deductions/section_80qqb_rrb.py's own docstring).
+    _is_huf = inp.filing_profile is not None and inp.filing_profile.assessee_status == AssesseeStatus.HUF
+    _is_non_resident = inp.residential_status == ResidentialStatus.NON_RESIDENT
+    if inp.deduction_80qqb > _ZERO and (_is_non_resident or _is_huf):
+        results.append(_result(
+            "ITR2-IN-VIA-037", False,
+            "Deduction u/s 80QQB is not applicable to non-resident individuals or a HUF.",
+            "deduction_80qqb", _ZERO, str(inp.deduction_80qqb),
+        ))
+    if inp.deduction_80rrb > _ZERO and (_is_non_resident or _is_huf):
+        results.append(_result(
+            "ITR2-IN-VIA-038", False,
+            "Deduction u/s 80RRB is not applicable to non-resident individuals or a HUF.",
+            "deduction_80rrb", _ZERO, str(inp.deduction_80rrb),
+        ))
+    # CBDT rule #337: royalty deductions cannot exceed the royalty income
+    # disclosed under Schedule OS's "any other income" (Sl.1e) -- there is
+    # no dedicated royalty line item elsewhere in Schedule OS.
+    _os_other_income_total = sum((e.amount for e in inp.os_other_income_entries), _ZERO)
+    if inp.deduction_80qqb + inp.deduction_80rrb > _os_other_income_total:
+        results.append(_result(
+            "ITR2-IN-VIA-039", False,
+            "Deduction u/s 80QQB plus 80RRB cannot exceed the royalty income disclosed under "
+            "Schedule OS Sl. No. 1e (any other income).",
+            "deduction_80qqb + deduction_80rrb", f"<= {_os_other_income_total}",
+            str(inp.deduction_80qqb + inp.deduction_80rrb),
+        ))
+    # CBDT rules #340/#760 and #341/#761 (duplicate PDF rows): 80QQB/80RRB
+    # cannot be claimed if the return is filed after the due date.
+    if (
+        inp.deduction_80qqb > _ZERO and inp.filing_date is not None and inp.due_date is not None
+        and inp.filing_date > inp.due_date
+    ):
+        results.append(_result(
+            "ITR2-IN-VIA-040", False,
+            "Deduction u/s 80QQB cannot be claimed if the return is filed after the due date.",
+            "deduction_80qqb", _ZERO, str(inp.deduction_80qqb),
+        ))
+    if (
+        inp.deduction_80rrb > _ZERO and inp.filing_date is not None and inp.due_date is not None
+        and inp.filing_date > inp.due_date
+    ):
+        results.append(_result(
+            "ITR2-IN-VIA-041", False,
+            "Deduction u/s 80RRB cannot be claimed if the return is filed after the due date.",
+            "deduction_80rrb", _ZERO, str(inp.deduction_80rrb),
+        ))
+    # CBDT rules #648/#649: Form 10CCD/10CCE acknowledgement number is
+    # mandatory to claim 80QQB/80RRB respectively.
+    if inp.deduction_80qqb > _ZERO and not inp.form_10ccd_ack_number_80qqb:
+        results.append(_result(
+            "ITR2-IN-VIA-052", False,
+            "Form 10CCD acknowledgement number is required to claim deduction u/s 80QQB.",
+            "form_10ccd_ack_number_80qqb", "present", "absent",
+        ))
+    if inp.deduction_80rrb > _ZERO and not inp.form_10cce_ack_number_80rrb:
+        results.append(_result(
+            "ITR2-IN-VIA-053", False,
+            "Form 10CCE acknowledgement number is required to claim deduction u/s 80RRB.",
+            "form_10cce_ack_number_80rrb", "present", "absent",
+        ))
+
+    # CBDT rule #338: Section 80CCD(2) employer NPS contribution requires an
+    # active employer -- not available when every disclosed employer is a
+    # pensioner category (CG/SG/PSU/Other-Pensioners).
+    if ch6a is not None and ch6a.amount_80ccd2 > _ZERO and inp.employer_filing_details:
+        _pensioner_categories = {"PE", "PESG", "PEPS", "PEO"}
+        if all(d.nature_of_employment in _pensioner_categories for d in inp.employer_filing_details):
+            results.append(_result(
+                "ITR2-IN-VIA-042", False,
+                "Deduction u/s 80CCD(2) cannot be claimed when every disclosed employer is a "
+                "pensioner category.",
+                "deductions_chapter6a.amount_80ccd2", _ZERO, str(ch6a.amount_80ccd2),
+            ))
+
+    # CBDT rule #645: PRAN is required for a Section 80CCD(1) or 80CCD(1B)
+    # claim -- distinct from ITR2-IN-VIA-013 above, which only covers 80CCH.
+    if ch6a is not None and (ch6a.amount_80ccd1 > _ZERO or ch6a.amount_80ccd1b > _ZERO) and not inp.pran_number:
+        results.append(_result(
+            "ITR2-IN-VIA-043", False,
+            "PRAN is required in Schedule VIA to claim deduction u/s 80CCD(1) or 80CCD(1B).",
+            "pran_number", "present", "absent",
+        ))
+    # CBDT rule #756 (Category D advisory, not a hard block: a PRAN present
+    # with no CCD claim is not necessarily an error -- the same PRAN also
+    # supports a Section 80CCH claim, per ITR2-IN-VIA-013 above). ch6a may
+    # legitimately be None here (no Chapter VI-A claims at all).
+    _amount_80ccd1 = ch6a.amount_80ccd1 if ch6a is not None else _ZERO
+    _amount_80ccd1b = ch6a.amount_80ccd1b if ch6a is not None else _ZERO
+    if inp.pran_number and _amount_80ccd1 <= _ZERO and _amount_80ccd1b <= _ZERO:
+        results.append(_result(
+            "ITR2-IN-VIA-044", True,
+            "PRAN is entered but no amount is claimed under 80CCD(1) or 80CCD(1B) -- confirm "
+            "this is intentional (e.g. the PRAN supports a Section 80CCH claim instead).",
+            "pran_number", "80CCD(1)/80CCD(1B) > 0 or PRAN not entered",
+            f"pran={inp.pran_number}, 80CCD(1)={_amount_80ccd1}, 80CCD(1B)={_amount_80ccd1b}",
+            severity=Severity.D,
+        ))
+
+    # CBDT rules #611-614/#615-618: Schedule 80D policy rows require an
+    # insurer name and policy number when claimed, and each bucket's
+    # (1a/1b/2a/2b) policy rows must sum to that bucket's own premium field
+    # -- itd/itr2.py:2592-2611 computes TotalPayments per bucket
+    # independently with no cross-check against `policies`.
+    if inp.schedule_80d is not None:
+        _sch80d = inp.schedule_80d
+        for _policy in _sch80d.policies:
+            if _policy.premium_paid > _ZERO and not (_policy.insurer_name and _policy.policy_number):
+                results.append(_result(
+                    "ITR2-IN-VIA-045", False,
+                    "Schedule 80D requires the insurer name and policy number for a claimed "
+                    "health-insurance policy row.",
+                    f"schedule_80d.policies[section={_policy.section}]",
+                    "insurer_name and policy_number present", "missing",
+                ))
+        _bucket_fields = {
+            "1a": _sch80d.premium_1a_non_senior, "1b": _sch80d.premium_1b_senior,
+            "2a": _sch80d.premium_2a_parents_non_senior, "2b": _sch80d.premium_2b_parents_senior,
+        }
+        for _bucket, _bucket_premium in _bucket_fields.items():
+            _bucket_rows_total = sum(
+                (p.premium_paid for p in _sch80d.policies if p.section == _bucket), _ZERO
+            )
+            if _sch80d.policies and any(p.section == _bucket for p in _sch80d.policies) and _bucket_rows_total != _bucket_premium:
+                results.append(_result(
+                    "ITR2-IN-VIA-046", False,
+                    f"Schedule 80D's policy-row breakup for sl.no.{_bucket} must equal the "
+                    "health-insurance premium entered for that bucket.",
+                    f"schedule_80d.policies[section={_bucket}]", str(_bucket_premium),
+                    str(_bucket_rows_total),
+                ))
     if (
         ch6a is not None
         and ch6a.amount_80dd > _ZERO
@@ -1555,6 +2095,16 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "ITR2-IN-TDS-005", False,
                 "TDS2 gross income must be disclosed when TDS is claimed.",
                 f"{path}.gross_amount", "> 0", str(entry.gross_amount),
+            ))
+        # CBDT rule #464: unlike TDS3Entry.head_of_income (a required field
+        # with a default, so it can never actually be blank), TDS2Entry's
+        # own head_of_income is genuinely Optional[...] = None -- require it
+        # explicitly when TDS is claimed, same trigger as ITR2-IN-TDS-005.
+        if entry.tds_claimed_this_year > _ZERO and entry.head_of_income is None:
+            results.append(_result(
+                "ITR2-IN-TDS-021", False,
+                "TDS2 head of income must be disclosed when TDS is claimed.",
+                f"{path}.head_of_income", "present", "absent",
             ))
         if entry.brought_forward_tds > _ZERO and entry.tds_deducted > _ZERO:
             results.append(_result(
@@ -1613,6 +2163,30 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "ESOP deferred-tax balance carried forward must equal brought-forward tax less current-year tax payable.",
                 f"esop_deferrals[{index}].balance_tax_carried_forward",
                 str(expected_balance), str(esop.balance_tax_carried_forward),
+            ))
+
+    # CBDT rule #482: if the specified security/sweat equity was NOT sold
+    # (Sl.4="Not sold") and the holder has NOT ceased employment (Sl.5="No"),
+    # neither triggering event for the deferral has occurred, so no tax can
+    # become payable this year (Sl.7 must be zero).
+    for index, esop in enumerate(inp.esop_deferrals or []):
+        if esop.security_type == "NS" and not esop.ceased_employee and esop.tax_payable_current_year != _ZERO:
+            results.append(_result(
+                "ITR2-IN-ESOP-002", False,
+                "ESOP tax payable this year must be zero when the security was not sold and the "
+                "holder has not ceased employment.",
+                f"esop_deferrals[{index}].tax_payable_current_year", "0",
+                str(esop.tax_payable_current_year),
+            ))
+        # CBDT rule #483: ceasing employment triggers the full deferred
+        # balance becoming payable immediately -- Sl.7 must equal Sl.3.
+        if esop.ceased_employee and esop.tax_payable_current_year != esop.tax_deferred_brought_forward:
+            results.append(_result(
+                "ITR2-IN-ESOP-003", False,
+                "ESOP tax payable this year must equal the tax deferred brought forward when the "
+                "holder has ceased employment.",
+                f"esop_deferrals[{index}].tax_payable_current_year",
+                str(esop.tax_deferred_brought_forward), str(esop.tax_payable_current_year),
             ))
 
     # CBDT rule 754: Section 115F investment must be made within six months
@@ -1762,10 +2336,41 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
     if any(hp.home_loan_interest_paid > _ZERO for hp in hp_rows):
         if not any(detail.home_loan_details for detail in inp.property_filing_details):
             results.append(_result(
-                "ITR2-IN-HP-009", False,
+                "ITR2-IN-HP-014", False,
                 "A Section 24(b) home-loan-interest claim requires at least one loan-detail row "
                 "(lender, sanction date, amounts) in Schedule HP's own Table 24(b).",
                 "property_filing_details[].home_loan_details", "at least one row", "none",
+            ))
+
+    # CBDT rules #621/#622: 80EE/80EEA are claimed "over and above" Section
+    # 24(b), so each 80EE/80EEA loan row's own reference number must
+    # actually appear among Table 24(b)'s own loan-detail rows -- distinct
+    # from ITR2-IN-HP-014 above, which only checks *some* Table 24(b) row
+    # exists, not that it's specifically the same loan being claimed.
+    _table_24b_loan_refs = {
+        loan.loan_account_or_ref_no
+        for detail in inp.property_filing_details
+        for loan in detail.home_loan_details
+    }
+    for _index, _loan in enumerate(inp.loan_details_80ee_list or []):
+        if _loan.account_or_reference_number not in _table_24b_loan_refs:
+            results.append(_result(
+                "ITR2-IN-HP-015", False,
+                f"Schedule 80EE loan row {_index + 1} must also be disclosed in Schedule HP's "
+                "own Table 24(b) loan details.",
+                f"loan_details_80ee_list[{_index}].account_or_reference_number",
+                "present in property_filing_details[].home_loan_details",
+                _loan.account_or_reference_number,
+            ))
+    for _index, _loan in enumerate(inp.loan_details_80eea_list or []):
+        if _loan.account_or_reference_number not in _table_24b_loan_refs:
+            results.append(_result(
+                "ITR2-IN-HP-016", False,
+                f"Schedule 80EEA loan row {_index + 1} must also be disclosed in Schedule HP's "
+                "own Table 24(b) loan details.",
+                f"loan_details_80eea_list[{_index}].account_or_reference_number",
+                "present in property_filing_details[].home_loan_details",
+                _loan.account_or_reference_number,
             ))
 
     # CBDT rules 305-310: Schedule 80D's own senior-citizen dropdown flags
@@ -1825,6 +2430,20 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     "amount is claimed.",
                     f"schedule_80ggc.contributions[{_idx}].contribution_date", "present", "absent",
                 ))
+            # CBDT rule #547: for AY 2026-27, a claimed contribution must
+            # fall within the corresponding financial year 01.04.2025 to
+            # 31.03.2026 -- VIA-021 above only checks the date is present,
+            # not that it falls in-year.
+            elif _contrib.amount > _ZERO and _contrib.contribution_date is not None and not (
+                date(2025, 4, 1) <= _contrib.contribution_date <= date(2026, 3, 31)
+            ):
+                results.append(_result(
+                    "ITR2-IN-VIA-049", False,
+                    "A Section 80GGC contribution for AY 2026-27 must be made between "
+                    "01.04.2025 and 31.03.2026.",
+                    f"schedule_80ggc.contributions[{_idx}].contribution_date",
+                    "2025-04-01..2026-03-31", str(_contrib.contribution_date),
+                ))
             if _contrib.other_mode_amount > _ZERO and not (_contrib.transaction_ref and _contrib.ifsc_code):
                 results.append(_result(
                     "ITR2-IN-VIA-022", False,
@@ -1844,6 +2463,26 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     "Section 80GGC requires the political party's name and PAN.",
                     "schedule_80ggc", "political_party_name and political_party_pan present",
                     "missing",
+                ))
+
+    # CBDT rules #693/#758: Schedule 80CCC's own per-row detail (identifier
+    # type/name/amount) must sum to the Chapter VI-A 80CCC total, and must
+    # be present at all when any 80CCC amount is claimed.
+    if ch6a is not None and ch6a.amount_80ccc > _ZERO:
+        if not inp.schedule_80ccc_entries:
+            results.append(_result(
+                "ITR2-IN-VIA-050", False,
+                "Section 80CCC claimed but no per-row pension-fund details provided. "
+                "Identifier type and name required.",
+                "deductions_chapter6a.amount_80ccc", "> 0", "no schedule_80ccc_entries rows",
+            ))
+        else:
+            _80ccc_sum = sum((e.amount for e in inp.schedule_80ccc_entries), _ZERO)
+            if _80ccc_sum != ch6a.amount_80ccc:
+                results.append(_result(
+                    "ITR2-IN-VIA-051", False,
+                    "Schedule 80CCC's per-row amounts must sum to the Chapter VI-A 80CCC total.",
+                    "schedule_80ccc_entries", str(ch6a.amount_80ccc), str(_80ccc_sum),
                 ))
 
     # CBDT rules 363/365: Schedule 80U/80DD require supporting-certificate
@@ -2068,6 +2707,20 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     f"{_label}[{_idx}].fmv_per_share/total_fmv", "0 when not is_before_31jan2018",
                     f"fmv_per_share={_scrip.fmv_per_share}, total_fmv={_scrip.total_fmv}",
                 ))
+            # CBDT rules #87/#94: Col.11 Total FMV must equal Col.4 (num
+            # shares) * Col.10 (FMV per share) -- both fields are
+            # independently user-suppliable on CG112AScrip, with no
+            # calculator derivation linking them.
+            if _scrip.total_fmv > _ZERO or _scrip.fmv_per_share > _ZERO:
+                _expected_fmv = _scrip.fmv_per_share * _scrip.num_shares_units
+                if abs(_scrip.total_fmv - _expected_fmv) > Decimal("1"):
+                    results.append(_result(
+                        "ITR2-IN-CG-113" if _label == "cg_112a_scrips" else "ITR2-IN-CG-114",
+                        False,
+                        "Total Fair Market Value must equal FMV per share/unit multiplied by "
+                        "the number of shares/units.",
+                        f"{_label}[{_idx}].total_fmv", str(_expected_fmv), str(_scrip.total_fmv),
+                    ))
 
     # CBDT rule 662: every CGAS claim must point to a disclosed CGAS bank
     # account, matched by account number and account type.
@@ -2395,12 +3048,16 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
     # and why it needs its own dedicated phase, not a validator addition.
     for index, entry in enumerate(inp.os_dtaa_entries):
         _dtaa_ceiling = min(entry.rate_as_per_treaty, entry.rate_as_per_it_act)
-        if entry.applicable_rate > _dtaa_ceiling:
+        # CBDT rule #207: the applicable rate must be EXACTLY the lower of
+        # the treaty/Act rates (Section 90(2) DTAA relief mechanics), not
+        # merely capped by it -- widened from a one-directional `>` check
+        # (which let a too-low rate pass) to exact inequality.
+        if entry.applicable_rate != _dtaa_ceiling:
             results.append(_result(
                 "ITR2-IN-DTAA-002", False,
-                "The applicable DTAA rate cannot exceed the lower of the treaty "
+                "The applicable DTAA rate must equal the lower of the treaty "
                 "rate and the IT Act rate.",
-                f"os_dtaa_entries[{index}].applicable_rate", f"<= {_dtaa_ceiling}",
+                f"os_dtaa_entries[{index}].applicable_rate", str(_dtaa_ceiling),
                 str(entry.applicable_rate),
             ))
 
@@ -2411,22 +3068,23 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
     # new CG-side DTAA entry lists (Schedule CG items A8/B11).
     for index, entry in enumerate(inp.cg_stcg_dtaa_entries):
         _dtaa_ceiling = min(entry.rate_as_per_treaty, entry.rate_as_per_it_act)
-        if entry.applicable_rate > _dtaa_ceiling:
+        # CBDT rule #152: same exact-equality fix as ITR2-IN-DTAA-002 above.
+        if entry.applicable_rate != _dtaa_ceiling:
             results.append(_result(
                 "ITR2-IN-DTAA-003", False,
-                "The applicable DTAA rate cannot exceed the lower of the treaty "
+                "The applicable DTAA rate must equal the lower of the treaty "
                 "rate and the IT Act rate.",
-                f"cg_stcg_dtaa_entries[{index}].applicable_rate", f"<= {_dtaa_ceiling}",
+                f"cg_stcg_dtaa_entries[{index}].applicable_rate", str(_dtaa_ceiling),
                 str(entry.applicable_rate),
             ))
     for index, entry in enumerate(inp.cg_ltcg_dtaa_entries):
         _dtaa_ceiling = min(entry.rate_as_per_treaty, entry.rate_as_per_it_act)
-        if entry.applicable_rate > _dtaa_ceiling:
+        if entry.applicable_rate != _dtaa_ceiling:
             results.append(_result(
                 "ITR2-IN-DTAA-004", False,
-                "The applicable DTAA rate cannot exceed the lower of the treaty "
+                "The applicable DTAA rate must equal the lower of the treaty "
                 "rate and the IT Act rate.",
-                f"cg_ltcg_dtaa_entries[{index}].applicable_rate", f"<= {_dtaa_ceiling}",
+                f"cg_ltcg_dtaa_entries[{index}].applicable_rate", str(_dtaa_ceiling),
                 str(entry.applicable_rate),
             ))
 

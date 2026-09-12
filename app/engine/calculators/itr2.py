@@ -337,6 +337,7 @@ def _classify_cg_transactions(
                 indexed_acquisition_cost=tx.indexed_cost,
                 improvement_cost=tx.improvement_cost,
                 indexed_improvement_cost=tx.indexed_improvement,
+                year_of_improvement=tx.year_of_improvement or "",
                 expenditure_on_transfer=tx.expenditure_on_transfer,
             )
             if is_short:
@@ -440,17 +441,24 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     r = ITR2Result()
     regime = input_data.tax_regime
     age = input_data.age_bracket
-    is_resident = input_data.residential_status == ResidentialStatus.RESIDENT
     is_individual = (
         input_data.filing_profile is None
         or input_data.filing_profile.assessee_status.value == "I"
     )
     # Section 112(1)(a) second-proviso eligibility (land/building LTCG
-    # comparison, capital_gains.py::compute_ltcg()) counts BOTH ordinary
-    # residents and not-ordinarily-residents (NOR is a species of "resident"
-    # under section 6 -- only a non-resident is excluded), distinct from
-    # `is_resident` above (used for the narrower section 87A rebate
-    # eligibility, deliberately left unchanged here).
+    # comparison, capital_gains.py::compute_ltcg()) and Section 87A rebate
+    # eligibility (below) both count BOTH ordinary residents and
+    # not-ordinarily-residents (NOR is a species of "resident" under
+    # section 6 -- only a non-resident is excluded; Section 87A itself
+    # applies to "an individual resident in India" with no ROR/RNOR
+    # distinction, and CBDT rule #535's own text names "Resident or
+    # Resident but not Ordinarily Resident Individual" together as the
+    # class the rebate applies to, capped above ₹5L only under the old
+    # regime). A prior version of this calculator used a stricter
+    # ``== RESIDENT`` check for 87A eligibility alone, which denied RNOR
+    # taxpayers the rebate unconditionally (every regime, every income
+    # level) instead of only above the old-regime ₹5L threshold -- fixed
+    # 2026-09-12 to use the same residency test as the 112(1)(a) case.
     is_resident_or_nor = input_data.residential_status != ResidentialStatus.NON_RESIDENT
     # Section 115AD: an FII/FPI's OWN capital gains on securities are taxed
     # under a completely separate code (Schedule CG's NRISecur115AD/
@@ -914,6 +922,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             agri.gross_agricultural_income,
             agri.agricultural_deductions,
             agri.share_from_firm,
+            agri.unabsorbed_agricultural_loss_previous_8_years,
         )
         r.net_agricultural_income = ag_result.total_net_agricultural_income
         r.schedules["agri"] = ag_result
@@ -1262,7 +1271,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         r.tax_before_rebate,
         slab_tax,
         regime,
-        is_resident_individual=is_resident and is_individual,
+        is_resident_individual=is_resident_or_nor and is_individual,
     )
     r.rebate_87a = rebate
     r.tax_after_rebate = max(_ZERO, r.tax_before_rebate - rebate)

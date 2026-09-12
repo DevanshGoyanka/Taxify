@@ -25,6 +25,7 @@ from app.schemas.itr1 import (
     OtherSourcesIncome,
     PostalAddress,
     SalaryIncome,
+    Schedule80CCCEntry,
     Schedule80CEntry,
     Schedule80D,
     Schedule80DD,
@@ -356,6 +357,11 @@ class CGTransaction(StrictModel):
     indexed_cost: Decimal = Field(default=Decimal("0"), ge=0)
     improvement_cost: Decimal = Field(default=Decimal("0"), ge=0)
     indexed_improvement: Decimal = Field(default=Decimal("0"), ge=0)
+    # CBDT rule #186: mandatory whenever improvement_cost is declared on a
+    # land/building sale (Schedule CG Sl.B1) -- official schema's per-event
+    # ImproveDate is an AY-range enum ("2001-02".."2025-26"); one aggregate
+    # event is sufficient to satisfy the rule as literally stated.
+    year_of_improvement: Optional[str] = Field(default=None, pattern=r"^20\d{2}-\d{2}$")
     expenditure_on_transfer: Decimal = Field(default=Decimal("0"), ge=0)
     is_stt_paid_on_acquisition: Optional[bool] = None
     is_stt_paid_on_transfer: Optional[bool] = None
@@ -537,12 +543,68 @@ class ScheduleSIEntry(StrictModel):
         return self
 
 
+class AgriculturalLandDetail(StrictModel):
+    """One agricultural land parcel (official Schedule EI ``ExcNetAgriIncDtls``
+    row) -- required per-parcel disclosure when net agricultural income for
+    the year exceeds ₹5,00,000 (CBDT rule #445)."""
+
+    name_of_district: str = Field(min_length=1, max_length=125)
+    pin_code: str = Field(pattern=r"^[1-9][0-9]{5}$")
+    measurement_of_land: Decimal = Field(default=Decimal("0"), ge=0)
+    owned_flag: Literal["O", "H"] = "O"
+    irrigated_flag: Literal["IRG", "RF"] = "IRG"
+
+
 class AgriculturalIncome(StrictModel):
     """Agricultural income and related expenditure."""
 
     gross_agricultural_income: Decimal = Field(default=Decimal("0"), ge=0)
     agricultural_deductions: Decimal = Field(default=Decimal("0"), ge=0)
+    # CBDT rule #436: Net Agricultural income = Gross receipts - Expenditure
+    # - Unabsorbed agricultural loss of the previous eight assessment years
+    # -- the frontend already captures this
+    # (unabsorbedAgriculturalLossPreviousEightYears), previously never
+    # mapped or subtracted anywhere in the pipeline.
+    unabsorbed_agricultural_loss_previous_8_years: Decimal = Field(default=Decimal("0"), ge=0)
     share_from_firm: Decimal = Field(default=Decimal("0"), ge=0)
+    # CBDT rule #445: per-parcel land detail (official ExcNetAgriIncDtls) --
+    # the frontend's ExemptIncomeWorkspace.tsx already collects this
+    # (agriculturalLandParcels), previously never mapped into ITR2Input at
+    # all (draft_to_itr2_input.py had zero references to it).
+    land_details: List[AgriculturalLandDetail] = Field(default_factory=list)
+
+
+class ExemptIncomeOtherEntry(StrictModel):
+    """One 'other exempt income' row for Schedule EI (official
+    ``OthersIncDtlEI``) -- Category/SubCategory/Description/OthAmount,
+    matching the official JSON schema's own field names and enums exactly
+    (confirmed against Reference Docs by CBDT & ITD/Official JSON Schema/
+    ITR-2_2026_Main_V1.1.json's OthersIncDtlEI definition). ``sub_category``
+    is a free string, not a closed Literal -- the official SubCategory enum
+    has ~60 codes and this avoids the risk of an incomplete/mistyped
+    transcription silently rejecting a legitimate code.
+    """
+
+    category: Literal["AGRI", "GOVC", "ISI", "SSRA", "SRSC", "SRST", "SRPC", "OTH", "OTHN"]
+    sub_category: str = Field(min_length=1, max_length=20)
+    description: str = Field(min_length=1, max_length=125)
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class ExemptIncomeDtaaEntry(StrictModel):
+    """One Schedule-EI DTAA-not-chargeable income row (official
+    ``IncNotChrgblAsPerDTAADtls``) -- item 4's own detail rows, distinct
+    from the taxable DTAA income disclosed in Schedule OS/CG. CBDT rule
+    #434: item 4's total must equal the sum of these rows, not duplicate
+    item 1 (interest)."""
+
+    amount: Decimal = Field(default=Decimal("0"), ge=0)
+    nature_of_income: str = Field(min_length=1, max_length=75)
+    country_name: str = Field(min_length=1, max_length=55)
+    country_code: str = Field(min_length=1)
+    dtaa_article: str = Field(min_length=1, max_length=16)
+    head_of_income: Literal["SA", "HP", "CG", "OS"] = "OS"
+    tax_residency_certificate: Literal["Y", "N"] = "N"
 
 
 class ExemptIncome(StrictModel):
@@ -555,6 +617,20 @@ class ExemptIncome(StrictModel):
     share_of_profit_from_firm: Decimal = Field(default=Decimal("0"), ge=0)
     other_exempt: Decimal = Field(default=Decimal("0"), ge=0)
     other_description: Optional[str] = Field(default=None, max_length=125)
+    # Per-clause breakdown (CBDT rules #698-745): the frontend's
+    # ExemptIncomeWorkspace.tsx already collects category/subCategory/
+    # description/amount per entry, matching the official OthersIncDtlEI
+    # row shape exactly -- previously draft_to_itr2_input.py's
+    # _map_exempt_income() rolled every entry into the single
+    # `other_exempt`/`other_description` pair above, discarding the
+    # per-clause classification entirely before it ever reached this
+    # schema. `other_exempt` remains the aggregate total (still correct,
+    # still used everywhere it already was); this list is additive.
+    other_exempt_entries: List[ExemptIncomeOtherEntry] = Field(default_factory=list)
+    # CBDT rule #434: item 4's own DTAA-not-chargeable detail rows -- the
+    # frontend's ExemptIncomeWorkspace.tsx already collects this
+    # (dtaaExemptIncome), previously never mapped into ITR2Input at all.
+    dtaa_exempt_entries: List[ExemptIncomeDtaaEntry] = Field(default_factory=list)
     # Item 5 of Schedule EI: pass-through income (from a business trust or
     # investment fund, e.g. exempt REIT/InvIT distributions) claimed as not
     # chargeable to tax. Deliberately a standalone scalar, not a field on
@@ -695,6 +771,14 @@ class PTIEntry(StrictModel):
     section: str = Field(min_length=1, max_length=20)
     income_amount: Decimal = Field(default=Decimal("0"))
     tds_credit: Decimal = Field(default=Decimal("0"), ge=0)
+    # CBDT rule #432: Schedule EI Sl.5 ("Pass through income not chargeable
+    # to tax") must equal the exempt income actually declared inside
+    # Schedule PTI itself (the official IncClmdPTI.TotalSec23FBB/Sec23FBB
+    # fields, Section 10(23FBB)) -- previously there was no field anywhere
+    # to capture this per-entity, so any nonzero EI Sl.5 claim was numerically
+    # unverifiable against Schedule PTI. Additive; default 0 preserves every
+    # existing entry's behaviour.
+    exempt_income_23fbb: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class AMTCreditItem(StrictModel):
@@ -758,6 +842,16 @@ class ESOPDeferralInput(StrictModel):
     tax_deferred_brought_forward: Decimal = Field(default=Decimal("0"), ge=0)
     tax_payable_current_year: Decimal = Field(default=Decimal("0"), ge=0)
     balance_tax_carried_forward: Decimal = Field(default=Decimal("0"), ge=0)
+    # Official schema's ScheduleESOPEventDtls.SecurityType (Sl.4) / CeasedEmployee
+    # (Sl.5). Previously not represented at all -- the ITD builder hardcoded
+    # SecurityType="NS"/CeasedEmployee="N" for every entry regardless of the
+    # truth, which is itself a real bug (a return whose shares were actually
+    # sold, or whose holder ceased employment, silently reported the opposite
+    # in the submitted JSON). CBDT rules #482/#483 tie these to Sl.7 (tax
+    # payable current year): "not sold" + "not ceased" forces Sl.7 to zero;
+    # "ceased" forces Sl.7 to equal Sl.3 (tax deferred brought forward).
+    security_type: Literal["FS", "PS", "NS"] = "NS"
+    ceased_employee: bool = False
     # Only meaningful for an entry representing THIS year's own new ESOP
     # allotment being deferred for the first time (assessment_year == the
     # current AY) -- the tax computed on the section 17(2)(vi) perquisite
@@ -1194,6 +1288,13 @@ class ITR2Input(StrictModel):
     # fields, wired the same way in `app/engine/calculators/itr2.py` and
     # consumed by `itd/itr2.py`'s `_schedule_80c()`/`_schedule_deduction_loan()`.
     schedule_80c_entries: List[Schedule80CEntry] = Field(default_factory=list)
+    # CBDT rules #693/#758: per-row Section 80CCC pension-fund detail
+    # (identifier type/name/amount) -- ``ReturnDraft.deductions.
+    # pensionContribution80CCC`` already feeds ITR-1/ITR-4's identically-
+    # shaped field; previously never wired into ITR2Input at all, so
+    # `amount_80ccc` was a scalar with no per-row backing anywhere on this
+    # form.
+    schedule_80ccc_entries: List[Schedule80CCCEntry] = Field(default_factory=list)
     schedule_80e_entries: List[Schedule80EEntry] = Field(default_factory=list)
     loan_details_80ee_list: List[ITR1Schedule80EELoanEntry] = Field(default_factory=list)
     loan_details_80eea_list: List[ITR1Schedule80EEALoanEntry] = Field(default_factory=list)
@@ -1212,6 +1313,12 @@ class ITR2Input(StrictModel):
     deduction_80qqb: Decimal = Field(default=Decimal("0"), ge=0)
     royalty_income_80qqb: Decimal = Field(default=Decimal("0"), ge=0)
     deduction_80rrb: Decimal = Field(default=Decimal("0"), ge=0)
+    # CBDT rules #648/#649: Form 10CCD/10CCE acknowledgement numbers,
+    # required to claim 80QQB/80RRB respectively. The frontend draft
+    # already collects both (Deductions.section80QQBForm10CCDAckNum/
+    # section80RRBForm10CCEAckNum) -- never read into ITR2Input until now.
+    form_10ccd_ack_number_80qqb: Optional[str] = Field(default=None, max_length=25)
+    form_10cce_ack_number_80rrb: Optional[str] = Field(default=None, max_length=25)
     # PRAN is mandatory for a Section 80CCH (Agniveer Corpus Fund) claim --
     # ITR-1 already has this field (app/schemas/itr1.py's ITR1Input.pran_number)
     # reading the same shared ReturnDraft field (draft.deductions.chapterVIA.

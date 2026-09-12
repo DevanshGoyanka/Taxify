@@ -27,15 +27,21 @@ from app.schemas.itr1 import (
     ITR1Schedule80EEALoanEntry,
     ITR1Schedule80EEBLoanEntry,
     ITR1Schedule80EELoanEntry,
+    Donation80GGA,
+    DonationAddress,
+    InsurancePolicy,
     OtherSourcesIncome,
     PoliticalContribution,
+    Schedule80CCCEntry,
     PropertyType,
     SalaryIncome,
+    Section80GGAClause,
     TaxPaymentDetail,
     Schedule80CEntry,
     Schedule80D,
     Schedule80DD,
     Schedule80EEntry,
+    Schedule80GGA,
     Schedule80GGC,
     Schedule80U,
     TaxRegime,
@@ -69,6 +75,7 @@ from app.schemas.itr2 import (
     OSDtaaEntry,
     OSGiftBreakdown,
     OSQuarterlyAmount,
+    OSOtherIncomeEntry,
     OSSection89A,
     OSSpecialRateEntry,
     PTIEntry,
@@ -608,6 +615,95 @@ def test_ESOP_001_balance_arithmetic_fails():
     assert failed(validate_itr2_input(inp), "ITR2-IN-ESOP-001")
 
 
+def test_ESOP_002_payable_nonzero_without_sale_or_cessation_fails():
+    """CBDT rule #482: not sold + not ceased forces Sl.7 (tax payable) to zero."""
+    inp = _base_input(esop_deferrals=[ESOPDeferralInput(
+        employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+        assessment_year="2025-26", tax_deferred_brought_forward=Decimal("100"),
+        tax_payable_current_year=Decimal("20"), balance_tax_carried_forward=Decimal("80"),
+        security_type="NS", ceased_employee=False,
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-ESOP-002")
+
+
+def test_ESOP_002_payable_zero_without_sale_or_cessation_passes():
+    inp = _base_input(esop_deferrals=[ESOPDeferralInput(
+        employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+        assessment_year="2025-26", tax_deferred_brought_forward=Decimal("100"),
+        tax_payable_current_year=Decimal("0"), balance_tax_carried_forward=Decimal("100"),
+        security_type="NS", ceased_employee=False,
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-ESOP-002")
+
+
+def test_ESOP_002_sold_security_with_nonzero_payable_passes():
+    inp = _base_input(esop_deferrals=[ESOPDeferralInput(
+        employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+        assessment_year="2025-26", tax_deferred_brought_forward=Decimal("100"),
+        tax_payable_current_year=Decimal("20"), balance_tax_carried_forward=Decimal("80"),
+        security_type="FS", ceased_employee=False,
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-ESOP-002")
+
+
+def test_ESOP_003_ceased_employee_payable_not_equal_bf_fails():
+    """CBDT rule #483: ceasing employment forces Sl.7 to equal Sl.3."""
+    inp = _base_input(esop_deferrals=[ESOPDeferralInput(
+        employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+        assessment_year="2025-26", tax_deferred_brought_forward=Decimal("100"),
+        tax_payable_current_year=Decimal("20"), balance_tax_carried_forward=Decimal("80"),
+        security_type="NS", ceased_employee=True,
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-ESOP-003")
+
+
+def test_ESOP_003_ceased_employee_payable_equals_bf_passes():
+    inp = _base_input(esop_deferrals=[ESOPDeferralInput(
+        employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+        assessment_year="2025-26", tax_deferred_brought_forward=Decimal("100"),
+        tax_payable_current_year=Decimal("100"), balance_tax_carried_forward=Decimal("0"),
+        security_type="NS", ceased_employee=True,
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-ESOP-003")
+
+
+def test_VIA_050_80ccc_claimed_without_schedule_rows_fails():
+    """CBDT rule #758: 80CCC claimed but no per-row schedule details."""
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(amount_80ccc=Decimal("50000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-050")
+
+
+def test_VIA_050_80ccc_claimed_with_schedule_rows_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccc=Decimal("50000")),
+        schedule_80ccc_entries=[Schedule80CCCEntry(
+            amount=Decimal("50000"), identifier_type="PRAN", identifier_name="123456789012",
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-050")
+
+
+def test_VIA_051_80ccc_row_sum_mismatch_fails():
+    """CBDT rule #693: Schedule 80CCC row amounts must sum to the VIA total."""
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccc=Decimal("50000")),
+        schedule_80ccc_entries=[Schedule80CCCEntry(
+            amount=Decimal("30000"), identifier_type="PRAN", identifier_name="123456789012",
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-051")
+
+
+def test_VIA_051_80ccc_row_sum_matches_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccc=Decimal("50000")),
+        schedule_80ccc_entries=[Schedule80CCCEntry(
+            amount=Decimal("50000"), identifier_type="PRAN", identifier_name="123456789012",
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-051")
+
+
 def test_CG_009_late_115f_investment_fails():
     claim = CapitalGainExemptionClaim(
         section="115F", transfer_date=date(2025, 4, 1), eligible_gain=Decimal("100"),
@@ -751,6 +847,68 @@ def test_PROFILE_002_resident_fpi_fails():
     assert failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-002")
 
 
+def _cg_112a_scrip() -> CG112AScrip:
+    return CG112AScrip(
+        isin_code="INE000A00001", share_unit_name="RELIANCE",
+        date_of_acquisition=date(2020, 1, 1), date_of_transfer=date(2025, 7, 1),
+        num_shares_units=Decimal("100"), sale_price_per_share=Decimal("1000"),
+        total_sale_value=Decimal("100000"), cost_acq_without_index=Decimal("50000"),
+    )
+
+
+def _fii_fpi_profile(is_fii_fpi: bool) -> ITR2FilingProfile:
+    """A fully-valid ITR2FilingProfile (not `.model_construct()`, which
+    leaves required fields like `date_of_birth_or_formation` unset and
+    raises AttributeError the moment `StrictModel` revalidates it as a
+    nested field of `ITR2Input`)."""
+    return ITR2FilingProfile(
+        pan="ABCPN1234F", surname_or_org_name="Nair",
+        date_of_birth_or_formation=date(1985, 6, 15), father_name="Ramesh Nair",
+        verification_place="Mumbai",
+        primary_address=FilingAddress(
+            residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
+            state_code="27", mobile_no="9876543210", email="priya@example.com",
+        ),
+        residential_status=(
+            ResidentialStatus.NON_RESIDENT if is_fii_fpi else ResidentialStatus.RESIDENT
+        ),
+        is_fii_fpi=is_fii_fpi,
+        sebi_registration_number="INABFP123456" if is_fii_fpi else None,
+    )
+
+
+def test_CG_111_fii_fpi_using_112a_schedule_fails():
+    """CBDT rule #177: an FII/FPI taxpayer must use Schedule 115AD(1)(b)(iii)
+    proviso, not Schedule 112A."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        filing_profile=_fii_fpi_profile(True), cg_112a_scrips=[_cg_112a_scrip()],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-111")
+
+
+def test_CG_111_fii_fpi_using_115ad_schedule_passes():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        filing_profile=_fii_fpi_profile(True), cg_115ad_scrips=[_cg_112a_scrip()],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-111")
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-112")
+
+
+def test_CG_112_non_fii_using_115ad_schedule_fails():
+    """CBDT rule #187: a non-FII/FPI taxpayer must use Schedule 112A, not
+    Schedule 115AD(1)(b)(iii) proviso."""
+    inp = _base_input(filing_profile=_fii_fpi_profile(False), cg_115ad_scrips=[_cg_112a_scrip()])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-112")
+
+
+def test_CG_112_non_fii_using_112a_schedule_passes():
+    inp = _base_input(filing_profile=_fii_fpi_profile(False), cg_112a_scrips=[_cg_112a_scrip()])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-111")
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-112")
+
+
 def test_PROFILE_003_seventh_proviso_without_amounts_fails():
     profile = ITR2FilingProfile.model_construct(seventh_proviso_139=True)
     assert failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-003")
@@ -819,6 +977,36 @@ def test_CG_007_land_building_transfer_after_financial_year_end_fails():
         full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
     )])
     assert failed(validate_itr2_input(inp), "ITR2-IN-CG-007")
+
+
+def test_CG_115_improvement_cost_without_year_fails():
+    """CBDT rule #186: year of improvement is mandatory when improvement cost is declared."""
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+        improvement_cost=Decimal("500000"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-115")
+
+
+def test_CG_115_improvement_cost_with_year_passes():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+        improvement_cost=Decimal("500000"), year_of_improvement="2022-23",
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-115")
+
+
+def test_CG_115_no_improvement_cost_is_a_no_op():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-115")
 
 
 def test_CG_008_54ec_deduction_within_cap_passes():
@@ -1103,6 +1291,130 @@ def test_FE_001_mismatched_employer_and_tds1_counts_cannot_even_be_constructed()
         )
 
 
+# ─── Phase 2 cluster 1: Schedule Salary (CBDT rules #51/#59/#60/#601/#606) ──
+
+def test_SAL_027_duplicate_section10_exemption_code_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        employer_filing_details=[_employer_detail(section10_exemption_rows=[
+            {"SalNatureDesc": "10(6)", "SalOthNatOfInc": "Diplomatic", "SalOthAmount": 1000},
+            {"SalNatureDesc": "10(6)", "SalOthNatOfInc": "Diplomatic again", "SalOthAmount": 2000},
+        ])],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-027")
+
+
+def test_SAL_027_distinct_section10_exemption_codes_pass():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        employer_filing_details=[_employer_detail(section10_exemption_rows=[
+            {"SalNatureDesc": "10(6)", "SalOthNatOfInc": "Diplomatic", "SalOthAmount": 1000},
+            {"SalNatureDesc": "10(7)", "SalOthNatOfInc": "Foreign service", "SalOthAmount": 2000},
+        ])],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-027")
+
+
+def test_SAL_028_eic_judge_code_requires_cgov_sgov_fails():
+    """CBDT rule #601: the 'EIC' judges'-exempt-income code requires a
+    Central/State Government employer."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        employer_filing_details=[_employer_detail(
+            nature_of_employment="PSU",
+            section10_exemption_rows=[
+                {"SalNatureDesc": "EIC", "SalOthNatOfInc": "Judge income", "SalOthAmount": 5000},
+            ],
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-028")
+
+
+def test_SAL_028_eic_judge_code_with_cgov_employer_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        employer_filing_details=[_employer_detail(
+            nature_of_employment="CGOV",
+            section10_exemption_rows=[
+                {"SalNatureDesc": "EIC", "SalOthNatOfInc": "Judge income", "SalOthAmount": 5000},
+            ],
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-028")
+
+
+def test_SAL_029_relief_89a_exceeding_income_notified_fails():
+    """CBDT rule #60: Section 89A relief cannot exceed the notified income
+    (Sl.1d) it relates to."""
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("600000"),
+        income_notified_89a=Decimal("10000"), relief_89a=Decimal("15000"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-029")
+
+
+def test_SAL_029_relief_89a_within_income_notified_passes():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("600000"),
+        income_notified_89a=Decimal("10000"), relief_89a=Decimal("10000"),
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-029")
+
+
+def test_FORM_010_huf_relief_89a_fails():
+    """CBDT rule #59: Section 89A relief is an individual-only concession,
+    not available to a HUF assessee. Builds its own valid HUF profile
+    (verification_capacity="K"/karta_pan set) rather than reusing
+    `_filing_profile(assessee_status=HUF)`, which raises "HUF ITR-2
+    verification requires Karta or representative capacity" -- the same
+    pre-existing stale-fixture issue behind the baseline
+    test_VIA_007/TDS_008/VIA_002 HUF failures, out of scope to fix here."""
+    profile = ITR2FilingProfile(
+        pan="ABCPH1234F", assessee_status=AssesseeStatus.HUF, surname_or_org_name="Nair HUF",
+        date_of_birth_or_formation=date(2000, 6, 15), father_name="NA",
+        verification_place="Mumbai", verification_capacity="K", karta_pan="ABCPN1234F",
+        primary_address=FilingAddress(
+            residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
+            state_code="27", mobile_no="9876543210", email="priya@example.com",
+        ),
+    )
+    inp = _base_input(
+        filing_profile=profile,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000"), relief_89a=Decimal("5000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-FORM-010")
+
+
+def test_FORM_010_individual_relief_89a_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000"), relief_89a=Decimal("5000"),
+                                    income_notified_89a=Decimal("5000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-FORM-010")
+
+
+def test_SAL_026_table_10_13a_total_exceeding_gross_salary_fails():
+    """CBDT rule #606: Basic + DA + actual HRA received (Table 10(13A))
+    cannot exceed gross salary u/s 17(1)."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[_employer_detail(
+            salary_for_hra=Decimal("300000"), actual_hra_received=Decimal("300000"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-026")
+
+
+def test_SAL_026_table_10_13a_total_within_gross_salary_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("1000000")),
+        employer_filing_details=[_employer_detail(
+            salary_for_hra=Decimal("300000"), actual_hra_received=Decimal("120000"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-026")
+
+
 # ── Category B/D advisories (Phase 6a) ──────────────────────────────────────
 
 def _fsi_entry(**overrides) -> FSICountryEntry:
@@ -1234,6 +1546,122 @@ def test_DTAA_001_no_advisory_for_non_resident():
     assert not emitted(validate_itr2_input(inp), "ITR2-IN-DTAA-001")
 
 
+def test_OS_018_dividend_115ac_mismatches_special_rate_entry_fails():
+    """CBDT rule #220: Schedule OS Sl.10's dividend quarterly breakdown for
+    a special-rate section must equal the corresponding Sl.2d/2e amount --
+    os_dividend_entries is disclosure-only, never read by the calculator,
+    so it can silently diverge from what os_special_rate_entries actually
+    taxes without this cross-check."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        os_dividend_entries=[OSDividendEntry(section="115AC", amount=Decimal("30000"))],
+        os_special_rate_entries=[OSSpecialRateEntry(
+            source_description="5AC1abD", source_amount=Decimal("20000"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-018")
+
+
+def test_OS_018_dividend_115ac_matches_special_rate_entry_passes():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        os_dividend_entries=[OSDividendEntry(section="115AC", amount=Decimal("30000"))],
+        os_special_rate_entries=[OSSpecialRateEntry(
+            source_description="5AC1abD", source_amount=Decimal("30000"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-018")
+
+
+def test_OS_019_dividend_dtaa_mismatches_dtaa_entries_fails():
+    """CBDT rule #219: DTAA-rate dividend quarterly breakdown vs Sl.2f."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        os_dividend_entries=[OSDividendEntry(section="DTAA", amount=Decimal("15000"))],
+        os_dtaa_entries=[_dtaa_entry(amount=Decimal("10000"), nature_of_income="2d")],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-019")
+
+
+def test_OS_020_plain_dividend_mismatches_formula_fails():
+    """CBDT rule #214: plain-dividend (Sl.10 "194") quarterly breakdown
+    must equal gross dividend income less DTAA dividend less eligible
+    interest expenditure u/s 57."""
+    inp = _base_input(
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("100000")),
+        os_dividend_entries=[OSDividendEntry(section="194", amount=Decimal("100000"))],
+        os_deductions=OSDeductions(interest_expense_eligible_us57=Decimal("10000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-020")
+
+
+def test_OS_020_plain_dividend_matches_formula_passes():
+    inp = _base_input(
+        other_sources_income=OtherSourcesIncome(dividend_income=Decimal("100000")),
+        os_dividend_entries=[OSDividendEntry(section="194", amount=Decimal("90000"))],
+        os_deductions=OSDeductions(interest_expense_eligible_us57=Decimal("10000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-020")
+
+
+def test_EI_001_duplicate_exempt_sub_category_fails():
+    """CBDT rules #698-745: the same Section 10 sub-category cannot be
+    selected more than once in Schedule EI's other-exempt-income rows."""
+    from app.schemas.itr2 import ExemptIncome, ExemptIncomeOtherEntry
+    inp = _base_input(exempt_income=ExemptIncome(other_exempt_entries=[
+        ExemptIncomeOtherEntry(category="SRPC", sub_category="10(16)", description="A", amount=Decimal("1000")),
+        ExemptIncomeOtherEntry(category="OTH", sub_category="10(16)", description="B", amount=Decimal("2000")),
+    ]))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-EI-001")
+
+
+def test_EI_001_distinct_exempt_sub_categories_pass():
+    from app.schemas.itr2 import ExemptIncome, ExemptIncomeOtherEntry
+    inp = _base_input(exempt_income=ExemptIncome(other_exempt_entries=[
+        ExemptIncomeOtherEntry(category="SRPC", sub_category="10(16)", description="A", amount=Decimal("1000")),
+        ExemptIncomeOtherEntry(category="OTH", sub_category="10(17A)", description="B", amount=Decimal("2000")),
+    ]))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-EI-001")
+
+
+def test_EI_002_pti_exempt_income_without_matching_pti_entry_fails():
+    """CBDT rule #432: Schedule EI Sl.5 must equal Schedule PTI's own exempt total."""
+    from app.schemas.itr2 import ExemptIncome
+    inp = _base_input(exempt_income=ExemptIncome(pti_exempt_income=Decimal("5000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-EI-002")
+
+
+def test_EI_002_pti_exempt_income_matching_pti_entry_passes():
+    from app.schemas.itr2 import ExemptIncome
+    inp = _base_input(
+        exempt_income=ExemptIncome(pti_exempt_income=Decimal("5000")),
+        pti_entries=[PTIEntry(
+            entity_name="ABC Trust", entity_pan="ABCTR1234E", income_head="OS",
+            section="115UA", income_amount=Decimal("0"), exempt_income_23fbb=Decimal("5000"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-EI-002")
+
+
+def test_EI_002_zero_pti_exempt_income_with_no_pti_entries_is_a_no_op():
+    inp = _base_input()
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-EI-002")
+
+
+def test_OS_020_no_plain_dividend_row_is_a_no_op():
+    inp = _base_input(other_sources_income=OtherSourcesIncome(dividend_income=Decimal("100000")))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-020")
+
+
+def test_OS_019_dividend_dtaa_matches_dtaa_entries_passes():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        os_dividend_entries=[OSDividendEntry(section="DTAA", amount=Decimal("10000"))],
+        os_dtaa_entries=[_dtaa_entry(amount=Decimal("10000"), nature_of_income="2d")],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-019")
+
+
 def test_DTAA_002_applicable_rate_at_lower_of_treaty_and_it_act_passes():
     inp = _base_input(
         residential_status=ResidentialStatus.NON_RESIDENT,
@@ -1255,6 +1683,20 @@ def test_DTAA_002_applicable_rate_exceeding_lower_of_treaty_and_it_act_fails():
         os_dtaa_entries=[_dtaa_entry(
             rate_as_per_treaty=Decimal("15"), rate_as_per_it_act=Decimal("20"),
             applicable_rate=Decimal("18"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-002")
+
+
+def test_DTAA_002_applicable_rate_below_lower_of_treaty_and_it_act_fails():
+    """CBDT rule #207: the applicable rate must EQUAL the lower of the two
+    rates, not merely be capped by it -- a too-low rate (understating
+    relief) must also fail."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        os_dtaa_entries=[_dtaa_entry(
+            rate_as_per_treaty=Decimal("15"), rate_as_per_it_act=Decimal("20"),
+            applicable_rate=Decimal("10"),
         )],
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-002")
@@ -1295,6 +1737,18 @@ def test_DTAA_003_stcg_applicable_rate_exceeding_lower_of_treaty_and_it_act_fail
     assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-003")
 
 
+def test_DTAA_003_stcg_applicable_rate_below_lower_of_treaty_and_it_act_fails():
+    """CBDT rule #152: exact-equality fix, STCG side."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_stcg_dtaa_entries=[_cg_dtaa_entry(
+            rate_as_per_treaty=Decimal("15"), rate_as_per_it_act=Decimal("20"),
+            applicable_rate=Decimal("10"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-003")
+
+
 def test_DTAA_004_ltcg_applicable_rate_at_lower_of_treaty_and_it_act_passes():
     """Same check, LTCG side (Schedule CG item B11)."""
     inp = _base_input(
@@ -1313,6 +1767,18 @@ def test_DTAA_004_ltcg_applicable_rate_exceeding_lower_of_treaty_and_it_act_fail
         cg_ltcg_dtaa_entries=[_cg_dtaa_entry(
             rate_as_per_treaty=Decimal("10"), rate_as_per_it_act=Decimal("12.5"),
             applicable_rate=Decimal("12"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-004")
+
+
+def test_DTAA_004_ltcg_applicable_rate_below_lower_of_treaty_and_it_act_fails():
+    """CBDT rule #152: exact-equality fix, LTCG side."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_ltcg_dtaa_entries=[_cg_dtaa_entry(
+            rate_as_per_treaty=Decimal("10"), rate_as_per_it_act=Decimal("12.5"),
+            applicable_rate=Decimal("5"),
         )],
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-DTAA-004")
@@ -1701,6 +2167,38 @@ def test_SAL_015_hra_exemption_exceeding_formula_fails():
         )],
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-015")
+
+
+def test_SAL_025_hra_claimed_without_table_10_13a_fails():
+    """CBDT rule #605: a claim with hra_exempt_amount > 0 but zero Table
+    10(13A) rows must be flagged, not silently skipped. Previously the
+    single guard on ITR2-IN-SAL-015 (`... and inp.employer_filing_details`)
+    meant an empty employer_filing_details list bypassed HRA validation
+    entirely instead of being caught as "table not filled"."""
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), hra_exempt_amount=Decimal("120000")),
+        employer_filing_details=[],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-025")
+
+
+def test_SAL_025_no_hra_claim_without_table_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-025")
+
+
+def test_SAL_025_hra_claimed_with_table_does_not_also_fail_025():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), hra_exempt_amount=Decimal("120000")),
+        employer_filing_details=[_employer_detail(
+            actual_hra_received=Decimal("120000"), actual_rent_paid=Decimal("200000"),
+            salary_for_hra=Decimal("300000"), is_metro_city=True,
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-025")
 
 
 # ─── Phase 6i-3: gratuity/commuted-pension per-employer attribution ────────
@@ -2111,7 +2609,7 @@ def test_OS_007_non_resident_claiming_115ac_dividend_passes():
 
 # ─── Phase 6j-8: Chapter VI-A "details required when claimed" family ───────
 
-def test_HP_009_home_loan_interest_claimed_without_loan_details_fails():
+def test_HP_014_home_loan_interest_claimed_without_loan_details_fails():
     inp = _base_input(
         house_property_income=HousePropertyIncome(
             property_type=PropertyType.SELF_OCCUPIED, home_loan_interest_paid=Decimal("150000"),
@@ -2123,10 +2621,10 @@ def test_HP_009_home_loan_interest_claimed_without_loan_details_fails():
             ),
         ],
     )
-    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-009")
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-014")
 
 
-def test_HP_009_home_loan_interest_claimed_with_loan_details_passes():
+def test_HP_014_home_loan_interest_claimed_with_loan_details_passes():
     inp = _base_input(
         house_property_income=HousePropertyIncome(
             property_type=PropertyType.SELF_OCCUPIED, home_loan_interest_paid=Decimal("150000"),
@@ -2144,7 +2642,7 @@ def test_HP_009_home_loan_interest_claimed_with_loan_details_passes():
             ),
         ],
     )
-    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-009")
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-014")
 
 
 def test_VIA_016_017_80d_self_senior_flag_mismatch_fails():
@@ -2509,6 +3007,45 @@ def test_CG_109_112a_scrip_zero_fmv_after_cutoff_passes():
     assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-109")
 
 
+def test_CG_113_112a_scrip_total_fmv_mismatches_per_share_times_units_fails():
+    """CBDT rule #87: Col.11 Total FMV must equal Col.4 (num shares) *
+    Col.10 (FMV per share)."""
+    inp = _base_input(cg_112a_scrips=[CG112AScrip(
+        isin_code="INE000A00001", share_unit_name="TEST SCRIP",
+        is_before_31jan2018=True,
+        date_of_transfer=date(2025, 5, 1), num_shares_units=Decimal("10"),
+        sale_price_per_share=Decimal("100"), total_sale_value=Decimal("1000"),
+        cost_acq_without_index=Decimal("500"), fmv_per_share=Decimal("80"),
+        total_fmv=Decimal("900"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-113")
+
+
+def test_CG_113_112a_scrip_total_fmv_matches_per_share_times_units_passes():
+    inp = _base_input(cg_112a_scrips=[CG112AScrip(
+        isin_code="INE000A00001", share_unit_name="TEST SCRIP",
+        is_before_31jan2018=True,
+        date_of_transfer=date(2025, 5, 1), num_shares_units=Decimal("10"),
+        sale_price_per_share=Decimal("100"), total_sale_value=Decimal("1000"),
+        cost_acq_without_index=Decimal("500"), fmv_per_share=Decimal("80"),
+        total_fmv=Decimal("800"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-113")
+
+
+def test_CG_114_115ad_scrip_total_fmv_mismatch_fails():
+    """CBDT rule #94: same check as #87, applied to cg_115ad_scrips."""
+    inp = _base_input(cg_115ad_scrips=[CG112AScrip(
+        isin_code="INE000A00001", share_unit_name="TEST SCRIP",
+        is_before_31jan2018=True,
+        date_of_transfer=date(2025, 5, 1), num_shares_units=Decimal("10"),
+        sale_price_per_share=Decimal("100"), total_sale_value=Decimal("1000"),
+        cost_acq_without_index=Decimal("500"), fmv_per_share=Decimal("80"),
+        total_fmv=Decimal("900"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-114")
+
+
 def test_FSI_004_salary_relief_exceeding_actual_gross_salary_fails():
     inp = _base_input(
         salary_income=SalaryIncome(gross_salary=Decimal("500000")),
@@ -2621,3 +3158,437 @@ def test_VIA_015_80cch_exceeding_46_2_pct_of_salary_fails():
         pran_number="123456789012",
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-015")
+
+
+# ─── Phase 2 cluster 3: Chapter VI-A/deductions (CBDT #314-761 cluster) ────
+
+def test_VIA_035_80gga_claimed_without_schedule_fails():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(amount_80gga=Decimal("10000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-035")
+
+
+def test_VIA_035_80gga_claimed_with_schedule_passes():
+    donation = Donation80GGA(
+        relevant_clause=Section80GGAClause.RURAL_DEVELOPMENT, donee_name="Trust",
+        address=DonationAddress(
+            address_line="1 MG Road", city_or_district="Pune", state_code="27", pin_code=411001,
+        ),
+        donee_pan="ABCPN1234F", cash_amount=Decimal("0"), other_mode_amount=Decimal("10000"),
+    )
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80gga=Decimal("10000")),
+        schedule_80gga=Schedule80GGA(donations=[donation]),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-035")
+
+
+def test_VIA_036_80gga_claim_mismatches_schedule_total_fails():
+    donation = Donation80GGA(
+        relevant_clause=Section80GGAClause.RURAL_DEVELOPMENT, donee_name="Trust",
+        address=DonationAddress(
+            address_line="1 MG Road", city_or_district="Pune", state_code="27", pin_code=411001,
+        ),
+        donee_pan="ABCPN1234F", cash_amount=Decimal("0"), other_mode_amount=Decimal("10000"),
+    )
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80gga=Decimal("15000")),
+        schedule_80gga=Schedule80GGA(donations=[donation]),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-036")
+
+
+def test_VIA_037_80qqb_non_resident_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT, deduction_80qqb=Decimal("50000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-037")
+
+
+def test_VIA_037_80qqb_resident_passes():
+    inp = _base_input(
+        deduction_80qqb=Decimal("50000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-037")
+
+
+def test_VIA_038_80rrb_non_resident_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT, deduction_80rrb=Decimal("50000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-038")
+
+
+def test_VIA_039_80qqb_plus_80rrb_exceeds_os_royalty_income_fails():
+    inp = _base_input(
+        deduction_80qqb=Decimal("40000"), deduction_80rrb=Decimal("40000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-039")
+
+
+def test_VIA_039_80qqb_plus_80rrb_within_os_royalty_income_passes():
+    inp = _base_input(
+        deduction_80qqb=Decimal("20000"), deduction_80rrb=Decimal("20000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-039")
+
+
+def test_VIA_040_80qqb_filed_after_due_date_fails():
+    inp = _base_input(
+        deduction_80qqb=Decimal("50000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+        filing_date=date(2026, 8, 1), due_date=date(2026, 7, 31),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-040")
+
+
+def test_VIA_040_80qqb_filed_within_due_date_passes():
+    inp = _base_input(
+        deduction_80qqb=Decimal("50000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+        filing_date=date(2026, 7, 1), due_date=date(2026, 7, 31),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-040")
+
+
+def test_VIA_052_80qqb_without_form_10ccd_ack_fails():
+    """CBDT rule #648: Form 10CCD ack number is mandatory to claim 80QQB."""
+    inp = _base_input(
+        deduction_80qqb=Decimal("50000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-052")
+
+
+def test_VIA_052_80qqb_with_form_10ccd_ack_passes():
+    inp = _base_input(
+        deduction_80qqb=Decimal("50000"), form_10ccd_ack_number_80qqb="ACK123456",
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-052")
+
+
+def test_VIA_053_80rrb_without_form_10cce_ack_fails():
+    """CBDT rule #649: Form 10CCE ack number is mandatory to claim 80RRB."""
+    inp = _base_input(
+        deduction_80rrb=Decimal("50000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-053")
+
+
+def test_VIA_053_80rrb_with_form_10cce_ack_passes():
+    inp = _base_input(
+        deduction_80rrb=Decimal("50000"), form_10cce_ack_number_80rrb="ACK654321",
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-053")
+
+
+def test_VIA_042_80ccd2_all_pensioner_employers_fails():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("50000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="PE")],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-042")
+
+
+def test_VIA_042_80ccd2_active_employer_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=Decimal("50000")),
+        employer_filing_details=[_employer_detail(nature_of_employment="CGOV")],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-042")
+
+
+def test_VIA_043_80ccd1_claimed_without_pran_fails():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("50000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-043")
+
+
+def test_VIA_043_80ccd1_claimed_with_pran_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=Decimal("50000")),
+        pran_number="123456789012",
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-043")
+
+
+def test_VIA_044_pran_present_without_ccd_claim_emits_advisory():
+    inp = _base_input(pran_number="123456789012")
+    assert emitted(validate_itr2_input(inp), "ITR2-IN-VIA-044")
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-044")
+
+
+def test_VIA_045_80d_policy_row_missing_insurer_details_fails():
+    inp = _base_input(schedule_80d=Schedule80D(
+        premium_1a_non_senior=Decimal("10000"),
+        policies=[InsurancePolicy(section="1a", premium_paid=Decimal("10000"))],
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-045")
+
+
+def test_VIA_045_80d_policy_row_with_insurer_details_passes():
+    inp = _base_input(schedule_80d=Schedule80D(
+        premium_1a_non_senior=Decimal("10000"),
+        policies=[InsurancePolicy(
+            section="1a", premium_paid=Decimal("10000"),
+            insurer_name="LIC", policy_number="POL123",
+        )],
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-045")
+
+
+def test_VIA_046_80d_bucket_breakup_mismatches_premium_fails():
+    inp = _base_input(schedule_80d=Schedule80D(
+        premium_1a_non_senior=Decimal("15000"),
+        policies=[InsurancePolicy(
+            section="1a", premium_paid=Decimal("10000"),
+            insurer_name="LIC", policy_number="POL123",
+        )],
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-046")
+
+
+def test_VIA_046_80d_bucket_breakup_matches_premium_passes():
+    inp = _base_input(schedule_80d=Schedule80D(
+        premium_1a_non_senior=Decimal("10000"),
+        policies=[InsurancePolicy(
+            section="1a", premium_paid=Decimal("10000"),
+            insurer_name="LIC", policy_number="POL123",
+        )],
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-046")
+
+
+def test_VIA_047_80ee_claimed_before_24b_limit_exhausted_fails():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ee=Decimal("30000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED, home_loan_interest_paid=Decimal("100000"),
+        ),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-047")
+
+
+def test_VIA_047_80ee_claimed_after_24b_limit_exhausted_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ee=Decimal("30000")),
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT, home_loan_interest_paid=Decimal("250000"),
+            annual_rent_received=Decimal("300000"),
+        ),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-047")
+
+
+# ─── Phase 3: completing Partially Implemented rules (#152/#207/#342/#547/
+# #549/#596/#621/#622/#464) ─────────────────────────────────────────────
+
+def test_VIA_048_80qqb_80rrb_new_regime_fails():
+    inp = _base_input(
+        tax_regime=TaxRegime.NEW, deduction_80qqb=Decimal("50000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-048")
+
+
+def test_VIA_048_80qqb_80rrb_old_regime_passes():
+    inp = _base_input(
+        deduction_80qqb=Decimal("50000"),
+        os_other_income_entries=[OSOtherIncomeEntry(nature="Royalty", amount=Decimal("50000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-048")
+
+
+def test_SAL_030_new_regime_standard_deduction_excess_fails():
+    inp = _base_input(
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), standard_deduction_claimed=Decimal("80000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-030")
+
+
+def test_SAL_030_new_regime_standard_deduction_within_cap_passes():
+    inp = _base_input(
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), standard_deduction_claimed=Decimal("75000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-030")
+
+
+def test_SAL_032_judge_exemption_under_new_regime_fails():
+    """CBDT rule #686: the judge's Section 10 exemption (EIC) is not
+    available under the new tax regime."""
+    inp = _base_input(
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[_employer_detail(section10_exemption_rows=[
+            {"SalNatureDesc": "EIC", "SalOthNatOfInc": "Judge exemption", "SalOthAmount": Decimal("50000")},
+        ])],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-032")
+
+
+def test_SAL_032_judge_exemption_under_old_regime_passes():
+    inp = _base_input(
+        tax_regime=TaxRegime.OLD,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[_employer_detail(section10_exemption_rows=[
+            {"SalNatureDesc": "EIC", "SalOthNatOfInc": "Judge exemption", "SalOthAmount": Decimal("50000")},
+        ])],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-032")
+
+
+def test_SAL_032_new_regime_without_judge_exemption_is_a_no_op():
+    inp = _base_input(
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[_employer_detail(section10_exemption_rows=[
+            {"SalNatureDesc": "10(17)", "SalOthNatOfInc": "MP/MLA allowance", "SalOthAmount": Decimal("10000")},
+        ])],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-032")
+
+
+def test_HP_015_80ee_loan_not_in_table_24b_fails():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ee=Decimal("50000")),
+        loan_details_80ee_list=[_loan_80ee_entry(account_or_reference_number="HL999")],
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED, home_loan_interest_paid=Decimal("100000"),
+        ),
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="1 MG Road", city_or_town_or_district="Pune", state_code="27",
+            pin_code="411001",
+            home_loan_details=[HomeLoanDetail(
+                loan_taken_from="B", bank_or_institution_name="SBI",
+                loan_account_or_ref_no="HL111", date_of_loan=date(2020, 1, 1),
+                total_loan_amount=Decimal("2000000"), loan_outstanding_amount=Decimal("1500000"),
+                interest_this_year=Decimal("100000"),
+            )],
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-015")
+
+
+def test_HP_015_80ee_loan_in_table_24b_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ee=Decimal("50000")),
+        loan_details_80ee_list=[_loan_80ee_entry(account_or_reference_number="HL111")],
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED, home_loan_interest_paid=Decimal("100000"),
+        ),
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="1 MG Road", city_or_town_or_district="Pune", state_code="27",
+            pin_code="411001",
+            home_loan_details=[HomeLoanDetail(
+                loan_taken_from="B", bank_or_institution_name="SBI",
+                loan_account_or_ref_no="HL111", date_of_loan=date(2020, 1, 1),
+                total_loan_amount=Decimal("2000000"), loan_outstanding_amount=Decimal("1500000"),
+                interest_this_year=Decimal("100000"),
+            )],
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-015")
+
+
+def test_TDS_021_tds2_claimed_without_head_of_income_fails():
+    inp = _base_input(tds2_entries=[{
+        "deductor_tan": "MUMA12345B", "tds_section": "194A",
+        "gross_amount": Decimal("10000"), "tds_deducted": Decimal("1000"),
+        "tds_claimed_this_year": Decimal("1000"),
+    }])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-021")
+
+
+def test_TDS_021_tds2_claimed_with_head_of_income_passes():
+    inp = _base_input(tds2_entries=[{
+        "deductor_tan": "MUMA12345B", "tds_section": "194A",
+        "gross_amount": Decimal("10000"), "tds_deducted": Decimal("1000"),
+        "tds_claimed_this_year": Decimal("1000"), "head_of_income": "OS",
+    }])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-TDS-021")
+
+
+def test_VIA_049_80ggc_contribution_outside_ay_date_range_fails():
+    inp = _base_input(schedule_80ggc=Schedule80GGC(contributions=[{
+        "amount": Decimal("10000"), "contribution_date": "2024-06-01",
+    }]))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-049")
+
+
+def test_VIA_049_80ggc_contribution_within_ay_date_range_passes():
+    inp = _base_input(schedule_80ggc=Schedule80GGC(contributions=[{
+        "amount": Decimal("10000"), "contribution_date": "2025-06-01",
+    }]))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-049")
+
+
+def test_HP_017_co_owner_missing_pan_fails():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT, annual_rent_received=Decimal("100000"),
+        ),
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="1 MG Road", city_or_town_or_district="Pune", state_code="27",
+            pin_code="411001", co_owned=True, assessee_share_percent=Decimal("50"),
+            co_owner_details=[CoOwnerDetail(name="Co-Owner", percent_share=Decimal("50"))],
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-017")
+
+
+def test_SAL_031_new_regime_old_only_section10_code_fails():
+    """CBDT rule #54: the plain (non-115BAC) 10(14)(i)/10(14)(ii)/10(17)
+    codes are old-regime-only."""
+    inp = _base_input(
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        employer_filing_details=[_employer_detail(section10_exemption_rows=[
+            {"SalNatureDesc": "10(17)", "SalOthNatOfInc": "MP allowance", "SalOthAmount": 5000},
+        ])],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-031")
+
+
+def test_SAL_031_new_regime_115bac_variant_passes():
+    inp = _base_input(
+        tax_regime=TaxRegime.NEW,
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        employer_filing_details=[_employer_detail(section10_exemption_rows=[
+            {"SalNatureDesc": "10(14)(i)(115BAC)", "SalOthNatOfInc": "Rule 2BB", "SalOthAmount": 5000},
+        ])],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-031")
+
+
+def test_SAL_031_old_regime_plain_code_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("600000")),
+        employer_filing_details=[_employer_detail(section10_exemption_rows=[
+            {"SalNatureDesc": "10(17)", "SalOthNatOfInc": "MP allowance", "SalOthAmount": 5000},
+        ])],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-031")
+
+
+def test_HP_017_co_owner_with_pan_passes():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT, annual_rent_received=Decimal("100000"),
+        ),
+        property_filing_details=[PropertyFilingDetail(
+            address_detail="1 MG Road", city_or_town_or_district="Pune", state_code="27",
+            pin_code="411001", co_owned=True, assessee_share_percent=Decimal("50"),
+            co_owner_details=[CoOwnerDetail(
+                name="Co-Owner", pan="XYZPN9876G", percent_share=Decimal("50"),
+            )],
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-017")
