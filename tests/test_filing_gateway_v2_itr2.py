@@ -66,6 +66,9 @@ def _filing_ready_itr2_draft() -> ReturnDraft:
         ifscCode="HDFC0000123", accountType="SB", useForRefund=True,
     )]
     draft.filing.filingSection = "139(1)"
+    # CBDT rule #83: a Resident/RNOR individual must explicitly answer the
+    # Section 115H question -- "filing-ready" now requires this too.
+    draft.filing.benefitUs115HAnswered = True
     draft.verification.declarationAccepted = True
     draft.verification.capacity = "SELF"
     draft.verification.place = "Mumbai"
@@ -328,6 +331,7 @@ def test_generate_cbdt_json_itr2_emits_residential_status_facts() -> None:
     draft.filing.totalStayIndiaPrevYr = 90
     draft.filing.totalStayIndia4PrecYr = 400
     draft.filing.benefitUs115H = True
+    draft.filing.benefitUs115HAnswered = True
     draft.filing.jurisdictionResidenceEntries = [
         DraftJurisdictionEntry(id="j1", jurisdictionCode="2", tin="123-45-6789"),
     ]
@@ -345,7 +349,10 @@ def test_generate_cbdt_json_itr2_emits_residential_status_facts() -> None:
 
 def test_generate_cbdt_json_itr2_omits_residential_status_facts_when_unset() -> None:
     """No residential-status detail entered means no fields emitted at all --
-    all of it is genuinely optional per the official schema."""
+    all of it is genuinely optional per the official schema. BenefitUs115HFlg
+    is the one exception: CBDT rule #83 makes it mandatory for a Resident/
+    RNOR individual (see the dedicated PROFILE-008 tests below), so the
+    fixture's own "filing-ready" default already answers it (as "No")."""
     draft = _filing_ready_itr2_draft()
     official_json, _summary = generate_cbdt_json(draft)
     filing_status = official_json["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
@@ -353,7 +360,18 @@ def test_generate_cbdt_json_itr2_omits_residential_status_facts_when_unset() -> 
     assert "JurisdictionResPrevYr" not in filing_status
     assert "TotalPrStayIndiaPrevYr" not in filing_status
     assert "TotalPrStayIndia4PrecYr" not in filing_status
-    assert "BenefitUs115HFlg" not in filing_status
+    assert filing_status["BenefitUs115HFlg"] == "N"
+
+
+def test_generate_cbdt_json_itr2_rejects_unanswered_115h_for_resident() -> None:
+    """CBDT rule #83: a Resident/RNOR individual must explicitly answer the
+    Section 115H question -- generate_cbdt_json blocks (Category A) when it
+    hasn't been."""
+    draft = _filing_ready_itr2_draft()
+    draft.filing.benefitUs115HAnswered = False
+    with pytest.raises(FilingGatewayV2Error) as excinfo:
+        generate_cbdt_json(draft)
+    assert "115H" in " ".join(excinfo.value.errors)
 
 
 # ── §4.3: director and unlisted-equity disclosures ──────────────────────────
@@ -520,6 +538,9 @@ def _zero_salary_zero_hp_itr2_draft() -> ReturnDraft:
         ifscCode="HDFC0000123", accountType="SB", useForRefund=True,
     )]
     draft.filing.filingSection = "139(1)"
+    # CBDT rule #83: a Resident/RNOR individual must explicitly answer the
+    # Section 115H question -- "filing-ready" now requires this too.
+    draft.filing.benefitUs115HAnswered = True
     draft.verification.declarationAccepted = True
     draft.verification.capacity = "SELF"
     draft.verification.place = "Mumbai"

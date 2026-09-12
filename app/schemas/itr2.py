@@ -155,6 +155,13 @@ class AssesseeRepresentativeProfile(StrictModel):
     email: str = Field(min_length=1, max_length=125)
     mobile_country_code: int = Field(ge=0, le=99999)
     mobile_no: str = Field(pattern=r"^[1-9][0-9]{4,9}$")
+    # CBDT rules #8/#277/#313: the representative's own PAN -- not part of
+    # the official schema's RepDtls block (which has no PAN field at all,
+    # only RepName/RepEmailID/RepMobileNo), but needed for the Verification.
+    # Declaration.AssesseeVerPAN the representative's own declaration must
+    # carry (see itd/itr2.py's _verification_block()), and to check a
+    # donee's PAN against it (ITR2-IN-VIA-031/032 in input_rules.py).
+    pan: Optional[str] = Field(default=None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
 
 
 class TaxReturnPreparerProfile(StrictModel):
@@ -182,6 +189,14 @@ class ITR2FilingProfile(StrictModel):
     filing_due_date: date = date(2026, 7, 31)
     receipt_number: Optional[str] = Field(default=None, pattern=r"^[0-9]{15}$")
     original_return_date: Optional[date] = None
+    # CBDT rule #4: a revised return (139(5)) cannot be filed against an
+    # original return that was itself filed in response to a 142(1) notice.
+    # Only meaningful when return_file_section == REVISED_139_5.
+    original_return_filing_section: Optional[ReturnFileSection] = None
+    # CBDT rule #599: a response to a defective-notice (139(9)) return must
+    # use the same tax regime the original (defective) return itself used.
+    # Only meaningful when return_file_section == DEFECTIVE_139_9.
+    original_return_tax_regime: Optional[TaxRegime] = None
     notice_number: Optional[str] = Field(default=None, max_length=100)
     notice_date: Optional[date] = None
     opted_out_new_tax_regime: bool = False
@@ -210,7 +225,10 @@ class ITR2FilingProfile(StrictModel):
     jurisdiction_residence_entries: List[JurisdictionResidenceEntry] = Field(default_factory=list)
     total_stay_india_prev_yr: Optional[int] = Field(default=None, ge=0, le=365)
     total_stay_india_4_prec_yr: Optional[int] = Field(default=None, ge=0, le=1461)
-    benefit_us_115h: bool = False
+    # CBDT rule #83: every Resident/RNOR individual must explicitly answer
+    # the 115H question -- ``None`` means "not yet answered", distinct from
+    # an explicit ``False`` ("answered No").
+    benefit_us_115h: Optional[bool] = None
     father_name: str = Field(min_length=1, max_length=125)
     verification_place: str = Field(min_length=1, max_length=50)
     verification_capacity: Literal["S", "R", "K", "A"] = "S"
@@ -362,6 +380,30 @@ class CGTransaction(StrictModel):
     # ImproveDate is an AY-range enum ("2001-02".."2025-26"); one aggregate
     # event is sufficient to satisfy the rule as literally stated.
     year_of_improvement: Optional[str] = Field(default=None, pattern=r"^20\d{2}-\d{2}$")
+    # CBDT rule #600: this disposal is a share buyback whose loss is
+    # reportable via Schedule CG's CapitalLossBuyBackShares block (the
+    # capital-loss counterpart of Section 2(22)(f) deemed-dividend
+    # treatment on the OS side). Cross-checked against
+    # OSDividendEntry.section == "10(22f)" by ITR2-IN-CG-116
+    # (input_rules.py) -- full CapitalLossBuyBackShares JSON serialization
+    # (STL20/STL30/STLAR rate-bucket detail rows) is a separate, larger
+    # feature not attempted here; this flag only backs the cross-check the
+    # rule itself asks for.
+    is_buyback_loss: bool = False
+    # CBDT rules #153/#155/#597: Schedule CG's Sl.B5 block -- LTCG on
+    # unlisted securities/bonds/GDRs specifically taxed under one of three
+    # NRI/FPI-only sections (112(1)(c) unlisted securities, 115AC bonds/
+    # GDRs, 115AD FII securities), the official schema's own dedicated
+    # ``NRIOnSec112and115`` array (SectionCode enum "21ciii"/"5AC1c"/
+    # "5ADiii"). Only meaningful when asset_type is UNLISTED_SHARES.
+    # Represented as a classification pair on the existing CGTransaction
+    # rather than a new parallel transaction type (which would additionally
+    # need its own FMV/Section-50CA valuation and DeductSec48 breakdown --
+    # a separate, larger feature not attempted here; this pair only backs
+    # the three eligibility/mandatory-field checks the rules themselves ask
+    # for).
+    is_nri_unquoted_shares_disposal: bool = False
+    section_code: Optional[Literal["112_1_c", "115AC", "115AD"]] = None
     expenditure_on_transfer: Decimal = Field(default=Decimal("0"), ge=0)
     is_stt_paid_on_acquisition: Optional[bool] = None
     is_stt_paid_on_transfer: Optional[bool] = None

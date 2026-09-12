@@ -29,6 +29,7 @@ from app.engine.draft_to_itr1_input import (
 from app.engine.draft_to_itr2_input import draft_to_itr2_input
 from app.engine.draft_to_itr4_input import draft_to_itr4_input
 from app.engine.personal_profile import (
+    FILING_SECTION_CODES,
     NormalizedPropertyProfile,
     PersonalProfileError,
     normalize_bank_accounts,
@@ -1383,6 +1384,7 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
                 email=normalized.representative.email,
                 mobile_country_code=normalized.representative.mobile_country_code,
                 mobile_no=normalized.representative.mobile_no,
+                pan=normalized.representative.pan,
             )
         trp = normalize_tax_return_preparer(draft)
         tax_return_preparer = None
@@ -1412,6 +1414,17 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
             return_file_section=normalized.return_file_section,
             receipt_number=normalized.original_acknowledgement_no,
             original_return_date=normalized.original_return_date,
+            # CBDT rule #4: only meaningful for a revised (139(5)) return --
+            # the section the ORIGINAL return (the one being revised) was
+            # itself filed under, distinct from this return's own
+            # return_file_section above.
+            original_return_filing_section=FILING_SECTION_CODES.get(
+                filing.originalReturnFilingSection
+            ),
+            # CBDT rule #599: only meaningful for a defective-notice
+            # (139(9)) response -- the tax regime the ORIGINAL return itself
+            # used.
+            original_return_tax_regime=filing.originalReturnTaxRegime,
             notice_number=normalized.notice_number,
             notice_date=normalized.notice_date,
             opted_out_new_tax_regime=normalized.regime_is_old,
@@ -1478,7 +1491,7 @@ def _itr2_filing_profile(draft: ReturnDraft) -> ITR2FilingProfile:
             ],
             total_stay_india_prev_yr=filing.totalStayIndiaPrevYr,
             total_stay_india_4_prec_yr=filing.totalStayIndia4PrecYr,
-            benefit_us_115h=filing.benefitUs115H,
+            benefit_us_115h=filing.benefitUs115H if filing.benefitUs115HAnswered else None,
             # ITR2Input's cross-schedule validator requires this to equal
             # (schedule_5a is not None). Mirror draft_to_itr2_input.py's
             # _map_schedule_5a guard exactly (spouseName + spousePAN both

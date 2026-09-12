@@ -25,6 +25,10 @@ _ALLOWED_LOSS_HEADS = {
     "NONSPECULATIVE": 8,
     "SPECULATIVE": 4,
 }
+# CBDT rules #153/#155: the two CGTransaction.section_code values a plain
+# Resident cannot claim without electing Section 115H -- 115AD is FII/FPI-
+# specific already and has no such restriction.
+_CG_115H_RESTRICTED_SECTIONS = {"112_1_c": "112(1)(c)", "115AC": "115AC"}
 
 
 def _result(
@@ -116,6 +120,65 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "Seventh-proviso filing requires at least one corresponding amount detail.",
                 "filing_profile", "one seventh-proviso amount > 0", "all amounts are zero",
             ))
+        # CBDT rule #4: a revised return cannot be filed against an original
+        # return that was itself filed under a section 142(1) notice.
+        if (
+            profile.return_file_section == ReturnFileSection.REVISED_139_5
+            and profile.original_return_filing_section == ReturnFileSection.NOTICE_142_1
+        ):
+            results.append(_result(
+                "ITR2-IN-PROFILE-007", False,
+                "A revised return cannot be filed if the original return was filed under "
+                "section 142(1).",
+                "filing_profile.original_return_filing_section", "!= 142(1)", "142(1)",
+            ))
+
+        # CBDT rule #599: a response to a defective-notice (139(9)) return
+        # must use the same tax regime the original (defective) return used.
+        if (
+            profile.return_file_section == ReturnFileSection.DEFECTIVE_139_9
+            and profile.original_return_tax_regime is not None
+            and profile.original_return_tax_regime != inp.tax_regime
+        ):
+            results.append(_result(
+                "ITR2-IN-PROFILE-010", False,
+                "The tax regime must be the same as the one selected in the original return "
+                "for which the response to the defective notice is being filed.",
+                "tax_regime", str(profile.original_return_tax_regime), str(inp.tax_regime),
+            ))
+
+        # CBDT rule #83: a Resident or RNOR individual must explicitly
+        # answer the Section 115H question (Yes or No) -- unanswered is not
+        # acceptable, even though "No" produces the same downstream tax
+        # treatment as "unanswered" would.
+        if (
+            profile.assessee_status == AssesseeStatus.INDIVIDUAL
+            and profile.residential_status in {
+                ResidentialStatus.RESIDENT, ResidentialStatus.NOT_ORDINARILY_RESIDENT,
+            }
+            and profile.benefit_us_115h is None
+        ):
+            results.append(_result(
+                "ITR2-IN-PROFILE-008", False,
+                "A Resident or RNOR individual must answer whether they wish to claim the "
+                "benefit u/s 115H.",
+                "filing_profile.benefit_us_115h", "Yes or No", "not answered",
+            ))
+
+        # CBDT rule #8: when a representative assessee is verifying (not the
+        # taxpayer or Karta), the declaration's own PAN is the
+        # representative's PAN, so it must actually be known -- otherwise
+        # itd/itr2.py's builder would silently fall back to a placeholder
+        # PAN rather than the representative's real one.
+        if profile.verification_capacity == "R" and (
+            profile.assessee_representative is None or not profile.assessee_representative.pan
+        ):
+            results.append(_result(
+                "ITR2-IN-PROFILE-009", False,
+                "The representative assessee's own PAN is required for the Verification "
+                "declaration.",
+                "filing_profile.assessee_representative.pan", "present", "absent",
+            ))
 
         # CBDT rules #177/#187 (ITR-2 official Validation Rules PDF): explicit
         # 112A-style scrip disposals must be reported through either Schedule
@@ -125,6 +188,11 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
         # calculator merges them into one basket for tax purposes (see
         # app/engine/calculators/itr2.py's own comment on
         # explicit_112a_scrips). is_fii_fpi determines which one applies.
+        # Together these two checks also close CBDT rule #15 ("Whether you
+        # are FPI? must be Yes to enable Schedule 115AD(1)(b)(iii)-Proviso"):
+        # CG-112 below already forbids cg_115ad_scrips whenever is_fii_fpi
+        # is False, which is exactly the same enablement gate the CBDT
+        # portal's own dynamic UI enforces client-side.
         if profile.is_fii_fpi and inp.cg_112a_scrips:
             results.append(_result(
                 "ITR2-IN-CG-111", False,
@@ -1126,6 +1194,50 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 f"{path}.deduction_us54ec", "<= 5000000", str(tx.deduction_us54ec),
             ))
 
+    # CBDT rule #600: a share-buyback loss claimed in Schedule CG requires
+    # the corresponding Section 2(22)(f) deemed-dividend detail in Schedule
+    # OS Sl. No. 1a(iii) (OSDividendEntry.section == "10(22f)").
+    if any(tx.is_buyback_loss for tx in (inp.cg_transactions or [])):
+        if not any(
+            e.section == "10(22f)" and e.amount > _ZERO for e in inp.os_dividend_entries
+        ):
+            results.append(_result(
+                "ITR2-IN-CG-116", False,
+                "A buyback capital loss claimed in Schedule CG requires the corresponding "
+                "Section 2(22)(f) dividend detail in Schedule OS Sl. No. 1a(iii).",
+                "os_dividend_entries[section=10(22f)]", "present", "absent",
+            ))
+
+    # CBDT rules #153/#155/#597: Schedule CG's Sl.B5 NRI/FPI unquoted-shares
+    # block (official NRIOnSec112and115.SectionCode) -- selecting it makes a
+    # section code mandatory (#597), and a plain Resident cannot select
+    # 112(1)(c) or 115AC without electing the Section 115H benefit (#153/
+    # #155; 115AD has no such restriction, being FII/FPI-specific already).
+    for index, tx in enumerate(inp.cg_transactions or []):
+        if not tx.is_nri_unquoted_shares_disposal:
+            continue
+        path = f"cg_transactions[{index}]"
+        if tx.section_code is None:
+            results.append(_result(
+                "ITR2-IN-CG-117", False,
+                "A section code (112(1)(c)/115AC/115AD) is mandatory when Schedule CG's Sl.B5 "
+                "NRI unquoted-shares block is filled.",
+                f"{path}.section_code", "present", "absent",
+            ))
+        elif (
+            tx.section_code in _CG_115H_RESTRICTED_SECTIONS
+            and inp.filing_profile is not None
+            and inp.filing_profile.residential_status == ResidentialStatus.RESIDENT
+            and not inp.filing_profile.benefit_us_115h
+        ):
+            results.append(_result(
+                "ITR2-IN-CG-118", False,
+                f"A Resident cannot claim the tax benefit u/s "
+                f"{_CG_115H_RESTRICTED_SECTIONS[tx.section_code]} without having exercised the "
+                "option u/s 115H.",
+                f"{path}.section_code", "not claimed unless benefit_us_115h", tx.section_code,
+            ))
+
     for index, scrip in enumerate(inp.cg_112a_scrips or []):
         path = f"cg_112a_scrips[{index}]"
         if not scrip.isin_code and not (scrip.share_unit_name or "").strip():
@@ -1380,14 +1492,11 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
     # CBDT rule 154: a plain Resident (not claiming Section 115H's "continue
     # to be taxed as a non-resident on assets acquired while non-resident"
     # option) cannot hold a dividend claim under Section 115AC, which is
-    # reserved for non-residents (or residents electing 115H). Rules 153/155
-    # (the Schedule-CG-side 112(1)(c)/115AC instances of this same
-    # eligibility gate) are Not representable, not merely unimplemented --
-    # confirmed via a full grep of `CGAssetType`/`CGTransaction` for any
-    # 112(1)(c)/115AC-specific classification: none exists, so no CG
-    # transaction in this schema can be identified as claiming either rate
-    # in the first place. See the gap-mapping doc's own reclassification note
-    # for rows #153/#155.
+    # reserved for non-residents (or residents electing 115H). Rules
+    # #153/#155 (the Schedule-CG-side 112(1)(c)/115AC instances of this same
+    # eligibility gate, Sl.B5 of Schedule CG) are ITR2-IN-CG-117/CG-118
+    # above, backed by CGTransaction.is_nri_unquoted_shares_disposal/
+    # section_code.
     if (
         inp.filing_profile is not None
         and inp.filing_profile.residential_status == ResidentialStatus.RESIDENT
@@ -2583,31 +2692,46 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 ))
 
     # CBDT rules 277/313: a donee's PAN cannot equal the filer's own PAN (or
-    # Karta's PAN for a HUF) at either Schedule 80G or Schedule 80GGA.
+    # Karta's PAN for a HUF), nor the PAN at Verification -- the
+    # representative assessee's own PAN when filed by a representative
+    # (previously only the assessee/Karta half was checked; the "PAN at
+    # Verification" half was structurally impossible to check before
+    # AssesseeRepresentativeProfile.pan existed).
     _filer_pans = set()
     if inp.filing_profile is not None:
         _own_pan = getattr(inp.filing_profile, "pan", None)
         _own_karta_pan = getattr(inp.filing_profile, "karta_pan", None)
+        _representative = getattr(inp.filing_profile, "assessee_representative", None)
         if _own_pan:
             _filer_pans.add(_own_pan)
         if _own_karta_pan:
             _filer_pans.add(_own_karta_pan)
-    if _filer_pans and ch6a is not None:
-        for _idx, _don in enumerate(ch6a.donations_80g or []):
-            if _don.donee_pan and _don.donee_pan in _filer_pans:
-                results.append(_result(
-                    "ITR2-IN-VIA-031", False,
-                    "A Schedule 80G donee's PAN cannot be the same as the assessee's own PAN.",
-                    f"deductions_chapter6a.donations_80g[{_idx}].donee_pan",
-                    "!= assessee PAN", _don.donee_pan,
-                ))
+        if _representative is not None and _representative.pan:
+            _filer_pans.add(_representative.pan)
+    if _filer_pans:
+        # Deliberately independent gates -- Schedule 80GGA's own donee-PAN
+        # check must not depend on Chapter VI-A's ch6a being populated at
+        # all (a return can carry a Schedule 80GGA donation with no other
+        # Chapter VI-A claim); the two were previously tied together under
+        # one `and ch6a is not None` gate, silently skipping ITR2-IN-VIA-032
+        # whenever `ch6a` was None regardless of the 80GGA data itself.
+        if ch6a is not None:
+            for _idx, _don in enumerate(ch6a.donations_80g or []):
+                if _don.donee_pan and _don.donee_pan in _filer_pans:
+                    results.append(_result(
+                        "ITR2-IN-VIA-031", False,
+                        "A Schedule 80G donee's PAN cannot be the same as the assessee's own "
+                        "PAN or the PAN at Verification.",
+                        f"deductions_chapter6a.donations_80g[{_idx}].donee_pan",
+                        "!= assessee PAN", _don.donee_pan,
+                    ))
         if inp.schedule_80gga is not None:
             for _idx, _don in enumerate(inp.schedule_80gga.donations):
                 if _don.donee_pan in _filer_pans:
                     results.append(_result(
                         "ITR2-IN-VIA-032", False,
                         "A Schedule 80GGA donee's PAN cannot be the same as the assessee's own "
-                        "PAN.",
+                        "PAN or the PAN at Verification.",
                         f"schedule_80gga.donations[{_idx}].donee_pan",
                         "!= assessee PAN", _don.donee_pan,
                     ))

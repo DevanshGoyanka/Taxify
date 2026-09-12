@@ -333,7 +333,7 @@ export interface SeventhProviso {
   electricityExpenditure: boolean; electricityExpenditureAmount: Money;
   otherClauseIV: boolean; clauseIVDetails: SeventhProvisoClause[];
 }
-export interface RepresentativeAssessee { name: string; email: string; mobileCountryCode: string; mobile: string; }
+export interface RepresentativeAssessee { name: string; email: string; mobileCountryCode: string; mobile: string; pan?: string; }
 export interface AlternateAddress {
   residenceNo: string; residenceName: string; roadOrStreet: string; localityOrArea: string;
   cityOrTownOrDistrict: string; stateCode: StateCode | ''; countryCode: string; pinCode: string; zipCode: string;
@@ -341,6 +341,8 @@ export interface AlternateAddress {
 export interface FilingStatus {
   filingSection: FilingSection; returnType: 'ORIGINAL' | 'REVISED';
   originalAcknowledgementNumber: string; originalFilingDate: string | null;
+  originalReturnFilingSection?: FilingSection | null;
+  originalReturnTaxRegime?: 'old' | 'new' | null;
   noticeNumber: string; noticeDate: string | null;
   representative: RepresentativeAssessee | null;
   form10IEAAcknowledgement: string; form10IEADate: string | null;
@@ -373,6 +375,8 @@ export interface FilingStatus {
   totalStayIndia4PrecYr: number | null;
   /** ITR-2 only: Section 115H benefit claim. */
   benefitUs115H: boolean;
+  /** ITR-2 only: whether the Section 115H question above has actually been answered (vs. left at its default). */
+  benefitUs115HAnswered?: boolean;
   /** ITR-2 only: PAN of the Karta verifying an HUF return (required when verification.capacity is Karta — an HUF's own PAN cannot be used for the Verification declaration). */
   kartaPan: string;
 }

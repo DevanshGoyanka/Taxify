@@ -55,6 +55,7 @@ from app.schemas.itr2 import (
     AMTCreditItem,
     AMTInput,
     AgriculturalIncome,
+    AssesseeRepresentativeProfile,
     AssesseeStatus,
     BFLossItem,
     CG112AScrip,
@@ -120,6 +121,27 @@ def _profile() -> ITR2FilingProfile:
             email="asha@example.com",
         ),
     )
+
+
+def test_benefit_us_115h_flag_reports_explicit_no_not_omitted() -> None:
+    """CBDT rule #83: BenefitUs115HFlg was previously only ever emitted as
+    "Y" (when claimed) and silently omitted for an explicit "No" answer,
+    even though the official schema's own enum is {"Y","N"} -- must now
+    report a real "N" once the question has been answered."""
+    input_data = _input(
+        filing_profile=_profile().model_copy(update={"benefit_us_115h": False}),
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("100000")),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    assert document["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]["BenefitUs115HFlg"] == "N"
+
+
+def test_benefit_us_115h_flag_omitted_when_unanswered() -> None:
+    input_data = _input(other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("100000")))
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    assert "BenefitUs115HFlg" not in document["ITR"]["ITR2"]["PartA_GEN1"]["FilingStatus"]
 
 
 def _input(**overrides: Any) -> ITR2Input:
@@ -221,6 +243,28 @@ def test_verification_still_uses_the_assessees_own_pan_for_individual_filers() -
     _assert_schema_valid(document)
     declaration = document["ITR"]["ITR2"]["Verification"]["Declaration"]
     assert declaration["AssesseeVerPAN"] == "AAAPA1234A"
+
+
+def test_verification_uses_representative_pan_not_the_assessees_own_pan() -> None:
+    """CBDT rule #8: when verified by a REPRESENTATIVE (not Karta),
+    Verification.Declaration.AssesseeVerPAN must be the representative's
+    own PAN -- the person actually making the declaration -- not the
+    assessee's own PAN, which was the previous (incorrect) behavior
+    regardless of capacity."""
+    profile = _profile().model_copy(update={
+        "verification_capacity": "R",
+        "assessee_representative": AssesseeRepresentativeProfile(
+            name="Rep Person", email="rep@example.com", mobile_country_code=91,
+            mobile_no="9123456780", pan="REPPN5678K",
+        ),
+    })
+    input_data = _input(filing_profile=profile)
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    declaration = document["ITR"]["ITR2"]["Verification"]["Declaration"]
+    assert declaration["AssesseeVerPAN"] == "REPPN5678K"
+    assert declaration["AssesseeVerPAN"] != profile.pan
+    assert document["ITR"]["ITR2"]["Verification"]["Capacity"] == "R"
 
 
 def test_refund_requires_real_primary_bank_account() -> None:

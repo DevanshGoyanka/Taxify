@@ -219,6 +219,10 @@ class RepresentativeAssessee(_StrictModel):
     email: str = Field(default="")
     mobileCountryCode: str = Field(default="91")
     mobile: str = Field(default="")
+    # CBDT rules #8/#277/#313 (ITR-2): the representative's own PAN --
+    # the person who is actually uploading the return on the assessee's
+    # behalf, distinct from the assessee's own PAN.
+    pan: str = Field(default="")
 
 
 # ---------------------------------------------------------------------------
@@ -1418,6 +1422,13 @@ class FilingStatus(_StrictModel):
     returnType: ReturnType = Field(default="ORIGINAL")
     originalAcknowledgementNumber: str = Field(default="")
     originalFilingDate: Optional[str] = Field(default=None)
+    # CBDT rule #4 (ITR-2): the section the ORIGINAL return was filed under,
+    # only meaningful when filingSection == "139(5)" (a revised return) --
+    # distinct from filingSection itself, which is this return's own section.
+    originalReturnFilingSection: Optional[FilingSection] = Field(default=None)
+    # CBDT rule #599 (ITR-2): the tax regime the ORIGINAL (defective) return
+    # itself used, only meaningful when filingSection == "139(9)".
+    originalReturnTaxRegime: Optional[Literal["old", "new"]] = Field(default=None)
     noticeNumber: str = Field(default="")
     noticeDate: Optional[str] = Field(default=None)
     representative: Optional[RepresentativeAssessee] = Field(default=None)
@@ -1507,6 +1518,12 @@ class FilingStatus(_StrictModel):
         "resident may continue special-rate treatment on specified "
         "foreign-exchange investment income. ITR-2 only.",
     )
+    # CBDT rule #83: every Resident/RNOR individual must explicitly answer
+    # the 115H question -- benefitUs115H alone cannot distinguish "answered
+    # No" from "never asked", so this tracks whether the question has
+    # actually been presented and answered. Defaults False (unanswered) for
+    # every return until a real Yes/No control exists on the frontend.
+    benefitUs115HAnswered: bool = Field(default=False)
     kartaPan: str = Field(
         default="",
         description="PAN of the Karta verifying an HUF return (Verification "

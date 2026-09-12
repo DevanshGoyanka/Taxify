@@ -914,6 +914,107 @@ def test_PROFILE_003_seventh_proviso_without_amounts_fails():
     assert failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-003")
 
 
+def _revised_return_profile(original_filing_section) -> ITR2FilingProfile:
+    return ITR2FilingProfile(
+        pan="ABCPN1234F", surname_or_org_name="Nair",
+        date_of_birth_or_formation=date(1985, 6, 15), father_name="Ramesh Nair",
+        verification_place="Mumbai",
+        primary_address=FilingAddress(
+            residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
+            state_code="27", mobile_no="9876543210", email="priya@example.com",
+        ),
+        return_file_section=ReturnFileSection.REVISED_139_5,
+        receipt_number="123456789012345", original_return_date=date(2026, 6, 1),
+        original_return_filing_section=original_filing_section,
+    )
+
+
+def test_PROFILE_007_revised_return_against_142_1_original_fails():
+    """CBDT rule #4: a revised return cannot be filed against an original
+    return filed under a section 142(1) notice."""
+    profile = _revised_return_profile(ReturnFileSection.NOTICE_142_1)
+    inp = _base_input(filing_profile=profile, filing_section=ReturnFileSection.REVISED_139_5)
+    assert failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-007")
+
+
+def test_PROFILE_007_revised_return_against_139_1_original_passes():
+    profile = _revised_return_profile(ReturnFileSection.ON_TIME_139_1)
+    inp = _base_input(filing_profile=profile, filing_section=ReturnFileSection.REVISED_139_5)
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-007")
+
+
+def test_PROFILE_007_revised_return_without_original_section_known_is_a_no_op():
+    profile = _revised_return_profile(None)
+    inp = _base_input(filing_profile=profile, filing_section=ReturnFileSection.REVISED_139_5)
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-007")
+
+
+def _defective_notice_response_profile(original_tax_regime) -> ITR2FilingProfile:
+    return ITR2FilingProfile(
+        pan="ABCPN1234F", surname_or_org_name="Nair",
+        date_of_birth_or_formation=date(1985, 6, 15), father_name="Ramesh Nair",
+        verification_place="Mumbai",
+        primary_address=FilingAddress(
+            residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
+            state_code="27", mobile_no="9876543210", email="priya@example.com",
+        ),
+        return_file_section=ReturnFileSection.DEFECTIVE_139_9,
+        notice_number="NOTICE123", notice_date=date(2026, 6, 1),
+        original_return_tax_regime=original_tax_regime,
+    )
+
+
+def test_PROFILE_010_defective_notice_response_regime_mismatch_fails():
+    """CBDT rule #599: a defective-notice response must use the same tax
+    regime as the original return."""
+    profile = _defective_notice_response_profile(TaxRegime.OLD)
+    inp = _base_input(
+        filing_profile=profile, filing_section=ReturnFileSection.DEFECTIVE_139_9,
+        tax_regime=TaxRegime.NEW,
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-010")
+
+
+def test_PROFILE_010_defective_notice_response_regime_match_passes():
+    profile = _defective_notice_response_profile(TaxRegime.OLD)
+    inp = _base_input(
+        filing_profile=profile, filing_section=ReturnFileSection.DEFECTIVE_139_9,
+        tax_regime=TaxRegime.OLD,
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-010")
+
+
+def test_PROFILE_010_original_regime_unknown_is_a_no_op():
+    profile = _defective_notice_response_profile(None)
+    inp = _base_input(
+        filing_profile=profile, filing_section=ReturnFileSection.DEFECTIVE_139_9,
+        tax_regime=TaxRegime.NEW,
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-010")
+
+
+def test_PROFILE_008_resident_115h_unanswered_fails():
+    """CBDT rule #83: a Resident/RNOR individual must explicitly answer the
+    Section 115H question -- unanswered (None) is not acceptable."""
+    profile = _fii_fpi_profile(False)
+    assert profile.benefit_us_115h is None
+    assert failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-008")
+
+
+def test_PROFILE_008_resident_115h_answered_no_passes():
+    profile = _fii_fpi_profile(False).model_copy(update={"benefit_us_115h": False})
+    assert not failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-008")
+
+
+def test_PROFILE_008_non_resident_unanswered_is_a_no_op():
+    """115H is not applicable to a plain non-resident at all (see the
+    model-level validator forbidding NON_RESIDENT + benefit_us_115h)."""
+    profile = _fii_fpi_profile(True)
+    assert not failed(validate_itr2_input(
+        _base_input(residential_status=ResidentialStatus.NON_RESIDENT, filing_profile=profile)
+    ), "ITR2-IN-PROFILE-008")
+
+
 def test_REGIME_001_old_regime_after_due_date_fails():
     assert failed(validate_itr2_input(_base_input(
         filing_date=date(2026, 8, 1), due_date=date(2026, 7, 31),
@@ -1007,6 +1108,104 @@ def test_CG_115_no_improvement_cost_is_a_no_op():
         full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
     )])
     assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-115")
+
+
+def test_CG_116_buyback_loss_without_os_dividend_detail_fails():
+    """CBDT rule #600: a buyback capital loss requires the corresponding
+    Section 2(22)(f) dividend detail in Schedule OS Sl. No. 1a(iii)."""
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.UNLISTED_SHARES,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("0"), cost_of_acquisition=Decimal("500000"),
+        is_buyback_loss=True,
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-116")
+
+
+def test_CG_116_buyback_loss_with_os_dividend_detail_passes():
+    inp = _base_input(
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.UNLISTED_SHARES,
+            date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+            full_consideration=Decimal("0"), cost_of_acquisition=Decimal("500000"),
+            is_buyback_loss=True,
+        )],
+        os_dividend_entries=[OSDividendEntry(section="10(22f)", amount=Decimal("500000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-116")
+
+
+def test_CG_116_no_buyback_loss_is_a_no_op():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.UNLISTED_SHARES,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-116")
+
+
+def test_CG_117_nri_unquoted_shares_disposal_without_section_code_fails():
+    """CBDT rule #597: a section code is mandatory when Schedule CG's Sl.B5
+    NRI unquoted-shares block is filled."""
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.UNLISTED_SHARES,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+        is_nri_unquoted_shares_disposal=True,
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-117")
+
+
+def test_CG_117_nri_unquoted_shares_disposal_with_section_code_passes():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.UNLISTED_SHARES,
+        date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+        is_nri_unquoted_shares_disposal=True, section_code="115AD",
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-117")
+
+
+def test_CG_118_resident_claims_112_1_c_without_115h_fails():
+    """CBDT rule #153: a Resident cannot claim 112(1)(c) without electing 115H."""
+    inp = _base_input(
+        filing_profile=_fii_fpi_profile(False),
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.UNLISTED_SHARES,
+            date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+            full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+            is_nri_unquoted_shares_disposal=True, section_code="112_1_c",
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-118")
+
+
+def test_CG_118_resident_claims_115ac_without_115h_fails():
+    """CBDT rule #155: same check for Section 115AC."""
+    inp = _base_input(
+        filing_profile=_fii_fpi_profile(False),
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.UNLISTED_SHARES,
+            date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+            full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+            is_nri_unquoted_shares_disposal=True, section_code="115AC",
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-118")
+
+
+def test_CG_118_115ad_has_no_115h_restriction():
+    """115AD is FII/FPI-specific already -- no 115H gate applies."""
+    inp = _base_input(
+        filing_profile=_fii_fpi_profile(False),
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.UNLISTED_SHARES,
+            date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+            full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+            is_nri_unquoted_shares_disposal=True, section_code="115AD",
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-118")
 
 
 def test_CG_008_54ec_deduction_within_cap_passes():
@@ -2857,6 +3056,77 @@ def test_VIA_031_80g_donee_pan_matches_assessee_pan_fails():
         ),
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-031")
+
+
+def _representative_filing_profile(representative_pan) -> ITR2FilingProfile:
+    return ITR2FilingProfile(
+        pan="ABCPN1234F", surname_or_org_name="Nair",
+        date_of_birth_or_formation=date(1985, 6, 15), father_name="Ramesh Nair",
+        verification_place="Mumbai", verification_capacity="R",
+        assessee_representative=AssesseeRepresentativeProfile(
+            name="Rep Person", email="rep@example.com", mobile_country_code=91,
+            mobile_no="9123456780", pan=representative_pan,
+        ),
+        primary_address=FilingAddress(
+            residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
+            state_code="27", mobile_no="9876543210", email="priya@example.com",
+        ),
+    )
+
+
+def test_VIA_031_80g_donee_pan_matches_representative_pan_fails():
+    """CBDT rule #277: a donee's PAN cannot equal the PAN at Verification --
+    the representative assessee's own PAN when filed by a representative."""
+    inp = _base_input(
+        filing_profile=_representative_filing_profile("REPPN5678K"),
+        deductions_chapter6a=Chapter6ADeductions(
+            donations_80g=[Donation80G(cash_amount=Decimal("5000"), donee_pan="REPPN5678K")],
+        ),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-031")
+
+
+def test_VIA_032_80gga_donee_pan_matches_representative_pan_fails():
+    """CBDT rule #313: same check for Schedule 80GGA."""
+    inp = _base_input(
+        filing_profile=_representative_filing_profile("REPPN5678K"),
+        schedule_80gga=Schedule80GGA(donations=[Donation80GGA(
+            relevant_clause=Section80GGAClause.RURAL_DEVELOPMENT, donee_name="Charity Trust",
+            address=DonationAddress(
+                address_line="1 Trust Road", city_or_district="Mumbai", state_code="27",
+                pin_code=400001,
+            ),
+            donee_pan="REPPN5678K", other_mode_amount=Decimal("5000"),
+        )]),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-032")
+
+
+def test_VIA_031_80g_donee_pan_distinct_from_representative_pan_passes():
+    inp = _base_input(
+        filing_profile=_representative_filing_profile("REPPN5678K"),
+        deductions_chapter6a=Chapter6ADeductions(
+            donations_80g=[Donation80G(cash_amount=Decimal("5000"), donee_pan="AAAPD1234D")],
+        ),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-031")
+
+
+def test_PROFILE_009_representative_capacity_without_pan_fails():
+    """CBDT rule #8: the representative assessee's own PAN is required for
+    the Verification declaration."""
+    inp = _base_input(filing_profile=_representative_filing_profile(None))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-009")
+
+
+def test_PROFILE_009_representative_capacity_with_pan_passes():
+    inp = _base_input(filing_profile=_representative_filing_profile("REPPN5678K"))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-009")
+
+
+def test_PROFILE_009_self_capacity_is_a_no_op():
+    inp = _base_input(filing_profile=_filing_profile())
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-PROFILE-009")
 
 
 def test_VIA_033_80g_same_pan_in_two_categories_fails():

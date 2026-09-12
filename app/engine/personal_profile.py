@@ -157,6 +157,11 @@ class NormalizedRepresentative:
     email: str
     mobile_country_code: int
     mobile_no: str
+    # CBDT rule #8 (ITR-2): the representative's own PAN -- optional (not
+    # required by ITR-1/4, which have no rule needing it) so this stays
+    # additive for those forms; ITR-2's adapter is the only one that reads
+    # it, via a real require_field() call of its own.
+    pan: str | None = None
 
 
 @dataclass(frozen=True)
@@ -374,6 +379,7 @@ def normalize_personal_profile(
             mobile_no=require_field(
                 rep.mobile, "filing.representative.mobile", form_error_prefix=form_error_prefix
             ),
+            pan=(rep.pan or "").strip().upper() or None,
         )
 
     seventh = filing.seventhProviso

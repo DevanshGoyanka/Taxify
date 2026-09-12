@@ -41,6 +41,9 @@ def _profile() -> ITR2FilingProfile:
             mobile_no="9876543210",
             email="asha@example.com",
         ),
+        # CBDT rule #83: a Resident/RNOR individual must explicitly answer
+        # the Section 115H question -- "filing-grade" now requires this too.
+        benefit_us_115h=False,
     )
 
 

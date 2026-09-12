@@ -227,8 +227,12 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         filing_status["TotalPrStayIndiaPrevYr"] = profile.total_stay_india_prev_yr
     if profile.total_stay_india_4_prec_yr is not None:
         filing_status["TotalPrStayIndia4PrecYr"] = profile.total_stay_india_4_prec_yr
-    if profile.benefit_us_115h:
-        filing_status["BenefitUs115HFlg"] = "Y"
+    # CBDT rule #83: emit a real Y/N once the question has actually been
+    # answered (was previously only emitted -- as "Y" -- when the benefit
+    # was claimed, silently omitting the field for every explicit "No",
+    # even though the official schema's own enum is {"Y","N"}).
+    if profile.benefit_us_115h is not None:
+        filing_status["BenefitUs115HFlg"] = "Y" if profile.benefit_us_115h else "N"
     if profile.company_director_entries:
         rows = []
         for entry in profile.company_director_entries:
@@ -4519,9 +4523,18 @@ def _verification_block(input_data: ITR2Input) -> dict[str, Any]:
     # (4th character "P") -- an HUF's own `pan` (4th character "H") cannot
     # satisfy it. ITR2FilingProfile's own validator guarantees karta_pan is
     # set whenever assessee_status is HUF, so this is safe unconditionally.
-    verification_pan = (
-        profile.karta_pan if profile.assessee_status == AssesseeStatus.HUF else profile.pan
-    )
+    # CBDT rule #8: when verified by a REPRESENTATIVE (not Karta), the
+    # declaration's own PAN is the representative's own PAN -- they are the
+    # one actually signing/uploading the return, not the assessee. Was
+    # previously always the assessee's own `profile.pan` regardless of
+    # capacity, silently misrepresenting who made the declaration.
+    # ITR2-IN-PROFILE-009 (input_rules.py) makes this pre-compute mandatory.
+    if profile.assessee_status == AssesseeStatus.HUF:
+        verification_pan = profile.karta_pan
+    elif profile.verification_capacity == "R" and profile.assessee_representative is not None:
+        verification_pan = profile.assessee_representative.pan
+    else:
+        verification_pan = profile.pan
     return _verification(name, profile.father_name, verification_pan, profile.verification_place, profile.verification_capacity)
 
 
