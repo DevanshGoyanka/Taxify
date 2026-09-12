@@ -632,6 +632,11 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             "80EEA": ch6a.amount_80eea,
             "80EEB": ch6a.amount_80eeb,
             "80U": ch6a.amount_80u,
+            # CBDT rule #592: Schedule 80D Sl.no.2 (parents' health insurance)
+            # is not available to a HUF assessee -- conspicuously missing from
+            # this set even though every other Section-80-series
+            # individual-only deduction is already listed here.
+            "80D (parents)": ch6a.amount_80d_parents,
         }
         claimed_huf = {section: amount for section, amount in _huf_disallowed.items() if amount > _ZERO}
         if claimed_huf:
@@ -1628,6 +1633,200 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     f"Section 80CCH deduction exceeds 46.2% of Salary u/s 17(1) "
                     f"(₹{sal.gross_salary}) = ₹{_cch_limit}.",
                     "deductions_chapter6a.amount_80cch", f"<= {_cch_limit}", str(ch6a.amount_80cch),
+                ))
+
+    # CBDT rules 610/653: Schedule HP's own Table 24(b) loan-detail rows
+    # (`PropertyFilingDetail.home_loan_details`) must actually be populated
+    # when a Section 24(b) interest claim exists -- distinct from the
+    # already-shipped `ITR2-IN-HP-008` (which only checks that a matching
+    # property *identity/address* row exists, not that its own loan-detail
+    # sub-table is non-empty). Checked in aggregate (at least one loan-detail
+    # row exists anywhere) rather than per-property-index, since `hp_rows`
+    # above and `_schedule_hp()`'s own `sources` list order
+    # `house_property_income` at opposite ends and are not safely
+    # index-matchable against `property_filing_details` here.
+    if any(hp.home_loan_interest_paid > _ZERO for hp in hp_rows):
+        if not any(detail.home_loan_details for detail in inp.property_filing_details):
+            results.append(_result(
+                "ITR2-IN-HP-009", False,
+                "A Section 24(b) home-loan-interest claim requires at least one loan-detail row "
+                "(lender, sanction date, amounts) in Schedule HP's own Table 24(b).",
+                "property_filing_details[].home_loan_details", "at least one row", "none",
+            ))
+
+    # CBDT rules 305-310: Schedule 80D's own senior-citizen dropdown flags
+    # must agree with which premium bucket actually carries a claim.
+    sch_80d = inp.schedule_80d
+    if sch_80d is not None:
+        if sch_80d.premium_1a_non_senior > _ZERO and sch_80d.has_self_senior:
+            results.append(_result(
+                "ITR2-IN-VIA-016", False,
+                'Select "No" for the Self/Family senior-citizen dropdown when the premium is '
+                "claimed in the non-senior bucket (Sl.1a).",
+                "schedule_80d.has_self_senior", False, True,
+            ))
+        if sch_80d.premium_1b_senior > _ZERO and not sch_80d.has_self_senior:
+            results.append(_result(
+                "ITR2-IN-VIA-017", False,
+                'Select "Yes" for the Self/Family senior-citizen dropdown when the premium is '
+                "claimed in the senior-citizen bucket (Sl.1b).",
+                "schedule_80d.has_self_senior", True, False,
+            ))
+        if sch_80d.premium_2a_parents_non_senior > _ZERO and sch_80d.has_parents_senior:
+            results.append(_result(
+                "ITR2-IN-VIA-018", False,
+                'Select "No" for the Parents senior-citizen dropdown when the premium is claimed '
+                "in the non-senior bucket (Sl.2a).",
+                "schedule_80d.has_parents_senior", False, True,
+            ))
+        if sch_80d.premium_2b_parents_senior > _ZERO and not sch_80d.has_parents_senior:
+            results.append(_result(
+                "ITR2-IN-VIA-019", False,
+                'Select "Yes" for the Parents senior-citizen dropdown when the premium is '
+                "claimed in the senior-citizen bucket (Sl.2b).",
+                "schedule_80d.has_parents_senior", True, False,
+            ))
+        # Rows #309/#310 (duplicate catalog entries): "select Yes/No" in the
+        # general sense is already structurally enforced by the four checks
+        # above covering every combination of bucket vs. flag.
+
+    # CBDT rule 349: Section 80TTB (senior-citizen deposit-interest
+    # deduction) is not available to a non-resident.
+    if ch6a is not None and ch6a.amount_80ttb > _ZERO and inp.residential_status == ResidentialStatus.NON_RESIDENT:
+        results.append(_result(
+            "ITR2-IN-VIA-020", False,
+            "Section 80TTB cannot be claimed by a non-resident.",
+            "deductions_chapter6a.amount_80ttb", _ZERO, str(ch6a.amount_80ttb),
+        ))
+
+    # CBDT rules 356/357: Schedule 80GGC's own per-contribution detail rows
+    # must carry a contribution date when any amount is claimed, and
+    # non-cash-mode-specific detail when claimed via a non-cash mode.
+    if inp.schedule_80ggc is not None:
+        for _idx, _contrib in enumerate(inp.schedule_80ggc.contributions):
+            if _contrib.amount > _ZERO and _contrib.contribution_date is None:
+                results.append(_result(
+                    "ITR2-IN-VIA-021", False,
+                    "A Section 80GGC contribution row requires a contribution date when an "
+                    "amount is claimed.",
+                    f"schedule_80ggc.contributions[{_idx}].contribution_date", "present", "absent",
+                ))
+            if _contrib.other_mode_amount > _ZERO and not (_contrib.transaction_ref and _contrib.ifsc_code):
+                results.append(_result(
+                    "ITR2-IN-VIA-022", False,
+                    "A Section 80GGC contribution made other than in cash requires transaction "
+                    "reference and IFSC details.",
+                    f"schedule_80ggc.contributions[{_idx}]",
+                    "transaction_ref and ifsc_code present", "missing",
+                ))
+        # CBDT rule 697: the political party's own name and PAN are required
+        # whenever any contribution is claimed at all.
+        if inp.schedule_80ggc.total_claimed > _ZERO or any(
+            c.amount > _ZERO for c in inp.schedule_80ggc.contributions
+        ):
+            if not (inp.schedule_80ggc.political_party_name and inp.schedule_80ggc.political_party_pan):
+                results.append(_result(
+                    "ITR2-IN-VIA-023", False,
+                    "Section 80GGC requires the political party's name and PAN.",
+                    "schedule_80ggc", "political_party_name and political_party_pan present",
+                    "missing",
+                ))
+
+    # CBDT rules 363/365: Schedule 80U/80DD require supporting-certificate
+    # detail (Form 10-IA acknowledgement or UDID) whenever a deduction is
+    # actually claimed.
+    if inp.schedule_80u is not None and inp.schedule_80u.deduction_amount > _ZERO:
+        if not (inp.schedule_80u.form_10ia_ack_number or inp.schedule_80u.udid_number):
+            results.append(_result(
+                "ITR2-IN-VIA-024", False,
+                "Section 80U requires a Form 10-IA acknowledgement number or UDID when a "
+                "deduction is claimed.",
+                "schedule_80u", "form_10ia_ack_number or udid_number present", "missing",
+            ))
+    if inp.schedule_80dd is not None and inp.schedule_80dd.deduction_amount > _ZERO:
+        if not (inp.schedule_80dd.form_10ia_ack_number or inp.schedule_80dd.udid_number):
+            results.append(_result(
+                "ITR2-IN-VIA-025", False,
+                "Section 80DD requires a Form 10-IA acknowledgement number or UDID when a "
+                "deduction is claimed.",
+                "schedule_80dd", "form_10ia_ack_number or udid_number present", "missing",
+            ))
+
+    # CBDT rule 642: Schedule 80C's own per-row detail must be present
+    # (payment type and policy/document identifier) when that row claims a
+    # nonzero amount.
+    for _idx, _entry in enumerate(inp.schedule_80c_entries):
+        if _entry.amount > _ZERO and not (_entry.payment_type and _entry.identifier_number):
+            results.append(_result(
+                "ITR2-IN-VIA-026", False,
+                "A Schedule 80C row requires a payment type and policy/document identifier "
+                "when an amount is claimed.",
+                f"schedule_80c_entries[{_idx}]", "payment_type and identifier_number present",
+                "missing",
+            ))
+
+    # CBDT rules 623/624/626/629: Schedule 80E/80EE/80EEA/80EEB each require
+    # at least one loan-detail row when the corresponding deduction is
+    # claimed (the row's OWN required fields -- lender, account reference,
+    # loan date, amounts -- are already schema-enforced by
+    # `OfficialDeductionLoanEntry` the moment a row is constructed, so only
+    # the row's *existence* needs checking here).
+    if ch6a is not None:
+        _loan_backed_deductions = (
+            ("80E", ch6a.amount_80e, inp.schedule_80e_entries, "schedule_80e_entries"),
+            ("80EE", ch6a.amount_80ee, inp.loan_details_80ee_list, "loan_details_80ee_list"),
+            ("80EEA", ch6a.amount_80eea, inp.loan_details_80eea_list, "loan_details_80eea_list"),
+            ("80EEB", ch6a.amount_80eeb, inp.loan_details_80eeb_list, "loan_details_80eeb_list"),
+        )
+        for _section, _amount, _entries, _field in _loan_backed_deductions:
+            if _amount > _ZERO and not _entries:
+                results.append(_result(
+                    "ITR2-IN-VIA-027", False,
+                    f"Section {_section} requires at least one loan-detail row when a deduction "
+                    "is claimed.",
+                    _field, "at least one row", "none",
+                ))
+
+        # CBDT rules 628/630/639: each loan-entry class's own sanction-date
+        # window (distinct statutory eligibility periods per section).
+        _loan_date_windows = (
+            ("80EE", inp.loan_details_80ee_list, date(2016, 4, 1), date(2017, 3, 31)),
+            ("80EEA", inp.loan_details_80eea_list, date(2019, 4, 1), date(2022, 3, 31)),
+            ("80EEB", inp.loan_details_80eeb_list, date(2019, 4, 1), date(2023, 3, 31)),
+        )
+        for _section, _entries, _start, _end in _loan_date_windows:
+            for _idx, _entry in enumerate(_entries):
+                if not (_start <= _entry.loan_date <= _end):
+                    results.append(_result(
+                        "ITR2-IN-VIA-028", False,
+                        f"Section {_section}'s loan must be sanctioned between {_start} and "
+                        f"{_end}.",
+                        f"loan_details_{_section.lower()}_list[{_idx}].loan_date",
+                        f"{_start}..{_end}", str(_entry.loan_date),
+                    ))
+
+    # CBDT rules 687-690/696: Schedule 80G's own per-donation detail (donee
+    # name/PAN/address) is required when a non-cash-mode contribution is
+    # claimed, and the donee PAN specifically is required for any donation
+    # (cash or non-cash) above zero -- across all four Sl.A/B/C/D blocks
+    # (`donation_category`).
+    if ch6a is not None and ch6a.donations_80g:
+        for _idx, _don in enumerate(ch6a.donations_80g):
+            _total_donation = _don.cash_amount + _don.non_cash_amount
+            if _total_donation > _ZERO and not _don.donee_pan:
+                results.append(_result(
+                    "ITR2-IN-VIA-029", False,
+                    "A Schedule 80G donation row requires the donee's PAN when an amount is "
+                    "claimed.",
+                    f"deductions_chapter6a.donations_80g[{_idx}].donee_pan", "present", "absent",
+                ))
+            if _don.non_cash_amount > _ZERO and not (_don.donee_name and _don.address):
+                results.append(_result(
+                    "ITR2-IN-VIA-030", False,
+                    "A Schedule 80G donation row made in a non-cash mode requires the donee's "
+                    "name and address.",
+                    f"deductions_chapter6a.donations_80g[{_idx}]",
+                    "donee_name and address present", "missing",
                 ))
 
     # CBDT rule 662: every CGAS claim must point to a disclosed CGAS bank

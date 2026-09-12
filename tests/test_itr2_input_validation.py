@@ -21,11 +21,22 @@ from app.schemas.itr1 import (
     BankAccount,
     Chapter6ADeductions,
     DependentRelationship,
+    Donation80G,
     FilingAddress,
     HousePropertyIncome,
+    ITR1Schedule80EEALoanEntry,
+    ITR1Schedule80EEBLoanEntry,
+    ITR1Schedule80EELoanEntry,
     OtherSourcesIncome,
+    PoliticalContribution,
     PropertyType,
     SalaryIncome,
+    Schedule80CEntry,
+    Schedule80D,
+    Schedule80DD,
+    Schedule80EEntry,
+    Schedule80GGC,
+    Schedule80U,
     TaxRegime,
     TDS2Entry,
     TDS3Entry,
@@ -47,6 +58,7 @@ from app.schemas.itr2 import (
     ReturnFileSection,
     ResidentialStatus,
     FSICountryEntry,
+    HomeLoanDetail,
     OS89ACountryEntry,
     OSDeductions,
     OSDividendEntry,
@@ -2037,6 +2049,190 @@ def test_OS_007_non_resident_claiming_115ac_dividend_passes():
         os_dividend_entries=[OSDividendEntry(section="115AC", amount=Decimal("10000"))],
     )
     assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-007")
+
+
+# ─── Phase 6j-8: Chapter VI-A "details required when claimed" family ───────
+
+def test_HP_009_home_loan_interest_claimed_without_loan_details_fails():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED, home_loan_interest_paid=Decimal("150000"),
+        ),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="1 MG Road", city_or_town_or_district="Pune",
+                state_code="27", pin_code="411001",
+            ),
+        ],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-HP-009")
+
+
+def test_HP_009_home_loan_interest_claimed_with_loan_details_passes():
+    inp = _base_input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.SELF_OCCUPIED, home_loan_interest_paid=Decimal("150000"),
+        ),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="1 MG Road", city_or_town_or_district="Pune",
+                state_code="27", pin_code="411001",
+                home_loan_details=[HomeLoanDetail(
+                    loan_taken_from="B", bank_or_institution_name="SBI",
+                    loan_account_or_ref_no="LN123", date_of_loan=date(2020, 1, 1),
+                    total_loan_amount=Decimal("2000000"), loan_outstanding_amount=Decimal("1500000"),
+                    interest_this_year=Decimal("150000"),
+                )],
+            ),
+        ],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-HP-009")
+
+
+def test_VIA_016_017_80d_self_senior_flag_mismatch_fails():
+    inp = _base_input(schedule_80d=Schedule80D(has_self_senior=True, premium_1a_non_senior=Decimal("10000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-016")
+
+    inp2 = _base_input(schedule_80d=Schedule80D(has_self_senior=False, premium_1b_senior=Decimal("10000")))
+    assert failed(validate_itr2_input(inp2), "ITR2-IN-VIA-017")
+
+
+def test_VIA_018_019_80d_parents_senior_flag_mismatch_fails():
+    inp = _base_input(schedule_80d=Schedule80D(has_parents_senior=True, premium_2a_parents_non_senior=Decimal("5000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-018")
+
+    inp2 = _base_input(schedule_80d=Schedule80D(has_parents_senior=False, premium_2b_parents_senior=Decimal("5000")))
+    assert failed(validate_itr2_input(inp2), "ITR2-IN-VIA-019")
+
+
+def test_VIA_016_correctly_flagged_80d_premiums_pass():
+    inp = _base_input(schedule_80d=Schedule80D(
+        has_self_senior=False, premium_1a_non_senior=Decimal("10000"),
+        has_parents_senior=True, premium_2b_parents_senior=Decimal("5000"),
+    ))
+    results = validate_itr2_input(inp)
+    for rid in ("ITR2-IN-VIA-016", "ITR2-IN-VIA-017", "ITR2-IN-VIA-018", "ITR2-IN-VIA-019"):
+        assert not failed(results, rid)
+
+
+def test_VIA_020_80ttb_claimed_by_non_resident_fails():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        deductions_chapter6a=Chapter6ADeductions(amount_80ttb=Decimal("30000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-020")
+
+
+def test_VIA_021_80ggc_contribution_missing_date_fails():
+    inp = _base_input(schedule_80ggc=Schedule80GGC(
+        contributions=[PoliticalContribution(amount=Decimal("5000"), other_mode_amount=Decimal("5000"))],
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-021")
+
+
+def test_VIA_022_80ggc_other_mode_missing_bank_details_fails():
+    inp = _base_input(schedule_80ggc=Schedule80GGC(
+        contributions=[PoliticalContribution(
+            amount=Decimal("5000"), other_mode_amount=Decimal("5000"),
+            contribution_date=date(2025, 6, 1),
+        )],
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-022")
+
+
+def test_VIA_023_80ggc_missing_party_name_and_pan_fails():
+    inp = _base_input(schedule_80ggc=Schedule80GGC(
+        contributions=[PoliticalContribution(
+            amount=Decimal("5000"), other_mode_amount=Decimal("5000"),
+            contribution_date=date(2025, 6, 1), transaction_ref="TXN1", ifsc_code="SBIN0001234",
+        )],
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-023")
+
+
+def test_VIA_024_80u_claimed_without_certificate_details_fails():
+    inp = _base_input(schedule_80u=Schedule80U(deduction_amount=Decimal("75000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-024")
+
+
+def test_VIA_024_80u_claimed_with_udid_passes():
+    inp = _base_input(schedule_80u=Schedule80U(deduction_amount=Decimal("75000"), udid_number="UDID12345"))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-024")
+
+
+def test_VIA_025_80dd_claimed_without_certificate_details_fails():
+    inp = _base_input(schedule_80dd=Schedule80DD(deduction_amount=Decimal("75000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-025")
+
+
+def test_VIA_026_80c_row_claimed_without_details_fails():
+    inp = _base_input(schedule_80c_entries=[Schedule80CEntry(amount=Decimal("10000"))])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-026")
+
+
+def test_VIA_026_80c_row_with_details_passes():
+    inp = _base_input(schedule_80c_entries=[
+        Schedule80CEntry(amount=Decimal("10000"), payment_type="LIC", identifier_number="POL123"),
+    ])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-026")
+
+
+def _loan_entry(cls, **overrides):
+    fields = dict(
+        loan_taken_from="B", lender_name="SBI", account_or_reference_number="LN123",
+        loan_date=date(2020, 6, 1), total_loan_amount=Decimal("500000"),
+        outstanding_loan_amount=Decimal("400000"), interest_paid=Decimal("20000"),
+    )
+    fields.update(overrides)
+    return cls(**fields)
+
+
+def test_VIA_027_80e_claimed_without_loan_details_fails():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(amount_80e=Decimal("20000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-027")
+
+
+def test_VIA_027_80ee_claimed_without_loan_details_fails():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(amount_80ee=Decimal("20000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-027")
+
+
+def test_VIA_027_80e_claimed_with_loan_details_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80e=Decimal("20000")),
+        schedule_80e_entries=[_loan_entry(Schedule80EEntry)],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-027")
+
+
+def test_VIA_028_80ee_loan_sanction_date_outside_window_fails():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ee=Decimal("20000")),
+        loan_details_80ee_list=[_loan_entry(ITR1Schedule80EELoanEntry, loan_date=date(2020, 1, 1))],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-028")
+
+
+def test_VIA_028_80ee_loan_sanction_date_within_window_passes():
+    inp = _base_input(
+        deductions_chapter6a=Chapter6ADeductions(amount_80ee=Decimal("20000")),
+        loan_details_80ee_list=[_loan_entry(ITR1Schedule80EELoanEntry, loan_date=date(2016, 6, 1))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-VIA-028")
+
+
+def test_VIA_029_80g_donation_missing_donee_pan_fails():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(
+        donations_80g=[Donation80G(cash_amount=Decimal("5000"))],
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-029")
+
+
+def test_VIA_030_80g_non_cash_donation_missing_donee_name_fails():
+    inp = _base_input(deductions_chapter6a=Chapter6ADeductions(
+        donations_80g=[Donation80G(non_cash_amount=Decimal("5000"), donee_pan="AAAPD1234D")],
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-030")
 
 
 # ─── Phase 6c: Section 80CCH PRAN + hard cap + percentage cap ───────────────

@@ -2600,14 +2600,14 @@ def _schedule_80d(
             "HealthInsPremSlfFam": _to_rupees(self_premium) if senior_flag_self == "N" else 0,
             "Sec80DSelfFamHIDtls": {
                 "Sch80DInsDtls": self_non_senior_rows,
-                "TotalPayments": _to_rupees(self_premium) if senior_flag_self == "N" else 0,
+                "TotalPayments": sum((r["HealthInsAmt"] for r in self_non_senior_rows), 0),
             },
             "PrevHlthChckUpSlfFam": _to_rupees(preventive_self) if senior_flag_self == "N" else 0,
             "SelfAndFamilySeniorCitizen": _to_rupees(self_aggregate) if senior_flag_self == "Y" else 0,
             "HlthInsPremSlfFamSrCtzn": _to_rupees(self_premium) if senior_flag_self == "Y" else 0,
             "Sec80DSelfFamSrCtznHIDtls": {
                 "Sch80DInsDtls": self_senior_rows,
-                "TotalPayments": _to_rupees(self_premium) if senior_flag_self == "Y" else 0,
+                "TotalPayments": sum((r["HealthInsAmt"] for r in self_senior_rows), 0),
             },
             "PrevHlthChckUpSlfFamSrCtzn": _to_rupees(preventive_self) if senior_flag_self == "Y" else 0,
             "MedicalExpSlfFamSrCtzn": (
@@ -2618,14 +2618,14 @@ def _schedule_80d(
             "HlthInsPremParents": _to_rupees(parents_premium) if senior_flag_parents == "N" else 0,
             "Sec80DParentsHIDtls": {
                 "Sch80DInsDtls": parents_non_senior_rows,
-                "TotalPayments": _to_rupees(parents_premium) if senior_flag_parents == "N" else 0,
+                "TotalPayments": sum((r["HealthInsAmt"] for r in parents_non_senior_rows), 0),
             },
             "PrevHlthChckUpParents": _to_rupees(preventive_parents) if senior_flag_parents == "N" else 0,
             "ParentsSeniorCitizen": _to_rupees(parents_aggregate) if senior_flag_parents == "Y" else 0,
             "HlthInsPremParentsSrCtzn": _to_rupees(parents_premium) if senior_flag_parents == "Y" else 0,
             "Sec80DParentsSrCtznHIDtls": {
                 "Sch80DInsDtls": parents_senior_rows,
-                "TotalPayments": _to_rupees(parents_premium) if senior_flag_parents == "Y" else 0,
+                "TotalPayments": sum((r["HealthInsAmt"] for r in parents_senior_rows), 0),
             },
             "PrevHlthChckUpParentsSrCtzn": _to_rupees(preventive_parents) if senior_flag_parents == "Y" else 0,
             "MedicalExpParentsSrCtzn": (

@@ -4536,6 +4536,37 @@ def test_schedule_80d_accepts_policy_with_complete_evidence() -> None:
     _assert_schema_valid(document)
 
 
+def test_schedule_80d_total_payments_derived_from_real_policy_rows_not_raw_scalar() -> None:
+    """CBDT rules #615-618 -- each Schedule 80D bucket's own `TotalPayments`
+    field was previously the raw scalar claim (`self_premium`/
+    `parents_premium`), not `sum(row.HealthInsAmt for row in ...)` -- the
+    two could silently diverge with nothing to catch it. Constructed here
+    with a policy-row sum deliberately lower than the scalar claim to prove
+    the fix reads from the rows, not the claim figure."""
+    input_data = _input(
+        other_sources_income=OtherSourcesIncome(income_56_2_x=Decimal("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80d_self_family=Decimal("20000")),
+        schedule_80d=Schedule80D(
+            premium_1a_non_senior=Decimal("20000"),
+            policies=[
+                InsurancePolicy(
+                    section="1a", premium_paid=Decimal("12000"),
+                    insurer_name="ABC Insurance", policy_number="POL123",
+                ),
+                InsurancePolicy(
+                    section="1a", premium_paid=Decimal("5000"),
+                    insurer_name="XYZ Insurance", policy_number="POL456",
+                ),
+            ],
+        ),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    bucket = document["ITR"]["ITR2"]["Schedule80D"]["Sec80DSelfFamSrCtznHealth"]["Sec80DSelfFamHIDtls"]
+    assert bucket["TotalPayments"] == 17000  # 12000 + 5000, not the 20000 scalar claim
+    assert len(bucket["Sch80DInsDtls"]) == 2
+
+
 def test_section_80qqb_and_80rrb_reach_the_official_json() -> None:
     """Regression for Phase 6b: section80QQB/section80RRB are captured on
     the frontend draft (and even round-tripped by the filed-return parser)
