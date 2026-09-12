@@ -47,6 +47,7 @@ from app.schemas.itr2 import (
     ReturnFileSection,
     ResidentialStatus,
     FSICountryEntry,
+    OS89ACountryEntry,
     OSDeductions,
     OSDtaaEntry,
     OSSection89A,
@@ -1728,6 +1729,125 @@ def test_SAL_017_commuted_pension_claimed_against_only_one_of_two_employers_pass
         ],
     )
     assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-017")
+
+
+# ─── Phase 6j-1: remaining Schedule S rows (#30/#31/#44/#49/#50/#52/#63/#64/#65) ──
+
+def test_SAL_018_non_hra_exempt_allowances_exceeding_gross_less_hra_fails():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("500000"), lta_amount_received=Decimal("100000"),
+        lta_exempt_amount=Decimal("100000"), sec10_6_embassy_exempt=Decimal("450000"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-018")
+
+
+def test_SAL_018_non_hra_exempt_allowances_within_ceiling_passes():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("500000"), lta_amount_received=Decimal("50000"),
+        lta_exempt_amount=Decimal("50000"),
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-018")
+
+
+def test_SAL_019_commuted_pension_received_exceeding_gross_salary_fails():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("200000"), commuted_pension_received=Decimal("300000"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-019")
+
+
+def test_SAL_019_commuted_pension_received_within_gross_salary_passes():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("500000"), commuted_pension_received=Decimal("100000"),
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-019")
+
+
+def test_SAL_020_other_section10_exempt_exceeding_other_allowances_received_fails():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("500000"), other_allowances_received=Decimal("10000"),
+        other_section10_exempt=Decimal("20000"),
+    ))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-020")
+
+
+def test_SAL_020_other_section10_exempt_within_other_allowances_received_passes():
+    inp = _base_input(salary_income=SalaryIncome(
+        gross_salary=Decimal("500000"), other_allowances_received=Decimal("20000"),
+        other_section10_exempt=Decimal("10000"),
+    ))
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-020")
+
+
+def test_SAL_021_80gg_exceeding_55000_with_hra_claimed_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), hra_exempt_amount=Decimal("10000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80gg=Decimal("60000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-021")
+
+
+def test_SAL_021_80gg_within_55000_with_hra_claimed_passes():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000"), hra_exempt_amount=Decimal("10000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80gg=Decimal("50000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-021")
+
+
+def test_SAL_022_duplicate_perquisite_nature_code_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[_employer_detail(nature_of_perquisites_rows=[
+            {"NatureDesc": "MotorCar", "OthAmount": 1000},
+            {"NatureDesc": "MotorCar", "OthAmount": 2000},
+        ])],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-022")
+
+
+def test_SAL_022_unique_perquisite_nature_codes_pass():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[_employer_detail(nature_of_perquisites_rows=[
+            {"NatureDesc": "MotorCar", "OthAmount": 1000},
+            {"NatureDesc": "Accommodation", "OthAmount": 2000},
+        ])],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-022")
+
+
+def test_SAL_023_duplicate_profit_in_lieu_nature_code_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[_employer_detail(nature_of_profit_in_lieu_rows=[
+            {"NatureDesc": "Compensation", "OthAmount": 1000},
+            {"NatureDesc": "Compensation", "OthAmount": 2000},
+        ])],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-023")
+
+
+def test_SAL_024_duplicate_89a_country_per_employer_fails():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[_employer_detail(income_notified_89a_country_rows=[
+            OS89ACountryEntry(country_code="US", amount=Decimal("1000")),
+            OS89ACountryEntry(country_code="US", amount=Decimal("2000")),
+        ])],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-SAL-024")
+
+
+def test_SAL_024_unique_89a_countries_per_employer_pass():
+    inp = _base_input(
+        salary_income=SalaryIncome(gross_salary=Decimal("500000")),
+        employer_filing_details=[_employer_detail(income_notified_89a_country_rows=[
+            OS89ACountryEntry(country_code="US", amount=Decimal("1000")),
+            OS89ACountryEntry(country_code="UK", amount=Decimal("2000")),
+        ])],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-SAL-024")
 
 
 # ─── Phase 6c: Section 80CCH PRAN + hard cap + percentage cap ───────────────

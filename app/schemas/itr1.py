@@ -257,6 +257,13 @@ class SalaryIncome(BaseModel):
     sec10_10cc_perquisite_tax: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14i_prescribed_allowance: Decimal = Field(default=Decimal("0"), ge=0)
     sec10_14ii_personal_allowance: Decimal = Field(default=Decimal("0"), ge=0)
+    # Gross "Other Allowances"/"Other Taxable Salary" received under section
+    # 17(1) (Employer.allowances/otherAllowance on the draft, already summed
+    # into section_17_1/gross_salary by _map_salary() -- this field only
+    # preserves that same sub-total separately so a Section 10(14)(i)/(ii)
+    # exemption claim can be capped against it, per CBDT rules #49/#50
+    # (ITR-2). Does not change gross_salary's own computation.
+    other_allowances_received: Decimal = Field(default=Decimal("0"), ge=0)
     # Direct pass-through exemption for the remaining Section 10 codes the
     # employer "Section 10 Exemption" row editor offers (EIC judges' exempt
     # income, 10(17) MP/MLA/MLC allowance, and the generic 10(14)(i)/

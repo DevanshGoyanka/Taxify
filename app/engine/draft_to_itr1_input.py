@@ -400,6 +400,7 @@ def _map_salary(
         sec10_7_foreign_allowance=sec10_7_foreign_allowance,
         sec10_10cc_perquisite_tax=sec10_10cc_perquisite_tax,
         other_section10_exempt=other_section10_exempt,
+        other_allowances_received=other_allowance + other_taxable_salary,
         is_disabled_employee=is_disabled_employee,
         number_of_children=number_of_children,
         average_monthly_salary=average_monthly_salary,

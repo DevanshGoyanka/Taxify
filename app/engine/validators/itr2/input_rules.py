@@ -342,6 +342,116 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     "salary_income.hra_exempt_amount", str(_allowed_hra), str(sal.hra_exempt_amount),
                 ))
 
+        # CBDT rule 31: Schedule S's own "Total amount of exempt allowances
+        # u/s 10 (other than HRA)" cannot exceed gross salary less HRA --
+        # every non-HRA Section 10 exempt-allowance field on this schema
+        # summed together.
+        _non_hra_exempt_total = (
+            sal.lta_exempt_amount + sal.sec10_6_embassy_exempt + sal.sec10_7_foreign_allowance
+            + sal.sec10_10cc_perquisite_tax + sal.sec10_14i_prescribed_allowance
+            + sal.sec10_14ii_personal_allowance + sal.other_section10_exempt
+        )
+        _non_hra_ceiling = max(_ZERO, gross_salary_total - sal.hra_exempt_amount)
+        if _non_hra_exempt_total > _non_hra_ceiling:
+            results.append(_result(
+                "ITR2-IN-SAL-018", False,
+                "Total exempt allowances u/s 10 (other than HRA) cannot exceed gross salary "
+                "less HRA.",
+                "salary_income", f"<= {_non_hra_ceiling}", str(_non_hra_exempt_total),
+            ))
+
+        # CBDT rule 44: Section 10(10A) commuted-pension exemption is a
+        # fraction of the amount actually received (schedules/salary.py's own
+        # _exempt_commutted_pension() formula structurally cannot exceed
+        # `received` itself) -- but `received` is itself a component of
+        # gross salary u/s 17(1), so a `received` figure exceeding the
+        # return's own total salary is a genuine data-entry inconsistency
+        # this rule catches, not a formula gap.
+        if sal.commuted_pension_received > gross_salary_total:
+            results.append(_result(
+                "ITR2-IN-SAL-019", False,
+                "Commuted pension received cannot exceed total salary u/s 17(1).",
+                "salary_income.commuted_pension_received", f"<= {gross_salary_total}",
+                str(sal.commuted_pension_received),
+            ))
+
+        # CBDT rules 49/50: the generic "Section 10(14)(i)/(ii) allowance not
+        # otherwise entered" claim (`other_section10_exempt` -- see this
+        # section's own comment above distinguishing it from the CEA/hostel-
+        # specific `sec10_14i_prescribed_allowance`/`sec10_14ii_personal_allowance`
+        # fields, which already carry their own fixed-rate statutory caps)
+        # cannot exceed the gross "Other Allowances"/"Other Taxable Salary"
+        # received under section 17(1) (`other_allowances_received`, newly
+        # added -- previously this schema had no field to check against at
+        # all, per this row's own prior "genuine gap" evidence). The official
+        # schema does not split this single claim field into a (i)-vs-(ii)
+        # sub-breakdown, so one check honestly covers both CBDT rule numbers.
+        if sal.other_section10_exempt > sal.other_allowances_received:
+            results.append(_result(
+                "ITR2-IN-SAL-020", False,
+                "Section 10(14)(i)/(ii) allowance exemption cannot exceed the gross "
+                "\"Other Allowances\" salary component u/s 17(1) (CBDT rules #49/#50).",
+                "salary_income.other_section10_exempt", f"<= {sal.other_allowances_received}",
+                str(sal.other_section10_exempt),
+            ))
+
+        # CBDT rule 52: Section 80GG (rent paid, no HRA) is capped at ₹5,000/
+        # month (₹60,000/year) by its own statutory formula regardless, but
+        # the official rule specifically flags ₹55,000 as the ceiling when
+        # HRA u/s 10(13A) is simultaneously claimed -- implemented literally
+        # per the rule's own text, matching this project's established
+        # practice for CBDT rules with an unusual/narrower-than-expected
+        # numeric threshold (do not "correct" it to 60000 without re-checking
+        # the primary PDF first).
+        if sal.hra_exempt_amount > _ZERO and inp.deductions_chapter6a is not None:
+            _amount_80gg = inp.deductions_chapter6a.amount_80gg
+            if _amount_80gg > Decimal("55000"):
+                results.append(_result(
+                    "ITR2-IN-SAL-021", False,
+                    "Deduction u/s 80GG cannot exceed ₹55,000 when HRA exemption u/s "
+                    "10(13A) is also claimed.",
+                    "deductions_chapter6a.amount_80gg", "<= 55000", str(_amount_80gg),
+                ))
+
+        # CBDT rules 63/64: the same dropdown "nature of perquisite"/"nature
+        # of profit in lieu of salary" code cannot be selected more than once
+        # per employer block (official NatureOfPerquisites/
+        # NatureOfProfitInLieuOfSalary row lists).
+        for _detail in inp.employer_filing_details:
+            _perq_codes = [row.get("NatureDesc") for row in _detail.nature_of_perquisites_rows]
+            _perq_dupes = {c for c in _perq_codes if c and _perq_codes.count(c) > 1}
+            if _perq_dupes:
+                results.append(_result(
+                    "ITR2-IN-SAL-022", False,
+                    "The same nature-of-perquisite code cannot be selected more than once "
+                    "per employer.",
+                    "employer_filing_details[].nature_of_perquisites_rows", "unique NatureDesc",
+                    ", ".join(sorted(_perq_dupes)),
+                ))
+            _pil_codes = [row.get("NatureDesc") for row in _detail.nature_of_profit_in_lieu_rows]
+            _pil_dupes = {c for c in _pil_codes if c and _pil_codes.count(c) > 1}
+            if _pil_dupes:
+                results.append(_result(
+                    "ITR2-IN-SAL-023", False,
+                    "The same nature-of-profit-in-lieu-of-salary code cannot be selected "
+                    "more than once per employer.",
+                    "employer_filing_details[].nature_of_profit_in_lieu_rows", "unique NatureDesc",
+                    ", ".join(sorted(_pil_dupes)),
+                ))
+
+            # CBDT rule 65: the same Section 89A notified-income country
+            # cannot be selected more than once per employer block.
+            _country_codes = [row.country_code for row in _detail.income_notified_89a_country_rows]
+            _country_dupes = {c for c in _country_codes if _country_codes.count(c) > 1}
+            if _country_dupes:
+                results.append(_result(
+                    "ITR2-IN-SAL-024", False,
+                    "The same Section 89A notified-income country cannot be selected more "
+                    "than once per employer.",
+                    "employer_filing_details[].income_notified_89a_country_rows",
+                    "unique country_code", ", ".join(sorted(_country_dupes)),
+                ))
+
     # ── Schedule HP (House Property) — Phase 5A ────────────────────────────
     hp_rows = list(inp.house_properties)
     if inp.house_property_income is not None:
