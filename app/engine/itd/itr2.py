@@ -935,9 +935,18 @@ def _schedule_hp(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
                 for i, t in enumerate(detail.tenant_details, 1)
             ]
         props.append(prop)
+    # CBDT rule #79 -- "Sch HP Sl.2 pass-through income = HP income in
+    # Schedule PTI": the calculator already folds real Schedule-PTI HP-head
+    # income into result.house_property_income (so TotalIncomeChargeableUnHP
+    # below was always correct in aggregate), but this line item disclosing
+    # specifically how much of that total came via pass-through was
+    # unconditionally 0 regardless of any actual PTI HP income.
+    pti_hp_income = sum(
+        (p.income_amount for p in input_data.pti_entries if p.income_head == "HP"), _ZERO,
+    )
     return {
         "PropertyDetails": props,
-        "PassThroghIncome": 0,
+        "PassThroghIncome": _to_rupees(pti_hp_income),
         "TotalIncomeChargeableUnHP": _to_rupees(result.house_property_income),
     }
 

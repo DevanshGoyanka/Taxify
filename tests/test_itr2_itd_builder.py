@@ -2569,6 +2569,35 @@ def test_pti_hp_and_os_head_entries_reach_gti_and_schedule_pti() -> None:
     assert result.other_sources_income == Decimal("30000")
 
 
+def test_schedule_hp_pass_through_income_line_reflects_real_pti_hp_income() -> None:
+    """CBDT rule #79 -- Schedule HP's own PassThroghIncome disclosure line
+    was previously hardcoded to 0 regardless of real Schedule-PTI HP-head
+    income, even though the calculator already correctly folds that income
+    into the schedule's own TotalIncomeChargeableUnHP total (a "right total,
+    wrong line item" defect, not a tax-computation bug)."""
+    input_data = _input(
+        house_property_income=HousePropertyIncome(property_type=PropertyType.LET_OUT, annual_rent_received=Decimal("120000")),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="1 MG Road", city_or_town_or_district="Pune",
+                state_code="27", pin_code="411001",
+            ),
+        ],
+        pti_entries=[
+            PTIEntry(
+                entity_name="ABC REIT", entity_pan="AAATA1234B",
+                income_head="HP", section="115UA", income_amount=Decimal("50000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    hp_block = document["ITR"]["ITR2"]["ScheduleHP"]
+    assert hp_block["PassThroghIncome"] == 50000
+    # 120000 - 30% standard deduction u/s 24(a) (84000) + 50000 PTI = 134000.
+    assert hp_block["TotalIncomeChargeableUnHP"] == 134000
+
+
 def test_pti_os_head_entry_retaining_special_rate_character_is_taxed_via_schedule_si() -> None:
     """OS-head Schedule PTI income that retains a special-rate character in
     the unit holder's hands (section 115UA(2)/115UB(1) proviso: pass-through
