@@ -141,19 +141,27 @@ finally a live ERI Type-2 UAT round) remain open — read the plan file for exac
 next before assuming ITR-2 is filing-ready. **Update (2026-09-12): the plan's Phase 6 validator-
 coverage build-out (sub-phases 6a-6j) is now fully closed** — every one of the 790 official CBDT
 rules re-derived in `Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md` has been driven to a final
-disposition; none remain unimplemented without a documented reason. Of the 173 rows tracked there
-as genuine gaps: 130 got real new validator/builder/schema code, 21 were reclassified after
-investigation confirmed the bad state is already structurally impossible or already covered
-indirectly (no code needed — confirmed via direct schema/code introspection, not assumed), 18 are
-deliberately deferred with a documented reason each (missing schema fields, no verified CBDT
-reference table, or an architecturally-inherent cross-schedule divergence — see rows #496/#497/
-#565/#566 and Phase 6h's own writeup), and 4 are genuine gaps in this session's own cluster
-planning: 3 never assigned to any cluster at all (#197, #323, #432) and 1 landed as a partial fix
-(#481 — one sub-field wired, two remain pending ESOP schema work). Test suite grew to 950+ passing
-ITR-2-adjacent tests over this build-out, same ~6 pre-existing baseline ITR-2 failures throughout.
-This still does not mean ITR-2 is production-ready — Phase 7 (test-density parity) and Phase 8
-(full re-audit exit gate) remain open; read the plan file before assuming otherwise. Two
-precedents from this fix cycle worth knowing
+disposition; none remain unimplemented without a documented reason. Of the 175 rows tracked there
+as genuine gaps (173 originally scoped into Phase 6j's clusters, plus 2 — #37/#53 — found only by
+a full mechanical re-scan of every row's status text afterward, not the original cluster planning:
+one row's own cited evidence was simply wrong, the other is a genuinely unresolved ₹2,500-vs-₹5,000
+discrepancy between the code and the CBDT rule text, not yet checked against a primary AY2026-27
+source): 130 got real new validator/builder/schema code, 22 were reclassified after investigation
+confirmed the bad state is already structurally impossible or already covered indirectly (no code
+needed — confirmed via direct schema/code introspection, not assumed), 19 are deliberately
+deferred with a documented reason each (missing schema fields, no verified CBDT reference table,
+an unresolved rate-figure discrepancy needing a primary source, or an architecturally-inherent
+cross-schedule divergence — see rows #496/#497/#565/#566 and Phase 6h's own writeup), and 4 are
+genuine gaps in this session's own cluster planning: 3 never assigned to any cluster at all (#197,
+#323, #432) and 1 landed as a partial fix (#481 — one sub-field wired, two remain pending ESOP
+schema work). A full row-by-row CSV of all 790 official rules (number, scenario, classification,
+evidence, latest update) exists as a one-off audit artifact, not checked into the repo — regenerate
+it from the gap-mapping doc's own two tables (`## Category A rules` / `## Category B/D rules`)
+rather than assuming a stale copy is current. Test suite grew to 950+ passing ITR-2-adjacent tests
+over this build-out, same ~6 pre-existing baseline ITR-2 failures throughout. This still does not
+mean ITR-2 is production-ready — Phase 7 (test-density parity) and Phase 8 (full re-audit exit
+gate) remain open; read the plan file before assuming otherwise. Two precedents from this fix
+cycle worth knowing
 before touching `app/engine/itd/itr2.py`/`app/engine/calculators/itr2.py` again: (1) the Schedule
 CG fix pass (2026-09-04) — a finding described as "missing detail" turned out on re-verification
 to be a schema-blocking wrong-field-name bug for land/building rows specifically (no test had
