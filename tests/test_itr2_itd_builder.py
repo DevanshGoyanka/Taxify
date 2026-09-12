@@ -2344,6 +2344,37 @@ def test_schedule_os_serializes_unexplained_income_89a_deductions_and_dtaa() -> 
     assert dtaa_row["NatureOfIncome"] == "1ai"
 
 
+def test_schedule_cyla_bfla_disclose_real_os_dtaa_income_not_hardcoded_zero() -> None:
+    """CBDT rule #371 -- Schedule BFLA's own IncOSDTAA basket was hardcoded
+    to zero regardless of real DTAA-rate Other Sources income, so it could
+    never be cross-checked against Schedule SI's own DTAAOS entries. This
+    basket is not loss-set-off-eligible (mirrors Salary's own no-setoff
+    treatment), so it should simply disclose the real income unchanged."""
+    input_data = _input(
+        filing_profile=_profile().model_copy(update={"residential_status": ResidentialStatus.NON_RESIDENT}),
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        os_dtaa_entries=[
+            OSDtaaEntry(
+                amount=Decimal("40000"), nature_of_income="1ai",
+                country_name="Singapore", country_code="65", dtaa_article="11",
+                rate_as_per_treaty=Decimal("10"), rate_as_per_it_act=Decimal("20"),
+                tax_residency_certificate="Y", item_no_incl="5A1ai",
+                applicable_rate=Decimal("10"),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    assert result.os_dtaa_income == Decimal("40000")
+    cyla_row = document["ITR"]["ITR2"]["ScheduleCYLA"]["IncOSDTAA"]["IncCYLA"]
+    assert cyla_row["IncOfCurYrUnderThatHead"] == 40000
+    assert cyla_row["IncOfCurYrAfterSetOff"] == 40000
+    bfla_row = document["ITR"]["ITR2"]["ScheduleBFLA"]["IncOSDTAA"]["IncBFLA"]
+    assert bfla_row["IncOfCurYrUndHeadFromCYLA"] == 40000
+    assert bfla_row["IncOfCurYrAfterSetOffBFLosses"] == 40000
+
+
 def test_schedule_os_serializes_dividend_section_breakdown() -> None:
     """Dividend rows preserve their official section classification
     (Dividend22e/Dividend22f split, DTAA/115A-series date-range fields),

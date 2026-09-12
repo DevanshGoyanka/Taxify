@@ -141,6 +141,12 @@ class ITR2Result:
     house_property_income: Decimal = _ZERO
     capital_gains_income: Decimal = _ZERO
     other_sources_income: Decimal = _ZERO
+    # DTAA-rate Other Sources income (Schedule OS's NRIDTAADtlsSchOS rows,
+    # official IncOSDTAA basket) -- already folded into other_sources_income
+    # above and taxed via Schedule SI; kept separately too so the CYLA/BFLA
+    # builder can disclose this specific sub-basket (CBDT rule #371) without
+    # needing input_data threaded into those functions.
+    os_dtaa_income: Decimal = _ZERO
     vda_income: Decimal = _ZERO
     clubbing_income: Decimal = _ZERO
 
@@ -542,9 +548,8 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # `_OS_HEAD_SI_SECTIONS`, so it needs the same independent GTI-inclusion
     # step as the block above. Previously this income was disclosed but
     # never reached GTI or Schedule SI at all.
-    r.other_sources_income += sum(
-        (dtaa.amount for dtaa in input_data.os_dtaa_entries), _ZERO
-    )
+    r.os_dtaa_income = sum((dtaa.amount for dtaa in input_data.os_dtaa_entries), _ZERO)
+    r.other_sources_income += r.os_dtaa_income
     # OS-head pass-through income (Schedule PTI) -- STCG/LTCG-head PTI
     # entries are already dispatched to Schedule SI above; HP-head is added
     # to house_property_income above; OS-head retains its head as ordinary

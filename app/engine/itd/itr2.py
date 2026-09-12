@@ -401,7 +401,12 @@ def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
         "STCGDTAARate": {"IncCYLA": _inc_cyla(stcg_dtaa_inc, z, z, stcg_dtaa_after)},
         "LTCG12_5Per": {"IncCYLA": _inc_cyla(ltcg125_inc, z, z, ltcg125_after)},
         "LTCGDTAARate": {"IncCYLA": _inc_cyla(ltcg_dtaa_inc, z, z, ltcg_dtaa_after)},
-        "IncOSDTAA": {"IncCYLA": _inc_cyla(z, z, z, z)},
+        # CBDT rule #371: DTAA-rate Other Sources income (Schedule OS's own
+        # NRIDTAADtlsSchOS rows) is a special-rate basket not eligible for
+        # loss set-off (same treatment as VDA/salary income elsewhere in
+        # this schedule) -- disclosed at its own real value, no setoff ever
+        # applied to it.
+        "IncOSDTAA": {"IncCYLA": _inc_cyla(result.os_dtaa_income, z, z, result.os_dtaa_income)},
         "OthSrcExclRaceHorse": {
             "IncCYLA": _inc_cyla_os(os_inc_excl_rh, hp_setoff, max(z, os_inc_excl_rh - hp_setoff))
         },
@@ -471,7 +476,7 @@ def _schedule_bfla(result: ITR2Result) -> dict[str, Any]:
         "STCGDTAARate": {"IncBFLA": _inc_bfla(stcg_dtaa_cyla, max(z, stcg_dtaa_cyla - stcg_dtaa_after), stcg_dtaa_after)},
         "LTCG12_5Per": {"IncBFLA": _inc_bfla(ltcg125_cyla, max(z, ltcg125_cyla - ltcg125_after), ltcg125_after)},
         "LTCGDTAARate": {"IncBFLA": _inc_bfla(ltcg_dtaa_cyla, max(z, ltcg_dtaa_cyla - ltcg_dtaa_after), ltcg_dtaa_after)},
-        "IncOSDTAA": {"IncBFLA": _inc_bfla_no_bf(z, z)},
+        "IncOSDTAA": {"IncBFLA": _inc_bfla_no_bf(result.os_dtaa_income, result.os_dtaa_income)},
         "OthSrcExclRaceHorse": {"IncBFLA": _inc_bfla_no_bf(os_inc_excl_rh, os_inc_excl_rh)},
         "OthSrcRaceHorse": {
             "IncBFLA": _inc_bfla(racehorse_remaining_cyla, racehorse_bf_setoff, racehorse_bf_remaining)
