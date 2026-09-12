@@ -151,10 +151,14 @@ confirmed the bad state is already structurally impossible or already covered in
 needed — confirmed via direct schema/code introspection, not assumed), 19 are deliberately
 deferred with a documented reason each (missing schema fields, no verified CBDT reference table,
 an unresolved rate-figure discrepancy needing a primary source, or an architecturally-inherent
-cross-schedule divergence — see rows #496/#497/#565/#566 and Phase 6h's own writeup), and 4 are
-genuine gaps in this session's own cluster planning: 3 never assigned to any cluster at all (#197,
-#323, #432) and 1 landed as a partial fix (#481 — one sub-field wired, two remain pending ESOP
-schema work). A full row-by-row CSV of all 790 official rules (number, scenario, classification,
+cross-schedule divergence — see rows #496/#497/#565/#566 and Phase 6h's own writeup), and 134 got
+real new code (130 from the original cluster passes above, plus a follow-up pass closing the 4
+rows this session's own cluster planning had missed entirely: #197, #323, #432, and #481's
+previously-partial ESOP fix — see those rows' own "Fix status" notes for the full write-up,
+including one rule, #323, whose literal PDF text was implemented as garbled rather than followed
+verbatim, since doing so would have meant coding an affirmatively wrong tax rule). Every one of
+the 175 rows now has either real code or a deliberately-documented deferral — none remain simply
+unaddressed. A full row-by-row CSV of all 790 official rules (number, scenario, classification,
 evidence, latest update) exists as a one-off audit artifact, not checked into the repo — regenerate
 it from the gap-mapping doc's own two tables (`## Category A rules` / `## Category B/D rules`)
 rather than assuming a stale copy is current. Test suite grew to 950+ passing ITR-2-adjacent tests
