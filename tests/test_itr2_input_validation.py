@@ -15,6 +15,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
 from app.engine.validators.itr2.input_rules import validate_itr2_input
 from app.schemas.itr1 import (
@@ -551,14 +552,8 @@ def test_VIA_005_and_006_missing_disability_schedules_fail():
 
 
 def test_VIA_007_huf_80dd_requires_member_relationship():
-    profile = ITR2FilingProfile.model_construct(
-        assessee_status=AssesseeStatus.HUF,
-        residential_status=ResidentialStatus.RESIDENT,
-        return_file_section=ReturnFileSection.ON_TIME_139_1,
-        portuguese_civil_code_applies=False,
-    )
     inp = _base_input(
-        filing_profile=profile,
+        filing_profile=_filing_profile(AssesseeStatus.HUF),
         deductions_chapter6a=Chapter6ADeductions(amount_80dd=Decimal("1"), schedule_80dd={}),
     )
     assert failed(validate_itr2_input(inp), "ITR2-IN-VIA-007")
@@ -590,11 +585,10 @@ def test_TDS_007_carry_forward_arithmetic_fails():
 
 
 def test_TDS_008_huf_salary_tds_fails():
-    profile = ITR2FilingProfile.model_construct(
-        assessee_status=AssesseeStatus.HUF,
-        date_of_birth_or_formation=date(1990, 1, 1),
+    inp = _base_input(
+        filing_profile=_filing_profile(AssesseeStatus.HUF),
+        tds1_entries=[{"tds_deducted": Decimal("1")}],
     )
-    inp = _base_input(filing_profile=profile, tds1_entries=[{"tds_deducted": Decimal("1")}])
     assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-008")
 
 
@@ -839,12 +833,25 @@ def test_TDS_012_tds3_carry_forward_arithmetic_fails():
 
 
 
-def test_PROFILE_002_resident_fpi_fails():
-    profile = ITR2FilingProfile.model_construct(
-        residential_status=ResidentialStatus.RESIDENT, is_fii_fpi=True,
-        sebi_registration_number="INABFP123456",
-    )
-    assert failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-002")
+def test_PROFILE_002_resident_fpi_rejected_at_schema_construction():
+    """CBDT rule #20: a Resident/RNOR taxpayer cannot be an FII/FPI. This
+    used to be re-checked in validate_itr2_input() as ITR2-IN-PROFILE-002,
+    but that check was dead code -- ITR2FilingProfile's own model validator
+    (schemas/itr2.py) already raises for every state it tested, so no such
+    profile could ever be constructed to reach it. Enforcement moved
+    entirely to the schema boundary; this test exercises that directly."""
+    with pytest.raises(ValidationError, match="FII/FPI status requires non-resident"):
+        ITR2FilingProfile(
+            pan="ABCPN1234F", surname_or_org_name="Nair",
+            date_of_birth_or_formation=date(1985, 6, 15), father_name="Ramesh Nair",
+            verification_place="Mumbai",
+            primary_address=FilingAddress(
+                residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
+                state_code="27", mobile_no="9876543210", email="priya@example.com",
+            ),
+            residential_status=ResidentialStatus.RESIDENT, is_fii_fpi=True,
+            sebi_registration_number="INABFP123456",
+        )
 
 
 def _cg_112a_scrip() -> CG112AScrip:
@@ -910,7 +917,7 @@ def test_CG_112_non_fii_using_112a_schedule_passes():
 
 
 def test_PROFILE_003_seventh_proviso_without_amounts_fails():
-    profile = ITR2FilingProfile.model_construct(seventh_proviso_139=True)
+    profile = _fii_fpi_profile(False).model_copy(update={"seventh_proviso_139": True})
     assert failed(validate_itr2_input(_base_input(filing_profile=profile)), "ITR2-IN-PROFILE-003")
 
 
@@ -1270,10 +1277,17 @@ def test_VDA_004_transfer_date_after_financial_year_end_fails():
 # ── Phase 5C: Chapter VI-A deductions ───────────────────────────────────────
 
 def _filing_profile(assessee_status: AssesseeStatus = AssesseeStatus.INDIVIDUAL) -> ITR2FilingProfile:
+    # HUF requires Karta/representative verification capacity (and a
+    # Karta PAN for capacity "K") -- an HUF caller with the default "S"
+    # capacity fails ITR2FilingProfile's own validator before ever reaching
+    # whatever rule the test actually wants to exercise.
+    is_huf = assessee_status == AssesseeStatus.HUF
     return ITR2FilingProfile(
         pan="ABCPN1234F", assessee_status=assessee_status, surname_or_org_name="Nair",
         date_of_birth_or_formation=date(1985, 6, 15), father_name="Ramesh Nair",
         verification_place="Mumbai",
+        verification_capacity="K" if is_huf else "S",
+        karta_pan="ABCPX1234F" if is_huf else None,
         primary_address=FilingAddress(
             residence_no="12", locality_or_area="MG Road", city_or_town_or_district="Mumbai",
             state_code="27", mobile_no="9876543210", email="priya@example.com",
@@ -1563,11 +1577,10 @@ def test_SAL_029_relief_89a_within_income_notified_passes():
 def test_FORM_010_huf_relief_89a_fails():
     """CBDT rule #59: Section 89A relief is an individual-only concession,
     not available to a HUF assessee. Builds its own valid HUF profile
-    (verification_capacity="K"/karta_pan set) rather than reusing
-    `_filing_profile(assessee_status=HUF)`, which raises "HUF ITR-2
-    verification requires Karta or representative capacity" -- the same
-    pre-existing stale-fixture issue behind the baseline
-    test_VIA_007/TDS_008/VIA_002 HUF failures, out of scope to fix here."""
+    (verification_capacity="K"/karta_pan set) -- `_filing_profile(
+    assessee_status=HUF)` now does the same thing itself (fixed alongside
+    the former baseline test_VIA_007/TDS_008/VIA_002 HUF failures), but
+    this one predates that fix and there's no need to churn a passing test."""
     profile = ITR2FilingProfile(
         pan="ABCPH1234F", assessee_status=AssesseeStatus.HUF, surname_or_org_name="Nair HUF",
         date_of_birth_or_formation=date(2000, 6, 15), father_name="NA",

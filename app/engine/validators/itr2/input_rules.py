@@ -102,14 +102,17 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
 
     if inp.filing_profile is not None:
         profile = inp.filing_profile
-        if profile.is_fii_fpi and profile.residential_status in {
-            ResidentialStatus.RESIDENT, ResidentialStatus.NOT_ORDINARILY_RESIDENT,
-        }:
-            results.append(_result(
-                "ITR2-IN-PROFILE-002", False,
-                "Residents and not ordinarily resident taxpayers cannot be FII/FPIs.",
-                "filing_profile.is_fii_fpi", False, str(profile.is_fii_fpi),
-            ))
+        # CBDT rule #20 ("Residents and not ordinarily resident taxpayers
+        # cannot be FII/FPIs") used to be checked here too (as
+        # ITR2-IN-PROFILE-002), but that check was provably unreachable:
+        # ITR2FilingProfile.validate_conditional_filing_facts() (schemas/
+        # itr2.py) already raises unconditionally whenever
+        # is_fii_fpi and residential_status != NON_RESIDENT -- which is
+        # every state this check ever tested for -- so no ITR2FilingProfile
+        # satisfying this check's own trigger condition could ever exist to
+        # reach it. Removed rather than kept as dead code; the rule is
+        # still enforced, just earlier (at construction) and harder (a
+        # ValidationError, not a soft ValidationResult).
         if profile.seventh_proviso_139 and not any((
             profile.foreign_travel_expenditure > _ZERO,
             profile.electricity_expenditure > _ZERO,

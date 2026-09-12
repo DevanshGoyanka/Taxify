@@ -18,7 +18,7 @@ GlobalNo,Category,PdfSlNo,Status,Evidence
 17,A,17,Missing,"Documented out of scope (Phase 4, 2026-09-13, matching the Phase 1 research spike's treatment of rules #2/#3/#664/#665): 'role CD of the PAN' is the PAN's own registered category in the ITD's internal PAN database (Individual/HUF/Firm/Company/etc.) -- external data this system has no access to. Confirmed via the official ERI API Specification: the ERI program's full API catalog (Login, Prefill, Validation, Verification, Submit, Add Client, Get Acknowledgement) exposes no PAN-registration-category lookup. Permanently out of scope; not planned."
 18,A,18,Implemented,input_rules.py:2041-2052 ITR2-IN-PROFILE-006
 19,A,19,Implemented,input_rules.py:2041-2052 ITR2-IN-PROFILE-006 (duplicate PDF text of rule 18)
-20,A,20,Implemented,input_rules.py:101-108 ITR2-IN-PROFILE-002 + schemas/itr2.py:247 (double-covered)
+20,A,20,Implemented,"Implemented (evidence corrected, 2026-09-13): enforced exclusively by ITR2FilingProfile.validate_conditional_filing_facts() (schemas/itr2.py) -- 'if self.is_fii_fpi and self.residential_status != NON_RESIDENT: raise'. The former ITR2-IN-PROFILE-002 duplicate in input_rules.py was removed (2026-09-13): it was provably unreachable dead code, since no ITR2FilingProfile satisfying its own trigger condition could ever be constructed past the schema validator above. Test coverage moved to a direct schema-construction test (test_PROFILE_002_resident_fpi_rejected_at_schema_construction)."
 21,A,21,Implemented,input_rules.py:91-97 ITR2-IN-REGIME-001
 22,A,22,Implemented,"structural: itd/itr2.py:671-674,745-747 builder computes and raises ValueError on gross-salary mismatch"
 23,A,23,Implemented,"structural: itd/itr2.py:745,787 TotalGrossSalary summed from employer rows"

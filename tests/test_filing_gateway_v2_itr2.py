@@ -30,6 +30,7 @@ from app.schemas.return_draft import (
     HouseProperty,
     InterestIncome,
     PersonalInfo,
+    RepresentativeAssessee,
     ReturnDraft,
     SeventhProvisoClause,
     TdsCredit,
@@ -188,13 +189,36 @@ def test_generate_cbdt_json_itr2_omits_lei_block_when_unset() -> None:
     assert "LEIDtls" not in filing_status
 
 
-def test_generate_cbdt_json_itr2_rejects_representative_verification() -> None:
-    """ITR-2 verification capacity REPRESENTATIVE/PARTNER is not supported."""
+def test_generate_cbdt_json_itr2_rejects_representative_verification_without_details() -> None:
+    """ITR-2 verification capacity REPRESENTATIVE requires filing.representative
+    to actually be populated -- this test previously asserted a stale error
+    message ("SELF or KARTA") from before representative verification was
+    supported at all (see CBDT rules #8/#277/#313's fix, which added
+    AssesseeRepresentativeProfile.pan and full representative-capacity
+    support); REPRESENTATIVE is a real, working capacity today, so the
+    only thing that should still fail here is the missing detail block."""
     draft = _filing_ready_itr2_draft()
     draft.verification.capacity = "REPRESENTATIVE"
     with pytest.raises(FilingGatewayV2Error) as excinfo:
         generate_cbdt_json(draft)
-    assert "SELF or KARTA" in " ".join(excinfo.value.errors)
+    assert "representative is required" in " ".join(excinfo.value.errors)
+
+
+def test_generate_cbdt_json_itr2_accepts_representative_verification_with_details() -> None:
+    """CBDT rules #8/#277/#313: with real representative details (including
+    their own PAN) supplied, REPRESENTATIVE verification succeeds end to
+    end, and the Verification declaration uses the representative's own
+    PAN, not the assessee's."""
+    draft = _filing_ready_itr2_draft()
+    draft.verification.capacity = "REPRESENTATIVE"
+    draft.filing.representative = RepresentativeAssessee(
+        name="Rep Person", email="rep@example.com", mobileCountryCode="91",
+        mobile="9123456780", pan="REPPN5678K",
+    )
+    official_json, _summary = generate_cbdt_json(draft)
+    declaration = official_json["ITR"]["ITR2"]["Verification"]["Declaration"]
+    assert declaration["AssesseeVerPAN"] == "REPPN5678K"
+    assert official_json["ITR"]["ITR2"]["Verification"]["Capacity"] == "R"
 
 
 def test_generate_cbdt_json_itr2_property_details_match_house_property_count() -> None:
