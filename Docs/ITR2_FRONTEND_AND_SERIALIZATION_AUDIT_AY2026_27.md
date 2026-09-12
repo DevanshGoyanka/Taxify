@@ -1099,6 +1099,24 @@ Create a verified mapping matrix from every canonical capital-gains category to 
 > make the computed relief a lower-bound estimate, never an overstatement, since a real per-row
 > exemption would shrink both the 12.5% and 20% tax figures together.
 >
+> **Fix status (2026-09-12): the one item from this section's original evidence list left
+> unresolved by every update above — `NRISaleofForeignAsset` — is now also fixed, along with two
+> sibling NRI-specific bare-entry blocks this section never separately named
+> (`NRIProvisoSec48`/`NRITransacSec48Dtl`) and the Schedule CG DTAA claim tables (A8/B11).** These
+> are architecturally distinct from both the land/building and generic-other-assets fixes above:
+> the official form discloses them as bare, off-form-computed rupee totals (no per-transaction
+> detail at all, confirmed by reading the form directly), not a `CGTransaction`-classified bucket
+> — so they needed their own dedicated `ITR2Input` scalar/list fields and mapper wiring rather than
+> extending `_other_assets_block()`/`_classify()`. Implemented in
+> `Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md`'s Phase 6i-5 (2026-09-12, "NRI/DTAA capital-gains
+> disclosure family") — see that document's own fix-status write-up (rows #127/#136/#144/#152/
+> #498/#499, "Additional bugs noticed" items 6 and 8) for the full detail, including two related
+> bugs found and fixed alongside it (Schedule SI never actually taxed DTAA-rate capital gains at
+> their own rate, and a proportional-allocation defect in `_post_loss_cg_baskets()`'s 112A/other-
+> LTCG split). `Proviso112Applicable` (Schedule CG item B2) remains a confirmed, deliberately
+> out-of-scope gap — still hardcoded to `[]`, a genuinely different transaction-classification-
+> shaped item not part of that phase's scoped priority order.
+>
 > Regression tests: `test_compute_land_building_long_term_uses_non_indexed_cost_as_primary`
 > (renamed/corrected from the old `..._uses_indexed_cost`, which had encoded the bug's own wrong
 > expectation), `test_compute_land_building_section_112_1a_second_proviso_relief`,
@@ -1287,6 +1305,25 @@ unconditionally, reading only `post_loss_cg`'s `normal_stcg`/`111a`/`112`/`112a_
 verified further here (Part B-TI/B-TTI is its own dedicated pass later in this re-audit); flagged
 so it isn't lost, and to be confirmed or ruled out when that section is audited rather than
 duplicating the investigation now.
+
+> **Fix status: both halves of this forward-pointer are now resolved, from two separate fix
+> passes.** `ShortTerm30Per` was fixed as part of §4341's own dedicated finding ("Part B-TI's
+> `ShortTerm20Per`/`ShortTermAppRate` are swapped, and `ShortTerm30Per` is always zero" — see that
+> section's own fix-status note) — it now correctly reads `post_loss_cg["normal_stcg"]` when the
+> filer is FII/FPI, `0` otherwise, mirroring `_schedule_cg()`'s own FII/FPI routing.
+> `ShortTermSplRateDTAA`/`LongTermSplRateDTAA` were fixed later, in
+> `Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md`'s Phase 6i-5 (2026-09-12, "NRI/DTAA capital-gains
+> disclosure family," rows #498/#499 there) — `_post_loss_cg_baskets()` gained `stcg_dtaa`/
+> `ltcg_dtaa` keys (sourced from `cyla.stcg_dtaa_remaining`/`bfla.ltcg_dtaa_remaining`), and
+> `_partb_ti()` now reads them into these two fields instead of a hardcoded `0`, also folding them
+> into `TotalShortTerm`/`TotalLongTerm`/`TotalCapGains`. That same phase added the underlying
+> Schedule CG DTAA-claim data path (`CGDtaaEntry`, `ITR2Input.cg_stcg_dtaa_entries`/
+> `cg_ltcg_dtaa_entries`) this fix reads from — before it, DTAA-rate capital gains could not be
+> entered at all, so these two fields were correctly zero in every reachable scenario even though
+> the code path itself was a hardcoded placeholder. See that phase's own commit and the gap-mapping
+> doc's rows #498/#499/#127/#136/#144/#152 and "Additional bugs noticed" items 6/8 for the full
+> write-up, including two related bugs (a Schedule-SI rate-wiring gap and a proportional-allocation
+> defect in the same function) found and fixed alongside it.
 
 ## 3.10 The top-level Schedule 115AD scrip-detail table (mirroring Schedule 112A) is never emitted — a real gap §3.1's fix did not cover
 
@@ -3471,6 +3508,31 @@ The frontend exposes only a few AMT deduction fields and no year-by-year AMTC le
 > future fix are isolated to `app/engine/calculators/itr2.py` and `app/engine/itd/itr2.py`; no
 > other form is affected.
 
+> **Fix status (2026-09-12): fixed in full, resolving the exact tax-law question this finding left
+> open (`Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md`'s Phase 6i-4, "AMT/AMTC credit chain").**
+> Confirmed by reading the official ITR-2 form directly (Part B-TTI items 1-12, Schedule AMTC Sl.
+> 1-6) rather than inferring further: Section 115JD credit is consumable specifically in a year
+> item 7 (normal-provisions tax) exceeds item 1d (the 115JC tax), and the comparison **is** made
+> every such year, independent of whether an AMT-triggering deduction was claimed that year — this
+> is what Schedule AMTC's own Sl.3 ("Sl.2 − Sl.1, or 0 if Sl.2 ≤ Sl.1") computes annually. The root
+> cause was exactly as this finding suspected: `result.amt_tax` was a bookkeeping delta, nonzero
+> only in a *binding* AMT year — the opposite of when credit should be usable. Fixed by adding
+> `AMTResult.chapter_xii_ba_applicable` (true whenever the 115JC comparison is genuinely made, win
+> or lose) and a new `compute_amtc(credits, cap, current_ay)` function (`app/engine/schedules/
+> amt.py`) implementing real FIFO-oldest-first utilization across every brought-forward row against
+> one shared cap — `max(0, gross_tax_liability − amt_tax)` — directly fixing the row-independence
+> double-counting bug this finding also flagged, plus a 15-assessment-year expiry window (section
+> 115JD(3)) that did not exist before at all. The calculator was reordered so items 2-7 (rebate/
+> surcharge/cess) finalize *before* AMT runs, so `gross_tax_liability`/`amt_tax` are the correct,
+> final Part-B-TTI item 7/1d figures the cap formula needs — not the pre-fix code's own conflated,
+> partially-computed versions. `result.amt_credit_utilised` (the new total) now genuinely reduces
+> `net_tax_liability`, which it never did before regardless of disclosure. This was resolved by
+> direct reading of the primary form, not by inference or a live UAT call — the standard this
+> note's own text asked for; a live Type-2 UAT round remains the final confirmation step per this
+> project's own established practice, not yet run for this specific fix. See that phase's own
+> fix-status write-up for the remaining root causes fixed alongside this one (item-7/8 conflation,
+> a surcharge-omission bug in the AMT-applicability comparison) and full test/regression evidence.
+
 ## 9.3a Full form-order re-audit (2026-09-08) — Schedule AMTC's per-year credit rows use entirely wrong field names, and one total field holds a row count instead of an amount
 
 Cross-referenced Schedule AMTC (form pp. 60-61) against schema `ScheduleAMTC`/`ScheduleAMTCDtls`
@@ -4469,6 +4531,22 @@ pair of fields for that population, compounding §9.3a's Schedule AMTC findings)
 
 **Remediation:** wire `CreditUS115JD` from the same AMT-credit-utilization total §9.3a's fix would
 produce, and compute `TaxPayAfterCreditUs115JD` accordingly.
+
+> **Fix status (2026-09-12): fixed, as part of a full-stack AMT/AMTC credit-chain rebuild
+> (`Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md`'s Phase 6i-4, 2026-09-12).** `CreditUS115JD` now
+> reads `result.amt_credit_utilised`, computed once by a new `compute_amtc()` function
+> (`app/engine/schedules/amt.py`, FIFO oldest-first, 15-assessment-year expiry per section
+> 115JD(3)) and reused by both the calculator's own tax arithmetic and this disclosure field — so
+> the two can never drift, unlike the pre-fix design this finding itself worried about (deriving a
+> *second* independently-hardcoded value). `TaxPayAfterCreditUs115JD` is now
+> `gross_tax_payable + esop_deferred_payable_this_year − amt_credit_utilised` (the form's own
+> "8a + 8c − 9" formula). This fix went beyond wiring these two fields alone: it also corrected a
+> pre-existing bug where brought-forward AMT credit never actually reduced `net_tax_liability` at
+> all (only ever disclosed, never subtracted from the real tax computation), reordered the
+> calculator so items 2-7 compute before AMT (previously AMT could overwrite item 7, conflating it
+> with item 8), and fixed a surcharge-omission bug in the AMT-applicability comparison itself. See
+> that phase's own fix-status write-up for the full six-root-cause breakdown, and §9.3a's own note
+> for Schedule AMTC's field-naming fix this shares its data source with.
 
 ### Secondary finding — surcharge "before marginal relief" breakdown fields are always zero
 
@@ -5775,7 +5853,9 @@ layer).
 ### Areas re-checked, confirmed clean (or confirmed still accurately documented)
 
 §9.3 (AMTC utilization-direction issue, "left unfixed pending tax-law verification") and §9.3a
-(field-name fix) both confirmed still accurately described, no change needed. §12a.1
+(field-name fix) both confirmed still accurately described, no change needed **at the time of this
+re-check (2026-09-08) — §9.3's own finding was subsequently fixed on 2026-09-12, see its own
+fix-status note.** §12a.1
 (`ImmovableDetails` always `[]`) confirmed still open, unfixed. §10.2 (Schedule FA, 3 of 10
 categories, fails closed for the rest) confirmed still open, unfixed but safe. §13.1 (ESOP
 event-level gap) confirmed still matches the doc's characterization. §12.2 (Schedule 5A's `amount *
