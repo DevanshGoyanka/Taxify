@@ -51,6 +51,7 @@ from app.schemas.itr2 import (
     OSDeductions,
     OSDividendEntry,
     OSDtaaEntry,
+    OSQuarterlyAmount,
     OSSection89A,
     OSSpecialRateEntry,
     PTIEntry,
@@ -1961,6 +1962,70 @@ def test_OS_011_resident_claiming_115bbf_passes():
         si_entries=[ScheduleSIEntry(section="115BBF", gross_income=Decimal("50000"))],
     )
     assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-011")
+
+
+def test_OS_012_dividend_row_quarterly_breakdown_not_matching_amount_fails():
+    inp = _base_input(os_dividend_entries=[
+        OSDividendEntry(section="194", amount=Decimal("10000"), q1=Decimal("5000"), q2=Decimal("2000")),
+    ])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-012")
+
+
+def test_OS_012_dividend_row_quarterly_breakdown_matching_amount_passes():
+    inp = _base_input(os_dividend_entries=[
+        OSDividendEntry(section="194", amount=Decimal("7000"), q1=Decimal("5000"), q2=Decimal("2000")),
+    ])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-012")
+
+
+def test_OS_013_lottery_quarterly_breakdown_not_matching_si_gross_fails():
+    inp = _base_input(
+        si_entries=[ScheduleSIEntry(section="115BB", gross_income=Decimal("10000"))],
+        os_lottery_quarters=OSQuarterlyAmount(q1=Decimal("5000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-013")
+
+
+def test_OS_013_lottery_quarterly_breakdown_matching_si_gross_passes():
+    inp = _base_input(
+        si_entries=[ScheduleSIEntry(section="115BB", gross_income=Decimal("5000"))],
+        os_lottery_quarters=OSQuarterlyAmount(q1=Decimal("5000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-013")
+
+
+def test_OS_014_gaming_quarterly_breakdown_not_matching_si_gross_fails():
+    inp = _base_input(
+        si_entries=[ScheduleSIEntry(section="115BBJ", gross_income=Decimal("8000"))],
+        os_gaming_quarters=OSQuarterlyAmount(q1=Decimal("1000")),
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-014")
+
+
+def test_OS_015_depreciation_claimed_without_machinery_rent_income_fails():
+    inp = _base_input(os_deductions=OSDeductions(depreciation=Decimal("5000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-015")
+
+
+def test_OS_015_depreciation_claimed_with_machinery_rent_income_passes():
+    inp = _base_input(
+        os_machinery_plant_rent=Decimal("50000"),
+        os_deductions=OSDeductions(depreciation=Decimal("5000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-015")
+
+
+def test_OS_016_expenses_claimed_without_any_os_income_fails():
+    inp = _base_input(os_deductions=OSDeductions(expenses=Decimal("2000")))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-OS-016")
+
+
+def test_OS_016_expenses_claimed_with_qualifying_os_income_passes():
+    inp = _base_input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=Decimal("50000")),
+        os_deductions=OSDeductions(expenses=Decimal("2000")),
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-OS-016")
 
 
 def test_OS_007_non_resident_claiming_115ac_dividend_passes():

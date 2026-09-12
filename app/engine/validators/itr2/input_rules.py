@@ -1134,6 +1134,85 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
             "si_entries[].section", "not 115BBF for a non-resident", "115BBF",
         ))
 
+    # CBDT rules 214/219-223/231 (Phase 6j-6): each Schedule OS dividend row's
+    # own Q1-Q5 quarterly breakdown (used for Section 234C interest support)
+    # must sum to exactly that row's own declared `amount` -- one reusable
+    # check across every dividend section (general/DTAA/115A1ai/115AC/
+    # 115ACA/115AD1i/115A1aA), since `OSDividendEntry` carries one `amount`
+    # plus one `q1..q5` breakdown regardless of section.
+    for _idx, _div in enumerate(inp.os_dividend_entries):
+        _div_quarters_total = _div.q1 + _div.q2 + _div.q3 + _div.q4 + _div.q5
+        if _div_quarters_total > _ZERO and _div_quarters_total != _div.amount:
+            results.append(_result(
+                "ITR2-IN-OS-012", False,
+                "A Schedule OS dividend row's quarterly (Q1-Q5) breakdown must sum to its own "
+                "declared amount.",
+                f"os_dividend_entries[{_idx}]", str(_div.amount), str(_div_quarters_total),
+            ))
+
+    # CBDT rules 213/230: the lottery/online-gaming quarterly breakdowns
+    # (used for 234C interest support, distinct from the per-row dividend
+    # breakdown above) must sum to their own corresponding Schedule-SI gross
+    # income total.
+    if inp.os_lottery_quarters is not None:
+        _lottery_q = inp.os_lottery_quarters
+        _lottery_total = _lottery_q.q1 + _lottery_q.q2 + _lottery_q.q3 + _lottery_q.q4 + _lottery_q.q5
+        _lottery_si = sum((sie.gross_income for sie in inp.si_entries if sie.section == "115BB"), _ZERO)
+        if _lottery_total != _lottery_si:
+            results.append(_result(
+                "ITR2-IN-OS-013", False,
+                "The lottery-income quarterly breakdown must sum to the Section 115BB gross "
+                "income declared in Schedule SI.",
+                "os_lottery_quarters", str(_lottery_si), str(_lottery_total),
+            ))
+    if inp.os_gaming_quarters is not None:
+        _gaming_q = inp.os_gaming_quarters
+        _gaming_total = _gaming_q.q1 + _gaming_q.q2 + _gaming_q.q3 + _gaming_q.q4 + _gaming_q.q5
+        _gaming_si = sum((sie.gross_income for sie in inp.si_entries if sie.section == "115BBJ"), _ZERO)
+        if _gaming_total != _gaming_si:
+            results.append(_result(
+                "ITR2-IN-OS-014", False,
+                "The online-gaming-winnings quarterly breakdown must sum to the Section 115BBJ "
+                "gross income declared in Schedule SI.",
+                "os_gaming_quarters", str(_gaming_si), str(_gaming_total),
+            ))
+
+    # CBDT rules 192/217/228: deductions/depreciation u/s 57 (other than the
+    # family-pension-specific 57(iia), which is engine-computed and always
+    # tied to `family_pension_received`) can only be claimed when the
+    # corresponding OS income items are actually offered. #192 is the
+    # machinery/plant-rent-specific instance (depreciation requires
+    # Sl.1c > 0); #217/#228 are the general instance across every non-family-
+    # pension OS income item -- one combined check covers all three, since a
+    # nonzero deduction with zero income anywhere in the qualifying set is
+    # invalid regardless of which specific item the taxpayer meant to net it
+    # against.
+    if inp.os_deductions is not None:
+        _ded = inp.os_deductions
+        # #192: depreciation specifically requires machinery/plant rent
+        # income (Sl.1c), regardless of any other OS income offered.
+        if _ded.depreciation > _ZERO and inp.os_machinery_plant_rent <= _ZERO:
+            results.append(_result(
+                "ITR2-IN-OS-015", False,
+                "Depreciation u/s 57 cannot be claimed against machinery/plant/building rental "
+                "income unless that income (Sl.1c) is itself offered.",
+                "os_deductions.depreciation", "0 when os_machinery_plant_rent == 0",
+                str(_ded.depreciation),
+            ))
+        # #217/#228: expenses/depreciation more generally require SOME
+        # qualifying OS income (other than family pension) to be offered.
+        _other_os_income = (
+            (osi.savings_bank_interest + osi.fixed_deposit_interest + osi.interest_on_it_refund
+             + osi.income_56_2_x + osi.other_income + inp.os_machinery_plant_rent) if osi else _ZERO
+        )
+        if (_ded.expenses > _ZERO or _ded.depreciation > _ZERO) and _other_os_income <= _ZERO:
+            results.append(_result(
+                "ITR2-IN-OS-016", False,
+                "Expenses/depreciation u/s 57 cannot be claimed unless corresponding Other "
+                "Sources income (other than family pension) is offered.",
+                "os_deductions", "> 0 only with offered OS income", "0",
+            ))
+
     # ── Schedule OS / Schedule SI / CYLA-BFLA-CFL — Phase 5D ───────────────
     # Schedule OS (`OtherSourcesIncome`) has almost nothing left to validate:
     # it is a flat gross-income-bucket model shared with ITR-1, and ITR-1's
