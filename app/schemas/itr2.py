@@ -1302,6 +1302,16 @@ class ITR2Input(StrictModel):
     # NRIDTAADtls, applicable for non-residents only).
     cg_stcg_dtaa_entries: List[CGDtaaEntry] = Field(default_factory=list)
     cg_ltcg_dtaa_entries: List[CGDtaaEntry] = Field(default_factory=list)
+    # Schedule CG item A6 -- "amount deemed to be short-term capital gains"
+    # under the section 54B(2)/54D(2) proviso: an earlier year's Capital
+    # Gains Account Scheme deposit whose statutory reinvestment window
+    # lapsed without the taxpayer actually acquiring the replacement asset.
+    # The unutilized deposit becomes deemed STCG of THIS year, taxed at
+    # normal (non-111A) rates -- distinct from `CapitalGainExemptionClaim.
+    # cgas_deposit_amount`, which tracks a CURRENT-year deposit still within
+    # its window. No prior field captured this at all (a genuinely missing
+    # disclosure path, not merely an unexercised one).
+    deemed_stcg_unutilized_cgas: Decimal = Field(default=Decimal("0"), ge=0)  # A6
     vda_transactions: List[VDATransaction] = Field(default_factory=list)
     bf_losses: List[BFLossItem] = Field(default_factory=list)
     cf_losses: List[CFLLossItem] = Field(default_factory=list)

@@ -133,6 +133,48 @@ def test_compute_land_building_section_112_1a_second_proviso_relief() -> None:
     assert asset.tax_sec_112_1a_iib == Decimal("400000")
 
 
+def test_compute_land_building_section_112_1a_relief_uses_real_cii_when_indexed_cost_unpopulated() -> None:
+    """When the preparer leaves `indexed_cost` at its zero default, the
+    second-proviso relief must be computed from a REAL CII-indexed cost,
+    not silently treated as equal to the un-indexed cost (an implicit,
+    always-wrong CII ratio of 1). Previously `_indexed_cost()` only
+    computed real indexation for `xfer_fy <= 2022` -- for FY2023 onward
+    (every AY 2026-27 transfer) it returned the raw un-indexed cost,
+    silently zeroing or understating this relief for any resident who
+    didn't hand-compute and enter the indexed figure themselves.
+
+    Acquired FY2002-03 (CII 109), transferred FY2025-26 (CII 384), cost
+    10L, sale 40L: indexed cost = 10L * 384/109 ~= 35,22,936. Primary tax
+    (12.5% x 30L non-indexed gain) = 3,75,000. EiB tax (20% x ~4,77,064
+    indexed-basis gain) ~= 95,413. Relief ~= 2,79,587 -- clearly nonzero,
+    unlike the pre-fix result of exactly zero.
+    """
+    tx = SimpleNamespace(
+        asset_type="land_building",
+        description="Ancestral plot",
+        isin_code="",
+        full_consideration=Decimal("4000000"),
+        cost_of_acquisition=Decimal("1000000"),
+        indexed_cost=Decimal("0"),  # deliberately unpopulated
+        improvement_cost=Decimal("0"),
+        indexed_improvement=Decimal("0"),
+        expenditure_on_transfer=Decimal("0"),
+        fair_market_value_jan2018=None,
+        date_of_acquisition=__import__("datetime").date(2002, 6, 1),
+        date_of_transfer=__import__("datetime").date(2025, 6, 1),
+        exemptions=[],
+        explicit_long_term=None,
+    )
+    result = compute([tx], is_resident=True)
+    asset = result.ltcg.land_building[0]
+    assert asset.eib_applicable is True
+    assert asset.tax_sec_112_1a == Decimal("375000")  # 30L * 12.5%
+    # Indexed-basis tax must be well below the un-indexed 20% figure (6L)
+    # -- proof a real, larger-than-cost indexed figure was actually used.
+    assert Decimal("90000") < asset.tax_sec_112_1a_iib < Decimal("100000")
+    assert abs(result.ltcg.total_excess_tax_112_1a - Decimal("279587")) < Decimal("1")
+
+
 def test_compute_land_building_section_112_1a_not_applicable_for_non_resident() -> None:
     """A non-resident gets no second-proviso comparison at all, even with
     an identical pre-23-Jul-2024 acquisition -- the relief is resident-only

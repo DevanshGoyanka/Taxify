@@ -227,15 +227,31 @@ def _cii(fy: int) -> int:
 
 
 def _indexed_cost(cost: Decimal, acquisition_date: str, transfer_date: str) -> Decimal:
-    """Index cost for transfers in financial years where indexation applies."""
+    """Index cost using the CII table for the acquisition/transfer years.
+
+    Indexation was withdrawn from the PRIMARY long-term capital gain
+    computation (section 48's proviso) for transfers on/after 23-Jul-2024,
+    but it is still required for the section 112(1)(a) second-proviso
+    comparison (``compute_ltcg()``'s ``eib_applicable`` track), which
+    exists specifically to compute what the OLD, indexed-cost-based 20%
+    computation would have produced. A prior ``xfer_fy <= 2022`` gate here
+    made this function silently return the raw, un-indexed cost for any
+    transfer in FY2023 onward -- i.e. for every AY 2026-27 transfer, the
+    exact returns this function exists to support -- even though
+    ``CII_TABLE`` (app/engine/constants.py) has real CBDT-notified values
+    through FY2025-26. That made the second-proviso relief compute against
+    an indexed cost equal to the un-indexed cost (an implicit, always-wrong
+    CII ratio of 1), silently zeroing or understating a resident's
+    statutory relief. Index using whatever years CII_TABLE actually covers;
+    ``_cii()`` already falls back to the nearest earlier notified year.
+    """
     if not acquisition_date or not transfer_date:
         return cost
     acq_fy = _acquire_fy(acquisition_date)
     xfer_fy = _acquire_fy(transfer_date)
-    if xfer_fy <= 2022:
-        cii_acq, cii_xfer = _cii(acq_fy), _cii(xfer_fy)
-        if cii_acq > 0:
-            return cost * Decimal(cii_xfer) / Decimal(cii_acq)
+    cii_acq, cii_xfer = _cii(acq_fy), _cii(xfer_fy)
+    if cii_acq > 0:
+        return cost * Decimal(cii_xfer) / Decimal(cii_acq)
     return cost
 
 
@@ -450,8 +466,17 @@ def compute_ltcg(
             is_resident and acquired_date is not None and acquired_date < _SECOND_PROVISO_112_1A_CUTOFF
         )
         if asset.eib_applicable:
-            indexed_acquisition = _decimal(asset.indexed_acquisition_cost) or acquisition
-            indexed_improvement = _decimal(asset.indexed_improvement_cost) or improvement
+            # Fall back to a real CII-computed indexed cost (not the raw
+            # un-indexed cost -- see `_indexed_cost()`'s own docstring for
+            # why that fallback silently zeroed this relief) whenever the
+            # preparer hasn't supplied an explicit indexed figure.
+            indexed_acquisition = _decimal(asset.indexed_acquisition_cost) or _indexed_cost(
+                acquisition, asset.date_of_acquisition, asset.date_of_transfer
+            )
+            indexed_improvement = _decimal(asset.indexed_improvement_cost) or (
+                _indexed_cost(improvement, asset.year_of_improvement or asset.date_of_acquisition, asset.date_of_transfer)
+                if improvement > _ZERO else _ZERO
+            )
             indexed_total_ded = indexed_acquisition + indexed_improvement + _decimal(asset.expenditure_on_transfer)
             # "In case of negative, to be considered as nil" (form item 1ca).
             asset.balance_for_eib = max(_ZERO, deemed - indexed_total_ded)
@@ -581,7 +606,23 @@ def aggregate(
 
     positive_stcg = max(_ZERO, remaining_stcg)
     positive_ltcg = max(_ZERO, remaining_ltcg)
-    eligible_exemption = min(positive_ltcg, max(_ZERO, exemptions.total_exemption))
+
+    # Section 54B (agricultural land) is the ONLY §54-series exemption the
+    # official form allows against short-term capital gain (Schedule CG
+    # item A1d restricts the STCG-land-building deduction row to 54B only;
+    # 54/54EC/54F are long-term-only per their own statutory text). Net the
+    # STCG-land-building 54B claims against the STCG bucket FIRST, then net
+    # whatever remains of the total exemption pool against LTCG as before.
+    # Previously the entire exemption pool -- including any 54B claimed on
+    # an STCG land/building disposal -- was only ever netted against LTCG,
+    # so a 54B claim was correctly disclosed per-row but silently never
+    # reduced the taxable total whenever LTCG couldn't fully absorb it
+    # (e.g. no LTCG at all in the return).
+    stcg_land_54b = sum((asset.exemption_total for asset in stcg.land_building), _ZERO)
+    stcg_eligible_exemption = min(positive_stcg, max(_ZERO, stcg_land_54b), max(_ZERO, exemptions.total_exemption))
+    remaining_exemption_pool = max(_ZERO, exemptions.total_exemption - stcg_eligible_exemption)
+    ltcg_eligible_exemption = min(positive_ltcg, remaining_exemption_pool)
+
     vda_income = max(_ZERO, _decimal(vda))
     total_before = signed_regular_cg + vda_income
     return CGResult(
@@ -590,7 +631,11 @@ def aggregate(
         vda=vda_income,
         exemptions=exemptions,
         current_year_losses=losses,
-        total_capital_gains=positive_stcg + positive_ltcg - eligible_exemption + vda_income,
+        total_capital_gains=(
+            positive_stcg - stcg_eligible_exemption
+            + positive_ltcg - ltcg_eligible_exemption
+            + vda_income
+        ),
         total_capital_gains_before_exemption=total_before,
     )
 
@@ -815,6 +860,57 @@ def _claim_total(transactions, section: str) -> Decimal:
     return canonical
 
 
+@dataclass
+class _LegacyClaim:
+    """Duck-typed stand-in for a canonical `CapitalGainExemptionClaim`.
+
+    Lets `_normalized_land_exemptions()` feed a legacy-scalar-only claim
+    through the same `_exemption_claim_total()`/`asset.exemptions` path a
+    canonical claim uses, without this schedule module importing the real
+    Pydantic model (keeping the calculators -> schedule dependency arrow
+    one-way, per this module's own header comment).
+    """
+
+    section: str
+    investment_amount: Decimal = _ZERO
+    cgas_deposit_amount: Decimal = _ZERO
+
+
+_LEGACY_EXEMPTION_FIELDS = {
+    "54": "deduction_us54",
+    "54B": "deduction_us54b",
+    "54EC": "deduction_us54ec",
+    "54F": "deduction_us54f",
+}
+
+
+def _normalized_land_exemptions(tx) -> list:
+    """Canonical §54-series claims plus any legacy-scalar-only claims.
+
+    `CGTransaction.deduction_us54*` legacy scalar fields are accepted by
+    the schema as a standalone claim (only rejected if they DISAGREE with a
+    canonical claim for the same section, not required to duplicate one --
+    see `CGTransaction.validate_transaction()`). Without this
+    normalization, a claim entered ONLY via a legacy scalar field on a
+    land/building transaction was invisible to `compute_stcg()`/
+    `compute_ltcg()`'s per-asset `exemption_total` (sourced exclusively
+    from `asset.exemptions`, itself built only from the canonical
+    `exemptions` list at classification time) -- so a 54B claim entered
+    this way would silently never reduce the assessee's actual STCG tax,
+    the same bug class `aggregate()`/`_post_loss_cg_baskets()` are fixed
+    for below, just via a different, legacy-field-only entry path.
+    """
+    claims = list(getattr(tx, "exemptions", None) or [])
+    covered = {getattr(c, "section", None) for c in claims}
+    for section, field_name in _LEGACY_EXEMPTION_FIELDS.items():
+        if section in covered:
+            continue
+        legacy_amount = _decimal_attr(tx, field_name)
+        if legacy_amount > _ZERO:
+            claims.append(_LegacyClaim(section=section, investment_amount=legacy_amount))
+    return claims
+
+
 def _classify(transactions) -> tuple:
     """Classify canonical CG transactions into the schedule's baskets.
 
@@ -889,7 +985,7 @@ def _classify(transactions) -> tuple:
                 indexed_improvement_cost=_decimal_attr(tx, "indexed_improvement"),
                 year_of_improvement=str(_attr(tx, "year_of_improvement", "") or ""),
                 expenditure_on_transfer=expenditure,
-                exemptions=list(getattr(tx, "exemptions", None) or []),
+                exemptions=_normalized_land_exemptions(tx),
             )
             if is_short:
                 stcg_land.append(asset)

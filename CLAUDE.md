@@ -183,6 +183,34 @@ route a fresh accumulator through `_to_rupees()` exactly once, matching how ever
 these builders already does it, not zero times (schema-invalid `Decimal`) or via a plain-int
 `sum()` start (crashes `_to_rupees()` on an empty generator).
 
+**Update (2026-09-13): a full schedule-by-schedule audit of every ITR-2 calculation against the
+literal official ITR-2 FORM PDF's own arithmetic sequence (Parts A-D, every schedule) — a
+different, additional layer from what Phase 6/Phase 8 above already covered (see the
+three-layer JSON-Schema/Validation-Rules/FORM-PDF distinction a few paragraphs below).**
+Generated a realistic, schema-valid sample return and cross-checked it section by section
+against the gazetted form PDF. Found and fixed 8 real defects, 3 of them severe/tax-affecting:
+(1) a section 54B exemption on STCG land/building was disclosed per-row but never actually
+reduced tax whenever the return had no LTCG to absorb it
+(`app/engine/schedules/capital_gains.py::aggregate()`,
+`app/engine/calculators/itr2.py::_post_loss_cg_baskets()`); (2) `_indexed_cost()`'s own
+`xfer_fy <= 2022` gate silently zeroed the section 112(1)(a) second-proviso relief for every
+AY2026-27 transfer — a distinct, newly-found defect from the 2026-09-05 indexed-cost-primacy
+fix noted above (same area, different code path: that fix corrected the primary declared
+gain's cost basis, this one is the second-proviso comparison's own fallback); (3) Part B-TI's
+`TotalLongTerm` didn't equal its own declared parts, and — the deeper issue underneath that
+mismatch — GTI/Total Income never excluded ANY §54-series exemption or the section 112A ₹1.25L
+threshold at all, so an exempted LTCG amount was silently taxed at ordinary SLAB rates instead
+of being excluded from tax entirely. Also fixed: Part B-TTI's `BalTaxPayable` (item 16) was
+never written; Schedule CG item A6 (deemed STCG from a lapsed CGAS deposit) had no backing
+field anywhere; Schedule TCS `DeductedYr` always defaulted to 2024 even for ordinary
+current-year credit; Schedule CG item A7 (pass-through STCG) was hardcoded to zero regardless
+of real PTI data. 14 new tests added (known-bad/known-good pairs); the full ITR-1/2/3/4 suite
+(1,319 tests) and the complete suite (2,235 tests) both pass with zero new failures. This audit
+is orthogonal to production-readiness, not a substitute for it — it does not touch the Type-2
+submission gate (`app/routers/filing.py:199,290`, still hard-blocked to ITR-1/ITR-4 pending a
+live ITD UAT round). Full per-bug evidence, worked numeric examples, and file:line citations are
+in `Docs/ITR2_FRONTEND_AND_SERIALIZATION_AUDIT_AY2026_27.md`'s own top-of-file update log.
+
 ### v2 canonical pipeline (`ReturnDraft`)
 
 The production compute/filing path for the frontend's single multi-form editor. One

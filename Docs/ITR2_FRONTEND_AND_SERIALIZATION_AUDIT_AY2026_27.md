@@ -6,6 +6,96 @@
 **Excluded:** Validators and validator-related working-tree changes  
 **Status:** Not production-ready for complete real-world ITR-2 filing
 
+> **Update (2026-09-13): a full schedule-by-schedule cross-check of every ITR-2 calculation
+> against the literal official ITR-2 FORM PDF's own arithmetic sequence (Parts A-D, every
+> schedule) — distinct from and additional to every pass above, none of which checked the
+> gazetted FORM's own row-by-row formulas: the JSON Schema only verifies type/required/pattern/
+> enum shape, the CBDT Validation Rules PDF verifies business-rule consistency of
+> already-computed values, and only `Reference Docs by CBDT & ITD/Official ITR FORMS/
+> ITR-2-2026-Eng.pdf` itself shows what a field is actually supposed to compute TO.**
+> Generated a realistic, schema-valid sample return (Salary, co-owned HP, CG covering STCG
+> land + 111A + 112A LTCG, Chapter VI-A 80C/80D/80G, agricultural income, exempt income, TDS/
+> TCS, bank details) and ran six parallel cross-checks against the form PDF text, one per
+> schedule cluster. Found and fixed 8 real defects, 3 of them severe and tax-affecting (not
+> just disclosure):
+>
+> 1. **[SEVERE] Section 54B exemption on STCG land/building never reduced actual tax.**
+>    `app/engine/schedules/capital_gains.py::aggregate()` and `app/engine/calculators/
+>    itr2.py::_post_loss_cg_baskets()` only ever netted the §54-series exemption pool against
+>    LTCG, never STCG, even though the form's own item A1d restricts the STCG-land deduction
+>    row to 54B specifically. A resident with STCG-only land income and a valid 54B claim was
+>    taxed on the full pre-exemption gain — worked repro: ₹20L consideration − ₹10L cost = ₹10L
+>    gain, ₹5L claimed under 54B, no LTCG anywhere → taxed the full ₹10L instead of ₹5L. Fixed
+>    by netting 54B against the STCG bucket first, then any remainder against LTCG as before. A
+>    companion gap was fixed alongside in `_classify()`: a 54B claim entered only via the legacy
+>    scalar `CGTransaction.deduction_us54b` field (not the canonical `exemptions` list) was
+>    invisible to this same mechanism.
+> 2. **[SEVERE] Section 112(1)(a) second-proviso relief silently zeroed for every AY 2026-27
+>    transfer.** `_indexed_cost()`'s own `xfer_fy <= 2022` gate made it return the raw
+>    un-indexed cost for any transfer in FY2023 onward — i.e. every AY2026-27 transfer, exactly
+>    the years this relief exists to protect, even though `CII_TABLE` (`app/engine/
+>    constants.py`) has real CBDT-notified values through FY2025-26. A resident who acquired
+>    land/building years before 23-Jul-2024 and left `indexed_cost` unpopulated got zero relief
+>    instead of a real, sometimes-substantial statutory entitlement (worked example: land
+>    bought 2003, sold FY2025-26, cost ₹10L, sale ₹40L → correct relief ≈ ₹2,79,587, computed
+>    as ₹0 before this fix), with the advisory validator `ITR2-IN-CG-012` actively misfiring
+>    against correctly-entered figures because it shared the same broken helper. **This is a
+>    distinct, newly-found defect from the 2026-09-05 "indexed-cost-primacy" fix already
+>    documented below (§3.2) — that fix corrected the PRIMARY declared gain's cost basis; this
+>    one is in the second-proviso comparison's own fallback, a different code path in the same
+>    function.** Fixed the helper, the calculator's fallback, and a duplicate fallback in the
+>    ITD builder (`app/engine/itd/itr2.py`); the validator self-corrects once the shared helper
+>    is fixed.
+> 3. **[SEVERE] Part B-TI's `TotalLongTerm` didn't equal its own declared parts
+>    (`LongTerm12_5Per` + `LongTermSplRateDTAA`), and — the deeper issue underneath that
+>    mismatch — GTI/Total Income never excluded ANY §54-series exemption or the section 112A
+>    ₹1.25L threshold at all.** Because GTI/Total Income were computed from the pre-exemption
+>    gross CG totals and never corrected afterward, an LTCG amount genuinely exempted under
+>    54/54B/54EC/54F/115F or the 112A threshold was silently taxed at ordinary SLAB rates
+>    instead of being excluded from tax entirely — worse than a disclosure bug, a real tax
+>    overstatement whenever an LTCG exemption existed. Fixed with one generalized correction in
+>    `app/engine/calculators/itr2.py::compute()` that reconciles GTI against the exact
+>    exemption amount `_post_loss_cg_baskets()` actually consumed, plus the matching field fix
+>    in `app/engine/itd/itr2.py::_partb_ti()`.
+> 4. **[MODERATE] Part B-TTI item 16 (`BalTaxPayable`) was never written** when tax was owed —
+>    ITR-1/ITR-4's builders already set this sibling of `TaxesPaid` correctly; ITR-2's never
+>    did. Fixed.
+> 5. **[MODERATE] Schedule CG item A6 (deemed STCG from a lapsed Capital Gains Account Scheme
+>    deposit)** had no backing input field anywhere — a genuinely missing disclosure path, not
+>    an unexercised one. Added `ITR2Input.deemed_stcg_unutilized_cgas` end-to-end (schema,
+>    calculator, JSON builder, and `_schedule_cg()`'s own presence gate, which also needed a
+>    matching fix so a return with ONLY A6/A7 income doesn't lose Schedule CG entirely).
+> 6. **[MINOR] Schedule TCS `DeductedYr` always defaulted to 2024**, even for ordinary
+>    current-year credit, misstating the disclosed year — fixed to match TDS2/TDS3's own
+>    already-established conditional-emission pattern (only emit when genuinely brought
+>    forward).
+> 7. **[MINOR] Schedule CG item A7 (pass-through STCG via Schedule PTI)** was hardcoded to zero
+>    even when real PTI STCG existed — already correctly taxed via Schedule SI, but Schedule
+>    CG's own A7/A9 total silently omitted income the return was genuinely taxed on. Fixed.
+> 8. **[COSMETIC]** `app/engine/schedules/house_property.py`'s module docstring said the 30%
+>    deduction base was "NAV" when it's actually the post-ownership-share annual value — the
+>    code itself was already correct, only the comment was loose.
+>
+> Two items were investigated and deliberately left as-is, with reasons recorded rather than
+> silently skipped: Schedule CG's quarterly accrual table (`AccruOrRecOfCG`) already
+> self-documents (see its own docstring in `app/engine/itd/itr2.py`) as a deliberate
+> approximation with no downstream consumer — 234C interest is computed independently, never
+> read back from this table — so a rearchitecture to match the form's literal "post-BFLA"
+> instruction isn't worth the regression risk for a field that can't itself produce a wrong tax
+> outcome; the shared `AMTInput` schema exposes ITR-3/4-only 10AA/35AD addback fields that are
+> unreachable for any valid ITR-2 return (no PGBP income), touching them risks the other forms
+> for zero ITR-2 benefit.
+>
+> All 8 fixes are covered by 14 new tests (known-bad + known-good pairs) across
+> `tests/test_itr2_integration.py`, `tests/test_itr2_itd_builder.py`,
+> `tests/test_standalone_cg_schedule.py`. Full verification: 1,319 ITR-1/2/3/4-related tests
+> pass; the complete suite (2,235 tests) passes with zero new failures (one pre-existing,
+> unrelated collection error in `test_26as_batch.py`, confirmed unaffected by this work). **This
+> audit is orthogonal to, not a substitute for, this document's own frontend/serialization
+> scope** — it does not change this document's "Not production-ready" status above, and it does
+> not touch the Type-2 submission gate (`app/routers/filing.py:199,290`, still hard-blocked to
+> ITR-1/ITR-4 pending a live ITD UAT round).
+
 > **Update (2026-09-11): new §22, a live E2E audit (real browser, real backend, real client) —
 > not a code-reading pass like every section before it.** Found that despite §20's 26 findings all
 > being fixed (see the twenty-fourth-fix update below), CBDT JSON generation for ITR-2 is still

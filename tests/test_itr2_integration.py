@@ -32,6 +32,7 @@ from app.schemas.itr1 import (
 )
 from app.schemas.itr2 import (
     AgriculturalIncome,
+    CapitalGainExemptionClaim,
     CG112AScrip,
     CGAssetType,
     CGTransaction,
@@ -305,7 +306,20 @@ def test_112a_threshold_applies_after_brought_forward_ltcl() -> None:
 
 
 def test_112a_threshold_portion_does_not_enter_slab_tax() -> None:
-    """112A gain below threshold remains in TI but is not taxed at slab rates."""
+    """112A gain below threshold is excluded from Total Income entirely.
+
+    The section 112A ₹1.25L threshold is a genuine income EXCLUSION under
+    the section's own proviso, not a Chapter VI-A deduction -- exempt
+    income never forms part of Gross/Total Income at all (the official
+    form's own Part B-TI "TotalLongTerm" = "LongTerm12_5Per" +
+    "LongTermSplRateDTAA", neither of which includes an exempt slice). A
+    100000 112A gain fully within the threshold is therefore fully exempt
+    and Total Income is correctly 0 -- not 100000, which the un-fixed
+    calculator previously (and wrongly) reported by including the gross,
+    pre-threshold 112A gain in Total Income even though it was never
+    slab-taxed (see the matching fix note in
+    calculators/itr2.py::compute()).
+    """
     inp = _minimal_input(
         cg_112a_scrips=[
             CG112AScrip(
@@ -321,7 +335,7 @@ def test_112a_threshold_portion_does_not_enter_slab_tax() -> None:
         ],
     )
     r = compute(inp)
-    assert r.taxable_income == D("100000")
+    assert r.taxable_income == D("0")
     assert r.special_rate_tax == D("0")
     assert r.slab_tax == D("0")
 
@@ -682,3 +696,88 @@ def test_salary_plus_cg_plus_os():
     assert r.gross_tax_liability > D("0")
     assert r.slab_tax >= D("0")
     assert r.special_rate_tax >= D("0")
+
+
+# ---------------------------------------------------------------------------
+# Section 54B exemption on STCG land/building (form item A1d) -- must
+# actually reduce the taxable total, not just the per-row disclosure.
+# ---------------------------------------------------------------------------
+
+def test_section_54b_exemption_reduces_stcg_when_no_ltcg_exists() -> None:
+    """A valid §54B claim against STCG land/building must reduce the real
+    taxable total even when the return has NO LTCG to absorb it.
+
+    Previously the entire §54-series exemption pool -- including 54B
+    claimed against an STCG land/building disposal -- was only ever netted
+    against LTCG (`_post_loss_cg_baskets()`'s `[other_ltcg, section_112a]`
+    consumption). A 54B claim was correctly disclosed per-row but silently
+    never reduced actual tax whenever the return had no LTCG at all, as
+    here: STCG land gain 20L - 10L = 10L, 5L claimed under 54B, no LTCG
+    anywhere -- capital_gains_income must be 5L, not the full 10L.
+    """
+    inp = _minimal_input(
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LAND_BUILDING,
+                date_of_acquisition=date(2024, 1, 1),
+                date_of_transfer=date(2025, 6, 1),
+                full_consideration=D("2000000"),
+                cost_of_acquisition=D("1000000"),
+                exemptions=[
+                    CapitalGainExemptionClaim(
+                        section="54B",
+                        transfer_date=date(2025, 6, 1),
+                        eligible_gain=D("1000000"),
+                        investment_amount=D("500000"),
+                        investment_date=date(2025, 8, 1),
+                    ),
+                ],
+            ),
+        ],
+    )
+    r = compute(inp)
+    assert r.schedules["cg"].stcg.total_stcg == D("1000000")  # pre-exemption, per-row disclosure
+    assert r.capital_gains_income == D("500000")  # post-exemption, actual taxable amount
+    assert r.gross_total_income == D("500000")
+
+
+def test_section_54b_exemption_on_stcg_does_not_reduce_unrelated_ltcg() -> None:
+    """A 54B claim against STCG land must not leak into netting LTCG too --
+    only the LTCG-eligible sections (54/54EC/54F/115F, or leftover 54B) may
+    reduce a positive LTCG bucket."""
+    inp = _minimal_input(
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LAND_BUILDING,
+                date_of_acquisition=date(2024, 1, 1),
+                date_of_transfer=date(2025, 6, 1),
+                full_consideration=D("2000000"),
+                cost_of_acquisition=D("1000000"),
+                exemptions=[
+                    CapitalGainExemptionClaim(
+                        section="54B",
+                        transfer_date=date(2025, 6, 1),
+                        eligible_gain=D("1000000"),
+                        investment_amount=D("500000"),
+                        investment_date=date(2025, 8, 1),
+                    ),
+                ],
+            ),
+        ],
+        cg_112a_scrips=[
+            CG112AScrip(
+                isin_code="INE000A00001",
+                share_unit_name="SCRIP",
+                date_of_acquisition=date(2020, 1, 1),
+                date_of_transfer=date(2025, 7, 1),
+                num_shares_units=D("100"),
+                sale_price_per_share=D("3000"),
+                total_sale_value=D("300000"),
+                cost_acq_without_index=D("100000"),
+            ),
+        ],
+    )
+    r = compute(inp)
+    # STCG side: 10L gain - 5L (54B) = 5L. LTCG side (112A): 2L gain, fully
+    # untouched by the STCG-side 54B claim.
+    assert r.capital_gains_income == D("500000") + D("200000")

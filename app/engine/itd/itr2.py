@@ -20,7 +20,7 @@ from app.engine.constants import (
     SECTION_80U_LIMIT,
     SECTION_80U_SEVERE_LIMIT,
 )
-from app.engine.schedules.capital_gains import _exemption_claim_total, deemed_consideration_50c
+from app.engine.schedules.capital_gains import _exemption_claim_total, _indexed_cost, deemed_consideration_50c
 from app.engine.itd.country_codes import country_name as _country_name
 from app.engine.itd.common import (
     _to_rupees,
@@ -1661,9 +1661,19 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         or input_data.cg_nri_ltcg_without_indexation > _ZERO or input_data.cg_nri_115f_sale_value > _ZERO
         or input_data.cg_stcg_dtaa_entries or input_data.cg_ltcg_dtaa_entries
     )
+    # A6 (deemed STCG from a lapsed CGAS deposit) and A7 (pass-through
+    # STCG, Schedule PTI) are real, taxed Schedule CG income even when no
+    # ordinary transaction/scrip/VDA/NRI row exists in the same return --
+    # without this, a taxpayer whose ONLY capital-gains item is one of
+    # these would get Schedule CG silently omitted while Part B-TI still
+    # shows a nonzero CapGain figure with no supporting disclosure (the
+    # same failure mode Phase 6i-5's own comment above already fixed once
+    # for the NRI-proviso-48/115F/DTAA-only case).
+    has_pti_stcg = any(e.income_head == "STCG" and e.income_amount > _ZERO for e in input_data.pti_entries)
     if (
         not input_data.cg_transactions and not input_data.cg_112a_scrips
         and not input_data.vda_transactions and not has_nri_cg_data
+        and input_data.deemed_stcg_unutilized_cgas <= _ZERO and not has_pti_stcg
     ):
         return None
     cg = result.schedules.get("cg")
@@ -1827,6 +1837,22 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         (e.amount for e in input_data.cg_ltcg_dtaa_entries if e.chargeable_in_india), _ZERO,
     )
 
+    # Schedule CG item A7 -- pass-through STCG (Schedule PTI), split 20%/
+    # 30%/applicable-rate exactly as the calculator's own SI dispatch does
+    # (compute()'s `pti_entries` loop: `section == "111A"` -> 20%, any other
+    # STCG section -> 30%; this codebase has no applicable-rate PTI STCG
+    # bucket). This income was already taxed correctly via Schedule SI
+    # regardless, but A7/A9 previously stayed hardcoded at 0 even when real
+    # PTI STCG existed, so Schedule CG's own disclosed total silently
+    # omitted income the return was genuinely taxed on.
+    pti_stcg_20 = sum(
+        (e.income_amount for e in input_data.pti_entries if e.income_head == "STCG" and e.section == "111A"), _ZERO,
+    )
+    pti_stcg_30 = sum(
+        (e.income_amount for e in input_data.pti_entries if e.income_head == "STCG" and e.section != "111A"), _ZERO,
+    )
+    pti_stcg_total = pti_stcg_20 + pti_stcg_30
+
     stcg_block: dict[str, Any] = {
         "SaleofLandBuild": {"SaleofLandBuildDtls": stcg_land_rows},
         "EquityMFonSTT": equity_111a_rows,
@@ -1842,18 +1868,26 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         },
         "NRISecur115AD": fii_stcg_securities if fii_stcg_securities is not None else _equity_or_unit_sec94(),
         "SaleOnOtherAssets": stcg_other_ordinary,
-        "UnutilizedStcgFlag": "N",
-        "AmtDeemedStcg": 0,
-        "TotalAmtDeemedStcg": 0,
-        "PassThrIncNatureSTCG": 0,
-        "PassThrIncNatureSTCG20Per": 0,
-        "PassThrIncNatureSTCG30Per": 0,
+        # A6 -- deemed STCG from a lapsed Capital Gains Account Scheme
+        # deposit (ITR2Input.deemed_stcg_unutilized_cgas). Already folded
+        # into the calculator's STCG "30%/normal-rate" bucket (see
+        # compute()), so it flows into TotalSTCG below automatically; this
+        # is the disclosure-only A6 flag/amount pair.
+        "UnutilizedStcgFlag": "Y" if input_data.deemed_stcg_unutilized_cgas > _ZERO else "N",
+        "AmtDeemedStcg": _to_rupees(input_data.deemed_stcg_unutilized_cgas),
+        "TotalAmtDeemedStcg": _to_rupees(input_data.deemed_stcg_unutilized_cgas),
+        "PassThrIncNatureSTCG": _to_rupees(pti_stcg_total),
+        "PassThrIncNatureSTCG20Per": _to_rupees(pti_stcg_20),
+        "PassThrIncNatureSTCG30Per": _to_rupees(pti_stcg_30),
         "PassThrIncNatureSTCGAppRate": 0,
         **({"NRICgDTAA": {"NRIDTAADtls": stcg_dtaa_rows}} if stcg_dtaa_rows else {}),
         "TotalAmtNotTaxUsDTAAStcg": _to_rupees(stcg_dtaa_not_chargeable),
         "TotalAmtTaxUsDTAAStcg": _to_rupees(stcg_dtaa_chargeable),
         "CapitalLossBuyBackShares": {"CapitalLossBuyBackSharesDtls": [], "TotalCapitalLossBuyBackShares": 0},
-        "TotalSTCG": _to_rupees(getattr(stcg, "total_stcg", z) if stcg else z),
+        # A9 = A1e+A2e+A3a+A3b+A4e+A5e+A6+A7+... per the form -- include A7
+        # (PTI STCG) so the schedule's own headline total isn't silently
+        # missing income the return was actually taxed on via Schedule SI.
+        "TotalSTCG": _to_rupees((getattr(stcg, "total_stcg", z) if stcg else z) + pti_stcg_total),
     }
     ltcg_block: dict[str, Any] = {
         "SaleofLandBuild": {
@@ -2076,8 +2110,17 @@ def _cg_land_building_row_ltcg(asset: Any) -> dict[str, Any]:
         "LTCGonImmvblPrprty": _to_rupees(asset.balance - getattr(asset, "exemption_total", _ZERO)),
     }
     if getattr(asset, "eib_applicable", False):
-        indexed_acquisition = asset.indexed_acquisition_cost or asset.acquisition_cost
-        indexed_improvement = asset.indexed_improvement_cost or asset.improvement_cost
+        # Same real-CII fallback as compute_ltcg() (app/engine/schedules/
+        # capital_gains.py) -- an unpopulated indexed cost must never be
+        # treated as equal to the un-indexed cost; that silently zeroed the
+        # second-proviso relief this exact block discloses.
+        indexed_acquisition = asset.indexed_acquisition_cost or _indexed_cost(
+            asset.acquisition_cost, asset.date_of_acquisition, asset.date_of_transfer
+        )
+        indexed_improvement = asset.indexed_improvement_cost or (
+            _indexed_cost(asset.improvement_cost, asset.year_of_improvement or asset.date_of_acquisition, asset.date_of_transfer)
+            if asset.improvement_cost > 0 else _ZERO
+        )
         total_dedn_for_eib = indexed_acquisition + indexed_improvement + asset.expenditure_on_transfer
         row["TotalDednForEiB"] = _to_rupees(total_dedn_for_eib)
         row["BalanceForEiB"] = _to_rupees(asset.balance_for_eib)
@@ -4266,13 +4309,9 @@ def _schedule_tcs(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         return None
     rows = []
     for entry in input_data.tcs_entries:
-        deducted_year = int(
-            (entry.deducted_year or (entry.financial_year or "2024-25").split("-")[0])
-        )
         row: dict[str, Any] = {
             "TCSCreditOwner": entry.ownership,
             "EmployerOrDeductorOrCollectTAN": entry.collector_tan,
-            "DeductedYr": deducted_year,
             "BroughtFwdTDSAmt": _to_rupees(entry.brought_forward_tds),
             "TCSCurrFYDtls": {
                 "TCSAmtCollOwnHand": _to_rupees(entry.tcs_collected),
@@ -4286,6 +4325,15 @@ def _schedule_tcs(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         }
         if entry.ownership == "2" and entry.pan_of_spouse_or_other_person:
             row["PANOfSpouseOrOthrPrsn"] = entry.pan_of_spouse_or_other_person
+        # DeductedYr is not required by the schema, and (mirroring
+        # _schedule_tds2's own established pattern/comment) it exists only
+        # to disclose TCS genuinely brought forward from an earlier year --
+        # unconditionally deriving one from entry.financial_year (falling
+        # back to a hardcoded "2024-25") previously stamped a false
+        # brought-forward year onto ordinary current-year TCS credit, which
+        # has no brought-forward year to disclose at all.
+        if entry.deducted_year:
+            row["DeductedYr"] = int(entry.deducted_year)
         rows.append(row)
     return {
         "TCS": rows,
@@ -4317,7 +4365,16 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     stcg_30 = stcg_normal if is_fii_fpi else 0
     stcg_app_rate = 0 if is_fii_fpi else stcg_normal
     ltcg_112 = _to_rupees(post_loss.get("112", _ZERO))
-    ltcg_112a_gross = _to_rupees(post_loss.get("112a_gross", _ZERO))
+    # "112a_taxable" (net of the section 112A ₹1.25L threshold exemption),
+    # NOT "112a_gross" -- the exempt slice is an income exclusion under
+    # 112A's own proviso and must never appear in "LongTerm12_5Per"/
+    # "TotalLongTerm" (item 3b, form formula "iii = bi + bii"). Using the
+    # gross figure here previously made TotalLongTerm silently absorb the
+    # exempt slice without either subfield disclosing it -- a real
+    # cross-foot failure (TotalLongTerm != LongTerm12_5Per +
+    # LongTermSplRateDTAA) -- and inflated GTI/Total Income upstream (see
+    # the matching fix in calculators/itr2.py::compute()).
+    ltcg_112a_taxable = _to_rupees(post_loss.get("112a_taxable", _ZERO))
     # Schedule CG items A8b/B11b (Phase 6i-5) -- DTAA-special-rate STCG/LTCG,
     # each its own post-loss basket (see _post_loss_cg_baskets), previously
     # hardcoded to 0 regardless of real data, silently understating
@@ -4326,7 +4383,7 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     stcg_dtaa = _to_rupees(post_loss.get("stcg_dtaa", _ZERO))
     ltcg_dtaa = _to_rupees(post_loss.get("ltcg_dtaa", _ZERO))
     total_stcg = stcg_111a + stcg_normal + stcg_dtaa
-    total_ltcg = ltcg_112 + ltcg_112a_gross + ltcg_dtaa
+    total_ltcg = ltcg_112 + ltcg_112a_taxable + ltcg_dtaa
     total_cg = total_stcg + total_ltcg + _to_rupees(result.vda_income)
     # Form items 4a/4b/4c (schema IncFromOS.OtherSrcThanOwnRaceHorse/
     # IncChargblSplRate/FromOwnRaceHorse) are, per the official form, "6 of
@@ -4372,7 +4429,7 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
                 "TotalShortTerm": total_stcg,
             },
             "LongTerm": {
-                "LongTerm12_5Per": ltcg_112,
+                "LongTerm12_5Per": ltcg_112 + ltcg_112a_taxable,
                 "LongTermSplRateDTAA": ltcg_dtaa,
                 "TotalLongTerm": total_ltcg,
             },
@@ -4587,6 +4644,12 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
                 "SelfAssessmentTax": _to_rupees(result.total_self_assessment_tax),
                 "TotalTaxesPaid": _to_rupees(result.total_taxes_paid),
             },
+            # Form item 16 ("Amount payable... if 14 is greater than 15e,
+            # else enter 0") -- was never emitted at all (ITR-1/ITR-4's
+            # builders already set this sibling field correctly; ITR-2's
+            # never did), so a filer with a genuine balance due got no
+            # disclosure of the mandated "amount payable" figure.
+            "BalTaxPayable": _to_rupees_rounded10(result.balance_payable),
         },
         "Refund": refund_block,
     }

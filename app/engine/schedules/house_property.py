@@ -11,7 +11,11 @@ The caller provides this value as ``annual_rent_received`` for backward
 compatibility with the existing typed compute contract. Canonical drafts map
 ``HouseProperty.annualLettingValue`` to that field.
 
-Section 24(a): 30% standard deduction on NAV (Net Annual Value = GAV - municipal taxes)
+Section 24(a): 30% standard deduction on the annual value OWNED (Net Annual
+  Value = GAV - unrealized rent - municipal taxes, THEN scaled by the
+  assessee's own co-ownership share per the form's item 1f -- the 30%
+  deduction is computed on that post-share figure, not on gross rent or on
+  NAV before ownership-share is applied).
 Section 24(b): Interest on borrowed capital
   - Self-occupied: capped at 2L (old regime) / disallowed (new regime)
   - Let-out: fully deductible in both regimes

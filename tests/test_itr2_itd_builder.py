@@ -5160,6 +5160,179 @@ def test_section_80qqb_80rrb_not_available_under_new_regime() -> None:
     assert "80RRB" not in ded.breakdown
 
 
+def test_part_b_ti_total_long_term_equals_its_own_declared_parts() -> None:
+    """Part B-TI item 3b: "TotalLongTerm" (iii) must equal "LongTerm12_5Per"
+    (bi) + "LongTermSplRateDTAA" (bii), exactly as the form's own "iii = bi
+    + bii" formula states -- and neither figure may include the section
+    112A ₹1.25L threshold's EXEMPT slice, which is an income exclusion
+    under 112A's own proviso, not part of Total Income at all.
+
+    Previously the gross (pre-threshold) 112A gain was folded into
+    TotalLongTerm but never into LongTerm12_5Per, so the two silently
+    disagreed by exactly the exempt slice whenever a 112A gain existed.
+    Here: a 112A scrip gain of 50000 (fully within the 1.25L exemption,
+    so taxable_112a=0) plus a plain LTCG land/building gain of 2000000 --
+    both fields must come out to exactly 2000000, with the exempt 50000
+    appearing in neither.
+    """
+    input_data = _input(
+        residential_status=ResidentialStatus.RESIDENT,
+        cg_112a_scrips=[
+            CG112AScrip(
+                isin_code="INE000A00001",
+                share_unit_name="SCRIP",
+                date_of_acquisition=date(2020, 1, 1),
+                date_of_transfer=date(2025, 5, 1),
+                num_shares_units=Decimal("100"),
+                sale_price_per_share=Decimal("1000"),
+                total_sale_value=Decimal("100000"),
+                cost_acq_without_index=Decimal("50000"),
+            ),
+        ],
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LAND_BUILDING,
+                date_of_acquisition=date(2015, 4, 1),
+                date_of_transfer=date(2025, 6, 1),
+                full_consideration=Decimal("3000000"),
+                cost_of_acquisition=Decimal("1000000"),
+                indexed_cost=Decimal("1000000"),  # keep 112(1)(a) relief at 0, not under test here
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    long_term = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["LongTerm"]
+    assert long_term["LongTerm12_5Per"] == 2000000
+    assert long_term["LongTermSplRateDTAA"] == 0
+    assert long_term["TotalLongTerm"] == 2000000
+    assert long_term["TotalLongTerm"] == long_term["LongTerm12_5Per"] + long_term["LongTermSplRateDTAA"]
+    # The exempt 112A slice must not inflate Total Income either.
+    assert result.taxable_income == 2000000
+
+
+def test_part_b_tti_bal_tax_payable_is_written_when_tax_is_owed() -> None:
+    """Form item 16 ("Amount payable... if 14 is greater than 15e, else
+    enter 0") was never emitted at all -- ITR-1/ITR-4's builders already
+    set this sibling of TaxesPaid correctly; ITR-2's never did."""
+    input_data = _input(
+        salary_income=SalaryIncome(gross_salary=Decimal("2500000")),
+        tds1_entries=[
+            TDS1Entry(
+                employer_tan="DELA00003C", employer_name="Acme Corp",
+                income_chargeable=Decimal("2500000"), tds_deducted=Decimal("50000"),
+            ),
+        ],
+        employer_filing_details=[
+            EmployerFilingDetail(
+                employer_tan="DELA00003C", employer_name="Acme Corp",
+                address_detail="1 Corporate Park", city_or_town_or_district="Mumbai",
+                state_code="27",
+            ),
+        ],
+    )
+    result = compute(input_data)
+    assert result.balance_payable > 0
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    tax_paid = document["ITR"]["ITR2"]["PartB_TTI"]["TaxPaid"]
+    assert "BalTaxPayable" in tax_paid
+    assert tax_paid["BalTaxPayable"] == int(result.balance_payable)
+
+
+def test_schedule_tcs_deducted_yr_omitted_for_ordinary_current_year_credit() -> None:
+    """DeductedYr exists only to disclose TCS genuinely brought forward
+    from an earlier year (its own schema enum caps at 2024, excluding the
+    current AY) -- an ordinary current-year TCS credit with no
+    `deducted_year` set must not get a fabricated year stamped on it."""
+    input_data = _input(
+        tcs_entries=[
+            TCSEntry(
+                collector_tan="DELA00002B", collector_name="Car Dealer Pvt Ltd",
+                tcs_section="206C", gross_amount=Decimal("1200000"),
+                tcs_collected=Decimal("12000"), tcs_credit_claimed=Decimal("12000"),
+            ),
+        ],
+        bank_accounts=[
+            BankAccount(
+                account_number="1234567890", ifsc_code="SBIN0000001",
+                bank_name="State Bank of India", account_type="savings", is_primary=True,
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleTCS"]["TCS"][0]
+    assert "DeductedYr" not in row
+
+
+def test_schedule_tcs_deducted_yr_present_when_genuinely_brought_forward() -> None:
+    input_data = _input(
+        tcs_entries=[
+            TCSEntry(
+                collector_tan="DELA00002B", collector_name="Car Dealer Pvt Ltd",
+                tcs_section="206C", gross_amount=Decimal("1200000"),
+                tcs_collected=Decimal("12000"), tcs_credit_claimed=Decimal("12000"),
+                deducted_year="2023",
+            ),
+        ],
+        bank_accounts=[
+            BankAccount(
+                account_number="1234567890", ifsc_code="SBIN0000001",
+                bank_name="State Bank of India", account_type="savings", is_primary=True,
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleTCS"]["TCS"][0]
+    assert row["DeductedYr"] == 2023
+
+
+def test_schedule_cg_a6_deemed_stcg_from_unutilized_cgas_deposit() -> None:
+    """Schedule CG item A6 ("amount deemed to be short-term capital gains")
+    -- a lapsed Capital Gains Account Scheme deposit from an earlier year --
+    previously had no backing input field at all, so it was hardcoded to
+    "N"/0/0 unconditionally regardless of real data."""
+    input_data = _input(deemed_stcg_unutilized_cgas=Decimal("300000"))
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    stcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg["UnutilizedStcgFlag"] == "Y"
+    assert stcg["AmtDeemedStcg"] == 300000
+    assert stcg["TotalAmtDeemedStcg"] == 300000
+    assert stcg["TotalSTCG"] == 300000
+    assert result.capital_gains_income == Decimal("300000")
+
+
+def test_schedule_cg_a7_pti_stcg_is_reflected_in_total_stcg() -> None:
+    """Schedule CG item A7 (pass-through STCG, Schedule PTI) was previously
+    hardcoded to 0 even when real PTI STCG existed -- already correctly
+    taxed via Schedule SI, but Schedule CG's own A7/A9 total silently
+    omitted income the return was genuinely taxed on."""
+    input_data = _input(
+        pti_entries=[
+            PTIEntry(
+                entity_name="Example InvIT", entity_pan="AAAAT1234E",
+                income_head="STCG", section="111A", income_amount=Decimal("40000"),
+            ),
+            PTIEntry(
+                entity_name="Example InvIT", entity_pan="AAAAT1234E",
+                income_head="STCG", section="OTH", income_amount=Decimal("60000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    stcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg["PassThrIncNatureSTCG20Per"] == 40000
+    assert stcg["PassThrIncNatureSTCG30Per"] == 60000
+    assert stcg["PassThrIncNatureSTCG"] == 100000
+    assert stcg["TotalSTCG"] == 100000
+
+
 def test_schedule_os_tot_deductions_includes_eligible_interest_expense() -> None:
     """Regression for Phase 6f: TotDeductions previously omitted interest
     expenditure entirely (neither the raw claim nor the eligible/computed

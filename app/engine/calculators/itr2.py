@@ -410,9 +410,30 @@ def _post_loss_cg_baskets(
     # BFLA CG losses are already consumed in the per-basket residuals.
     # No additional allocation needed.
 
-    # Section 54-series claims can only reduce positive LTCG.
-    _, pools = _consume(exemptions.total_exemption, [other_ltcg, section_112a])
+    # Section 54B (agricultural land) is the ONLY §54-series exemption the
+    # official form allows against short-term capital gain (Schedule CG
+    # item A1d restricts the STCG-land-building deduction to 54B only) --
+    # consume it from the 30%/normal-rate STCG bucket first, which is where
+    # land/building STCG lands (`compute_stcg()` blends land gain into
+    # `income_30per`). Only the REMAINING exemption pool -- after whatever
+    # 54B actually reduced STCG -- can then reduce LTCG. Previously the
+    # entire pool, including any 54B claimed on an STCG land/building
+    # disposal, was consumed ONLY against LTCG (`[other_ltcg, section_112a]`
+    # below), so a resident's real tax liability never reflected a 54B
+    # claim whenever the return had no LTCG (or too little LTCG) to absorb
+    # it -- a direct tax overstatement, not just a disclosure gap.
+    stcg_land_54b = sum((asset.exemption_total for asset in stcg.land_building), _ZERO)
+    stcg_exemption_pool = min(max(_ZERO, stcg_land_54b), max(_ZERO, exemptions.total_exemption))
+    remaining_after_stcg, stcg_pools = _consume(stcg_exemption_pool, [normal_stcg])
+    normal_stcg = stcg_pools[0]
+    stcg_exemption_used = stcg_exemption_pool - remaining_after_stcg
+
+    # Section 54/54EC/54F/115F (LTCG-only) plus any 54B not already
+    # consumed by STCG above can reduce positive LTCG.
+    ltcg_exemption_pool = max(_ZERO, exemptions.total_exemption - stcg_exemption_used)
+    ltcg_exemption_remaining, pools = _consume(ltcg_exemption_pool, [other_ltcg, section_112a])
     other_ltcg, section_112a = pools
+    ltcg_exemption_used = ltcg_exemption_pool - ltcg_exemption_remaining
     return {
         "normal_stcg": normal_stcg,
         "111a": section_111a,
@@ -425,6 +446,15 @@ def _post_loss_cg_baskets(
         # respectively).
         "stcg_dtaa": cyla.stcg_dtaa_remaining,
         "ltcg_dtaa": bfla.ltcg_dtaa_remaining,
+        # Total §54-series exemption actually consumed against STCG+LTCG
+        # this year (NOT including the separate section 112A ₹1.25L
+        # threshold, tracked implicitly via "112a_gross" - "112a_taxable"
+        # above) -- used by compute() to correct GTI/Total Income, which
+        # was computed further up this function from the PRE-exemption
+        # gross CG totals (loss set-off must run before exemption is
+        # applied, so GTI necessarily starts from the gross figure; this
+        # is the retroactive correction for the exemption on top of it).
+        "exemption_used": stcg_exemption_used + ltcg_exemption_used,
     }
 
 
@@ -744,7 +774,13 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         input_data.cg_nri_115f_sale_value - input_data.cg_nri_115f_deduction)  # B7c
 
     stcg_result.income_111a += nri_stcg_111a
-    stcg_result.income_30per += nri_stcg_other - stcg_dtaa_not_chargeable - stcg_dtaa_special
+    # Schedule CG item A6 -- deemed STCG from a lapsed CGAS deposit -- is
+    # taxed at normal (non-111A) STCG rates like ordinary "other assets"
+    # STCG, so it joins the same 30%/normal-rate bucket.
+    stcg_result.income_30per += (
+        nri_stcg_other - stcg_dtaa_not_chargeable - stcg_dtaa_special
+        + input_data.deemed_stcg_unutilized_cgas
+    )
     stcg_result.income_dtaa += stcg_dtaa_special
     stcg_result.total_stcg = (
         stcg_result.income_111a + stcg_result.income_30per
@@ -933,7 +969,43 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         cg_result.exemptions,
     )
     r.schedules["post_loss_cg"] = post_loss_cg
-    r.capital_gains_income = sum(post_loss_cg.values(), _ZERO) - post_loss_cg["112a_taxable"] + vda_income
+    # This DISCLOSURE figure deliberately keeps the section 112A gain at its
+    # GROSS (pre-₹1.25L-threshold) amount -- matching Schedule CG's own
+    # headline totals (A9/B12), which show the gain before the threshold is
+    # applied -- while still reflecting §54-series exemption netting (the
+    # dict's own normal_stcg/112/112a_gross values are already
+    # exemption-reduced by `_post_loss_cg_baskets()`'s `_consume()` calls).
+    # Only the 6 real CG-income buckets are summed; "exemption_used" is a
+    # bookkeeping figure for the separate GTI correction below, not part of
+    # this total.
+    _cg_bucket_keys = ("normal_stcg", "111a", "112", "112a_gross", "stcg_dtaa", "ltcg_dtaa")
+    r.capital_gains_income = sum((post_loss_cg[k] for k in _cg_bucket_keys), _ZERO) + vda_income
+
+    # Correct GTI/Total Income for every CG-side exemption/exclusion that
+    # was necessarily applied AFTER `gti_before`/`gti_after` above were
+    # already computed:
+    #   (a) the section 112A ₹1.25L threshold -- a genuine income EXCLUSION
+    #       under 112A's own proviso, never part of Gross/Total Income at
+    #       all (the form's own Part B-TI "TotalLongTerm" = "LongTerm12_5Per"
+    #       + "LongTermSplRateDTAA", neither of which includes it); and
+    #   (b) §54/54B/54EC/54F/115F exemptions actually consumed against
+    #       STCG/LTCG in `_post_loss_cg_baskets()` above ("exemption_used").
+    # `gti_before`/`gti_after` necessarily started from the GROSS, pre-
+    # exemption CG totals (`ltcg_result.total_ltcg`/`stcg_result.total_stcg`)
+    # because CYLA/BFLA loss-absorption must run on the pre-exemption gain,
+    # and the real post-loss-post-exemption CG picture is only resolved in
+    # `_post_loss_cg_baskets()` just above. Left uncorrected, GTI/Total
+    # Income/AggregateIncome silently retained the full exempted amount --
+    # inflating Chapter VI-A deduction ceilings that key off GTI, 80G's
+    # qualifying-limit base, and surcharge-threshold determination (though
+    # NOT slab tax itself, which already excludes 111A/112/112A/VDA from
+    # its own base entirely via `special_rate_income_for_slab` below --
+    # that exclusion is kept in sync with this fix a few lines down).
+    exempt_112a_slice = post_loss_cg["112a_gross"] - post_loss_cg["112a_taxable"]
+    total_cg_exemption_relief = exempt_112a_slice + post_loss_cg.get("exemption_used", _ZERO)
+    gti_after = max(_ZERO, gti_after - total_cg_exemption_relief)
+    r.gti_after_loss_setoff = gti_after
+    r.gross_total_income = gti_after
 
     # ── 9. Agricultural Income ───────────────────────────────────────────────
     agri = input_data.agricultural_income
@@ -1253,10 +1325,17 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # comes through `si_result.surcharge_full_income` below (that new SI
     # entry's own `taxable_income`), the same mechanism already used for
     # 115BB/115BBE/etc., so it must not be added a second time here.
+    # Uses "112a_taxable", not "112a_gross": `ti` above is now net of the
+    # exempt 112A slice (see the GTI correction earlier in this function),
+    # so excluding the taxable-only remainder here -- instead of the full
+    # gross figure -- is what correctly cancels 112A entirely out of
+    # `normal_income` below; excluding the gross figure against an
+    # already-net `ti` would double-subtract the exempt slice and
+    # understate slab tax.
     special_rate_income_for_slab = (
         post_loss_cg["111a"]
         + post_loss_cg["112"]
-        + post_loss_cg["112a_gross"]
+        + post_loss_cg["112a_taxable"]
         + si_result.surcharge_full_income
     )
     normal_income = max(_ZERO, ti - special_rate_income_for_slab)
