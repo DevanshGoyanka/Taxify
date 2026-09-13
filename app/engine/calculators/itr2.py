@@ -474,12 +474,32 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     r.relief_89 = input_data.relief_89 + sal.salary_89a_relief
     r.schedules["salary"] = sal
 
-    # Support both single house_property_income and multiple house_properties
-    hp_results: list[HPResult] = []
+    # Support both single house_property_income and multiple house_properties.
+    # CBDT rule #69 (official form Schedule HP item 1f: "Annual value of the
+    # property owned (own percentage share x 1e)"): a co-owned property's
+    # taxable HP income must be scaled by the assessee's own
+    # PropertyFilingDetail.assessee_share_percent -- previously compute_hp()
+    # was always called with its default ownership_share_percentage=100,
+    # regardless of the real disclosed share, so a co-owned property was
+    # taxed as if the assessee owned it outright (overstating HP income,
+    # and thus tax, for anyone with a share below 100%). Matched by
+    # position against property_filing_details, mirroring
+    # itd/itr2.py's own _schedule_hp() zip() -- but tolerant of a
+    # length mismatch here (defaulting to 100%) since compute() can run
+    # before property_filing_details is fully assembled (e.g. a live
+    # preview), unlike the JSON builder, which hard-requires the match.
+    hp_sources = list(input_data.house_properties)
     if input_data.house_property_income:
-        hp_results.append(compute_hp(input_data.house_property_income, regime))
-    for prop in input_data.house_properties:
-        hp_results.append(compute_hp(prop, regime))
+        hp_sources = [input_data.house_property_income] + hp_sources
+    share_percentages: list[Decimal] = (
+        [detail.assessee_share_percent for detail in input_data.property_filing_details]
+        if len(input_data.property_filing_details) == len(hp_sources)
+        else [Decimal("100")] * len(hp_sources)
+    )
+    hp_results: list[HPResult] = [
+        compute_hp(prop, regime, ownership_share_percentage=share_pct)
+        for prop, share_pct in zip(hp_sources, share_percentages)
+    ]
 
     # Aggregate HP income (intra-head netting)
     hp_total = sum((hp.income_chargeable for hp in hp_results), _ZERO)
@@ -1007,6 +1027,13 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     si_entries.append(si_112a_entry)
 
     # Section 111A: listed equity STCG (at 20% for AY 2026-27)
+    # CBDT rule #661 ("STCG @ 15% - 111A & 115AD(1)(b)(ii) can only be
+    # entered once"): structurally guaranteed here -- exactly one
+    # si_111a_entry is ever created (a single aggregate figure, not one
+    # per transaction), and it is RELABELED in place for an FII/FPI
+    # (below), never duplicated into a second entry. So Schedule SI's
+    # SplCodeRateTax array can never carry more than one "1A"
+    # (SpecialRateSection.S111A) or "5AD1biip" (S115AD_STCG_111A) row.
     si_111a_entry = compute_111a(cg_111a_income)
     if is_fii_fpi:
         # Section 115AD(1)(b)(ii) proviso: same 20% rate, FII-specific

@@ -348,7 +348,18 @@ class CapitalGainExemptionClaim(StrictModel):
 
     @model_validator(mode="after")
     def validate_investment_or_deposit(self) -> "CapitalGainExemptionClaim":
-        """Require dated investment or complete CGAS evidence."""
+        """Require dated investment or complete CGAS evidence.
+
+        CBDT rule #590: the official ITR-2 form's own "Table D" (Information
+        about deduction claimed against Capital Gains, ITR-2-2026-Eng.pdf)
+        requires Sl.1a(iv)/1b(iv)/1d(iv) ("Amount deposited in Capital Gains
+        Accounts Scheme before due date", sections 54/54B/54F) to carry all
+        three sub-details -- (iva) date of deposit, (ivb) account number,
+        (ivc) IFSC code -- whenever the deposit amount is claimed. The
+        cgas_deposit_amount check below already enforces exactly this,
+        structurally: no CapitalGainExemptionClaim with a nonzero deposit
+        and any of the three sub-details missing can be constructed at all.
+        """
         if self.investment_amount > 0 and self.investment_date is None:
             raise ValueError("Exemption investment requires investment_date")
         if self.cgas_deposit_amount > 0 and (

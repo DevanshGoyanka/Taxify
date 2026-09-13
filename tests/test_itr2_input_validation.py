@@ -661,6 +661,51 @@ def test_ESOP_003_ceased_employee_payable_equals_bf_passes():
     assert not failed(validate_itr2_input(inp), "ITR2-IN-ESOP-003")
 
 
+def test_ESOP_004_next_year_brought_forward_mismatches_prior_year_carried_forward_fails():
+    """CBDT rule #481: the official form's own Schedule ESOP table defines
+    each AY row's own brought-forward figure as literally "Sl.No.8 of
+    Schedule ESOP for last year" -- a year-over-year chain within Schedule
+    ESOP itself."""
+    inp = _base_input(esop_deferrals=[
+        ESOPDeferralInput(
+            employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+            assessment_year="2022-23", tax_deferred_brought_forward=Decimal("100"),
+            tax_payable_current_year=Decimal("40"), balance_tax_carried_forward=Decimal("60"),
+        ),
+        ESOPDeferralInput(
+            employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+            assessment_year="2023-24", tax_deferred_brought_forward=Decimal("50"),
+            tax_payable_current_year=Decimal("10"), balance_tax_carried_forward=Decimal("40"),
+        ),
+    ])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-ESOP-004")
+
+
+def test_ESOP_004_next_year_brought_forward_matches_prior_year_carried_forward_passes():
+    inp = _base_input(esop_deferrals=[
+        ESOPDeferralInput(
+            employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+            assessment_year="2022-23", tax_deferred_brought_forward=Decimal("100"),
+            tax_payable_current_year=Decimal("40"), balance_tax_carried_forward=Decimal("60"),
+        ),
+        ESOPDeferralInput(
+            employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+            assessment_year="2023-24", tax_deferred_brought_forward=Decimal("60"),
+            tax_payable_current_year=Decimal("10"), balance_tax_carried_forward=Decimal("50"),
+        ),
+    ])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-ESOP-004")
+
+
+def test_ESOP_004_single_year_entry_is_a_no_op():
+    inp = _base_input(esop_deferrals=[ESOPDeferralInput(
+        employer_pan="ABCDE1234F", dpiit_registration_number="DIPP12345",
+        assessment_year="2022-23", tax_deferred_brought_forward=Decimal("100"),
+        tax_payable_current_year=Decimal("40"), balance_tax_carried_forward=Decimal("60"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-ESOP-004")
+
+
 def test_VIA_050_80ccc_claimed_without_schedule_rows_fails():
     """CBDT rule #758: 80CCC claimed but no per-row schedule details."""
     inp = _base_input(deductions_chapter6a=Chapter6ADeductions(amount_80ccc=Decimal("50000")))
@@ -806,6 +851,28 @@ def test_CG_011_exemption_exceeding_eligible_gain_fails():
         date_of_transfer=date(2025, 4, 1), full_consideration=Decimal("20"), exemptions=[claim],
     )
     assert failed(validate_itr2_input(_base_input(cg_transactions=[tx])), "ITR2-IN-CG-011")
+
+
+def test_CG_590_cgas_deposit_without_full_sub_detail_rejected_at_schema_construction():
+    """CBDT rule #590: the official form's Table D Sl.1a(iv)/1b(iv)/1d(iv)
+    ("Amount deposited in Capital Gains Accounts Scheme") requires all
+    three sub-details (iva date of deposit, ivb account number, ivc IFSC)
+    whenever a nonzero deposit is declared -- CapitalGainExemptionClaim's
+    own model validator already enforces this structurally; no
+    CapitalGainExemptionClaim with a nonzero cgas_deposit_amount and any
+    of the three missing can even be constructed."""
+    with pytest.raises(ValidationError, match="CGAS deposit requires date, account number, and IFSC"):
+        CapitalGainExemptionClaim(
+            section="54", transfer_date=date(2025, 4, 1), eligible_gain=Decimal("100000"),
+            investment_amount=Decimal("0"), cgas_deposit_amount=Decimal("50000"),
+        )
+    # Full detail (iva/ivb/ivc all present) constructs cleanly.
+    CapitalGainExemptionClaim(
+        section="54B", transfer_date=date(2025, 4, 1), eligible_gain=Decimal("100000"),
+        investment_amount=Decimal("0"), cgas_deposit_amount=Decimal("50000"),
+        cgas_deposit_date=date(2025, 5, 1), cgas_account_number="123456",
+        cgas_ifsc="ABCD0123456",
+    )
 
 
 def test_CG_010_cgas_ifsc_mismatch_fails():
@@ -1115,6 +1182,80 @@ def test_CG_115_no_improvement_cost_is_a_no_op():
         full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
     )])
     assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-115")
+
+
+def test_CG_119_ltcg_land_building_without_date_of_acquisition_fails():
+    """CBDT rule #183: date of purchase is mandatory for a Schedule CG
+    Sl.B1 (LTCG land/building) row once consideration/indexed cost is
+    declared."""
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, explicit_long_term=True,
+        date_of_acquisition=None,
+        date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+    )])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-119")
+
+
+def test_CG_119_ltcg_land_building_with_date_of_acquisition_passes():
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, explicit_long_term=True,
+        date_of_acquisition=date(2015, 4, 1),
+        date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-119")
+
+
+def test_CG_120_non_resident_claims_indexed_cost_fails():
+    """CBDT rule #570: indexation is not allowed for non-residents."""
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.LAND_BUILDING, explicit_long_term=True,
+            date_of_acquisition=date(2015, 4, 1), date_of_transfer=date(2026, 2, 1),
+            full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+            indexed_cost=Decimal("4500000"),
+        )],
+    )
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-120")
+
+
+def test_CG_120_resident_claims_indexed_cost_passes():
+    inp = _base_input(
+        residential_status=ResidentialStatus.RESIDENT,
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.LAND_BUILDING, explicit_long_term=True,
+            date_of_acquisition=date(2015, 4, 1), date_of_transfer=date(2026, 2, 1),
+            full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+            indexed_cost=Decimal("4500000"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-120")
+
+
+def test_CG_120_non_resident_without_indexed_cost_is_a_no_op():
+    inp = _base_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.LAND_BUILDING, explicit_long_term=True,
+            date_of_acquisition=date(2015, 4, 1), date_of_transfer=date(2026, 2, 1),
+            full_consideration=Decimal("8000000"), cost_of_acquisition=Decimal("3000000"),
+        )],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-120")
+
+
+def test_CG_119_stcg_land_building_without_date_of_acquisition_is_a_no_op():
+    """Sl.A1 (STCG) is not scoped by this rule -- only explicit_long_term
+    rows (Sl.B1) are."""
+    inp = _base_input(cg_transactions=[CGTransaction(
+        asset_type=CGAssetType.LAND_BUILDING, explicit_long_term=False,
+        date_of_acquisition=None,
+        date_of_transfer=date(2026, 2, 1),
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("1500000"),
+    )])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-119")
 
 
 def test_CG_116_buyback_loss_without_os_dividend_detail_fails():
@@ -3797,6 +3938,47 @@ def test_TDS_021_tds2_claimed_with_head_of_income_passes():
         "tds_claimed_this_year": Decimal("1000"), "head_of_income": "OS",
     }])
     assert not failed(validate_itr2_input(inp), "ITR2-IN-TDS-021")
+
+
+def test_TDS_022_tds1_employer_tan_invalid_jurisdiction_prefix_fails():
+    """CBDT rule #11: a TAN's first three letters must be one of the
+    official CBDT jurisdiction codes -- extracted directly from the
+    official ITR-2 JSON schema's own TAN pattern regex."""
+    inp = _base_input(tds1_entries=[{
+        "employer_tan": "ABCD12345E", "tds_deducted": Decimal("1000"),
+    }])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-022")
+
+
+def test_TDS_022_tds1_employer_tan_valid_jurisdiction_prefix_passes():
+    inp = _base_input(tds1_entries=[{
+        "employer_tan": "MUMA12345B", "tds_deducted": Decimal("1000"),
+    }])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-TDS-022")
+
+
+def test_TDS_022_tds2_deductor_tan_invalid_jurisdiction_prefix_fails():
+    inp = _base_input(tds2_entries=[{
+        "deductor_tan": "XYZW12345E", "tds_section": "194A",
+        "gross_amount": Decimal("10000"), "tds_deducted": Decimal("1000"),
+    }])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-022")
+
+
+def test_TDS_022_tcs_collector_tan_invalid_jurisdiction_prefix_fails():
+    inp = _base_input(tcs_entries=[{
+        "collector_tan": "XYZW12345E", "tcs_section": "206C",
+        "gross_amount": Decimal("10000"), "tcs_collected": Decimal("1000"),
+    }])
+    assert failed(validate_itr2_input(inp), "ITR2-IN-TDS-022")
+
+
+def test_TDS_022_tcs_collector_tan_valid_jurisdiction_prefix_passes():
+    inp = _base_input(tcs_entries=[{
+        "collector_tan": "DELA00002B", "tcs_section": "206C",
+        "gross_amount": Decimal("10000"), "tcs_collected": Decimal("1000"),
+    }])
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-TDS-022")
 
 
 def test_VIA_049_80ggc_contribution_outside_ay_date_range_fails():

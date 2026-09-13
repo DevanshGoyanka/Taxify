@@ -429,6 +429,35 @@ def test_equity_mf_on_stt_aggregates_transactions_instead_of_one_row_each() -> N
     assert dtls["CapgainonAssets"] == expected_balance
 
 
+def test_schedule_si_111a_row_appears_exactly_once_for_multiple_transactions() -> None:
+    """CBDT rule #661: "STCG @ 111A & 115AD(1)(b)(ii) can only be entered
+    once" -- multiple 111A-eligible transactions must still produce exactly
+    one Schedule SI row (SecCode "1A"), not one per transaction. Structurally
+    guaranteed by calculators/itr2.py's own single compute_111a() call site
+    (see its own comment) -- this test locks that in against regression."""
+    input_data = _input(
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_EQUITY_111A,
+                date_of_acquisition=date(2024, 4, 1), date_of_transfer=date(2025, 1, 1),
+                full_consideration=Decimal("100000"), cost_of_acquisition=Decimal("60000"),
+            ),
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_EQUITY_111A,
+                date_of_acquisition=date(2024, 6, 1), date_of_transfer=date(2025, 3, 1),
+                full_consideration=Decimal("50000"), cost_of_acquisition=Decimal("20000"),
+            ),
+        ],
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    si_rows = document["ITR"]["ITR2"]["ScheduleSI"]["SplCodeRateTax"]
+    rows_1a = [row for row in si_rows if row["SecCode"] == "1A"]
+    assert len(rows_1a) == 1
+    assert rows_1a[0]["SplRateInc"] == (100000 - 60000) + (50000 - 20000)
+
+
 def test_sale_of_equity_share_us112a_reflects_real_gain_not_hardcoded_zero() -> None:
     """Schedule CG's LongTermCapGain23.SaleOfEquityShareUs112A (item 3a/3c,
     "LTCG u/s 112A (column 14 of Schedule 112A)") was previously always a
@@ -3392,6 +3421,49 @@ def test_schedule_hp_serializes_loan_co_owner_and_tenant_detail_rows() -> None:
     tenant_row = row["TenantDetails"][0]
     assert tenant_row["NameofTenant"] == "Tenant Pvt Ltd"
     assert tenant_row["PANofTenant"] == "CCCPC9012D"
+
+
+def test_house_property_income_is_scaled_by_assessee_own_share_percent() -> None:
+    """CBDT rule #69 / official form Schedule HP item 1f ("Annual value of
+    the property owned (own percentage share x 1e)"): a co-owned
+    property's taxable HP income must be scaled by the assessee's OWN
+    disclosed share (PropertyFilingDetail.assessee_share_percent), not
+    computed as if the assessee owned it outright. Previously
+    compute_hp() was always called with the default 100% ownership
+    regardless of the real disclosed share -- confirmed real, not just a
+    disclosure gap: a 50%-share co-owner's computed HP income should be
+    exactly half of the full property's annual value less standard
+    deduction, not the full amount."""
+    input_data = _input(
+        house_property_income=HousePropertyIncome(
+            property_type=PropertyType.LET_OUT,
+            annual_rent_received=Decimal("600000"),
+        ),
+        property_filing_details=[
+            PropertyFilingDetail(
+                address_detail="7 MG Road", city_or_town_or_district="Bengaluru",
+                state_code="29", pin_code="560001",
+                co_owned=True, assessee_share_percent=Decimal("50"),
+                co_owner_details=[
+                    CoOwnerDetail(name="Spouse Name", pan="BBBPB5678C", percent_share=Decimal("50")),
+                ],
+            ),
+        ],
+    )
+    result = compute(input_data)
+    # Full annual value (1e) = 600000; owned share (1f) = 50% x 600000 =
+    # 300000; standard deduction (1g) = 30% of 1f = 90000; chargeable
+    # income = 1f - 1g = 210000 -- NOT the unscaled 600000-180000=420000
+    # the pre-fix code would have computed.
+    assert result.house_property_income == Decimal("210000")
+
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleHP"]["PropertyDetails"][0]
+    rent = row["Rentdetails"]
+    assert rent["AnnualOfPropOwned"] == 300000
+    assert rent["ThirtyPercentOfBalance"] == 90000
+    assert rent["IncomeOfHP"] == 210000
 
 
 def test_schedule_hp_rejects_loan_rows_that_dont_cross_foot_to_real_interest() -> None:

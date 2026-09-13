@@ -25,6 +25,25 @@ _ALLOWED_LOSS_HEADS = {
     "NONSPECULATIVE": 8,
     "SPECULATIVE": 4,
 }
+# CBDT rule #11: "First three alphabets [of TAN] should be as per list TAN
+# codes on field TAN" -- extracted directly from the official ITR-2 JSON
+# schema itself (Reference Docs by CBDT & ITD/Official JSON Schema/
+# ITR-2_2026_Main_V1.1 (2).json), not fabricated: three of the schema's
+# four TAN-pattern fields (TDSonSalary.EmployerOrDeductorOrCollectDetl.TAN,
+# TDSOthThanSalaryDtls.TANOfDeductor, ScheduleTCS.TCS[].
+# EmployerOrDeductorOrCollectTAN -- matching this codebase's TDS1Entry.
+# employer_tan/TDS2Entry.deductor_tan/TCSEntry.collector_tan) restrict the
+# TAN's own pattern to exactly these 36 three-letter jurisdiction prefixes;
+# the fourth (Salaries.TANofEmployer, matching EmployerFilingDetail.
+# employer_tan) deliberately uses a generic, unrestricted pattern instead,
+# so it is intentionally excluded here to match the official schema's own
+# differential treatment.
+_VALID_TAN_JURISDICTION_PREFIXES = frozenset({
+    "AGR", "AHM", "ALD", "AMR", "BBN", "BLR", "BPL", "BRD", "CAL", "CHE",
+    "CHN", "CMB", "DEL", "HYD", "JBP", "JDH", "JLD", "JPR", "KLP", "KNP",
+    "LKN", "MRI", "MRT", "MUM", "NGP", "NSK", "PNE", "PTL", "PTN", "RCH",
+    "RKT", "RTK", "SHL", "SRT", "TVD", "VPN",
+})
 # CBDT rules #153/#155: the two CGTransaction.section_code values a plain
 # Resident cannot claim without electing Section 115H -- 115AD is FII/FPI-
 # specific already and has no such restriction.
@@ -1190,6 +1209,54 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "land or building sale.",
                 f"{path}.year_of_improvement", "present", "absent",
             ))
+        # CBDT rule #183: date of purchase is mandatory for a Schedule CG
+        # Sl.B1 (LTCG land/building) row whenever B1(aiii) (deemed sale
+        # consideration u/s 50C -- proxied here by full_consideration,
+        # since every real B1 disposal has one), B1(biia) (indexed cost of
+        # acquisition, the section 112(1)(a) second-proviso track), or
+        # B1(biib) (indexed cost of improvement) is more than zero --
+        # confirmed against the official ITR-2 form PDF's own Schedule CG
+        # B.1 table, which requires the acquisition date up front for
+        # exactly this row. Scoped to explicit_long_term=True (Sl.B1, not
+        # Sl.A1's identical-looking STCG table) rather than every
+        # LAND_BUILDING row, since short/long-term classification is
+        # otherwise only resolved later at compute time -- using the date
+        # this very check would be validating to classify it first would
+        # be circular.
+        if (
+            tx.asset_type == CGAssetType.LAND_BUILDING
+            and tx.explicit_long_term is True
+            and tx.date_of_acquisition is None
+            and (tx.full_consideration > _ZERO or tx.indexed_cost > _ZERO or tx.indexed_improvement > _ZERO)
+        ):
+            results.append(_result(
+                "ITR2-IN-CG-119", False,
+                "Date of purchase is mandatory when full value of consideration, indexed cost "
+                "of acquisition, or indexed cost of improvement is declared for a land or "
+                "building long-term capital gain.",
+                f"{path}.date_of_acquisition", "present", "absent",
+            ))
+        # CBDT rule #570: indexation is not allowed for non-residents. The
+        # official form's own Schedule CG B.1 table scopes B1(biia)/B1(biib)
+        # (indexed cost of acquisition/improvement, the section 112(1)(a)
+        # second-proviso track) explicitly to "Residents ... where
+        # acquisition is before 23rd July 2024" -- confirming this is the
+        # one place indexation is representable in this schema at all
+        # (calculators/schedules/capital_gains.py's own eib_applicable gate
+        # already silently ignores these fields for a non-resident rather
+        # than using them, so there is no live tax-computation error, but a
+        # non-resident who enters them gets no feedback that the claim was
+        # dropped -- this makes that rejection explicit and pre-compute).
+        if (
+            inp.residential_status == ResidentialStatus.NON_RESIDENT
+            and (tx.indexed_cost > _ZERO or tx.indexed_improvement > _ZERO)
+        ):
+            results.append(_result(
+                "ITR2-IN-CG-120", False,
+                "Indexation (indexed cost of acquisition/improvement) is not allowed for "
+                "non-residents.",
+                f"{path}.indexed_cost", "0", str(tx.indexed_cost),
+            ))
         if tx.deduction_us54ec > Decimal("5000000"):
             results.append(_result(
                 "ITR2-IN-CG-008", False,
@@ -2236,6 +2303,40 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 f"{path}.tds_credit_carried_forward", str(expected_carry_forward),
                 str(entry.tds_credit_carried_forward),
             ))
+    # CBDT rule #11: TAN's own first three letters (its jurisdiction prefix)
+    # must be one of the official CBDT-issued codes -- extracted directly
+    # from the official ITR-2 JSON schema's own TAN pattern regexes (see
+    # _VALID_TAN_JURISDICTION_PREFIXES's own comment). Checked wherever a
+    # TAN is captured and feeds one of the three official fields the schema
+    # itself restricts this way.
+    for index, entry in enumerate(inp.tds1_entries):
+        if entry.employer_tan and entry.employer_tan[:3] not in _VALID_TAN_JURISDICTION_PREFIXES:
+            results.append(_result(
+                "ITR2-IN-TDS-022", False,
+                "The first three letters of a TAN must be one of the official CBDT "
+                "jurisdiction codes.",
+                f"tds1_entries[{index}].employer_tan", "valid jurisdiction prefix",
+                entry.employer_tan[:3],
+            ))
+    for index, entry in enumerate(inp.tds2_entries or []):
+        if entry.deductor_tan[:3] not in _VALID_TAN_JURISDICTION_PREFIXES:
+            results.append(_result(
+                "ITR2-IN-TDS-022", False,
+                "The first three letters of a TAN must be one of the official CBDT "
+                "jurisdiction codes.",
+                f"tds2_entries[{index}].deductor_tan", "valid jurisdiction prefix",
+                entry.deductor_tan[:3],
+            ))
+    for index, entry in enumerate(inp.tcs_entries or []):
+        if entry.collector_tan[:3] not in _VALID_TAN_JURISDICTION_PREFIXES:
+            results.append(_result(
+                "ITR2-IN-TDS-022", False,
+                "The first three letters of a TAN must be one of the official CBDT "
+                "jurisdiction codes.",
+                f"tcs_entries[{index}].collector_tan", "valid jurisdiction prefix",
+                entry.collector_tan[:3],
+            ))
+
     if inp.filing_profile is not None and inp.filing_profile.assessee_status == AssesseeStatus.HUF:
         salary_tds = sum((entry.tds_deducted for entry in inp.tds1_entries), _ZERO)
         if salary_tds > _ZERO:
@@ -2300,6 +2401,38 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 f"esop_deferrals[{index}].tax_payable_current_year",
                 str(esop.tax_deferred_brought_forward), str(esop.tax_payable_current_year),
             ))
+
+    # CBDT rule #481: the official ITR-2 form's own Schedule ESOP table
+    # (ITR-2-2026-Eng.pdf) shows each assessment-year row's own "Amount of
+    # tax deferred brought forward" (Sl.3) is literally defined as "Sl.No.8
+    # [balance carried forward] of Schedule ESOP for LAST YEAR" -- i.e. a
+    # self-referential year-over-year chain within Schedule ESOP itself
+    # (not a cross-reference to Part B-TTI, which the rule's own PDF text
+    # garbled as "Sl.no 3b of Part B-TTI"; no such sub-item exists there).
+    # Aggregate by assessment year first (matching itd/itr2.py's own
+    # _schedule_esop() -- multiple entries can share one AY) before
+    # checking the chain.
+    _esop_by_ay: dict[str, dict[str, Decimal]] = {}
+    for esop in inp.esop_deferrals or []:
+        _bucket = _esop_by_ay.setdefault(
+            esop.assessment_year, {"bf": _ZERO, "payable": _ZERO, "cf": _ZERO},
+        )
+        _bucket["bf"] += esop.tax_deferred_brought_forward
+        _bucket["payable"] += esop.tax_payable_current_year
+        _bucket["cf"] += esop.balance_tax_carried_forward
+    _esop_ay_sequence = ["2021-22", "2022-23", "2023-24", "2024-25", "2025-26", "2026-27"]
+    for _prev_ay, _next_ay in zip(_esop_ay_sequence, _esop_ay_sequence[1:]):
+        if _prev_ay in _esop_by_ay and _next_ay in _esop_by_ay:
+            _prev_cf = _esop_by_ay[_prev_ay]["cf"]
+            _next_bf = _esop_by_ay[_next_ay]["bf"]
+            if _next_bf != _prev_cf:
+                results.append(_result(
+                    "ITR2-IN-ESOP-004", False,
+                    f"ESOP tax deferred brought forward for AY {_next_ay} must equal the "
+                    f"balance carried forward for AY {_prev_ay}.",
+                    f"esop_deferrals[assessment_year={_next_ay}].tax_deferred_brought_forward",
+                    str(_prev_cf), str(_next_bf),
+                ))
 
     # CBDT rule 754: Section 115F investment must be made within six months
     # after the transfer of the original foreign-exchange asset.
