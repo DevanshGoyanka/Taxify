@@ -1,6 +1,6 @@
 # ITR-3 UI Redesign and Implementation Plan — AY 2026-27
 
-**Status:** Phase 2 completed: Filing Status. Phase 3 — Audit Information is next.
+**Status:** Phase 3 completed: Audit Information. Phase 4 — Nature of Business or Profession is next.
 
 **Scope:** Redesign the ITR-3 experience for tax professionals against the notified form PDF and official CBDT JSON schema, without modifying ITR-1, ITR-2, or ITR-4 behavior. Every phase must persist through the canonical `ReturnDraft`; browser-only `localStorage` is not an acceptable source of filing data.
 
@@ -86,11 +86,35 @@ Intentional deferrals to typed-model/backend phases:
 - Form 10-IEA history and all CBDT cross-field validation in the backend mapper/validator.
 
 
-### Phase 3 — Audit Information (A20)
+### Phase 3 — Audit Information (A20) — ✅ COMPLETED
+
+**Completed:** 2026-09-14
+**Implementation:** Added canonical `itr3AuditInfo` to frontend/backend `ReturnDraft`, safe factory defaults, loaded-draft normalization, and an isolated ITR-3 Part A A20 audit editor in `frontend/src/components/ITR3PersonalInfoPage.tsx`.
 
 Schema path: `PartA_GEN2.AuditInfo`.
 
-Guided questionnaire for sections 44AA, 44AB, and 92E; turnover band; cash-receipt/payment percentages; audit-accountant details; audit report date and acknowledgement; accounting/audit applicability. The UI reveals only the fields triggered by previous answers and validates the official dependencies.
+Delivered controls:
+
+- Sections 44AA, 44AB, 92E, and account-audit Yes/No answers.
+- Income declared only under presumptive sections.
+- Turnover/receipt band and cash-receipt/payment percentages when applicable.
+- Section 44AB condition selection and audit-accountant appointment.
+- Audit report date, acknowledgement number, auditor/firm name, PAN, and Aadhaar.
+- Section 92E audit date and acknowledgement number.
+- Conditional visibility and canonical persistence through `ReturnDraft`.
+
+Validation completed:
+
+- Frontend production build: passed (`tsc -b && vite build`).
+- Backend canonical draft schema tests: **20 passed**.
+- `git diff --check`: passed.
+
+Intentional deferrals:
+
+- Complete backend ITR-3 mapper/validator serialization into `PartA_GEN2`.
+- Official audit-detail arrays and all Part A-OI/Part A-QD dependencies.
+- Nature-of-business code entry, scheduled for Phase 4.
+
 
 ### Phase 4 — Nature of Business or Profession
 

@@ -106,6 +106,7 @@ export function normalizeLoadedDraft(draft: ReturnDraft): ReturnDraft {
   return {
     ...draft,
     personal: { ...defaults.personal, ...draft.personal },
+    itr3AuditInfo: { ...defaults.itr3AuditInfo, ...draft.itr3AuditInfo },
     filing: {
       ...defaults.filing,
       ...draft.filing,

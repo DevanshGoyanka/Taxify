@@ -338,6 +338,31 @@ export interface AlternateAddress {
   residenceNo: string; residenceName: string; roadOrStreet: string; localityOrArea: string;
   cityOrTownOrDistrict: string; stateCode: StateCode | ''; countryCode: string; pinCode: string; zipCode: string;
 }
+export interface ITR3AuditInfo {
+  liableSec44AA: 'Y' | 'N';
+  incomeDeclaredUnderPresumptive: 'Y' | 'N';
+  totalSalesBand: 'Upto1CR' | 'Upto10CR' | 'MoreThan10CR' | '';
+  receiptsCashBand: 'Upto5Per' | 'MoreThan5Per' | '';
+  paymentsCashBand: 'Upto5Per' | 'MoreThan5Per' | '';
+  liableSec44AB: 'Y' | 'N';
+  condition44AB: 'bi' | 'bii' | 'biii' | '';
+  presumptive44AD: 'Y' | 'N';
+  presumptive44ADA: 'Y' | 'N';
+  presumptive44AE: 'Y' | 'N';
+  presumptive44BB: 'Y' | 'N';
+  auditAccountant: 'Y' | 'N';
+  auditReportFurnishDate: string | null;
+  acknowledgement44AB: string;
+  auditorName: string;
+  auditorPAN: string;
+  auditorAadhaar: string;
+  liableSec92E: 'Y' | 'N';
+  accountAudit: 'Y' | 'N';
+  auditReport92EDate: string | null;
+  acknowledgement92E: string;
+}
+
+/** Canonical ITR-3 Part A audit-information profile. */
 export interface FilingStatus {
   filingSection: FilingSection; returnType: 'ORIGINAL' | 'REVISED';
   originalAcknowledgementNumber: string; originalFilingDate: string | null;
@@ -776,6 +801,8 @@ export const EMPTY_CAPITAL_GAINS_SCHEDULE: CapitalGainsSchedule = {
 export interface ReturnDraft {
   schemaVersion: 1; assessmentYear: string; form: ItrForm; regime: TaxRegime;
   personal: PersonalInfo;
+  /** ITR-3 Part A_GEN2 audit information; ignored by ITR-1/2/4. */
+  itr3AuditInfo: ITR3AuditInfo;
   filing: FilingStatus; employers: Employer[]; houseProperties: HouseProperty[]; housePropertyPassThroughIncome: number; businesses: PresumptiveBusiness[]; capitalGainsSchedule: CapitalGainsSchedule;
   otherSources: {
     interest: InterestIncome[];

@@ -32,6 +32,14 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       secondaryAddressDifferent: false, alternateAddress: null,
       companyDirectorEntries: [], unlistedEquityEntries: [],
     },
+    itr3AuditInfo: {
+      liableSec44AA: 'N', incomeDeclaredUnderPresumptive: 'N', totalSalesBand: '',
+      receiptsCashBand: '', paymentsCashBand: '', liableSec44AB: 'N', condition44AB: '',
+      presumptive44AD: 'N', presumptive44ADA: 'N', presumptive44AE: 'N', presumptive44BB: 'N',
+      auditAccountant: 'N', auditReportFurnishDate: null, acknowledgement44AB: '', auditorName: '',
+      auditorPAN: '', auditorAadhaar: '', liableSec92E: 'N', accountAudit: 'N',
+      auditReport92EDate: null, acknowledgement92E: '',
+    },
     filing: {
       filingSection: '139(1)', returnType: 'ORIGINAL',
       originalAcknowledgementNumber: '', originalFilingDate: null,

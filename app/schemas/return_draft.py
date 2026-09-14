@@ -1427,6 +1427,32 @@ class BankAccount(Identified):
     useForRefund: bool = Field(default=False)
 
 
+class ITR3AuditInfo(_StrictModel):
+    """Canonical ITR-3 Part A_GEN2 audit-information profile."""
+
+    liableSec44AA: Literal["Y", "N"] = Field(default="N")
+    incomeDeclaredUnderPresumptive: Literal["Y", "N"] = Field(default="N")
+    totalSalesBand: Literal["Upto1CR", "Upto10CR", "MoreThan10CR", ""] = Field(default="")
+    receiptsCashBand: Literal["Upto5Per", "MoreThan5Per", ""] = Field(default="")
+    paymentsCashBand: Literal["Upto5Per", "MoreThan5Per", ""] = Field(default="")
+    liableSec44AB: Literal["Y", "N"] = Field(default="N")
+    condition44AB: Literal["bi", "bii", "biii", ""] = Field(default="")
+    presumptive44AD: Literal["Y", "N"] = Field(default="N")
+    presumptive44ADA: Literal["Y", "N"] = Field(default="N")
+    presumptive44AE: Literal["Y", "N"] = Field(default="N")
+    presumptive44BB: Literal["Y", "N"] = Field(default="N")
+    auditAccountant: Literal["Y", "N"] = Field(default="N")
+    auditReportFurnishDate: Optional[str] = Field(default=None)
+    acknowledgement44AB: str = Field(default="")
+    auditorName: str = Field(default="")
+    auditorPAN: str = Field(default="")
+    auditorAadhaar: str = Field(default="")
+    liableSec92E: Literal["Y", "N"] = Field(default="N")
+    accountAudit: Literal["Y", "N"] = Field(default="N")
+    auditReport92EDate: Optional[str] = Field(default=None)
+    acknowledgement92E: str = Field(default="")
+
+
 class FilingStatus(_StrictModel):
     filingSection: FilingSection = Field(default="139(1)")
     returnType: ReturnType = Field(default="ORIGINAL")
@@ -1711,6 +1737,7 @@ class ReturnDraft(_StrictModel):
     form: ItrForm = Field(default="ITR-1")
     regime: TaxRegime = Field(default="new")
     personal: PersonalInfo = Field(default_factory=PersonalInfo)
+    itr3AuditInfo: ITR3AuditInfo = Field(default_factory=ITR3AuditInfo)
     filing: FilingStatus = Field(default_factory=FilingStatus)
     employers: list[Employer] = Field(default_factory=list)
     houseProperties: list[HouseProperty] = Field(default_factory=list)

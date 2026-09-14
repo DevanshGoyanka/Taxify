@@ -2038,6 +2038,7 @@ export default function ITRComputationPage() {
             ...(patch.personal ? { personal: { ...current.draft.personal, ...patch.personal } } : {}),
             ...(patch.filing ? { filing: { ...current.draft.filing, ...patch.filing } } : {}),
             ...(patch.verification ? { verification: { ...current.draft.verification, ...patch.verification } } : {}),
+            ...(patch.itr3AuditInfo ? { itr3AuditInfo: { ...current.draft.itr3AuditInfo, ...patch.itr3AuditInfo } } : {}),
           },
         }))} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} /> : <PersonalInfoTab draft={editorModel.draft} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={(patch: any) => updateEditor((current) => ({
           ...current,
