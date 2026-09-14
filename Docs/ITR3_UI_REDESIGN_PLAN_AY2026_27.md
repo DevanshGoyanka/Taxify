@@ -1,6 +1,6 @@
 # ITR-3 UI Redesign and Implementation Plan — AY 2026-27
 
-**Status:** Phase 1 implementation in progress: Personal Information.
+**Status:** Phase 1 completed: Personal Information. Phase 2 — Filing Status is next.
 
 **Scope:** Redesign the ITR-3 experience for tax professionals against the notified form PDF and official CBDT JSON schema, without modifying ITR-1, ITR-2, or ITR-4 behavior. Every phase must persist through the canonical `ReturnDraft`; browser-only `localStorage` is not an acceptable source of filing data.
 
@@ -24,22 +24,39 @@ The PDF controls user-facing order and arithmetic context. The JSON schema contr
 
 ## 3. Page and schedule roadmap in official PDF order
 
-### Phase 1 — Personal Information (A1–A18) — current implementation
+### Phase 1 — Personal Information (A1–A18) — ✅ COMPLETED
+
+**Completed:** 2026-09-14  
+**Implementation:** `frontend/src/components/ITR3PersonalInfoPage.tsx`, wired through the ITR-3-only branch in `frontend/src/pages/ITRComputationPage.tsx`.  
+**Commit:** `16ee72a` (`Implement ITR-3 personal information foundation`)
 
 Schema blocks: `PartA_GEN1.PersonalInfo`, `PartA_GEN1.FilingStatus` foundations, `Verification` foundations.
 
-UI sections:
+UI sections delivered:
 
-- **Return profile:** ITR-3, AY 2026-27, taxpayer type Individual/HUF, name components, PAN, Aadhaar, DOB/date of formation, father’s name where applicable.
+- **Return profile:** ITR-3, AY 2026-27, Individual/HUF status, name components, PAN, Aadhaar, DOB/date of formation, and father’s name.
 - **Primary address:** residence/door, premises, road, locality, city/district, state, country, PIN/ZIP.
-- **Secondary address:** explicit Yes/No matching `SecondaryAdd`; alternate address fields only when Yes.
+- **Secondary address:** explicit Yes/No indicator matching `SecondaryAdd`; alternate address fields appear only when selected.
 - **Communication:** country code, mobile, email, secondary mobile/email.
-- **Filing identity:** filing section, original/revised/notice details, due date, tax regime.
-- **Representative/Karta:** capacity and representative details only when applicable.
-- **Verification:** capacity, declarant place/date, declaration acceptance.
-- **Professional usability:** completion summary, official field labels, required markers, inline format help, and no generic JSON editor.
+- **Filing identity:** filing section, revised-return details, due date, and tax regime.
+- **Verification:** self, representative, Karta, or partner capacity; place/date; declaration acceptance.
+- **Bank accounts:** canonical bank-account manager remains available within the ITR-3 page.
+- **Professional usability:** official field labels, required markers, format constraints, inline help, and no generic JSON editor.
 
-Schema requirements implemented by this page: required `AssesseeName`, `PAN`, `Address`, `SecondaryAdd`, `DOB`, `Status`; required communication fields; PAN/mobile/email/PIN formats; `Verification.Declaration`, `Capacity`, `Date`, and `Place` foundations.
+Isolation guarantee: the existing `PersonalInfoTab` remains the rendering path for ITR-1, ITR-2, and ITR-4. No ITR-1/2/4 component behavior was changed for this page.
+
+Validation completed:
+
+- Frontend production build: passed (`tsc -b && vite build`).
+- Affected backend regression tests: **226 passed**.
+- `git diff --check`: passed.
+- Changes pushed to `origin/devansh-dev`.
+
+Known Phase 1 follow-ups, intentionally deferred to later phases:
+
+- Full ITR-3 filing-status conditional fields, including residential status, seventh-proviso details, Form 10-IEA history, director/partner/PE/SEP/IFSC/FPI/LEI disclosures.
+- Typed canonical persistence for the full ITR-3 business workspace and all supporting schedules.
+- Complete representative/Karta cross-field validation and backend ITR-3 mapper/schema-validator integration.
 
 ### Phase 2 — Filing Status (A19)
 
