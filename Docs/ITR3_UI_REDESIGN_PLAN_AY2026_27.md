@@ -1,6 +1,6 @@
 # ITR-3 UI Redesign and Implementation Plan — AY 2026-27
 
-**Status:** Phase 1 completed: Personal Information. Phase 2 — Filing Status is next.
+**Status:** Phase 2 completed: Filing Status. Phase 3 — Audit Information is next.
 
 **Scope:** Redesign the ITR-3 experience for tax professionals against the notified form PDF and official CBDT JSON schema, without modifying ITR-1, ITR-2, or ITR-4 behavior. Every phase must persist through the canonical `ReturnDraft`; browser-only `localStorage` is not an acceptable source of filing data.
 
@@ -58,11 +58,33 @@ Known Phase 1 follow-ups, intentionally deferred to later phases:
 - Typed canonical persistence for the full ITR-3 business workspace and all supporting schedules.
 - Complete representative/Karta cross-field validation and backend ITR-3 mapper/schema-validator integration.
 
-### Phase 2 — Filing Status (A19)
+### Phase 2 — Filing Status (A19) — ✅ COMPLETED
 
-Schema paths: `PartA_GEN1.FilingStatus` and related `PartA_GEN2` flags.
+**Completed:** 2026-09-14**Implementation:** Extended `frontend/src/components/ITR3PersonalInfoPage.tsx` only; ITR-1/2/4 personal-information rendering remains unchanged.
 
-Add explicit ITR-3 controls for return section, residential status (`RES`/`NRI`/`NOR`), business/profession income indicator, seventh-proviso triggers, unlisted equity, foreign exchange/foreign income indicators, Form 10-IEA history, director/partner status, representative assessee, PE/SEP/IFSC/FPI/LEI disclosures, and original return references. Rules must enforce mutually exclusive regime branches and conditional acknowledgements.
+Schema paths: `PartA_GEN1.FilingStatus` and related filing-profile fields already present in the canonical `ReturnDraft`.
+
+Delivered controls:
+
+- Return section, revised-return acknowledgement/date, and notice/order number/date.
+- Residential status (`ROR`, `RNOR`, `NR`) with non-resident basis, stay-day counts, foreign residence jurisdictions, and Section 115H Yes/No answer.
+- FII/FPI status, SEBI registration number, LEI number, and LEI validity date.
+- Seventh-proviso thresholds for current-account deposits, foreign travel, and electricity expenditure, with conditional amount fields and statutory minimums.
+- Company-director disclosure rows with company name, domestic/foreign type, PAN, DIN, and removal controls.
+- Explicit conditional visibility and canonical `ReturnDraft` updates for all fields.
+
+Validation completed:
+
+- Frontend production build: passed (`tsc -b && vite build`).
+- Canonical draft and personal-information regressions: **33 passed**.
+- `git diff --check`: passed.
+
+Intentional deferrals to typed-model/backend phases:
+
+- Full partner, PE/SEP, IFSC-unit, foreign-exchange, and other ITR-3-only fields not present in the current canonical frontend model.
+- Full unlisted-equity detail rows; the existing canonical type is available but will be completed with the official schema-backed disclosure workflow.
+- Form 10-IEA history and all CBDT cross-field validation in the backend mapper/validator.
+
 
 ### Phase 3 — Audit Information (A20)
 
