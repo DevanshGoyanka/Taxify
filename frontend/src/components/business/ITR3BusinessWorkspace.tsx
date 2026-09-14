@@ -9,6 +9,9 @@ export interface ITR3BusinessWorkspaceProps {
   auxiliary?: Partial<ITR3AuxiliaryData>;
   onCoreChange: (data: ITR3BusinessCoreData) => void;
   onAuxiliaryChange: (data: ITR3AuxiliaryData) => void;
+  /** Persisted applicability and schedule payload owned by ReturnDraft. */
+  selectedSchedules?: string[];
+  onSelectedSchedulesChange?: (schedules: string[]) => void;
   computedIncome?: number;
 }
 
@@ -106,17 +109,21 @@ function initialSelectedSchedules(auxiliary?: Partial<ITR3AuxiliaryData>): Set<s
 }
 
 /** Renders a guided portal-style workflow over the canonical ITR-3 schedules. */
-export default function ITR3BusinessWorkspace({ core, auxiliary, onCoreChange, onAuxiliaryChange, computedIncome = 0 }: ITR3BusinessWorkspaceProps): React.JSX.Element {
+export default function ITR3BusinessWorkspace({ core, auxiliary, onCoreChange, onAuxiliaryChange, selectedSchedules, onSelectedSchedulesChange, computedIncome = 0 }: ITR3BusinessWorkspaceProps): React.JSX.Element {
   const [activeStep, setActiveStep] = useState<StepKey>('profile');
-  const [selectedSchedules, setSelectedSchedules] = useState<Set<string>>(() => initialSelectedSchedules(auxiliary));
-  const activeIndex = STEPS.findIndex((step) => step.key === activeStep);
-  const selectedKeys = useMemo(() => SCHEDULE_CHOICES.map((choice) => choice.key).filter((key) => selectedSchedules.has(key)), [selectedSchedules]);
+  const [selectedSchedulesState, setSelectedSchedulesState] = useState<Set<string>>(() => new Set(selectedSchedules ?? initialSelectedSchedules(auxiliary)));
+  const selectedSchedulesControlled = selectedSchedules !== undefined;
+  const selectedSchedulesSet = selectedSchedulesControlled ? new Set(selectedSchedules) : selectedSchedulesState;
 
-  const toggleSchedule = (key: string): void => setSelectedSchedules((current) => {
-    const next = new Set(current);
+  const activeIndex = STEPS.findIndex((step) => step.key === activeStep);
+  const selectedKeys = useMemo(() => SCHEDULE_CHOICES.map((choice) => choice.key).filter((key) => selectedSchedulesSet.has(key)), [selectedSchedulesSet]);
+
+  const toggleSchedule = (key: string): void => {
+    const next = new Set(selectedSchedulesSet);
     if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  });
+    if (!selectedSchedulesControlled) setSelectedSchedulesState(next);
+    onSelectedSchedulesChange?.([...next]);
+  };
   const go = (offset: number): void => setActiveStep(STEPS[Math.max(0, Math.min(STEPS.length - 1, activeIndex + offset))].key);
 
   return <div>
@@ -157,7 +164,7 @@ export default function ITR3BusinessWorkspace({ core, auxiliary, onCoreChange, o
 
     {activeStep === 'supporting' && <div>
       <div style={sectionCard}><h3 style={{ margin: '0 0 6px', fontSize: 15, color: 'var(--text-secondary)' }}>4. Select applicable supporting schedules</h3><p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: 'var(--text-muted)' }}>The ITD utility shows schedules based on applicability. Select only those relevant to this return. Hiding a schedule does not delete data already entered.</p></div>
-      {[...new Set(SCHEDULE_CHOICES.map((choice) => choice.group))].map((group) => <div key={group} style={sectionCard}><h4 style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-secondary)' }}>{group}</h4><div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>{SCHEDULE_CHOICES.filter((choice) => choice.group === group).map((choice) => <label key={choice.key} style={{ display: 'flex', gap: 10, padding: 12, border: `1px solid ${selectedSchedules.has(choice.key) ? 'var(--gold)' : 'var(--border)'}`, borderRadius: 6, background: selectedSchedules.has(choice.key) ? 'var(--gold-pale)' : 'var(--bg)', cursor: 'pointer' }}><input type="checkbox" checked={selectedSchedules.has(choice.key)} onChange={() => toggleSchedule(choice.key)} style={{ marginTop: 2 }} /><span><strong style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)' }}>{choice.label}</strong><span style={{ display: 'block', marginTop: 4, fontSize: 10, lineHeight: 1.4, color: 'var(--text-muted)' }}>{choice.help}</span></span></label>)}</div></div>)}
+      {[...new Set(SCHEDULE_CHOICES.map((choice) => choice.group))].map((group) => <div key={group} style={sectionCard}><h4 style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-secondary)' }}>{group}</h4><div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>{SCHEDULE_CHOICES.filter((choice) => choice.group === group).map((choice) => <label key={choice.key} style={{ display: 'flex', gap: 10, padding: 12, border: `1px solid ${selectedSchedulesSet.has(choice.key) ? 'var(--gold)' : 'var(--border)'}`, borderRadius: 6, background: selectedSchedulesSet.has(choice.key) ? 'var(--gold-pale)' : 'var(--bg)', cursor: 'pointer' }}><input type="checkbox" checked={selectedSchedulesSet.has(choice.key)} onChange={() => toggleSchedule(choice.key)} style={{ marginTop: 2 }} /><span><strong style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)' }}>{choice.label}</strong><span style={{ display: 'block', marginTop: 4, fontSize: 10, lineHeight: 1.4, color: 'var(--text-muted)' }}>{choice.help}</span></span></label>)}</div></div>)}
       {selectedKeys.length === 0 ? <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 6 }}>No supporting schedule selected. Choose an applicable schedule above to complete it.</div> : <ITR3BusinessAuxiliaryManager data={auxiliary} onChange={onAuxiliaryChange} visibleSchedules={selectedKeys} showHeading={false} />}
     </div>}
 
@@ -168,7 +175,7 @@ export default function ITR3BusinessWorkspace({ core, auxiliary, onCoreChange, o
         <ReviewMetric label="Supporting schedules" value={String(selectedKeys.length)} detail={selectedKeys.length ? 'selected as applicable' : 'none selected'} />
         <ReviewMetric label="Computed business income" value={`₹${Number(computedIncome || 0).toLocaleString('en-IN')}`} detail="from current tax computation" />
       </div>
-      <div style={sectionCard}><h4 style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-secondary)' }}>Selected supporting schedules</h4>{selectedKeys.length ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>{SCHEDULE_CHOICES.filter((choice) => selectedSchedules.has(choice.key)).map((choice) => <span key={choice.key} style={{ padding: '5px 9px', borderRadius: 12, background: 'var(--gold-pale)', color: 'var(--text-secondary)', fontSize: 11 }}>{choice.label}</span>)}</div> : <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No supporting schedules selected.</div>}</div>
+      <div style={sectionCard}><h4 style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-secondary)' }}>Selected supporting schedules</h4>{selectedKeys.length ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>{SCHEDULE_CHOICES.filter((choice) => selectedSchedulesSet.has(choice.key)).map((choice) => <span key={choice.key} style={{ padding: '5px 9px', borderRadius: 12, background: 'var(--gold-pale)', color: 'var(--text-secondary)', fontSize: 11 }}>{choice.label}</span>)}</div> : <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No supporting schedules selected.</div>}</div>
     </div>}
 
     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 20 }}><button type="button" disabled={activeIndex === 0} onClick={() => go(-1)} style={{ padding: '7px 14px', border: '1px solid var(--border)', background: '#fff', borderRadius: 6, fontSize: 12, cursor: activeIndex === 0 ? 'not-allowed' : 'pointer', opacity: activeIndex === 0 ? 0.5 : 1 }}>← Previous</button><button type="button" disabled={activeIndex === STEPS.length - 1} onClick={() => go(1)} style={{ padding: '7px 14px', border: 0, background: 'var(--gold)', color: '#fff', borderRadius: 6, fontSize: 12, cursor: activeIndex === STEPS.length - 1 ? 'not-allowed' : 'pointer', opacity: activeIndex === STEPS.length - 1 ? 0.5 : 1 }}>Save and continue →</button></div>

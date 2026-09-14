@@ -136,7 +136,7 @@ Day-to-day operations: [`docs/runbook.md`](docs/runbook.md).
 │   │   ├── auth.py                 # POST /auth/signup, POST /auth/login
 │   │   ├── itr.py                  # POST /itr{1,3,4}/compute, /returns/save, /returns (CRUD)
 │   │   ├── clients.py              # /clients CRUD + PAN analysis + ITR classification
-│   │   ├── client_itr.py           # /clients/{id}/itr/{year} save/load/validate/download
+│   │   ├── client_itr_v2.py        # /v2/clients/{id}/itr/{year} save/load/generate-cbdt-json/download
 │   │   ├── integration.py          # Form 16, AIS, TIS, 26AS import + prefill + ERI routes
 │   │   ├── pan.py                  # /pan/{pan}/validate, /pan/{pan}/analyze
 │   │   ├── tax.py                  # /tax-summary/compute, /business-income/*, /capital-gains/*
@@ -301,13 +301,18 @@ All **error** responses share a unified shape regardless of status code:
 
 ### Client ITR Data
 
+The canonical `ReturnDraft` pipeline (`client_itr_v2.py`) is the only save/load/JSON/download
+path — the earlier flat-blob `client_itr.py` router (`/clients/{id}/itr/{year}` with no `/v2`
+prefix) has been removed; there is no separate validate endpoint, since input validation runs as
+part of `generate-cbdt-json`, not as its own call.
+
 | Method | Path | Auth | Request Body | Response |
 |--------|------|------|-------------|----------|
-| `GET` | `/clients/{id}/itr/{year}` | **Bearer** | — | Saved ITR form JSON |
-| `PUT` | `/clients/{id}/itr/{year}` | **Bearer** | Form data JSON | `{ message, itr_type }` |
-| `POST` | `/clients/{id}/itr/{year}/validate` | **Bearer** | Form data JSON | `{ valid, errors, warnings }` |
-| `GET` | `/clients/{id}/itr/{year}/download` | **Bearer** | — | File download (CBDT JSON Utility format) |
-| `GET` | `/clients/{id}/itr/{year}/download-pdf` | **Bearer** | — | File download (PDF — stub implementation) |
+| `GET` | `/v2/clients/{id}/itr/{year}` | **Bearer** | — | Saved canonical `ReturnDraft` JSON |
+| `PUT` | `/v2/clients/{id}/itr/{year}` | **Bearer** | `ReturnDraft` JSON | `{ message, itr_type }` |
+| `POST` | `/v2/clients/{id}/itr/{year}/generate-cbdt-json` | **Bearer** | — | Schema-valid CBDT JSON built from the saved draft (422 if incomplete/invalid) |
+| `GET` | `/v2/clients/{id}/itr/{year}/download` | **Bearer** | — | File download of the saved canonical draft (JSON) |
+| `GET` | `/v2/clients/{id}/itr/{year}/download-pdf` | **Bearer** | — | File download ("Statement of Income" computation PDF) |
 
 ### PAN & Tax Engine
 

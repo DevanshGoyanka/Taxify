@@ -59,7 +59,7 @@ def _normalize_form(itr_type: str) -> str:
     if value not in {"ITR-1", "ITR-2", "ITR-4"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="This season's Type-3 filing supports ITR-1, ITR-2, and ITR-4 only; ITR-3 is not supported.",
+            detail="This season's Type-3 filing currently supports ITR-1, ITR-2, and ITR-4; ITR-3 is not filing-enabled until its complete preparation, validator, and official-schema gates are complete.",
         )
     return value
 

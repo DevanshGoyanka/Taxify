@@ -32,6 +32,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       secondaryAddressDifferent: false, alternateAddress: null,
       companyDirectorEntries: [], unlistedEquityEntries: [],
     },
+    itr3BusinessWorkspace: { core: {}, auxiliary: {}, selectedSchedules: [] },
     itr3AuditInfo: {
       liableSec44AA: 'N', incomeDeclaredUnderPresumptive: 'N', totalSalesBand: '',
       receiptsCashBand: '', paymentsCashBand: '', liableSec44AB: 'N', condition44AB: '',

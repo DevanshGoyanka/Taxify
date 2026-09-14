@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from app.engine.calculators.itr1 import ITR1Result, compute as compute_itr1
 from app.engine.calculators.itr2 import ITR2Result, compute as compute_itr2
+from app.engine.calculators.itr3 import ITR3Result, compute as compute_itr3
 from app.engine.calculators.itr4 import ITR4Result, compute as compute_itr4
 from app.engine.common.due_dates import filing_section_due_date_error, get_due_date
 from app.engine.draft_to_itr1_input import (
@@ -27,6 +28,8 @@ from app.engine.draft_to_itr1_input import (
     draft_to_itr1_input,
 )
 from app.engine.draft_to_itr2_input import draft_to_itr2_input
+from app.engine.draft_to_itr3_input import draft_to_itr3_input
+from app.engine.draft_to_itr3_input import draft_to_itr3_input
 from app.engine.draft_to_itr4_input import draft_to_itr4_input
 from app.engine.personal_profile import (
     FILING_SECTION_CODES,
@@ -45,9 +48,13 @@ from app.engine.personal_profile import (
 from app.engine.itd.itr1 import build_itr1_json
 from app.engine.itd.itr1_schema import ITR1SchemaValidationError, validate_itr1_json
 from app.engine.itd.itr2 import build_itr2_json
+from app.engine.itd.itr3 import build_itr3_json
+from app.engine.itd.itr3_schema import validate_itr3_json
 from app.engine.itd.itr2_schema import validate_itr2_json
 from app.engine.itd.itr4 import build_itr4_json
 from app.engine.itd.itr4_schema import validate_itr4_json
+from app.engine.validators.itr3 import run_calc_validation as run_itr3_calc_validation
+from app.engine.validators.itr3 import run_input_validation as run_itr3_input_validation
 from app.schemas.itr1 import (
     AssesseeRepresentativeProfile,
     FilingAddress,
@@ -79,6 +86,7 @@ from app.schemas.itr2 import (
     TenantDetail as ITR2TenantDetail,
     UnlistedEquityEntry,
 )
+from app.schemas.itr3 import ITR3Input
 from app.schemas.itr4 import (
     ITR4BankAccount,
     ITR4FilingAddress,
@@ -2068,9 +2076,66 @@ def _generate_cbdt_json_itr2(draft: ReturnDraft) -> tuple[dict[str, Any], dict[s
     return official_json, pipeline.summary
 
 
+@dataclass(frozen=True)
+class ITR3PipelineResult:
+    """Immutable output from one canonical ITR-3 computation."""
+
+    typed_input: ITR3Input
+    computation: ITR3Result
+    breakdown: dict[str, Any]
+    summary: dict[str, Any]
+
+
+def compute_canonical_itr3(draft: ReturnDraft) -> ITR3PipelineResult:
+    """Map and compute the canonical ITR-3 foundation."""
+    if draft.form != "ITR-3":
+        raise FilingGatewayV2Error("compute_canonical_itr3 requires draft.form == 'ITR-3'.")
+    try:
+        typed_input, breakdown = draft_to_itr3_input(draft)
+        typed_input = typed_input.model_copy(update={
+            "filing_date": _to_date(draft.verification.date),
+            "assessee_pan": draft.personal.pan or None,
+            "verification_date": draft.verification.date or None,
+        })
+        input_report = run_itr3_input_validation(typed_input)
+        if not input_report.can_upload:
+            raise FilingGatewayV2Error(
+                "ITR-3 input validation rejected the canonical draft.",
+                [item.message for item in input_report.blocking_errors],
+            )
+        result = compute_itr3(typed_input)
+    except FilingGatewayV2Error:
+        raise
+    except (DraftMappingError, ValidationError, ValueError) as exc:
+        raise FilingGatewayV2Error("ITR-3 mapping or computation failed.", [str(exc)]) from exc
+    if result.errors:
+        raise FilingGatewayV2Error("ITR-3 computation rejected the canonical draft.", [str(e) for e in result.errors])
+    calc_report = run_itr3_calc_validation(typed_input, result)
+    if not calc_report.can_upload:
+        raise FilingGatewayV2Error(
+            "ITR-3 calculation validation rejected the computed result.",
+            [item.message for item in calc_report.blocking_errors],
+        )
+    return ITR3PipelineResult(typed_input, result, breakdown, {
+        "gti": float(result.gross_total_income), "totalIncome": float(result.taxable_income),
+        "businessIncome": float(result.business_income), "computedByFormEngine": "ITR-3",
+    })
+
+
+def _generate_cbdt_json_itr3(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build and schema-validate canonical ITR-3 JSON."""
+    pipeline = compute_canonical_itr3(draft)
+    try:
+        document = build_itr3_json(pipeline.computation, pipeline.typed_input)
+        validate_itr3_json(document)
+    except Exception as exc:
+        raise FilingGatewayV2Error("ITR-3 official JSON generation failed.", [f"{type(exc).__name__}: {exc}"]) from exc
+    return document, pipeline.summary
+
+
 def compute_canonical(
     draft: ReturnDraft,
-) -> ITR1PipelineResult | ITR2PipelineResult | ITR4PipelineResult:
+) -> ITR1PipelineResult | ITR2PipelineResult | ITR3PipelineResult | ITR4PipelineResult:
     """Form-dispatching compute entrypoint (Phase 3/4).
 
     Used by ``tax_v2.compute_tax_summary_v2`` so ITR-1, ITR-2, and ITR-4 all
@@ -2091,6 +2156,8 @@ def compute_canonical(
         return compute_canonical_itr1(draft)
     if draft.form == "ITR-2":
         return compute_canonical_itr2(draft)
+    if draft.form == "ITR-3":
+        return compute_canonical_itr3(draft)
     if draft.form == "ITR-4":
         return compute_canonical_itr4(draft)
     raise FilingGatewayV2Error(
@@ -2139,6 +2206,8 @@ def generate_cbdt_json(draft: ReturnDraft) -> tuple[dict[str, Any], dict[str, An
         return _generate_cbdt_json_itr1(draft)
     if draft.form == "ITR-2":
         return _generate_cbdt_json_itr2(draft)
+    if draft.form == "ITR-3":
+        return _generate_cbdt_json_itr3(draft)
     if draft.form == "ITR-4":
         return _generate_cbdt_json_itr4(draft)
     raise FilingGatewayV2Error(

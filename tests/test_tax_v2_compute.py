@@ -11,6 +11,7 @@ from app.routers.tax_v2 import compute_tax_summary_v2
 from app.schemas.return_draft import (
     CapitalGainsSchedule,
     Employer,
+    Presumptive44AD,
     ReconciliationDiscrepancy,
     ReturnDraft,
     WinningIncome,
@@ -68,18 +69,17 @@ def test_compute_v2_surfaces_per_row_capital_gains_for_simplified_112a() -> None
     assert summary["totalSTCG"] == 0.0  # STCG equity is not reportable on ITR-4
 
 
-def test_compute_v2_rejects_non_itr1_form_with_422() -> None:
-    """Unsupported canonical forms fail at the v2 boundary with 422.
-
-    ITR-3 remains unsupported (Phase 8 of
-    Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md); ITR-2 is supported by
-    the v2 pipeline as of Phase 4 and is covered by its own tests instead.
-    """
-    draft = ReturnDraft(assessmentYear="2026-27", form="ITR-3")
-    with pytest.raises(HTTPException) as caught:
-        compute_tax_summary_v2(draft)
-    assert caught.value.status_code == 422
-    assert "not supported by the v2 pipeline" in caught.value.detail["errors"][0]
+def test_compute_v2_routes_itr3_to_the_canonical_pipeline() -> None:
+    """ITR-3 is dispatched through the canonical typed pipeline."""
+    draft = create_empty_draft("2026-27", "ITR-3", "new")
+    draft.businesses = [Presumptive44AD(
+        id="business-1",
+        natureCode="01001",
+        digitalReceipts=Decimal("1000000"),
+        declaredIncome=Decimal("60000"),
+    )]
+    summary = compute_tax_summary_v2(draft)
+    assert summary["computedByFormEngine"] == "ITR-3"
 
 
 def test_compute_v2_surfaces_engine_eligibility_errors() -> None:

@@ -28,6 +28,8 @@ Every raw response below is preserved verbatim (auth tokens redacted) in
 - `GOYPT2026A_acknowledgement_117003220140926.pdf` — the acknowledgement PDF ITD returned (pre-EVC)
 - `bankevc_verify_response.json` — the Bank EVC `verifyEvc` success response
 - `GOYPT2026A_acknowledgement_117003220140926_post_bankevc.pdf` — the acknowledgement PDF re-fetched after genuine Bank EVC verification
+- `prefill_request_otp_response.json` — the successful `requestPrefillOTP` response
+- `GOYPT2026A_prefill_data_decrypted.json` — the full decrypted, parsed prefill data returned by `getPrefill`
 
 ---
 
@@ -75,12 +77,69 @@ the reference sheet's row 2). Re-demonstrating it here would need a genuinely fr
 never-registered test PAN, which the client identity for this round (GOYPT2026A) is not. This is
 a general ERI-onboarding capability, not something that varies per ITR form.
 
-**Not performed this round**: `requestPrefillOTP` / `getPrefill` — both require a live OTP
-delivered to the taxpayer's real mobile/email that only a human can relay; not automatable
-end-to-end. Already demonstrated for PAN GOYPT2026A in an earlier session (see
-`Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §13.2) and is, like client registration, a general ERI
-capability rather than something ITR-2-specific. Can be re-run for this round on request if ITD's
-whitelisting review specifically requires a fresh-dated prefill call for ITR-2.
+---
+
+## Step 2a — Prefill data (`requestPrefillOTP` + `getPrefill`)
+
+Initially deferred (requires a live OTP relayed by the taxpayer), then run to completion at the
+user's explicit request rather than left uncovered.
+
+### First attempt — mobile SMS did not arrive
+
+**Request**: `EriPrefill`, `pan=GOYPT2026A`, `assessmentYear=2026`, `otpSourceFlag=E`.
+
+**Response**:
+```json
+{
+  "smsTransactionId": "FOS000005979156",
+  "emailTransactionId": "FOS000005979157",
+  "httpStatus": "SUBMITTED",
+  "messages": [
+    {"code": "EF40010", "type": "REMARK", "desc": "OTP has been sent successfully.", "fieldName": null}
+  ],
+  "errors": [],
+  "successFlag": true
+}
+```
+
+Email OTP arrived; mobile SMS did not arrive within a reasonable wait. Per the official spec
+(`API_Prefill_v1.1.pdf` §4.3.3/§5.3.3), `getPrefill` with `otpSourceFlag=E` requires **both**
+`mobileOtp` and `emailOtp` — deliberately did not guess or omit the missing mobile code (ITD's
+own error table lists an attempt-limit lockout, `EF00128`/similar, for wrong/expired OTPs), so a
+second `requestPrefillOTP` was issued instead of proceeding on one code alone.
+
+### Second attempt — success
+
+**Request**: `EriPrefill`, same parameters, issued fresh.
+
+**Response**:
+```json
+{
+  "smsTransactionId": "FOS000005979162",
+  "emailTransactionId": "FOS000005979163",
+  "httpStatus": "SUBMITTED",
+  "messages": [
+    {"code": "EF40010", "type": "REMARK", "desc": "OTP has been sent successfully.", "fieldName": null}
+  ],
+  "errors": [],
+  "successFlag": true
+}
+```
+
+Both OTPs arrived this time and were relayed by the user.
+
+**`getPrefill` request**: `EriGetPrefill`, `pan=GOYPT2026A`, `assessmentYear=2026`,
+`otpSourceFlag=E`, `smsTransactionId=FOS000005979162`, `mobileOtp=<redacted>`,
+`emailTransactionId=FOS000005979163`, `emailOtp=<redacted>`.
+
+**Result**: success. The response's `prefill` field was AES-decrypted and parsed into a 57-key
+JSON document, of which 7 top-level sections were populated (the rest `null` — expected; the
+official published prefill schema itself is routinely out of sync with which sections a live UAT
+server actually populates for a given return, per the existing note in `prefill.py`'s own
+docstring): `personalInfo`, `form3CD`, `verification`, `filingStatus`, `Form10IFA`, `form10IF`,
+`lastFiledITR`. `personalInfo.pan` confirmed as `GOYPT2026A`, matching the requested PAN exactly.
+Saved (full, since this contains real prefill PII — gitignored, not committed) as
+`GOYPT2026A_prefill_data_decrypted.json`.
 
 ---
 
@@ -178,6 +237,22 @@ documented in `Docs/ERI_UAT_AND_PRODUCTION_REFERENCE.md` §18.3 — that variant
 time). 48,580 bytes, starts with `%PDF-1.4`, ends with `%%EOF` — verified structurally valid.
 Saved as `GOYPT2026A_acknowledgement_117003220140926.pdf`.
 
+Re-inspected the **raw HTTP response** directly (not just the PDF bytes `get_acknowledgement()`
+extracts) to check for any reference-number-bearing metadata the wrapper function discards:
+
+```
+HTTP status: 200
+Content-Type: application/pdf
+Content-Disposition: attachment;filename=117003220140926.pdf
+X-Global-Transaction-ID: e00d9d316aa823fa004ea532
+```
+
+The PDF starts at byte 0 with no prefix/wrapper this time, and nothing follows the trailing
+`%%EOF` — a genuinely clean binary body, not a JSON envelope. `X-Global-Transaction-ID` is
+ITD's own gateway-level trace header — confirmed present on other Type-2 endpoints too (checked
+against a raw `validate` call), so it is a universal per-request identifier, not something
+specific to `getAcknowledgement`.
+
 ---
 
 ## Step 7 — Bank EVC e-verification (real verification, beyond the ITRV placeholder)
@@ -269,15 +344,18 @@ Whole flow (login through acknowledgement): ~12 seconds.
 
 ## Summary for the ITD whitelisting sheet
 
-All 6 relevant rows (Login, Add Client/Validate OTP, Validate ITR, Submission, e-Verification,
-Acknowledgement) completed successfully end-to-end for PAN GOYPT2026A, ITR-2, AY 2026-27 — and
-e-Verification was completed via **genuine Bank EVC**, not just the "verify later" ITRV
-placeholder, since the user confirmed this PAN is enabled for it. See `Reference Docs by CBDT &
-ITD/Official ERI REFERENCE Documentation/ERI Type 2 - Sunit Ramashankar Goyanka-UAT Test
-Scenario Sheet (4).xlsx` for the filled sheet, produced directly from this round's results.
+7 of 8 relevant rows (Login, Add Client/Validate OTP, Prefill data, Validate ITR, Submission,
+e-Verification, Acknowledgement) completed successfully live, end-to-end, for PAN GOYPT2026A,
+ITR-2, AY 2026-27 in this round — including **genuine Bank EVC** e-verification (not just the
+"verify later" ITRV placeholder) and a full, live `requestPrefillOTP`/`getPrefill` round-trip
+(two attempts; the first was retried after the mobile SMS didn't arrive in time rather than
+guessing at the missing OTP). See `Reference Docs by CBDT & ITD/Official ERI REFERENCE
+Documentation/ERI Type 2 - Sunit Ramashankar Goyanka-UAT Test Scenario Sheet (4).xlsx` for the
+filled sheet, produced directly from this round's results.
 
-Two rows ("Add Register client", "Prefill data") are, per the user's explicit decision, marked as
-carried over from the ITR-1 round rather than re-run — both are general ERI-onboarding
-capabilities (not ITR-form-specific) already demonstrated live in that earlier, ITD-accepted
-round. Flag to the user if ITD's review specifically requires a fresh-dated demonstration of
-either for the ITR-2 submission specifically.
+One row ("Add Register client") is, per the user's explicit decision, marked as carried over from
+the ITR-1 round rather than re-run — a general ERI-onboarding capability (not ITR-form-specific)
+already demonstrated live in that earlier, ITD-accepted round (with a different PAN, GOYPT2026E,
+specifically because it registers a taxpayer not yet on the portal at all — GOYPT2026A doesn't
+qualify for that scenario). Flag to the user if ITD's review specifically requires a fresh-dated
+demonstration of it for the ITR-2 submission specifically.

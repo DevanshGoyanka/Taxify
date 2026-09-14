@@ -280,12 +280,12 @@ def test_compute_canonical_dispatches_itr1_and_itr4():
     assert isinstance(result4, ITR4PipelineResult)
 
 
-def test_compute_canonical_rejects_unsupported_form():
-    """ITR-3 is not yet supported by the v2 pipeline (ITR-2 is, since Phase 4)."""
+def test_compute_canonical_rejects_incomplete_itr3_draft():
+    """ITR-3 dispatch exists but incomplete drafts fail at the mapper boundary."""
     draft = ReturnDraft(assessmentYear="2026-27", form="ITR-3")
     with pytest.raises(FilingGatewayV2Error) as caught:
         compute_canonical(draft)
-    assert "ITR-1, ITR-2, and ITR-4 only" in caught.value.message
+    assert "business or professional income" in " ".join(caught.value.errors)
 
 
 # ── generate_cbdt_json (ITR-4 dispatch) ──────────────────────────────────────

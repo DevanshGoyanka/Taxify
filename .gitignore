@@ -117,6 +117,8 @@ Docs/*.zip
 
 # Test playground temp files
 uat-login-test/
+# Live ERI API call outputs -- can contain real taxpayer PII (e.g. downloaded ITR PDFs)
+Docs/API calls output/
 API_Testing/*.json
 API_Testing/*.cfg
 API_Testing/*.zip

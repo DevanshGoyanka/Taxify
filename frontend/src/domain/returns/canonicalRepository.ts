@@ -106,6 +106,13 @@ export function normalizeLoadedDraft(draft: ReturnDraft): ReturnDraft {
   return {
     ...draft,
     personal: { ...defaults.personal, ...draft.personal },
+    itr3BusinessWorkspace: {
+      ...defaults.itr3BusinessWorkspace,
+      ...draft.itr3BusinessWorkspace,
+      core: { ...defaults.itr3BusinessWorkspace.core, ...(draft.itr3BusinessWorkspace?.core ?? {}) },
+      auxiliary: { ...defaults.itr3BusinessWorkspace.auxiliary, ...(draft.itr3BusinessWorkspace?.auxiliary ?? {}) },
+      selectedSchedules: draft.itr3BusinessWorkspace?.selectedSchedules ?? [],
+    },
     itr3AuditInfo: { ...defaults.itr3AuditInfo, ...draft.itr3AuditInfo },
     itr3NatureOfBusiness: draft.itr3NatureOfBusiness !== undefined ? draft.itr3NatureOfBusiness : defaults.itr3NatureOfBusiness,
     itr3BalanceSheet: { ...defaults.itr3BalanceSheet, ...draft.itr3BalanceSheet },

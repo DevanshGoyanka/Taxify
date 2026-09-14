@@ -1,4 +1,5 @@
 import React from 'react';
+import type { ReturnDraft } from '../domain/returns/types';
 import ITR4ScheduleBPManager, { type ITR4ScheduleBPData } from './business/ITR4ScheduleBPManager';
 import type { ITR3BusinessCoreData } from './business/ITR3BusinessCoreManager';
 import type { ITR3AuxiliaryData } from './business/ITR3BusinessAuxiliaryManager';
@@ -15,6 +16,8 @@ export interface BusinessProfessionScheduleData {
 interface Props {
   data?: BusinessProfessionScheduleData;
   onChange: (data: BusinessProfessionScheduleData) => void;
+  selectedSchedules?: string[];
+  onSelectedSchedulesChange?: (schedules: string[]) => void;
   selectedForm: string;
   taxResult?: { bizIncome?: number } | null;
   /** Prior-year (lastFiledITR) Schedule BP figures for read-only reference. */
@@ -24,7 +27,7 @@ interface Props {
 const cardStyle: React.CSSProperties = { marginBottom: 20, padding: 16, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' };
 
 /** Routes Business/Profession capture to the exact official schema for the selected ITR form. */
-export function BusinessProfessionEntryManager({ data = {}, onChange, selectedForm, taxResult, priorYearData }: Props): React.ReactElement {
+export function BusinessProfessionEntryManager({ data = {}, onChange, selectedSchedules, onSelectedSchedulesChange, selectedForm, taxResult, priorYearData }: Props): React.ReactElement {
   // Guard against an undefined/empty selectedForm so this component never
   // throws during render (a missing form would otherwise crash on
   // .replace below and blank the whole screen).
@@ -60,6 +63,8 @@ export function BusinessProfessionEntryManager({ data = {}, onChange, selectedFo
       auxiliary={data.ITR3Auxiliary}
       onCoreChange={(ITR3Core: ITR3BusinessCoreData) => onChange({ ...data, ITR3Core })}
       onAuxiliaryChange={(ITR3Auxiliary: ITR3AuxiliaryData) => onChange({ ...data, ITR3Auxiliary })}
+      selectedSchedules={selectedSchedules}
+      onSelectedSchedulesChange={onSelectedSchedulesChange}
       computedIncome={Number(taxResult?.bizIncome || 0)}
     />
   </div>;

@@ -156,18 +156,3 @@ def test_single_unified_112a_calculation_entrypoint():
     # They must NOT be the same function as the ITR-1/4 entrypoint.
     assert capital_gains.compute_112a is not restricted_112a.compute_112a
     assert special_rates.compute_112a is not restricted_112a.compute_112a
-
-
-def test_filing_gateway_uses_canonical_112a_entrypoint():
-    """The filing gateway must use the canonical restricted-112a entrypoint."""
-    import inspect
-    from app.engine import filing_gateway
-    source = inspect.getsource(filing_gateway)
-    # The gateway imports the canonical entry point, not a duplicate.
-    assert "compute_112a as compute_restricted_112a" in source or (
-        "from app.engine.schedules.restricted_112a import compute_112a" in source
-    ), "Filing gateway must import the canonical 112a entrypoint"
-    # It must NOT import the ITR-2/3 per-scrip path.
-    assert "from app.engine.schedules.capital_gains import compute_112a" not in source, (
-        "Filing gateway must not use the ITR-2/3 per-scrip 112a path"
-    )

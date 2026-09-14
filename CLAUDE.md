@@ -236,12 +236,29 @@ plan above; do not infer their readiness from this ITR-1/ITR-4 contract.
 ### Routers → engine wiring
 
 `app/main.py` mounts: `auth`, `itr` (`/itr{1,3}/compute`, `/returns/*`), `clients`,
-`client_itr` + `client_itr_v2`, `integration` (Form16/AIS/TIS/26AS import, prefill, legacy
-`/api/v1/eri/*`), `pan`, `tax` + `tax_v2`, `dashboard`, `automation` (portal-download jobs),
-`filing` (submission pipeline). ITR-4 compute and the newer `/eri/*` route set live elsewhere
-per `README.md`'s API reference table — check there for the full endpoint list before assuming
-a route doesn't exist. There are two overlapping ERI route sets (`/api/v1/eri/*` in
-`integration.py`, `/eri/*` in `eri.py`) — known duplication, not a bug to "fix" incidentally.
+`client_itr_v2` (`/v2/clients/{id}/itr/{year}` save/load/generate-cbdt-json/download —
+the only save/load/JSON/download path now; see below), `integration` (Form16/AIS/TIS/26AS
+import, prefill, legacy `/api/v1/eri/*`), `pan`, `tax` + `tax_v2`, `dashboard`, `automation`
+(portal-download jobs), `filing` (submission pipeline). ITR-4 compute and the newer `/eri/*`
+route set live elsewhere per `README.md`'s API reference table — check there for the full
+endpoint list before assuming a route doesn't exist. There are two overlapping ERI route sets
+(`/api/v1/eri/*` in `integration.py`, `/eri/*` in `eri.py`) — known duplication, not a bug to
+"fix" incidentally.
+
+**Update (2026-09-14): the legacy pre-v2 filing path is deleted, not just orphaned.**
+`app/engine/filing_gateway.py` (the flat-blob `generate_filing_artifact`/
+`_build_itr1_input_from_flat` engine that predates `filing_gateway_v2.py`) and
+`app/routers/client_itr.py` (the un-prefixed `/clients/{id}/itr/{year}` router `client_itr_v2`
+above superseded) are both removed, along with their dedicated legacy-only tests
+(`test_itr1_filing_gateway_profile.py`, `test_itr1_golden_suite.py`,
+`test_personal_info_contract.py`, and the legacy-router tests inside
+`test_integration_routers.py`). This closes a real doc/code mismatch: an earlier same-day entry
+in `Docs/ITR2_ITR3_V2_PIPELINE_PRODUCTION_PLAN.md` claimed `filing_gateway.py` was
+"intentionally retained" because an integration endpoint still imported its flat adapter — a
+fresh repo-wide grep found that claim false (zero live importers anywhere in `app/`, only a
+stale docstring mention), matching that same doc's own earlier, actually-verified entry from
+2026-09-02. Lesson: a "retained because X still uses it" note is only as good as the grep behind
+it — don't write or trust one without re-running it.
 
 Two background workers start in `app/main.py`'s lifespan and stop on shutdown:
 `app/automation/job_worker.py` (portal-download jobs enqueued via `POST

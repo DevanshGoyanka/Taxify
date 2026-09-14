@@ -832,6 +832,8 @@ export const EMPTY_CAPITAL_GAINS_SCHEDULE: CapitalGainsSchedule = {
 export interface ReturnDraft {
   schemaVersion: 1; assessmentYear: string; form: ItrForm; regime: TaxRegime;
   personal: PersonalInfo;
+  /** ITR-3 business workspace payload; ignored by ITR-1/2/4. */
+  itr3BusinessWorkspace: ITR3BusinessWorkspace;
   /** ITR-3 Part A_GEN2 audit information; ignored by ITR-1/2/4. */
   itr3AuditInfo: ITR3AuditInfo;
   /** ITR-3 Part A-BS; ignored by ITR-1/2/4. */
@@ -889,6 +891,16 @@ export interface ReturnDraft {
   portugueseCivilCode: PortugueseCivilCodeDetails | null;
   /** Schedule ESOP. ITR-2/3 only. */
   esopDeferrals: ESOPDeferralEntry[];
+}
+
+/** Lossless generic JSON value used by the ITR-3 UI schedule workspace. */
+export type CanonicalJsonValue = string | number | boolean | null | { [key: string]: CanonicalJsonValue } | CanonicalJsonValue[];
+
+/** Persisted ITR-3 business workspace; retained separately from official mappings. */
+export interface ITR3BusinessWorkspace {
+  core: { [schedule: string]: CanonicalJsonValue };
+  auxiliary: { [schedule: string]: CanonicalJsonValue };
+  selectedSchedules: string[];
 }
 
 /** Canonical aggregate of brought-forward losses the user is carrying into the current year. */

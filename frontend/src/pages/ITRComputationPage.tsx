@@ -2056,7 +2056,7 @@ export default function ITRComputationPage() {
         {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={tdsToManager(editorModel?.draft?.taxes?.tds ?? [])} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} taxResult={backendTaxResult} />}
         {activeTab === 3 && editorModel && <CapitalGainsTab draft={editorModel.draft} taxResult={taxResult} itrForm={itrForm as ItrForm} onChange={(schedule) => updateEditor((model) => updateCapitalGainsSchedule(model, schedule))} />}
-        {activeTab === 4 && editorModel && <BusinessTab taxResult={taxResult} itrForm={itrForm as string} draft={editorModel.draft} onChangeBusinesses={(entries: ReturnDraft['businesses']) => updateEditor((model) => replaceDraft({ ...model.draft, businesses: entries }))} onChangeBpNetProfit={(value: number) => updateEditor((model) => updateBpNetProfit(model, value))} priorYearData={buildPriorYearBPData((reconciledImportData as any)?.prefill)} />}
+        {activeTab === 4 && editorModel && <BusinessTab taxResult={taxResult} itrForm={itrForm as string} draft={editorModel.draft} updateEditor={updateEditor} onChangeBusinesses={(entries: ReturnDraft['businesses']) => updateEditor((model) => replaceDraft({ ...model.draft, businesses: entries }))} onChangeBpNetProfit={(value: number) => updateEditor((model) => updateBpNetProfit(model, value))} priorYearData={buildPriorYearBPData((reconciledImportData as any)?.prefill)} />}
         {activeTab === 5 && <OtherSourcesTab taxResult={taxResult} managers={managers} itrForm={itrForm} regime={regime} editorModel={editorModel as any} />}
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
         {activeTab === 7 && editorModel && <DeductionsTab regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
@@ -2247,7 +2247,7 @@ function HousePropertyTab({ entries, passThroughIncome, onChange, itrForm, taxRe
   return <HousePropertyEntryManager entries={entries} passThroughIncome={passThroughIncome} onChange={onChange} itrForm={itrForm} taxResult={taxResult} />;
 }
 
-function BusinessTab({ taxResult, itrForm, draft, onChangeBusinesses, priorYearData }: { taxResult: any; itrForm: string; draft: ReturnDraft; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void; priorYearData?: ITR4ScheduleBPData | null }): React.ReactElement {
+function BusinessTab({ taxResult, itrForm, draft, updateEditor, onChangeBusinesses, priorYearData }: { taxResult: any; itrForm: string; draft: ReturnDraft; updateEditor: (update: (current: ReturnEditorModelV2) => ReturnEditorModelV2) => void; onChangeBusinesses: (entries: ReturnDraft['businesses']) => void; onChangeBpNetProfit: (value: number) => void; priorYearData?: ITR4ScheduleBPData | null }): React.ReactElement {
   if (itrForm === 'ITR-4') {
     return <BusinessProfessionEntryManager
       data={{ ITR4ScheduleBP: scheduleBpFromBusinesses(draft.businesses) }}
@@ -2261,36 +2261,33 @@ function BusinessTab({ taxResult, itrForm, draft, onChangeBusinesses, priorYearD
   // turnover, business receipts, commission, etc. rolled into a presumptive
   // 44AD/44ADA entry on draft.businesses).  The BusinessProfessionEntryManager
   // below captures the full official ITR-3/4 Schedule BP beyond the
-  // presumptive roll-up; that fuller state is kept in a localStorage cache
-  // keyed by PAN+AY+form so switching tabs (which unmounts this component)
-  // does not lose it.
-  const cacheKey = `biz-schedule-${draft.personal?.pan || 'unknown'}-${draft.assessmentYear || ''}-${itrForm}`;
+  // presumptive roll-up; this canonical workspace is stored directly in
+  // ReturnDraft, so switching tabs cannot lose it.
   const importedBusiness = draft.businesses[0] as any;
   const importedData: BusinessProfessionScheduleData = (importedBusiness?.businessSpecific ?? {}) as BusinessProfessionScheduleData;
-  const [data, setData] = useState<BusinessProfessionScheduleData>(() => {
-    try {
-      const raw = localStorage.getItem(cacheKey);
-      return raw ? JSON.parse(raw) as BusinessProfessionScheduleData : importedData;
-    } catch {
-      return importedData;
-    }
-  });
-  // When the import's business roll-up changes (e.g. re-import), re-seed
-  // from the draft so the imported figures are never lost behind a stale
-  // cache.
-  useEffect(() => {
-    setData((prev) => {
-      const seed = importedData;
-      const hasImport = Object.keys(seed).length > 0;
-      if (!hasImport) return prev;
-      return { ...prev, ...seed };
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cacheKey, draft.businesses]);
-  const handleChange = useCallback((next: BusinessProfessionScheduleData) => {
-    setData(next);
-    try { localStorage.setItem(cacheKey, JSON.stringify(next)); } catch { /* ignore quota */ }
-  }, [cacheKey]);
+  const canonicalWorkspace = (draft.itr3BusinessWorkspace ?? { core: {}, auxiliary: {}, selectedSchedules: [] }) as any;
+  const data: BusinessProfessionScheduleData = {
+    ITR3Core: canonicalWorkspace.core as BusinessProfessionScheduleData['ITR3Core'],
+    ITR3Auxiliary: canonicalWorkspace.auxiliary as BusinessProfessionScheduleData['ITR3Auxiliary'],
+  };
+  const hasCanonicalWorkspace = Object.keys(canonicalWorkspace.core ?? {}).length > 0 || Object.keys(canonicalWorkspace.auxiliary ?? {}).length > 0 || (canonicalWorkspace.selectedSchedules ?? []).length > 0;
+  const effectiveData = hasCanonicalWorkspace ? data : importedData;
+  const handleChange = useCallback((next: BusinessProfessionScheduleData): void => {
+    updateEditor((model) => replaceDraft({
+      ...model.draft,
+      itr3BusinessWorkspace: {
+        ...model.draft.itr3BusinessWorkspace,
+        core: (next.ITR3Core ?? {}) as any,
+        auxiliary: (next.ITR3Auxiliary ?? {}) as any,
+      },
+    }));
+  }, [updateEditor]);
+  const handleSelectedSchedulesChange = useCallback((selectedSchedules: string[]): void => {
+    updateEditor((model) => replaceDraft({
+      ...model.draft,
+      itr3BusinessWorkspace: { ...model.draft.itr3BusinessWorkspace, selectedSchedules },
+    }));
+  }, [updateEditor]);
   // Imported presumptive roll-up banner (turnover + scheme + declared
   // income) so the user sees the reconciled business income even before
   // they fill the full Schedule BP.
@@ -2308,8 +2305,10 @@ function BusinessTab({ taxResult, itrForm, draft, onChangeBusinesses, priorYearD
       </div>
     )}
     <BusinessProfessionEntryManager
-      data={data}
+      data={effectiveData}
       onChange={handleChange}
+      selectedSchedules={draft.itr3BusinessWorkspace.selectedSchedules}
+      onSelectedSchedulesChange={handleSelectedSchedulesChange}
       selectedForm={itrForm}
       taxResult={taxResult}
       priorYearData={priorYearData}

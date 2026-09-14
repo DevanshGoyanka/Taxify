@@ -1,8 +1,21 @@
 # ITR-3 UI Redesign and Implementation Plan — AY 2026-27
 
-**Status:** Phase 5 completed: Part A-BS Balance Sheet. Phase 6 — Part A-Manufacturing Account is next.
+**Status:** Phases 1–5 have prototype UI and draft-persistence groundwork only. They are **not exact official-schema implementations and are not filing-ready**. Phase 6 is blocked until the official-schema-first correction scope below is completed.
 
-**Scope:** Redesign the ITR-3 experience for tax professionals against the notified form PDF and official CBDT JSON schema, without modifying ITR-1, ITR-2, or ITR-4 behavior. Every phase must persist through the canonical `ReturnDraft`; browser-only `localStorage` is not an acceptable source of filing data.
+> **Exactness correction (2026-09-14):** The prior phase-completion wording overstated implementation status. The current `itr3AuditInfo`, `itr3NatureOfBusiness`, and `itr3BalanceSheet` models are friendly UI models, not lossless CBDT schema models; no canonical ITR-3 draft-to-official-JSON pipeline exists yet; and the business workspace still has local-storage-backed generic objects. Passing frontend/build and draft-schema tests verifies prototype integrity only, not official ITR-3 correctness.
+
+**Scope:** Redesign the ITR-3 experience for tax professionals against the notified form PDF and official CBDT JSON schema, without modifying ITR-1, ITR-2, or ITR-4 behavior. Every phase must persist through the canonical `ReturnDraft`; browser-only `localStorage` is not an acceptable source of filing data. A phase may be marked exact only after typed schema mapping, official-schema validation, cross-field validation, and round-trip tests are all present.
+
+## 0. Official-schema-first correction scope (must precede Phase 6)
+
+1. **Freeze the friendly-field expansion.** Do not add more flattened `itr3*` convenience blocks or manufacturing fields to `ReturnDraft`.
+2. **Define exact typed ITR-3 input models** matching the official names, nesting, required fields, enums, integer monetary types, and conditional arrays for `PartA_GEN1`, `PartA_GEN2`, `PARTA_BS`, `ManufacturingAccount`, `TradingAccount`, `PARTA_PL`, `PARTA_OI`, `PARTA_QD`, `ITR3ScheduleBP`, `ScheduleCYLA`, `ScheduleBFLA`, `PartB-TI`, and `PartB_TTI`.
+3. **Replace competing sources of truth.** Migrate the active ITR-3 business workspace from `biz-schedule-{PAN}-{AY}-{form}` local storage and generic `CanonicalObject` state into the canonical draft, preserving stable schedule identifiers and explicit applicability state.
+4. **Follow official order.** Rebuild the ITR-3 workflow as `PartA_GEN2 → PARTA_BS → ManufacturingAccount → TradingAccount → PARTA_PL → PARTA_OI → PARTA_QD → schedules`, while keeping calculated values read-only and linked to their source schedule.
+5. **Create the backend pipeline** in `app/engine/draft_to_itr3_input.py`, add ITR-3 v2 gateway dispatch, complete typed mapping, input/calculation validation, official JSON-schema validation, and builder integration. No ITR-3 filing or submission path is considered available before this gate passes.
+6. **Add the exit test:** `UI → ReturnDraft → typed ITR3Input → official JSON → official schema validation`, with round-trip preservation tests and negative tests for omitted/inapplicable conditional blocks.
+
+Until this correction scope is complete, Phases 1–5 are historical prototype milestones and must not be described as completed official implementation.
 
 ## 1. Official source authority
 
@@ -24,9 +37,9 @@ The PDF controls user-facing order and arithmetic context. The JSON schema contr
 
 ## 3. Page and schedule roadmap in official PDF order
 
-### Phase 1 — Personal Information (A1–A18) — ✅ COMPLETED
+### Phase 1 — Personal Information (A1–A18) — ⚠️ PROTOTYPE GROUNDWORK (NOT EXACT)
 
-**Completed:** 2026-09-14
+**Prototype milestone (not an exact official implementation):**
 **Implementation:** `frontend/src/components/ITR3PersonalInfoPage.tsx`, wired through the ITR-3-only branch in `frontend/src/pages/ITRComputationPage.tsx`.
 **Commit:** `16ee72a` (`Implement ITR-3 personal information foundation`)
 
@@ -45,12 +58,14 @@ UI sections delivered:
 
 Isolation guarantee: the existing `PersonalInfoTab` remains the rendering path for ITR-1, ITR-2, and ITR-4. No ITR-1/2/4 component behavior was changed for this page.
 
-Validation completed:
+Validation completed for the prototype only (not an official-schema exit gate):
 
 - Frontend production build: passed (`tsc -b && vite build`).
 - Affected backend regression tests: **226 passed**.
 - `git diff --check`: passed.
 - Changes pushed to `origin/devansh-dev`.
+
+These checks do not establish schema-exact serialization, mapper correctness, or filing readiness.
 
 Known Phase 1 follow-ups, intentionally deferred to later phases:
 
@@ -58,9 +73,9 @@ Known Phase 1 follow-ups, intentionally deferred to later phases:
 - Typed canonical persistence for the full ITR-3 business workspace and all supporting schedules.
 - Complete representative/Karta cross-field validation and backend ITR-3 mapper/schema-validator integration.
 
-### Phase 2 — Filing Status (A19) — ✅ COMPLETED
+### Phase 2 — Filing Status (A19) — ⚠️ PROTOTYPE GROUNDWORK (NOT EXACT)
 
-**Completed:** 2026-09-14**Implementation:** Extended `frontend/src/components/ITR3PersonalInfoPage.tsx` only; ITR-1/2/4 personal-information rendering remains unchanged.
+**Prototype milestone (not an exact official implementation):****Implementation:** Extended `frontend/src/components/ITR3PersonalInfoPage.tsx` only; ITR-1/2/4 personal-information rendering remains unchanged.
 
 Schema paths: `PartA_GEN1.FilingStatus` and related filing-profile fields already present in the canonical `ReturnDraft`.
 
@@ -86,9 +101,9 @@ Intentional deferrals to typed-model/backend phases:
 - Form 10-IEA history and all CBDT cross-field validation in the backend mapper/validator.
 
 
-### Phase 3 — Audit Information (A20) — ✅ COMPLETED
+### Phase 3 — Audit Information (A20) — ⚠️ PROTOTYPE GROUNDWORK (NOT EXACT)
 
-**Completed:** 2026-09-14
+**Prototype milestone (not an exact official implementation):**
 **Implementation:** Added canonical `itr3AuditInfo` to frontend/backend `ReturnDraft`, safe factory defaults, loaded-draft normalization, and an isolated ITR-3 Part A A20 audit editor in `frontend/src/components/ITR3PersonalInfoPage.tsx`.
 
 Schema path: `PartA_GEN2.AuditInfo`.
@@ -116,9 +131,9 @@ Intentional deferrals:
 - Nature-of-business code entry, scheduled for Phase 4.
 
 
-### Phase 4 — Nature of Business or Profession — ✅ COMPLETED
+### Phase 4 — Nature of Business or Profession — ⚠️ PROTOTYPE GROUNDWORK (NOT EXACT)
 
-**Completed:** 2026-09-14
+**Prototype milestone (not an exact official implementation):**
 **Implementation:** Added canonical `itr3NatureOfBusiness` rows to frontend/backend `ReturnDraft`, factory defaults, loaded-draft normalization, and an isolated ITR-3 activity editor in `frontend/src/components/ITR3PersonalInfoPage.tsx`.
 
 Schema path: `PartA_GEN2.NatOfBus.NatureOfBusiness[]`.
@@ -144,9 +159,9 @@ Intentional deferrals:
 - Business-specific activity applicability and duplicate-code validation, to be added with the business-profile model.
 
 
-### Phase 5 — Part A-BS — Balance Sheet — ✅ COMPLETED
+### Phase 5 — Part A-BS — Balance Sheet — ⚠️ PROTOTYPE GROUNDWORK (NOT EXACT)
 
-**Completed:** 2026-09-14
+**Prototype milestone (not an exact official implementation):**
 **Implementation:** Added canonical `itr3BalanceSheet` to frontend/backend `ReturnDraft`, factory defaults, loaded-draft normalization, and an isolated Part A-BS editor in `frontend/src/components/ITR3PersonalInfoPage.tsx`.
 
 Schema path: `PARTA_BS`, with the current UI organized into official Sources of Funds and Application of Funds groups.

@@ -1756,6 +1756,14 @@ class ReconciliationState(_StrictModel):
     discrepancies: list[ReconciliationDiscrepancy] = Field(default_factory=list)
 
 
+class ITR3BusinessWorkspace(_StrictModel):
+    """Lossless generic ITR-3 business workspace payload."""
+
+    core: dict[str, Any] = Field(default_factory=dict)
+    auxiliary: dict[str, Any] = Field(default_factory=dict)
+    selectedSchedules: list[str] = Field(default_factory=list)
+
+
 class ReturnDraft(_StrictModel):
     """Canonical ITR return draft — the single typed persisted shape.
 
@@ -1769,6 +1777,7 @@ class ReturnDraft(_StrictModel):
     form: ItrForm = Field(default="ITR-1")
     regime: TaxRegime = Field(default="new")
     personal: PersonalInfo = Field(default_factory=PersonalInfo)
+    itr3BusinessWorkspace: ITR3BusinessWorkspace = Field(default_factory=ITR3BusinessWorkspace)
     itr3AuditInfo: ITR3AuditInfo = Field(default_factory=ITR3AuditInfo)
     itr3BalanceSheet: ITR3BalanceSheet = Field(default_factory=ITR3BalanceSheet)
     itr3NatureOfBusiness: list[ITR3NatureOfBusiness] = Field(default_factory=list)

@@ -6,8 +6,7 @@ All endpoints require a valid Bearer token (get_current_user dependency).
 Endpoints:
   POST  /itr1/compute        — compute ITR-1 tax, return breakdown (no DB write)
   POST  /itr2/compute        — compute ITR-2 tax, return breakdown (no DB write)
-  POST  /itr3/compute        — compute ITR-3 tax, return breakdown (no DB write)
-  POST  /itr{1,2,3}/compute-json — compute and return CBDT ITD-compliant JSON
+  POST  /itr{1,2}/compute-json — compute and return CBDT ITD-compliant JSON
 
 `/itr4/compute`, `/itr4/compute-json`, and the `/returns/save`, `GET /returns`,
 `GET /returns/{id}` saved-return CRUD endpoints were removed 2026-09-05 (full-codebase
@@ -29,16 +28,13 @@ from app.auth.dependencies import get_current_user
 from app.db.models import User
 from app.engine.calculators.itr1 import compute as compute_itr1
 from app.engine.calculators.itr2 import compute as compute_itr2
-from app.engine.calculators.itr3 import compute as compute_itr3
 from app.engine.validators.itr1 import run_input_validation as itr1_input_val, run_calc_validation as itr1_calc_val
 from app.engine.validators.itr2 import run_input_validation as itr2_input_val, run_calc_validation as itr2_calc_val
 from app.schemas.itr1 import ITR1Input
 from app.schemas.itr2 import ITR2Input
-from app.schemas.itr3 import ITR3Input
 from app.schemas.itr_responses import (
     ITR1ComputeResponse,
     ITR2ComputeResponse,
-    ITR3ComputeResponse,
 )
 
 router = APIRouter(tags=["itr"])
@@ -131,24 +127,6 @@ def itr2_compute(
     return response
 
 
-@router.post("/itr3/compute", response_model=ITR3ComputeResponse)
-def itr3_compute(
-    body: ITR3Input,
-    current_user: User = Depends(get_current_user),
-) -> ITR3ComputeResponse:
-    """
-    Run the ITR-3 tax engine and return the full breakdown.
-
-    Raises HTTP 422 if the input is invalid (Pydantic validation).
-    Does NOT persist anything to the database.
-    """
-    try:
-        result = compute_itr3(body)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    return _build_itr3_response(result)
-
-
 # ---------------------------------------------------------------------------
 # Response builders (dataclass → Pydantic response with field-name mapping)
 # ---------------------------------------------------------------------------
@@ -164,11 +142,6 @@ def _build_itr1_response(result) -> ITR1ComputeResponse:
     d["deductions_chapter6a"] = d.pop("deductions_total")
     d["total_tax_payable"] = d.pop("net_tax_liability")
     return ITR1ComputeResponse.model_validate(d)
-
-
-def _build_itr3_response(result) -> ITR3ComputeResponse:
-    """Convert ITR3Result dataclass to the ITR3ComputeResponse Pydantic model."""
-    return ITR3ComputeResponse.model_validate(asdict(result))
 
 
 # ---------------------------------------------------------------------------
@@ -288,31 +261,8 @@ def itr2_compute_json(
     )
 
 
-@router.post("/itr3/compute-json")
-def itr3_compute_json(
-    body: ITR3Input,
-    current_user: User = Depends(get_current_user),
-) -> Response:
-    """Compute ITR-3 and return CBDT ITD-compliant JSON."""
-    from app.engine.itd.itr3 import build_itr3_json
-
-    try:
-        result = compute_itr3(body)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-
-    try:
-        itd_json = build_itr3_json(result)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"ITD JSON generation failed: {exc}",
-        )
-
-    return Response(
-        content=json.dumps(itd_json, indent=2, default=str),
-        media_type="application/json",
-        headers={"Content-Disposition": "attachment; filename=ITR-3.json"},
-    )
-
+# The canonical ReturnDraft → filing_gateway_v2 pipeline is the only ITR-3
+# generation path. The old /itr3/compute-json endpoint was removed because it
+# accepted a separate ITR3Input, used placeholder identity data, and bypassed
+# canonical persistence, validators, and official schema validation.
 

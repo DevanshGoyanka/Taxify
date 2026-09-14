@@ -20,7 +20,6 @@ from app.routers.client_itr_v2 import (
     _load_saved_draft,
     router as v2_router,
 )
-from app.routers.client_itr import router as legacy_router
 from app.schemas.return_draft import ReturnDraft, migrate_stored_draft_payload
 
 
@@ -45,12 +44,6 @@ def test_v2_download_routes_use_get() -> None:
     v2_pdf = by_path["/v2/clients/{client_id}/itr/{year}/download-pdf"]
     assert "GET" in v2_download.methods
     assert "GET" in v2_pdf.methods
-
-
-def test_legacy_download_routes_still_registered() -> None:
-    """Regression: the legacy download-pdf route stays until Phase 7."""
-    paths = _router_paths(legacy_router)
-    assert "/clients/{client_id}/itr/{year}/download-pdf" in paths
 
 
 # ── _load_saved_draft helper ────────────────────────────────────────────────

@@ -23,6 +23,7 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from app.engine.calculators.itr3 import ITR3Result
+from app.schemas.itr3 import ITR3Input
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -120,22 +121,30 @@ def _parta_gen1(
 # PartA_GEN2 — Business-specific (REQUIRED in ITR-3)
 # ============================================================================
 
-def _parta_gen2() -> dict:
+def _parta_gen2(typed_input: ITR3Input | None = None) -> dict:
+    """Build Part A-GEN2 from typed audit and business disclosures."""
+    audit = typed_input.audit_info if typed_input is not None else None
+    nature_rows = typed_input.nature_of_business if typed_input is not None else None
+    audit_info: dict[str, Any] = {
+        "AccountAuditFlag": "Y" if audit and audit.account_audited else "N",
+        "AuditAccountantFlg": "Y" if audit and audit.account_audited else "N",
+        "AgrOFAllAmtsRcvd": "Upto5Per",
+        "AgrOFAllPayMade": "Upto5Per",
+        "IncDclrdUs": "Y" if audit and audit.income_declared_under_presumptive else "N",
+        "LiableSec44AAflg": "Y" if audit and audit.liable_sec_44aa else "N",
+        "LiableSec44ABflg": "Y" if audit and audit.liable_sec_44ab else "N",
+        "LiableSec92Eflg": "Y" if audit and audit.liable_sec_92e else "N",
+    }
+    nature_of_business = [
+        {
+            "Code": str(row.code).zfill(5),
+            "Description": row.description or "",
+        }
+        for row in (nature_rows or [])
+    ]
     return {
-        "AuditInfo": {
-            "AccountAuditFlag": "N",
-            "AuditAccountantFlg": "N",
-            "AgrOFAllAmtsRcvd": "Upto5Per",
-            "AgrOFAllPayMade": "Upto5Per",
-            "IncDclrdUs": "N",
-            "LiableSec44AAflg": "N",
-            "LiableSec44ABflg": "N",
-            "LiableSec92Eflg": "N",
-            "AckNum44AB": 0,
-        },
-        "NatOfBus": {
-            "NatureOfBusiness": [{"Code": "00001", "Description": "Business"}],
-        },
+        "AuditInfo": audit_info,
+        "NatOfBus": {"NatureOfBusiness": nature_of_business},
     }
 
 
@@ -1007,6 +1016,7 @@ class _DummyCG:
 
 def build_itr3_json(
     result: ITR3Result,
+    typed_input: ITR3Input | None = None,
     *,
     pan: str = "AAAPA1234A",
     first_name: str = "",
@@ -1031,9 +1041,32 @@ def build_itr3_json(
     tds1_entries: Optional[list[dict]] = None,
     tds2_entries: Optional[list[dict]] = None,
 ) -> dict:
-    """Build an ITD-compliant ITR-3 JSON document."""
+    """Build an ITR-3 payload; canonical calls must supply typed identity."""
+    if typed_input is not None:
+        if not typed_input.assessee_pan or not typed_input.assessee_dob:
+            raise ValueError("ITR3Input identity requires assessee_pan and assessee_dob for canonical JSON")
+        pan = typed_input.assessee_pan
+        first_name = typed_input.assessee_first_name
+        middle_name = typed_input.assessee_middle_name
+        last_name = typed_input.assessee_last_name
+        dob = typed_input.assessee_dob
+        father_name = typed_input.assessee_father_name
+        ver_place = typed_input.verification_place
+        residence_no = typed_input.residence_no or ""
+        locality = typed_input.locality or ""
+        city = typed_input.city or ""
+        state_code = typed_input.state_code or ""
+        country_code = typed_input.country_code or ""
+        pin_code = typed_input.pin_code
+        mobile_no = typed_input.mobile_no
+        email = typed_input.email
+        if not typed_input.verification_date:
+            raise ValueError("ITR3Input.verification_date is required for canonical JSON")
+        verification_date = typed_input.verification_date
+    else:
+        verification_date = "2026-07-31"
 
-    assessee_name = f"{first_name} {last_name}".strip()
+    assessee_name = f"{first_name} {middle_name} {last_name}".strip()
 
     cg_data = result.schedules.get("cg")
     if cg_data is None:
@@ -1052,7 +1085,7 @@ def build_itr3_json(
             secondary_add=secondary_add, pin_code=pin_code,
             assessee_status=assessee_status,
         ),
-        "PartA_GEN2": _parta_gen2(),
+        "PartA_GEN2": _parta_gen2(typed_input),
         "ITR3ScheduleBP": _schedule_bp(result),
         "PARTA_BS": _parta_bs(),
         "PARTA_PL": _parta_pl(),
@@ -1131,7 +1164,7 @@ def build_itr3_json(
         itr3["ITR3ScheduleUD"] = _schedule_ud()
 
     # ITR-3 Verification requires Date
-    itr3["Verification"]["Date"] = "2026-07-31"
+    itr3["Verification"]["Date"] = verification_date
 
     # Digest is computed over the COMPLETE ITR document (the whole
     # ``{"ITR": {"ITR3": ...}}`` JSON, matching the ITD reference

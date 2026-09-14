@@ -1,6 +1,6 @@
 # ITR-2 & ITR-3 — v2 Canonical Pipeline Production Implementation Plan
 
-**Status:** Active implementation tracker. Phases 1–5D are delivered; Phase 5E remains, followed by the mandatory shared canonical-profile and complete-preparer migration before frontend or direct-submit work begins. Updated immediately after each phase — status, files touched, verification result — matching the convention of `ITR4_V2_PIPELINE_AND_LEGACY_DELETION_PLAN.md`.
+**Status:** ITR-2 legacy cleanup is delivered. ITR-3 canonical foundation and business-workspace persistence are in progress; the former stateless ITR-3 compute/JSON routes have been removed. Exact official schedule models, complete preparation, validator coverage, and filing enablement remain gated.
 **Date:** 2026-09-01 (created) · last phase update 2026-09-02
 **Authority:** This is the single source of truth for building ITR-2 and ITR-3 on the same complete-preparation standard now established by the ITR-1 and ITR-4 canonical flows. It is verified against `Docs/ITR1_ITR4_COMPLETE_PIPELINE_REFERENCE.md` and `Docs/design/CANONICAL_RETURN_PIPELINE_MIGRATION_PLAN.md` at every step — nothing here is guessed from an older doc's claims.
 **Relationship to `Docs/ERI_UAT_EXPANSION_PLAN.md`:** that doc owns the shared UAT-pack
@@ -22,7 +22,7 @@ items point to, not a duplicate.
 | 5G | Migrate ITR-2 to complete pre-calculation preparation | ✅ Delivered 2026-09-02 |
 | 6 | Frontend: wire ITR-2 onto the canonical `ReturnDraft` | ✅ Delivered 2026-09-02 |
 | 7 | ITR-2 v2 endpoints + Direct Submit allowlist | ✅ Delivered 2026-09-02 |
-| 8 | ITR-3 on the shared complete-preparation contract | Not started |
+| 8 | ITR-3 on the shared complete-preparation contract | In progress — canonical foundation and legacy-route cleanup delivered; exact schedules, validators, complete preparation, and filing enablement remain |
 | 9 | Delete the dead ITR-2 legacy path | Not started |
 | 10 | Production hardening + final verification | Not started |
 
@@ -37,17 +37,17 @@ in before JSON emission, frontend hitting only `/v2/*` and `/api/v1/filing/*`, p
 via `ClientITR.form_data` as serialized `ReturnDraft`, Digest via `app/eri/digest.py`, and
 Type-3 submission working via the existing form-agnostic uploader.
 
-ITR-2 and ITR-3 do not yet meet the complete-preparation standard. ITR-2 now has substantial delivered foundation work — typed draft fields, canonical mapping, v2 dispatch, JSON generation, and validator coverage through 5D — but its filing-detail enrichment still requires the Phase 5F/5G migration. ITR-3 remains without a canonical mapper, v2 dispatch, or production frontend path. Verified current state (research conducted this session, cross-checked against actual code):
+ITR-3 has a canonical compute/generation foundation, but it is not filing-enabled: the exact official schedule models, lossless workspace mapping, real validator suite, placeholder schedule removal, and complete filing preparation are still open.
 
 | | ITR-2 | ITR-3 |
 |---|---|---|
 | Pydantic input schema | `app/schemas/itr2.py`, 655 lines, complete | `app/schemas/itr3.py`, 263 lines — imports ITR-2's CG/VDA/FSI/TR/SPI/AMT types directly, adds PGBP/balance-sheet/audit types |
 | Calculator | `app/engine/calculators/itr2.py`, 914 lines, complete | `app/engine/calculators/itr3.py`, 581 lines, complete |
-| ITD JSON builder | `app/engine/itd/itr2.py`, 1677 lines, ~25 schedules, complete | `app/engine/itd/itr3.py`, 1130 lines, complete |
-| CBDT validators | `app/engine/validators/itr2/`, 625 lines total (~15% of ITR-1's 4431) | `app/engine/validators/itr3/`, **57 lines total — a stub, not a partial suite** |
-| Canonical `ReturnDraft` mapper | **Does not exist** | **Does not exist** |
-| `filing_gateway_v2.py` dispatch | **Rejects** ITR-2 explicitly (`"ITR-2/3 not yet supported by the v2 pipeline"`) | Same rejection |
-| Live production path today | A **third, separate** flat-payload path: `app/routers/tax.py::_compute_itr2_from_flat_payload` → `compute_itr2` (no `ReturnDraft`, no CBDT rule validation before JSON, no Direct Submit) | No live compute path found at all — `/itr3/compute` (`app/routers/itr.py`) is a dead route (§ pipeline reference doc's route inventory) |
+| ITD JSON builder | `app/engine/itd/itr2.py`, 1677 lines, ~25 schedules, complete | `app/engine/itd/itr3.py`, retained canonical builder behind official-schema validation; placeholder/default schedules remain a filing-readiness gap |
+| CBDT validators | `app/engine/validators/itr2/`, 625 lines total (~15% of ITR-1's 4431) | `app/engine/validators/itr3/` remains a stub; real ITR-3 input/calculation validator coverage is still required |
+| Canonical `ReturnDraft` mapper | **Does not exist** | `app/engine/draft_to_itr3_input.py` — requires business/professional data and preserves canonical identity/profile fields |
+| `filing_gateway_v2.py` dispatch | **Rejects** ITR-2 explicitly (`"ITR-2/3 not yet supported by the v2 pipeline"`) | Dispatches through `compute_canonical_itr3()` and validates generated JSON against the official schema |
+| Live production path today | A **third, separate** flat-payload path: `app/routers/tax.py::_compute_itr2_from_flat_payload` → `compute_itr2` (no `ReturnDraft`, no CBDT rule validation before JSON, no Direct Submit) | Canonical v2 compute/generation path only; unified filing remains gated until complete preparation is delivered |
 | Frontend | `frontend/src/api/itr2Mapper.ts` (flat, non-`ReturnDraft`), computable/selectable in the UI but not v2-pipeline-backed | Selectable in the UI (`ITRComputationPage.tsx` form selector), but no confirmed working compute path |
 | Type-3 UAT sample | Not generated | Not generated |
 
@@ -1644,8 +1644,9 @@ before accepting, per this project's standing practice.
     component-test coverage to extend); `npm run build` clean (same pre-existing large-chunk
     warning).
 
-### Phase 8 ? ITR-3: build on the shared complete-preparation contract
+### Phase 8 — ITR-3: build on the shared complete-preparation contract
 
+- **Status:** In progress. Canonical mapper, v2 dispatch, persisted business workspace, stateless-route cleanup, baseline validators, Schedule BP workspace-to-input mapping, and Part A-GEN2 audit/nature-of-business mapping are delivered. Exact official models, comprehensive validator coverage, complete preparation, and filing enablement remain open.
 ITR-3 must not copy the current ITR-2 split mapper/gateway pattern. It starts only after Phase 5F establishes the shared personal profile and Phase 5G proves the complete-preparer lifecycle.
 
 ```text
@@ -1663,19 +1664,7 @@ The ITR-3 validator work requires a separate rule inventory. Classify every offi
 
 **Sub-phases:** 8.1 extend draft fields, 8.2 close schema imports, 8.3 build the complete canonical mapper/preparer, 8.4 wire gateway dispatch, 8.5 build the classified validator suite, 8.6 wire the frontend, and 8.7 extend endpoints/Direct Submit. Every sub-phase must preserve the same single prepared input for computation and JSON.
 
-**Item flagged for resolution in this phase (2026-09-05, full-codebase dead-code audit)**:
-`app/routers/itr.py`'s `/itr3/compute`/`/itr3/compute-json` (functions `itr3_compute`/
-`itr3_compute_json`) currently have **zero frontend callers and zero test coverage** —
-strictly weaker than every sibling form's compute route (ITR-1/ITR-2 both have direct test
-coverage in `test_itr1_route_validation.py`/`test_itr2_production_path.py`; ITR-4's equivalents
-were removed for the same reason in the same audit — see Phase 10-adjacent cleanup note below).
-Deliberately left in place for now rather than removed, since ITR-3 is mid-build here in Phase
-8 and the route may become genuinely load-bearing once wired to the frontend (sub-phase 8.7).
-**Resolve as part of sub-phase 8.7**: either wire `/itr3/compute`/`/itr3/compute-json` into the
-live frontend and add real test coverage matching ITR-1/2's pattern, or confirm they remain
-unneeded once the v2 canonical path is complete and remove them then — do not let them persist
-untested and uncalled past this phase's completion.
-
+**Historical route decision (resolved 2026-09-14):** The uncalled legacy `/itr3/compute` and `/itr3/compute-json` routes were removed. ITR-3 generation is available only through the canonical `ReturnDraft → filing_gateway_v2` path, which fails closed on incomplete or official-schema-invalid output. This entry previously claimed `app/engine/filing_gateway.py` was "intentionally retained" because an integration endpoint still imported its flat adapter — re-verified same-day by a fresh repo-wide grep and that claim was wrong: there was no live importer anywhere in `app/` (only a docstring mention in `filing_orchestrator.py` noting the path was no longer reachable), matching this doc's own earlier 2026-09-02 entry under Phase 8 ("Confirmed via grep that `app.engine.filing_gateway` now has zero callers anywhere in `app/`"). `app/engine/filing_gateway.py`, its 6 dedicated tests, and the legacy `app/routers/client_itr.py` router (also zero live callers — the frontend only ever called the `/v2` routes) were deleted 2026-09-14. Do not write a "retained because X still uses it" note again without a fresh grep confirming X actually does.
 ### Phase 9 — Delete the now-dead ITR-2 legacy path
 
 Once Phases 5E–5G, Phase 6, and Phase 7 are tested and the frontend no longer calls the flat-payload path:
@@ -1726,6 +1715,7 @@ that UAT pack is emailed.
 - `pytest tests/test_itr1_*.py tests/test_itr4_*.py -v` stays green after every phase.
 - Every new `ITR2Input`/`ITR3Input` construction round-trips through `compute_itr{2,3}` →
   `build_itr{2,3}_json` → `validate_itr{2,3}_json` (official CBDT schema) without error.
+  The current ITR-3 foundation additionally rejects incomplete canonical drafts before generation.
 - `run_input_validation`/`run_calc_validation` report `can_upload=True`, zero Category-A
   blocking errors, for a known-good fixture.
 - `npm run build` (`tsc -b && vite build`) clean after every frontend-touching phase.

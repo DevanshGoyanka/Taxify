@@ -136,7 +136,7 @@ class BalanceSheet(BaseModel):
 
 class NatureOfBusiness(BaseModel):
     """Nature of business codes for ITR-3 PartA_GEN2."""
-    code: int = Field(default=1, ge=1, le=99)
+    code: str = Field(default="00001", pattern=r"^[0-9]{5}$")
     description: Optional[str] = Field(default=None, max_length=125)
 
 
@@ -146,6 +146,7 @@ class AuditInfo(BaseModel):
     liable_sec_44aa: bool = Field(default=False)
     liable_sec_92e: bool = Field(default=False)
     account_audited: bool = Field(default=False)
+    income_declared_under_presumptive: bool = Field(default=False)
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +193,26 @@ class ITR3Input(BaseModel):
     tax_regime: TaxRegime = Field(...)
     residential_status: ResidentialStatus = Field(default=ResidentialStatus.RES)
     filing_section: ReturnFileSection = Field(default=ReturnFileSection.S11)
+
+    # Canonical filing identity/profile used by the ITD builder. These remain
+    # optional for legacy calculator callers, but canonical generation never
+    # fabricates them.
+    assessee_pan: Optional[str] = Field(default=None)
+    assessee_first_name: str = Field(default="")
+    assessee_middle_name: str = Field(default="")
+    assessee_last_name: str = Field(default="")
+    assessee_dob: Optional[str] = Field(default=None)
+    assessee_father_name: str = Field(default="")
+    verification_place: Optional[str] = Field(default=None)
+    verification_date: Optional[str] = Field(default=None)
+    residence_no: Optional[str] = Field(default=None)
+    locality: Optional[str] = Field(default=None)
+    city: Optional[str] = Field(default=None)
+    state_code: Optional[str] = Field(default=None)
+    country_code: Optional[str] = Field(default=None)
+    pin_code: Optional[str] = Field(default=None)
+    mobile_no: Optional[str] = Field(default=None)
+    email: Optional[str] = Field(default=None)
 
     # --- Business Income (core PGBP) ---
     business_income: Optional[BusinessIncome] = Field(default=None)

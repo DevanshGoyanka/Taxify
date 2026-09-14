@@ -350,10 +350,12 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         non_spec_biz_income=pgbp.non_spec_net_income if has_pgbp and pgbp.non_spec_net_income > 0 else z,
         spec_biz_loss=pgbp.speculative_signed if has_pgbp and pgbp.speculative_signed < 0 else z,
         spec_biz_income=pgbp.speculative_net_income if has_pgbp and pgbp.speculative_net_income > 0 else z,
-        stcg_loss=z,   # intra-head, already handled by aggregate()
-        stcg_income=cg_result.total_capital_gains if cg_result.total_capital_gains > 0 else z,
-        ltcg_loss=z,   # intra-head, already handled by aggregate()
-        ltcg_income=z,
+        stcg20_income=z,
+        stcg30_income=z,
+        stcg_app_income=cg_result.total_capital_gains if cg_result.total_capital_gains > 0 else z,
+        stcg_dtaa_income=z,
+        ltcg125_income=z,
+        ltcg_dtaa_income=z,
         non_salary_income=max(z, r.salary_income) + max(z, r.other_sources_income - r.clubbing_income),
     )
     cyla = compute_cyla(cy_input)
@@ -380,8 +382,12 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         hp_income=hp.income_chargeable if hp.income_chargeable > 0 else z,
         non_spec_biz_income=pgbp.non_spec_net_income if has_pgbp and pgbp.non_spec_net_income > 0 else z,
         spec_biz_income=pgbp.speculative_net_income if has_pgbp and pgbp.speculative_net_income > 0 else z,
-        stcg_income=cg_income_for_bfla,
-        ltcg_income=z,
+        stcg20_income=cg_income_for_bfla,
+        stcg30_income=z,
+        stcg_app_income=z,
+        stcg_dtaa_income=z,
+        ltcg125_income=z,
+        ltcg_dtaa_income=z,
         bf_losses=bf_list,
     )
     bfla = compute_bfla(bf_input)
