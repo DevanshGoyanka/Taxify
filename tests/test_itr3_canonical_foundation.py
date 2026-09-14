@@ -92,7 +92,44 @@ def test_itr3_mapper_uses_schedule_bp_workspace_values() -> None:
     assert breakdown["business_income"] == Decimal("125000")
 
 
-def test_itr3_builder_uses_part_a_gen2_workspace_data() -> None:
+def test_itr3_mapper_preserves_part_a_pl_workspace_values() -> None:
+    """The typed input preserves required PARTA_PL workspace totals."""
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {
+        "PARTA_PL": {
+            "GrossProfit": 240000,
+            "Expenditure": 90000,
+            "NetIncomeFrmSpecActivity": 12000,
+            "TurnverFrmSpecActivity": 300000,
+            "NoBooksOfAccPL": {"GrossReceipt": 400000, "GrossProfit": 150000, "Expenses": 50000, "NetProfit": 100000},
+            "TaxProvAppr": {"ProvForCurrTax": 20000, "ProvDefTax": 5000, "ProfitAfterTax": 75000},
+            "CreditsToPL": {"GrossProfitTrnsfFrmTrdAcc": 240000, "TotCreditsToPL": 252000, "OthIncome": {"TotOthIncome": 12000}},
+            "DebitsToPL": {"OtherExpenses": 90000, "PBT": 162000},
+        }
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    assert typed_input.profit_and_loss is not None
+    assert typed_input.profit_and_loss.gross_profit == Decimal("240000")
+    assert typed_input.profit_and_loss.no_books_net_profit == Decimal("100000")
+    assert typed_input.profit_and_loss.profit_before_tax == Decimal("162000")
+
+
+def test_itr3_builder_uses_part_a_pl_workspace_data() -> None:
+    """PARTA_PL JSON carries typed workspace totals instead of hardcoded zeros."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {"PARTA_PL": {"GrossProfit": 240000, "Expenditure": 90000, "NetIncomeFrmSpecActivity": 12000, "TurnverFrmSpecActivity": 300000}}
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    pl = document["ITR"]["ITR3"]["PARTA_PL"]
+    assert pl["GrossProfit"] == 240000
+    assert pl["Expenditure"] == 90000
+    assert pl["NetIncomeFrmSpecActivity"] == 12000
+    assert pl["TurnverFrmSpecActivity"] == 300000
+
+
     """Part A-GEN2 JSON carries mapped audit and nature-of-business data."""
     from app.engine.calculators.itr3 import compute as compute_itr3
     from app.engine.itd.itr3 import build_itr3_json

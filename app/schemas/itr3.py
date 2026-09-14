@@ -121,6 +121,39 @@ class BusinessIncome(BaseModel):
     specified_business_deductions: Decimal = Field(default=Decimal("0"), ge=0)
 
 
+class ITR3BusinessAccounts(BaseModel):
+    """Schema-shaped Manufacturing Account and Trading Account payloads.
+
+    The keys intentionally mirror the official CBDT schedule names exactly;
+    official JSON-schema validation remains the final authority while the
+    remaining nested accounting fields are progressively typed.
+    """
+
+    manufacturing_account: Optional[dict] = Field(default=None)
+    trading_account: Optional[dict] = Field(default=None)
+
+
+class ProfitAndLoss(BaseModel):
+    """Typed required PARTA_PL totals and no-books disclosures."""
+
+    gross_profit: Decimal = Field(default=Decimal("0"), ge=0)
+    expenditure: Decimal = Field(default=Decimal("0"), ge=0)
+    net_income_from_special_activity: Decimal = Field(default=Decimal("0"), ge=0)
+    turnover_from_special_activity: Decimal = Field(default=Decimal("0"), ge=0)
+    no_books_gross_receipt: Decimal = Field(default=Decimal("0"), ge=0)
+    no_books_gross_profit: Decimal = Field(default=Decimal("0"), ge=0)
+    no_books_expenses: Decimal = Field(default=Decimal("0"), ge=0)
+    no_books_net_profit: Decimal = Field(default=Decimal("0"), ge=0)
+    provision_current_tax: Decimal = Field(default=Decimal("0"), ge=0)
+    provision_deferred_tax: Decimal = Field(default=Decimal("0"), ge=0)
+    profit_after_tax: Decimal = Field(default=Decimal("0"), ge=0)
+    gross_profit_from_trading: Decimal = Field(default=Decimal("0"), ge=0)
+    other_income: Decimal = Field(default=Decimal("0"), ge=0)
+    total_credits: Decimal = Field(default=Decimal("0"), ge=0)
+    total_expenses: Decimal = Field(default=Decimal("0"), ge=0)
+    profit_before_tax: Decimal = Field(default=Decimal("0"))
+
+
 class BalanceSheet(BaseModel):
     """Balance sheet summary for ITR-3."""
     proprietors_fund: Decimal = Field(default=Decimal("0"), ge=0)
@@ -216,6 +249,9 @@ class ITR3Input(BaseModel):
 
     # --- Business Income (core PGBP) ---
     business_income: Optional[BusinessIncome] = Field(default=None)
+
+    # --- Profit and Loss ---
+    profit_and_loss: Optional[ProfitAndLoss] = Field(default=None)
 
     # --- Heads of Income ---
     salary_income: Optional[SalaryIncome] = Field(default=None)

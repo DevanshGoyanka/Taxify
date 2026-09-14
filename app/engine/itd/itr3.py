@@ -358,37 +358,50 @@ def _parta_bs() -> dict:
 # PARTA_PL — Profit & Loss (REQUIRED)
 # ============================================================================
 
-def _parta_pl() -> dict:
-    """PARTA_PL — Profit & Loss (ITR-3 specific structure)."""
+def _parta_pl(typed_input: ITR3Input | None = None) -> dict:
+    """Build PARTA_PL from typed workspace totals with schema-complete defaults."""
+    pl = typed_input.profit_and_loss if typed_input is not None else None
     _obj = {"NonResOtherCompany": 0, "Others": 0, "Total": 0}
-    return {
+    result: dict[str, Any] = {
+        "GrossProfit": _to_rupees(pl.gross_profit if pl else Decimal("0")),
+        "Expenditure": _to_rupees(pl.expenditure if pl else Decimal("0")),
+        "NetIncomeFrmSpecActivity": _to_rupees(pl.net_income_from_special_activity if pl else Decimal("0")),
+        "TurnverFrmSpecActivity": _to_rupees(pl.turnover_from_special_activity if pl else Decimal("0")),
+    }
+    # Preserve the official nested shape while replacing the mapped P&L values.
+    result.update({
         "GoodsDtlsUs44AE": [],
-        "GrossProfit": 0,
-        "NetIncomeFrmSpecActivity": 0,
+        "GrossProfit": _to_rupees(pl.gross_profit if pl else Decimal("0")),
+        "NetIncomeFrmSpecActivity": _to_rupees(pl.net_income_from_special_activity if pl else Decimal("0")),
         "NoBooksOfAccPL": {
-            "GrossReceipt": 0, "GrsRcptAccPayeeOrBankMode": 0, "GrsRcptOtherMode": 0,
-            "GrossProfit": 0, "Expenses": 0, "NetProfit": 0,
+            "GrossReceipt": _to_rupees(pl.no_books_gross_receipt if pl else Decimal("0")),
+            "GrsRcptAccPayeeOrBankMode": 0, "GrsRcptOtherMode": 0,
+            "GrossProfit": _to_rupees(pl.no_books_gross_profit if pl else Decimal("0")),
+            "Expenses": _to_rupees(pl.no_books_expenses if pl else Decimal("0")),
+            "NetProfit": _to_rupees(pl.no_books_net_profit if pl else Decimal("0")),
             "GrossReceiptPrf": 0, "GrsRcptAccPayeeOrBankModePrf": 0,
             "GrsRcptOtherModePrf": 0, "GrossProfitPrf": 0,
             "ExpensesPrf": 0, "NetProfitPrf": 0, "TotBusinessProfession": 0,
         },
         "TaxProvAppr": {
-            "ProvForCurrTax": 0, "ProvDefTax": 0, "ProfitAfterTax": 0,
+            "ProvForCurrTax": _to_rupees(pl.provision_current_tax if pl else Decimal("0")),
+            "ProvDefTax": _to_rupees(pl.provision_deferred_tax if pl else Decimal("0")),
+            "ProfitAfterTax": _to_rupees(pl.profit_after_tax if pl else Decimal("0")),
             "BalBFPrevYr": 0, "AmtAvlAppr": 0, "TrfToReserves": 0,
             "ProprietorAccBalTrf": 0,
         },
-        "TurnverFrmSpecActivity": 0,
-        "Expenditure": 0,
+        "TurnverFrmSpecActivity": _to_rupees(pl.turnover_from_special_activity if pl else Decimal("0")),
+        "Expenditure": _to_rupees(pl.expenditure if pl else Decimal("0")),
         "CreditsToPL": {
             "OthIncome": {
                 "RentInc": 0, "Comissions": 0, "Dividends": 0, "InterestInc": 0,
                 "ProfitOnSaleFixedAsset": 0, "ProfitOnInvChrSTT": 0, "ProfitOnOthInv": 0,
                 "ProfitOnCurrFluct": 0, "ProfitOnCnvInvntryToCapAsst": 0, "ProfitOnAgriIncome": 0,
                 "LiabilityWrittenBack": 0, "AmtofInterest": 0, "AmtofRem": 0,
-                "MiscOthIncome": 0, "TotOthIncome": 0,
+                "MiscOthIncome": 0, "TotOthIncome": _to_rupees(pl.other_income if pl else Decimal("0")),
             },
-            "GrossProfitTrnsfFrmTrdAcc": 0,
-            "TotCreditsToPL": 0,
+            "GrossProfitTrnsfFrmTrdAcc": _to_rupees(pl.gross_profit_from_trading if pl else Decimal("0")),
+            "TotCreditsToPL": _to_rupees(pl.total_credits if pl else Decimal("0")),
         },
         "DebitsToPL": {
             "Freight": 0, "ConsumptionOfStores": 0, "PowerFuel": 0,
@@ -415,7 +428,7 @@ def _parta_pl() -> dict:
                     "OthDutyTaxCess": 0, "Cess": 0, "TotExciseCustomsVAT": 0,
                 },
             },
-            "AuditFee": 0, "OtherExpensesDtls": [], "OtherExpenses": 0,
+            "AuditFee": 0, "OtherExpensesDtls": [], "OtherExpenses": _to_rupees(pl.total_expenses if pl else Decimal("0")),
             "BadDebtDtls": {
                 "BadDebt": 0,
                 "BadDebtAmtDtls": [],
@@ -430,9 +443,10 @@ def _parta_pl() -> dict:
                 "NonResOtherCompany": 0,
                 "Others": 0,
             },
-            "DepreciationAmort": 0, "PBT": 0,
+            "DepreciationAmort": 0, "PBT": _to_rupees(pl.profit_before_tax if pl else Decimal("0")),
         },
-    }
+    })
+    return result
 
 
 # ============================================================================
@@ -1088,7 +1102,7 @@ def build_itr3_json(
         "PartA_GEN2": _parta_gen2(typed_input),
         "ITR3ScheduleBP": _schedule_bp(result),
         "PARTA_BS": _parta_bs(),
-        "PARTA_PL": _parta_pl(),
+        "PARTA_PL": _parta_pl(typed_input),
         "ScheduleCYLA": _schedule_cyla(result),
         "ScheduleBFLA": _schedule_bfla(result),
         "ScheduleCFL": _schedule_cfl(result),

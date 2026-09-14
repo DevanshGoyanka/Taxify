@@ -32,6 +32,12 @@ Two official sources, read together:
 - **PDF:** `Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-3-2026-Eng.pdf`, extracted
   via `pdftotext -layout`. Line numbers are the PDF text-extraction line where each heading
   first appears, kept here as evidence so future re-audits don't have to re-derive the sequence.
+  **Caveat (added 2026-09-14, after an independent re-audit):** these line numbers are
+  indicative for the specific extraction run that produced them, not a stable citation — a
+  different `pdftotext`/poppler version reflows this dense multi-column form differently (an
+  independent re-extraction found the same headings drifting by up to ~370 lines by the time it
+  reaches Schedule S, while the *relative order* of every heading stayed identical either way).
+  Trust the ordering, not the exact line number, if re-deriving this table from scratch.
 - **Schema:** `Reference Docs by CBDT & ITD/Official JSON Schema/ITR-3_2026_Main_V1.1 (2).json`.
   69 schedule blocks on the `ITR3` document node, 287 definitions. The schema's 12
   **required** top-level blocks are marked REQ below; the other 57 are optional (emitted
@@ -98,7 +104,7 @@ the builder emits for it, so both sources are satisfied simultaneously.
 | 50 | Schedule TR — Summary of tax relief for taxes paid outside India | 4058 | `ScheduleTR1` | opt | **Naming divergence:** PDF "Schedule TR" ↔ schema `ScheduleTR1`; `ScheduleTR`/`TotalTaxPaidOutsideIndia`/`TotalTaxReliefOutsideIndia`/`TaxReliefOutsideIndiaDTAA`/`TaxReliefOutsideIndiaNotDTAA`/`AmtTaxRefunded`/`AssmtYrTaxRelief` |
 | 51 | Schedule FA — Foreign Assets & income from any source outside India | 4091 | `ScheduleFA` | opt | `DetailsForiegnBank`/`DtlsForeignCustodialAcc`/`DtlsForeignEquityDebtInterest`/`DtlsForeignCashValueInsurance`/`DetailsFinancialInterest`/`DetailsImmovableProperty`/`DetailsOthAssets`/`DetailsOfAccntsHvngSigningAuth`; resident-only |
 | 52 | Schedule 5A — Apportionment of income (Portuguese Civil Code, S.5A) | 4227 | `Schedule5A2014` | opt | **Naming divergence:** PDF "Schedule 5A" ↔ schema `Schedule5A2014`; `NameOfSpouse`/`PANOfSpouse`/`AadhaarOfSpouse`/`BooksSpouse44ABFlg`/`BooksSpouse92EFlg`/`HPHeadIncome`/`BusHeadIncome`/`CapGainHeadIncome` |
-| 53 | Schedule AL — Assets & Liabilities at year-end (other than Part A-BS) | 4248 | `ScheduleAL` | opt | `ImmovableDetails`/`MovableAsset`/`InterstAOPFlag`/`InterestHeldInaAsset`/`LiabilityInRelatAssets`; applies where income > ₹50 lakh |
+| 53 | Schedule AL — Assets & Liabilities at year-end (other than Part A-BS) | 4248 | `ScheduleAL` | opt | `ImmovableDetails`/`MovableAsset`/`InterstAOPFlag`/`InterestHeldInaAsset`/`LiabilityInRelatAssets`; applies where income > ₹1 crore |
 | 54 | Schedule GST — Turnover/Gross Receipt reported for GST | 4288 | `ScheduleGST` | opt | `TurnoverGrsRcptForGSTIN` array of `{GSTINNo, AmtTurnGrossRcptGSTIN}` |
 | 55 | ESOP (employee stock-option tax deferral) | 4314 | `ScheduleESOP` | opt | `PanofStartUp`/`DPIITRegNo`/year-wise ESOP type fields/`TotalTaxAttributedAmt` |
 | 56 | Part B-TI — Computation of Total Income | 4394 | `PartB-TI` | REQ | `Salaries`/`IncomeFromHP`/`ProfBusGain`/`CapGain`/`IncFromOS`/`TotalTI`/`CurrentYearLoss`/`BalanceAfterSetoffLosses` |
@@ -735,11 +741,16 @@ checks FA completeness (resident with foreign income must fill FA — Part B-TTI
 
 ### Phase 53 — Schedule AL (Assets & Liabilities at year-end, other than Part A-BS)
 
-**PDF anchor:** PDF line 4248. Applies where income > ₹50 lakh.
+**PDF anchor:** PDF line 4248. Applies where income > ₹1 crore (verified 2026-09-14 against the
+notified ITR-3 PDF's own text — "applicable in a case where total income exceeds Rs. 1 crore" —
+after an earlier draft of this doc wrongly carried over ITR-2's ₹50L threshold without
+re-checking ITR-3's own printed figure; there is only one AL threshold in the form and it is
+unambiguous).
 **Schema block:** `ScheduleAL` (`ImmovableDetails`/`MovableAsset`/`InterstAOPFlag`/
 `InterestHeldInaAsset`/`LiabilityInRelatAssets`).
 **Gate 53A — Mapper** reuses ITR-2 `_map_asset_liability`. **Builder** emits `ScheduleAL`
-(conditional on total income > ₹50L). **Validator** checks AL completeness.
+(conditional on total income > ₹1 crore, not ₹50L — see PDF anchor note above). **Validator**
+checks AL completeness.
 
 ### Phase 54 — Schedule GST (Turnover/Gross Receipt reported for GST)
 

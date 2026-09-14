@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input
-from app.schemas.itr3 import AuditInfo, BalanceSheet, BusinessIncome, ITR3Input, NatureOfBusiness
+from app.schemas.itr3 import AuditInfo, BalanceSheet, BusinessIncome, ITR3Input, NatureOfBusiness, ProfitAndLoss
 from app.schemas.itr2 import ResidentialStatus as ITR3ResidentialStatus, ReturnFileSection
 from app.schemas.return_draft import ReturnDraft
 
@@ -145,6 +145,37 @@ def _audit_info(draft: ReturnDraft) -> AuditInfo:
     )
 
 
+def _profit_and_loss(draft: ReturnDraft) -> ProfitAndLoss | None:
+    """Map the authoritative PARTA_PL workspace totals when present."""
+    workspace = _core_schedule(draft, "PARTA_PL")
+    if not workspace:
+        return None
+    no_books = workspace.get("NoBooksOfAccPL", {})
+    tax = workspace.get("TaxProvAppr", {})
+    credits = workspace.get("CreditsToPL", {})
+    other_income = credits.get("OthIncome", {}) if isinstance(credits, Mapping) else {}
+    debits = workspace.get("DebitsToPL", {})
+    interest = debits.get("InterestExpdrtDtls", {}) if isinstance(debits, Mapping) else {}
+    return ProfitAndLoss(
+        gross_profit=_decimal_value(workspace.get("GrossProfit")),
+        expenditure=_decimal_value(workspace.get("Expenditure")),
+        net_income_from_special_activity=_decimal_value(workspace.get("NetIncomeFrmSpecActivity")),
+        turnover_from_special_activity=_decimal_value(workspace.get("TurnverFrmSpecActivity")),
+        no_books_gross_receipt=_decimal_value(no_books.get("GrossReceipt") if isinstance(no_books, Mapping) else None),
+        no_books_gross_profit=_decimal_value(no_books.get("GrossProfit") if isinstance(no_books, Mapping) else None),
+        no_books_expenses=_decimal_value(no_books.get("Expenses") if isinstance(no_books, Mapping) else None),
+        no_books_net_profit=_decimal_value(no_books.get("NetProfit") if isinstance(no_books, Mapping) else None),
+        provision_current_tax=_decimal_value(tax.get("ProvForCurrTax") if isinstance(tax, Mapping) else None),
+        provision_deferred_tax=_decimal_value(tax.get("ProvDefTax") if isinstance(tax, Mapping) else None),
+        profit_after_tax=_decimal_value(tax.get("ProfitAfterTax") if isinstance(tax, Mapping) else None),
+        gross_profit_from_trading=_decimal_value(credits.get("GrossProfitTrnsfFrmTrdAcc") if isinstance(credits, Mapping) else None),
+        other_income=_decimal_value(other_income.get("TotOthIncome") if isinstance(other_income, Mapping) else None),
+        total_credits=_decimal_value(credits.get("TotCreditsToPL") if isinstance(credits, Mapping) else None),
+        total_expenses=_decimal_value(debits.get("OtherExpenses") if isinstance(debits, Mapping) else None),
+        profit_before_tax=_decimal_value(debits.get("PBT") if isinstance(debits, Mapping) else None),
+    )
+
+
 def _business_income(draft: ReturnDraft) -> BusinessIncome:
     """Map canonical business rows and the persisted Schedule BP workspace."""
     if not draft.businesses:
@@ -202,6 +233,7 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
             ReturnFileSection.ON_TIME_139_1,
         ),
         business_income=_business_income(draft),
+        profit_and_loss=_profit_and_loss(draft),
         balance_sheet=_balance_sheet(draft),
         audit_info=_audit_info(draft),
         nature_of_business=[

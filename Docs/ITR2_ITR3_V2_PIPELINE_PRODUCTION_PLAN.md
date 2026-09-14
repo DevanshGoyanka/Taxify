@@ -1646,7 +1646,7 @@ before accepting, per this project's standing practice.
 
 ### Phase 8 — ITR-3: build on the shared complete-preparation contract
 
-- **Status:** In progress. Canonical mapper, v2 dispatch, persisted business workspace, stateless-route cleanup, baseline validators, Schedule BP workspace-to-input mapping, and Part A-GEN2 audit/nature-of-business mapping are delivered. Exact official models, comprehensive validator coverage, complete preparation, and filing enablement remain open.
+- **Status:** In progress. Canonical mapper, v2 dispatch, persisted business workspace, stateless-route cleanup, baseline validators, Schedule BP workspace-to-input mapping, Part A-GEN2 audit/nature-of-business mapping, and PARTA_PL totals mapping are delivered. Exact official models, comprehensive validator coverage, complete preparation, and filing enablement remain open.
 ITR-3 must not copy the current ITR-2 split mapper/gateway pattern. It starts only after Phase 5F establishes the shared personal profile and Phase 5G proves the complete-preparer lifecycle.
 
 ```text
