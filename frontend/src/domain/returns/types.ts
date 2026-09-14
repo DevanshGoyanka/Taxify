@@ -338,6 +338,29 @@ export interface AlternateAddress {
   residenceNo: string; residenceName: string; roadOrStreet: string; localityOrArea: string;
   cityOrTownOrDistrict: string; stateCode: StateCode | ''; countryCode: string; pinCode: string; zipCode: string;
 }
+export interface ITR3BalanceSheet {
+  proprietorCapital: Money;
+  reservesAndSurplus: Money;
+  securedLoans: Money;
+  unsecuredLoans: Money;
+  advancesFromCustomers: Money;
+  otherLiabilities: Money;
+  creditors: Money;
+  provisions: Money;
+  totalSources: Money;
+  fixedAssets: Money;
+  investments: Money;
+  inventories: Money;
+  tradeReceivables: Money;
+  cashAndBank: Money;
+  loansAndAdvances: Money;
+  otherAssets: Money;
+  totalApplications: Money;
+  noBooksOfAccounts: boolean;
+  reconciliationDifference: Money;
+}
+
+/** Canonical ITR-3 Part A-BS balance-sheet profile. */
 export interface ITR3NatureOfBusiness {
   id: string;
   code: string;
@@ -811,6 +834,8 @@ export interface ReturnDraft {
   personal: PersonalInfo;
   /** ITR-3 Part A_GEN2 audit information; ignored by ITR-1/2/4. */
   itr3AuditInfo: ITR3AuditInfo;
+  /** ITR-3 Part A-BS; ignored by ITR-1/2/4. */
+  itr3BalanceSheet: ITR3BalanceSheet;
   /** ITR-3 Part A_GEN2.NatOfBus activity rows; ignored by ITR-1/2/4. */
   itr3NatureOfBusiness: ITR3NatureOfBusiness[];
   filing: FilingStatus; employers: Employer[]; houseProperties: HouseProperty[]; housePropertyPassThroughIncome: number; businesses: PresumptiveBusiness[]; capitalGainsSchedule: CapitalGainsSchedule;

@@ -1,6 +1,6 @@
 # ITR-3 UI Redesign and Implementation Plan — AY 2026-27
 
-**Status:** Phase 4 completed: Nature of Business or Profession. Phase 5 — Part A-BS is next.
+**Status:** Phase 5 completed: Part A-BS Balance Sheet. Phase 6 — Part A-Manufacturing Account is next.
 
 **Scope:** Redesign the ITR-3 experience for tax professionals against the notified form PDF and official CBDT JSON schema, without modifying ITR-1, ITR-2, or ITR-4 behavior. Every phase must persist through the canonical `ReturnDraft`; browser-only `localStorage` is not an acceptable source of filing data.
 
@@ -144,11 +144,34 @@ Intentional deferrals:
 - Business-specific activity applicability and duplicate-code validation, to be added with the business-profile model.
 
 
-### Phase 5 — Part A-BS
+### Phase 5 — Part A-BS — Balance Sheet — ✅ COMPLETED
 
-Schema path: `PARTA_BS`.
+**Completed:** 2026-09-14
+**Implementation:** Added canonical `itr3BalanceSheet` to frontend/backend `ReturnDraft`, factory defaults, loaded-draft normalization, and an isolated Part A-BS editor in `frontend/src/components/ITR3PersonalInfoPage.tsx`.
 
-Tax-professional balance-sheet workspace split into Sources of Funds, Application of Funds, and No-Account-Case. Each group shows subtotals and reconciliation status. Imported opening figures remain traceable; totals are computed and read-only.
+Schema path: `PARTA_BS`, with the current UI organized into official Sources of Funds and Application of Funds groups.
+
+Delivered controls:
+
+- Sources of funds: proprietor’s capital, reserves and surplus, secured loans, unsecured loans, customer advances, other liabilities, creditors, and provisions.
+- Applications of funds: fixed assets, investments, inventories, trade receivables, cash/bank, loans and advances, and other assets.
+- No-books-of-accounts indicator.
+- Automatically calculated total sources and total applications.
+- Visible reconciliation difference warning when the balance sheet does not balance.
+- Read-only derived totals and canonical persistence through `ReturnDraft`.
+
+Validation completed:
+
+- Frontend production build: passed (`tsc -b && vite build`).
+- Backend canonical draft schema tests: **20 passed**.
+- `git diff --check`: passed.
+
+Intentional deferrals:
+
+- Complete nested CBDT `FundSrc`/`FundApply` serialization and `NoBooksOfAccBS` mapper integration.
+- Detailed official sub-blocks such as reserves, current liabilities/provisions, and asset subcategories beyond the professional entry model.
+- Cross-schedule reconciliation with Part A-P&L and Schedule BP, which will be added as those phases are implemented.
+
 
 ### Phase 6 — Part A-Manufacturing Account
 

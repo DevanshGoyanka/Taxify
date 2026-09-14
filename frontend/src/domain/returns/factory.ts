@@ -41,6 +41,13 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       auditReport92EDate: null, acknowledgement92E: '',
     },
     itr3NatureOfBusiness: [],
+    itr3BalanceSheet: {
+      proprietorCapital: 0, reservesAndSurplus: 0, securedLoans: 0, unsecuredLoans: 0,
+      advancesFromCustomers: 0, otherLiabilities: 0, creditors: 0, provisions: 0, totalSources: 0,
+      fixedAssets: 0, investments: 0, inventories: 0, tradeReceivables: 0, cashAndBank: 0,
+      loansAndAdvances: 0, otherAssets: 0, totalApplications: 0, noBooksOfAccounts: false,
+      reconciliationDifference: 0,
+    },
     filing: {
       filingSection: '139(1)', returnType: 'ORIGINAL',
       originalAcknowledgementNumber: '', originalFilingDate: null,

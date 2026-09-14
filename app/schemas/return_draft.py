@@ -1427,6 +1427,30 @@ class BankAccount(Identified):
     useForRefund: bool = Field(default=False)
 
 
+class ITR3BalanceSheet(_StrictModel):
+    """Canonical ITR-3 Part A-BS balance-sheet profile."""
+
+    proprietorCapital: Money = Field(default=Decimal("0"), ge=0)
+    reservesAndSurplus: Money = Field(default=Decimal("0"), ge=0)
+    securedLoans: Money = Field(default=Decimal("0"), ge=0)
+    unsecuredLoans: Money = Field(default=Decimal("0"), ge=0)
+    advancesFromCustomers: Money = Field(default=Decimal("0"), ge=0)
+    otherLiabilities: Money = Field(default=Decimal("0"), ge=0)
+    creditors: Money = Field(default=Decimal("0"), ge=0)
+    provisions: Money = Field(default=Decimal("0"), ge=0)
+    totalSources: Money = Field(default=Decimal("0"), ge=0)
+    fixedAssets: Money = Field(default=Decimal("0"), ge=0)
+    investments: Money = Field(default=Decimal("0"), ge=0)
+    inventories: Money = Field(default=Decimal("0"), ge=0)
+    tradeReceivables: Money = Field(default=Decimal("0"), ge=0)
+    cashAndBank: Money = Field(default=Decimal("0"), ge=0)
+    loansAndAdvances: Money = Field(default=Decimal("0"), ge=0)
+    otherAssets: Money = Field(default=Decimal("0"), ge=0)
+    totalApplications: Money = Field(default=Decimal("0"), ge=0)
+    noBooksOfAccounts: bool = Field(default=False)
+    reconciliationDifference: Money = Field(default=Decimal("0"))
+
+
 class ITR3NatureOfBusiness(Identified):
     """Canonical ITR-3 Part A_GEN2.NatOfBus activity row."""
 
@@ -1746,6 +1770,7 @@ class ReturnDraft(_StrictModel):
     regime: TaxRegime = Field(default="new")
     personal: PersonalInfo = Field(default_factory=PersonalInfo)
     itr3AuditInfo: ITR3AuditInfo = Field(default_factory=ITR3AuditInfo)
+    itr3BalanceSheet: ITR3BalanceSheet = Field(default_factory=ITR3BalanceSheet)
     itr3NatureOfBusiness: list[ITR3NatureOfBusiness] = Field(default_factory=list)
     filing: FilingStatus = Field(default_factory=FilingStatus)
     employers: list[Employer] = Field(default_factory=list)
