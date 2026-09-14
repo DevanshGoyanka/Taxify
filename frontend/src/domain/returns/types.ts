@@ -338,6 +338,14 @@ export interface AlternateAddress {
   residenceNo: string; residenceName: string; roadOrStreet: string; localityOrArea: string;
   cityOrTownOrDistrict: string; stateCode: StateCode | ''; countryCode: string; pinCode: string; zipCode: string;
 }
+export interface ITR3NatureOfBusiness {
+  id: string;
+  code: string;
+  tradeName: string;
+  description: string;
+}
+
+/** Canonical ITR-3 Part A_GEN2 nature-of-business activity row. */
 export interface ITR3AuditInfo {
   liableSec44AA: 'Y' | 'N';
   incomeDeclaredUnderPresumptive: 'Y' | 'N';
@@ -803,6 +811,8 @@ export interface ReturnDraft {
   personal: PersonalInfo;
   /** ITR-3 Part A_GEN2 audit information; ignored by ITR-1/2/4. */
   itr3AuditInfo: ITR3AuditInfo;
+  /** ITR-3 Part A_GEN2.NatOfBus activity rows; ignored by ITR-1/2/4. */
+  itr3NatureOfBusiness: ITR3NatureOfBusiness[];
   filing: FilingStatus; employers: Employer[]; houseProperties: HouseProperty[]; housePropertyPassThroughIncome: number; businesses: PresumptiveBusiness[]; capitalGainsSchedule: CapitalGainsSchedule;
   otherSources: {
     interest: InterestIncome[];

@@ -1427,6 +1427,14 @@ class BankAccount(Identified):
     useForRefund: bool = Field(default=False)
 
 
+class ITR3NatureOfBusiness(Identified):
+    """Canonical ITR-3 Part A_GEN2.NatOfBus activity row."""
+
+    code: str = Field(default="")
+    tradeName: str = Field(default="")
+    description: str = Field(default="")
+
+
 class ITR3AuditInfo(_StrictModel):
     """Canonical ITR-3 Part A_GEN2 audit-information profile."""
 
@@ -1738,6 +1746,7 @@ class ReturnDraft(_StrictModel):
     regime: TaxRegime = Field(default="new")
     personal: PersonalInfo = Field(default_factory=PersonalInfo)
     itr3AuditInfo: ITR3AuditInfo = Field(default_factory=ITR3AuditInfo)
+    itr3NatureOfBusiness: list[ITR3NatureOfBusiness] = Field(default_factory=list)
     filing: FilingStatus = Field(default_factory=FilingStatus)
     employers: list[Employer] = Field(default_factory=list)
     houseProperties: list[HouseProperty] = Field(default_factory=list)

@@ -40,6 +40,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
       auditorPAN: '', auditorAadhaar: '', liableSec92E: 'N', accountAudit: 'N',
       auditReport92EDate: null, acknowledgement92E: '',
     },
+    itr3NatureOfBusiness: [],
     filing: {
       filingSection: '139(1)', returnType: 'ORIGINAL',
       originalAcknowledgementNumber: '', originalFilingDate: null,

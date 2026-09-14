@@ -1,6 +1,6 @@
 # ITR-3 UI Redesign and Implementation Plan — AY 2026-27
 
-**Status:** Phase 3 completed: Audit Information. Phase 4 — Nature of Business or Profession is next.
+**Status:** Phase 4 completed: Nature of Business or Profession. Phase 5 — Part A-BS is next.
 
 **Scope:** Redesign the ITR-3 experience for tax professionals against the notified form PDF and official CBDT JSON schema, without modifying ITR-1, ITR-2, or ITR-4 behavior. Every phase must persist through the canonical `ReturnDraft`; browser-only `localStorage` is not an acceptable source of filing data.
 
@@ -116,11 +116,33 @@ Intentional deferrals:
 - Nature-of-business code entry, scheduled for Phase 4.
 
 
-### Phase 4 — Nature of Business or Profession
+### Phase 4 — Nature of Business or Profession — ✅ COMPLETED
 
-Schema path: `PartA_GEN2.NatOfBus`.
+**Completed:** 2026-09-14
+**Implementation:** Added canonical `itr3NatureOfBusiness` rows to frontend/backend `ReturnDraft`, factory defaults, loaded-draft normalization, and an isolated ITR-3 activity editor in `frontend/src/components/ITR3PersonalInfoPage.tsx`.
 
-A repeatable, searchable official nature-code table with up to the schema-supported number of activities, trade/profession description, primary activity marker, and duplicate-code prevention.
+Schema path: `PartA_GEN2.NatOfBus.NatureOfBusiness[]`.
+
+Delivered controls:
+
+- Up to three activity rows, matching the guided ITR-3 workflow.
+- Required five-digit official CBDT nature code with numeric format enforcement.
+- Optional trade name and activity description, each capped at the schema’s 125-character limit.
+- Stable row identifiers, add/remove controls, and canonical persistence.
+- No fabricated or incomplete code catalogue: users enter the exact code from the official CBDT list, preserving imported codes and descriptions without alteration.
+
+Validation completed:
+
+- Frontend production build: passed (`tsc -b && vite build`).
+- Backend canonical draft schema tests: **20 passed**.
+- `git diff --check`: passed.
+
+Intentional deferrals:
+
+- Backend mapper serialization into `PartA_GEN2.NatOfBus`.
+- Searchable official code catalogue; the schema embeds a very large code/description enum and the repository does not yet contain a maintainable extracted catalogue.
+- Business-specific activity applicability and duplicate-code validation, to be added with the business-profile model.
+
 
 ### Phase 5 — Part A-BS
 

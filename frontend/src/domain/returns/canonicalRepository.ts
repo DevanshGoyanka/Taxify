@@ -107,6 +107,7 @@ export function normalizeLoadedDraft(draft: ReturnDraft): ReturnDraft {
     ...draft,
     personal: { ...defaults.personal, ...draft.personal },
     itr3AuditInfo: { ...defaults.itr3AuditInfo, ...draft.itr3AuditInfo },
+    itr3NatureOfBusiness: draft.itr3NatureOfBusiness !== undefined ? draft.itr3NatureOfBusiness : defaults.itr3NatureOfBusiness,
     filing: {
       ...defaults.filing,
       ...draft.filing,
