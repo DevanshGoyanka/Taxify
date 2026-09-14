@@ -32,6 +32,7 @@ from app.schemas.return_draft import (
     PersonalInfo,
     RepresentativeAssessee,
     ReturnDraft,
+    SalaryNatureRow,
     SeventhProvisoClause,
     TdsCredit,
     TenantDetail,
@@ -53,6 +54,10 @@ def _filing_ready_itr2_draft() -> ReturnDraft:
         id="e1", basic=Decimal("1500000"), tdsDeducted=Decimal("120000"),
         employerName="Acme Corp", employerTAN="MUMA12345B",
         employerCity="Mumbai", employerStateCode="27", employerAddress="Tower A",
+        # Schedule S item 1a's own dropdown breakdown -- required by
+        # ITR2-IN-SAL-033 (and confirmed live-rejected by ITD's own
+        # validateItr when absent, 2026-09-13, PAN GOYPT2026A).
+        salaryNatureRows=[SalaryNatureRow(id="sn1", natureCode="1", amount=Decimal("1500000"))],
     )]
     draft.houseProperties = [HouseProperty(id="hp1", propertyType="SELF_OCCUPIED")]
     draft.otherSources.interest = [InterestIncome(
@@ -627,3 +632,57 @@ def test_employer_filing_details_carries_per_employer_gratuity_and_pension() -> 
     assert details["MUMA12345B"].commuted_pension_received == Decimal("0")
     assert details["DELB54321C"].gratuity_received == Decimal("0")
     assert details["DELB54321C"].commuted_pension_received == Decimal("250000")
+
+
+def test_employer_filing_detail_nature_of_salary_rows_omits_othnatofinc_when_blank() -> None:
+    """Regression: `OthNatOfInc` must be OMITTED, not emitted as JSON
+    `null`, whenever the row's nature code needs no free-text description
+    (every code except "OTH") -- the official schema marks it optional but
+    requires a real non-empty string when present. Previously
+    `row.otherDescription or None` always included the key."""
+    draft = _filing_ready_itr2_draft()
+    pipeline = compute_canonical_itr2(draft)
+    detail = pipeline.typed_input.employer_filing_details[0]
+    assert detail.nature_of_salary_rows == [{"NatureDesc": "1", "OthAmount": 1500000}]
+    official_json, _summary = generate_cbdt_json(draft)
+    rows = official_json["ITR"]["ITR2"]["ScheduleS"]["Salaries"][0]["Salarys"]["NatureOfSalary"]["OthersIncDtls"]
+    assert rows == [{"NatureDesc": "1", "OthAmount": 1500000}]
+
+
+def test_single_employer_nature_of_employment_falls_back_to_personal_info() -> None:
+    """A single-employer return whose employer record leaves
+    natureOfEmployment blank falls back to `PersonalInfo.employerCategory`
+    (the same CBDT employer-category field ITR-1/ITR-4 capture at the
+    personal-info level, since those forms support only one employer)
+    before defaulting to generic "OTH"."""
+    draft = _filing_ready_itr2_draft()
+    assert draft.employers[0].natureOfEmployment == ""
+    draft.personal.employerCategory = "CGOV"
+    pipeline = compute_canonical_itr2(draft)
+    detail = pipeline.typed_input.employer_filing_details[0]
+    assert detail.nature_of_employment == "CGOV"
+
+
+def test_multi_employer_nature_of_employment_uses_each_employers_own_field() -> None:
+    """With multiple employers, no single whole-return `employerCategory`
+    can correctly apply to all of them -- each employer's own field (or
+    "OTH" if genuinely unset) must be used, not the personal-info
+    fallback."""
+    draft = _filing_ready_itr2_draft()
+    draft.personal.employerCategory = "CGOV"
+    draft.employers.append(Employer(
+        id="e2", basic=Decimal("800000"), tdsDeducted=Decimal("40000"),
+        employerName="Beta Corp", employerTAN="DELB54321C",
+        employerCity="Delhi", employerStateCode="07", employerAddress="Tower B",
+        natureOfEmployment="PSU",
+    ))
+    draft.taxes.tds.append(TdsCredit(
+        id="t2", section="192", deductorName="Beta Corp", deductorTAN="DELB54321C",
+        grossAmount=Decimal("800000"), taxDeducted=Decimal("40000"), schedule="TDS1",
+    ))
+    pipeline = compute_canonical_itr2(draft)
+    details = {d.employer_tan: d for d in pipeline.typed_input.employer_filing_details}
+    # First employer's own natureOfEmployment is blank -- with 2 employers,
+    # this must NOT fall back to personal.employerCategory ("CGOV").
+    assert details["MUMA12345B"].nature_of_employment == "OTH"
+    assert details["DELB54321C"].nature_of_employment == "PSU"

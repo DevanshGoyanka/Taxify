@@ -538,6 +538,8 @@ def _map_foreign_assets(draft: ReturnDraft) -> list[ITR2ForeignAssetEntry]:
             nature_of_asset=row.natureOfAsset or None,
             nature_of_income=row.natureOfIncome or None,
             income_tax_schedule_item_no=row.incomeTaxScheduleItemNo or None,
+            initial_value_of_investment=row.initialValueOfInvestment,
+            total_gross_proceeds_from_sale=row.totalGrossProceedsValue,
         ))
     return entries
 
@@ -631,7 +633,9 @@ def _map_schedule_5a(draft: ReturnDraft) -> Optional[Schedule5AInput]:
         hp_amount_apportioned=pcc.hpAmountApportioned,
         cg_amount_apportioned=pcc.cgAmountApportioned,
         os_amount_apportioned=pcc.osAmountApportioned,
-        tds_apportioned=pcc.tdsApportioned,
+        hp_tds_apportioned=pcc.hpTdsApportioned,
+        cg_tds_apportioned=pcc.cgTdsApportioned,
+        os_tds_apportioned=pcc.osTdsApportioned,
     )
 
 

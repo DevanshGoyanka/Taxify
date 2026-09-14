@@ -775,13 +775,12 @@ class ForeignAssetType(str, Enum):
 class ForeignAssetEntry(StrictModel):
     """One Schedule FA asset or account disclosure.
 
-    Currently backs the three categories with a real serializer path
-    (bank account, immovable property, other asset) -- the remaining seven
-    official Schedule FA categories (custodial account, equity/debt
-    interest, cash-value insurance, financial interest in an entity,
-    signing authority, trust, other foreign-sourced income) each require
-    their own category-specific fields the official schema mandates
-    (e.g. equity/debt's InitialValOfInvstmnt/TotGrossProceeds, trust's
+    Currently backs four categories with a real serializer path (bank
+    account, equity/debt interest, immovable property, other asset) -- the
+    remaining six official Schedule FA categories (custodial account,
+    cash-value insurance, financial interest in an entity, signing
+    authority, trust, other foreign-sourced income) each require their own
+    category-specific fields the official schema mandates (e.g. trust's
     settlor/trustee/beneficiary names) that this generic model does not
     capture; app/engine/itd/itr2.py's builder raises rather than
     misclassify those entries into the wrong official category.
@@ -803,6 +802,15 @@ class ForeignAssetEntry(StrictModel):
     nature_of_asset: Optional[str] = Field(default=None, max_length=100)
     nature_of_income: Optional[str] = Field(default=None, max_length=100)
     income_tax_schedule_item_no: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    # Equity/debt interest (`ForeignAssetType.EQUITY_DEBT_INTEREST`) only:
+    # the official schema's own "InitialValOfInvstmnt" (cost at acquisition,
+    # distinct from `peak_value`/`closing_value`, which track the holding
+    # during the year, not its original cost) and "TotGrossProceeds" (sale
+    # proceeds realized during the year, if any units were sold -- distinct
+    # from `gross_income`, which is dividends/interest received, not sale
+    # proceeds). No prior field captured either.
+    initial_value_of_investment: Optional[Decimal] = Field(default=None)
+    total_gross_proceeds_from_sale: Decimal = Field(default=Decimal("0"))
 
 
 class SPIEntry(StrictModel):
@@ -880,7 +888,16 @@ class Schedule5AInput(StrictModel):
     hp_amount_apportioned: Decimal = Field(default=Decimal("0"))
     cg_amount_apportioned: Decimal = Field(default=Decimal("0"))
     os_amount_apportioned: Decimal = Field(default=Decimal("0"))
-    tds_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
+    # Split per-head (the form's own Sl.1/2/3 rows each carry their own
+    # "TDS deducted on income at (ii)"/"TDS apportioned in the hands of
+    # spouse" columns) -- previously a single combined `tds_apportioned`
+    # field existed, which the ITD builder attributed entirely to the OS
+    # row regardless of which head the TDS was actually withheld on. Any
+    # TDS genuinely deducted on the couple's HP rent or CG proceeds was
+    # silently misreported as OS-head TDS.
+    hp_tds_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
+    cg_tds_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
+    os_tds_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class ESOPDeferralInput(StrictModel):
@@ -1320,6 +1337,15 @@ class ITR2Input(StrictModel):
     exempt_income: Optional[ExemptIncome] = None
     fsi_entries: List[FSICountryEntry] = Field(default_factory=list)
     tr1_entries: List[TR1Entry] = Field(default_factory=list)
+    # Schedule TR item 4 ("Whether any tax paid outside India, on which tax
+    # relief was allowed in India, has been refunded/credited by the foreign
+    # tax authority during the year?"). No prior field captured this at all
+    # -- the ITD builder previously hardcoded "YES" unconditionally
+    # (`app/engine/itd/itr2.py::_schedule_tr1()`), which is wrong for the
+    # overwhelmingly common case (no refund) and falsely tells the ITD every
+    # single foreign-tax-relief claimant later had that relief refunded.
+    foreign_tax_relief_refunded: bool = False
+    foreign_tax_relief_refunded_amount: Decimal = Field(default=Decimal("0"))
     foreign_assets: List[ForeignAssetEntry] = Field(default_factory=list)
     spi_entries: List[SPIEntry] = Field(default_factory=list)
     pti_entries: List[PTIEntry] = Field(default_factory=list)

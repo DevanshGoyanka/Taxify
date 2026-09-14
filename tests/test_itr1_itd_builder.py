@@ -563,8 +563,6 @@ def test_builder_preserves_filing_profile_without_placeholders() -> None:
             "ZipCode": "",
             "CountryCodeMobile": 91,
             "MobileNo": 9876543210,
-            "CountryCodeMobileNoSec": 0,
-            "MobileNoSec": 0,
             "EmailAddress": "asha.sharma@example.com",
         },
         "SecondaryAdd": "N",

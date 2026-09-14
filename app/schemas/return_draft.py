@@ -835,6 +835,11 @@ class ForeignAssetEntry(Identified):
     natureOfAsset: str = Field(default="")
     natureOfIncome: str = Field(default="")
     incomeTaxScheduleItemNo: str = Field(default="")
+    # Equity/debt interest category only -- see ITR2Input's own
+    # ForeignAssetEntry.initial_value_of_investment/
+    # total_gross_proceeds_from_sale for the official field this backs.
+    initialValueOfInvestment: Optional[Money] = Field(default=None)
+    totalGrossProceedsValue: Money = Field(default=Decimal("0"))
 
 
 class ClubbedIncomeEntry(Identified):
@@ -901,7 +906,12 @@ class PortugueseCivilCodeDetails(_StrictModel):
     hpAmountApportioned: Money = Field(default=Decimal("0"))
     cgAmountApportioned: Money = Field(default=Decimal("0"))
     osAmountApportioned: Money = Field(default=Decimal("0"))
-    tdsApportioned: Money = Field(default=Decimal("0"))
+    # Split per-head, matching the form's own Sl.1/2/3 rows -- see
+    # Schedule5AInput's own field docstring for why a single combined
+    # figure was wrong (misattributed all TDS to the OS row).
+    hpTdsApportioned: Money = Field(default=Decimal("0"))
+    cgTdsApportioned: Money = Field(default=Decimal("0"))
+    osTdsApportioned: Money = Field(default=Decimal("0"))
 
 
 class ESOPDeferralEntry(Identified):

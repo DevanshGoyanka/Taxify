@@ -1600,6 +1600,33 @@ def _itr2_property_filing_details(draft: ReturnDraft) -> list[PropertyFilingDeta
     return details
 
 
+def _nature_of_income_rows(rows) -> list[dict[str, Any]]:
+    """Map a draft's SalaryNatureRow list to the official NatureOfSalaryDtlsType
+    dict shape, omitting "OthNatOfInc" entirely when there's no free-text
+    description.
+
+    The official schema marks "OthNatOfInc" optional but requires it be a
+    real non-empty string when present ("allOf": nonEmptyString) --
+    `row.otherDescription or None` previously always included the key,
+    with a JSON `null` whenever the row's nature code needed no free-text
+    description (i.e. every code except "OTH"), which fails schema
+    validation outright ("None is not of type 'string'"). Never actually
+    reached before ITR2-IN-SAL-033 (app/engine/validators/itr2/
+    input_rules.py) existed to require this breakdown be populated at all
+    -- confirmed live-reachable (2026-09-13, PAN GOYPT2026A) once tested
+    with a real row.
+    """
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if not (row.natureCode and row.amount > 0):
+            continue
+        entry: dict[str, Any] = {"NatureDesc": row.natureCode, "OthAmount": int(row.amount)}
+        if row.otherDescription:
+            entry["OthNatOfInc"] = row.otherDescription
+        result.append(entry)
+    return result
+
+
 def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDetail]:
     """Map Schedule S employer details from TDS rows or salary rows.
 
@@ -1636,7 +1663,22 @@ def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDeta
                 details.append(EmployerFilingDetail(
                     employer_tan=tan,
                     employer_name=(employer.employerName or employer.customEmployerName).strip(),
-                    nature_of_employment=employer.natureOfEmployment or "OTH",
+                    # For a single-employer return, an unset per-employer
+                    # natureOfEmployment falls back to the whole-return
+                    # `PersonalInfo.employerCategory` (the same CBDT
+                    # employer-category field ITR-1/ITR-4 capture at the
+                    # personal-info level, since those forms only support
+                    # one employer) before defaulting to generic "OTH" --
+                    # the preparer may have entered it there instead of
+                    # per-employer. With multiple employers there is no
+                    # single category this whole-return field could
+                    # correctly apply to, so each employer's own field (or
+                    # "OTH" if genuinely unset) is used unchanged.
+                    nature_of_employment=(
+                        employer.natureOfEmployment
+                        or (draft.personal.employerCategory if len(draft.employers) == 1 else "")
+                        or "OTH"
+                    ),
                     address_detail=(employer.employerAddress or "NA").strip()[:200],
                     city_or_town_or_district=(employer.employerCity or draft.personal.city or "City").strip()[:50],
                     state_code=(employer.employerStateCode or draft.personal.stateCode or "07").strip()[:2],
@@ -1650,9 +1692,9 @@ def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDeta
                         {"SalNatureDesc": row.natureCode, "SalOthNatOfInc": row.otherDescription or row.natureCode, "SalOthAmount": int(row.amount)}
                         for row in employer.section10ExemptionRows if row.natureCode and row.amount > 0
                     ],
-                    nature_of_salary_rows=[{"NatureDesc": row.natureCode, "OthNatOfInc": row.otherDescription or None, "OthAmount": int(row.amount)} for row in employer.salaryNatureRows if row.natureCode and row.amount > 0],
-                    nature_of_perquisites_rows=[{"NatureDesc": row.natureCode, "OthNatOfInc": row.otherDescription or None, "OthAmount": int(row.amount)} for row in employer.perquisiteNatureRows if row.natureCode and row.amount > 0],
-                    nature_of_profit_in_lieu_rows=[{"NatureDesc": row.natureCode, "OthNatOfInc": row.otherDescription or None, "OthAmount": int(row.amount)} for row in employer.profitInLieuNatureRows if row.natureCode and row.amount > 0],
+                    nature_of_salary_rows=_nature_of_income_rows(employer.salaryNatureRows),
+                    nature_of_perquisites_rows=_nature_of_income_rows(employer.perquisiteNatureRows),
+                    nature_of_profit_in_lieu_rows=_nature_of_income_rows(employer.profitInLieuNatureRows),
                     income_notified_89a=employer.incomeNotified89A,
                     income_notified_other_89a=employer.incomeNotifiedOther89A,
                     income_notified_prior_year_89a=employer.incomeNotifiedPriorYear89A,
@@ -1685,7 +1727,14 @@ def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDeta
             details.append(EmployerFilingDetail(
                 employer_tan=tan,
                 employer_name=name[:125],
-                nature_of_employment=(employer.natureOfEmployment if employer else "") or "OTH",
+                # Same single-vs-multi-employer fallback as the no-TDS
+                # branch above, keyed off the TDS-row count instead (this
+                # branch runs when salary_tds_rows is non-empty).
+                nature_of_employment=(
+                    (employer.natureOfEmployment if employer else "")
+                    or (draft.personal.employerCategory if len(salary_tds_rows) == 1 else "")
+                    or "OTH"
+                ),
                 address_detail=address[:200] or "NA",
                 city_or_town_or_district=city[:50],
                 state_code=state[:2],
@@ -1699,9 +1748,9 @@ def _itr2_employer_filing_details(draft: ReturnDraft) -> list[EmployerFilingDeta
                     {"SalNatureDesc": item.natureCode, "SalOthNatOfInc": item.otherDescription or item.natureCode, "SalOthAmount": int(item.amount)}
                     for item in (employer.section10ExemptionRows if employer else []) if item.natureCode and item.amount > 0
                 ],
-                nature_of_salary_rows=[{"NatureDesc": item.natureCode, "OthNatOfInc": item.otherDescription or None, "OthAmount": int(item.amount)} for item in (employer.salaryNatureRows if employer else []) if item.natureCode and item.amount > 0],
-                nature_of_perquisites_rows=[{"NatureDesc": item.natureCode, "OthNatOfInc": item.otherDescription or None, "OthAmount": int(item.amount)} for item in (employer.perquisiteNatureRows if employer else []) if item.natureCode and item.amount > 0],
-                nature_of_profit_in_lieu_rows=[{"NatureDesc": item.natureCode, "OthNatOfInc": item.otherDescription or None, "OthAmount": int(item.amount)} for item in (employer.profitInLieuNatureRows if employer else []) if item.natureCode and item.amount > 0],
+                nature_of_salary_rows=_nature_of_income_rows(employer.salaryNatureRows if employer else []),
+                nature_of_perquisites_rows=_nature_of_income_rows(employer.perquisiteNatureRows if employer else []),
+                nature_of_profit_in_lieu_rows=_nature_of_income_rows(employer.profitInLieuNatureRows if employer else []),
                 income_notified_89a=employer.incomeNotified89A if employer else Decimal("0"),
                 income_notified_other_89a=employer.incomeNotifiedOther89A if employer else Decimal("0"),
                 income_notified_prior_year_89a=employer.incomeNotifiedPriorYear89A if employer else Decimal("0"),

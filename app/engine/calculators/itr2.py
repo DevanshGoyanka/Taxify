@@ -40,7 +40,7 @@ from app.engine.common.cess import compute as compute_cess
 from app.engine.common.interest import compute_234a, compute_234b, compute_234c, compute_234i, compute_234f
 from app.engine.common.due_dates import get_due_date, get_default_filing_date
 from app.engine.common.rebate import compute as compute_rebate
-from app.engine.common.rounding import round_to_nearest_10
+from app.engine.common.rounding import round_to_nearest_10, round_to_nearest_rupee
 from app.engine.common.slab_tax import compute as compute_slab_tax
 from app.engine.common.surcharge import compute as compute_surcharge
 from app.engine.constants import (
@@ -578,28 +578,66 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # OS loss absorbs against it (see the CYLAInput construction further
     # down). `racehorse_profit_in_os` is kept for that CYLAInput wiring.
     racehorse_profit_in_os = _ZERO
+    # Schedule OS item 8e ("Balance (8a-8b+8c+8d)") is the activity's own
+    # fully-netted current-year result; item 9 says "take 8e as nil if
+    # negative" for GTI purposes, but a negative 8e does not simply vanish
+    # -- Schedule CFL row xi explicitly sources its own "current year
+    # loss" column FROM "8e of Schedule OS, if -ve" (form PDF). Section
+    # 74A(3) quarantines this loss from every other pool (it can only ever
+    # be set off against a FUTURE year's race-horse profit), so it bypasses
+    # CYLA/BFLA entirely and is carried straight to CFL below
+    # (`racehorse_current_year_loss`) -- previously this negative balance
+    # was simply discarded by the `max(_ZERO, ...)` clamp with nothing
+    # downstream to catch it, silently losing the taxpayer's statutory
+    # right to carry the loss forward at all.
+    racehorse_current_year_loss = _ZERO
     if input_data.os_race_horse is not None:
         racehorse_profit_in_os = max(_ZERO, input_data.os_race_horse.balance)
+        racehorse_current_year_loss = max(_ZERO, -input_data.os_race_horse.balance)
         r.other_sources_income += racehorse_profit_in_os
     # Income from letting machinery/plant/furniture (Section 56(2)(ii)/(iii),
     # Schedule OS's "RentFromMachPlantBldgs") is ordinary slab-rate Other
-    # Sources income computed net of its own specific deductions --
-    # Expenses/Depreciation/interest u/s 57 reduce it, while amounts
+    # Sources income, added to GTI at its own gross amount here; amounts
     # disallowed u/s 58 and deemed profits u/s 59 (a balancing charge on
-    # sale of assets used in the letting activity) add back to it. Only the
-    # positive net is added to GTI here (unchanged); a resulting loss
-    # (`os_loss_amount`) is today's only representable current-year
-    # "normal" Other Sources loss and is routed into CYLA below instead of
-    # being silently discarded -- CBDT rule #267 requires it be set off
-    # against race-horse profit first, then (per Section 71) cross-head.
-    os_loss_amount = _ZERO
+    # sale of assets used in the letting activity) add back to it -- these
+    # two are the only items genuinely specific to this sub-head.
     if input_data.os_machinery_plant_rent:
         ded = input_data.os_deductions
-        deductible = (ded.expenses + ded.depreciation + ded.interest_expense_us57) if ded else _ZERO
         addbacks = (ded.amount_not_deductible_us58 + ded.profit_chargeable_us59) if ded else _ZERO
-        mp_rent_net = input_data.os_machinery_plant_rent - deductible + addbacks
-        r.other_sources_income += max(_ZERO, mp_rent_net)
-        os_loss_amount = max(_ZERO, -mp_rent_net)
+        r.other_sources_income += input_data.os_machinery_plant_rent + addbacks
+    # Deductions under section 57 (form item 3: "Deductions under section 57
+    # (other than those relating to income chargeable at special rates)")
+    # apply against the WHOLE normal-applicable-rate Other Sources pool --
+    # NOT only against machinery/plant/furniture letting income. Previously
+    # `os_deductions.expenses`/`.depreciation`/interest were only applied
+    # when `os_machinery_plant_rent` was also nonzero, so a taxpayer with
+    # e.g. savings-bank interest and a genuine Section 57 expense claim but
+    # no letting income at all got the deduction disclosed in the JSON
+    # (`_schedule_os()`'s own `Deductions` block, which was never gated
+    # this way) but silently never subtracted from taxable income -- a real
+    # overstatement of tax. Uses `interest_expense_eligible_us57` (the
+    # post-20%-cap amount, rule ITR2-IN-OS-001), matching the JSON's own
+    # `TotDeductions` formula exactly (`deduction_57iia` -- family pension
+    # -- is applied separately elsewhere in this function already).
+    # Race-horse income (added just above) is its own separate Schedule OS
+    # sub-head with its own specific deduction (`OSRaceHorseActivity.
+    # deduction_us57`) -- this general section-57 deduction must apply only
+    # to the "normal applicable rate" pool, excluding it, or a taxpayer
+    # with both race-horse profit and unrelated Section 57 expenses would
+    # have the race-horse income wrongly reduced too.
+    os_deductions = input_data.os_deductions
+    os_general_deduction = (
+        os_deductions.expenses + os_deductions.depreciation + os_deductions.interest_expense_eligible_us57
+        if os_deductions else _ZERO
+    )
+    os_normal_rate_before_57_deduction = r.other_sources_income - racehorse_profit_in_os
+    os_normal_rate_after_57_deduction = max(_ZERO, os_normal_rate_before_57_deduction - os_general_deduction)
+    r.other_sources_income = racehorse_profit_in_os + os_normal_rate_after_57_deduction
+    # Today's only representable current-year "normal" Other Sources loss,
+    # routed into CYLA below instead of being silently discarded -- CBDT
+    # rule #267 requires it be set off against race-horse profit first,
+    # then (per Section 71) cross-head.
+    os_loss_amount = max(_ZERO, os_general_deduction - os_normal_rate_before_57_deduction)
     # NRI/FII special-rate Other Sources income (Section 115A/115AC/115ACA/
     # 115AD/115E family, Schedule OS's "OthersGrossDtls" dropdown) lives in
     # its own `os_special_rate_entries` field, entirely separate from
@@ -820,15 +858,63 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     clubbing = sum((spi.amount_included for spi in input_data.spi_entries), _ZERO)
     r.clubbing_income = clubbing
     # Add to the head specified by each SPI entry
+    spi_cg_clubbed = _ZERO
     for spi in input_data.spi_entries:
         if spi.head_of_income == "SAL":
             r.salary_income += spi.amount_included
         elif spi.head_of_income == "HP":
             r.house_property_income += spi.amount_included
         elif spi.head_of_income == "CG":
-            r.capital_gains_income += spi.amount_included
+            spi_cg_clubbed += spi.amount_included
         else:
             r.other_sources_income += spi.amount_included
+    if spi_cg_clubbed > _ZERO:
+        # SPIEntry has no short-term/long-term sub-classification (unlike
+        # PTIEntry) -- route into the generic "other assets" normal-rate
+        # (slab) STCG bucket, the same default this module already uses
+        # for every other CG amount it cannot finely classify (NRI
+        # proviso-48 STCG, deemed STCG from a lapsed CGAS deposit, above).
+        # Tax-conservative choice: slab-rate STCG is never lower than 12.5%
+        # LTCG, so an actually-long-term clubbed gain is never undertaxed
+        # by this default, only (at most) slightly overtaxed. Previously
+        # this amount was added to `r.capital_gains_income` directly, which
+        # (a) never fed GTI at all (`gti_before` below is built from
+        # `stcg_result.total_stcg`/`ltcg_result.total_ltcg`, not that
+        # field) and (b) was unconditionally overwritten a few hundred
+        # lines later (## 8, GTI and post-loss capital-gain rate baskets)
+        # anyway -- so clubbed CG income silently vanished from Total
+        # Income entirely, a real understatement of tax.
+        stcg_result.income_30per += spi_cg_clubbed
+        stcg_result.total_stcg += spi_cg_clubbed
+
+    # Schedule PTI capital gains (Sl. income_head "STCG"/"LTCG") retain the
+    # SAME head AND rate the business trust/investment fund itself earned
+    # them under (section 115UA(2)/115UB(1) proviso), and the official form
+    # gives them their OWN distinct Schedule-CG line items (A7 for STCG,
+    # B10 for LTCG -- "Pass Through Income/Loss ... (Fill up schedule
+    # PTI)") and their OWN distinct Schedule-SI SecCodes (PTI_STCG20P/
+    # PTI_STCG30P/PTI_LTCG12_5P112A/PTI_LTCG12_5P per the official JSON
+    # schema's SecCode enum) -- NOT the ordinary 111A/112/112A rows, so
+    # this amount is deliberately NOT merged into stcg_result/ltcg_result
+    # (which would misclassify it under the wrong SecCode and double up
+    # against ordinary CG in the same 111A/112/112A bucket). It is also not
+    # run through CYLA/BFLA -- a pure pass-through total, disclosed as a
+    # single Schedule-CG line item rather than a per-transaction detail --
+    # mirroring how VDA income (the closest existing precedent: a special-
+    # rate-only, GTI-additive, non-loss-eligible basket) is already
+    # treated in this same function. Previously this income was dispatched
+    # to Schedule SI (for tax computation, correctly) but never added to
+    # GTI/Total Income at all -- Part B-TI's disclosed Total Income
+    # silently excluded real, taxed income, and `r.aggregate_income`
+    # (item 15 = 12-13+14) double-subtracted it (13 already includes it via
+    # `si_result.total_special_rate_gross_income`, but 12 never had it
+    # added in the first place).
+    pti_cg_gross = sum(
+        (pti.income_amount for pti in input_data.pti_entries
+         if pti.income_head in ("STCG", "LTCG") and pti.income_amount > 0),
+        _ZERO,
+    )
+    r.capital_gains_income += pti_cg_gross
 
     # ── 4. GTI before loss set-off ───────────────────────────────────────────
     # Gross positive heads before current-year and brought-forward loss adjustments.
@@ -839,6 +925,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         + max(_ZERO, r.house_property_income)
         + positive_regular_cg
         + vda_income
+        + pti_cg_gross
         + max(_ZERO, r.other_sources_income)
     )
     r.gti_before_loss_setoff = gti_before
@@ -953,6 +1040,24 @@ def compute(input_data: ITR2Input) -> ITR2Result:
                 )
                 if cfl_result.entries:
                     cfl_entries.append(cfl_result)
+    if racehorse_current_year_loss > 0:
+        # Section 74A(3): 4-year carry-forward limit (not the ordinary
+        # 8-year HP/CG limit) -- same figure already used for a
+        # brought-forward race-horse loss in
+        # `app/engine/schedules/loss_setoff/bfla.py` and by the ITD
+        # builder's own year-slot gating (`app/engine/itd/itr2.py`,
+        # "Section 74A caps race-horse-activity loss carry-forward at 4
+        # years").
+        cfl_result = compute_cfl(
+            cyla_remaining=racehorse_current_year_loss,
+            head="RaceHorse",
+            assessment_year="2026-27",
+            original_loss=racehorse_current_year_loss,
+            years_carried=0,
+            max_carry_forward_years=4,
+        )
+        if cfl_result.entries:
+            cfl_entries.append(cfl_result)
     r.schedules["cfl"] = cfl_entries
 
     # ── 8. GTI and post-loss capital-gain rate baskets ────────────────────────
@@ -969,43 +1074,82 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         cg_result.exemptions,
     )
     r.schedules["post_loss_cg"] = post_loss_cg
-    # This DISCLOSURE figure deliberately keeps the section 112A gain at its
-    # GROSS (pre-₹1.25L-threshold) amount -- matching Schedule CG's own
-    # headline totals (A9/B12), which show the gain before the threshold is
-    # applied -- while still reflecting §54-series exemption netting (the
-    # dict's own normal_stcg/112/112a_gross values are already
-    # exemption-reduced by `_post_loss_cg_baskets()`'s `_consume()` calls).
+    # GROSS (pre-section-112A-threshold), matching the official form's own
+    # definition: Schedule CG's Part C (C1 = "8ii+8iii+8iv+8v+8vi+8vii of
+    # Table E") and Table E itself (whose LTCG@12.5% row's own "Capital
+    # Gain of current year" column is literally defined as
+    # "B1g+B2e+B3c+...+B(A)", a pure sum with no threshold subtraction
+    # anywhere, and whose final "col8 = col1-col2-...-col7" is a strict
+    # arithmetic identity with no spare term for one) are ENTIRELY gross
+    # throughout Schedule CG's own disclosure chain -- confirmed directly
+    # against the form PDF (`Reference Docs by CBDT & ITD/Official ITR
+    # FORMS/ITR-2-2026-Eng.pdf`, pages 47-49) and against two live
+    # rejections when this was tried net instead (2026-09-13, Type-2 UAT
+    # validateItr, PAN GOYPT2026A: netting CurrYearIncome broke the
+    # B-item-sum check, netting only CurrYrCapGain broke the row's own
+    # col1-col7 identity). This figure feeds Schedule CG's own Part C
+    # total (TotScheduleCGFor23/SumOfCGIncm, app/engine/itd/itr2.py) and
+    # is correctly ALLOWED to differ from Part B-TI's own
+    # CapGain.TotalCapGains (which IS net of the threshold -- a genuinely
+    # separate, later total, not cross-checked against this one by any
+    # live rule encountered) -- see that field's own fix note in
+    # app/engine/itd/itr2.py::_partb_ti() for why IT must stay net. Still
+    # reflects §54-series exemption netting (the dict's own normal_stcg/
+    # 112 values are already exemption-reduced by
+    # `_post_loss_cg_baskets()`'s `_consume()` calls) -- only the section
+    # 112A ₹1.25L threshold specifically stays excluded from this total.
     # Only the 6 real CG-income buckets are summed; "exemption_used" is a
-    # bookkeeping figure for the separate GTI correction below, not part of
-    # this total.
+    # bookkeeping figure for the separate GTI correction below, not part
+    # of this total.
     _cg_bucket_keys = ("normal_stcg", "111a", "112", "112a_gross", "stcg_dtaa", "ltcg_dtaa")
-    r.capital_gains_income = sum((post_loss_cg[k] for k in _cg_bucket_keys), _ZERO) + vda_income
+    # `+ pti_cg_gross`: Schedule PTI's own STCG/LTCG pass-through total (##
+    # 3, Clubbing/PTI block above) -- a separate additive GTI component,
+    # not part of any post_loss_cg basket (see that block's own comment for
+    # why it deliberately bypasses CYLA/BFLA). Previously this unconditional
+    # reassignment silently discarded the earlier `r.capital_gains_income
+    # += pti_cg_gross` from that block.
+    r.capital_gains_income = sum((post_loss_cg[k] for k in _cg_bucket_keys), _ZERO) + vda_income + pti_cg_gross
 
-    # Correct GTI/Total Income for every CG-side exemption/exclusion that
-    # was necessarily applied AFTER `gti_before`/`gti_after` above were
-    # already computed:
-    #   (a) the section 112A ₹1.25L threshold -- a genuine income EXCLUSION
-    #       under 112A's own proviso, never part of Gross/Total Income at
-    #       all (the form's own Part B-TI "TotalLongTerm" = "LongTerm12_5Per"
-    #       + "LongTermSplRateDTAA", neither of which includes it); and
-    #   (b) §54/54B/54EC/54F/115F exemptions actually consumed against
-    #       STCG/LTCG in `_post_loss_cg_baskets()` above ("exemption_used").
-    # `gti_before`/`gti_after` necessarily started from the GROSS, pre-
-    # exemption CG totals (`ltcg_result.total_ltcg`/`stcg_result.total_stcg`)
-    # because CYLA/BFLA loss-absorption must run on the pre-exemption gain,
-    # and the real post-loss-post-exemption CG picture is only resolved in
-    # `_post_loss_cg_baskets()` just above. Left uncorrected, GTI/Total
-    # Income/AggregateIncome silently retained the full exempted amount --
-    # inflating Chapter VI-A deduction ceilings that key off GTI, 80G's
-    # qualifying-limit base, and surcharge-threshold determination (though
-    # NOT slab tax itself, which already excludes 111A/112/112A/VDA from
-    # its own base entirely via `special_rate_income_for_slab` below --
-    # that exclusion is kept in sync with this fix a few lines down).
-    exempt_112a_slice = post_loss_cg["112a_gross"] - post_loss_cg["112a_taxable"]
-    total_cg_exemption_relief = exempt_112a_slice + post_loss_cg.get("exemption_used", _ZERO)
+    # Correct GTI/Total Income for §54/54B/54EC/54F/115F exemptions
+    # actually consumed against STCG/LTCG in `_post_loss_cg_baskets()`
+    # above ("exemption_used"). The official form's own Schedule CG B-item
+    # row formulas (e.g. B1g = "1f - Deduction u/s 54/54B", B8e = "8c-8d"
+    # where 8d is the §54F deduction) already net this exemption INTO each
+    # B-item's own gross-disclosed figure at the row level, before it ever
+    # reaches Table E/Part B-TI item 3 -- but `gti_before`/`gti_after`
+    # above were computed from `stcg_result.total_stcg`/`ltcg_result.
+    # total_ltcg`, captured BEFORE `_post_loss_cg_baskets()` ever applies
+    # this same netting to `normal_stcg`/`other_ltcg`, so they were stale
+    # relative to it. This does NOT include the section 112A ₹1.25L
+    # threshold: confirmed directly against the form PDF (`Reference Docs
+    # by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf`, pages 66-68)
+    # that Part B-TI item 3 (Capital gains) is sourced VERBATIM from
+    # Schedule CG's own Table E columns (gross throughout -- Schedule
+    # 112A's own per-scrip "column 14" has no aggregate threshold applied
+    # at all), and GTI (item 9)/Total Income (item 12) are both defined
+    # purely as running sums of item 3 with no threshold subtraction
+    # anywhere -- the threshold only affects the AGGREGATE INCOME step
+    # (item 15 = "12 - 13 + 14", where item 13 is Schedule SI's own
+    # already-threshold-net total, fixed separately below). An earlier
+    # attempt to also subtract the 112A threshold here was based on a
+    # plausible but ultimately WRONG general tax-law inference made
+    # without checking this literal form table first -- confirmed wrong
+    # by three separate live Type-2 UAT validateItr rejections when
+    # Schedule CG's own figures were correspondingly netted (2026-09-13,
+    # PAN GOYPT2026A) before this table was actually read.
+    total_cg_exemption_relief = post_loss_cg.get("exemption_used", _ZERO)
     gti_after = max(_ZERO, gti_after - total_cg_exemption_relief)
     r.gti_after_loss_setoff = gti_after
     r.gross_total_income = gti_after
+    # `r.gti_before_loss_setoff` was captured earlier in this function
+    # (before this exemption correction existed) and is read directly by
+    # the JSON builder's "BalanceAfterSetoffLosses" (Part B-TI's own
+    # after-CYLA/before-BFLA row) -- left uncorrected, that field would
+    # silently diverge from the now-corrected `GrossTotalIncome` by
+    # exactly the §54-series exemption amount whenever no BFLA activity
+    # existed to otherwise explain the gap. Apply the same correction here
+    # so every GTI-derived figure stays consistent.
+    r.gti_before_loss_setoff = max(_ZERO, r.gti_before_loss_setoff - total_cg_exemption_relief)
 
     # ── 9. Agricultural Income ───────────────────────────────────────────────
     agri = input_data.agricultural_income
@@ -1074,6 +1218,24 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         deduction_80qqb=input_data.deduction_80qqb,
         royalty_income_80qqb=input_data.royalty_income_80qqb,
         deduction_80rrb=input_data.deduction_80rrb,
+        # `salary`/`is_government_employee` were never passed here at all --
+        # a genuine, serious defect (not merely an omission): without a real
+        # `salary` figure, section_80ccd2.compute_details()'s own fallback
+        # (`ceiling = (salary * pct) if salary > _ZERO else user_claim`)
+        # applies NO statutory ceiling whatsoever, so Section 80CCD(2)
+        # (employer NPS contribution, capped at 10%/14% of salary) allowed
+        # the ENTIRE claimed amount unconditionally for every ITR-2 filer
+        # who claimed it -- an unbounded, uncapped deduction. It also
+        # silently broke the new section 80CCD(1) 10%-of-salary/20%-of-GTI
+        # sub-cap (CBDT rule #348) added alongside this fix, which needs the
+        # same real salary figure to correctly distinguish an employee from
+        # a non-employee. Mirrors ITR-1's own already-correct call
+        # (`app/engine/calculators/itr1.py`) exactly, including the
+        # CG/SG-only (not PSU) government-employee flag distinction.
+        salary=input_data.salary_income.gross_salary if input_data.salary_income else _ZERO,
+        is_government_employee=bool(
+            input_data.salary_income and input_data.salary_income.is_cg_sg_employee
+        ),
     )
     r.schedules["deductions"] = ded
     r.deductions_total = ded.total
@@ -1084,13 +1246,15 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     r.taxable_income = ti
     r.total_income_before_288a = income_before
     r.rounding_adjustment_288a = ti - income_before
-    r.aggregate_income = ti + r.net_agricultural_income
 
     # ── 12. Special Rate Income Tax (Schedule SI) ────────────────────────────
     si_entries: list[SpecialRateEntry] = []
 
-    # Section 112A: use the taxable amount from the CG engine (threshold applied once)
-    si_112a_entry = compute_112a_taxable(cg_112a_taxable)
+    # Section 112A: taxable amount drives the tax; gross amount (BFLA-
+    # sourced, "part of 3vii of Schedule BFLA" per the form's own Schedule
+    # SI table) drives the disclosed "Income" column -- see
+    # compute_112a_taxable()'s own docstring for the full citation.
+    si_112a_entry = compute_112a_taxable(cg_112a_taxable, gross_112a=cg_112a_gross)
     if is_fii_fpi:
         # Section 115AD(1)(b)(iii) proviso: same 12.5% rate, FII-specific
         # SecCode/Schedule-CG field (NRISaleOfEquityShareUs112A instead of
@@ -1313,6 +1477,31 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     si_result: SpecialRatesResult = aggregate_si(si_entries)
     r.special_rate_tax = si_result.total_special_rate_tax
     r.schedules["si"] = si_result
+    # Part B-TI item 15: "Aggregate income (12-13+14) [applicable if
+    # (12-13) exceeds maximum amount not chargeable to tax]" -- item 12 is
+    # Total Income (`ti`), item 13 is "Income which is included in 12 and
+    # chargeable to tax at special rates (total of column (i) of schedule
+    # SI)", item 14 is net agricultural income. Confirmed directly against
+    # the form PDF (`Reference Docs by CBDT & ITD/Official ITR FORMS/
+    # ITR-2-2026-Eng.pdf`, page 68) -- previously computed as just
+    # "ti + net_agricultural_income", silently omitting the "-13" term
+    # entirely, which overstated this disclosure by the full special-rate
+    # income total whenever any special-rate income existed.
+    #
+    # Uses `total_special_rate_gross_income`, NOT `total_special_rate_
+    # income`: Schedule SI's own column (i) is itself gross for the 112A
+    # row (the form's own Schedule SI table sources it as "part of 3vii of
+    # Schedule BFLA" -- see `compute_112a_taxable()`'s docstring), so item
+    # 13 must match that same gross figure, not the net-taxable amount.
+    #
+    # Only a disclosure figure (AggregateIncome in the JSON) -- not read
+    # back by anything else in this calculator, so this fix cannot change
+    # the actual tax computed. The form's own text marks item 15
+    # "applicable if (12-13) exceeds maximum amount not chargeable to tax"
+    # -- i.e. not meaningful (and, per the schema's own `minimum: 0`, not
+    # permitted) when special-rate income (13) exceeds Total Income (12);
+    # clamp at 0 rather than emit a schema-invalid negative value.
+    r.aggregate_income = max(_ZERO, ti - si_result.total_special_rate_gross_income + r.net_agricultural_income)
 
     # ── 13. Normal Slab Tax ──────────────────────────────────────────────────
     # Full post-loss 111A/112/112A/VDA income is excluded from slab tax.
@@ -1325,18 +1514,48 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # comes through `si_result.surcharge_full_income` below (that new SI
     # entry's own `taxable_income`), the same mechanism already used for
     # 115BB/115BBE/etc., so it must not be added a second time here.
-    # Uses "112a_taxable", not "112a_gross": `ti` above is now net of the
-    # exempt 112A slice (see the GTI correction earlier in this function),
-    # so excluding the taxable-only remainder here -- instead of the full
-    # gross figure -- is what correctly cancels 112A entirely out of
-    # `normal_income` below; excluding the gross figure against an
-    # already-net `ti` would double-subtract the exempt slice and
-    # understate slab tax.
+    # Uses "112a_gross", NOT "112a_taxable": `ti` above still includes the
+    # FULL gross 112A gain (Part B-TI's item 9/12 never subtract the
+    # section 112A ₹1.25L threshold at all -- confirmed against the form
+    # PDF, see the GTI correction earlier in this function for the full
+    # citation), so excluding the same gross figure here is what correctly
+    # cancels 112A entirely out of `normal_income` below. Excluding only
+    # the taxable remainder against a still-gross `ti` would under-exclude
+    # it and leave the exempt slice taxed at slab rate.
+    # `si_result.surcharge_cap_income` is the 15%-surcharge-capped SI
+    # bucket's own taxable-income total (S111A/S112/S112A -- ALREADY
+    # counted via the three post_loss_cg terms above, since those very
+    # entries are built from post_loss_cg["111a"]/["112"]/["112a_gross"] --
+    # plus DIVIDEND/S5A1AA/S5AC1ABD/S5ACA1A/S5AD1IDIV/PTI_STCG20/
+    # PTI_LTCG112A/PTI_LTCG125, which are NOT counted anywhere above.
+    # Previously this bucket was entirely absent from this exclusion, so
+    # any capped-bucket income NOT already covered by the three explicit CG
+    # terms above (dividend/FII special-rate OS income via
+    # `os_special_rate_entries`, and PTI capital gains once those also
+    # start reaching GTI below) stayed inside `ti`/`normal_income` -- taxed
+    # BOTH at slab rate AND, separately and correctly, at its own SI rate.
+    # Confirmed by direct reproduction: a ₹10L NRI-dividend-only return
+    # (section 115A(1)(a)(A), 10% SI rate) produced slab_tax=₹112,500 in
+    # addition to the correct special_rate_tax=₹100,000 -- a real,
+    # confirmed double-taxation defect, not a hypothetical one. Subtracting
+    # the already-counted CG portion (rather than adding surcharge_cap_income
+    # outright) avoids double-EXCLUDING the ordinary 111A/112/112A amounts.
+    cg_capped_already_excluded = (
+        post_loss_cg["111a"] + post_loss_cg["112"] + post_loss_cg["112a_gross"]
+    )
+    additional_capped_exclusion = max(
+        _ZERO, si_result.surcharge_cap_income - cg_capped_already_excluded
+    )
     special_rate_income_for_slab = (
-        post_loss_cg["111a"]
-        + post_loss_cg["112"]
-        + post_loss_cg["112a_taxable"]
+        cg_capped_already_excluded
         + si_result.surcharge_full_income
+        + additional_capped_exclusion
+        # 115BBE (and any other future mandatory-25%-surcharge section) is
+        # its own carved-out SI bucket (## 16, Surcharge, below) -- it must
+        # still be excluded from the ordinary slab base here exactly like
+        # every other SI-taxed income, or it would be taxed twice (once at
+        # slab rate, once at its own flat 60% SI rate).
+        + si_result.mandatory_25pct_surcharge_income
     )
     normal_income = max(_ZERO, ti - special_rate_income_for_slab)
     slab_tax = compute_slab_tax(normal_income, age, regime)
@@ -1407,9 +1626,23 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     r.tax_after_rebate = max(_ZERO, r.tax_before_rebate - rebate)
 
     # ── 16. Surcharge ───────────────────────────────────────────────────────
+    # Part B-TTI item 5i: section 115BBE (unexplained income u/s 68/69-
+    # series) carries a MANDATORY flat 25% surcharge -- "@ 25% of 15(ii) of
+    # Schedule SI" -- independent of the taxpayer's overall income-level
+    # surcharge slab/threshold (which can be 0% entirely, if total income
+    # is otherwise below the first surcharge threshold). Computed and added
+    # separately, on its own carved-out income/tax amount, so the ordinary
+    # threshold/marginal-relief computation below operates on a
+    # self-consistent remaining universe (excluding this fixed-rate,
+    # no-relief component) rather than silently taxing 115BBE income at
+    # whatever the OTHER income's slab-derived rate happens to be (0% for
+    # a return with modest other income, understating tax on a
+    # high-ITD-scrutiny income category).
+    income_ex_115bbe = max(_ZERO, ti - si_result.mandatory_25pct_surcharge_income)
+    tax_ex_115bbe = max(_ZERO, r.tax_after_rebate - si_result.mandatory_25pct_surcharge_tax)
     surcharge = compute_surcharge(
-        ti,
-        r.tax_after_rebate,
+        income_ex_115bbe,
+        tax_ex_115bbe,
         regime,
         age,
         sr_tax=si_result.surcharge_cap_tax,
@@ -1417,7 +1650,8 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         sr_income=si_result.surcharge_cap_income,
         sr_surcharge_full_income=si_result.surcharge_full_income,
     )
-    r.surcharge = surcharge
+    surcharge_115bbe = round_to_nearest_rupee(si_result.mandatory_25pct_surcharge_tax * Decimal("0.25"))
+    r.surcharge = surcharge + surcharge_115bbe
 
     # ── 17. Cess ─────────────────────────────────────────────────────────────
     cess = compute_cess(r.tax_after_rebate + surcharge)
@@ -1448,6 +1682,13 @@ def compute(input_data: ITR2Input) -> ITR2Result:
          if e.assessment_year == "2026-27"),
         _ZERO,
     )
+    # 8a/8b are only provisionally computed here, against item 7
+    # (gross_tax_liability) -- they are RECOMPUTED below (## 18a) against
+    # item 8 (gross_tax_payable) once AMT has run, since the form's own
+    # item 8a formula is "(8-8b)", not "(7-8b)". Item 7 == item 8 for the
+    # overwhelming majority of returns (no AMT), so this provisional value
+    # is already final for them; only an AMT-binding return needs the
+    # recompute.
     if esop_new_perquisite > _ZERO:
         esop_tax_deferred = min(esop_new_perquisite, r.gross_tax_liability)
         r.esop_tax_deferred_this_year = esop_tax_deferred
@@ -1468,6 +1709,24 @@ def compute(input_data: ITR2Input) -> ITR2Result:
             amt_additions.append(AMTAddition(AMTAdditionSection.SECTION_80IA, amt_in.deduction_80ia_to_80rrb_except_80p))
         if amt_in.deduction_35ad_net_depreciation > 0:
             amt_additions.append(AMTAddition(AMTAdditionSection.SECTION_35AD, amt_in.deduction_35ad_net_depreciation))
+
+    # Schedule AMT item 2a ("Deduction claimed under any section included in
+    # Chapter VI-A under the heading 'C.-Deductions in respect of certain
+    # incomes'"): for an ITR-2 filer (no business/profession income), the
+    # ONLY such heading-C sections that can actually apply are 80QQB/80RRB
+    # (80-IA/80-IB/80-IC/80JJAA/etc. all require business income). These are
+    # real, already-computed deduction amounts
+    # (`input_data.deduction_80qqb`/`deduction_80rrb`, fed to
+    # `compute_deductions()` above) that previously never reached this
+    # addition list at all -- they only reached AMT if the taxpayer
+    # separately, manually re-entered the same figure into
+    # `amt_in.deduction_80ia_to_80rrb_except_80p`.
+    amt_80qqb_rrb = ded.breakdown.get("80QQB", _ZERO) + ded.breakdown.get("80RRB", _ZERO)
+    if amt_80qqb_rrb > 0:
+        # Reuses the ALREADY-computed, already-capped allowed deduction
+        # (`ded`, from ## 10 above) rather than re-deriving the 80QQB/80RRB
+        # caps/NR-HUF-due-date gating a second time here.
+        amt_additions.append(AMTAddition(AMTAdditionSection.SECTION_80IA, amt_80qqb_rrb))
 
     # Also derive from Chapter VI-A deductions if present
     if ded_input := input_data.deductions_chapter6a:
@@ -1512,6 +1771,22 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # Item 8, "Gross tax payable" = higher of 1d and 7 -- a field of its own,
     # not a conditional overwrite of item 7.
     r.gross_tax_payable = max(r.gross_tax_liability, r.amt_tax)
+
+    # ── 18a. Recompute item 8a against item 8, not item 7 ──────────────────
+    # Form: "8a Tax payable on income without including income on
+    # perquisites... (8-8b)". The provisional value computed above (## Part
+    # B-TTI items 8a/8b) used item 7 (gross_tax_liability) because item 8
+    # didn't exist yet at that point in the pipeline; item 7 and item 8 are
+    # only the same figure when AMT does not bind, so only an AMT-binding
+    # return needs this correction -- redone unconditionally for simplicity
+    # since it's a no-op otherwise.
+    if esop_new_perquisite > _ZERO:
+        esop_tax_deferred = min(esop_new_perquisite, r.gross_tax_payable)
+        r.esop_tax_deferred_this_year = esop_tax_deferred
+        r.esop_tax_excluding_new_perquisite = r.gross_tax_payable - esop_tax_deferred
+    else:
+        r.esop_tax_excluding_new_perquisite = r.gross_tax_payable
+        r.esop_tax_deferred_this_year = _ZERO
 
     # ── 19. AMT credit (section 115JD) ────────────────────────────────────────
     # Schedule AMTC's own brought-forward-credit table is disclosed every
@@ -1607,17 +1882,19 @@ def compute(input_data: ITR2Input) -> ITR2Result:
 
     # ── 21. Tax payable after AMT credit (item 10, "8a + 8c - 9") ────────────
     # 8a = item 8 minus 8b (tax deferred THIS year on 80-IAC eligible-startup
-    # ESOP perquisites); 8c = tax deferred from EARLIER years now payable.
-    # ESOPDeferralInput has no field for 8b's own gross pre-deferral
-    # perquisite figure at all (a separate, already-documented gap -- see
-    # Docs/ITR2_VALIDATOR_GAP_MAPPING_AY2026_27.md, "Additional bugs
-    # noticed"), so 8b is treated as zero here (8a = item 8) -- an inherited
-    # simplification, not a new one. 8c is real, already-correct data.
+    # ESOP perquisites, recomputed against item 8 just above -- ## 18a); 8c
+    # = tax deferred from EARLIER years now payable. Previously this used
+    # raw `r.gross_tax_payable` (item 8) directly, never subtracting 8b at
+    # all -- item 10 was overstated by exactly the 8b amount whenever a
+    # new-this-year ESOP deferral existed (`r.esop_tax_deferred_this_year`
+    # is real, nonzero data here -- the ESOPDeferralInput.gross_perquisite_tax
+    # field it's built from does exist; an earlier comment on this claiming
+    # otherwise was simply wrong).
     r.esop_deferred_payable_this_year = sum(
         (e.tax_payable_current_year for e in input_data.esop_deferrals), _ZERO,
     )
     tax_payable_after_amt_credit = max(_ZERO,
-        r.gross_tax_payable + r.esop_deferred_payable_this_year - r.amt_credit_utilised
+        r.esop_tax_excluding_new_perquisite + r.esop_deferred_payable_this_year - r.amt_credit_utilised
     )
 
     # ── 22. Interest and Late Fee ─────────────────────────────────────────────

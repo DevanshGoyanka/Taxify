@@ -50,6 +50,9 @@ def compute_details(
     ded: Optional[Chapter6ADeductions],
     entries: Optional[list[Schedule80CEntry]],
     regime: TaxRegime,
+    *,
+    salary: Decimal = _ZERO,
+    gti: Decimal = _ZERO,
 ) -> Section80CResult:
     """Compute the 80C component and allocate per-row eligibility.
 
@@ -73,7 +76,7 @@ def compute_details(
         return Section80CResult(user_claim=user_claim)
 
     raw_total_80cce = (
-        ded.amount_80c + ded.amount_80ccc + ded.amount_80ccd1
+        ded.amount_80c + ded.amount_80ccc + _eligible_80ccd1(ded, salary, gti)
     )
     capped_80cce = min(raw_total_80cce, SECTION_80C_LIMIT)
     # 80C component's share of the combined cap (proportional).
@@ -125,25 +128,55 @@ def compute_details(
     )
 
 
+def _eligible_80ccd1(
+    ded: Optional[Chapter6ADeductions],
+    salary: Decimal,
+    gti: Decimal,
+) -> Decimal:
+    """Section 80CCD(1)'s OWN statutory sub-cap, independent of the shared
+    80CCE ₹1,50,000 pool: the proviso to section 80CCD(1) limits the
+    deductible contribution to 10% of salary for an employee, or 20% of
+    gross total income for any other assessee (CBDT Validation Rule #348:
+    "Deduction u/s 80CCD(1) to be limited to 10% of salary or 20% of GTI as
+    applicable"). This must be applied to the raw contribution BEFORE it
+    ever enters the combined-pool proportional allocation below, since the
+    pool cap and this sub-cap are two independent, both-must-hold limits,
+    not the same one. `salary > 0` is used as the employee test (the same
+    `salary` figure section_80ccd2.compute_details() already receives for
+    the sibling 80CCD(2) employer-contribution cap).
+    """
+    raw = ded.amount_80ccd1 if ded else _ZERO
+    if raw <= _ZERO:
+        return _ZERO
+    statutory_cap = salary * Decimal("0.10") if salary > 0 else gti * Decimal("0.20")
+    return min(raw, statutory_cap)
+
+
 def compute(
     ded: Optional[Chapter6ADeductions],
     regime: TaxRegime,
+    *,
+    salary: Decimal = _ZERO,
+    gti: Decimal = _ZERO,
 ) -> Decimal:
     """Return the combined 80CCE pool (80C + 80CCC + 80CCD(1)) capped at ₹1.5L."""
     if not ded or regime == TaxRegime.NEW:
         return _ZERO
-    raw = ded.amount_80c + ded.amount_80ccc + ded.amount_80ccd1
+    raw = ded.amount_80c + ded.amount_80ccc + _eligible_80ccd1(ded, salary, gti)
     return min(raw, SECTION_80C_LIMIT)
 
 
 def compute_80ccc(
     ded: Optional[Chapter6ADeductions],
     regime: TaxRegime,
+    *,
+    salary: Decimal = _ZERO,
+    gti: Decimal = _ZERO,
 ) -> Decimal:
     """Return the 80CCC proportional share of the 80CCE cap."""
     if not ded or regime == TaxRegime.NEW:
         return _ZERO
-    raw_total = ded.amount_80c + ded.amount_80ccc + ded.amount_80ccd1
+    raw_total = ded.amount_80c + ded.amount_80ccc + _eligible_80ccd1(ded, salary, gti)
     if raw_total == 0:
         return _ZERO
     capped = min(raw_total, SECTION_80C_LIMIT)
@@ -153,12 +186,18 @@ def compute_80ccc(
 def compute_80ccd1(
     ded: Optional[Chapter6ADeductions],
     regime: TaxRegime,
+    *,
+    salary: Decimal = _ZERO,
+    gti: Decimal = _ZERO,
 ) -> Decimal:
-    """Return the 80CCD(1) proportional share of the 80CCE cap."""
+    """Return the 80CCD(1) proportional share of the 80CCE cap, after its
+    own statutory 10%-of-salary/20%-of-GTI sub-cap (see `_eligible_80ccd1`).
+    """
     if not ded or regime == TaxRegime.NEW:
         return _ZERO
-    raw_total = ded.amount_80c + ded.amount_80ccc + ded.amount_80ccd1
+    eligible = _eligible_80ccd1(ded, salary, gti)
+    raw_total = ded.amount_80c + ded.amount_80ccc + eligible
     if raw_total == 0:
         return _ZERO
     capped = min(raw_total, SECTION_80C_LIMIT)
-    return min(ded.amount_80ccd1, ded.amount_80ccd1 / raw_total * capped)
+    return min(eligible, eligible / raw_total * capped)

@@ -119,13 +119,24 @@ class TestSecondaryMobile:
         )
         assert addr["MobileNoSec"] == 9403556603
 
-    def test_no_secondary_mobile_emits_zero(self) -> None:
-        """When no secondary mobile is entered, CBDT keys are present and 0."""
+    def test_no_secondary_mobile_omits_the_sec_keys(self) -> None:
+        """When no secondary mobile is entered, the CBDT MobileNoSec keys
+        are omitted entirely, not emitted as a placeholder 0.
+
+        Neither key is in the CBDT Address schema's own "required" list,
+        and MobileNoSec's own pattern
+        ("[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}") requires a real 5-10 digit
+        number starting 1-9 -- a placeholder 0 fails to look like a phone
+        number at all. Confirmed live-rejected by ITD's own Type-2 UAT
+        validateItr for the identical bug in the ITR-2 builder
+        (2026-09-13, PAN GOYPT2026A, errCd="" desc="Pattern is
+        Mismatching") -- fixed defensively here too.
+        """
         payload = {**BASE_PAYLOAD}
         json_doc = _generate(payload)
         addr = _address(json_doc)
-        assert addr["CountryCodeMobileNoSec"] == 0
-        assert addr["MobileNoSec"] == 0
+        assert "CountryCodeMobileNoSec" not in addr
+        assert "MobileNoSec" not in addr
         # EmailAddressSec must be absent when no secondary email entered
         assert "EmailAddressSec" not in addr
 
@@ -138,9 +149,11 @@ class TestSecondaryMobile:
         }
         json_doc = _generate(payload)
         addr = _address(json_doc)
-        # No number → no secondary mobile emitted (country code defaults to 0)
-        assert addr["CountryCodeMobileNoSec"] == 0
-        assert addr["MobileNoSec"] == 0
+        # No number → no secondary mobile emitted at all (see
+        # test_no_secondary_mobile_omits_the_sec_keys for why these keys
+        # are omitted rather than defaulted to 0).
+        assert "CountryCodeMobileNoSec" not in addr
+        assert "MobileNoSec" not in addr
 
 
 # ---------------------------------------------------------------------------

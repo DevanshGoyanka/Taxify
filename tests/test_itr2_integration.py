@@ -32,13 +32,20 @@ from app.schemas.itr1 import (
 )
 from app.schemas.itr2 import (
     AgriculturalIncome,
+    AMTInput,
     CapitalGainExemptionClaim,
     CG112AScrip,
     CGAssetType,
     CGTransaction,
     ITR2Input,
+    OSDeductions,
+    OSRaceHorseActivity,
+    OSSpecialRateEntry,
+    PTIEntry,
     ResidentialStatus,
+    SPIEntry,
     ReturnFileSection,
+    ScheduleSIEntry,
     VDATransaction,
 )
 
@@ -133,6 +140,12 @@ def test_section_112a_gain_below_threshold_no_tax():
         ],
     )
     r = compute(inp)
+    # capital_gains_income stays GROSS of the section 112A ₹1.25L
+    # threshold -- Schedule CG's own disclosure chain (Table E, Part C)
+    # is defined by the form itself as pure sums with no threshold
+    # subtraction anywhere (confirmed against the form PDF, pages 47-49);
+    # only Schedule SI's own tax computation (si.total_special_rate_tax
+    # below) actually applies the threshold.
     assert r.capital_gains_income > D("0")
     assert r.capital_gains_income <= D("50000")  # 100K - 50K = 50K gain
     # 50K < 1.25L threshold → no 112A tax
@@ -215,7 +228,11 @@ def test_112a_grandfathering_never_below_cost():
         ],
     )
     r = compute(inp)
-    # Gain = 15000 - 10000 = 5000 (not 15000 - 8000 = 7000)
+    # Gain = 15000 - 10000 = 5000 (not 15000 - 8000 = 7000).
+    # capital_gains_income stays GROSS of the section 112A threshold (see
+    # the fix note on this field's own assignment in
+    # app/engine/calculators/itr2.py) -- only Schedule SI's own tax
+    # computation below applies it.
     assert r.capital_gains_income == D("5000")
     si = r.schedules.get("si")
     # 5000 < 125000 threshold → no tax
@@ -306,19 +323,29 @@ def test_112a_threshold_applies_after_brought_forward_ltcl() -> None:
 
 
 def test_112a_threshold_portion_does_not_enter_slab_tax() -> None:
-    """112A gain below threshold is excluded from Total Income entirely.
+    """112A gain below threshold remains in Total Income but is not taxed
+    at slab rates (and correctly attracts no 112A tax either, since it's
+    below the threshold).
 
-    The section 112A ₹1.25L threshold is a genuine income EXCLUSION under
-    the section's own proviso, not a Chapter VI-A deduction -- exempt
-    income never forms part of Gross/Total Income at all (the official
-    form's own Part B-TI "TotalLongTerm" = "LongTerm12_5Per" +
-    "LongTermSplRateDTAA", neither of which includes an exempt slice). A
-    100000 112A gain fully within the threshold is therefore fully exempt
-    and Total Income is correctly 0 -- not 100000, which the un-fixed
-    calculator previously (and wrongly) reported by including the gross,
-    pre-threshold 112A gain in Total Income even though it was never
-    slab-taxed (see the matching fix note in
-    calculators/itr2.py::compute()).
+    Confirmed directly against the official form PDF (`Reference Docs by
+    CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf`, pages 47-49 and
+    66-68): Part B-TI item 3 (Capital gains) is defined verbatim from
+    Schedule CG's own Table E figures, which are GROSS throughout with no
+    section 112A ₹1.25L threshold subtraction anywhere in their
+    definition (Schedule 112A's own per-scrip "column 14" has no
+    aggregate threshold applied at all) -- so Total Income (item 12)
+    correctly includes the full 100000 gain. The threshold only zeroes
+    the actual 112A TAX (via Schedule SI, which uses the post-threshold
+    taxable amount) and is excluded from slab tax specifically via
+    `special_rate_income_for_slab` (which uses the same gross figure
+    Total Income includes, so the two exactly cancel for slab-tax
+    purposes) -- not by excluding it from Total Income itself. An earlier
+    version of this test asserted the opposite (`taxable_income == 0`),
+    based on a plausible-sounding but ultimately wrong general
+    income-tax-law inference made without checking this literal form
+    table first; confirmed wrong by live Type-2 UAT validateItr
+    rejections once GTI/Total Income were correspondingly netted to
+    match (2026-09-13, PAN GOYPT2026A).
     """
     inp = _minimal_input(
         cg_112a_scrips=[
@@ -335,7 +362,7 @@ def test_112a_threshold_portion_does_not_enter_slab_tax() -> None:
         ],
     )
     r = compute(inp)
-    assert r.taxable_income == D("0")
+    assert r.taxable_income == D("100000")
     assert r.special_rate_tax == D("0")
     assert r.slab_tax == D("0")
 
@@ -779,5 +806,304 @@ def test_section_54b_exemption_on_stcg_does_not_reduce_unrelated_ltcg() -> None:
     )
     r = compute(inp)
     # STCG side: 10L gain - 5L (54B) = 5L. LTCG side (112A): 2L gain, fully
-    # untouched by the STCG-side 54B claim.
+    # untouched by the STCG-side 54B claim, and GROSS of the section 112A
+    # threshold (Schedule CG's own disclosure chain never applies it --
+    # see the fix note on capital_gains_income's own assignment in
+    # app/engine/calculators/itr2.py).
     assert r.capital_gains_income == D("500000") + D("200000")
+
+
+# ---------------------------------------------------------------------------
+# Schedule OS -- section 57 general deductions (form item 3) apply against
+# the whole normal-rate OS pool, not only machinery/plant/furniture rent.
+# ---------------------------------------------------------------------------
+
+def test_os_section_57_general_deduction_applies_without_machinery_rent() -> None:
+    """A Section 57 expense claim must reduce taxable OS income even when
+    the taxpayer has no machinery/plant/furniture letting income at all.
+
+    Previously `os_deductions.expenses`/`.depreciation` were only ever
+    subtracted when `os_machinery_plant_rent` was also nonzero, so a
+    taxpayer with e.g. savings-bank interest and a genuine Section 57
+    expense claim but no letting income got the deduction disclosed in
+    the JSON but silently never subtracted from taxable income -- a real
+    overstatement of tax.
+    """
+    inp = _minimal_input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=D("50000")),
+        os_deductions=OSDeductions(expenses=D("5000")),
+    )
+    r = compute(inp)
+    assert r.other_sources_income == D("45000")
+
+
+def test_os_section_57_general_deduction_does_not_touch_race_horse_income() -> None:
+    """The general Section 57 deduction must reduce only the normal-rate OS
+    pool, never the separately-taxed race-horse sub-head."""
+    inp = _minimal_input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=D("50000")),
+        os_deductions=OSDeductions(expenses=D("5000")),
+        os_race_horse=OSRaceHorseActivity(receipts=D("20000"), balance=D("20000")),
+    )
+    r = compute(inp)
+    # Normal-rate pool: 50000 - 5000 = 45000. Race-horse: 20000 (untouched).
+    assert r.other_sources_income == D("45000") + D("20000")
+
+
+def test_os_section_57_general_deduction_still_applies_with_machinery_rent() -> None:
+    """When machinery rent IS present, the general deduction still applies
+    to the whole normal-rate pool (not double-counted, not dropped)."""
+    inp = _minimal_input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=D("50000")),
+        os_deductions=OSDeductions(expenses=D("5000")),
+        os_machinery_plant_rent=D("30000"),
+    )
+    r = compute(inp)
+    # (50000 + 30000) - 5000 = 75000.
+    assert r.other_sources_income == D("75000")
+
+
+# ---------------------------------------------------------------------------
+# Section 80CCD(1)/(2) statutory salary-based caps (real bug: `salary` was
+# never threaded into compute_deductions() for ITR-2 at all, so 80CCD(2)'s
+# 10%/14%-of-salary ceiling was never enforced -- the full claimed amount was
+# always allowed -- and the new 80CCD(1) 10%-of-salary/20%-of-GTI sub-cap
+# (CBDT rule #348) fell back to the wrong branch for every salaried filer.)
+# ---------------------------------------------------------------------------
+
+def test_80ccd2_employer_nps_contribution_is_capped_to_salary_not_allowed_in_full():
+    """A non-government employee claims an employer NPS contribution well
+    above 10% of salary. Before the `salary=` wiring fix, section_80ccd2's
+    own no-salary fallback (`ceiling = ... if salary > 0 else user_claim`)
+    silently allowed the ENTIRE claim -- an unbounded deduction. It must now
+    be capped at 10% of salary (old regime, non-government employer)."""
+    inp = _minimal_input(
+        salary_income=SalaryIncome(
+            gross_salary=D("1000000"), is_government_employee=False, is_cg_sg_employee=False,
+        ),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd2=D("300000")),  # 30% of salary
+    )
+    r = compute(inp)
+    ccd2 = r.schedules["deductions"].section_details["80CCD(2)"]
+    assert ccd2.statutory_ceiling == D("100000")  # 10% of 10L
+    assert ccd2.allowed_deduction == D("100000")  # capped, not the full 300000 claim
+
+
+def test_80ccd1_employee_nps_contribution_capped_at_10pct_of_salary():
+    """Section 80CCD(1)'s own statutory sub-cap (CBDT rule #348): for an
+    employee, the deductible NPS contribution is limited to 10% of salary,
+    independent of the shared ₹1,50,000 80CCE pool. A ₹10L-salary employee
+    claiming ₹2,00,000 (well within the pool cap) must still be limited to
+    ₹1,00,000 (10% of salary), not the full pool-capped ₹1,50,000."""
+    inp = _minimal_input(
+        salary_income=SalaryIncome(gross_salary=D("1000000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=D("200000")),
+    )
+    r = compute(inp)
+    assert r.schedules["deductions"].breakdown.get("80CCD(1)", D("0")) == D("100000")
+
+
+def test_80ccd1_non_employee_capped_at_20pct_of_gti():
+    """No salary income at all (e.g. a filer whose only income is house
+    property / other sources): the 20%-of-GTI branch applies instead of
+    10%-of-salary, and must bind below the ₹1,50,000 combined-pool cap when
+    20% of GTI is itself smaller than that pool."""
+    inp = _minimal_input(
+        other_sources_income=OtherSourcesIncome(savings_bank_interest=D("500000")),
+        deductions_chapter6a=Chapter6ADeductions(amount_80ccd1=D("300000")),
+    )
+    r = compute(inp)
+    # GTI = 500,000; 20% = 100,000 -- below both the raw 300,000 claim and
+    # the 150,000 combined-pool cap, so the GTI sub-cap is the binding one.
+    assert r.schedules["deductions"].breakdown.get("80CCD(1)", D("0")) == D("100000")
+
+
+# ---------------------------------------------------------------------------
+# Schedule CFL: current-year race-horse-activity loss carry-forward (Section
+# 74A(3)). Schedule OS item 8e's own negative balance was previously simply
+# clamped to zero for GTI purposes (correct) with nothing downstream ever
+# picking up the discarded negative remainder for Schedule CFL row xi --
+# silently losing the taxpayer's statutory right to carry it forward.
+# ---------------------------------------------------------------------------
+
+def test_racehorse_current_year_loss_is_carried_forward_to_cfl():
+    inp = _minimal_input(
+        salary_income=SalaryIncome(gross_salary=D("800000")),
+        os_race_horse=OSRaceHorseActivity(receipts=D("5000"), balance=D("-30000")),
+    )
+    r = compute(inp)
+    # The loss must not reduce other-sources income (Schedule OS item 9
+    # takes 8e as nil when negative) ...
+    assert r.other_sources_income == D("0")
+    # ... but it must appear as a fresh current-year CFL entry, carried
+    # forward for 4 years (section 74A(3)), not the ordinary 8.
+    cfl_entries = r.schedules["cfl"]
+    race_horse_results = [
+        entry for cfl in cfl_entries for entry in cfl.entries if entry.head == "RaceHorse"
+    ]
+    assert len(race_horse_results) == 1
+    assert race_horse_results[0].loss_remaining == D("30000")
+    assert race_horse_results[0].assessment_year_of_loss == "2026-27"
+
+
+def test_racehorse_current_year_profit_produces_no_cfl_entry():
+    """A positive balance must not spuriously create a CFL entry."""
+    inp = _minimal_input(
+        os_race_horse=OSRaceHorseActivity(receipts=D("30000"), balance=D("20000")),
+    )
+    r = compute(inp)
+    cfl_entries = r.schedules["cfl"]
+    race_horse_results = [
+        entry for cfl in cfl_entries for entry in cfl.entries if entry.head == "RaceHorse"
+    ]
+    assert race_horse_results == []
+
+
+# ---------------------------------------------------------------------------
+# Capped-bucket special-rate income (dividend/FII 115A-family, and PTI
+# capital gains) was silently absent from `special_rate_income_for_slab`,
+# so once it reached GTI via `os_special_rate_entries` it was taxed BOTH at
+# slab rate (via `normal_income`) AND, correctly, at its own Schedule SI
+# rate -- a real, confirmed double-taxation defect.
+# ---------------------------------------------------------------------------
+
+def test_nri_dividend_special_rate_income_is_not_double_taxed():
+    """A return whose only income is NRI dividend income taxable at a
+    special SI rate (section 115A(1)(a)(A), 10%) must have ZERO slab tax --
+    previously the same ₹10L was also taxed at ordinary slab rates on top
+    of the correct flat 10% SI tax."""
+    inp = _minimal_input(
+        os_special_rate_entries=[
+            OSSpecialRateEntry(source_description="5A1aA", source_amount=D("1000000")),
+        ],
+    )
+    r = compute(inp)
+    assert r.taxable_income == D("1000000")
+    assert r.slab_tax == D("0")
+    assert r.special_rate_tax == D("100000")  # 10% of 10L
+
+
+def test_nri_dividend_alongside_ordinary_salary_income_taxes_each_correctly():
+    """Mixed case: ordinary salary (slab-rate) plus NRI dividend (SI-rate,
+    capped bucket) -- slab tax must apply only to the salary portion."""
+    inp = _minimal_input(
+        salary_income=SalaryIncome(gross_salary=D("800000")),
+        os_special_rate_entries=[
+            OSSpecialRateEntry(source_description="5A1aA", source_amount=D("500000")),
+        ],
+    )
+    r = compute(inp)
+    salary_only = compute(_minimal_input(salary_income=SalaryIncome(gross_salary=D("800000"))))
+    assert r.slab_tax == salary_only.slab_tax
+    assert r.special_rate_tax == D("50000")  # 10% of 5L
+
+
+# ---------------------------------------------------------------------------
+# SPI (clubbed) and PTI (pass-through) capital-gains income was computed
+# then silently discarded / never added to GTI at all -- understating Total
+# Income and, for SPI, understating tax outright (income vanished entirely).
+# ---------------------------------------------------------------------------
+
+def test_spi_clubbed_capital_gain_reaches_gross_total_income():
+    """A capital gain clubbed from a minor child (head_of_income='CG') must
+    actually increase Total Income -- previously it was added to a field
+    that (a) never fed GTI and (b) was unconditionally overwritten later,
+    so the clubbed income silently vanished."""
+    inp = _minimal_input(
+        spi_entries=[
+            SPIEntry(
+                specified_person_name="Minor Child", relationship="Son",
+                amount_included=D("200000"), head_of_income="CG",
+            ),
+        ],
+    )
+    r = compute(inp)
+    assert r.gross_total_income == D("200000")
+    assert r.capital_gains_income == D("200000")
+    assert r.taxable_income > D("0")
+
+
+def test_pti_stcg_111a_reaches_gross_total_income_and_stays_out_of_slab():
+    """PTI STCG taxed at 20% (section 111A pass-through) must be included
+    in GTI/Total Income (Schedule CG's own A7 line item) while still being
+    excluded from ordinary slab tax (it's taxed via Schedule SI instead)."""
+    inp = _minimal_input(
+        pti_entries=[
+            PTIEntry(
+                entity_name="ABC InvIT", entity_pan="AAACI1234A",
+                income_head="STCG", section="111A", income_amount=D("300000"),
+            ),
+        ],
+    )
+    r = compute(inp)
+    assert r.gross_total_income == D("300000")
+    assert r.capital_gains_income == D("300000")
+    assert r.slab_tax == D("0")
+    assert r.special_rate_tax == D("60000")  # 20% of 3L
+
+
+def test_pti_ltcg_other_reaches_gross_total_income_and_stays_out_of_slab():
+    """PTI LTCG taxed at 12.5% (not section 112A) must likewise be included
+    in GTI (Schedule CG's own B10 line item) and excluded from slab."""
+    inp = _minimal_input(
+        pti_entries=[
+            PTIEntry(
+                entity_name="XYZ REIT", entity_pan="AAACX1234B",
+                income_head="LTCG", section="OTHER", income_amount=D("400000"),
+            ),
+        ],
+    )
+    r = compute(inp)
+    assert r.gross_total_income == D("400000")
+    assert r.capital_gains_income == D("400000")
+    assert r.slab_tax == D("0")
+    assert r.special_rate_tax == D("50000")  # 12.5% of 4L
+
+
+# ---------------------------------------------------------------------------
+# Schedule AMT item 2a: 80QQB/80RRB -- the only heading-C Chapter VI-A
+# deductions an ITR-2 filer (no business income) can actually claim -- were
+# never fed into the AMT addback list at all, so Adjusted Total Income
+# silently omitted them.
+# ---------------------------------------------------------------------------
+
+def test_amt_addition_includes_80qqb_deduction():
+    inp = _minimal_input(
+        salary_income=SalaryIncome(gross_salary=D("2200000")),
+        deduction_80qqb=D("300000"),
+        royalty_income_80qqb=D("300000"),
+    )
+    r = compute(inp)
+    amt = r.schedules["amt"]
+    assert amt.adjusted_total_income == r.taxable_income + D("300000")
+
+
+# ---------------------------------------------------------------------------
+# Part B-TTI item 5i: section 115BBE (unexplained income) carries a
+# MANDATORY flat 25% surcharge, independent of the taxpayer's overall
+# income-level surcharge slab -- previously this was entirely absent, so a
+# return with modest total income (below the first surcharge threshold, 0%
+# ordinary rate) got ZERO surcharge on the 115BBE component too.
+# ---------------------------------------------------------------------------
+
+def test_115bbe_gets_mandatory_25pct_surcharge_even_below_ordinary_threshold():
+    inp = _minimal_input(
+        si_entries=[ScheduleSIEntry(section="115BBE", gross_income=D("500000"))],
+    )
+    r = compute(inp)
+    assert r.taxable_income == D("500000")
+    assert r.special_rate_tax == D("300000")  # 60% of 5L
+    assert r.surcharge == D("75000")  # 25% of 300000, despite 5L being well below any ordinary surcharge threshold
+
+
+def test_115bbe_surcharge_adds_on_top_of_ordinary_surcharge_on_other_income():
+    inp = _minimal_input(
+        salary_income=SalaryIncome(gross_salary=D("6000000")),  # crosses the 10% surcharge slab
+        si_entries=[ScheduleSIEntry(section="115BBE", gross_income=D("500000"))],
+    )
+    r = compute(inp)
+    salary_only = compute(_minimal_input(salary_income=SalaryIncome(gross_salary=D("6000000"))))
+    # The 115BBE component's own flat-25% surcharge (75000) must be added
+    # on top of whatever surcharge the ordinary salary income independently
+    # generates -- not blended into a single overall rate.
+    assert r.surcharge == salary_only.surcharge + D("75000")

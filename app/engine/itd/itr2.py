@@ -31,7 +31,7 @@ from app.engine.itd.common import (
     _compute_digest,
     _str_or,
 )
-from app.schemas.itr1 import BankAccountType
+from app.schemas.itr1 import BankAccountType, TaxRegime
 from app.schemas.itr2 import (
     AssesseeStatus,
     ForeignAssetEntry,
@@ -104,10 +104,22 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         "CountryCode": addr.country_code,
         "CountryCodeMobile": addr.mobile_country_code,
         "MobileNo": int(addr.mobile_no) if addr.mobile_no.isdigit() else 0,
-        "CountryCodeMobileNoSec": addr.secondary_mobile_country_code,
-        "MobileNoSec": int(addr.secondary_mobile_no) if addr.secondary_mobile_no and addr.secondary_mobile_no.isdigit() else 0,
         "EmailAddress": addr.email,
     }
+    # Neither field is schema-required, and MobileNoSec's own pattern
+    # ("[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}") requires a real 5-10 digit
+    # number starting 1-9 -- unlike Phone.STDcode/PhoneNo below, which have
+    # explicit 0/"0" schema defaults that satisfy their own looser
+    # patterns, a placeholder 0 here fails to look like a phone number at
+    # all. Confirmed live (2026-09-13, Type-2 UAT validateItr, PAN
+    # GOYPT2026A): the local jsonschema Draft-4 validator never catches
+    # this, since "pattern" is a no-op against a non-string instance per
+    # spec -- ITD's own server enforces it anyway, rejecting with
+    # errCd="" desc="Pattern is Mismatching" on this exact field. Only
+    # emit when a real secondary mobile is actually on file.
+    if addr.secondary_mobile_no and addr.secondary_mobile_no.isdigit():
+        address_data["CountryCodeMobileNoSec"] = addr.secondary_mobile_country_code
+        address_data["MobileNoSec"] = int(addr.secondary_mobile_no)
     if addr.country_code == "91":
         address_data["PinCode"] = int(addr.pin_code) if addr.pin_code else 0
     else:
@@ -127,28 +139,56 @@ def _part_a_gen1(input_data: ITR2Input) -> dict[str, Any]:
         },
         "PAN": profile.pan,
         "Address": address_data,
-        "SecondaryAdd": "Y" if profile.alternate_address else "N",
+        # Secondary address details are mandatory in Part A General
+        # Information -- confirmed live: ITD's Type-2 UAT validateItr
+        # rejected an entirely-absent AlternateAddress with "Secondary
+        # address details are not provided in Schedule Part A General
+        # information" (2026-09-13, PAN GOYPT2026A). This exact bug class
+        # was already found and fixed for ITR-4 (`app/engine/itd/itr4.py`,
+        # 2026-09-04) -- ITR-2's own builder never got the matching fix.
+        # When the caller supplies no genuinely distinct secondary
+        # address, default it to the primary address ("secondary same as
+        # primary") rather than omitting the block.
+        "SecondaryAdd": "Y",
         "DOB": _date(profile.date_of_birth_or_formation),
         "Status": profile.assessee_status.value,
     }
     if profile.aadhaar_number:
         personal_info["AadhaarCardNo"] = profile.aadhaar_number
-    if profile.alternate_address:
-        alt = profile.alternate_address
-        personal_info["AlternateAddress"] = {
-            "ResidenceNo": alt.residence_no,
-            "ResidenceName": alt.residence_name,
-            "RoadOrStreet": alt.road_or_street,
-            "LocalityOrArea": alt.locality_or_area,
-            "CityOrTownOrDistrict": alt.city_or_town_or_district,
-            "StateCode": alt.state_code,
-            "CountryCode": alt.country_code,
-            "PinCode": int(alt.pin_code) if alt.pin_code else 0,
-            "ZipCode": alt.zip_code,
-        }
+    alt = profile.alternate_address or profile.primary_address
+    personal_info["AlternateAddress"] = {
+        "ResidenceNo": alt.residence_no,
+        "ResidenceName": alt.residence_name,
+        "RoadOrStreet": alt.road_or_street,
+        "LocalityOrArea": alt.locality_or_area,
+        "CityOrTownOrDistrict": alt.city_or_town_or_district,
+        "StateCode": alt.state_code,
+        "CountryCode": alt.country_code,
+        "PinCode": int(alt.pin_code) if alt.pin_code else 0,
+        "ZipCode": alt.zip_code,
+    }
     filing_status: dict[str, Any] = {
         "ReturnFileSec": int(profile.return_file_section),
-        "OptOutNewTaxRegime": "Y" if profile.opted_out_new_tax_regime else "N",
+        # Form item: "Do you wish to exercise the option u/s 115BAC(6) of
+        # Opting out of new tax regime? (default is 'No')" -- this is the
+        # SAME underlying fact as ITR2Input.tax_regime (the field the
+        # calculator itself uses to pick old- vs new-regime slabs,
+        # standard deduction, and deduction eligibility), not an
+        # independent choice. Previously sourced from a separate,
+        # independently-settable ``profile.opted_out_new_tax_regime`` flag
+        # that nothing cross-validated against ``tax_regime`` -- a
+        # preparer selecting TaxRegime.OLD (correctly driving the actual
+        # tax computation, e.g. the ₹50,000 old-regime standard deduction)
+        # without ALSO separately setting the profile flag produced a
+        # self-contradictory return: computed under old-regime rules but
+        # disclosed as new-regime. Confirmed live (2026-09-13, Type-2 UAT
+        # validateItr, PAN GOYPT2026A, errCd=
+        # "ITR2_INF26_PDM_FilingStatus_OptOutNewTaxRegime_9gda2"): ITD's
+        # own server independently derives the expected standard-deduction
+        # ceiling from THIS flag and rejects the mismatch. Deriving it
+        # directly from tax_regime makes the two facts structurally
+        # impossible to disagree.
+        "OptOutNewTaxRegime": "Y" if input_data.tax_regime == TaxRegime.OLD else "N",
         "SeventhProvisio139": "Y" if profile.seventh_proviso_139 else "N",
         "ResidentialStatus": profile.residential_status.value,
         "AsseseeRepFlg": "Y" if profile.verification_capacity == "R" else "N",
@@ -1557,6 +1597,27 @@ def _cg_loss_setoff_table(result: ITR2Result) -> dict[str, Any]:
     setoff_total = getattr(cyla, "cg_source_setoff_total", None) or {}
     loss_remaining = getattr(cyla, "cg_source_loss_remaining", None) or {}
 
+    # Table E is entirely GROSS (pre-section-112A-threshold), including its
+    # final "CurrYrCapGain" column, for BOTH "InLtcg12_5Per.CurrYearIncome"
+    # (Evi, cross-checked live against the sum of Schedule CG's own
+    # B-section LTCG items -- B1g+B2e+B3c+..., themselves gross since
+    # Schedule 112A's own per-scrip Balance has no aggregate threshold
+    # applied at all) AND "CurrYrCapGain" (E8, cross-checked live against
+    # the row's own strict "col8 = col1-col2-...-col7" arithmetic identity
+    # -- there is no spare column in this row for the exemption to land
+    # in). An earlier attempt to net either column against the exempt
+    # slice was confirmed live-rejected both ways (2026-09-13, Type-2 UAT
+    # validateItr, PAN GOYPT2026A: reducing CurrYearIncome broke the
+    # B-item-sum check, errCd=
+    # "ITR2_INF26_InLtcg12_5Per_CurrYearIncome_Znh99"; reducing only
+    # CurrYrCapGain broke the row's own col1-col7 identity, errCd=
+    # "ITR2_INF26_InLtcg12_5Per_CurrYrCapGain_5tcka"). Schedule CG's own
+    # Part C total (TotScheduleCGFor23/SumOfCGIncm) must therefore also
+    # stay gross to match this table (see the matching revert in
+    # app/engine/calculators/itr2.py) -- the section 112A exemption is
+    # applied ONLY when Schedule CG's total flows into Part B-TI's
+    # separately-computed CapGain block, not anywhere within Schedule CG
+    # itself.
     def gross_loss(name: str) -> int:
         return _to_rupees(loss.get(name, _ZERO))
 
@@ -1669,11 +1730,14 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     # shows a nonzero CapGain figure with no supporting disclosure (the
     # same failure mode Phase 6i-5's own comment above already fixed once
     # for the NRI-proviso-48/115F/DTAA-only case).
-    has_pti_stcg = any(e.income_head == "STCG" and e.income_amount > _ZERO for e in input_data.pti_entries)
+    has_pti_cg = any(
+        e.income_head in ("STCG", "LTCG") and e.income_amount > _ZERO
+        for e in input_data.pti_entries
+    )
     if (
         not input_data.cg_transactions and not input_data.cg_112a_scrips
         and not input_data.vda_transactions and not has_nri_cg_data
-        and input_data.deemed_stcg_unutilized_cgas <= _ZERO and not has_pti_stcg
+        and input_data.deemed_stcg_unutilized_cgas <= _ZERO and not has_pti_cg
     ):
         return None
     cg = result.schedules.get("cg")
@@ -1720,10 +1784,34 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     # from the subtraction even though DeductSec48.TotalDedn (computed one
     # line below it) already included it -- the two fields disagreed on
     # what "total deduction" meant for the identical transaction.
+    from app.engine.schedules.capital_gains import _is_short_term as _is_short_term_111a
+
     equity_111a_rows = []
+
+    def _is_actually_short_111a(tx: Any) -> bool:
+        asset_type = tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type
+        if tx.date_of_acquisition is not None:
+            return _is_short_term_111a(asset_type, tx.date_of_acquisition, tx.date_of_transfer)
+        if tx.explicit_long_term is not None:
+            return not tx.explicit_long_term
+        return True
+
+    # A "listed_equity_111a"-typed transaction held past the 12-month
+    # threshold is reclassified by _classify() (app/engine/schedules/
+    # capital_gains.py) into the 112A LTCG basket everywhere else in this
+    # pipeline -- this A2 disclosure table must only include the ones that
+    # ARE actually short-term, or its own CapgainonAssets total silently
+    # includes a gain the return doesn't actually tax as STCG@20% at all.
+    # Confirmed live (2026-09-13, Type-2 UAT validateItr, PAN GOYPT2026A):
+    # ITD's own server cross-checks this against Table E's Eii (STCG@20%
+    # current-year income) and rejects the mismatch with errCd=
+    # "ITR2_INF26_InStcg20Per_CurrYearIncome_oywce" -- the same
+    # long-held-111A root cause as the Table F fix just above this
+    # function, hitting a second, independent disclosure spot.
     matching_111a_txs = [
         tx for tx in input_data.cg_transactions
         if tx.asset_type.value in ("listed_equity_111a", "equity_oriented_fund_111a")
+        and _is_actually_short_111a(tx)
     ]
     if matching_111a_txs:
         total_consideration = sum((tx.full_consideration for tx in matching_111a_txs), z)
@@ -1756,13 +1844,43 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         _GENERIC_OTHER_ASSET_TYPES - _FII_SECURITIES_ASSET_TYPES if is_fii_fpi
         else _GENERIC_OTHER_ASSET_TYPES
     )
+    # Schedule CG item B5 ("NRIOnSec112and115", CBDT rules #153/#155/#597):
+    # a non-FII/FPI NRI's LTCG on unlisted securities specifically tagged
+    # `is_nri_unquoted_shares_disposal` (section 112(1)(c) unlisted
+    # securities, or section 115AC bonds/GDRs) -- previously the input
+    # pipeline required and validated this tag/section_code pair, but the
+    # ITD builder never read either field: such a transaction fell through
+    # to the generic B8 "SaleofAssetNADtls" bucket with no SectionCode at
+    # all, disagreeing with what the taxpayer explicitly declared. Tax is
+    # unaffected (B5/B8 share the same 12.5% rate), only the disclosed row/
+    # SectionCode was wrong. The FII/FPI case (SectionCode "5ADiii") is
+    # already handled entirely separately below via `_FII_SECURITIES_ASSET_
+    # TYPES` (unconditional for every FII security, not gated by this
+    # manual tag), so this block only applies when `not is_fii_fpi`.
+    _NRI_B5_SECTION_CODE_MAP = {"112_1_c": "21ciii", "115AC": "5AC1c", "115AD": "5ADiii"}
+    nri_b5_by_code: dict[str, list] = {}
+    ordinary_ltcg_txs: list = []
+    for tx in input_data.cg_transactions or []:
+        if not is_fii_fpi and tx.is_nri_unquoted_shares_disposal and tx.section_code:
+            nri_b5_by_code.setdefault(tx.section_code, []).append(tx)
+        else:
+            ordinary_ltcg_txs.append(tx)
+
     stcg_other_ordinary = _other_assets_block(input_data.cg_transactions, is_long_term=False, asset_types=other_asset_types_ordinary)
-    ltcg_other_ordinary = _other_assets_block(input_data.cg_transactions, is_long_term=True, asset_types=other_asset_types_ordinary)
+    ltcg_other_ordinary = _other_assets_block(ordinary_ltcg_txs, is_long_term=True, asset_types=other_asset_types_ordinary)
     fii_stcg_securities = None
     fii_ltcg_securities = None
     if is_fii_fpi:
         fii_stcg_securities = _other_assets_block(input_data.cg_transactions, is_long_term=False, asset_types=_FII_SECURITIES_ASSET_TYPES)
         fii_ltcg_securities = _other_assets_block(input_data.cg_transactions, is_long_term=True, asset_types=_FII_SECURITIES_ASSET_TYPES)
+    nri_b5_rows = [
+        {
+            "SectionCode": _NRI_B5_SECTION_CODE_MAP[code],
+            **_other_assets_block(group, is_long_term=True, asset_types=_GENERIC_OTHER_ASSET_TYPES),
+        }
+        for code, group in nri_b5_by_code.items()
+        if code in _NRI_B5_SECTION_CODE_MAP
+    ]
 
     # Section 112A summary (Schedule CG item 3a/3c, "LTCG u/s 112A (column
     # 14 of Schedule 112A)") -- the GROSS per-scrip aggregate before the
@@ -1837,6 +1955,23 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         (e.amount for e in input_data.cg_ltcg_dtaa_entries if e.chargeable_in_india), _ZERO,
     )
 
+    # Schedule CG item B10 -- pass-through LTCG (Schedule PTI), split
+    # 112A/other exactly as the calculator's own SI dispatch does
+    # (compute()'s `pti_entries` loop: `"112A" in section.upper()` -> 112A
+    # bucket, any other LTCG section -> the generic 12.5% bucket). Mirrors
+    # the A7/PTI-STCG fix above -- this income was already taxed correctly
+    # via Schedule SI regardless, but B10/B12 previously stayed hardcoded
+    # at 0 even when real PTI LTCG existed.
+    pti_ltcg_112a = sum(
+        (e.income_amount for e in input_data.pti_entries
+         if e.income_head == "LTCG" and "112A" in e.section.upper()), _ZERO,
+    )
+    pti_ltcg_other = sum(
+        (e.income_amount for e in input_data.pti_entries
+         if e.income_head == "LTCG" and "112A" not in e.section.upper()), _ZERO,
+    )
+    pti_ltcg_total = pti_ltcg_112a + pti_ltcg_other
+
     # Schedule CG item A7 -- pass-through STCG (Schedule PTI), split 20%/
     # 30%/applicable-rate exactly as the calculator's own SI dispatch does
     # (compute()'s `pti_entries` loop: `section == "111A"` -> 20%, any other
@@ -1906,19 +2041,26 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
                 {"SectionCode": "5ADiii", **fii_ltcg_securities}
             ]}}
             if is_fii_fpi and fii_ltcg_securities is not None and fii_ltcg_securities["FullConsideration"] > 0
-            else {}
+            else (
+                {"NRIOnSec112and115": {"NRIOnSec112and115Dtls": nri_b5_rows}}
+                if nri_b5_rows else {}
+            )
         ),
         "UnutilizedLtcgFlag": "N",
         "AmtDeemedLtcg": 0,
         "TotalAmtDeemedLtcg": 0,
-        "PassThrIncNatureLTCG": 0,
-        "PassThrIncNatureLTCGUs112A12_5Per": 0,
-        "PassThrIncNatureLTCG12_5Per": 0,
+        "PassThrIncNatureLTCG": _to_rupees(pti_ltcg_total),
+        "PassThrIncNatureLTCGUs112A12_5Per": _to_rupees(pti_ltcg_112a),
+        "PassThrIncNatureLTCG12_5Per": _to_rupees(pti_ltcg_other),
         **({"NRICgDTAA": {"NRIDTAADtls": ltcg_dtaa_rows}} if ltcg_dtaa_rows else {}),
         "TotalAmtNotTaxUsDTAALtcg": _to_rupees(ltcg_dtaa_not_chargeable),
         "CapitalLossBuyBackShares": {"TotalCapitalLossBuyBackShares": 0},
         "TotalAmtTaxUsDTAALtcg": _to_rupees(ltcg_dtaa_chargeable),
-        "TotalLTCG": _to_rupees(getattr(ltcg, "total_ltcg", z) if ltcg else z),
+        # B12 = B1g+...+B10+B11a per the form -- include B10 (PTI LTCG) so
+        # the schedule's own headline total isn't silently missing income
+        # the return was actually taxed on via Schedule SI (mirrors A9/
+        # TotalSTCG's own pti_stcg_total inclusion above).
+        "TotalLTCG": _to_rupees((getattr(ltcg, "total_ltcg", z) if ltcg else z) + pti_ltcg_total),
     }
     total_stcg = _to_rupees(getattr(stcg, "total_stcg", z) if stcg else z)
     total_ltcg = _to_rupees(getattr(ltcg, "total_ltcg", z) if ltcg else z)
@@ -2253,14 +2395,27 @@ def _accrued_cg(input_data: ITR2Input, result: ITR2Result) -> dict[str, Any]:
         if not is_111a and asset_type not in _GENERIC_OTHER_ASSET_TYPES:
             continue  # land/building (below) or 112A (via cg_112a_scrips/cg_115ad_scrips)
         gain = tx.full_consideration - tx.cost_of_acquisition - tx.improvement_cost - tx.expenditure_on_transfer
-        if is_111a:
-            add("stcg20", tx.date_of_transfer, gain)
-            continue
         is_short = True
         if tx.date_of_acquisition is not None:
             is_short = _is_short_term(asset_type, tx.date_of_acquisition, tx.date_of_transfer)
         elif tx.explicit_long_term is not None:
             is_short = not tx.explicit_long_term
+        if is_111a:
+            # A "listed_equity_111a"-typed transaction actually held past
+            # the 12-month threshold is reclassified by _classify()
+            # (app/engine/schedules/capital_gains.py) into the 112A LTCG
+            # basket everywhere else in this pipeline (real 112A tax
+            # treatment for STT-paid equity held long-term), not STT-paid
+            # short-term. Previously always bucketed here as "stcg20"
+            # regardless of actual holding period, so a long-held 111A
+            # transaction's gain silently vanished from this table's own
+            # LongTermUnder12_5Per total -- confirmed live (2026-09-13,
+            # Type-2 UAT validateItr, PAN GOYPT2026A): ITD's own server
+            # cross-checks this bucket's sum against Schedule BFLA's item
+            # 3vii and rejects the mismatch with errCd=
+            # "ITR2_INF26_AccruOrRecOfCG_LongTermUnder12_5Per_DateRange_8974t".
+            add("stcg20" if is_short else "ltcg125", tx.date_of_transfer, gain)
+            continue
         add("stcg30" if is_short else "ltcg125", tx.date_of_transfer, gain)
 
     cg = result.schedules.get("cg")
@@ -2322,7 +2477,36 @@ def _112a_source_rows(
     112A-eligible ``CGTransaction`` rows entered through the generic
     capital-gains editor (not just the dedicated scrip-editor rows) --
     matching how ``_schedule_112a()`` always sourced both before this
-    function was split out."""
+    function was split out.
+
+    The official form's own Schedule 112A text ("From sale of equity share
+    in a company or unit of equity-oriented fund or unit of a business
+    trust on which STT is paid under section 112A") draws no distinction
+    between a "111A-labeled" and "112A-labeled" input row -- 111A/112A are
+    the SAME underlying STT-paid-equity category, split only by actual
+    holding period (<=12 months vs >12 months), exactly like
+    ``_classify()`` (app/engine/schedules/capital_gains.py) already treats
+    them for real tax computation. A "listed_equity_111a"/
+    "equity_oriented_fund_111a"-typed transaction held past the 12-month
+    threshold is therefore also 112A-eligible here -- previously excluded
+    entirely (only `_112A_ELIGIBLE_TX_TYPES` was checked), so its gain
+    could vanish from EVERY Schedule CG disclosure table at once (neither
+    the A2/EquityMFonSTT STCG table -- fixed alongside this, see that
+    fix's own comment -- nor this LTCG one), confirmed live (2026-09-13,
+    Type-2 UAT validateItr, PAN GOYPT2026A).
+    """
+    from app.engine.schedules.capital_gains import _is_short_term as _is_short_term_112a
+
+    def _is_long_term_111a(tx: Any) -> bool:
+        asset_type = tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type
+        if asset_type not in ("listed_equity_111a", "equity_oriented_fund_111a"):
+            return False
+        if tx.date_of_acquisition is not None:
+            return not _is_short_term_112a(asset_type, tx.date_of_acquisition, tx.date_of_transfer)
+        if tx.explicit_long_term is not None:
+            return tx.explicit_long_term
+        return False
+
     source_rows: list[dict[str, Any]] = []
     for item in explicit_scrips:
         source_rows.append({
@@ -2339,7 +2523,7 @@ def _112a_source_rows(
             "balance": item.balance,
         })
     for tx in transactions:
-        if tx.asset_type.value not in _112A_ELIGIBLE_TX_TYPES:
+        if tx.asset_type.value not in _112A_ELIGIBLE_TX_TYPES and not _is_long_term_111a(tx):
             continue
         quantity = tx.quantity or Decimal("1")
         price = tx.sale_price_per_unit if tx.sale_price_per_unit is not None else tx.full_consideration / quantity
@@ -2412,12 +2596,27 @@ def _112a_style_schedule(source_rows: list[dict[str, Any]], suffix: str) -> Opti
             deemed_cost = max(item["cost"], min(item["fmv"], item["sale"]))
         deductions = deemed_cost + item["expense"]
         balance = item["balance"] if item["balance"] is not None else item["sale"] - deductions
+        # Confirmed via the official schema's own field `description`
+        # ("ShareUnitName: [w]* - On or Before 31st January 2018;
+        # CONSOLIDATED - After 31st January 2018") and live (2026-09-13,
+        # Type-2 UAT validateItr, PAN GOYPT2026A, errCd=
+        # "ITR2_PDM_Group1.Schedule112ADtls_FairMktValuePerShareunit_CNQki"):
+        # the per-share/quantity/FMV columns (NumSharesUnits,
+        # SalePricePerShareUnit, FairMktValuePerShareunit,
+        # TotFairMktValueCapAst -- Col.4/5/10/11) exist ONLY to support the
+        # grandfathering comparison, which is meaningless for a
+        # post-31-Jan-2018 acquisition; ITD's server rejects any nonzero
+        # value there for such a row, and the row's ShareUnitName must be
+        # the literal string "CONSOLIDATED" (matching ISINCode's own
+        # already-correct "INNOTREQUIRD" convention for the same case) --
+        # not the transaction's real description.
+        is_before = item["is_before"]
         rows.append({
-            "ShareOnOrBefore": "BE" if item["is_before"] else "AE",
+            "ShareOnOrBefore": "BE" if is_before else "AE",
             "ISINCode": item["isin"],
-            "ShareUnitName": item["name"],
-            "NumSharesUnits": float(item["quantity"]),
-            "SalePricePerShareUnit": float(item["price"]),
+            "ShareUnitName": item["name"] if is_before else "CONSOLIDATED",
+            "NumSharesUnits": float(item["quantity"]) if is_before else 0.0,
+            "SalePricePerShareUnit": float(item["price"]) if is_before else 0.0,
             "TotSaleValue": _to_rupees(item["sale"]),
             # Col.7 (deemed/grandfathered cost) -> CostAcqWithoutIndx;
             # Col.8 (plain original cost) -> AcquisitionCost. See this
@@ -2425,8 +2624,8 @@ def _112a_style_schedule(source_rows: list[dict[str, Any]], suffix: str) -> Opti
             "CostAcqWithoutIndx": _to_rupees(deemed_cost),
             "AcquisitionCost": float(item["cost"]),
             "LTCGBeforelowerB1B2": _to_rupees(max(_ZERO, item["sale"] - item["cost"])),
-            "FairMktValuePerShareunit": float(item["fmv_per_unit"]),
-            "TotFairMktValueCapAst": _to_rupees(item["fmv"]),
+            "FairMktValuePerShareunit": float(item["fmv_per_unit"]) if is_before else 0.0,
+            "TotFairMktValueCapAst": _to_rupees(item["fmv"]) if is_before else 0,
             "ExpExclCnctTransfer": float(item["expense"]),
             "TotalDeductions": _to_rupees(deductions),
             "Balance": _to_rupees(balance),
@@ -3277,7 +3476,13 @@ def _chapter6a_detail_schedules(result: ITR2Result, input_data: ITR2Input) -> di
 def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
     """Serialize Schedule SI from actual special-rate computation."""
     si = result.schedules.get("si")
-    if si is None or si.total_special_rate_income <= 0:
+    # Checks BOTH totals: a 112A gain fully within its own ₹1.25L
+    # threshold has total_special_rate_income (net/taxable) == 0 but real,
+    # nonzero gross income that the form's Schedule SI table still
+    # requires disclosing (Income column populated, Tax column correctly
+    # 0) -- checking only the net total previously skipped Schedule SI
+    # entirely for that case.
+    if si is None or (si.total_special_rate_income <= 0 and si.total_special_rate_gross_income <= 0):
         return None
     # Map internal section codes to official SplCodeRateTax SecCode values
     section_code_map = {
@@ -3321,7 +3526,11 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
     }
     rows = []
     for entry in si.entries:
-        if entry.taxable_income <= 0 and entry.tax_amount <= 0:
+        # Also checks gross_income: a 112A entry fully within its own
+        # ₹1.25L threshold has taxable_income==tax_amount==0 but a real,
+        # nonzero gross gain the form's Schedule SI table still requires
+        # disclosing (Income column populated, Tax column correctly 0).
+        if entry.taxable_income <= 0 and entry.tax_amount <= 0 and entry.gross_income <= 0:
             continue
         if entry.section == "111":
             # Section 111 (accumulated PF) is taxed at slab rate, not a
@@ -3338,12 +3547,20 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
         rows.append({
             "SecCode": code,
             "SplRatePercent": float(entry.tax_rate_pct) if entry.tax_rate_pct else 0,
-            "SplRateInc": _to_rupees(entry.taxable_income),
+            # Gross, not taxable/net: the form's own Schedule SI column (i)
+            # ("Income") is BFLA-sourced for every row with an annual
+            # threshold (currently only 112A) -- see
+            # compute_112a_taxable()'s own docstring. Identical to
+            # `entry.taxable_income` for every other section (no other
+            # entry type has its own gross/net split).
+            "SplRateInc": _to_rupees(entry.gross_income),
             "SplRateIncTax": _to_rupees(entry.tax_amount),
         })
     return {
         "SplCodeRateTax": rows,
-        "TotSplRateInc": _to_rupees(si.total_special_rate_income),
+        # Gross-based, matching the per-row "SplRateInc" values above (so
+        # this total can never disagree with its own rows' sum).
+        "TotSplRateInc": _to_rupees(si.total_special_rate_gross_income),
         "TotSplRateIncTax": _to_rupees(si.total_special_rate_tax),
     }
 
@@ -3558,8 +3775,14 @@ def _schedule_tr1(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         "TotalTaxReliefOutsideIndia": dtaa + non_dtaa,
         "TaxReliefOutsideIndiaDTAA": dtaa,
         "TaxReliefOutsideIndiaNotDTAA": non_dtaa,
-        "TaxPaidOutsideIndFlg": "YES",
-        "AmtTaxRefunded": 0,
+        # Item 4: whether foreign tax already relieved in India was later
+        # refunded/credited by the foreign tax authority. Previously
+        # hardcoded "YES" unconditionally, which falsely declared a refund
+        # for every single foreign-tax-relief claim regardless of the real
+        # (overwhelmingly "no") answer -- see `ITR2Input.
+        # foreign_tax_relief_refunded`'s own docstring.
+        "TaxPaidOutsideIndFlg": "YES" if input_data.foreign_tax_relief_refunded else "NO",
+        "AmtTaxRefunded": _to_rupees(input_data.foreign_tax_relief_refunded_amount),
         "AssmtYrTaxRelief": "2026-27",
     }
 
@@ -3686,17 +3909,38 @@ def _schedule_fa(input_data: ITR2Input) -> Optional[dict[str, Any]]:
                 "IncTaxSch": _fa_inc_tax_sch(item),
                 "IncTaxSchNo": _fa_inc_tax_sch_no(item, "other-asset"),
             })
+        elif item.asset_type == ForeignAssetType.EQUITY_DEBT_INTEREST:
+            # The single most common real-world foreign asset (foreign
+            # equity/RSUs/ESPP from a multinational employer, foreign mutual
+            # funds) -- previously blocked JSON generation entirely for any
+            # client holding one at all (fail-closed `raise` below).
+            if not item.nature_of_asset:
+                raise ValueError("Schedule FA equity/debt interest entry requires nature_of_asset (NatureOfEntity)")
+            if item.initial_value_of_investment is None:
+                raise ValueError("Schedule FA equity/debt interest entry requires initial_value_of_investment")
+            result["DtlsForeignEquityDebtInterest"].append({
+                "CountryName": _country_name(item.country_code),
+                "CountryCodeExcludingIndia": item.country_code,
+                "NameOfEntity": item.institution_or_entity_name,
+                "AddressOfEntity": item.address,
+                "ZipCode": item.zip_code,
+                "NatureOfEntity": item.nature_of_asset[:34],
+                "InterestAcquiringDate": _date(item.opening_or_acquisition_date),
+                "InitialValOfInvstmnt": _to_rupees(item.initial_value_of_investment),
+                "PeakBalanceDuringPeriod": _to_rupees(item.peak_value),
+                "ClosingBalance": _to_rupees(item.closing_value),
+                "TotGrossAmtPaidCredited": _to_rupees(item.gross_income),
+                "TotGrossProceeds": _to_rupees(item.total_gross_proceeds_from_sale),
+            })
         else:
-            # Custodial account, equity/debt interest, cash-value insurance,
-            # financial interest in an entity, signing authority, trust, and
-            # other foreign-sourced income each require official fields
-            # ForeignAssetEntry does not capture (e.g. equity/debt's
-            # InitialValOfInvstmnt/TotGrossProceeds, trust's settlor/trustee/
-            # beneficiary names) -- silently folding these into
-            # DetailsOthAssets, as the previous code did, would misclassify
-            # them into the wrong official category entirely, not just omit
-            # detail. Fail closed until each category gets its own typed
-            # model and serializer path.
+            # Custodial account, cash-value insurance, financial interest in
+            # an entity, signing authority, trust, and other foreign-sourced
+            # income each require official fields ForeignAssetEntry does not
+            # capture (e.g. trust's settlor/trustee/beneficiary names) --
+            # silently folding these into DetailsOthAssets, as the previous
+            # code did, would misclassify them into the wrong official
+            # category entirely, not just omit detail. Fail closed until
+            # each category gets its own typed model and serializer path.
             raise ValueError(
                 f"Schedule FA category {item.asset_type.value!r} is not yet "
                 "supported by the ITR-2 JSON builder -- it requires a "
@@ -3714,6 +3958,28 @@ def _schedule_al(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     item = input_data.asset_liability
     if item is None:
         return None
+    if item.immovable_property > 0:
+        # The official schema's own ImmovableDetails row requires
+        # Description + AddressAL (a structured address) + Amount
+        # (`Reference Docs by CBDT & ITD/Official JSON Schema/ITR-2_2026_
+        # Main_V1.1 (2).json`, definitions.ImmovableDetails) -- but
+        # `AssetLiabilityInput.immovable_property` is only a scalar total,
+        # with no address/description field to populate a real row from.
+        # Previously this amount was silently dropped (`"ImmovableDetails":
+        # []` unconditionally), so a client's real-estate holding -- a
+        # mandatory Schedule AL disclosure at their income bracket -- went
+        # missing from the filed return with no error at all. Fail closed
+        # instead, matching this same builder's own established precedent
+        # for Schedule FA's not-yet-modeled asset categories (see
+        # `_schedule_fa()` above): surface the gap loudly rather than file
+        # an incomplete legally-required disclosure.
+        raise ValueError(
+            "Schedule AL: immovable_property is set but no per-property "
+            "description/address detail is captured -- AssetLiabilityInput "
+            "needs a structured immovable-property list (description, "
+            "address, amount) before this can be disclosed; it cannot be "
+            "silently omitted."
+        )
     return {
         "ImmovableDetails": [],
         "MovableAsset": {
@@ -3996,13 +4262,14 @@ def _schedule_5a(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         return {"IncRecvdUndHead": _to_rupees(amount * 2), "AmtApprndOfSpouse": _to_rupees(amount), "AmtTDSDeducted": _to_rupees(tds * 2), "TDSApprndOfSpouse": _to_rupees(tds)}
 
     total = item.hp_amount_apportioned + item.cg_amount_apportioned + item.os_amount_apportioned
+    total_tds = item.hp_tds_apportioned + item.cg_tds_apportioned + item.os_tds_apportioned
     output: dict[str, Any] = {
         "NameOfSpouse": item.spouse_name,
         "PANOfSpouse": item.spouse_pan,
-        "HPHeadIncome": head(item.hp_amount_apportioned),
-        "CapGainHeadIncome": head(item.cg_amount_apportioned),
-        "OtherSourcesHeadIncome": head(item.os_amount_apportioned, item.tds_apportioned),
-        "TotalHeadIncome": head(total, item.tds_apportioned),
+        "HPHeadIncome": head(item.hp_amount_apportioned, item.hp_tds_apportioned),
+        "CapGainHeadIncome": head(item.cg_amount_apportioned, item.cg_tds_apportioned),
+        "OtherSourcesHeadIncome": head(item.os_amount_apportioned, item.os_tds_apportioned),
+        "TotalHeadIncome": head(total, total_tds),
     }
     if item.spouse_aadhaar:
         output["AadhaarOfSpouse"] = item.spouse_aadhaar
@@ -4365,16 +4632,24 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     stcg_30 = stcg_normal if is_fii_fpi else 0
     stcg_app_rate = 0 if is_fii_fpi else stcg_normal
     ltcg_112 = _to_rupees(post_loss.get("112", _ZERO))
-    # "112a_taxable" (net of the section 112A ₹1.25L threshold exemption),
-    # NOT "112a_gross" -- the exempt slice is an income exclusion under
-    # 112A's own proviso and must never appear in "LongTerm12_5Per"/
-    # "TotalLongTerm" (item 3b, form formula "iii = bi + bii"). Using the
-    # gross figure here previously made TotalLongTerm silently absorb the
-    # exempt slice without either subfield disclosing it -- a real
-    # cross-foot failure (TotalLongTerm != LongTerm12_5Per +
-    # LongTermSplRateDTAA) -- and inflated GTI/Total Income upstream (see
-    # the matching fix in calculators/itr2.py::compute()).
-    ltcg_112a_taxable = _to_rupees(post_loss.get("112a_taxable", _ZERO))
+    # "112a_gross", NOT "112a_taxable": Part B-TI item 3b(i) is literally
+    # defined by the form as "8vi of item E of schedule CG" -- Table E's
+    # own LTCG@12.5% column, which is GROSS throughout with no section
+    # 112A ₹1.25L threshold subtraction anywhere (confirmed against the
+    # form PDF, `Reference Docs by CBDT & ITD/Official ITR FORMS/
+    # ITR-2-2026-Eng.pdf`, pages 47-49 and 66-68; Schedule 112A's own
+    # per-scrip "column 14" has no aggregate threshold applied at all --
+    # the threshold is a single return-level figure, only realized in
+    # Schedule SI's own tax computation). An earlier attempt to net this
+    # against the threshold (to fix a real, separate cross-foot bug --
+    # TotalLongTerm previously silently included the gross 112A gain
+    # while LongTerm12_5Per omitted it entirely) used the wrong direction
+    # for that fix: the correct repair is including the SAME gross figure
+    # in both fields (below), not netting both to a value the form never
+    # asks for -- confirmed wrong by live Type-2 UAT validateItr
+    # rejections once Schedule CG's own figures were also netted to match
+    # (2026-09-13, PAN GOYPT2026A) before this table was properly read.
+    ltcg_112a_gross = _to_rupees(post_loss.get("112a_gross", _ZERO))
     # Schedule CG items A8b/B11b (Phase 6i-5) -- DTAA-special-rate STCG/LTCG,
     # each its own post-loss basket (see _post_loss_cg_baskets), previously
     # hardcoded to 0 regardless of real data, silently understating
@@ -4383,7 +4658,7 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     stcg_dtaa = _to_rupees(post_loss.get("stcg_dtaa", _ZERO))
     ltcg_dtaa = _to_rupees(post_loss.get("ltcg_dtaa", _ZERO))
     total_stcg = stcg_111a + stcg_normal + stcg_dtaa
-    total_ltcg = ltcg_112 + ltcg_112a_taxable + ltcg_dtaa
+    total_ltcg = ltcg_112 + ltcg_112a_gross + ltcg_dtaa
     total_cg = total_stcg + total_ltcg + _to_rupees(result.vda_income)
     # Form items 4a/4b/4c (schema IncFromOS.OtherSrcThanOwnRaceHorse/
     # IncChargblSplRate/FromOwnRaceHorse) are, per the official form, "6 of
@@ -4411,7 +4686,16 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     # CG-only 111A+112+112A(+VDA) subset previously summed here directly
     # from post_loss_cg.
     si_result = result.schedules.get("si")
-    total_special_rate_income = _to_rupees(getattr(si_result, "total_special_rate_income", _ZERO))
+    # "total_special_rate_gross_income", NOT "total_special_rate_income":
+    # Schedule SI's own column (i) is gross for the 112A row (see
+    # compute_112a_taxable()'s docstring), and items 10/13 are literally
+    # "total of column (i) of schedule SI" -- using the net-based total
+    # here previously understated these items by the exempt 112A slice,
+    # which also silently changed item 15's Aggregate Income and made
+    # Schedule SI's own 112A row disagree with Schedule BFLA. Confirmed
+    # live (2026-09-13, Type-2 UAT validateItr, PAN GOYPT2026A, errCd=
+    # "ITR2_INF26_LTCG12_5Per_IncBFLA_IncOfCurYrAfterSetOffBFLosses_u9lc5").
+    total_special_rate_income = _to_rupees(getattr(si_result, "total_special_rate_gross_income", _ZERO))
     amt_for_ti = result.schedules.get("amt")
     deemed_income_115jc = (
         getattr(amt_for_ti, "adjusted_total_income", _ZERO)
@@ -4429,7 +4713,7 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
                 "TotalShortTerm": total_stcg,
             },
             "LongTerm": {
-                "LongTerm12_5Per": ltcg_112 + ltcg_112a_taxable,
+                "LongTerm12_5Per": ltcg_112 + ltcg_112a_gross,
                 "LongTermSplRateDTAA": ltcg_dtaa,
                 "TotalLongTerm": total_ltcg,
             },
@@ -4458,7 +4742,23 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
         # real whenever the 115JC comparison was made this year, not only
         # when AMT actually binds (matches _schedule_amt()'s own gate).
         "DeemedIncomeUs115JC": _to_rupees(deemed_income_115jc),
-        "TotalTI": _to_rupees_rounded10(result.taxable_income),
+        # "TotalTI" is positioned in the schema's own field order right
+        # after IncFromOS and before CurrentYearLoss/BalanceAfterSetoff
+        # Losses/GrossTotalIncome -- i.e. it is Part B-TI's ITEM 5, "Total
+        # of head wise income (1+2+3e+4d)" (BEFORE any CYLA/BFLA loss
+        # set-off), not item 12 "Total income" despite the similar name.
+        # Previously wired to `result.taxable_income` (item 12), which
+        # made this field equal the POST-deduction total instead of the
+        # pre-loss-setoff head-wise sum -- confirmed live (2026-09-13,
+        # Type-2 UAT validateItr, PAN GOYPT2026A, errCd=
+        # "ITR2_PDM_Group5.PartB_TI_TotalTI_Paexg" -- "Total income from
+        # all the heads of income at Part B TI is not equal to the sum of
+        # Incomes from individual heads", which is item 5's own literal
+        # form wording). Summed from the exact same source expressions
+        # already used for Salaries/IncomeFromHP/TotalCapGains/
+        # TotIncFromOS above, so it can never drift from them.
+        "TotalTI": _to_rupees(result.salary_income) + _to_rupees(max(_ZERO, result.house_property_income))
+        + total_cg + _to_rupees(result.other_sources_income),
     }
 
 
@@ -4530,9 +4830,18 @@ def _partb_tti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     surcharge_1b = getattr(amt, "amt_surcharge", _ZERO) if chapter_active else _ZERO
     cess_1c = getattr(amt, "amt_cess", _ZERO) if chapter_active else _ZERO
     total_1d = result.amt_tax
+    # Item 10 = "8a + 8c - 9", not "8 + 8c - 9" -- 8a (result.
+    # esop_tax_excluding_new_perquisite) already IS item 8 minus 8b
+    # (result.esop_tax_deferred_this_year), computed by the calculator
+    # against item 8 (## 18a in app/engine/calculators/itr2.py). Using raw
+    # `gross_tax_payable` here instead of 8a silently dropped the 8b
+    # subtraction, overstating this figure -- and everything derived from
+    # it (interest 234A/B/C, final payable/refund) -- by exactly the 8b
+    # amount whenever a new-this-year eligible-startup ESOP deferral
+    # existed.
     tax_pay_after_credit_10 = max(
         _ZERO,
-        result.gross_tax_payable + result.esop_deferred_payable_this_year - result.amt_credit_utilised,
+        result.esop_tax_excluding_new_perquisite + result.esop_deferred_payable_this_year - result.amt_credit_utilised,
     )
     balance_tax_after_relief = max(
         _ZERO, tax_pay_after_credit_10 - result.relief_89 - result.relief_90_91

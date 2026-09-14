@@ -396,6 +396,33 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                     "salary_income.professional_tax_paid", _ZERO, str(sal.professional_tax_paid),
                 ))
 
+        # Form item 1a's own dropdown breakdown ("Salary as per section
+        # 17(1)", official NatureOfSalary.OthersIncDtls, populated from
+        # EmployerFilingDetail.nature_of_salary_rows) has no pre-compute
+        # validator requiring it be populated at all -- confirmed live
+        # (2026-09-13, Type-2 UAT validateItr, PAN GOYPT2026A, errCd=
+        # "ITR2_PDM_Group1.Salaries_Salary_h1EA0" -- "Sum of Drop downs in
+        # Sl. No. 1a of Schedule S should be equal to Sl No. 1a"): a
+        # preparer who doesn't know to populate this optional field
+        # produces a return that passes local schema validation but fails
+        # live validateItr. Only a presence check (not an exact-sum
+        # reconciliation, which would need to replicate the builder's own
+        # gross_components formula -- perquisites/profits-in-lieu/89A
+        # amounts -- pre-compute) -- catches the reachable failure mode
+        # without duplicating that logic.
+        if sal.gross_salary > _ZERO:
+            for _sal_idx, _detail in enumerate(inp.employer_filing_details or []):
+                if not _detail.nature_of_salary_rows:
+                    results.append(_result(
+                        "ITR2-IN-SAL-033", False,
+                        "Schedule S item 1a (Salary as per section 17(1)) requires at least "
+                        "one nature-of-salary breakdown row (e.g. Basic Salary) whenever "
+                        "gross salary is claimed, or the return will be rejected by ITD's "
+                        "own live validation.",
+                        f"employer_filing_details[{_sal_idx}].nature_of_salary_rows",
+                        "at least one row", "none",
+                    ))
+
         # CBDT rule 28: gratuity exemption u/s 10(10) is capped at ₹25,00,000
         # for Central/State Government employees and CG/SG-Pensioners
         # (CGOV/SGOV/PE/PESG), ₹20,00,000 for everyone else (PSU/PSU-Pensioners/

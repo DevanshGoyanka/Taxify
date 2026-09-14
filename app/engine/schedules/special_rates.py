@@ -131,11 +131,34 @@ class SpecialRatesResult:
 
     entries: list[SpecialRateEntry] = field(default_factory=list)
     total_special_rate_income: Decimal = _ZERO
+    # Sum of each entry's `gross_income` rather than `taxable_income` --
+    # identical to `total_special_rate_income` for every entry type except
+    # section 112A (the only one with its own annual-threshold exemption,
+    # where `gross_income` is the true pre-threshold gain). Needed
+    # separately from `total_special_rate_income` (which stays net-based,
+    # since forms/callers that use it to exclude special-rate income from
+    # their own slab-tax base need the ACTUAL taxed amount, not the gross
+    # one) because ITR-2's own Part B-TI items 10/13 are explicitly
+    # defined by the form as "total of column (i) of schedule SI", and
+    # that column is itself gross for the 112A row ("part of 3vii of
+    # Schedule BFLA") -- see `compute_112a_taxable()`'s own docstring.
+    total_special_rate_gross_income: Decimal = _ZERO
     total_special_rate_tax: Decimal = _ZERO
     surcharge_cap_tax: Decimal = _ZERO
     surcharge_full_tax: Decimal = _ZERO
     surcharge_cap_income: Decimal = _ZERO
     surcharge_full_income: Decimal = _ZERO
+    # Part B-TTI item 5i: "@ 25% of 15(ii) of Schedule SI" -- section 115BBE
+    # (unexplained income u/s 68/69/69A/69B/69C/69D) carries a MANDATORY
+    # flat 25% surcharge, independent of the taxpayer's own overall
+    # income-level surcharge slab (which can be 0% below the first
+    # threshold, or 10%/15%/25%/37% above it -- 115BBE's 25% applies
+    # regardless, even when the rest of the return owes no surcharge at
+    # all). Kept as its own partition, separate from `surcharge_full_tax`/
+    # `_income` (which apply the ordinary income-level rate), so this
+    # section's tax is never subjected to the wrong rate.
+    mandatory_25pct_surcharge_tax: Decimal = _ZERO
+    mandatory_25pct_surcharge_income: Decimal = _ZERO
 
 
 _SURCHARGE_CAP_SECTIONS: set[str] = {
@@ -167,6 +190,16 @@ _SURCHARGE_CAP_SECTIONS: set[str] = {
     SpecialRateSection.S5AC1ABD.value,
     SpecialRateSection.S5ACA1A.value,
     SpecialRateSection.S5AD1IDIV.value,
+}
+
+# Part B-TTI item 5i: sections carrying a MANDATORY flat 25% surcharge,
+# independent of the taxpayer's overall income-level surcharge slab.
+# Confirmed against the form PDF: "5 i @ 25% of 15(ii) of Schedule SI",
+# where Schedule SI item 15(ii) is the 115BBE row (unexplained income u/s
+# 68/69/69A/69B/69C/69D, taxed at 60%). No other Schedule-SI category has
+# this unconditional-25% treatment in the form's own item 5 breakdown.
+_MANDATORY_25PCT_SURCHARGE_SECTIONS: set[str] = {
+    SpecialRateSection.S115BBE.value,
 }
 
 
@@ -240,16 +273,40 @@ def compute_112a(
     )
 
 
-def compute_112a_taxable(taxable_112a: Decimal | None) -> SpecialRateEntry:
+def compute_112a_taxable(
+    taxable_112a: Decimal | None, gross_112a: Decimal | None = None
+) -> SpecialRateEntry:
     """Compute section 112A from an amount thresholded by the CG schedule.
 
     Args:
-        taxable_112a: Taxable section 112A amount after the annual threshold.
+        taxable_112a: Taxable section 112A amount after the annual threshold
+            (used for the actual tax computation).
+        gross_112a: The true pre-threshold gross 112A gain, for disclosure.
+            The official form's own Schedule SI table (Sl.No. 11, column
+            "Income (i)") sources this row from "(part of 3vii of Schedule
+            BFLA)" -- i.e. the GROSS, pre-threshold amount, not the taxable
+            remainder -- confirmed directly against the form PDF
+            (`Reference Docs by CBDT & ITD/Official ITR FORMS/
+            ITR-2-2026-Eng.pdf`, Schedule SI table). Without this, Schedule
+            SI's own disclosed "Income" column (and, downstream, Part B-TI
+            items 10/13 and 15, which are defined as sums/derivations of
+            this same column) silently used the net-taxable amount instead,
+            which also made Schedule SI's own 112A row disagree with
+            Schedule BFLA's LTCG@12.5% bucket -- confirmed live-rejected
+            (2026-09-13, Type-2 UAT validateItr, PAN GOYPT2026A, errCd=
+            "ITR2_INF26_LTCG12_5Per_IncBFLA_IncOfCurYrAfterSetOffBFLosses_u9lc5").
+            Defaults to `taxable_112a` (old behaviour) when not supplied,
+            so any other caller is unaffected.
 
     Returns:
-        The section 112A Schedule-SI entry without a second threshold.
+        The section 112A Schedule-SI entry without a second threshold, its
+        `gross_income` set to the true pre-threshold gain for disclosure
+        while `taxable_income`/`tax_amount` stay based on the net amount.
     """
-    return compute_112a(taxable_112a, pre_exempted=True)
+    entry = compute_112a(taxable_112a, pre_exempted=True)
+    if gross_112a is not None:
+        entry.gross_income = _non_negative(gross_112a)
+    return entry
 
 
 def compute_111a(
@@ -497,15 +554,28 @@ def aggregate(entries: Iterable[SpecialRateEntry] | None) -> SpecialRatesResult:
         entry.tax_amount = _non_negative(entry.tax_amount)
         normalized.append(entry)
     cap_entries = [entry for entry in normalized if entry.section in _SURCHARGE_CAP_SECTIONS]
-    full_entries = [entry for entry in normalized if entry.section not in _SURCHARGE_CAP_SECTIONS]
+    mandatory25_entries = [
+        entry for entry in normalized if entry.section in _MANDATORY_25PCT_SURCHARGE_SECTIONS
+    ]
+    full_entries = [
+        entry for entry in normalized
+        if entry.section not in _SURCHARGE_CAP_SECTIONS
+        and entry.section not in _MANDATORY_25PCT_SURCHARGE_SECTIONS
+    ]
     cap_tax = sum((entry.tax_amount for entry in cap_entries), _ZERO)
     full_tax = sum((entry.tax_amount for entry in full_entries), _ZERO)
+    mandatory25_tax = sum((entry.tax_amount for entry in mandatory25_entries), _ZERO)
     return SpecialRatesResult(
         entries=normalized,
         total_special_rate_income=sum((entry.taxable_income for entry in normalized), _ZERO),
-        total_special_rate_tax=cap_tax + full_tax,
+        total_special_rate_gross_income=sum((entry.gross_income for entry in normalized), _ZERO),
+        total_special_rate_tax=cap_tax + full_tax + mandatory25_tax,
         surcharge_cap_tax=cap_tax,
         surcharge_full_tax=full_tax,
         surcharge_cap_income=sum((entry.taxable_income for entry in cap_entries), _ZERO),
         surcharge_full_income=sum((entry.taxable_income for entry in full_entries), _ZERO),
+        mandatory_25pct_surcharge_tax=mandatory25_tax,
+        mandatory_25pct_surcharge_income=sum(
+            (entry.taxable_income for entry in mandatory25_entries), _ZERO
+        ),
     )

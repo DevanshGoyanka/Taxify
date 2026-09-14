@@ -164,14 +164,16 @@ def compute_all(
         return result
 
     # --- Old regime only deductions ---
-    r_80c = section_80c.compute(ded, regime)
+    r_80c = section_80c.compute(ded, regime, salary=salary, gti=gti)
     _add("80C+80CCC+80CCD(1)", r_80c)
-    details_80c = section_80c.compute_details(ded, schedule_80c_entries, regime)
+    details_80c = section_80c.compute_details(
+        ded, schedule_80c_entries, regime, salary=salary, gti=gti,
+    )
     result.section_details["80C"] = details_80c
     # Store 80CCC and 80CCD(1) individually for ITD JSON line-item breakout.
-    r_80ccc = section_80c.compute_80ccc(ded, regime)
+    r_80ccc = section_80c.compute_80ccc(ded, regime, salary=salary, gti=gti)
     _add("80CCC", r_80ccc)
-    r_80ccd1 = section_80c.compute_80ccd1(ded, regime)
+    r_80ccd1 = section_80c.compute_80ccd1(ded, regime, salary=salary, gti=gti)
     _add("80CCD(1)", r_80ccd1)
 
     details_80ccd1b = section_80ccd1b.compute_details(ded, regime)

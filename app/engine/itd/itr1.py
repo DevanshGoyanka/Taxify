@@ -54,10 +54,24 @@ from app.engine.itd.common import (
 def _address_from_profile(address: PostalAddress, *, include_contact: bool) -> dict[str, Any]:
     """Map a typed filing address to the official address structure.
 
-    The CBDT ITR-1 Address schema requires CountryCodeMobileNoSec and
-    MobileNoSec keys to always be present (emitted as 0 when the assessee
-    has no secondary mobile).  EmailAddressSec is optional and is omitted
-    entirely when the assessee has no secondary email.
+    Neither CountryCodeMobileNoSec nor MobileNoSec is in the CBDT Address
+    schema's own "required" list (verified directly against `Reference
+    Docs by CBDT & ITD/Official JSON Schema/ITR-1_2026_Main_V1.1 (2).json`)
+    -- the prior comment here claiming otherwise was never checked against
+    the schema itself. MobileNoSec's own pattern
+    ("[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}") requires a real 5-10 digit
+    number starting 1-9; a placeholder 0 fails to look like a phone number
+    at all. This is invisible to local `jsonschema` validation ("pattern"
+    is a no-op against a non-string instance per the JSON Schema spec) but
+    confirmed live-rejected by ITD's own Type-2 UAT `validateItr` for the
+    identical bug in the ITR-2 builder (2026-09-13, PAN GOYPT2026A,
+    errCd="" desc="Pattern is Mismatching",
+    fieldName=".../Address/MobileNoSec") -- fixed here defensively for
+    ITR-1 too, without waiting for an ITR-1-specific live repro, since the
+    same schema shape and the same "always emit 0" logic produce the exact
+    same invalid value whenever a real secondary mobile isn't on file.
+    EmailAddressSec is optional and is omitted entirely when the assessee
+    has no secondary email.
     """
     mapped: dict[str, Any] = {
         "ResidenceNo": address.residence_no,
@@ -77,10 +91,11 @@ def _address_from_profile(address: PostalAddress, *, include_contact: bool) -> d
         mapped.update({
             "CountryCodeMobile": address.mobile_country_code,
             "MobileNo": int(address.mobile_no),
-            "CountryCodeMobileNoSec": address.secondary_mobile_country_code,
-            "MobileNoSec": int(address.secondary_mobile_no) if address.secondary_mobile_no else 0,
             "EmailAddress": address.email,
         })
+        if address.secondary_mobile_no:
+            mapped["CountryCodeMobileNoSec"] = address.secondary_mobile_country_code
+            mapped["MobileNoSec"] = int(address.secondary_mobile_no)
         # EmailAddressSec is optional in the CBDT schema — emit it only
         # when the assessee actually entered a secondary email.  Never
         # fabricate a placeholder.

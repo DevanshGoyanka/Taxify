@@ -80,7 +80,7 @@ describe('normalizeLoadedDraft', () => {
 
   it('serializes additive schedules unchanged through the canonical payload boundary', () => {
     const draft = createEmptyReturnDraft('2026-27', 'ITR-2', 'new');
-    draft.foreignAssets = [{ id: 'fa-1', assetType: 'BANK_ACCOUNT', countryCode: 'US', institutionOrEntityName: 'Bank', address: 'A', accountOrAssetIdentifier: '1', ownershipStatus: 'OWNER', openingOrAcquisitionDate: '2025-04-01', peakValue: 10, closingValue: 8, grossIncome: 0, incomeOffered: 0 }];
+    draft.foreignAssets = [{ id: 'fa-1', assetType: 'BANK_ACCOUNT', countryCode: 'US', institutionOrEntityName: 'Bank', address: 'A', zipCode: '00000', accountOrAssetIdentifier: '1', ownershipStatus: 'OWNER', openingOrAcquisitionDate: '2025-04-01', peakValue: 10, closingValue: 8, grossIncome: 0, incomeOffered: 0, natureOfAsset: '', natureOfIncome: '', incomeTaxScheduleItemNo: '', initialValueOfInvestment: null, totalGrossProceedsValue: 0 }];
     const normalized = normalizeLoadedDraft(JSON.parse(JSON.stringify(draft)) as ReturnDraft);
     expect(JSON.parse(JSON.stringify(normalized)).foreignAssets).toEqual(draft.foreignAssets);
   });

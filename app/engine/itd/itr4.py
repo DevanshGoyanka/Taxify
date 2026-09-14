@@ -173,10 +173,26 @@ def _address_from_postal(address: ITR4PostalAddress, *, include_contact: bool) -
         mapped.update({
             "CountryCodeMobile": address.mobile_country_code,
             "MobileNo": int(address.mobile_no) if address.mobile_no.isdigit() else 0,
-            "CountryCodeMobileNoSec": address.secondary_mobile_country_code,
-            "MobileNoSec": int(address.secondary_mobile_no) if address.secondary_mobile_no else 0,
             "EmailAddress": address.email,
         })
+        # Neither CountryCodeMobileNoSec nor MobileNoSec is in the CBDT
+        # Address schema's "required" list, and MobileNoSec's own pattern
+        # ("[1-9]{1}[0-9]{9}|[1-9]{1}[0-9]{4,9}") requires a real 5-10
+        # digit number starting 1-9 -- a placeholder 0 fails to look like
+        # a phone number at all. Invisible to local `jsonschema`
+        # validation ("pattern" no-ops against a non-string instance) but
+        # confirmed live-rejected by ITD's own Type-2 UAT `validateItr`
+        # for the identical bug in the ITR-2 builder (2026-09-13, PAN
+        # GOYPT2026A, errCd="" desc="Pattern is Mismatching") -- fixed
+        # here defensively too, since the same schema shape and the same
+        # "always emit 0" logic produce the same invalid value whenever a
+        # real secondary mobile isn't on file. Unlike ITR-1's equivalent
+        # field, this one has no Pydantic-level pattern of its own (only
+        # max_length=10), so it also needs the same .isdigit() guard
+        # already used for the primary MobileNo above.
+        if address.secondary_mobile_no and address.secondary_mobile_no.isdigit():
+            mapped["CountryCodeMobileNoSec"] = address.secondary_mobile_country_code
+            mapped["MobileNoSec"] = int(address.secondary_mobile_no)
         if address.secondary_email:
             mapped["EmailAddressSec"] = address.secondary_email
     return mapped

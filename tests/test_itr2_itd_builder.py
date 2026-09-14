@@ -57,6 +57,7 @@ from app.schemas.itr2 import (
     AgriculturalIncome,
     AssesseeRepresentativeProfile,
     AssesseeStatus,
+    AssetLiabilityInput,
     BFLossItem,
     CG112AScrip,
     CGAssetType,
@@ -92,6 +93,7 @@ from app.schemas.itr2 import (
     PropertyFilingDetail,
     PTIEntry,
     ResidentialStatus,
+    Schedule5AInput,
     ScheduleSIEntry,
     TDS3FilingDetail,
     TenantDetail,
@@ -1083,7 +1085,12 @@ def test_112a_scrip_total_deductions_is_not_double_counted() -> None:
 
     # The real gain is 1,000,000 - 500,000 - 5,000 = 495,000 -- not the
     # fabricated -10,000 loss the double-counted formula produced
-    # (1,000,000 - 500,000 - 505,000 - 5,000).
+    # (1,000,000 - 500,000 - 505,000 - 5,000). capital_gains_income stays
+    # GROSS of the section 112A ₹1.25L threshold, matching Schedule CG's
+    # own disclosure chain (Table E's LTCG@12.5% row and Schedule CG's
+    # Part C total are both defined by the form itself as pure sums with
+    # no threshold subtraction anywhere -- see the fix note on this
+    # field's own assignment in app/engine/calculators/itr2.py).
     assert result.capital_gains_income == Decimal("495000")
 
     row = document["ITR"]["ITR2"]["Schedule112A"]["Schedule112ADtls"][0]
@@ -4548,13 +4555,53 @@ def test_schedule_fa_other_asset_uses_correct_official_field_names() -> None:
     assert "AcctNumOrIdtyNum" not in row
 
 
+def test_schedule_fa_equity_debt_interest_uses_correct_official_fields() -> None:
+    """Foreign equity/RSUs/ESPP/foreign mutual funds (the single most
+    common real-world Schedule FA category) previously fell into the
+    fail-closed `raise` below (ForeignAssetEntry had no InitialValOfInvstmnt/
+    TotGrossProceeds fields) -- blocking JSON generation entirely for any
+    client holding one. Confirm it now serializes into the schema's own
+    dedicated DtlsForeignEquityDebtInterest category."""
+    input_data = _input(
+        foreign_assets=[
+            ForeignAssetEntry(
+                asset_type=ForeignAssetType.EQUITY_DEBT_INTEREST,
+                country_code="44",
+                institution_or_entity_name="Example Corp Inc.",
+                address="1 Infinite Loop, Cupertino, CA",
+                zip_code="95014",
+                account_or_asset_identifier="RSU-001",
+                ownership_status="DIRECT",
+                opening_or_acquisition_date=date(2022, 6, 15),
+                nature_of_asset="RSU vesting from employer",
+                peak_value=Decimal("500000"),
+                closing_value=Decimal("450000"),
+                gross_income=Decimal("5000"),
+                initial_value_of_investment=Decimal("300000"),
+                total_gross_proceeds_from_sale=Decimal("100000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    row = document["ITR"]["ITR2"]["ScheduleFA"]["DtlsForeignEquityDebtInterest"][0]
+    assert row["NameOfEntity"] == "Example Corp Inc."
+    assert row["NatureOfEntity"] == "RSU vesting from employer"
+    assert row["InitialValOfInvstmnt"] == 300000
+    assert row["PeakBalanceDuringPeriod"] == 500000
+    assert row["ClosingBalance"] == 450000
+    assert row["TotGrossAmtPaidCredited"] == 5000
+    assert row["TotGrossProceeds"] == 100000
+
+
 def test_schedule_fa_unsupported_category_fails_closed() -> None:
-    """Custodial accounts, equity/debt interests, insurance, financial
-    interests, signing authority, trusts, and other foreign-sourced income
-    each require official fields ForeignAssetEntry doesn't capture --
-    the previous code silently folded all of them into DetailsOthAssets,
-    misclassifying them into the wrong official category entirely. Confirm
-    this now fails closed instead."""
+    """Custodial accounts, cash-value insurance, financial interests,
+    signing authority, trusts, and other foreign-sourced income each
+    require official fields ForeignAssetEntry doesn't capture -- the
+    previous code silently folded all of them (equity/debt interest
+    included, before that category got its own real fields/serializer
+    path) into DetailsOthAssets, misclassifying them into the wrong
+    official category entirely. Confirm this now fails closed instead."""
     input_data = _input(
         foreign_assets=[
             ForeignAssetEntry(
@@ -4642,6 +4689,134 @@ def test_partb_tti_tax_relief_splits_section_90_from_section_91() -> None:
     assert relief["Section90"] == 8000
     assert relief["Section91"] == 4000
     assert relief["TotTaxRelief"] == relief["Section89"] + 8000 + 4000
+
+
+def test_schedule_tr1_refund_flag_defaults_to_no() -> None:
+    """``TaxPaidOutsideIndFlg`` (Schedule TR item 4: was the relieved foreign
+    tax later refunded by the foreign authority?) was previously hardcoded
+    "YES" unconditionally, falsely declaring a refund for every single
+    foreign-tax-relief claim -- the wrong answer for the overwhelmingly
+    common case. Absent an explicit ``foreign_tax_relief_refunded=True``, it
+    must default to "NO" with a zero refund amount."""
+    input_data = _input(
+        fsi_entries=[
+            FSICountryEntry(country_code="44", tax_identification_no="UK-TIN-1", salary_income=Decimal("100000")),
+        ],
+        tr1_entries=[
+            TR1Entry(
+                country_code="44", tax_identification_no="UK-TIN-1",
+                tax_paid_outside_india=Decimal("10000"), indian_tax_payable=Decimal("8000"),
+                relief_claimed=Decimal("8000"), relief_section="90",
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    tr1 = document["ITR"]["ITR2"]["ScheduleTR1"]
+    assert tr1["TaxPaidOutsideIndFlg"] == "NO"
+    assert tr1["AmtTaxRefunded"] == 0
+
+
+def test_schedule_tr1_refund_flag_reflects_real_refund_when_declared() -> None:
+    input_data = _input(
+        fsi_entries=[
+            FSICountryEntry(country_code="44", tax_identification_no="UK-TIN-1", salary_income=Decimal("100000")),
+        ],
+        tr1_entries=[
+            TR1Entry(
+                country_code="44", tax_identification_no="UK-TIN-1",
+                tax_paid_outside_india=Decimal("10000"), indian_tax_payable=Decimal("8000"),
+                relief_claimed=Decimal("8000"), relief_section="90",
+            ),
+        ],
+        foreign_tax_relief_refunded=True,
+        foreign_tax_relief_refunded_amount=Decimal("2000"),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    tr1 = document["ITR"]["ITR2"]["ScheduleTR1"]
+    assert tr1["TaxPaidOutsideIndFlg"] == "YES"
+    assert tr1["AmtTaxRefunded"] == 2000
+
+
+def test_schedule_al_immovable_property_fails_closed_without_address_detail() -> None:
+    """``AssetLiabilityInput.immovable_property`` is only a scalar total --
+    the official schema's ImmovableDetails row requires Description +
+    AddressAL + Amount, none of which this scalar can populate. Previously
+    the amount was silently dropped (``"ImmovableDetails": []``
+    unconditionally); it must now fail closed instead of filing an
+    incomplete legally-required disclosure."""
+    input_data = _input(
+        asset_liability=AssetLiabilityInput(immovable_property=Decimal("5000000")),
+    )
+    with pytest.raises(ValueError, match="immovable_property"):
+        build_itr2_json(compute(input_data), input_data)
+
+
+def test_schedule_al_movable_only_still_builds_fine() -> None:
+    input_data = _input(
+        asset_liability=AssetLiabilityInput(
+            cash_in_hand=Decimal("100000"),
+            bank_deposits=Decimal("500000"),
+        ),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    al = document["ITR"]["ITR2"]["ScheduleAL"]
+    assert al["ImmovableDetails"] == []
+    assert al["MovableAsset"]["CashInHand"] == 100000
+
+
+def test_nri_unquoted_shares_disposal_routes_to_schedule_cg_b5() -> None:
+    """CBDT rules #153/#155/#597: a non-FII/FPI NRI's LTCG on unlisted
+    securities tagged `is_nri_unquoted_shares_disposal` with a real
+    `section_code` must appear in Schedule CG's own dedicated Sl.B5 block
+    (`NRIOnSec112and115`, SectionCode "21ciii" for 112(1)(c)) -- previously
+    it silently fell through to the generic B8 "SaleofAssetNADtls" bucket
+    with no SectionCode disclosed at all, even though the taxpayer
+    explicitly tagged it and the input validator requires the tag."""
+    input_data = _input(
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.UNLISTED_SHARES,
+            date_of_acquisition=date(2020, 4, 1), date_of_transfer=date(2026, 2, 1),
+            full_consideration=Decimal("500000"), cost_of_acquisition=Decimal("300000"),
+            is_nri_unquoted_shares_disposal=True, section_code="112_1_c",
+        )],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    ltcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]
+    b5_rows = ltcg["NRIOnSec112and115"]["NRIOnSec112and115Dtls"]
+    assert len(b5_rows) == 1
+    assert b5_rows[0]["SectionCode"] == "21ciii"
+    assert b5_rows[0]["FullConsideration"] == 500000
+    assert b5_rows[0]["BalanceCG"] == 200000
+    # Must NOT also appear in the generic B8 "other assets" bucket.
+    assert ltcg["SaleofAssetNADtls"]["SaleofAssetNA"]["FullConsideration"] == 0
+
+
+def test_schedule_5a_tds_attributed_to_correct_head() -> None:
+    """Schedule 5A's Sl.1/2/3 rows (HP/CG/OS) each carry their own
+    per-head TDS column -- previously a single combined `tds_apportioned`
+    field was dumped entirely into the OS row regardless of which head the
+    TDS was actually deducted on."""
+    input_data = _input(
+        filing_profile=_profile().model_copy(update={"portuguese_civil_code_applies": True}),
+        schedule_5a=Schedule5AInput(
+            spouse_name="Maria D'Souza", spouse_pan="ABCDE1234F",
+            hp_amount_apportioned=Decimal("100000"), cg_amount_apportioned=Decimal("50000"),
+            os_amount_apportioned=Decimal("20000"),
+            hp_tds_apportioned=Decimal("10000"), cg_tds_apportioned=Decimal("5000"),
+            os_tds_apportioned=Decimal("2000"),
+        ),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    sch5a = document["ITR"]["ITR2"]["Schedule5A2014"]
+    assert sch5a["HPHeadIncome"]["TDSApprndOfSpouse"] == 10000
+    assert sch5a["CapGainHeadIncome"]["TDSApprndOfSpouse"] == 5000
+    assert sch5a["OtherSourcesHeadIncome"]["TDSApprndOfSpouse"] == 2000
+    assert sch5a["TotalHeadIncome"]["TDSApprndOfSpouse"] == 17000
 
 
 def test_schedule_fa_fsi_tr_derive_real_country_name_from_the_code() -> None:
@@ -5163,17 +5338,23 @@ def test_section_80qqb_80rrb_not_available_under_new_regime() -> None:
 def test_part_b_ti_total_long_term_equals_its_own_declared_parts() -> None:
     """Part B-TI item 3b: "TotalLongTerm" (iii) must equal "LongTerm12_5Per"
     (bi) + "LongTermSplRateDTAA" (bii), exactly as the form's own "iii = bi
-    + bii" formula states -- and neither figure may include the section
-    112A ₹1.25L threshold's EXEMPT slice, which is an income exclusion
-    under 112A's own proviso, not part of Total Income at all.
+    + bii" formula states. Both fields are GROSS of the section 112A
+    ₹1.25L threshold -- confirmed directly against the form PDF (item
+    3b(i) is literally defined as "8vi of item E of schedule CG", and
+    Table E's own LTCG@12.5% column has no threshold subtraction anywhere
+    in its definition; the threshold only affects Schedule SI's own tax
+    computation and Part B-TI's later "Aggregate Income" step, item 15).
 
-    Previously the gross (pre-threshold) 112A gain was folded into
-    TotalLongTerm but never into LongTerm12_5Per, so the two silently
-    disagreed by exactly the exempt slice whenever a 112A gain existed.
-    Here: a 112A scrip gain of 50000 (fully within the 1.25L exemption,
-    so taxable_112a=0) plus a plain LTCG land/building gain of 2000000 --
-    both fields must come out to exactly 2000000, with the exempt 50000
-    appearing in neither.
+    Previously the gross 112A gain was folded into TotalLongTerm but never
+    into LongTerm12_5Per, so the two silently disagreed by exactly the
+    112A gain whenever one existed -- a real cross-foot bug, but the fix
+    is including the SAME gross figure in both fields, not netting both
+    against the threshold (an earlier attempt at the latter was confirmed
+    wrong by live Type-2 UAT validateItr rejections, 2026-09-13, PAN
+    GOYPT2026A). Here: a 112A scrip gain of 50000 (fully within the 1.25L
+    exemption, so taxable_112a=0 for tax purposes, but still gross-
+    disclosed here) plus a plain LTCG land/building gain of 2000000 --
+    both fields must come out to exactly 2050000.
     """
     input_data = _input(
         residential_status=ResidentialStatus.RESIDENT,
@@ -5204,12 +5385,15 @@ def test_part_b_ti_total_long_term_equals_its_own_declared_parts() -> None:
     document = build_itr2_json(result, input_data)
     _assert_schema_valid(document)
     long_term = document["ITR"]["ITR2"]["PartB-TI"]["CapGain"]["LongTerm"]
-    assert long_term["LongTerm12_5Per"] == 2000000
+    assert long_term["LongTerm12_5Per"] == 2050000
     assert long_term["LongTermSplRateDTAA"] == 0
-    assert long_term["TotalLongTerm"] == 2000000
+    assert long_term["TotalLongTerm"] == 2050000
     assert long_term["TotalLongTerm"] == long_term["LongTerm12_5Per"] + long_term["LongTermSplRateDTAA"]
-    # The exempt 112A slice must not inflate Total Income either.
-    assert result.taxable_income == 2000000
+    # Total Income stays gross too -- the 112A gain (even fully within its
+    # own threshold) is still part of Total Income per the form; only
+    # Schedule SI's own tax computation (and, separately, item 15's
+    # Aggregate Income) accounts for the threshold.
+    assert result.taxable_income == 2050000
 
 
 def test_part_b_tti_bal_tax_payable_is_written_when_tax_is_owed() -> None:
@@ -5331,6 +5515,59 @@ def test_schedule_cg_a7_pti_stcg_is_reflected_in_total_stcg() -> None:
     assert stcg["PassThrIncNatureSTCG30Per"] == 60000
     assert stcg["PassThrIncNatureSTCG"] == 100000
     assert stcg["TotalSTCG"] == 100000
+
+
+def test_schedule_cg_b10_pti_ltcg_is_reflected_in_total_ltcg() -> None:
+    """Schedule CG item B10 (pass-through LTCG, Schedule PTI) was previously
+    hardcoded to 0 even when real PTI LTCG existed -- mirrors the A7/PTI
+    STCG fix above."""
+    input_data = _input(
+        pti_entries=[
+            PTIEntry(
+                entity_name="Example REIT", entity_pan="AAAAT1234E",
+                income_head="LTCG", section="112A", income_amount=Decimal("70000"),
+            ),
+            PTIEntry(
+                entity_name="Example REIT", entity_pan="AAAAT1234E",
+                income_head="LTCG", section="OTHER", income_amount=Decimal("30000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    ltcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]
+    assert ltcg["PassThrIncNatureLTCGUs112A12_5Per"] == 70000
+    assert ltcg["PassThrIncNatureLTCG12_5Per"] == 30000
+    assert ltcg["PassThrIncNatureLTCG"] == 100000
+    assert ltcg["TotalLTCG"] == 100000
+
+
+def test_schedule_cg_own_total_matches_stcg_plus_ltcg_with_pti() -> None:
+    """Schedule CG's own headline total (SumOfCGIncm/TotScheduleCGFor23)
+    must not silently diverge from its own A9 (TotalSTCG) + B12 (TotalLTCG)
+    line items when PTI capital gains are present -- previously
+    `result.capital_gains_income` excluded all PTI CG entirely while A7 (STCG
+    only, partially) was separately patched in, an internal cross-foot
+    failure within the same schedule."""
+    input_data = _input(
+        pti_entries=[
+            PTIEntry(
+                entity_name="Example InvIT", entity_pan="AAAAT1234E",
+                income_head="STCG", section="111A", income_amount=Decimal("40000"),
+            ),
+            PTIEntry(
+                entity_name="Example REIT", entity_pan="AAAAT1234E",
+                income_head="LTCG", section="112A", income_amount=Decimal("70000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    cg = document["ITR"]["ITR2"]["ScheduleCGFor23"]
+    stcg_total = cg["ShortTermCapGainFor23"]["TotalSTCG"]
+    ltcg_total = cg["LongTermCapGain23"]["TotalLTCG"]
+    assert cg["SumOfCGIncm"] == stcg_total + ltcg_total == 110000
+    assert cg["TotScheduleCGFor23"] == cg["SumOfCGIncm"]
 
 
 def test_schedule_os_tot_deductions_includes_eligible_interest_expense() -> None:

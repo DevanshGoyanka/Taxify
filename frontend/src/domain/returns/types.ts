@@ -895,9 +895,12 @@ export interface ForeignTaxReliefEntry extends Identified {
 /** Schedule FA: one foreign asset or account disclosure. */
 export interface ForeignAssetEntry extends Identified {
   assetType: ForeignAssetType; countryCode: string; institutionOrEntityName: string;
-  address: string; accountOrAssetIdentifier: string; ownershipStatus: string;
+  address: string; zipCode: string; accountOrAssetIdentifier: string; ownershipStatus: string;
   openingOrAcquisitionDate: string; peakValue: Money; closingValue: Money;
   grossIncome: Money; incomeOffered: Money; incomeHead?: ClubbedHeadOfIncome | null;
+  natureOfAsset: string; natureOfIncome: string; incomeTaxScheduleItemNo: string;
+  /** Equity/debt interest category only. */
+  initialValueOfInvestment: Money | null; totalGrossProceedsValue: Money;
 }
 
 /** Schedule SPI: income clubbed under Section 64. */
@@ -935,7 +938,7 @@ export interface AssetLiabilityDetails {
 export interface PortugueseCivilCodeDetails {
   spouseName: string; spousePAN: string; spouseAadhaar: string;
   hpAmountApportioned: Money; cgAmountApportioned: Money; osAmountApportioned: Money;
-  tdsApportioned: Money;
+  hpTdsApportioned: Money; cgTdsApportioned: Money; osTdsApportioned: Money;
 }
 
 /** Eligible-startup ESOP tax deferral ledger entry (Sec 191(2)). */
