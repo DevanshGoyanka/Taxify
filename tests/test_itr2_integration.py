@@ -25,6 +25,7 @@ from app.schemas.itr1 import (
     AgeBracket,
     BankAccount,
     Chapter6ADeductions,
+    FilingAddress,
     OtherSourcesIncome,
     SalaryIncome,
     TaxRegime,
@@ -37,6 +38,7 @@ from app.schemas.itr2 import (
     CG112AScrip,
     CGAssetType,
     CGTransaction,
+    ITR2FilingProfile,
     ITR2Input,
     OSDeductions,
     OSRaceHorseActivity,
@@ -1067,6 +1069,74 @@ def test_pti_ltcg_other_reaches_gross_total_income_and_stays_out_of_slab():
 # silently omitted them.
 # ---------------------------------------------------------------------------
 
+def test_ordinary_other_assets_stcg_uses_applicable_rate_not_flat_30pct():
+    """MAJOR finding: a plain, non-FII/FPI taxpayer's "other assets" STCG
+    (jewellery, unlisted shares, land/building -- form item A5/A1) was
+    being disclosed under Schedule CG Table E's "STCG@30%" row
+    (post_loss_cg["normal_stcg"], CYLA/BFLA's "stcg30" bucket), which the
+    form's own item A9 formula ("A1e+A2e+A3a+A3b+A4e+A5e+A6+A7-A8a+A(A)")
+    and its own Table-E cross-check ("E(iii) STCG@30% = A4e+A7b+A(A)_30%")
+    reserve EXCLUSIVELY for a genuine FII/FPI's own section 115AD(1)(ii)
+    securities gain (item A4) -- not A1/A5 at all. Confirmed live
+    (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A) with a completely
+    plain jewellery STCG transaction, no FII/PTI/SPI/buyback involvement
+    whatsoever: errCd ITR2_INF26_InStcg30Per_CurrYearIncome, "STCG gain @
+    30% should be equal to the sum of Sl. No. (A4e + A7b + A(A)_30%)" --
+    this was blocking Type-2 submission for any ordinary resident with
+    this extremely common transaction type. Must instead be taxed at slab
+    rate (unaffected -- this was already correct) and disclosed under
+    "applicable rate" (InStcgAppRate/STCGAppRate), not "30%"."""
+    inp = _minimal_input(
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.JEWELLERY,
+            date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2026, 1, 15),
+            full_consideration=D("500000"), cost_of_acquisition=D("350000"),
+        )],
+    )
+    r = compute(inp)
+    assert r.taxable_income == D("150000")
+    assert r.slab_tax == D("0")  # correctly below the basic exemption, unaffected by this fix
+    assert r.capital_gains_income == D("150000")
+    post_loss_cg = r.schedules["post_loss_cg"]
+    # The OUTPUT bucket total is unchanged (still 150000) -- only its
+    # INTERNAL CYLA source sub-bucket moved from stcg30 to stcg_app.
+    assert post_loss_cg["normal_stcg"] == D("150000")
+    cyla = r.schedules["cyla"]
+    assert cyla.stcg30_remaining == D("0")
+    assert cyla.stcg_app_remaining == D("150000")
+
+
+def test_fii_fpi_other_stcg_still_uses_flat_30pct_bucket():
+    """An FII/FPI's OWN section 115AD(1)(ii) securities gain genuinely IS a
+    flat 30% and must still route through the "stcg30" bucket unchanged."""
+    profile = ITR2FilingProfile(
+        pan="ABCFE1234F", surname_or_org_name="Foreign Fund",
+        date_of_birth_or_formation=date(2000, 1, 1), father_name="NA",
+        verification_place="Mumbai",
+        primary_address=FilingAddress(
+            residence_no="1", locality_or_area="BKC", city_or_town_or_district="Mumbai",
+            state_code="27", mobile_no="9876543210", email="fund@example.com",
+        ),
+        residential_status=ResidentialStatus.NON_RESIDENT, benefit_us_115h=False,
+        is_fii_fpi=True, sebi_registration_number="INABFP123456",
+    )
+    inp = _minimal_input(
+        residential_status=ResidentialStatus.NON_RESIDENT,
+        filing_profile=profile,
+        cg_transactions=[CGTransaction(
+            asset_type=CGAssetType.LISTED_SECURITY,
+            date_of_acquisition=date(2025, 6, 1), date_of_transfer=date(2026, 1, 15),
+            full_consideration=D("500000"), cost_of_acquisition=D("350000"),
+        )],
+    )
+    r = compute(inp)
+    post_loss_cg = r.schedules["post_loss_cg"]
+    assert post_loss_cg["normal_stcg"] == D("150000")
+    cyla = r.schedules["cyla"]
+    assert cyla.stcg30_remaining == D("150000")
+    assert cyla.stcg_app_remaining == D("0")
+
+
 def test_amt_addition_includes_80qqb_deduction():
     inp = _minimal_input(
         salary_income=SalaryIncome(gross_salary=D("2200000")),
@@ -1094,6 +1164,14 @@ def test_115bbe_gets_mandatory_25pct_surcharge_even_below_ordinary_threshold():
     assert r.taxable_income == D("500000")
     assert r.special_rate_tax == D("300000")  # 60% of 5L
     assert r.surcharge == D("75000")  # 25% of 300000, despite 5L being well below any ordinary surcharge threshold
+    # Cess and Gross Tax Liability must be based on the COMPLETE surcharge
+    # (including the 115BBE portion) -- a real bug found live (2026-09-14,
+    # Type-2 UAT validateItr, PAN GOYPT2026A): both were computed from a
+    # stale local `surcharge` variable that excluded the 115BBE addition,
+    # so GrossTaxLiability silently disagreed with its own declared
+    # Tax+Surcharge+Cess components.
+    assert r.health_education_cess == D("15000")  # 4% of (300000 + 75000)
+    assert r.gross_tax_liability == D("300000") + D("75000") + D("15000")
 
 
 def test_115bbe_surcharge_adds_on_top_of_ordinary_surcharge_on_other_income():

@@ -54,9 +54,19 @@ interface EmployerEntry {
   vrsCompensation?: number;
   retrenchmentCompensation?: number;
   section10ExemptionRows?: Section10ExemptionRow[];
+  /** CBDT rule ITR2-IN-SAL-033: at least one nature-of-salary row is required when
+   *  gross salary > 0. Maps to Schedule S item 1a breakdown. */
+  salaryNatureRows?: SalaryNatureRow[];
 }
 
 interface Section10ExemptionRow {
+  id: string;
+  natureCode: string;
+  otherDescription: string;
+  amount: number;
+}
+
+interface SalaryNatureRow {
   id: string;
   natureCode: string;
   otherDescription: string;
@@ -137,6 +147,22 @@ const SECTION_10_OTHER_EXEMPTIONS = [
   ['EIC', "Judges' exempt income"],
   ['10(17)', 'MP / MLA / MLC allowance'],
   ['OTH', 'Other salary-origin section 10 exemption'],
+] as const;
+
+/** Official CBDT Schedule S item 1a nature-of-salary codes.
+ *  CBDT rule ITR2-IN-SAL-033: at least one row required when gross salary > 0.
+ *  Sum of all rows must equal item 1a (Salary as per section 17(1)). */
+const SALARY_NATURE_OPTIONS = [
+  ['BS', 'Basic Salary'],
+  ['DA', 'Dearness Allowance'],
+  ['ANN', 'Annuity'],
+  ['GRT', 'Gratuity'],
+  ['FEE', 'Fees'],
+  ['COM', 'Commission'],
+  ['BO', 'Bonus'],
+  ['PEN', 'Pension'],
+  ['LF', 'Leave Fare Assistance'],
+  ['OTH', 'Others'],
 ] as const;
 
 function generateId(): string {
@@ -250,6 +276,70 @@ function Section10Rows({ rows, onChange }: { rows: Section10ExemptionRow[]; onCh
             type="button"
             onClick={() => onChange(rows.filter((r) => r.id !== row.id))}
             aria-label="Remove exemption"
+            style={{ height: 36, border: '1px solid #fecaca', borderRadius: 5, color: 'var(--danger)', background: 'var(--danger-bg)', cursor: 'pointer' }}
+          >
+            &#215;
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Editor for Schedule S item 1a nature-of-salary breakdown rows.
+ *  CBDT rule ITR2-IN-SAL-033: required whenever gross salary > 0. */
+function SalaryNatureRows({ rows, onChange }: { rows: SalaryNatureRow[]; onChange: (rows: SalaryNatureRow[]) => void }): React.JSX.Element {
+  const addRow = (): void => onChange([...rows, { id: generateId(), natureCode: 'BS', otherDescription: '', amount: 0 }]);
+  const update = (id: string, patch: Partial<SalaryNatureRow>): void =>
+    onChange(rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+
+  return (
+    <div style={CARD_STYLE}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <div>
+          <strong style={{ fontSize: 13, color: 'var(--navy)' }}>Schedule S item 1a — nature-of-salary breakdown</strong>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, marginTop: 3 }}>
+            CBDT rule ITR2-IN-SAL-033: at least one row is required whenever gross salary is greater than zero.
+            The sum of all rows must equal the total salary entered under Section 17(1) above.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={addRow}
+          style={{ border: 0, borderRadius: 5, padding: '7px 10px', color: '#fff', background: 'var(--navy-light)', cursor: 'pointer', fontWeight: 600 }}
+        >
+          + Add row
+        </button>
+      </div>
+      {rows.length === 0 && (
+        <div style={{ color: 'var(--danger)', fontSize: 12, padding: '8px 10px', borderRadius: 6, background: 'var(--danger-bg)', border: '1px solid #fecaca' }}>
+          No nature-of-salary rows — CBDT JSON generation will be blocked. Add at least one row (e.g. Basic Salary).
+        </div>
+      )}
+      {rows.map((row) => (
+        <div
+          key={row.id}
+          style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 2fr) minmax(140px, 1.5fr) minmax(120px, 1fr) 34px', gap: 10, alignItems: 'end', marginTop: 10 }}
+        >
+          <Field label="Nature of salary" required>
+            <select value={row.natureCode} onChange={(e) => update(row.id, { natureCode: e.target.value })} style={INPUT_STYLE}>
+              {SALARY_NATURE_OPTIONS.map(([code, desc]) => (
+                <option key={code} value={code}>{code} — {desc}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Description" required={row.natureCode === 'OTH'}>
+            {row.natureCode === 'OTH'
+              ? <TextInput value={row.otherDescription} onChange={(v) => update(row.id, { otherDescription: v.slice(0, 125) })} maxLength={125} />
+              : <input value="" disabled style={{ ...INPUT_STYLE, background: 'var(--bg)' }} />}
+          </Field>
+          <Field label="Amount (₹)" required>
+            <AmountInput value={row.amount} onChange={(v) => update(row.id, { amount: v })} />
+          </Field>
+          <button
+            type="button"
+            onClick={() => onChange(rows.filter((r) => r.id !== row.id))}
+            aria-label="Remove row"
             style={{ height: 36, border: '1px solid #fecaca', borderRadius: 5, color: 'var(--danger)', background: 'var(--danger-bg)', cursor: 'pointer' }}
           >
             &#215;
@@ -376,11 +466,13 @@ function EmployerForm({
     money(entry.leaveEncashment) > 0 || money(entry.vrsCompensation) > 0 ||
     money(entry.retrenchmentCompensation) > 0;
   const section10Rows = entry.section10ExemptionRows || [];
+  const salaryNatureRows = entry.salaryNatureRows || [];
 
   // Sequential section numbers -- only visible sections get a number
   let seq = 0;
   const next = (): number => { seq += 1; return seq; };
   const nDetails = next();
+  const nNatureSalary = next();
   const nSalary = next();
   const nHRA = hraClaimed ? next() : 0;
   const nLTA = ltaClaimed ? next() : 0;
@@ -449,6 +541,14 @@ function EmployerForm({
           <TextInput value={entry.employerZipCode} onChange={(v) => onChange({ employerZipCode: v.slice(0, 8) })} maxLength={8} />
         </Field>
       </div>
+
+      {/* CBDT rule ITR2-IN-SAL-033: at least one nature-of-salary row required when gross salary > 0 */}
+      <SectionHeading
+        n={nNatureSalary}
+        title="Schedule S item 1a — nature-of-salary breakdown"
+        description="Required by CBDT rule ITR2-IN-SAL-033 whenever gross salary is claimed. Add at least one row (e.g. Basic Salary). Sum must equal total Section 17(1) salary."
+      />
+      <SalaryNatureRows rows={salaryNatureRows} onChange={(rows) => onChange({ salaryNatureRows: rows })} />
 
       <SectionHeading n={nSalary} title="Taxable salary received" description="Enter each salary amount once. HRA, LTA and retirement amounts reveal evidence fields below when non-zero." />
       <div style={GRID_STYLE}>

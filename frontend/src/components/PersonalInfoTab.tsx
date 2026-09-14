@@ -348,12 +348,35 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       {filing.form10IEACurrentAYOldRegime && <Field label="Current AY old-regime filing date" value={filing.form10IEACurrentAYOldRegimeDate || ''} onChange={(value) => updateFiling({ form10IEACurrentAYOldRegimeDate: value || null })} type="date" required />}
       {filing.form10IEACurrentAYOldRegime && <Field label="Current AY old-regime acknowledgement" value={filing.form10IEACurrentAYOldRegimeAck} onChange={(value) => updateFiling({ form10IEACurrentAYOldRegimeAck: value.replace(/\D/g, '').slice(0, 15) })} pattern="[0-9]{15}" maxLength={15} required />}
     </div></div></>}
-    {itrForm === 'ITR-2' && <><SectionHeading title="Other ITR-2 declarations" description="FII/FPI status, SEBI registration, and Legal Entity Identifier." /><div style={CARD_STYLE}><div style={GRID_STYLE}>
+    {itrForm === 'ITR-2' && <><SectionHeading title="Other ITR-2 declarations" description="FII/FPI status, SEBI registration, Legal Entity Identifier, and Section 115H." /><div style={CARD_STYLE}><div style={GRID_STYLE}>
       <CheckField label="Assessee is a Foreign Institutional Investor / Foreign Portfolio Investor (FII/FPI)" checked={filing.isFiiFpi} onChange={(checked) => updateFiling({ isFiiFpi: checked })} />
       {filing.isFiiFpi && <Field label="SEBI registration number" value={filing.sebiRegistrationNumber} onChange={(value) => updateFiling({ sebiRegistrationNumber: value.toUpperCase() })} required pattern="IN[A-Z]{2}FP[0-9]{6}" maxLength={11} help="Format: IN followed by 2 letters, FP, then 6 digits." />}
       <Field label="Legal Entity Identifier (LEI)" value={filing.leiNumber} onChange={(value) => updateFiling({ leiNumber: value.toUpperCase().slice(0, 20) })} maxLength={20} help="Required by CBDT instructions only when the refund claimed is ₹50 crore or more." />
       <CheckField label="Governed by Portuguese Civil Code under Section 5A" checked={filing.portugueseCivilCodeApplies} onChange={(checked) => updateFiling({ portugueseCivilCodeApplies: checked })} />
       <Field label="LEI valid upto date" value={filing.leiValidUptoDate || ''} onChange={(value) => updateFiling({ leiValidUptoDate: value || null })} type="date" />
+      {/* CBDT rule ITR2-IN-PROFILE-008: every Resident (ROR) and RNOR individual must give an
+          explicit Yes/No answer to Section 115H — leaving it unanswered (benefitUs115HAnswered
+          undefined/false) is a blocking pre-flight validation error even when the answer is No.
+          NR taxpayers are exempt from this rule; we hide the field for them only. */}
+      {(personal.residentialStatus || 'ROR') !== 'NR' && (
+        <div style={{ gridColumn: '1 / -1' }}>
+          <CheckField
+            label="Claiming Section 115H benefit — continued special-rate treatment for an NRI who has become resident (answer No if not applicable)"
+            checked={filing.benefitUs115H}
+            onChange={(checked) => updateFiling({ benefitUs115H: checked, benefitUs115HAnswered: true })}
+          />
+          {!filing.benefitUs115HAnswered && (
+            <div style={{ marginTop: 4, color: 'var(--danger)', fontSize: 11 }}>
+              Required: answer Yes or No to this question before generating CBDT JSON (CBDT rule ITR2-IN-PROFILE-008).
+            </div>
+          )}
+          {filing.benefitUs115H && (
+            <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11 }}>
+              Available only for a resident taxpayer who was formerly non-resident.
+            </div>
+          )}
+        </div>
+      )}
     </div></div></>}
     {itrForm === 'ITR-2' && (personal.residentialStatus || 'ROR') !== 'ROR' && <><SectionHeading title="Residential status details" description="Basis, day counts, and jurisdiction of residence supporting the NRI/RNOR classification above." /><div style={CARD_STYLE}><div style={GRID_STYLE}>
       <SelectField label="Basis for residential status (Section 6)" value={filing.conditionsResStatus} onChange={(value) => updateFiling({ conditionsResStatus: value as Filing['conditionsResStatus'] })}>
@@ -370,8 +393,6 @@ export function PersonalInfoTab({ draft, itrForm, onChange, onBanksChange, onReg
       </SelectField>
       <Field label="Total days stayed in India this previous year" value={filing.totalStayIndiaPrevYr ?? ''} onChange={(value) => updateFiling({ totalStayIndiaPrevYr: value === '' ? null : Math.max(0, Math.min(365, Number(value) || 0)) })} type="number" min={0} max={365} inputMode="numeric" />
       <Field label="Total days stayed in India in preceding 4 years" value={filing.totalStayIndia4PrecYr ?? ''} onChange={(value) => updateFiling({ totalStayIndia4PrecYr: value === '' ? null : Math.max(0, Math.min(1461, Number(value) || 0)) })} type="number" min={0} max={1461} inputMode="numeric" />
-      {(personal.residentialStatus || 'ROR') === 'RNOR' && <CheckField label="Claiming Section 115H benefit (continued special-rate treatment for an NRI who becomes resident)" checked={filing.benefitUs115H} onChange={(checked) => updateFiling({ benefitUs115H: checked })} />}
-      {filing.benefitUs115H && <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 11 }}>Available only for a resident taxpayer who was formerly non-resident.</div>}
     </div>
     <div style={{ marginTop: 6 }}>
       <h4 style={{ margin: '0 0 5px', fontSize: 13 }}>Jurisdiction(s) of residence</h4>

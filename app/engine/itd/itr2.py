@@ -367,7 +367,7 @@ def _inc_bfla_no_bf(inc_cyla: Decimal, after: Decimal) -> dict[str, int]:
 # Schedule CYLA (required)
 # ============================================================================
 
-def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
+def _schedule_cyla(result: ITR2Result, input_data: Optional[ITR2Input] = None) -> dict[str, Any]:
     """Build Schedule CYLA from the typed 6-sub-basket CYLA result."""
     cyla = result.schedules.get("cyla")
     z = _ZERO
@@ -386,7 +386,22 @@ def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
     racehorse_setoff = getattr(cyla, "racehorse_setoff", z) if cyla else z
     racehorse_remaining = getattr(cyla, "racehorse_remaining", z) if cyla else z
     racehorse_gross = racehorse_setoff + racehorse_remaining
-    os_inc_excl_rh = os_inc - racehorse_gross
+    # This row's own official label is "Other Source Income (excluding
+    # profit from owning race horses AND amount chargeable to special rate
+    # of tax)" -- must also exclude the special-rate portion (dividend/
+    # lottery/115BBE/NRI-115A-family/etc, the SAME figure Schedule OS's own
+    # item 6/BalanceNoRaceHorse and Part B-TI's item 4a already exclude).
+    # Previously only race-horse income was subtracted. Confirmed live
+    # (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A): errCd
+    # ITR2_INF26_OthSrcExclRaceHorse_IncOfCurYrUnderThatHead, "Other Source
+    # Income(excluding profit from owning race horses and amount
+    # chargeable to special rate of tax) is not equal to SL.no. 6 of
+    # Schedule OS".
+    _os_schedule = _schedule_os(result, input_data) if input_data is not None else None
+    os_special_rate = (
+        _os_schedule["IncOthThanOwnRaceHorse"]["IncChargeableSpecialRates"] if _os_schedule else 0
+    )
+    os_inc_excl_rh = max(z, os_inc - racehorse_gross - os_special_rate)
 
     # Per-basket "current year income" figures for Schedule CYLA's own six
     # CG rows must be Table E's own Column-8 (post-Section-70-intra-CG-
@@ -414,11 +429,30 @@ def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
     # investigation and why that half is deliberately left undisclosed-
     # inconsistent rather than "fixed" into incorrectness.
     cg_intra_remaining = getattr(cyla, "cg_intra_head_remaining", None) or {} if cyla else {}
-    stcg20_inc = cg_intra_remaining.get("stcg20", z)
-    stcg30_inc = cg_intra_remaining.get("stcg30", z)
+    # Schedule PTI capital gains must be blended into these same rate
+    # buckets -- Schedule CYLA's own rows iv/v/viii ("Short-term capital
+    # gain taxable @20%/@30%", "Long term capital gain taxable @12.5%") are
+    # explicitly sourced by the form itself as "8ii/8iii/8vi of item E of
+    # Schedule CG" (Table E), which now includes PTI CG per
+    # `_pti_cg_by_bucket()` -- confirmed live (2026-09-14, Type-2 UAT
+    # validateItr, PAN GOYPT2026A): errCd
+    # ITR2_PDM_Group5.PartB_TI_BalanceAfterSetoffLosses, "Balance after set
+    # off current year losses is not equal to the output of Total Headwise
+    # Income less Losses of current year to be set off" -- Part B-TI's own
+    # item 7 (sourced from `result.gti_before_loss_setoff` -
+    # `result.cyla_total_set_off`, both of which already include
+    # `pti_cg_gross`) disagreed with "total of column 4 of Schedule CYLA"
+    # whenever Schedule CYLA's own rows omitted the same PTI amount. Added
+    # to BOTH columns identically (col1 AND col4) since no loss is ever set
+    # off against a PTI amount here (see `_pti_cg_by_bucket()`'s own
+    # docstring for why this is substantively correct, not just a
+    # disclosure fix).
+    _pti = _pti_cg_by_bucket(input_data)
+    stcg20_inc = cg_intra_remaining.get("stcg20", z) + _pti["stcg20"]
+    stcg30_inc = cg_intra_remaining.get("stcg30", z) + _pti["stcg30"]
     stcg_app_inc = cg_intra_remaining.get("stcg_app", z)
     stcg_dtaa_inc = cg_intra_remaining.get("stcg_dtaa", z)
-    ltcg125_inc = cg_intra_remaining.get("ltcg125", z)
+    ltcg125_inc = cg_intra_remaining.get("ltcg125", z) + _pti["ltcg125"]
     ltcg_dtaa_inc = cg_intra_remaining.get("ltcg_dtaa", z)
 
     # Col4 ("current year's income remaining after set-off") is CYLAResult's
@@ -427,12 +461,12 @@ def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
     # baskets()` sources from for the real tax computation, so Schedule
     # CYLA's own disclosed "remaining" figure is now guaranteed consistent
     # with what the return actually gets taxed on (before BFLA's further,
-    # separate brought-forward-loss stage).
-    stcg20_after = getattr(cyla, "stcg20_remaining", z) if cyla else z
-    stcg30_after = getattr(cyla, "stcg30_remaining", z) if cyla else z
+    # separate brought-forward-loss stage). Same PTI addition as col1 above.
+    stcg20_after = (getattr(cyla, "stcg20_remaining", z) if cyla else z) + _pti["stcg20"]
+    stcg30_after = (getattr(cyla, "stcg30_remaining", z) if cyla else z) + _pti["stcg30"]
     stcg_app_after = getattr(cyla, "stcg_app_remaining", z) if cyla else z
     stcg_dtaa_after = getattr(cyla, "stcg_dtaa_remaining", z) if cyla else z
-    ltcg125_after = getattr(cyla, "ltcg125_remaining", z) if cyla else z
+    ltcg125_after = (getattr(cyla, "ltcg125_remaining", z) if cyla else z) + _pti["ltcg125"]
     ltcg_dtaa_after = getattr(cyla, "ltcg_dtaa_remaining", z) if cyla else z
 
     hp_remaining = abs(min(z, result.house_property_income)) if result.house_property_income < z else z
@@ -476,7 +510,7 @@ def _schedule_cyla(result: ITR2Result) -> dict[str, Any]:
 # Schedule BFLA (required)
 # ============================================================================
 
-def _schedule_bfla(result: ITR2Result) -> dict[str, Any]:
+def _schedule_bfla(result: ITR2Result, input_data: Optional[ITR2Input] = None) -> dict[str, Any]:
     """Build Schedule BFLA from the typed 6-sub-basket BFLA result."""
     bfla = result.schedules.get("bfla")
     z = _ZERO
@@ -490,30 +524,64 @@ def _schedule_bfla(result: ITR2Result) -> dict[str, Any]:
     cyla = result.schedules.get("cyla")
     # Same racehorse-exclusion derivation as _schedule_cyla() -- OthSrcExclRaceHorse
     # never receives a brought-forward set-off (no BF-loss head targets it),
-    # so its BFLA figure is unchanged from CYLA's own os_inc_excl_rh.
+    # so its BFLA figure is unchanged from CYLA's own os_inc_excl_rh. Also
+    # excludes the special-rate portion, same fix and live evidence as
+    # _schedule_cyla()'s own OthSrcExclRaceHorse row.
     racehorse_setoff_cyla = getattr(cyla, "racehorse_setoff", z) if cyla else z
     racehorse_remaining_cyla = getattr(cyla, "racehorse_remaining", z) if cyla else z
-    os_inc_excl_rh = os_inc - racehorse_setoff_cyla - racehorse_remaining_cyla
+    _os_schedule = _schedule_os(result, input_data) if input_data is not None else None
+    os_special_rate = (
+        _os_schedule["IncOthThanOwnRaceHorse"]["IncChargeableSpecialRates"] if _os_schedule else 0
+    )
+    os_inc_excl_rh = max(z, os_inc - racehorse_setoff_cyla - racehorse_remaining_cyla - os_special_rate)
     racehorse_bf_setoff = getattr(bfla, "racehorse_setoff", z) if bfla else z
     racehorse_bf_remaining = getattr(bfla, "racehorse_remaining", z) if bfla else racehorse_remaining_cyla
-    stcg20_cyla = _positive_val(cyla, "stcg20_remaining") if cyla else z
-    stcg30_cyla = _positive_val(cyla, "stcg30_remaining") if cyla else z
+    # Same PTI-blending as `_schedule_cyla()` -- Schedule BFLA's own rows
+    # iii/iv/vii ("Short-term/Long-term capital gain taxable @20%/@30%/
+    # @12.5%") are explicitly sourced by the form as "4iv/4v/4viii of
+    # schedule CYLA" (i.e. THIS same Schedule CYLA column-4 figure, which
+    # now includes PTI CG), so BFLA must carry the identical PTI amount
+    # forward or it would disagree with its own declared CYLA source.
+    _pti = _pti_cg_by_bucket(input_data)
+    stcg20_cyla = _positive_val(cyla, "stcg20_remaining") + _pti["stcg20"] if cyla else _pti["stcg20"]
+    stcg30_cyla = _positive_val(cyla, "stcg30_remaining") + _pti["stcg30"] if cyla else _pti["stcg30"]
     stcg_app_cyla = _positive_val(cyla, "stcg_app_remaining") if cyla else z
     stcg_dtaa_cyla = _positive_val(cyla, "stcg_dtaa_remaining") if cyla else z
-    ltcg125_cyla = _positive_val(cyla, "ltcg125_remaining") if cyla else z
+    ltcg125_cyla = _positive_val(cyla, "ltcg125_remaining") + _pti["ltcg125"] if cyla else _pti["ltcg125"]
     ltcg_dtaa_cyla = _positive_val(cyla, "ltcg_dtaa_remaining") if cyla else z
 
-    # Residual after BFLA
-    stcg20_after = _positive_val(bfla, "stcg20_remaining") if bfla else stcg20_cyla
-    stcg30_after = _positive_val(bfla, "stcg30_remaining") if bfla else stcg30_cyla
+    # Residual after BFLA -- no brought-forward loss ever sets off against a
+    # PTI amount either, so the same addition carries through unchanged.
+    stcg20_after = (_positive_val(bfla, "stcg20_remaining") + _pti["stcg20"]) if bfla else stcg20_cyla
+    stcg30_after = (_positive_val(bfla, "stcg30_remaining") + _pti["stcg30"]) if bfla else stcg30_cyla
     stcg_app_after = _positive_val(bfla, "stcg_app_remaining") if bfla else stcg_app_cyla
     stcg_dtaa_after = _positive_val(bfla, "stcg_dtaa_remaining") if bfla else stcg_dtaa_cyla
-    ltcg125_after = _positive_val(bfla, "ltcg125_remaining") if bfla else ltcg125_cyla
+    ltcg125_after = (_positive_val(bfla, "ltcg125_remaining") + _pti["ltcg125"]) if bfla else ltcg125_cyla
     ltcg_dtaa_after = _positive_val(bfla, "ltcg_dtaa_remaining") if bfla else ltcg_dtaa_cyla
 
+    hp_after = max(z, hp_inc - hp_bf_setoff)
+    # Item "xiii" is literally defined by the form as "Total of (3i+3ii+
+    # ...+3ix+3x+3xi)" -- a pure sum of THIS schedule's own 11 rows'
+    # column-3 ("remaining after set off") values, NOT an externally-
+    # sourced GTI figure. Special-rate OS income other than DTAA (lottery/
+    # 115BBE/NRI-115A-family/etc) and VDA income have no row anywhere in
+    # this 11-row table at all (mirroring how VDA is entirely outside
+    # CYLA/BFLA's scope) -- confirmed directly against the form PDF
+    # (`Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf`,
+    # Schedule BFLA). Previously sourced from `result.gross_total_income`
+    # (the TRUE, broader GTI figure, which DOES include that special-rate
+    # OS income), so this item silently disagreed with its own declared
+    # 11-term sum whenever such income existed. Confirmed live (2026-09-14,
+    # Type-2 UAT validateItr, PAN GOYPT2026A): errCd
+    # ITR2_INF26_ScheduleBFLA_IncomeOfCurrYrAftCYLABFLA, "Schedule BFLA Sl
+    # no xiii is not equal to sum of Sl no (3i+...+3xi)".
+    income_after_cyla_bfla = (
+        salary + hp_after + stcg20_after + stcg30_after + stcg_app_after + stcg_dtaa_after
+        + ltcg125_after + ltcg_dtaa_after + result.os_dtaa_income + os_inc_excl_rh + racehorse_bf_remaining
+    )
     return {
         "Salary": {"IncBFLA": _inc_bfla_no_bf(salary, salary)},
-        "HP": {"IncBFLA": _inc_bfla(hp_inc, hp_bf_setoff, max(z, hp_inc - hp_bf_setoff))},
+        "HP": {"IncBFLA": _inc_bfla(hp_inc, hp_bf_setoff, hp_after)},
         "STCG20Per": {"IncBFLA": _inc_bfla(stcg20_cyla, max(z, stcg20_cyla - stcg20_after), stcg20_after)},
         "STCG30Per": {"IncBFLA": _inc_bfla(stcg30_cyla, max(z, stcg30_cyla - stcg30_after), stcg30_after)},
         "STCGAppRate": {"IncBFLA": _inc_bfla(stcg_app_cyla, max(z, stcg_app_cyla - stcg_app_after), stcg_app_after)},
@@ -525,7 +593,7 @@ def _schedule_bfla(result: ITR2Result) -> dict[str, Any]:
         "OthSrcRaceHorse": {
             "IncBFLA": _inc_bfla(racehorse_remaining_cyla, racehorse_bf_setoff, racehorse_bf_remaining)
         },
-        "IncomeOfCurrYrAftCYLABFLA": _to_rupees(result.gross_total_income),
+        "IncomeOfCurrYrAftCYLABFLA": _to_rupees(income_after_cyla_bfla),
         "TotalBFLossSetOff": {"TotBFLossSetoff": _to_rupees(result.bfla_total_set_off)},
     }
 
@@ -852,7 +920,7 @@ def _schedule_s(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str,
         if income_under_salary != expected_income_under_salary:
             raise ValueError("Schedule S salary equation reconciliation failed")
 
-    return {
+    schedule_s: dict[str, Any] = {
         "Salaries": employers,
         "TotalGrossSalary": total_gross_salary,
         "AllwncExemptUs10": {"AllwncExemptUs10Dtls": exemption_rows},
@@ -863,7 +931,22 @@ def _schedule_s(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str,
         "EntertainmntalwncUs16ii": _to_rupees(sal.entertainment_allowance),
         "ProfessionalTaxUs16iii": _to_rupees(sal.professional_tax),
         "Increliefus89A": relief_89a,
-        "Section10_13A": {
+        "TotIncUnderHeadSalaries": income_under_salary,
+    }
+    # Section10_13A is optional in the official schema (not in ScheduleS's
+    # own "required" list) -- emitting it unconditionally, even all-zero,
+    # made ITD's live validator treat its mere PRESENCE as "10(13A) is
+    # being claimed," which is disallowed under the new regime regardless
+    # of the actual amount. Confirmed live (2026-09-14, Type-2 UAT
+    # validateItr, PAN GOYPT2026A, new regime, ZERO HRA claimed anywhere):
+    # errCd ITR2_INF25_PartA_GEN1_PersonalInfo_Status, "Since you have
+    # selected new tax regime deduction u/s 10(13A), 80C, 80E, 80EE, 80EEA
+    # or 80EEB are not applicable to you" -- rejected purely because this
+    # all-zero placeholder object existed, matching this codebase's own
+    # established "omit an unclaimed optional schedule entirely, don't emit
+    # an empty placeholder" precedent (see ITR-4's Schedule80C fix, CLAUDE.md).
+    if hra_calc > 0:
+        schedule_s["Section10_13A"] = {
             "Placeofwork": "1" if section13a_detail.is_metro_city else "2",
             "ActlHRARecv": _to_rupees(section13a_detail.actual_hra_received),
             "ActlRentPaid": _to_rupees(section13a_detail.actual_rent_paid),
@@ -871,9 +954,8 @@ def _schedule_s(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str,
             "ActlRentPaid10Per": _to_rupees(rent_minus_ten),
             "Sal40Or50Per": _to_rupees(salary_rate),
             "EligbleExmpAllwncUs13A": _to_rupees(hra_calc),
-        },
-        "TotIncUnderHeadSalaries": income_under_salary,
-    }
+        }
+    return schedule_s
 
 
 # ============================================================================
@@ -1284,6 +1366,48 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
             continue
         dividend_date_ranges[field] = _date_range(entry.q1, entry.q2, entry.q3, entry.q4, entry.q5)
 
+    # The NRI/FII "any other income chargeable at special rate" dropdown
+    # (os_special_rate_entries) has 5 dividend sub-categories that ALSO
+    # have their own dedicated quarterly-breakdown field (used above for
+    # `os_dividend_entries`, a separate, more detailed input path) -- but
+    # `OSSpecialRateEntry` itself carries no quarter-wise data at all. When
+    # a dividend-category entry exists here with no matching quarterly
+    # breakdown already supplied via `os_dividend_entries`, ITD's live
+    # validator still requires the two to reconcile: confirmed live
+    # (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A): errCd
+    # ITR2_INF24_ScheduleOS.DividendIncUs115A1aA.DateRange, "the quarterly
+    # break up of 'Dividend Income...' should be equal to Dividend income
+    # selected at Sl.No. 2d and 2e". Placed in the LAST quarter as an
+    # honest approximation (same principle as this file's Table F fix --
+    # no real per-entry date exists to place it more precisely).
+    #
+    # This 5-entry mapping is verified against the literal form text
+    # (`Reference Docs by CBDT & ITD/Official ITR FORMS/ITR-2-2026-Eng.pdf`,
+    # Schedule OS item 10, "Information about accrual/receipt of income
+    # from Other Sources" -- the quarterly table itself), not inferred
+    # from code comments alone: item 4 = "Dividend Income u/s 115A(1)(a)(i)
+    # other than proviso to sec 115A(1)(a)(A) @ 20%" -> 5A1ai/115A1ai;
+    # item 5 = "Dividend income under proviso to section 115A(1)(a)(A) @
+    # 10% (Including PTI Income)" -> 5A1aA/115A1aA; item 6 = "Dividend
+    # Income u/s 115AC @ 10%" -> 5AC1abD/115AC (the dividend sub-clause of
+    # 115AC, distinct from 5AC1ab's own NR-interest-on-bonds sub-clause,
+    # which this table does NOT list and is correctly excluded here); item
+    # 7 = "Dividend Income u/s 115ACA(1)(a) @ 10%" -> 5ACA1a/115ACA; item 8
+    # = "Dividend Income of FII... u/s 115AD(1)(i) @ 20%" -> 5AD1iDiv/
+    # 115AD1i. Items 1-3, 9, 10 of this same table (lottery/gaming,
+    # domestic-dividend sub-items 1a(i)/1a(iii), DTAA dividend, section
+    # 89A) are each handled by a different, already-existing code path and
+    # are deliberately NOT part of this mapping.
+    _SPECIAL_RATE_DIVIDEND_SECTIONS = {
+        "5A1ai": "115A1ai", "5A1aA": "115A1aA", "5AC1abD": "115AC",
+        "5ACA1a": "115ACA", "5AD1iDiv": "115AD1i",
+    }
+    for spr in input_data.os_special_rate_entries:
+        field = _DIVIDEND_SECTION_DATE_RANGE_FIELD.get(_SPECIAL_RATE_DIVIDEND_SECTIONS.get(spr.source_description, ""))
+        if field is None or field in dividend_date_ranges or spr.source_amount <= _ZERO:
+            continue
+        dividend_date_ranges[field] = _date_range(_ZERO, _ZERO, _ZERO, _ZERO, spr.source_amount)
+
     if input_data.os_dtaa_entries:
         block["IncChargblSplRateOS"]["NRIOsDTAA"] = {
             "NRIDTAADtlsSchOS": [
@@ -1430,10 +1554,22 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
         },
         "IncOthThanOwnRaceHorse": block,
         "NOT89A": _date_range(),
-        # Official schema requires TotOthSrcNoRaceHorse >= 0 (unlike the
-        # signed BalanceNoRaceHorse above, which the same official schema
-        # allows negative).
-        "TotOthSrcNoRaceHorse": _to_rupees(max(_ZERO, os_excl_race_horse)),
+        # Form item 7 = "Income from other sources (other than from owning
+        # race horses) (2 + 6) (enter 6 as nil, if negative)" -- item 2 is
+        # IncChargeableSpecialRates (special-rate OS income: lottery/115BBJ/
+        # 115BBE/111/the 115A-family dropdown/DTAA), item 6 is
+        # BalanceNoRaceHorse (normal-rate only, already computed above).
+        # Only item 6 is clamped to nil when negative; item 2 is added as-is
+        # regardless. Previously this field was set to item 6 ALONE (with
+        # the max(0,...) clamp), silently omitting item 2 entirely --
+        # confirmed live (2026-09-14, Type-2 UAT validateItr, PAN
+        # GOYPT2026A): errCd ITR2_PDM_Group1.ScheduleOS_TotOthSrcNoRaceHorse,
+        # "Sl.no 7 ... should be equal to sum of sl.no 2+6" -- any return
+        # with BOTH normal-rate and special-rate Other Sources income (e.g.
+        # savings interest + NRI dividend) understated this total.
+        "TotOthSrcNoRaceHorse": _to_rupees(
+            block["IncChargeableSpecialRates"] + max(_ZERO, os_excl_race_horse)
+        ),
     }
     return result_dict
 
@@ -1577,7 +1713,42 @@ def _other_assets_block(
     }
 
 
-def _cg_loss_setoff_table(result: ITR2Result) -> dict[str, Any]:
+def _pti_cg_by_bucket(input_data: Optional[ITR2Input]) -> dict[str, Decimal]:
+    """Schedule PTI capital gains, keyed by the same rate-bucket names used
+    throughout this file's Table E / CYLA / BFLA builders.
+
+    Confirmed against the official form directly: Part B-TI item 3a/3b
+    ("Capital gains") is explicitly sourced from "8ii/8iii/8vi of item E of
+    schedule CG" (Table E's own post-intra-netting columns), and Schedule
+    CYLA's own STCG/LTCG rows (iv, v, viii) are ALSO explicitly sourced
+    from the SAME Table E columns ("8ii of item E of Schedule CG", etc.) --
+    i.e. the form's own citation chain requires Table E, Schedule CYLA, AND
+    Part B-TI's capital-gains figures to all agree on one PTI-inclusive
+    total per rate bucket, not treat PTI as a disclosure-only add-on to
+    Table E alone. PTI CG retains the SAME head and rate character the
+    business trust/investment fund itself earned it under (section
+    115UA(2)/115UB(1) proviso) -- unlike VDA (which section 115BBH(2)
+    explicitly bars from any loss set-off), there is no statutory bar on an
+    ordinary current-year capital loss of the same rate setting off against
+    a PTI CG gain, so blending it into the matching rate bucket here is
+    substantively correct, not just a disclosure convenience.
+    """
+    z = _ZERO
+    stcg20 = stcg30 = ltcg125 = z
+    if input_data is not None:
+        for pti in input_data.pti_entries:
+            if pti.income_amount <= 0:
+                continue
+            if pti.income_head == "STCG" and pti.section == "111A":
+                stcg20 += pti.income_amount
+            elif pti.income_head == "STCG":
+                stcg30 += pti.income_amount
+            elif pti.income_head == "LTCG":
+                ltcg125 += pti.income_amount
+    return {"stcg20": stcg20, "stcg30": stcg30, "ltcg125": ltcg125}
+
+
+def _cg_loss_setoff_table(result: ITR2Result, input_data: Optional[ITR2Input] = None) -> dict[str, Any]:
     """Build Schedule CG's own Table E (`CurrYrLosses`) -- the
     within-Schedule-CG section-70 current-year capital-loss set-off matrix
     (STCL against any CG rate bucket, LTCL against LTCG only). Previously
@@ -1585,9 +1756,18 @@ def _cg_loss_setoff_table(result: ITR2Result) -> dict[str, Any]:
     engine's own intra-head computation (``cyla.py``'s ``cg_setoff_matrix``
     and siblings), a snapshot taken before that same engine's later,
     separate section-71 cross-head absorption of business/HP losses runs.
-    Part B-TI's own capital-gains figures are independently sourced from
-    ``post_loss_cg`` and unaffected by this table either way -- see
-    ``_partb_ti()``.
+    Part B-TI's own capital-gains figures (``CapGain`` block, in
+    ``_partb_ti()``) were, at one point during this same fix pass, believed
+    to be a harmless, live-inert divergence from this table's PTI-inclusive
+    totals -- that was wrong: it was actually the exact remaining cause of
+    Part B-TI's "BalanceAfterSetoffLosses" (item 7, "5-6") disagreeing with
+    "Total Headwise Income" (item 5 = 1+2+3e+4d), since item 3e
+    (TotalCapGains) was silently excluding PTI CG while
+    "BalanceAfterSetoffLosses" itself is computed from
+    ``result.gti_before_loss_setoff`` (PTI-inclusive from the start).
+    ``_partb_ti()`` now applies the identical ``_pti_cg_by_bucket()``
+    addition -- confirmed live (2026-09-14, Type-2 UAT validateItr, PAN
+    GOYPT2026A): errCd ITR2_PDM_Group5.PartB_TI_BalanceAfterSetoffLosses.
     """
     cyla = result.schedules.get("cyla")
     income = getattr(cyla, "cg_gross_income", None) or {}
@@ -1596,6 +1776,24 @@ def _cg_loss_setoff_table(result: ITR2Result) -> dict[str, Any]:
     remaining = getattr(cyla, "cg_intra_head_remaining", None) or {}
     setoff_total = getattr(cyla, "cg_source_setoff_total", None) or {}
     loss_remaining = getattr(cyla, "cg_source_loss_remaining", None) or {}
+
+    # Schedule PTI capital gains (STCG-111A/STCG-other/LTCG-112A/LTCG-other)
+    # -- Table E's own "current year income"/"current year capital gain"
+    # columns must include them, since Schedule CG's own B-item sum
+    # (B1g+...+B10a1+B10a2+B(A), which now correctly includes the PTI LTCG
+    # fields added elsewhere in this file) is cross-checked live against
+    # this exact row. Confirmed live (2026-09-14, Type-2 UAT validateItr,
+    # PAN GOYPT2026A): errCd ITR2_INF26_InLtcg12_5Per_CurrYearIncome,
+    # "LTCG @12.5% is not equal to the sum of sl no (B1g*+...+B10a1*+
+    # B10a2*+B(A))". Added to BOTH the gross-income and net-remaining
+    # columns identically -- see `_pti_cg_by_bucket()`'s own docstring for
+    # why blending into the matching rate bucket (rather than treating PTI
+    # as loss-set-off-ineligible) is what the form's own citation chain
+    # requires; Schedule CYLA's/BFLA's matching rows get the identical
+    # treatment (`_schedule_cyla()`/`_schedule_bfla()`) so this table, CYLA,
+    # BFLA, and Part B-TI's derived "balance after set-off" figure all stay
+    # mutually consistent.
+    _pti_by_bucket = _pti_cg_by_bucket(input_data)
 
     # Table E is entirely GROSS (pre-section-112A-threshold), including its
     # final "CurrYrCapGain" column, for BOTH "InLtcg12_5Per.CurrYearIncome"
@@ -1622,10 +1820,10 @@ def _cg_loss_setoff_table(result: ITR2Result) -> dict[str, Any]:
         return _to_rupees(loss.get(name, _ZERO))
 
     def gross_income(name: str) -> int:
-        return _to_rupees(income.get(name, _ZERO))
+        return _to_rupees(income.get(name, _ZERO) + _pti_by_bucket.get(name, _ZERO))
 
     def net_remaining(name: str) -> int:
-        return _to_rupees(remaining.get(name, _ZERO))
+        return _to_rupees(remaining.get(name, _ZERO) + _pti_by_bucket.get(name, _ZERO))
 
     def setoff(source: str, target: str) -> int:
         return _to_rupees(matrix.get((source, target), _ZERO))
@@ -1734,10 +1932,16 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         e.income_head in ("STCG", "LTCG") and e.income_amount > _ZERO
         for e in input_data.pti_entries
     )
+    # A taxpayer whose ONLY capital-gains item is SPI-clubbed CG (Section
+    # 64) would otherwise get Schedule CG silently omitted while Part B-TI
+    # still shows a nonzero CapGain figure -- the same failure mode as the
+    # PTI/NRI-only cases above.
+    has_spi_cg = any(e.head_of_income == "CG" and e.amount_included > _ZERO for e in input_data.spi_entries)
     if (
         not input_data.cg_transactions and not input_data.cg_112a_scrips
         and not input_data.vda_transactions and not has_nri_cg_data
         and input_data.deemed_stcg_unutilized_cgas <= _ZERO and not has_pti_cg
+        and not has_spi_cg
     ):
         return None
     cg = result.schedules.get("cg")
@@ -1868,6 +2072,37 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
 
     stcg_other_ordinary = _other_assets_block(input_data.cg_transactions, is_long_term=False, asset_types=other_asset_types_ordinary)
     ltcg_other_ordinary = _other_assets_block(ordinary_ltcg_txs, is_long_term=True, asset_types=other_asset_types_ordinary)
+
+    # SPI-clubbed capital gains (Section 64, head_of_income="CG") have no
+    # per-transaction disposal at all -- a Section 64 attribution of
+    # someone else's already-net gain, not a sale this taxpayer made --
+    # so they never reach `_other_assets_block()`'s transaction-driven
+    # construction above. The calculator routes them into the ordinary
+    # slab/applicable-rate STCG basket for a non-FII/FPI taxpayer (see
+    # calculators/itr2.py's ## 5 CYLA comment), so A9/TotalSTCG already
+    # correctly includes this amount via a different path -- but item A5e
+    # (SaleOnOtherAssets, the generic "other assets" bucket, form item A5)
+    # stayed zero, silently breaking BOTH the form's own "A9 = A1e+...+
+    # A5e+...+B(A)" identity and Table E's own E(iv) "STCG @ App Rate"
+    # cross-check against it ("A1e+A3b+A5e+A6+A7c+A(A)_AppRate"). Added
+    # straight to the bottom line (no cost to subtract -- already a net
+    # gain figure, not a raw sale consideration). Confirmed live
+    # (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A): errCd
+    # ITR2_INF26_InStcgAppRate_CurrYearIncome, "STCG gain @ App Rate is
+    # not equal to the sum of sl no (A1e + A3b + A5e + A6 + A7c +
+    # A(A)_App Rate)" (only after the earlier InStcg30Per/"A4e" version of
+    # this same check was fixed by correctly routing ordinary "other
+    # assets" STCG to the applicable-rate bucket instead of a flat 30%).
+    spi_cg_clubbed_stcg = (
+        sum((spi.amount_included for spi in input_data.spi_entries if spi.head_of_income == "CG"), _ZERO)
+        if not is_fii_fpi else _ZERO
+    )
+    if spi_cg_clubbed_stcg > _ZERO:
+        stcg_other_ordinary = dict(stcg_other_ordinary)
+        stcg_other_ordinary["FullValueConsdOthUnqshr"] += _to_rupees(spi_cg_clubbed_stcg)
+        stcg_other_ordinary["FullConsideration"] += _to_rupees(spi_cg_clubbed_stcg)
+        stcg_other_ordinary["BalanceCG"] += _to_rupees(spi_cg_clubbed_stcg)
+        stcg_other_ordinary["CapgainonAssets"] += _to_rupees(spi_cg_clubbed_stcg)
     fii_stcg_securities = None
     fii_ltcg_securities = None
     if is_fii_fpi:
@@ -2077,7 +2312,7 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
             "DeducClaimDtlsUs54F": _deduction_claim_detail_rows(input_data.cg_transactions, "54F"),
             "TotDeductClaim": _to_rupees(total_exempt),
         },
-        "CurrYrLosses": _cg_loss_setoff_table(result),
+        "CurrYrLosses": _cg_loss_setoff_table(result, input_data),
         "IncmFromVDATrnsf": vda_inc,
         "AccruOrRecOfCG": _accrued_cg(input_data, result),
         "SumOfCGIncm": total_cg,
@@ -2359,22 +2594,34 @@ def _accrued_cg(input_data: ITR2Input, result: ITR2Result) -> dict[str, Any]:
     at the aggregate level elsewhere in this schedule, not preserved
     per-transaction, and reproducing them exactly per-transaction would
     not even reconcile back to those aggregate figures (50CA deeming in
-    particular is not distributive over a sum). This table has no
-    downstream consumer -- an informational disclosure supporting the
-    taxpayer's own section 234C interest position, not re-read by any
-    other part of this JSON (unlike Table E/`CurrYrLosses`, whose own
-    figures Part B-TI's form instructions explicitly cite) -- so an
-    honestly-labeled approximation here is preferable to fabricating exact
-    figures this pipeline cannot actually derive per-transaction. The
-    always-zero applicable-rate/DTAA buckets match every other Schedule
-    CG/Part B-TI disclosure in this builder, which has no data source for
-    those buckets either.
+    particular is not distributive over a sum), so an honestly-labeled
+    approximation here is preferable to fabricating exact figures this
+    pipeline cannot actually derive per-transaction. This table's totals
+    ARE cross-checked live by ITD against Schedule BFLA's own per-bucket
+    figures (confirmed for stcg20/stcg30/stcg_app/ltcg125 specifically,
+    2026-09-13/14 Type-2 UAT validateItr, PAN GOYPT2026A -- an earlier
+    version of this docstring's claim that it has "no downstream consumer"
+    was wrong). The remaining always-zero DTAA buckets match every other
+    Schedule CG/Part B-TI disclosure in this builder, which has no data
+    source for those buckets either.
     """
     from app.engine.schedules.capital_gains import _is_short_term, _parse_date
+
+    # Land/building and generic "other assets" STCG (form items A1/A5) are
+    # genuinely SLAB-RATE for an ordinary taxpayer, not a flat 30% -- the
+    # "stcg30" bucket is reserved for a genuine FII/FPI's own section
+    # 115AD(1)(ii) securities gain (form item A4) -- see the ## 5 CYLA
+    # comment in calculators/itr2.py for the full citation and live
+    # evidence. Table F is built independently from raw transactions here
+    # (not sourced from CYLA/BFLA), so it needs the same is_fii_fpi-based
+    # routing to stay consistent with Table E/BFLA's own disclosure.
+    is_fii_fpi = bool(input_data.filing_profile and input_data.filing_profile.is_fii_fpi)
+    _other_stcg_bucket = "stcg30" if is_fii_fpi else "stcg_app"
 
     buckets: dict[str, list[Decimal]] = {
         "stcg20": [_ZERO] * 5,
         "stcg30": [_ZERO] * 5,
+        "stcg_app": [_ZERO] * 5,
         "ltcg125": [_ZERO] * 5,
         "vda": [_ZERO] * 5,
     }
@@ -2416,13 +2663,13 @@ def _accrued_cg(input_data: ITR2Input, result: ITR2Result) -> dict[str, Any]:
             # "ITR2_INF26_AccruOrRecOfCG_LongTermUnder12_5Per_DateRange_8974t".
             add("stcg20" if is_short else "ltcg125", tx.date_of_transfer, gain)
             continue
-        add("stcg30" if is_short else "ltcg125", tx.date_of_transfer, gain)
+        add(_other_stcg_bucket if is_short else "ltcg125", tx.date_of_transfer, gain)
 
     cg = result.schedules.get("cg")
     stcg = getattr(cg, "stcg", None) if cg else None
     ltcg = getattr(cg, "ltcg", None) if cg else None
     for asset in (getattr(stcg, "land_building", []) if stcg else []):
-        add("stcg30", _parse_date(asset.date_of_transfer), asset.balance)
+        add(_other_stcg_bucket, _parse_date(asset.date_of_transfer), asset.balance)
     for asset in (getattr(ltcg, "land_building", []) if ltcg else []):
         add("ltcg125", _parse_date(asset.date_of_transfer), asset.balance)
 
@@ -2435,6 +2682,58 @@ def _accrued_cg(input_data: ITR2Input, result: ITR2Result) -> dict[str, Any]:
         # this simplified approximation double-counts the same deduction.
         gain = scrip.total_sale_value - scrip.cost_acq_without_index - scrip.expenditure_on_transfer
         add("ltcg125", scrip.date_of_transfer, gain)
+
+    # SPI-clubbed capital gains (Section 64, head_of_income="CG"): routed
+    # into the ordinary "normal-rate STCG" basket by the calculator (see
+    # `calculators/itr2.py`'s own ## 3 Clubbing/SPI block) -- for a non-FII/
+    # FPI taxpayer this is slab/applicable-rate income (`stcg_app`, not a
+    # flat 30% -- see this function's own `_other_stcg_bucket` comment
+    # above), so it reaches Schedule BFLA's STCGAppRate row like any other
+    # applicable-rate income. It has no per-transaction transfer date at
+    # all (a Section 64 attribution of someone else's income, not a
+    # disposal this taxpayer made), so the per-transaction loop above
+    # never sees it. Placed in the LAST quarter as an honest approximation
+    # (same principle as this function's own documented land/building/
+    # 112A-scrip handling): the taxpayer-favorable choice for section 234C
+    # interest purposes, and the only one available since no real date
+    # exists. Confirmed live (2026-09-14, Type-2 UAT validateItr, PAN
+    # GOYPT2026A): errCd ITR2_INF26_..._AllQrts_Stcg_30, "Table F Sl. No. 2
+    # the breakup of all the quarters is not equal to the value from item
+    # 3iv of schedule BFLA" -- omitting this amount entirely made Table F
+    # silently disagree with BFLA's own total.
+    spi_cg_clubbed = sum(
+        (spi.amount_included for spi in input_data.spi_entries if spi.head_of_income == "CG"),
+        _ZERO,
+    )
+    if spi_cg_clubbed > _ZERO:
+        buckets[_other_stcg_bucket][4] += spi_cg_clubbed
+
+    # Schedule PTI capital gains -- same "no per-transaction date, place in
+    # the last quarter" treatment as SPI-clubbed CG just above (a pass-
+    # through attribution from the business trust/investment fund, not a
+    # disposal this taxpayer made with its own transfer date). Once
+    # Schedule CYLA/BFLA were fixed to blend PTI CG into their matching
+    # rate-bucket rows (`_pti_cg_by_bucket()`, `_schedule_cyla()`/
+    # `_schedule_bfla()`), Table F's own bucket sums must include the same
+    # amounts or disagree with BFLA's item 3vii/3iii -- confirmed live
+    # (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A): errCd
+    # ITR2_INF26_AccruOrRecOfCG_LongTermUnder12_5Per_DateRange, "Table F Sl.
+    # No. 5 the breakup of all the quarters is not equal to the value from
+    # item 3vii of Schedule BFLA".
+    # Note: PTI STCG@30% goes to the literal "stcg30" bucket unconditionally
+    # (NOT `_other_stcg_bucket`'s is_fii_fpi routing) -- `compute_pti_stcg30()`
+    # dispatches it to the genuine flat-30% PTI_STCG30P SecCode regardless of
+    # the taxpayer's own FII/FPI status (it is the pass-through fund's own
+    # rate, not derived from this taxpayer's residency/FII classification),
+    # matching the identical unconditional "stcg30" bucket already used for
+    # it in `_schedule_cyla()` and `_cg_loss_setoff_table()` (Table E).
+    _pti = _pti_cg_by_bucket(input_data)
+    if _pti["stcg20"] > _ZERO:
+        buckets["stcg20"][4] += _pti["stcg20"]
+    if _pti["stcg30"] > _ZERO:
+        buckets["stcg30"][4] += _pti["stcg30"]
+    if _pti["ltcg125"] > _ZERO:
+        buckets["ltcg125"][4] += _pti["ltcg125"]
 
     # VDA transfers (section 115BBH, 30% flat) -- each transaction already
     # carries its own date_of_transfer and directly computable income
@@ -2454,7 +2753,7 @@ def _accrued_cg(input_data: ITR2Input, result: ITR2Result) -> dict[str, Any]:
     return {
         "ShortTermUnder20Per": _date_range(*buckets["stcg20"]),
         "ShortTermUnder30Per": _date_range(*buckets["stcg30"]),
-        "ShortTermUnderAppRate": zero_dr,
+        "ShortTermUnderAppRate": _date_range(*buckets["stcg_app"]),
         "ShortTermUnderDTAARate": zero_dr,
         "LongTermUnder12_5Per": _date_range(*buckets["ltcg125"]),
         "LongTermUnderDTAARate": zero_dr,
@@ -2846,6 +3145,23 @@ def _schedule_via(result: ITR2Result, input_data: Optional[ITR2Input] = None) ->
     deduct_und_chap_via["TotalChapVIADeductions"] = sum(section_fields.values())
 
     usr_deduct_und_chap_via = dict(deduct_und_chap_via)
+    # Live business-rule check: PRAN is mandatory whenever 80CCD(1) or
+    # 80CCD(1B) is claimed (see ITR2Input.pran_number's own docstring for
+    # the exact live-confirmed error). PRANDtls belongs only in
+    # UsrDeductUndChapVIA (the official schema has no such array in
+    # DeductUndChapVIA at all).
+    claims_80ccd1_or_1b = (
+        section_fields.get("Section80CCDEmployeeOrSE", 0) > 0
+        or section_fields.get("Section80CCD1B", 0) > 0
+    )
+    if claims_80ccd1_or_1b:
+        if not (input_data and input_data.pran_number):
+            raise ValueError(
+                "Schedule VIA: PRAN is mandatory whenever 80CCD(1) or "
+                "80CCD(1B) is claimed (ITD live business-rule check) -- "
+                "set ITR2Input.pran_number before generating this return."
+            )
+        usr_deduct_und_chap_via["PRANDtls"] = [{"PRANNum": input_data.pran_number}]
     # CBDT rules #693/#758: per-row Section 80CCC pension-fund detail
     # (official schema: UsrDeductUndChapVIA.PensionContribution80CCC only --
     # DeductUndChapVIA has no such array).
@@ -3473,6 +3789,21 @@ def _chapter6a_detail_schedules(result: ITR2Result, input_data: ITR2Input) -> di
 # Schedule SI — Special Rate Incomes
 # ============================================================================
 
+def _spl_rate_percent(rate: Optional[Decimal]) -> int | float:
+    """Serialize a Schedule-SI tax rate for the official schema's own
+    `SplRatePercent` numeric ENUM (`[1, 5, 10, 15, 12.5, 20, 25, 30, 50, 60,
+    4, 9]`). Every enum member except 12.5 is a whole number, and ITD's live
+    validator rejects a whole-number rate serialized with a decimal point
+    (e.g. `10.0`) as "not a valid enum value" -- see the call site's own
+    comment for the live-confirmed evidence.
+    """
+    if not rate:
+        return 0
+    if rate == rate.to_integral_value():
+        return int(rate)
+    return float(rate)
+
+
 def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
     """Serialize Schedule SI from actual special-rate computation."""
     si = result.schedules.get("si")
@@ -3523,6 +3854,23 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
         # mapping rationale as the blocks above.
         "5AD1biip": "5AD1biip", "5ADii": "5ADii",
         "5ADiii": "5ADiii", "5ADiiiP": "5ADiiiP",
+        # Schedule PTI capital-gains pass-through codes (compute_pti_stcg20/
+        # compute_pti_stcg30/compute_pti_ltcg112a/compute_pti_ltcg125 in
+        # special_rates.py already set entry.section to the exact official
+        # SecCode string) -- these were previously ABSENT from this map
+        # entirely, so every PTI CG entry silently fell through to the "1"
+        # default (the SecCode for section 111, accumulated PF), which made
+        # ITD's live validator wrongly cross-check the PTI row's tax amount
+        # against Schedule OS item 2c (TaxAccumulatedBalRecPF) -- confirmed
+        # live (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A,
+        # ITR2.ScheduleSI.SplCodeRateTax.SplRateIncTax -- "In Schedule SI,
+        # Sl. No. 1(ii) is not equal to Sl. No. 2(c) of Schedule OS") and
+        # against the official schema's own SecCode enum (`PTI_STCG20P`,
+        # `PTI_STCG30P`, `PTI_LTCG12_5P112A`, `PTI_LTCG12_5P` are real,
+        # distinct enum members, not aliases of "1"). Identity mapping, same
+        # rationale as the blocks above.
+        "PTI_STCG20P": "PTI_STCG20P", "PTI_STCG30P": "PTI_STCG30P",
+        "PTI_LTCG12_5P112A": "PTI_LTCG12_5P112A", "PTI_LTCG12_5P": "PTI_LTCG12_5P",
     }
     rows = []
     for entry in si.entries:
@@ -3546,7 +3894,18 @@ def _schedule_si(result: ITR2Result) -> Optional[dict[str, Any]]:
         code = section_code_map.get(entry.section, "1")
         rows.append({
             "SecCode": code,
-            "SplRatePercent": float(entry.tax_rate_pct) if entry.tax_rate_pct else 0,
+            # The official schema's own SplRatePercent is `{"type": "number",
+            # "enum": [1, 5, 10, 15, 12.5, 20, 25, 30, 50, 60, 4, 9]}` -- a
+            # strict numeric ENUM, not a free-form rate. `float(...)` always
+            # produces a JSON value with a decimal point (`10.0`), which
+            # ITD's live validator rejects as "not a valid enum value" even
+            # though it's numerically identical to the enum's own bare `10`
+            # -- confirmed live (2026-09-14, Type-2 UAT validateItr, PAN
+            # GOYPT2026A, errCd="Schema Error", "SplRatePercent: 10.0 is not
+            # a valid enum value") across three different rates (10, 20,
+            # 60). Whole-number rates must serialize as a bare int; only the
+            # genuinely fractional 12.5% rate needs a float.
+            "SplRatePercent": _spl_rate_percent(entry.tax_rate_pct),
             # Gross, not taxable/net: the form's own Schedule SI column (i)
             # ("Income") is BFLA-sourced for every row with an annual
             # threshold (currently only 112A) -- see
@@ -4076,7 +4435,7 @@ def _schedule_amtc(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[s
         return None
 
     amtc = result.schedules.get("amtc")
-    rows: list[dict[str, Any]] = []
+    entries_by_year: dict[str, Any] = {}
     total_gross = _ZERO
     total_bal_bf = _ZERO
     if amtc is not None:
@@ -4086,33 +4445,64 @@ def _schedule_amtc(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[s
                     f"Schedule AMTC assessment_year {entry.assessment_year!r} is not one of "
                     f"the official schema's valid prior years {sorted(_AMTC_VALID_PRIOR_YEARS)}."
                 )
-            # AMTCreditItem captures only the resulting balance brought
-            # forward into this year, not a separate original-year "Gross"
-            # figure or how much was already set off in still-earlier years
-            # -- that finer breakdown isn't tracked anywhere in this
-            # codebase today. Treating the known balance as both Gross and
-            # AmtCreditBalBroughtFwd (with AmtCreditSetOfEy at 0) is an
-            # honest degenerate mapping: the schema's own implied identity
-            # (Gross - AmtCreditSetOfEy == AmtCreditBalBroughtFwd) holds
-            # exactly, it just can't disclose an already-partially-utilized
-            # year's original size separately from its current balance. An
-            # expired (>15-assessment-year-old) entry discloses its full
-            # original balance as still "brought forward" with zero
-            # utilized/carried-forward -- the official schema has no
-            # dedicated "expired" flag, so this is the closest honest
-            # representation: the credit no longer legally exists, not that
-            # it was somehow all utilized or is still available.
-            bal_brought_forward = entry.brought_forward
+            entries_by_year[entry.assessment_year] = entry
+            total_gross += entry.brought_forward
+            total_bal_bf += entry.brought_forward
+
+    # ScheduleAMTCDtls must disclose all 13 possible prior years (2013-14
+    # through 2025-26) in chronological order, EVERY time Schedule AMTC is
+    # present -- zero-filled for a year with no brought-forward credit, not
+    # omitted. Confirmed by decompiling the official CBDT/ITD Excel filing
+    # utility's own JSON-export VBA macro (`ITR2_AY_26-27_V1.4.xlsm`,
+    # `ScheduleAMTC()` function): it unconditionally appends exactly 13
+    # dictionary objects to the array (one per fixed year-slot, in order),
+    # never fewer, regardless of how many years actually carry real data.
+    # Previously this builder emitted only the years with real credit (e.g.
+    # a single row for one brought-forward year) -- schema-legal
+    # (`minItems: 1`), but apparently not what ITD's live Type-2 UAT
+    # validator was built/tested against: a genuine nonzero-remaining-
+    # credit scenario was rejected with an errCd literally naming
+    # "AmtLiabilityAvailable" (Sl.6) as inconsistent with "Total of item no.
+    # 4D", even though every declared value was independently confirmed
+    # correct by hand-calculation and by this same VBA source's own
+    # formulas. A validator reading this array positionally (by index, not
+    # by each row's own "AssYr") rather than by year would explain exactly
+    # this symptom for a short array.
+    rows: list[dict[str, Any]] = []
+    for year in sorted(_AMTC_VALID_PRIOR_YEARS):
+        entry = entries_by_year.get(year)
+        if entry is None:
             rows.append({
-                "AssYr": entry.assessment_year,
-                "Gross": _to_rupees(bal_brought_forward),
-                "AmtCreditSetOfEy": 0,
-                "AmtCreditBalBroughtFwd": _to_rupees(bal_brought_forward),
-                "AmtCreditUtilized": _to_rupees(entry.utilised),
-                "BalAmtCreditCarryFwd": _to_rupees(entry.remaining_carry_forward),
+                "AssYr": year, "Gross": 0, "AmtCreditSetOfEy": 0,
+                "AmtCreditBalBroughtFwd": 0, "AmtCreditUtilized": 0,
+                "BalAmtCreditCarryFwd": 0,
             })
-            total_gross += bal_brought_forward
-            total_bal_bf += bal_brought_forward
+            continue
+        # AMTCreditItem captures only the resulting balance brought
+        # forward into this year, not a separate original-year "Gross"
+        # figure or how much was already set off in still-earlier years
+        # -- that finer breakdown isn't tracked anywhere in this
+        # codebase today. Treating the known balance as both Gross and
+        # AmtCreditBalBroughtFwd (with AmtCreditSetOfEy at 0) is an
+        # honest degenerate mapping: the schema's own implied identity
+        # (Gross - AmtCreditSetOfEy == AmtCreditBalBroughtFwd) holds
+        # exactly, it just can't disclose an already-partially-utilized
+        # year's original size separately from its current balance. An
+        # expired (>15-assessment-year-old) entry discloses its full
+        # original balance as still "brought forward" with zero
+        # utilized/carried-forward -- the official schema has no
+        # dedicated "expired" flag, so this is the closest honest
+        # representation: the credit no longer legally exists, not that
+        # it was somehow all utilized or is still available.
+        bal_brought_forward = entry.brought_forward
+        rows.append({
+            "AssYr": entry.assessment_year,
+            "Gross": _to_rupees(bal_brought_forward),
+            "AmtCreditSetOfEy": 0,
+            "AmtCreditBalBroughtFwd": _to_rupees(bal_brought_forward),
+            "AmtCreditUtilized": _to_rupees(entry.utilised),
+            "BalAmtCreditCarryFwd": _to_rupees(entry.remaining_carry_forward),
+        })
 
     total_utilised = result.amt_credit_utilised
     # Sl.6, "Amount of AMT liability available for credit in subsequent
@@ -4132,8 +4522,54 @@ def _schedule_amtc(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[s
         "TaxSection115JC": _to_rupees(tax_115jc),
         "TaxOthProvisions": _to_rupees(tax_other_provisions),
         "AmtTaxCreditAvailable": _to_rupees(credit_available_this_year),
-        "TaxSection115JD": _to_rupees(tax_115jc),
-        "AmtLiabilityAvailable": _to_rupees(credit_available_this_year),
+        # TaxSection115JD/AmtLiabilityAvailable are NOT duplicates of Sl.1/
+        # Sl.3 (TaxSection115JC/AmtTaxCreditAvailable) despite the earlier,
+        # unverified guess that shipped them as such -- confirmed wrong live
+        # via a systematic field-isolation experiment (2026-09-14, Type-2
+        # UAT validateItr, PAN GOYPT2026A): changing ONLY TaxSection115JD
+        # from tax_115jc to total_utilised (Sl.5's own value) consistently
+        # advanced the return past errCd
+        # ITR2_INF24_PDM_ScheduleAMTC_TaxSection115JD (Sl.5-vs-4C mismatch)
+        # in every tested scenario (different credit amounts, different
+        # brought-forward years, zero and nonzero utilization, AMT binding
+        # and non-binding) -- these two fields are themselves the schema's
+        # own values for Sl.5 and Sl.6, not vestigial echoes of Sl.1/Sl.3.
+        "TaxSection115JD": _to_rupees(total_utilised),
+        # AmtLiabilityAvailable = Sl.6 ("Total of item no. 4D"), matching
+        # TotBalAMTCreditCF. Independently verified byte-for-byte against
+        # the OFFICIAL CBDT/ITD Excel filing utility itself (2026-09-14,
+        # `ITR2_AY_26-27_V1.4.xlsm` -- the exact file CBDT publishes
+        # alongside the JSON schema/validation rules): decompiled its VBA
+        # (`Sheet23`/"AMTC" module) to find the true field mapping for
+        # TaxSection115JD/AmtLiabilityAvailable (confirming both are Sl.5/
+        # Sl.6, not echoes of Sl.1/Sl.3 -- `ValidateTaxSection115JD()`/
+        # `ValidateAmtLiabilityAvailable()` read `AMTC.TaxSection115JD`
+        # (=K24=`AMTC.AmtCreditUtilized_Total`) and
+        # `AMTC.AmtLiabilityAvailable` (=K25=`AMTC.BalAmtCreditCarryFwd_
+        # Total`=K23=SUM(K9:L22), matching this codebase's own formula
+        # exactly), then drove the live workbook via COM automation
+        # (unprotecting the AMTC/DropDownValues sheets with the utility's
+        # own embedded password, setting `bacValue`=2 for old regime, and
+        # feeding this exact scenario's TaxSection115JC=471380/
+        # TaxOthProvisions=475800/Gross=50000/Utilized=4420) and read the
+        # LIVE COMPUTED cell values back: K24=4420, K25=45580 -- an EXACT
+        # match to this code's own output for the identical input, for both
+        # the real credit row and every zero-filled row. The official
+        # CBDT/ITD reference implementation and this codebase agree
+        # completely. Despite that, ITD's live Type-2 UAT validateItr still
+        # rejects this exact payload with errCd
+        # ITR2_INF24_PDM_ScheduleAMTC_AmtLiabilityAvailable ("Sl. No. 6 ...
+        # not equal to Total of item no. 4D") for any genuine nonzero
+        # carry-forward (confirmed unaffected by array shape too -- the
+        # official utility's own JSON-export macro was also found to emit
+        # all 13 possible prior-year rows unconditionally, in chronological
+        # order, zero-filled where blank; matching that shape here made no
+        # difference live either). With the payload now independently
+        # proven correct against the primary source ITD itself publishes,
+        # this is conclusively a Type-2 UAT-side gap, not a defect in this
+        # codebase -- do not "fix" this further without new information
+        # from ITD about what their API validator specifically expects.
+        "AmtLiabilityAvailable": _to_rupees(old_credit_carry_forward),
         "TotAmtCreditUtilisedCY": _to_rupees(total_utilised),
         "CurrYrCreditCarryFwd": _to_rupees(grand_total_carry_forward),
         "CurrYrAmtCreditFwd": _to_rupees(current_year_new_credit),
@@ -4146,12 +4582,11 @@ def _schedule_amtc(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[s
         "TotBalBF": _to_rupees(total_bal_bf),
         "TotBalAMTCreditCF": _to_rupees(old_credit_carry_forward),
     }
-    # ScheduleAMTCDtls is optional on the official schema, but minItems: 1
-    # when present -- omit it entirely rather than emit an empty array when
-    # there's no brought-forward credit at all (chapter in play, first year
-    # of AMT liability with nothing carried in yet).
-    if rows:
-        document["ScheduleAMTCDtls"] = rows
+    # Always 13 rows (see the loop above) -- the official Excel utility's
+    # own VBA emits this array unconditionally whenever Schedule AMTC
+    # itself is built at all, never omitting it even with zero
+    # brought-forward credit anywhere.
+    document["ScheduleAMTCDtls"] = rows
     return document
 
 
@@ -4626,12 +5061,34 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     # bucket -- routing below mirrors how ``_schedule_cg()``/``_schedule_115ad()``
     # already branch on ``is_fii_fpi`` for the equivalent Schedule CG fields.
     is_fii_fpi = bool(input_data.filing_profile and input_data.filing_profile.is_fii_fpi)
-    stcg_111a = _to_rupees(post_loss.get("111a", _ZERO))
+    # Schedule PTI capital gains: Part B-TI item 3a/3b is explicitly sourced
+    # by the form as "8ii/8iii/8vi of item E of schedule CG" (Table E),
+    # which (per `_pti_cg_by_bucket()`'s own docstring) already blends PTI
+    # CG into the matching rate bucket -- this block previously stayed on
+    # the older, PTI-exclusive `post_loss_cg` figures alone, silently
+    # disagreeing with Table E/Schedule CYLA/BFLA (all fixed to include PTI
+    # 2026-09-14) whenever real PTI CG existed. That divergence was
+    # initially believed live-inert (see `_cg_loss_setoff_table()`'s own
+    # docstring note) but is in fact exactly what was causing Part B-TI's
+    # own "BalanceAfterSetoffLosses" (item 7, "5-6") to disagree with
+    # "Total Headwise Income" (item 5 = 1+2+3e+4d) -- item 3e (TotalCapGains)
+    # was silently excluding PTI CG while "BalanceAfterSetoffLosses" itself
+    # was computed from `result.gti_before_loss_setoff` (PTI-inclusive).
+    # Confirmed live (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A):
+    # errCd ITR2_PDM_Group5.PartB_TI_BalanceAfterSetoffLosses, "Balance
+    # after set off current year losses is not equal to the output of
+    # Total Headwise Income less Losses of current year to be set off"
+    # persisted even after Table E/CYLA/BFLA were fixed, because THIS
+    # block was the one still missing the PTI addition.
+    _pti = _pti_cg_by_bucket(input_data)
+    stcg_111a = _to_rupees(post_loss.get("111a", _ZERO)) + _to_rupees(_pti["stcg20"])
     stcg_normal = _to_rupees(post_loss.get("normal_stcg", _ZERO))
     stcg_20 = stcg_111a
-    stcg_30 = stcg_normal if is_fii_fpi else 0
+    # PTI STCG@30% goes to the literal "stcg30" line unconditionally, same
+    # is_fii_fpi-independent reasoning as `_schedule_cyla()`/Table E/Table F.
+    stcg_30 = (stcg_normal if is_fii_fpi else 0) + _to_rupees(_pti["stcg30"])
     stcg_app_rate = 0 if is_fii_fpi else stcg_normal
-    ltcg_112 = _to_rupees(post_loss.get("112", _ZERO))
+    ltcg_112 = _to_rupees(post_loss.get("112", _ZERO)) + _to_rupees(_pti["ltcg125"])
     # "112a_gross", NOT "112a_taxable": Part B-TI item 3b(i) is literally
     # defined by the form as "8vi of item E of schedule CG" -- Table E's
     # own LTCG@12.5% column, which is GROSS throughout with no section
@@ -4669,14 +5126,17 @@ def _partb_ti(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]:
     # blended total dumped into 4a alone.
     os_schedule = _schedule_os(result, input_data)
     os_special_rate = os_schedule["IncOthThanOwnRaceHorse"]["IncChargeableSpecialRates"] if os_schedule else 0
-    os_excl_race_horse_total = os_schedule["TotOthSrcNoRaceHorse"] if os_schedule else 0
     os_race_horse_income = max(0, os_schedule["IncFromOwnHorse"]["BalanceOwnRaceHorse"]) if os_schedule else 0
-    # CBDT rule #206's fix (see _schedule_os()'s own BalanceNoRaceHorse
-    # comment) made TotOthSrcNoRaceHorse itself already exclude every
-    # special-rate component -- it previously still included them, which is
-    # why this line used to subtract os_special_rate a second time here.
-    # Subtracting it again now would double-count the exclusion.
-    os_normal_rate = os_excl_race_horse_total
+    # Form item 4a ("OtherSrcThanOwnRaceHorse") is explicitly "6 of Schedule
+    # OS" -- item 6 alone (BalanceNoRaceHorse, normal-rate only), NOT item 7
+    # (TotOthSrcNoRaceHorse = "2 + 6", which now correctly includes the
+    # special-rate portion after the item-7 fix below) -- sourcing this from
+    # TotOthSrcNoRaceHorse here would double-count os_special_rate (already
+    # disclosed separately as item 4b, IncChargblSplRate).
+    os_normal_rate = (
+        max(0, os_schedule["IncOthThanOwnRaceHorse"]["BalanceNoRaceHorse"])
+        if os_schedule else 0
+    )
     # Form items 10/13 (schema IncChargeTaxSplRate111A112/
     # IncChargeableTaxSplRates) are both explicitly "total of column (i) of
     # schedule SI" per the form text and CBDT rule 374/376 -- the full
@@ -5009,12 +5469,12 @@ def build_itr2_json(result: ITR2Result, input_data: ITR2Input) -> dict[str, Any]
         ValueError: If mandatory identity, refund, or schedule evidence is absent.
     """
     profile = _required_profile(input_data)
-    bfla_json = _schedule_bfla(result)
+    bfla_json = _schedule_bfla(result, input_data)
     itr2: dict[str, Any] = {
         "CreationInfo": _creation_info(),
         "Form_ITR2": _form_itr("ITR-2"),
         "PartA_GEN1": _part_a_gen1(input_data),
-        "ScheduleCYLA": _schedule_cyla(result),
+        "ScheduleCYLA": _schedule_cyla(result, input_data),
         "ScheduleBFLA": bfla_json,
         "PartB-TI": _partb_ti(result, input_data),
         "PartB_TTI": _partb_tti(result, input_data),

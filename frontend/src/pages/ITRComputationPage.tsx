@@ -19,6 +19,7 @@ import exemptIncomeIcon from '../../svgs/extempt income.svg';
 import taxComputationIcon from '../../svgs/tax computation.svg';
 import { BankAccountManager } from '../components/BankAccountManager';
 import { PersonalInfoTab } from '../components/PersonalInfoTab';
+import ITR3PersonalInfoPage from '../components/ITR3PersonalInfoPage';
 import { hasNonSimplifiedCapitalGains } from '../components/CapitalGainsEntryManager';
 import { BusinessProfessionEntryManager, type BusinessProfessionScheduleData } from '../components/BusinessProfessionEntryManager';
 import { DonationEntryManager } from '../components/DonationEntryManager';
@@ -2029,7 +2030,16 @@ export default function ITRComputationPage() {
         border: '1px solid #000',
         borderTop: 0
       }}>
-        {activeTab === 0 && editorModel && <PersonalInfoTab draft={editorModel.draft} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={(patch: any) => updateEditor((current) => ({
+        {activeTab === 0 && editorModel && (itrForm === 'ITR-3' ? <ITR3PersonalInfoPage draft={editorModel.draft} onChange={(patch) => updateEditor((current) => ({
+          ...current,
+          draft: {
+            ...current.draft,
+            ...(patch.regime ? { regime: patch.regime } : {}),
+            ...(patch.personal ? { personal: { ...current.draft.personal, ...patch.personal } } : {}),
+            ...(patch.filing ? { filing: { ...current.draft.filing, ...patch.filing } } : {}),
+            ...(patch.verification ? { verification: { ...current.draft.verification, ...patch.verification } } : {}),
+          },
+        }))} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} /> : <PersonalInfoTab draft={editorModel.draft} itrForm={itrForm as 'ITR-1' | 'ITR-2' | 'ITR-3' | 'ITR-4'} onChange={(patch: any) => updateEditor((current) => ({
           ...current,
           draft: {
             ...current.draft,
@@ -2039,7 +2049,7 @@ export default function ITRComputationPage() {
             ...(patch.verification ? { verification: { ...current.draft.verification, ...patch.verification } } : {}),
             ...(patch.taxReturnPreparer ? { taxReturnPreparer: { ...current.draft.taxReturnPreparer, ...patch.taxReturnPreparer } } : {}),
           },
-        }))} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} />}
+        }))} onBanksChange={managers.banks} onRegimeChange={handleRegimeChange} />)}
         {activeTab === 1 && <SalaryTab entries={editorModel?.draft.employers ?? []} onChange={(entries: any[]) => updateEditor((model) => updateEmployers(model, entries))} taxResult={backendTaxResult} ayParam={effectiveAssessmentYear} regime={regime} tdsEntries={tdsToManager(editorModel?.draft?.taxes?.tds ?? [])} />}
         {activeTab === 2 && <HousePropertyTab entries={editorModel?.draft.houseProperties ?? []} passThroughIncome={editorModel?.draft.housePropertyPassThroughIncome ?? 0} onChange={(entries: any[], passThroughIncome: number) => updateEditor((model) => updateHouseProperties(model, entries, passThroughIncome))} itrForm={itrForm} taxResult={backendTaxResult} />}
         {activeTab === 3 && editorModel && <CapitalGainsTab draft={editorModel.draft} taxResult={taxResult} itrForm={itrForm as ItrForm} onChange={(schedule) => updateEditor((model) => updateCapitalGainsSchedule(model, schedule))} />}

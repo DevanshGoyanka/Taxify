@@ -379,8 +379,17 @@ def _post_loss_cg_baskets(
     engines to populate the official ITR-2 Schedule CG/Part B-TI sub-baskets.
     """
     # Map CYLA/BFLA 6-sub-basket residuals into the 4 post-loss baskets
-    # used by the SI engine.
-    normal_stcg = cyla.stcg30_remaining  # 30% normal-rate STCG
+    # used by the SI engine. `normal_stcg` is the "ordinary slab-rate STCG"
+    # basket (land/building + generic other-assets, form items A1/A5) --
+    # sourced from `stcg30_remaining` for an FII/FPI (whose OWN section
+    # 115AD(1)(ii) securities gain genuinely IS a flat 30%) or from
+    # `stcg_app_remaining` for every other taxpayer (see the ## 5 CYLA
+    # comment in this file for the full citation of why ordinary
+    # land/building/other-assets STCG must NOT be disclosed under Table
+    # E's "STCG@30%" row) -- exactly one of the two is ever nonzero for a
+    # single return, so summing both is safe and keeps this basket's own
+    # total unchanged regardless of which CYLA sub-bucket it came from.
+    normal_stcg = cyla.stcg30_remaining + cyla.stcg_app_remaining
     section_111a = cyla.stcg20_remaining  # 20% 111A STCG
     # 112A gross and 112 other LTCG are both in the ltcg125 pool;
     # split 112A out for threshold application.
@@ -932,17 +941,43 @@ def compute(input_data: ITR2Input) -> ITR2Result:
 
     # ── 5. CYLA: Current Year Loss Set-off ───────────────────────────────────
     # Map CG baskets into 6 statutory sub-baskets for CYLA/BFLA/CG schedule.
-    # STCG: 111A (20%) goes to stcg20; other STCG (30% normal rate) to stcg30;
-    # applicable-rate is zero unless explicitly classified; DTAA-rate STCG
-    # (Phase 6i-5) now has its own dedicated bucket, no longer folded into
-    # stcg30 -- previously stcg_result.income_dtaa was added into
-    # stcg_30_signed here WHILE ALSO being read (as always-zero) into its
-    # own stcg_dtaa_signed below, a latent double-bucketing bug that stayed
-    # invisible only because income_dtaa was never populated with a real
-    # value until this phase.
+    # STCG: 111A (20%) goes to stcg20. `stcg_result.income_30per` is a
+    # BLENDED bucket (`_classify()`'s own `land_gain + stcg_other`: land/
+    # building STCG (form item A1) plus generic "other assets" STCG (A5,
+    # jewellery/unlisted shares/etc) -- BOTH are genuinely SLAB-RATE income
+    # for an ordinary taxpayer (section 50C-adjusted land/building has no
+    # special rate of its own; "other assets" STCG is plain slab-rate), NOT
+    # a flat 30%. The "stcg30" CYLA/BFLA/Table-E bucket is reserved
+    # EXCLUSIVELY for a genuine flat-30% rate -- confirmed against the
+    # official form directly (`Reference Docs by CBDT & ITD/Official ITR
+    # FORMS/ITR-2-2026-Eng.pdf`, Schedule CG item A9's own formula "A1e+
+    # A2e+A3a+A3b+A4e+A5e+A6+A7-A8a+A(A)", where A4 is explicitly "For
+    # NON-RESIDENT... by an FII as per section 115AD" -- i.e. Table E's
+    # "STCG@30%" row is populated from A4e (FII 115AD(1)(ii) securities)
+    # + A7b (PTI STCG@30%) + A(A) (buyback-loss), never A1/A5). Routing
+    # ordinary land/building/other-assets STCG into "stcg30" made it fail
+    # ITD's live cross-check outright -- confirmed live (2026-09-14, Type-2
+    # UAT validateItr, PAN GOYPT2026A, with NO FII/PTI/buyback involvement
+    # at all, just a plain jewellery STCG transaction): errCd
+    # ITR2_INF26_InStcg30Per_CurrYearIncome, "STCG gain @ 30% should be
+    # equal to the sum of Sl. No. (A4e + A7b + A(A)_30%)". An ordinary
+    # (non-FII/FPI) taxpayer's land/building+other-assets STCG must
+    # instead go to "stcg_app" (InStcgAppRate, "STCG taxable at applicable
+    # rates" -- i.e. the taxpayer's own slab rate). An FII/FPI's OWN
+    # section 115AD(1)(ii) securities gain genuinely IS a flat 30% (see
+    # the `is_fii_fpi` dispatch to `compute_115ad_stcg_other()` later in
+    # this function, which reads `post_loss_cg["normal_stcg"]` -- i.e. THIS
+    # exact "stcg30" bucket) -- unchanged for that case, since a real
+    # FII/FPI assessee never has land/building/generic-jewellery STCG
+    # blended into the same basket in practice.
     stcg_111a_signed = stcg_result.income_111a
-    stcg_30_signed = stcg_result.income_30per + stcg_result.income_app_rate
-    stcg_app_signed = _ZERO  # applicable-rate STCG (e.g. 15% pre-Jul 2024 111A)
+    stcg_other_and_land = stcg_result.income_30per + stcg_result.income_app_rate
+    if is_fii_fpi:
+        stcg_30_signed = stcg_other_and_land
+        stcg_app_signed = _ZERO
+    else:
+        stcg_30_signed = _ZERO
+        stcg_app_signed = stcg_other_and_land
     stcg_dtaa_signed = stcg_result.income_dtaa  # DTAA-rate STCG
     ltcg_125_signed = ltcg_result.income_125per_other  # section 112 at 12.5%
     ltcg_112a_gross = ltcg_result.income_112a  # 112A before threshold
@@ -1654,7 +1689,17 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     r.surcharge = surcharge + surcharge_115bbe
 
     # ── 17. Cess ─────────────────────────────────────────────────────────────
-    cess = compute_cess(r.tax_after_rebate + surcharge)
+    # Uses `r.surcharge` (the COMPLETE figure, including the 115BBE flat-25%
+    # addition above), not the local `surcharge` variable (the ordinary
+    # income-level-rate portion alone, excluding 115BBE) -- cess applies to
+    # the taxpayer's ENTIRE surcharge, not just the ordinary-rate slice.
+    # Confirmed live (2026-09-14, Type-2 UAT validateItr, PAN GOYPT2026A):
+    # errCd ITR2_PDM_Group5.ComputationOfTaxLiability_GrossTaxLiability,
+    # "Gross tax liability is not equal to the sum of (Tax Payable,
+    # Surcharge & Education Cess)" -- using the local `surcharge` here made
+    # both EducationCess and GrossTaxLiability silently omit the 115BBE
+    # surcharge portion.
+    cess = compute_cess(r.tax_after_rebate + r.surcharge)
     r.health_education_cess = cess
     # Item 7, "Gross tax liability" -- pure normal-provisions tax, NEVER
     # overwritten by AMT (a prior version of this code overwrote this with
@@ -1662,7 +1707,7 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     # 8; the bottom-line final tax was still correct via final_tax, but item
     # 7's own disclosure -- and Schedule AMTC's own Sl.2, which must read
     # this exact figure every year the 115JC comparison is made -- was not).
-    r.gross_tax_liability = r.tax_after_rebate + surcharge + cess
+    r.gross_tax_liability = r.tax_after_rebate + r.surcharge + cess
 
     # ── Part B-TTI items 8a/8b: eligible-startup ESOP deferral tax split ──────
     # Official schema descriptions: "TaxInc17" (8a) is "Tax on income without
