@@ -26,8 +26,8 @@ The PDF controls user-facing order and arithmetic context. The JSON schema contr
 
 ### Phase 1 — Personal Information (A1–A18) — ✅ COMPLETED
 
-**Completed:** 2026-09-14  
-**Implementation:** `frontend/src/components/ITR3PersonalInfoPage.tsx`, wired through the ITR-3-only branch in `frontend/src/pages/ITRComputationPage.tsx`.  
+**Completed:** 2026-09-14
+**Implementation:** `frontend/src/components/ITR3PersonalInfoPage.tsx`, wired through the ITR-3-only branch in `frontend/src/pages/ITRComputationPage.tsx`.
 **Commit:** `16ee72a` (`Implement ITR-3 personal information foundation`)
 
 Schema blocks: `PartA_GEN1.PersonalInfo`, `PartA_GEN1.FilingStatus` foundations, `Verification` foundations.
