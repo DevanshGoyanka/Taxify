@@ -6078,3 +6078,55 @@ def test_schedule_os_tot_deductions_includes_eligible_interest_expense() -> None
     assert block["Deductions"]["IntExp57"] == 20000
     assert block["Deductions"]["UsrIntExp57"] == 15000
     assert block["Deductions"]["TotDeductions"] == 2000 + 1000 + 15000
+
+
+def test_schedule_cg_buyback_loss_nets_against_matching_stcg_bucket() -> None:
+    """Schedule CG's "CapitalLossBuyBackShares" (Section 46A capital loss
+    on buyback of shares) was entirely unmapped -- the frontend already
+    captures rate-bucketed loss rows (STL20/STL30/STLAR), but nothing fed
+    them anywhere. This is a genuine loss, not disclosure-only: it must
+    reduce the SAME rate bucket's taxed amount, not merely appear in the
+    JSON. A 111A (20%) gain of ₹6,00,000 with a ₹1,00,000 buyback loss in
+    the same bucket must tax only ₹5,00,000 at 20%."""
+    input_data = _input(
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_EQUITY_111A,
+                date_of_acquisition=date(2025, 1, 1), date_of_transfer=date(2025, 6, 1),
+                full_consideration=Decimal("1000000"), cost_of_acquisition=Decimal("400000"),
+            ),
+        ],
+        cg_buyback_loss_stcg20=Decimal("-100000"),
+    )
+    result = compute(input_data)
+    document = build_itr2_json(result, input_data)
+    _assert_schema_valid(document)
+    si = result.schedules["si"]
+    assert si.total_special_rate_income == Decimal("500000")
+
+    stcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    assert stcg["CapitalLossBuyBackShares"] == {
+        "CapitalLossBuyBackSharesDtls": [{"Rate": "STL20", "Amount": -100000}],
+        "TotalCapitalLossBuyBackShares": -100000,
+    }
+
+
+def test_schedule_cg_buyback_loss_omitted_entirely_when_zero() -> None:
+    """No empty placeholder object -- confirmed the field is not in either
+    form's own JSON schema `required` list, matching this codebase's
+    established convention."""
+    input_data = _input(
+        cg_transactions=[
+            CGTransaction(
+                asset_type=CGAssetType.LISTED_EQUITY_111A,
+                date_of_acquisition=date(2025, 1, 1), date_of_transfer=date(2025, 6, 1),
+                full_consideration=Decimal("1000000"), cost_of_acquisition=Decimal("400000"),
+            ),
+        ],
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    stcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["ShortTermCapGainFor23"]
+    ltcg = document["ITR"]["ITR2"]["ScheduleCGFor23"]["LongTermCapGain23"]
+    assert "CapitalLossBuyBackShares" not in stcg
+    assert "CapitalLossBuyBackShares" not in ltcg

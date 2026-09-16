@@ -64,6 +64,40 @@ def test_itr3_mapper_preserves_identity_and_business_amount() -> None:
     assert breakdown["business_income"] == Decimal("60000")
 
 
+def test_itr3_nri_112_115_securities_reach_cg_transactions_and_json() -> None:
+    """Schedule CG item B6 (``ltNri112115``) had no mapper for ITR-3 at
+    all, and the corresponding ``NRIOnSec112and115`` JSON block was
+    entirely absent from the builder (unlike its STCG sibling
+    ``NRISecur115AD``, which correctly stays empty for ITR-3 since section
+    115AD is FII/FPI-specific and ITR-3 filers -- individuals/HUF -- can
+    never be an FII/FPI entity). This is a genuine gap in ITR-3's own
+    official schema coverage, not a by-design omission: confirmed the
+    field exists identically in ITR-3's own JSON schema by direct
+    introspection."""
+    draft = _draft_with_business()
+    draft.capitalGainsSchedule.ltNri112115 = [{
+        "sectionCode": "5AC1c", "fullConsideration": Decimal("800000"),
+        "acquisitionCost": Decimal("200000"), "transferExpenses": Decimal("3000"),
+        "deduction54F": Decimal("50000"),
+    }]
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    matching = [tx for tx in typed_input.cg_transactions if tx.is_nri_unquoted_shares_disposal]
+    assert len(matching) == 1
+    assert matching[0].section_code == "115AC"
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    nri_dtls = cg["LongTermCapGain23"]["NRIOnSec112and115"]["NRIOnSec112and115Dtls"]
+    assert len(nri_dtls) == 1
+    assert nri_dtls[0]["SectionCode"] == "5AC1c"
+    assert nri_dtls[0]["FullConsideration"] == 800000
+    assert nri_dtls[0]["DeductSec48"]["AquisitCost"] == 200000
+
+
 def test_itr3_mapper_uses_schedule_bp_workspace_values() -> None:
     """Persisted Schedule BP values override the presumptive fallback fields."""
     draft = _draft_with_business()
@@ -112,6 +146,49 @@ def test_itr3_mapper_preserves_part_a_pl_workspace_values() -> None:
     assert typed_input.profit_and_loss.gross_profit == Decimal("240000")
     assert typed_input.profit_and_loss.no_books_net_profit == Decimal("100000")
     assert typed_input.profit_and_loss.profit_before_tax == Decimal("162000")
+    assert typed_input.profit_and_loss.other_income_breakdown.dividends == Decimal("0")
+
+
+def test_itr3_mapper_and_builder_preserve_part_a_pl_credit_debit_breakdown() -> None:
+    """Mapped PARTA_PL credits and interest debits reach official integer paths."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {"PARTA_PL": {
+        "CreditsToPL": {"OthIncome": {"RentInc": 1100, "Dividends": 2200, "InterestInc": 3300, "MiscOthIncome": 4400, "TotOthIncome": 11000}, "TotCreditsToPL": 15000},
+        "DebitsToPL": {"InterestExpdrtDtls": {"InterestExpdr": 7700, "NonResOtherCompany": 1200, "Others": 6500}},
+    }}
+    typed_input, _ = draft_to_itr3_input(draft)
+    assert typed_input.profit_and_loss is not None
+    assert typed_input.profit_and_loss.other_income_breakdown.rent_income == Decimal("1100")
+    assert typed_input.profit_and_loss.interest_expense.total == Decimal("7700")
+    payload = build_itr3_json(compute_itr3(typed_input), typed_input)["ITR"]["ITR3"]["PARTA_PL"]
+    assert payload["CreditsToPL"]["OthIncome"]["Dividends"] == 2200
+    assert payload["CreditsToPL"]["OthIncome"]["MiscOthIncome"] == 4400
+    assert payload["DebitsToPL"]["InterestExpdrtDtls"] == {"InterestExpdr": 7700, "NonResOtherCompany": 1200, "Others": 6500}
+
+
+def test_itr3_builder_preserves_parta_pl_pbidta_and_depreciation() -> None:
+    """PARTA_PL carries form rows 50 and 52 instead of hard-coded zeroes."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {
+        "PARTA_PL": {
+            "DebitsToPL": {
+                "PBIDTA": 161000,
+                "DepreciationAmort": 9000,
+                "PBT": 152000,
+            }
+        }
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    payload = build_itr3_json(compute_itr3(typed_input), typed_input)["ITR"]["ITR3"]["PARTA_PL"]
+    assert payload["DebitsToPL"]["PBIDTA"] == 161000
+    assert payload["DebitsToPL"]["DepreciationAmort"] == 9000
+    assert payload["DebitsToPL"]["PBT"] == 152000
 
 
 def test_itr3_builder_uses_part_a_pl_workspace_data() -> None:
@@ -130,6 +207,7 @@ def test_itr3_builder_uses_part_a_pl_workspace_data() -> None:
     assert pl["TurnverFrmSpecActivity"] == 300000
 
 
+def test_itr3_builder_maps_parta_gen2_workspace() -> None:
     """Part A-GEN2 JSON carries mapped audit and nature-of-business data."""
     from app.engine.calculators.itr3 import compute as compute_itr3
     from app.engine.itd.itr3 import build_itr3_json
@@ -148,7 +226,40 @@ def test_itr3_builder_uses_part_a_pl_workspace_data() -> None:
     assert gen2["NatOfBus"]["NatureOfBusiness"] == [{"Code": "14001", "Description": "Software"}]
 
 
-def test_itr3_mapper_prefers_workspace_part_a_gen2_over_legacy_fields() -> None:
+def test_itr3_mapper_preserves_manufacturing_and_trading_accounts() -> None:
+    """Official account schedules remain typed and lossless at field level."""
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {
+        "ManufacturingAccount": {
+            "OpeningInventory": {"OpngStckRawMat": 10000, "Purchases": 50000, "TotalDebtsManfctrngAcc": 70000},
+            "ClosingStock": {"ClsngStckRawMaterial": 5000, "ClsngStckTotal": 5000},
+            "CostOfGoodsPrdcd": 65000,
+        },
+        "TradingAccount": {"OperatingRevenueTotal": 300000, "SalesGrossReceiptsTotal": 300000, "TotRevenueFrmOperations": 300000, "TardingAccTotCred": 305000, "DirectExpenses": 150000, "GrossProfitFrmBusProf": 155000},
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    assert typed_input.business_accounts is not None
+    assert typed_input.business_accounts.manufacturing_account is not None
+    assert typed_input.business_accounts.manufacturing_account.cost_of_goods_produced == Decimal("65000")
+    assert typed_input.business_accounts.trading_account is not None
+    assert typed_input.business_accounts.trading_account.values["GrossProfitFrmBusProf"] == Decimal("155000")
+
+
+def test_itr3_builder_emits_manufacturing_and_trading_schedules() -> None:
+    """The builder emits exact official schedule names and nesting."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {"ManufacturingAccount": {"OpeningInventory": {"OpngStckRawMat": 10000}, "ClosingStock": {"ClsngStckTotal": 5000}, "CostOfGoodsPrdcd": 65000}, "TradingAccount": {"OperatingRevenueTotal": 300000, "SalesGrossReceiptsTotal": 300000, "TotRevenueFrmOperations": 300000, "TardingAccTotCred": 305000, "DirectExpenses": 150000}}
+    typed_input, _ = draft_to_itr3_input(draft)
+    payload = build_itr3_json(compute_itr3(typed_input), typed_input)["ITR"]["ITR3"]
+    assert payload["ManufacturingAccount"]["OpeningInventory"]["OpngStckRawMat"] == 10000
+    assert payload["ManufacturingAccount"]["CostOfGoodsPrdcd"] == 65000
+    assert payload["TradingAccount"]["OperatingRevenueTotal"] == 300000
+    assert payload["TradingAccount"]["DirectExpenses"] == 150000
+
+
     """Official workspace schedules are authoritative over duplicate legacy fields."""
     draft = _draft_with_business()
     draft.itr3AuditInfo.accountAudit = "N"

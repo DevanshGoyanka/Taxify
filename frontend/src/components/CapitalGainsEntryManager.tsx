@@ -11,7 +11,7 @@ const cardStyle: React.CSSProperties = { marginBottom: 20, padding: 16, backgrou
 type JsonRow = Record<string, unknown>;
 type SectionKey = keyof CapitalGainsScheduleData;
 type FieldKind = 'text' | 'money' | 'signed' | 'decimal' | 'date' | 'select' | 'boolean' | 'readout';
-interface FieldSpec { key: string; label: string; kind?: FieldKind; required?: boolean; options?: Array<[string, string]>; maxLength?: number; pattern?: string; }
+interface FieldSpec { key: string; label: string; kind?: FieldKind; required?: boolean; options?: Array<[string, string]>; maxLength?: number; pattern?: string; help?: string; }
 interface NestedSpec { key: string; title: string; fields: FieldSpec[]; maxRows?: number; }
 
 export interface CapitalGainTransaction extends JsonRow { id?: string; transactionId?: string; recordKind?: 'EVIDENCE' | 'TRANSACTION'; }
@@ -36,11 +36,15 @@ export interface CapitalGainsScheduleData {
   simplified112A: JsonRow;
   stImmovable: JsonRow[];
   stEquity: JsonRow[];
+  /** Form Schedule CG item A4 -- non-resident (not FII) sale of shares/debentures of an Indian company. */
+  stNonResShares: JsonRow[];
   stNriUnlisted: JsonRow[];
   stOtherAssets: JsonRow[];
   stSlumpSale: JsonRow[];
   ltImmovable: JsonRow[];
   ltProviso112: JsonRow[];
+  /** Form Schedule CG item B5 -- non-resident sale of unlisted shares or listed debentures of an Indian company, no indexation. */
+  ltNriUnlisted: JsonRow[];
   ltNri112115: JsonRow[];
   ltForeignAssets: JsonRow[];
   ltOtherAssets: JsonRow[];
@@ -75,8 +79,8 @@ interface Props {
 
 const emptyData = (): CapitalGainsScheduleData => ({
   simplified112A: { totalSaleConsideration: 0, totalCostAcquisition: 0 },
-  stImmovable: [], stEquity: [], stNriUnlisted: [], stOtherAssets: [], stSlumpSale: [],
-  ltImmovable: [], ltProviso112: [], ltNri112115: [], ltForeignAssets: [], ltOtherAssets: [], ltSlumpSale: [],
+  stImmovable: [], stEquity: [], stNonResShares: [], stNriUnlisted: [], stOtherAssets: [], stSlumpSale: [],
+  ltImmovable: [], ltProviso112: [], ltNriUnlisted: [], ltNri112115: [], ltForeignAssets: [], ltOtherAssets: [], ltSlumpSale: [],
   schedule112A: [], schedule115AD: [], vda: [], stUnutilized: [], ltUnutilized: [], stDtaa: [], ltDtaa: [], buyBackLosses: [], deductionClaims: [],
   quarterly: {}, stSection48: { nriSttPaid: 0, nriSttNotPaid: 0 }, ltNriProviso48: { ltcgWithoutBenefit: 0, deduction54F: 0 }, ltNri112A: {}, stUnutilizedFlag: 'N', ltUnutilizedFlag: 'N', lossSetOff: {}, aggregates: { stPassThrough: 0, stPassThrough20: 0, stPassThrough30: 0, stPassThroughApplicable: 0, ltPassThrough: 0, ltPassThrough112A: 0, ltPassThrough125: 0 },
 });
@@ -137,7 +141,8 @@ const SCRIP_FIELDS: FieldSpec[] = [
 const VDA_FIELDS: FieldSpec[] = [
   { key: 'dateOfAcquisition', label: 'Date of acquisition *', kind: 'date', required: true }, { key: 'dateOfTransfer', label: 'Date of transfer *', kind: 'date', required: true },
   { key: 'head', label: 'Head under which taxed *', kind: 'select', required: true, options: [['CG','Capital gains'],['BI','Business income']] },
-  { key: 'acquisitionCost', label: 'Acquisition cost *', kind: 'money', required: true }, { key: 'consideration', label: 'Consideration received *', kind: 'money', required: true },
+  { key: 'acquisitionCost', label: 'Acquisition cost *', kind: 'money', required: true, help: 'If acquired as a gift: enter the amount on which tax was paid u/s 56(2)(x), if any; otherwise the cost to the previous owner. Otherwise, actual cost of acquisition.' },
+  { key: 'consideration', label: 'Consideration received *', kind: 'money', required: true },
   { key: 'incomeFromVda', label: 'Income from VDA *', kind: 'readout', required: true },
 ];
 const DTAA_FIELDS: FieldSpec[] = [
@@ -182,7 +187,7 @@ const QUARTERS: FieldSpec[] = [
 
 export function hasNonSimplifiedCapitalGains(schedule: Partial<CapitalGainsScheduleData> | CanonicalCapitalGainsSchedule | undefined): boolean {
   if (!schedule) return false;
-  const arrays: Array<keyof CapitalGainsScheduleData> = ['stImmovable','stEquity','stNriUnlisted','stOtherAssets','stSlumpSale','ltImmovable','ltProviso112','ltNri112115','ltForeignAssets','ltOtherAssets','ltSlumpSale','schedule112A','schedule115AD','vda','stUnutilized','ltUnutilized','stDtaa','ltDtaa','buyBackLosses','deductionClaims'];
+  const arrays: Array<keyof CapitalGainsScheduleData> = ['stImmovable','stEquity','stNonResShares','stNriUnlisted','stOtherAssets','stSlumpSale','ltImmovable','ltProviso112','ltNriUnlisted','ltNri112115','ltForeignAssets','ltOtherAssets','ltSlumpSale','schedule112A','schedule115AD','vda','stUnutilized','ltUnutilized','stDtaa','ltDtaa','buyBackLosses','deductionClaims'];
   for (const key of arrays) { const rows = schedule[key]; if (Array.isArray(rows) && rows.length > 0) return true; }
   const sums: Array<keyof CapitalGainsScheduleData> = ['stSection48','ltNriProviso48','ltNri112A','aggregates','lossSetOff','quarterly'];
   for (const key of sums) { const obj = schedule[key]; if (obj && typeof obj === 'object' && !Array.isArray(obj) && Object.keys(obj as object).length > 0) return true; }
@@ -271,16 +276,18 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
   const countRows = (key: SectionKey): number => rows(key).length;
   const overviewCategories = [
     { key: 'stImmovable', label: 'A1. STCG land/building', count: countRows('stImmovable'), sale: sumRows('stImmovable','fullConsideration'), cost: sumRows('stImmovable','acquisitionCost') },
-    { key: 'stEquity', label: 'A2. STCG equity/STT', count: countRows('stEquity'), sale: sumRows('stEquity','fullConsideration'), cost: sumRows('stEquity','acquisitionCost') },
-    { key: 'stNriUnlisted', label: 'A3. STCG NRI unlisted', count: countRows('stNriUnlisted'), sale: sumRows('stNriUnlisted','unquotedConsideration'), cost: sumRows('stNriUnlisted','acquisitionCost') },
-    { key: 'stOtherAssets', label: 'A4. STCG other assets', count: countRows('stOtherAssets'), sale: sumRows('stOtherAssets','fullConsideration'), cost: sumRows('stOtherAssets','acquisitionCost') },
-    { key: 'stSlumpSale', label: 'A5. STCG slump sale (ITR-3)', count: countRows('stSlumpSale'), sale: 0, cost: 0 },
+    { key: 'stSlumpSale', label: 'A2. STCG slump sale', count: countRows('stSlumpSale'), sale: 0, cost: 0 },
+    { key: 'stEquity', label: 'A3. STCG equity/STT (111A)', count: countRows('stEquity'), sale: sumRows('stEquity','fullConsideration'), cost: sumRows('stEquity','acquisitionCost') },
+    { key: 'stNonResShares', label: 'A4. STCG non-resident shares/debentures', count: countRows('stNonResShares'), sale: sumRows('stNonResShares','fullConsideration'), cost: 0 },
+    { key: 'stNriUnlisted', label: 'A5. STCG NRI/FII securities (115AD)', count: countRows('stNriUnlisted'), sale: sumRows('stNriUnlisted','unquotedConsideration'), cost: sumRows('stNriUnlisted','acquisitionCost') },
+    { key: 'stOtherAssets', label: 'A6. STCG other assets', count: countRows('stOtherAssets'), sale: sumRows('stOtherAssets','fullConsideration'), cost: sumRows('stOtherAssets','acquisitionCost') },
     { key: 'ltImmovable', label: 'B1. LTCG land/building', count: countRows('ltImmovable'), sale: sumRows('ltImmovable','fullConsideration'), cost: sumRows('ltImmovable','acquisitionCost') },
-    { key: 'ltProviso112', label: 'B2. LTCG proviso 112', count: countRows('ltProviso112'), sale: sumRows('ltProviso112','fullConsideration'), cost: sumRows('ltProviso112','acquisitionCost') },
-    { key: 'ltNri112115', label: 'B3. LTCG NRI 112/115', count: countRows('ltNri112115'), sale: sumRows('ltNri112115','fullConsideration'), cost: sumRows('ltNri112115','acquisitionCost') },
-    { key: 'ltForeignAssets', label: 'B4. LTCG NRI foreign assets', count: countRows('ltForeignAssets'), sale: sumRows('ltForeignAssets','saleValue'), cost: 0 },
-    { key: 'ltOtherAssets', label: 'B5. LTCG other assets', count: countRows('ltOtherAssets'), sale: sumRows('ltOtherAssets','fullConsideration'), cost: sumRows('ltOtherAssets','acquisitionCost') },
-    { key: 'ltSlumpSale', label: 'B6. LTCG slump sale (ITR-3)', count: countRows('ltSlumpSale'), sale: 0, cost: 0 },
+    { key: 'ltSlumpSale', label: 'B2. LTCG slump sale', count: countRows('ltSlumpSale'), sale: 0, cost: 0 },
+    { key: 'ltProviso112', label: 'B3. LTCG listed securities (112/115ACA)', count: countRows('ltProviso112'), sale: sumRows('ltProviso112','fullConsideration'), cost: sumRows('ltProviso112','acquisitionCost') },
+    { key: 'ltNriUnlisted', label: 'B5. LTCG NRI unlisted shares/debentures', count: countRows('ltNriUnlisted'), sale: sumRows('ltNriUnlisted','fullConsideration'), cost: 0 },
+    { key: 'ltNri112115', label: 'B6. LTCG NRI unlisted securities (112/115AC/115AD)', count: countRows('ltNri112115'), sale: sumRows('ltNri112115','fullConsideration'), cost: sumRows('ltNri112115','acquisitionCost') },
+    { key: 'ltForeignAssets', label: 'B8. LTCG NRI foreign exchange asset (115F)', count: countRows('ltForeignAssets'), sale: sumRows('ltForeignAssets','saleValue'), cost: 0 },
+    { key: 'ltOtherAssets', label: 'B9. LTCG other assets', count: countRows('ltOtherAssets'), sale: sumRows('ltOtherAssets','fullConsideration'), cost: sumRows('ltOtherAssets','acquisitionCost') },
     { key: 'schedule112A', label: 'C. Schedule 112A scrips', count: countRows('schedule112A'), sale: sumRows('schedule112A','totalSaleValue'), cost: sumRows('schedule112A','costWithoutIndexation') },
     { key: 'schedule115AD', label: 'D. Schedule 115AD scrips', count: countRows('schedule115AD'), sale: sumRows('schedule115AD','totalSaleValue'), cost: sumRows('schedule115AD','costWithoutIndexation') },
     { key: 'vda', label: 'E. Schedule VDA', count: countRows('vda'), sale: sumRows('vda','consideration'), cost: sumRows('vda','acquisitionCost') },
@@ -326,11 +333,12 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
     <SectionTitle title="A. Short-term capital gains" />
     <ApplicabilityBadge form={normalizedForm} permitted={!simple} />
     <RowSection title="A1. Land or building" rows={data.stImmovable} fields={ST_IMMOVABLE} disabled={simple} nested={[{ key: 'transferees', title: 'Transferee / buyer details', fields: TRANSFEREE_FIELDS }]} onChange={(rows) => setRows('stImmovable', rows)} />
-    <RowSection title="A2. Equity shares / equity-oriented funds with STT" rows={data.stEquity} disabled={simple} fields={[{ key: 'sectionCode', label: 'Section code *', kind: 'select', required: true, options: [['1A','111A'],['5AD1biip','115AD(1)(b)(ii) proviso']] }, ...COMMON_ASSET]} onChange={(rows) => setRows('stEquity', rows)} maxRows={2} />
+    {itr3 && <RowSection title="A2. Slump sale" rows={data.stSlumpSale} fields={[{ key: 'fmv11uae2', label: 'FMV under Rule 11UAE(2) *', kind: 'money', required: true }, { key: 'fmv11uae3', label: 'FMV under Rule 11UAE(3) *', kind: 'money', required: true }, { key: 'netWorth', label: 'Net worth of division *', kind: 'signed', required: true }]} onChange={(rows) => setRows('stSlumpSale', rows)} />}
+    <RowSection title="A3. Equity shares / equity-oriented funds with STT (111A / 115AD(1)(ii) proviso)" rows={data.stEquity} disabled={simple} fields={[{ key: 'sectionCode', label: 'Section code *', kind: 'select', required: true, options: [['1A','111A'],['5AD1biip','115AD(1)(b)(ii) proviso']] }, ...COMMON_ASSET]} onChange={(rows) => setRows('stEquity', rows)} maxRows={2} />
     <AggregateCard fields={[{ key: 'nriSttPaid', label: 'NRI transactions — STT paid *', kind: 'signed', required: true }, { key: 'nriSttNotPaid', label: 'NRI transactions — STT not paid *', kind: 'signed', required: true }]} row={data.stSection48} disabled={simple} patch={(patch) => patchObject('stSection48', patch)} />
-    <RowSection title="A3. NRI unlisted shares / securities u/s 115AD" rows={data.stNriUnlisted} fields={[{ key: 'unquotedConsideration', label: 'Consideration for unquoted shares', kind: 'money' }, { key: 'fairMarketValue', label: 'Fair market value u/s 50CA', kind: 'money' }, ...COMMON_ASSET]} disabled={simple} onChange={(rows) => setRows('stNriUnlisted', rows)} />
-    <RowSection title="A4. Other short-term assets" disabled={simple} rows={data.stOtherAssets} fields={[...COMMON_ASSET, ...(itr3 ? [{ key: 'deemedGain', label: 'Deemed STCG', kind: 'money' } as FieldSpec, { key: 'exemptionSection', label: 'Exemption', kind: 'select', options: [['54G','54G'],['54GA','54GA']] } as FieldSpec, { key: 'exemptionAmount', label: 'Exemption amount', kind: 'money' } as FieldSpec] : [])]} onChange={(rows) => setRows('stOtherAssets', rows)} />
-    {itr3 && <RowSection title="A5. Short-term slump sale" rows={data.stSlumpSale} fields={[{ key: 'fmv11uae2', label: 'FMV under Rule 11UAE(2) *', kind: 'money', required: true }, { key: 'fmv11uae3', label: 'FMV under Rule 11UAE(3) *', kind: 'money', required: true }, { key: 'netWorth', label: 'Net worth of division *', kind: 'signed', required: true }]} onChange={(rows) => setRows('stSlumpSale', rows)} />}
+    {itr3 && <RowSection title="A4. Non-resident (not FII) — sale of shares/debentures of an Indian company" rows={data.stNonResShares} fields={[{ key: 'section', label: 'Category *', kind: 'select', required: true, options: [['111A','Covered u/s 111A'],['OTHER','Other shares/debentures']] }, ...COMMON_ASSET]} onChange={(rows) => setRows('stNonResShares', rows)} />}
+    <RowSection title="A5. NRI/FII securities u/s 115AD (other than A3)" rows={data.stNriUnlisted} fields={[{ key: 'unquotedConsideration', label: 'Consideration for unquoted shares', kind: 'money' }, { key: 'fairMarketValue', label: 'Fair market value u/s 50CA', kind: 'money' }, ...COMMON_ASSET]} disabled={simple} onChange={(rows) => setRows('stNriUnlisted', rows)} />
+    <RowSection title="A6. Other short-term assets" disabled={simple} rows={data.stOtherAssets} fields={[...COMMON_ASSET, ...(itr3 ? [{ key: 'exemptionSection', label: 'Exemption', kind: 'select', options: [['54G','54G'],['54GA','54GA']] } as FieldSpec, { key: 'exemptionAmount', label: 'Exemption amount', kind: 'money', help: 'Deemed STCG on depreciable assets (item 6e) is sourced automatically from Schedule DCG — enter depreciable-asset block sales there, not here.' } as FieldSpec] : [])]} onChange={(rows) => setRows('stOtherAssets', rows)} />
     <AggregateCard fields={[{ key: 'stPassThrough', label: 'Pass-through STCG *', kind: 'signed' }, { key: 'stPassThrough20', label: 'Pass-through STCG at 20%', kind: 'signed' }, { key: 'stPassThrough30', label: 'Pass-through STCG at 30%', kind: 'signed' }, { key: 'stPassThroughApplicable', label: 'Pass-through STCG at applicable rate', kind: 'signed' }]} row={data.aggregates} patch={(patch) => patchObject('aggregates', patch)} />
     <FlagField label="Unutilized STCG deposit exists? *" value={data.stUnutilizedFlag} disabled={simple} onChange={(value) => patchFlag('stUnutilizedFlag', value)} />
     <RowSection title="Prior-year unutilized STCG deposits" disabled={simple} rows={data.stUnutilized} fields={UNUTILIZED_FIELDS} onChange={(rows) => setRows('stUnutilized', rows)} />
@@ -340,12 +348,13 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
     <SectionTitle title="B. Long-term capital gains" />
     <ApplicabilityBadge form={normalizedForm} permitted={!simple} />
     <RowSection title="B1. Land or building" rows={data.ltImmovable} disabled={simple} fields={LT_IMMOVABLE} nested={[{ key: 'transferees', title: 'Transferee / buyer details', fields: TRANSFEREE_FIELDS }, { key: 'improvements', title: 'Indexed cost of improvements', fields: IMPROVEMENT_FIELDS }, { key: 'exemptions', title: 'Exemptions under sections 54/54B/54F/54EC', fields: EXEMPTION_FIELDS, maxRows: 6 }]} onChange={(rows) => setRows('ltImmovable', rows)} />
-    <RowSection title="B2. Securities where proviso to section 112 applies" disabled={simple} rows={data.ltProviso112} fields={[{ key: 'sectionCode', label: 'Section code *', kind: 'select', required: true, options: [['22','Section 112 proviso'],['5ACA1b','Section 115ACA(1)(b)']] }, ...COMMON_ASSET, { key: 'deduction54F', label: 'Deduction u/s 54F', kind: 'money' }]} onChange={(rows) => setRows('ltProviso112', rows)} maxRows={2} />
+    {itr3 && <RowSection title="B2. Slump sale" rows={data.ltSlumpSale} fields={[{ key: 'fmv11uae2', label: 'FMV under Rule 11UAE(2) *', kind: 'money', required: true }, { key: 'fmv11uae3', label: 'FMV under Rule 11UAE(3) *', kind: 'money', required: true }, { key: 'netWorth', label: 'Net worth of division *', kind: 'signed', required: true }, { key: 'exemptionAmount', label: 'Exemption amount *', kind: 'money', required: true }]} onChange={(rows) => setRows('ltSlumpSale', rows)} />}
+    <RowSection title="B3. Listed securities/zero-coupon bonds (112(1)) or GDR (115ACA)" disabled={simple} rows={data.ltProviso112} fields={[{ key: 'sectionCode', label: 'Section code *', kind: 'select', required: true, options: [['22','Section 112 proviso'],['5ACA1b','Section 115ACA(1)(b)']] }, ...COMMON_ASSET, { key: 'deduction54F', label: 'Deduction u/s 54F', kind: 'money' }]} onChange={(rows) => setRows('ltProviso112', rows)} maxRows={2} />
     <AggregateCard fields={[{ key: 'ltcgWithoutBenefit', label: 'NRI LTCG without indexation benefit *', kind: 'signed', required: true }, { key: 'deduction54F', label: 'Deduction u/s 54F *', kind: 'money', required: true }, { key: 'balance', label: 'Balance NRI LTCG *', kind: 'readout', required: true }]} row={data.ltNriProviso48} disabled={simple} patch={(patch) => patchObject('ltNriProviso48', patch)} />
-    <RowSection title="B3. NRI gains under sections 112 / 115" disabled={simple} rows={data.ltNri112115} fields={[{ key: 'sectionCode', label: 'Section code *', kind: 'select', required: true, options: [['21ciii','Section 112(1)(c)(iii)'],['5AC1c','Section 115AC(1)(c)'],['5ADiii','Section 115AD(1)(iii)']] }, ...COMMON_ASSET, { key: 'deduction54F', label: 'Deduction u/s 54F', kind: 'money' }]} onChange={(rows) => setRows('ltNri112115', rows)} maxRows={3} />
-    <RowSection title="B4. NRI specified foreign assets" disabled={simple} rows={data.ltForeignAssets} fields={[{ key: 'saleValue', label: 'Sale value of specified asset *', kind: 'money', required: true }, { key: 'deduction115F', label: 'Deduction u/s 115F *', kind: 'money', required: true }]} onChange={(rows) => setRows('ltForeignAssets', rows)} />
-    <RowSection title="B5. Other long-term assets" disabled={simple} rows={data.ltOtherAssets} fields={[...COMMON_ASSET, { key: 'exemptionSection', label: 'Exemption section' }, { key: 'exemptionAmount', label: 'Exemption amount', kind: 'money' }]} onChange={(rows) => setRows('ltOtherAssets', rows)} />
-    {itr3 && <RowSection title="B6. Long-term slump sale" rows={data.ltSlumpSale} fields={[{ key: 'fmv11uae2', label: 'FMV under Rule 11UAE(2) *', kind: 'money', required: true }, { key: 'fmv11uae3', label: 'FMV under Rule 11UAE(3) *', kind: 'money', required: true }, { key: 'netWorth', label: 'Net worth of division *', kind: 'signed', required: true }, { key: 'exemptionAmount', label: 'Exemption amount *', kind: 'money', required: true }]} onChange={(rows) => setRows('ltSlumpSale', rows)} />}
+    {itr3 && <RowSection title="B5. Non-resident — unlisted shares/listed debentures of an Indian company" rows={data.ltNriUnlisted} fields={[...COMMON_ASSET, { key: 'deduction54F', label: 'Deduction u/s 54F', kind: 'money' }]} onChange={(rows) => setRows('ltNriUnlisted', rows)} />}
+    <RowSection title="B6. Non-resident — unlisted securities (112(1)(c)) / bonds/GDR (115AC) / FII securities (115AD)" disabled={simple} rows={data.ltNri112115} fields={[{ key: 'sectionCode', label: 'Section code *', kind: 'select', required: true, options: [['21ciii','Section 112(1)(c)(iii)'],['5AC1c','Section 115AC(1)(c)'],['5ADiii','Section 115AD(1)(iii)']] }, ...COMMON_ASSET, { key: 'deduction54F', label: 'Deduction u/s 54F', kind: 'money' }]} onChange={(rows) => setRows('ltNri112115', rows)} maxRows={3} />
+    <RowSection title="B8. Foreign exchange asset sale by NRI (115F)" disabled={simple} rows={data.ltForeignAssets} fields={[{ key: 'saleValue', label: 'Sale value of specified asset *', kind: 'money', required: true }, { key: 'deduction115F', label: 'Deduction u/s 115F *', kind: 'money', required: true }]} onChange={(rows) => setRows('ltForeignAssets', rows)} />
+    <RowSection title="B9. Other long-term assets" disabled={simple} rows={data.ltOtherAssets} fields={[...COMMON_ASSET.filter((field) => field.key !== 'loss94'), { key: 'exemptionSection', label: 'Exemption section', kind: 'select', options: itr3 ? [['54D','54D'],['54F','54F'],['54G','54G'],['54GA','54GA']] : [['54F','54F']] }, { key: 'exemptionAmount', label: 'Exemption amount', kind: 'money' }]} onChange={(rows) => setRows('ltOtherAssets', rows)} />
     <AggregateCard fields={[{ key: 'ltPassThrough', label: 'Pass-through LTCG *', kind: 'signed' }, { key: 'ltPassThrough112A', label: 'Pass-through LTCG u/s 112A at 12.5%', kind: 'signed' }, { key: 'ltPassThrough125', label: 'Pass-through other LTCG at 12.5%', kind: 'signed' }]} row={data.aggregates} patch={(patch) => patchObject('aggregates', patch)} />
     <FlagField label="Unutilized LTCG deposit exists? *" value={data.ltUnutilizedFlag} disabled={simple} onChange={(value) => patchFlag('ltUnutilizedFlag', value)} />
     <RowSection title="Prior-year unutilized LTCG deposits" disabled={simple} rows={data.ltUnutilized} fields={UNUTILIZED_FIELDS} onChange={(rows) => setRows('ltUnutilized', rows)} />
@@ -361,6 +370,10 @@ export function CapitalGainsEntryManager({ data: incoming, entries = [], onChang
     <ScheduleTotals title="Schedule 115AD totals" rows={data.schedule115AD} />
     <SectionTitle title="E. Schedule VDA" />
     <RowSection title="Virtual digital asset transfers" disabled={simple} rows={data.vda} fields={VDA_FIELDS.map((field) => field.key === 'head' && !itr3 ? { ...field, options: [['CG','Capital gains']] } : field)} onChange={(rows) => setRows('vda', rows)} />
+    <div style={cardStyle}><div style={gridStyle}>
+      <Readout label="A. Total business income from VDA (positive Col.7 only) — feeds Schedule BP item A3g" value={rows('vda').reduce((sum, row) => { const income = Number(row.incomeFromVda ?? Math.max(0, Number(row.consideration || 0) - Number(row.acquisitionCost || 0))); return row.head === 'BI' && income > 0 ? sum + income : sum; }, 0)} />
+      <Readout label="B. Total capital gain from VDA (positive Col.7 only) — feeds Schedule CG item C2" value={rows('vda').reduce((sum, row) => { const income = Number(row.incomeFromVda ?? Math.max(0, Number(row.consideration || 0) - Number(row.acquisitionCost || 0))); return row.head !== 'BI' && income > 0 ? sum + income : sum; }, 0)} />
+    </div></div>
     <SectionTitle title="F. Capital-gain deduction claims" />
     <RowSection title="Sections 54 / 54B / 54EC / 54F / 115F deduction details" disabled={simple} rows={data.deductionClaims} fields={CLAIM_FIELDS.map((field) => field.key === 'section' && !itr3 ? { ...field, options: field.options?.filter(([value]) => !['54D','54G','54GA'].includes(value)) } : field)} onChange={(rows) => setRows('deductionClaims', rows)} />
     <SectionTitle title="G. Accrual or receipt of capital gains by instalment period" />
@@ -389,7 +402,7 @@ function Field({ spec, row, patch, disabled = false }: { spec: FieldSpec; row: J
   if (spec.kind === 'readout') return <Readout label={spec.label} value={Number(value || 0)} />;
   if (spec.kind === 'select' || spec.kind === 'boolean') { const options = spec.kind === 'boolean' ? [['','Select'],['Y','Yes'],['N','No']] : [['','Select'], ...(spec.options || [])]; return <div><label style={labelStyle}>{spec.label}</label><select required={spec.required} value={String(value)} onChange={(event) => patch({ [spec.key]: event.target.value })} disabled={disabled} style={{ ...inputStyle, ...(disabled ? { background: '#f8fafc', color: 'var(--text-muted)', cursor: 'not-allowed' } : {}) }}>{options.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>; }
   const numeric = ['money','signed','decimal'].includes(spec.kind || '');
-  return <div><label style={labelStyle}>{spec.label}</label><input required={spec.required} type={spec.kind === 'date' ? 'date' : numeric ? 'number' : 'text'} min={spec.kind === 'money' ? 0 : spec.kind === 'signed' ? -MONEY_MAX : spec.kind === 'decimal' ? 0 : undefined} max={numeric ? MONEY_MAX : undefined} step={spec.kind === 'decimal' ? '0.0001' : numeric ? '1' : undefined} maxLength={spec.maxLength} pattern={spec.pattern} value={String(value)} onChange={(event) => patch({ [spec.key]: numeric ? numberValue(event.target.value) : event.target.value })} readOnly={disabled} style={{ ...inputStyle, ...(disabled ? { background: '#f8fafc', color: 'var(--text-muted)', cursor: 'not-allowed' } : {}) }} /></div>;
+  return <div><label style={labelStyle}>{spec.label}</label><input required={spec.required} type={spec.kind === 'date' ? 'date' : numeric ? 'number' : 'text'} min={spec.kind === 'money' ? 0 : spec.kind === 'signed' ? -MONEY_MAX : spec.kind === 'decimal' ? 0 : undefined} max={numeric ? MONEY_MAX : undefined} step={spec.kind === 'decimal' ? '0.0001' : numeric ? '1' : undefined} maxLength={spec.maxLength} pattern={spec.pattern} value={String(value)} onChange={(event) => patch({ [spec.key]: numeric ? numberValue(event.target.value) : event.target.value })} readOnly={disabled} style={{ ...inputStyle, ...(disabled ? { background: '#f8fafc', color: 'var(--text-muted)', cursor: 'not-allowed' } : {}) }} />{spec.help && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>{spec.help}</div>}</div>;
 }
 function QuarterlyEditor({ row, patch, disabled = false }: { row: JsonRow; patch: (values: JsonRow) => void; disabled?: boolean }): React.ReactElement {
   const categories = [['st20','STCG taxable at 20%'],['st30','STCG taxable at 30%'],['stApplicable','STCG at applicable rate'],['stDtaa','STCG under DTAA'],['lt125','LTCG taxable at 12.5%'],['ltDtaa','LTCG under DTAA'],['vda30','VDA gains taxable at 30%']];

@@ -30,7 +30,7 @@ from typing import Optional
 from dataclasses import dataclass, field
 from datetime import date
 
-from app.schemas.itr1 import AgeBracket, TaxRegime
+from app.schemas.itr1 import AgeBracket, HousePropertyIncome, PropertyType, TaxRegime
 from app.schemas.itr3 import ITR3Input
 from app.engine.common.rounding import round_to_nearest_10
 from app.engine.common.slab_tax import compute as compute_slab_tax
@@ -47,6 +47,9 @@ from app.engine.schedules.capital_gains import (
     compute_stcg, compute_ltcg, compute_vda,
     compute_exemptions, aggregate as aggregate_cg,
     STCGResult, LTCGResult, CG112AAsset, VDAEntry, CGAsset,
+    _is_short_term, other_asset_gain,
+    ITR3_OTHER_ASSETS_ST_EXEMPTION_SECTIONS,
+    ITR3_OTHER_ASSETS_LT_EXEMPTION_SECTIONS,
 )
 from app.engine.schedules.special_rates import (
     compute_112a as si_112a, compute_111a as si_111a,
@@ -65,7 +68,7 @@ from app.engine.schedules.loss_setoff.bfla import (
     compute as compute_bfla, BFLAInput,
 )
 from app.engine.schedules.loss_setoff.cfl import compute as compute_cfl
-from app.engine.schedules.amt import compute as compute_amt
+from app.engine.schedules.amt import compute as compute_amt, compute_amtc
 
 
 @dataclass
@@ -103,6 +106,7 @@ class ITR3Result:
     slab_tax: Decimal = Decimal("0")
     special_rate_tax: Decimal = Decimal("0")
     amt_tax: Decimal = Decimal("0")
+    amtc_utilised: Decimal = Decimal("0")
     total_tax_before_relief: Decimal = Decimal("0")
     tax_before_rebate: Decimal = Decimal("0")
     rebate_87a: Decimal = Decimal("0")
@@ -196,18 +200,64 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         r.warnings.extend(pgbp.warnings)
 
     r.business_income = biz_income
-    r.relief_89 = input_data.relief_89  # Pass-through from Form 10E
 
     # ── 2. Salary ───────────────────────────────────────────────────────
     sal = compute_salary(input_data.salary_income, regime)
     r.salary_income = sal.income_chargeable
     r.schedules["salary"] = sal
+    # relief_89 combines section 89(1) relief (Form 10E, salary arrears/
+    # advance) with section 89A relief (Schedule S items 1d-1f, retirement
+    # benefit account income) -- matching ITR-2's identical combination.
+    r.relief_89 = input_data.relief_89 + sal.salary_89a_relief
 
     # ── 3. House Property ───────────────────────────────────────────────
-    hp = compute_hp(input_data.house_property_income, regime)
-    r.house_property_income = hp.income_chargeable
-    r.hp_loss_disallowed = hp.loss_disallowed
-    r.schedules["hp"] = hp
+    # ITR-3 allows any number of properties, each with its own type
+    # (self-occupied/let-out/deemed-let-out), ownership share, and loan
+    # sanction dates -- all of which change the Section 24 interest cap and
+    # the 30% standard deduction. compute_hp() itself already handles all
+    # of this correctly for ONE property; it must be called once per
+    # property, not once with a single pre-aggregated input (which silently
+    # collapsed every property's distinct self-occupied/let-out treatment
+    # and ownership share into one figure).
+    if input_data.schedule_hp_properties:
+        hp_results: list = []
+        for hp_source in input_data.schedule_hp_properties:
+            try:
+                property_type = PropertyType(hp_source.property_type)
+            except ValueError:
+                property_type = PropertyType.SELF_OCCUPIED
+            loan_rows = hp_source.home_loan_details or []
+            raw_interest = sum(
+                (Decimal(str(loan.get("InterestUs24B", 0))) for loan in loan_rows), Decimal("0")
+            )
+            loan_sanction_dates: list[Optional[date]] = []
+            for loan in loan_rows:
+                raw_date = loan.get("DateofLoan")
+                try:
+                    loan_sanction_dates.append(date.fromisoformat(raw_date) if raw_date else None)
+                except ValueError:
+                    loan_sanction_dates.append(None)
+            hp_input = HousePropertyIncome(
+                property_type=property_type,
+                annual_rent_received=hp_source.annual_lettable_value,
+                rent_not_realized=hp_source.rent_not_realized,
+                municipal_taxes_paid=hp_source.local_taxes,
+                home_loan_interest_paid=raw_interest,
+                arrears_unrealised_rent_received=hp_source.arrears_unrealised_rent,
+            )
+            hp_results.append(compute_hp(
+                hp_input, regime,
+                ownership_share_percentage=hp_source.assessee_share_percent or Decimal("100"),
+                loan_sanction_dates=loan_sanction_dates or None,
+            ))
+        r.house_property_income = sum((row.income_chargeable for row in hp_results), Decimal("0"))
+        r.hp_loss_disallowed = sum((row.loss_disallowed for row in hp_results), Decimal("0"))
+        r.schedules["hp"] = hp_results
+    else:
+        hp = compute_hp(input_data.house_property_income, regime)
+        r.house_property_income = hp.income_chargeable
+        r.hp_loss_disallowed = hp.loss_disallowed
+        r.schedules["hp"] = hp
 
     # ── 4. Capital Gains (same as ITR-2) ────────────────────────────────
     stcg_111a_val = z
@@ -224,14 +274,26 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     exempt_54f = z
 
     for tx in (input_data.cg_transactions or []):
-        if tx.asset_type.value in ("listed_equity_111a",):
-            is_short = True
-            if tx.date_of_acquisition and tx.date_of_transfer:
-                holding_days = (tx.date_of_transfer - tx.date_of_acquisition).days
-                is_short = holding_days <= 365
+        asset_type = tx.asset_type.value
+
+        # Determine holding period by calendar anniversary, never day-count
+        # approximations -- identical to ITR-2's own classification
+        # (calculators/itr2.py's `_classify()`), since both forms share the
+        # exact same statutory holding-period thresholds for this schedule.
+        is_short = True
+        if tx.date_of_acquisition is not None and tx.date_of_transfer is not None:
+            is_short = _is_short_term(asset_type, tx.date_of_acquisition, tx.date_of_transfer)
+        elif tx.explicit_long_term is not None:
+            is_short = not tx.explicit_long_term
+
+        if asset_type in ("listed_equity_111a", "equity_oriented_fund_111a"):
             if is_short:
+                # Form A3c = 3a - 3biv (biv = cost + improvement + transfer
+                # expenses); A3e = 3c + 3d (3d = 94(7)/94(8) disallowed
+                # loss, entered positive and added back).
                 stcg_111a_val += (tx.full_consideration - tx.cost_of_acquisition
-                                  - tx.expenditure_on_transfer)
+                                  - tx.improvement_cost - tx.expenditure_on_transfer
+                                  + tx.loss_disallowed_94_7_94_8)
             else:
                 ltcg_112a_assets.append(CG112AAsset(
                     total_sale_value=tx.full_consideration,
@@ -239,7 +301,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
                     total_fmv=tx.fair_market_value_jan2018 or tx.cost_of_acquisition,
                     total_deductions=tx.expenditure_on_transfer,
                 ))
-        elif tx.asset_type.value == "land_building":
+        elif asset_type == "land_building":
             asset = CGAsset(
                 full_consideration=tx.full_consideration,
                 acquisition_cost=tx.cost_of_acquisition,
@@ -248,10 +310,6 @@ def compute(input_data: ITR3Input) -> ITR3Result:
                 indexed_improvement_cost=tx.indexed_improvement,
                 expenditure_on_transfer=tx.expenditure_on_transfer,
             )
-            is_short = True
-            if tx.date_of_acquisition and tx.date_of_transfer:
-                holding_days = (tx.date_of_transfer - tx.date_of_acquisition).days
-                is_short = holding_days <= 730
             if is_short:
                 stcg_land_cg.append(asset)
             else:
@@ -261,7 +319,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
                 exempt_54ec += tx.deduction_us54ec
                 exempt_54f += tx.deduction_us54f
 
-        elif tx.asset_type.value == "listed_equity_112a":
+        elif asset_type == "listed_equity_112a":
             # 112A is always long-term (listed equity held >12 months)
             ltcg_112a_assets.append(CG112AAsset(
                 total_sale_value=tx.full_consideration,
@@ -271,17 +329,56 @@ def compute(input_data: ITR3Input) -> ITR3Result:
             ))
 
         else:
-            # Unlisted shares, debt MFs, bonds, jewellery, other
-            gain = tx.full_consideration - tx.cost_of_acquisition - tx.expenditure_on_transfer
-            is_short = True
-            if tx.date_of_acquisition and tx.date_of_transfer:
-                holding_days = (tx.date_of_transfer - tx.date_of_acquisition).days
-                # Unlisted shares/movable: >24 months = LTCG
-                is_short = holding_days <= 730
+            # Unlisted shares, debt MFs, bonds, jewellery, other. Same
+            # arithmetic STRUCTURE as ITR-2's own generic "other assets"
+            # bucket (Sl. A5/B8 there vs A6/B9 here) -- shared via
+            # `other_asset_gain`, but ITR-3's own valid exemption-section
+            # set (54G/54GA for ST; 54D/54F/54G/54GA for LT) is WIDER than
+            # ITR-2's (ITR-2's own A5 item has no exemption line at all;
+            # its B8 item allows only 54F) -- passed explicitly per call,
+            # never a shared default, so the two forms cannot silently
+            # apply an exemption the other form's own item doesn't offer.
+            valid_sections = (
+                ITR3_OTHER_ASSETS_ST_EXEMPTION_SECTIONS if is_short
+                else ITR3_OTHER_ASSETS_LT_EXEMPTION_SECTIONS
+            )
+            gain = other_asset_gain(tx, is_short, valid_sections)
             if is_short:
                 stcg_other += gain
             else:
                 ltcg_other_cg += gain
+
+    # Schedule CG item A6e -- "Deemed short-term capital gains on
+    # depreciable assets (6 of schedule - DCG)". This is a SCHEDULE-level
+    # total (Schedule DCG's own grand total across the block-of-assets
+    # computation, item 6 = 1e+2d+3+4+5), not a per-transaction figure, so
+    # it is added to the generic-other-assets STCG bucket once here rather
+    # than inside the transaction loop above. ITR-2 has no business-income
+    # concept and therefore no Schedule DCG at all -- this term exists ONLY
+    # in ITR-3's A6 formula, never ITR-2's equivalent A5 formula (confirmed
+    # against both forms' official PDFs: ITR-2's item 5 is "5c + 5d" only;
+    # ITR-3's item 6 is "6c + 6d + 6e - 6f").
+    dcg_schedule = (
+        input_data.depreciation_schedules.schedule_dcg
+        if input_data.depreciation_schedules else None
+    )
+    if dcg_schedule is not None:
+        stcg_other += dcg_schedule.SummaryFromDeprSchCG.TotalDepreciation
+
+    # Section 46A capital loss on buyback of shares (Schedule CG's
+    # "CapitalLossBuyBackShares" block) is a genuine loss, not merely
+    # disclosure -- it reduces the actual taxed STCG/LTCG total. ITR-3's
+    # own CYLA wiring for capital gains does not bucket-separate STCG@20%/
+    # 30%/applicable-rate the way ITR-2's does (confirmed by inspection --
+    # `cy_input` below lumps everything into `stcg_app_income`), so the
+    # 30%/applicable-rate split at the loss-input level would be lost
+    # downstream regardless; net into the two raw accumulators this
+    # calculator actually carries forward (111A-taxed vs. everything else)
+    # so the computed tax is correct even though that pre-existing
+    # bucket-precision gap is not fixed here.
+    stcg_111a_val += input_data.cg_buyback_loss_stcg20
+    stcg_other += input_data.cg_buyback_loss_stcg30 + input_data.cg_buyback_loss_stcg_applicable
+    ltcg_other_cg += input_data.cg_buyback_loss_ltcg
 
     for scrip in (input_data.cg_112a_scrips or []):
         ltcg_112a_assets.append(CG112AAsset(
@@ -344,8 +441,8 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # Note: STCG/LTCG intra-head losses already netted by aggregate().
     # Business and HP losses are cross-head and handled here.
     cy_input = CYLAInput(
-        hp_loss=hp.income_chargeable if hp.income_chargeable < 0 else z,
-        hp_income=hp.income_chargeable if hp.income_chargeable > 0 else z,
+        hp_loss=r.house_property_income if r.house_property_income < 0 else z,
+        hp_income=r.house_property_income if r.house_property_income > 0 else z,
         non_spec_biz_loss=pgbp.non_spec_signed if has_pgbp and pgbp.non_spec_signed < 0 else z,
         non_spec_biz_income=pgbp.non_spec_net_income if has_pgbp and pgbp.non_spec_net_income > 0 else z,
         spec_biz_loss=pgbp.speculative_signed if has_pgbp and pgbp.speculative_signed < 0 else z,
@@ -379,7 +476,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
         for item in (input_data.bf_losses or [])
     ]
     bf_input = BFLAInput(
-        hp_income=hp.income_chargeable if hp.income_chargeable > 0 else z,
+        hp_income=r.house_property_income if r.house_property_income > 0 else z,
         non_spec_biz_income=pgbp.non_spec_net_income if has_pgbp and pgbp.non_spec_net_income > 0 else z,
         spec_biz_income=pgbp.speculative_net_income if has_pgbp and pgbp.speculative_net_income > 0 else z,
         stcg20_income=cg_income_for_bfla,
@@ -398,7 +495,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     # ── 10a. CFL: Carry-Forward Loss Summary ────────────────────────────────
     cfl_entries = []
     # CYLA remaining losses (current-year that couldn't be set off)
-    if cyla.hp_setoff > 0 or abs(hp.income_chargeable) > cyla.hp_setoff if hp.income_chargeable < 0 else False:
+    if cyla.hp_setoff > 0 or abs(r.house_property_income) > cyla.hp_setoff if r.house_property_income < 0 else False:
         pass  # hp_loss remaining handled via cyla.entries
     for entry in cyla.entries:
         if entry.remaining_loss > 0:
@@ -537,11 +634,16 @@ def compute(input_data: ITR3Input) -> ITR3Result:
             if val > 0:
                 amt_triggers[label] = val
     amt_result = compute_amt(ti, r.gross_tax_liability, amt_triggers, regime, age)
+    if amt_result.chapter_xii_ba_applicable:
+        r.schedules["amt"] = amt_result
+        credits = input_data.amt_input.amt_credits if input_data.amt_input is not None else []
+        capacity = max(z, r.gross_tax_liability - amt_result.amt_tax)
+        r.schedules["amtc"] = compute_amtc(credits, capacity, "2026-27")
+        r.amtc_utilised = r.schedules["amtc"].total_utilised
     if amt_result.amt_applicable:
         r.amt_tax = amt_result.amt_tax - r.gross_tax_liability
         r.gross_tax_liability = amt_result.final_tax
-        r.schedules["amt"] = amt_result
-        r.total_tax_before_relief += r.amt_tax  # Recomputed: AMT delta was not in original
+        r.total_tax_before_relief += r.amt_tax
 
     # ── 24. Foreign tax relief ──────────────────────────────────────────
     for tr1 in (input_data.tr1_entries or []):
@@ -568,7 +670,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     if filing_date and due_date:
         assessed_tax = max(z,
             r.gross_tax_liability - r.relief_90_91 - r.relief_89
-            - r.total_tds - r.total_tcs)
+            - r.amtc_utilised - r.total_tds - r.total_tcs)
         ay_start = date(due_date.year, 4, 1)
         r.interest_234a = compute_234a(assessed_tax, filing_date, due_date)
         r.interest_234b = compute_234b(assessed_tax,
@@ -590,7 +692,7 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     r.total_interest = r.interest_234a + r.interest_234b + r.interest_234c
 
     # ── 27. Final payable / refund ──────────────────────────────────────
-    net_liability = (r.gross_tax_liability - r.relief_89 - r.relief_90_91
+    net_liability = (r.gross_tax_liability - r.amtc_utilised - r.relief_89 - r.relief_90_91
                       + r.total_interest + r.late_fee_234f + r.fees_234i)
     r.net_tax_liability = max(z, net_liability)
 

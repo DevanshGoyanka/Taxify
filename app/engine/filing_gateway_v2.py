@@ -49,6 +49,7 @@ from app.engine.itd.itr1 import build_itr1_json
 from app.engine.itd.itr1_schema import ITR1SchemaValidationError, validate_itr1_json
 from app.engine.itd.itr2 import build_itr2_json
 from app.engine.itd.itr3 import build_itr3_json
+from app.engine.itd.itr3_preparation import ITR3PreparationIncompleteError, require_complete_itr3_document
 from app.engine.itd.itr3_schema import validate_itr3_json
 from app.engine.itd.itr2_schema import validate_itr2_json
 from app.engine.itd.itr4 import build_itr4_json
@@ -2127,6 +2128,7 @@ def _generate_cbdt_json_itr3(draft: ReturnDraft) -> tuple[dict[str, Any], dict[s
     pipeline = compute_canonical_itr3(draft)
     try:
         document = build_itr3_json(pipeline.computation, pipeline.typed_input)
+        require_complete_itr3_document(document)
         validate_itr3_json(document)
     except Exception as exc:
         raise FilingGatewayV2Error("ITR-3 official JSON generation failed.", [f"{type(exc).__name__}: {exc}"]) from exc

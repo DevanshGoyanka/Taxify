@@ -26,6 +26,8 @@ from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.itr3 import ITR3DepreciationSchedules, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA
+
 
 # ---------------------------------------------------------------------------
 # Common primitives
@@ -197,6 +199,42 @@ class UnlistedEquityEntry(Identified):
     transferSaleConsideration: Money = Field(default=Decimal("0"))
     closingShares: Money = Field(default=Decimal("0"))
     closingCost: Money = Field(default=Decimal("0"))
+
+
+class PartnerInFirmEntry(Identified):
+    """One partner-in-firm disclosure row (ITR-3's ``PartnerInFirmDtls``): form A19(k)."""
+
+    firmName: str = Field(default="")
+    pan: str = Field(default="")
+
+
+class AuditUnderOtherActEntry(Identified):
+    """One audit-under-another-Act disclosure row (ITR-3's ``AuditReportDetails``): form A20(e)."""
+
+    act: Literal["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", ""] = Field(
+        default="",
+        description="1 Banking Regulation Act; 2 Central Excise Act; 3 Central Sales Tax Act; "
+        "4 CGST Act; 5 Charitable And Religious Trusts Act; 6 Companies Act; 7 Electricity Act; "
+        "8 EPF and Misc Provisions Act; 9 FEMA; 10 Government Superannuation Fund Act; "
+        "11 Indian Trusts Act; 12 IGST Act; 13 LLP Act; 14 Payment of Gratuity Act; 15 SEBI Act; "
+        "16 Securities Contract (Regulation) Act; 17 SGST Act; 18 UTGST Act; 19 Others.",
+    )
+    actOthers: str = Field(default="", description="Required when act == '19' (Others).")
+    auditedSection: str = Field(default="")
+    dateOfAudit: Optional[str] = Field(default=None)
+
+
+class OtherAuditReportEntry(Identified):
+    """One 'other audit report' disclosure row (ITR-3's ``AuditDetails``): form A20(diii),
+    required when the return claims deductions under sections requiring their own audit report."""
+
+    auditedSection: Literal[
+        "10A", "10AA", "44DA", "50B", "80-IA", "80-IAB", "80-IAC", "80-IB", "80-IC", "80-ID",
+        "80-IE", "80JJAA", "80LA", "115JC", "",
+    ] = Field(default="")
+    auditFlag: Literal["Y", "N"] = Field(default="N")
+    dateOfAudit: Optional[str] = Field(default=None)
+    ackNumOth: str = Field(default="")
 
 
 class SeventhProviso(_StrictModel):
@@ -676,11 +714,17 @@ class CapitalGainsSchedule(_StrictModel):
     simplified112A: Simplified112ABlock = Field(default_factory=Simplified112ABlock)
     stImmovable: list[ImmovableAssetGain] = Field(default_factory=list)
     stEquity: list[dict[str, Any]] = Field(default_factory=list)
+    # Form item A4 -- non-resident (not FII) sale of shares/debentures of an
+    # Indian company, ITR-3 only.
+    stNonResShares: list[dict[str, Any]] = Field(default_factory=list)
     stNriUnlisted: list[dict[str, Any]] = Field(default_factory=list)
     stOtherAssets: list[dict[str, Any]] = Field(default_factory=list)
     stSlumpSale: list[dict[str, Any]] = Field(default_factory=list)
     ltImmovable: list[ImmovableAssetGain] = Field(default_factory=list)
     ltProviso112: list[dict[str, Any]] = Field(default_factory=list)
+    # Form item B5 -- non-resident unlisted shares/listed debentures of an
+    # Indian company, no indexation, ITR-3 only.
+    ltNriUnlisted: list[dict[str, Any]] = Field(default_factory=list)
     ltNri112115: list[dict[str, Any]] = Field(default_factory=list)
     ltForeignAssets: list[dict[str, Any]] = Field(default_factory=list)
     ltOtherAssets: list[dict[str, Any]] = Field(default_factory=list)
@@ -840,6 +884,24 @@ class ForeignAssetEntry(Identified):
     # total_gross_proceeds_from_sale for the official field this backs.
     initialValueOfInvestment: Optional[Money] = Field(default=None)
     totalGrossProceedsValue: Money = Field(default=Decimal("0"))
+    # Category-specific Schedule FA fields.  These remain optional at the
+    # draft boundary; the serializer rejects an incomplete category rather
+    # than substituting a different official row type.
+    natureOfAmount: Optional[str] = Field(default=None)
+    cashValueOrSurrenderValue: Optional[Money] = Field(default=None)
+    nameMentionedInAccount: Optional[str] = Field(default=None)
+    incomeAccruedTaxFlag: Optional[str] = Field(default=None)
+    nameOfTrust: Optional[str] = Field(default=None)
+    addressOfTrust: Optional[str] = Field(default=None)
+    nameOfOtherTrustees: Optional[str] = Field(default=None)
+    addressOfOtherTrustees: Optional[str] = Field(default=None)
+    nameOfSettlor: Optional[str] = Field(default=None)
+    addressOfSettlor: Optional[str] = Field(default=None)
+    nameOfBeneficiaries: Optional[str] = Field(default=None)
+    addressOfBeneficiaries: Optional[str] = Field(default=None)
+    nameOfPerson: Optional[str] = Field(default=None)
+    addressOfPerson: Optional[str] = Field(default=None)
+    incomeDerivedTaxFlag: Optional[str] = Field(default=None)
 
 
 class ClubbedIncomeEntry(Identified):
@@ -882,10 +944,34 @@ class AMTDetails(_StrictModel):
     creditsBroughtForward: list[AMTCreditEntry] = Field(default_factory=list)
 
 
+class AssetLiabilityAddress(_StrictModel):
+    """Official Schedule AL address for an immovable asset."""
+
+    residenceNo: str = Field(min_length=1)
+    localityOrArea: str = Field(min_length=1)
+    cityOrTownOrDistrict: str = Field(min_length=1)
+    stateCode: str = Field(min_length=1)
+    countryCode: str = Field(min_length=1)
+    residenceName: Optional[str] = None
+    roadOrStreet: Optional[str] = None
+    pinCode: Optional[int] = Field(default=None, ge=100000, le=999999)
+    zipCode: Optional[str] = None
+
+
+class AssetLiabilityImmovable(Identified):
+    """One explicitly sourced immovable-property row in Schedule AL."""
+
+    description: str = Field(min_length=1, max_length=25)
+    address: AssetLiabilityAddress
+    amount: Money = Field(ge=0)
+
+
 class AssetLiabilityDetails(_StrictModel):
     """Schedule AL: assets and related liabilities (mandatory above the income threshold)."""
 
     immovableProperty: Money = Field(default=Decimal("0"))
+    immovableProperties: list[AssetLiabilityImmovable] = Field(default_factory=list)
+    interestHeldInAssetFlag: Optional[Literal["Y", "N"]] = None
     cashInHand: Money = Field(default=Decimal("0"))
     bankDeposits: Money = Field(default=Decimal("0"))
     sharesAndSecurities: Money = Field(default=Decimal("0"))
@@ -903,13 +989,14 @@ class PortugueseCivilCodeDetails(_StrictModel):
     spouseName: str = Field(default="")
     spousePAN: str = Field(default="")
     spouseAadhaar: str = Field(default="")
+    # Schedule 5A has one row for each head of income.  Business income is
+    # distinct from house property/capital gains/other sources in ITR-3.
     hpAmountApportioned: Money = Field(default=Decimal("0"))
+    busAmountApportioned: Money = Field(default=Decimal("0"))
     cgAmountApportioned: Money = Field(default=Decimal("0"))
     osAmountApportioned: Money = Field(default=Decimal("0"))
-    # Split per-head, matching the form's own Sl.1/2/3 rows -- see
-    # Schedule5AInput's own field docstring for why a single combined
-    # figure was wrong (misattributed all TDS to the OS row).
     hpTdsApportioned: Money = Field(default=Decimal("0"))
+    busTdsApportioned: Money = Field(default=Decimal("0"))
     cgTdsApportioned: Money = Field(default=Decimal("0"))
     osTdsApportioned: Money = Field(default=Decimal("0"))
 
@@ -923,6 +1010,9 @@ class ESOPDeferralEntry(Identified):
     taxDeferredBroughtForward: Money = Field(default=Decimal("0"))
     taxPayableCurrentYear: Money = Field(default=Decimal("0"))
     balanceTaxCarriedForward: Money = Field(default=Decimal("0"))
+    securityType: Literal["FS", "PS", "NS"] = "NS"
+    ceasedEmployee: bool = False
+    grossPerquisiteTax: Money = Field(default=Decimal("0"))
 
 
 # ---------------------------------------------------------------------------
@@ -1434,10 +1524,8 @@ class ITR3BalanceSheet(_StrictModel):
     reservesAndSurplus: Money = Field(default=Decimal("0"), ge=0)
     securedLoans: Money = Field(default=Decimal("0"), ge=0)
     unsecuredLoans: Money = Field(default=Decimal("0"), ge=0)
+    deferredTaxLiability: Money = Field(default=Decimal("0"), ge=0)
     advancesFromCustomers: Money = Field(default=Decimal("0"), ge=0)
-    otherLiabilities: Money = Field(default=Decimal("0"), ge=0)
-    creditors: Money = Field(default=Decimal("0"), ge=0)
-    provisions: Money = Field(default=Decimal("0"), ge=0)
     totalSources: Money = Field(default=Decimal("0"), ge=0)
     fixedAssets: Money = Field(default=Decimal("0"), ge=0)
     investments: Money = Field(default=Decimal("0"), ge=0)
@@ -1445,9 +1533,18 @@ class ITR3BalanceSheet(_StrictModel):
     tradeReceivables: Money = Field(default=Decimal("0"), ge=0)
     cashAndBank: Money = Field(default=Decimal("0"), ge=0)
     loansAndAdvances: Money = Field(default=Decimal("0"), ge=0)
+    # Current liabilities and provisions (form item 3d) -- netted against
+    # current assets/loans/advances (form item 3e), not a Sources-side item.
+    creditors: Money = Field(default=Decimal("0"), ge=0)
+    provisions: Money = Field(default=Decimal("0"), ge=0)
     otherAssets: Money = Field(default=Decimal("0"), ge=0)
     totalApplications: Money = Field(default=Decimal("0"), ge=0)
     noBooksOfAccounts: bool = Field(default=False)
+    # Form item 6 (a-d) -- only used when noBooksOfAccounts is True.
+    noBooksSundryDebtors: Money = Field(default=Decimal("0"), ge=0)
+    noBooksSundryCreditors: Money = Field(default=Decimal("0"), ge=0)
+    noBooksStockInTrade: Money = Field(default=Decimal("0"), ge=0)
+    noBooksCashBalance: Money = Field(default=Decimal("0"), ge=0)
     reconciliationDifference: Money = Field(default=Decimal("0"))
 
 
@@ -1480,9 +1577,19 @@ class ITR3AuditInfo(_StrictModel):
     auditorPAN: str = Field(default="")
     auditorAadhaar: str = Field(default="")
     liableSec92E: Literal["Y", "N"] = Field(default="N")
+    # Whether the accounts have actually been audited under section 92E,
+    # asked before the audit-report date/ack fields -- distinct from
+    # liableSec92E (which only asks whether the section applies).
+    auditedUnder92E: Literal["Y", "N"] = Field(default="N")
     accountAudit: Literal["Y", "N"] = Field(default="N")
     auditReport92EDate: Optional[str] = Field(default=None)
     acknowledgement92E: str = Field(default="")
+    # Form A20(e): audit report(s) under Acts other than the Income-tax Act
+    # (schema AuditInfo.AuditReportDetails).
+    auditUnderOtherActEntries: list[AuditUnderOtherActEntry] = Field(default_factory=list)
+    # Form A20(diii): other audit reports required for specified deductions
+    # (schema AuditInfo.AuditDetails).
+    otherAuditReportEntries: list[OtherAuditReportEntry] = Field(default_factory=list)
 
 
 class FilingStatus(_StrictModel):
@@ -1599,6 +1706,25 @@ class FilingStatus(_StrictModel):
         "PAN, category 'P' — an HUF's own PAN, category 'H', cannot "
         "satisfy it). Required when the assessee is an HUF. ITR-2 only.",
     )
+    # Umbrella Yes/No gate for the seventh-proviso-139(1) sub-questions
+    # (schema SeventhProvisio139) -- distinct from the individual
+    # sub-condition checkboxes on seventhProviso.
+    seventhProvisoApplies: bool = Field(default=False)
+    # Form A19(b)(II): if no business/profession income this year, does the
+    # assessee still want to opt for the old regime (schema OptOldRegimeCurrAY)?
+    optOldRegimeCurrAY: Literal["Y", "N", ""] = Field(default="")
+    # Form A19(k): partner-in-firm disclosure (schema PartnerInFirm.PartnerInFirmDtls).
+    isPartnerInFirm: bool = Field(default=False)
+    partnerInFirmEntries: list[PartnerInFirmEntry] = Field(default_factory=list)
+    # Form A19(m): non-resident permanent establishment in India (schema NriPEinIndia).
+    nriPEinIndia: Literal["Y", "N", ""] = Field(default="")
+    # Form A19(n): non-resident significant economic presence in India (schema NriSEPinIndia).
+    nriSEPinIndia: Literal["Y", "N", "NA", ""] = Field(default="")
+    aggrPaymentTransac: Money = Field(default=Decimal("0"))
+    numberOfUsers: int = Field(default=0, ge=0)
+    # Form A19(o): IFSC unit with income solely in convertible foreign
+    # exchange (schema ForeignExchangeFlag).
+    foreignExchangeFlag: Literal["Y", "N", ""] = Field(default="")
 
 
 class PersonalInfo(_StrictModel):
@@ -1757,11 +1883,21 @@ class ReconciliationState(_StrictModel):
 
 
 class ITR3BusinessWorkspace(_StrictModel):
-    """Lossless generic ITR-3 business workspace payload."""
+    """Typed ITR-3 business workspace, including depreciation schedules."""
 
     core: dict[str, Any] = Field(default_factory=dict)
     auxiliary: dict[str, Any] = Field(default_factory=dict)
     selectedSchedules: list[str] = Field(default_factory=list)
+    depreciationSchedules: Optional[ITR3DepreciationSchedules] = Field(default=None)
+    scheduleICDS: Optional[ScheduleICDS] = Field(default=None)
+    scheduleESR: Optional[ScheduleESR] = Field(default=None)
+    scheduleTPSA: Optional[ITR3ScheduleTPSA] = Field(default=None)
+    scheduleGST: Optional[ScheduleGST] = Field(default=None)
+    schedule80IA: Optional[ITR3Schedule80IA] = Field(default=None)
+    schedule80IB: Optional[ITR3Schedule80IB] = Field(default=None)
+    schedule80IC: Optional[ITR3Schedule80IC] = Field(default=None)
+    schedule80RA: Optional[ITR3Schedule80RA] = Field(default=None)
+    schedule10AA: Optional[ITR3Schedule10AA] = Field(default=None)
 
 
 class ReturnDraft(_StrictModel):

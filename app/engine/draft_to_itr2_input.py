@@ -59,6 +59,7 @@ and :class:`app.schemas.itr2.ITR2Input` (typed compute input).
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -69,6 +70,8 @@ from app.schemas.itr2 import (
     AMTCreditItem,
     AMTInput,
     AssetLiabilityInput,
+    AssetLiabilityAddress,
+    AssetLiabilityImmovable,
     BFLossItem,
     CG112AScrip,
     CGAssetType,
@@ -202,6 +205,7 @@ def _map_112a_scrip_rows(rows) -> tuple[list[CG112AScrip], int]:
             expenditure_on_transfer=row.transferExpenses,
             total_deductions=row.totalDeductions or Decimal("0"),
             stt_paid_on_transfer=True,
+            is_recognized_stock_exchange=True,
         ))
     return scrips, skipped
 
@@ -260,6 +264,239 @@ def _map_immovable_gains(draft: ReturnDraft) -> list[CGTransaction]:
     return transactions
 
 
+def _map_equity_stt_stcg(draft: ReturnDraft) -> list[CGTransaction]:
+    """
+    Map Schedule CG item A3 rows (``capitalGainsSchedule.stEquity``) --
+    STCG on equity shares/equity-oriented fund units/business trust units,
+    STT paid u/s 111A (or the s.115AD(1)(b)(ii) proviso for an FII/FPI).
+    SHARED mapper -- the frontend row shape and official schema handling
+    (`build_equity_mf_stt_rows`) are identical for both forms; only
+    ITR-2's own `is_fii_fpi` filing-profile flag picks the FII/FPI
+    MFSectionCode variant at build time, which needs no per-transaction
+    tag at all (this function's own asset-type classification is the
+    same regardless of FII/FPI status).
+
+    These rows carry no acquisition/transfer dates (the official disclosure
+    table itself is aggregate-only, with no per-scrip date field either) --
+    the row's mere presence under this ST-only bucket already means the
+    taxpayer is asserting short-term holding, so each row is tagged
+    ``explicit_long_term=False`` rather than left to the calculator's
+    date-based classification (which would default to short-term anyway
+    when both dates are absent, but explicit is clearer and matches how
+    ``_map_immovable_gains`` handles its own date-optional rows).
+    ``date_of_acquisition`` is left unset (None) so every downstream
+    consumer (the calculator, ``cg_shared.build_equity_mf_stt_rows``) takes
+    the ``explicit_long_term`` branch rather than a date-based one;
+    ``date_of_transfer`` is schema-required with no real value to supply,
+    so it is set to the previous year's last day (AY 2026-27 -> FY-end
+    2026-03-31, the same placeholder convention `draft_to_itr1_input.py`
+    already uses elsewhere) -- a placeholder never actually read for
+    classification.
+
+    Reuses ``CGAssetType.LISTED_EQUITY_111A`` for every row (rather than
+    trying to distinguish "listed share" vs "equity-oriented fund unit"
+    sub-types, which this row shape has no field for) -- both calculators
+    (ITR-2's and ITR-3's own) treat the two 111A asset-type values
+    identically, so this is a distinction without a computational
+    difference.
+
+    ``is_stt_paid_on_acquisition``/``is_stt_paid_on_transfer``/
+    ``is_recognized_stock_exchange`` are set True unconditionally here --
+    CRITICAL, not cosmetic: `ITR2-IN-CG-005` (Severity.A, return-blocking)
+    checks these exact fields and, before this fix, they defaulted to
+    `None` for every transaction this mapper ever produced (no frontend
+    control sets them, and no other mapper populates them either), so the
+    rule failed -- and blocked filing -- for EVERY real ITR-2 return with
+    111A equity STCG the moment this mapper was wired into ITR-2's own
+    `cg_transactions` assembly. True by construction, not merely a
+    default: the official schema itself has no separate STT-paid/exchange
+    sub-field on `EquityMFonSTT` at all (confirmed by direct
+    introspection) -- Section 111A's own STT-paid condition (and the
+    recognized-stock-exchange trading it necessarily implies, since STT
+    can only be levied on an exchange-executed trade) is exactly what the
+    taxpayer is already asserting by classifying a row under this specific
+    Schedule CG item in the first place, the same way every other
+    self-declaring bucket in this schedule works (DTAA rate cap, NRI
+    proviso 48, etc.) -- there is no genuinely separate condition here to
+    ask about a second time.
+    """
+    transactions: list[CGTransaction] = []
+    for row in draft.capitalGainsSchedule.stEquity:
+        transactions.append(CGTransaction(
+            asset_type=CGAssetType.LISTED_EQUITY_111A,
+            description="Equity/MF/business trust unit (STT paid)",
+            full_consideration=Decimal(str(row.get("fullConsideration") or 0)),
+            cost_of_acquisition=Decimal(str(row.get("acquisitionCost") or 0)),
+            improvement_cost=Decimal(str(row.get("improvementCost") or 0)),
+            expenditure_on_transfer=Decimal(str(row.get("transferExpenses") or 0)),
+            loss_disallowed_94_7_94_8=Decimal(str(row.get("loss94") or 0)),
+            explicit_long_term=False,
+            is_stt_paid_on_acquisition=True,
+            is_stt_paid_on_transfer=True,
+            is_recognized_stock_exchange=True,
+            date_of_transfer=date(2026, 3, 31),
+        ))
+    return transactions
+
+
+def _map_other_assets(draft: ReturnDraft) -> list[CGTransaction]:
+    """
+    Map Schedule CG's generic "other assets" rows (``stOtherAssets``/
+    ``ltOtherAssets``) -- unlisted shares, debt mutual funds, bonds,
+    jewellery, foreign assets, or any other capital asset not covered by
+    an earlier, more specific Schedule CG item (Sl. A6/B9 in ITR-3; Sl.
+    A5/B8 in ITR-2 -- SHARED mapper since the frontend row shape is
+    identical for both forms, only each form's own ITD-builder formatter
+    differs; see `app/engine/itd/cg_shared.py`).
+
+    These rows carry no acquisition/transfer dates and no asset-type
+    sub-classification (the frontend's ``COMMON_ASSET`` field set has
+    neither) -- the row's mere presence under this ST-only or LT-only
+    bucket already means the taxpayer is asserting that holding period, so
+    each row is tagged ``explicit_long_term`` directly rather than left to
+    date-based classification (which would need dates this row shape
+    doesn't collect). Mapped to ``CGAssetType.OTHER`` (not
+    ``UNLISTED_SHARES``) since no sub-type is actually declared by the
+    user -- fabricating an "unlisted shares" classification (which would
+    additionally require a Section 50CA fair-market-value comparison this
+    row shape also has no field for) would be less honest than the
+    generic bucket, and the disclosure total is identical either way
+    (``FullValueConsdOthUnqshr`` vs ``FullValueConsdSec50CA`` differ only
+    in which sub-line the same consideration lands on).
+    """
+    schedule = draft.capitalGainsSchedule
+    transactions: list[CGTransaction] = []
+    valid_sections = {"54D", "54F", "54G", "54GA"}
+    for is_long_term, rows in ((False, schedule.stOtherAssets), (True, schedule.ltOtherAssets)):
+        for row in rows:
+            # Defensive normalization: `ltOtherAssets.exemptionSection` was
+            # a free-text field before this mapper existed, so an older
+            # saved draft could hold arbitrary text here -- fall back to
+            # None (no exemption applied) rather than let an invalid value
+            # raise a Pydantic ValidationError on an otherwise-valid draft.
+            raw_section = row.get("exemptionSection") or None
+            exemption_section = raw_section if raw_section in valid_sections else None
+            transactions.append(CGTransaction(
+                asset_type=CGAssetType.OTHER,
+                description="Other capital asset",
+                date_of_transfer=date(2026, 3, 31),
+                full_consideration=Decimal(str(row.get("fullConsideration") or 0)),
+                cost_of_acquisition=Decimal(str(row.get("acquisitionCost") or 0)),
+                improvement_cost=Decimal(str(row.get("improvementCost") or 0)),
+                expenditure_on_transfer=Decimal(str(row.get("transferExpenses") or 0)),
+                loss_disallowed_94_7_94_8=Decimal(str(row.get("loss94") or 0)),
+                explicit_long_term=is_long_term,
+                other_assets_exemption_section=exemption_section,
+                other_assets_exemption_amount=Decimal(str(row.get("exemptionAmount") or 0)),
+            ))
+    return transactions
+
+
+def _map_nri_fii_securities(draft: ReturnDraft) -> list[CGTransaction]:
+    """
+    Map Schedule CG item A5 rows (``capitalGainsSchedule.stNriUnlisted``) --
+    "NRI/FII securities u/s 115AD (other than A3)". Section 115AD is
+    inherently FII/FPI-specific, so no per-row FII tag is needed: for an
+    FII/FPI taxpayer these transactions route to Schedule CG's own
+    ``NRISecur115AD`` block via the existing unconditional
+    ``_FII_SECURITIES_ASSET_TYPES`` split in
+    `app/engine/itd/itr2.py::_schedule_cg_for23()`; for anyone else -- a
+    genuine 115AD security shouldn't occur, but the mapper must still
+    degrade gracefully rather than misclassify -- they fall through to the
+    ordinary generic "other assets" bucket (Sl. A6/B9) the same
+    ``_other_assets_block``/``build_itr3_other_assets_*`` formatters
+    already handle for every other generic-bucket transaction.
+
+    The row has no explicit asset-type sub-classification, only a binary
+    choice already implicit in which money field is filled:
+    ``unquotedConsideration``/``fairMarketValue`` (section 50CA deeming
+    applies -- tagged ``UNLISTED_SHARES``) or the generic
+    ``fullConsideration`` (any other FII-eligible security type -- no
+    50CA deeming; tagged ``LISTED_SECURITY`` as the most representative
+    generic member of ``_FII_SECURITIES_ASSET_TYPES`` -- the shared
+    aggregation core does not distinguish further within that set).
+    """
+    transactions: list[CGTransaction] = []
+    for row in draft.capitalGainsSchedule.stNriUnlisted:
+        unquoted = Decimal(str(row.get("unquotedConsideration") or 0))
+        if unquoted > 0:
+            asset_type = CGAssetType.UNLISTED_SHARES
+            full_consideration = unquoted
+        else:
+            asset_type = CGAssetType.LISTED_SECURITY
+            full_consideration = Decimal(str(row.get("fullConsideration") or 0))
+        transactions.append(CGTransaction(
+            asset_type=asset_type,
+            description="NRI/FII security u/s 115AD",
+            date_of_transfer=date(2026, 3, 31),
+            full_consideration=full_consideration,
+            fair_market_value_50ca=Decimal(str(row.get("fairMarketValue") or 0)) or None,
+            cost_of_acquisition=Decimal(str(row.get("acquisitionCost") or 0)),
+            improvement_cost=Decimal(str(row.get("improvementCost") or 0)),
+            expenditure_on_transfer=Decimal(str(row.get("transferExpenses") or 0)),
+            loss_disallowed_94_7_94_8=Decimal(str(row.get("loss94") or 0)),
+            explicit_long_term=False,
+        ))
+    return transactions
+
+
+# Row-level Schedule CG sectionCode -> CGTransaction.section_code, for
+# Schedule CG item B6 ("NRIOnSec112and115" / non-FII "NRI_B5" path).
+_NRI_112_115_SECTION_CODE_MAP = {"21ciii": "112_1_c", "5AC1c": "115AC", "5ADiii": "115AD"}
+
+
+def _map_nri_112_115_securities(draft: ReturnDraft) -> list[CGTransaction]:
+    """
+    Map Schedule CG item B6 rows (``capitalGainsSchedule.ltNri112115``) --
+    non-resident LTCG on unlisted securities u/s 112(1)(c), bonds/GDRs u/s
+    115AC, or FII securities u/s 115AD. Unlike A5's STCG counterpart, this
+    row DOES carry an explicit ``sectionCode`` selector, which decides the
+    routing precisely rather than by inference:
+
+    - ``"5ADiii"`` (115AD) is FII/FPI-specific and routes through the same
+      unconditional ``_FII_SECURITIES_ASSET_TYPES`` split as A5 (see
+      `_map_nri_fii_securities`'s own docstring) -- no
+      ``is_nri_unquoted_shares_disposal``/``section_code`` tag needed or
+      set, since that tagged path is explicitly gated ``if not
+      is_fii_fpi`` in the builder (`app/engine/itd/itr2.py`).
+    - ``"21ciii"``/``"5AC1c"``/``"5ADiii"`` are ALL tagged
+      ``is_nri_unquoted_shares_disposal=True`` + ``section_code`` uniformly
+      (unlike A5's STCG counterpart, which has no such tagging mechanism at
+      all -- Schedule CG's own A5 item is 115AD-only, with no non-FII
+      112(1)(c)/115AC sibling on the STCG side, unlike LTCG). The builder's
+      own `is_fii_fpi` routing takes priority regardless of this tag: when
+      `is_fii_fpi` is true, EVERY transaction of a `_FII_SECURITIES_ASSET_
+      TYPES` type (including `UNLISTED_SHARES`, used here unconditionally)
+      is swept into the FII bucket via asset-type membership alone, before
+      this tag is even consulted (the tag's own consuming loop only fires
+      `if not is_fii_fpi`) -- so a "5ADiii" row tagged this way still
+      routes correctly to `NRISecur115AD`/the FII branch of
+      `NRIOnSec112and115` for an FII/FPI taxpayer, and to the ordinary
+      non-FII `NRIOnSec112and115Dtls` grouping (keyed by its own declared
+      section code) for everyone else -- including the reasonable
+      graceful-degradation case of a non-FII/FPI taxpayer who selected
+      "5ADiii" despite that section being FII-specific in practice.
+    """
+    transactions: list[CGTransaction] = []
+    for row in draft.capitalGainsSchedule.ltNri112115:
+        deduction_54f = Decimal(str(row.get("deduction54F") or 0))
+        transactions.append(CGTransaction(
+            asset_type=CGAssetType.UNLISTED_SHARES,
+            description="NRI unlisted security u/s 112(1)(c)/115AC/115AD",
+            date_of_transfer=date(2026, 3, 31),
+            full_consideration=Decimal(str(row.get("fullConsideration") or 0)),
+            cost_of_acquisition=Decimal(str(row.get("acquisitionCost") or 0)),
+            improvement_cost=Decimal(str(row.get("improvementCost") or 0)),
+            expenditure_on_transfer=Decimal(str(row.get("transferExpenses") or 0)),
+            explicit_long_term=True,
+            other_assets_exemption_section="54F" if deduction_54f > 0 else None,
+            other_assets_exemption_amount=deduction_54f,
+            is_nri_unquoted_shares_disposal=True,
+            section_code=_NRI_112_115_SECTION_CODE_MAP.get(row.get("sectionCode")),
+        ))
+    return transactions
+
+
 def _map_vda_transactions(draft: ReturnDraft) -> list[VDATransaction]:
     """Map Schedule VDA rows. Rows missing either date are skipped — both
     are required by ``VDATransaction`` and by the statutory holding-period
@@ -275,6 +512,7 @@ def _map_vda_transactions(draft: ReturnDraft) -> list[VDATransaction]:
             date_of_transfer=transferred,
             acquisition_cost=row.acquisitionCost,
             consideration_received=row.consideration,
+            head=row.head or "CG",
         ))
     return transactions
 
@@ -333,6 +571,35 @@ def _map_cg_nri_proviso_48(draft: ReturnDraft) -> dict[str, Decimal]:
         "cg_nri_ltcg_deduction_54f": proviso48.deduction54F,
         "cg_nri_115f_sale_value": sale_115f,
         "cg_nri_115f_deduction": deduction_115f,
+    }
+
+
+def _map_buyback_losses(draft: ReturnDraft) -> dict[str, Decimal]:
+    """
+    Map Schedule CG's ``CapitalLossBuyBackShares`` rows (Section 46A
+    capital loss on buyback of shares by a domestic company).
+    ``capitalGainsSchedule.buyBackLosses`` is a flat rate-bucketed list
+    (``rate`` one of "STL20"/"STL30"/"STLAR", ``amount`` already a
+    negative/non-positive loss) matching the official STCG schema shape
+    exactly -- summed per bucket here since the schema's own
+    ``CapitalLossBuyBackSharesDtls`` array itself only ever needs one row
+    per rate (max 3 total).
+
+    The frontend has no corresponding LTCG input yet (the official LTCG
+    schema only needs one flat total, no rate breakdown) --
+    ``cg_buyback_loss_ltcg`` stays 0 pending that field, disclosed here
+    rather than silently assumed complete.
+    """
+    totals = {"STL20": Decimal("0"), "STL30": Decimal("0"), "STLAR": Decimal("0")}
+    for row in draft.capitalGainsSchedule.buyBackLosses:
+        rate = row.get("rate")
+        if rate in totals:
+            totals[rate] += min(Decimal("0"), Decimal(str(row.get("amount") or 0)))
+    return {
+        "cg_buyback_loss_stcg20": totals["STL20"],
+        "cg_buyback_loss_stcg30": totals["STL30"],
+        "cg_buyback_loss_stcg_applicable": totals["STLAR"],
+        "cg_buyback_loss_ltcg": Decimal("0"),
     }
 
 
@@ -540,6 +807,21 @@ def _map_foreign_assets(draft: ReturnDraft) -> list[ITR2ForeignAssetEntry]:
             income_tax_schedule_item_no=row.incomeTaxScheduleItemNo or None,
             initial_value_of_investment=row.initialValueOfInvestment,
             total_gross_proceeds_from_sale=row.totalGrossProceedsValue,
+            nature_of_amount=row.natureOfAmount,
+            cash_value_or_surrender_value=row.cashValueOrSurrenderValue,
+            name_mentioned_in_account=row.nameMentionedInAccount,
+            income_accrued_tax_flag=row.incomeAccruedTaxFlag,
+            name_of_trust=row.nameOfTrust,
+            address_of_trust=row.addressOfTrust,
+            name_of_other_trustees=row.nameOfOtherTrustees,
+            address_of_other_trustees=row.addressOfOtherTrustees,
+            name_of_settlor=row.nameOfSettlor,
+            address_of_settlor=row.addressOfSettlor,
+            name_of_beneficiaries=row.nameOfBeneficiaries,
+            address_of_beneficiaries=row.addressOfBeneficiaries,
+            name_of_person=row.nameOfPerson,
+            address_of_person=row.addressOfPerson,
+            income_derived_tax_flag=row.incomeDerivedTaxFlag,
         ))
     return entries
 
@@ -607,6 +889,25 @@ def _map_asset_liability(draft: ReturnDraft) -> Optional[AssetLiabilityInput]:
         return None
     return AssetLiabilityInput(
         immovable_property=al.immovableProperty,
+        immovable_properties=[
+            AssetLiabilityImmovable(
+                description=row.description,
+                address=AssetLiabilityAddress(
+                    residence_no=row.address.residenceNo,
+                    locality_or_area=row.address.localityOrArea,
+                    city_or_town_or_district=row.address.cityOrTownOrDistrict,
+                    state_code=row.address.stateCode,
+                    country_code=row.address.countryCode,
+                    residence_name=row.address.residenceName,
+                    road_or_street=row.address.roadOrStreet,
+                    pin_code=row.address.pinCode,
+                    zip_code=row.address.zipCode,
+                ),
+                amount=row.amount,
+            )
+            for row in al.immovableProperties
+        ],
+        interest_held_in_asset_flag=al.interestHeldInAssetFlag,
         cash_in_hand=al.cashInHand,
         bank_deposits=al.bankDeposits,
         shares_and_securities=al.sharesAndSecurities,
@@ -631,9 +932,11 @@ def _map_schedule_5a(draft: ReturnDraft) -> Optional[Schedule5AInput]:
         spouse_pan=pcc.spousePAN,
         spouse_aadhaar=pcc.spouseAadhaar or None,
         hp_amount_apportioned=pcc.hpAmountApportioned,
+        bus_amount_apportioned=pcc.busAmountApportioned,
         cg_amount_apportioned=pcc.cgAmountApportioned,
         os_amount_apportioned=pcc.osAmountApportioned,
         hp_tds_apportioned=pcc.hpTdsApportioned,
+        bus_tds_apportioned=pcc.busTdsApportioned,
         cg_tds_apportioned=pcc.cgTdsApportioned,
         os_tds_apportioned=pcc.osTdsApportioned,
     )
@@ -648,6 +951,9 @@ def _map_esop_deferrals(draft: ReturnDraft) -> list[ESOPDeferralInput]:
             tax_deferred_brought_forward=row.taxDeferredBroughtForward,
             tax_payable_current_year=row.taxPayableCurrentYear,
             balance_tax_carried_forward=row.balanceTaxCarriedForward,
+            security_type=row.securityType,
+            ceased_employee=row.ceasedEmployee,
+            gross_perquisite_tax=row.grossPerquisiteTax,
         )
         for row in draft.esopDeferrals
         if row.employerPAN and row.dpiitRegistrationNumber and row.assessmentYear
@@ -1201,9 +1507,13 @@ def draft_to_itr2_input(
     # ITR-2-specific: full Schedule CG, VDA, brought-forward losses, SI,
     # agricultural/exempt income, FSI/TR/FA/SPI/PTI/AMT.
     cg_112a_scrips, cg_115ad_scrips, scrips_skipped = _map_112a_scrips(draft)
-    cg_transactions = _map_immovable_gains(draft)
+    cg_transactions = (
+        _map_immovable_gains(draft) + _map_equity_stt_stcg(draft) + _map_other_assets(draft)
+        + _map_nri_fii_securities(draft) + _map_nri_112_115_securities(draft)
+    )
     cg_stcg_dtaa_entries, cg_ltcg_dtaa_entries = _map_cg_dtaa_entries(draft)
     cg_nri_proviso_48 = _map_cg_nri_proviso_48(draft)
+    cg_buyback_losses = _map_buyback_losses(draft)
     vda_transactions = _map_vda_transactions(draft)
     bf_losses = _map_bf_losses(draft)
     si_entries = _map_si_entries(draft)
@@ -1289,6 +1599,7 @@ def draft_to_itr2_input(
         cg_stcg_dtaa_entries=cg_stcg_dtaa_entries,
         cg_ltcg_dtaa_entries=cg_ltcg_dtaa_entries,
         **cg_nri_proviso_48,
+        **cg_buyback_losses,
         vda_transactions=vda_transactions,
         bf_losses=bf_losses,
         si_entries=si_entries,

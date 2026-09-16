@@ -18,6 +18,7 @@ import pytest
 
 from app.engine.calculators.itr2 import compute as compute_itr2
 from app.engine.draft_to_itr2_input import draft_to_itr2_input
+from app.engine.validators.itr2.input_rules import validate_itr2_input
 from app.schemas.return_draft import (
     AccumulatedPfEntry,
     AgriculturalLandParcel,
@@ -147,6 +148,82 @@ def test_112a_scrip_with_date_is_mapped_and_taxed() -> None:
     # 300000 sale - 100000 cost - 1.25L exemption = 75000 taxable, so a
     # nonzero special-rate 112A tax must appear.
     assert result.special_rate_tax > 0
+
+
+def test_112a_scrip_passes_stt_and_recognized_exchange_validation() -> None:
+    """`ITR2-IN-CG-121`/`-123` (Section 112A's own STT-paid-on-transfer/
+    recognized-stock-exchange conditions on `CG112AScrip`) must pass for a
+    normally-mapped scrip -- `is_recognized_stock_exchange` has no
+    frontend control or official schema field, so the mapper must set it
+    True by construction the same way `_map_equity_stt_stcg` does for
+    111A, or every real Schedule 112A scrip would fail a Severity.A,
+    return-blocking check the moment one existed (the exact class of bug
+    already found and fixed for 111A)."""
+    draft = _filing_ready_itr2_draft()
+    draft.capitalGainsSchedule.schedule112A = [Scrip112A(
+        id="s1", isin="INE001A01036", name="Reliance Industries",
+        quantity=Decimal("100"), salePricePerUnit=Decimal("3000"),
+        totalSaleValue=Decimal("300000"), costWithoutIndexation=Decimal("100000"),
+        acquisitionCost=Decimal("100000"), fmvPerUnit=Decimal("1000"),
+        totalFmv=Decimal("100000"), transferExpenses=Decimal("500"),
+        dateOfAcquisition="2023-01-10", dateOfTransfer="2025-12-01",
+    )]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.cg_112a_scrips[0].is_recognized_stock_exchange is True
+    assert itr2_input.cg_112a_scrips[0].stt_paid_on_transfer is True
+
+    results = validate_itr2_input(itr2_input)
+    failures = [r for r in results if r.rule_id in ("ITR2-IN-CG-121", "ITR2-IN-CG-123") and not r.passed]
+    assert not failures, [f.message for f in failures]
+
+
+def test_st_equity_111a_rows_reach_cg_transactions_and_are_taxed() -> None:
+    """Schedule CG item A3 (``stEquity``, STCG on equity/MF/business-trust
+    units, STT paid u/s 111A) had a mapper written and used by ITR-3, but
+    it was NEVER wired into ITR-2's own ``cg_transactions`` assembly --
+    the single most common real capital-gains transaction type was
+    silently dropped for every ITR-2 filer with equity STCG."""
+    from app.schemas.itr2 import CGAssetType
+
+    draft = _filing_ready_itr2_draft()
+    draft.capitalGainsSchedule.stEquity = [{
+        "sectionCode": "1A", "fullConsideration": 1000000,
+        "acquisitionCost": 400000, "transferExpenses": 5000,
+    }]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    matching = [tx for tx in itr2_input.cg_transactions if tx.asset_type == CGAssetType.LISTED_EQUITY_111A]
+    assert len(matching) == 1
+    assert matching[0].full_consideration == Decimal("1000000")
+    assert matching[0].cost_of_acquisition == Decimal("400000")
+    assert matching[0].explicit_long_term is False
+
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+    # 1000000 - 400000 - 5000 = 595000 taxable at the 111A special rate.
+    assert result.special_rate_tax > 0
+    assert result.schedules["si"].total_special_rate_income == Decimal("595000")
+
+
+def test_st_equity_111a_rows_pass_stt_paid_validation() -> None:
+    """CRITICAL regression: `ITR2-IN-CG-005` (Severity.A -- the return
+    WILL NOT be allowed to upload if this fails) checks
+    `is_stt_paid_on_acquisition`/`is_stt_paid_on_transfer`, which default
+    to `None` on `CGTransaction` and were never set by any mapper. Wiring
+    `stEquity` into ITR-2's own `cg_transactions` assembly (the fix in the
+    test above) would otherwise have made this rule reachable for ITR-2
+    for the first time and immediately started blocking every real return
+    with 111A equity STCG from filing at all. This must pass, not merely
+    compute a correct tax amount -- a return that computes correctly but
+    cannot be filed is not actually fixed."""
+    draft = _filing_ready_itr2_draft()
+    draft.capitalGainsSchedule.stEquity = [{
+        "sectionCode": "1A", "fullConsideration": 1000000,
+        "acquisitionCost": 400000, "transferExpenses": 5000,
+    }]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    results = validate_itr2_input(itr2_input)
+    failures = [r for r in results if r.rule_id == "ITR2-IN-CG-005" and not r.passed]
+    assert not failures, [f.message for f in failures]
 
 
 def test_112a_scrip_without_transfer_date_is_skipped_not_fabricated() -> None:
@@ -460,6 +537,77 @@ def test_pti_exempt_income_reaches_exempt_income_schedule() -> None:
     itr2_input, _breakdown = draft_to_itr2_input(draft)
     assert itr2_input.exempt_income is not None
     assert itr2_input.exempt_income.pti_exempt_income == Decimal("15000")
+
+
+def test_nri_fii_securities_stcg_reaches_cg_transactions() -> None:
+    """Schedule CG item A5 (``stNriUnlisted``, "NRI/FII securities u/s
+    115AD (other than A3)") had no mapper at all -- captured by the
+    frontend but silently discarded before ever reaching a CGTransaction."""
+    from app.schemas.itr2 import CGAssetType
+
+    draft = _filing_ready_itr2_draft()
+    draft.capitalGainsSchedule.stNriUnlisted = [{
+        "unquotedConsideration": 500000, "fairMarketValue": 600000,
+        "acquisitionCost": 100000, "transferExpenses": 5000,
+    }]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    matching = [tx for tx in itr2_input.cg_transactions if tx.asset_type == CGAssetType.UNLISTED_SHARES]
+    assert len(matching) == 1
+    assert matching[0].full_consideration == Decimal("500000")
+    assert matching[0].fair_market_value_50ca == Decimal("600000")
+    assert matching[0].explicit_long_term is False
+
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+
+
+def test_nri_112_115_securities_ltcg_reaches_cg_transactions() -> None:
+    """Schedule CG item B6 (``ltNri112115``, unlisted securities u/s
+    112(1)(c)/bonds-GDR u/s 115AC/FII securities u/s 115AD) had no mapper
+    at all -- the row's own declared section code must reach the typed
+    ``CGTransaction`` for the builder's NRIOnSec112and115 grouping to work."""
+    draft = _filing_ready_itr2_draft()
+    draft.capitalGainsSchedule.ltNri112115 = [{
+        "sectionCode": "5AC1c", "fullConsideration": 800000,
+        "acquisitionCost": 200000, "transferExpenses": 3000, "deduction54F": 50000,
+    }]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    matching = [tx for tx in itr2_input.cg_transactions if tx.is_nri_unquoted_shares_disposal]
+    assert len(matching) == 1
+    assert matching[0].section_code == "115AC"
+    assert matching[0].full_consideration == Decimal("800000")
+    assert matching[0].other_assets_exemption_section == "54F"
+    assert matching[0].other_assets_exemption_amount == Decimal("50000")
+    assert matching[0].explicit_long_term is True
+
+    result = compute_itr2(itr2_input)
+    assert not result.errors
+
+
+def test_buyback_loss_reaches_itr2_input_fields() -> None:
+    """Schedule CG's ``CapitalLossBuyBackShares`` (Section 46A capital loss
+    on buyback of shares) had no mapper at all -- the frontend already
+    captures rate-bucketed loss rows, but nothing fed them into
+    ``ITR2Input``. Summed correctly per rate bucket, and the sign is
+    preserved as a loss (non-positive) throughout. The calculator's own
+    netting of this loss against the matching STCG/LTCG rate bucket is
+    covered separately in ``tests/test_itr2_itd_builder.py`` (a full
+    draft-level scenario would need `stEquity`'s own STCG mapper, which
+    does not exist yet for ITR-2 -- a separate, pre-existing gap, not
+    something to route around here)."""
+    draft = _filing_ready_itr2_draft()
+    draft.capitalGainsSchedule.buyBackLosses = [
+        {"rate": "STL20", "amount": -100000},
+        {"rate": "STL30", "amount": -25000},
+    ]
+    itr2_input, _breakdown = draft_to_itr2_input(draft)
+    assert itr2_input.cg_buyback_loss_stcg20 == Decimal("-100000")
+    assert itr2_input.cg_buyback_loss_stcg30 == Decimal("-25000")
+    assert itr2_input.cg_buyback_loss_stcg_applicable == Decimal("0")
+    assert itr2_input.cg_buyback_loss_ltcg == Decimal("0")
+
+    result = compute_itr2(itr2_input)
+    assert not result.errors
 
 
 def test_other_exempt_income_preserves_per_clause_classification() -> None:

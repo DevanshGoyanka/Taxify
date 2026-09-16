@@ -416,6 +416,11 @@ class CGTransaction(StrictModel):
     is_nri_unquoted_shares_disposal: bool = False
     section_code: Optional[Literal["112_1_c", "115AC", "115AD"]] = None
     expenditure_on_transfer: Decimal = Field(default=Decimal("0"), ge=0)
+    # Schedule CG's repeated "Loss to be disallowed u/s 94(7) or 94(8)"
+    # sub-item (Sl. A3d/A5d/A6d/etc.) -- entered as a positive value that is
+    # ADDED BACK to the balance (increasing the taxable gain / reducing the
+    # loss), per the form's own "Enter positive value only" instruction.
+    loss_disallowed_94_7_94_8: Decimal = Field(default=Decimal("0"), ge=0)
     is_stt_paid_on_acquisition: Optional[bool] = None
     is_stt_paid_on_transfer: Optional[bool] = None
     is_recognized_stock_exchange: Optional[bool] = None
@@ -429,6 +434,21 @@ class CGTransaction(StrictModel):
     deduction_us54b: Decimal = Field(default=Decimal("0"), ge=0)
     deduction_us54ec: Decimal = Field(default=Decimal("0"), ge=0)
     deduction_us54f: Decimal = Field(default=Decimal("0"), ge=0)
+    # Schedule CG's generic "other assets" bucket (Sl. A6f/B9d in ITR-3;
+    # Sl. B8d in ITR-2 -- ITR-2's own STCG-other-assets item, A5, has NO
+    # exemption line at all) -- a single flat (section, amount) exemption
+    # declaration, distinct from `exemptions` above (the richer CGAS-
+    # evidence-tracked claim list used by land/building), because this
+    # bucket's frontend row captures only one section + one amount with no
+    # transfer-date/investment-date/CGAS evidence. Valid sections differ by
+    # form and by ST/LT: ITR-2 LTCG-other-assets accepts only "54F"; ITR-3
+    # STCG-other-assets accepts only "54G"/"54GA" (section 54G/54GA relief
+    # for shifting an industrial undertaking -- business-specific, so ITR-2
+    # never offers it); ITR-3 LTCG-other-assets accepts "54D"/"54F"/"54G"/
+    # "54GA". The consuming calculator/builder code applies this only when
+    # the section is valid for the given form/ST-LT combination.
+    other_assets_exemption_section: Optional[Literal["54D", "54F", "54G", "54GA"]] = None
+    other_assets_exemption_amount: Decimal = Field(default=Decimal("0"), ge=0)
 
     @model_validator(mode="after")
     def validate_transaction(self) -> "CGTransaction":
@@ -510,6 +530,15 @@ class CG112AScrip(StrictModel):
     balance: Optional[Decimal] = None
     stt_paid_on_acquisition: Optional[bool] = None
     stt_paid_on_transfer: bool = True
+    # Section 112A's own recognized-stock-exchange condition (distinct
+    # from stt_paid_on_transfer, though the two facts are practically
+    # inseparable under Indian securities law -- STT can only be levied
+    # on an exchange-executed trade). No frontend control or official
+    # schema field exists for this on a Schedule 112A/115AD scrip row;
+    # set True by the mapper for every scrip, matching the same
+    # "row's own classification is the assertion" reasoning used for
+    # `CGTransaction.is_recognized_stock_exchange`.
+    is_recognized_stock_exchange: Optional[bool] = None
 
     @model_validator(mode="after")
     def validate_scrip_totals(self) -> "CG112AScrip":
@@ -531,6 +560,10 @@ class VDATransaction(StrictModel):
     acquisition_cost: Decimal = Field(default=Decimal("0"), ge=0)
     consideration_received: Decimal = Field(default=Decimal("0"), ge=0)
     income_from_vda: Optional[Decimal] = Field(default=None, ge=0)
+    # Schedule VDA HeadUndIncTaxed: BI (business income, ITR-3 only) or CG
+    # (capital gain). Defaults to CG, matching every form except ITR-3
+    # where the taxpayer may have VDA business income.
+    head: Literal["CG", "BI"] = Field(default="CG")
 
     @model_validator(mode="after")
     def validate_dates_and_income(self) -> "VDATransaction":
@@ -811,6 +844,21 @@ class ForeignAssetEntry(StrictModel):
     # proceeds). No prior field captured either.
     initial_value_of_investment: Optional[Decimal] = Field(default=None)
     total_gross_proceeds_from_sale: Decimal = Field(default=Decimal("0"))
+    nature_of_amount: Optional[str] = None
+    cash_value_or_surrender_value: Optional[Decimal] = None
+    name_mentioned_in_account: Optional[str] = None
+    income_accrued_tax_flag: Optional[str] = None
+    name_of_trust: Optional[str] = None
+    address_of_trust: Optional[str] = None
+    name_of_other_trustees: Optional[str] = None
+    address_of_other_trustees: Optional[str] = None
+    name_of_settlor: Optional[str] = None
+    address_of_settlor: Optional[str] = None
+    name_of_beneficiaries: Optional[str] = None
+    address_of_beneficiaries: Optional[str] = None
+    name_of_person: Optional[str] = None
+    address_of_person: Optional[str] = None
+    income_derived_tax_flag: Optional[str] = None
 
 
 class SPIEntry(StrictModel):
@@ -832,13 +880,6 @@ class PTIEntry(StrictModel):
     section: str = Field(min_length=1, max_length=20)
     income_amount: Decimal = Field(default=Decimal("0"))
     tds_credit: Decimal = Field(default=Decimal("0"), ge=0)
-    # CBDT rule #432: Schedule EI Sl.5 ("Pass through income not chargeable
-    # to tax") must equal the exempt income actually declared inside
-    # Schedule PTI itself (the official IncClmdPTI.TotalSec23FBB/Sec23FBB
-    # fields, Section 10(23FBB)) -- previously there was no field anywhere
-    # to capture this per-entity, so any nonzero EI Sl.5 claim was numerically
-    # unverifiable against Schedule PTI. Additive; default 0 preserves every
-    # existing entry's behaviour.
     exempt_income_23fbb: Decimal = Field(default=Decimal("0"), ge=0)
 
 
@@ -864,10 +905,34 @@ class AMTInput(StrictModel):
     amt_credit_utilised: Decimal = Field(default=Decimal("0"), ge=0)
 
 
+class AssetLiabilityAddress(StrictModel):
+    """Official Schedule AL address for an immovable asset."""
+
+    residence_no: str = Field(min_length=1)
+    locality_or_area: str = Field(min_length=1)
+    city_or_town_or_district: str = Field(min_length=1)
+    state_code: str = Field(min_length=1)
+    country_code: str = Field(min_length=1)
+    residence_name: Optional[str] = None
+    road_or_street: Optional[str] = None
+    pin_code: Optional[int] = Field(default=None, ge=100000, le=999999)
+    zip_code: Optional[str] = None
+
+
+class AssetLiabilityImmovable(StrictModel):
+    """One explicitly sourced immovable-property row in Schedule AL."""
+
+    description: str = Field(min_length=1, max_length=25)
+    address: AssetLiabilityAddress
+    amount: Decimal = Field(ge=0)
+
+
 class AssetLiabilityInput(StrictModel):
     """Schedule AL assets and related liabilities."""
 
     immovable_property: Decimal = Field(default=Decimal("0"), ge=0)
+    immovable_properties: list[AssetLiabilityImmovable] = Field(default_factory=list)
+    interest_held_in_asset_flag: Optional[Literal["Y", "N"]] = None
     cash_in_hand: Decimal = Field(default=Decimal("0"), ge=0)
     bank_deposits: Decimal = Field(default=Decimal("0"), ge=0)
     shares_and_securities: Decimal = Field(default=Decimal("0"), ge=0)
@@ -885,17 +950,12 @@ class Schedule5AInput(StrictModel):
     spouse_name: str = Field(min_length=1, max_length=125)
     spouse_pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
     spouse_aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
-    hp_amount_apportioned: Decimal = Field(default=Decimal("0"))
-    cg_amount_apportioned: Decimal = Field(default=Decimal("0"))
-    os_amount_apportioned: Decimal = Field(default=Decimal("0"))
-    # Split per-head (the form's own Sl.1/2/3 rows each carry their own
-    # "TDS deducted on income at (ii)"/"TDS apportioned in the hands of
-    # spouse" columns) -- previously a single combined `tds_apportioned`
-    # field existed, which the ITD builder attributed entirely to the OS
-    # row regardless of which head the TDS was actually withheld on. Any
-    # TDS genuinely deducted on the couple's HP rent or CG proceeds was
-    # silently misreported as OS-head TDS.
+    hp_amount_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
+    bus_amount_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
+    cg_amount_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
+    os_amount_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
     hp_tds_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
+    bus_tds_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
     cg_tds_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
     os_tds_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
 
@@ -1319,6 +1379,22 @@ class ITR2Input(StrictModel):
     # NRIDTAADtls, applicable for non-residents only).
     cg_stcg_dtaa_entries: List[CGDtaaEntry] = Field(default_factory=list)
     cg_ltcg_dtaa_entries: List[CGDtaaEntry] = Field(default_factory=list)
+    # Schedule CG's "CapitalLossBuyBackShares" block -- Section 46A capital
+    # loss on buyback of shares by a domestic company. Unlike the ordinary
+    # transaction pipeline, the official schema discloses this as a bare
+    # rate-bucketed loss total (STCG: three buckets, "STL20"/"STL30"/
+    # "STLAR" -- LTCG: a single flat total, no rate breakdown needed since
+    # only one LTCG rate applies), not a per-transaction consideration/cost
+    # breakdown -- confirmed by direct schema introspection. All four are
+    # non-positive (a loss, `le=0`) and net into the calculator's own
+    # existing STCG-20%/30%/applicable-rate and LTCG-12.5% buckets before
+    # CYLA, the same buckets any other capital loss of that rate would
+    # reduce -- this is a genuine loss under Section 46A, not merely a
+    # disclosure-only NRI off-form figure like the `cg_nri_*` fields above.
+    cg_buyback_loss_stcg20: Decimal = Field(default=Decimal("0"), le=0)
+    cg_buyback_loss_stcg30: Decimal = Field(default=Decimal("0"), le=0)
+    cg_buyback_loss_stcg_applicable: Decimal = Field(default=Decimal("0"), le=0)
+    cg_buyback_loss_ltcg: Decimal = Field(default=Decimal("0"), le=0)
     # Schedule CG item A6 -- "amount deemed to be short-term capital gains"
     # under the section 54B(2)/54D(2) proviso: an earlier year's Capital
     # Gains Account Scheme deposit whose statutory reinvestment window

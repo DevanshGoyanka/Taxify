@@ -1192,6 +1192,21 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                 "Capital-gain exemptions cannot exceed the gain before exemption.",
                 path, f"<= {gross_gain}", str(total_exemptions),
             ))
+        # No mapper anywhere currently constructs a `CGTransaction` with
+        # `LISTED_EQUITY_112A` (or the 111A/112A equity-oriented-fund/
+        # business-trust-unit variants) -- confirmed by a full repo-wide
+        # search; actual Section 112A income is represented via the
+        # separate `CG112AScrip` list (`cg_112a_scrips`/`cg_115ad_scrips`,
+        # see `ITR2-IN-CG-121`..`-124` below for that path's own equivalent
+        # check), which this loop never sees. This branch is therefore
+        # unreachable via the real filing pipeline TODAY, but the schema
+        # itself still supports constructing a 112A-typed CGTransaction
+        # directly (a real, deliberately-written test does exactly this,
+        # `tests/test_itr2_validators.py::
+        # test_capital_gain_dates_stt_and_fmv_are_required`) -- kept, not
+        # removed, so that general-purpose coverage isn't silently dropped
+        # for a schema-supported scenario just because today's one mapper
+        # doesn't happen to produce it.
         if tx.asset_type in {CGAssetType.LISTED_EQUITY_111A, CGAssetType.LISTED_EQUITY_112A}:
             stt_paid = bool(tx.is_stt_paid_on_transfer) and (
                 tx.asset_type == CGAssetType.LISTED_EQUITY_111A or bool(tx.is_stt_paid_on_acquisition)
@@ -1294,7 +1309,27 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
     # CBDT rule #600: a share-buyback loss claimed in Schedule CG requires
     # the corresponding Section 2(22)(f) deemed-dividend detail in Schedule
     # OS Sl. No. 1a(iii) (OSDividendEntry.section == "10(22f)").
-    if any(tx.is_buyback_loss for tx in (inp.cg_transactions or [])):
+    #
+    # Two independent ways a buyback loss can be declared, both checked:
+    # `is_buyback_loss` tags an ordinary per-transaction disposal (e.g. an
+    # UNLISTED_SHARES row with a low/nil consideration) -- schema-supported
+    # and covered by existing tests, but nothing in the real mapper
+    # pipeline actually sets this flag today. The real, CBDT-compliant
+    # disclosure path is Schedule CG's own bare rate-bucketed
+    # "CapitalLossBuyBackShares" block (`_map_buyback_losses` ->
+    # `cg_buyback_loss_stcg20`/`_stcg30`/`_stcg_applicable`/`_ltcg`, all
+    # non-positive) -- until now this cross-check only recognized the
+    # former, so a return using the actual real-world path never triggered
+    # it at all, regardless of whether the Section 2(22)(f) evidence was
+    # present or missing.
+    has_buyback_loss = (
+        any(tx.is_buyback_loss for tx in (inp.cg_transactions or []))
+        or inp.cg_buyback_loss_stcg20 < _ZERO
+        or inp.cg_buyback_loss_stcg30 < _ZERO
+        or inp.cg_buyback_loss_stcg_applicable < _ZERO
+        or inp.cg_buyback_loss_ltcg < _ZERO
+    )
+    if has_buyback_loss:
         if not any(
             e.section == "10(22f)" and e.amount > _ZERO for e in inp.os_dividend_entries
         ):
@@ -3008,6 +3043,45 @@ def validate_itr2_input(inp: ITR2Input) -> list[ValidationResult]:
                         "the number of shares/units.",
                         f"{_label}[{_idx}].total_fmv", str(_expected_fmv), str(_scrip.total_fmv),
                     ))
+            # Section 112A's own STT-paid-on-transfer/recognized-stock-
+            # exchange conditions -- CG112AScrip's equivalent of
+            # `ITR2-IN-CG-005`'s check for CGTransaction-modeled 111A
+            # income (see that rule's own comment for why 112A itself is
+            # never reachable through the CGTransaction path). Unlike that
+            # rule, `stt_paid_on_acquisition` is deliberately NOT checked
+            # here: section 112A(4) exempts several notified acquisition
+            # modes (IPO/FPO, bonus, rights issue, ESOP, inheritance, etc.)
+            # from the acquisition-side STT requirement, which is exactly
+            # why that field is genuinely nullable on this schema (not a
+            # missing-value placeholder) -- hard-requiring it True would
+            # incorrectly block a legitimately exempted acquisition, the
+            # same class of bug this rule's own STT-paid mapping fix
+            # elsewhere was written to avoid. `stt_paid_on_transfer`
+            # (always required, no acquisition-side exemption regime)
+            # already defaults `True` on the schema itself and
+            # `is_recognized_stock_exchange` is set `True` by the mapper
+            # for every scrip (the row's own presence under Schedule
+            # 112A/115AD already asserts exchange-traded listed equity,
+            # the same reasoning `_map_equity_stt_stcg` uses) -- so both
+            # checks below are satisfied by construction today, and exist
+            # as a guard against a future construction path that forgets
+            # to set them, not because either is expected to fail.
+            if _scrip.stt_paid_on_transfer is not True:
+                results.append(_result(
+                    "ITR2-IN-CG-121" if _label == "cg_112a_scrips" else "ITR2-IN-CG-122",
+                    False,
+                    "Section 112A requires securities transaction tax to have been paid on "
+                    "transfer.",
+                    f"{_label}[{_idx}].stt_paid_on_transfer", True, _scrip.stt_paid_on_transfer,
+                ))
+            if _scrip.is_recognized_stock_exchange is not True:
+                results.append(_result(
+                    "ITR2-IN-CG-123" if _label == "cg_112a_scrips" else "ITR2-IN-CG-124",
+                    False,
+                    "Section 112A requires the transfer to be on a recognized stock exchange.",
+                    f"{_label}[{_idx}].is_recognized_stock_exchange", True,
+                    _scrip.is_recognized_stock_exchange,
+                ))
 
     # CBDT rule 662: every CGAS claim must point to a disclosed CGAS bank
     # account, matched by account number and account type.

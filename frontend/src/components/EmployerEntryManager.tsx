@@ -57,6 +57,11 @@ interface EmployerEntry {
   /** CBDT rule ITR2-IN-SAL-033: at least one nature-of-salary row is required when
    *  gross salary > 0. Maps to Schedule S item 1a breakdown. */
   salaryNatureRows?: SalaryNatureRow[];
+  /** Schedule S items 1d/1e/1f -- Section 89A retirement-benefit-account income. */
+  incomeNotified89A?: number;
+  incomeNotifiedOther89A?: number;
+  incomeNotifiedPriorYear89A?: number;
+  incomeNotified89ACountryRows?: Section89ACountryRow[];
 }
 
 interface Section10ExemptionRow {
@@ -70,6 +75,15 @@ interface SalaryNatureRow {
   id: string;
   natureCode: string;
   otherDescription: string;
+  amount: number;
+}
+
+/** Schedule S item 1d country-wise breakdown of notified-country
+ *  retirement-benefit-account income (schema NOT89AType). Only 3 countries
+ *  are notified under section 89A for this AY. */
+interface Section89ACountryRow {
+  id: string;
+  countryCode: 'US' | 'UK' | 'CA';
   amount: number;
 }
 
@@ -350,6 +364,47 @@ function SalaryNatureRows({ rows, onChange }: { rows: SalaryNatureRow[]; onChang
   );
 }
 
+const SECTION_89A_COUNTRIES = [
+  ['US', 'United States'],
+  ['UK', 'United Kingdom'],
+  ['CA', 'Canada'],
+] as const;
+
+/** Schedule S item 1d — country-wise breakdown of notified-country
+ *  Section 89A retirement-benefit-account income. */
+function Section89ACountryRows({ rows, onChange }: { rows: Section89ACountryRow[]; onChange: (rows: Section89ACountryRow[]) => void }): React.JSX.Element {
+  const addRow = (): void => onChange([...rows, { id: generateId(), countryCode: 'US', amount: 0 }]);
+  const update = (id: string, patch: Partial<Section89ACountryRow>): void =>
+    onChange(rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+
+  return (
+    <div style={CARD_STYLE}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <strong style={{ fontSize: 13, color: 'var(--navy)' }}>Notified-country breakdown</strong>
+        <button type="button" onClick={addRow} style={{ border: 0, borderRadius: 5, padding: '7px 10px', color: '#fff', background: 'var(--navy-light)', cursor: 'pointer', fontWeight: 600 }}>
+          + Add country
+        </button>
+      </div>
+      {rows.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>No notified-country rows added.</div>}
+      {rows.map((row) => (
+        <div key={row.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1.5fr) minmax(140px, 1fr) 34px', gap: 10, alignItems: 'end', marginTop: 10 }}>
+          <Field label="Country" required>
+            <select value={row.countryCode} onChange={(e) => update(row.id, { countryCode: e.target.value as Section89ACountryRow['countryCode'] })} style={INPUT_STYLE}>
+              {SECTION_89A_COUNTRIES.map(([code, name]) => <option key={code} value={code}>{code} -- {name}</option>)}
+            </select>
+          </Field>
+          <Field label="Amount (₹)" required>
+            <AmountInput value={row.amount} onChange={(v) => update(row.id, { amount: v })} />
+          </Field>
+          <button type="button" onClick={() => onChange(rows.filter((r) => r.id !== row.id))} aria-label="Remove country" style={{ height: 36, border: '1px solid #fecaca', borderRadius: 5, color: 'var(--danger)', background: 'var(--danger-bg)', cursor: 'pointer' }}>
+            &#215;
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Read-only TDS panel -- matches TDS tab entries by TAN and section 192/192A */
 function EmployerTDSPanel({ employerTAN, allTdsEntries }: {
   employerTAN?: string;
@@ -467,6 +522,12 @@ function EmployerForm({
     money(entry.retrenchmentCompensation) > 0;
   const section10Rows = entry.section10ExemptionRows || [];
   const salaryNatureRows = entry.salaryNatureRows || [];
+  const notified89ACountryRows = entry.incomeNotified89ACountryRows || [];
+  const notifiedAny89A = money(entry.incomeNotified89A) > 0;
+  // Form A20/Schedule S: TAN is mandatory whenever tax has actually been
+  // deducted by this employer -- optional only when no TDS was deducted.
+  const hasSalaryTDS = allTdsEntries.some((e) => (e.section === '192' || e.section === '192A') && e.claimedInReturn !== false);
+  const tanRequired = hasSalaryTDS;
 
   // Sequential section numbers -- only visible sections get a number
   let seq = 0;
@@ -474,6 +535,7 @@ function EmployerForm({
   const nDetails = next();
   const nNatureSalary = next();
   const nSalary = next();
+  const n89A = next();
   const nHRA = hraClaimed ? next() : 0;
   const nLTA = ltaClaimed ? next() : 0;
   const nAllowances = next();
@@ -510,17 +572,19 @@ function EmployerForm({
             {NATURE_OF_EMPLOYMENT_OPTIONS.map(({ code, label }) => <option key={code} value={code}>{code} — {label}</option>)}
           </select>
         </Field>
-        <Field label="Employer TAN" help="Optional when unavailable. If entered, use a CBDT jurisdiction TAN such as DELA12345B.">
+        <Field label="Employer TAN" required={tanRequired} help={tanRequired ? 'Mandatory: this return has section 192/192A TDS entries, and a TAN is required to validate that credit.' : 'Optional when no tax has been deducted by this employer. If entered, use a CBDT jurisdiction TAN such as DELA12345B.'}>
           <input
             type="text"
             value={entry.employerTAN || ''}
             onChange={(event) => onChange({ employerTAN: normalizeTan(event.target.value) })}
             maxLength={10}
             placeholder="DELA12345B"
+            required={tanRequired}
             aria-invalid={Boolean(entry.employerTAN) && !isValidTan(entry.employerTAN)}
-            style={{ ...INPUT_STYLE, borderColor: entry.employerTAN && !isValidTan(entry.employerTAN) ? 'var(--danger)' : 'var(--border-strong)' }}
+            style={{ ...INPUT_STYLE, borderColor: (entry.employerTAN && !isValidTan(entry.employerTAN)) || (tanRequired && !entry.employerTAN) ? 'var(--danger)' : 'var(--border-strong)' }}
           />
           {entry.employerTAN && !isValidTan(entry.employerTAN) && <div style={{ marginTop: 4, color: 'var(--danger)', fontSize: 11 }}>Enter a valid CBDT jurisdiction TAN.</div>}
+          {tanRequired && !entry.employerTAN && <div style={{ marginTop: 4, color: 'var(--danger)', fontSize: 11 }}>TAN is required because this return has salary TDS entries.</div>}
         </Field>
         <Field label="Employer Address" required>
           <TextInput value={entry.employerAddress} onChange={(v) => onChange({ employerAddress: v.slice(0, 200) })} maxLength={200} />
@@ -564,6 +628,18 @@ function EmployerForm({
         <Field label="Taxable Perquisites -- Section 17(2)"><AmountInput value={entry.perquisites} onChange={(v) => onChange({ perquisites: v })} /></Field>
         <Field label="Profits in Lieu -- Section 17(3)"><AmountInput value={entry.profitsInLieu} onChange={(v) => onChange({ profitsInLieu: v })} /></Field>
       </div>
+
+      <SectionHeading
+        n={n89A}
+        title="Section 89A -- retirement benefit account income (items 1d-1f)"
+        description="Income from a retirement benefit account maintained in a notified country (Schedule S items 1d/1e), and previously-relieved income now taxable (item 1f). Leave blank if not applicable."
+      />
+      <div style={GRID_STYLE}>
+        <Field label="Income from notified-country account (1d)"><AmountInput value={entry.incomeNotified89A} onChange={(v) => onChange({ incomeNotified89A: v })} /></Field>
+        <Field label="Income from other (non-notified) country account (1e)"><AmountInput value={entry.incomeNotifiedOther89A} onChange={(v) => onChange({ incomeNotifiedOther89A: v })} /></Field>
+        <Field label="Previously-relieved income taxable this year (1f)"><AmountInput value={entry.incomeNotifiedPriorYear89A} onChange={(v) => onChange({ incomeNotifiedPriorYear89A: v })} /></Field>
+      </div>
+      {notifiedAny89A && <Section89ACountryRows rows={notified89ACountryRows} onChange={(rows) => onChange({ incomeNotified89ACountryRows: rows })} />}
 
       {hraClaimed && (
         <>

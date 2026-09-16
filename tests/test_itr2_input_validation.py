@@ -1292,6 +1292,25 @@ def test_CG_116_no_buyback_loss_is_a_no_op():
     assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-116")
 
 
+def test_CG_116_bare_aggregate_buyback_loss_without_os_dividend_detail_fails():
+    """The real, actually-used buyback-loss mechanism (`_map_buyback_losses`'s
+    bare rate-bucketed ``cg_buyback_loss_*`` fields on ``ITR2Input``, matching
+    the official CBDT ``CapitalLossBuyBackShares`` schema shape) must trigger
+    this same cross-check -- previously only the unused, no-mapper-ever-sets-it
+    per-transaction ``is_buyback_loss`` flag did, so a return using the real
+    disclosure path never hit this rule at all."""
+    inp = _base_input(cg_buyback_loss_stcg20=Decimal("-500000"))
+    assert failed(validate_itr2_input(inp), "ITR2-IN-CG-116")
+
+
+def test_CG_116_bare_aggregate_buyback_loss_with_os_dividend_detail_passes():
+    inp = _base_input(
+        cg_buyback_loss_ltcg=Decimal("-200000"),
+        os_dividend_entries=[OSDividendEntry(section="10(22f)", amount=Decimal("200000"))],
+    )
+    assert not failed(validate_itr2_input(inp), "ITR2-IN-CG-116")
+
+
 def test_CG_117_nri_unquoted_shares_disposal_without_section_code_fails():
     """CBDT rule #597: a section code is mandatory when Schedule CG's Sl.B5
     NRI unquoted-shares block is filled."""

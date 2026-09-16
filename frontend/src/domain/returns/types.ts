@@ -343,10 +343,8 @@ export interface ITR3BalanceSheet {
   reservesAndSurplus: Money;
   securedLoans: Money;
   unsecuredLoans: Money;
+  deferredTaxLiability: Money;
   advancesFromCustomers: Money;
-  otherLiabilities: Money;
-  creditors: Money;
-  provisions: Money;
   totalSources: Money;
   fixedAssets: Money;
   investments: Money;
@@ -354,9 +352,18 @@ export interface ITR3BalanceSheet {
   tradeReceivables: Money;
   cashAndBank: Money;
   loansAndAdvances: Money;
+  /** Current liabilities and provisions (form item 3d) — netted against
+   *  current assets/loans/advances (form item 3e), not a Sources-side item. */
+  creditors: Money;
+  provisions: Money;
   otherAssets: Money;
   totalApplications: Money;
   noBooksOfAccounts: boolean;
+  /** Form item 6 (a-d) — only used when noBooksOfAccounts is true. */
+  noBooksSundryDebtors: Money;
+  noBooksSundryCreditors: Money;
+  noBooksStockInTrade: Money;
+  noBooksCashBalance: Money;
   reconciliationDifference: Money;
 }
 
@@ -388,9 +395,15 @@ export interface ITR3AuditInfo {
   auditorPAN: string;
   auditorAadhaar: string;
   liableSec92E: 'Y' | 'N';
+  /** Whether the accounts have actually been audited under section 92E (asked before the audit-report date/ack fields, distinct from liableSec92E). */
+  auditedUnder92E: 'Y' | 'N';
   accountAudit: 'Y' | 'N';
   auditReport92EDate: string | null;
   acknowledgement92E: string;
+  /** Form A20(e): audit report(s) under Acts other than the Income-tax Act (schema AuditInfo.AuditReportDetails). */
+  auditUnderOtherActEntries: AuditUnderOtherActEntry[];
+  /** Form A20(diii): other audit reports required for specified deductions (schema AuditInfo.AuditDetails). */
+  otherAuditReportEntries: OtherAuditReportEntry[];
 }
 
 /** Canonical ITR-3 Part A audit-information profile. */
@@ -435,6 +448,30 @@ export interface FilingStatus {
   benefitUs115HAnswered?: boolean;
   /** ITR-2 only: PAN of the Karta verifying an HUF return (required when verification.capacity is Karta — an HUF's own PAN cannot be used for the Verification declaration). */
   kartaPan: string;
+  /** Umbrella Yes/No gate for the seventh-proviso-139(1) sub-questions (schema SeventhProvisio139) — distinct from the individual sub-condition checkboxes on seventhProviso. */
+  seventhProvisoApplies: boolean;
+  /** Form A19(b)(II): if no business/profession income this year, does the assessee still want to opt for the old regime (schema OptOldRegimeCurrAY)? */
+  optOldRegimeCurrAY: 'Y' | 'N' | '';
+  /** Form A19(k): partner-in-firm disclosure (schema PartnerInFirm.PartnerInFirmDtls). */
+  isPartnerInFirm: boolean;
+  partnerInFirmEntries: PartnerInFirmEntry[];
+  /** Form A19(m): non-resident permanent establishment in India (schema NriPEinIndia). */
+  nriPEinIndia: 'Y' | 'N' | '';
+  /** Form A19(n): non-resident significant economic presence in India (schema NriSEPinIndia). */
+  nriSEPinIndia: 'Y' | 'N' | 'NA' | '';
+  aggrPaymentTransac: Money;
+  numberOfUsers: number;
+  /** Form A19(o): IFSC unit with income solely in convertible foreign exchange (schema ForeignExchangeFlag). */
+  foreignExchangeFlag: 'Y' | 'N' | '';
+}
+export interface PartnerInFirmEntry extends Identified { firmName: string; pan: string; }
+export type AuditReportAct = '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | '11' | '12' | '13' | '14' | '15' | '16' | '17' | '18' | '19';
+export interface AuditUnderOtherActEntry extends Identified {
+  act: AuditReportAct | ''; actOthers: string; auditedSection: string; dateOfAudit: string | null;
+}
+export type OtherAuditReportSection = '10A' | '10AA' | '44DA' | '50B' | '80-IA' | '80-IAB' | '80-IAC' | '80-IB' | '80-IC' | '80-ID' | '80-IE' | '80JJAA' | '80LA' | '115JC';
+export interface OtherAuditReportEntry extends Identified {
+  auditedSection: OtherAuditReportSection | ''; auditFlag: 'Y' | 'N'; dateOfAudit: string | null; ackNumOth: string;
 }
 export type ExemptIncomeCategory = 'AGRI' | 'GOVC' | 'ISI' | 'SSRA' | 'SRSC' | 'SRST' | 'SRPC' | 'OTH' | 'OTHN';
 export type ExemptIncomeSubCategory = '10(1)' | '10(2)' | '10(2A)' | '10(4)(i)' | '10(4)(ii)' | '10(4B)' | '10(4C)' | '10(4E)' | '10(4F)' | '10(4G)' | '10(4H)' | '10(6B)' | '10(6BB)' | '10(6D)' | '10(8)' | '10(8A)' | '10(8B)' | '10(9)' | '10(10BB)' | '10(10BC)' | '10(10D)' | '10(11)' | '10(11A)' | '10(12)' | '10(12A)' | '10(12AA)' | '10(12AB)' | '10(12B)' | '10(12BA)' | '10(12C)' | '10(13)' | '10(15)' | '10(16)' | '10(17A)' | '10(18)' | '10(19)' | '10(19A)' | '10(23AA)' | '10(23FBB)' | '10(23FBC)' | '10(23FD)' | '10(23FF)' | '10(25)' | '10(26)' | '10(26AAA)' | '10(30)' | '10(31)' | '10(32)' | '10(33)' | '10(35)' | '10(35A)' | '10(36)' | '10(37)' | '10(37A)' | '10(43)' | '10(44)' | 'DMD' | 'Incmexmptcircular' | 'Incmexmptnotification' | 'Receiptnotincme' | 'Anyother1' | 'Anyother2' | 'Anyother3' | 'Anyother4';
@@ -752,25 +789,29 @@ export interface CapitalGainsSchedule {
   simplified112A: { totalSaleConsideration: number; totalCostAcquisition: number };
   /** STCG land/building (A1). */
   stImmovable: ImmovableAssetGain[];
-  /** STCG equity/STT (A2). */
+  /** STCG equity/STT under 111A / 115AD(1)(ii) proviso (A3). */
   stEquity: JsonRow[];
-  /** STCG NRI unlisted (A3). */
+  /** STCG non-resident (not FII) sale of shares/debentures of an Indian company (A4, ITR-3 only). */
+  stNonResShares: JsonRow[];
+  /** STCG NRI/FII securities u/s 115AD, other than A3 (A5). */
   stNriUnlisted: JsonRow[];
-  /** STCG other assets (A4). */
+  /** STCG other assets (A6). */
   stOtherAssets: JsonRow[];
-  /** STCG slump sale (A5, ITR-3 only). */
+  /** STCG slump sale (A2, ITR-3 only). */
   stSlumpSale: JsonRow[];
   /** LTCG land/building (B1). */
   ltImmovable: ImmovableAssetGain[];
-  /** LTCG proviso to s.112 (B2). */
+  /** LTCG listed securities/zero-coupon bonds (112(1)) or GDR (115ACA) (B3). */
   ltProviso112: JsonRow[];
-  /** LTCG NRI u/s 112/115 (B3). */
+  /** LTCG non-resident unlisted shares/listed debentures of an Indian company, no indexation (B5, ITR-3 only). */
+  ltNriUnlisted: JsonRow[];
+  /** LTCG non-resident unlisted securities (112(1)(c)) / bonds-GDR (115AC) / FII securities (115AD) (B6). */
   ltNri112115: JsonRow[];
-  /** LTCG NRI specified foreign assets (B4, s.115F). */
+  /** LTCG NRI specified foreign exchange asset (B8, s.115F). */
   ltForeignAssets: JsonRow[];
-  /** LTCG other assets (B5). */
+  /** LTCG other assets (B9). */
   ltOtherAssets: JsonRow[];
-  /** LTCG slump sale (B6, ITR-3 only). */
+  /** LTCG slump sale (B2, ITR-3 only). */
   ltSlumpSale: JsonRow[];
   /** Schedule 112A scrips (C) — auto-populated from AIS SFT-17-LES. */
   schedule112A: Scrip112A[];
@@ -816,8 +857,8 @@ export interface CapitalGainsSchedule {
 /** Empty (factory-seed) capital gains schedule. */
 export const EMPTY_CAPITAL_GAINS_SCHEDULE: CapitalGainsSchedule = {
   simplified112A: { totalSaleConsideration: 0, totalCostAcquisition: 0 },
-  stImmovable: [], stEquity: [], stNriUnlisted: [], stOtherAssets: [], stSlumpSale: [],
-  ltImmovable: [], ltProviso112: [], ltNri112115: [], ltForeignAssets: [], ltOtherAssets: [], ltSlumpSale: [],
+  stImmovable: [], stEquity: [], stNonResShares: [], stNriUnlisted: [], stOtherAssets: [], stSlumpSale: [],
+  ltImmovable: [], ltProviso112: [], ltNriUnlisted: [], ltNri112115: [], ltForeignAssets: [], ltOtherAssets: [], ltSlumpSale: [],
   schedule112A: [], schedule115AD: [], purchases: [], vda: [], stUnutilized: [], ltUnutilized: [], stDtaa: [], ltDtaa: [], buyBackLosses: [], deductionClaims: [],
   stSection48: { nriSttPaid: 0, nriSttNotPaid: 0 },
   ltNriProviso48: { ltcgWithoutBenefit: 0, deduction54F: 0 },

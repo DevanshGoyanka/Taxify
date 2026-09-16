@@ -737,6 +737,66 @@ def _is_short_term(asset_type: str, acquired: date, transferred: date) -> bool:
     return transferred < _calendar_anniversary(acquired, years)
 
 
+# Schedule CG's generic "other assets" bucket (Sl. A6/B9 in ITR-3; Sl. A5/B8
+# in ITR-2) -- valid exemption sections differ by BOTH form AND ST/LT, per
+# each form's own printed item text, confirmed by direct introspection of
+# both forms' official JSON schemas (not assumed from a shared type name --
+# see `app/engine/itd/cg_shared.py`'s own builder docstrings for the exact
+# citations): ITR-3 STCG-other-assets (item 6) allows 54G/54GA; ITR-2
+# STCG-other-assets (item 5) has NO exemption line at all -- an EMPTY set,
+# not a subset of ITR-3's; ITR-3 LTCG-other-assets (item 9) allows
+# 54D/54F/54G/54GA; ITR-2 LTCG-other-assets (item 8) allows ONLY 54F. Each
+# caller must pass its own form-correct set explicitly -- there is no safe
+# shared default, since a wrongly-broad set would let an ITR-2 return
+# silently apply an exemption (54D/54G/54GA) its own form never offers.
+ITR2_OTHER_ASSETS_ST_EXEMPTION_SECTIONS: frozenset[str] = frozenset()
+ITR2_OTHER_ASSETS_LT_EXEMPTION_SECTIONS = frozenset({"54F"})
+ITR3_OTHER_ASSETS_ST_EXEMPTION_SECTIONS = frozenset({"54G", "54GA"})
+ITR3_OTHER_ASSETS_LT_EXEMPTION_SECTIONS = frozenset({"54D", "54F", "54G", "54GA"})
+
+
+def other_asset_gain(tx: object, is_short: bool, valid_exemption_sections: frozenset[str]) -> Decimal:
+    """
+    Compute the taxable gain for one Schedule CG generic "other assets"
+    transaction (Sl. A6/B9 ITR-3; Sl. A5/B8 ITR-2) -- unlisted shares, debt
+    mutual funds, bonds/debentures, jewellery, foreign assets, and any
+    other capital asset not covered by an earlier, more specific Schedule
+    CG item.
+
+    Official form formula (identical arithmetic STRUCTURE in both forms,
+    for a given ST/LT side -- only which exemption sections are legal
+    differs, hence the required, form-specific ``valid_exemption_sections``
+    parameter rather than a shared default; pass one of the
+    ``ITR{2,3}_OTHER_ASSETS_{ST,LT}_EXEMPTION_SECTIONS`` constants above):
+        Balance = FullConsideration - (CostOfAcquisition + ImprovementCost
+                                        + TransferExpenses)
+        Gain    = Balance + LossDisallowedUs94_7Or94_8 [STCG only]
+                          - OtherAssetsExemptionAmount  [only when the
+                            claimed section is in valid_exemption_sections]
+
+    The 94(7)/94(8) add-back is STCG-only per the form (no such sub-item
+    exists on the LTCG side of this bucket in either form). The exemption
+    subtraction happens here, at the actual tax-computation source, not
+    only in the disclosure JSON (`cg_shared.py`'s aggregators) -- the two
+    must agree, or the disclosed "CapgainonAssets" figure and the amount
+    actually taxed would silently diverge whenever an exemption is claimed
+    on a generic-other-asset sale.
+    """
+    exemption = (
+        _decimal(getattr(tx, "other_assets_exemption_amount", None))
+        if getattr(tx, "other_assets_exemption_section", None) in valid_exemption_sections
+        else _ZERO
+    )
+    gain = (
+        tx.full_consideration - tx.cost_of_acquisition
+        - tx.improvement_cost - tx.expenditure_on_transfer
+        - exemption
+    )
+    if is_short:
+        gain += _decimal(getattr(tx, "loss_disallowed_94_7_94_8", None))
+    return gain
+
+
 # Field aliases — the schedule accepts both the canonical snake_case names
 # (used by the typed CGTransaction schema) and the camelCase names used by
 # the flat frontend payload rows, so it can be fed directly from the router

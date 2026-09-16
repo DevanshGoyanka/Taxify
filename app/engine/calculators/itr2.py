@@ -71,6 +71,9 @@ from app.engine.schedules.capital_gains import (
     compute_ltcg,
     compute_stcg,
     compute_vda,
+    other_asset_gain,
+    ITR2_OTHER_ASSETS_ST_EXEMPTION_SECTIONS,
+    ITR2_OTHER_ASSETS_LT_EXEMPTION_SECTIONS,
 )
 from app.engine.schedules.deductions import compute_all as compute_deductions
 from app.engine.schedules.house_property import apply_inter_head_loss_limit, compute as compute_hp
@@ -312,7 +315,14 @@ def _classify_cg_transactions(
                 grandfathering_eligible=tx.date_of_acquisition is not None and tx.date_of_acquisition < date(2018, 2, 1),
             ))
         elif asset_type == "listed_equity_111a" or asset_type == "equity_oriented_fund_111a":
-            gain = tx.full_consideration - tx.cost_of_acquisition - tx.expenditure_on_transfer
+            # Form A3c = 3a - 3biv (biv = cost + improvement + transfer
+            # expenses); A3e = 3c + 3d (3d = 94(7)/94(8) disallowed loss,
+            # entered positive and added back) -- kept identical to the
+            # ITR-3 calculator's own A3 formula (calculators/itr3.py) since
+            # both forms share this schedule's statutory computation.
+            gain = (tx.full_consideration - tx.cost_of_acquisition
+                    - tx.improvement_cost - tx.expenditure_on_transfer
+                    + tx.loss_disallowed_94_7_94_8)
             if is_short:
                 stcg_111a_signed += gain
             else:
@@ -345,7 +355,11 @@ def _classify_cg_transactions(
             else:
                 ltcg_land.append(asset)
         else:
-            gain = tx.full_consideration - tx.cost_of_acquisition - tx.expenditure_on_transfer
+            valid_sections = (
+                ITR2_OTHER_ASSETS_ST_EXEMPTION_SECTIONS if is_short
+                else ITR2_OTHER_ASSETS_LT_EXEMPTION_SECTIONS
+            )
+            gain = other_asset_gain(tx, is_short, valid_sections)
             if is_short:
                 stcg_other_signed += gain
             else:
@@ -982,6 +996,16 @@ def compute(input_data: ITR2Input) -> ITR2Result:
     ltcg_125_signed = ltcg_result.income_125per_other  # section 112 at 12.5%
     ltcg_112a_gross = ltcg_result.income_112a  # 112A before threshold
     ltcg_dtaa_signed = ltcg_result.income_dtaa  # DTAA-rate LTCG
+
+    # Section 46A capital loss on buyback of shares (Schedule CG's
+    # "CapitalLossBuyBackShares" block) is a genuine loss, not merely
+    # disclosure -- it must reduce the SAME rate bucket it belongs to
+    # before CYLA, exactly like any other capital loss of that rate would.
+    # All four inputs are already non-positive (schema-enforced `le=0`).
+    stcg_111a_signed += input_data.cg_buyback_loss_stcg20
+    stcg_30_signed += input_data.cg_buyback_loss_stcg30
+    stcg_app_signed += input_data.cg_buyback_loss_stcg_applicable
+    ltcg_125_signed += input_data.cg_buyback_loss_ltcg
 
     # HP loss for CYLA (capped at 2L for old regime; blocked for new regime)
     hp_loss_for_cyla = _ZERO

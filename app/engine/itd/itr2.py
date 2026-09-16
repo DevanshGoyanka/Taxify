@@ -22,6 +22,14 @@ from app.engine.constants import (
 )
 from app.engine.schedules.capital_gains import _exemption_claim_total, _indexed_cost, deemed_consideration_50c
 from app.engine.itd.country_codes import country_name as _country_name
+from app.engine.itd.cg_shared import (
+    build_equity_mf_stt_rows,
+    build_stcg_buyback_loss_block,
+    build_ltcg_buyback_loss_block,
+    _GENERIC_OTHER_ASSET_TYPES,
+    _FII_SECURITIES_ASSET_TYPES,
+    _aggregate_generic_other_assets,
+)
 from app.engine.itd.common import (
     _to_rupees,
     _to_rupees_rounded10,
@@ -1587,35 +1595,10 @@ def _schedule_os(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[str
 # "From sale of assets other than at A1 or A2 or A3 or A4 above" / "From
 # sale of assets where B1 to B7 above are not applicable" -- i.e. this is
 # the genuine generic bucket, not a mislabeled unquoted-shares-only field.
-_GENERIC_OTHER_ASSET_TYPES = frozenset({
-    "unlisted_shares",
-    "listed_security",
-    "debt_mutual_fund",
-    "specified_mutual_fund_50aa",
-    "market_linked_debenture_50aa",
-    "bonds_debentures",
-    "depreciable_asset",
-    "jewellery",
-    "foreign_asset",
-    "other",
-})
-
-# The subset of the generic "other assets" bucket that are genuinely
-# "securities" for section 115AD purposes (an FII/FPI's own gains on
-# these route to NRISecur115AD/NRIOnSec112and115Dtls instead of the
-# ordinary SaleOnOtherAssets/SaleofAssetNADtls, per the official form's
-# Schedule CG item 4/5 "For NON-RESIDENT- from sale of securities... by
-# an FII as per section 115AD"). `jewellery`/`depreciable_asset`/
-# `foreign_asset`/`other` are NOT securities and always stay in the
-# ordinary bucket regardless of FII/FPI status.
-_FII_SECURITIES_ASSET_TYPES = frozenset({
-    "unlisted_shares",
-    "listed_security",
-    "debt_mutual_fund",
-    "specified_mutual_fund_50aa",
-    "market_linked_debenture_50aa",
-    "bonds_debentures",
-})
+# `_GENERIC_OTHER_ASSET_TYPES`/`_FII_SECURITIES_ASSET_TYPES` are defined in
+# and imported from `cg_shared.py` (see the top-of-file import) -- ITR-3's
+# own equivalent formatters there (Sl. A6/B9, a schema-richer shape) need
+# the exact same two sets.
 
 
 def _other_assets_block(
@@ -1623,93 +1606,53 @@ def _other_assets_block(
     is_long_term: bool,
     asset_types: frozenset = _GENERIC_OTHER_ASSET_TYPES,
 ) -> dict[str, Any]:
-    """Aggregate the generic "other assets" bucket for Schedule CG item 5/8.
+    """Aggregate the generic "other assets" bucket for ITR-2 Schedule CG
+    item 5/8 (STCG ``EquityOrUnitSec94Type``/``SaleOnOtherAssets``; LTCG
+    ``EquityOrUnitSec54Type``/``SaleofAssetNADtls.SaleofAssetNA``).
 
-    Both the STCG (``EquityOrUnitSec94Type``, ``SaleOnOtherAssets``) and
-    LTCG (``EquityOrUnitSec54Type``, ``SaleofAssetNADtls.SaleofAssetNA``)
-    variants share this structure: consideration/cost aggregated across
-    every matching-``asset_types`` transaction of the matching
-    holding period, split into "unquoted shares" (``unlisted_shares`` --
-    section 50CA deeming applies) versus "assets other than unquoted
-    shares" (every other generic category) sub-totals. Unlike land/building
-    (section 50C, a 110%-tolerance deemed-consideration rule), section 50CA
-    is a straight higher-of-consideration-or-FMV comparison with no
-    tolerance band -- see ``deemed_consideration_50ca``'s docstring.
+    ITR-2's own two shapes here are SIMPLER than ITR-3's equivalent items
+    (Sl. A6/B9) -- confirmed by direct schema introspection: ITR-2's STCG
+    shape has no deemed-STCG-on-depreciable-assets/54G-54GA term at all
+    (matching its form item 5 text, "5c + 5d" only -- ITR-2 filers have no
+    business income), and its LTCG shape's exemption field is a flat
+    ``DeductionUs54F`` integer, not ITR-3's nested multi-section
+    ``ExemptionOrDednUs54`` object (matching its form item 8 text, "Deduction
+    under sections 54F" only). See `cg_shared.py`'s
+    ``build_itr3_other_assets_stcg_block``/``build_itr3_other_assets_ltcg_block``
+    for ITR-3's own richer shapes, built from the same shared aggregation
+    core (``_aggregate_generic_other_assets``) this function also uses, so
+    the two forms cannot silently diverge on the underlying arithmetic.
 
-    Indexation does not apply to this bucket at all (confirmed by the
-    official form's item 5b/8b, which only ever asks for "cost of
-    acquisition without indexation" here -- the dual indexed/non-indexed
-    track is specific to land/building's own section 112(1)(a) transitional
-    provision, not this generic bucket), so only the non-indexed cost
-    fields are used, matching what the calculator's own ``stcg_other``/
-    ``ltcg_other`` aggregate already does.
+    Unlike land/building (section 50C, a 110%-tolerance deemed-consideration
+    rule), section 50CA is a straight higher-of-consideration-or-FMV
+    comparison with no tolerance band -- see ``deemed_consideration_50ca``'s
+    docstring.
     """
-    from app.engine.schedules.capital_gains import _is_short_term, deemed_consideration_50ca
-
-    unq_consideration = _ZERO
-    unq_fmv = _ZERO
-    oth_consideration = _ZERO
-    total_cost = _ZERO
-    total_improvement = _ZERO
-    total_expenditure = _ZERO
-    deduction_us54f = _ZERO
-
-    for tx in transactions or []:
-        asset_type = tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type
-        if asset_type not in asset_types:
-            continue
-        is_short = True
-        if tx.date_of_acquisition is not None:
-            is_short = _is_short_term(asset_type, tx.date_of_acquisition, tx.date_of_transfer)
-        elif tx.explicit_long_term is not None:
-            is_short = not tx.explicit_long_term
-        wanted_short = not is_long_term
-        if is_short != wanted_short:
-            continue
-
-        total_cost += tx.cost_of_acquisition
-        total_improvement += tx.improvement_cost
-        total_expenditure += tx.expenditure_on_transfer
-        if asset_type == "unlisted_shares":
-            unq_consideration += tx.full_consideration
-            unq_fmv += tx.fair_market_value_50ca or _ZERO
-        else:
-            oth_consideration += tx.full_consideration
-        # Section 54F (any capital asset other than a residential house,
-        # reinvested into a new residential house) is the only §54-series
-        # exemption applicable to this bucket -- confirmed by the official
-        # form's item 5d/8d, which cites only section 54F here (54/54B/54EC
-        # belong to land/building or bonds specifically). Aggregated across
-        # every matching transaction, mirroring the bucket's own
-        # transaction-level aggregation (no per-row detail exists for this
-        # bucket, matching land/building's DIFFERENT, per-row treatment).
-        if is_long_term:
-            deduction_us54f += _exemption_claim_total(getattr(tx, "exemptions", None), frozenset({"54F"}))
-
-    unq_deemed = deemed_consideration_50ca(unq_consideration, unq_fmv)
-    full_consideration = unq_deemed + oth_consideration
-    total_ded = total_cost + total_improvement + total_expenditure
-    balance = full_consideration - total_ded
+    agg = _aggregate_generic_other_assets(transactions, is_long_term, asset_types)
+    deduction_us54f = agg["exemption_by_section"].get("54F", _ZERO)
 
     return {
-        "FullValueConsdRecvUnqshr": _to_rupees(unq_consideration),
-        "FairMrktValueUnqshr": _to_rupees(unq_fmv),
-        "FullValueConsdSec50CA": _to_rupees(unq_deemed),
-        "FullValueConsdOthUnqshr": _to_rupees(oth_consideration),
-        "FullConsideration": _to_rupees(full_consideration),
+        "FullValueConsdRecvUnqshr": _to_rupees(agg["unq_consideration"]),
+        "FairMrktValueUnqshr": _to_rupees(agg["unq_fmv"]),
+        "FullValueConsdSec50CA": _to_rupees(agg["unq_deemed"]),
+        "FullValueConsdOthUnqshr": _to_rupees(agg["oth_consideration"]),
+        "FullConsideration": _to_rupees(agg["full_consideration"]),
         "DeductSec48": {
-            "AquisitCost": _to_rupees(total_cost),
-            "ImproveCost": _to_rupees(total_improvement),
-            "ExpOnTrans": _to_rupees(total_expenditure),
-            "TotalDedn": _to_rupees(total_ded),
+            "AquisitCost": _to_rupees(agg["total_cost"]),
+            "ImproveCost": _to_rupees(agg["total_improvement"]),
+            "ExpOnTrans": _to_rupees(agg["total_expenditure"]),
+            "TotalDedn": _to_rupees(agg["total_ded"]),
         },
-        "BalanceCG": _to_rupees(balance),
+        "BalanceCG": _to_rupees(agg["balance"]),
         **(
-            {"LossSec94of7Or94of8": 0}
+            {"LossSec94of7Or94of8": _to_rupees(agg["total_loss94"])}
             if not is_long_term
             else {"DeductionUs54F": _to_rupees(deduction_us54f)}
         ),
-        "CapgainonAssets": _to_rupees(balance - deduction_us54f),
+        "CapgainonAssets": _to_rupees(
+            agg["balance"] + agg["total_loss94"] if not is_long_term
+            else agg["balance"] - deduction_us54f
+        ),
     }
 
 
@@ -1987,23 +1930,14 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     # formula: BalanceCG/CapgainonAssets previously omitted improvement_cost
     # from the subtraction even though DeductSec48.TotalDedn (computed one
     # line below it) already included it -- the two fields disagreed on
-    # what "total deduction" meant for the identical transaction.
-    from app.engine.schedules.capital_gains import _is_short_term as _is_short_term_111a
-
-    equity_111a_rows = []
-
-    def _is_actually_short_111a(tx: Any) -> bool:
-        asset_type = tx.asset_type.value if hasattr(tx.asset_type, "value") else tx.asset_type
-        if tx.date_of_acquisition is not None:
-            return _is_short_term_111a(asset_type, tx.date_of_acquisition, tx.date_of_transfer)
-        if tx.explicit_long_term is not None:
-            return not tx.explicit_long_term
-        return True
-
+    # what "total deduction" meant for the identical transaction; and
+    # LossSec94of7Or94of8 was hardcoded to 0 regardless of any actual
+    # dividend-stripping disallowance on the underlying transactions.
+    #
     # A "listed_equity_111a"-typed transaction held past the 12-month
     # threshold is reclassified by _classify() (app/engine/schedules/
     # capital_gains.py) into the 112A LTCG basket everywhere else in this
-    # pipeline -- this A2 disclosure table must only include the ones that
+    # pipeline -- this A3 disclosure table must only include the ones that
     # ARE actually short-term, or its own CapgainonAssets total silently
     # includes a gain the return doesn't actually tax as STCG@20% at all.
     # Confirmed live (2026-09-13, Type-2 UAT validateItr, PAN GOYPT2026A):
@@ -2012,33 +1946,12 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
     # "ITR2_INF26_InStcg20Per_CurrYearIncome_oywce" -- the same
     # long-held-111A root cause as the Table F fix just above this
     # function, hitting a second, independent disclosure spot.
-    matching_111a_txs = [
-        tx for tx in input_data.cg_transactions
-        if tx.asset_type.value in ("listed_equity_111a", "equity_oriented_fund_111a")
-        and _is_actually_short_111a(tx)
-    ]
-    if matching_111a_txs:
-        total_consideration = sum((tx.full_consideration for tx in matching_111a_txs), z)
-        total_acquisition_cost = sum((tx.cost_of_acquisition for tx in matching_111a_txs), z)
-        total_improvement_cost = sum((tx.improvement_cost for tx in matching_111a_txs), z)
-        total_expenditure = sum((tx.expenditure_on_transfer for tx in matching_111a_txs), z)
-        total_deduction = total_acquisition_cost + total_improvement_cost + total_expenditure
-        balance_cg = total_consideration - total_deduction
-        equity_111a_rows.append({
-            "MFSectionCode": "5AD1biip" if is_fii_fpi else "1A",
-            "EquityMFonSTTDtls": {
-                "FullConsideration": _to_rupees(total_consideration),
-                "DeductSec48": {
-                    "AquisitCost": _to_rupees(total_acquisition_cost),
-                    "ImproveCost": _to_rupees(total_improvement_cost),
-                    "ExpOnTrans": _to_rupees(total_expenditure),
-                    "TotalDedn": _to_rupees(total_deduction),
-                },
-                "BalanceCG": _to_rupees(balance_cg),
-                "LossSec94of7Or94of8": 0,
-                "CapgainonAssets": _to_rupees(balance_cg),
-            },
-        })
+    #
+    # Extracted to `app/engine/itd/cg_shared.py` so ITR-3 (identical
+    # schema shape for this table) derives the exact same numbers from the
+    # exact same `cg_transactions` rather than a second, independently
+    # maintained copy of this formula.
+    equity_111a_rows = build_equity_mf_stt_rows(input_data.cg_transactions, is_fii_fpi)
 
     # Generic "other assets" bucket, split for FII/FPI: securities-type
     # transactions route to the 115AD-specific fields below; non-security
@@ -2190,6 +2103,12 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         (e.amount for e in input_data.cg_ltcg_dtaa_entries if e.chargeable_in_india), _ZERO,
     )
 
+    stcg_buyback_loss_block = build_stcg_buyback_loss_block(
+        input_data.cg_buyback_loss_stcg20, input_data.cg_buyback_loss_stcg30,
+        input_data.cg_buyback_loss_stcg_applicable,
+    )
+    ltcg_buyback_loss_block = build_ltcg_buyback_loss_block(input_data.cg_buyback_loss_ltcg)
+
     # Schedule CG item B10 -- pass-through LTCG (Schedule PTI), split
     # 112A/other exactly as the calculator's own SI dispatch does
     # (compute()'s `pti_entries` loop: `"112A" in section.upper()` -> 112A
@@ -2253,7 +2172,7 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         **({"NRICgDTAA": {"NRIDTAADtls": stcg_dtaa_rows}} if stcg_dtaa_rows else {}),
         "TotalAmtNotTaxUsDTAAStcg": _to_rupees(stcg_dtaa_not_chargeable),
         "TotalAmtTaxUsDTAAStcg": _to_rupees(stcg_dtaa_chargeable),
-        "CapitalLossBuyBackShares": {"CapitalLossBuyBackSharesDtls": [], "TotalCapitalLossBuyBackShares": 0},
+        **({"CapitalLossBuyBackShares": stcg_buyback_loss_block} if stcg_buyback_loss_block else {}),
         # A9 = A1e+A2e+A3a+A3b+A4e+A5e+A6+A7+... per the form -- include A7
         # (PTI STCG) so the schedule's own headline total isn't silently
         # missing income the return was actually taxed on via Schedule SI.
@@ -2289,7 +2208,7 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
         "PassThrIncNatureLTCG12_5Per": _to_rupees(pti_ltcg_other),
         **({"NRICgDTAA": {"NRIDTAADtls": ltcg_dtaa_rows}} if ltcg_dtaa_rows else {}),
         "TotalAmtNotTaxUsDTAALtcg": _to_rupees(ltcg_dtaa_not_chargeable),
-        "CapitalLossBuyBackShares": {"TotalCapitalLossBuyBackShares": 0},
+        **({"CapitalLossBuyBackShares": ltcg_buyback_loss_block} if ltcg_buyback_loss_block else {}),
         "TotalAmtTaxUsDTAALtcg": _to_rupees(ltcg_dtaa_chargeable),
         # B12 = B1g+...+B10+B11a per the form -- include B10 (PTI LTCG) so
         # the schedule's own headline total isn't silently missing income
@@ -4291,19 +4210,74 @@ def _schedule_fa(input_data: ITR2Input) -> Optional[dict[str, Any]]:
                 "TotGrossAmtPaidCredited": _to_rupees(item.gross_income),
                 "TotGrossProceeds": _to_rupees(item.total_gross_proceeds_from_sale),
             })
+        elif item.asset_type == ForeignAssetType.CUSTODIAL_ACCOUNT:
+            if item.ownership_status not in _FA_BANK_OWNER_STATUS or item.nature_of_amount not in {"I", "D", "S", "O", "N"}:
+                raise ValueError("Schedule FA custodial account requires valid Status and NatureOfAmount")
+            result["DtlsForeignCustodialAcc"].append({
+                "CountryName": _country_name(item.country_code), "CountryCodeExcludingIndia": item.country_code,
+                "FinancialInstName": item.institution_or_entity_name, "FinancialInstAddress": item.address,
+                "ZipCode": item.zip_code, "AccountNumber": item.account_or_asset_identifier[:34],
+                "Status": item.ownership_status, "AccOpenDate": _date(item.opening_or_acquisition_date),
+                "PeakBalanceDuringPeriod": _to_rupees(item.peak_value), "ClosingBalance": _to_rupees(item.closing_value),
+                "GrossAmtPaidCredited": _to_rupees(item.gross_income), "NatureOfAmount": item.nature_of_amount,
+            })
+        elif item.asset_type == ForeignAssetType.CASH_VALUE_INSURANCE:
+            if item.cash_value_or_surrender_value is None:
+                raise ValueError("Schedule FA insurance entry requires cash_value_or_surrender_value")
+            result["DtlsForeignCashValueInsurance"].append({
+                "CountryName": _country_name(item.country_code), "CountryCodeExcludingIndia": item.country_code,
+                "FinancialInstName": item.institution_or_entity_name, "FinancialInstAddress": item.address,
+                "ZipCode": item.zip_code, "ContractDate": _date(item.opening_or_acquisition_date),
+                "CashValOrSurrenderVal": _to_rupees(item.cash_value_or_surrender_value),
+                "TotGrossAmtPaidCredited": _to_rupees(item.gross_income),
+            })
+        elif item.asset_type == ForeignAssetType.FINANCIAL_INTEREST:
+            if item.ownership_status not in _FA_OTHER_OWNERSHIP or not item.nature_of_asset or not item.nature_of_income:
+                raise ValueError("Schedule FA financial interest requires ownership, nature of entity, and nature of income")
+            result["DetailsFinancialInterest"].append({
+                "CountryName": _country_name(item.country_code), "CountryCodeExcludingIndia": item.country_code,
+                "ZipCode": item.zip_code, "NatureOfEntity": item.nature_of_asset, "NameOfEntity": item.institution_or_entity_name,
+                "AddressOfEntity": item.address, "NatureOfInt": item.ownership_status,
+                "DateHeld": _date(item.opening_or_acquisition_date), "TotalInvestment": _to_rupees(item.peak_value),
+                "IncFromInt": _to_rupees(item.gross_income), "NatureOfInc": item.nature_of_income,
+                "IncTaxAmt": _to_rupees(item.income_offered), "IncTaxSch": _fa_inc_tax_sch(item),
+                "IncTaxSchNo": _fa_inc_tax_sch_no(item, "financial interest"),
+            })
+        elif item.asset_type == ForeignAssetType.SIGNING_AUTHORITY:
+            if item.income_accrued_tax_flag not in {"Y", "N"}:
+                raise ValueError("Schedule FA signing authority requires income_accrued_tax_flag Y or N")
+            row = {"NameOfInstitution": item.institution_or_entity_name, "AddressOfInstitution": item.address,
+                "CountryName": _country_name(item.country_code), "CountryCodeExcludingIndia": item.country_code,
+                "ZipCode": item.zip_code, "NameMentionedInAccnt": item.name_mentioned_in_account or "",
+                "InstitutionAccountNumber": item.account_or_asset_identifier[:34], "PeakBalanceOrInvestment": _to_rupees(item.peak_value),
+                "IncAccuredTaxFlag": item.income_accrued_tax_flag}
+            if not row["NameMentionedInAccnt"]: raise ValueError("Schedule FA signing authority requires name_mentioned_in_account")
+            if item.income_accrued_tax_flag == "Y":
+                row.update({"IncAccuredInAcc": _to_rupees(item.gross_income), "IncOfferedAmt": _to_rupees(item.income_offered),
+                            "IncOfferedSch": _fa_inc_tax_sch(item), "IncOfferedSchNo": _fa_inc_tax_sch_no(item, "signing authority")})
+            result["DetailsOfAccntsHvngSigningAuth"].append(row)
+        elif item.asset_type == ForeignAssetType.TRUST:
+            required = (item.name_of_trust, item.address_of_trust, item.name_of_other_trustees, item.address_of_other_trustees,
+                        item.name_of_settlor, item.address_of_settlor, item.name_of_beneficiaries, item.address_of_beneficiaries,
+                        item.income_derived_tax_flag)
+            if not all(required) or item.income_derived_tax_flag not in {"Y", "N"}: raise ValueError("Schedule FA trust entry is incomplete")
+            row = {"CountryName": _country_name(item.country_code), "CountryCodeExcludingIndia": item.country_code, "ZipCode": item.zip_code,
+                "NameOfTrust": item.name_of_trust, "AddressOfTrust": item.address_of_trust, "NameOfOtherTrustees": item.name_of_other_trustees,
+                "AddressOfOtherTrustees": item.address_of_other_trustees, "NameOfSettlor": item.name_of_settlor, "AddressOfSettlor": item.address_of_settlor,
+                "NameOfBeneficiaries": item.name_of_beneficiaries, "AddressOfBeneficiaries": item.address_of_beneficiaries,
+                "DateHeld": _date(item.opening_or_acquisition_date), "IncDrvTaxFlag": item.income_derived_tax_flag}
+            if item.income_derived_tax_flag == "Y": row.update({"IncDrvFromTrust": _to_rupees(item.gross_income), "IncOfferedAmt": _to_rupees(item.income_offered), "IncOfferedSch": _fa_inc_tax_sch(item), "IncOfferedSchNo": _fa_inc_tax_sch_no(item, "trust")})
+            result["DetailsOfTrustOutIndiaTrustee"].append(row)
+        elif item.asset_type == ForeignAssetType.OTHER_FOREIGN_INCOME:
+            if not item.name_of_person or not item.address_of_person or not item.nature_of_income or item.income_derived_tax_flag not in {"Y", "N"}: raise ValueError("Schedule FA other foreign income entry is incomplete")
+            row = {"CountryName": _country_name(item.country_code), "CountryCodeExcludingIndia": item.country_code, "ZipCode": item.zip_code,
+                "NameOfPerson": item.name_of_person, "AddressOfPerson": item.address_of_person, "IncDerived": _to_rupees(item.gross_income),
+                "NatureOfInc": item.nature_of_income, "IncDrvTaxFlag": item.income_derived_tax_flag}
+            if item.income_derived_tax_flag == "Y": row.update({"IncOfferedAmt": _to_rupees(item.income_offered), "IncOfferedSch": _fa_inc_tax_sch(item), "IncOfferedSchNo": _fa_inc_tax_sch_no(item, "other foreign income")})
+            result["DetailsOfOthSourcesIncOutsideIndia"].append(row)
         else:
-            # Custodial account, cash-value insurance, financial interest in
-            # an entity, signing authority, trust, and other foreign-sourced
-            # income each require official fields ForeignAssetEntry does not
-            # capture (e.g. trust's settlor/trustee/beneficiary names) --
-            # silently folding these into DetailsOthAssets, as the previous
-            # code did, would misclassify them into the wrong official
-            # category entirely, not just omit detail. Fail closed until
-            # each category gets its own typed model and serializer path.
             raise ValueError(
-                f"Schedule FA category {item.asset_type.value!r} is not yet "
-                "supported by the ITR-2 JSON builder -- it requires a "
-                "dedicated typed model, not the generic ForeignAssetEntry."
+                f"Schedule FA category {item.asset_type.value!r} is not supported by the ITR-2 JSON builder"
             )
     return result
 
@@ -4317,30 +4291,44 @@ def _schedule_al(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     item = input_data.asset_liability
     if item is None:
         return None
-    if item.immovable_property > 0:
-        # The official schema's own ImmovableDetails row requires
-        # Description + AddressAL (a structured address) + Amount
-        # (`Reference Docs by CBDT & ITD/Official JSON Schema/ITR-2_2026_
-        # Main_V1.1 (2).json`, definitions.ImmovableDetails) -- but
-        # `AssetLiabilityInput.immovable_property` is only a scalar total,
-        # with no address/description field to populate a real row from.
-        # Previously this amount was silently dropped (`"ImmovableDetails":
-        # []` unconditionally), so a client's real-estate holding -- a
-        # mandatory Schedule AL disclosure at their income bracket -- went
-        # missing from the filed return with no error at all. Fail closed
-        # instead, matching this same builder's own established precedent
-        # for Schedule FA's not-yet-modeled asset categories (see
-        # `_schedule_fa()` above): surface the gap loudly rather than file
-        # an incomplete legally-required disclosure.
+    property_total = sum((row.amount for row in item.immovable_properties), _ZERO)
+    if item.immovable_property != property_total:
+        raise ValueError(
+            "Schedule AL: aggregate immovable_property must equal the sum of "
+            "explicitly sourced immovable_properties rows"
+        )
+    if item.immovable_property > 0 and not item.immovable_properties:
         raise ValueError(
             "Schedule AL: immovable_property is set but no per-property "
-            "description/address detail is captured -- AssetLiabilityInput "
-            "needs a structured immovable-property list (description, "
-            "address, amount) before this can be disclosed; it cannot be "
-            "silently omitted."
+            "description/address detail is captured"
+        )
+    if item.interest_held_in_asset_flag is None:
+        raise ValueError(
+            "Schedule AL: InterstAOPFlag is required and must be explicitly sourced"
         )
     return {
-        "ImmovableDetails": [],
+        "ImmovableDetails": [
+            {
+                "Description": row.description,
+                "AddressAL": {
+                    key: value
+                    for key, value in {
+                        "ResidenceNo": row.address.residence_no,
+                        "ResidenceName": row.address.residence_name,
+                        "RoadOrStreet": row.address.road_or_street,
+                        "LocalityOrArea": row.address.locality_or_area,
+                        "CityOrTownOrDistrict": row.address.city_or_town_or_district,
+                        "StateCode": row.address.state_code,
+                        "CountryCode": row.address.country_code,
+                        "PinCode": row.address.pin_code,
+                        "ZipCode": row.address.zip_code,
+                    }.items()
+                    if value is not None
+                },
+                "Amount": _to_rupees(row.amount),
+            }
+            for row in item.immovable_properties
+        ],
         "MovableAsset": {
             "CashInHand": _to_rupees(item.cash_in_hand),
             "DepositsInBank": _to_rupees(item.bank_deposits),
@@ -4351,6 +4339,7 @@ def _schedule_al(input_data: ITR2Input) -> Optional[dict[str, Any]]:
             "ArchCollDrawPaintSulpArt": _to_rupees(item.art),
             "VehiclYachtsBoatsAircrafts": _to_rupees(item.vehicles_boats_aircraft),
         },
+        "InterstAOPFlag": item.interest_held_in_asset_flag or "N",
         "LiabilityInRelatAssets": _to_rupees(item.related_liabilities),
     }
 
@@ -4473,7 +4462,7 @@ def _schedule_amtc(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[s
         entry = entries_by_year.get(year)
         if entry is None:
             rows.append({
-                "AssYr": year, "Gross": 0, "AmtCreditSetOfEy": 0,
+                "AssYr": year, "AmtCreditFwd": 0, "AmtCreditSetOfEy": 0,
                 "AmtCreditBalBroughtFwd": 0, "AmtCreditUtilized": 0,
                 "BalAmtCreditCarryFwd": 0,
             })
@@ -4497,14 +4486,14 @@ def _schedule_amtc(result: ITR2Result, input_data: ITR2Input) -> Optional[dict[s
         bal_brought_forward = entry.brought_forward
         rows.append({
             "AssYr": entry.assessment_year,
-            "Gross": _to_rupees(bal_brought_forward),
+            "AmtCreditFwd": _to_rupees(bal_brought_forward),
             "AmtCreditSetOfEy": 0,
             "AmtCreditBalBroughtFwd": _to_rupees(bal_brought_forward),
             "AmtCreditUtilized": _to_rupees(entry.utilised),
             "BalAmtCreditCarryFwd": _to_rupees(entry.remaining_carry_forward),
         })
 
-    total_utilised = result.amt_credit_utilised
+    total_utilised = getattr(result, "amt_credit_utilised", _ZERO)
     # Sl.6, "Amount of AMT liability available for credit in subsequent
     # assessment years [total of 4(D)]" -- sum of EVERY row's own carry-
     # forward column, i-xiii (old, unutilized) PLUS row xiv (this year's own
@@ -4696,12 +4685,13 @@ def _schedule_5a(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     def head(amount: Decimal, tds: Decimal = _ZERO) -> dict[str, int]:
         return {"IncRecvdUndHead": _to_rupees(amount * 2), "AmtApprndOfSpouse": _to_rupees(amount), "AmtTDSDeducted": _to_rupees(tds * 2), "TDSApprndOfSpouse": _to_rupees(tds)}
 
-    total = item.hp_amount_apportioned + item.cg_amount_apportioned + item.os_amount_apportioned
-    total_tds = item.hp_tds_apportioned + item.cg_tds_apportioned + item.os_tds_apportioned
+    total = item.hp_amount_apportioned + item.bus_amount_apportioned + item.cg_amount_apportioned + item.os_amount_apportioned
+    total_tds = item.hp_tds_apportioned + item.bus_tds_apportioned + item.cg_tds_apportioned + item.os_tds_apportioned
     output: dict[str, Any] = {
         "NameOfSpouse": item.spouse_name,
         "PANOfSpouse": item.spouse_pan,
         "HPHeadIncome": head(item.hp_amount_apportioned, item.hp_tds_apportioned),
+        "BusHeadIncome": head(item.bus_amount_apportioned, item.bus_tds_apportioned),
         "CapGainHeadIncome": head(item.cg_amount_apportioned, item.cg_tds_apportioned),
         "OtherSourcesHeadIncome": head(item.os_amount_apportioned, item.os_tds_apportioned),
         "TotalHeadIncome": head(total, total_tds),
@@ -4736,11 +4726,13 @@ def _schedule_esop(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         bucket = aggregated_by_ay.setdefault(
             e.assessment_year,
             {"bf": _ZERO, "payable": _ZERO, "cf": _ZERO,
-             "security_type": e.security_type, "ceased_employee": e.ceased_employee},
+             "security_type": e.security_type, "ceased_employee": e.ceased_employee,
+             "gross_perquisite_tax": e.gross_perquisite_tax},
         )
         bucket["bf"] += e.tax_deferred_brought_forward
         bucket["payable"] += e.tax_payable_current_year
         bucket["cf"] += e.balance_tax_carried_forward
+        bucket["gross_perquisite_tax"] += e.gross_perquisite_tax
 
     def ay_block(ay_label: str, tax_key: str) -> dict[str, Any]:
         bucket = aggregated_by_ay.get(ay_label)
@@ -4762,6 +4754,12 @@ def _schedule_esop(input_data: ITR2Input) -> Optional[dict[str, Any]]:
         }
 
     total_attributed = sum((e.tax_payable_current_year for e in input_data.esop_deferrals), _ZERO)
+    # Item 8c is tax deferred in earlier assessment years becoming payable
+    # now; a new 2026-27 deferral belongs to item 8b, not item 8c.
+    total_attributed = sum(
+        (e.tax_payable_current_year for e in input_data.esop_deferrals
+         if e.assessment_year != "2026-27"), _ZERO,
+    )
     # The running balance carried into the current AY is the sum of every
     # outstanding entry's carry-forward, not just the first entry's --
     # using `first.balance_tax_carried_forward` alone silently dropped every
