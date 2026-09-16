@@ -1463,6 +1463,7 @@ def _schedule_ei(typed_input: ITR3Input | None) -> dict[str, Any] | None:
         "agricultural_deductions": Decimal("0"),
         "unabsorbed_agricultural_loss_previous_8_years": Decimal("0"),
         "land_details": [],
+        "agricultural_income_rule_7_and_8": Decimal("0"),
     })()
     exempt = exempt or type("Exempt", (), {
         "ppf_interest": Decimal("0"), "sukanya_samriddhi_interest": Decimal("0"),
@@ -1504,8 +1505,9 @@ def _schedule_ei(typed_input: ITR3Input | None) -> dict[str, Any] | None:
         "AgriLandOwnedFlag": row.owned_flag,
         "AgriLandIrrigatedFlag": row.irrigated_flag,
     } for row in agriculture.land_details]
-    net_agri = max(Decimal("0"), gross - expense - prior_loss)
+    net_agri = max(Decimal("0"), gross - expense - prior_loss + getattr(agriculture, "agricultural_income_rule_7_and_8", Decimal("0")))
     total = interest + gross - expense - prior_loss + other
+    total += getattr(agriculture, "agricultural_income_rule_7_and_8", Decimal("0"))
     total += sum((row.amount for row in exempt.dtaa_exempt_entries), Decimal("0"))
     total += exempt.pti_exempt_income + exempt.share_of_profit_from_firm
     result: dict[str, Any] = {
@@ -1513,7 +1515,7 @@ def _schedule_ei(typed_input: ITR3Input | None) -> dict[str, Any] | None:
         "GrossAgriRecpt": _to_rupees(gross),
         "ExpIncAgri": _to_rupees(expense),
         "UnabAgriLossPrev8": _to_rupees(prior_loss),
-        "AgriIncRule7and8": 0,
+        "AgriIncRule7and8": _to_rupees(getattr(agriculture, "agricultural_income_rule_7_and_8", Decimal("0"))),
         "NetAgriIncOrOthrIncRule7": _to_rupees(net_agri),
         "Others": _to_rupees(other + exempt.share_of_profit_from_firm),
         "IncChrgblAsPerDTAA": _to_rupees(sum((row.amount for row in exempt.dtaa_exempt_entries), Decimal("0"))),

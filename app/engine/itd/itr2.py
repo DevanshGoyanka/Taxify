@@ -4690,6 +4690,9 @@ def _schedule_5a(input_data: ITR2Input) -> Optional[dict[str, Any]]:
     output: dict[str, Any] = {
         "NameOfSpouse": item.spouse_name,
         "PANOfSpouse": item.spouse_pan,
+        **({"AadhaarOfSpouse": item.spouse_aadhaar} if item.spouse_aadhaar else {}),
+        **({"BooksSpouse44ABFlg": item.books_spouse_44ab_flg} if item.books_spouse_44ab_flg else {}),
+        **({"BooksSpouse92EFlg": item.books_spouse_92e_flg} if item.books_spouse_92e_flg else {}),
         "HPHeadIncome": head(item.hp_amount_apportioned, item.hp_tds_apportioned),
         "BusHeadIncome": head(item.bus_amount_apportioned, item.bus_tds_apportioned),
         "CapGainHeadIncome": head(item.cg_amount_apportioned, item.cg_tds_apportioned),

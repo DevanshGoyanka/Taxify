@@ -39,15 +39,15 @@ const text = (value: unknown): string => value == null ? '' : String(value);
 
 export const createBroughtForwardLossEntry = (): BroughtForwardLossEntry => ({ id: uid('bfla'), assessmentYear: '', head: 'HP', subCategory: '', originalLoss: 0, broughtForward: 0, dateOfFiling: null });
 export const createScheduleSIEntry = (): ScheduleSIEntry => ({ id: uid('si'), section: '115BB', description: '', grossIncome: 0, deductions: 0, taxRatePct: null });
-export const createForeignSourceIncomeEntry = (): ForeignSourceIncomeEntry => ({ id: uid('fsi'), countryCode: '', taxIdentificationNo: '', salaryIncome: 0, hpIncome: 0, cgIncome: 0, osIncome: 0, taxPaidOutsideIndia: 0, taxPayableInIndia: 0, reliefSection: '90' });
+export const createForeignSourceIncomeEntry = (): ForeignSourceIncomeEntry => ({ id: uid('fsi'), countryName: '', countryCode: '', taxIdentificationNo: '', salaryIncome: 0, hpIncome: 0, businessIncome: 0, cgIncome: 0, osIncome: 0, taxPaidOutsideIndia: 0, taxPayableInIndia: 0, reliefSection: '90', treatyArticle: '' });
 export const createForeignTaxReliefEntry = (): ForeignTaxReliefEntry => ({ id: uid('tr'), countryCode: '', taxIdentificationNo: '', incomeIncludedInThisReturn: 0, taxPaidOutsideIndia: 0, indianTaxPayable: 0, reliefClaimed: 0, reliefSection: '90', form67Filed: false, form10FFiled: false });
 export const createForeignAssetEntry = (): ForeignAssetEntry => ({ id: uid('fa'), assetType: 'BANK_ACCOUNT', countryCode: '', institutionOrEntityName: '', address: '', zipCode: '', accountOrAssetIdentifier: '', ownershipStatus: '', openingOrAcquisitionDate: '', peakValue: 0, closingValue: 0, grossIncome: 0, incomeOffered: 0, incomeHead: null, natureOfAsset: '', natureOfIncome: '', incomeTaxScheduleItemNo: '', initialValueOfInvestment: null, totalGrossProceedsValue: 0 });
 export const createClubbedIncomeEntry = (): ClubbedIncomeEntry => ({ id: uid('spi'), specifiedPersonName: '', pan: '', relationship: '', amountIncluded: 0, headOfIncome: 'OS' });
-export const createPassThroughIncomeEntry = (): PassThroughIncomeEntry => ({ id: uid('pti'), entityName: '', entityPAN: '', incomeHead: 'OS', section: '', incomeAmount: 0, tdsCredit: 0 });
+export const createPassThroughIncomeEntry = (): PassThroughIncomeEntry => ({ id: uid('pti'), investmentType: 'A', entityName: '', entityPAN: '', incomeHead: 'OS', section: '', incomeAmount: 0, tdsCredit: 0 });
 export const createAmtDetails = (): AMTDetails => ({ deduction10AA: 0, deduction80IAto80RRBExcept80P: 0, deduction35ADNetDepreciation: 0, creditsBroughtForward: [] });
 export const createAmtCreditEntry = (): AMTCreditEntry => ({ id: uid('amtc'), assessmentYear: '', creditBroughtForward: 0 });
 export const createAssetLiabilityDetails = (): AssetLiabilityDetails => ({ immovableProperty: 0, cashInHand: 0, bankDeposits: 0, sharesAndSecurities: 0, insurancePolicies: 0, loansAndAdvances: 0, jewellery: 0, art: 0, vehiclesBoatsAircraft: 0, relatedLiabilities: 0 });
-export const createPortugueseCivilCodeDetails = (): PortugueseCivilCodeDetails => ({ spouseName: '', spousePAN: '', spouseAadhaar: '', hpAmountApportioned: 0, cgAmountApportioned: 0, osAmountApportioned: 0, hpTdsApportioned: 0, cgTdsApportioned: 0, osTdsApportioned: 0 });
+export const createPortugueseCivilCodeDetails = (): PortugueseCivilCodeDetails => ({ spouseName: '', spousePAN: '', spouseAadhaar: '', booksSpouse44ABFlg: '', booksSpouse92EFlg: '', hpAmountApportioned: 0, busAmountApportioned: 0, cgAmountApportioned: 0, osAmountApportioned: 0, hpTdsApportioned: 0, busTdsApportioned: 0, cgTdsApportioned: 0, osTdsApportioned: 0 });
 export const createESOPDeferralEntry = (): ESOPDeferralEntry => ({ id: uid('esop'), employerPAN: '', dpiitRegistrationNumber: '', assessmentYear: '', taxDeferredBroughtForward: 0, taxPayableCurrentYear: 0, balanceTaxCarriedForward: 0 });
 
 const PAN = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -72,6 +72,8 @@ export function validationFor(section: string, row: Row, assessmentYear: string)
   if (section === '5A' && (!text(row.spouseName) || !text(row.spousePAN))) errors.push('Spouse name and PAN are required.');
   if (section === '5A' && text(row.spousePAN) && !PAN.test(text(row.spousePAN).toUpperCase())) errors.push('Spouse PAN must be valid.');
   if (section === '5A' && text(row.spouseAadhaar) && !/^\d{12}$/.test(text(row.spouseAadhaar))) errors.push('Spouse Aadhaar must contain 12 digits when supplied.');
+  if (section === '5A' && row.booksSpouse44ABFlg && !['Y', 'N'].includes(text(row.booksSpouse44ABFlg))) errors.push('Section 44AB audit status must be Yes or No.');
+  if (section === '5A' && row.booksSpouse92EFlg && !['Y', 'N'].includes(text(row.booksSpouse92EFlg))) errors.push('Section 92E audit status must be Yes or No.');
   if (section === 'ESOP' && row.assessmentYear && !AY.test(text(row.assessmentYear))) errors.push('Assessment year must use YYYY-YY format.');
   if (section === 'ESOP' && (!text(row.employerPAN) || !PAN.test(text(row.employerPAN).toUpperCase()))) errors.push('A valid employer PAN is required.');
   if (section === 'ESOP' && text(row.dpiitRegistrationNumber) && !DIPP.test(text(row.dpiitRegistrationNumber).toUpperCase())) errors.push('DPIIT registration number must match DIPP followed by 3-5 digits (e.g. DIPP12345).');
@@ -95,6 +97,9 @@ function controlFor(section: string, key: string, row: Row, onValue: (value: unk
     return <select value={value == null ? '' : String(value)} onChange={(event) => onValue(event.target.value)}>
       {options[key].map((option) => <option key={option} value={option}>{option || 'None'}</option>)}
     </select>;
+  }
+  if (section === '5A' && (key === 'booksSpouse44ABFlg' || key === 'booksSpouse92EFlg')) {
+    return <select value={value == null ? '' : String(value)} onChange={(event) => onValue(event.target.value)}><option value="">-- Select --</option><option value="Y">Yes</option><option value="N">No</option></select>;
   }
   return <input
     type={isMoney(key) ? 'number' : key.toLowerCase().includes('date') ? 'date' : 'text'}
@@ -139,7 +144,8 @@ export function ITR2SchedulesWorkspace(props: ITR2SchedulesWorkspaceProps): Reac
       assessmentYear={props.assessmentYear}
     />}
     <NullableSection title="Schedule AL — Assets and liabilities" code="AL" value={props.assetLiability} onChange={props.onAssetLiabilityChange} factory={createAssetLiabilityDetails} fields={['immovableProperty', 'cashInHand', 'bankDeposits', 'sharesAndSecurities', 'insurancePolicies', 'loansAndAdvances', 'jewellery', 'art', 'vehiclesBoatsAircraft', 'relatedLiabilities']} assessmentYear={props.assessmentYear} />
-    <NullableSection title="Schedule 5A — Portuguese Civil Code" code="5A" value={props.portugueseCivilCode} onChange={props.onPortugueseCivilCodeChange} factory={createPortugueseCivilCodeDetails} fields={['spouseName', 'spousePAN', 'spouseAadhaar', 'hpAmountApportioned', 'cgAmountApportioned', 'osAmountApportioned', 'hpTdsApportioned', 'cgTdsApportioned', 'osTdsApportioned']} assessmentYear={props.assessmentYear} />
+    <NullableSection title="Schedule 5A — Portuguese Civil Code" code="5A" value={props.portugueseCivilCode} onChange={props.onPortugueseCivilCodeChange} factory={createPortugueseCivilCodeDetails} fields={['spouseName', 'spousePAN', 'spouseAadhaar', 'booksSpouse44ABFlg', 'booksSpouse92EFlg']} assessmentYear={props.assessmentYear} />
+    {props.portugueseCivilCode && <p style={muted}>Income apportionment, TDS allocation, ownership percentages, and statutory totals are computed from the backend’s Portuguese Civil Code inputs and are shown read-only after calculation.</p>}
     <ListSection title="Schedule ESOP — Tax deferrals" code="ESOP" rows={props.esopDeferrals as unknown as Row[]} onChange={props.onEsopDeferralsChange as unknown as ListCallback<Row>} factory={createESOPDeferralEntry as unknown as () => Row} fields={['employerPAN', 'dpiitRegistrationNumber', 'assessmentYear', 'taxDeferredBroughtForward', 'taxPayableCurrentYear', 'balanceTaxCarriedForward']} assessmentYear={props.assessmentYear} />
   </div>;
 }

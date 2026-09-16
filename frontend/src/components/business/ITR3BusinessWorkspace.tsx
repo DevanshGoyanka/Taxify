@@ -2,6 +2,10 @@ import React, { useMemo, useState } from 'react';
 import ITR3BusinessCoreManager, { type CanonicalObject, type CanonicalValue, type ITR3BusinessCoreData } from './ITR3BusinessCoreManager';
 import ITR3BusinessAuxiliaryManager, { type ITR3AuxiliaryData, type ITR3AuxiliaryValue } from './ITR3BusinessAuxiliaryManager';
 import ITR3PresumptiveManager from './ITR3PresumptiveManager';
+import ITR3PartAFinancialEditor from '../ITR3PartAFinancialEditor';
+import ITR3ScheduleBPEditor from './ITR3ScheduleBPEditor';
+import ITR3PartAQDEditor from '../ITR3PartAQDEditor';
+import type { ITR3BusinessWorkspace as ITR3BusinessWorkspaceData } from '../../domain/returns/types';
 
 /** Props for the guided AY 2026-27 ITR-3 business workspace. */
 export interface ITR3BusinessWorkspaceProps {
@@ -45,7 +49,7 @@ const SCHEDULE_CHOICES: readonly ScheduleChoice[] = [
   { key: 'ScheduleDEP', label: 'DEP — Depreciation summary', help: 'Summary of depreciation carried to Schedule BP.', group: 'Depreciation and assets' },
   { key: 'ScheduleDCG', label: 'DCG — Capital gains on depreciable assets', help: 'Select when a depreciable block gives rise to section 50 capital gains.', group: 'Depreciation and assets' },
   { key: 'ScheduleESR', label: 'ESR — Scientific research expenditure', help: 'Deductions claimed under section 35.', group: 'Adjustments and carried-forward amounts' },
-  { key: 'ITR3ScheduleUD', label: 'UD — Unabsorbed depreciation', help: 'Brought-forward depreciation and allowance set-off.', group: 'Adjustments and carried-forward amounts' },
+  { key: 'ScheduleUD', label: 'UD — Unabsorbed depreciation', help: 'Brought-forward depreciation and allowance set-off.', group: 'Adjustments and carried-forward amounts' },
   { key: 'ScheduleICDS', label: 'ICDS adjustments', help: 'Increase or decrease in profit under the ten notified ICDS.', group: 'Adjustments and carried-forward amounts' },
   { key: 'ScheduleGST', label: 'GST turnover', help: 'Turnover or gross receipts reported for each GSTIN.', group: 'Business disclosures' },
   { key: 'ScheduleIF', label: 'IF — Partnership firms', help: 'Share of profit, interest, remuneration and capital in firms.', group: 'Business disclosures' },
@@ -151,7 +155,8 @@ export default function ITR3BusinessWorkspace({ core, auxiliary, onCoreChange, o
 
     {activeStep === 'accounts' && <div>
       <div style={sectionCard}><h3 style={{ margin: '0 0 6px', fontSize: 15, color: 'var(--text-secondary)' }}>2. Prepare financial statements</h3><p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: 'var(--text-muted)' }}>Enter figures in accounting order. Manufacturers should complete the Manufacturing Account first; its cost of goods produced flows into the Trading Account, followed by the Profit and Loss Account and Balance Sheet.</p></div>
-      <ITR3BusinessCoreManager value={core} onChange={onCoreChange} visibleSchedules={['ManufacturingAccount', 'TradingAccount', 'PARTA_PL', 'PARTA_BS']} excludedPaths={[...PRESUMPTIVE_PL_PATHS]} showHeading={false} />
+      <ITR3PartAFinancialEditor schedule="PARTA_PL" value={asCanonicalObject(core?.PARTA_PL)} onChange={(next) => onCoreChange({ ...withPartAPL(core, next), PARTA_PL: next })} />
+      <ITR3PartAFinancialEditor schedule="PARTA_BS" value={asCanonicalObject(core?.PARTA_BS)} onChange={(next) => onCoreChange({ ...withPartAPL(core, asCanonicalObject(core?.PARTA_PL)), PARTA_BS: next })} />
       {declaresPresumptiveIncome(core) && <ITR3PresumptiveManager data={asCanonicalObject(core?.PARTA_PL)} onChange={(partAPL) => onCoreChange(withPartAPL(core, partAPL))} />}
     </div>}
 
@@ -159,13 +164,13 @@ export default function ITR3BusinessWorkspace({ core, auxiliary, onCoreChange, o
       <div style={sectionCard}><h3 style={{ margin: '0 0 6px', fontSize: 15, color: 'var(--text-secondary)' }}>3. Compute income in Schedule BP</h3><div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginTop: 12 }}>
         {[['A', 'Regular business', 'Book profit, other-head items, disallowances, deductions and Rule 7 adjustments'], ['B', 'Speculative business', 'Profit or loss from speculative transactions'], ['C', 'Specified business', 'Section 35AD specified-business computation'], ['D', 'Chargeable income', 'Aggregate business income and current-year business-loss set-off']].map(([code, title, text]) => <div key={code} style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)' }}><span style={{ display: 'inline-flex', width: 22, height: 22, alignItems: 'center', justifyContent: 'center', background: 'var(--gold)', color: '#fff', borderRadius: 4, fontSize: 11, fontWeight: 700 }}>{code}</span><strong style={{ display: 'block', marginTop: 8, fontSize: 12, color: 'var(--text-secondary)' }}>{title}</strong><span style={{ display: 'block', marginTop: 4, fontSize: 10, lineHeight: 1.4, color: 'var(--text-muted)' }}>{text}</span></div>)}
       </div></div>
-      <ITR3BusinessCoreManager value={core} onChange={onCoreChange} visibleSchedules={['ITR3ScheduleBP']} showHeading={false} />
+      <ITR3ScheduleBPEditor value={asCanonicalObject(core?.ITR3ScheduleBP)} onChange={(next) => onCoreChange({ ...withPartAPL(core, asCanonicalObject(core?.PARTA_PL)), ITR3ScheduleBP: next })} />
     </div>}
 
     {activeStep === 'supporting' && <div>
       <div style={sectionCard}><h3 style={{ margin: '0 0 6px', fontSize: 15, color: 'var(--text-secondary)' }}>4. Select applicable supporting schedules</h3><p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: 'var(--text-muted)' }}>The ITD utility shows schedules based on applicability. Select only those relevant to this return. Hiding a schedule does not delete data already entered.</p></div>
       {[...new Set(SCHEDULE_CHOICES.map((choice) => choice.group))].map((group) => <div key={group} style={sectionCard}><h4 style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-secondary)' }}>{group}</h4><div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>{SCHEDULE_CHOICES.filter((choice) => choice.group === group).map((choice) => <label key={choice.key} style={{ display: 'flex', gap: 10, padding: 12, border: `1px solid ${selectedSchedulesSet.has(choice.key) ? 'var(--gold)' : 'var(--border)'}`, borderRadius: 6, background: selectedSchedulesSet.has(choice.key) ? 'var(--gold-pale)' : 'var(--bg)', cursor: 'pointer' }}><input type="checkbox" checked={selectedSchedulesSet.has(choice.key)} onChange={() => toggleSchedule(choice.key)} style={{ marginTop: 2 }} /><span><strong style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)' }}>{choice.label}</strong><span style={{ display: 'block', marginTop: 4, fontSize: 10, lineHeight: 1.4, color: 'var(--text-muted)' }}>{choice.help}</span></span></label>)}</div></div>)}
-      {selectedKeys.length === 0 ? <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 6 }}>No supporting schedule selected. Choose an applicable schedule above to complete it.</div> : <ITR3BusinessAuxiliaryManager data={auxiliary} onChange={onAuxiliaryChange} visibleSchedules={selectedKeys} showHeading={false} />}
+      {selectedKeys.length === 0 ? <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 6 }}>No supporting schedule selected. Choose an applicable schedule above to complete it.</div> : <div>{selectedKeys.includes('PARTA_QD') && <ITR3PartAQDEditor workspace={{ core: core ?? {}, auxiliary: (auxiliary ?? {}) as ITR3BusinessWorkspaceData['auxiliary'], selectedSchedules: selectedKeys }} onChange={(workspace) => onAuxiliaryChange(workspace.auxiliary as ITR3AuxiliaryData)} />}<ITR3BusinessAuxiliaryManager data={auxiliary} onChange={onAuxiliaryChange} visibleSchedules={selectedKeys.filter((key) => key !== 'PARTA_QD')} showHeading={false} /></div>}
     </div>}
 
     {activeStep === 'review' && <div>

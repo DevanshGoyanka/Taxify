@@ -1,0 +1,15 @@
+{
+  "schema": "ITR-3 AY 2026-27 V1.1",
+  "officialPathCount": 2936,
+  "scheduleCount": 69,
+  "dispositionCounts": {
+    "metadata": 6,
+    "backend-only": 160,
+    "computed": 1004,
+    "dedicated-input": 1651,
+    "backend-computed": 50,
+    "imported": 65
+  },
+  "missingMandatoryPaths": [],
+  "missingPaths": []
+}

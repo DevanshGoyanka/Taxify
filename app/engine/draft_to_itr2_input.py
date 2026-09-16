@@ -646,6 +646,7 @@ def _map_agricultural_income(draft: ReturnDraft) -> Optional[AgriculturalIncome]
         # CBDT rule #436 (Phase 4, 2026-09-12): previously never mapped
         # despite the frontend already collecting it.
         unabsorbed_agricultural_loss_previous_8_years=ei.unabsorbedAgriculturalLossPreviousEightYears,
+        agricultural_income_rule_7_and_8=ei.agriculturalIncomeRule7And8,
         # CBDT rule #445 (Phase 4, 2026-09-12): per-parcel land detail,
         # previously never mapped despite the frontend already collecting
         # it (draft.exemptIncome.agriculturalLandParcels).
@@ -694,7 +695,14 @@ def _map_exempt_income(draft: ReturnDraft) -> Optional[ExemptIncome]:
             ExemptIncomeOtherEntry(
                 category=row.category,
                 sub_category=row.subCategory,
-                description=row.description or "Other exempt income",
+                description=" | ".join(
+                    value for value in (
+                        row.description,
+                        row.natureOfIncome,
+                        row.sectionDetails,
+                        row.evidenceReference,
+                    ) if value
+                )[:125] or "Other exempt income",
                 amount=row.grossAmount,
             )
             for row in entries if row.grossAmount > 0
@@ -931,12 +939,14 @@ def _map_schedule_5a(draft: ReturnDraft) -> Optional[Schedule5AInput]:
         spouse_name=pcc.spouseName,
         spouse_pan=pcc.spousePAN,
         spouse_aadhaar=pcc.spouseAadhaar or None,
+        books_spouse_44ab_flg=pcc.booksSpouse44ABFlg or None,
+        books_spouse_92e_flg=pcc.booksSpouse92EFlg or None,
         hp_amount_apportioned=pcc.hpAmountApportioned,
-        bus_amount_apportioned=pcc.busAmountApportioned,
+        bus_amount_apportioned=pcc.busAmountApportioned or Decimal("0"),
         cg_amount_apportioned=pcc.cgAmountApportioned,
         os_amount_apportioned=pcc.osAmountApportioned,
         hp_tds_apportioned=pcc.hpTdsApportioned,
-        bus_tds_apportioned=pcc.busTdsApportioned,
+        bus_tds_apportioned=pcc.busTdsApportioned or Decimal("0"),
         cg_tds_apportioned=pcc.cgTdsApportioned,
         os_tds_apportioned=pcc.osTdsApportioned,
     )

@@ -755,6 +755,12 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
                 managers.advanceTax(updated);
               }} placeholder="0" style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 4, fontSize: 12, fontWeight: 600 }} />
             </div>
+            <Field label="Minor head" value={entry.minorHead || ''} onChange={(v: any) => { const updated = [...advanceTaxEntries]; updated[index] = { ...updated[index], minorHead: v }; managers.advanceTax(updated); }} />
+            <Field label="Assessment year" value={entry.assessmentYear || '2026-27'} onChange={(v: any) => { const updated = [...advanceTaxEntries]; updated[index] = { ...updated[index], assessmentYear: v }; managers.advanceTax(updated); }} />
+            <Field label="Tax component" value={entry.taxAmount || 0} onChange={(v: any) => { const updated = [...advanceTaxEntries]; updated[index] = { ...updated[index], taxAmount: v }; managers.advanceTax(updated); }} />
+            <Field label="Interest component" value={entry.interestAmount || 0} onChange={(v: any) => { const updated = [...advanceTaxEntries]; updated[index] = { ...updated[index], interestAmount: v }; managers.advanceTax(updated); }} />
+            <Field label="Fee component" value={entry.feeAmount || 0} onChange={(v: any) => { const updated = [...advanceTaxEntries]; updated[index] = { ...updated[index], feeAmount: v }; managers.advanceTax(updated); }} />
+            <Field label="Source / evidence reference" value={entry.sourceReference || ''} onChange={(v: any) => { const updated = [...advanceTaxEntries]; updated[index] = { ...updated[index], sourceReference: v }; managers.advanceTax(updated); }} />
           </div>
         </div>
       ))}
@@ -820,6 +826,12 @@ export function TDSTab({ taxResult, managers, editorModel }: { taxResult: any; m
             </div>
             <Field label="Date of Deposit *" value={entry.depositDate || ''} onChange={(v: any) => updateSelfAssessmentEntry(index, 'depositDate', v)} type="date" prefix="" required />
             <Field label="Amount *" value={entry.amount || 0} onChange={(v: any) => updateSelfAssessmentEntry(index, 'amount', v)} required />
+            <Field label="Minor head" value={entry.minorHead || ''} onChange={(v: any) => updateSelfAssessmentEntry(index, 'minorHead', v)} />
+            <Field label="Assessment year" value={entry.assessmentYear || '2026-27'} onChange={(v: any) => updateSelfAssessmentEntry(index, 'assessmentYear', v)} />
+            <Field label="Tax component" value={entry.taxAmount || 0} onChange={(v: any) => updateSelfAssessmentEntry(index, 'taxAmount', v)} />
+            <Field label="Interest component" value={entry.interestAmount || 0} onChange={(v: any) => updateSelfAssessmentEntry(index, 'interestAmount', v)} />
+            <Field label="Fee component" value={entry.feeAmount || 0} onChange={(v: any) => updateSelfAssessmentEntry(index, 'feeAmount', v)} />
+            <Field label="Source / evidence reference" value={entry.sourceReference || ''} onChange={(v: any) => updateSelfAssessmentEntry(index, 'sourceReference', v)} />
             <div>
               <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>CIN (derived)</label>
               <input type="text" value={deriveCin(entry)} readOnly placeholder="Complete BSR, date and serial" style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'var(--gold-pale)' }} />

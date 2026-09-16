@@ -111,6 +111,7 @@ export function createEmptyReturnDraft(assessmentYear = '', form: ReturnDraft['f
     foreignSourceIncome: [], foreignTaxRelief: [], foreignAssets: [],
     clubbedIncome: [], passThroughIncomeEntries: [],
     amt: null, assetLiability: null, portugueseCivilCode: null,
+    scheduleTPSA: { details: [] },
     esopDeferrals: [],
   };
 }

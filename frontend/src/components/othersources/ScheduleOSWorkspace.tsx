@@ -5,6 +5,7 @@ import type {
   SpecialRateSourceDescription, WinningIncome, WinningIncomeType,
 } from '../../domain/returns/types';
 import type { ItrForm } from '../../domain/eligibility';
+import { SCHEDULE_OS_OFFICIAL_PATH_COUNT, scheduleOSCoverageByGroup } from '../../domain/scheduleOSCoverage';
 
 const INV = 99_999_999_999_999;
 
@@ -305,6 +306,9 @@ export default function ScheduleOSWorkspace({ form, regime, otherSources, onChan
     <div style={{ marginBottom: 16 }}>
       <h3 style={sectionTitleStyle}>Income from Other Sources (Schedule OS)</h3>
       <div style={sectionSubtitleStyle}>Sections 56–59 · AY 2026-27 · CBDT-compliant</div>
+      <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }} data-testid="schedule-os-coverage">
+        {SCHEDULE_OS_OFFICIAL_PATH_COUNT} official ITR-3 fields classified · {Object.entries(scheduleOSCoverageByGroup()).map(([group, count]) => `${group}: ${count}`).join(' · ')}
+      </div>
     </div>
 
     <FormWarning form={form} categories={incompatibilities} />

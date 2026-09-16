@@ -32,6 +32,7 @@ import type {
   Schedule80GGCEntry,
   ScheduleSIEntry,
   Section80D,
+  ITR3TPSA,
   TaxChallan,
   TcsCredit,
   TdsCredit,
@@ -160,6 +161,13 @@ export interface ChallanManagerEntry {
   challanSerialNo?: string | number;
   amount?: number;
   cin?: string;
+  minorHead?: string;
+  assessmentYear?: string;
+  taxAmount?: number;
+  interestAmount?: number;
+  feeAmount?: number;
+  surchargeAmount?: number;
+  sourceReference?: string;
 }
 
 export type BankManagerEntry = BankAccount;
@@ -355,6 +363,11 @@ export function updateAssetLiability(model: ReturnEditorModelV2, value: AssetLia
 /** Replaces Schedule 5A details immutably. */
 export function updatePortugueseCivilCode(model: ReturnEditorModelV2, value: PortugueseCivilCodeDetails | null): ReturnEditorModelV2 {
   return withDraft(model, { ...model.draft, portugueseCivilCode: value === null ? null : clone(value) });
+}
+
+/** Replaces Schedule TPSA supporting tax deposits immutably. */
+export function updateScheduleTPSA(model: ReturnEditorModelV2, value: ITR3TPSA): ReturnEditorModelV2 {
+  return withDraft(model, { ...model.draft, scheduleTPSA: structuredClone(value) });
 }
 
 /** Replaces Schedule ESOP rows immutably. */
@@ -717,7 +730,7 @@ export function tdsFromManager(entries: readonly TdsManagerEntry[], previous: re
 
 /** Projects one challan kind into the editor shape. */
 export function challansToManager(challans: readonly TaxChallan[], kind: TaxChallan['kind']): ChallanManagerEntry[] {
-  return challans.filter((entry) => entry.kind === kind).map((entry) => ({ id: entry.id, bsrCode: entry.bsrCode, depositDate: entry.depositDate, challanSerialNo: entry.challanSerialNo, challanNo: entry.challanSerialNo, amount: entry.amount, cin: entry.cin }));
+  return challans.filter((entry) => entry.kind === kind).map((entry) => ({ id: entry.id, bsrCode: entry.bsrCode, depositDate: entry.depositDate, challanSerialNo: entry.challanSerialNo, challanNo: entry.challanSerialNo, amount: entry.amount, cin: entry.cin, minorHead: entry.minorHead, assessmentYear: entry.assessmentYear, taxAmount: entry.taxAmount, interestAmount: entry.interestAmount, feeAmount: entry.feeAmount, surchargeAmount: entry.surchargeAmount, sourceReference: entry.sourceReference }));
 }
 
 /** Replaces one challan kind while preserving every challan of the other kind.
@@ -732,7 +745,8 @@ export function replaceChallanKind(challans: readonly TaxChallan[], kind: TaxCha
     const bsr = optionalText(entry.bsrCode ?? prior?.bsrCode);
     const date = optionalText(entry.depositDate ?? prior?.depositDate);
     const amount = finiteMoney(entry.amount ?? prior?.amount);
-    return { ...prior, id: deterministicId(kind === 'ADVANCE_TAX' ? 'advance' : 'self-assessment', entry, index), kind, bsrCode: bsr, depositDate: date, challanSerialNo: serial, amount, cin: deriveCin(bsr, date, serial) };
+    const nonNegative = (value: unknown, fallback: number = 0): number => value === undefined ? fallback : finiteMoney(value);
+    return { ...prior, id: deterministicId(kind === 'ADVANCE_TAX' ? 'advance' : 'self-assessment', entry, index), kind, bsrCode: bsr, depositDate: date, challanSerialNo: serial, amount, cin: deriveCin(bsr, date, serial), minorHead: optionalText(entry.minorHead ?? prior?.minorHead), assessmentYear: optionalText(entry.assessmentYear ?? prior?.assessmentYear ?? '2026-27'), taxAmount: nonNegative(entry.taxAmount, prior?.taxAmount), interestAmount: nonNegative(entry.interestAmount, prior?.interestAmount), feeAmount: nonNegative(entry.feeAmount, prior?.feeAmount), surchargeAmount: nonNegative(entry.surchargeAmount, prior?.surchargeAmount), sourceReference: optionalText(entry.sourceReference ?? prior?.sourceReference) };
   });
   return [...retained, ...replacements];
 }

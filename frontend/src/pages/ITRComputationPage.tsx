@@ -27,6 +27,15 @@ import { HousePropertyEntryManager } from '../components/HousePropertyEntryManag
 import EmployerReconciliationModal from '../components/EmployerReconciliationModal';
 import { ITD_COUNTRY_CODES } from '../constants/itdCountryCodes';
 import ExemptIncomeWorkspace from '../components/exemptincome/ExemptIncomeWorkspace';
+import ITR3CYLABFLAEditor from '../components/ITR3CYLABFLAEditor';
+import ITR3SpecialSchedulesEditor from '../components/ITR3SpecialSchedulesEditor';
+import ITR3ForeignSchedulesEditor from '../components/ITR3ForeignSchedulesEditor';
+import ITR3PTIEditor from '../components/ITR3PTIEditor';
+import ITR3AlFaEsopEditor from '../components/ITR3AlFaEsopEditor';
+import ITR3PartAOIEditor from '../components/ITR3PartAOIEditor';
+import ITR3AMTEditor from '../components/ITR3AMTEditor';
+import ITR3TaxPaymentEditor from '../components/ITR3TaxPaymentEditor';
+import ITR3TPSAEditor from '../components/ITR3TPSAEditor';
 import ITR2SchedulesWorkspace from '../components/itr2/ITR2SchedulesWorkspace';
 import {
   createReturnRepository, stripCompatibility,
@@ -40,7 +49,7 @@ import {
   updateChapterVIA, updateTaxCreditsFromManager, updateTcsCredits, updateWinningsFromManager,
   updateBroughtForwardLossEntries, updateScheduleSIEntries,
   updateForeignSourceIncome, updateForeignTaxRelief, updateForeignAssets, updateClubbedIncome,
-  updatePassThroughIncomeEntries, updateAmt, updateAssetLiability, updatePortugueseCivilCode,
+  updatePassThroughIncomeEntries, updateAmt, updateAssetLiability, updatePortugueseCivilCode, updateScheduleTPSA,
   updateEsopDeferrals, updatePensionContribution80CCC, updateSchedule80GGA, updateSchedule80GGC, updateTaxReturnPreparer,
   replaceDraft, type ReturnEditorModelV2,
 } from '../domain/returns/editorModelV2';
@@ -1341,6 +1350,7 @@ export default function ITRComputationPage() {
     { label: 'Exempt Income', icon: exemptIncomeIcon },
     { label: '➖ Deductions' },
     { label: '🧾 TDS & Advance Tax' },
+    ...(itrForm === 'ITR-3' ? [{ label: '⚖️ Schedule CYLA & BFLA' }, { label: '🧾 Part A-OI' }, { label: '🧾 Schedule SI & SPI' }, { label: '🌐 Schedule FSI & TR1' }, { label: '🗂️ Schedule AL, FA & ESOP' }, { label: '🧾 Schedule PTI' }, { label: '🧮 Schedule AMT & AMTC' }, { label: '💳 Tax payment schedules' }, { label: '⚖️ Schedule TPSA' }] : []),
     ...(itrForm === 'ITR-2' ? [{ label: '🗂️ ITR-2 Schedules' }] : []),
     { label: 'Tax Computation', icon: taxComputationIcon }
   ];
@@ -2061,6 +2071,24 @@ export default function ITRComputationPage() {
         {activeTab === 6 && editorModel && <ExemptIncomeWorkspace form={itrForm} schedule={editorModel.draft.exemptIncome} onChange={(next) => updateEditor((model) => updateExemptIncome(model, next))} />}
         {activeTab === 7 && editorModel && <DeductionsTab regime={regime} taxResult={taxResult} managers={managers} form={itrForm} editorModel={editorModel as any} />}
         {activeTab === 8 && editorModel && <TDSTab taxResult={taxResult} managers={managers} editorModel={editorModel as any} />}
+        {itrForm === 'ITR-3' && safeActiveTab === 9 && editorModel && <ITR3CYLABFLAEditor draft={editorModel.draft} taxResult={backendTaxResult} onChange={(losses) => updateEditor((model) => updateLossesBroughtForward(model, losses))} />}
+        {itrForm === 'ITR-3' && safeActiveTab === 10 && editorModel && <ITR3PartAOIEditor draft={editorModel.draft} taxResult={backendTaxResult} onChange={(workspace) => updateEditor((model) => replaceDraft({ ...model.draft, itr3BusinessWorkspace: workspace }))} />}
+        {itrForm === 'ITR-3' && safeActiveTab === 11 && editorModel && <ITR3SpecialSchedulesEditor
+          scheduleSIEntries={editorModel.draft.scheduleSIEntries}
+          onScheduleSIEntriesChange={(entries) => updateEditor((model) => updateScheduleSIEntries(model, entries))}
+          clubbedIncome={editorModel.draft.clubbedIncome}
+          onClubbedIncomeChange={(entries) => updateEditor((model) => updateClubbedIncome(model, entries))}
+        />}
+        {itrForm === 'ITR-3' && safeActiveTab === 12 && editorModel && <ITR3ForeignSchedulesEditor
+          foreignSourceIncome={editorModel.draft.foreignSourceIncome}
+          onForeignSourceIncomeChange={(entries) => updateEditor((model) => updateForeignSourceIncome(model, entries))}
+          foreignTaxRelief={editorModel.draft.foreignTaxRelief}
+          onForeignTaxReliefChange={(entries) => updateEditor((model) => updateForeignTaxRelief(model, entries))}
+        />}
+        {itrForm === 'ITR-3' && safeActiveTab === 13 && editorModel && <ITR3AlFaEsopEditor assetLiability={editorModel.draft.assetLiability} onAssetLiabilityChange={(v) => updateEditor((m) => updateAssetLiability(m, v))} foreignAssets={editorModel.draft.foreignAssets} onForeignAssetsChange={(v) => updateEditor((m) => updateForeignAssets(m, v))} esopDeferrals={editorModel.draft.esopDeferrals} onEsopDeferralsChange={(v) => updateEditor((m) => updateEsopDeferrals(m, v))} />}
+        {itrForm === 'ITR-3' && safeActiveTab === 14 && editorModel && <ITR3PTIEditor entries={editorModel.draft.passThroughIncomeEntries} onChange={(entries) => updateEditor((model) => updatePassThroughIncomeEntries(model, entries))} />}
+        {itrForm === 'ITR-3' && safeActiveTab === 15 && editorModel && <ITR3AMTEditor amt={editorModel.draft.amt} computed={backendTaxResult?.amt ?? backendTaxResult?.amtSummary ?? null} onChange={(value) => updateEditor((model) => updateAmt(model, value))} />}
+        {itrForm === 'ITR-3' && safeActiveTab === 17 && editorModel && <ITR3TPSAEditor value={editorModel.draft.scheduleTPSA} onChange={(value) => updateEditor((model) => updateScheduleTPSA(model, value))} />}
         {itrForm === 'ITR-2' && safeActiveTab === 9 && editorModel && <ITR2SchedulesWorkspace
           assessmentYear={effectiveAssessmentYear}
           broughtForwardLossEntries={editorModel.draft.broughtForwardLossEntries} onBroughtForwardLossEntriesChange={(v) => updateEditor((m) => updateBroughtForwardLossEntries(m, v))}

@@ -653,6 +653,7 @@ class AgriculturalIncome(StrictModel):
     # mapped or subtracted anywhere in the pipeline.
     unabsorbed_agricultural_loss_previous_8_years: Decimal = Field(default=Decimal("0"), ge=0)
     share_from_firm: Decimal = Field(default=Decimal("0"), ge=0)
+    agricultural_income_rule_7_and_8: Decimal = Field(default=Decimal("0"), ge=0)
     # CBDT rule #445: per-parcel land detail (official ExcNetAgriIncDtls) --
     # the frontend's ExemptIncomeWorkspace.tsx already collects this
     # (agriculturalLandParcels), previously never mapped into ITR2Input at
@@ -950,6 +951,8 @@ class Schedule5AInput(StrictModel):
     spouse_name: str = Field(min_length=1, max_length=125)
     spouse_pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]$")
     spouse_aadhaar: Optional[str] = Field(default=None, pattern=r"^[0-9]{12}$")
+    books_spouse_44ab_flg: Optional[Literal["Y", "N"]] = None
+    books_spouse_92e_flg: Optional[Literal["Y", "N"]] = None
     hp_amount_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
     bus_amount_apportioned: Decimal = Field(default=Decimal("0"), ge=0)
     cg_amount_apportioned: Decimal = Field(default=Decimal("0"), ge=0)

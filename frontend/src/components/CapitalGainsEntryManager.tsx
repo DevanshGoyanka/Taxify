@@ -1,5 +1,6 @@
 import React from 'react';
 import type { CapitalGainsSchedule as CanonicalCapitalGainsSchedule } from '../domain/returns/types';
+import { CG_ACCRUAL_BUCKETS, CG_ACCRUAL_BUCKET_LABELS, CG_ACCRUAL_DATE_RANGES, normalizeScheduleCGAccrual, updateScheduleCGAccrual, validateScheduleCGAccrual, type CGAccrualBucket, type CGAccrualDateRange } from '../domain/itr3CapitalGainsAccrual';
 import { CollapsibleWarning } from './ui/CollapsibleWarning';
 
 const MONEY_MAX = 99999999999999;
@@ -82,7 +83,7 @@ const emptyData = (): CapitalGainsScheduleData => ({
   stImmovable: [], stEquity: [], stNonResShares: [], stNriUnlisted: [], stOtherAssets: [], stSlumpSale: [],
   ltImmovable: [], ltProviso112: [], ltNriUnlisted: [], ltNri112115: [], ltForeignAssets: [], ltOtherAssets: [], ltSlumpSale: [],
   schedule112A: [], schedule115AD: [], vda: [], stUnutilized: [], ltUnutilized: [], stDtaa: [], ltDtaa: [], buyBackLosses: [], deductionClaims: [],
-  quarterly: {}, stSection48: { nriSttPaid: 0, nriSttNotPaid: 0 }, ltNriProviso48: { ltcgWithoutBenefit: 0, deduction54F: 0 }, ltNri112A: {}, stUnutilizedFlag: 'N', ltUnutilizedFlag: 'N', lossSetOff: {}, aggregates: { stPassThrough: 0, stPassThrough20: 0, stPassThrough30: 0, stPassThroughApplicable: 0, ltPassThrough: 0, ltPassThrough112A: 0, ltPassThrough125: 0 },
+  quarterly: normalizeScheduleCGAccrual({}), stSection48: { nriSttPaid: 0, nriSttNotPaid: 0 }, ltNriProviso48: { ltcgWithoutBenefit: 0, deduction54F: 0 }, ltNri112A: {}, stUnutilizedFlag: 'N', ltUnutilizedFlag: 'N', lossSetOff: {}, aggregates: { stPassThrough: 0, stPassThrough20: 0, stPassThrough30: 0, stPassThroughApplicable: 0, ltPassThrough: 0, ltPassThrough112A: 0, ltPassThrough125: 0 },
 });
 
 const normalizeData = (value?: Partial<CapitalGainsScheduleData> | CanonicalCapitalGainsSchedule): CapitalGainsScheduleData => {
@@ -93,7 +94,7 @@ const normalizeData = (value?: Partial<CapitalGainsScheduleData> | CanonicalCapi
     if (Array.isArray(base[key])) (result as unknown as Record<string, unknown>)[key] = Array.isArray(value[key]) ? value[key] : [];
   }
   result.simplified112A = { ...base.simplified112A, ...(value.simplified112A || {}) };
-  result.quarterly = { ...(value.quarterly || {}) };
+  result.quarterly = normalizeScheduleCGAccrual(value.quarterly);
   result.aggregates = { ...base.aggregates, ...(value.aggregates || {}) };
   result.stSection48 = { ...base.stSection48, ...(value.stSection48 || {}) };
   result.ltNriProviso48 = { ...base.ltNriProviso48, ...(value.ltNriProviso48 || {}) };
@@ -129,14 +130,17 @@ const LT_IMMOVABLE: FieldSpec[] = [
 ];
 const SCRIP_FIELDS: FieldSpec[] = [
   { key: 'shareOnOrBefore', label: 'Acquired before/after 31-Jan-2018 *', kind: 'select', required: true, options: [['BE','Before/on 31-Jan-2018'],['AE','After 31-Jan-2018']] },
-  { key: 'isin', label: 'ISIN code *', required: true, maxLength: 12, pattern: '(?:IN[0-9A-Z]{10}|INNOTREQUIRD)' },
-  { key: 'name', label: 'Share / unit name *', required: true, maxLength: 125 }, { key: 'quantity', label: 'Number of shares / units', kind: 'decimal' },
-  { key: 'salePricePerUnit', label: 'Sale price per unit', kind: 'decimal' }, { key: 'totalSaleValue', label: 'Total sale value *', kind: 'money', required: true },
-  { key: 'costWithoutIndexation', label: 'Cost without indexation *', kind: 'money', required: true }, { key: 'acquisitionCost', label: 'Acquisition cost *', kind: 'decimal', required: true },
-  { key: 'fmvPerUnit', label: 'FMV per unit on 31-Jan-2018 *', kind: 'decimal', required: true }, { key: 'totalFmv', label: 'Total fair market value *', kind: 'money', required: true },
-  { key: 'transferExpenses', label: 'Transfer expenses *', kind: 'decimal', required: true },
-  { key: 'ltcgBeforeLower', label: 'LTCG before lower of B1/B2 *', kind: 'readout', required: true }, { key: 'totalDeductions', label: 'Total deductions *', kind: 'readout', required: true },
-  { key: 'balance', label: 'Balance *', kind: 'readout', required: true },
+  { key: 'isin', label: 'ISIN code *', required: true, maxLength: 12, pattern: '(?:IN[0-9A-Z]{10}|INNOTREQUIRD|INNOTAVAILAB)' },
+  { key: 'name', label: 'Company / issuer / share-unit name *', required: true, maxLength: 125 },
+  { key: 'securityStatus', label: 'Listed / unlisted status', kind: 'select', options: [['LISTED','Listed'],['UNLISTED','Unlisted']] },
+  { key: 'dateOfAcquisition', label: 'Date of acquisition', kind: 'date' }, { key: 'dateOfTransfer', label: 'Date of transfer', kind: 'date' },
+  { key: 'quantity', label: 'Number of shares / units', kind: 'decimal' },
+  { key: 'salePricePerUnit', label: 'Sale price per unit', kind: 'decimal' }, { key: 'totalSaleValue', label: 'Sale consideration *', kind: 'money', required: true },
+  { key: 'costWithoutIndexation', label: 'Purchase cost without indexation *', kind: 'money', required: true }, { key: 'acquisitionCost', label: 'Indexed / allowable acquisition cost', kind: 'decimal', required: true },
+  { key: 'fmvPerUnit', label: 'FMV per unit on 31-Jan-2018 *', kind: 'decimal', required: true }, { key: 'totalFmv', label: 'Total FMV of capital asset *', kind: 'money', required: true },
+  { key: 'transferExpenses', label: 'Expenses wholly and exclusively on transfer *', kind: 'decimal', required: true },
+  { key: 'ltcgBeforeLower', label: 'LTCG before statutory adjustments *', kind: 'readout', required: true }, { key: 'totalDeductions', label: 'Total deductions / threshold adjustment *', kind: 'readout', required: true },
+  { key: 'balance', label: 'Taxable balance / gain *', kind: 'readout', required: true },
 ];
 const VDA_FIELDS: FieldSpec[] = [
   { key: 'dateOfAcquisition', label: 'Date of acquisition *', kind: 'date', required: true }, { key: 'dateOfTransfer', label: 'Date of transfer *', kind: 'date', required: true },
@@ -405,8 +409,16 @@ function Field({ spec, row, patch, disabled = false }: { spec: FieldSpec; row: J
   return <div><label style={labelStyle}>{spec.label}</label><input required={spec.required} type={spec.kind === 'date' ? 'date' : numeric ? 'number' : 'text'} min={spec.kind === 'money' ? 0 : spec.kind === 'signed' ? -MONEY_MAX : spec.kind === 'decimal' ? 0 : undefined} max={numeric ? MONEY_MAX : undefined} step={spec.kind === 'decimal' ? '0.0001' : numeric ? '1' : undefined} maxLength={spec.maxLength} pattern={spec.pattern} value={String(value)} onChange={(event) => patch({ [spec.key]: numeric ? numberValue(event.target.value) : event.target.value })} readOnly={disabled} style={{ ...inputStyle, ...(disabled ? { background: '#f8fafc', color: 'var(--text-muted)', cursor: 'not-allowed' } : {}) }} />{spec.help && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>{spec.help}</div>}</div>;
 }
 function QuarterlyEditor({ row, patch, disabled = false }: { row: JsonRow; patch: (values: JsonRow) => void; disabled?: boolean }): React.ReactElement {
-  const categories = [['st20','STCG taxable at 20%'],['st30','STCG taxable at 30%'],['stApplicable','STCG at applicable rate'],['stDtaa','STCG under DTAA'],['lt125','LTCG taxable at 12.5%'],['ltDtaa','LTCG under DTAA'],['vda30','VDA gains taxable at 30%']];
-  return <div style={disabled ? { opacity: 0.6, pointerEvents: 'none' } : {}}>{categories.map(([key, title]) => <div key={key} style={cardStyle}><strong style={{ fontSize: 12 }}>{title}</strong><div style={{ ...gridStyle, marginTop: 12 }}>{QUARTERS.map((field) => <Field key={field.key} spec={{ ...field, key: `${key}_${field.key}` }} row={row} patch={patch} disabled={disabled} />)}</div></div>)}</div>;
+  const accrual = normalizeScheduleCGAccrual(row);
+  const update = (bucket: CGAccrualBucket, range: CGAccrualDateRange, amount: number): void => {
+    const next = updateScheduleCGAccrual(accrual, bucket, range, amount);
+    if (next !== accrual) patch(next as unknown as JsonRow);
+  };
+  const errors = validateScheduleCGAccrual(accrual);
+  return <div style={disabled ? { opacity: 0.6, pointerEvents: 'none' } : {}}>
+    {CG_ACCRUAL_BUCKETS.map((bucket) => <div key={bucket} style={cardStyle}><strong style={{ fontSize: 12 }}>{CG_ACCRUAL_BUCKET_LABELS[bucket]}</strong><div style={{ ...gridStyle, marginTop: 12 }}>{CG_ACCRUAL_DATE_RANGES.map((range) => <div key={range}><label style={labelStyle}>{range}</label><input type="number" min={0} max={MONEY_MAX} step={1} value={accrual[bucket][range]} onChange={(event) => { const amount = numberValue(event.target.value); if (amount !== undefined) update(bucket, range, amount); }} readOnly={disabled} style={{ ...inputStyle, ...(disabled ? { background: '#f8fafc', color: 'var(--text-muted)' } : {}) }} /></div>)}</div></div>)}
+    {errors.length > 0 && <div role="alert" style={{ color: 'var(--danger)', fontSize: 11 }}>Accrual values must be non-negative whole rupees.</div>}
+  </div>;
 }
 function NestedRows({ spec, rows, onChange, disabled = false }: { spec: NestedSpec; rows: JsonRow[]; onChange: (rows: JsonRow[]) => void; disabled?: boolean }): React.ReactElement {
   const add = (): void => { if (disabled || (spec.maxRows !== undefined && rows.length >= spec.maxRows)) return; onChange([...rows, { id: makeId() }]); };
