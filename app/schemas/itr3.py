@@ -493,7 +493,13 @@ class BalanceSheet(BaseModel):
 
 class NatureOfBusiness(BaseModel):
     """Nature of business codes for ITR-3 PartA_GEN2."""
-    code: str = Field(default="00001", pattern=r"^[0-9]{5}$")
+    # A handful of official codes carry a disambiguating "_N" suffix (e.g.
+    # 16019_1 "Medical Profession", 20023_1 "Sports Management", 21008_1
+    # "Event Management" -- confirmed present in the real enum, distinct
+    # from their un-suffixed base codes). A plain ^[0-9]{5}$ pattern makes
+    # these three legitimate codes impossible to construct at all.
+    code: str = Field(default="00001", pattern=r"^[0-9]{5}(_[0-9]+)?$")
+    trade_name: Optional[str] = Field(default=None, max_length=125)
     description: Optional[str] = Field(default=None, max_length=125)
 
 

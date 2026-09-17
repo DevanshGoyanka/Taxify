@@ -618,13 +618,19 @@ def _parta_gen2(typed_input: ITR3Input | None = None) -> dict:
                 rows.append(row)
             if rows:
                 audit_info["AuditReportDetails"] = rows
-    nature_of_business = [
-        {
-            "Code": str(row.code).zfill(5),
-            "Description": row.description or "",
-        }
-        for row in (nature_rows or [])
-    ]
+    nature_of_business = []
+    for row in (nature_rows or []):
+        nob_row: dict[str, Any] = {"Code": str(row.code).zfill(5)}
+        # TradeName1/Description are both genuinely optional (only Code is
+        # schema-required) and, when present, must be a real non-empty
+        # string -- emitting "" here would itself fail schema validation
+        # (NatOfBus's own nonEmptyString constraint), so omit rather than
+        # emit a fabricated blank.
+        if row.trade_name:
+            nob_row["TradeName1"] = row.trade_name
+        if row.description:
+            nob_row["Description"] = row.description
+        nature_of_business.append(nob_row)
     return {
         "AuditInfo": audit_info,
         "NatOfBus": {"NatureOfBusiness": nature_of_business},

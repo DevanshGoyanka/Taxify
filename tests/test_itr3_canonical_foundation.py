@@ -484,6 +484,62 @@ def test_itr3_audit_info_not_audited_omits_report_detail_not_fabricates() -> Non
     _validate_against_schema_definition(ai, "AuditInfo")
 
 
+def test_itr3_nature_of_business_trade_name_reaches_json() -> None:
+    """Schedule 4 (Nature of Business or Profession): the "Trade name of
+    the proprietorship, if any" column was silently dropped end-to-end
+    despite the draft already capturing it -- confirmed here directly."""
+    draft = _draft_with_business()
+    from app.schemas.return_draft import ITR3NatureOfBusiness
+    draft.itr3NatureOfBusiness = [
+        ITR3NatureOfBusiness(code="14001", tradeName="Acme Software Works", description="Custom software development"),
+    ]
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    assert typed_input.nature_of_business[0].trade_name == "Acme Software Works"
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    rows = document["ITR"]["ITR3"]["PartA_GEN2"]["NatOfBus"]["NatureOfBusiness"]
+    assert rows == [{
+        "Code": "14001", "TradeName1": "Acme Software Works",
+        "Description": "Custom software development",
+    }]
+
+    _validate_against_schema_definition({"NatureOfBusiness": rows}, "NatOfBus")
+
+
+def test_itr3_nature_of_business_disambiguated_codes_not_silently_dropped() -> None:
+    """The three official disambiguation codes (16019_1 Medical Profession,
+    20023_1 Sports Management, 21008_1 Event Management) are real, valid
+    CBDT enum values distinct from their un-suffixed base codes -- a filer
+    who is a doctor/sports manager/event manager and correctly selects the
+    disambiguated code must not have that row silently vanish."""
+    draft = _draft_with_business()
+    from app.schemas.return_draft import ITR3NatureOfBusiness
+    draft.itr3NatureOfBusiness = [
+        ITR3NatureOfBusiness(code="16019_1", description="Medical practice"),
+        ITR3NatureOfBusiness(code="20023_1", description="Sports management"),
+        ITR3NatureOfBusiness(code="21008_1", description="Event management"),
+    ]
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    codes = {row.code for row in typed_input.nature_of_business}
+    assert codes == {"16019_1", "20023_1", "21008_1"}
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    rows = document["ITR"]["ITR3"]["PartA_GEN2"]["NatOfBus"]["NatureOfBusiness"]
+    assert {row["Code"] for row in rows} == {"16019_1", "20023_1", "21008_1"}
+
+    _validate_against_schema_definition({"NatureOfBusiness": rows}, "NatOfBus")
+
+
 def test_itr3_nri_112_115_securities_reach_cg_transactions_and_json() -> None:
     """Schedule CG item B6 (``ltNri112115``) had no mapper for ITR-3 at
     all, and the corresponding ``NRIOnSec112and115`` JSON block was
@@ -643,7 +699,13 @@ def test_itr3_builder_maps_parta_gen2_workspace() -> None:
     assert gen2["AuditInfo"]["AccountAuditFlag"] == "Y"
     assert gen2["AuditInfo"]["LiableSec44ABflg"] == "Y"
     assert gen2["AuditInfo"]["IncDclrdUs"] == "Y"
-    assert gen2["NatOfBus"]["NatureOfBusiness"] == [{"Code": "14001", "Description": "Software"}]
+    # TradeName1 ("Tech") was previously silently dropped despite being set
+    # on the draft -- see the dedicated Schedule 4 tests below for the
+    # fail-pre-fix proof; this pre-existing test's own data already
+    # exercised the bug without ever asserting on it.
+    assert gen2["NatOfBus"]["NatureOfBusiness"] == [
+        {"Code": "14001", "TradeName1": "Tech", "Description": "Software"}
+    ]
 
 
 def test_itr3_mapper_preserves_manufacturing_and_trading_accounts() -> None:

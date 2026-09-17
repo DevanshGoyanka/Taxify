@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
@@ -21,6 +22,14 @@ _RESIDENTIAL_STATUS: dict[str, ITR3ResidentialStatus] = {
     "RNOR": ITR3ResidentialStatus.NOT_ORDINARILY_RESIDENT,
     "NR": ITR3ResidentialStatus.NON_RESIDENT,
 }
+
+# PDF item 4's own Code column -- 5 digits, optionally with a disambiguating
+# "_N" suffix (e.g. 16019_1 "Medical Profession", 20023_1 "Sports
+# Management", 21008_1 "Event Management" -- confirmed present as distinct,
+# legitimate values in the real official enum, alongside their un-suffixed
+# base codes). A plain `.isdigit()` filter silently drops these three real
+# codes from the return entirely.
+_NATURE_OF_BUSINESS_CODE = re.compile(r"[0-9]{5}(_[0-9]+)?")
 
 _FILING_SECTION: dict[str, ReturnFileSection] = {
     "139(1)": ReturnFileSection.ON_TIME_139_1,
@@ -553,13 +562,16 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
         balance_sheet=_balance_sheet(draft),
         audit_info=_audit_info(draft),
         nature_of_business=[
-            NatureOfBusiness(code=row.get("Code", ""), description=row.get("Description") or None)
+            NatureOfBusiness(
+                code=row.get("Code", ""), trade_name=row.get("TradeName1") or None,
+                description=row.get("Description") or None,
+            )
             for row in (_core_schedule(draft, "PartA_GEN2") or {}).get("NatOfBus", {}).get("NatureOfBusiness", [])
-            if isinstance(row, Mapping) and str(row.get("Code", "")).isdigit()
+            if isinstance(row, Mapping) and _NATURE_OF_BUSINESS_CODE.fullmatch(str(row.get("Code", "")))
         ] or [
-            NatureOfBusiness(code=row.code, description=row.description or None)
+            NatureOfBusiness(code=row.code, trade_name=row.tradeName or None, description=row.description or None)
             for row in draft.itr3NatureOfBusiness
-            if row.code.isdigit()
+            if _NATURE_OF_BUSINESS_CODE.fullmatch(row.code)
         ] or None,
         salary_income=values.get("salary_income"),
         house_property_income=values.get("house_property_income"),
