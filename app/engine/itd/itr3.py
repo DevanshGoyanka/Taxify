@@ -185,6 +185,7 @@ def _parta_gen1(
     alternate_zip_code: Optional[str] = None,
     pin_code: Optional[str] = None,
     assessee_status: str = "I",
+    typed_input: ITR3Input | None = None,
 ) -> dict:
     if not mobile_no or not mobile_no.isdigit():
         raise ValueError("ITR-3 personal information requires a sourced numeric mobile number")
@@ -230,7 +231,20 @@ def _parta_gen1(
         },
         "PAN": pan.upper(),
         "Address": address,
-        "SecondaryAdd": secondary_add,
+        # Secondary address details are mandatory in Part A General
+        # Information in practice -- ITR-2's own builder found this live
+        # (`app/engine/itd/itr2.py`'s `SecondaryAdd`/`AlternateAddress`
+        # comment: ITD's Type-2 UAT validateItr rejected an entirely-absent
+        # AlternateAddress with "Secondary address details are not provided
+        # in Schedule Part A General information", 2026-09-13, PAN
+        # GOYPT2026A) even though neither field is schema-required. ITR-3
+        # shares the identical PersonalInfo/AlternateAddress schema shape,
+        # so the same live rejection almost certainly applies here --
+        # always emit "Y" and always emit a real AlternateAddress block,
+        # falling back to a copy of the primary address when the taxpayer
+        # genuinely has none, rather than the schema-literal (but
+        # apparently ITD-rejected) choice of omitting the block for "N".
+        "SecondaryAdd": "Y",
         "DOB": _str_or(dob, "1990-01-01"),
         "Status": assessee_status,
     }
@@ -238,11 +252,11 @@ def _parta_gen1(
         result["AadhaarCardNo"] = aadhaar
     if secondary_add == "Y":
         # Real, distinct alternate-address data sourced from the taxpayer's
-        # own secondary-address entry -- NOT a copy of the primary address.
-        # `build_itr3_json`'s own required-identity gate already raises
-        # before this point if `secondary_address_different` is True but
-        # these weren't actually sourced, so callers here are guaranteed at
-        # least the four schema-required alternate fields.
+        # own secondary-address entry. `build_itr3_json`'s own
+        # required-identity gate already raises before this point if
+        # `secondary_address_different` is True but these weren't actually
+        # sourced, so callers here are guaranteed at least the four
+        # schema-required alternate fields.
         alternate_address: dict[str, Any] = {
             "ResidenceNo": alternate_residence_no or "",
             "ResidenceName": alternate_residence_name or "",
@@ -262,19 +276,244 @@ def _parta_gen1(
         if alternate_zip_code:
             alternate_address["ZipCode"] = alternate_zip_code
         result["AlternateAddress"] = alternate_address
-    return {
-        "PersonalInfo": result,
-        "FilingStatus": {
-            "ReturnFileSec": return_file_sec,
-            "IncFrmBusOrProf": "Y",
-            "SeventhProvisio139": "N",
-            "ResidentialStatus": residential_status,
-            "HeldUnlistedEqShrPrYrFlg": "N",
-            "ForeignExchangeFlag": "N",
-            "FiiFpiFlag": "N",
-            "ItrFilingDueDate": "2026-10-31",
-        },
+    else:
+        # No genuinely distinct secondary address -- "same as primary",
+        # matching ITR-2's own live-verified fallback exactly (see the
+        # SecondaryAdd comment above). Copy every primary Address field
+        # AlternateAddress actually has room for.
+        result["AlternateAddress"] = {
+            "ResidenceNo": address["ResidenceNo"],
+            "ResidenceName": address["ResidenceName"],
+            "RoadOrStreet": address["RoadOrStreet"],
+            "LocalityOrArea": address["LocalityOrArea"],
+            "CityOrTownOrDistrict": address["CityOrTownOrDistrict"],
+            "StateCode": address["StateCode"],
+            "CountryCode": address["CountryCode"],
+            "PinCode": address["PinCode"],
+            "ZipCode": address["ZipCode"],
+        }
+    filing_status: dict[str, Any] = {
+        "ReturnFileSec": return_file_sec,
+        # ITR-3's mapper currently requires an explicit business/professional
+        # income declaration before it will build a typed input at all (see
+        # `draft_to_itr3_input`'s own "requires explicit business income"
+        # guard), so every canonical ITR-3 filing this system produces
+        # genuinely has business/professional income for the current AY --
+        # "Y" is not a fabricated default here, it reflects a real,
+        # enforced precondition. If that mapper precondition is ever
+        # relaxed, this must be re-derived rather than left hardcoded.
+        "IncFrmBusOrProf": "Y",
+        "ResidentialStatus": residential_status,
+        "ItrFilingDueDate": "2026-10-31",
+        "ForeignExchangeFlag": (
+            typed_input.ifsc_unit_foreign_exchange_flag
+            if typed_input is not None and typed_input.ifsc_unit_foreign_exchange_flag else "N"
+        ),
+        "FiiFpiFlag": "Y" if typed_input is not None and typed_input.is_fii_fpi else "N",
+        "HeldUnlistedEqShrPrYrFlg": (
+            "Y" if typed_input is not None and typed_input.held_unlisted_equity else "N"
+        ),
+        "CompDirectorPrvYrFlg": (
+            "Y" if typed_input is not None and typed_input.is_company_director else "N"
+        ),
+        "PartnerInFirmFlg": (
+            "Y" if typed_input is not None and typed_input.is_partner_in_firm else "N"
+        ),
+        "SeventhProvisio139": (
+            "Y" if typed_input is not None and typed_input.seventh_proviso_139 else "N"
+        ),
+        "AsseseeRepFlg": (
+            "Y" if typed_input is not None and typed_input.assessee_representative_name else "N"
+        ),
+        "Form10IEAEarlierAYOldRegime": (
+            typed_input.form_10iea_earlier_ay_old_regime if typed_input is not None else "N"
+        ),
+        "PortugeseCC5A": (
+            "Y" if typed_input is not None and typed_input.portuguese_civil_code_applies else "N"
+        ),
     }
+    if typed_input is None:
+        return {"PersonalInfo": result, "FilingStatus": filing_status}
+
+    # Seventh proviso to section 139(1) (A19(c)).
+    if typed_input.deposit_exceeds_one_crore:
+        filing_status["DepAmtAggAmtExcd1CrPrYrFlg"] = "Y"
+        filing_status["AmtSeventhProvisio139i"] = _to_rupees(typed_input.current_account_deposits)
+    else:
+        filing_status["DepAmtAggAmtExcd1CrPrYrFlg"] = "N"
+    if typed_input.foreign_travel_flag:
+        filing_status["IncrExpAggAmt2LkTrvFrgnCntryFlg"] = "Y"
+        filing_status["AmtSeventhProvisio139ii"] = _to_rupees(typed_input.foreign_travel_expenditure)
+    else:
+        filing_status["IncrExpAggAmt2LkTrvFrgnCntryFlg"] = "N"
+    if typed_input.electricity_expenditure_flag:
+        filing_status["IncrExpAggAmt1LkElctrctyPrYrFlg"] = "Y"
+        filing_status["AmtSeventhProvisio139iii"] = _to_rupees(typed_input.electricity_expenditure)
+    else:
+        filing_status["IncrExpAggAmt1LkElctrctyPrYrFlg"] = "N"
+    if typed_input.other_clause_iv_flag:
+        filing_status["clauseiv7provisio139i"] = "Y"
+        if typed_input.seventh_proviso_clause_iv_entries:
+            filing_status["clauseiv7provisio139iDtls"] = [
+                {"clauseiv7provisio139iNature": nature, "clauseiv7provisio139iAmount": _to_rupees(amount)}
+                for nature, amount in typed_input.seventh_proviso_clause_iv_entries
+            ]
+    else:
+        filing_status["clauseiv7provisio139i"] = "N"
+
+    # A19(d)/(e) revised/defective/notice metadata.
+    if typed_input.receipt_number:
+        filing_status["ReceiptNo"] = typed_input.receipt_number
+    if typed_input.original_return_date:
+        filing_status["OrigRetFiledDate"] = typed_input.original_return_date
+    if typed_input.notice_number:
+        filing_status["NoticeNo"] = typed_input.notice_number
+    if typed_input.notice_date:
+        filing_status["NoticeDate"] = typed_input.notice_date
+
+    # A19(f) residential-status conditions/jurisdictions/stay-days.
+    if typed_input.conditions_res_status:
+        filing_status["ConditionsResStatus"] = typed_input.conditions_res_status
+    if typed_input.jurisdiction_residence_entries:
+        filing_status["JurisdictionResPrevYr"] = {
+            "JurisdictionResPrevYrDtls": [
+                {"JurisdictionResidence": code, "TIN": tin}
+                for code, tin in typed_input.jurisdiction_residence_entries
+            ]
+        }
+    if typed_input.total_stay_india_prev_yr is not None:
+        filing_status["TotalPrStayIndiaPrevYr"] = typed_input.total_stay_india_prev_yr
+    if typed_input.total_stay_india_4_prec_yr is not None:
+        filing_status["TotalPrStayIndia4PrecYr"] = typed_input.total_stay_india_4_prec_yr
+
+    # A19(g) section 115H -- CBDT rule #83 wants a real Y/N once the
+    # question has actually been presented and answered, not just when the
+    # benefit is claimed (matching ITR-2's own fix for the identical rule).
+    if typed_input.benefit_us_115h is not None:
+        filing_status["BenefitUs115HFlg"] = "Y" if typed_input.benefit_us_115h else "N"
+
+    # A19(i) representative assessee.
+    if typed_input.assessee_representative_name and typed_input.assessee_representative_mobile_no:
+        filing_status["AssesseeRep"] = {
+            "RepName": typed_input.assessee_representative_name,
+            "RepEmailID": typed_input.assessee_representative_email or "",
+            "CountryCodeRepMobileNo": (
+                int(typed_input.assessee_representative_mobile_country_code)
+                if typed_input.assessee_representative_mobile_country_code
+                and typed_input.assessee_representative_mobile_country_code.isdigit() else 91
+            ),
+            "RepMobileNo": int(typed_input.assessee_representative_mobile_no),
+        }
+
+    # A19(j) company directorships.
+    if typed_input.company_director_entries:
+        rows = []
+        for entry in typed_input.company_director_entries:
+            row: dict[str, Any] = {
+                "NameOfCompany": entry["company_name"],
+                "CompanyType": entry["company_type"],
+                "SharesTypes": entry["shares_type"],
+            }
+            if entry.get("pan"):
+                row["PAN"] = entry["pan"]
+            if entry.get("din"):
+                row["DIN"] = entry["din"]
+            rows.append(row)
+        filing_status["CompDirectorPrvYr"] = {"CompDirectorPrvYrDtls": rows}
+
+    # A19(k) partner in firm.
+    if typed_input.partner_in_firm_entries:
+        filing_status["PartnerInFirm"] = {
+            "PartnerInFirmDtls": [
+                {"NameOfFirm": entry["firm_name"], "PAN": entry["pan"]}
+                for entry in typed_input.partner_in_firm_entries
+            ]
+        }
+
+    # A19(l) unlisted equity shares held.
+    if typed_input.unlisted_equity_entries:
+        rows = []
+        for entry in typed_input.unlisted_equity_entries:
+            row = {
+                "NameOfCompany": entry["company_name"],
+                "CompanyType": entry["company_type"],
+                "OpngBalNumberOfShares": int(entry["opening_shares"]),
+                "OpngBalCostOfAcquisition": _to_rupees(entry["opening_cost"]),
+                "ClsngBalNumberOfShares": int(entry["closing_shares"]),
+                "ClsngBalCostOfAcquisition": _to_rupees(entry["closing_cost"]),
+            }
+            if entry.get("pan"):
+                row["PAN"] = entry["pan"]
+            if entry.get("acquired_shares"):
+                row["ShrAcqDurYrNumberOfShares"] = int(entry["acquired_shares"])
+            if entry.get("date_of_acquisition"):
+                row["DateOfSubscrPurchase"] = entry["date_of_acquisition"]
+            if entry.get("face_value_per_share"):
+                row["FaceValuePerShare"] = _to_rupees(entry["face_value_per_share"])
+            if entry.get("issue_price_per_share"):
+                row["IssuePricePerShare"] = int(entry["issue_price_per_share"])
+            if entry.get("purchase_price_per_share"):
+                row["PurchasePricePerShare"] = _to_rupees(entry["purchase_price_per_share"])
+            if entry.get("transferred_shares"):
+                row["ShrTrnfNumberOfShares"] = int(entry["transferred_shares"])
+            if entry.get("transfer_sale_consideration"):
+                row["ShrTrnfSaleConsideration"] = _to_rupees(entry["transfer_sale_consideration"])
+            rows.append(row)
+        filing_status["HeldUnlistedEqShrPrYr"] = {"HeldUnlistedEqShrPrYrDtls": rows}
+
+    # A19(m)/(n) NRI permanent establishment / significant economic presence.
+    if typed_input.nri_pe_in_india:
+        filing_status["NriPEinIndia"] = typed_input.nri_pe_in_india
+    if typed_input.nri_sep_in_india:
+        filing_status["NriSEPinIndia"] = typed_input.nri_sep_in_india
+        if typed_input.nri_sep_in_india == "Y":
+            filing_status["AggrPaymentTransac"] = float(typed_input.sep_aggregate_payment)
+            filing_status["NumberOfUsers"] = typed_input.sep_number_of_users
+
+    # A19(p) SEBI registration number (only meaningful when FII/FPI).
+    if typed_input.is_fii_fpi and typed_input.sebi_registration_number:
+        filing_status["SebiRegnNo"] = typed_input.sebi_registration_number
+
+    # A19(q) Legal Entity Identifier.
+    if typed_input.lei_number:
+        filing_status["LEIDtls"] = {"LEINumber": typed_input.lei_number}
+        if typed_input.lei_valid_upto_date:
+            filing_status["LEIDtls"]["ValidUptoDate"] = typed_input.lei_valid_upto_date
+
+    # Form 10-IEA cascade (A19(b)(I)) -- CBDT ITR-4 Validation Rules AY
+    # 2026-27 rules #353-364 (the identical A23 gate exists verbatim on
+    # ITR-3's own schema): Form10IEAEarlierAYOldRegime gates two MUTUALLY
+    # EXCLUSIVE sub-branches. Emitting both at once -- even with "N"
+    # answers -- was REJECTED live by ITD's Type-2 UAT validateItr for
+    # ITR-4 with "Multiple question shall not be responded in A23"
+    # (2026-09-04, PAN SRGPZ2026C); ITR-3 shares the identical field set
+    # and almost certainly has the identical live constraint, so this
+    # branch discipline is ported deliberately, not guessed at fresh.
+    if typed_input.form_10iea_earlier_ay_old_regime == "Y":
+        if typed_input.form_10iea_ass_year:
+            filing_status["Form10IEAAssYear"] = typed_input.form_10iea_ass_year
+        if typed_input.form_10iea_earlier_ay_ack_old_regime:
+            filing_status["Form10IEAEarlierAYAckOldRegime"] = int(typed_input.form_10iea_earlier_ay_ack_old_regime)
+
+        filing_status["F10IEAEarlierAYNewRegime"] = typed_input.f10iea_earlier_ay_new_regime
+        if typed_input.ass_yr_f10iea_new_tax_reg:
+            filing_status["AssYrF10IEANewTaxReg"] = typed_input.ass_yr_f10iea_new_tax_reg
+        if typed_input.form_10iea_earlier_ay_ack_new_regime:
+            filing_status["Form10IEAEarlierAYAckNewRegime"] = int(typed_input.form_10iea_earlier_ay_ack_new_regime)
+
+        filing_status["F10IEACurrAYNewRegime"] = typed_input.f10iea_curr_ay_new_regime
+        if typed_input.f10iea_date_curr_ay_new_tax:
+            filing_status["F10IEADateCurrAYNewTax"] = typed_input.f10iea_date_curr_ay_new_tax
+        if typed_input.f10iea_ack_no_curr_ay_new_tax:
+            filing_status["F10IEAAckNoCurrAYNewTax"] = int(typed_input.f10iea_ack_no_curr_ay_new_tax)
+    elif typed_input.form_10iea_earlier_ay_old_regime == "N":
+        filing_status["F10IEACurrAYOldRegime"] = typed_input.f10iea_curr_ay_old_regime
+        if typed_input.f10iea_date_curr_ay_old_tax:
+            filing_status["F10IEADateCurrAYOldTax"] = typed_input.f10iea_date_curr_ay_old_tax
+        if typed_input.f10iea_ack_no_curr_ay_old_tax:
+            filing_status["F10IEAAckNoCurrAYOldTax"] = int(typed_input.f10iea_ack_no_curr_ay_old_tax)
+
+    return {"PersonalInfo": result, "FilingStatus": filing_status}
 
 
 # ============================================================================
@@ -1907,6 +2146,7 @@ def build_itr3_json(
         last_name = typed_input.assessee_last_name
         dob = typed_input.assessee_dob
         father_name = typed_input.assessee_father_name
+        assessee_status = typed_input.assessee_status
         ver_place = typed_input.verification_place
         residence_no = typed_input.residence_no or ""
         residence_name = typed_input.residence_name
@@ -2001,6 +2241,7 @@ def build_itr3_json(
             alternate_state_code=alternate_state_code, alternate_country_code=alternate_country_code,
             alternate_pin_code=alternate_pin_code, alternate_zip_code=alternate_zip_code,
             assessee_status=assessee_status,
+            typed_input=typed_input,
         ),
         "PartA_GEN2": _parta_gen2(typed_input),
         "ITR3ScheduleBP": _schedule_bp(result, typed_input),

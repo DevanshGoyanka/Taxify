@@ -542,6 +542,9 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
         assessee_last_name=draft.personal.surnameOrOrgName,
         assessee_dob=draft.personal.dateOfBirth or None,
         assessee_father_name=draft.personal.fatherName,
+        assessee_status=(
+            draft.personal.assesseeStatus if draft.personal.assesseeStatus in ("I", "H") else "I"
+        ),
         verification_place=draft.verification.place or None,
         verification_date=draft.verification.date or None,
         residence_no=draft.personal.flatNo or draft.personal.residenceName or None,
@@ -610,6 +613,97 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
             draft.personal.alternateAddress.zipCode or None
             if draft.personal.alternateAddress else None
         ),
+        # --- Filing Status (A19) ---
+        form_10iea_earlier_ay_old_regime=draft.filing.form10IEAEarlierAYOldRegime,
+        form_10iea_ass_year=draft.filing.form10IEAAssessmentYear or None,
+        form_10iea_earlier_ay_ack_old_regime=draft.filing.form10IEAEarlierAYAckOldRegime or None,
+        f10iea_earlier_ay_new_regime=draft.filing.form10IEAEarlierAYNewRegime,
+        ass_yr_f10iea_new_tax_reg=draft.filing.form10IEANewRegimeAssessmentYear or None,
+        form_10iea_earlier_ay_ack_new_regime=draft.filing.form10IEAEarlierAYAckNewRegime or None,
+        f10iea_curr_ay_new_regime="Y" if draft.filing.form10IEACurrentAYNewRegime else "N",
+        f10iea_date_curr_ay_new_tax=draft.filing.form10IEACurrentAYNewRegimeDate or None,
+        f10iea_ack_no_curr_ay_new_tax=draft.filing.form10IEACurrentAYNewRegimeAck or None,
+        f10iea_curr_ay_old_regime="Y" if draft.filing.form10IEACurrentAYOldRegime else "N",
+        f10iea_date_curr_ay_old_tax=draft.filing.form10IEACurrentAYOldRegimeDate or None,
+        f10iea_ack_no_curr_ay_old_tax=draft.filing.form10IEACurrentAYOldRegimeAck or None,
+        seventh_proviso_139=draft.filing.seventhProvisoApplies,
+        deposit_exceeds_one_crore=draft.filing.seventhProviso.depositExceedsOneCrore,
+        current_account_deposits=draft.filing.seventhProviso.depositAmount,
+        foreign_travel_flag=draft.filing.seventhProviso.foreignTravel,
+        foreign_travel_expenditure=draft.filing.seventhProviso.foreignTravelAmount,
+        electricity_expenditure_flag=draft.filing.seventhProviso.electricityExpenditure,
+        electricity_expenditure=draft.filing.seventhProviso.electricityExpenditureAmount,
+        other_clause_iv_flag=draft.filing.seventhProviso.otherClauseIV,
+        seventh_proviso_clause_iv_entries=[
+            (row.nature, row.amount) for row in draft.filing.seventhProviso.clauseIVDetails
+        ],
+        receipt_number=draft.filing.originalAcknowledgementNumber or None,
+        original_return_date=draft.filing.originalFilingDate or None,
+        notice_number=draft.filing.noticeNumber or None,
+        notice_date=draft.filing.noticeDate or None,
+        conditions_res_status=draft.filing.conditionsResStatus or None,
+        jurisdiction_residence_entries=[
+            (row.jurisdictionCode, row.tin) for row in draft.filing.jurisdictionResidenceEntries
+        ],
+        total_stay_india_prev_yr=draft.filing.totalStayIndiaPrevYr,
+        total_stay_india_4_prec_yr=draft.filing.totalStayIndia4PrecYr,
+        benefit_us_115h=(
+            draft.filing.benefitUs115H if draft.filing.benefitUs115HAnswered else None
+        ),
+        portuguese_civil_code_applies=draft.filing.portugueseCivilCodeApplies,
+        assessee_representative_name=(
+            draft.filing.representative.name or None if draft.filing.representative else None
+        ),
+        assessee_representative_email=(
+            draft.filing.representative.email or None if draft.filing.representative else None
+        ),
+        assessee_representative_mobile_country_code=(
+            draft.filing.representative.mobileCountryCode or None
+            if draft.filing.representative else None
+        ),
+        assessee_representative_mobile_no=(
+            draft.filing.representative.mobile or None if draft.filing.representative else None
+        ),
+        is_company_director=draft.personal.isDirector,
+        company_director_entries=[
+            {
+                "company_name": row.companyName, "company_type": row.companyType,
+                "pan": row.pan or None, "shares_type": row.sharesType, "din": row.din or None,
+            }
+            for row in draft.personal.companyDirectorEntries
+        ],
+        is_partner_in_firm=draft.filing.isPartnerInFirm,
+        partner_in_firm_entries=[
+            {"firm_name": row.firmName, "pan": row.pan}
+            for row in draft.filing.partnerInFirmEntries
+        ],
+        held_unlisted_equity=draft.personal.holdsUnlistedShares,
+        unlisted_equity_entries=[
+            {
+                "company_name": row.companyName, "company_type": row.companyType,
+                "pan": row.pan or None,
+                "opening_shares": row.openingShares, "opening_cost": row.openingCost,
+                "acquired_shares": row.acquiredShares or None,
+                "date_of_acquisition": row.dateOfAcquisition or None,
+                "face_value_per_share": row.faceValuePerShare or None,
+                "issue_price_per_share": row.issuePricePerShare or None,
+                "purchase_price_per_share": row.purchasePricePerShare or None,
+                "transferred_shares": row.transferredShares or None,
+                "transfer_sale_consideration": row.transferSaleConsideration or None,
+                "closing_shares": row.closingShares,
+                "closing_cost": row.closingCost,
+            }
+            for row in draft.personal.unlistedEquityEntries
+        ],
+        nri_pe_in_india=draft.filing.nriPEinIndia or None,
+        nri_sep_in_india=draft.filing.nriSEPinIndia or None,
+        sep_aggregate_payment=draft.filing.aggrPaymentTransac,
+        sep_number_of_users=draft.filing.numberOfUsers,
+        ifsc_unit_foreign_exchange_flag=draft.filing.foreignExchangeFlag or None,
+        is_fii_fpi=draft.filing.isFiiFpi,
+        sebi_registration_number=draft.filing.sebiRegistrationNumber or None,
+        lei_number=draft.filing.leiNumber or None,
+        lei_valid_upto_date=draft.filing.leiValidUptoDate or None,
         bank_accounts=[account.model_dump() for account in draft.bankAccounts],
         relief_89=values.get("relief_89", Decimal("0")),
     )

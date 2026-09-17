@@ -29,7 +29,7 @@ Key schedules unique to ITR-3:
 
 from decimal import Decimal
 from enum import Enum
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Literal
 from datetime import date
 
 from pydantic import BaseModel, Field, ConfigDict
@@ -1096,6 +1096,9 @@ class ITR3Input(BaseModel):
     assessee_last_name: str = Field(default="")
     assessee_dob: Optional[str] = Field(default=None)
     assessee_father_name: str = Field(default="")
+    # PDF item A14 -- ITR-3 permits only Individual/HUF (schema `Status`
+    # enum is `["I","H"]`, no Firm).
+    assessee_status: Literal["I", "H"] = Field(default="I")
     verification_place: Optional[str] = Field(default=None)
     verification_date: Optional[str] = Field(default=None)
     residence_no: Optional[str] = Field(default=None)
@@ -1221,6 +1224,70 @@ class ITR3Input(BaseModel):
 
     # --- AMT ---
     amt_input: Optional[AMTInput] = Field(default=None)
+
+    # --- Filing Status (A19) ---
+    # Form10IEA cascade (A19(b)(I)) -- see app/engine/itd/itr3.py's own
+    # comment on the mutually-exclusive A23 branch (ported from ITR-4's
+    # live-UAT-verified fix) for why these two sub-branches must never both
+    # be emitted at once.
+    form_10iea_earlier_ay_old_regime: Literal["Y", "N"] = Field(default="N")
+    form_10iea_ass_year: Optional[str] = Field(default=None)
+    form_10iea_earlier_ay_ack_old_regime: Optional[str] = Field(default=None)
+    f10iea_earlier_ay_new_regime: Literal["Y", "N"] = Field(default="N")
+    ass_yr_f10iea_new_tax_reg: Optional[str] = Field(default=None)
+    form_10iea_earlier_ay_ack_new_regime: Optional[str] = Field(default=None)
+    f10iea_curr_ay_new_regime: Literal["Y", "N"] = Field(default="N")
+    f10iea_date_curr_ay_new_tax: Optional[str] = Field(default=None)
+    f10iea_ack_no_curr_ay_new_tax: Optional[str] = Field(default=None)
+    f10iea_curr_ay_old_regime: Literal["Y", "N"] = Field(default="N")
+    f10iea_date_curr_ay_old_tax: Optional[str] = Field(default=None)
+    f10iea_ack_no_curr_ay_old_tax: Optional[str] = Field(default=None)
+    # A19(c) seventh proviso to section 139(1).
+    seventh_proviso_139: bool = Field(default=False)
+    deposit_exceeds_one_crore: bool = Field(default=False)
+    current_account_deposits: Decimal = Field(default=Decimal("0"), ge=0)
+    foreign_travel_flag: bool = Field(default=False)
+    foreign_travel_expenditure: Decimal = Field(default=Decimal("0"), ge=0)
+    electricity_expenditure_flag: bool = Field(default=False)
+    electricity_expenditure: Decimal = Field(default=Decimal("0"), ge=0)
+    other_clause_iv_flag: bool = Field(default=False)
+    seventh_proviso_clause_iv_entries: List[tuple[str, Decimal]] = Field(default_factory=list)
+    # A19(d)/(e) revised/defective/notice metadata.
+    receipt_number: Optional[str] = Field(default=None)
+    original_return_date: Optional[str] = Field(default=None)
+    notice_number: Optional[str] = Field(default=None)
+    notice_date: Optional[str] = Field(default=None)
+    # A19(f) residential-status conditions/jurisdictions/stay-days (NRI/RNOR).
+    conditions_res_status: Optional[str] = Field(default=None)
+    jurisdiction_residence_entries: List[tuple[str, str]] = Field(default_factory=list)
+    total_stay_india_prev_yr: Optional[int] = Field(default=None, ge=0, le=365)
+    total_stay_india_4_prec_yr: Optional[int] = Field(default=None, ge=0, le=1461)
+    # A19(g)/(h) 115H benefit, Portuguese Civil Code.
+    benefit_us_115h: Optional[bool] = Field(default=None)
+    portuguese_civil_code_applies: bool = Field(default=False)
+    # A19(i) representative assessee.
+    assessee_representative_name: Optional[str] = Field(default=None)
+    assessee_representative_email: Optional[str] = Field(default=None)
+    assessee_representative_mobile_country_code: Optional[str] = Field(default=None)
+    assessee_representative_mobile_no: Optional[str] = Field(default=None)
+    # A19(j) company directorships, A19(k) partner-in-firm, A19(l) unlisted equity.
+    is_company_director: bool = Field(default=False)
+    company_director_entries: List[dict[str, Any]] = Field(default_factory=list)
+    is_partner_in_firm: bool = Field(default=False)
+    partner_in_firm_entries: List[dict[str, Any]] = Field(default_factory=list)
+    held_unlisted_equity: bool = Field(default=False)
+    unlisted_equity_entries: List[dict[str, Any]] = Field(default_factory=list)
+    # A19(m)/(n) NRI permanent establishment / significant economic presence.
+    nri_pe_in_india: Optional[str] = Field(default=None)
+    nri_sep_in_india: Optional[str] = Field(default=None)
+    sep_aggregate_payment: Decimal = Field(default=Decimal("0"), ge=0)
+    sep_number_of_users: int = Field(default=0, ge=0)
+    # A19(o)/(p)/(q) IFSC unit, FII/FPI, LEI.
+    ifsc_unit_foreign_exchange_flag: Optional[str] = Field(default=None)
+    is_fii_fpi: bool = Field(default=False)
+    sebi_registration_number: Optional[str] = Field(default=None)
+    lei_number: Optional[str] = Field(default=None)
+    lei_valid_upto_date: Optional[str] = Field(default=None)
 
     # --- Audit Info ---
     audit_info: Optional[AuditInfo] = Field(default=None)

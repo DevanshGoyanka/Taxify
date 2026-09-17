@@ -162,6 +162,226 @@ def test_itr3_secondary_address_flag_without_data_fails_closed() -> None:
         build_itr3_json(result, typed_input)
 
 
+def test_itr3_no_secondary_address_still_emits_alternate_address_as_primary_copy() -> None:
+    """ITD's real Type-2 server rejects an entirely-absent AlternateAddress
+    block regardless of SecondaryAdd (confirmed live for ITR-2, same
+    PersonalInfo/AlternateAddress schema shape as ITR-3 -- see the matching
+    comment in app/engine/itd/itr3.py::_parta_gen1). A taxpayer with no
+    genuinely distinct secondary address must still get SecondaryAdd="Y"
+    and a real AlternateAddress, copied from the primary address."""
+    draft = _draft_with_business()
+    assert draft.personal.secondaryAddressDifferent is False
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    assert typed_input.secondary_address_different is False
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    personal = document["ITR"]["ITR3"]["PartA_GEN1"]["PersonalInfo"]
+    assert personal["SecondaryAdd"] == "Y"
+    assert personal["AlternateAddress"]["ResidenceNo"] == personal["Address"]["ResidenceNo"]
+    assert personal["AlternateAddress"]["CityOrTownOrDistrict"] == personal["Address"]["CityOrTownOrDistrict"]
+    assert personal["AlternateAddress"]["PinCode"] == personal["Address"]["PinCode"]
+
+
+def _validate_against_schema_definition(payload: dict, definition_name: str) -> None:
+    """Scoped schema check against one official definitions/<name> block --
+    used throughout this push since the full ITR-3 document doesn't
+    schema-validate yet (other schedules aren't closed out)."""
+    import json
+    from jsonschema import Draft4Validator
+    schema_path = (
+        "Reference Docs by CBDT & ITD/Official JSON Schema/"
+        "ITR-3_2026_Main_V1.1 (2).json"
+    )
+    with open(schema_path, encoding="utf-8") as f:
+        full_schema = json.load(f)
+    definition = dict(full_schema["definitions"][definition_name])
+    definition["definitions"] = full_schema["definitions"]
+    errors = sorted(Draft4Validator(definition).iter_errors(payload), key=lambda e: e.path)
+    assert not errors, [e.message for e in errors]
+
+
+def test_itr3_filing_status_old_regime_currently_filing_reaches_json() -> None:
+    """Schedule 2 (Filing Status, A19): the A23(B) branch -- taxpayer never
+    filed Form 10-IEA in an earlier AY for the old regime, and is filing
+    Form 10-IEA for the OLD regime this year -- reaches the JSON, and the
+    mutually-exclusive A23(A) "new regime" branch fields are NOT emitted
+    alongside it (CBDT rule #353-364 / live-verified for ITR-4: emitting
+    both branches at once is rejected outright)."""
+    draft = _draft_with_business()
+    draft.filing.form10IEAEarlierAYOldRegime = "N"
+    draft.filing.form10IEACurrentAYOldRegime = True
+    draft.filing.form10IEACurrentAYOldRegimeDate = "2026-07-15"
+    draft.filing.form10IEACurrentAYOldRegimeAck = "123456789012345"
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    assert typed_input.form_10iea_earlier_ay_old_regime == "N"
+    assert typed_input.f10iea_curr_ay_old_regime == "Y"
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    filing_status = document["ITR"]["ITR3"]["PartA_GEN1"]["FilingStatus"]
+    assert filing_status["Form10IEAEarlierAYOldRegime"] == "N"
+    assert filing_status["F10IEACurrAYOldRegime"] == "Y"
+    assert filing_status["F10IEADateCurrAYOldTax"] == "2026-07-15"
+    assert filing_status["F10IEAAckNoCurrAYOldTax"] == 123456789012345
+    # The A23(A) branch must be completely absent -- not just "N".
+    assert "F10IEAEarlierAYNewRegime" not in filing_status
+    assert "F10IEACurrAYNewRegime" not in filing_status
+    assert "Form10IEAAssYear" not in filing_status
+
+    _validate_against_schema_definition(filing_status, "FilingStatus")
+
+
+def test_itr3_filing_status_earlier_old_regime_then_reentered_new_reaches_json() -> None:
+    """The A23(A) branch -- taxpayer filed Form 10-IEA for the old regime in
+    an earlier AY, then re-entered the new regime -- reaches the JSON, and
+    the A23(B) branch is absent."""
+    draft = _draft_with_business()
+    draft.filing.form10IEAEarlierAYOldRegime = "Y"
+    draft.filing.form10IEAAssessmentYear = "2024-25"
+    draft.filing.form10IEAEarlierAYAckOldRegime = "123456789012340"
+    draft.filing.form10IEAEarlierAYNewRegime = "N"
+    draft.filing.form10IEACurrentAYNewRegime = True
+    draft.filing.form10IEACurrentAYNewRegimeDate = "2026-07-20"
+    draft.filing.form10IEACurrentAYNewRegimeAck = "223456789012345"
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    filing_status = document["ITR"]["ITR3"]["PartA_GEN1"]["FilingStatus"]
+    assert filing_status["Form10IEAEarlierAYOldRegime"] == "Y"
+    assert filing_status["Form10IEAAssYear"] == "2024-25"
+    assert filing_status["Form10IEAEarlierAYAckOldRegime"] == 123456789012340
+    assert filing_status["F10IEAEarlierAYNewRegime"] == "N"
+    assert filing_status["F10IEACurrAYNewRegime"] == "Y"
+    assert filing_status["F10IEADateCurrAYNewTax"] == "2026-07-20"
+    assert "F10IEACurrAYOldRegime" not in filing_status
+
+    _validate_against_schema_definition(filing_status, "FilingStatus")
+
+
+def test_itr3_filing_status_seventh_proviso_representative_director_partner_reach_json() -> None:
+    """Every other A19 sub-item -- seventh proviso, residential-status
+    conditions/jurisdiction, 115H, representative, director, partner-in-
+    firm, unlisted equity (with a genuine closing balance, not a copy of
+    opening+acquired), PE/SEP, IFSC flag, FII/FPI+SEBI, LEI -- reaches the
+    typed input and the emitted JSON."""
+    draft = _draft_with_business()
+    draft.personal.residentialStatus = "NR"
+    draft.filing.seventhProvisoApplies = True
+    draft.filing.seventhProviso.depositExceedsOneCrore = True
+    draft.filing.seventhProviso.depositAmount = Decimal("15000000")
+    draft.filing.seventhProviso.otherClauseIV = True
+    from app.schemas.return_draft import SeventhProvisoClause
+    draft.filing.seventhProviso.clauseIVDetails = [
+        SeventhProvisoClause(nature="1", amount=Decimal("6500000")),
+    ]
+    draft.filing.conditionsResStatus = "5"
+    from app.schemas.return_draft import JurisdictionResidenceEntry
+    draft.filing.jurisdictionResidenceEntries = [
+        JurisdictionResidenceEntry(jurisdictionCode="2", tin="US-TIN-123"),
+    ]
+    draft.filing.totalStayIndiaPrevYr = 45
+    draft.filing.totalStayIndia4PrecYr = 400
+    draft.filing.benefitUs115H = True
+    draft.filing.benefitUs115HAnswered = True
+    from app.schemas.return_draft import RepresentativeAssessee
+    draft.filing.representative = RepresentativeAssessee(
+        name="Rep Person", email="rep@example.com", mobileCountryCode="91", mobile="9988776655",
+    )
+    draft.personal.isDirector = True
+    from app.schemas.return_draft import CompanyDirectorEntry
+    draft.personal.companyDirectorEntries = [
+        CompanyDirectorEntry(companyName="Acme Pvt Ltd", companyType="D", pan="ACMEP1234A", sharesType="U", din="12345678"),
+    ]
+    draft.filing.isPartnerInFirm = True
+    from app.schemas.return_draft import PartnerInFirmEntry
+    draft.filing.partnerInFirmEntries = [PartnerInFirmEntry(firmName="Sharma & Co", pan="SHRMP1234B")]
+    draft.personal.holdsUnlistedShares = True
+    from app.schemas.return_draft import UnlistedEquityEntry
+    draft.personal.unlistedEquityEntries = [
+        UnlistedEquityEntry(
+            companyName="Beta Pvt Ltd", companyType="D", openingShares=Decimal("100"),
+            openingCost=Decimal("10000"), acquiredShares=Decimal("50"), transferredShares=Decimal("30"),
+            transferSaleConsideration=Decimal("6000"), closingShares=Decimal("120"), closingCost=Decimal("13000"),
+        ),
+    ]
+    draft.filing.nriPEinIndia = "Y"
+    draft.filing.nriSEPinIndia = "Y"
+    draft.filing.aggrPaymentTransac = Decimal("500000")
+    draft.filing.numberOfUsers = 200
+    draft.filing.foreignExchangeFlag = "Y"
+    draft.filing.isFiiFpi = True
+    draft.filing.sebiRegistrationNumber = "INABFP123456"
+    draft.filing.leiNumber = "1234567890ABCDEFGH12"
+    draft.filing.leiValidUptoDate = "2027-03-31"
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    assert typed_input.seventh_proviso_139 is True
+    assert typed_input.is_company_director is True
+    assert typed_input.is_partner_in_firm is True
+    assert typed_input.held_unlisted_equity is True
+    assert typed_input.is_fii_fpi is True
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    fs = document["ITR"]["ITR3"]["PartA_GEN1"]["FilingStatus"]
+
+    assert fs["SeventhProvisio139"] == "Y"
+    assert fs["DepAmtAggAmtExcd1CrPrYrFlg"] == "Y"
+    assert fs["AmtSeventhProvisio139i"] == 15000000
+    assert fs["clauseiv7provisio139i"] == "Y"
+    assert fs["clauseiv7provisio139iDtls"] == [{"clauseiv7provisio139iNature": "1", "clauseiv7provisio139iAmount": 6500000}]
+    assert fs["ConditionsResStatus"] == "5"
+    assert fs["JurisdictionResPrevYr"]["JurisdictionResPrevYrDtls"] == [{"JurisdictionResidence": "2", "TIN": "US-TIN-123"}]
+    assert fs["TotalPrStayIndiaPrevYr"] == 45
+    assert fs["TotalPrStayIndia4PrecYr"] == 400
+    assert fs["BenefitUs115HFlg"] == "Y"
+    assert fs["AsseseeRepFlg"] == "Y"
+    assert fs["AssesseeRep"] == {
+        "RepName": "Rep Person", "RepEmailID": "rep@example.com",
+        "CountryCodeRepMobileNo": 91, "RepMobileNo": 9988776655,
+    }
+    assert fs["CompDirectorPrvYrFlg"] == "Y"
+    assert fs["CompDirectorPrvYr"]["CompDirectorPrvYrDtls"] == [
+        {"NameOfCompany": "Acme Pvt Ltd", "CompanyType": "D", "SharesTypes": "U", "PAN": "ACMEP1234A", "DIN": "12345678"},
+    ]
+    assert fs["PartnerInFirmFlg"] == "Y"
+    assert fs["PartnerInFirm"]["PartnerInFirmDtls"] == [{"NameOfFirm": "Sharma & Co", "PAN": "SHRMP1234B"}]
+    assert fs["HeldUnlistedEqShrPrYrFlg"] == "Y"
+    unlisted = fs["HeldUnlistedEqShrPrYr"]["HeldUnlistedEqShrPrYrDtls"][0]
+    assert unlisted["OpngBalNumberOfShares"] == 100
+    assert unlisted["ClsngBalNumberOfShares"] == 120
+    assert unlisted["ClsngBalCostOfAcquisition"] == 13000
+    assert unlisted["ShrTrnfNumberOfShares"] == 30
+    assert unlisted["ShrTrnfSaleConsideration"] == 6000
+    assert fs["NriPEinIndia"] == "Y"
+    assert fs["NriSEPinIndia"] == "Y"
+    assert fs["AggrPaymentTransac"] == 500000
+    assert fs["NumberOfUsers"] == 200
+    assert fs["ForeignExchangeFlag"] == "Y"
+    assert fs["FiiFpiFlag"] == "Y"
+    assert fs["SebiRegnNo"] == "INABFP123456"
+    assert fs["LEIDtls"] == {"LEINumber": "1234567890ABCDEFGH12", "ValidUptoDate": "2027-03-31"}
+
+    _validate_against_schema_definition(fs, "FilingStatus")
+
+
 def test_itr3_nri_112_115_securities_reach_cg_transactions_and_json() -> None:
     """Schedule CG item B6 (``ltNri112115``) had no mapper for ITR-3 at
     all, and the corresponding ``NRIOnSec112and115`` JSON block was
