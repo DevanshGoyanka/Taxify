@@ -1099,13 +1099,40 @@ class ITR3Input(BaseModel):
     verification_place: Optional[str] = Field(default=None)
     verification_date: Optional[str] = Field(default=None)
     residence_no: Optional[str] = Field(default=None)
+    residence_name: Optional[str] = Field(default=None)
+    road_or_street: Optional[str] = Field(default=None)
     locality: Optional[str] = Field(default=None)
     city: Optional[str] = Field(default=None)
     state_code: Optional[str] = Field(default=None)
     country_code: Optional[str] = Field(default=None)
     pin_code: Optional[str] = Field(default=None)
+    zip_code: Optional[str] = Field(default=None)
+    mobile_country_code: str = Field(default="91")
     mobile_no: Optional[str] = Field(default=None)
     email: Optional[str] = Field(default=None)
+    assessee_aadhaar: Optional[str] = Field(default=None)
+    # PDF item A17 -- office/residence phone with STD code (schema
+    # `Address.Phone`), distinct from the primary mobile number above.
+    office_phone_std_code: Optional[str] = Field(default=None)
+    office_phone_no: Optional[str] = Field(default=None)
+    # PDF items A17/A18's own secondary mobile/email columns.
+    secondary_mobile_country_code: Optional[str] = Field(default=None)
+    secondary_mobile_no: Optional[str] = Field(default=None)
+    secondary_email: Optional[str] = Field(default=None)
+    # PDF item A5b-A13b "Secondary Address" -- `SecondaryAdd`/`AlternateAddress`
+    # in the schema. `secondary_address_different` is the Y/N flag itself;
+    # the alternate_* fields are only meaningful (and only emitted) when it
+    # is True -- mirrors `app.engine.personal_profile.NormalizedAlternateAddress`.
+    secondary_address_different: bool = Field(default=False)
+    alternate_residence_no: Optional[str] = Field(default=None)
+    alternate_residence_name: Optional[str] = Field(default=None)
+    alternate_road_or_street: Optional[str] = Field(default=None)
+    alternate_locality: Optional[str] = Field(default=None)
+    alternate_city: Optional[str] = Field(default=None)
+    alternate_state_code: Optional[str] = Field(default=None)
+    alternate_country_code: Optional[str] = Field(default=None)
+    alternate_pin_code: Optional[str] = Field(default=None)
+    alternate_zip_code: Optional[str] = Field(default=None)
     bank_accounts: List[dict[str, Any]] = Field(default_factory=list)
 
     # --- Explicit employer/property disclosure sources ---

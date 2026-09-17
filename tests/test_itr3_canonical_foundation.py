@@ -16,7 +16,7 @@ from app.engine.filing_gateway_v2 import (
 )
 from app.engine.itd.itr3_schema import ITR3SchemaValidationError, validate_itr3_json
 from app.engine.validators.itr3 import run_calc_validation, run_input_validation
-from app.schemas.return_draft import ITR3NatureOfBusiness, Presumptive44AD, ReturnDraft, create_empty_draft
+from app.schemas.return_draft import AlternateAddress, ITR3NatureOfBusiness, Presumptive44AD, ReturnDraft, create_empty_draft
 
 
 def _draft_with_business() -> ReturnDraft:
@@ -62,6 +62,104 @@ def test_itr3_mapper_preserves_identity_and_business_amount() -> None:
     assert typed_input.business_income is not None
     assert typed_input.business_income.net_profit_before_tax == Decimal("60000")
     assert breakdown["business_income"] == Decimal("60000")
+
+
+def test_itr3_personal_info_optional_fields_reach_typed_input_and_json() -> None:
+    """Schedule 1 (Personal Information, A1-A18): every optional field the
+    PDF prints -- building/village name (A6a), road/street (A7a), Aadhaar
+    (A16), office phone with STD code and secondary mobile (A17), secondary
+    email (A18), and a genuinely distinct secondary address (A5b-A13b) --
+    must reach the typed input and the emitted JSON as real, sourced data,
+    not silently dropped or fabricated as a copy of the primary address."""
+    draft = _draft_with_business()
+    draft.personal.residenceName = "Shivam Apartments"
+    draft.personal.roadOrStreet = "MG Road"
+    draft.personal.aadhaar = "123456789012"
+    draft.personal.landlineStdCode = "011"
+    draft.personal.landlinePhoneNo = "23456789"
+    draft.personal.secondaryMobileCountryCode = "91"
+    draft.personal.secondaryMobile = "9123456780"
+    draft.personal.secondaryEmail = "asha.alt@example.com"
+    draft.personal.secondaryAddressDifferent = True
+    draft.personal.alternateAddress = AlternateAddress(
+        residenceNo="42", residenceName="Green Villa", roadOrStreet="Park Street",
+        localityOrArea="Salt Lake", cityOrTownOrDistrict="Kolkata",
+        stateCode="19", countryCode="91", pinCode="700091",
+    )
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    assert typed_input.residence_name == "Shivam Apartments"
+    assert typed_input.road_or_street == "MG Road"
+    assert typed_input.assessee_aadhaar == "123456789012"
+    assert typed_input.office_phone_std_code == "011"
+    assert typed_input.office_phone_no == "23456789"
+    assert typed_input.secondary_mobile_no == "9123456780"
+    assert typed_input.secondary_email == "asha.alt@example.com"
+    assert typed_input.secondary_address_different is True
+    assert typed_input.alternate_city == "Kolkata"
+    assert typed_input.alternate_pin_code == "700091"
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    personal = document["ITR"]["ITR3"]["PartA_GEN1"]["PersonalInfo"]
+
+    # Scoped to Schedule 1 (Personal Information) only -- the full document
+    # doesn't schema-validate yet since later schedules in this push (Part
+    # A-BS/OI, CYLA/BFLA, Schedule OS, etc.) aren't closed out yet. Validate
+    # PersonalInfo against its own official schema sub-definition directly.
+    import json
+    from jsonschema import Draft4Validator
+    schema_path = (
+        "Reference Docs by CBDT & ITD/Official JSON Schema/"
+        "ITR-3_2026_Main_V1.1 (2).json"
+    )
+    with open(schema_path, encoding="utf-8") as f:
+        full_schema = json.load(f)
+    personal_info_schema = dict(full_schema["definitions"]["PersonalInfo"])
+    personal_info_schema["definitions"] = full_schema["definitions"]
+    errors = sorted(Draft4Validator(personal_info_schema).iter_errors(personal), key=lambda e: e.path)
+    assert not errors, [e.message for e in errors]
+    address = personal["Address"]
+    assert address["ResidenceName"] == "Shivam Apartments"
+    assert address["RoadOrStreet"] == "MG Road"
+    assert personal["AadhaarCardNo"] == "123456789012"
+    assert address["Phone"] == {"STDcode": 11, "PhoneNo": "23456789"}
+    assert address["CountryCodeMobileNoSec"] == 91
+    assert address["MobileNoSec"] == 9123456780
+    assert address["EmailAddressSec"] == "asha.alt@example.com"
+    assert personal["SecondaryAdd"] == "Y"
+    alt = personal["AlternateAddress"]
+    assert alt["ResidenceNo"] == "42"
+    assert alt["ResidenceName"] == "Green Villa"
+    assert alt["CityOrTownOrDistrict"] == "Kolkata"
+    assert alt["StateCode"] == "19"
+    assert alt["PinCode"] == 700091
+    # Real, distinct alternate address -- not a copy of the primary one.
+    assert alt["ResidenceNo"] != address["ResidenceNo"]
+    assert alt["CityOrTownOrDistrict"] != address["CityOrTownOrDistrict"]
+
+
+def test_itr3_secondary_address_flag_without_data_fails_closed() -> None:
+    """A taxpayer who declares a secondary address (SecondaryAdd=Y) but
+    never actually enters one must not silently file with a copied or
+    fabricated AlternateAddress -- the builder must fail closed."""
+    draft = _draft_with_business()
+    draft.personal.secondaryAddressDifferent = True
+    draft.personal.alternateAddress = None
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    assert typed_input.secondary_address_different is True
+    assert typed_input.alternate_residence_no is None
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    with pytest.raises(ValueError, match="alternate-address"):
+        build_itr3_json(result, typed_input)
 
 
 def test_itr3_nri_112_115_securities_reach_cg_transactions_and_json() -> None:

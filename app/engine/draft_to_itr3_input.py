@@ -545,13 +545,71 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
         verification_place=draft.verification.place or None,
         verification_date=draft.verification.date or None,
         residence_no=draft.personal.flatNo or draft.personal.residenceName or None,
+        residence_name=draft.personal.residenceName or None,
+        road_or_street=draft.personal.roadOrStreet or None,
         locality=draft.personal.localityOrArea or None,
         city=draft.personal.city or None,
         state_code=draft.personal.stateCode or None,
         country_code=draft.personal.countryCode or None,
         pin_code=draft.personal.pinCode or None,
+        zip_code=draft.personal.zipCode or None,
+        mobile_country_code=draft.personal.mobileCountryCode or "91",
         mobile_no=draft.personal.mobile or None,
         email=draft.personal.email or None,
+        assessee_aadhaar=draft.personal.aadhaar or None,
+        # PDF A17's own "Residential/Office Phone Number with STD code" --
+        # shares the draft's landline field with ITR-4's identical Address.
+        # Phone block (see PersonalInfo.landlineStdCode's own docstring);
+        # "0"/"0" is the draft's own default for "no landline declared" and
+        # is treated as absent here, matching that field's documented intent.
+        office_phone_std_code=(
+            draft.personal.landlineStdCode
+            if draft.personal.landlineStdCode not in ("", "0") else None
+        ),
+        office_phone_no=(
+            draft.personal.landlinePhoneNo
+            if draft.personal.landlinePhoneNo not in ("", "0") else None
+        ),
+        secondary_mobile_country_code=draft.personal.secondaryMobileCountryCode or None,
+        secondary_mobile_no=draft.personal.secondaryMobile or None,
+        secondary_email=draft.personal.secondaryEmail or None,
+        secondary_address_different=draft.personal.secondaryAddressDifferent,
+        alternate_residence_no=(
+            draft.personal.alternateAddress.residenceNo or None
+            if draft.personal.alternateAddress else None
+        ),
+        alternate_residence_name=(
+            draft.personal.alternateAddress.residenceName or None
+            if draft.personal.alternateAddress else None
+        ),
+        alternate_road_or_street=(
+            draft.personal.alternateAddress.roadOrStreet or None
+            if draft.personal.alternateAddress else None
+        ),
+        alternate_locality=(
+            draft.personal.alternateAddress.localityOrArea or None
+            if draft.personal.alternateAddress else None
+        ),
+        alternate_city=(
+            draft.personal.alternateAddress.cityOrTownOrDistrict or None
+            if draft.personal.alternateAddress else None
+        ),
+        alternate_state_code=(
+            draft.personal.alternateAddress.stateCode or None
+            if draft.personal.alternateAddress else None
+        ),
+        alternate_country_code=(
+            draft.personal.alternateAddress.countryCode or None
+            if draft.personal.alternateAddress else None
+        ),
+        alternate_pin_code=(
+            draft.personal.alternateAddress.pinCode or None
+            if draft.personal.alternateAddress else None
+        ),
+        alternate_zip_code=(
+            draft.personal.alternateAddress.zipCode or None
+            if draft.personal.alternateAddress else None
+        ),
         bank_accounts=[account.model_dump() for account in draft.bankAccounts],
         relief_89=values.get("relief_89", Decimal("0")),
     )

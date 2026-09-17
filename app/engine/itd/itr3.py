@@ -159,12 +159,30 @@ def _parta_gen1(
     city: str,
     state_code: str,
     country_code: str,
+    residence_name: Optional[str] = None,
+    road_or_street: Optional[str] = None,
+    zip_code: Optional[str] = None,
+    mobile_country_code: str = "91",
     residential_status: str = "RES",
     return_file_sec: int = 11,
     mobile_no: Optional[str] = None,
     email: Optional[str] = None,
     aadhaar: Optional[str] = None,
+    office_phone_std_code: Optional[str] = None,
+    office_phone_no: Optional[str] = None,
+    secondary_mobile_country_code: Optional[str] = None,
+    secondary_mobile_no: Optional[str] = None,
+    secondary_email: Optional[str] = None,
     secondary_add: str = "N",
+    alternate_residence_no: Optional[str] = None,
+    alternate_residence_name: Optional[str] = None,
+    alternate_road_or_street: Optional[str] = None,
+    alternate_locality: Optional[str] = None,
+    alternate_city: Optional[str] = None,
+    alternate_state_code: Optional[str] = None,
+    alternate_country_code: Optional[str] = None,
+    alternate_pin_code: Optional[str] = None,
+    alternate_zip_code: Optional[str] = None,
     pin_code: Optional[str] = None,
     assessee_status: str = "I",
 ) -> dict:
@@ -172,6 +190,38 @@ def _parta_gen1(
         raise ValueError("ITR-3 personal information requires a sourced numeric mobile number")
     if not email or "@" not in email:
         raise ValueError("ITR-3 personal information requires a sourced email address")
+    address: dict[str, Any] = {
+        "ResidenceNo": _str_or(residence_no, "1"),
+        "ResidenceName": residence_name or "",
+        "RoadOrStreet": road_or_street or "",
+        "LocalityOrArea": _str_or(locality, "Locality"),
+        "CityOrTownOrDistrict": _str_or(city, "City"),
+        "StateCode": _str_or(state_code, "07"),
+        "CountryCode": _str_or(country_code, "91"),
+        "PinCode": int(pin_code) if pin_code and pin_code.isdigit() else 110001,
+        "ZipCode": zip_code or "",
+        "CountryCodeMobile": int(mobile_country_code) if mobile_country_code and mobile_country_code.isdigit() else 91,
+        "MobileNo": int(mobile_no),
+        "CountryCodeMobileNoSec": (
+            int(secondary_mobile_country_code)
+            if secondary_mobile_country_code and secondary_mobile_country_code.isdigit()
+            else 0
+        ),
+        "MobileNoSec": int(secondary_mobile_no) if secondary_mobile_no and secondary_mobile_no.isdigit() else 0,
+        "EmailAddress": email,
+    }
+    # PDF A17's office/residence phone (schema `Address.Phone`) -- a
+    # genuinely distinct field from the primary mobile number above; only
+    # emitted when a real STD code/number was sourced, matching this
+    # builder's own "omit rather than fabricate" convention for every other
+    # optional block (e.g. AadhaarCardNo below).
+    if office_phone_std_code and office_phone_no:
+        address["Phone"] = {
+            "STDcode": int(office_phone_std_code) if office_phone_std_code.isdigit() else 0,
+            "PhoneNo": office_phone_no,
+        }
+    if secondary_email:
+        address["EmailAddressSec"] = secondary_email
     result: dict[str, Any] = {
         "AssesseeName": {
             "FirstName": first_name or "",
@@ -179,22 +229,7 @@ def _parta_gen1(
             "SurNameOrOrgName": last_name or "ASSESSEE",
         },
         "PAN": pan.upper(),
-        "Address": {
-            "ResidenceNo": _str_or(residence_no, "1"),
-            "ResidenceName": "",
-            "RoadOrStreet": "",
-            "LocalityOrArea": _str_or(locality, "Locality"),
-            "CityOrTownOrDistrict": _str_or(city, "City"),
-            "StateCode": _str_or(state_code, "07"),
-            "CountryCode": _str_or(country_code, "91"),
-            "PinCode": int(pin_code) if pin_code and pin_code.isdigit() else 110001,
-            "ZipCode": "",
-            "CountryCodeMobile": 91,
-            "MobileNo": int(mobile_no),
-            "CountryCodeMobileNoSec": 0,
-            "MobileNoSec": 0,
-            "EmailAddress": email,
-        },
+        "Address": address,
         "SecondaryAdd": secondary_add,
         "DOB": _str_or(dob, "1990-01-01"),
         "Status": assessee_status,
@@ -202,17 +237,31 @@ def _parta_gen1(
     if aadhaar:
         result["AadhaarCardNo"] = aadhaar
     if secondary_add == "Y":
-        result["AlternateAddress"] = {
-            "ResidenceNo": _str_or(residence_no, "1"),
-            "ResidenceName": "",
-            "RoadOrStreet": "",
-            "LocalityOrArea": _str_or(locality, "Locality"),
-            "CityOrTownOrDistrict": _str_or(city, "City"),
-            "StateCode": _str_or(state_code, "07"),
-            "CountryCode": _str_or(country_code, "91"),
-            "PinCode": int(pin_code) if pin_code and pin_code.isdigit() else 110001,
-            "ZipCode": "",
+        # Real, distinct alternate-address data sourced from the taxpayer's
+        # own secondary-address entry -- NOT a copy of the primary address.
+        # `build_itr3_json`'s own required-identity gate already raises
+        # before this point if `secondary_address_different` is True but
+        # these weren't actually sourced, so callers here are guaranteed at
+        # least the four schema-required alternate fields.
+        alternate_address: dict[str, Any] = {
+            "ResidenceNo": alternate_residence_no or "",
+            "ResidenceName": alternate_residence_name or "",
+            "RoadOrStreet": alternate_road_or_street or "",
+            "LocalityOrArea": alternate_locality or "",
+            "CityOrTownOrDistrict": alternate_city or "",
+            "StateCode": alternate_state_code or "",
+            "CountryCode": alternate_country_code or "91",
         }
+        # PinCode/ZipCode are both genuinely optional on AlternateAddress
+        # (neither is in the schema's own `required` list -- unlike the
+        # primary Address, a foreign alternate address is expected to carry
+        # only a ZipCode) -- emit whichever was actually sourced, never a
+        # fabricated PIN.
+        if alternate_pin_code and alternate_pin_code.isdigit():
+            alternate_address["PinCode"] = int(alternate_pin_code)
+        if alternate_zip_code:
+            alternate_address["ZipCode"] = alternate_zip_code
+        result["AlternateAddress"] = alternate_address
     return {
         "PersonalInfo": result,
         "FilingStatus": {
@@ -1813,17 +1862,35 @@ def build_itr3_json(
     last_name: str = "",
     dob: str = "1990-01-01",
     residence_no: str = "1",
+    residence_name: Optional[str] = None,
+    road_or_street: Optional[str] = None,
     locality: str = "Locality",
     city: str = "City",
     state_code: str = "07",
     country_code: str = "91",
+    pin_code: Optional[str] = None,
+    zip_code: Optional[str] = None,
+    mobile_country_code: str = "91",
     residential_status: str = "RES",
     return_file_sec: int = 11,
     mobile_no: Optional[str] = None,
     email: Optional[str] = None,
     aadhaar: Optional[str] = None,
+    office_phone_std_code: Optional[str] = None,
+    office_phone_no: Optional[str] = None,
+    secondary_mobile_country_code: Optional[str] = None,
+    secondary_mobile_no: Optional[str] = None,
+    secondary_email: Optional[str] = None,
     secondary_add: str = "N",
-    pin_code: Optional[str] = None,
+    alternate_residence_no: Optional[str] = None,
+    alternate_residence_name: Optional[str] = None,
+    alternate_road_or_street: Optional[str] = None,
+    alternate_locality: Optional[str] = None,
+    alternate_city: Optional[str] = None,
+    alternate_state_code: Optional[str] = None,
+    alternate_country_code: Optional[str] = None,
+    alternate_pin_code: Optional[str] = None,
+    alternate_zip_code: Optional[str] = None,
     assessee_status: str = "I",
     father_name: str = "",
     ver_place: Optional[str] = None,
@@ -1842,13 +1909,33 @@ def build_itr3_json(
         father_name = typed_input.assessee_father_name
         ver_place = typed_input.verification_place
         residence_no = typed_input.residence_no or ""
+        residence_name = typed_input.residence_name
+        road_or_street = typed_input.road_or_street
         locality = typed_input.locality or ""
         city = typed_input.city or ""
         state_code = typed_input.state_code or ""
         country_code = typed_input.country_code or ""
         pin_code = typed_input.pin_code
+        zip_code = typed_input.zip_code
+        mobile_country_code = typed_input.mobile_country_code or "91"
         mobile_no = typed_input.mobile_no
         email = typed_input.email
+        aadhaar = typed_input.assessee_aadhaar
+        office_phone_std_code = typed_input.office_phone_std_code
+        office_phone_no = typed_input.office_phone_no
+        secondary_mobile_country_code = typed_input.secondary_mobile_country_code
+        secondary_mobile_no = typed_input.secondary_mobile_no
+        secondary_email = typed_input.secondary_email
+        secondary_add = "Y" if typed_input.secondary_address_different else "N"
+        alternate_residence_no = typed_input.alternate_residence_no
+        alternate_residence_name = typed_input.alternate_residence_name
+        alternate_road_or_street = typed_input.alternate_road_or_street
+        alternate_locality = typed_input.alternate_locality
+        alternate_city = typed_input.alternate_city
+        alternate_state_code = typed_input.alternate_state_code
+        alternate_country_code = typed_input.alternate_country_code
+        alternate_pin_code = typed_input.alternate_pin_code
+        alternate_zip_code = typed_input.alternate_zip_code
         if not typed_input.verification_date:
             raise ValueError("ITR3Input.verification_date is required for canonical JSON")
         required_identity = {
@@ -1868,6 +1955,19 @@ def build_itr3_json(
                 "Canonical ITR3Input is missing required sourced identity fields: "
                 + ", ".join(missing_identity)
             )
+        if typed_input.secondary_address_different:
+            required_alternate = {
+                "alternate_residence_no": alternate_residence_no,
+                "alternate_locality": alternate_locality,
+                "alternate_city": alternate_city,
+                "alternate_state_code": alternate_state_code,
+            }
+            missing_alternate = [name for name, value in required_alternate.items() if not value]
+            if missing_alternate:
+                raise ValueError(
+                    "ITR3Input declares a secondary address (secondary_address_different=True) "
+                    "but is missing required alternate-address fields: " + ", ".join(missing_alternate)
+                )
         verification_date = typed_input.verification_date
     else:
         verification_date = "2026-07-31"
@@ -1884,11 +1984,22 @@ def build_itr3_json(
         # Required schedules
         "PartA_GEN1": _parta_gen1(
             pan=pan, first_name=first_name, middle_name=middle_name, last_name=last_name,
-            dob=dob, residence_no=residence_no, locality=locality, city=city,
+            dob=dob, residence_no=residence_no, residence_name=residence_name,
+            road_or_street=road_or_street, locality=locality, city=city,
             state_code=state_code, country_code=country_code,
+            pin_code=pin_code, zip_code=zip_code, mobile_country_code=mobile_country_code,
             residential_status=residential_status, return_file_sec=return_file_sec,
             mobile_no=mobile_no, email=email, aadhaar=aadhaar,
-            secondary_add=secondary_add, pin_code=pin_code,
+            office_phone_std_code=office_phone_std_code, office_phone_no=office_phone_no,
+            secondary_mobile_country_code=secondary_mobile_country_code,
+            secondary_mobile_no=secondary_mobile_no, secondary_email=secondary_email,
+            secondary_add=secondary_add,
+            alternate_residence_no=alternate_residence_no,
+            alternate_residence_name=alternate_residence_name,
+            alternate_road_or_street=alternate_road_or_street,
+            alternate_locality=alternate_locality, alternate_city=alternate_city,
+            alternate_state_code=alternate_state_code, alternate_country_code=alternate_country_code,
+            alternate_pin_code=alternate_pin_code, alternate_zip_code=alternate_zip_code,
             assessee_status=assessee_status,
         ),
         "PartA_GEN2": _parta_gen2(typed_input),
