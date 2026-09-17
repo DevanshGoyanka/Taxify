@@ -498,12 +498,44 @@ class NatureOfBusiness(BaseModel):
 
 
 class AuditInfo(BaseModel):
-    """Audit information for PartA_GEN2."""
+    """Audit information for PartA_GEN2 (form A20)."""
     liable_sec_44ab: bool = Field(default=False)
     liable_sec_44aa: bool = Field(default=False)
     liable_sec_92e: bool = Field(default=False)
+    # Schema AccountAuditFlag -- A20(b) "Are you liable for audit u/s 44AB?"
     account_audited: bool = Field(default=False)
+    # Schema AuditAccountantFlg -- A20(c) "have the accounts been audited by
+    # an accountant?" -- a genuinely distinct question from AccountAuditFlag
+    # per the schema's own two separate properties.
+    audited_by_accountant: bool = Field(default=False)
     income_declared_under_presumptive: bool = Field(default=False)
+    # A20(a2i) turnover band -- schema TotalSalesExcOneCr enum.
+    total_sales_band: Optional[str] = Field(default=None)
+    # A20(a2ii)/(a2iii) cash-receipts/payments percentage bands.
+    receipts_cash_band: Optional[str] = Field(default=None)
+    payments_cash_band: Optional[str] = Field(default=None)
+    # A20(b)(i)/(ii)/(iii) reason for 44AB liability.
+    condition_44ab: Optional[str] = Field(default=None)
+    presumptive_44ad: bool = Field(default=False)
+    presumptive_44ada: bool = Field(default=False)
+    presumptive_44ae: bool = Field(default=False)
+    presumptive_44bb: bool = Field(default=False)
+    # A20(c)(1)-(4) audit-report detail.
+    audit_report_furnish_date: Optional[str] = Field(default=None)
+    ack_num_44ab: Optional[str] = Field(default=None)
+    auditor_firm_name: Optional[str] = Field(default=None)
+    auditor_firm_pan: Optional[str] = Field(default=None)
+    auditor_firm_aadhaar: Optional[str] = Field(default=None)
+    # A20(d)(ii) 92E audit detail -- "audited" is distinct from "liable"
+    # (liable_sec_92e above only asks whether section 92E applies at all).
+    audited_under_92e: bool = Field(default=False)
+    audit_92e_date: Optional[str] = Field(default=None)
+    ack_num_92e: Optional[str] = Field(default=None)
+    # A20(d)(iii) other-section audit reports (schema AuditDetails[]).
+    other_section_audit_entries: List[dict[str, Any]] = Field(default_factory=list)
+    # A20(e) audit report(s) under Acts other than the Income-tax Act
+    # (schema AuditReportDetails[]).
+    other_act_audit_entries: List[dict[str, Any]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -199,16 +199,37 @@ def _balance_sheet(draft: ReturnDraft) -> Any:
 
 
 def _audit_info(draft: ReturnDraft) -> AuditInfo:
-    """Map PartA_GEN2 audit data, falling back to the legacy profile."""
+    """Map PartA_GEN2 audit data (form A20), falling back to the legacy profile."""
     workspace = _core_schedule(draft, "PartA_GEN2")
     audit = workspace.get("AuditInfo") if workspace else None
     if isinstance(audit, Mapping) and audit:
+        bii = audit.get("BiiDetails") if isinstance(audit.get("BiiDetails"), Mapping) else {}
+        audit_92e = audit.get("AuditDetails92E") if isinstance(audit.get("AuditDetails92E"), Mapping) else {}
         return AuditInfo(
             liable_sec_44ab=audit.get("LiableSec44ABflg") == "Y",
             liable_sec_44aa=audit.get("LiableSec44AAflg") == "Y",
             liable_sec_92e=audit.get("LiableSec92Eflg") == "Y",
             account_audited=audit.get("AccountAuditFlag") == "Y",
+            audited_by_accountant=audit.get("AuditAccountantFlg") == "Y",
             income_declared_under_presumptive=audit.get("IncDclrdUs") == "Y",
+            total_sales_band=audit.get("TotalSalesExcOneCr") or None,
+            receipts_cash_band=audit.get("AgrOFAllAmtsRcvd") or None,
+            payments_cash_band=audit.get("AgrOFAllPayMade") or None,
+            condition_44ab=audit.get("Cndnfor44AB") or None,
+            presumptive_44ad=bii.get("44AD") == "Y",
+            presumptive_44ada=bii.get("44ADA") == "Y",
+            presumptive_44ae=bii.get("44AE") == "Y",
+            presumptive_44bb=bii.get("44BB") == "Y",
+            audit_report_furnish_date=audit.get("AuditReportFurnishDate") or None,
+            ack_num_44ab=str(audit["AckNum44AB"]) if audit.get("AckNum44AB") else None,
+            auditor_firm_name=audit.get("AudFrmName") or None,
+            auditor_firm_pan=audit.get("AudFrmPAN") or None,
+            auditor_firm_aadhaar=audit.get("AudFrmAadhaar") or None,
+            audited_under_92e=bool(audit_92e),
+            audit_92e_date=audit_92e.get("DateOfAudit") or None,
+            ack_num_92e=str(audit_92e["AckNum92E"]) if audit_92e.get("AckNum92E") else None,
+            other_section_audit_entries=list(audit.get("AuditDetails") or []),
+            other_act_audit_entries=list(audit.get("AuditReportDetails") or []),
         )
     source = draft.itr3AuditInfo
     return AuditInfo(
@@ -216,7 +237,38 @@ def _audit_info(draft: ReturnDraft) -> AuditInfo:
         liable_sec_44aa=source.liableSec44AA == "Y",
         liable_sec_92e=source.liableSec92E == "Y",
         account_audited=source.accountAudit == "Y",
+        audited_by_accountant=source.auditAccountant == "Y",
         income_declared_under_presumptive=source.incomeDeclaredUnderPresumptive == "Y",
+        total_sales_band=source.totalSalesBand or None,
+        receipts_cash_band=source.receiptsCashBand or None,
+        payments_cash_band=source.paymentsCashBand or None,
+        condition_44ab=source.condition44AB or None,
+        presumptive_44ad=source.presumptive44AD == "Y",
+        presumptive_44ada=source.presumptive44ADA == "Y",
+        presumptive_44ae=source.presumptive44AE == "Y",
+        presumptive_44bb=source.presumptive44BB == "Y",
+        audit_report_furnish_date=source.auditReportFurnishDate or None,
+        ack_num_44ab=source.acknowledgement44AB or None,
+        auditor_firm_name=source.auditorName or None,
+        auditor_firm_pan=source.auditorPAN or None,
+        auditor_firm_aadhaar=source.auditorAadhaar or None,
+        audited_under_92e=source.auditedUnder92E == "Y",
+        audit_92e_date=source.auditReport92EDate or None,
+        ack_num_92e=source.acknowledgement92E or None,
+        other_section_audit_entries=[
+            {
+                "auditedSection": row.auditedSection, "auditFlag": row.auditFlag,
+                "dateOfAudit": row.dateOfAudit, "ackNumOth": row.ackNumOth,
+            }
+            for row in source.otherAuditReportEntries if row.auditedSection
+        ],
+        other_act_audit_entries=[
+            {
+                "act": row.act, "actOthers": row.actOthers,
+                "auditedSection": row.auditedSection, "dateOfAudit": row.dateOfAudit,
+            }
+            for row in source.auditUnderOtherActEntries if row.act
+        ],
     )
 
 

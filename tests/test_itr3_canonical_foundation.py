@@ -382,6 +382,108 @@ def test_itr3_filing_status_seventh_proviso_representative_director_partner_reac
     _validate_against_schema_definition(fs, "FilingStatus")
 
 
+def test_itr3_audit_info_full_44ab_disclosure_reaches_json() -> None:
+    """Schedule 3 (Audit Information, A20): the full 44AB/92E/other-audit
+    disclosure -- turnover band, cash-receipt/payment percentage bands,
+    the 44AB liability reason, presumptive-section sub-flags, the actual
+    audit-report detail (date/ack/auditor name/PAN/Aadhaar), the 92E audit
+    detail, and both "other audit report" arrays -- reaches typed input and
+    the emitted JSON. Previously AgrOFAllAmtsRcvd/AgrOFAllPayMade were
+    hardcoded to "Upto5Per" regardless of the real return, and every other
+    field here was silently dropped."""
+    draft = _draft_with_business()
+    draft.itr3AuditInfo.liableSec44AA = "Y"
+    draft.itr3AuditInfo.incomeDeclaredUnderPresumptive = "Y"
+    draft.itr3AuditInfo.totalSalesBand = "Upto10CR"
+    draft.itr3AuditInfo.receiptsCashBand = "MoreThan5Per"
+    draft.itr3AuditInfo.paymentsCashBand = "Upto5Per"
+    draft.itr3AuditInfo.liableSec44AB = "Y"
+    draft.itr3AuditInfo.condition44AB = "bii"
+    draft.itr3AuditInfo.presumptive44AD = "Y"
+    draft.itr3AuditInfo.presumptive44ADA = "N"
+    draft.itr3AuditInfo.accountAudit = "Y"
+    draft.itr3AuditInfo.auditAccountant = "Y"
+    draft.itr3AuditInfo.auditReportFurnishDate = "2026-08-15"
+    draft.itr3AuditInfo.acknowledgement44AB = "123456789012345"
+    draft.itr3AuditInfo.auditorName = "Kapoor & Associates"
+    draft.itr3AuditInfo.auditorPAN = "KAPOP1234A"
+    draft.itr3AuditInfo.liableSec92E = "Y"
+    draft.itr3AuditInfo.auditedUnder92E = "Y"
+    draft.itr3AuditInfo.auditReport92EDate = "2026-08-20"
+    draft.itr3AuditInfo.acknowledgement92E = "223456789012345"
+    from app.schemas.return_draft import OtherAuditReportEntry, AuditUnderOtherActEntry
+    draft.itr3AuditInfo.otherAuditReportEntries = [
+        OtherAuditReportEntry(auditedSection="80-IA", auditFlag="Y", dateOfAudit="2026-08-10", ackNumOth="323456789012345"),
+    ]
+    draft.itr3AuditInfo.auditUnderOtherActEntries = [
+        AuditUnderOtherActEntry(act="6", auditedSection="143", dateOfAudit="2026-08-05"),
+    ]
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    audit = typed_input.audit_info
+    assert audit.total_sales_band == "Upto10CR"
+    assert audit.receipts_cash_band == "MoreThan5Per"
+    assert audit.condition_44ab == "bii"
+    assert audit.presumptive_44ad is True
+    assert audit.auditor_firm_pan == "KAPOP1234A"
+    assert len(audit.other_section_audit_entries) == 1
+    assert len(audit.other_act_audit_entries) == 1
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    ai = document["ITR"]["ITR3"]["PartA_GEN2"]["AuditInfo"]
+
+    assert ai["TotalSalesExcOneCr"] == "Upto10CR"
+    assert ai["AgrOFAllAmtsRcvd"] == "MoreThan5Per"
+    assert ai["AgrOFAllPayMade"] == "Upto5Per"
+    assert ai["Cndnfor44AB"] == "bii"
+    assert ai["BiiDetails"] == {"44AD": "Y", "44ADA": "N", "44AE": "N", "44BB": "N"}
+    assert ai["AuditAccountantFlg"] == "Y"
+    assert ai["AuditReportFurnishDate"] == "2026-08-15"
+    assert ai["AckNum44AB"] == 123456789012345
+    assert ai["AudFrmName"] == "Kapoor & Associates"
+    assert ai["AudFrmPAN"] == "KAPOP1234A"
+    assert ai["AuditDetails92E"] == {"DateOfAudit": "2026-08-20", "AckNum92E": 223456789012345}
+    assert ai["AuditDetails"] == [
+        {"AuditedSection": "80-IA", "AuditFlag": "Y", "OthAuditDtls": "Y", "DateOfAudit": "2026-08-10", "AckNumOth": 323456789012345},
+    ]
+    assert ai["AuditReportDetails"] == [
+        {"AuditReportAct": "6", "AuditedSection": "143", "OtherITActFlag": "Y", "OthAuditDtlsOthThanITAct": "Y", "DateOfAudit": "2026-08-05"},
+    ]
+
+    _validate_against_schema_definition(ai, "AuditInfo")
+
+
+def test_itr3_audit_info_not_audited_omits_report_detail_not_fabricates() -> None:
+    """A taxpayer not liable for audit must not get a fabricated audit-report
+    date/ack/auditor -- these fields should simply be absent, matching this
+    codebase's fail-closed/no-placeholder discipline."""
+    draft = _draft_with_business()
+    draft.itr3AuditInfo.liableSec44AB = "N"
+    draft.itr3AuditInfo.accountAudit = "N"
+    draft.itr3AuditInfo.auditAccountant = "N"
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    ai = document["ITR"]["ITR3"]["PartA_GEN2"]["AuditInfo"]
+    assert ai["LiableSec44ABflg"] == "N"
+    assert ai["AuditAccountantFlg"] == "N"
+    assert "AuditReportFurnishDate" not in ai
+    assert "AckNum44AB" not in ai
+    assert "AudFrmName" not in ai
+    assert "AuditDetails92E" not in ai
+
+    _validate_against_schema_definition(ai, "AuditInfo")
+
+
 def test_itr3_nri_112_115_securities_reach_cg_transactions_and_json() -> None:
     """Schedule CG item B6 (``ltNri112115``) had no mapper for ITR-3 at
     all, and the corresponding ``NRIOnSec112and115`` JSON block was

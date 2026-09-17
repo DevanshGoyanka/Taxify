@@ -526,14 +526,98 @@ def _parta_gen2(typed_input: ITR3Input | None = None) -> dict:
     nature_rows = typed_input.nature_of_business if typed_input is not None else None
     audit_info: dict[str, Any] = {
         "AccountAuditFlag": "Y" if audit and audit.account_audited else "N",
-        "AuditAccountantFlg": "Y" if audit and audit.account_audited else "N",
-        "AgrOFAllAmtsRcvd": "Upto5Per",
-        "AgrOFAllPayMade": "Upto5Per",
+        "AuditAccountantFlg": "Y" if audit and audit.audited_by_accountant else "N",
         "IncDclrdUs": "Y" if audit and audit.income_declared_under_presumptive else "N",
         "LiableSec44AAflg": "Y" if audit and audit.liable_sec_44aa else "N",
         "LiableSec44ABflg": "Y" if audit and audit.liable_sec_44ab else "N",
         "LiableSec92Eflg": "Y" if audit and audit.liable_sec_92e else "N",
     }
+    if audit is not None:
+        # A20(a2i) turnover band.
+        if audit.total_sales_band:
+            audit_info["TotalSalesExcOneCr"] = audit.total_sales_band
+        # A20(a2ii)/(a2iii) cash-receipts/payments percentage bands --
+        # previously hardcoded to "Upto5Per" unconditionally regardless of
+        # the real return; now sourced for real, and omitted (not
+        # fabricated) when the taxpayer's turnover band doesn't reach this
+        # question at all.
+        if audit.receipts_cash_band:
+            audit_info["AgrOFAllAmtsRcvd"] = audit.receipts_cash_band
+        if audit.payments_cash_band:
+            audit_info["AgrOFAllPayMade"] = audit.payments_cash_band
+        # A20(b)(i)/(ii)/(iii) reason for 44AB liability.
+        if audit.condition_44ab:
+            audit_info["Cndnfor44AB"] = audit.condition_44ab
+        if audit.presumptive_44ad or audit.presumptive_44ada or audit.presumptive_44ae or audit.presumptive_44bb:
+            audit_info["BiiDetails"] = {
+                "44AD": "Y" if audit.presumptive_44ad else "N",
+                "44ADA": "Y" if audit.presumptive_44ada else "N",
+                "44AE": "Y" if audit.presumptive_44ae else "N",
+                "44BB": "Y" if audit.presumptive_44bb else "N",
+            }
+        # A20(c)(1)-(4) audit-report detail -- only meaningful once the
+        # accountant-audit question itself is answered "Yes".
+        if audit.audited_by_accountant:
+            if audit.audit_report_furnish_date:
+                audit_info["AuditReportFurnishDate"] = audit.audit_report_furnish_date
+            if audit.ack_num_44ab:
+                audit_info["AckNum44AB"] = int(audit.ack_num_44ab)
+            if audit.auditor_firm_name:
+                audit_info["AudFrmName"] = audit.auditor_firm_name
+            if audit.auditor_firm_pan:
+                audit_info["AudFrmPAN"] = audit.auditor_firm_pan
+            if audit.auditor_firm_aadhaar:
+                audit_info["AudFrmAadhaar"] = audit.auditor_firm_aadhaar
+        # A20(d)(ii) section 92E audit detail -- "audited" is distinct from
+        # merely "liable" (LiableSec92Eflg above).
+        if audit.audited_under_92e and audit.audit_92e_date and audit.ack_num_92e:
+            audit_info["AuditDetails92E"] = {
+                "DateOfAudit": audit.audit_92e_date,
+                "AckNum92E": int(audit.ack_num_92e),
+            }
+        # A20(d)(iii) other-section audit reports required for specified
+        # deductions (Schedule 10A/10AA/44DA/50B/80-IA family/80JJAA/80LA/
+        # 115JC audit disclosures).
+        if audit.other_section_audit_entries:
+            rows = []
+            for entry in audit.other_section_audit_entries:
+                if not entry.get("auditedSection"):
+                    continue
+                row: dict[str, Any] = {
+                    "AuditedSection": entry["auditedSection"],
+                    "AuditFlag": entry.get("auditFlag") or "N",
+                }
+                if entry.get("dateOfAudit"):
+                    row["OthAuditDtls"] = "Y"
+                    row["DateOfAudit"] = entry["dateOfAudit"]
+                    if entry.get("ackNumOth"):
+                        row["AckNumOth"] = int(entry["ackNumOth"])
+                else:
+                    row["OthAuditDtls"] = "N"
+                rows.append(row)
+            if rows:
+                audit_info["AuditDetails"] = rows
+        # A20(e) audit report(s) under Acts other than the Income-tax Act.
+        if audit.other_act_audit_entries:
+            rows = []
+            for entry in audit.other_act_audit_entries:
+                if not entry.get("act"):
+                    continue
+                row = {"AuditReportAct": entry["act"]}
+                if entry["act"] == "19" and entry.get("actOthers"):
+                    row["AuditReportActOthers"] = entry["actOthers"]
+                if entry.get("auditedSection"):
+                    row["AuditedSection"] = entry["auditedSection"]
+                if entry.get("dateOfAudit"):
+                    row["OtherITActFlag"] = "Y"
+                    row["OthAuditDtlsOthThanITAct"] = "Y"
+                    row["DateOfAudit"] = entry["dateOfAudit"]
+                else:
+                    row["OtherITActFlag"] = "N"
+                    row["OthAuditDtlsOthThanITAct"] = "N"
+                rows.append(row)
+            if rows:
+                audit_info["AuditReportDetails"] = rows
     nature_of_business = [
         {
             "Code": str(row.code).zfill(5),
