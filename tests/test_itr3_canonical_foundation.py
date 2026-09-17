@@ -838,7 +838,7 @@ def test_itr3_mapper_preserves_manufacturing_and_trading_accounts() -> None:
     assert typed_input.business_accounts.manufacturing_account is not None
     assert typed_input.business_accounts.manufacturing_account.cost_of_goods_produced == Decimal("65000")
     assert typed_input.business_accounts.trading_account is not None
-    assert typed_input.business_accounts.trading_account.values["GrossProfitFrmBusProf"] == Decimal("155000")
+    assert typed_input.business_accounts.trading_account.GrossProfitFrmBusProf == Decimal("155000")
 
 
 def test_itr3_builder_emits_manufacturing_and_trading_schedules() -> None:
@@ -856,6 +856,100 @@ def test_itr3_builder_emits_manufacturing_and_trading_schedules() -> None:
     assert payload["TradingAccount"]["DirectExpenses"] == 150000
 
 
+def test_itr3_trading_account_nested_duties_and_other_revenue_rows_reach_json() -> None:
+    """Nested ExciseCustomsVAT/DutyTaxPay sub-objects and itemized rows survive
+    the mapper -> builder path, not just the schedule's flat scalar fields --
+    previously the mapper's own generic flattening silently dropped every
+    nested Mapping value, and the two array fields were hardcoded to []."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {
+        "TradingAccount": {
+            "OperatingRevenueTotal": 300000, "SalesGrossReceiptsTotal": 320000,
+            "TotRevenueFrmOperations": 330000, "TardingAccTotCred": 335000, "DirectExpenses": 150000,
+            "OtherOperatingRevenueDtls": [{"OperatingRevenueName": "Scrap sales", "OperatingRevenueAmt": 20000}],
+            "OtherIncDtls": [{"NatureOfIncome": "Freight recovered", "Amount": 5000}],
+            "ExciseCustomsVAT": {"CentralGoodServiceTax": 9000, "StateGoodServiceTax": 9000, "TotExciseCustomsVAT": 18000},
+            "DutyTaxPay": {"ExciseCustomsVAT": {"CustomDuty": 4000, "TotExciseCustomsVAT": 4000}},
+        }
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    account = typed_input.business_accounts.trading_account
+    assert account is not None
+    assert account.OtherOperatingRevenueDtls[0].OperatingRevenueName == "Scrap sales"
+    assert account.OtherIncDtls[0].Amount == Decimal("5000")
+    assert account.ExciseCustomsVAT.CentralGoodServiceTax == Decimal("9000")
+    assert account.DutyTaxPay.ExciseCustomsVAT.CustomDuty == Decimal("4000")
+
+    payload = build_itr3_json(compute_itr3(typed_input), typed_input)["ITR"]["ITR3"]["TradingAccount"]
+    assert payload["OtherOperatingRevenueDtls"] == [{"OperatingRevenueName": "Scrap sales", "OperatingRevenueAmt": 20000}]
+    assert payload["OtherIncDtls"] == [{"NatureOfIncome": "Freight recovered", "Amount": 5000}]
+    assert payload["ExciseCustomsVAT"]["CentralGoodServiceTax"] == 9000
+    assert payload["ExciseCustomsVAT"]["TotExciseCustomsVAT"] == 18000
+    assert payload["DutyTaxPay"]["ExciseCustomsVAT"]["CustomDuty"] == 4000
+    _validate_against_schema_definition(payload, "TradingAccount")
+
+
+def test_itr3_manufacturing_and_trading_full_schema_valid() -> None:
+    """A fully-populated Manufacturing + Trading Account pair validates clean
+    against the complete official schema definitions, not just a spot check."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {
+        "ManufacturingAccount": {
+            "OpeningInventory": {
+                "OpngStckRawMat": 10000, "OpngStckWrkinPrgrs": 2000, "OpngInvntryTotal": 12000,
+                "Purchases": 50000, "DirectWages": 8000, "DirectExpenses": 3000,
+                "CarriageInward": 1000, "PowerAndFuel": 2000, "OthDirectExpenses": 0,
+                "IndirectWages": 4000, "FactoryRentAndRates": 6000, "FactoryInsurance": 1000,
+                "FactoryFuelAndPower": 500, "FactoryGeneralExpenses": 500,
+                "DeprctnOfFactoryMachinery": 2000, "TotalFactoryOverheads": 14000,
+                "TotalDebtsManfctrngAcc": 88000,
+            },
+            "ClosingStock": {"ClsngStckRawMaterial": 4000, "ClsngStckWrkInPrgrs": 1000, "ClsngStckTotal": 5000},
+            "CostOfGoodsPrdcd": 83000,
+        },
+        "TradingAccount": {
+            "SaleOfGoods": 400000, "SaleOfServices": 20000,
+            "OtherOperatingRevenueDtls": [{"OperatingRevenueName": "Scrap sales", "OperatingRevenueAmt": 5000}],
+            "OperatingRevenueTotal": 425000, "SalesGrossReceiptsTotal": 425000, "GrossRcptFromProfession": 0,
+            "ExciseCustomsVAT": {"CentralGoodServiceTax": 20000, "StateGoodServiceTax": 20000, "TotExciseCustomsVAT": 40000},
+            "TotRevenueFrmOperations": 465000, "ClsngStckOfFinishedStcks": 15000, "TardingAccTotCred": 480000,
+            "OpngStckOfFinishedStcks": 10000, "Purchases": 100000, "DirectExpenses": 5000, "CarriageInward": 2000,
+            "PowerAndFuel": 1000, "OtherIncDtls": [{"NatureOfIncome": "Miscellaneous direct expense", "Amount": 500}],
+            "DirectExpensesTotal": 118000,
+            "DutyTaxPay": {"ExciseCustomsVAT": {"CustomDuty": 1000, "TotExciseCustomsVAT": 1000}},
+            "GoodsCostPrdcdFrmMA": 83000, "GrossProfitFrmBusProf": 277000,
+            "TurnoverIntradayTrd": 0, "IncomeIntradayTrd": 0, "TurnoverFutureTrd": 0, "IncomeFutureTrd": 0,
+        },
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    payload = build_itr3_json(compute_itr3(typed_input), typed_input)["ITR"]["ITR3"]
+    _validate_against_schema_definition(payload["ManufacturingAccount"], "ManufacturingAccount")
+    _validate_against_schema_definition(payload["TradingAccount"], "TradingAccount")
+
+
+def test_itr3_manufacturing_and_trading_omitted_when_no_data() -> None:
+    """Both optional schedules are omitted entirely (not zero-filled stubs)
+    when the taxpayer runs no manufacturing/trading business at all --
+    previously the builder always emitted both, unconditionally, regardless
+    of whether any real data existed."""
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _draft_with_business()
+    typed_input, _ = draft_to_itr3_input(draft)
+    assert typed_input.business_accounts is None
+    payload = build_itr3_json(compute_itr3(typed_input), typed_input)["ITR"]["ITR3"]
+    assert "ManufacturingAccount" not in payload
+    assert "TradingAccount" not in payload
+
+
+def test_itr3_mapper_prefers_workspace_audit_and_business_over_legacy_fields() -> None:
     """Official workspace schedules are authoritative over duplicate legacy fields."""
     draft = _draft_with_business()
     draft.itr3AuditInfo.accountAudit = "N"

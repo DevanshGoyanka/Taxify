@@ -918,50 +918,90 @@ def _parta_pl(typed_input: ITR3Input | None = None) -> dict:
 
 
 def _manufacturing_account(typed_input: ITR3Input | None = None) -> dict:
-    """Build the official ManufacturingAccount schedule from typed fields."""
+    """Build the official ManufacturingAccount schedule from typed fields.
+
+    Returns {} (not a zero-filled stub) when the taxpayer has no manufacturing
+    data at all -- the caller omits the whole optional schedule in that case.
+    """
     account = typed_input.business_accounts.manufacturing_account if typed_input and typed_input.business_accounts else None
-    opening = account.opening_inventory if account else {}
-    closing = account.closing_stock if account else {}
-    def amount(key: str) -> int:
-        return _to_rupees(opening.get(key, Decimal("0")))
-    def closing_amount(key: str) -> int:
-        return _to_rupees(closing.get(key, Decimal("0")))
-    opening_total = amount("OpngInvntryTotal")
-    overhead_total = amount("TotalFactoryOverheads")
-    debts_total = amount("TotalDebtsManfctrngAcc")
+    if account is None:
+        return {}
+    opening, closing = account.opening_inventory, account.closing_stock
     return {
         "OpeningInventory": {
-            **{key: amount(key) for key in ["OpngStckRawMat", "OpngStckWrkinPrgrs", "Purchases", "DirectWages", "DirectExpenses", "CarriageInward", "PowerAndFuel", "OthDirectExpenses", "IndirectWages", "FactoryRentAndRates", "FactoryInsurance", "FactoryFuelAndPower", "FactoryGeneralExpenses", "DeprctnOfFactoryMachinery"]},
-            "OpngInvntryTotal": opening_total,
-            "TotalFactoryOverheads": overhead_total,
-            "TotalDebtsManfctrngAcc": debts_total,
+            "OpngStckRawMat": _to_rupees(opening.OpngStckRawMat),
+            "OpngStckWrkinPrgrs": _to_rupees(opening.OpngStckWrkinPrgrs),
+            "OpngInvntryTotal": _to_rupees(opening.OpngInvntryTotal),
+            "Purchases": _to_rupees(opening.Purchases),
+            "DirectWages": _to_rupees(opening.DirectWages),
+            "DirectExpenses": _to_rupees(opening.DirectExpenses),
+            "CarriageInward": _to_rupees(opening.CarriageInward),
+            "PowerAndFuel": _to_rupees(opening.PowerAndFuel),
+            "OthDirectExpenses": _to_rupees(opening.OthDirectExpenses),
+            "IndirectWages": _to_rupees(opening.IndirectWages),
+            "FactoryRentAndRates": _to_rupees(opening.FactoryRentAndRates),
+            "FactoryInsurance": _to_rupees(opening.FactoryInsurance),
+            "FactoryFuelAndPower": _to_rupees(opening.FactoryFuelAndPower),
+            "FactoryGeneralExpenses": _to_rupees(opening.FactoryGeneralExpenses),
+            "DeprctnOfFactoryMachinery": _to_rupees(opening.DeprctnOfFactoryMachinery),
+            "TotalFactoryOverheads": _to_rupees(opening.TotalFactoryOverheads),
+            "TotalDebtsManfctrngAcc": _to_rupees(opening.TotalDebtsManfctrngAcc),
         },
         "ClosingStock": {
-            "ClsngStckRawMaterial": closing_amount("ClsngStckRawMaterial"),
-            "ClsngStckWrkInPrgrs": closing_amount("ClsngStckWrkInPrgrs"),
-            "ClsngStckTotal": closing_amount("ClsngStckTotal"),
+            "ClsngStckRawMaterial": _to_rupees(closing.ClsngStckRawMaterial),
+            "ClsngStckWrkInPrgrs": _to_rupees(closing.ClsngStckWrkInPrgrs),
+            "ClsngStckTotal": _to_rupees(closing.ClsngStckTotal),
         },
-        "CostOfGoodsPrdcd": _to_rupees(account.cost_of_goods_produced if account else Decimal("0")),
+        "CostOfGoodsPrdcd": _to_rupees(account.cost_of_goods_produced),
     }
 
 
 def _trading_account(typed_input: ITR3Input | None = None) -> dict:
-    """Build the official TradingAccount schedule from typed values."""
-    values = typed_input.business_accounts.trading_account.values if typed_input and typed_input.business_accounts and typed_input.business_accounts.trading_account else {}
-    amount = lambda key: _to_rupees(values.get(key, Decimal("0")))
+    """Build the official TradingAccount schedule from typed values.
+
+    Returns {} (not a zero-filled stub) when the taxpayer has no trading
+    data at all -- the caller omits the whole optional schedule in that case.
+    """
+    account = typed_input.business_accounts.trading_account if typed_input and typed_input.business_accounts else None
+    if account is None:
+        return {}
+    excise = account.ExciseCustomsVAT
+    duty_excise = account.DutyTaxPay.ExciseCustomsVAT
     return {
-        "SaleOfGoods": amount("SaleOfGoods"), "SaleOfServices": amount("SaleOfServices"),
-        "OtherOperatingRevenueDtls": [], "OperatingRevenueTotal": amount("OperatingRevenueTotal"),
-        "SalesGrossReceiptsTotal": amount("SalesGrossReceiptsTotal"), "GrossRcptFromProfession": amount("GrossRcptFromProfession"),
-        "ExciseCustomsVAT": {key: amount(key) for key in ["UnionExciseDuty", "ServiceTax", "VATorSaleTax", "CentralGoodServiceTax", "StateGoodServiceTax", "IntegratedGoodServiceTax", "UnionTerrGoodServiceTax", "OthDutyTaxCess", "TotExciseCustomsVAT"]},
-        "TotRevenueFrmOperations": amount("TotRevenueFrmOperations"), "ClsngStckOfFinishedStcks": amount("ClsngStckOfFinishedStcks"),
-        "TardingAccTotCred": amount("TardingAccTotCred"), "OpngStckOfFinishedStcks": amount("OpngStckOfFinishedStcks"),
-        "Purchases": amount("Purchases"), "DirectExpenses": amount("DirectExpenses"), "CarriageInward": amount("CarriageInward"),
-        "PowerAndFuel": amount("PowerAndFuel"), "OtherIncDtls": [], "DirectExpensesTotal": amount("DirectExpensesTotal"),
-        "DutyTaxPay": {"ExciseCustomsVAT": {"TotExciseCustomsVAT": amount("DutyTaxPay.TotExciseCustomsVAT")}},
-        "GoodsCostPrdcdFrmMA": amount("GoodsCostPrdcdFrmMA"), "GrossProfitFrmBusProf": amount("GrossProfitFrmBusProf"),
-        "TurnoverIntradayTrd": amount("TurnoverIntradayTrd"), "IncomeIntradayTrd": amount("IncomeIntradayTrd"),
-        "TurnoverFutureTrd": amount("TurnoverFutureTrd"), "IncomeFutureTrd": amount("IncomeFutureTrd"),
+        "SaleOfGoods": _to_rupees(account.SaleOfGoods), "SaleOfServices": _to_rupees(account.SaleOfServices),
+        "OtherOperatingRevenueDtls": [
+            {"OperatingRevenueName": row.OperatingRevenueName, "OperatingRevenueAmt": _to_rupees(row.OperatingRevenueAmt)}
+            for row in account.OtherOperatingRevenueDtls
+        ],
+        "OperatingRevenueTotal": _to_rupees(account.OperatingRevenueTotal),
+        "SalesGrossReceiptsTotal": _to_rupees(account.SalesGrossReceiptsTotal), "GrossRcptFromProfession": _to_rupees(account.GrossRcptFromProfession),
+        "ExciseCustomsVAT": {
+            "UnionExciseDuty": _to_rupees(excise.UnionExciseDuty), "ServiceTax": _to_rupees(excise.ServiceTax),
+            "VATorSaleTax": _to_rupees(excise.VATorSaleTax), "CentralGoodServiceTax": _to_rupees(excise.CentralGoodServiceTax),
+            "StateGoodServiceTax": _to_rupees(excise.StateGoodServiceTax), "IntegratedGoodServiceTax": _to_rupees(excise.IntegratedGoodServiceTax),
+            "UnionTerrGoodServiceTax": _to_rupees(excise.UnionTerrGoodServiceTax), "OthDutyTaxCess": _to_rupees(excise.OthDutyTaxCess),
+            "TotExciseCustomsVAT": _to_rupees(excise.TotExciseCustomsVAT),
+        },
+        "TotRevenueFrmOperations": _to_rupees(account.TotRevenueFrmOperations), "ClsngStckOfFinishedStcks": _to_rupees(account.ClsngStckOfFinishedStcks),
+        "TardingAccTotCred": _to_rupees(account.TardingAccTotCred), "OpngStckOfFinishedStcks": _to_rupees(account.OpngStckOfFinishedStcks),
+        "Purchases": _to_rupees(account.Purchases), "DirectExpenses": _to_rupees(account.DirectExpenses), "CarriageInward": _to_rupees(account.CarriageInward),
+        "PowerAndFuel": _to_rupees(account.PowerAndFuel),
+        "OtherIncDtls": [
+            {"NatureOfIncome": row.NatureOfIncome, "Amount": _to_rupees(row.Amount)}
+            for row in account.OtherIncDtls
+        ],
+        "DirectExpensesTotal": _to_rupees(account.DirectExpensesTotal),
+        "DutyTaxPay": {"ExciseCustomsVAT": {
+            "CustomDuty": _to_rupees(duty_excise.CustomDuty), "CounterVailDuty": _to_rupees(duty_excise.CounterVailDuty),
+            "SplAddDuty": _to_rupees(duty_excise.SplAddDuty), "UnionExciseDuty": _to_rupees(duty_excise.UnionExciseDuty),
+            "ServiceTax": _to_rupees(duty_excise.ServiceTax), "VATorSaleTax": _to_rupees(duty_excise.VATorSaleTax),
+            "CentralGoodServiceTax": _to_rupees(duty_excise.CentralGoodServiceTax), "StateGoodServiceTax": _to_rupees(duty_excise.StateGoodServiceTax),
+            "IntegratedGoodServiceTax": _to_rupees(duty_excise.IntegratedGoodServiceTax), "UnionTerrGoodServiceTax": _to_rupees(duty_excise.UnionTerrGoodServiceTax),
+            "OthDutyTaxCess": _to_rupees(duty_excise.OthDutyTaxCess), "TotExciseCustomsVAT": _to_rupees(duty_excise.TotExciseCustomsVAT),
+        }},
+        "GoodsCostPrdcdFrmMA": _to_rupees(account.GoodsCostPrdcdFrmMA), "GrossProfitFrmBusProf": _to_rupees(account.GrossProfitFrmBusProf),
+        "TurnoverIntradayTrd": _to_rupees(account.TurnoverIntradayTrd), "IncomeIntradayTrd": _to_rupees(account.IncomeIntradayTrd),
+        "TurnoverFutureTrd": _to_rupees(account.TurnoverFutureTrd), "IncomeFutureTrd": _to_rupees(account.IncomeFutureTrd),
     }
 
 
@@ -2434,7 +2474,7 @@ def build_itr3_json(
 
     # is present. An empty object is not a prepared CBDT schedule and must not
     # be serialized as a placeholder.
-    for schedule_name in ("ScheduleDPM", "ScheduleDOA", "ScheduleDEP", "ScheduleDCG", "ScheduleGST", "ScheduleICDS", "ScheduleESR"):
+    for schedule_name in ("ScheduleDPM", "ScheduleDOA", "ScheduleDEP", "ScheduleDCG", "ScheduleGST", "ScheduleICDS", "ScheduleESR", "ManufacturingAccount", "TradingAccount"):
         if not itr3[schedule_name]:
             del itr3[schedule_name]
 

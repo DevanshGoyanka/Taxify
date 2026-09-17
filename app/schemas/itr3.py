@@ -286,24 +286,135 @@ class BusinessIncome(BaseModel):
     specified_business_deductions: Decimal = Field(default=Decimal("0"), ge=0)
 
 
+class MfgOpeningInventory(BaseModel):
+    """Official ManufacturingAccount.OpeningInventory block (form item 1)."""
+    OpngStckRawMat: Decimal = Field(default=Decimal("0"), ge=0)
+    OpngStckWrkinPrgrs: Decimal = Field(default=Decimal("0"), ge=0)
+    OpngInvntryTotal: Decimal = Field(default=Decimal("0"), ge=0)
+    Purchases: Decimal = Field(default=Decimal("0"), ge=0)
+    DirectWages: Decimal = Field(default=Decimal("0"), ge=0)
+    DirectExpenses: Decimal = Field(default=Decimal("0"), ge=0)
+    CarriageInward: Decimal = Field(default=Decimal("0"), ge=0)
+    PowerAndFuel: Decimal = Field(default=Decimal("0"), ge=0)
+    OthDirectExpenses: Decimal = Field(default=Decimal("0"), ge=0)
+    IndirectWages: Decimal = Field(default=Decimal("0"), ge=0)
+    FactoryRentAndRates: Decimal = Field(default=Decimal("0"), ge=0)
+    FactoryInsurance: Decimal = Field(default=Decimal("0"), ge=0)
+    FactoryFuelAndPower: Decimal = Field(default=Decimal("0"), ge=0)
+    FactoryGeneralExpenses: Decimal = Field(default=Decimal("0"), ge=0)
+    DeprctnOfFactoryMachinery: Decimal = Field(default=Decimal("0"), ge=0)
+    TotalFactoryOverheads: Decimal = Field(default=Decimal("0"), ge=0)
+    TotalDebtsManfctrngAcc: Decimal = Field(default=Decimal("0"), ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MfgClosingStock(BaseModel):
+    """Official ManufacturingAccount.ClosingStock block (form item 2)."""
+    ClsngStckRawMaterial: Decimal = Field(default=Decimal("0"), ge=0)
+    ClsngStckWrkInPrgrs: Decimal = Field(default=Decimal("0"), ge=0)
+    ClsngStckTotal: Decimal = Field(default=Decimal("0"), ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class ManufacturingAccount(BaseModel):
-    """Typed official ManufacturingAccount schedule fields."""
-    opening_inventory: dict[str, Decimal] = Field(default_factory=dict)
-    closing_stock: dict[str, Decimal] = Field(default_factory=dict)
-    cost_of_goods_produced: Decimal = Field(default=Decimal("0"), ge=0)
+    """Typed official ManufacturingAccount schedule fields (form items 1-3)."""
+    opening_inventory: MfgOpeningInventory = Field(default_factory=MfgOpeningInventory)
+    closing_stock: MfgClosingStock = Field(default_factory=MfgClosingStock)
+    # No `ge=0` -- the official schema places no minimum on this field
+    # (form item 3, "1F - 2"), unlike every other Manufacturing Account amount.
+    cost_of_goods_produced: Decimal = Field(default=Decimal("0"))
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TradingOtherRevenueEntry(BaseModel):
+    """Official TradingAccount.OtherOperatingRevenueDtls row (form item 4A.iii)."""
+    OperatingRevenueName: str
+    OperatingRevenueAmt: Decimal = Field(default=Decimal("0"), ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TradingOtherIncomeEntry(BaseModel):
+    """Official TradingAccount.OtherIncDtls row (form item 9iii, itemized other direct expenses)."""
+    NatureOfIncome: str
+    Amount: Decimal = Field(default=Decimal("0"))
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TradingExciseCustomsVAT(BaseModel):
+    """Official TradingAccount.ExciseCustomsVAT block (form item 4C, duties on sales)."""
+    UnionExciseDuty: Decimal = Field(default=Decimal("0"), ge=0)
+    ServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    VATorSaleTax: Decimal = Field(default=Decimal("0"), ge=0)
+    CentralGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    StateGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    IntegratedGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    UnionTerrGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    OthDutyTaxCess: Decimal = Field(default=Decimal("0"), ge=0)
+    TotExciseCustomsVAT: Decimal = Field(default=Decimal("0"), ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TradingDutyTaxPayExciseCustomsVAT(BaseModel):
+    """Official TradingAccount.DutyTaxPay.ExciseCustomsVAT block (form item 10, duties on purchases)."""
+    CustomDuty: Decimal = Field(default=Decimal("0"), ge=0)
+    CounterVailDuty: Decimal = Field(default=Decimal("0"), ge=0)
+    SplAddDuty: Decimal = Field(default=Decimal("0"), ge=0)
+    UnionExciseDuty: Decimal = Field(default=Decimal("0"), ge=0)
+    ServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    VATorSaleTax: Decimal = Field(default=Decimal("0"), ge=0)
+    CentralGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    StateGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    IntegratedGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    UnionTerrGoodServiceTax: Decimal = Field(default=Decimal("0"), ge=0)
+    OthDutyTaxCess: Decimal = Field(default=Decimal("0"), ge=0)
+    TotExciseCustomsVAT: Decimal = Field(default=Decimal("0"), ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class TradingDutyTaxPay(BaseModel):
+    """Official TradingAccount.DutyTaxPay block."""
+    ExciseCustomsVAT: TradingDutyTaxPayExciseCustomsVAT = Field(default_factory=TradingDutyTaxPayExciseCustomsVAT)
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class TradingAccount(BaseModel):
-    """Typed official TradingAccount schedule fields and totals."""
-    values: dict[str, Decimal] = Field(default_factory=dict)
+    """Typed official TradingAccount schedule fields and totals (form items 4-12d)."""
+    SaleOfGoods: Decimal = Field(default=Decimal("0"), ge=0)
+    SaleOfServices: Decimal = Field(default=Decimal("0"), ge=0)
+    OtherOperatingRevenueDtls: List[TradingOtherRevenueEntry] = Field(default_factory=list)
+    OperatingRevenueTotal: Decimal = Field(default=Decimal("0"), ge=0)
+    SalesGrossReceiptsTotal: Decimal = Field(default=Decimal("0"), ge=0)
+    GrossRcptFromProfession: Decimal = Field(default=Decimal("0"), ge=0)
+    ExciseCustomsVAT: TradingExciseCustomsVAT = Field(default_factory=TradingExciseCustomsVAT)
+    TotRevenueFrmOperations: Decimal = Field(default=Decimal("0"), ge=0)
+    ClsngStckOfFinishedStcks: Decimal = Field(default=Decimal("0"), ge=0)
+    TardingAccTotCred: Decimal = Field(default=Decimal("0"), ge=0)
+    OpngStckOfFinishedStcks: Decimal = Field(default=Decimal("0"), ge=0)
+    Purchases: Decimal = Field(default=Decimal("0"), ge=0)
+    DirectExpenses: Decimal = Field(default=Decimal("0"), ge=0)
+    CarriageInward: Decimal = Field(default=Decimal("0"), ge=0)
+    PowerAndFuel: Decimal = Field(default=Decimal("0"), ge=0)
+    OtherIncDtls: List[TradingOtherIncomeEntry] = Field(default_factory=list)
+    DirectExpensesTotal: Decimal = Field(default=Decimal("0"), ge=0)
+    DutyTaxPay: TradingDutyTaxPay = Field(default_factory=TradingDutyTaxPay)
+    # form items 12/12b/12d -- no `ge=0`, the official schema places no
+    # minimum on these four (a trading/F&O/intraday result can be a loss).
+    GoodsCostPrdcdFrmMA: Decimal = Field(default=Decimal("0"))
+    GrossProfitFrmBusProf: Decimal = Field(default=Decimal("0"))
+    TurnoverIntradayTrd: Decimal = Field(default=Decimal("0"), ge=0)
+    IncomeIntradayTrd: Decimal = Field(default=Decimal("0"))
+    TurnoverFutureTrd: Decimal = Field(default=Decimal("0"), ge=0)
+    IncomeFutureTrd: Decimal = Field(default=Decimal("0"))
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ITR3BusinessAccounts(BaseModel):
-    """Schema-shaped Manufacturing Account and Trading Account payloads.
+    """Fully typed Manufacturing Account and Trading Account payloads.
 
-    The keys intentionally mirror the official CBDT schedule names exactly;
-    official JSON-schema validation remains the final authority while the
-    remaining nested accounting fields are progressively typed.
+    Either schedule is entirely optional (omitted from the filed JSON when
+    the taxpayer has no such business), but when present every mandatory and
+    optional official field is individually typed and validated -- not a
+    generic passthrough.
     """
 
     manufacturing_account: Optional[ManufacturingAccount] = Field(default=None)

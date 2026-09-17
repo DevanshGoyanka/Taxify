@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input, _to_date
-from app.schemas.itr3 import AuditInfo, BalanceSheet, BSOfficial, BSProprietorsFund, BSReserves, BSLoanGroup, BSUnsecuredLoanGroup, BSAdvances, BSFixedAsset, BSCurrentAssets, BSInventory, BSCashBank, BSCurrentLiabilities, BSProvisions, BSInvestments, BSLongTermInv, BSTradeInv, BSLoanAdvances, BSMiscAdjust, BSNoBooks, BSRupeeLoan, BusinessIncome, ITR3BusinessAccounts, ITR3Input, ITR3ScheduleSEmployer, ITR3ScheduleHPProperty, ManufacturingAccount, NatureOfBusiness, ProfitAndLoss, PLOtherIncome, PLInterestExpense, TradingAccount, ITR3PartAOI, ITR3PartAQD, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3DeductionDetails, ITR3DeductionDonation, ITR3DeductionLoan, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA, ITR3Schedule80D, ITR3Schedule80DCategory, ITR3Schedule80DHealth, ITR3Schedule80DInsurance, ITR3Schedule80DD, ITR3Schedule80U
+from app.schemas.itr3 import AuditInfo, BalanceSheet, BSOfficial, BSProprietorsFund, BSReserves, BSLoanGroup, BSUnsecuredLoanGroup, BSAdvances, BSFixedAsset, BSCurrentAssets, BSInventory, BSCashBank, BSCurrentLiabilities, BSProvisions, BSInvestments, BSLongTermInv, BSTradeInv, BSLoanAdvances, BSMiscAdjust, BSNoBooks, BSRupeeLoan, BusinessIncome, ITR3BusinessAccounts, ITR3Input, ITR3ScheduleSEmployer, ITR3ScheduleHPProperty, ManufacturingAccount, MfgOpeningInventory, MfgClosingStock, NatureOfBusiness, ProfitAndLoss, PLOtherIncome, PLInterestExpense, TradingAccount, TradingOtherRevenueEntry, TradingOtherIncomeEntry, TradingExciseCustomsVAT, TradingDutyTaxPay, TradingDutyTaxPayExciseCustomsVAT, ITR3PartAOI, ITR3PartAQD, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3DeductionDetails, ITR3DeductionDonation, ITR3DeductionLoan, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA, ITR3Schedule80D, ITR3Schedule80DCategory, ITR3Schedule80DHealth, ITR3Schedule80DInsurance, ITR3Schedule80DD, ITR3Schedule80U
 from app.schemas.itr2 import ResidentialStatus as ITR3ResidentialStatus, ReturnFileSection
 from app.engine.draft_to_itr2_input import _map_112a_scrips, _map_immovable_gains, _map_equity_stt_stcg, _map_other_assets, _map_nri_fii_securities, _map_nri_112_115_securities, _map_buyback_losses, _map_vda_transactions, _map_fsi_entries, _map_tr1_entries, _map_foreign_assets, _map_asset_liability, _map_schedule_5a, _map_esop_deferrals
 from app.schemas.itr2 import CG112AScrip, CGTransaction, CGAssetType, ScheduleSIEntry, VDATransaction, SPIEntry, PTIEntry
@@ -371,11 +371,60 @@ def _audit_info(draft: ReturnDraft) -> AuditInfo:
     )
 
 
-def _decimal_map(value: Any) -> dict[str, Decimal]:
-    """Convert a flat official schedule object to Decimal values."""
-    if not isinstance(value, Mapping):
-        return {}
-    return {str(key): _decimal_value(item) for key, item in value.items() if not isinstance(item, Mapping) and item not in (None, "")}
+def _mfg_opening_inventory(opening: Mapping[str, Any]) -> MfgOpeningInventory:
+    return MfgOpeningInventory(
+        OpngStckRawMat=_decimal_value(opening.get("OpngStckRawMat")),
+        OpngStckWrkinPrgrs=_decimal_value(opening.get("OpngStckWrkinPrgrs")),
+        OpngInvntryTotal=_decimal_value(opening.get("OpngInvntryTotal")),
+        Purchases=_decimal_value(opening.get("Purchases")),
+        DirectWages=_decimal_value(opening.get("DirectWages")),
+        DirectExpenses=_decimal_value(opening.get("DirectExpenses")),
+        CarriageInward=_decimal_value(opening.get("CarriageInward")),
+        PowerAndFuel=_decimal_value(opening.get("PowerAndFuel")),
+        OthDirectExpenses=_decimal_value(opening.get("OthDirectExpenses")),
+        IndirectWages=_decimal_value(opening.get("IndirectWages")),
+        FactoryRentAndRates=_decimal_value(opening.get("FactoryRentAndRates")),
+        FactoryInsurance=_decimal_value(opening.get("FactoryInsurance")),
+        FactoryFuelAndPower=_decimal_value(opening.get("FactoryFuelAndPower")),
+        FactoryGeneralExpenses=_decimal_value(opening.get("FactoryGeneralExpenses")),
+        DeprctnOfFactoryMachinery=_decimal_value(opening.get("DeprctnOfFactoryMachinery")),
+        TotalFactoryOverheads=_decimal_value(opening.get("TotalFactoryOverheads")),
+        TotalDebtsManfctrngAcc=_decimal_value(opening.get("TotalDebtsManfctrngAcc")),
+    )
+
+
+def _mfg_closing_stock(closing: Mapping[str, Any]) -> MfgClosingStock:
+    return MfgClosingStock(
+        ClsngStckRawMaterial=_decimal_value(closing.get("ClsngStckRawMaterial")),
+        ClsngStckWrkInPrgrs=_decimal_value(closing.get("ClsngStckWrkInPrgrs")),
+        ClsngStckTotal=_decimal_value(closing.get("ClsngStckTotal")),
+    )
+
+
+def _trading_other_revenue_entries(rows: Any) -> list[TradingOtherRevenueEntry]:
+    if not isinstance(rows, list):
+        return []
+    return [
+        TradingOtherRevenueEntry(
+            OperatingRevenueName=str(row.get("OperatingRevenueName")),
+            OperatingRevenueAmt=_decimal_value(row.get("OperatingRevenueAmt")),
+        )
+        for row in rows
+        if isinstance(row, Mapping) and row.get("OperatingRevenueName")
+    ]
+
+
+def _trading_other_income_entries(rows: Any) -> list[TradingOtherIncomeEntry]:
+    if not isinstance(rows, list):
+        return []
+    return [
+        TradingOtherIncomeEntry(
+            NatureOfIncome=str(row.get("NatureOfIncome")),
+            Amount=_decimal_value(row.get("Amount")),
+        )
+        for row in rows
+        if isinstance(row, Mapping) and row.get("NatureOfIncome")
+    ]
 
 
 def _business_accounts(draft: ReturnDraft) -> ITR3BusinessAccounts | None:
@@ -386,13 +435,49 @@ def _business_accounts(draft: ReturnDraft) -> ITR3BusinessAccounts | None:
         return None
     opening = manufacturing.get("OpeningInventory", {}) if manufacturing else {}
     closing = manufacturing.get("ClosingStock", {}) if manufacturing else {}
+    excise_customs_vat = trading.get("ExciseCustomsVAT", {}) if trading else {}
+    duty_tax_pay = trading.get("DutyTaxPay", {}) if trading else {}
+    duty_tax_pay_excise = duty_tax_pay.get("ExciseCustomsVAT", {}) if isinstance(duty_tax_pay, Mapping) else {}
     return ITR3BusinessAccounts(
         manufacturing_account=ManufacturingAccount(
-            opening_inventory=_decimal_map(opening),
-            closing_stock=_decimal_map(closing),
+            opening_inventory=_mfg_opening_inventory(opening if isinstance(opening, Mapping) else {}),
+            closing_stock=_mfg_closing_stock(closing if isinstance(closing, Mapping) else {}),
             cost_of_goods_produced=_decimal_value(manufacturing.get("CostOfGoodsPrdcd")),
         ) if manufacturing else None,
-        trading_account=TradingAccount(values=_decimal_map(trading)) if trading else None,
+        trading_account=TradingAccount(
+            SaleOfGoods=_decimal_value(trading.get("SaleOfGoods")),
+            SaleOfServices=_decimal_value(trading.get("SaleOfServices")),
+            OtherOperatingRevenueDtls=_trading_other_revenue_entries(trading.get("OtherOperatingRevenueDtls")),
+            OperatingRevenueTotal=_decimal_value(trading.get("OperatingRevenueTotal")),
+            SalesGrossReceiptsTotal=_decimal_value(trading.get("SalesGrossReceiptsTotal")),
+            GrossRcptFromProfession=_decimal_value(trading.get("GrossRcptFromProfession")),
+            ExciseCustomsVAT=TradingExciseCustomsVAT(**{
+                key: _decimal_value(excise_customs_vat.get(key))
+                for key in ("UnionExciseDuty", "ServiceTax", "VATorSaleTax", "CentralGoodServiceTax", "StateGoodServiceTax", "IntegratedGoodServiceTax", "UnionTerrGoodServiceTax", "OthDutyTaxCess", "TotExciseCustomsVAT")
+            }) if isinstance(excise_customs_vat, Mapping) else TradingExciseCustomsVAT(),
+            TotRevenueFrmOperations=_decimal_value(trading.get("TotRevenueFrmOperations")),
+            ClsngStckOfFinishedStcks=_decimal_value(trading.get("ClsngStckOfFinishedStcks")),
+            TardingAccTotCred=_decimal_value(trading.get("TardingAccTotCred")),
+            OpngStckOfFinishedStcks=_decimal_value(trading.get("OpngStckOfFinishedStcks")),
+            Purchases=_decimal_value(trading.get("Purchases")),
+            DirectExpenses=_decimal_value(trading.get("DirectExpenses")),
+            CarriageInward=_decimal_value(trading.get("CarriageInward")),
+            PowerAndFuel=_decimal_value(trading.get("PowerAndFuel")),
+            OtherIncDtls=_trading_other_income_entries(trading.get("OtherIncDtls")),
+            DirectExpensesTotal=_decimal_value(trading.get("DirectExpensesTotal")),
+            DutyTaxPay=TradingDutyTaxPay(
+                ExciseCustomsVAT=TradingDutyTaxPayExciseCustomsVAT(**{
+                    key: _decimal_value(duty_tax_pay_excise.get(key))
+                    for key in ("CustomDuty", "CounterVailDuty", "SplAddDuty", "UnionExciseDuty", "ServiceTax", "VATorSaleTax", "CentralGoodServiceTax", "StateGoodServiceTax", "IntegratedGoodServiceTax", "UnionTerrGoodServiceTax", "OthDutyTaxCess", "TotExciseCustomsVAT")
+                }) if isinstance(duty_tax_pay_excise, Mapping) else TradingDutyTaxPayExciseCustomsVAT(),
+            ),
+            GoodsCostPrdcdFrmMA=_decimal_value(trading.get("GoodsCostPrdcdFrmMA")),
+            GrossProfitFrmBusProf=_decimal_value(trading.get("GrossProfitFrmBusProf")),
+            TurnoverIntradayTrd=_decimal_value(trading.get("TurnoverIntradayTrd")),
+            IncomeIntradayTrd=_decimal_value(trading.get("IncomeIntradayTrd")),
+            TurnoverFutureTrd=_decimal_value(trading.get("TurnoverFutureTrd")),
+            IncomeFutureTrd=_decimal_value(trading.get("IncomeFutureTrd")),
+        ) if trading else None,
     )
 
 
