@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input, _to_date
-from app.schemas.itr3 import AuditInfo, BalanceSheet, BSOfficial, BSProprietorsFund, BSReserves, BSLoanGroup, BSUnsecuredLoanGroup, BSAdvances, BSFixedAsset, BSCurrentAssets, BSInventory, BSCashBank, BSCurrentLiabilities, BSProvisions, BusinessIncome, ITR3BusinessAccounts, ITR3Input, ITR3ScheduleSEmployer, ITR3ScheduleHPProperty, ManufacturingAccount, NatureOfBusiness, ProfitAndLoss, PLOtherIncome, PLInterestExpense, TradingAccount, ITR3PartAOI, ITR3PartAQD, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3DeductionDetails, ITR3DeductionDonation, ITR3DeductionLoan, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA, ITR3Schedule80D, ITR3Schedule80DCategory, ITR3Schedule80DHealth, ITR3Schedule80DInsurance, ITR3Schedule80DD, ITR3Schedule80U
+from app.schemas.itr3 import AuditInfo, BalanceSheet, BSOfficial, BSProprietorsFund, BSReserves, BSLoanGroup, BSUnsecuredLoanGroup, BSAdvances, BSFixedAsset, BSCurrentAssets, BSInventory, BSCashBank, BSCurrentLiabilities, BSProvisions, BSInvestments, BSLongTermInv, BSTradeInv, BSLoanAdvances, BSMiscAdjust, BSNoBooks, BSRupeeLoan, BusinessIncome, ITR3BusinessAccounts, ITR3Input, ITR3ScheduleSEmployer, ITR3ScheduleHPProperty, ManufacturingAccount, NatureOfBusiness, ProfitAndLoss, PLOtherIncome, PLInterestExpense, TradingAccount, ITR3PartAOI, ITR3PartAQD, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3DeductionDetails, ITR3DeductionDonation, ITR3DeductionLoan, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA, ITR3Schedule80D, ITR3Schedule80DCategory, ITR3Schedule80DHealth, ITR3Schedule80DInsurance, ITR3Schedule80DD, ITR3Schedule80U
 from app.schemas.itr2 import ResidentialStatus as ITR3ResidentialStatus, ReturnFileSection
 from app.engine.draft_to_itr2_input import _map_112a_scrips, _map_immovable_gains, _map_equity_stt_stcg, _map_other_assets, _map_nri_fii_securities, _map_nri_112_115_securities, _map_buyback_losses, _map_vda_transactions, _map_fsi_entries, _map_tr1_entries, _map_foreign_assets, _map_asset_liability, _map_schedule_5a, _map_esop_deferrals
 from app.schemas.itr2 import CG112AScrip, CGTransaction, CGAssetType, ScheduleSIEntry, VDATransaction, SPIEntry, PTIEntry
@@ -95,6 +95,12 @@ def _balance_sheet(draft: ReturnDraft) -> Any:
         rupee_loan = secr_loan.get("RupeeLoan", {}) if isinstance(secr_loan.get("RupeeLoan"), Mapping) else {}
         inventories = current_asset.get("Inventories", {}) if isinstance(current_asset.get("Inventories"), Mapping) else {}
         cash_bank = current_asset.get("CashOrBankBal", {}) if isinstance(current_asset.get("CashOrBankBal"), Mapping) else {}
+        investments = fund_apply.get("Investments", {}) if isinstance(fund_apply, Mapping) else {}
+        long_term_inv = investments.get("LongTermInv", {}) if isinstance(investments.get("LongTermInv"), Mapping) else {}
+        trade_inv = investments.get("TradeInv", {}) if isinstance(investments.get("TradeInv"), Mapping) else {}
+        loan_adv = current.get("LoanAdv", {}) if isinstance(current, Mapping) else {}
+        misc_adjust = fund_apply.get("MiscAdjust", {}) if isinstance(fund_apply, Mapping) else {}
+        no_books_ws = workspace.get("NoBooksOfAccBS") if isinstance(workspace, Mapping) else None
         official = BSOfficial(
             proprietors_fund=BSProprietorsFund(
                 PropCap=_decimal_value(prop_fund.get("PropCap")),
@@ -109,9 +115,11 @@ def _balance_sheet(draft: ReturnDraft) -> Any:
             ),
             secured_loans=BSLoanGroup(
                 ForeignCurrLoan=_decimal_value(secr_loan.get("ForeignCurrLoan")),
-                FrmBank=_decimal_value(rupee_loan.get("FrmBank")),
-                FrmOthrs=_decimal_value(rupee_loan.get("FrmOthrs")),
-                TotRupeeLoan=_decimal_value(rupee_loan.get("TotRupeeLoan")),
+                RupeeLoan=BSRupeeLoan(
+                    FrmBank=_decimal_value(rupee_loan.get("FrmBank")),
+                    FrmOthrs=_decimal_value(rupee_loan.get("FrmOthrs")),
+                    TotRupeeLoan=_decimal_value(rupee_loan.get("TotRupeeLoan")),
+                ),
                 TotSecrLoan=_decimal_value(secr_loan.get("TotSecrLoan")),
             ),
             unsecured_loans=BSUnsecuredLoanGroup(
@@ -132,6 +140,20 @@ def _balance_sheet(draft: ReturnDraft) -> Any:
                 NetBlock=_decimal_value(fixed_asset.get("NetBlock")),
                 CapWrkProg=_decimal_value(fixed_asset.get("CapWrkProg")),
                 TotFixedAsset=_decimal_value(fixed_asset.get("TotFixedAsset")),
+            ),
+            investments=BSInvestments(
+                LongTermInv=BSLongTermInv(
+                    GovtOthSecQuoted=_decimal_value(long_term_inv.get("GovtOthSecQuoted")),
+                    GovOthSecUnQoted=_decimal_value(long_term_inv.get("GovOthSecUnQoted")),
+                    TotLongTermInv=_decimal_value(long_term_inv.get("TotLongTermInv")),
+                ),
+                TradeInv=BSTradeInv(
+                    EquityShares=_decimal_value(trade_inv.get("EquityShares")),
+                    PreferShares=_decimal_value(trade_inv.get("PreferShares")),
+                    Debenture=_decimal_value(trade_inv.get("Debenture")),
+                    TotTradeInv=_decimal_value(trade_inv.get("TotTradeInv")),
+                ),
+                TotInvestments=_decimal_value(investments.get("TotInvestments")),
             ),
             current_assets=BSCurrentAssets(
                 Inventories=BSInventory(
@@ -162,6 +184,27 @@ def _balance_sheet(draft: ReturnDraft) -> Any:
                 ELSuperAnnGratProvision=_decimal_value(provisions.get("ELSuperAnnGratProvision")),
                 OthProvision=_decimal_value(provisions.get("OthProvision")),
                 TotProvisions=_decimal_value(provisions.get("TotProvisions")),
+            ),
+            loan_advances=BSLoanAdvances(
+                AdvRecoverable=_decimal_value(loan_adv.get("AdvRecoverable")),
+                Deposits=_decimal_value(loan_adv.get("Deposits")),
+                BalWithRevAuth=_decimal_value(loan_adv.get("BalWithRevAuth")),
+                TotLoanAdv=_decimal_value(loan_adv.get("TotLoanAdv")),
+            ),
+            NetCurrAsset=_decimal_value(current.get("NetCurrAsset")),
+            misc_adjust=BSMiscAdjust(
+                MiscExpndr=_decimal_value(misc_adjust.get("MiscExpndr")),
+                DefTaxAsset=_decimal_value(misc_adjust.get("DefTaxAsset")),
+                AccumaltedLosses=_decimal_value(misc_adjust.get("AccumaltedLosses")),
+                TotMiscAdjust=_decimal_value(misc_adjust.get("TotMiscAdjust")),
+            ),
+            no_books=(
+                BSNoBooks(
+                    TotSundryDbtAmt=_decimal_value(no_books_ws.get("TotSundryDbtAmt")),
+                    TotSundryCrdAmt=_decimal_value(no_books_ws.get("TotSundryCrdAmt")),
+                    TotStkInTradAmt=_decimal_value(no_books_ws.get("TotStkInTradAmt")),
+                    CashBalAmt=_decimal_value(no_books_ws.get("CashBalAmt")),
+                ) if isinstance(no_books_ws, Mapping) and no_books_ws else None
             ),
         )
         return BalanceSheet(
@@ -195,6 +238,52 @@ def _balance_sheet(draft: ReturnDraft) -> Any:
         + source.otherAssets
     )
     total_assets = source.totalApplications or source.fixedAssets + source.investments + current_assets
+    # The legacy flat summary has no LongTermInv/TradeInv/AdvRecoverable/
+    # Deposits/BalWithRevAuth/MiscExpndr/DefTaxAsset breakdown -- only bare
+    # aggregates. Still build a complete BSOfficial (every schema-required
+    # sub-block present, defaulting to 0 where no finer source exists)
+    # rather than leaving `official=None`, which previously sent this path
+    # through the builder's minimal fallback and produced a PARTA_BS
+    # missing more than a dozen required properties (confirmed live via
+    # direct schema validation).
+    legacy_official = BSOfficial(
+        proprietors_fund=BSProprietorsFund(
+            PropCap=source.proprietorCapital,
+            ResrNSurp=BSReserves(TotResrNSurp=source.reservesAndSurplus),
+            TotPropFund=source.proprietorCapital + source.reservesAndSurplus,
+        ),
+        secured_loans=BSLoanGroup(TotSecrLoan=source.securedLoans),
+        unsecured_loans=BSUnsecuredLoanGroup(TotUnSecrLoan=source.unsecuredLoans),
+        advances=BSAdvances(
+            FromOthers=source.advancesFromCustomers, TotalAdvances=source.advancesFromCustomers,
+        ),
+        DeferredTax=source.deferredTaxLiability,
+        TotFundSrc=total_liabilities,
+        fixed_assets=BSFixedAsset(NetBlock=source.fixedAssets, TotFixedAsset=source.fixedAssets),
+        investments=BSInvestments(TotInvestments=source.investments),
+        current_assets=BSCurrentAssets(
+            Inventories=BSInventory(TotInventries=source.inventories),
+            SndryDebtors=source.tradeReceivables,
+            CashOrBankBal=BSCashBank(TotCashOrBankBal=source.cashAndBank),
+            OthCurrAsset=source.otherAssets,
+            TotCurrAsset=(
+                source.inventories + source.tradeReceivables + source.cashAndBank + source.otherAssets
+            ),
+        ),
+        loan_advances=BSLoanAdvances(TotLoanAdv=source.loansAndAdvances),
+        current_liabilities=BSCurrentLiabilities(SundryCred=source.creditors, TotCurrLiabilities=source.creditors),
+        provisions=BSProvisions(OthProvision=source.provisions, TotProvisions=source.provisions),
+        NetCurrAsset=current_assets,
+        misc_adjust=BSMiscAdjust(),
+        no_books=(
+            BSNoBooks(
+                TotSundryDbtAmt=source.noBooksSundryDebtors,
+                TotSundryCrdAmt=source.noBooksSundryCreditors,
+                TotStkInTradAmt=source.noBooksStockInTrade,
+                CashBalAmt=source.noBooksCashBalance,
+            ) if source.noBooksOfAccounts else None
+        ),
+    )
     return BalanceSheet(
         proprietors_fund=source.proprietorCapital + source.reservesAndSurplus,
         secured_loans=source.securedLoans,
@@ -204,6 +293,7 @@ def _balance_sheet(draft: ReturnDraft) -> Any:
         fixed_assets=source.fixedAssets,
         current_assets=current_assets,
         total_assets=total_assets,
+        official=legacy_official,
     )
 
 

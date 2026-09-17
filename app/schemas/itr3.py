@@ -373,19 +373,38 @@ class BSReserves(BaseModel):
 
 
 class BSProprietorsFund(BaseModel):
-    """Typed PARTA_BS proprietors-fund group."""
-    capital: Decimal = Field(Decimal("0"), alias="PropCap", ge=0)
+    """Typed PARTA_BS proprietors-fund group.
+
+    Unlike every other PARTA_BS money field, the official schema places no
+    ``minimum`` constraint on PropCap/TotPropFund -- a real, expected case
+    for a business whose accumulated losses exceed contributed capital.
+    """
+    capital: Decimal = Field(Decimal("0"), alias="PropCap")
     reserves: BSReserves = Field(default_factory=BSReserves, alias="ResrNSurp")
-    total: Decimal = Field(Decimal("0"), alias="TotPropFund", ge=0)
+    total: Decimal = Field(Decimal("0"), alias="TotPropFund")
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BSRupeeLoan(BaseModel):
+    """Typed rupee-loan sub-group under PARTA_BS's secured-loans group."""
+    from_bank: Decimal = Field(Decimal("0"), alias="FrmBank", ge=0)
+    from_others: Decimal = Field(Decimal("0"), alias="FrmOthrs", ge=0)
+    total: Decimal = Field(Decimal("0"), alias="TotRupeeLoan", ge=0)
     model_config = ConfigDict(populate_by_name=True)
 
 
 class BSLoanGroup(BaseModel):
-    """Typed secured or unsecured loan group in PARTA_BS."""
+    """Typed secured-loan group in PARTA_BS.
+
+    The official schema nests FrmBank/FrmOthrs/TotRupeeLoan under a
+    RupeeLoan sub-object (SecrLoan.RupeeLoan.{FrmBank,FrmOthrs,
+    TotRupeeLoan}), not as flat siblings of ForeignCurrLoan/TotSecrLoan --
+    confirmed by direct schema validation (a flat shape produces both
+    "Additional properties are not allowed" for the three rupee-loan keys
+    and "'RupeeLoan' is a required property").
+    """
     foreign_currency: Decimal = Field(Decimal("0"), alias="ForeignCurrLoan", ge=0)
-    from_bank: Decimal = Field(Decimal("0"), alias="FrmBank", ge=0)
-    from_others: Decimal = Field(Decimal("0"), alias="FrmOthrs", ge=0)
-    total_rupee: Decimal = Field(Decimal("0"), alias="TotRupeeLoan", ge=0)
+    rupee_loan: BSRupeeLoan = Field(default_factory=BSRupeeLoan, alias="RupeeLoan")
     total: Decimal = Field(Decimal("0"), alias="TotSecrLoan", ge=0)
     model_config = ConfigDict(populate_by_name=True)
 
@@ -463,6 +482,60 @@ class BSProvisions(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class BSLongTermInv(BaseModel):
+    """Typed long-term-investments group in PARTA_BS (form item 2a)."""
+    quoted: Decimal = Field(Decimal("0"), alias="GovtOthSecQuoted", ge=0)
+    unquoted: Decimal = Field(Decimal("0"), alias="GovOthSecUnQoted", ge=0)
+    total: Decimal = Field(Decimal("0"), alias="TotLongTermInv", ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BSTradeInv(BaseModel):
+    """Typed short-term (trade) investments group in PARTA_BS (form item 2b)."""
+    equity_shares: Decimal = Field(Decimal("0"), alias="EquityShares", ge=0)
+    preference_shares: Decimal = Field(Decimal("0"), alias="PreferShares", ge=0)
+    debentures: Decimal = Field(Decimal("0"), alias="Debenture", ge=0)
+    total: Decimal = Field(Decimal("0"), alias="TotTradeInv", ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BSInvestments(BaseModel):
+    """Typed investments group in PARTA_BS (form item 2)."""
+    long_term: BSLongTermInv = Field(default_factory=BSLongTermInv, alias="LongTermInv")
+    trade: BSTradeInv = Field(default_factory=BSTradeInv, alias="TradeInv")
+    total: Decimal = Field(Decimal("0"), alias="TotInvestments", ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BSLoanAdvances(BaseModel):
+    """Typed loans-and-advances group in PARTA_BS (form item 3b)."""
+    advances_recoverable: Decimal = Field(Decimal("0"), alias="AdvRecoverable", ge=0)
+    deposits: Decimal = Field(Decimal("0"), alias="Deposits", ge=0)
+    balance_with_revenue_authorities: Decimal = Field(Decimal("0"), alias="BalWithRevAuth", ge=0)
+    total: Decimal = Field(Decimal("0"), alias="TotLoanAdv", ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BSMiscAdjust(BaseModel):
+    """Typed miscellaneous-adjustments group in PARTA_BS (form item 4)."""
+    misc_expenditure: Decimal = Field(Decimal("0"), alias="MiscExpndr", ge=0)
+    deferred_tax_asset: Decimal = Field(Decimal("0"), alias="DefTaxAsset", ge=0)
+    accumulated_losses: Decimal = Field(Decimal("0"), alias="AccumaltedLosses", ge=0)
+    total: Decimal = Field(Decimal("0"), alias="TotMiscAdjust", ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BSNoBooks(BaseModel):
+    """Typed PARTA_BS.NoBooksOfAccBS -- form item 6(a)-(d), the "no
+    account case" alternative used only when regular books of account of
+    business or profession are not maintained."""
+    sundry_debtors: Decimal = Field(Decimal("0"), alias="TotSundryDbtAmt", ge=0)
+    sundry_creditors: Decimal = Field(Decimal("0"), alias="TotSundryCrdAmt", ge=0)
+    stock_in_trade: Decimal = Field(Decimal("0"), alias="TotStkInTradAmt", ge=0)
+    cash_balance: Decimal = Field(Decimal("0"), alias="CashBalAmt", ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class BSOfficial(BaseModel):
     """Explicitly typed, bounded PARTA_BS source tree."""
     proprietors_fund: BSProprietorsFund = Field(default_factory=BSProprietorsFund, alias="PropFund")
@@ -472,9 +545,14 @@ class BSOfficial(BaseModel):
     deferred_tax: Decimal = Field(Decimal("0"), alias="DeferredTax", ge=0)
     total_sources: Decimal = Field(Decimal("0"), alias="TotFundSrc", ge=0)
     fixed_assets: BSFixedAsset = Field(default_factory=BSFixedAsset, alias="FixedAsset")
+    investments: BSInvestments = Field(default_factory=BSInvestments, alias="Investments")
     current_assets: BSCurrentAssets = Field(default_factory=BSCurrentAssets, alias="CurrAsset")
+    loan_advances: BSLoanAdvances = Field(default_factory=BSLoanAdvances, alias="LoanAdv")
     current_liabilities: BSCurrentLiabilities = Field(default_factory=BSCurrentLiabilities, alias="CurrLiabilities")
     provisions: BSProvisions = Field(default_factory=BSProvisions, alias="Provisions")
+    net_current_asset: Decimal = Field(Decimal("0"), alias="NetCurrAsset")
+    misc_adjust: BSMiscAdjust = Field(default_factory=BSMiscAdjust, alias="MiscAdjust")
+    no_books: Optional[BSNoBooks] = Field(default=None, alias="NoBooksOfAccBS")
     model_config = ConfigDict(populate_by_name=True)
 
 

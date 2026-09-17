@@ -484,6 +484,120 @@ def test_itr3_audit_info_not_audited_omits_report_detail_not_fabricates() -> Non
     _validate_against_schema_definition(ai, "AuditInfo")
 
 
+def test_itr3_balance_sheet_minimal_draft_now_schema_valid() -> None:
+    """Schedule 5 (Part A-BS): a minimal draft with no workspace/legacy
+    balance-sheet data at all previously produced a PARTA_BS missing more
+    than a dozen schema-required properties (confirmed live via direct
+    Draft4Validator errors: FundApply.Investments, FundApply.MiscAdjust,
+    FundApply.CurrAssetLoanAdv.{CurrAsset,LoanAdv,CurrLiabilitiesProv,
+    NetCurrAsset}, FundApply.FixedAsset.{GrossBlock,Depreciation,NetBlock,
+    CapWrkProg}, FundSrc.{LoanFunds,DeferredTax,Advances}, FundSrc.PropFund.
+    {PropCap,ResrNSurp} were all absent). The same minimal draft must now
+    produce a fully schema-valid PARTA_BS, every required block present
+    and defaulting to 0."""
+    draft = _draft_with_business()
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    assert typed_input.balance_sheet is not None
+    assert typed_input.balance_sheet.official is not None
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    parta_bs = document["ITR"]["ITR3"]["PARTA_BS"]
+
+    _validate_against_schema_definition(parta_bs, "PARTA_BS")
+
+
+def test_itr3_balance_sheet_workspace_investments_and_misc_adjust_reach_json() -> None:
+    """The rich workspace path: Investments (long-term + trade), loans and
+    advances, miscellaneous adjustments, and net current assets -- all
+    previously absent from the builder output entirely -- reach the JSON
+    for real."""
+    draft = _draft_with_business()
+    draft.itr3BusinessWorkspace.core = {
+        "PARTA_BS": {
+            "FundSrc": {
+                "PropFund": {"PropCap": 500000, "ResrNSurp": {"RevResr": 0, "CapResr": 0, "StatResr": 0, "OthResr": 0, "TotResrNSurp": 0}, "TotPropFund": 500000},
+                "LoanFunds": {"SecrLoan": {"ForeignCurrLoan": 0, "RupeeLoan": {"FrmBank": 100000, "FrmOthrs": 0, "TotRupeeLoan": 100000}, "TotSecrLoan": 100000}, "UnsecrLoan": {"FrmBank": 0, "FrmOthrs": 0, "TotUnSecrLoan": 0}, "TotLoanFund": 100000},
+                "DeferredTax": 0, "Advances": {"FromPrsn": 0, "FromOthers": 0, "TotalAdvances": 0},
+                "TotFundSrc": 600000,
+            },
+            "FundApply": {
+                "FixedAsset": {"GrossBlock": 200000, "Depreciation": 40000, "NetBlock": 160000, "CapWrkProg": 0, "TotFixedAsset": 160000},
+                "Investments": {
+                    "LongTermInv": {"GovtOthSecQuoted": 30000, "GovOthSecUnQoted": 0, "TotLongTermInv": 30000},
+                    "TradeInv": {"EquityShares": 20000, "PreferShares": 0, "Debenture": 0, "TotTradeInv": 20000},
+                    "TotInvestments": 50000,
+                },
+                "CurrAssetLoanAdv": {
+                    "CurrAsset": {"Inventories": {"StoresConsumables": 0, "RawMatl": 0, "StkInProcess": 0, "FinOrTradGood": 0, "TotInventries": 0}, "SndryDebtors": 100000, "CashOrBankBal": {"CashinHand": 5000, "BankBal": 95000, "TotCashOrBankBal": 100000}, "OthCurrAsset": 0, "TotCurrAsset": 200000},
+                    "LoanAdv": {"AdvRecoverable": 15000, "Deposits": 25000, "BalWithRevAuth": 0, "TotLoanAdv": 40000},
+                    "CurrLiabilitiesProv": {"CurrLiabilities": {"SundryCred": 50000, "LiabForLeasedAsset": 0, "AccrIntonLeasedAsset": 0, "AccrIntNotDue": 0, "TotCurrLiabilities": 50000}, "Provisions": {"ITProvision": 0, "ELSuperAnnGratProvision": 0, "OthProvision": 0, "TotProvisions": 0}, "TotCurrLiabilitiesProvision": 50000},
+                    "TotCurrAssetLoanAdv": 240000, "NetCurrAsset": 190000,
+                },
+                "MiscAdjust": {"MiscExpndr": 5000, "DefTaxAsset": 2000, "AccumaltedLosses": 0, "TotMiscAdjust": 7000},
+                "TotFundApply": 407000,
+            },
+        }
+    }
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    official = typed_input.balance_sheet.official
+    assert official.investments.total == Decimal("50000")
+    assert official.loan_advances.total == Decimal("40000")
+    assert official.misc_adjust.total == Decimal("7000")
+    assert official.net_current_asset == Decimal("190000")
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    fund_apply = document["ITR"]["ITR3"]["PARTA_BS"]["FundApply"]
+    assert fund_apply["Investments"]["TotInvestments"] == 50000
+    assert fund_apply["Investments"]["LongTermInv"]["GovtOthSecQuoted"] == 30000
+    assert fund_apply["Investments"]["TradeInv"]["EquityShares"] == 20000
+    assert fund_apply["CurrAssetLoanAdv"]["LoanAdv"]["AdvRecoverable"] == 15000
+    assert fund_apply["CurrAssetLoanAdv"]["NetCurrAsset"] == 190000
+    assert fund_apply["MiscAdjust"]["MiscExpndr"] == 5000
+    assert document["ITR"]["ITR3"]["PARTA_BS"]["FundSrc"]["LoanFunds"]["TotLoanFund"] == 100000
+
+    _validate_against_schema_definition(document["ITR"]["ITR3"]["PARTA_BS"], "PARTA_BS")
+
+
+def test_itr3_balance_sheet_no_books_case_reaches_json() -> None:
+    """Form item 6 (a)-(d), the "no account case" -- used when regular
+    books of account are not maintained -- was never emitted at all,
+    regardless of data source. A filer who marks noBooksOfAccounts must
+    get a real NoBooksOfAccBS block."""
+    draft = _draft_with_business()
+    draft.itr3BalanceSheet.noBooksOfAccounts = True
+    draft.itr3BalanceSheet.noBooksSundryDebtors = Decimal("40000")
+    draft.itr3BalanceSheet.noBooksSundryCreditors = Decimal("25000")
+    draft.itr3BalanceSheet.noBooksStockInTrade = Decimal("60000")
+    draft.itr3BalanceSheet.noBooksCashBalance = Decimal("8000")
+
+    typed_input, _breakdown = draft_to_itr3_input(draft)
+    assert typed_input.balance_sheet.official.no_books is not None
+    assert typed_input.balance_sheet.official.no_books.sundry_debtors == Decimal("40000")
+
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    result = compute_itr3(typed_input)
+    document = build_itr3_json(result, typed_input)
+    parta_bs = document["ITR"]["ITR3"]["PARTA_BS"]
+    assert parta_bs["NoBooksOfAccBS"] == {
+        "TotSundryDbtAmt": 40000, "TotSundryCrdAmt": 25000,
+        "TotStkInTradAmt": 60000, "CashBalAmt": 8000,
+    }
+
+    _validate_against_schema_definition(parta_bs, "PARTA_BS")
+
+
 def test_itr3_nature_of_business_trade_name_reaches_json() -> None:
     """Schedule 4 (Nature of Business or Profession): the "Trade name of
     the proprietorship, if any" column was silently dropped end-to-end

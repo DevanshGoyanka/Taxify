@@ -752,41 +752,66 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
 # ============================================================================
 
 def _parta_bs(typed_input: ITR3Input | None = None) -> dict:
-    """Build PARTA_BS from explicit typed official field groups."""
+    """Build PARTA_BS from explicit typed official field groups.
+
+    Every FundSrc/FundApply sub-block the official schema marks `required`
+    (nearly all of them, each with its own `default: 0`) must always be
+    present -- unlike a genuinely optional disclosure field, an absent
+    required block here is a schema-validation failure, not a legitimate
+    omission. `draft_to_itr3_input._balance_sheet()` is the single place
+    that guarantees `typed_input.balance_sheet.official` is always
+    populated (both its workspace and legacy-fallback paths build a
+    complete `BSOfficial`); this function trusts that and fails closed if
+    a caller ever bypasses it.
+    """
     if typed_input is None or typed_input.balance_sheet is None:
         raise ValueError("ITR3Input.balance_sheet is required for PARTA_BS generation")
     source = typed_input.balance_sheet
     if source.official is None:
-        return _official_integer_tree({
-            "FundSrc": {"PropFund": {"TotPropFund": source.proprietors_fund}, "TotFundSrc": source.total_liabilities},
-            "FundApply": {"FixedAsset": {"TotFixedAsset": source.fixed_assets}, "CurrAssetLoanAdv": {"TotCurrAssetLoanAdv": source.current_assets}, "TotFundApply": source.total_assets},
-        })
+        raise ValueError(
+            "ITR3Input.balance_sheet.official is required for PARTA_BS generation -- "
+            "draft_to_itr3_input._balance_sheet() must always populate it."
+        )
     official = source.official.model_dump(by_alias=True, exclude_none=True)
+    secured_total = official["SecrLoan"]["TotSecrLoan"]
+    unsecured_total = official["UnsecrLoan"]["TotUnSecrLoan"]
     fund_src = {
         "PropFund": official.pop("PropFund"),
         "LoanFunds": {
             "SecrLoan": official.pop("SecrLoan"),
             "UnsecrLoan": official.pop("UnsecrLoan"),
-            "TotLoanFund": official.pop("TotLoanFund", 0),
+            # Schema-required, no typed source field of its own (it's a
+            # pure derived sum of the two totals above) -- previously
+            # always hardcoded to 0 via a dict.pop() default that could
+            # never actually find a "TotLoanFund" key.
+            "TotLoanFund": secured_total + unsecured_total,
         },
         "DeferredTax": official.pop("DeferredTax"),
         "Advances": official.pop("Advances"),
         "TotFundSrc": official.pop("TotFundSrc"),
     }
-    fund_apply = {
+    fund_apply: dict[str, Any] = {
         "FixedAsset": official.pop("FixedAsset"),
+        "Investments": official.pop("Investments"),
         "CurrAssetLoanAdv": {
             "CurrAsset": official.pop("CurrAsset"),
+            "LoanAdv": official.pop("LoanAdv"),
             "CurrLiabilitiesProv": {
                 "CurrLiabilities": official.pop("CurrLiabilities"),
                 "Provisions": official.pop("Provisions"),
                 "TotCurrLiabilitiesProvision": source.current_liabilities,
             },
             "TotCurrAssetLoanAdv": source.current_assets,
+            "NetCurrAsset": official.pop("NetCurrAsset"),
         },
+        "MiscAdjust": official.pop("MiscAdjust"),
         "TotFundApply": source.total_assets,
     }
-    return _official_integer_tree({"FundSrc": fund_src, "FundApply": fund_apply})
+    result = {"FundSrc": fund_src, "FundApply": fund_apply}
+    no_books = official.pop("NoBooksOfAccBS", None)
+    if no_books:
+        result["NoBooksOfAccBS"] = no_books
+    return _official_integer_tree(result)
 # ============================================================================
 # PARTA_PL — Profit & Loss (REQUIRED)
 # ============================================================================
