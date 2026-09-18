@@ -617,7 +617,24 @@ def compute(input_data: ITR3Input) -> ITR3Result:
     exempt_54b = _claim_total(_claim_eligible_txs, "54B")
     exempt_54ec = _claim_total(_claim_eligible_txs, "54EC")
     exempt_54f = _claim_total(_claim_eligible_txs, "54F")
-    exemptions = compute_exemptions(exempt_54, exempt_54b, exempt_54ec, exempt_54f)
+    # Cross-form issue #13 (tracker): section 115F, unlike 54/54B/54EC/54F,
+    # has no competing "other assets" mechanism at all (`other_asset_gain()`'s
+    # own `other_assets_exemption_section` Literal structurally excludes
+    # "115F") -- so it's safe to sum canonical claims over ALL transactions,
+    # not just the land/building-and-112A/111A subset above. Deliberately
+    # does NOT also add `cg_nri_115f_deduction` (item B7's own bare,
+    # off-form-computed aggregate) here: `exemptions.total_exemption` is
+    # consumed a second time by `post_loss_cg_baskets()` (the function that
+    # actually drives Schedule SI's LTCG dispatch), and the B7 deduction is
+    # ALREADY netted directly into `income_125per_other` via `nri_ltcg_115f`
+    # above -- adding it to the exemption pool too would double-subtract it
+    # from the actually-taxed amount (confirmed by a regression:
+    # `test_nri_115f_net_sale_value_taxed_at_section_112` caught this exact
+    # double-count on first attempt). The B7 amount is instead added
+    # directly to `TotDeductClaim`'s DISCLOSED total, at the builder layer
+    # only (`itd/itr3.py`), bypassing `exemptions` entirely.
+    exempt_115f = _claim_total(input_data.cg_transactions or [], "115F")
+    exemptions = compute_exemptions(exempt_54, exempt_54b, exempt_54ec, exempt_54f, exempt_115f)
     # Cross-form issue #10 (tracker): 54D/54G/54GA have no dedicated
     # ExemptionResult field (compute_exemptions() is shared with ITR-1/2/4
     # and deliberately left untouched here) -- folded directly into the

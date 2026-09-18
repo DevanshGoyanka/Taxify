@@ -2474,16 +2474,30 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         "TotalAmtTaxUsDTAALtcg": _to_rupees(ltcg_dtaa_chargeable), "TotalLTCG": _to_rupees(total_ltcg),
     }
     # TotDeductClaim -- the calculator's own authoritative exemption total
-    # (`compute_exemptions()`'s 54/54B/54EC/54F/115F sum), not re-summed
-    # from the disclosure rows -- matching ITR-2's own established builder
-    # exactly (`itd/itr2.py`'s `total_exempt`), since 115F has no
-    # per-transaction detail row to sum in the first place (see
-    # `_map_cg_nri_proviso_48`'s own docstring: 115F is a bare aggregate
-    # figure, not per-transaction).
+    # (`compute_exemptions()`'s 54/54B/54EC/54F/115F sum, cross-form issue
+    # #13 fixed 2026-09-19: previously omitted any canonical per-transaction
+    # 115F claim entirely), not re-summed from the disclosure rows --
+    # matching ITR-2's own established builder exactly (`itd/itr2.py`'s
+    # `total_exempt`). Item B7's own bare, off-form-computed 115F deduction
+    # is added here directly, at the disclosure layer only -- it must NOT
+    # flow through the calculator's `exemptions.total_exemption` (consumed
+    # a second time by `post_loss_cg_baskets()` to compute the actual taxed
+    # LTCG), since it's already netted directly into `income_125per_other`;
+    # adding it there too would double-subtract it from the real tax
+    # (confirmed by a regression, `test_nri_115f_net_sale_value_taxed_at_
+    # section_112`, which caught this exact double-count on first attempt).
+    # `DeducClaimDtlsUs115F` (below) discloses only genuine canonical
+    # per-transaction claims -- the B7 bare aggregate has no transfer/
+    # investment date data anywhere in this codebase to back a per-claim
+    # detail row, so it correctly stays represented in the total only, not
+    # fabricated into a detail row (same "omit rather than fabricate"
+    # principle used throughout this builder).
     cg_exemptions = getattr(cg_result, "exemptions", None)
-    tot_deduct_claim = getattr(cg_exemptions, "total_exemption", zero) if cg_exemptions else zero
+    tot_deduct_claim = (
+        getattr(cg_exemptions, "total_exemption", zero) if cg_exemptions else zero
+    ) + typed_input.cg_nri_115f_deduction
     all_cg_transactions = typed_input.cg_transactions or []
-    return {"ShortTermCapGainFor23": stcg_block, "LongTermCapGain23": ltcg_block, "DeducClaimInfo": {"DeducClaimDtlsUs115F": [], "DeducClaimDtlsUs54": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54"), "DeducClaimDtlsUs54B": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54B"), "DeducClaimDtlsUs54D": _land_building_54dga_rows(all_cg_transactions, "deduction_us54d", use_acquisition_date=True), "DeducClaimDtlsUs54EC": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54EC"), "DeducClaimDtlsUs54F": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54F"), "DeducClaimDtlsUs54G": _land_building_54dga_rows(all_cg_transactions, "deduction_us54g", use_acquisition_date=False), "DeducClaimDtlsUs54GA": _land_building_54dga_rows(all_cg_transactions, "deduction_us54ga", use_acquisition_date=False), "TotDeductClaim": _to_rupees(tot_deduct_claim)}, "CurrYrLosses": current_loss_rows, "IncmFromVDATrnsf": _to_rupees(vda_income), "AccruOrRecOfCG": {"ShortTermUnder20Per": _date_range_from_values(buckets["stcg20"]), "ShortTermUnder30Per": _date_range_from_values(buckets["stcg30"]), "ShortTermUnderAppRate": _date_range_from_values(buckets["stcg_app"]), "ShortTermUnderDTAARate": {"DateRange": _DR_RANGE}, "LongTermUnder12_5Per": _date_range_from_values(buckets["ltcg125"]), "LongTermUnderDTAARate": {"DateRange": _DR_RANGE}, "VDATrnsfGainsUnder30Per": _date_range_from_values(buckets["vda"])}, "SumOfCGIncm": _to_rupees(total_cg), "TotScheduleCGFor23": _to_rupees(total_cg)}
+    return {"ShortTermCapGainFor23": stcg_block, "LongTermCapGain23": ltcg_block, "DeducClaimInfo": {"DeducClaimDtlsUs115F": _itr2_deduction_claim_detail_rows(all_cg_transactions, "115F"), "DeducClaimDtlsUs54": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54"), "DeducClaimDtlsUs54B": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54B"), "DeducClaimDtlsUs54D": _land_building_54dga_rows(all_cg_transactions, "deduction_us54d", use_acquisition_date=True), "DeducClaimDtlsUs54EC": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54EC"), "DeducClaimDtlsUs54F": _itr2_deduction_claim_detail_rows(all_cg_transactions, "54F"), "DeducClaimDtlsUs54G": _land_building_54dga_rows(all_cg_transactions, "deduction_us54g", use_acquisition_date=False), "DeducClaimDtlsUs54GA": _land_building_54dga_rows(all_cg_transactions, "deduction_us54ga", use_acquisition_date=False), "TotDeductClaim": _to_rupees(tot_deduct_claim)}, "CurrYrLosses": current_loss_rows, "IncmFromVDATrnsf": _to_rupees(vda_income), "AccruOrRecOfCG": {"ShortTermUnder20Per": _date_range_from_values(buckets["stcg20"]), "ShortTermUnder30Per": _date_range_from_values(buckets["stcg30"]), "ShortTermUnderAppRate": _date_range_from_values(buckets["stcg_app"]), "ShortTermUnderDTAARate": {"DateRange": _DR_RANGE}, "LongTermUnder12_5Per": _date_range_from_values(buckets["ltcg125"]), "LongTermUnderDTAARate": {"DateRange": _DR_RANGE}, "VDATrnsfGainsUnder30Per": _date_range_from_values(buckets["vda"])}, "SumOfCGIncm": _to_rupees(total_cg), "TotScheduleCGFor23": _to_rupees(total_cg)}
 
 
 def _schedule_ei(typed_input: ITR3Input | None) -> dict[str, Any] | None:

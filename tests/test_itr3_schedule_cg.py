@@ -60,6 +60,7 @@ from app.engine.itd.itr3_schema import get_itr3_schema_validator
 from app.engine.draft_to_itr3_input import draft_to_itr3_input, _map_slump_sale
 from app.engine.calculators.itr3 import compute as compute_itr3
 from app.engine.itd.itr3 import build_itr3_json, _schedule_cg_for23_typed, _slump_sale_block
+from app.schemas.itr2 import CapitalGainExemptionClaim, CGTransaction, CGAssetType
 from app.schemas.itr3 import ITR3SlumpSaleRow
 from app.schemas.return_draft import PassThroughIncomeEntry
 
@@ -512,6 +513,47 @@ def test_pti_stcg_applicable_rate_disclosed_under_app_rate_not_flat_30() -> None
     assert stcg["PassThrIncNatureSTCG20Per"] == 40000
     assert stcg["PassThrIncNatureSTCG30Per"] == 0
     assert stcg["PassThrIncNatureSTCGAppRate"] == 60000
+    errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_115f_canonical_claim_and_b7_scalar_both_reach_tot_deduct_claim() -> None:
+    """Cross-form issue #13 (tracker), fixed 2026-09-19: TotDeductClaim
+    previously omitted the section 115F deduction entirely, from both its
+    possible sources -- a canonical per-transaction `CGTransaction.exemptions`
+    claim, and item B7's own bare, off-form-computed aggregate figure
+    (`cg_nri_115f_sale_value`/`_deduction`). Both are additive, not
+    overlapping (different data sources), and disclosure-only -- the B7
+    deduction already correctly reduces the actual taxed LTCG regardless.
+    `DeducClaimDtlsUs115F` should now carry the canonical claim's own
+    detail row (real transfer/investment dates exist for it), but NOT a
+    row for the B7 aggregate (which has no per-transaction date data
+    anywhere in this codebase to back one)."""
+    from datetime import date as _dt
+    tx = CGTransaction(
+        asset_type=CGAssetType.LISTED_EQUITY_112A,
+        full_consideration=Decimal("2000000"), cost_of_acquisition=Decimal("500000"),
+        fair_market_value_jan2018=Decimal("500000"),
+        date_of_acquisition=_dt(2015, 1, 1), date_of_transfer=_dt(2026, 1, 1),
+        exemptions=[CapitalGainExemptionClaim(
+            section="115F", transfer_date=_dt(2026, 1, 1), eligible_gain=Decimal("400000"),
+            investment_amount=Decimal("400000"), investment_date=_dt(2026, 2, 1),
+        )],
+    )
+    draft = _minimal_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    typed_input.cg_transactions = [tx]
+    typed_input.cg_nri_115f_sale_value = Decimal("900000")
+    typed_input.cg_nri_115f_deduction = Decimal("300000")
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    cg = document["ITR"]["ITR3"]["ScheduleCGFor23"]
+    info = cg["DeducClaimInfo"]
+    # 400000 (canonical claim) + 300000 (B7 scalar) = 700000.
+    assert info["TotDeductClaim"] == 700000
+    assert info["DeducClaimDtlsUs115F"] == [{
+        "DateofTransfer": "2026-01-01", "AmtInvested": 400000,
+        "DateofInvestment": "2026-02-01", "AmtDeducted": 400000,
+    }]
     errors = list(_schedule_validator("ScheduleCGFor23").iter_errors(cg))
     assert not errors, "\n".join(e.message for e in errors)
 

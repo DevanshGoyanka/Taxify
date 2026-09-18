@@ -631,6 +631,22 @@ def compute(input_data: ITR2Input) -> ITR2Result:
         compute_vda as _compute_vda_income,
     )
     cg_result = _compute_cg_schedule(input_data.cg_transactions, is_resident=is_resident_or_nor)
+    # Cross-form issue #13 (ITR-3 tracker): `_compute_cg_schedule()`'s own
+    # `section_115f=_claim_total(transactions, "115F")` already picks up a
+    # canonical per-transaction 115F claim into `exemptions.total_exemption`
+    # -- correct, since that exemption isn't applied anywhere else. But
+    # `cg_nri_115f_deduction` (item B7's own bare, off-form-computed
+    # aggregate figure) must NOT ALSO be added here: `exemptions.total_
+    # exemption` is consumed a second time by `post_loss_cg_baskets()`
+    # (the function that actually drives Schedule SI's LTCG dispatch), and
+    # the B7 deduction is ALREADY netted directly into `income_125per_other`
+    # via `nri_ltcg_115f` below -- adding it to the exemption pool too would
+    # double-subtract it from the actually-taxed amount (confirmed by a
+    # regression: `test_nri_115f_net_sale_value_taxed_at_section_112`
+    # caught this exact double-count on first attempt). The B7 amount is
+    # instead added directly to `TotDeductClaim`'s DISCLOSED total, at the
+    # builder layer only (`itd/itr2.py`/`itd/itr3.py`), bypassing
+    # `exemptions` entirely -- see those builders' own comments.
 
     # Merge explicit 112A scrips (Schedule 112A Part-A3, plus any FII/FPI
     # Schedule-115AD-proviso scrips -- both taxed identically for 112A

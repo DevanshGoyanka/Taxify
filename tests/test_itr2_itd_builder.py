@@ -1854,6 +1854,26 @@ def test_per_transaction_exemption_claims_reduce_own_row_and_populate_detail_arr
     assert result.schedules["cg"].total_capital_gains == Decimal("2300000")
 
 
+def test_b7_115f_scalar_deduction_reaches_tot_deduct_claim() -> None:
+    """Cross-form issue #13 (ITR-3 tracker), fixed 2026-09-19: item B7's own
+    bare, off-form-computed section 115F deduction (cg_nri_115f_sale_value
+    - cg_nri_115f_deduction) already correctly reduced the actual taxed
+    LTCG, but was never added to DeducClaimInfo.TotDeductClaim -- Schedule
+    CG's own Table D grand total silently understated itself by this
+    amount whenever a genuine B7 claim existed."""
+    input_data = _input(
+        cg_nri_115f_sale_value=Decimal("900000"),
+        cg_nri_115f_deduction=Decimal("300000"),
+    )
+    document = build_itr2_json(compute(input_data), input_data)
+    _assert_schema_valid(document)
+    cg = document["ITR"]["ITR2"]["ScheduleCGFor23"]
+    assert cg["DeducClaimInfo"]["TotDeductClaim"] == 300000
+    assert cg["LongTermCapGain23"]["NRISaleofForeignAsset"] == {
+        "SaleonSpecAsset": 900000, "DednSpecAssetus115": 300000, "BalonSpeciAsset": 600000,
+    }
+
+
 def test_generic_other_assets_bucket_maps_jewellery_and_bonds() -> None:
     """Jewellery/bonds/depreciable-asset/etc. transactions -- previously
     always emitted as a zero placeholder regardless of real data -- now

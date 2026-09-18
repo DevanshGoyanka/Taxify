@@ -2256,7 +2256,15 @@ def _schedule_cg(input_data: ITR2Input, result: ITR2Result) -> Optional[dict[str
             "DeducClaimDtlsUs54B": _deduction_claim_detail_rows(input_data.cg_transactions, "54B"),
             "DeducClaimDtlsUs54EC": _deduction_claim_detail_rows(input_data.cg_transactions, "54EC"),
             "DeducClaimDtlsUs54F": _deduction_claim_detail_rows(input_data.cg_transactions, "54F"),
-            "TotDeductClaim": _to_rupees(total_exempt),
+            # Cross-form issue #13 (tracker): item B7's own bare,
+            # off-form-computed section 115F deduction is added here, at the
+            # disclosure layer only -- it must NOT flow through the
+            # calculator's `exemptions.total_exemption` (which
+            # `post_loss_cg_baskets()` also consumes to compute the actual
+            # taxed LTCG), since it's already netted directly into
+            # `income_125per_other`; adding it there too would
+            # double-subtract it from the real tax.
+            "TotDeductClaim": _to_rupees(total_exempt + input_data.cg_nri_115f_deduction),
         },
         "CurrYrLosses": _cg_loss_setoff_table(result, input_data),
         "IncmFromVDATrnsf": vda_inc,
