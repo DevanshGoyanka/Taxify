@@ -9,7 +9,8 @@ from decimal import Decimal
 from typing import Any
 
 from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input, _to_date
-from app.schemas.itr3 import AuditInfo, BalanceSheet, BSOfficial, BSProprietorsFund, BSReserves, BSLoanGroup, BSUnsecuredLoanGroup, BSAdvances, BSFixedAsset, BSCurrentAssets, BSInventory, BSCashBank, BSCurrentLiabilities, BSProvisions, BSInvestments, BSLongTermInv, BSTradeInv, BSLoanAdvances, BSMiscAdjust, BSNoBooks, BSRupeeLoan, BusinessIncome, ITR3BusinessAccounts, ITR3Input, ITR3ScheduleSEmployer, ITR3ScheduleHPProperty, ManufacturingAccount, MfgOpeningInventory, MfgClosingStock, NatureOfBusiness, ProfitAndLoss, PLPartA, PLPLPartACreditsToPL, PLPLPartATaxProvAppr, PLPLPartANoBooksOfAccPL, PLPLPartADebitsToPL, PLPLPLPartADebitsToPLInterestExpdrtDtls, PLPLPLPartACreditsToPLOthIncome, TradingAccount, TradingOtherRevenueEntry, TradingOtherIncomeEntry, TradingExciseCustomsVAT, TradingDutyTaxPay, TradingDutyTaxPayExciseCustomsVAT, ITR3PartAOI, ITR3PartAQD, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3DeductionDetails, ITR3DeductionDonation, ITR3DeductionLoan, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA, ITR3Schedule80D, ITR3Schedule80DCategory, ITR3Schedule80DHealth, ITR3Schedule80DInsurance, ITR3Schedule80DD, ITR3Schedule80U
+from app.schemas.itr3 import AuditInfo, BalanceSheet, BSOfficial, BSProprietorsFund, BSReserves, BSLoanGroup, BSUnsecuredLoanGroup, BSAdvances, BSFixedAsset, BSCurrentAssets, BSInventory, BSCashBank, BSCurrentLiabilities, BSProvisions, BSInvestments, BSLongTermInv, BSTradeInv, BSLoanAdvances, BSMiscAdjust, BSNoBooks, BSRupeeLoan, BusinessIncome, ITR3BusinessAccounts, ITR3Input, ITR3ScheduleSEmployer, ITR3ScheduleHPProperty, ManufacturingAccount, MfgOpeningInventory, MfgClosingStock, NatureOfBusiness, ProfitAndLoss, PLPartA, PLPLPartACreditsToPL, PLPLPartATaxProvAppr, PLPLPartANoBooksOfAccPL, PLPLPartADebitsToPL, PLPLPLPartADebitsToPLInterestExpdrtDtls, PLPLPLPartACreditsToPLOthIncome, TradingAccount, TradingOtherRevenueEntry, TradingOtherIncomeEntry, TradingExciseCustomsVAT, TradingDutyTaxPay, TradingDutyTaxPayExciseCustomsVAT, ITR3PartAOI, ITR3PartAQD, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3DeductionDetails, ITR3DeductionDonation, ITR3DeductionLoan, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA, ITR3Schedule80D, ITR3Schedule80DCategory, ITR3Schedule80DHealth, ITR3Schedule80DInsurance, ITR3Schedule80DD, ITR3Schedule80U, \
+    ITR3DepreciationSchedules, ScheduleDPM, ScheduleDOA, ScheduleDEP, ScheduleDCG
 from app.schemas.itr2 import ResidentialStatus as ITR3ResidentialStatus, ReturnFileSection
 from app.engine.draft_to_itr2_input import _map_112a_scrips, _map_immovable_gains, _map_equity_stt_stcg, _map_other_assets, _map_nri_fii_securities, _map_nri_112_115_securities, _map_buyback_losses, _map_vda_transactions, _map_fsi_entries, _map_tr1_entries, _map_foreign_assets, _map_asset_liability, _map_schedule_5a, _map_esop_deferrals
 from app.schemas.itr2 import CG112AScrip, CGTransaction, CGAssetType, ScheduleSIEntry, VDATransaction, SPIEntry, PTIEntry
@@ -527,6 +528,166 @@ def _profit_and_loss(draft: ReturnDraft) -> ProfitAndLoss | None:
     )
 
 
+_ZERO = Decimal("0")
+
+
+def _dpm_rate_detail(raw: Any) -> dict[str, Any] | None:
+    """Return one Schedule DPM/DOA rate block's DepreciationDetail dict if
+    it carries any real (nonzero) taxpayer-entered value, else None.
+
+    The frontend's ITR3BusinessAuxiliaryManager (the actual, working editor
+    for this schedule) recomputes and re-saves EVERY rate block's derived
+    fields on every change, unconditionally -- including rate blocks the
+    taxpayer never touched, which end up as a fully-populated all-zero
+    dict rather than being absent. Presence alone therefore cannot signal
+    "this block is genuinely in use"; only a real nonzero figure can.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+    detail = raw.get("DepreciationDetail")
+    if not isinstance(detail, Mapping):
+        return None
+    if not any(_decimal_value(v) != _ZERO for v in detail.values()):
+        return None
+    return dict(detail)
+
+
+def _depreciation_schedules(draft: ReturnDraft) -> ITR3DepreciationSchedules | None:
+    """Map the real, taxpayer-entered Schedule DPM/DOA/DEP/DCG data.
+
+    ``draft.itr3BusinessWorkspace.depreciationSchedules`` (the typed field
+    this schedule used to read exclusively) is never populated by any
+    frontend code -- a pure dead end. The actual, working editor
+    (``ITR3BusinessAuxiliaryManager.tsx``) writes into
+    ``draft.itr3BusinessWorkspace.auxiliary["ScheduleDPM"/"ScheduleDOA"]``
+    instead, keyed by the exact official JSON field names, with its own
+    client-side ``recompute()`` already deriving every statutory total
+    (FullRateDeprAmt, TotalDepreciation, NetAggregateDepreciation,
+    CapGainUs50, WDVLastDay, ...) from the taxpayer's raw block facts --
+    this is a genuine, already-working depreciation engine, just
+    implemented in the frontend rather than the backend.
+
+    Schedule DEP/DCG's own summary figures are NOT computed by that
+    frontend code at all (their fields are marked read-only there with
+    nothing ever writing to them), so both are derived here from the
+    mapped DPM/DOA block totals, matching the official form's own
+    item-by-item cross-references exactly: Schedule DEP item 1a = Schedule
+    DPM item 17(i) (NetAggregateDepreciation of the 15% block); Schedule
+    DCG item 1a = Schedule DPM item 20(i) (CapGainUs50 of the same block);
+    and so on for every rate across both plant/machinery and the four DOA
+    asset categories.
+    """
+    auxiliary = draft.itr3BusinessWorkspace.auxiliary
+    dpm_raw = auxiliary.get("ScheduleDPM") if isinstance(auxiliary, Mapping) else None
+    doa_raw = auxiliary.get("ScheduleDOA") if isinstance(auxiliary, Mapping) else None
+    dpm_pm = dpm_raw.get("PlantMachinery") if isinstance(dpm_raw, Mapping) else None
+
+    dpm_rates: dict[str, Any] = {}
+    for rate in ("Rate15", "Rate30", "Rate40", "Rate45"):
+        detail = _dpm_rate_detail(dpm_pm.get(rate) if isinstance(dpm_pm, Mapping) else None)
+        if detail is not None:
+            dpm_rates[rate] = {"DepreciationDetail": detail}
+    schedule_dpm = ScheduleDPM.model_validate({"PlantMachinery": dpm_rates}) if dpm_rates else None
+
+    doa_land_raw = doa_raw.get("Land") if isinstance(doa_raw, Mapping) else None
+    land_detail = doa_land_raw.get("DepreciationDetail") if isinstance(doa_land_raw, Mapping) else None
+    land_used = isinstance(land_detail, Mapping) and any(_decimal_value(v) != _ZERO for v in land_detail.values())
+
+    doa_building_raw = doa_raw.get("Building") if isinstance(doa_raw, Mapping) else None
+    building_rates: dict[str, Any] = {}
+    for rate in ("Rate5", "Rate10", "Rate40"):
+        detail = _dpm_rate_detail(doa_building_raw.get(rate) if isinstance(doa_building_raw, Mapping) else None)
+        if detail is not None:
+            building_rates[rate] = {"DepreciationDetail": detail}
+
+    def _single_doa_block(schedule_key: str, rate_key: str) -> dict[str, Any] | None:
+        source = doa_raw.get(schedule_key) if isinstance(doa_raw, Mapping) else None
+        detail = _dpm_rate_detail(source.get(rate_key) if isinstance(source, Mapping) else None)
+        return {rate_key: {"DepreciationDetail": detail}} if detail is not None else None
+
+    doa_fields: dict[str, Any] = {}
+    if land_used:
+        doa_fields["Land"] = {"DepreciationDetail": dict(land_detail)}
+    if building_rates:
+        doa_fields["Building"] = building_rates
+    furniture = _single_doa_block("FurnitureFittings", "Rate10")
+    if furniture:
+        doa_fields["FurnitureFittings"] = furniture
+    intangible = _single_doa_block("IntangibleAssets", "Rate25")
+    if intangible:
+        doa_fields["IntangibleAssets"] = intangible
+    ships = _single_doa_block("Ships", "Rate20")
+    if ships:
+        doa_fields["Ships"] = ships
+    schedule_doa = ScheduleDOA.model_validate(doa_fields) if doa_fields else None
+
+    if schedule_dpm is None and schedule_doa is None:
+        return None
+
+    pm = schedule_dpm.PlantMachinery if schedule_dpm is not None else None
+    dep_15 = pm.Rate15.DepreciationDetail.NetAggregateDepreciation if pm and pm.Rate15 else _ZERO
+    cg_15 = pm.Rate15.DepreciationDetail.CapGainUs50 if pm and pm.Rate15 else _ZERO
+    dep_30 = pm.Rate30.DepreciationDetail.NetAggregateDepreciation if pm and pm.Rate30 else _ZERO
+    cg_30 = pm.Rate30.DepreciationDetail.CapGainUs50 if pm and pm.Rate30 else _ZERO
+    dep_40 = pm.Rate40.DepreciationDetail.NetAggregateDepreciation if pm and pm.Rate40 else _ZERO
+    cg_40 = pm.Rate40.DepreciationDetail.CapGainUs50 if pm and pm.Rate40 else _ZERO
+    dep_45 = pm.Rate45.DepreciationDetail.NetAggregateDepreciation if pm and pm.Rate45 else _ZERO
+    cg_45 = pm.Rate45.DepreciationDetail.CapGainUs50 if pm and pm.Rate45 else _ZERO
+    pm_total_dep = dep_15 + dep_30 + dep_40 + dep_45
+    pm_total_cg = cg_15 + cg_30 + cg_40 + cg_45
+
+    bld = schedule_doa.Building if schedule_doa is not None else None
+    bdep_5 = bld.Rate5.DepreciationDetail.NetAggregateDepreciation if bld and bld.Rate5 else _ZERO
+    bcg_5 = bld.Rate5.DepreciationDetail.CapGainUs50 if bld and bld.Rate5 else _ZERO
+    bdep_10 = bld.Rate10.DepreciationDetail.NetAggregateDepreciation if bld and bld.Rate10 else _ZERO
+    bcg_10 = bld.Rate10.DepreciationDetail.CapGainUs50 if bld and bld.Rate10 else _ZERO
+    bdep_40 = bld.Rate40.DepreciationDetail.NetAggregateDepreciation if bld and bld.Rate40 else _ZERO
+    bcg_40 = bld.Rate40.DepreciationDetail.CapGainUs50 if bld and bld.Rate40 else _ZERO
+    bld_total_dep = bdep_5 + bdep_10 + bdep_40
+    bld_total_cg = bcg_5 + bcg_10 + bcg_40
+
+    furn_rate = schedule_doa.FurnitureFittings.Rate10 if schedule_doa and schedule_doa.FurnitureFittings else None
+    furn_dep = furn_rate.DepreciationDetail.NetAggregateDepreciation if furn_rate else _ZERO
+    furn_cg = furn_rate.DepreciationDetail.CapGainUs50 if furn_rate else _ZERO
+
+    intang_rate = schedule_doa.IntangibleAssets.Rate25 if schedule_doa and schedule_doa.IntangibleAssets else None
+    intang_dep = intang_rate.DepreciationDetail.NetAggregateDepreciation if intang_rate else _ZERO
+    intang_cg = intang_rate.DepreciationDetail.CapGainUs50 if intang_rate else _ZERO
+
+    ships_rate = schedule_doa.Ships.Rate20 if schedule_doa and schedule_doa.Ships else None
+    ships_dep = ships_rate.DepreciationDetail.NetAggregateDepreciation if ships_rate else _ZERO
+    ships_cg = ships_rate.DepreciationDetail.CapGainUs50 if ships_rate else _ZERO
+
+    total_dep = pm_total_dep + bld_total_dep + furn_dep + intang_dep + ships_dep
+    total_cg = pm_total_cg + bld_total_cg + furn_cg + intang_cg + ships_cg
+
+    schedule_dep = ScheduleDEP.model_validate({
+        "SummaryFromDeprSch": {
+            "PlantMachinerySummary": {"DeprBlockTot15Percent": dep_15, "DeprBlockTot30Percent": dep_30, "DeprBlockTot40Percent": dep_40, "DeprBlockTot45Percent": dep_45, "TotPlntMach": pm_total_dep} if pm else None,
+            "BuildingSummary": {"DeprBlockTot5Percent": bdep_5, "DeprBlockTot10Percent": bdep_10, "DeprBlockTot40Percent": bdep_40, "TotBuildng": bld_total_dep} if bld else None,
+            "FurnitureSummary": furn_dep if furn_rate else None,
+            "IntangibleAssetSummary": intang_dep if intang_rate else None,
+            "ShipsSummary": ships_dep if ships_rate else None,
+            "TotalDepreciation": total_dep,
+        }
+    })
+
+    schedule_dcg = ScheduleDCG.model_validate({
+        "SummaryFromDeprSchCG": {
+            "PlantMachinerySummaryCG": {"DeprBlockTot15Percent": cg_15, "DeprBlockTot30Percent": cg_30, "DeprBlockTot40Percent": cg_40, "DeprBlockTot45Percent": cg_45, "TotPlntMach": pm_total_cg} if pm else None,
+            "BuildingSummaryCG": {"DeprBlockTot5Percent": bcg_5, "DeprBlockTot10Percent": bcg_10, "DeprBlockTot40Percent": bcg_40, "TotBuildng": bld_total_cg} if bld else None,
+            "FurnitureSummary": furn_cg if furn_rate else None,
+            "IntangibleAssetSummary": intang_cg if intang_rate else None,
+            "ShipsSummary": ships_cg if ships_rate else None,
+            "TotalDepreciation": total_cg,
+        }
+    })
+
+    return ITR3DepreciationSchedules(
+        schedule_dpm=schedule_dpm, schedule_doa=schedule_doa,
+        schedule_dep=schedule_dep, schedule_dcg=schedule_dcg,
+    )
+
 
 def _business_income(draft: ReturnDraft) -> BusinessIncome:
     """Map canonical business rows and the persisted Schedule BP workspace."""
@@ -766,7 +927,7 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
             ReturnFileSection.ON_TIME_139_1,
         ),
         business_income=_business_income(draft),
-        depreciation_schedules=draft.itr3BusinessWorkspace.depreciationSchedules,
+        depreciation_schedules=draft.itr3BusinessWorkspace.depreciationSchedules or _depreciation_schedules(draft),
         business_accounts=_business_accounts(draft),
         parta_oi=oi,
         parta_qd=qd,
