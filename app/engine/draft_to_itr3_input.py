@@ -10,9 +10,9 @@ from typing import Any
 
 from app.engine.draft_to_itr1_input import DraftMappingError, draft_to_itr1_input, _to_date
 from app.schemas.itr3 import AuditInfo, BalanceSheet, BSOfficial, BSProprietorsFund, BSReserves, BSLoanGroup, BSUnsecuredLoanGroup, BSAdvances, BSFixedAsset, BSCurrentAssets, BSInventory, BSCashBank, BSCurrentLiabilities, BSProvisions, BSInvestments, BSLongTermInv, BSTradeInv, BSLoanAdvances, BSMiscAdjust, BSNoBooks, BSRupeeLoan, BusinessIncome, ITR3BusinessAccounts, ITR3Input, ITR3ScheduleSEmployer, ITR3ScheduleHPProperty, ManufacturingAccount, MfgOpeningInventory, MfgClosingStock, NatureOfBusiness, ProfitAndLoss, PLPartA, PLPLPartACreditsToPL, PLPLPartATaxProvAppr, PLPLPartANoBooksOfAccPL, PLPLPartADebitsToPL, PLPLPLPartADebitsToPLInterestExpdrtDtls, PLPLPLPartACreditsToPLOthIncome, TradingAccount, TradingOtherRevenueEntry, TradingOtherIncomeEntry, TradingExciseCustomsVAT, TradingDutyTaxPay, TradingDutyTaxPayExciseCustomsVAT, ITR3PartAOI, ITR3PartAQD, ScheduleESR, ScheduleGST, ScheduleICDS, ITR3ScheduleTPSA, ITR3DeductionDetails, ITR3DeductionDonation, ITR3DeductionLoan, ITR3Schedule80IA, ITR3Schedule80IB, ITR3Schedule80IC, ITR3Schedule80RA, ITR3Schedule10AA, ITR3Schedule80D, ITR3Schedule80DCategory, ITR3Schedule80DHealth, ITR3Schedule80DInsurance, ITR3Schedule80DD, ITR3Schedule80U, \
-    ITR3DepreciationSchedules, ScheduleDPM, ScheduleDOA, ScheduleDEP, ScheduleDCG
+    ITR3DepreciationSchedules, ScheduleDPM, ScheduleDOA, ScheduleDEP, ScheduleDCG, ITR3SlumpSaleRow
 from app.schemas.itr2 import ResidentialStatus as ITR3ResidentialStatus, ReturnFileSection
-from app.engine.draft_to_itr2_input import _map_112a_scrips, _map_immovable_gains, _map_equity_stt_stcg, _map_other_assets, _map_nri_fii_securities, _map_nri_112_115_securities, _map_buyback_losses, _map_vda_transactions, _map_fsi_entries, _map_tr1_entries, _map_foreign_assets, _map_asset_liability, _map_schedule_5a, _map_esop_deferrals
+from app.engine.draft_to_itr2_input import _map_112a_scrips, _map_immovable_gains, _map_equity_stt_stcg, _map_other_assets, _map_nri_fii_securities, _map_nri_112_115_securities, _map_buyback_losses, _map_cg_nri_proviso_48, _map_vda_transactions, _map_fsi_entries, _map_tr1_entries, _map_foreign_assets, _map_asset_liability, _map_schedule_5a, _map_esop_deferrals
 from app.schemas.itr2 import CG112AScrip, CGTransaction, CGAssetType, ScheduleSIEntry, VDATransaction, SPIEntry, PTIEntry
 from app.schemas.return_draft import ReturnDraft
 from app.engine.validators.itr3.parta_pl import validate_parta_pl_arithmetic
@@ -1011,6 +1011,33 @@ def _business_income(draft: ReturnDraft, schedule_esr: "ScheduleESR | None" = No
     )
 
 
+def _map_slump_sale(draft: ReturnDraft) -> tuple[list[ITR3SlumpSaleRow], list[ITR3SlumpSaleRow]]:
+    """
+    Map Schedule CG items A2 (STCG)/B2 (LTCG) slump-sale rows
+    (``capitalGainsSchedule.stSlumpSale``/``ltSlumpSale``) -- genuinely
+    ITR-3-only (section 50B requires a business/undertaking; confirmed
+    absent from ITR-2's own official form text, unlike every other CG
+    category this codebase has closed so far).
+
+    ``ltSlumpSale`` rows additionally carry ``exemptionAmount`` (Sl. B2d,
+    deduction u/s 54EC/54F); ``stSlumpSale`` has no exemption sub-item on
+    the form at all (confirmed: A2's own formula is "2c = 2aiii - 2b",
+    no "2d"), so that key is simply never read for the STCG rows.
+    """
+    schedule = draft.capitalGainsSchedule
+    def _row(raw: dict) -> ITR3SlumpSaleRow:
+        return ITR3SlumpSaleRow(
+            fmv_11uae_2=_decimal_value(raw.get("fmv11uae2")),
+            fmv_11uae_3=_decimal_value(raw.get("fmv11uae3")),
+            net_worth=_decimal_value(raw.get("netWorth")),
+            exemption_amount=_decimal_value(raw.get("exemptionAmount")),
+        )
+    return (
+        [_row(raw) for raw in schedule.stSlumpSale],
+        [_row(raw) for raw in schedule.ltSlumpSale],
+    )
+
+
 def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
     """Map a canonical draft to ITR3Input without inventing identity data."""
     if draft.form != "ITR-3":
@@ -1076,6 +1103,8 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
         + _map_nri_fii_securities(draft) + _map_nri_112_115_securities(draft)
     )
     cg_buyback_losses = _map_buyback_losses(draft)
+    cg_nri_proviso_48 = _map_cg_nri_proviso_48(draft)
+    cg_slump_sale_stcg, cg_slump_sale_ltcg = _map_slump_sale(draft)
     vda_transactions = _map_vda_transactions(draft)
     fsi_entries = _map_fsi_entries(draft)
     tr1_entries = _map_tr1_entries(draft)
@@ -1162,6 +1191,9 @@ def draft_to_itr3_input(draft: ReturnDraft) -> tuple[ITR3Input, dict[str, Any]]:
         cg_transactions=cg_transactions,
         cg_112a_scrips=cg_scrips,
         **cg_buyback_losses,
+        **cg_nri_proviso_48,
+        cg_slump_sale_stcg=cg_slump_sale_stcg,
+        cg_slump_sale_ltcg=cg_slump_sale_ltcg,
         cg_115ad_scrips=cg_115ad_scrips,
         vda_transactions=vda_transactions,
         spi_entries=[SPIEntry(specified_person_name=row.specifiedPersonName, pan=row.pan or None, relationship=row.relationship, amount_included=row.amountIncluded, head_of_income=row.headOfIncome) for row in draft.clubbedIncome if row.specifiedPersonName and row.relationship],

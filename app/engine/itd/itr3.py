@@ -53,6 +53,8 @@ from app.engine.itd.itr2 import (
     _cg_land_building_row_stcg as _itr2_cg_land_building_row_stcg,
     _cg_land_building_row_ltcg as _itr2_cg_land_building_row_ltcg,
     _deduction_claim_detail_rows as _itr2_deduction_claim_detail_rows,
+    _nri_proviso_48 as _itr2_nri_proviso_48,
+    _nri_foreign_asset as _itr2_nri_foreign_asset,
 )
 from app.engine.itd.cg_shared import (
     build_equity_mf_stt_rows,
@@ -1919,6 +1921,52 @@ def _schedule_vda_typed(typed_input: ITR3Input | None) -> dict | None:
     return {"ScheduleVDADtls": rows, "TotIncBusiness": tot_business, "TotIncCapGain": tot_capital_gain}
 
 
+def _slump_sale_block(rows: list, is_long_term: bool) -> dict[str, Any]:
+    """
+    Aggregate Schedule CG item A2 (STCG)/B2 (LTCG) slump-sale rows
+    (``ITR3SlumpSaleRow``) into the official schema's single summary
+    object -- there is no per-transaction array for this item, matching
+    the form's own single-row layout (items 2a-2c/2a-2e).
+
+    Formula, confirmed against the official ITR-3 form PDF directly:
+        FullConsideration (2a.iii) = sum(higher of 2a.i FMV-11UAE(2) or
+                                          2a.ii FMV-11UAE(3), per row)
+        Balance (2c) = FullConsideration - NetWorthOfDivision (2b)
+        LTCG only: CapgainonAssets (2e) = Balance (2c) - deduction u/s
+                   54EC/54F (2d); STCG has no exemption sub-item at all
+                   (2c IS the final STCG figure, no "2d"/"2e").
+    """
+    fmv2_total = sum((r.fmv_11uae_2 for r in rows), Decimal("0"))
+    fmv3_total = sum((r.fmv_11uae_3 for r in rows), Decimal("0"))
+    net_worth_total = sum((r.net_worth for r in rows), Decimal("0"))
+    full_consideration = sum((max(r.fmv_11uae_2, r.fmv_11uae_3) for r in rows), Decimal("0"))
+    balance = full_consideration - net_worth_total
+    if not is_long_term:
+        return {
+            "FMV11UAEii": _to_rupees(fmv2_total),
+            "FMV11UAEiii": _to_rupees(fmv3_total),
+            "FullConsideration": _to_rupees(full_consideration),
+            "NetWorthOfDivision": _to_rupees(net_worth_total),
+            "CapgainonAssets": _to_rupees(balance),
+        }
+    # The frontend row captures one flat exemption amount with no section
+    # sub-code (54EC vs 54F) -- the per-section breakdown array
+    # (`ExemptionOrDednUs54Dtls`) is schema-optional (only
+    # ``ExemptionGrandTotal`` is required), so it is omitted rather than
+    # guessed at, matching this codebase's established "omit uncertain
+    # optional detail rather than fabricate a classification" discipline.
+    exemption_total = sum((r.exemption_amount for r in rows), Decimal("0"))
+    return {
+        "FMV11UAEii": _to_rupees(fmv2_total),
+        "FMV11UAEiii": _to_rupees(fmv3_total),
+        "FullConsideration": _to_rupees(full_consideration),
+        "NetWorthOfDivision": _to_rupees(net_worth_total),
+        "SlumpBalance": _to_rupees(balance),
+        "ExemptionOrDednUs54": {"ExemptionGrandTotal": _to_rupees(exemption_total)},
+        "CapgainonAssets": _to_rupees(balance - exemption_total),
+    }
+
+
 def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> dict[str, Any]:
     """Serialize typed ITR-3 capital-gains evidence into ScheduleCGFor23.
 
@@ -2090,6 +2138,14 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
         typed_input.cg_buyback_loss_stcg_applicable,
     )
     ltcg_buyback_loss_block = build_ltcg_buyback_loss_block(typed_input.cg_buyback_loss_ltcg)
+    # Schedule CG items A2 (STCG)/B2 (LTCG) -- slump sale of an undertaking
+    # or division (section 50B, genuinely ITR-3-only -- see
+    # `ITR3SlumpSaleRow`'s own docstring). The official schema has no
+    # per-transaction array for this item, only one aggregate block, so
+    # multiple rows (a taxpayer selling more than one division/undertaking
+    # in the year) are summed here.
+    stcg_slump_sale_block = _slump_sale_block(typed_input.cg_slump_sale_stcg, is_long_term=False)
+    ltcg_slump_sale_block = _slump_sale_block(typed_input.cg_slump_sale_ltcg, is_long_term=True)
     # Schedule CG item A3 -- STCG on equity shares/equity-oriented fund
     # units/business trust units, STT paid (s.111A). ITR-3 filers (
     # individuals/HUF with business income) are never FII/FPI, so this is
@@ -2103,11 +2159,11 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
     stcg_block: dict[str, Any] = {
         "SaleofLandBuild": {"SaleofLandBuildDtls": stcg_rows},
         "EquityMFonSTT": equity_111a_rows,
-        "NRITransacSec48Dtl": {"NRItaxSTTPaid": 0, "NRItaxSTTNotPaid": 0},
+        "NRITransacSec48Dtl": {"NRItaxSTTPaid": _to_rupees(typed_input.cg_nri_stcg_stt_paid), "NRItaxSTTNotPaid": _to_rupees(typed_input.cg_nri_stcg_stt_not_paid)},
         "NRISecur115AD": {"FullValueConsdRecvUnqshr": 0, "FairMrktValueUnqshr": 0, "FullValueConsdSec50CA": 0, "FullValueConsdOthUnqshr": 0, "FullConsideration": 0, "DeductSec48": {"AquisitCost": 0, "ImproveCost": 0, "ExpOnTrans": 0, "TotalDedn": 0}, "BalanceCG": 0, "LossSec94of7Or94of8": 0, "CapgainonAssets": 0},
         "SaleOnOtherAssets": stcg_other,
         "UnutilizedStcgFlag": "N", "AmtDeemedStcg": 0, "TotalAmtDeemedStcg": 0,
-        "SlumpSaleInStcg": {"FMV11UAEii": 0, "FMV11UAEiii": 0, "FullConsideration": 0, "NetWorthOfDivision": 0, "CapgainonAssets": 0},
+        "SlumpSaleInStcg": stcg_slump_sale_block,
         "PassThrIncNatureSTCG": pass_stcg, "PassThrIncNatureSTCG20Per": pass_stcg_111a, "PassThrIncNatureSTCG30Per": pass_stcg_other, "PassThrIncNatureSTCGAppRate": 0,
         "TotalAmtNotTaxUsDTAAStcg": 0, "TotalAmtTaxUsDTAAStcg": 0,
         **({"CapitalLossBuyBackShares": stcg_buyback_loss_block} if stcg_buyback_loss_block else {}),
@@ -2116,15 +2172,24 @@ def _schedule_cg_for23_typed(cg_result: Any, typed_input: ITR3Input | None) -> d
     ltcg_block: dict[str, Any] = {
         "SaleofLandBuild": {"SaleofLandBuildDtls": ltcg_rows, "TotalExcessTax": 0, "TotalLTCGImmblPrprty": _to_rupees(sum((a.balance for a in ltcg_assets), zero))},
         "SaleOfEquityShareUs112A": equity_112a,
-        "NRIProvisoSec48": {"LTCGWithoutBenefit": 0, "DeductionUs54F": 0, "BalanceCG": 0}, "NRISaleOfEquityShareUs112A": {"BalanceCG": 0, "DeductionUs54F": 0, "CapgainonAssets": 0}, "NRISaleofForeignAsset": {"SaleonSpecAsset": 0, "DednSpecAssetus115": 0, "BalonSpeciAsset": 0},
+        "NRIProvisoSec48": _itr2_nri_proviso_48(typed_input), "NRISaleOfEquityShareUs112A": {"BalanceCG": 0, "DeductionUs54F": 0, "CapgainonAssets": 0}, "NRISaleofForeignAsset": _itr2_nri_foreign_asset(typed_input),
         **({"NRIOnSec112and115": {"NRIOnSec112and115Dtls": nri_112_115_rows}} if nri_112_115_rows else {}),
         "SaleofAssetNADtls": {"SaleofAssetNA": ltcg_other},
-        "SlumpSaleInLtcgDtls": {"SlumpSaleInLtcg": {"FMV11UAEii": 0, "FMV11UAEiii": 0, "FullConsideration": 0, "NetWorthOfDivision": 0, "SlumpBalance": 0, "ExemptionOrDednUs54": {"ExemptionGrandTotal": 0}, "CapgainonAssets": 0}},
+        "SlumpSaleInLtcgDtls": {"SlumpSaleInLtcg": ltcg_slump_sale_block},
         "UnutilizedLtcgFlag": "N", "AmtDeemedLtcg": 0, "TotalAmtDeemedLtcg": 0, "PassThrIncNatureLTCG": pass_ltcg, "PassThrIncNatureLTCGUs112A12_5Per": pass_ltcg_112a, "PassThrIncNatureLTCG12_5Per": pass_ltcg_other, "TotalAmtNotTaxUsDTAALtcg": 0,
         **({"CapitalLossBuyBackShares": ltcg_buyback_loss_block} if ltcg_buyback_loss_block else {}),
         "TotalAmtTaxUsDTAALtcg": 0, "TotalLTCG": _to_rupees(total_ltcg),
     }
-    return {"ShortTermCapGainFor23": stcg_block, "LongTermCapGain23": ltcg_block, "DeducClaimInfo": {"DeducClaimDtlsUs115F": [], "DeducClaimDtlsUs54": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54"), "DeducClaimDtlsUs54B": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54B"), "DeducClaimDtlsUs54EC": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54EC"), "DeducClaimDtlsUs54F": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54F"), "TotDeductClaim": 0}, "CurrYrLosses": current_loss_rows, "IncmFromVDATrnsf": _to_rupees(vda_income), "AccruOrRecOfCG": {"ShortTermUnder20Per": _date_range_from_values(buckets["stcg20"]), "ShortTermUnder30Per": _date_range_from_values(buckets["stcg30"]), "ShortTermUnderAppRate": _date_range_from_values(buckets["stcg_app"]), "ShortTermUnderDTAARate": {"DateRange": _DR_RANGE}, "LongTermUnder12_5Per": _date_range_from_values(buckets["ltcg125"]), "LongTermUnderDTAARate": {"DateRange": _DR_RANGE}, "VDATrnsfGainsUnder30Per": _date_range_from_values(buckets["vda"])}, "SumOfCGIncm": _to_rupees(total_cg), "TotScheduleCGFor23": _to_rupees(total_cg)}
+    # TotDeductClaim -- the calculator's own authoritative exemption total
+    # (`compute_exemptions()`'s 54/54B/54EC/54F/115F sum), not re-summed
+    # from the disclosure rows -- matching ITR-2's own established builder
+    # exactly (`itd/itr2.py`'s `total_exempt`), since 115F has no
+    # per-transaction detail row to sum in the first place (see
+    # `_map_cg_nri_proviso_48`'s own docstring: 115F is a bare aggregate
+    # figure, not per-transaction).
+    cg_exemptions = getattr(cg_result, "exemptions", None)
+    tot_deduct_claim = getattr(cg_exemptions, "total_exemption", zero) if cg_exemptions else zero
+    return {"ShortTermCapGainFor23": stcg_block, "LongTermCapGain23": ltcg_block, "DeducClaimInfo": {"DeducClaimDtlsUs115F": [], "DeducClaimDtlsUs54": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54"), "DeducClaimDtlsUs54B": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54B"), "DeducClaimDtlsUs54EC": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54EC"), "DeducClaimDtlsUs54F": _itr2_deduction_claim_detail_rows(typed_input.cg_transactions or [], "54F"), "TotDeductClaim": _to_rupees(tot_deduct_claim)}, "CurrYrLosses": current_loss_rows, "IncmFromVDATrnsf": _to_rupees(vda_income), "AccruOrRecOfCG": {"ShortTermUnder20Per": _date_range_from_values(buckets["stcg20"]), "ShortTermUnder30Per": _date_range_from_values(buckets["stcg30"]), "ShortTermUnderAppRate": _date_range_from_values(buckets["stcg_app"]), "ShortTermUnderDTAARate": {"DateRange": _DR_RANGE}, "LongTermUnder12_5Per": _date_range_from_values(buckets["ltcg125"]), "LongTermUnderDTAARate": {"DateRange": _DR_RANGE}, "VDATrnsfGainsUnder30Per": _date_range_from_values(buckets["vda"])}, "SumOfCGIncm": _to_rupees(total_cg), "TotScheduleCGFor23": _to_rupees(total_cg)}
 
 
 def _schedule_ei(typed_input: ITR3Input | None) -> dict[str, Any] | None:
@@ -2655,7 +2720,16 @@ def build_itr3_json(
         "ScheduleS": _schedule_s(result, typed_input),
         "ScheduleHP": _schedule_hp(result, typed_input),
         "ScheduleOS": _schedule_os(result, typed_input),
-        "ScheduleCGFor23": _schedule_cg_for23_typed(cg_data, typed_input) if typed_input is not None else _schedule_cg_for23(cg_data),
+        # `_schedule_cg_for23_typed` itself already raises a clear
+        # ValueError when `typed_input` is None -- the prior code branched
+        # to a same-named-minus-"_typed" fallback function that was never
+        # actually defined anywhere (a real `NameError` waiting to happen
+        # for any legacy caller omitting `typed_input`, confirmed by grep;
+        # `tests/validate_schemas.py`'s own `test_itr3()` -- a manual
+        # schema-validation script, not pytest-collected in normal runs --
+        # does exactly this and would have crashed). Calling the one real
+        # function unconditionally removes the dead branch entirely.
+        "ScheduleCGFor23": _schedule_cg_for23_typed(cg_data, typed_input),
         **({"Schedule112A": _schedule_112a_115ad(typed_input, "112A")} if _schedule_112a_115ad(typed_input, "112A") else {}),
         **({"Schedule115AD": _schedule_112a_115ad(typed_input, "115AD")} if _schedule_112a_115ad(typed_input, "115AD") else {}),
         **({"ScheduleVDA": _schedule_vda_typed(typed_input)} if _schedule_vda_typed(typed_input) else {}),

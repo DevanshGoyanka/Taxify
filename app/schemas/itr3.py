@@ -1860,6 +1860,28 @@ class ITR3ScheduleHPProperty(BaseModel):
     tenant_details: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ITR3SlumpSaleRow(BaseModel):
+    """
+    One Schedule CG slump-sale transaction (Sl. A2 STCG / B2 LTCG,
+    section 50B -- transfer of an undertaking or division as a going
+    concern). Confirmed against the official ITR-3 form PDF (Schedule CG
+    items 2/2): full consideration is the higher of fair market value
+    under Rule 11UAE(2) (FMV of capital assets transferred) or Rule
+    11UAE(3) (FMV of consideration received); the gain is that figure less
+    the undertaking's own net worth per Form 3CEA item 6(e). Multiple rows
+    are aggregated into the schema's single ``SlumpSaleInStcg``/
+    ``SlumpSaleInLtcgDtls.SlumpSaleInLtcg`` object in the ITD builder,
+    since the official schema has no per-transaction array for this item.
+    """
+    fmv_11uae_2: Decimal = Field(default=Decimal("0"), ge=0)
+    fmv_11uae_3: Decimal = Field(default=Decimal("0"), ge=0)
+    net_worth: Decimal = Field(default=Decimal("0"))
+    # LTCG only (Sl. B2d) -- deduction u/s 54EC/54F. The STCG item (A2) has
+    # no exemption sub-item at all, confirmed by the official form text
+    # ("2c Short term capital gains from slump sale (2aiii-2b)" -- no "2d").
+    exemption_amount: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 # ---------------------------------------------------------------------------
 
 class ITR3Input(BaseModel):
@@ -1965,6 +1987,26 @@ class ITR3Input(BaseModel):
     cg_buyback_loss_stcg30: Decimal = Field(default=Decimal("0"), le=0)
     cg_buyback_loss_stcg_applicable: Decimal = Field(default=Decimal("0"), le=0)
     cg_buyback_loss_ltcg: Decimal = Field(default=Decimal("0"), le=0)
+    # Schedule CG items A4 (STCG)/B3-proviso (LTCG)/B8 (115F) -- NRI bare,
+    # off-form-computed rupee figures (no per-transaction breakdown on the
+    # official form itself). Same six fields ITR-2 already carries and
+    # already has a working mapper for (`app/engine/draft_to_itr2_input.py
+    # ::_map_cg_nri_proviso_48`, reused directly for ITR-3 since both forms
+    # read the identical `ReturnDraft.capitalGainsSchedule.stSection48/
+    # ltNriProviso48/ltForeignAssets` fields).
+    cg_nri_stcg_stt_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    cg_nri_stcg_stt_not_paid: Decimal = Field(default=Decimal("0"), ge=0)
+    cg_nri_ltcg_without_indexation: Decimal = Field(default=Decimal("0"), ge=0)
+    cg_nri_ltcg_deduction_54f: Decimal = Field(default=Decimal("0"), ge=0)
+    cg_nri_115f_sale_value: Decimal = Field(default=Decimal("0"), ge=0)
+    cg_nri_115f_deduction: Decimal = Field(default=Decimal("0"), ge=0)
+    # Schedule CG items A2 (STCG)/B2 (LTCG) -- slump sale of an undertaking
+    # or division (section 50B). ITR-2 has no equivalent item at all
+    # (slump sale requires a business, confirmed absent from ITR-2's own
+    # official form text) -- genuinely ITR-3-only, unlike the six NRI
+    # fields above.
+    cg_slump_sale_stcg: List[ITR3SlumpSaleRow] = Field(default_factory=list)
+    cg_slump_sale_ltcg: List[ITR3SlumpSaleRow] = Field(default_factory=list)
 
     # --- Loss Set-Off ---
     bf_losses: Optional[List[BFLossItem]] = Field(default=None)
