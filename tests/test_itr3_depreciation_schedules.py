@@ -8,6 +8,15 @@ the mapper used to read only the never-populated typed field
 ``draft.itr3BusinessWorkspace.depreciationSchedules`` -- a pure frontend
 dead end. Schedule DEP/DCG's own summary figures are derived here from the
 mapped DPM/DOA block totals, since the frontend never computes them either.
+
+A second, independent bug was found while stress-testing this fix with
+more realistic partial input (not every field of a block filled in): the
+frontend only ever writes a block's DERIVED fields once the block already
+exists, never the raw-input fields the taxpayer leaves genuinely blank
+(no additions, no half-rate depreciation this year) -- constructing the
+typed model directly from that subset raised a hard Pydantic
+ValidationError. Every leaf field is now defaulted to 0 when absent,
+matching the official schema's own per-field defaults.
 """
 
 from __future__ import annotations
@@ -76,14 +85,16 @@ def _dpm_rate_block(wdv_first_day: int, additions_gt180: int = 0, cap_gain: int 
 
 
 def _zero_dpm_rate_block() -> dict:
-    """Exactly what the frontend's recompute() writes for an untouched
-    rate block -- every field present, every value 0."""
+    """A block whose every field is explicitly 0 -- distinct from a
+    genuinely untouched block (which the frontend leaves absent
+    entirely, see the realistic-partial-input tests below)."""
     return _dpm_rate_block(0)
 
 
 def test_dpm_rate_detail_omits_all_zero_untouched_blocks() -> None:
-    """The frontend unconditionally zero-fills every rate block on every
-    save; an untouched block must not be mistaken for a real, in-use one."""
+    """An explicitly all-zero rate block (every field present, every value
+    0 -- e.g. a stale block a taxpayer cleared out) must not be mistaken
+    for a real, in-use one."""
     draft = _minimal_draft()
     draft.itr3BusinessWorkspace.auxiliary["ScheduleDPM"] = {
         "PlantMachinery": {
@@ -219,3 +230,89 @@ def test_schedule_dcg_total_depreciation_reaches_capital_gains_computation() -> 
     typed_input, _ = draft_to_itr3_input(draft)
     result = compute_itr3(typed_input)
     assert result.capital_gains_income >= Decimal("25000")
+
+
+def _realistic_partial_block(wdv_first_day: int) -> dict:
+    """What a REAL taxpayer interaction actually produces: only
+    WDVFirstDay plus the frontend's own derived/readonly fields
+    (Total/FullRateDeprAmt/TotalDepreciation/NetAggregateDepreciation/
+    WDVLastDay), with every other raw-input field (additions,
+    realizations, half-rate figures, DepreciationAtFullRate/HalfRate,
+    section-38(2) disallowance, capital gain) genuinely left untouched --
+    absent from the dict entirely, not typed as an explicit 0. The
+    frontend's recompute() only ever assigns the handful of fields it
+    itself derives; it never back-fills the rest."""
+    return {"DepreciationDetail": {
+        "WDVFirstDay": wdv_first_day, "Total": wdv_first_day,
+        "FullRateDeprAmt": wdv_first_day, "TotalDepreciation": 0,
+        "NetAggregateDepreciation": 0, "WDVLastDay": wdv_first_day,
+    }}
+
+
+def test_realistic_partial_block_with_untouched_fields_still_validates() -> None:
+    """Regression: constructing the typed model directly from whatever
+    subset of fields the frontend happened to send raised a hard Pydantic
+    ValidationError for this entirely ordinary case (a block with no
+    additions/realizations/half-rate depreciation this year, correctly
+    left blank rather than typed as "0") -- every required leaf field
+    must default to 0 when genuinely absent, matching the official
+    schema's own per-field default."""
+    draft = _minimal_draft()
+    draft.itr3BusinessWorkspace.auxiliary["ScheduleDPM"] = {
+        "PlantMachinery": {"Rate15": _realistic_partial_block(100000)},
+    }
+    draft.itr3BusinessWorkspace.auxiliary["ScheduleDOA"] = {
+        "Land": {"DepreciationDetail": {"WDVFirstDay": 1000000}},  # WDVLastDay never typed
+        "FurnitureFittings": {"Rate10": _realistic_partial_block(40000)},
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    itr3_doc = document["ITR"]["ITR3"]
+    for name in ("ScheduleDPM", "ScheduleDOA", "ScheduleDEP", "ScheduleDCG"):
+        errors = list(_schedule_validator(name).iter_errors(itr3_doc[name]))
+        assert not errors, f"{name}: " + "\n".join(e.message for e in errors)
+    assert itr3_doc["ScheduleDOA"]["Land"]["DepreciationDetail"]["WDVLastDay"] == 0
+
+
+def test_rate45_special_block_validates_against_official_schema() -> None:
+    """Rate45 (the special 45% block) has a genuinely smaller required-
+    field set than Rate15/30/40 (no half-rate/additional-depreciation
+    provisions at all) -- exercised end-to-end through the real builder,
+    not just the typed-model layer, to prove the smaller shape doesn't
+    silently break schema validation."""
+    draft = _minimal_draft()
+    draft.itr3BusinessWorkspace.auxiliary["ScheduleDPM"] = {
+        "PlantMachinery": {"Rate45": _dpm_rate_block(500000, cap_gain=3000)},
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    itr3_doc = document["ITR"]["ITR3"]
+    errors = list(_schedule_validator("ScheduleDPM").iter_errors(itr3_doc["ScheduleDPM"]))
+    assert not errors, "\n".join(e.message for e in errors)
+    assert itr3_doc["ScheduleDPM"]["PlantMachinery"]["Rate45"]["DepreciationDetail"]["CapGainUs50"] == 3000
+    assert itr3_doc["ScheduleDCG"]["SummaryFromDeprSchCG"]["PlantMachinerySummaryCG"]["DeprBlockTot45Percent"] == 3000
+
+
+def test_all_doa_asset_categories_together_validate_against_official_schema() -> None:
+    """Land + Building + FurnitureFittings + IntangibleAssets + Ships all
+    populated at once, exercised end-to-end through the real builder."""
+    draft = _minimal_draft()
+    draft.itr3BusinessWorkspace.auxiliary["ScheduleDOA"] = {
+        "Land": {"DepreciationDetail": {"WDVFirstDay": 500000, "WDVLastDay": 500000}},
+        "Building": {"Rate10": _dpm_rate_block(200000)},
+        "FurnitureFittings": {"Rate10": _dpm_rate_block(40000)},
+        "IntangibleAssets": {"Rate25": _dpm_rate_block(80000)},
+        "Ships": {"Rate20": _dpm_rate_block(1000000, cap_gain=5000)},
+    }
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    itr3_doc = document["ITR"]["ITR3"]
+    for name in ("ScheduleDOA", "ScheduleDEP", "ScheduleDCG"):
+        errors = list(_schedule_validator(name).iter_errors(itr3_doc[name]))
+        assert not errors, f"{name}: " + "\n".join(e.message for e in errors)
+    doa = itr3_doc["ScheduleDOA"]
+    assert doa["Land"]["DepreciationDetail"]["WDVFirstDay"] == 500000
+    assert doa["FurnitureFittings"]["Rate10"]["DepreciationDetail"]["WDVFirstDay"] == 40000
+    assert doa["IntangibleAssets"]["Rate25"]["DepreciationDetail"]["WDVFirstDay"] == 80000
+    assert doa["Ships"]["Rate20"]["DepreciationDetail"]["CapGainUs50"] == 5000
+    assert itr3_doc["ScheduleDCG"]["SummaryFromDeprSchCG"]["ShipsSummary"] == 5000

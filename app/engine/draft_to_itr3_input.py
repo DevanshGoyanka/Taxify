@@ -531,16 +531,44 @@ def _profit_and_loss(draft: ReturnDraft) -> ProfitAndLoss | None:
 _ZERO = Decimal("0")
 
 
+# Every possible leaf field across the three DepreciationDetail shapes
+# (the 16-21-field DPM/DOA block, and the smaller 11-13-field Rate45
+# block). Passing the full superset to `model_validate()` is safe for
+# either shape: Pydantic silently ignores keys a given model doesn't
+# declare (none of these classes set `extra="forbid"`), so one dict
+# construction serves both without needing to know which shape a given
+# rate block is ahead of time.
+_DEPRECIATION_DETAIL_KEYS = (
+    "WDVFirstDay", "AdjustmentSec115BAC", "Total", "AdditionsGrThan180Days",
+    "RealizationTotalPeriod", "FullRateDeprAmt", "AdditionsLessThan180Days",
+    "RealizationPeriodLessThan180days", "HalfRateDeprAmt", "DepreciationAtFullRate",
+    "DepreciationAtHalfRate", "AddlnDeprOnGT180DayAdditions",
+    "AddlnDeprOnLessThan180DayAdditions", "AddlnDeprOnAssetLessThan180Days",
+    "TotalDepreciation", "DepDisAllowUs38_2", "NetAggregateDepreciation",
+    "ProportionateAggDepreciation", "ExpdrOnTrforSaleAsset", "CapGainUs50", "WDVLastDay",
+)
+
+
 def _dpm_rate_detail(raw: Any) -> dict[str, Any] | None:
     """Return one Schedule DPM/DOA rate block's DepreciationDetail dict if
     it carries any real (nonzero) taxpayer-entered value, else None.
 
-    The frontend's ITR3BusinessAuxiliaryManager (the actual, working editor
-    for this schedule) recomputes and re-saves EVERY rate block's derived
-    fields on every change, unconditionally -- including rate blocks the
-    taxpayer never touched, which end up as a fully-populated all-zero
-    dict rather than being absent. Presence alone therefore cannot signal
-    "this block is genuinely in use"; only a real nonzero figure can.
+    The frontend's ITR3BusinessAuxiliaryManager only ever writes a rate
+    block's DERIVED fields (Total/FullRateDeprAmt/HalfRateDeprAmt/
+    TotalDepreciation/NetAggregateDepreciation/WDVLastDay) once the block
+    already exists (i.e. the taxpayer has typed into at least one of its
+    own raw-input fields) -- an untouched block is simply absent, not
+    zero-filled. But once a block DOES exist, its OTHER required raw-input
+    fields (AdditionsGrThan180Days, RealizationTotalPeriod,
+    DepreciationAtFullRate, ...) are still genuinely optional from the
+    taxpayer's own point of view -- a furniture block with no additions
+    and no half-rate depreciation this year is correctly left blank on
+    those specific inputs, not typed as an explicit "0". Every leaf field
+    here therefore defaults to 0 when missing, matching the official
+    schema's own per-field `"default": 0` -- constructing the model
+    directly from whatever subset the frontend happened to send would
+    raise a hard Pydantic ValidationError (missing required field) for
+    this entirely ordinary, expected input shape.
     """
     if not isinstance(raw, Mapping):
         return None
@@ -549,7 +577,7 @@ def _dpm_rate_detail(raw: Any) -> dict[str, Any] | None:
         return None
     if not any(_decimal_value(v) != _ZERO for v in detail.values()):
         return None
-    return dict(detail)
+    return {key: _decimal_value(detail.get(key)) for key in _DEPRECIATION_DETAIL_KEYS}
 
 
 def _depreciation_schedules(draft: ReturnDraft) -> ITR3DepreciationSchedules | None:
@@ -607,7 +635,13 @@ def _depreciation_schedules(draft: ReturnDraft) -> ITR3DepreciationSchedules | N
 
     doa_fields: dict[str, Any] = {}
     if land_used:
-        doa_fields["Land"] = {"DepreciationDetail": dict(land_detail)}
+        # Land has only WDVFirstDay/WDVLastDay, both required, neither
+        # backed by a readonly/derived field on the frontend -- default
+        # the same way as every other block for the identical reason.
+        doa_fields["Land"] = {"DepreciationDetail": {
+            "WDVFirstDay": _decimal_value(land_detail.get("WDVFirstDay")),
+            "WDVLastDay": _decimal_value(land_detail.get("WDVLastDay")),
+        }}
     if building_rates:
         doa_fields["Building"] = building_rates
     furniture = _single_doa_block("FurnitureFittings", "Rate10")
