@@ -538,6 +538,9 @@ def _business_income(draft: ReturnDraft) -> BusinessIncome:
     if unsupported:
         raise DraftMappingError("ReturnDraft contains unsupported business schemes for the ITR-3 foundation.")
     declared = sum((b.declaredIncome for b in draft.businesses), Decimal("0"))
+    presumptive_44ad = sum((b.declaredIncome for b in draft.businesses if b.scheme == "44AD"), Decimal("0"))
+    presumptive_44ada = sum((b.declaredIncome for b in draft.businesses if b.scheme == "44ADA"), Decimal("0"))
+    presumptive_44ae = sum((b.declaredIncome for b in draft.businesses if b.scheme == "44AE"), Decimal("0"))
     core = draft.itr3BusinessWorkspace.core
     bp = core.get("ITR3ScheduleBP", {}) if isinstance(core, dict) else {}
     regular = bp.get("BusinessIncOthThanSpec", {}) if isinstance(bp, dict) else {}
@@ -545,6 +548,9 @@ def _business_income(draft: ReturnDraft) -> BusinessIncome:
         net_profit_before_tax=_decimal_value(
             regular.get("ProfBfrTaxPL"), declared
         ),
+        presumptive_44ad_income=presumptive_44ad,
+        presumptive_44ada_income=presumptive_44ada,
+        presumptive_44ae_income=presumptive_44ae,
         disallowance_us36=_decimal_value(regular.get("AmtDebPLDisallowUs36")),
         disallowance_us37=_decimal_value(regular.get("AmtDebPLDisallowUs37")),
         disallowance_us40=_decimal_value(regular.get("AmtDebPLDisallowUs40")),
@@ -564,6 +570,11 @@ def _business_income(draft: ReturnDraft) -> BusinessIncome:
         deduction_us32_1_iii=_decimal_value(regular.get("DeductUs32_1_iii")),
         icds_increase=_decimal_value(regular.get("IncProfDecLossAccICDSAdj")),
         icds_decrease=_decimal_value(regular.get("DecProfIncLossAccICDSAdj")),
+        # Item 23 / item 31 -- already accepted by the calculator
+        # (compute_pgbp's own other_additions/other_deductions parameters)
+        # but never actually sourced from anywhere, so always silently 0.
+        other_additions=_decimal_value(regular.get("OthItemDisallowUs28To44DA")),
+        other_deductions=_decimal_value(regular.get("AnyOthAmtAllDeduct")),
     )
 
 

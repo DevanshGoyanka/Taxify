@@ -655,20 +655,51 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
     business = typed_input.business_income if typed_input is not None else None
 
     if pgbp:
-        non_spec = pgbp.non_spec_net_income
+        non_spec_pbt = pgbp.non_spec_profit_before_tax
+        non_spec_signed = pgbp.non_spec_signed
         spec = pgbp.speculative_net_income
         specified = pgbp.specified_net_income
         total_biz = pgbp.total_business_income
         books_depr = pgbp.non_spec_depreciation_books
         it_depr = pgbp.non_spec_depreciation_it
     else:
-        non_spec = spec = specified = total_biz = books_depr = it_depr = z
+        non_spec_pbt = non_spec_signed = spec = specified = total_biz = books_depr = it_depr = z
 
     def amount(name: str) -> Decimal:
         """Read one non-negative typed business adjustment."""
         return getattr(business, name, z) if business is not None else z
 
-    row10 = non_spec + books_depr - it_depr
+    # Item 35 / item 4a's own breakdown -- presumptive income (44AD/44ADA/
+    # 44AE) already included in item 1's raw P&L figure. The 44B-family
+    # non-resident-shipping/aircraft/turnkey sections and 44DA have no
+    # typed source anywhere in this codebase and stay 0 -- not supported,
+    # not merely unmapped.
+    presumptive_ad = amount("presumptive_44ad_income")
+    presumptive_ada = amount("presumptive_44ada_income")
+    presumptive_ae = amount("presumptive_44ae_income")
+    presumptive_total = presumptive_ad + presumptive_ada + presumptive_ae
+
+    # Item 6 = 1 - 2a - 2b - 3(a-g) - 4a - 4b - 5d - 5A. Only item 1 and
+    # item 4a (presumptive income) have a typed source; items 2a/2b are
+    # structurally 0 by this codebase's own architecture (speculative/
+    # specified P&L are tracked as separate fields, never co-mingled into
+    # net_profit_before_tax); items 3/4b/5/5A have no typed source
+    # anywhere (cross-head income/expense reallocation and Rule 7/7A/7B/8
+    # composite-income disclosures are not captured on the draft model at
+    # all) and stay 0, deliberately deferred -- not merely unmapped.
+    row6 = non_spec_pbt - presumptive_total
+    # Item 9 = 7a+...+7g+8a+8b -- no typed source for any of these
+    # (cross-head expense reallocation / exempt-income-related expenses),
+    # deliberately deferred.
+    row9 = z
+    # Item 10 = 6 + 9 (NOT yet adjusted for depreciation -- items 11/12
+    # are a separate step feeding item 13, not item 10). Previously item
+    # 10 and item 13 were both set to the SAME (already depreciation-
+    # adjusted) value, silently double-counting the depreciation
+    # adjustment once row 26's additions were later re-applied on top.
+    row10 = row6 + row9
+    # Item 13 = 10 + 11 - 12iii.
+    row13 = row10 + books_depr - it_depr
     row14 = amount("disallowance_us36")
     row15 = amount("disallowance_us37")
     row16 = amount("disallowance_us40")
@@ -681,11 +712,34 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
         "deemed_income_us72a", "deemed_income_us80hhd", "deemed_income_us80ia",
     )), z)
     row22 = amount("deemed_income_us43ca")
+    row24 = amount("other_additions")
     row25 = amount("icds_increase")
     row27 = amount("deduction_us32_1_iii")
+    row31 = amount("other_deductions")
     row32 = amount("icds_decrease")
-    total_additions = sum((row14, row15, row16, row17, row18, row20, row21, row22, row25), z)
-    total_deductions = row27 + row32
+    # Item 26 = sum(14..25); item 33 = sum(27..32) -- items 19/23 (MSME
+    # interest disallowance, other 28-44DA additions) and 28/29/30 (ESR
+    # excess deduction, section 40/43B now-allowable) have no typed source
+    # wired into this total; each has an exact same-document cross-
+    # reference available on the already-closed Part A-OI (items 17, 8B,
+    # 10i respectively) but is deliberately NOT read here yet, since doing
+    # so would make this disclosure diverge from what the calculator (which
+    # does not read Part A-OI at all) actually used for total_biz/GTI --
+    # wiring them safely needs the calculator itself extended first, a
+    # larger change than this schedule's own disclosure fix.
+    total_additions = sum((row14, row15, row16, row17, row18, row20, row21, row22, row24, row25), z)
+    total_deductions = row27 + row31 + row32
+    # Item 34 = 13 + 26 - 33.
+    row34 = row13 + total_additions - total_deductions
+    # Item 36 = 34 + 35viii. Item 37 (Rule 7/7A/7B/8 adjustment) has no
+    # typed source (no composite-income data captured anywhere) so stays
+    # equal to item 36, matching the form's own "if rule 7A/7B/8 is not
+    # applicable, enter same figure as in 36" instruction.
+    row36 = row34 + presumptive_total
+    # By construction, row36 always equals pgbp.non_spec_signed exactly
+    # (the unclamped total the calculator itself used for GTI) -- proven
+    # algebraically and locked in by
+    # test_itr3_schedule_bp_presumptive_breakdown_does_not_change_total_income.
 
     _bus_loss_obj = {
         "LossSetOffOnBusLoss": 0,
@@ -696,9 +750,15 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
     }
 
     _pl_us = {
-        "ProfitLossUs44AD": 0, "ProfitLossUs44ADA": 0, "ProfitLossUs44AE": 0,
+        "ProfitLossUs44AD": _to_rupees(presumptive_ad), "ProfitLossUs44ADA": _to_rupees(presumptive_ada), "ProfitLossUs44AE": _to_rupees(presumptive_ae),
         "ProfitLossUs44B": 0, "ProfitLossUs44BB": 0, "ProfitLossUs44BBA": 0,
         "ProfitLossUs44BBC": 0, "ProfitLossUs44BBD": 0, "ProfitLossUs44DA": 0,
+    }
+
+    _deemed_profit_us = {
+        "Section44AD": _to_rupees(presumptive_ad), "Section44ADA": _to_rupees(presumptive_ada), "Section44AE": _to_rupees(presumptive_ae),
+        "Section44B": 0, "Section44BB": 0, "Section44BBA": 0, "Section44BBC": 0, "Section44BBD": 0, "Section44DA": 0,
+        "TotDeemedProfitBusUs": _to_rupees(presumptive_total),
     }
 
     _heads_inc = {
@@ -715,7 +775,7 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
     return {
         "BusSetoffCurrYr": _bus_loss_obj,
         "BusinessIncOthThanSpec": {
-            "ProfBfrTaxPL": _to_rupees(non_spec),
+            "ProfBfrTaxPL": _to_rupees(non_spec_pbt),
             "NetPLFromSpecBus": 0,
             "NetPLFromSpecifiedBus": 0,
             "IncRecCredPLOthHeadDtls": _heads_inc,
@@ -724,23 +784,27 @@ def _schedule_bp(result: ITR3Result, typed_input: ITR3Input | None = None) -> di
             "TotalProfitFrmActCvrd": 0,
             "ProfitFrmActCvrd": {"ProfitFrmActCvrdUndrRule7": 0, "ProfitFrmActCvrdUndrRule7A": 0, "ProfitFrmActCvrdUndrRule7B1": 0, "ProfitFrmActCvrdUndrRule7B1A": 0, "ProfitFrmActCvrdUndrRule8": 0,},
             "IncCredPL": {"FirmShareInc": 0, "AOPBOISharInc": 0, "OtherExmptIncDtl": {"OperatingDividendName": "Dividend", "OperatingDividendAmt": 0}, "OthExempInc": 0, "TotExempIncPL": 0},
-            "IncCredPLNotChargable": 0, "BalancePLOthThanSpecBus": 0,
+            "IncCredPLNotChargable": 0, "BalancePLOthThanSpecBus": _to_rupees(row6),
             "ExpDebToPLOthHeadDtls": _heads_exp, "ExpDebToPLExemptInc": 0, "ExpDebToPLExemptIncDisAllwUs14A": 0,
-            "TotExpDebPL": 0, "AdjustedPLOthThanSpecBus": _to_rupees(row10),
+            "TotExpDebPL": _to_rupees(row9), "AdjustedPLOthThanSpecBus": _to_rupees(row10),
             "DepreciationDebPLCosAct": _to_rupees(books_depr),
             "DepreciationAllowITAct32": {"DepreciationAllowUs32_1_ii": _to_rupees(it_depr), "DepreciationAllowUs32_1_i": 0, "TotDeprAllowITAct": _to_rupees(it_depr)},
-            "AdjustPLAfterDeprOthSpecInc": _to_rupees(row10),
+            "AdjustPLAfterDeprOthSpecInc": _to_rupees(row13),
             "AmtDebPLDisallowUs36": _to_rupees(row14), "AmtDebPLDisallowUs37": _to_rupees(row15), "AmtDebPLDisallowUs40": _to_rupees(row16),
             "AmtDebPLDisallowUs40A": _to_rupees(row17), "AmtDebPLDisallowUs43B": _to_rupees(row18), "InterestDisAllowUs23SMEAct": 0,
             "DeemIncUs41": _to_rupees(row20), "DeemIncUs32AD": _to_rupees(amount("deemed_income_us32ad")), "DeemIncUs33AB": _to_rupees(amount("deemed_income_us33ab")),
             "DeemIncUs33ABA": _to_rupees(amount("deemed_income_us33aba")), "DeemIncUs35ABA": _to_rupees(amount("deemed_income_us35aba")), "DeemIncUs35ABB": _to_rupees(amount("deemed_income_us35abb")),
             "DeemIncUs40A3A": _to_rupees(amount("deemed_income_us40a3a")), "DeemIncUs72A": _to_rupees(amount("deemed_income_us72a")), "DeemIncUs80HHD": _to_rupees(amount("deemed_income_us80hhd")),
-            "DeemIncUs80IA": _to_rupees(amount("deemed_income_us80ia")), "DeemIncUs3380HHD80IA": 0, "DeemIncUs43CA": _to_rupees(row22), "OthItemDisallowUs28To44DA": 0,
-            "AnyOthIncNotInclInExpDisallowPL": 0, "AnyOthIncNotInclInSalary": 0, "AnyOthIncNotInclInBonus": 0, "AnyOthIncNotInclInCommission": 0, "AnyOthIncNotInclInInterest": 0, "AnyOthIncNotInclInOthers": 0,
-            "IncProfDecLossAccICDSAdj": _to_rupees(row25), "TotAfterAddToPLDeprOthSpecInc": _to_rupees(row10 + total_additions), "DeductUs32_1_iii": _to_rupees(row27), "DebPLUs35ExcessAmt": 0,
-            "AmtDisallUs40NowAllow": 0, "AmtDisallUs43BNowAllow": 0, "AnyOthAmtAllDeduct": 0, "DecProfIncLossAccICDSAdj": _to_rupees(row32), "TotDeductionAmts": _to_rupees(total_deductions),
-            "PLAftAdjDedBusOthThanSpec": _to_rupees(row10 + total_additions - total_deductions), "DeemedProfitBusUs": {"Section44AD": 0, "Section44ADA": 0, "Section44AE": 0, "Section44B": 0, "Section44BB": 0, "Section44BBA": 0, "Section44BBC": 0, "Section44BBD": 0, "Section44DA": 0, "TotDeemedProfitBusUs": 0},
-            "NetPLAftAdjBusOthThanSpec": _to_rupees(non_spec), "NetPLBusOthThanSpec7A7B7C": _to_rupees(non_spec), "ChrgblIncUndrRule7": 0, "DeemedChrgblIncUndrRule7A": 0, "DeemedChrgblIncUndrRule7B1": 0, "DeemedChrgblIncUndrRule7B1A": 0, "DeemedChrgblIncUndrRule8": 0, "IncomeOtherThanRule": 0, "BalIncDeemedFrmAgri": 0,
+            # Item 21's own combined total (the form prints 32AD/33AB/33ABA/
+            # 35ABA/35ABB/40A(3A)/72A/80HHD/80-IA as ONE single line item,
+            # not nine separate rows) -- previously hardcoded 0 even though
+            # row21 (the exact sum) was already computed for total_additions.
+            "DeemIncUs80IA": _to_rupees(amount("deemed_income_us80ia")), "DeemIncUs3380HHD80IA": _to_rupees(row21), "DeemIncUs43CA": _to_rupees(row22), "OthItemDisallowUs28To44DA": 0,
+            "AnyOthIncNotInclInExpDisallowPL": _to_rupees(row24), "AnyOthIncNotInclInSalary": 0, "AnyOthIncNotInclInBonus": 0, "AnyOthIncNotInclInCommission": 0, "AnyOthIncNotInclInInterest": 0, "AnyOthIncNotInclInOthers": 0,
+            "IncProfDecLossAccICDSAdj": _to_rupees(row25), "TotAfterAddToPLDeprOthSpecInc": _to_rupees(row13 + total_additions), "DeductUs32_1_iii": _to_rupees(row27), "DebPLUs35ExcessAmt": 0,
+            "AmtDisallUs40NowAllow": 0, "AmtDisallUs43BNowAllow": 0, "AnyOthAmtAllDeduct": _to_rupees(row31), "DecProfIncLossAccICDSAdj": _to_rupees(row32), "TotDeductionAmts": _to_rupees(total_deductions),
+            "PLAftAdjDedBusOthThanSpec": _to_rupees(row34), "DeemedProfitBusUs": _deemed_profit_us,
+            "NetPLAftAdjBusOthThanSpec": _to_rupees(row36), "NetPLBusOthThanSpec7A7B7C": _to_rupees(row36), "ChrgblIncUndrRule7": 0, "DeemedChrgblIncUndrRule7A": 0, "DeemedChrgblIncUndrRule7B1": 0, "DeemedChrgblIncUndrRule7B1A": 0, "DeemedChrgblIncUndrRule8": 0, "IncomeOtherThanRule": _to_rupees(row36), "BalIncDeemedFrmAgri": 0,
         },
         "IncChrgUnHdProftGain": _to_rupees(total_biz),
         "SpecBusinessInc": {"NetPLFrmSpecBus": _to_rupees(spec), "AdditionUs28to44DA": 0, "DeductUs28to44DA": 0, "AdjustedPLFrmSpecuBus": _to_rupees(spec)},

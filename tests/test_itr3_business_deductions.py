@@ -47,8 +47,10 @@ def test_schedule_bp_maps_typed_rows_and_closes_official_arithmetic_bridge() -> 
         icds_decrease=Decimal("29"),
     )
     pgbp = PGBPResult(
-        non_spec_net_income=Decimal("1000"),
-        total_business_income=Decimal("1000"),
+        non_spec_profit_before_tax=Decimal("1000"),
+        non_spec_signed=Decimal("1306"),
+        non_spec_net_income=Decimal("1306"),
+        total_business_income=Decimal("1306"),
         non_spec_depreciation_books=business.depreciation_books,
         non_spec_depreciation_it=business.depreciation_it_act,
     )
@@ -71,7 +73,11 @@ def test_schedule_bp_maps_typed_rows_and_closes_official_arithmetic_bridge() -> 
     )
     assert business_rows["DepreciationDebPLCosAct"] == 100
     assert business_rows["DepreciationAllowITAct32"]["TotDeprAllowITAct"] == 60
-    assert business_rows["AdjustedPLOthThanSpecBus"] == 1040
+    # Item 10 (6+9) is BEFORE the depreciation adjustment -- item 13 (10+11-12iii)
+    # is the separate, later step that applies it. Previously both were set
+    # to the same (already depreciation-adjusted) value.
+    assert business_rows["AdjustedPLOthThanSpecBus"] == 1000
+    assert business_rows["AdjustPLAfterDeprOthSpecInc"] == 1040
     assert business_rows["TotAfterAddToPLDeprOthSpecInc"] == 1363
     assert business_rows["TotDeductionAmts"] == 57
     assert business_rows["PLAftAdjDedBusOthThanSpec"] == 1306
@@ -82,6 +88,8 @@ def test_schedule_bp_maps_typed_rows_and_closes_official_arithmetic_bridge() -> 
 def test_schedule_bp_does_not_infer_untyped_adjustments_from_pgbp() -> None:
     """Omitted typed adjustments stay zero even when the calculator has a total."""
     pgbp = PGBPResult(
+        non_spec_profit_before_tax=Decimal("500"),
+        non_spec_signed=Decimal("500"),
         non_spec_net_income=Decimal("500"),
         total_business_income=Decimal("500"),
         non_spec_depreciation_books=Decimal("80"),
@@ -93,13 +101,117 @@ def test_schedule_bp_does_not_infer_untyped_adjustments_from_pgbp() -> None:
     typed = type("TypedInput", (), {"business_income": BusinessIncome()})()
     payload = _schedule_bp(result, typed)
     rows = payload["BusinessIncOthThanSpec"]
-    assert rows["AdjustedPLOthThanSpecBus"] == 550
+    assert rows["AdjustedPLOthThanSpecBus"] == 500
+    assert rows["AdjustPLAfterDeprOthSpecInc"] == 550
     assert rows["AmtDebPLDisallowUs36"] == 0
     assert rows["AmtDebPLDisallowUs43B"] == 0
     assert rows["DeemIncUs41"] == 0
     assert rows["IncProfDecLossAccICDSAdj"] == 0
     assert rows["DecProfIncLossAccICDSAdj"] == 0
-    assert rows["PLAftAdjDedBusOthThanSpec"] == 550
+
+
+def _presumptive_draft():
+    """A minimal end-to-end ITR-3 draft with 44AD + 44ADA + 44AE presumptive businesses."""
+    from app.schemas.return_draft import Presumptive44AD, Presumptive44ADA, Presumptive44AE, create_empty_draft
+
+    draft = create_empty_draft("2026-27", "ITR-3", "new")
+    draft.personal.pan = "ABCDE1234F"
+    draft.personal.firstName = "Asha"
+    draft.personal.surnameOrOrgName = "Sharma"
+    draft.personal.dateOfBirth = "1985-01-01"
+    draft.personal.flatNo = "1"
+    draft.personal.localityOrArea = "Central"
+    draft.personal.city = "Delhi"
+    draft.personal.stateCode = "07"
+    draft.personal.countryCode = "91"
+    draft.personal.pinCode = "110001"
+    draft.personal.mobile = "9876543210"
+    draft.personal.email = "asha@example.com"
+    draft.verification.place = "Delhi"
+    draft.verification.date = "2026-07-31"
+    draft.verification.declarationAccepted = True
+    draft.businesses = [
+        Presumptive44AD(id="b1", natureCode="01001", digitalReceipts=Decimal("1000000"), declaredIncome=Decimal("60000")),
+        Presumptive44ADA(id="b2", natureCode="16001", grossReceipts=Decimal("500000"), declaredIncome=Decimal("250000")),
+        Presumptive44AE(id="b3", natureCode="60010", declaredIncome=Decimal("40000")),
+    ]
+    return draft
+
+
+def test_schedule_bp_presumptive_income_breakdown_reaches_json() -> None:
+    """Schedule 14 fix: items 4a/35 (the presumptive-income breakdown by
+    section) were both entirely hardcoded to 0 despite draft.businesses
+    already carrying exactly this data, grouped by scheme."""
+    from app.engine.draft_to_itr3_input import draft_to_itr3_input
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _presumptive_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    document = build_itr3_json(compute_itr3(typed_input), typed_input)
+    bp = document["ITR"]["ITR3"]["ITR3ScheduleBP"]["BusinessIncOthThanSpec"]
+    assert bp["ProfitLossInclRefrdSec"]["ProfitLossUs44AD"] == 60000
+    assert bp["ProfitLossInclRefrdSec"]["ProfitLossUs44ADA"] == 250000
+    assert bp["ProfitLossInclRefrdSec"]["ProfitLossUs44AE"] == 40000
+    assert bp["DeemedProfitBusUs"]["Section44AD"] == 60000
+    assert bp["DeemedProfitBusUs"]["Section44ADA"] == 250000
+    assert bp["DeemedProfitBusUs"]["Section44AE"] == 40000
+    assert bp["DeemedProfitBusUs"]["TotDeemedProfitBusUs"] == 350000
+    errors = list(_schedule_bp_validator().iter_errors(document["ITR"]["ITR3"]["ITR3ScheduleBP"]))
+    assert not errors, "\n".join(e.message for e in errors)
+
+
+def test_schedule_bp_presumptive_breakdown_does_not_change_total_income() -> None:
+    """The presumptive-income disclosure fix must be purely a re-allocation
+    across items 6/34/35/36 -- it must never change the actual income
+    figures (IncChrgUnHdProftGain / GTI), which the calculator already
+    computed correctly before this fix. Item 36 must exactly equal the
+    calculator's own unclamped total (pgbp.non_spec_signed)."""
+    from app.engine.draft_to_itr3_input import draft_to_itr3_input
+    from app.engine.calculators.itr3 import compute as compute_itr3
+    from app.engine.itd.itr3 import build_itr3_json
+
+    draft = _presumptive_draft()
+    typed_input, _ = draft_to_itr3_input(draft)
+    result = compute_itr3(typed_input)
+    pgbp = result.schedules["pgbp"]
+    document = build_itr3_json(result, typed_input)
+    bp_doc = document["ITR"]["ITR3"]["ITR3ScheduleBP"]
+    bp = bp_doc["BusinessIncOthThanSpec"]
+    # Item 36 = item 34 + item 35viii -- must reconcile internally...
+    assert bp["NetPLAftAdjBusOthThanSpec"] == bp["PLAftAdjDedBusOthThanSpec"] + bp["DeemedProfitBusUs"]["TotDeemedProfitBusUs"]
+    # ...and must equal the calculator's own unclamped total exactly, proving
+    # the presumptive subtraction (item 6) and re-addition (item 35) are
+    # perfectly neutral, not a double-count or a silent drop.
+    from app.engine.itd.common import _to_rupees
+    assert bp["NetPLAftAdjBusOthThanSpec"] == _to_rupees(pgbp.non_spec_signed)
+    assert bp_doc["IncChrgUnHdProftGain"] == _to_rupees(result.schedules["pgbp"].total_business_income)
+
+
+def test_schedule_bp_loss_disclosed_as_negative_not_floored_to_zero() -> None:
+    """Schedule 14 fix: NetPLAftAdjBusOthThanSpec/NetPLBusOthThanSpec7A7B7C
+    have no official schema minimum (a regular business can genuinely make
+    a loss) -- previously these were set directly from the GTI-floored
+    non_spec_net_income (always >= 0), so a real business loss was silently
+    disclosed as a false 0 instead of the true negative figure."""
+    pgbp = PGBPResult(
+        non_spec_profit_before_tax=Decimal("-20000"),
+        non_spec_signed=Decimal("-20000"),
+        non_spec_net_income=Decimal("0"),  # GTI-floored, as the calculator correctly does
+        total_business_income=Decimal("0"),
+    )
+    result = ITR3Result(schedules={"pgbp": pgbp})
+    typed = type("TypedInput", (), {"business_income": BusinessIncome()})()
+    payload = _schedule_bp(result, typed)
+    rows = payload["BusinessIncOthThanSpec"]
+    assert rows["NetPLAftAdjBusOthThanSpec"] == -20000
+    assert rows["NetPLBusOthThanSpec7A7B7C"] == -20000
+    assert rows["PLAftAdjDedBusOthThanSpec"] == -20000
+    # GTI-relevant total_business_income stays correctly floored at 0 --
+    # this fix touches only the disclosure, never the actual tax computation.
+    assert payload["IncChrgUnHdProftGain"] == 0
+    errors = list(_schedule_bp_validator().iter_errors(payload))
+    assert not errors, "\n".join(e.message for e in errors)
 
 
 from app.schemas.itr3 import (

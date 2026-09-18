@@ -353,6 +353,13 @@ class BusinessIncome(BaseModel):
     other_additions: Decimal = Field(default=Decimal("0"), ge=0)
     other_deductions: Decimal = Field(default=Decimal("0"), ge=0)
 
+    # Presumptive income by section (form item 35 / item 4a's own
+    # breakdown) -- the amount of net_profit_before_tax that is actually
+    # presumptive income declared under 44AD/44ADA/44AE, from draft.businesses.
+    presumptive_44ad_income: Decimal = Field(default=Decimal("0"), ge=0)
+    presumptive_44ada_income: Decimal = Field(default=Decimal("0"), ge=0)
+    presumptive_44ae_income: Decimal = Field(default=Decimal("0"), ge=0)
+
     # Speculative business
     speculative_net_pl: Decimal = Field(default=Decimal("0"))
     speculative_additions: Decimal = Field(default=Decimal("0"), ge=0)
